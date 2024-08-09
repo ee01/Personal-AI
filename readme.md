@@ -10,6 +10,12 @@ If it doesn't work, please check the extension permissions:
 1. Right-click on `radar poc` extension
 2. Click `This can Read and change site data`
 
+# Update flow
+1. open url `chrome://extensions/`
+2. enable `Development mode`
+3. click button `Update`
+4. reload page `https://app.ringcentral.com/`
+
 # Usage Of Template  
 ### Topic Template 
 1. Set you API key = `app-CjA00E2dCpUqlpmqhcRp91gq`
