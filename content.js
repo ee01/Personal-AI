@@ -84,7 +84,8 @@ function transformData2Group(data) {
         time: '' // 初始化 time 字段
       };
     }
-    acc[item.groupId].text += `[${item.time}][${item.creator}]: ${item.text}\n`;
+    acc[item.groupId].text += item.parentId ? `[postId:${item.id}][threadId:${item.parentId}][${item.time}][${item.creator}]: ${item.text}\n` : `[postId:${item.id}][${item.time}][${item.creator}]: ${item.text}\n`;
+
     acc[item.groupId].time = item.time; // 更新 time 为当前项的时间
     acc[item.groupId].groupType = item.groupType;
     return acc;
@@ -114,6 +115,7 @@ function TransformMessagePosts(startTime, groupPost) {
     // 转换数据结构
     const transformedData = filteredPosts.map(post => ({
         id: post.id, // 使用 unique_id 作为 id
+        parentId: post.parent_post_id, // 使用 parent_id 作为 parentId
         groupName: groupsMap[post.group_id].name, // 使用 group_id 作为 group_name
         groupType: groupsMap[post.group_id].is_team ? 'team' : 'direct message', // 使用 group_id 作为 group_type
         groupId: post.group_id, // 使用 group_id 作为 group_id
@@ -225,6 +227,11 @@ const TransformPhone = (startTime) => {
 
 function insert2MainBody() {
   // JavaScript to insert a new DOM element
+  const resultElement = document.getElementById('radar-poc-result');
+  if (resultElement) {
+    resultElement.remove();
+  }
+
   const appMainSection = document.getElementById('app-main-section');
 
   // Create a new div element
