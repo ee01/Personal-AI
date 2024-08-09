@@ -5,52 +5,79 @@
   <style>
     html, body {
       margin: 0;
-      padding: 10px;
-      width: 280px;
-      border-radius: 4px;
-      background-color: #eee;
-      text-align: center;
+      padding: 0;
+      width: 400px;
+      height: auto;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: Arial, sans-serif;
+      font-family: 'Arial', sans-serif;
+      color: #333;
     }
     #container {
-      background: white;
+      background: #fff;
       border-radius: 10px;
-      box-shadow: 0 0 10px rgba(0,0,0,0.1);
-      padding: 20px;
-      z-index: 1;
-    }
-    #fetchDataButton, #clearButton {
-      background-color: #4CAF50;
-      border: none;
-      color: white;
-      padding: 15px 32px;
-      text-align: center;
-      text-decoration: none;
-      display: inline-block;
-      font-size: 16px;
-      margin: 10px 0;
-      cursor: pointer;
-      border-radius: 5px;
-      transition: background-color 0.3s;
-    }
-    #fetchDataButton:hover, #clearButton:hover {
-      background-color: #45a049;
-    }
-    input[type="number"], input[type="checkbox"] {
-      width: calc(100% - 20px);
-      padding: 10px;
-      margin: 10px 0;
+      box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+      padding: 30px;
+      width: 100%;
+      max-width: 400px;
       box-sizing: border-box;
-      border: 2px solid #ccc;
-      border-radius: 4px;
+      text-align: left;
+    }
+    #container h2 {
+      margin-top: 0;
+      font-size: 24px;
+      color: #2980B9;
     }
     label {
       display: block;
-      margin: 10px 0;
-      font-weight: bold;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #555;
+    }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 15px;
+      box-sizing: border-box;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      transition: border-color 0.3s ease-in-out;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+    }
+    input[type="text"]:focus, input[type="number"]:focus {
+      border-color: #2980B9;
+      outline: none;
+    }
+    input[type="checkbox"] {
+      margin-right: 10px;
+      transform: scale(1.2);
+      vertical-align: middle;
+    }
+    button {
+      width: 100%;
+      padding: 15px;
+      margin-top: 10px;
+      border: none;
+      border-radius: 5px;
+      background-color: #2980B9;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    button:hover {
+      background-color: #2574A9;
+    }
+    #moreButton {
+      margin: 10px;
+      display: inline-block;
+      text-align: center;
+      color: #2980B9;
+      cursor: pointer;
+      border-radius: 5px;
+      font-size: 14px;
+      float: right;
     }
     #loading {
       display: none;
@@ -66,23 +93,42 @@
       justify-content: center;
       z-index: 1000;
     }
-    #result {
+    .more {
+      display: none;
       margin-top: 20px;
-      font-size: 14px;
-      text-align: left;
     }
   </style>
 </head>
 <body>
   <div id="container">
-    <label for="recentDays">Data from how many days ago, default is 1 day</label>
+    <h2>Radar Poc</h2>
+    <label for="recentDays">Days of data</label>
     <input id="recentDays" type="number" value="1" />
-    <label for="groupPost">
-      <input id="groupPost" type="checkbox" checked> Whether to group posts together, default is group
+    <label for="apiKey">Set your API key</label>
+    <input id="apiKey" type="text" value="app-CjA00E2dCpUqlpmqhcRp91gq" />
+    <label>Set your data source</label>
+    <label id="dataSource">
+      <input id="enableMessage" type="checkbox" checked> message
+      <input id="enableSms" type="checkbox" checked> sms
+      <input id="enableVoicemail" type="checkbox" checked> voicemail
+      <input id="enableCallTranscript" type="checkbox" checked> call transcript
     </label>
+    <div class="more" id="moreOptions">
+      <label for="contactUserName">Set your contact username, separated by commas (only for Contact template)</label>
+      <input id="contactUserName" type="text" placeholder="e.g: Steve Chen,Spike Yang" value="" />
+      <label for="selectGroupName">Choose your group name, separated by commas (default all)</label>
+      <input id="selectGroupName" type="text" placeholder="e.g: team1,team2" value="" />
+      <label for="ignoreGroupName">Choose your ignore group name, separated by commas (default None)</label>
+      <input id="ignoreGroupName" type="text" placeholder="e.g: team1,team2" value="" />
+      <label for="selectDirectMessages">Choose your direct messages, separated by commas (default all)</label>
+      <input id="selectDirectMessages" placeholder="e.g: spike.yang,edward.lin" type="text" value="" />
+      <label for="groupPost">
+        <input id="groupPost" type="checkbox" checked> By group or by posts, default by group
+      </label>
+    </div>
+    <div id="moreButton">Show More Options</div>
     <button id="fetchDataButton">Generate Report</button>
-    <div id="result"></div>
   </div>
-  <script src="./popup.js"></script>
+  <script src="popup.js"></script>
 </body>
 </html>

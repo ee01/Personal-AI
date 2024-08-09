@@ -54,18 +54,25 @@ function fetchAllMessageData() {
   });
 }
 
-function fetchAllPhoneData() {
-  return Promise.all([
-    getIndexedDBData('SMS', 'sms'),
-    getIndexedDBData('Voicemail', 'voicemail'),
-    getIndexedDBData('CaptionsTranscripts', 'callTranscript'),
-    getIndexedDBData('CallLog', 'callLog')
-  ])
+function fetchAllPhoneData(enableSms,enableVoicemail,enableCallTranscript) {
+  const promises = [];
+  if (enableSms) {
+    promises.push(getIndexedDBData('SMS', 'sms'));
+  }
+  if (enableVoicemail) {
+    promises.push(getIndexedDBData('Voicemail', 'voicemail'));
+  }
+  if (enableCallTranscript) {
+    promises.push(getIndexedDBData('CaptionsTranscripts', 'callTranscript'));
+    promises.push(getIndexedDBData('CallLog', 'callLog'));
+  }
+
+  return Promise.all(promises)
   .then(([sms, voicemail, callTranscript, callLog]) => ({
-    sms: sms,
-    voicemail: voicemail,
-    callTranscript: callTranscript,
-    callLog: callLog
+    sms: sms || [],
+    voicemail: voicemail || [],
+    callTranscript: callTranscript || [],
+    callLog: callLog || []
   }))
   .catch(error => {
     console.error("Error fetchAllPhoneData:", error);
@@ -94,8 +101,19 @@ function transformData2Group(data) {
   return Object.values(groupedData);
 };
 
+function getDirectUserNameByGroupName(groupName) {
+  // "jenny.cai+spike.yang"; => "jenny.cai"
+  const regex = /^[^+]+/;
+  const match = groupName.match(regex);
+  const result = match ? match[0] : '';
+  return result;
+}
 
-function TransformMessagePosts(startTime, groupPost) {
+function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, selectDirectMessageNames, ignoreGroupNames) {
+  if (!enableMessage) {
+    return Promise.resolve([]);
+  }
+
   const transformMessagePosts = (input, persons, groups) => {
     const personsMap = persons.reduce((acc, person) => {
         acc[person.id] = `${person.first_name} ${person.last_name}`;
@@ -134,7 +152,15 @@ function TransformMessagePosts(startTime, groupPost) {
   return fetchAllMessageData()
   .then((glipData) => {
       const post = glipData.post.concat(glipData.replyPost);
-      const transformedData = transformMessagePosts(post, glipData.person, glipData.group).filter(item => new Date(item.time) >= new Date(startTime));
+      const transformedData = transformMessagePosts(post, glipData.person, glipData.group).filter(item => new Date(item.time) >= new Date(startTime)).filter(item => {
+        const groupName = item.groupName;
+
+        const isGroupSelected = selectGroupNames.length === 0 || selectGroupNames.includes(groupName);
+        const isDirectMessageSelected = selectDirectMessageNames.length === 0 || selectDirectMessageNames.includes(getDirectUserNameByGroupName(groupName));
+        const isGroupIgnored = ignoreGroupNames.length > 0 && ignoreGroupNames.includes(groupName);
+
+        return (isGroupSelected || isDirectMessageSelected) && !isGroupIgnored;
+      });;
 
       return groupPost ? transformData2Group(transformedData) : transformedData;
   })
@@ -215,8 +241,8 @@ const transformVoicemail = (input) => {
   })).filter(item => item.text !== '');
 };
 
-const TransformPhone = (startTime) => {
-  return fetchAllPhoneData().then((inputData) => {
+const TransformPhone = (startTime, enableSms,enableVoicemail,enableCallTranscript) => {
+  return fetchAllPhoneData(enableSms,enableVoicemail,enableCallTranscript).then((inputData) => {
     const sms = transformSMS(inputData.sms).filter(item => new Date(item.time) >= new Date(startTime));
     const voicemail = transformVoicemail(inputData.voicemail).filter(item => new Date(item.time) >= new Date(startTime));
     const callTranscript = transformCall(inputData.callTranscript, inputData.callLog).filter(item => new Date(item.time) >= new Date(startTime));
@@ -239,7 +265,7 @@ function insert2MainBody() {
   newElement.id = 'radar-poc-result';
   
   // Apply styles to the new element
-  newElement.style.width = '400px';
+  newElement.style.width = '480px';
   newElement.style.backgroundColor = 'rgb(249, 249, 249)'; // Example background color
   newElement.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.1)';
   newElement.style.padding = '20px';
@@ -253,8 +279,7 @@ function insert2MainBody() {
   appMainSection.appendChild(newElement);
 }
 
-function query(username, query) {
-  const apiKey = 'app-CjA00E2dCpUqlpmqhcRp91gq';
+function query(username, query, apiKey, contactUserName) {
   const url = 'https://lap2-api-dev.int.rclabenv.com/v1/completion-messages';
 
   const data = {
@@ -262,6 +287,10 @@ function query(username, query) {
     response_mode: 'blocking',
     user: username
   };
+
+  if (contactUserName) {
+    data.inputs.contact_user_names = contactUserName;
+  }
 
   return fetch(url, {
     method: 'POST',
@@ -286,17 +315,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_INDEX_DB_DATA") {
     const startTime = message.startTime;
     const groupPost = message.groupPost || false;
+    const apiKey = message.apiKey || '';
+    const contactUserName = message.contactUserName || '';
+    const selectGroupName = message.selectGroupName || '';
+    const selectDirectMessages = message.selectDirectMessages || '';
+    const ignoreGroupName = message.ignoreGroupName || '';
+    const enableMessage = message.enableMessage;
+    const enableSms = message.enableSms;
+    const enableVoicemail = message.enableVoicemail;
+    const enableCallTranscript = message.enableCallTranscript;
+
+    const selectGroupNames = selectGroupName.split(',').map(item => item.trim());
+    const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase());
+    const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim());
+
+
     console.log('Received message:', message);
     sendResponse({ status: 'success' });
     insert2MainBody();
     const resultElement = document.getElementById('radar-poc-result');
 
-    Promise.all([TransformMessagePosts(startTime, groupPost), TransformPhone(startTime)]).then(([message, phone]) => {
+    Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, selectDirectMessageNames, ignoreGroupNames), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
       const username = localStorage.getItem('displayName');
       const data = message.concat(phone).sort((a, b) => new Date(a.time) - new Date(b.time));
       sendResponse({ status: 'success' });
 
-      query(username, data).then(answer => {
+      query(username, data, apiKey, contactUserName).then(answer => {
         resultElement.innerHTML = marked.parse(answer);
       }).catch(error => {
         resultElement.innerHTML = error.message;
