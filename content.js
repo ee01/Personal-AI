@@ -18,7 +18,7 @@ function getIndexedDBData(databaseName, storeName) {
       const dataRequest = objectStore.getAll();
 
       dataRequest.onsuccess = (event) => {
-        console.log(`Data fetched successfully from store '${storeName}':`, event.target.result);
+        console.log(`Data fetched successfully from store ${storeName}`);
         resolve(event.target.result);
       };
 
@@ -54,7 +54,7 @@ function fetchAllMessageData() {
   });
 }
 
-function fetchAllPhoneData(enableSms,enableVoicemail,enableCallTranscript) {
+function fetchAllPhoneData(enableSms, enableVoicemail, enableCallTranscript) {
   const promises = [];
   if (enableSms) {
     promises.push(getIndexedDBData('SMS', 'sms'));
@@ -68,17 +68,27 @@ function fetchAllPhoneData(enableSms,enableVoicemail,enableCallTranscript) {
   }
 
   return Promise.all(promises)
-  .then(([sms, voicemail, callTranscript, callLog]) => ({
-    sms: sms || [],
-    voicemail: voicemail || [],
-    callTranscript: callTranscript || [],
-    callLog: callLog || []
-  }))
-  .catch(error => {
-    console.error("Error fetchAllPhoneData:", error);
-    throw error;
-  });
+    .then(results => {
+      const [sms, voicemail, callTranscript, callLog] = [
+        enableSms ? results.shift() : [],
+        enableVoicemail ? results.shift() : [],
+        enableCallTranscript ? results.shift() : [],
+        enableCallTranscript ? results.shift() : []
+      ];
+
+      return {
+        sms,
+        voicemail,
+        callTranscript,
+        callLog
+      };
+    })
+    .catch(error => {
+      console.error("Error fetchAllPhoneData:", error);
+      throw error;
+    });
 }
+
 
 function transformData2Group(data) {
   const groupedData = data.reduce((acc, item) => {
