@@ -325,9 +325,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const enableVoicemail = message.enableVoicemail;
     const enableCallTranscript = message.enableCallTranscript;
 
-    const selectGroupNames = selectGroupName.split(',').map(item => item.trim());
-    const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase());
-    const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim());
+    const selectGroupNames = selectGroupName.split(',').map(item => item.trim()).filter(item => !!item);
+    const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
+    const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim()).filter(item => !!item);
 
 
     console.log('Received message:', message);
