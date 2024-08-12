@@ -185,7 +185,7 @@ const transformSMS = (input) => {
     type: "sms", // 确保类型为小写
     text: item.subject || '', // 如果没有主题，则使用空字符串
     from: item.from ? (item.from.name || item.from.phoneNumber) : 'unknown', // 如果没有用户名，设置为'unknown'
-    to: item.to.map(recipient => recipient.name || recipient.phoneNumber || 'unknown  '), // 如果没有用户名，设置为'unknown'
+    to: item.to ? item.to.map(recipient => recipient.name || recipient.phoneNumber || 'unknown  ') : ['unknown'], // 如果没有用户名，设置为'unknown'
     readStatus: item.readStatus, // 读取状态, 已读未读
     time: new Date(item.__timestamp), // 使用输入中的时间戳
   })).filter(item => item.text !== '');
@@ -245,7 +245,7 @@ const transformVoicemail = (input) => {
     type: "voicemail", // 确保类型为小写
     text: item.transcription || '', // 如果没有主题，则使用空字符串
     from: item.from ? (item.from.name || item.from.phoneNumber) : 'unknown', // 如果没有用户名，设置为'unknown'
-    to: item.to.map(recipient => recipient.name || recipient.phoneNumber || 'unknown  '), // 如果没有用户名，设置为'unknown'
+    to: item.to ? item.to.map(recipient => recipient.name || recipient.phoneNumber || 'unknown  ') : ['unknown'], // 如果没有用户名，设置为'unknown'
     readStatus: item.readStatus, // 读取状态, 已读未读
     time: new Date(item.__timestamp), // 使用输入中的时间戳
   })).filter(item => item.text !== '');
