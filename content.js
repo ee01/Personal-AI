@@ -1325,7 +1325,11 @@ function extractAndParseJSON(inputString) {
 }
 
 
-function filterGroup(groups, username) {
+function filterGroup(groups, username, autoFilterGroup) {
+    if (!autoFilterGroup) {
+        return Promise.resolve(groups);
+    }
+
     const apiKey = 'app-LZueVrlxA37lrUCuHCpN5jzs';
     const teamGroups = groups.filter(group => !!group.groupType);
     const chunkSize = 5;
@@ -1358,7 +1362,7 @@ function filterGroup(groups, username) {
 
         // 保留 groupType !== 'team' 的所有 group 和 isImportant 为 true 的 team group
         return groups.filter(group => 
-            group.groupType !== 'team' || importantTeamGroupIds.includes(group.groupId)
+            !group.groupType || importantTeamGroupIds.includes(group.groupId)
         );
     });
 }
@@ -1378,11 +1382,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const enableSms = message.enableSms;
     const enableVoicemail = message.enableVoicemail;
     const enableCallTranscript = message.enableCallTranscript;
+    const autoFilterGroup = message.autoFilterGroup;
 
     const selectGroupNames = selectGroupName.split(',').map(item => item.trim()).filter(item => !!item);
     // const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
     const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim()).filter(item => !!item);
-
 
     console.log('Received message:', message);
     sendResponse({ status: 'success' });
@@ -1392,9 +1396,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
       const username = localStorage.getItem('displayName');
       const data = message.concat(phone).sort((a, b) => new Date(a.time) - new Date(b.time));
-      sendResponse({ status: 'success' });
 
-      filterGroup(data, username).then(filteredGroups => {
+      filterGroup(data, username, autoFilterGroup).then(filteredGroups => {
         console.log('Filtered Groups:', filteredGroups.length);
         query(username, filteredGroups, apiKey, contactUserName).then(answer => {
             resultElement.innerHTML = marked.parse(answer || 'llm anwser error');
