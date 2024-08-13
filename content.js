@@ -1327,7 +1327,7 @@ function extractAndParseJSON(inputString) {
 
 function filterGroup(groups, username) {
     const apiKey = 'app-LZueVrlxA37lrUCuHCpN5jzs';
-    const teamGroups = groups.filter(group => group.groupType === 'team');
+    const teamGroups = groups.filter(group => !!group.groupType);
     const chunkSize = 5;
     const results = [];
 
