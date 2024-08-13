@@ -1300,6 +1300,7 @@ function query(username, query, apiKey, contactUserName) {
   })
   .catch(error => {
     console.error('Error:', error);
+    return error.message || 'Http Fetch Error';
   });
 }
 
