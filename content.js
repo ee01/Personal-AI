@@ -119,7 +119,7 @@ function getDirectUserNameByGroupName(groupName) {
   return result;
 }
 
-function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, selectDirectMessageNames, ignoreGroupNames) {
+function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames) {
   if (!enableMessage) {
     return Promise.resolve([]);
   }
@@ -162,15 +162,17 @@ function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupN
   return fetchAllMessageData()
   .then((glipData) => {
       const post = glipData.post.concat(glipData.replyPost);
-      const transformedData = transformMessagePosts(post, glipData.person, glipData.group).filter(item => new Date(item.time) >= new Date(startTime)).filter(item => {
+      const transformedData = transformMessagePosts(post, glipData.person, glipData.group)
+      .filter(item => new Date(item.time) >= new Date(startTime))
+      .filter(item => {
         const groupName = item.groupName;
 
         const isGroupSelected = selectGroupNames.length === 0 || selectGroupNames.includes(groupName);
-        const isDirectMessageSelected = selectDirectMessageNames.length === 0 || selectDirectMessageNames.includes(getDirectUserNameByGroupName(groupName));
+        // const isDirectMessageSelected = selectDirectMessageNames.length === 0 || selectDirectMessageNames.includes(getDirectUserNameByGroupName(groupName));
         const isGroupIgnored = ignoreGroupNames.length > 0 && ignoreGroupNames.includes(groupName);
 
-        return (isGroupSelected || isDirectMessageSelected) && !isGroupIgnored;
-      });;
+        return isGroupSelected && !isGroupIgnored;
+      });
 
       return groupPost ? transformData2Group(transformedData) : transformedData;
   })
@@ -1300,7 +1302,7 @@ function query(username, query, apiKey, contactUserName) {
   })
   .catch(error => {
     console.error('Error:', error);
-    return error.message || 'Http Fetch Error';
+    return error.message || 'Https error'
   });
 }
 
@@ -1370,7 +1372,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const apiKey = message.apiKey || '';
     const contactUserName = message.contactUserName || '';
     const selectGroupName = message.selectGroupName || '';
-    const selectDirectMessages = message.selectDirectMessages || '';
+    // const selectDirectMessages = message.selectDirectMessages || '';
     const ignoreGroupName = message.ignoreGroupName || '';
     const enableMessage = message.enableMessage;
     const enableSms = message.enableSms;
@@ -1378,7 +1380,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const enableCallTranscript = message.enableCallTranscript;
 
     const selectGroupNames = selectGroupName.split(',').map(item => item.trim()).filter(item => !!item);
-    const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
+    // const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
     const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim()).filter(item => !!item);
 
 
@@ -1387,7 +1389,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     insert2MainBody();
     const resultElement = document.getElementById('radar-poc-result');
 
-    Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, selectDirectMessageNames, ignoreGroupNames), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
+    Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
       const username = localStorage.getItem('displayName');
       const data = message.concat(phone).sort((a, b) => new Date(a.time) - new Date(b.time));
       sendResponse({ status: 'success' });
@@ -1395,7 +1397,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       filterGroup(data, username).then(filteredGroups => {
         console.log('Filtered Groups:', filteredGroups.length);
         query(username, filteredGroups, apiKey, contactUserName).then(answer => {
-            resultElement.innerHTML = marked.parse(answer);
+            resultElement.innerHTML = marked.parse(answer || 'llm anwser error');
           }).catch(error => {
             resultElement.innerHTML = error.message;
           });

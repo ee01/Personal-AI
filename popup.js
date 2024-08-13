@@ -21,7 +21,7 @@ fetchDataButton.addEventListener('click', () => {
   const apiKey = document.getElementById('apiKey');
   const contactUserName = document.getElementById('contactUserName');
   const selectGroupName = document.getElementById('selectGroupName');
-  const selectDirectMessages = document.getElementById('selectDirectMessages');
+  // const selectDirectMessages = document.getElementById('selectDirectMessages');
   const ignoreGroupName = document.getElementById('ignoreGroupName');
 
   const enableMessage = document.getElementById('enableMessage').checked;
@@ -35,7 +35,7 @@ fetchDataButton.addEventListener('click', () => {
   const contactUserNameValue = contactUserName.value;
   const selectGroupNameValue = selectGroupName.value;
   const ignoreGroupNameValue = ignoreGroupName.value;
-  const selectDirectMessagesValue = selectDirectMessages.checked;
+  // const selectDirectMessagesValue = selectDirectMessages.checked;
 
   const now = new Date(); // 获取当前时间
   const startTime = new Date(now.getTime() - recentDays * 24 * 60 * 60 * 1000); // 计算开始时间
@@ -47,7 +47,7 @@ fetchDataButton.addEventListener('click', () => {
     apiKey: apiKeyValue,
     contactUserName: contactUserNameValue,
     selectGroupName: selectGroupNameValue,
-    selectDirectMessages: selectDirectMessagesValue,
+    // selectDirectMessages: selectDirectMessagesValue,
     ignoreGroupName: ignoreGroupNameValue,
     enableMessage: enableMessage,
     enableSms: enableSms,
