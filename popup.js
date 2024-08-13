@@ -27,7 +27,8 @@ fetchDataButton.addEventListener('click', () => {
   const enableMessage = document.getElementById('enableMessage').checked;
   const enableSms = document.getElementById('enableSms').checked;
   const enableVoicemail = document.getElementById('enableVoicemail').checked;;
-  const enableCallTranscript = document.getElementById('enableCallTranscript').checked;;
+  const enableCallTranscript = document.getElementById('enableCallTranscript').checked;
+  const autoFilterGroup = document.getElementById('autoFilterGroup').checked
 
   const recentDays = +recentDaysInput.value || 1;
   const groupPostValue = groupPost.checked; // 获取复选框的值
@@ -52,7 +53,8 @@ fetchDataButton.addEventListener('click', () => {
     enableMessage: enableMessage,
     enableSms: enableSms,
     enableVoicemail: enableVoicemail,
-    enableCallTranscript: enableCallTranscript
+    enableCallTranscript: enableCallTranscript,
+    autoFilterGroup: autoFilterGroup
   }
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

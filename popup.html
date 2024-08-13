@@ -104,7 +104,7 @@
     <h2>Radar Poc</h2>
     <label for="recentDays">Days of data</label>
     <input id="recentDays" type="number" value="1" />
-    <label for="apiKey">Set your API key</label>
+    <label for="apiKey">Set your API key <a href="https://lop2-dev.int.rclabenv.com/app/1199ad4f-1fc8-4053-869c-19179de930d0/configuration">default</a></label>
     <input id="apiKey" type="text" value="app-CjA00E2dCpUqlpmqhcRp91gq" />
     <label>Set your data source</label>
     <label id="dataSource">
@@ -112,6 +112,9 @@
       <input id="enableSms" type="checkbox" checked> sms
       <input id="enableVoicemail" type="checkbox" checked> voicemail
       <input id="enableCallTranscript" type="checkbox" checked> call transcript
+    </label>
+    <label for="autoFilterGroup">
+      <input id="autoFilterGroup" type="checkbox">Automatically filter groups that are not related to you.
     </label>
     <div class="more" id="moreOptions">
       <label for="contactUserName">Set your contact username, separated by commas (only for Contact template)</label>
