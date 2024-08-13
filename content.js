@@ -1303,6 +1303,64 @@ function query(username, query, apiKey, contactUserName) {
   });
 }
 
+function extractAndParseJSON(inputString) {
+    // 使用正则表达式提取JSON部分
+    const jsonMatch = inputString.match(/```json([\s\S]*?)```/);
+    if (jsonMatch) {
+        const jsonString = jsonMatch[1].trim();
+        try {
+            const jsonObject = JSON.parse(jsonString);
+            return jsonObject;
+        } catch (error) {
+            console.error("JSON解析错误:", error);
+            return [];
+        }
+    } else {
+        console.log("未找到JSON数据");
+        return [];
+    }
+}
+
+
+function filterGroup(groups, username) {
+    const apiKey = 'app-LZueVrlxA37lrUCuHCpN5jzs';
+    const teamGroups = groups.filter(group => group.groupType === 'team');
+    const chunkSize = 5;
+    const results = [];
+
+    function processChunks(index) {
+        if (index >= teamGroups.length) {
+            return Promise.resolve(results);  // 全部处理完毕，返回结果数组
+        }
+
+        const chunk = teamGroups.slice(index, index + chunkSize);
+
+        return query(username, chunk, apiKey)
+            .then(result => {
+                results.push(...extractAndParseJSON(result));  // 将结果添加到结果数组
+                return processChunks(index + chunkSize);  // 处理下一个 chunk
+            })
+            .catch(error => {
+                console.error('Error processing groups:', error);
+                return processChunks(index + chunkSize);  // 即使有错误，也继续处理下一个 chunk
+            });
+    }
+
+    return processChunks(0).then(() => {
+        console.log('All groups processed.');
+        // 过滤出 isImportant 为 true 的 team group
+        const importantTeamGroupIds = results
+            .filter(result => result.isImportant)
+            .map(result => result.groupId);
+
+        // 保留 groupType !== 'team' 的所有 group 和 isImportant 为 true 的 team group
+        return groups.filter(group => 
+            group.groupType !== 'team' || importantTeamGroupIds.includes(group.groupId)
+        );
+    });
+}
+
+
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_INDEX_DB_DATA") {
@@ -1333,11 +1391,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const data = message.concat(phone).sort((a, b) => new Date(a.time) - new Date(b.time));
       sendResponse({ status: 'success' });
 
-      query(username, data, apiKey, contactUserName).then(answer => {
-        resultElement.innerHTML = marked.parse(answer);
-      }).catch(error => {
-        resultElement.innerHTML = error.message;
-      });
+      filterGroup(data, username).then(filteredGroups => {
+        console.log('Filtered Groups:', filteredGroups.length);
+        query(username, filteredGroups, apiKey, contactUserName).then(answer => {
+            resultElement.innerHTML = marked.parse(answer);
+          }).catch(error => {
+            resultElement.innerHTML = error.message;
+          });
+        }).catch(error => {
+            console.error('filterGroup Error:', error);
+            resultElement.innerHTML = error.message;
+        });
     }).catch(error => {
       resultElement.innerHTML = error.message;
     });
