@@ -1324,7 +1324,11 @@ function extractAndParseJSON(inputString) {
     }
 }
 
-
+// 相关性打分 https://lop2-dev.int.rclabenv.com/app/260d716c-c690-41a4-92bd-85fdd22b4a55/configuration
+//  {
+//     "groupId": the group id,
+//      "stars": the relevance score
+//   }
 function filterGroup(groups, username, autoFilterGroup) {
     if (!autoFilterGroup) {
         return Promise.resolve(groups);
@@ -1356,16 +1360,27 @@ function filterGroup(groups, username, autoFilterGroup) {
             });
     }
 
+
     return processChunks(0).then(() => {
         console.log('All groups processed.');
-        // 过滤出 isImportant 为 true 的 team group
-        const importantTeamGroupIds = results
-            .filter(result => result.isImportant)
-            .map(result => result.groupId);
+        const hashMap = results.reduce((acc, item) => {
+            acc[item.groupId] = +item.stars;
+            return acc;
+        }, {});
 
-        // 保留 groupType !== 'team' 的所有 group 和 isImportant 为 true 的 team group
-        return groups.filter(group => 
-            !group.groupType || importantTeamGroupIds.includes(group.groupId)
+        const groupsWithRelevanceScore = groups.map(group => {
+            const relevanceScore = hashMap[group.groupId];
+            if (relevanceScore) {
+                return {
+                    ...group,
+                    relevanceScore: relevanceScore
+                };
+            }
+            return group;
+        });
+
+        return groupsWithRelevanceScore.filter(group => 
+            !group.groupType || group.relevanceScore >= 4
         );
     });
 }
