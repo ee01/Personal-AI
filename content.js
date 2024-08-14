@@ -1316,11 +1316,16 @@ function extractAndParseJSON(inputString) {
             return jsonObject;
         } catch (error) {
             console.error("JSON解析错误:", error);
-            return [];
+            return null;
         }
     } else {
-        console.log("未找到JSON数据");
-        return [];
+        try {
+            const jsonObject = JSON.parse(inputString);
+            return jsonObject;
+        } catch (error) {
+            console.error("JSON解析错误:", error);
+            return null;
+        }
     }
 }
 
@@ -1350,7 +1355,10 @@ function filterGroup(groups, username, autoFilterGroup) {
         return Promise.all(chunk.map(group => query(username, group, apiKey)))
             .then(responses => {
                 responses.forEach(response => {
-                    results.push(...extractAndParseJSON(response));  // 将结果添加到结果数组
+                    const res = extractAndParseJSON(response);
+                    if (res) {
+                        results.push(res);  // 将结果添加到结果数组
+                    }
                 });
                 return processChunks(index + chunkSize);  // 处理下一个chunk
             })
