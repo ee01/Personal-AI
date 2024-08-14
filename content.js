@@ -1332,7 +1332,7 @@ function filterGroup(groups, username, autoFilterGroup) {
 
     const apiKey = 'app-LZueVrlxA37lrUCuHCpN5jzs';
     const teamGroups = groups.filter(group => !!group.groupType);
-    const chunkSize = 5;
+    const chunkSize = 5; // 设置并发请求的数量
     const results = [];
 
     function processChunks(index) {
@@ -1342,14 +1342,17 @@ function filterGroup(groups, username, autoFilterGroup) {
 
         const chunk = teamGroups.slice(index, index + chunkSize);
 
-        return query(username, chunk, apiKey)
-            .then(result => {
-                results.push(...extractAndParseJSON(result));  // 将结果添加到结果数组
-                return processChunks(index + chunkSize);  // 处理下一个 chunk
+        // 并发处理chunk中的所有请求
+        return Promise.all(chunk.map(group => query(username, group, apiKey)))
+            .then(responses => {
+                responses.forEach(response => {
+                    results.push(...extractAndParseJSON(response));  // 将结果添加到结果数组
+                });
+                return processChunks(index + chunkSize);  // 处理下一个chunk
             })
             .catch(error => {
                 console.error('Error processing groups:', error);
-                return processChunks(index + chunkSize);  // 即使有错误，也继续处理下一个 chunk
+                return processChunks(index + chunkSize);  // 即使有错误，也继续处理下一个chunk
             });
     }
 
@@ -1366,7 +1369,6 @@ function filterGroup(groups, username, autoFilterGroup) {
         );
     });
 }
-
 
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
