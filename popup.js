@@ -29,6 +29,7 @@ fetchDataButton.addEventListener('click', () => {
   const enableVoicemail = document.getElementById('enableVoicemail').checked;;
   const enableCallTranscript = document.getElementById('enableCallTranscript').checked;
   const autoFilterGroup = document.getElementById('autoFilterGroup').checked
+  const selectFolderGroupIds = document.getElementById('folder').value;
 
   const recentDays = +recentDaysInput.value || 1;
   const groupPostValue = groupPost.checked; // 获取复选框的值
@@ -54,7 +55,8 @@ fetchDataButton.addEventListener('click', () => {
     enableSms: enableSms,
     enableVoicemail: enableVoicemail,
     enableCallTranscript: enableCallTranscript,
-    autoFilterGroup: autoFilterGroup
+    autoFilterGroup: autoFilterGroup,
+    selectFolderGroupIds: selectFolderGroupIds
   }
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -69,3 +71,24 @@ fetchDataButton.addEventListener('click', () => {
     });
   });
 });
+
+
+document.addEventListener('DOMContentLoaded', function() {
+  chrome.storage.local.get(['folders'], function(result) {
+    if (result.folders) {
+      renderSelect(result.folders);
+    } else {
+      console.log("No data available");
+    }
+  });
+});
+
+function renderSelect(data) {
+  const select = document.getElementById('folder');
+  data.forEach(function(item) {
+    let option = document.createElement('option');
+    option.value = item.ids;
+    option.textContent = item.title;
+    select.appendChild(option);
+  });
+}

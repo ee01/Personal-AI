@@ -119,7 +119,7 @@ function getDirectUserNameByGroupName(groupName) {
   return result;
 }
 
-function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames) {
+function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames, selectFolderGroupIds) {
   if (!enableMessage) {
     return Promise.resolve([]);
   }
@@ -171,7 +171,9 @@ function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupN
         // const isDirectMessageSelected = selectDirectMessageNames.length === 0 || selectDirectMessageNames.includes(getDirectUserNameByGroupName(groupName));
         const isGroupIgnored = ignoreGroupNames.length > 0 && ignoreGroupNames.includes(groupName);
 
-        return isGroupSelected && !isGroupIgnored;
+        const isSelectedGroupOfFolder = selectFolderGroupIds.length === 0 || selectFolderGroupIds.includes(item.groupId);
+
+        return isGroupSelected && isSelectedGroupOfFolder && !isGroupIgnored;
       });
 
       return groupPost ? transformData2Group(transformedData) : transformedData;
@@ -1408,6 +1410,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const enableVoicemail = message.enableVoicemail;
     const enableCallTranscript = message.enableCallTranscript;
     const autoFilterGroup = message.autoFilterGroup;
+    const selectFolderGroupIds = message.selectFolderGroupIds.split(',').map(item => +item);
 
     const selectGroupNames = selectGroupName.split(',').map(item => item.trim()).filter(item => !!item);
     // const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
@@ -1418,7 +1421,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     insert2MainBody();
     const resultElement = document.getElementById('radar-poc-result');
 
-    Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
+    Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames, selectFolderGroupIds), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
       const username = localStorage.getItem('displayName');
       const data = message.concat(phone).sort((a, b) => new Date(a.time) - new Date(b.time));
 
@@ -1440,3 +1443,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Will respond asynchronously.
   }
 });
+
+
+window.addEventListener('load', () => {
+    getIndexedDBData('Glip', 'profile').then(([data]) => {
+    const folders = [{title: ' ', ids: []},{title: 'favorite', ids: data.favorite_group_ids}, ...data.conversation_sets.filter(item => item.type === 'folder')]
+      // 将数据发送到background script
+      chrome.runtime.sendMessage({type: 'indexedDBData', data: folders});
+    }).catch(error => {
+      console.error(error);
+    });
+  });
