@@ -35,7 +35,7 @@
       font-weight: 500;
       color: #555;
     }
-    input[type="text"], input[type="number"] {
+    input[type="text"], input[type="number"], select {
       width: 100%;
       padding: 12px;
       margin-bottom: 15px;
@@ -45,7 +45,7 @@
       transition: border-color 0.3s ease-in-out;
       box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
     }
-    input[type="text"]:focus, input[type="number"]:focus {
+    input[type="text"]:focus, input[type="number"]:focus, select:focus {
       border-color: #2980B9;
       outline: none;
     }
@@ -128,6 +128,9 @@
       <label for="groupPost">
         <input id="groupPost" type="checkbox" checked> By group or by posts, default by group
       </label>
+      <label for="conversationFolders">Choose a folder:</label>
+      <select name="folder" id="folder">
+      </select>
     </div>
     <div id="moreButton">Show More Options</div>
     <button id="fetchDataButton">Generate Report</button>
