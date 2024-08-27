@@ -9,7 +9,11 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://mfe_a-develop.jupiter.int.rclabenv.com/*", "https://app.ringcentral.com/*"],
+      "matches": [
+        "https://mfe_a-develop.jupiter.int.rclabenv.com/*", 
+        "https://rc-a-develop.jupiter.int.rclabenv.com/*",
+        "https://app.ringcentral.com/*"
+      ],
       "js": ["content.js"]
     }
   ],
