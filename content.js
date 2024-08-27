@@ -98,15 +98,18 @@ function transformData2Group(data) {
         groupName: item.groupName,
         text: '',
         groupType: 'team',
+        postNum: 0,
         time: '' // 初始化 time 字段
       };
     }
     acc[item.groupId].text += item.parentId ? `[postId:${item.id}][threadId:${item.parentId}][${item.time}][${item.creator}]: ${item.text}\n` : `[postId:${item.id}][${item.time}][${item.creator}]: ${item.text}\n`;
-
+    acc[item.groupId].postNum += 1;
     acc[item.groupId].time = item.time; // 更新 time 为当前项的时间
     acc[item.groupId].groupType = item.groupType;
     return acc;
   }, {});
+
+  console.log('conversation list', groupedData);
 
   return Object.values(groupedData);
 };
@@ -138,7 +141,7 @@ function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupN
         return acc;
     }, {});
 
-    const filteredPosts = input.filter(post => post.text !== '');
+    const filteredPosts = input.filter(post => !!post.text);
 
     // 转换数据结构
     const transformedData = filteredPosts.map(post => ({
@@ -176,12 +179,25 @@ function TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupN
         return isGroupSelected && isSelectedGroupOfFolder && !isGroupIgnored;
       });
 
-      return groupPost ? transformData2Group(transformedData) : transformedData;
+      return groupPost ? transformData2Group(uniqBy(transformedData, 'id')) : transformedData;
   })
   .catch((error) => {
       console.error('Error processing files:', error);
   });
 }
+
+function uniqBy(array, key) {
+  const seen = new Set();
+  return array.filter(item => {
+    const keyValue = item[key];
+    if (seen.has(keyValue)) {
+      return false;
+    }
+    seen.add(keyValue);
+    return true;
+  });
+}
+
 
 const transformSMS = (input) => {
   return input.map(item => ({
@@ -290,6 +306,17 @@ const cssStyles = `
     -webkit-user-select: text;
     -moz-user-select: text;
     user-select: text
+}
+
+.radar-poc-result-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    margin-top: 10px;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    background: none;
 }
 
 .light,:root {
@@ -1249,11 +1276,20 @@ function insert2MainBody() {
   const resultElement = document.getElementById('radar-poc-result');
   if (resultElement) {
     resultElement.remove();
+    document.getElementById('radar-poc-result-close').remove();
   }
 
   const appMainSection = document.getElementById('app-main-section');
 
-  // Create a new div element
+  const closeButton = document.createElement('button');
+  closeButton.className = 'radar-poc-result-close';
+  closeButton.id = 'radar-poc-result-close';
+  closeButton.innerHTML = 'X';
+  closeButton.addEventListener('click', () => {
+    document.getElementById('radar-poc-result').remove();
+    closeButton.remove();
+  });
+
   const newElement = document.createElement('div');
   newElement.id = 'radar-poc-result';
   newElement.className = 'radar-poc-result';
@@ -1274,6 +1310,7 @@ function insert2MainBody() {
 
   // Insert the new element into the app-main-section
   appMainSection.appendChild(newElement);
+  appMainSection.appendChild(closeButton);
 }
 
 function query(username, query, apiKey, contactUserName) {
@@ -1422,13 +1459,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const resultElement = document.getElementById('radar-poc-result');
 
     Promise.all([TransformMessagePosts(enableMessage, startTime, groupPost, selectGroupNames, ignoreGroupNames, selectFolderGroupIds), TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript)]).then(([message, phone]) => {
-      const username = localStorage.getItem('displayName');
+      const username = localStorage.getItem('displayName') ?? 'radar-poc';
       const data = message.concat(phone).sort((a, b) => new Date(a.time) - new Date(b.time));
 
       filterGroup(data, username, autoFilterGroup).then(filteredGroups => {
         console.log('Filtered Groups:', filteredGroups.length);
         query(username, filteredGroups, apiKey, contactUserName).then(answer => {
-            resultElement.innerHTML = marked.parse(answer || 'llm anwser error');
+            const transformedAnswer = transformGroupLinks(transformPostLinks(answer || 'llm anwser error'));
+            resultElement.innerHTML = marked.parse(transformedAnswer);
           }).catch(error => {
             resultElement.innerHTML = error.message;
           });
@@ -1444,6 +1482,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+function transformPostLinks(inputString) {
+  const postLinkPattern = /\[post:(\d+)\]/g;
+  let match;
+  let index = 1;
+  const transformedString = inputString.replace(postLinkPattern, (match, postId) => {
+    return `[[${index++}]](/l${window.location.pathname}/${postId})`;
+  });
+  return transformedString;
+}
+
+function transformGroupLinks(inputString) {
+  const groupLinkPattern = /\[group:(.+):(\d+)\]/g;
+  let match;
+  let index = 1;
+  const transformedString = inputString.replace(groupLinkPattern, (match, groupName, groupId) => {
+    return `[${groupName}](/messages/${groupId})`;
+  });
+  return transformedString;
+}
+
 
 window.addEventListener('load', () => {
     getIndexedDBData('Glip', 'profile').then(([data]) => {
@@ -1453,4 +1511,4 @@ window.addEventListener('load', () => {
     }).catch(error => {
       console.error(error);
     });
-  });
+});
