@@ -1,6 +1,8 @@
 const fetchDataButton = document.getElementById('fetchDataButton');
 const indexingButton = document.getElementById('indexingButton');
 const moreButton = document.getElementById('moreButton');
+const genTopicsButton = document.getElementById('genTopicsButton');
+const querySubmitButton = document.getElementById('querySubmitButton');
 
 function toggleMore() {
   var moreOptions = document.getElementById('moreOptions');
@@ -76,6 +78,49 @@ indexingButton.addEventListener('click', () => {
       // Hide loading and show result
       if (response.status === 'success' && response.action === 'INDEXING') {
         console.log('indexing data sent successfully');
+        window.close();
+      }
+    });
+  });
+});
+
+genTopicsButton.addEventListener('click', () => {
+  const model = document.getElementById('model').value;
+
+  const data = {
+    type: 'RADAR-POC-GEN-TOPICS',
+    model: model,
+  };
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
+      // Hide loading and show result
+      if (response.status === 'success' && response.action === 'GEN-TOPICS') {
+        console.log('gen topics data sent successfully');
+        window.close();
+      }
+    });
+  });
+});
+
+querySubmitButton.addEventListener('click', () => {
+  const model = document.getElementById('model').value;
+  const query = document.getElementById('queryInput').value;
+  if (!query || query.trim() === '') {
+    alert('Please enter a query');
+    return;
+  }
+
+  const data = {
+    type: 'RADAR-POC-QUERY',
+    model: model,
+    query: query,
+  };
+
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
+      // Hide loading and show result
+      if (response.status === 'success' && response.action === 'QUERY') {
+        console.log('gen topics data sent successfully');
         window.close();
       }
     });

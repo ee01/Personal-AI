@@ -102,6 +102,7 @@ function transformData2Group(data) {
   const groupedData = data.reduce((acc, item) => {
     if (!acc[item.groupId]) {
       acc[item.groupId] = {
+        id: item.groupId,
         groupId: item.groupId,
         groupName: item.groupName,
         text: '',
@@ -1316,7 +1317,7 @@ const cssStyles = `
 
 let styleSheet = null;
 
-function insert2MainBody() {
+function insert2MainBody(defaultText) {
   // JavaScript to insert a new DOM element
   const resultElement = document.getElementById('radar-poc-result');
   if (resultElement) {
@@ -1351,25 +1352,77 @@ function insert2MainBody() {
   newElement.style.overflowY = 'auto';
 
   // Add some content to the new element
-  newElement.innerHTML = 'Loading...';
+  newElement.innerHTML = defaultText || 'Loading...';
 
   // Insert the new element into the app-main-section
   appMainSection.appendChild(newElement);
   appMainSection.appendChild(closeButton);
 }
 
+function genTopics(username, extensionId, model) {
+    const url = 'http://localhost:8012/v1/gen/topics';
+
+    const body = {
+        username: username,
+        extension_id: extensionId,
+        model: model,
+    };
+
+    console.info('genTopics body', body);
+
+    return fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      })
+      .then(response => response.json())
+      .then(data => {
+        return data;
+      })
+      .catch(error => {
+        return error.message || 'Https error'
+      });
+}
+
+function customQuery(username, extensionId, model, query) {
+    const url = 'http://localhost:8012/v1/query';
+
+    const body = {
+        username: username,
+        extension_id: extensionId,
+        model: model,
+        query: query
+    };
+
+    console.info('customQuery body', body);
+
+    return fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      })
+      .then(response => response.json())
+      .then(data => {
+        return data;
+      })
+      .catch(error => {
+        return error.message || 'Https error'
+      });
+}
 
 function indexing(username, extensionId, model, data) {
     const url = 'http://localhost:8012/v1/indexing';
 
     const body = {
         username: username,
-        extensionId: extensionId,
+        extension_id: extensionId,
         model: model,
         data: data
     };
-
-    console.info('indexing body', body);
 
     return fetch(url, {
         method: 'POST',
@@ -1411,98 +1464,111 @@ function query(username, query, apiKey, contactUserName) {
   })
   .then(response => response.json())
   .then(data => {
-    console.log('Success:', data);
     return data.answer;
   })
   .catch(error => {
-    console.log('Error:', error);
     return error.message || 'Https error'
   });
 }
 
-function extractAndParseJSON(inputString) {
-    // 使用正则表达式提取JSON部分
-    const jsonMatch = inputString.match(/```json([\s\S]*?)```/);
-    if (jsonMatch) {
-        const jsonString = jsonMatch[1].trim();
-        try {
-            const jsonObject = JSON.parse(jsonString);
-            return jsonObject;
-        } catch (error) {
-            console.log("JSON解析错误:", error);
-            return null;
-        }
-    } else {
-        try {
-            const jsonObject = JSON.parse(inputString);
-            return jsonObject;
-        } catch (error) {
-            console.log("JSON解析错误:", error);
-            return null;
-        }
-    }
-}
-
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "RADAR-POC-CUSTOM") {
-    const recentDays = +message.recentDays || 1;
-    const apiKey = message.apiKey || '';
-    const action = message.action;
-    const model = message.model;
-    const contactUserName = message.contactUserName || '';
-    const selectGroupName = message.selectGroupName || '';
-    // const selectDirectMessages = message.selectDirectMessages || '';
-    const ignoreGroupName = message.ignoreGroupName || '';
-    const enableMessage = message.enableMessage;
-    const enableSms = message.enableSms;
-    const enableVoicemail = message.enableVoicemail;
-    const enableCallTranscript = message.enableCallTranscript;
-    const enableCalendar = message.enableCalendar;
-    const selectFolderGroupIds = message.selectFolderGroupIds.split(',').map(item => +item).filter(item => !!item);
-    const selectGroupNames = selectGroupName.split(',').map(item => item.trim()).filter(item => !!item);
-    // const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
-    const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim()).filter(item => !!item);
-    console.log('Received message:', message);
-    sendResponse({ status: 'success', action: action });
     const ownExtension = localStorage.getItem('ownExtension') || {};
     const ownExtensionObj = JSON.parse(ownExtension);
     const extensionId = ownExtensionObj.extension;
     const username = JSON.parse(localStorage.getItem('displayName') || '') ?? 'radar-poc';
-    insert2MainBody();
+    const model = message.model;
+    
+    if (message.type === "RADAR-POC-GEN-TOPICS") {
+        sendResponse({ status: 'success', action: 'GEN-TOPICS' });
+        insert2MainBody();
 
-    const now = new Date(); // 获取当前时间
-    const startTime = formatDate(new Date(now.getTime() - recentDays * 24 * 60 * 60 * 1000)); // 计算开始时间
-    console.log(`Start Time: ${startTime}`)
-
-    Promise.all([
-        TransformMessagePosts(enableMessage, startTime, selectGroupNames, ignoreGroupNames, selectFolderGroupIds), 
-        TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript),
-        TransformCalendar(startTime, enableCalendar, username)
-    ]).then(([message, phone, calendar]) => {
         const resultElement = document.getElementById('radar-poc-result');
-        const data = message.concat(phone).concat(calendar).sort((a, b) => new Date(a.time) - new Date(b.time));
+        genTopics(username, extensionId, model).then((data) => {
+            resultElement.innerHTML = marked.parse(data);
+        }).catch(error => {
+            resultElement.innerHTML = error.message;
+        });
 
-        if (action === 'INDEXING') {
-            indexing(username, extensionId, model, data).then(() => {
-                resultElement.innerHTML = 'indexing success.';
-            }).catch(error => {
-                resultElement.innerHTML = error.message;
-            });
-        } else if (action === 'GENERATE_REPORT') {
-            query(username, data, apiKey, contactUserName).then(answer => {
-                const transformedAnswer = transformGroupLinks(transformPostLinks(answer || 'llm anwser error'));
-                resultElement.innerHTML = marked.parse(transformedAnswer);
-            }).catch(error => {
-                resultElement.innerHTML = error.message;
-            });
-        }
-    }).catch(error => {
-        resultElement.innerHTML = error.message;
-    });
+        return;
+    }
 
-    return true; // Will respond asynchronously.
-  }
+    if (message.type === "RADAR-POC-QUERY") {
+        const query = message.query;
+        sendResponse({ status: 'success', action: 'QUERY' });
+        insert2MainBody();
+
+        const resultElement = document.getElementById('radar-poc-result');
+        customQuery(username, extensionId, model, query).then((data) => {
+            const result = data.result;
+            const candidate_questions = data.candidate_questions;
+            let anwser = result + '<h2>Candidate Questions</h2>';
+            const questionsElements = candidate_questions.map(q => `<p>${q}</p>`).join('');
+            anwser += questionsElements;
+
+            resultElement.innerHTML = marked.parse(anwser);
+        }).catch(error => {
+            resultElement.innerHTML = error.message;
+        });
+
+        return;
+    }
+
+    if (message.type === "RADAR-POC-CUSTOM") {
+        const recentDays = +message.recentDays || 1;
+        const apiKey = message.apiKey || '';
+        const action = message.action;
+        const contactUserName = message.contactUserName || '';
+        const selectGroupName = message.selectGroupName || '';
+        // const selectDirectMessages = message.selectDirectMessages || '';
+        const ignoreGroupName = message.ignoreGroupName || '';
+        const enableMessage = message.enableMessage;
+        const enableSms = message.enableSms;
+        const enableVoicemail = message.enableVoicemail;
+        const enableCallTranscript = message.enableCallTranscript;
+        const enableCalendar = message.enableCalendar;
+        const selectFolderGroupIds = message.selectFolderGroupIds.split(',').map(item => +item).filter(item => !!item);
+        const selectGroupNames = selectGroupName.split(',').map(item => item.trim()).filter(item => !!item);
+        // const selectDirectMessageNames = selectDirectMessages.split(',').map(item => item.trim().toLowerCase()).filter(item => !!item);
+        const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim()).filter(item => !!item);
+        console.log('Received message:', message);
+        sendResponse({ status: 'success', action: action });
+        const isIndexing = action === 'INDEXING'
+        insert2MainBody(isIndexing ? 'Indexing...' : 'Loading...');
+
+        const now = new Date(); // 获取当前时间
+        const startTime = formatDate(new Date(now.getTime() - recentDays * 24 * 60 * 60 * 1000)); // 计算开始时间
+        console.log(`Start Time: ${startTime}`)
+
+        const resultElement = document.getElementById('radar-poc-result');
+
+        Promise.all([
+            TransformMessagePosts(enableMessage, startTime, selectGroupNames, ignoreGroupNames, selectFolderGroupIds), 
+            TransformPhone(startTime, enableSms,enableVoicemail,enableCallTranscript),
+            TransformCalendar(startTime, enableCalendar, username)
+        ]).then(([message, phone, calendar]) => {
+            const data = message.concat(phone).concat(calendar).sort((a, b) => new Date(a.time) - new Date(b.time));
+
+            if (isIndexing) {
+                indexing(username, extensionId, model, data).then(() => {
+                    resultElement.innerHTML = 'indexing success.';
+                }).catch(error => {
+                    resultElement.innerHTML = error.message;
+                });
+            } else if (action === 'GENERATE_REPORT') {
+                query(username, data, apiKey, contactUserName).then(answer => {
+                    const transformedAnswer = transformGroupLinks(transformPostLinks(answer || 'llm anwser error'));
+                    resultElement.innerHTML = marked.parse(transformedAnswer);
+                }).catch(error => {
+                    resultElement.innerHTML = error.message;
+                });
+            }
+        }).catch(error => {
+            resultElement.innerHTML = error.message;
+        });
+
+        return true; // Will respond asynchronously.
+    }
 });
 
 function transformPostLinks(inputString) {

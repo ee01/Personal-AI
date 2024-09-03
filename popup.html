@@ -77,6 +77,7 @@
       transform: scale(1.2);
       vertical-align: middle;
     }
+
     button {
       width: 100%;
       padding: 12px;
@@ -124,6 +125,24 @@
     .more input[type="text"], .more input[type="number"], .more select {
       margin: 10px 0;
     }
+    .query-section {
+      margin-top: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .query-section input[type="text"] {
+      flex: 1;
+      padding: 12px 8px;
+    }
+
+    .query-section button {
+      width: 100px;
+      margin-top: 0;
+      margin-left: 16px;
+    }
+  
   </style>
 </head>
 <body>
@@ -181,8 +200,13 @@
       </select>
     </div>
     <div id="moreButton">Show More Options</div>
-    <button id="indexingButton">Indexing</button>
-    <button id="fetchDataButton">Generate Report</button>
+    <button id="fetchDataButton">(Without Graph) Generate Report</button>
+    <button id="indexingButton">(Graph) Indexing</button>
+    <button id="genTopicsButton">(With Graph) Generate Report</button>
+    <div class="query-section">
+      <input type="text" id="queryInput" value="" placeholder="Please enter your question" />
+      <button id="querySubmitButton">submit</button>
+    </div>
   </div>
   <script src="popup.js"></script>
 </body>
