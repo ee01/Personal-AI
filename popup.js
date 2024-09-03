@@ -64,11 +64,19 @@ function getData(action) {
 moreButton.addEventListener('click', toggleMore);
 
 indexingButton.addEventListener('click', () => {
+  let result = window.confirm("Indexing is a relatively expensive operation. If you have already indexed, please do not repeat the indexing. Do you want to continue?");
+  if (!result) {
+    return;
+  }
+
   const data = getData('INDEXING');
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
       // Hide loading and show result
+      if (response.status === 'success' && response.action === 'INDEXING') {
+        console.log('indexing data sent successfully');
+      }
     });
   });
 });
@@ -79,11 +87,9 @@ fetchDataButton.addEventListener('click', () => {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
       // Hide loading and show result
-      if (response.status === 'success') {
-        console.log('Data sent successfully');
+      if (response.status === 'success' && response.action === 'GENERATE_REPORT') {
+        console.log('generate report data sent successfully');
         window.close();
-      } else {
-        console.error('Failed to fetch data:', response.error);
       }
     });
   });
