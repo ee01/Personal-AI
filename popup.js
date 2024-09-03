@@ -76,6 +76,7 @@ indexingButton.addEventListener('click', () => {
       // Hide loading and show result
       if (response.status === 'success' && response.action === 'INDEXING') {
         console.log('indexing data sent successfully');
+        window.close();
       }
     });
   });
