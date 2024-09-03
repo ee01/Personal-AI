@@ -6,7 +6,7 @@
     html, body {
       margin: 0;
       padding: 0;
-      width: 400px;
+      width: 420px;
       height: auto;
       display: flex;
       align-items: center;
@@ -18,9 +18,9 @@
       background: #fff;
       border-radius: 10px;
       box-shadow: 0 8px 16px rgba(0,0,0,0.2);
-      padding: 30px;
+      padding: 18px;
       width: 100%;
-      max-width: 400px;
+      max-width: 420px;
       box-sizing: border-box;
       text-align: left;
     }
@@ -29,18 +29,41 @@
       font-size: 24px;
       color: #2980B9;
     }
+
+    .section {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 10px 0;
+    }
+
+    .section label {
+      flex: 1;
+      margin-right: 10px;
+    }
+
+    .section input[type="text"], .section input[type="number"], .section select {
+      width: 250px;
+    }
+
     label {
       display: block;
-      margin-bottom: 8px;
       font-weight: 500;
       color: #555;
     }
-    input[type="text"], input[type="number"], select {
-      width: 100%;
-      padding: 12px;
-      margin-bottom: 15px;
+    .section .dataSource {
+      padding: 8px;
+      width: 250px;
       box-sizing: border-box;
-      border: 2px solid #ddd;
+      border: 1px solid #ddd;
+      display: flex;
+      flex-direction: column;
+    }
+    input[type="text"], input[type="number"], select {
+      padding: 8px;
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #ddd;
       border-radius: 4px;
       transition: border-color 0.3s ease-in-out;
       box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
@@ -56,7 +79,7 @@
     }
     button {
       width: 100%;
-      padding: 15px;
+      padding: 12px;
       margin-top: 10px;
       border: none;
       border-radius: 5px;
@@ -97,42 +120,68 @@
       display: none;
       margin-top: 20px;
     }
+
+    .more input[type="text"], .more input[type="number"], .more select {
+      margin: 10px 0;
+    }
   </style>
 </head>
 <body>
   <div id="container">
     <h2>Radar Poc</h2>
-    <label for="recentDays">Days of data</label>
-    <input id="recentDays" type="number" value="1" />
-    <label for="apiKey">Set your API key <a href="https://lop2-dev.int.rclabenv.com/app/1199ad4f-1fc8-4053-869c-19179de930d0/configuration">default</a></label>
-    <input id="apiKey" type="text" value="app-CjA00E2dCpUqlpmqhcRp91gq" />
-    <label>Set your data source</label>
-    <label id="dataSource">
-      <input id="enableMessage" type="checkbox" checked> Message
-      <input id="enableSms" type="checkbox" checked> Sms
-      <input id="enableVoicemail" type="checkbox" checked> Voicemail
-      <input id="enableCallTranscript" type="checkbox" checked> Call transcript
-    </label>
-    <label for="autoFilterGroup">
-      <input id="autoFilterGroup" type="checkbox">Enable group relevance evaluation
-    </label>
+    <div class="section">
+      <label for="recentDays">Days of data</label>
+      <input id="recentDays" type="number" value="1" />
+    </div>
+    <div class="section">
+      <label for="model">LLM model</label>
+      <select name="model" id="model">
+        <option value="4o-mini">4o mini</option>
+        <option value="4o">4o</option>
+      </select>
+    </div>
+
+    <div class="section">
+      <label for="apiKey">API key <a href="https://lop2-dev.int.rclabenv.com/app/1199ad4f-1fc8-4053-869c-19179de930d0/configuration">default</a></label>
+      <input id="apiKey" type="text" value="app-CjA00E2dCpUqlpmqhcRp91gq" />
+    </div>
+  
+    <div class="section">
+      <label>Data source</label>
+      <div id="dataSource" class="dataSource">
+        <span>
+          <input id="enableMessage" type="checkbox" checked> Message
+        </span>
+        <span>
+          <input id="enableSms" type="checkbox"> Sms
+        </span>
+        <span>
+          <input id="enableVoicemail" type="checkbox"> Voicemail
+        </span>
+        <span>
+          <input id="enableCallTranscript" type="checkbox"> Call transcript
+        </span>
+        <span>
+          <input id="enableCalendar" type="checkbox"> Calendar
+        </span>
+      </div>
+    </div>
+
     <div class="more" id="moreOptions">
-      <label for="contactUserName">Set your contact username, separated by commas (only for Contact template)</label>
-      <input id="contactUserName" type="text" placeholder="e.g: Steve Chen,Spike Yang" value="" />
-      <label for="selectGroupName">Choose your group name, separated by commas (default all)</label>
+      <!-- <label for="contactUserName">Set your contact username, separated by commas (only for Contact template)</label>
+      <input id="contactUserName" type="text" placeholder="e.g: Steve Chen,Spike Yang" value="" /> -->
+      <label for="selectGroupName">Select group, separated by commas (default all)</label>
       <input id="selectGroupName" type="text" placeholder="e.g: team1,team2" value="" />
-      <label for="ignoreGroupName">Choose your ignore group name, separated by commas (default None)</label>
+      <label for="ignoreGroupName">Ignore group, separated by commas (default None)</label>
       <input id="ignoreGroupName" type="text" placeholder="e.g: team1,team2" value="" />
       <!-- <label for="selectDirectMessages">Choose your direct messages, separated by commas (default all)</label>
       <input id="selectDirectMessages" placeholder="e.g: spike.yang,edward.lin" type="text" value="" /> -->
-      <label for="groupPost">
-        <input id="groupPost" type="checkbox" checked> By group or by posts, default by group
-      </label>
       <label for="conversationFolders">Choose a folder:</label>
       <select name="folder" id="folder">
       </select>
     </div>
     <div id="moreButton">Show More Options</div>
+    <button id="indexingButton">Indexing</button>
     <button id="fetchDataButton">Generate Report</button>
   </div>
   <script src="popup.js"></script>

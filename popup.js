@@ -1,4 +1,5 @@
 const fetchDataButton = document.getElementById('fetchDataButton');
+const indexingButton = document.getElementById('indexingButton');
 const moreButton = document.getElementById('moreButton');
 
 function toggleMore() {
@@ -13,13 +14,10 @@ function toggleMore() {
   }
 }
 
-moreButton.addEventListener('click', toggleMore);
-
-fetchDataButton.addEventListener('click', () => {
+function getData(action) {
   const recentDaysInput = document.getElementById('recentDays');
-  const groupPost = document.getElementById('groupPost');
   const apiKey = document.getElementById('apiKey');
-  const contactUserName = document.getElementById('contactUserName');
+  // const contactUserName = document.getElementById('contactUserName');
   const selectGroupName = document.getElementById('selectGroupName');
   // const selectDirectMessages = document.getElementById('selectDirectMessages');
   const ignoreGroupName = document.getElementById('ignoreGroupName');
@@ -28,26 +26,26 @@ fetchDataButton.addEventListener('click', () => {
   const enableSms = document.getElementById('enableSms').checked;
   const enableVoicemail = document.getElementById('enableVoicemail').checked;;
   const enableCallTranscript = document.getElementById('enableCallTranscript').checked;
-  const autoFilterGroup = document.getElementById('autoFilterGroup').checked
+  const enableCalendar = document.getElementById('enableCalendar').checked;
+  // const autoFilterGroup = document.getElementById('autoFilterGroup').checked
   const selectFolderGroupIds = document.getElementById('folder').value;
+  const model = document.getElementById('model').value;
 
   const recentDays = +recentDaysInput.value || 1;
-  const groupPostValue = groupPost.checked; // 获取复选框的值
   const apiKeyValue = apiKey.value;
-  const contactUserNameValue = contactUserName.value;
+  // const contactUserNameValue = contactUserName.value;
   const selectGroupNameValue = selectGroupName.value;
   const ignoreGroupNameValue = ignoreGroupName.value;
   // const selectDirectMessagesValue = selectDirectMessages.checked;
 
-  const now = new Date(); // 获取当前时间
-  const startTime = new Date(now.getTime() - recentDays * 24 * 60 * 60 * 1000); // 计算开始时间
-  console.log(`Start Time: ${startTime}`);
   const data = { 
-    type: "GET_INDEX_DB_DATA",
-    startTime: startTime,
-    groupPost: groupPostValue,
+    type: 'RADAR-POC-CUSTOM',
+    action: action,
+    recentDays: recentDays,
+    model: model,
+    // groupPost: groupPostValue,
     apiKey: apiKeyValue,
-    contactUserName: contactUserNameValue,
+    // contactUserName: contactUserNameValue,
     selectGroupName: selectGroupNameValue,
     // selectDirectMessages: selectDirectMessagesValue,
     ignoreGroupName: ignoreGroupNameValue,
@@ -55,9 +53,28 @@ fetchDataButton.addEventListener('click', () => {
     enableSms: enableSms,
     enableVoicemail: enableVoicemail,
     enableCallTranscript: enableCallTranscript,
-    autoFilterGroup: autoFilterGroup,
+    enableCalendar: enableCalendar,
+    // autoFilterGroup: autoFilterGroup,
     selectFolderGroupIds: selectFolderGroupIds
   }
+
+  return data;
+}
+
+moreButton.addEventListener('click', toggleMore);
+
+indexingButton.addEventListener('click', () => {
+  const data = getData('INDEXING');
+
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
+      // Hide loading and show result
+    });
+  });
+});
+
+fetchDataButton.addEventListener('click', () => {
+  const data = getData('GENERATE_REPORT');
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
