@@ -1405,7 +1405,7 @@ function insert2MainBody(defaultText) {
 }
 
 function genTopics(username, extensionId, model) {
-    const url = 'http://localhost:8012/v1/gen/topics';
+    const url = 'https://radar-poc.int.rclabenv.com:8443/v1/gen/topics';
 
     const body = {
         username: username,
@@ -1433,7 +1433,7 @@ function genTopics(username, extensionId, model) {
 }
 
 function customQuery(username, extensionId, model, query) {
-    const url = 'http://localhost:8012/v1/query';
+    const url = 'https://radar-poc.int.rclabenv.com:8443/v1/query';
 
     const body = {
         username: username,
@@ -1462,7 +1462,7 @@ function customQuery(username, extensionId, model, query) {
 }
 
 function indexing(username, extensionId, model, data) {
-    const url = 'http://localhost:8012/v1/indexing';
+    const url = 'https://radar-poc.int.rclabenv.com:8443/v1/indexing';
 
     if (!data || data.length === 0) {
         return Promise.reject('No data provided');
