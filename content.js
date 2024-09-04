@@ -118,7 +118,6 @@ function transformData2Group(data) {
     return acc;
   }, {});
 
-  console.log('conversation list', groupedData);
 
   return Object.values(groupedData);
 };
@@ -220,10 +219,33 @@ function uniqBy(array, key) {
   });
 }
 
+function transformSMSData2Group(data) {
+    const groupedData = data.reduce((acc, item) => {
+      if (!acc[item.conversationId]) {
+        acc[item.conversationId] = {
+          id: item.conversationId,
+          text: '',
+          type: 'sms',
+          postNum: 0,
+          to: item.to,
+          time: '' // 初始化 time 字段
+        };
+      }
+
+      acc[item.conversationId].text += `[id:${item.id}][${item.time}][${item.from}]: ${item.text}\n`;
+      acc[item.conversationId].postNum += 1;
+      acc[item.conversationId].time = item.time; // 更新 time 为当前项的时间
+      return acc;
+    }, {});
+  
+  
+    return Object.values(groupedData);
+};
 
 const transformSMS = (input) => {
   return input.map(item => ({
     id: item.id.toString(), // 将ID转换为字符串形式
+    conversationId: item.conversationId, // 会话ID
     type: "sms", // 确保类型为小写
     text: item.subject || '', // 如果没有主题，则使用空字符串
     from: item.from ? (item.from.name || item.from.phoneNumber) : 'unknown', // 如果没有用户名，设置为'unknown'
@@ -274,11 +296,32 @@ const transformCall = (transcripts, logs) => {
       text: text,
       time: endTime,
       from: sessionLog.from ? sessionLog.from.name : 'unknown',
-      to: sessionLog.to ? sessionLog.to.name : 'unknown'
     };
   });
 
   return transformedData;
+};
+
+function transformVMData2Group(data) {
+    const groupedData = data.reduce((acc, item) => {
+      if (!acc[item.from]) {
+        acc[item.from] = {
+          id: 'vm-' + item.id,
+          text: '',
+          type: 'voicemail',
+          postNum: 0,
+          time: '' // 初始化 time 字段
+        };
+      }
+
+      acc[item.from].text += `[id:${item.id}][${item.time}][${item.from}]: ${item.text}\n`;
+      acc[item.from].postNum += 1;
+      acc[item.from].time = item.time; // 更新 time 为当前项的时间
+      return acc;
+    }, {});
+  
+  
+    return Object.values(groupedData);
 };
 
 const transformVoicemail = (input) => {
@@ -287,8 +330,6 @@ const transformVoicemail = (input) => {
     type: "voicemail", // 确保类型为小写
     text: item.transcription || '', // 如果没有主题，则使用空字符串
     from: item.from ? (item.from.name || item.from.phoneNumber) : 'unknown', // 如果没有用户名，设置为'unknown'
-    to: item.to ? item.to.map(recipient => recipient.name || recipient.phoneNumber || 'unknown  ') : ['unknown'], // 如果没有用户名，设置为'unknown'
-    readStatus: item.readStatus, // 读取状态, 已读未读
     time: formatDate(new Date(item.__timestamp)), // 使用输入中的时间戳
   })).filter(item => item.text !== '');
 };
@@ -296,10 +337,14 @@ const transformVoicemail = (input) => {
 const TransformPhone = (startTime, enableSms,enableVoicemail,enableCallTranscript) => {
   return fetchAllPhoneData(enableSms,enableVoicemail,enableCallTranscript).then((inputData) => {
     const sms = transformSMS(inputData.sms).filter(item => new Date(item.time) >= new Date(startTime));
+    const smsGroup = transformSMSData2Group(sms);
+
     const voicemail = transformVoicemail(inputData.voicemail).filter(item => new Date(item.time) >= new Date(startTime));
+    const voicemailGroup = transformVMData2Group(voicemail);
+
     const callTranscript = transformCall(inputData.callTranscript, inputData.callLog).filter(item => new Date(item.time) >= new Date(startTime));
 
-    return sms.concat(voicemail).concat(callTranscript);
+    return smsGroup.concat(voicemailGroup).concat(callTranscript);
   });
 }
 
@@ -1368,8 +1413,6 @@ function genTopics(username, extensionId, model) {
         model: model,
     };
 
-    console.info('genTopics body', body);
-
     return fetch(url, {
         method: 'POST',
         headers: {
@@ -1395,8 +1438,6 @@ function customQuery(username, extensionId, model, query) {
         model: model,
         query: query
     };
-
-    console.info('customQuery body', body);
 
     return fetch(url, {
         method: 'POST',
@@ -1433,7 +1474,6 @@ function indexing(username, extensionId, model, data) {
       })
       .then(response => response.json())
       .then(data => {
-        console.log('Success:', data);
         return true;
       })
       .catch(error => {
