@@ -66,12 +66,17 @@ function getData(action) {
 moreButton.addEventListener('click', toggleMore);
 
 indexingButton.addEventListener('click', () => {
+  const data = getData('INDEXING');
+
+  if (data.recentDays > 7) {
+    alert('Recent days should be less than 7');
+    return;
+  }
+
   let result = window.confirm("Indexing is a relatively expensive operation. If you have already indexed, please do not repeat the indexing. Do you want to continue?");
   if (!result) {
     return;
   }
-
-  const data = getData('INDEXING');
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
@@ -129,6 +134,12 @@ querySubmitButton.addEventListener('click', () => {
 
 fetchDataButton.addEventListener('click', () => {
   const data = getData('GENERATE_REPORT');
+
+
+  if (data.recentDays > 7) {
+    alert('Recent days should be less than 7');
+    return;
+  }
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {

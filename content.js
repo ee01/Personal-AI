@@ -1420,13 +1420,16 @@ function genTopics(username, extensionId, model) {
         },
         body: JSON.stringify(body)
       })
-      .then(response => response.json())
+      .then(async response => {
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+      })
       .then(data => {
         return data;
       })
-      .catch(error => {
-        return error.message || 'Https error'
-      });
 }
 
 function customQuery(username, extensionId, model, query) {
@@ -1446,17 +1449,24 @@ function customQuery(username, extensionId, model, query) {
         },
         body: JSON.stringify(body)
       })
-      .then(response => response.json())
+      .then(async response => {
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+      })
       .then(data => {
         return data;
       })
-      .catch(error => {
-        return error.message || 'Https error'
-      });
 }
 
 function indexing(username, extensionId, model, data) {
     const url = 'http://localhost:8012/v1/indexing';
+
+    if (!data || data.length === 0) {
+        return Promise.reject('No data provided');
+    }
 
     const body = {
         username: username,
@@ -1472,13 +1482,16 @@ function indexing(username, extensionId, model, data) {
         },
         body: JSON.stringify(body)
       })
-      .then(response => response.json())
-      .then(data => {
-        return true;
+      .then(async response => {
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        return response.json();
       })
-      .catch(error => {
-        return error.message || 'Https error'
-      });
+      .then(data => {
+        return data;
+      })
 }
 
 function query(username, query, apiKey, contactUserName) {
@@ -1518,6 +1531,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const extensionId = ownExtensionObj.extension;
     const username = JSON.parse(localStorage.getItem('displayName') || '') ?? 'radar-poc';
     const model = message.model;
+
+    if (!extensionId) {
+        alert('sorry, Your extension id was not found.');
+        return;
+    }
     
     if (message.type === "RADAR-POC-GEN-TOPICS") {
         sendResponse({ status: 'success', action: 'GEN-TOPICS' });
@@ -1541,6 +1559,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const resultElement = document.getElementById('radar-poc-result');
         customQuery(username, extensionId, model, query).then((data) => {
             const result = data.result;
+            const details = data.details;
             const candidate_questions = data.candidate_questions;
             let anwser = result + '<h2>Candidate Questions</h2>';
             const questionsElements = candidate_questions.map(q => `<p>${q}</p>`).join('');
@@ -1573,8 +1592,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const ignoreGroupNames = ignoreGroupName.split(',').map(item => item.trim()).filter(item => !!item);
         console.log('Received message:', message);
         sendResponse({ status: 'success', action: action });
-        const isIndexing = action === 'INDEXING'
-        insert2MainBody(isIndexing ? 'Indexing...' : 'Loading...');
+        const isIndexing = action === 'INDEXING';
+        const indexingPlaceholder = 'Indexing is a time-consuming operation. Based on your data volume, it may take a few minutes. Please wait…';
+        insert2MainBody(isIndexing ? indexingPlaceholder : 'Loading...');
 
         const now = new Date(); // 获取当前时间
         const startTime = formatDate(new Date(now.getTime() - recentDays * 24 * 60 * 60 * 1000)); // 计算开始时间
@@ -1590,8 +1610,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const data = message.concat(phone).concat(calendar).sort((a, b) => new Date(a.time) - new Date(b.time));
 
             if (isIndexing) {
-                indexing(username, extensionId, model, data).then(() => {
-                    resultElement.innerHTML = 'indexing success.';
+                indexing(username, extensionId, model, data).then((data) => {
+                    resultElement.innerHTML = data;
                 }).catch(error => {
                     resultElement.innerHTML = error.message;
                 });
