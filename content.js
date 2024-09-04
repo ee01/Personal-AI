@@ -111,7 +111,7 @@ function transformData2Group(data) {
         time: '' // 初始化 time 字段
       };
     }
-    acc[item.groupId].text += item.parentId ? `[postId:${item.id}][threadId:${item.parentId}][${item.time}][${item.creator}]: ${item.text}\n` : `[postId:${item.id}][${item.time}][${item.creator}]: ${item.text}\n`;
+    acc[item.groupId].text += item.parentId ? `[id:${item.id}][threadId:${item.parentId}][${item.time}][${item.creator}]: ${item.text}\n` : `[id:${item.id}][${item.time}][${item.creator}]: ${item.text}\n`;
     acc[item.groupId].postNum += 1;
     acc[item.groupId].time = item.time; // 更新 time 为当前项的时间
     acc[item.groupId].groupType = item.groupType;
