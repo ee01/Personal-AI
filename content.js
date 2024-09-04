@@ -1610,6 +1610,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const data = message.concat(phone).concat(calendar).sort((a, b) => new Date(a.time) - new Date(b.time));
 
             if (isIndexing) {
+
+                if (data.length >= 500) {
+                    alert('Sorry, the data volume is too large, please reduce the data volume and try again.');
+                    return;
+                }
+
+                if (data.length > 100) {
+                    const res = window.confirm('Warning: The data volume is too large. It is recommended that you use the 4o mini model to save costs. Are you sure you want to continue?');
+                    if (!res) {
+                        return;
+                    }
+                }
+
                 indexing(username, extensionId, model, data).then((data) => {
                     resultElement.innerHTML = data;
                 }).catch(error => {
