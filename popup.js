@@ -1,6 +1,5 @@
 const fetchDataButton = document.getElementById('fetchDataButton');
 const indexingButton = document.getElementById('indexingButton');
-const moreButton = document.getElementById('moreButton');
 const genTopicsButton = document.getElementById('genTopicsButton');
 const querySubmitButton = document.getElementById('querySubmitButton');
 
