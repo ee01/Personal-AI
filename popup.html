@@ -18,7 +18,7 @@
       background: #fff;
       border-radius: 10px;
       box-shadow: 0 8px 16px rgba(0,0,0,0.2);
-      padding: 18px;
+      padding: 10px 12px;
       width: 100%;
       max-width: 420px;
       box-sizing: border-box;
@@ -26,6 +26,7 @@
     }
     #container h2 {
       margin-top: 0;
+      margin-bottom: 12px;
       font-size: 24px;
       color: #2980B9;
     }
@@ -115,7 +116,7 @@
       margin: 10px 0;
     }
     .query-section {
-      margin-top: 20px;
+      margin-top: 12px;
       display: flex;
       flex: 1;
       justify-content: space-between;
@@ -183,7 +184,15 @@
     .content-wrapper.graph .graph-button {
       display: block;
     }
-
+    .graph-button-wrapper {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .graph-button-wrapper button {
+      width: 48%;
+      margin-top: 0;
+    }
   </style>
 </head>
 <body>
@@ -193,17 +202,17 @@
       <div class="label">Pattern</div>
       <div class="pattern-radio-wrapper">
         <div class="pattern-radio-item">
-          <input type="radio" id="disposable" name="pattern" value="disposable" checked />
-          <label for="disposable">Disposable</label>
+          <input type="radio" id="graph" name="pattern" value="graph" checked />
+          <label for="graph">Graph</label>
         </div>
         <div class="pattern-radio-item">
-          <input type="radio" id="graph" name="pattern" value="graph" />
-          <label for="graph">Graph</label>
+          <input type="radio" id="disposable" name="pattern" value="disposable" />
+          <label for="disposable">Disposable</label>
         </div>
       </div>
     </div>    
 
-    <div class="content-wrapper disposable">   
+    <div class="content-wrapper graph">   
       <div class="section">
         <label for="recentDays">Days of data <br />(max: past 7d)</label>
         <input id="recentDays" type="number" max="7" min="0" value="1" />
@@ -259,8 +268,10 @@
       <button class="disposable-button" id="fetchDataButton">Generate Report</button>
       <button class="disposable-button" disabled>(Refine) Generate Report</button>
 
-      <button class="graph-button" id="indexingButton">Indexing</button>
-      <button class="graph-button" id="genTopicsButton">Generate Report</button>
+      <div class="graph-button-wrapper">
+        <button class="graph-button" id="indexingButton">Indexing</button>
+        <button class="graph-button" id="genTopicsButton">Generate Report</button>
+      </div>
 
       <div class="graph-section query">
         <div class="query-section">
