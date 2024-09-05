@@ -54,7 +54,6 @@ function fetchAllMessageData() {
   });
 }
 
-
 function fetchAllCalendarData() {
     return getIndexedDBData('Calendar', 'event2').catch(error => {
       console.log("Error fetchAllCalendarData:", error);
@@ -279,10 +278,11 @@ const transformCall = (transcripts, logs) => {
     // 按时间排序
     sessionTranscripts.sort((a, b) => a.startTimeMs - b.startTimeMs);
 
-    const text = transcripts
+    const transcriptsText = transcripts
     .filter(t => !t.text.includes('transcription on'))
     .map(t => `[${formatDate(new Date(t.startTimeMs))}][${t.participant.name}]: ${t.text}`).join('\n');
 
+    const text = `id:${sessionId}\n\n ${transcriptsText}`;
 
     // 使用最后一个记录的时间作为endTime
     const endTime = formatDate(new Date(sessionTranscripts[sessionTranscripts.length - 1].startTimeMs));
@@ -355,19 +355,33 @@ const TransformCalendar = (startTime, enableCalendar, username) => {
 
     return fetchAllCalendarData().then((inputData) => {
         const calendar = inputData.filter(item => {
-            return new Date(item.startTime) >= new Date(startTime) && new Date(item.startTime) <= new Date(Date.now()) && item.attendees.some(attendee => attendee.name === username);
-        }).map(item => ({
-            id: item.id,
-            type: 'calendar',
-            subject: item.subject,
-            description: item.description,
-            time: formatDate(new Date(item.startTime)),
-            startTime: formatDate(new Date(item.startTime)),
-            endTime: formatDate(new Date(item.endTime)),
-            attendees: item.attendees.map(attendee => attendee.name).join(', '),
-            organizer: item.organizer.name
-        }));
-    
+            const isInTimeRang = new Date(item.startTime) >= new Date(startTime) && new Date(item.startTime) <= new Date(Date.now());
+            const isAccept = item.responseStatus === 'Accepted';
+            const cancelled = item.cancelled;
+            return isInTimeRang && isAccept && !cancelled;
+        }).map(item => {
+            const data = {
+                id: item.id,
+                type: 'calendar',
+                subject: item.subject,
+                description: item.description,
+                time: formatDate(new Date(item.startTime)),
+                startTime: formatDate(new Date(item.startTime)),
+                endTime: formatDate(new Date(item.endTime)),
+                attendees: item.attendees.filter(attendee => attendee.responseStatus === 'Accepted').map(attendee => attendee.name).join(', '),
+                organizer: item.organizer.name
+            };
+
+            const text = `id:${data.id}\n type:${data.type}\n subject:${data.subject}\n description:${data.description}\n startTime:${data.startTime}\n endTime:${data.endTime}\n attendees:${data.attendees}\n organizer:${data.organizer}`;
+
+            return {
+                id: item.id,
+                text: text,
+                type: 'calendar',
+                time: data.time
+            };
+        });
+
         return calendar;
     });
 }
@@ -1465,7 +1479,7 @@ function indexing(username, extensionId, model, data) {
     const url = 'https://radar-poc.int.rclabenv.com:8443/v1/indexing';
 
     if (!data || data.length === 0) {
-        return Promise.reject('No data provided');
+        return Promise.reject(new Error('No data provided'));
     }
 
     const body = {
@@ -1523,7 +1537,6 @@ function query(username, query, apiKey, contactUserName) {
     return error.message || 'Https error'
   });
 }
-
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const ownExtension = localStorage.getItem('ownExtension') || {};
@@ -1643,7 +1656,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true; // Will respond asynchronously.
     }
 });
-
 function transformPostLinks(inputString) {
   const postLinkPattern = /\[post:(\d+)\]/g;
   let match;
@@ -1663,7 +1675,6 @@ function transformGroupLinks(inputString) {
   });
   return transformedString;
 }
-
 
 window.addEventListener('load', () => {
     getIndexedDBData('Glip', 'profile').then(([data]) => {

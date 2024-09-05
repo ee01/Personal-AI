@@ -4,18 +4,6 @@ const moreButton = document.getElementById('moreButton');
 const genTopicsButton = document.getElementById('genTopicsButton');
 const querySubmitButton = document.getElementById('querySubmitButton');
 
-function toggleMore() {
-  var moreOptions = document.getElementById('moreOptions');
-  var moreButton = document.getElementById('moreButton');
-  if (moreOptions.style.display === 'none' || moreOptions.style.display === '') {
-    moreOptions.style.display = 'block';
-    moreButton.textContent = 'Show Less Options';
-  } else {
-    moreOptions.style.display = 'none';
-    moreButton.textContent = 'Show More Options';
-  }
-}
-
 function getData(action) {
   const recentDaysInput = document.getElementById('recentDays');
   const apiKey = document.getElementById('apiKey');
@@ -63,8 +51,6 @@ function getData(action) {
   return data;
 }
 
-moreButton.addEventListener('click', toggleMore);
-
 indexingButton.addEventListener('click', () => {
   const data = getData('INDEXING');
 
@@ -80,7 +66,6 @@ indexingButton.addEventListener('click', () => {
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
-      // Hide loading and show result
       if (response.status === 'success' && response.action === 'INDEXING') {
         console.log('indexing data sent successfully');
         window.close();
@@ -98,7 +83,6 @@ genTopicsButton.addEventListener('click', () => {
   };
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
-      // Hide loading and show result
       if (response.status === 'success' && response.action === 'GEN-TOPICS') {
         console.log('gen topics data sent successfully');
         window.close();
@@ -123,7 +107,6 @@ querySubmitButton.addEventListener('click', () => {
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
-      // Hide loading and show result
       if (response.status === 'success' && response.action === 'QUERY') {
         console.log('gen topics data sent successfully');
         window.close();
@@ -143,7 +126,6 @@ fetchDataButton.addEventListener('click', () => {
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     chrome.tabs.sendMessage(tabs[0].id, data, (response) => {
-      // Hide loading and show result
       if (response.status === 'success' && response.action === 'GENERATE_REPORT') {
         console.log('generate report data sent successfully');
         window.close();
@@ -154,6 +136,22 @@ fetchDataButton.addEventListener('click', () => {
 
 
 document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('input[name="pattern"]').forEach((radio) => {
+    radio.addEventListener('change', function() {
+      const contentWrapper = document.querySelector('.content-wrapper');
+      
+      // 删除现有的类
+      contentWrapper.classList.remove('disposable', 'graph');
+  
+      // 根据选项添加相应的类
+      if (this.value === 'disposable') {
+        contentWrapper.classList.add('disposable');
+      } else if (this.value === 'graph') {
+        contentWrapper.classList.add('graph');
+      }
+    });
+  });  
+  
   chrome.storage.local.get(['folders'], function(result) {
     if (result.folders) {
       renderSelect(result.folders);
