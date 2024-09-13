@@ -61,11 +61,11 @@ export const App = observer((props: IAppProps) => {
                     {/* @ts-ignore */}
                     {!showConfig && <Stream vm={vm} />}
                 </div>
-               {(!showConfig && latestTimestamp) &&
+               {(!showConfig && !!latestTimestamp) ?
                (<div className="radar-poc-footer">
                     <input type="text" value={query} onKeyDown={handleKeyDown} onChange={handleInputChange} placeholder="Please enter your question" />
                     <button className="radar-poc-result-button" onClick={handleSubmitQuery} disabled={!query.trim()}>Submit</button>
-                </div>)}
+                </div>) : null}
             </div>
             {loading &&
             (<div className="loading-overlay">

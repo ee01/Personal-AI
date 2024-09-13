@@ -109,6 +109,7 @@ export class ViewModel {
             indexing,
             'Initialization successful. You can use GraphRAG to generate a report or perform a custom query.'
         );
+        this.latestTimestamp = Date.now();
     }
 
     // 优化后的handleIncrement函数
