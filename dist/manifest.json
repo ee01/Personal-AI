@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Radar Poc",
-  "version": "1.0",
+  "version": "2.0",
   "permissions": [
     "storage",
     "activeTab",
@@ -14,12 +14,9 @@
         "https://rc-a-develop.jupiter.int.rclabenv.com/*",
         "https://app.ringcentral.com/*"
       ],
-      "js": ["content.js"]
+      "js": ["contentScript.js"]
     }
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
   "action": {
     "default_title": "Open Radar Poc",
     "default_popup": "popup.html"
