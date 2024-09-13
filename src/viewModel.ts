@@ -104,12 +104,13 @@ export class ViewModel {
     handleInitialize = async () => {
         const recentDays = this.config.recentDays;
         const startTime = new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000);
+
+        this.latestTimestamp = Date.now();
         await this._handleDataProcessing(
             startTime,
             indexing,
             'Initialization successful. You can use GraphRAG to generate a report or perform a custom query.'
         );
-        this.latestTimestamp = Date.now();
     }
 
     // 优化后的handleIncrement函数
