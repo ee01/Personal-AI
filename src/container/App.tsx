@@ -38,7 +38,10 @@ export const App = observer((props: IAppProps) => {
 
     React.useEffect(() => {
         return () => {
-            hasResult && setLocalStorageItem(RADAR_POC_RESULT_LISTS, lists);
+            if (hasResult) {
+                const saveLists = lists.slice(-5); // 获取数组最后面的5个元素
+                setLocalStorageItem(RADAR_POC_RESULT_LISTS, saveLists);
+            }
         };
     }, [hasResult]);
 
