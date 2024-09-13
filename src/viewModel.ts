@@ -200,5 +200,7 @@ export class ViewModel {
 
     handleClear = () => {
         this.lists = [];
+        localStorage.removeItem(RADAR_POC_RESULT_LISTS);
+        this.candidateQuestions = [];
     }
 }
