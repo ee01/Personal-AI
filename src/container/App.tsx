@@ -4,8 +4,6 @@ import { observer } from 'mobx-react';
 import { Config } from './Config';
 import { Stream } from './Stream';
 import { ViewModel } from '../viewModel';
-import { setLocalStorageItem } from '../storage';
-import { RADAR_POC_RESULT_LISTS } from '../constants';
 
 type IAppProps = {
     vm: ViewModel;
@@ -36,15 +34,6 @@ export const App = observer((props: IAppProps) => {
         }
     };
 
-    React.useEffect(() => {
-        return () => {
-            if (hasResult) {
-                const saveLists = lists.slice(-5); // 获取数组最后面的5个元素
-                setLocalStorageItem(RADAR_POC_RESULT_LISTS, saveLists);
-            }
-        };
-    }, [hasResult]);
-
     const handleClose = () => {
         const container = document.querySelector('#radar-poc-container');
         ReactDOM.unmountComponentAtNode(container);
@@ -62,7 +51,7 @@ export const App = observer((props: IAppProps) => {
                     <h2>Radar PoC</h2>
                     <div className="radar-poc-header-right">
                         <button className="radar-poc-result-button" onClick={() => handleSetConfigConfig(!showConfig)}>{showConfig ? 'Open Panel' : 'Open Config'}</button>
-                        {hasResult && <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClear}>Clear Panel</button>}
+                        {(hasResult && !showConfig) && <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClear}>Clear Panel</button>}
                         <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClose}>X</button>
                     </div>
                 </div>
