@@ -4,6 +4,8 @@ import { observer } from 'mobx-react';
 import { Config } from './Config';
 import { Stream } from './Stream';
 import { ViewModel } from '../viewModel';
+import { setLocalStorageItem } from '../storage';
+import { RADAR_POC_RESULT_LISTS } from '../constants';
 
 type IAppProps = {
     vm: ViewModel;
@@ -11,14 +13,17 @@ type IAppProps = {
 
 export const App = observer((props: IAppProps) => {
     const { vm } = props;
-    const { 
+    const {
+        lists,
         loading,
         showConfig,
         query,
         latestTimestamp,
         handleSetConfigConfig,
-        handleSubmitQuery
+        handleSubmitQuery,
+        handleClear
     } = vm;
+    const hasResult = lists.length > 0;
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         const { value } = e.target;
@@ -30,6 +35,12 @@ export const App = observer((props: IAppProps) => {
             handleSubmitQuery();
         }
     };
+
+    React.useEffect(() => {
+        return () => {
+            hasResult && setLocalStorageItem(RADAR_POC_RESULT_LISTS, lists);
+        };
+    }, [hasResult]);
 
     const handleClose = () => {
         const container = document.querySelector('#radar-poc-container');
@@ -47,7 +58,8 @@ export const App = observer((props: IAppProps) => {
                 <div className="radar-poc-header">
                     <h2>Radar PoC</h2>
                     <div className="radar-poc-header-right">
-                        <button className="radar-poc-result-button" onClick={() => handleSetConfigConfig(!showConfig)}>{showConfig ? 'Open Chat Bot' : 'Open Configuration'}</button>
+                        <button className="radar-poc-result-button" onClick={() => handleSetConfigConfig(!showConfig)}>{showConfig ? 'Open Panel' : 'Open Config'}</button>
+                        {hasResult && <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClear}>Clear Panel</button>}
                         <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClose}>X</button>
                     </div>
                 </div>

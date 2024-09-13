@@ -39,6 +39,7 @@ function bootstrap() {
 }
 
 // Main listener
+// @ts-ignore
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { type } = message;
 

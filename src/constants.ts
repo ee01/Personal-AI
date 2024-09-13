@@ -8,4 +8,6 @@ export const API_PATH = {
     INCREMENT: '/v1/update_indexing'
 }
 
-export const CONFIG_LOCAL_STORAGE_KEY = 'RADAR_POC_CONFIG'
+export const CONFIG_LOCAL_STORAGE_KEY = 'RADAR_POC_CONFIG';
+
+export const RADAR_POC_RESULT_LISTS = 'RADAR_POC_RESULT_LISTS';

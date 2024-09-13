@@ -3,15 +3,15 @@ import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchD
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
-import { getFolders } from './storage';
-import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
+import { getFolders, getLocalStorageItem } from './storage';
+import { CONFIG_LOCAL_STORAGE_KEY, RADAR_POC_RESULT_LISTS } from './constants';
 
 export class ViewModel {
     @observable
     radarPoCConfig: RadarPoCConfig;
 
     @observable
-    lists: string[] = [];
+    lists: { timestamp: number, text: string }[] = [];
 
     @observable
     latestTimestamp = 0;
@@ -39,6 +39,11 @@ export class ViewModel {
         if (localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY)) {
             this.showConfig = false;
         }
+        const lists = getLocalStorageItem(RADAR_POC_RESULT_LISTS, []);
+        if (lists && lists.length) {
+            this.lists = [...lists];
+        }
+
         this.radarPoCConfig = new RadarPoCConfig();
         this.fetchLastIndexTime();
         this.getFolders();
@@ -81,7 +86,10 @@ export class ViewModel {
 
             showToast('This is a time-consuming operation, please be patient.', 'info');
             const result = await processFunction(data, this.config);
-            this.lists.push(result);
+            this.lists.push({
+                timestamp: Date.now(),
+                text: result
+            });
             showToast(successMessage, 'success');
             
             return result;
@@ -130,7 +138,10 @@ export class ViewModel {
         try {
             const query = 'Important Topics I am Participated In';
             const [topics, questions] = await Promise.all([genTopics(this.config), customQuery(query, this.config)]);
-            this.lists.push(topics);
+            this.lists.push({
+                timestamp: Date.now(),
+                text: topics
+            });
             this.candidateQuestions = questions.candidate_questions.slice(0, 3);
         } catch (err) {
             showToast(err.message, 'error');
@@ -150,7 +161,10 @@ export class ViewModel {
             const data = await fetchUserData(startTime, this.config);
             const result = await fetchDifyServer(data, this.config);
             const answer = transformGroupLinks(transformPostLinks(result || 'LLM answer error'));
-            this.lists.push(answer);
+            this.lists.push({
+                timestamp: Date.now(),
+                text: answer
+            });
         } catch (err) {
             showToast(err.message, 'error');
         } finally {
@@ -163,7 +177,10 @@ export class ViewModel {
         try {
             const data = await customQuery(query.trim(), this.config);
             const { result, candidate_questions } = data;
-            this.lists.push(result);
+            this.lists.push({
+                timestamp: Date.now(),
+                text: result
+            });
             this.candidateQuestions = candidate_questions.slice(0, 3);
         } catch (err) {
             showToast(err.message, 'error');
@@ -179,5 +196,9 @@ export class ViewModel {
     
     handleCandidateQuestions = async(query: string) => {
         await this._executeQuery(query);
+    }
+
+    handleClear = () => {
+        this.lists = [];
     }
 }

@@ -3,6 +3,7 @@ import { observer } from 'mobx-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ViewModel } from '../viewModel';
+import { formatDate } from '../utils';
 
 
 type IConfigProps = {
@@ -32,12 +33,16 @@ export const Stream = observer((props: IConfigProps) => {
                 <button className="radar-poc-result-button" onClick={handleGenerateDisposeReport}>[Full Context for Dify] - Generate Report</button>
             </div>}
             <div className="radar-poc-result-inner">
-                {lists.map((text, index) => {
-                    return  (<div key={index} className="radar-poc-result-item">
-                                {/* @ts-ignore */}
-                                <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
-                            </div>
-                        )
+                {lists.map((item, index) => {
+                    return  (
+                    <div key={index} className="radar-poc-result-item-wrapper">
+                        <span className='radar-poc-result-item-time'>Generate Time: {formatDate(item.timestamp)}</span>
+                        <div key={index} className="radar-poc-result-item">
+                            {/* @ts-ignore */}
+                            <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+                        </div>
+                    </div>
+                    )
                 })}
             </div>
             <div className="radar-poc-candidate">

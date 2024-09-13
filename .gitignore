@@ -1,2 +1,5 @@
-.vscode
+coverage
 node_modules
+.DS_Store
+.env
+.vscode/symbols.json

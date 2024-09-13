@@ -1,4 +1,13 @@
 export const CONTENT_STYLE = `
+.radar-poc-chatbot {
+  display: flex;
+  flex: 1 1 0%;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+  pointer-events: auto;
+  overflow: auto;
+}
 .radar-poc-toast {
     position: absolute;
     top: 32px;
@@ -120,11 +129,20 @@ export const CONTENT_STYLE = `
     border-right: 1px solid rgb(243, 243, 243);
     overflow-y: auto;
 }
+.radar-poc-result-item-wrapper {
+  margin-bottom: 18px;
+}
+
+.radar-poc-result-item-wrapper .radar-poc-result-item-time {
+  font-style: italic;
+  color: #666;
+}
+
 .radar-poc-result-item {
-    margin-bottom: 18px;
     border: 1px solid #e1e4e8;
     padding: 6px;
     border-radius: 4px;
+    background: rgb(249, 249, 249);
 }
 .radar-poc-inner {
     display: flex;

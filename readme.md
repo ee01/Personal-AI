@@ -1,3 +1,7 @@
+# Local build
+1. `npm install --force`
+2. `npm run start` or  `npm run build`
+
 # Step
 1. open url `chrome://extensions/`
 2. enable `Development mode`
