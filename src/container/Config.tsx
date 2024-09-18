@@ -2,6 +2,7 @@ import * as React from 'react';
 import { observer } from 'mobx-react';
 import { formatDate } from '../utils';
 import { ViewModel } from '../viewModel';
+import { Actions } from './Actions';
 
 type IConfigProps = {
     vm: ViewModel;
@@ -18,6 +19,7 @@ export const Config = observer((props: IConfigProps) => {
         handleInitialize,
         handleGenerateReport,
         handleGenerateDisposeReport,
+        handleDelete
     } = vm;
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -100,13 +102,16 @@ export const Config = observer((props: IConfigProps) => {
                     </select>
                 </div>
                 {Boolean(latestTimestamp) && <p className="radar-poc-config-tip">Last indexing time: {formatDate(latestTimestamp)}</p>}
-                <div className="radar-poc-config-section">
-                    <button className="radar-poc-result-button" onClick={handleSaveConfig}>Persistent Configuration</button>
-                    <button className="radar-poc-result-button" onClick={handleInitialize}>GraphRAG Initialize</button>
-                    <button className="radar-poc-result-button" onClick={handleIncrement} disabled={!latestTimestamp}>GraphRAG Increment</button>
-                    <button className="radar-poc-result-button" onClick={handleGenerateReport} disabled={!latestTimestamp}>GraphRAG - Generate Report</button>
-                    <button className="radar-poc-result-button" onClick={handleGenerateDisposeReport}>[Full Context for Dify] - Generate Report</button>
-                </div>
+                <Actions
+                    handleSaveConfig={handleSaveConfig} 
+                    handleInitialize={handleInitialize} 
+                    handleIncrement={handleIncrement}
+                    handleGenerateReport={handleGenerateReport}
+                    handleGenerateDisposeReport={handleGenerateDisposeReport}
+                    handleDelete={handleDelete}
+                    latestTimestamp={latestTimestamp}
+                    showConfig={true}
+                />
             </div>
         </div>
     );

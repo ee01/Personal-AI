@@ -91,6 +91,17 @@ export function increment(data: any[], config: IConfig) {
   return fetchRadarPocServer(API_PATH.INCREMENT, body);
 }
 
+export function delete_indexing(config: IConfig) {
+  const { username, extensionId  } = config;
+
+  const body = {
+      username,
+      extension_id: extensionId,
+  };
+
+  return fetchRadarPocServer(API_PATH.DELETE, body);
+}
+
 export function fetchDifyServer(query: string[], config: IConfig) {
   const url = 'https://lap2-api-dev.int.rclabenv.com/v1/completion-messages';
   const { username, apiKey  } = config;

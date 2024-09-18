@@ -1,5 +1,5 @@
 import { observable } from 'mobx';
-import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer } from './api';
+import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing } from './api';
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
@@ -14,7 +14,7 @@ export class ViewModel {
     lists: { timestamp: number, text: string }[] = [];
 
     @observable
-    latestTimestamp = 0;
+    latestTimestamp?: number = undefined;
 
     @observable
     showConfig = true;
@@ -92,6 +92,9 @@ export class ViewModel {
             const result = await processFunction(data, this.config);
             showToast(successMessage, 'success');
             
+            if (result) {
+                this.latestTimestamp = +result * 1000;
+            }
             return result;
         } catch (err) {
             showToast(err.message, 'error');
@@ -105,7 +108,6 @@ export class ViewModel {
         const recentDays = this.config.recentDays;
         const startTime = new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000);
 
-        this.latestTimestamp = Date.now();
         await this._handleDataProcessing(
             startTime,
             indexing,
@@ -189,6 +191,24 @@ export class ViewModel {
     handleSubmitQuery = async() => {
         await this._executeQuery(this.query);
         this.query = '';
+    }
+
+    handleDelete = async() => {
+        const res = window.confirm('Once deleted, it cannot be recovered and can only be reinitialized. Are you sure you want to delete the Graph Indexing data?');
+        if (!res) {
+            return;
+        }
+
+        this.loading = true;
+        try {
+            await delete_indexing(this.config);
+            this.latestTimestamp = undefined;
+            showToast('Delete success.', 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            this.loading = false;
+        }
     }
     
     handleCandidateQuestions = async(query: string) => {

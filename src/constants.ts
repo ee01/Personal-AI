@@ -5,7 +5,8 @@ export const API_PATH = {
     QUERY: '/v1/query',
     LATEST_INDEX_TIME: '/v1/fetch_latest_index_time',
     INDEXING: '/v1/indexing',
-    INCREMENT: '/v1/update_indexing'
+    INCREMENT: '/v1/update_indexing',
+    DELETE: '/v1/delete',
 }
 
 export const CONFIG_LOCAL_STORAGE_KEY = 'RADAR_POC_CONFIG';

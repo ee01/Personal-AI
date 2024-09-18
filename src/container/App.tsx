@@ -56,9 +56,7 @@ export const App = observer((props: IAppProps) => {
                     </div>
                 </div>
                 <div className="radar-poc-result-main">
-                    {/* @ts-ignore */}
                     {showConfig && <Config vm={vm} />}
-                    {/* @ts-ignore */}
                     {!showConfig && <Stream vm={vm} />}
                 </div>
                {(!showConfig && !!latestTimestamp) ?

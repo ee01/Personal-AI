@@ -4,6 +4,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ViewModel } from '../viewModel';
 import { formatDate } from '../utils';
+import { Actions } from './Actions';
 
 
 type IConfigProps = {
@@ -15,30 +16,35 @@ export const Stream = observer((props: IConfigProps) => {
     const { 
         lists,
         candidateQuestions,
+        handleSaveConfig,
         latestTimestamp, 
         handleIncrement, 
         handleInitialize,
         handleGenerateReport,
         handleGenerateDisposeReport,
         handleCandidateQuestions,
+        handleDelete
     } = vm;
     const hasResult = lists.length > 0;
 
     return (
         <div className="radar-poc-chatbot">
-            {!hasResult && <div className="radar-poc-config-section">
-                <button className="radar-poc-result-button" onClick={handleInitialize}>GraphRAG Initialize</button>
-                <button className="radar-poc-result-button" onClick={handleIncrement} disabled={!latestTimestamp}>GraphRAG Increment</button>
-                <button className="radar-poc-result-button" onClick={handleGenerateReport} disabled={!latestTimestamp}>GraphRAG - Generate Report</button>
-                <button className="radar-poc-result-button" onClick={handleGenerateDisposeReport}>[Full Context for Dify] - Generate Report</button>
-            </div>}
+            {!hasResult && <Actions
+                    handleSaveConfig={handleSaveConfig} 
+                    handleInitialize={handleInitialize} 
+                    handleIncrement={handleIncrement}
+                    handleGenerateReport={handleGenerateReport}
+                    handleGenerateDisposeReport={handleGenerateDisposeReport}
+                    handleDelete={handleDelete}
+                    latestTimestamp={latestTimestamp}
+                    showConfig={false}
+                />}
             <div className="radar-poc-result-inner">
                 {lists.map((item, index) => {
                     return  (
                     <div key={index} className="radar-poc-result-item-wrapper">
                         <span className='radar-poc-result-item-time'>Generate Time: {formatDate(item.timestamp)}</span>
                         <div key={index} className="radar-poc-result-item">
-                            {/* @ts-ignore */}
                             <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
                         </div>
                     </div>
