@@ -23,13 +23,15 @@ export const Stream = observer((props: IConfigProps) => {
         handleGenerateReport,
         handleGenerateDisposeReport,
         handleCandidateQuestions,
-        handleDelete
+        handleDelete,
+        handleTrendingTopics
     } = vm;
     const hasResult = lists.length > 0;
 
     return (
         <div className="radar-poc-chatbot">
             {!hasResult && <Actions
+                    handleTrendingTopics={handleTrendingTopics}
                     handleSaveConfig={handleSaveConfig} 
                     handleInitialize={handleInitialize} 
                     handleIncrement={handleIncrement}

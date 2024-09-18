@@ -9,6 +9,7 @@ type IActionsProps = {
     handleGenerateReport: () => void;
     handleGenerateDisposeReport: () => void;
     handleDelete: () => void;
+    handleTrendingTopics: () => void;
 };
 
 export const Actions = (props: IActionsProps) => {
@@ -21,6 +22,7 @@ export const Actions = (props: IActionsProps) => {
         handleDelete,
         handleGenerateReport,
         handleGenerateDisposeReport,
+        handleTrendingTopics,
     } = props;
 
     return (
@@ -30,6 +32,7 @@ export const Actions = (props: IActionsProps) => {
             <button className="radar-poc-result-button" onClick={handleIncrement} disabled={!latestTimestamp}>GraphRAG Increment</button>
             <button className="radar-poc-result-button" onClick={handleDelete} disabled={!latestTimestamp}>GraphRAG Delete All Indexing</button>
             <button className="radar-poc-result-button" onClick={handleGenerateReport} disabled={!latestTimestamp}>GraphRAG - Generate Report</button>
+            <button className="radar-poc-result-button" onClick={handleTrendingTopics} disabled={!latestTimestamp}>GraphRAG - Trending Topics</button>
             <button className="radar-poc-result-button" onClick={handleGenerateDisposeReport}>[Full Context for Dify] - Generate Report</button>
         </div>
     );

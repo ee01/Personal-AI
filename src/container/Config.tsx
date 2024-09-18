@@ -19,7 +19,8 @@ export const Config = observer((props: IConfigProps) => {
         handleInitialize,
         handleGenerateReport,
         handleGenerateDisposeReport,
-        handleDelete
+        handleDelete,
+        handleTrendingTopics
     } = vm;
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -103,6 +104,7 @@ export const Config = observer((props: IConfigProps) => {
                 </div>
                 {Boolean(latestTimestamp) && <p className="radar-poc-config-tip">Last indexing time: {formatDate(latestTimestamp)}</p>}
                 <Actions
+                    handleTrendingTopics={handleTrendingTopics}
                     handleSaveConfig={handleSaveConfig} 
                     handleInitialize={handleInitialize} 
                     handleIncrement={handleIncrement}

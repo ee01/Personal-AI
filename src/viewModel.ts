@@ -1,5 +1,5 @@
 import { observable } from 'mobx';
-import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing } from './api';
+import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics } from './api';
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
@@ -166,6 +166,23 @@ export class ViewModel {
             const result = await fetchDifyServer(data, this.config);
             const answer = transformGroupLinks(transformPostLinks(result || 'LLM answer error'));
             this._updateLists(answer);
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            this.loading = false;
+        }
+    }
+
+    handleTrendingTopics = async () => {
+        this.loading = true;
+        this.showConfig = false;
+
+        try {
+            const query = 'trending topics';
+            const [topics, questions] = await Promise.all([trendingTopics(this.config), customQuery(query, this.config)]);
+            this._updateLists(topics);
+            this.candidateQuestions = questions.candidate_questions.slice(0, 3);
+            setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
         } catch (err) {
             showToast(err.message, 'error');
         } finally {

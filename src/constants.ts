@@ -7,6 +7,7 @@ export const API_PATH = {
     INDEXING: '/v1/indexing',
     INCREMENT: '/v1/update_indexing',
     DELETE: '/v1/delete',
+    TRENDING_TOPICS: '/v1/trending/topics',
 }
 
 export const CONFIG_LOCAL_STORAGE_KEY = 'RADAR_POC_CONFIG';

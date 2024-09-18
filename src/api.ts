@@ -33,6 +33,17 @@ export function genTopics(config: IConfig) {
     return fetchRadarPocServer(API_PATH.GEN_TOPICS, body);
 }
 
+export function trendingTopics(config: IConfig) {
+  const { username, extensionId, model  } = config;
+  const body = {
+      username: username,
+      extension_id: extensionId,
+      model: model,
+  };
+
+  return fetchRadarPocServer(API_PATH.TRENDING_TOPICS, body);
+}
+
 export function customQuery(query: string, config: IConfig) {
     const { username, extensionId, model  } = config;
 
