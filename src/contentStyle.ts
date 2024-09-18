@@ -207,7 +207,7 @@ export const CONTENT_STYLE = `
   border: 1px solid rgb(6, 111, 172);
   border-radius: 4px;
   padding: 4px 12px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .radar-poc-result-inner {
