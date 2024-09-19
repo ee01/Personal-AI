@@ -44,15 +44,18 @@ export class ViewModel {
             this.showConfig = false;
         }
         const lists = getLocalStorageItem(RADAR_POC_RESULT_LISTS, []);
-        const candidateQuestions = getLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, []);
         if (lists && lists.length) {
             this.lists = [...lists];
         }
-        if (candidateQuestions && candidateQuestions.length) {
-            this.candidateQuestions = [...candidateQuestions];
-        }
 
         this.radarPoCConfig = new RadarPoCConfig();
+
+        if (this.config.enableCandidateQuestions) {
+            const candidateQuestions = getLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, []);
+            if (candidateQuestions && candidateQuestions.length) {
+                this.candidateQuestions = [...candidateQuestions];
+            }
+        }
 
         Promise.all([this.fetchLastIndexTime(), this.getFolders(), this.getGroupsMap()]).finally(() => {
             this.loading = false;
@@ -155,6 +158,12 @@ export class ViewModel {
         this.showConfig = false;
 
         try {
+            if (!this.config.enableCandidateQuestions) {
+                const topics = await genTopics(this.config);
+                this._updateLists(topics);
+                return;
+            }
+
             const query = 'Important Topics I am Participated In';
             const [topics, questions] = await Promise.all([genTopics(this.config), customQuery(query, this.config)]);
             this._updateLists(topics);
@@ -175,8 +184,11 @@ export class ViewModel {
             const query = GET_INIT_TOPICS_QUERY(this.config.username);
             const { result, candidate_questions } = await globalQuery(query, this.config);
             this._updateLists(result);
-            this.candidateQuestions = candidate_questions.slice(0, 3);
-            setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
+
+            if (this.config.enableCandidateQuestions) {
+                this.candidateQuestions = candidate_questions.slice(0, 3);
+                setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
+            }
         } catch (err) {
             showToast(err.message, 'error');
         } finally {
@@ -208,6 +220,12 @@ export class ViewModel {
         this.showConfig = false;
 
         try {
+            if (!this.config.enableCandidateQuestions) {
+                const topics = await trendingTopics(this.config);
+                this._updateLists(topics);
+                return;
+            }
+
             const query = 'trending topics';
             const [topics, questions] = await Promise.all([trendingTopics(this.config), customQuery(query, this.config)]);
             this._updateLists(topics);
@@ -226,8 +244,11 @@ export class ViewModel {
             const data = await customQuery(query.trim(), this.config);
             const { result, candidate_questions } = data;
             this._updateLists(result);
-            this.candidateQuestions = candidate_questions.slice(0, 3);
-            setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
+
+            if (this.config.enableCandidateQuestions) {
+                this.candidateQuestions = candidate_questions.slice(0, 3);
+                setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
+            }
         } catch (err) {
             showToast(err.message, 'error');
         } finally {
@@ -281,9 +302,30 @@ export class ViewModel {
             });
         }
 
-        text = text.replace(/\[POST:(\d+)\]/gi, (match, id) => {
+        text = text.replace(/\[(post|sms|voicemail|calltranscript|calendar):(\d+)\]/gi, (match, type, id) => {
             if (id) {
-                return `[post:${id}](https://app.ringcentral.com/messages/${id})`;
+                type = type.toLowerCase();
+                let link;
+                switch (type) {
+                    case 'post':
+                        link = `https://app.ringcentral.com/messages/${id}`;
+                        break;
+                    case 'sms':
+                        link = `https://app.ringcentral.com/sms/${id}`;
+                        break;
+                    case 'voicemail':
+                        link = `https://app.ringcentral.com/voicemail/${id}`;
+                        break;
+                    case 'calltranscript':
+                        link = `https://app.ringcentral.com/call-transcript/${id}`;
+                        break;
+                    case 'calendar':
+                        link = `https://app.ringcentral.com/calendar/${id}`;
+                        break;
+                    default:
+                        return match; // 如果类型不匹配，保持原样
+                }
+                return `[${type}:${id}](${link})`;
             }
             return match; // 如果没有找到对应的组，保持原样
         });

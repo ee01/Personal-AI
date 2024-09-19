@@ -12,6 +12,7 @@ export type IConfig = {
     enableVoicemail: boolean;
     enableCallTranscript: boolean;
     enableCalendar: boolean;
+    enableCandidateQuestions: boolean,
     selectFolderGroupIds: string;
     username: string;
     extensionId: string;
@@ -27,6 +28,7 @@ const DefaultConfig: IConfig = {
     enableVoicemail: true,
     enableCallTranscript: true,
     enableCalendar: true,
+    enableCandidateQuestions: false,
     selectFolderGroupIds: '',
     username: username,
     extensionId: extensionId,

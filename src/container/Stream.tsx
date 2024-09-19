@@ -15,6 +15,7 @@ export const Stream = observer((props: IConfigProps) => {
     const { vm } = props;
     const { 
         lists,
+        radarPoCConfig,
         candidateQuestions,
         handleSaveConfig,
         latestTimestamp, 
@@ -28,6 +29,7 @@ export const Stream = observer((props: IConfigProps) => {
         handleGenerateGlobalSearchReport
     } = vm;
     const hasResult = lists.length > 0;
+    const enableCandidateQuestions = radarPoCConfig.config.enableCandidateQuestions;
 
     return (
         <div className="radar-poc-chatbot">
@@ -55,7 +57,7 @@ export const Stream = observer((props: IConfigProps) => {
                     )
                 })}
             </div>
-            <div className="radar-poc-candidate">
+            {enableCandidateQuestions && <div className="radar-poc-candidate">
                 <ul className="radar-poc-candidate-ul">
                     {candidateQuestions.map((question, index) => (
                         <li onClick={() => handleCandidateQuestions(question)} key={index} className="radar-poc-candidate-li">
@@ -63,7 +65,7 @@ export const Stream = observer((props: IConfigProps) => {
                         </li>
                     ))}
                 </ul>
-            </div>
+            </div>}
         </div>
     );
 });

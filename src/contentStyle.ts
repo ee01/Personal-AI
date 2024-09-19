@@ -78,6 +78,10 @@ export const CONTENT_STYLE = `
   margin-bottom: 8px;
 }
 
+.radar-poc-config-section.enableCandidateQuestions {
+  flex-direction: row;
+}
+
 .radar-poc-config-section label {
   margin-bottom: 5px;
 }

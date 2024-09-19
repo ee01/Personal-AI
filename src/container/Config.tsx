@@ -66,6 +66,16 @@ export const Config = observer((props: IConfigProps) => {
                         onChange={handleInputChange}
                     />
                 </div>
+
+                <div className="radar-poc-config-section enableCandidateQuestions">
+                    <label htmlFor="enableCandidateQuestions">Enable Candidate Questions</label>
+                    <input
+                        type="checkbox"
+                        name="enableCandidateQuestions"
+                        checked={radarPoCConfig.config.enableCandidateQuestions}
+                        onChange={handleInputChange}
+                    />
+                </div>
             
                 <div className="radar-poc-config-section">
                     <label>Data source</label>
