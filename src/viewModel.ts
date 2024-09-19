@@ -1,8 +1,9 @@
 import { observable } from 'mobx';
-import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics } from './api';
+import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics, globalQuery } from './api';
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
+import { GET_INIT_TOPICS_QUERY } from './prompt';
 import { getFolders, getLocalStorageItem, setLocalStorageItem } from './storage';
 import { CONFIG_LOCAL_STORAGE_KEY, RADAR_POC_RESULT_LISTS, RADAR_POC_CANDIDATE_QUESTIONS } from './constants';
 
@@ -142,10 +143,27 @@ export class ViewModel {
         this.showConfig = false;
 
         try {
-            const query = 'Important Topics I am Participated In';
+            const query = GET_INIT_TOPICS_QUERY(this.config.username);
             const [topics, questions] = await Promise.all([genTopics(this.config), customQuery(query, this.config)]);
             this._updateLists(topics);
             this.candidateQuestions = questions.candidate_questions.slice(0, 3);
+            setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            this.loading = false;
+        }
+    }
+
+    handleGenerateGlobalSearchReport = async () => {
+        this.loading = true;
+        this.showConfig = false;
+
+        try {
+            const query = GET_INIT_TOPICS_QUERY(this.config.username);
+            const { result, candidate_questions } = await globalQuery(query, this.config);
+            this._updateLists(result);
+            this.candidateQuestions = candidate_questions.slice(0, 3);
             setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
         } catch (err) {
             showToast(err.message, 'error');

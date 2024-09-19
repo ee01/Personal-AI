@@ -24,7 +24,8 @@ export const Stream = observer((props: IConfigProps) => {
         handleGenerateDisposeReport,
         handleCandidateQuestions,
         handleDelete,
-        handleTrendingTopics
+        handleTrendingTopics,
+        handleGenerateGlobalSearchReport
     } = vm;
     const hasResult = lists.length > 0;
 
@@ -38,6 +39,7 @@ export const Stream = observer((props: IConfigProps) => {
                     handleGenerateReport={handleGenerateReport}
                     handleGenerateDisposeReport={handleGenerateDisposeReport}
                     handleDelete={handleDelete}
+                    handleGenerateGlobalSearchReport={handleGenerateGlobalSearchReport}
                     latestTimestamp={latestTimestamp}
                     showConfig={false}
                 />}

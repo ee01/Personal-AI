@@ -18,6 +18,7 @@ export const Config = observer((props: IConfigProps) => {
         handleIncrement, 
         handleInitialize,
         handleGenerateReport,
+        handleGenerateGlobalSearchReport,
         handleGenerateDisposeReport,
         handleDelete,
         handleTrendingTopics
@@ -110,6 +111,7 @@ export const Config = observer((props: IConfigProps) => {
                     handleIncrement={handleIncrement}
                     handleGenerateReport={handleGenerateReport}
                     handleGenerateDisposeReport={handleGenerateDisposeReport}
+                    handleGenerateGlobalSearchReport={handleGenerateGlobalSearchReport}
                     handleDelete={handleDelete}
                     latestTimestamp={latestTimestamp}
                     showConfig={true}

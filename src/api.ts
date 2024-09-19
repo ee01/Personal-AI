@@ -57,6 +57,19 @@ export function customQuery(query: string, config: IConfig) {
     return fetchRadarPocServer(API_PATH.QUERY, body);
 }
 
+export function globalQuery(query: string, config: IConfig) {
+  const { username, extensionId, model  } = config;
+
+  const body = {
+      username: username,
+      extension_id: extensionId,
+      model: model,
+      query: query
+  };
+
+  return fetchRadarPocServer(API_PATH.GLOBAL_QUERY, body);
+}
+
 export function fetchLastIndexTime(config: IConfig) {
     const { username, extensionId  } = config;
 
