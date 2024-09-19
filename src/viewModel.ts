@@ -143,7 +143,7 @@ export class ViewModel {
         this.showConfig = false;
 
         try {
-            const query = GET_INIT_TOPICS_QUERY(this.config.username);
+            const query = 'Important Topics I am Participated In';
             const [topics, questions] = await Promise.all([genTopics(this.config), customQuery(query, this.config)]);
             this._updateLists(topics);
             this.candidateQuestions = questions.candidate_questions.slice(0, 3);
