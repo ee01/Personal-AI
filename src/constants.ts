@@ -1,5 +1,5 @@
-// export const SERVER_HOST = 'https://radar-poc.int.rclabenv.com:8443';
-export const SERVER_HOST = 'http://localhost:8443';
+export const SERVER_HOST = 'https://radar-poc.int.rclabenv.com:8443';
+// export const SERVER_HOST = 'http://localhost:8443';
 
 export const API_PATH = {
     GEN_TOPICS: '/v1/gen/topics',

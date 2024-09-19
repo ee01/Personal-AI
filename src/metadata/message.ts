@@ -38,6 +38,7 @@ function transformData2Group(data: any[]) {
     acc[item.groupId].postNum += 1;
     acc[item.groupId].time = item.time; // 更新 time 为当前项的时间
     acc[item.groupId].groupType = item.groupType;
+    acc[item.groupId].type = 'message';
     return acc;
   }, {});
 

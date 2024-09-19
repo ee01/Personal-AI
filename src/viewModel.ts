@@ -4,7 +4,7 @@ import { formatDate, showToast, transformGroupLinks, transformPostLinks } from '
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
 import { GET_INIT_TOPICS_QUERY } from './prompt';
-import { getFolders, getLocalStorageItem, setLocalStorageItem } from './storage';
+import { getFolders, getLocalStorageItem, setLocalStorageItem, getGroupsMap } from './storage';
 import { CONFIG_LOCAL_STORAGE_KEY, RADAR_POC_RESULT_LISTS, RADAR_POC_CANDIDATE_QUESTIONS } from './constants';
 
 export class ViewModel {
@@ -32,11 +32,14 @@ export class ViewModel {
     @observable
     query = '';
 
+    groupMaps = {};
+
     constructor() {
         this._init();
     }
 
     private _init() {
+        this.loading = true;
         if (localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY)) {
             this.showConfig = false;
         }
@@ -50,8 +53,10 @@ export class ViewModel {
         }
 
         this.radarPoCConfig = new RadarPoCConfig();
-        this.fetchLastIndexTime();
-        this.getFolders();
+
+        Promise.all([this.fetchLastIndexTime(), this.getFolders(), this.getGroupsMap()]).finally(() => {
+            this.loading = false;
+        });
     }
 
     get config() {
@@ -63,7 +68,6 @@ export class ViewModel {
     };
 
     fetchLastIndexTime = async () => {
-        this.loading = true;
         try {
             const data = await fetchLastIndexTime(this.config);
             const latest_timestamp = data?.latest_timestamp;
@@ -72,8 +76,6 @@ export class ViewModel {
             }
         } catch (err) {
             showToast(err.message, 'error');
-        } finally {
-            this.loading = false;
         }
     }
 
@@ -130,6 +132,16 @@ export class ViewModel {
             this.folders = await getFolders() as [];
         } catch(err) {
             console.error('getFolders error', err.message);
+            showToast(err.message, 'error');
+        }
+    }
+
+    getGroupsMap = async() => {
+        try {
+            this.groupMaps = await getGroupsMap() as any;
+        } catch(err) {
+            console.error('getGroupsMap error', err.message);
+            showToast(err.message, 'error');
         }
     }
 
@@ -258,6 +270,17 @@ export class ViewModel {
     }
 
     private _updateLists = (text: string) => {
+        if (this.groupMaps) {
+            text = text.replace(/\[message:(\d+)\]/g, (match, id) => {
+                // @ts-ignore
+                const group = this.groupMaps[String(id)];
+                if (group && group.name) {
+                    return `[group:${group.name}](https://app.ringcentral.com/messages/${id})`;
+                }
+                return match; // 如果没有找到对应的组，保持原样
+            });
+        }
+
         this.lists.push({
             timestamp: Date.now(),
             text

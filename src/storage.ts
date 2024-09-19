@@ -51,3 +51,17 @@ export function getFolders() {
           console.log(error);
         });
 }
+
+export function getGroupsMap() {
+    return getIndexedDBData('Glip', 'group').then((groups) => {
+        const groupsMap = groups.reduce((acc: any, group: any) => {
+            acc[group.id] = {
+                name: group.set_abbreviation,
+                is_team: group.is_team
+            };
+            return acc;
+        }, {});
+
+        return groupsMap;
+    });
+}
