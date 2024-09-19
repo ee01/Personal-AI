@@ -281,6 +281,13 @@ export class ViewModel {
             });
         }
 
+        text = text.replace(/\[POST:(\d+)\]/gi, (match, id) => {
+            if (id) {
+                return `[post:${id}](https://app.ringcentral.com/messages/${id})`;
+            }
+            return match; // 如果没有找到对应的组，保持原样
+        });
+
         this.lists.push({
             timestamp: Date.now(),
             text
