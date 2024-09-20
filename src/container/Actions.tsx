@@ -29,7 +29,7 @@ export const Actions = (props: IActionsProps) => {
 
     return (
         <div className="radar-poc-config-section">
-            {showConfig && <button className="radar-poc-result-button" onClick={handleSaveConfig}>Persistent Configuration</button>}
+            {showConfig && <button className="radar-poc-result-button" onClick={handleSaveConfig}>Save Configuration</button>}
             <button className="radar-poc-result-button" onClick={handleInitialize}>GraphRAG Initialize</button>
             <button className="radar-poc-result-button" onClick={handleIncrement} disabled={!latestTimestamp}>GraphRAG Increment</button>
             <button className="radar-poc-result-button" onClick={handleDelete} disabled={!latestTimestamp}>GraphRAG Delete All Indexing</button>
