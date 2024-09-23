@@ -142,6 +142,13 @@ export const CONTENT_STYLE = `
   color: #666;
 }
 
+.radar-poc-result-item-wrapper .radar-poc-result-item-time i {
+  font-style: italic;
+  color: rgb(6, 111, 172);
+  cursor: pointer;
+  margin-left: 10px;
+}
+
 .radar-poc-result-item {
     border: 1px solid #e1e4e8;
     padding: 6px;

@@ -3,7 +3,7 @@ import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchD
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
-import { GET_INIT_TOPICS_QUERY } from './prompt';
+import { GET_INIT_TOPICS_QUERY, SALES_QUERY } from './prompt';
 import { getFolders, getLocalStorageItem, setLocalStorageItem, getGroupsMap } from './storage';
 import { CONFIG_LOCAL_STORAGE_KEY, RADAR_POC_RESULT_LISTS, RADAR_POC_CANDIDATE_QUESTIONS } from './constants';
 
@@ -12,7 +12,7 @@ export class ViewModel {
     radarPoCConfig: RadarPoCConfig;
 
     @observable
-    lists: { timestamp: number, text: string }[] = [];
+    lists: { timestamp: number, text: string, id: number }[] = [];
 
     @observable
     latestTimestamp?: number = undefined;
@@ -255,6 +255,25 @@ export class ViewModel {
             this.loading = false;
         }
     }
+
+    handleGenerateSalesReport = async() => {
+        this.loading = true;
+        try {
+            const query = SALES_QUERY(this.config.username);
+            const data = await customQuery(query, this.config);
+            const { result, candidate_questions } = data;
+            this._updateLists(result);
+
+            if (this.config.enableCandidateQuestions) {
+                this.candidateQuestions = candidate_questions.slice(0, 3);
+                setLocalStorageItem(RADAR_POC_CANDIDATE_QUESTIONS, this.candidateQuestions);
+            }
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            this.loading = false;
+        }
+    }
     
     handleSubmitQuery = async() => {
         await this._executeQuery(this.query);
@@ -278,6 +297,12 @@ export class ViewModel {
             this.loading = false;
         }
     }
+
+    handleDeleteItem = (id: number) => {
+        this.lists = this.lists.filter(item => item.id !== id);
+        const lists = this.lists.slice(-5);
+        setLocalStorageItem(RADAR_POC_RESULT_LISTS, lists);
+    };
     
     handleCandidateQuestions = async(query: string) => {
         await this._executeQuery(query);
@@ -331,6 +356,7 @@ export class ViewModel {
         });
 
         this.lists.push({
+            id: Date.now(),
             timestamp: Date.now(),
             text
         });

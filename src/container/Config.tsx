@@ -21,7 +21,8 @@ export const Config = observer((props: IConfigProps) => {
         handleGenerateGlobalSearchReport,
         handleGenerateDisposeReport,
         handleDelete,
-        handleTrendingTopics
+        handleTrendingTopics,
+        handleGenerateSalesReport
     } = vm;
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -39,7 +40,7 @@ export const Config = observer((props: IConfigProps) => {
                     <input
                         type="number"
                         name="recentDays"
-                        max="7"
+                        max="30"
                         min="0"
                         value={radarPoCConfig.config.recentDays}
                         onChange={handleInputChange}
@@ -123,6 +124,7 @@ export const Config = observer((props: IConfigProps) => {
                     handleGenerateDisposeReport={handleGenerateDisposeReport}
                     handleGenerateGlobalSearchReport={handleGenerateGlobalSearchReport}
                     handleDelete={handleDelete}
+                    handleGenerateSalesReport={handleGenerateSalesReport}
                     latestTimestamp={latestTimestamp}
                     showConfig={true}
                 />

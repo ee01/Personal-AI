@@ -26,7 +26,9 @@ export const Stream = observer((props: IConfigProps) => {
         handleCandidateQuestions,
         handleDelete,
         handleTrendingTopics,
-        handleGenerateGlobalSearchReport
+        handleGenerateGlobalSearchReport,
+        handleGenerateSalesReport,
+        handleDeleteItem
     } = vm;
     const hasResult = lists.length > 0;
     const enableCandidateQuestions = radarPoCConfig.config.enableCandidateQuestions;
@@ -42,14 +44,15 @@ export const Stream = observer((props: IConfigProps) => {
                     handleGenerateDisposeReport={handleGenerateDisposeReport}
                     handleDelete={handleDelete}
                     handleGenerateGlobalSearchReport={handleGenerateGlobalSearchReport}
+                    handleGenerateSalesReport={handleGenerateSalesReport}
                     latestTimestamp={latestTimestamp}
                     showConfig={false}
                 />}
             <div className="radar-poc-result-inner">
                 {lists.map((item, index) => {
                     return  (
-                    <div key={index} className="radar-poc-result-item-wrapper">
-                        <span className='radar-poc-result-item-time'>Generate Time: {formatDate(item.timestamp)}</span>
+                    <div key={item.id} className="radar-poc-result-item-wrapper">
+                        <span className='radar-poc-result-item-time'>Generate Time: {formatDate(item.timestamp)} <i onClick={() => handleDeleteItem(item.id)}>Delete</i></span>
                         <div key={index} className="radar-poc-result-item">
                             <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
                         </div>
