@@ -44,8 +44,10 @@ export function getCurrentUserInfo() {
 
 export function getFolders() {
     return getIndexedDBData('Glip', 'profile').then(([data]) => {
-        // @ts-ignore
-        const folders = [{title: ' ', ids: []},{title: 'favorite', ids: data.favorite_group_ids}, ...data.conversation_sets.filter(item => item.type === 'folder')]
+            const favorite_group_ids = data?.favorite_group_ids || [];
+            const conversation_sets = data?.conversation_sets || [];
+            // @ts-ignore
+            const folders = [{title: ' ', ids: []},{title: 'favorite', ids: favorite_group_ids}, ...conversation_sets.filter(item => item.type === 'folder')]
             return folders;
         }).catch(error => {
           console.log(error);
