@@ -123,8 +123,8 @@ export const CONTENT_STYLE = `
 }
 .radar-poc-result {
     position: relative;
-    width: 450px;
-    min-width: 450px;
+    width: 520px;
+    min-width: 520px;
     height: 100%;
     box-sizing: border-box;
     background: linear-gradient(135deg, rgba(235, 115, 197, 0.08) 4.17%, rgba(136, 114, 239, 0.08) 54.17%, rgba(103, 140, 240, 0.08) 100%);

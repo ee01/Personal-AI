@@ -327,7 +327,7 @@ export class ViewModel {
             });
         }
 
-        text = text.replace(/\[(post|sms|voicemail|calltranscript|calendar):(\d+)\]/gi, (match, type, id) => {
+        text = text.replace(/\[(post|sms|voicemail|calltranscript|calendar):([a-zA-Z0-9-_]+)\]/gi, (match, type, id) => {
             if (id) {
                 type = type.toLowerCase();
                 let link;
