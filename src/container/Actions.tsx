@@ -12,6 +12,7 @@ type IActionsProps = {
     handleTrendingTopics: () => void;
     handleGenerateGlobalSearchReport: () => void;
     handleGenerateSalesReport: () => void;
+    handleSendToOllama: () => void;
 };
 
 export const Actions = (props: IActionsProps) => {
@@ -27,6 +28,7 @@ export const Actions = (props: IActionsProps) => {
         // handleGenerateGlobalSearchReport,
         handleTrendingTopics,
         // handleGenerateSalesReport,
+        handleSendToOllama,
     } = props;
 
     return (
@@ -40,6 +42,7 @@ export const Actions = (props: IActionsProps) => {
             {/* <button className="radar-poc-result-button" onClick={handleGenerateGlobalSearchReport} disabled={!latestTimestamp}>GraphRAG - Generate Report(Use Global Search)</button> */}
             <button className="radar-poc-result-button" onClick={handleTrendingTopics} disabled={!latestTimestamp}>GraphRAG - Trending Topics</button>
             <button className="radar-poc-result-button" onClick={handleGenerateDisposeReport}>[Full Context for Dify] - Generate Report</button>
+            <button className="radar-poc-config-button" onClick={handleSendToOllama}>发送 Indexing 数据到 Ollama</button>
         </div>
     );
 };

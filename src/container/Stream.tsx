@@ -28,7 +28,8 @@ export const Stream = observer((props: IConfigProps) => {
         handleTrendingTopics,
         handleGenerateGlobalSearchReport,
         handleGenerateSalesReport,
-        handleDeleteItem
+        handleDeleteItem,
+        handleSendToOllama
     } = vm;
     const hasResult = lists.length > 0;
     const enableCandidateQuestions = radarPoCConfig.config.enableCandidateQuestions;
@@ -45,6 +46,7 @@ export const Stream = observer((props: IConfigProps) => {
                     handleDelete={handleDelete}
                     handleGenerateGlobalSearchReport={handleGenerateGlobalSearchReport}
                     handleGenerateSalesReport={handleGenerateSalesReport}
+                    handleSendToOllama={handleSendToOllama}
                     latestTimestamp={latestTimestamp}
                     showConfig={false}
                 />}

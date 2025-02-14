@@ -1,5 +1,5 @@
 import { observable } from 'mobx';
-import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics, globalQuery } from './api';
+import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics, globalQuery, sendDataToOllama } from './api';
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
@@ -111,8 +111,8 @@ export class ViewModel {
 
     // 优化后的handleInitialize函数
     handleInitialize = async () => {
-        const recentDays = this.config.recentDays;
-        const startTime = new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000);
+        // const recentDays = this.config.recentDays;
+        const startTime = new Date(Date.now() - 10 * 1000);
 
         await this._handleDataProcessing(
             startTime,
@@ -363,4 +363,15 @@ export class ViewModel {
         const lists = this.lists.slice(-5);
         setLocalStorageItem(RADAR_POC_RESULT_LISTS, lists);
     }
+
+    handleSendToOllama = async () => {
+        const recentDays = this.config.recentDays;
+        const startTime = new Date(Date.now() - recentDays * (24/12) * 60 * 60 * 1000);
+
+        await this._handleDataProcessing(
+            startTime,
+            sendDataToOllama,
+            'Initialization successful. You can use GraphRAG to generate a report or perform a custom query.'
+        );
+    };
 }
