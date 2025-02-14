@@ -4,9 +4,8 @@
   "description": "Radar PoC chrome extension",
   "scripts": {
     "start": "webpack --watch --config webpack.dev.cjs",
-    "build": "webpack --config webpack.prod.cjs",
-    "lint": "eslint --ext .ts,.js --max-warnings=0 .",
-    "prettier": "prettier --write"
+    "build": "webpack --config webpack.dev.cjs",
+    "clean": "rm -rf dist/*"
   },
   "type": "module",
   "license": "MIT",

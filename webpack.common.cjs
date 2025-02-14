@@ -8,6 +8,7 @@ module.exports = {
   entry: {
     contentScript: './src/contentScript.tsx',
     popup: './src/popup.ts',
+    background: './src/background.ts',
   },
   module: {
     rules: [

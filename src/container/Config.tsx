@@ -22,7 +22,8 @@ export const Config = observer((props: IConfigProps) => {
         handleGenerateDisposeReport,
         handleDelete,
         handleTrendingTopics,
-        handleGenerateSalesReport
+        handleGenerateSalesReport,
+        handleSendToOllama
     } = vm;
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -126,6 +127,7 @@ export const Config = observer((props: IConfigProps) => {
                     handleDelete={handleDelete}
                     handleGenerateSalesReport={handleGenerateSalesReport}
                     latestTimestamp={latestTimestamp}
+                    handleSendToOllama={handleSendToOllama}
                     showConfig={true}
                 />
             </div>

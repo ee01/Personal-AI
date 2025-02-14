@@ -29,12 +29,14 @@ function transformData2Group(data: any[]) {
         groupId: item.groupId,
         groupName: item.groupName,
         text: '',
+        posts: [],
         groupType: 'team',
         postNum: 0,
         time: '' // 初始化 time 字段
       };
     }
     acc[item.groupId].text += item.parentId ? `[id:${item.id}][threadId:${item.parentId}][${item.time}][${item.creator}]: ${item.text}\n` : `[id:${item.id}][${item.time}][${item.creator}]: ${item.text}\n`;
+    acc[item.groupId].posts.push(item);
     acc[item.groupId].postNum += 1;
     acc[item.groupId].time = item.time; // 更新 time 为当前项的时间
     acc[item.groupId].groupType = item.groupType;
