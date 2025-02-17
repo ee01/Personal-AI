@@ -21,7 +21,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             body: JSON.stringify({
                 model: body.model,
                 prompt: body.prompt,
-                stream: body.stream
+                stream: body.stream,
+                temperature: 0.3,
+                top_p: 0.9
             })
         })
         .then(async response => {
