@@ -366,7 +366,7 @@ export class ViewModel {
 
     handleSendToOllama = async () => {
         const recentDays = this.config.recentDays;
-        const startTime = new Date(Date.now() - recentDays * (24/12) * 60 * 60 * 1000);
+        const startTime = new Date(Date.now() - recentDays * (24/2) * 60 * 60 * 1000);
 
         await this._handleDataProcessing(
             startTime,
