@@ -1,5 +1,6 @@
 import { SERVER_HOST, API_PATH } from './constants';
 import { IConfig } from './config';
+import { handleLLMRequest } from './llm';
 
 export function fetchRadarPocServer(path: string, body: any) {
     const url = SERVER_HOST + path;
@@ -156,12 +157,13 @@ export function fetchDifyServer(query: string[], config: IConfig) {
 
 export function sendDataToOllama (data: any[], config: IConfig) {
   const { username } = config;
-  const concerned_part: string[] = JSON.parse(localStorage.getItem('concernedItems') || JSON.stringify([
+  const concerned_part: string[] = JSON.parse(config.concernedItems || JSON.stringify([
     'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况（关键词：recording/RCV mobile/BE dependencies，必须同时包含"recording"和"BE"相关关键词）',
     '聊到关于公司政策，也可以是政策相关的八卦消息',
     'Sophia (Jinmei) Lin 发送的所有消息（只需要检查发送者是否完全匹配）',
     '任何明确 @我 的消息，或者提到我的名字的消息',
   ]));
+  console.log(data);
   // 插入调试数据
   data.unshift({
     groupName: 'Recording Test',
@@ -282,36 +284,44 @@ export function sendDataToOllama (data: any[], config: IConfig) {
 export const sendToOllama = async (prompt: string) => {
     console.log('Sending prompt to Ollama:', prompt);
     try {
-        chrome.runtime.sendMessage({
-            type: 'OLLAMA_REQUEST',
-            data: {
-                url: 'http://localhost:11434/api/generate',
-                method: 'POST',
-                body: {
-                    model: "deepseek-r1",
-                    prompt: prompt,
-                    stream: false
+        // 检查是否在 background script 环境中
+        const isBackground = typeof window === 'undefined';
+        if (isBackground) {
+            // 在 background script 中直接调用处理函数
+            const data = await handleLLMRequest({ prompt });
+            console.log("Ollama's response:", data.response);
+            return data;
+        } else {
+            // 在 content script 或其他环境中使用 message passing
+            chrome.runtime.sendMessage({
+                type: 'OLLAMA_REQUEST',
+                data: {
+                    body: {
+                        prompt: prompt
+                    }
                 }
-            }
-        }, response => {
-            if (response.error) {
-                console.error("Error sending to Ollama:", response.error);
-                console.error("Additional details:", response.details || 'No details');
-                if (response.rawResponse) {
-                    console.log("Raw response from Ollama:", response.rawResponse);
+            }, response => {
+                console.log('sendToOllama-response', response);
+                
+                if (response.error) {
+                    console.error("Error sending to Ollama:", response.error);
+                    console.error("Additional details:", response.details || 'No details');
+                    if (response.rawResponse) {
+                        console.log("Raw response from Ollama:", response.rawResponse);
+                    }
+                    showToast(`Failed to connect to Ollama: ${response.error}`, 'error');
+                    return;
                 }
-                showToast(`Failed to connect to Ollama: ${response.error}`, 'error');
-                return;
-            }
-            
-            if (response.data && response.data.response) {
-                console.log("Ollama's response:", response.data.response);
-                showToast('Analysis complete, please check the console', 'success');
-            } else {
-                console.error("Unexpected response format:", response);
-                showToast('Received invalid response format from Ollama', 'error');
-            }
-        });
+                
+                if (response.data && response.data.response) {
+                    console.log("Ollama's response:", response.data.response);
+                    showToast('Analysis complete, please check the console', 'success');
+                } else {
+                    console.error("Unexpected response format:", response);
+                    showToast('Received invalid response format from Ollama', 'error');
+                }
+            });
+        }
     } catch (error) {
         console.error("Error in sendToOllama:", error);
         showToast(`Error: ${error.message}`, 'error');
