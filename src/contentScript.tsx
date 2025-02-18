@@ -4,6 +4,7 @@ import { App } from './container/App';
 import { CONTENT_STYLE } from './contentStyle';
 import { MARKDOWN_STYLE } from './markdownStyle';
 import { ViewModel } from './viewModel';
+import { fetchUserData } from './metadata';
 
 
 // Insert the CSS styles into the DOM
@@ -39,12 +40,45 @@ function bootstrap() {
 }
 
 // Main listener
-// @ts-ignore
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log('收到消息:', message, '发送者:', sender); // 添加详细的日志
+
+    if (!message || !message.type) {
+        console.warn('收到无效消息格式');
+        return;
+    }
+
     const { type } = message;
 
     if (type === 'RADAR-POC-OPEN-PANEL') {
+        console.log('处理 RADAR-POC-OPEN-PANEL 消息');
         bootstrap();
         sendResponse({ status: 'done', type });
     }
+
+    if (type === 'FETCH_USER_DATA') {
+        console.log('处理 FETCH_USER_DATA 消息，参数:', message);
+        const { startTime, config } = message;
+        
+        // 确保必要的参数存在
+        if (!startTime || !config) {
+            console.error('缺少必要的参数:', { startTime, config });
+            sendResponse({ success: false, error: '缺少必要的参数' });
+            return true;
+        }
+
+        // 执行数据获取
+        fetchUserData(startTime, config)
+            .then(data => {
+                console.log('数据获取成功:', data);
+                sendResponse({ success: true, data });
+            })
+            .catch(error => {
+                console.error('数据获取失败:', error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true; // 保持消息通道开启
+    }
+
+    return true; // 为所有消息保持消息通道开启
 });

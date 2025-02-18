@@ -3,9 +3,12 @@
   "name": "Radar Poc",
   "version": "2.0",
   "permissions": [
+    "tabs",
     "storage",
     "activeTab",
     "scripting",
+    "alarms",
+    "background",
     "cors"
   ],
   "content_scripts": [
