@@ -1,4 +1,49 @@
+import OpenAI from 'openai';
+
 console.log('Background script loaded');
+
+// 初始化 OpenAI 客户端
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    baseURL: process.env.OPENAI_API_BASE_URL
+});
+
+// 处理 Ollama 请求
+async function handleOllamaRequest(body: any) {
+    const response = await fetch(`${process.env.OLLAMA_BASE_URL}/api/generate`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            model: process.env.OLLAMA_MODEL,
+            prompt: body.prompt,
+            stream: false,
+            temperature: 0.3,
+            top_p: 0.9
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return await response.json();
+}
+
+// 处理 OpenAI 请求
+async function handleOpenAIRequest(body: any) {
+    const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL,
+        messages: [{ role: "user", content: body.prompt }],
+        temperature: 0.3,
+        top_p: 0.9
+    });
+
+    return {
+        response: completion.choices[0].message.content
+    };
+}
 
 chrome.runtime.onInstalled.addListener(() => {
     console.log('Extension installed/updated');
@@ -10,55 +55,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'OLLAMA_REQUEST') {
         const { body } = request.data;
         
-        console.log('Sending request to Ollama:', body);
+        console.log('Sending request to LLM:', body);
         
-        // 403跨域的话要设置 launchctl setenv OLLAMA_ORIGINS "*"，或者编辑到 bash_profile 中重启不会失效 https://medium.com/dcoderai/how-to-handle-cors-settings-in-ollama-a-comprehensive-guide-ee2a5a1beef0
-        fetch('http://localhost:11434/api/generate', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: body.model,
-                prompt: body.prompt,
-                stream: body.stream,
-                temperature: 0.3,
-                top_p: 0.9
-            })
-        })
-        .then(async response => {
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Response not ok:', {
-                    status: response.status,
-                    statusText: response.statusText,
-                    body: errorText
-                });
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const text = await response.text();
-            console.log('Raw response:', text);
-            
-            try {
-                const data = JSON.parse(text);
-                console.log('Parsed response:', data);
+        // 根据配置选择不同的处理方式
+        const handler = process.env.LLM_TYPE === 'local' ? handleOllamaRequest : handleOpenAIRequest;
+        
+        handler(body)
+            .then(data => {
+                console.log('LLM response:', data);
                 sendResponse({ data });
-            } catch (e) {
-                console.error('JSON parse error:', e);
+            })
+            .catch(error => {
+                console.error('LLM error:', error);
                 sendResponse({ 
-                    error: 'Invalid JSON response from Ollama',
-                    rawResponse: text 
+                    error: error.message,
+                    details: `Failed to connect to ${process.env.LLM_TYPE} service`
                 });
-            }
-        })
-        .catch(error => {
-            console.error('Ollama error:', error);
-            sendResponse({ 
-                error: error.message,
-                details: 'Failed to connect to Ollama service'
             });
-        });
         
         return true;
     }

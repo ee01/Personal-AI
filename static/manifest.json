@@ -24,11 +24,9 @@
   },
   "options_page": "popup.html",
   "host_permissions": [
-    "http://localhost:11434/*"
+    "http://localhost:11434/*",
+    "https://integrate.api.nvidia.com/*"
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:11434"
-  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
