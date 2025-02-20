@@ -5,6 +5,7 @@ import { CONTENT_STYLE } from './contentStyle';
 import { MARKDOWN_STYLE } from './markdownStyle';
 import { ViewModel } from './viewModel';
 import { fetchUserData } from './metadata';
+import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 
 
 // Insert the CSS styles into the DOM
@@ -41,7 +42,7 @@ function bootstrap() {
 
 // Main listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('收到消息:', message, '发送者:', sender); // 添加详细的日志
+    console.log('收到消息:', message, '发送者:', sender);
 
     if (!message || !message.type) {
         console.warn('收到无效消息格式');
@@ -49,6 +50,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const { type } = message;
+
+    if (type === 'GET_CONFIG') {
+        console.log('处理 GET_CONFIG 消息');
+        const configStr = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
+        const config = configStr ? JSON.parse(configStr) : null;
+        console.log('获取到的配置:', config);
+        sendResponse({ success: true, config });
+        return true;
+    }
 
     if (type === 'RADAR-POC-OPEN-PANEL') {
         console.log('处理 RADAR-POC-OPEN-PANEL 消息');

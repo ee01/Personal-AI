@@ -22,8 +22,8 @@
     }
   ],
   "action": {
-    "default_title": "Open Radar Poc",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_title": "Radar PoC"
   },
   "options_page": "popup.html",
   "host_permissions": [

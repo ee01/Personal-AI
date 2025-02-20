@@ -1,6 +1,7 @@
 import { SERVER_HOST, API_PATH } from './constants';
 import { IConfig } from './config';
 import { handleLLMRequest } from './llm';
+import { sendBotMessage } from './bot';
 
 export function fetchRadarPocServer(path: string, body: any) {
     const url = SERVER_HOST + path;
@@ -155,23 +156,24 @@ export function fetchDifyServer(query: string[], config: IConfig) {
   });
 }
 
-export function sendDataToOllama (data: any[], config: IConfig) {
+export async function sendDataToOllama (data: any[], config: IConfig) {
   const { username } = config;
-  const concerned_part: string[] = JSON.parse(config.concernedItems || JSON.stringify([
-    'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况（关键词：recording/RCV mobile/BE dependencies，必须同时包含"recording"和"BE"相关关键词）',
-    '聊到关于公司政策，也可以是政策相关的八卦消息',
-    'Sophia (Jinmei) Lin 发送的所有消息（只需要检查发送者是否完全匹配）',
-    '任何明确 @我 的消息，或者提到我的名字的消息',
-  ]));
-  console.log(data);
+  // Todo: 从 bckgournd->storage 传参 中获取 concernedItems
+  const concernedItems: {text: string}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
+      {text:'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况（关键词：recording/RCV mobile/BE dependencies，必须同时包含"recording"和"BE"相关关键词）'},
+      {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
+      {text:'Sophia (Jinmei) Lin 发送的所有消息（只需要检查发送者是否完全匹配）'},
+      {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
+    ];
+  console.log(data, concernedItems, await chrome.storage.local.get('concernedItems'));
   // 插入调试数据
-  data.unshift({
-    groupName: 'Recording Test',
-    groupId: '123',
-    posts: [
-      { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
-    ]
-  });
+  // data.unshift({
+  //   groupName: 'Recording Test',
+  //   groupId: '123',
+  //   posts: [
+  //     { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
+  //   ]
+  // });
   data.unshift({
     groupName: '大群',
     groupId: '321',
@@ -179,12 +181,19 @@ export function sendDataToOllama (data: any[], config: IConfig) {
       { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。' }
     ]
   });
-  data.splice(3);
+  data.splice(2);
   console.log(data);
 
   if (process.env.LLM_TYPE === 'local') {
     // 拆分单条发送 LLM
-    data.forEach((item: any, index: number) => setTimeout(() => {
+    chrome.storage.local.set({
+      ollamaAnalysisProgress: {
+        total: data.length,
+        lastAnalyzedIndex: 0,
+        lastAnalyzedTime: new Date().toISOString()
+      }
+    });
+    data.forEach(async (item: any, index: number) => await setTimeout(async () => {
       console.log(`--开始分析第 ${index+1}/${data.length} 条消息--`);
       const message = `<message_group team_name="${item.groupName}" team_id="${item.groupId}">${item.posts.map((post:any) => `
           <message_content sender="${post.creator}" datetime="${post.time}">${post.text}</message_content>`).join('')}
@@ -199,7 +208,7 @@ export function sendDataToOllama (data: any[], config: IConfig) {
         ---- 以下是我的需求和你需要返回的内容定义 ----
         你是一个很细心的项目经理，请仔细阅读并认真分析以上消息，执行以下三步的任务：
         1. 请仔细阅读 message_group 里的每条聊天消息，判断里面的 message_content 是否有符合以下规则其中一条：
-          ${concerned_part.map((item:any, i:number) => `- 规则${i+1}: ${item}`).join('\n          ')}
+          ${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n          ')}
         2. 对 message_group 中刚有符合规则的消息，请提取以下字段（只提取原文，不做修改不做翻译）：
           - message_content消息原文及其对应发送者sender和发送时间datetime, 还有message_group中的 team_name, team_id, 以及符合的规则x
         3. 对 message_group 中刚有符合规则的消息，每条生成对应的这 3 个新字段：
@@ -222,7 +231,14 @@ export function sendDataToOllama (data: any[], config: IConfig) {
           }]
         2. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
       `
-      sendToOllama(prompt);
+      await sendToOllama(prompt);
+      chrome.storage.local.set({
+        ollamaAnalysisProgress: {
+          total: data.length,
+          lastAnalyzedIndex: index + 1,
+          lastAnalyzedTime: new Date().toISOString()
+        }
+      });
     }, 3 * 60 * 1000 * index + 1));
 
   } else {
@@ -253,7 +269,7 @@ export function sendDataToOllama (data: any[], config: IConfig) {
       ---- 以下是我的需求和你需要返回的内容定义 ----
       让我们来一个一个查看 message_group，并且针对每个 message_group 都执行以下三步的任务：
       1. 请仔细阅读 message_group 里的每条聊天消息，判断里面的 message_content 是否有符合以下规则其中一条。如果没有则跳过并查看下一个 message_group：
-        ${concerned_part.map((item:any, i:number) => `- 规则${i+1}: ${item}`).join('\n        ')}
+        ${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n        ')}
       2. 对 message_group 中刚有符合规则的消息，请提取以下字段（只提取原文，不做修改不做翻译）：
         - message_content消息原文及其对应发送者sender和发送时间datetime, 还有message_group中的 team_name, team_id, 以及符合的规则x
       3. 对 message_group 中刚有符合规则的消息，每条生成对应的这 3 个新字段：
@@ -277,7 +293,21 @@ export function sendDataToOllama (data: any[], config: IConfig) {
         }]
       2. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
     `
-    sendToOllama(prompt);
+    chrome.storage.local.set({
+      ollamaAnalysisProgress: {
+        total: 1,
+        lastAnalyzedIndex: 0,
+        lastAnalyzedTime: new Date().toISOString()
+      }
+    });
+    await sendToOllama(prompt);
+    chrome.storage.local.set({
+      ollamaAnalysisProgress: {
+        total: 1,
+        lastAnalyzedIndex: 1,
+        lastAnalyzedTime: new Date().toISOString()
+      }
+    });
   }
 }
 
@@ -288,39 +318,53 @@ export const sendToOllama = async (prompt: string) => {
         const isBackground = typeof window === 'undefined';
         if (isBackground) {
             // 在 background script 中直接调用处理函数
-            const data = await handleLLMRequest({ prompt });
-            console.log("Ollama's response:", data.response);
-            return data;
+            const [response, jsonArray] = await handleLLMRequest({ prompt });
+            console.log("Ollama's response:", response);
+            console.log("Ollama's jsonArray:", jsonArray);
+            // 发送 bot 消息，遍历数组中的每个项目
+            if (jsonArray && jsonArray.length > 0) {
+                jsonArray.forEach(json => {
+                    sendBotMessage({
+                        matched_rule: json.matched_rule,
+                        team_name: json.team_name,
+                        sender: json.sender,
+                        message_content: json.message_content,
+                        summary: json.summary
+                    }).catch(console.error);
+                });
+            }
+            return response;
         } else {
             // 在 content script 或其他环境中使用 message passing
-            chrome.runtime.sendMessage({
-                type: 'OLLAMA_REQUEST',
+            const response = await chrome.runtime.sendMessage({
+                type: 'LLM_REQUEST',
                 data: {
                     body: {
                         prompt: prompt
                     }
                 }
-            }, response => {
-                console.log('sendToOllama-response', response);
-                
-                if (response.error) {
-                    console.error("Error sending to Ollama:", response.error);
-                    console.error("Additional details:", response.details || 'No details');
-                    if (response.rawResponse) {
-                        console.log("Raw response from Ollama:", response.rawResponse);
-                    }
-                    showToast(`Failed to connect to Ollama: ${response.error}`, 'error');
-                    return;
-                }
-                
-                if (response.data && response.data.response) {
-                    console.log("Ollama's response:", response.data.response);
-                    showToast('Analysis complete, please check the console', 'success');
-                } else {
-                    console.error("Unexpected response format:", response);
-                    showToast('Received invalid response format from Ollama', 'error');
-                }
             });
+            
+            if (response.error) {
+                console.error("Error sending to Ollama:", response.error);
+                console.error("Additional details:", response.details || 'No details');
+                if (response.rawResponse) {
+                    console.log("Raw response from Ollama:", response.rawResponse);
+                }
+                showToast(`Failed to connect to Ollama: ${response.error}`, 'error');
+                throw new Error(response.error);
+            }
+            
+            if (response.data) {
+                console.log("LLM's response:", response.data);
+                showToast('Analysis complete, please check the console', 'success');
+                return response.data;
+            } else {
+                const error = new Error('Received invalid response format from LLM');
+                console.error("Unexpected response format:", response);
+                showToast(error.message, 'error');
+                throw error;
+            }
         }
     } catch (error) {
         console.error("Error in sendToOllama:", error);
