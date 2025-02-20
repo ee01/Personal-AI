@@ -9,6 +9,7 @@ module.exports = {
     contentScript: './src/contentScript.tsx',
     popup: './src/popup.tsx',
     background: './src/background.ts',
+    'topic-modal': './src/topic-modal.tsx'
   },
   module: {
     rules: [

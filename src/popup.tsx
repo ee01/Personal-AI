@@ -8,26 +8,11 @@ import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from './back
 const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
-    const [topics, setTopics] = useState<string[]>([]);
-    const [showTopicModal, setShowTopicModal] = useState(false);
-    const [newTopic, setNewTopic] = useState('');
-    const [topicExpiry, setTopicExpiry] = useState('7'); // 默认7天
     const [analysisProgress, setAnalysisProgress] = useState<{
         total: number;
         lastAnalyzedIndex: number;
         lastAnalyzedTime: string;
     } | null>(null);
-
-    useEffect(() => {
-        (async () => {
-            // 获取当前的话题列表
-            const savedTopics = (await chrome.storage.local.get('concernedItems')).concernedItems;
-            console.log('savedTopics:', savedTopics);
-            if (savedTopics) {
-                setTopics(savedTopics);
-            }
-        })();
-    }, []);
 
     useEffect(() => {
         (async () => {
@@ -104,21 +89,18 @@ const Popup = () => {
         });
     };
 
-    const handleAddTopic = () => {
-        if (newTopic) {
-            const updatedTopics = [...topics, {
-                text: newTopic,
-                expiredAt: Date.now() + (parseInt(topicExpiry) * 24 * 60 * 60 * 1000)
-            }];
-            setTopics(updatedTopics);
-            localStorage.setItem('concernedItems', JSON.stringify(updatedTopics));
-            setNewTopic('');
-            setShowTopicModal(false);
-        }
-    };
-
     const handleOpenRadar = () => {
         sendMessageToActiveTab({type: 'RADAR-POC-OPEN-PANEL'}, 'RADAR-POC-OPEN-PANEL');
+    };
+
+    const openTopicWindow = () => {
+        chrome.windows.create({
+            url: 'topic-modal.html',
+            type: 'popup',
+            width: 400,
+            height: 300,
+            focused: true
+        });
     };
 
     return (
@@ -133,10 +115,10 @@ const Popup = () => {
             </button>
             
             <button onClick={toggleSchedule}>
-                {isScheduleActive ? '禁用' : '启用'} 静默定时分析消息
+                {isScheduleActive ? '禁用' : '启用'} 静默定时消息分析
             </button>
             
-            <button onClick={() => setShowTopicModal(true)}>
+            <button onClick={openTopicWindow}>
                 配置感兴趣的话题
             </button>
 
@@ -146,32 +128,6 @@ const Popup = () => {
             >
                 Open Radar Sidebar
             </button>
-
-            {showTopicModal && (
-                <div className="topic-modal">
-                    <div className="modal-content">
-                        <h3>Add New Topic</h3>
-                        <textarea
-                            value={newTopic}
-                            onChange={(e) => setNewTopic(e.target.value)}
-                            placeholder="Enter topic..."
-                        />
-                        <select 
-                            value={topicExpiry}
-                            onChange={(e) => setTopicExpiry(e.target.value)}
-                        >
-                            <option value="1">1 day</option>
-                            <option value="7">7 days</option>
-                            <option value="30">30 days</option>
-                            <option value="90">90 days</option>
-                        </select>
-                        <div className="modal-buttons">
-                            <button onClick={handleAddTopic}>Add</button>
-                            <button onClick={() => setShowTopicModal(false)}>Cancel</button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

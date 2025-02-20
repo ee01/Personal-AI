@@ -33,5 +33,9 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
-  }
+  },
+  "web_accessible_resources": [{
+    "resources": ["topic-modal.html"],
+    "matches": ["<all_urls>"]
+  }]
 }

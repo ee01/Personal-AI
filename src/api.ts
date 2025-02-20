@@ -174,14 +174,14 @@ export async function sendDataToOllama (data: any[], config: IConfig) {
   //     { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
   //   ]
   // });
-  data.unshift({
-    groupName: '大群',
-    groupId: '321',
-    posts: [
-      { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。' }
-    ]
-  });
-  data.splice(2);
+  // data.unshift({
+  //   groupName: '大群',
+  //   groupId: '321',
+  //   posts: [
+  //     { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。' }
+  //   ]
+  // });
+  // data.splice(2);
   console.log(data);
 
   if (process.env.LLM_TYPE === 'local') {
@@ -327,6 +327,7 @@ export const sendToOllama = async (prompt: string) => {
                     sendBotMessage({
                         matched_rule: json.matched_rule,
                         team_name: json.team_name,
+                        team_id: json.team_id,
                         sender: json.sender,
                         message_content: json.message_content,
                         summary: json.summary

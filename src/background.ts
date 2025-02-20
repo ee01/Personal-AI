@@ -9,6 +9,32 @@ console.log('Background script loaded');
 chrome.runtime.onInstalled.addListener(async () => {
     console.log('Extension installed/updated');
 
+    // 初始化配置
+    chrome.storage.local.remove('scheduleActive');
+    chrome.storage.local.remove('ollamaAnalysisProgress');
+    
+    // 获取并清理过期的 concernedItems
+    const storage = await chrome.storage.local.get('concernedItems');
+    if (storage.concernedItems) {
+        // 过滤掉过期的项目
+        const validItems = storage.concernedItems.filter(item => {
+            return !item.expiredAt || new Date(item.expiredAt) > new Date();
+        });
+        
+        // 如果有项目被过滤掉，更新存储
+        if (validItems.length !== storage.concernedItems.length) {
+            await chrome.storage.local.set({ concernedItems: validItems });
+        }
+    }
+    
+    // 如果没有 concernedItems 或已清空，设置默认值
+    if (!storage.concernedItems || storage.concernedItems.length === 0) {
+        chrome.storage.local.set({concernedItems: [
+            {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
+            {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
+        ]});
+    }
+
     // 查找并刷新 RingCentral 标签页
     try {
         const rcTab = await findRingCentralTab();
@@ -34,12 +60,6 @@ chrome.runtime.onInstalled.addListener(async () => {
                     model: "4o"
                 },
             });
-            if (!((await chrome.storage.local.get('concernedItems')).concernedItems)) {
-                chrome.storage.local.set({concernedItems: [
-                    {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
-                    {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
-                ]});
-            }
         }
     } catch (error) {
         console.error('Failed to refresh RingCentral tab:', error);
@@ -73,6 +93,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         sendBotMessage({
                             matched_rule: json.matched_rule,
                             team_name: json.team_name,
+                            team_id: json.team_id,
                             sender: json.sender,
                             message_content: json.message_content,
                             summary: json.summary
