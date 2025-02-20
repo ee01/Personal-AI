@@ -1,45 +1,45 @@
-interface BotMessagePayload {
-    mentionList: string[];
-    isTeamMention: boolean;
-    teamName: string;
-    teamId: string;
-    message: string;
-    skipMentionCheck: boolean;
-}
-
 interface MessageData {
     matched_rule: string;
     team_name: string;
+    team_id: string;
     sender: string;
     message_content: string;
     summary: string;
 }
 
-const BOT_API_URL = 'https://botman.int.rclabenv.com/v2/team/message';
-const BOT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImVzb25lLnFpdUByaW5nY2VudHJhbC5jb20iLCJzZXJ2aWNlIjoiU01fYm90LnNlcnZpY2UiLCJyb2xlIjoiUk9MRV9VU0VSIiwiaWF0IjoxNzM5OTQyMjUyLCJleHAiOjIwNTUzMDIyNTJ9.ieSb3zGIwVhUTqZpkgJipK8ktH4FVJr3vDF0kyQ-4DI';
-const TEAM_ID = '1497300893698';
+const BOT_API_BASE_URL = 'https://botman.int.rclabenv.com/v2';
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_TYPE = process.env.BOT_TYPE;
+const TEAM_ID = process.env.TEAM_ID;
 
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
     console.log("Sending bot message:", messageData);
+    const username = (await chrome.storage.local.get('config')).config.username;
+    const userEmail = username.trim().split(' ').join('.') + '@ringcentral.com';
     const formattedMessage = `**监测到一条您可能关注的消息** (AI可能幻觉 仅供参考)
 
 __关注项__：\`${messageData.matched_rule}\`
-__在群__：${messageData.team_name}
+__在群__：<a class='at_mention_compose' rel='{"id":${messageData.team_id}}'>@${messageData.team_name}</a>
 __发送者__：${messageData.sender}
 __原文__：${messageData.message_content}
 __上下文__：${messageData.summary}`;
 
-    const payload: BotMessagePayload = {
-        mentionList: ["esone.qiu"],
+    const payload = BOT_TYPE === 'team' ? {
+        mentionList: [userEmail],
         isTeamMention: false,
         teamName: messageData.team_name,
         teamId: TEAM_ID,
         message: formattedMessage,
         skipMentionCheck: true
+    } : {
+        mention: true,
+        email: userEmail,
+        emailAutoCorrect: true,
+        message: formattedMessage,
     };
 
     try {
-        const response = await fetch(BOT_API_URL, {
+        const response = await fetch(`${BOT_API_BASE_URL}/${BOT_TYPE}/message`, {
             method: 'POST',
             headers: {
                 'accept': '*/*',
