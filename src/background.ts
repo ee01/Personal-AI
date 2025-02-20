@@ -1,36 +1,49 @@
 import { sendDataToOllama } from './api';
 import { handleLLMRequest } from './llm';
+import { sendBotMessage } from './bot';
+const scheduledInterval = 120;  // 每2小时执行一次
 
 console.log('Background script loaded');
 
 // 扩展安装或更新时，立即创建定时任务
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
     console.log('Extension installed/updated');
-    chrome.storage.local.set({
-        config: {
-            recentDays: 1 / 24,
-            selectGroupNames: "",
-            enableMessage: true,
-            enableSms: false,
-            enableVoicemail: false,
-            enableCallTranscript: false,
-            enableCalendar: false,
-            enableCandidateQuestions: false,
-            selectFolderGroupIds: "",
-            username: "Esone Qiu",
-            extensionId: "1325046020",
-            apiKey: "app-CjA00E2dCpUqlpmqhcRp91gq",
-            model: "4o"
+
+    // 查找并刷新 RingCentral 标签页
+    try {
+        const rcTab = await findRingCentralTab();
+        if (rcTab && rcTab.id) {
+            await chrome.tabs.reload(rcTab.id);
+            console.log('RingCentral tab refreshed');
+
+            // 延迟获取 RC Radar 配置
+            console.log('getConfigFromWebpage', await getConfigFromWebpage());
+            chrome.storage.local.set({
+                config: await getConfigFromWebpage() || {
+                    selectGroupNames: "",
+                    enableMessage: true,
+                    enableSms: false,
+                    enableVoicemail: false,
+                    enableCallTranscript: false,
+                    enableCalendar: false,
+                    enableCandidateQuestions: false,
+                    selectFolderGroupIds: "",
+                    username: "",
+                    extensionId: "",
+                    apiKey: "",
+                    model: "4o"
+                },
+            });
+            if (!((await chrome.storage.local.get('concernedItems')).concernedItems)) {
+                chrome.storage.local.set({concernedItems: [
+                    {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
+                    {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
+                ]});
+            }
         }
-    });
-    
-    setTimeout(() => {
-        runScheduledTask(); // 立即执行一次
-    }, 10000);
-    // 创建定时任务
-    chrome.alarms.create('checkMessages', {
-        periodInMinutes: 120
-    });
+    } catch (error) {
+        console.error('Failed to refresh RingCentral tab:', error);
+    }
 });
 
 // 监听定时任务
@@ -45,15 +58,28 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background received message:', request);
 
-    if (request.type === 'OLLAMA_REQUEST') {
+    if (request.type === 'LLM_REQUEST') {
         const { body } = request.data;
         
         console.log('Sending request to LLM:', body);
         
         handleLLMRequest(body)
-            .then(data => {
-                console.log('LLM response:', data);
-                sendResponse({ data });
+            .then(([raw, jsonArray]) => {
+                console.log('LLM response:', raw);
+                console.log('LLM jsonArray:', jsonArray);
+                // 发送 bot 消息，遍历数组中的每个项目
+                if (jsonArray && jsonArray.length > 0) {
+                    jsonArray.forEach(json => {
+                        sendBotMessage({
+                            matched_rule: json.matched_rule,
+                            team_name: json.team_name,
+                            sender: json.sender,
+                            message_content: json.message_content,
+                            summary: json.summary
+                        }).catch(console.error);
+                    });
+                }
+                sendResponse({ data: raw });
             })
             .catch(error => {
                 console.error('LLM error:', error);
@@ -79,16 +105,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // 启动定时任务
+let timerFirstRunAlarms: NodeJS.Timeout | null = null;
 export function startScheduledCheck() {
+    timerFirstRunAlarms = setTimeout(() => {
+        runScheduledTask(); // 立即执行一次
+    }, 10000);
     chrome.alarms.create('checkMessages', {
-        periodInMinutes: 120  // 每2小时执行一次
+        periodInMinutes: scheduledInterval
     });
+    chrome.storage.local.set({ scheduleActive: true });
     console.log('Scheduled message check started');
 }
 
 // 停止定时任务
 export function stopScheduledCheck() {
+    clearTimeout(timerFirstRunAlarms);
     chrome.alarms.clear('checkMessages');
+    chrome.storage.local.set({ scheduleActive: false });
     console.log('Scheduled message check stopped');
 }
 
@@ -98,7 +131,7 @@ async function runScheduledTask() {
         console.log('chrome.storage.local.result', result);
         if (result.config) {
             const config = result.config;
-            const startTime = new Date(Date.now() - config.recentDays * 60 * 60 * 1000);
+            const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
             
             try {
                 // 查找或创建 RingCentral 标签页
@@ -110,11 +143,12 @@ async function runScheduledTask() {
                 }
 
                 // 尝试发送消息，如果失败则重试
-                await sendMessageWithRetry(rcTab.id, {
+                const response = await sendMessageWithRetry(rcTab.id, {
                     type: 'FETCH_USER_DATA',
                     startTime,
                     config
                 });
+                await sendDataToOllama(response.data, config);
             } catch (error) {
                 console.error('Background task error:', error);
             }
@@ -123,7 +157,7 @@ async function runScheduledTask() {
 }
 
 // 查找已打开的 RingCentral 标签页
-async function findRingCentralTab() {
+export async function findRingCentralTab() {
     const tabs = await chrome.tabs.query({
         url: "*://app.ringcentral.com/*"
     });
@@ -131,7 +165,7 @@ async function findRingCentralTab() {
 }
 
 // 创建新的 RingCentral 标签页
-async function createRingCentralTab() {
+export async function createRingCentralTab() {
     return await chrome.tabs.create({
         url: "https://app.ringcentral.com/video",
         active: false
@@ -139,7 +173,7 @@ async function createRingCentralTab() {
 }
 
 // 等待标签页加载完成
-function waitForTabLoad(tabId: number): Promise<void> {
+export function waitForTabLoad(tabId: number): Promise<void> {
     return new Promise((resolve) => {
         chrome.tabs.onUpdated.addListener(function listener(updatedTabId, info) {
             if (updatedTabId === tabId && info.status === 'complete') {
@@ -162,13 +196,12 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Prom
                 if (chrome.runtime.lastError) {
                     console.log(`Attempt ${attempts} failed:`, chrome.runtime.lastError);
                     if (attempts < maxRetries) {
-                        setTimeout(trySendMessage, 1000); // 1秒后重试
+                        setTimeout(trySendMessage, 5000); // 5秒后重试
                     } else {
                         reject(new Error('Failed to send message after multiple attempts'));
                     }
                 } else {
-                    if (response && response.success) {
-                        sendDataToOllama(response.data, message.config);
+                    if (response && !response.error) {
                         resolve(response);
                     } else {
                         reject(new Error('Failed to fetch user data: ' + response?.error));
@@ -179,4 +212,21 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Prom
 
         trySendMessage();
     });
+}
+
+async function getConfigFromWebpage() {
+    const tab = await findRingCentralTab();
+    if (!tab) {
+        return null;
+    }
+    
+    try {
+        const response = await sendMessageWithRetry(tab.id, {
+            type: 'GET_CONFIG'
+        });
+        return response.config;
+    } catch (error) {
+        console.error('Failed to get config:', error);
+        return null;
+    }
 } 
