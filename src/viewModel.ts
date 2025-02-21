@@ -1,11 +1,12 @@
 import { observable } from 'mobx';
-import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics, globalQuery, sendDataToOllama } from './api';
+import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics, globalQuery } from './api';
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
 import { RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
 import { GET_INIT_TOPICS_QUERY, SALES_QUERY } from './prompt';
 import { getFolders, getLocalStorageItem, setLocalStorageItem, getGroupsMap } from './storage';
 import { CONFIG_LOCAL_STORAGE_KEY, RADAR_POC_RESULT_LISTS, RADAR_POC_CANDIDATE_QUESTIONS } from './constants';
+import { analyzeMessages } from './messageDealing';
 
 export class ViewModel {
     @observable
@@ -370,7 +371,7 @@ export class ViewModel {
 
         await this._handleDataProcessing(
             startTime,
-            sendDataToOllama,
+            analyzeMessages,
             'Initialization successful. You can use GraphRAG to generate a report or perform a custom query.'
         );
     };
