@@ -2,7 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
-import { sendDataToOllama } from './api'; // 请确保路径正确
+import { analyzeMessages } from './messageDealing'; // 请确保路径正确
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from './background';
 
 const Popup = () => {
@@ -53,7 +53,7 @@ const Popup = () => {
     const handleSendToLLM = async () => {
         setIsLoading(true);
         try {
-            // 直接调用 sendDataToOllama 方法
+            // 直接调用 analyzeMessages 方法
             let rcTab = await findRingCentralTab();
             if (!rcTab) {
                 rcTab = await createRingCentralTab();
@@ -74,7 +74,7 @@ const Popup = () => {
                 throw new Error(response.error);
             }
             const userData = response.data;
-            await sendDataToOllama(userData, config);
+            await analyzeMessages(userData, config);
         } catch (error) {
             console.error('Error sending data to Ollama:', error);
         }
@@ -97,8 +97,8 @@ const Popup = () => {
         chrome.windows.create({
             url: 'topic-modal.html',
             type: 'popup',
-            width: 400,
-            height: 300,
+            width: 500,
+            height: 800,
             focused: true
         });
     };

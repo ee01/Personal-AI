@@ -1,6 +1,4 @@
-import { sendDataToOllama } from './api';
-import { handleLLMRequest } from './llm';
-import { sendBotMessage } from './bot';
+import { analyzeMessages, reviewMessageByLLMAndSendToBot } from './messageDealing';
 const scheduledInterval = 120;  // 每2小时执行一次
 
 console.log('Background script loaded');
@@ -43,7 +41,6 @@ chrome.runtime.onInstalled.addListener(async () => {
             console.log('RingCentral tab refreshed');
 
             // 延迟获取 RC Radar 配置
-            console.log('getConfigFromWebpage', await getConfigFromWebpage());
             chrome.storage.local.set({
                 config: await getConfigFromWebpage() || {
                     selectGroupNames: "",
@@ -75,41 +72,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     }
 });
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+// 原来的监听器简化为：
+chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
     console.log('Background received message:', request);
 
+    // 如果不是 background 定时程序，会从页面发送请求到这里执行
     if (request.type === 'LLM_REQUEST') {
         const { body } = request.data;
-        
         console.log('Sending request to LLM:', body);
-        
-        handleLLMRequest(body)
-            .then(([raw, jsonArray]) => {
-                console.log('LLM response:', raw);
-                console.log('LLM jsonArray:', jsonArray);
-                // 发送 bot 消息，遍历数组中的每个项目
-                if (jsonArray && jsonArray.length > 0) {
-                    jsonArray.forEach(json => {
-                        sendBotMessage({
-                            matched_rule: json.matched_rule,
-                            team_name: json.team_name,
-                            team_id: json.team_id,
-                            sender: json.sender,
-                            message_content: json.message_content,
-                            summary: json.summary
-                        }).catch(console.error);
-                    });
-                }
-                sendResponse({ data: raw });
-            })
-            .catch(error => {
-                console.error('LLM error:', error);
-                sendResponse({ 
-                    error: error.message,
-                    details: `Failed to connect to ${process.env.LLM_TYPE} service`
-                });
-            });
-        
+        const raw = await reviewMessageByLLMAndSendToBot(body);
+        sendResponse({ data: raw });
         return true;
     }
 
@@ -148,33 +120,29 @@ export function stopScheduledCheck() {
 
 // 定时抓取分析消息
 async function runScheduledTask() {
-    chrome.storage.local.get(['config'], async (result) => {
-        console.log('chrome.storage.local.result', result);
-        if (result.config) {
-            const config = result.config;
-            const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
-            
-            try {
-                // 查找或创建 RingCentral 标签页
-                let rcTab = await findRingCentralTab();
-                if (!rcTab) {
-                    rcTab = await createRingCentralTab();
-                    // 等待页面加载完成
-                    await waitForTabLoad(rcTab.id);
-                }
-
-                // 尝试发送消息，如果失败则重试
-                const response = await sendMessageWithRetry(rcTab.id, {
-                    type: 'FETCH_USER_DATA',
-                    startTime,
-                    config
-                });
-                await sendDataToOllama(response.data, config);
-            } catch (error) {
-                console.error('Background task error:', error);
-            }
+    try {
+        // 查找或创建 RingCentral 标签页
+        let rcTab = await findRingCentralTab();
+        if (!rcTab) {
+            rcTab = await createRingCentralTab();
+            // 等待页面加载完成
+            await waitForTabLoad(rcTab.id);
         }
-    });
+
+        let { config } = await chrome.storage.local.get(['config'])
+        if (!config) config = await getConfigFromWebpage();
+        const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
+
+        // 尝试发送消息，如果失败则重试
+        const response = await sendMessageWithRetry(rcTab.id, {
+            type: 'FETCH_USER_DATA',
+            startTime,
+            config
+        });
+        await analyzeMessages(response.data, config);
+    } catch (error) {
+        console.error('Background task error:', error);
+    }
 }
 
 // 查找已打开的 RingCentral 标签页
@@ -236,13 +204,15 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Prom
 }
 
 async function getConfigFromWebpage() {
-    const tab = await findRingCentralTab();
-    if (!tab) {
-        return null;
+    let rcTab = await findRingCentralTab();
+    if (!rcTab) {
+        rcTab = await createRingCentralTab();
+        // 等待页面加载完成
+        await waitForTabLoad(rcTab.id);
     }
     
     try {
-        const response = await sendMessageWithRetry(tab.id, {
+        const response = await sendMessageWithRetry(rcTab.id, {
             type: 'GET_CONFIG'
         });
         return response.config;

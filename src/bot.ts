@@ -5,6 +5,7 @@ interface MessageData {
     sender: string;
     message_content: string;
     summary: string;
+    reply_advice: string;
 }
 
 const BOT_API_BASE_URL = 'https://botman.int.rclabenv.com/v2';
@@ -22,7 +23,9 @@ __关注项__：\`${messageData.matched_rule}\`
 __在群__：<a class='at_mention_compose' rel='{"id":${messageData.team_id}}'>@${messageData.team_name}</a>
 __发送者__：${messageData.sender}
 __原文__：${messageData.message_content}
-__上下文__：${messageData.summary}`;
+__上下文__：${messageData.summary}
+__回复建议__：${messageData.reply_advice}
+`;
 
     const payload = BOT_TYPE === 'team' ? {
         mentionList: [userEmail],
