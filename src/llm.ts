@@ -23,7 +23,7 @@ async function handleOllamaRequest(body: any): Promise<string> {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            model: process.env.OLLAMA_MODEL,
+            model: body.model || process.env.OLLAMA_MODEL,
             prompt: body.prompt,
             stream: false,
             temperature: 0.3,

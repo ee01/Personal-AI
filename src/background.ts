@@ -15,7 +15,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     const storage = await chrome.storage.local.get('concernedItems');
     if (storage.concernedItems) {
         // 过滤掉过期的项目
-        const validItems = storage.concernedItems.filter(item => {
+        const validItems = storage.concernedItems.filter((item:any) => {
             return !item.expiredAt || new Date(item.expiredAt) > new Date();
         });
         
@@ -41,22 +41,7 @@ chrome.runtime.onInstalled.addListener(async () => {
             console.log('RingCentral tab refreshed');
 
             // 延迟获取 RC Radar 配置
-            chrome.storage.local.set({
-                config: await getConfigFromWebpage() || {
-                    selectGroupNames: "",
-                    enableMessage: true,
-                    enableSms: false,
-                    enableVoicemail: false,
-                    enableCallTranscript: false,
-                    enableCalendar: false,
-                    enableCandidateQuestions: false,
-                    selectFolderGroupIds: "",
-                    username: "",
-                    extensionId: "",
-                    apiKey: "",
-                    model: "4o"
-                },
-            });
+            await getConfigFromWebpage()
         }
     } catch (error) {
         console.error('Failed to refresh RingCentral tab:', error);
@@ -130,7 +115,7 @@ async function runScheduledTask() {
         }
 
         let { config } = await chrome.storage.local.get(['config'])
-        if (!config) config = await getConfigFromWebpage();
+        if (!config || config.username === '') config = await getConfigFromWebpage();
         const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
 
         // 尝试发送消息，如果失败则重试
@@ -214,6 +199,22 @@ async function getConfigFromWebpage() {
     try {
         const response = await sendMessageWithRetry(rcTab.id, {
             type: 'GET_CONFIG'
+        });
+        chrome.storage.local.set({
+            config: response.config || {
+                selectGroupNames: "",
+                enableMessage: true,
+                enableSms: false,
+                enableVoicemail: false,
+                enableCallTranscript: false,
+                enableCalendar: false,
+                enableCandidateQuestions: false,
+                selectFolderGroupIds: "",
+                username: "",
+                extensionId: "",
+                apiKey: "",
+                model: "4o"
+            }
         });
         return response.config;
     } catch (error) {
