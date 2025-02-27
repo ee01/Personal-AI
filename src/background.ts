@@ -8,25 +8,30 @@ chrome.runtime.onInstalled.addListener(async () => {
     console.log('Extension installed/updated');
 
     // 初始化配置
-    chrome.storage.local.remove('scheduleActive');
+    const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
+    // 如果之前是激活状态，重新启动定时任务
+    if (scheduleActive) {
+        startScheduledCheck();
+    }
+    
     chrome.storage.local.remove('ollamaAnalysisProgress');
     
     // 获取并清理过期的 concernedItems
-    const storage = await chrome.storage.local.get('concernedItems');
-    if (storage.concernedItems) {
+    const { concernedItems } = await chrome.storage.local.get('concernedItems');
+    if (concernedItems) {
         // 过滤掉过期的项目
-        const validItems = storage.concernedItems.filter((item:any) => {
+        const validItems = concernedItems.filter((item:any) => {
             return !item.expiredAt || new Date(item.expiredAt) > new Date();
         });
         
         // 如果有项目被过滤掉，更新存储
-        if (validItems.length !== storage.concernedItems.length) {
+        if (validItems.length !== concernedItems.length) {
             await chrome.storage.local.set({ concernedItems: validItems });
         }
     }
     
     // 如果没有 concernedItems 或已清空，设置默认值
-    if (!storage.concernedItems || storage.concernedItems.length === 0) {
+    if (!concernedItems || concernedItems.length === 0) {
         chrome.storage.local.set({concernedItems: [
             {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
             {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
