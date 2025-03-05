@@ -2,6 +2,9 @@ import { sendBotMessage } from './bot';
 import { IConfig } from './config';
 import { handleLLMRequest } from './llm';
 import { showToast } from './utils';
+import { storeMessage } from './vectorStore';
+import { v4 as uuidv4 } from 'uuid';
+import { extractEntities } from './entityExtraction';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], config: IConfig) {
@@ -105,7 +108,7 @@ ${message}
 				lastAnalyzedTime: new Date().toISOString()
 			}
 			});
-		}, 3 * 60 * 1000 * index + 1));
+		}, (process.env.LLM_TYPE === 'local' ? 3 * 60 : 10) * 1000 * index + 1));
 	} else {
 		// 合并发送 LLM
 		const messages = data.reduce((acc, item) => `${acc}\n
@@ -139,7 +142,7 @@ ${messages}
 }
 
 const sendMessageToLLM = async (user_prompt: string, system_prompt: string, messageData?: any) => {
-	console.log('Sending prompt to Ollama:', user_prompt, system_prompt, messageData);
+	console.log(`Sending prompt to ${process.env.LLM_TYPE}:`, user_prompt, system_prompt, messageData);
 	try {
 		// 检查是否在 background script 环境中
 		const isBackground = typeof window === 'undefined';
@@ -150,7 +153,7 @@ const sendMessageToLLM = async (user_prompt: string, system_prompt: string, mess
 		} else {
 			// 在 content script 或其他环境中使用 message passing
 			const response = await chrome.runtime.sendMessage({
-				type: 'LLM_REQUEST',
+				type: 'MESSAGE_DEALING',
 				data: {
 					body: {
 						user_prompt,
@@ -162,6 +165,7 @@ const sendMessageToLLM = async (user_prompt: string, system_prompt: string, mess
 			
 			if (response.data) {
 				console.log("LLM's response:", response.data);
+				// Todo: Toast 方法在 popup 中无法调用
 				showToast('Analysis complete, please check the console', 'success');
 				return response.data;
 			} else {
@@ -181,6 +185,7 @@ const sendMessageToLLM = async (user_prompt: string, system_prompt: string, mess
 export async function reviewMessageByLLMAndSendToBot(body: any) {
 	try {
 		const { concernedItems } = await chrome.storage.local.get('concernedItems');
+		const { config } = await chrome.storage.local.get('config');
 		if (!body.prompt) body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
 		const [raw, jsonArray] = await handleLLMRequest(body);
 		console.log('LLM response:', raw);
@@ -191,11 +196,13 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 				let matched_rule = json.matched_rule;
 				if (process.env.LLM_REVIEW_BEFORE_SEND === 'true') {
 				  // 先进行 LLM 审核
-				  const reviewPrompt = `消息内容：${json.message_content}
-					请审核以上消息是否符合这些过滤规则中的任意一条：
-					${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n                    ')}
+				  const reviewPrompt = `本条消息是由 ${json.sender} 在群 ${json.team_name} 中发送的，内容如下：
+<message_content>${json.message_content}</message_content>
+这是上下文的总结：<summary>${json.summary}</summary>
+请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${config.username}）：
+${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n')}
 
-					如果符合规则，请直接返回符合的规则原文，不要包含其他内容。如果不符合任何规则，请返回"不通过"。
+如果符合规则，请直接返回符合的规则原文，不要包含其他内容。如果不符合任何规则，请返回"不通过"。
 				  `;
 				  console.log('reviewPrompt:', reviewPrompt);
 				  const [reviewResponseRaw] = await handleLLMRequest({ prompt: reviewPrompt, type: 'review' });
@@ -217,6 +224,25 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 						reply_advice: json.reply_advice
 					}).catch(console.error);
 				}
+				
+				// 将匹配的消息存储到向量数据库
+				const messageId = uuidv4();
+				const entities = await extractEntities(json.message_content);
+				await storeMessage(
+					messageId,
+					json.message_content,
+					{
+						source: json.sender || 'unknown',
+						timestamp: Date.now(),
+						matchedRules: json.matched_rule ? [json.matched_rule] : [],
+						summary: json.summary || '',
+						teamName: json.team_name,
+						teamId: json.team_id,
+						entities: entities,
+						sentiment: entities.sentiment,
+						category: entities.category
+					}
+				);
 			});
 		}
 		return raw

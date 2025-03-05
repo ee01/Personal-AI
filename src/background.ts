@@ -1,55 +1,73 @@
 import { analyzeMessages, reviewMessageByLLMAndSendToBot } from './messageDealing';
-const scheduledInterval = 120;  // 每2小时执行一次
+import { initChromaClient } from './vectorStore';
+import { knowledgeQuery } from './llm';
+import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
+const scheduledInterval = process.env.SCHEDULED_INTERVAL || 120;  // 每2小时执行一次
 
 console.log('Background script loaded');
 
 // 扩展安装或更新时，立即创建定时任务
 chrome.runtime.onInstalled.addListener(async () => {
-    console.log('Extension installed/updated');
-
-    // 初始化配置
-    const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
-    // 如果之前是激活状态，重新启动定时任务
-    if (scheduleActive) {
-        startScheduledCheck();
-    }
-    
-    chrome.storage.local.remove('ollamaAnalysisProgress');
-    
-    // 获取并清理过期的 concernedItems
-    const { concernedItems } = await chrome.storage.local.get('concernedItems');
-    if (concernedItems) {
-        // 过滤掉过期的项目
-        const validItems = concernedItems.filter((item:any) => {
-            return !item.expiredAt || new Date(item.expiredAt) > new Date();
-        });
-        
-        // 如果有项目被过滤掉，更新存储
-        if (validItems.length !== concernedItems.length) {
-            await chrome.storage.local.set({ concernedItems: validItems });
-        }
-    }
-    
-    // 如果没有 concernedItems 或已清空，设置默认值
-    if (!concernedItems || concernedItems.length === 0) {
-        chrome.storage.local.set({concernedItems: [
-            {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
-            {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
-        ]});
-    }
-
-    // 查找并刷新 RingCentral 标签页
     try {
-        const rcTab = await findRingCentralTab();
-        if (rcTab && rcTab.id) {
-            await chrome.tabs.reload(rcTab.id);
-            console.log('RingCentral tab refreshed');
+        console.log('Extension installed/updated');
 
-            // 延迟获取 RC Radar 配置
-            await getConfigFromWebpage()
+        // 初始化配置
+        const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
+        // 如果之前是激活状态，重新启动定时任务
+        if (scheduleActive) {
+            startScheduledCheck();
         }
+        
+        chrome.storage.local.remove('ollamaAnalysisProgress');
+        
+        // 获取并清理过期的 concernedItems
+        const { concernedItems } = await chrome.storage.local.get('concernedItems');
+        if (concernedItems) {
+            // 过滤掉过期的项目
+            const validItems = concernedItems.filter((item:any) => {
+                return !item.expiredAt || new Date(item.expiredAt) > new Date();
+            });
+            
+            // 如果有项目被过滤掉，更新存储
+            if (validItems.length !== concernedItems.length) {
+                await chrome.storage.local.set({ concernedItems: validItems });
+            }
+        }
+        
+        // 如果没有 concernedItems 或已清空，设置默认值
+        if (!concernedItems || concernedItems.length === 0) {
+            chrome.storage.local.set({concernedItems: [
+                {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
+                {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
+            ]});
+        }
+
+        // 查找并刷新 RingCentral 标签页
+        try {
+            const rcTab = await findRingCentralTab();
+            if (rcTab && rcTab.id) {
+                await chrome.tabs.reload(rcTab.id);
+                console.log('RingCentral tab refreshed');
+
+                // 延迟获取 RC Radar 配置
+                await getConfigFromWebpage()
+            }
+        } catch (error) {
+            console.error('Failed to refresh RingCentral tab:', error);
+        }
+
+        // 安全地初始化Chroma
+        try {
+            await initChromaClient();
+            console.log('Chroma client initialized');
+        } catch (error) {
+            console.error('Failed to initialize Chroma:', error);
+        }
+
+        // 预先创建离屏文档
+        await createOffscreenDocument();
     } catch (error) {
-        console.error('Failed to refresh RingCentral tab:', error);
+        console.error('Error in onInstalled handler:', error);
     }
 });
 
@@ -63,15 +81,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 // 原来的监听器简化为：
-chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background received message:', request);
 
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
-    if (request.type === 'LLM_REQUEST') {
+    if (request.type === 'MESSAGE_DEALING') {
         const { body } = request.data;
         console.log('Sending request to LLM:', body);
-        const raw = await reviewMessageByLLMAndSendToBot(body);
-        sendResponse({ data: raw });
+        reviewMessageByLLMAndSendToBot(body).then(raw => {
+            sendResponse({ data: raw });
+        });
         return true;
     }
 
@@ -85,6 +104,17 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
         }
         return true;
     }
+
+    if (request.type === 'KNOWLEDGE_QUERY') {
+        knowledgeQuery(request.question).then(result => {
+            console.log('General query result:', result);
+            sendResponse(result);
+        });
+        return true;
+    }
+
+    // 监听来自离屏文档的消息
+    handleEmbeddingResult(request);
 });
 
 // 启动定时任务
@@ -94,7 +124,7 @@ export function startScheduledCheck() {
         runScheduledTask(); // 立即执行一次
     }, 10000);
     chrome.alarms.create('checkMessages', {
-        periodInMinutes: scheduledInterval
+        periodInMinutes: Number(scheduledInterval)
     });
     chrome.storage.local.set({ scheduleActive: true });
     console.log('Scheduled message check started');
@@ -121,7 +151,7 @@ async function runScheduledTask() {
 
         let { config } = await chrome.storage.local.get(['config'])
         if (!config || config.username === '') config = await getConfigFromWebpage();
-        const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
+        const startTime = new Date(Date.now() - (Number(scheduledInterval) + 5) * 60 * 1000);
 
         // 尝试发送消息，如果失败则重试
         const response = await sendMessageWithRetry(rcTab.id, {
@@ -226,4 +256,4 @@ async function getConfigFromWebpage() {
         console.error('Failed to get config:', error);
         return null;
     }
-} 
+}

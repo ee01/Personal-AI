@@ -10,7 +10,8 @@
     "scripting",
     "alarms",
     "background",
-    "cors"
+    "unlimitedStorage",
+    "offscreen"
   ],
   "content_scripts": [
     {
@@ -28,15 +29,14 @@
   },
   "options_page": "popup.html",
   "host_permissions": [
-    "http://localhost:11434/*",
-    "https://integrate.api.nvidia.com/*"
+    "*://*/*"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html"],
+    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html"],
     "matches": ["<all_urls>"]
   }],
   "icons": {
@@ -44,5 +44,8 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }
 }

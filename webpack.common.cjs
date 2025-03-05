@@ -1,4 +1,5 @@
 const path = require('path');
+const webpack = require('webpack');
 
 const DotenvPlugin = require('dotenv-webpack');
 const ESLintPlugin = require('eslint-webpack-plugin');
@@ -10,7 +11,9 @@ module.exports = {
     contentScript: './src/contentScript.tsx',
     popup: './src/popup.tsx',
     background: './src/background.ts',
-    'topic-modal': './src/topic-modal.tsx'
+    'topic-modal': './src/topic-modal.tsx',
+    'knowledge-query': './src/knowledge-query.tsx',
+    offscreen: './src/offscreen.ts'
   },
   module: {
     rules: [
@@ -23,6 +26,13 @@ module.exports = {
   },
   resolve: {
     extensions: ['.ts', '.js', '.tsx', '.jsx'],
+    fallback: {
+      "fs": false,
+      "path": require.resolve("path-browserify"),
+      "crypto": require.resolve("crypto-browserify"),
+      "stream": require.resolve("stream-browserify"),
+      "buffer": require.resolve("buffer/")
+    }
   },
   output: {
     filename: '[name].js',
@@ -38,5 +48,12 @@ module.exports = {
     new CopyPlugin({
       patterns: [{ from: 'static' }],
     }),
+    new webpack.ProvidePlugin({
+      Buffer: ['buffer', 'Buffer'],
+    }),
   ],
+  optimization: {
+    splitChunks: false,
+    runtimeChunk: false
+  },
 };
