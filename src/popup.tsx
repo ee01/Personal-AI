@@ -17,7 +17,7 @@ const Popup = () => {
     useEffect(() => {
         (async () => {
             // 获取定时任务状态
-            const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive;
+            const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
             setIsScheduleActive(scheduleActive === true);
         })();
     }, []);
@@ -25,6 +25,7 @@ const Popup = () => {
     useEffect(() => {
         // 初始化时获取进度
         chrome.storage.local.get('ollamaAnalysisProgress', (result) => {
+            console.log("ollamaAnalysisProgress:", result.ollamaAnalysisProgress);
             if (result.ollamaAnalysisProgress) {
                 setAnalysisProgress(result.ollamaAnalysisProgress);
                 setIsLoading(result.ollamaAnalysisProgress && result.ollamaAnalysisProgress.lastAnalyzedIndex < result.ollamaAnalysisProgress.total);
@@ -63,8 +64,9 @@ const Popup = () => {
                 // 等待页面加载完成
                 await waitForTabLoad(rcTab.id);
             }
-            const { config } = await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_CONFIG' });
-            const startTime = new Date(Date.now() - config.recentDays * 24 * 60 * 60 * 1000);
+            let { config } = await chrome.storage.local.get(['config'])
+            if (!config || config.username === '') config = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_CONFIG' })).config;
+            const startTime = new Date(Date.now() - (Number(process.env.SCHEDULED_INTERVAL || 120) + 5) * 60 * 1000);
             const response = await chrome.tabs.sendMessage(rcTab.id, {
                 type: 'FETCH_USER_DATA',
                 startTime,
@@ -102,9 +104,23 @@ const Popup = () => {
             focused: true
         });
     };
+    
+    const openKnowledgeQueryWindow = () => {
+        chrome.windows.create({
+            url: 'knowledge-query.html',
+            type: 'popup',
+            width: 800,
+            height: 700,
+            focused: true
+        });
+    };
 
     return (
         <div className="popup-container">
+            <button onClick={openKnowledgeQueryWindow}>
+                知识库查询
+            </button>
+
             <button 
                 onClick={handleSendToLLM}
                 disabled={isLoading}
