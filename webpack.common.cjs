@@ -13,7 +13,8 @@ module.exports = {
     background: './src/background.ts',
     'topic-modal': './src/topic-modal.tsx',
     'knowledge-query': './src/knowledge-query.tsx',
-    offscreen: './src/offscreen.ts'
+    offscreen: './src/offscreen.ts',
+    options: './src/options.tsx'
   },
   module: {
     rules: [

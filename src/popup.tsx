@@ -114,6 +114,10 @@ const Popup = () => {
             focused: true
         });
     };
+    
+    const openOptionsPage = () => {
+        chrome.runtime.openOptionsPage();
+    };
 
     return (
         <div className="popup-container">
@@ -143,6 +147,10 @@ const Popup = () => {
                 className="radar-button"
             >
                 Open Radar Sidebar
+            </button>
+            
+            <button onClick={openOptionsPage}>
+                设置
             </button>
         </div>
     );
