@@ -127,7 +127,7 @@ const Popup = () => {
             >
                 {isLoading 
                     ? `正在分析 ${(analysisProgress?.lastAnalyzedIndex||0)+1}/${analysisProgress?.total||1} 条消息...` 
-                    : '将 GLip 消息发给 LLM 分析'}
+                    : `将最近 ${(Number(process.env.SCHEDULED_INTERVAL || 120)/60).toFixed(1)} 小时 Glip 消息发给 LLM 分析`}
             </button>
             
             <button onClick={toggleSchedule}>

@@ -1,8 +1,8 @@
 // 新文件：实体识别和提取
-import { handleLLMRequest } from './llm';
+import { callLLMJsonAPI } from './llm';
 
 // 使用LLM提取消息中的实体
-export async function extractEntities(content: string, options = {}) {
+export async function extractEntities(content: string) {
   try {
     // 构建 LLM 提示
     const prompt = `
@@ -25,14 +25,11 @@ export async function extractEntities(content: string, options = {}) {
     `;
     
     // 调用 LLM API 进行提取
-    const [_, jsonData] = await handleLLMRequest({
-      prompt,
-      type: 'entity_extraction'
-    });
+    const entityData = await callLLMJsonAPI(prompt);
+    console.log('提取出所有相关的实体信息：', entityData);
     
     // 解析返回的 JSON 结果
-    if (jsonData && jsonData.length > 0) {
-      const entityData = jsonData[0];
+    if (typeof entityData === 'object') {
       return {
         people: entityData.people || [],
         projects: entityData.projects || [],

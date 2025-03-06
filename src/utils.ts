@@ -26,6 +26,7 @@ export function uniqBy(array: any[], key: string) {
 export function showToast(message: string, type: string, onClose?: () => void) {
   // 获取或创建容器元素
   const container = document.getElementById('radar-poc-result');
+  if (!container) return
 
   // 移除现有的 Toast 元素
   const existingToast = container.querySelector('.radar-poc-toast');

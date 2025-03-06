@@ -35,7 +35,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 // 监听来自 background 的消息
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message) => {
   console.log('离屏文档收到消息:', message.type);
   
   if (message.type === 'GET_EMBEDDING') {

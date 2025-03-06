@@ -77,6 +77,7 @@ export async function storeMessage(
     timestamp: number,             // 时间戳
     matchedRules: string[],        // 匹配到的规则
     summary: string,               // 消息摘要
+    reply_advice: string,          // 回复建议
     teamName?: string,             // 群组/团队名称
     teamId?: string,               // 群组/团队ID
     entities?: {                   // 实体识别结果
@@ -156,6 +157,57 @@ export async function storeMessage(
   }
 }
 
+// 辅助函数：记录查询条件
+function logQueryConditions(where: any) {
+  console.log('完整查询条件:', JSON.stringify(where, null, 2));
+  return where;
+}
+
+// 辅助函数：生成可能的 JSON 字符串模式
+function generatePossibleJsonPatterns(value: string): string[] {
+  // 转义特殊字符，防止 JSON 注入
+  const escapedValue = value.replace(/"/g, '\\"');
+  
+  // 基本模式，适用于单值数组和多值数组
+  const patterns = [
+    `["${escapedValue}"]`,                   // 精确匹配单个值 ["value"]
+    `["${escapedValue}", `,                  // 数组开头 ["value", ...
+    `, "${escapedValue}"]`,                  // 数组结尾 ..., "value"]
+    `, "${escapedValue}", `                  // 数组中间 ..., "value", ...
+  ];
+  
+  // 处理可能的空格变化
+  patterns.push(`[ "${escapedValue}" ]`);    // 带空格的数组 [ "value" ]
+  
+  // 处理不同的引号格式（单引号）
+  patterns.push(`['${escapedValue}']`);      // 单引号格式 ['value']
+  
+  // 处理值本身包含的部分（用于子字符串搜索）
+  if (escapedValue.includes(' ')) {
+    // 如果值中包含空格，则提取关键部分
+    const parts = escapedValue.split(' ');
+    for (const part of parts) {
+      if (part.length > 2) {  // 只处理有意义的部分
+        patterns.push(`"${part}"`);          // 匹配部分关键词 "keyword"
+      }
+    }
+  }
+  
+  return patterns;
+}
+
+// 使用 $in 进行字符串模式匹配的更高级方法
+function createJsonPatternFilters(field: string, values: string[]): any {
+  // 对每个值，生成可能的 JSON 模式
+  const allPatterns: string[] = [];
+  for (const value of values) {
+    allPatterns.push(...generatePossibleJsonPatterns(value));
+  }
+  
+  // 将这些模式用 $in 操作符组合起来
+  return { [field]: { $in: allPatterns } };
+}
+
 // 修改：通用自然语言查询接口，添加 filters 参数
 export async function naturalLanguageQuery(
     userQuestion: string,
@@ -233,43 +285,39 @@ export async function naturalLanguageQuery(
         conditions.push({ sentiment: filters.sentiment });
       }
       
-      // 处理分类过滤
-      if (filters.category) {
-        conditions.push({ 
-          category: { $in: filters.category } 
-        });
-      }
-      
       // 处理实体过滤（人物、项目、话题）
       if (filters.entities) {
         // 人物过滤
         if (filters.entities.people && filters.entities.people.length > 0) {
-          conditions.push({ 
-            people: { $in: filters.entities.people } 
-          });
+          // 使用 $in 进行 JSON 模式匹配
+          conditions.push(createJsonPatternFilters('people', filters.entities.people));
         }
         
         // 项目过滤
         if (filters.entities.projects && filters.entities.projects.length > 0) {
-          conditions.push({ 
-            projects: { $in: filters.entities.projects } 
-          });
+          // 使用 $in 进行 JSON 模式匹配
+          conditions.push(createJsonPatternFilters('projects', filters.entities.projects));
         }
         
         // 话题过滤
         if (filters.entities.topics && filters.entities.topics.length > 0) {
-          conditions.push({ 
-            topics: { $in: filters.entities.topics } 
-          });
+          // 使用 $in 进行 JSON 模式匹配
+          conditions.push(createJsonPatternFilters('topics', filters.entities.topics));
         }
+      }
+      
+      // 处理分类过滤
+      if (filters.category && filters.category.length > 0) {
+        // 使用 $in 进行 JSON 模式匹配
+        conditions.push(createJsonPatternFilters('category', filters.category));
       }
       
       // 如果有多个条件，使用 $and 操作符
       if (conditions.length > 0) {
         if (conditions.length === 1) {
-          queryParams.where = conditions[0];
+          queryParams.where = logQueryConditions(conditions[0]);
         } else {
-          queryParams.where = { $and: conditions };
+          queryParams.where = logQueryConditions({ $and: conditions });
         }
       }
     }
@@ -277,6 +325,16 @@ export async function naturalLanguageQuery(
     // 执行查询
     console.log('naturalLanguageQuery queryParams', queryParams);
     const results = await messageCollection.query(queryParams);
+    
+    // 记录结果
+    console.log(`查询结果: 找到 ${results.ids[0]?.length || 0} 条匹配记录`);
+    if (results.ids[0]?.length > 0) {
+      console.log('第一条记录预览:', {
+        id: results.ids[0][0],
+        document: results.documents[0][0].substring(0, 100) + '...',
+        metadata: results.metadatas[0][0]
+      });
+    }
     
     // 3. 返回查询结果和元数据
     return {
@@ -393,4 +451,136 @@ export function fuzzyMatchPerson(partialName: string, knownPeople: string[]): st
   
   // 没有找到匹配
   return null;
+}
+
+// 获取所有已知的项目
+export async function getAllKnownProjects() {
+  if (!ENABLE_CHROMA) {
+    console.log('Chroma 向量数据库已禁用，无法获取已知项目');
+    return [];
+  }
+  
+  try {
+    if (!messageCollection) {
+      await initChromaClient();
+    }
+    
+    if (!messageCollection) {
+      throw new Error('向量数据库集合未初始化');
+    }
+    
+    // 获取所有消息的元数据
+    const allMessages = await messageCollection.get();
+    
+    // 提取所有项目
+    const projects = new Set<string>();
+    if (allMessages && allMessages.metadatas) {
+      allMessages.metadatas.forEach((metadata: any) => {
+        if (metadata.projects) {
+          try {
+            const projectsList = JSON.parse(String(metadata.projects));
+            if (Array.isArray(projectsList)) {
+              projectsList.forEach(project => projects.add(project));
+            }
+          } catch (e) {
+            console.error('解析项目数据失败:', e);
+          }
+        }
+      });
+    }
+    
+    return Array.from(projects);
+  } catch (error) {
+    console.error('获取已知项目失败:', error);
+    return [];
+  }
+}
+
+// 获取所有已知的主题
+export async function getAllKnownTopics() {
+  if (!ENABLE_CHROMA) {
+    console.log('Chroma 向量数据库已禁用，无法获取已知主题');
+    return [];
+  }
+  
+  try {
+    if (!messageCollection) {
+      await initChromaClient();
+    }
+    
+    if (!messageCollection) {
+      throw new Error('向量数据库集合未初始化');
+    }
+    
+    // 获取所有消息的元数据
+    const allMessages = await messageCollection.get();
+    
+    // 提取所有主题
+    const topics = new Set<string>();
+    if (allMessages && allMessages.metadatas) {
+      allMessages.metadatas.forEach((metadata: any) => {
+        if (metadata.topics) {
+          try {
+            const topicsList = JSON.parse(String(metadata.topics));
+            if (Array.isArray(topicsList)) {
+              topicsList.forEach(topic => topics.add(topic));
+            }
+          } catch (e) {
+            console.error('解析主题数据失败:', e);
+          }
+        }
+      });
+    }
+    
+    return Array.from(topics);
+  } catch (error) {
+    console.error('获取已知主题失败:', error);
+    return [];
+  }
+}
+
+// 模糊匹配项目或主题
+export function fuzzyMatchEntityName(partialName: string, knownNames: string[]): string[] {
+  if (!partialName || !knownNames || knownNames.length === 0) {
+    return [];
+  }
+  
+  // 转换为小写进行比较
+  const lowerPartialName = partialName.toLowerCase();
+  const matches: string[] = [];
+  
+  // 1. 精确匹配（忽略大小写）
+  const exactMatches = knownNames.filter(name => 
+    name.toLowerCase() === lowerPartialName
+  );
+  matches.push(...exactMatches);
+  
+  // 如果找到精确匹配，直接返回
+  if (matches.length > 0) return matches;
+  
+  // 2. 开头匹配（例如 "AI note" 匹配 "AI note 相关的规划进度"）
+  const startsWithMatches = knownNames.filter(name => 
+    name.toLowerCase().startsWith(lowerPartialName)
+  );
+  matches.push(...startsWithMatches);
+  
+  // 3. 包含匹配（例如 "note" 匹配 "AI note 相关的规划进度"）
+  const containsMatches = knownNames.filter(name => 
+    name.toLowerCase().includes(lowerPartialName) && 
+    !matches.includes(name)  // 避免重复
+  );
+  matches.push(...containsMatches);
+  
+  // 4. 词语匹配（例如 "AI" 和 "note" 都匹配 "AI note 相关的规划进度"）
+  const words = lowerPartialName.split(/\s+/);
+  if (words.length > 1) {
+    const wordMatches = knownNames.filter(name => {
+      const nameWords = name.toLowerCase().split(/\s+/);
+      return words.every(word => nameWords.some(nameWord => nameWord.includes(word))) &&
+        !matches.includes(name);  // 避免重复
+    });
+    matches.push(...wordMatches);
+  }
+  
+  return matches;
 } 
