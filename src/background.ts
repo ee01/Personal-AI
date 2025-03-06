@@ -48,12 +48,12 @@ chrome.runtime.onInstalled.addListener(async () => {
             if (rcTab && rcTab.id) {
                 await chrome.tabs.reload(rcTab.id);
                 console.log('RingCentral tab refreshed');
-
+                
                 // 延迟获取 RC Radar 配置
-                await getConfigFromWebpage()
+                await getConfigFromWebpage();
             }
         } catch (error) {
-            console.error('Failed to refresh RingCentral tab:', error);
+            console.error('Error refreshing RingCentral tab:', error);
         }
 
         // 安全地初始化Chroma
@@ -66,10 +66,47 @@ chrome.runtime.onInstalled.addListener(async () => {
 
         // 预先创建离屏文档
         await createOffscreenDocument();
+        
+        // 保存环境配置到storage
+        saveEnvConfigToStorage();
     } catch (error) {
-        console.error('Error in onInstalled handler:', error);
+        console.error('Error in onInstalled listener:', error);
     }
 });
+
+// 将.env中的配置保存到storage
+function saveEnvConfigToStorage() {
+    const envConfig = {
+        SCHEDULED_INTERVAL: process.env.SCHEDULED_INTERVAL || "120",
+        LLM_TYPE: process.env.LLM_TYPE || "dify",
+        LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
+        OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+        OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
+        OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
+        OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
+        DIFY_API_KEY: process.env.DIFY_API_KEY || "",
+        DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
+        DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+        OPENAI_MODEL: process.env.OPENAI_MODEL || "",
+        OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
+        OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
+        GROQ_API_KEY: process.env.GROQ_API_KEY || "",
+        GROQ_MODEL: process.env.GROQ_MODEL || "",
+        GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
+        BOT_TYPE: process.env.BOT_TYPE || "user",
+        BOT_TOKEN: process.env.BOT_TOKEN || "",
+        TEAM_ID: process.env.TEAM_ID || "",
+        ENABLE_BOT: process.env.ENABLE_BOT === "true",
+        LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
+        ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
+        CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
+        CHROMA_PORT: process.env.CHROMA_PORT || "8000"
+    };
+    
+    chrome.storage.local.set({ envConfig });
+    console.log('Saved environment config to storage:', envConfig);
+}
 
 // 监听定时任务
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -110,6 +147,55 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.log('General query result:', result);
             sendResponse(result);
         });
+        return true;
+    }
+    
+    // 获取环境配置
+    if (request.type === 'GET_ENV_CONFIG') {
+        chrome.storage.local.get(['envConfig'], (result) => {
+            if (result.envConfig) {
+                sendResponse({ success: true, config: result.envConfig });
+            } else {
+                const envConfig = {
+                    SCHEDULED_INTERVAL: process.env.SCHEDULED_INTERVAL || "120",
+                    LLM_TYPE: process.env.LLM_TYPE || "dify",
+                    LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
+                    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+                    OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
+                    OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
+                    OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
+                    DIFY_API_KEY: process.env.DIFY_API_KEY || "",
+                    DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
+                    DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
+                    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+                    OPENAI_MODEL: process.env.OPENAI_MODEL || "",
+                    OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
+                    OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
+                    GROQ_API_KEY: process.env.GROQ_API_KEY || "",
+                    GROQ_MODEL: process.env.GROQ_MODEL || "",
+                    GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
+                    BOT_TYPE: process.env.BOT_TYPE || "user",
+                    BOT_TOKEN: process.env.BOT_TOKEN || "",
+                    TEAM_ID: process.env.TEAM_ID || "",
+                    ENABLE_BOT: process.env.ENABLE_BOT === "true",
+                    LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
+                    ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
+                    CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
+                    CHROMA_PORT: process.env.CHROMA_PORT || "8000"
+                };
+                
+                chrome.storage.local.set({ envConfig });
+                sendResponse({ success: true, config: envConfig });
+            }
+        });
+        return true;
+    }
+    
+    // 更新环境配置
+    if (request.type === 'UPDATE_ENV_CONFIG') {
+        chrome.storage.local.set({ envConfig: request.config });
+        console.log('Updated environment config:', request.config);
+        sendResponse({ success: true });
         return true;
     }
 

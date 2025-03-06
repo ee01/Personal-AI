@@ -27,7 +27,7 @@
     "default_popup": "popup.html",
     "default_title": "Radar PoC"
   },
-  "options_page": "popup.html",
+  "options_page": "options.html",
   "host_permissions": [
     "*://*/*"
   ],
