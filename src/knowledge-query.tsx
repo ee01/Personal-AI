@@ -6,6 +6,7 @@ interface QueryResult {
     id: string;
     summary: string;
     details: string;
+    reply_advice: string;
     timestamp: string;
     source: string;
     relevance: number;
@@ -110,15 +111,36 @@ const KnowledgeQuery = () => {
                 question: query
             });
             
-            // 检查是否有人名模糊匹配
+            // 构建提示信息
+            const hintMessages = [];
             let answer = response.analysis || '未找到相关信息';
-            if (response.queryIntent && response.queryIntent.entities && 
-                response.queryIntent.entities.people && 
-                response.queryIntent.entities.people.length > 0) {
+            
+            // 检查是否有人名模糊匹配
+            if (response.queryIntent && response.queryIntent.entities) {
+                const { entities } = response.queryIntent;
                 
-                // 添加人名模糊匹配的提示
-                const people = response.queryIntent.entities.people.join('、');
-                answer = `(系统已识别相关人员: ${people})\n\n${answer}`;
+                // 添加人名提示
+                if (entities.people && entities.people.length > 0) {
+                    const people = entities.people.join('、');
+                    hintMessages.push(`相关人员: ${people}`);
+                }
+                
+                // 添加项目提示
+                if (entities.projects && entities.projects.length > 0) {
+                    const projects = entities.projects.join('、');
+                    hintMessages.push(`相关项目: ${projects}`);
+                }
+                
+                // 添加主题提示
+                if (entities.topics && entities.topics.length > 0) {
+                    const topics = entities.topics.join('、');
+                    hintMessages.push(`相关主题: ${topics}`);
+                }
+            }
+            
+            // 如果有提示信息，添加到回答前面
+            if (hintMessages.length > 0) {
+                answer = `(系统已识别${hintMessages.join('，')})\n\n${answer}`;
             }
             
             // 更新对话历史中的答案
@@ -366,24 +388,14 @@ const KnowledgeQuery = () => {
                                 </div>
                                 
                                 <div className="result-summary">
-                                    {result.summary}
-                                    {result.team && (
-                                        <div className="result-summary-team">
-                                            <span className="team-label">群组:</span> 
-                                            {result.team.url ? (
-                                                <a href={result.team.url} target="_blank" rel="noopener noreferrer">
-                                                    {result.team.name}
-                                                </a>
-                                            ) : (
-                                                result.team.name
-                                            )}
-                                        </div>
-                                    )}
+                                    {result.details}
                                 </div>
                                 
                                 {expandedResults.includes(result.id) && (
                                     <div className="result-details">
-                                        <p>{result.details}</p>
+                                        <div className="result-reply_advice">
+                                            <strong>回复建议:</strong> {result.reply_advice}
+                                        </div>
                                         <div className="result-source">
                                             <strong>来源:</strong> {result.source}
                                         </div>
@@ -671,7 +683,7 @@ const KnowledgeQuery = () => {
                     border-top: 1px solid #eee;
                 }
                 
-                .result-source {
+                .result-source, .result-reply_advice {
                     margin-top: 8px;
                     font-size: 14px;
                     color: #666;

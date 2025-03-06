@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import Groq from 'groq-sdk';
-import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson } from './vectorStore';
+import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics, fuzzyMatchEntityName } from './vectorStore';
 
 // 初始化 OpenAI 客户端
 const openai = new OpenAI({
@@ -177,7 +177,8 @@ export async function knowledgeQuery(question: string) {
     const queryIntent = await callLLMJsonAPI(analysisPrompt);
     console.log('queryIntent', queryIntent, new Date().getTime());
     
-    // 1.5 获取所有已知人名并进行模糊匹配
+    // 1.5 获取所有已知人名、项目和主题进行模糊匹配
+    // 1.5.1 人名模糊匹配
     if (queryIntent && queryIntent.entities && queryIntent.entities.people && 
         Array.isArray(queryIntent.entities.people) && queryIntent.entities.people.length > 0) {
       
@@ -202,6 +203,117 @@ export async function knowledgeQuery(question: string) {
       queryIntent.entities.people = matchedPeople;
       console.log('更新后的人名列表:', queryIntent.entities.people);
     }
+    
+    // 1.5.2 项目和主题的模糊匹配
+    // 获取所有已知项目和主题
+    const knownProjects = await getAllKnownProjects();
+    const knownTopics = await getAllKnownTopics();
+    console.log('已知项目列表:', knownProjects);
+    console.log('已知主题列表:', knownTopics);
+    
+    // 项目模糊匹配
+    const projectEntities: string[] = [];
+    if (queryIntent && queryIntent.entities && queryIntent.entities.projects && 
+        Array.isArray(queryIntent.entities.projects) && queryIntent.entities.projects.length > 0) {
+      
+      for (const project of queryIntent.entities.projects) {
+        const matchedProjects = fuzzyMatchEntityName(project, knownProjects);
+        if (matchedProjects.length > 0) {
+          console.log(`项目模糊匹配: "${project}" => `, matchedProjects);
+          projectEntities.push(...matchedProjects);
+        } else {
+          // 如果项目没匹配到，检查是否可以在主题中找到
+          const matchedTopicsForProject = fuzzyMatchEntityName(project, knownTopics);
+          if (matchedTopicsForProject.length > 0) {
+            console.log(`项目在主题中匹配: "${project}" => `, matchedTopicsForProject);
+            // 将匹配到的主题添加到主题列表中
+            if (!queryIntent.entities.topics) {
+              queryIntent.entities.topics = [];
+            }
+            queryIntent.entities.topics.push(...matchedTopicsForProject);
+          } else {
+            projectEntities.push(project);
+          }
+        }
+      }
+      
+      // 更新查询意图中的项目
+      queryIntent.entities.projects = projectEntities;
+    }
+    
+    // 主题模糊匹配
+    const topicEntities: string[] = [];
+    if (queryIntent && queryIntent.entities && queryIntent.entities.topics && 
+        Array.isArray(queryIntent.entities.topics) && queryIntent.entities.topics.length > 0) {
+      
+      for (const topic of queryIntent.entities.topics) {
+        const matchedTopics = fuzzyMatchEntityName(topic, knownTopics);
+        if (matchedTopics.length > 0) {
+          console.log(`主题模糊匹配: "${topic}" => `, matchedTopics);
+          topicEntities.push(...matchedTopics);
+        } else {
+          // 如果主题没匹配到，检查是否可以在项目中找到
+          const matchedProjectsForTopic = fuzzyMatchEntityName(topic, knownProjects);
+          if (matchedProjectsForTopic.length > 0) {
+            console.log(`主题在项目中匹配: "${topic}" => `, matchedProjectsForTopic);
+            // 将匹配到的项目添加到项目列表中
+            if (!queryIntent.entities.projects) {
+              queryIntent.entities.projects = [];
+            }
+            queryIntent.entities.projects.push(...matchedProjectsForTopic);
+          } else {
+            topicEntities.push(topic);
+          }
+        }
+      }
+      
+      // 更新查询意图中的主题
+      queryIntent.entities.topics = topicEntities;
+    }
+    
+    // 1.5.3 特殊处理：如果用户查询既没有指定项目也没有指定主题，但问题中含有实体名称，尝试从两者中匹配
+    if ((!queryIntent.entities.projects || queryIntent.entities.projects.length === 0) && 
+        (!queryIntent.entities.topics || queryIntent.entities.topics.length === 0)) {
+      
+      // 从问题中提取可能的实体名称（简单策略：提取所有名词短语）
+      const words = question.split(/\s+/);
+      for (let i = 0; i < words.length; i++) {
+        // 尝试不同长度的词组
+        for (let j = Math.min(i + 3, words.length); j > i; j--) {
+          const phrase = words.slice(i, j).join(' ');
+          
+          // 在项目中查找
+          const matchedProjects = fuzzyMatchEntityName(phrase, knownProjects);
+          if (matchedProjects.length > 0) {
+            console.log(`从问题中提取项目: "${phrase}" => `, matchedProjects);
+            if (!queryIntent.entities.projects) {
+              queryIntent.entities.projects = [];
+            }
+            queryIntent.entities.projects.push(...matchedProjects);
+          }
+          
+          // 在主题中查找
+          const matchedTopics = fuzzyMatchEntityName(phrase, knownTopics);
+          if (matchedTopics.length > 0) {
+            console.log(`从问题中提取主题: "${phrase}" => `, matchedTopics);
+            if (!queryIntent.entities.topics) {
+              queryIntent.entities.topics = [];
+            }
+            queryIntent.entities.topics.push(...matchedTopics);
+          }
+        }
+      }
+    }
+    
+    // 去重
+    if (queryIntent.entities.projects) {
+      queryIntent.entities.projects = Array.from(new Set(queryIntent.entities.projects));
+    }
+    if (queryIntent.entities.topics) {
+      queryIntent.entities.topics = Array.from(new Set(queryIntent.entities.topics));
+    }
+    
+    console.log('最终查询意图:', queryIntent);
     
     // 2. 构建查询过滤条件
     const filters: any = {};
@@ -294,7 +406,7 @@ export async function knowledgeQuery(question: string) {
         {{context}}
         
         基于以上信息,请分析并回答关于项目进展的问题:
-        ${question}
+        ${formattedQuestion}
         
         请包括:
         1. 项目当前进展
@@ -309,7 +421,7 @@ export async function knowledgeQuery(question: string) {
         {{context}}
         
         基于这些信息,请回答:
-        ${question}
+        ${formattedQuestion}
         
         请分析此人:
         1. 关注的重点话题/项目
@@ -324,7 +436,7 @@ export async function knowledgeQuery(question: string) {
         {{context}}
         
         基于这些信息,请回答:
-        ${question}
+        ${formattedQuestion}
         
         请分析:
         1. 这个话题的主要讨论点
@@ -339,7 +451,7 @@ export async function knowledgeQuery(question: string) {
         {{context}}
         
         基于这些信息,请回答:
-        ${question}
+        ${formattedQuestion}
         
         请列出:
         1. 所有需要注意的行动项
@@ -350,7 +462,7 @@ export async function knowledgeQuery(question: string) {
         
       default:
         promptTemplate = `
-        以下是与问题"${question}"相关的信息:
+        以下是与问题"${formattedQuestion}"相关的信息:
         {{context}}
         
         请基于以上信息提供详细回答。仅使用提供的信息,不要添加额外知识。
@@ -417,7 +529,8 @@ export async function knowledgeQuery(question: string) {
         source: String(metadata.source),
         relevance: relevance,
         tags: tags,
-        team: teamInfo
+        team: teamInfo,
+        reply_advice: metadata.reply_advice || ''
       };
     });
     
@@ -438,7 +551,7 @@ export async function knowledgeQuery(question: string) {
 }
 
 // 实现 callLLMJsonAPI 函数
-async function callLLMJsonAPI(prompt: string): Promise<any> {
+export async function callLLMJsonAPI(prompt: string): Promise<any> {
   // 复用现有的 LLM 请求代码
   const [, jsonData] = await handleLLMRequest({
     prompt: prompt,

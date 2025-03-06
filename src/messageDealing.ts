@@ -164,7 +164,7 @@ const sendMessageToLLM = async (user_prompt: string, system_prompt: string, mess
 			});
 			
 			if (response.data) {
-				console.log("LLM's response:", response.data);
+				console.log("LLM's response:", response.data, {user_prompt, messageData});
 				// Todo: Toast 方法在 popup 中无法调用
 				showToast('Analysis complete, please check the console', 'success');
 				return response.data;
@@ -240,7 +240,8 @@ ${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).joi
 						teamId: json.team_id,
 						entities: entities,
 						sentiment: entities.sentiment,
-						category: entities.category
+						category: entities.category,
+						reply_advice: json.reply_advice
 					}
 				);
 			});
