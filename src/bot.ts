@@ -1,3 +1,5 @@
+import { getEnvConfig } from "./utils";
+
 interface MessageData {
     matched_rule: string;
     team_name: string;
@@ -8,15 +10,10 @@ interface MessageData {
     reply_advice: string;
 }
 
-const BOT_API_BASE_URL = 'https://botman.int.rclabenv.com/v2';
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const BOT_TYPE = process.env.BOT_TYPE;
-const TEAM_ID = process.env.TEAM_ID;
-
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
     console.log("Sending bot message:", messageData);
-    const username = (await chrome.storage.local.get('config')).config.username;
-    const userEmail = username.trim().split(' ').join('.') + '@ringcentral.com';
+    const { userEmail } = await chrome.storage.local.get('userinfo');
+    const envConfig = await getEnvConfig();
     const formattedMessage = `**监测到一条您可能关注的消息** (AI可能幻觉 仅供参考)
 
 __关注项__：\`${messageData.matched_rule}\`
@@ -27,11 +24,11 @@ __上下文__：${messageData.summary}
 __回复建议__：${messageData.reply_advice}
 `;
 
-    const payload = BOT_TYPE === 'team' ? {
+    const payload = envConfig.BOT_TYPE === 'team' ? {
         mentionList: [userEmail],
         isTeamMention: false,
         teamName: messageData.team_name,
-        teamId: TEAM_ID,
+        teamId: envConfig.TEAM_ID,
         message: formattedMessage,
         skipMentionCheck: true
     } : {
@@ -42,13 +39,13 @@ __回复建议__：${messageData.reply_advice}
     };
 
     try {
-        const response = await fetch(`${BOT_API_BASE_URL}/${BOT_TYPE}/message`, {
+        const response = await fetch(`${envConfig.BOT_API_BASE_URL}/${envConfig.BOT_TYPE}/message`, {
             method: 'POST',
             headers: {
                 'accept': '*/*',
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${BOT_TOKEN}`,
-                'bot': '4700372020@37439510.bot.glip.net'
+                'Authorization': `Bearer ${envConfig.BOT_TOKEN}`,
+                'bot': envConfig.BOT_ID
             },
             body: JSON.stringify(payload)
         });
@@ -57,7 +54,7 @@ __回复建议__：${messageData.reply_advice}
             throw new Error(`Bot API error: ${response.status}`);
         }
     } catch (error) {
-        console.error('Failed to send bot message:', error);
+        console.error('Error sending bot message:', error);
         throw error;
     }
 } 

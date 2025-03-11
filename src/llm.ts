@@ -1,47 +1,29 @@
 import OpenAI from 'openai';
 import Groq from 'groq-sdk';
 import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics, fuzzyMatchEntityName } from './vectorStore';
-
-// 初始化 OpenAI 客户端
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    baseURL: process.env.OPENAI_API_BASE_URL,
-    dangerouslyAllowBrowser: true
-});
-
-// 初始化 Groq 客户端
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY,
-    dangerouslyAllowBrowser: true
-});
-
-// 新增：初始化 Dify API 配置
-const difyConfig = {
-    apiKey: process.env.DIFY_API_KEY,
-    reviewApiKey: process.env.DIFY_REVIEW_API_KEY,
-    baseURL: process.env.DIFY_API_BASE_URL || 'https://api.dify.ai/v1'
-};
+import { getEnvConfig } from './utils';
 
 // 根据不同 LLM 服务处理 LLM 请求，并提取 JSON 数据
 export async function handleLLMRequest(body: any): Promise<[string, any[]]> {
+    const envConfig = await getEnvConfig();
     let handler;
-    switch (process.env.LLM_TYPE) {
+    switch (envConfig.LLM_TYPE) {
         case 'local':
             handler = handleOllamaRequest;
-            if (body.type === 'review') body.model = process.env.OLLAMA_REVIEW_MODEL;
-            if (body.type === 'query') body.model = process.env.OLLAMA_QUERY_MODEL;
+            if (body.type === 'review') body.model = envConfig.OLLAMA_REVIEW_MODEL;
+            if (body.type === 'query') body.model = envConfig.OLLAMA_QUERY_MODEL;
             break;
         case 'groq':
             handler = handleGroqRequest;
-            if (body.type === 'review') body.model = process.env.GROQ_REVIEW_MODEL;
+            if (body.type === 'review') body.model = envConfig.GROQ_REVIEW_MODEL;
             break;
         case 'dify':
             handler = handleDifyRequest;
-            if (body.type === 'review') body.apiKey = process.env.DIFY_REVIEW_MODEL;
+            if (body.type === 'review') body.apiKey = envConfig.DIFY_REVIEW_MODEL;
             break;
         default:
             handler = handleOpenAIRequest;
-            if (body.type === 'review') body.model = process.env.OPENAI_REVIEW_MODEL;
+            if (body.type === 'review') body.model = envConfig.OPENAI_REVIEW_MODEL;
     }
     const response = await handler(body);
     const jsonData = extractJsonFromResponse(response);
@@ -50,13 +32,14 @@ export async function handleLLMRequest(body: any): Promise<[string, any[]]> {
 
 // 处理 Ollama 请求。Ollama 安装后需要把 launchctl setenv OLLAMA_ORIGINS "*" 加入到 .bashrc 中
 async function handleOllamaRequest(body: any): Promise<string> {
-    const response = await fetch(`${process.env.OLLAMA_BASE_URL}/api/generate`, {
+    const envConfig = await getEnvConfig();
+    const response = await fetch(`${envConfig.OLLAMA_BASE_URL}/api/generate`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            model: body.model || process.env.OLLAMA_MODEL,
+            model: body.model || envConfig.OLLAMA_MODEL,
             prompt: body.prompt,
             stream: false,
             temperature: 0.3,
@@ -74,21 +57,44 @@ async function handleOllamaRequest(body: any): Promise<string> {
 
 // 处理 OpenAI 请求
 async function handleOpenAIRequest(body: any): Promise<string> {
-    const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL,
-        messages: [{ role: "user", content: body.prompt }],
-        temperature: 0.3,
-        top_p: 0.9
-    });
+  const envConfig = await getEnvConfig();
+  // 初始化 OpenAI 客户端
+  const openai = new OpenAI({
+      apiKey: envConfig.OPENAI_API_KEY,
+      baseURL: envConfig.OPENAI_API_BASE_URL,
+      dangerouslyAllowBrowser: true
+  });
+  const completion = await openai.chat.completions.create({
+      model: envConfig.OPENAI_MODEL,
+      messages: body.system_prompt ?  [
+        { role: "system", content: body.system_prompt },
+        { role: "user", content: body.user_prompt },
+      ] : [
+        { role: "user", content: body.prompt },
+      ],
+      temperature: 0.3,
+      top_p: 0.9
+  });
 
-    return completion.choices[0].message.content || '';
+  return completion.choices[0].message.content || '';
 }
 
 // 处理 Groq 请求
 async function handleGroqRequest(body: any): Promise<string> {
+    const envConfig = await getEnvConfig();
+    // 初始化 Groq 客户端
+    const groq = new Groq({
+        apiKey: envConfig.GROQ_API_KEY,
+        dangerouslyAllowBrowser: true
+    });
     const completion = await groq.chat.completions.create({
-        model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
-        messages: [{ role: "user", content: body.prompt }],
+        model: envConfig.GROQ_MODEL || 'mixtral-8x7b-32768',
+        messages: body.system_prompt ? [
+          { role: "system", content: body.system_prompt },
+          { role: "user", content: body.user_prompt },
+        ] : [
+          { role: "user", content: body.prompt },
+        ],
         temperature: 0.3,
         top_p: 0.9
     });
@@ -98,6 +104,13 @@ async function handleGroqRequest(body: any): Promise<string> {
 
 // 新增：处理 Dify 请求
 async function handleDifyRequest(body: any): Promise<string> {
+    const envConfig = await getEnvConfig();
+    // 新增：初始化 Dify API 配置
+    const difyConfig = {
+        apiKey: envConfig.DIFY_API_KEY,
+        reviewApiKey: envConfig.DIFY_REVIEW_API_KEY,
+        baseURL: envConfig.DIFY_API_BASE_URL || 'https://api.dify.ai/v1'
+    };
     const response = await fetch(`${difyConfig.baseURL}/completion-messages`, {
         method: 'POST',
         headers: {

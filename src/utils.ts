@@ -1,3 +1,5 @@
+import { getCurrentUserInfo, getLocalStorageItem } from "./storage";
+
 export function formatDate(dateString: string | number) {
     const date = new Date(dateString);
     
@@ -83,3 +85,65 @@ export function transformPostLinks(inputString: string) {
   });
   return transformedString;
 }
+
+// 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
+export async function getEnvConfig(): Promise<any> {
+  try {
+    const { envConfig } = await chrome.storage.local.get(['envConfig']);
+    if (envConfig) {
+      return envConfig;
+    }
+  } catch (error) {
+    console.error('获取配置失败:', error);
+  }
+  
+  // 如果获取失败或没有保存的配置，返回 process.env 默认值
+  return {
+    SCHEDULED_INTERVAL: process.env.SCHEDULED_INTERVAL || "120",
+    LLM_TYPE: process.env.LLM_TYPE || "dify",
+    LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
+    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+    OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
+    OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
+    OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
+    DIFY_API_KEY: process.env.DIFY_API_KEY || "",
+    DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
+    DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+    OPENAI_MODEL: process.env.OPENAI_MODEL || "",
+    OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
+    OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
+    GROQ_API_KEY: process.env.GROQ_API_KEY || "",
+    GROQ_MODEL: process.env.GROQ_MODEL || "",
+    GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
+    BOT_API_BASE_URL: process.env.BOT_API_BASE_URL || "https://botman.int.rclabenv.com/v2",
+    BOT_TOKEN: process.env.BOT_TOKEN || "",
+    BOT_ID: process.env.BOT_ID || "4700372020@37439510.bot.glip.net",
+    BOT_TYPE: process.env.BOT_TYPE || "user",
+    TEAM_ID: process.env.TEAM_ID || "",
+    ENABLE_BOT: process.env.ENABLE_BOT === "true",
+    LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
+    ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
+    CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
+    CHROMA_PORT: process.env.CHROMA_PORT || "8000"
+  };
+}
+
+export function getUserInfo() {
+  const userInfo = getCurrentUserInfo();
+  if (userInfo.username && userInfo.username !== 'radar-poc') return {
+    extensionId: userInfo.extensionId,
+    fullName: userInfo.username,
+  };
+
+  const accountUD = getLocalStorageItem('global.account.UD', '');
+  const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
+
+  const accountInfo = accountUD ? accountInfoList[accountUD] : accountInfoList.find((item:any) => item.displayName != '');
+  return {
+    extensionId: accountInfo.extensionId,
+    email: accountInfo.email,
+    fullName: accountInfo.displayName,
+  }
+}
+

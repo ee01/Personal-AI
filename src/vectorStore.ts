@@ -1,15 +1,14 @@
 import { ChromaClient, Collection } from 'chromadb';
 import { getEmbeddingViaOffscreen } from './embeddings';
-
-// 添加一个标志来控制是否初始化 Chroma
-const ENABLE_CHROMA = process.env.ENABLE_CHROMA === 'true'; // 设置为 false 暂时禁用 Chroma
+import { getEnvConfig } from './utils';
 
 let chromaClient: ChromaClient | null = null;
 let messageCollection: Collection | null = null;
 
 // 获取嵌入向量
 export async function getEmbedding(text: string): Promise<number[]> {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('嵌入模型已禁用，返回空向量');
     return new Array(384).fill(0);
   }
@@ -25,14 +24,15 @@ export async function getEmbedding(text: string): Promise<number[]> {
 
 // 初始化 Chroma 客户端
 export async function initChromaClient() {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('Chroma 向量数据库已禁用');
     return false;
   }
   
   try {
     chromaClient = new ChromaClient({
-      path: process.env.CHROMA_API_URL || 'http://localhost:8000'
+      path: envConfig.CHROMA_API_URL || 'http://localhost:8000'
     });
     
     console.log('正在连接向量数据库...');
@@ -90,7 +90,8 @@ export async function storeMessage(
     category?: string[]            // 消息分类（如"决策"、"讨论"、"公告"等）
   }
 ) {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('Chroma 向量数据库已禁用，消息未存储');
     return false;
   }
@@ -226,7 +227,8 @@ export async function naturalLanguageQuery(
     },
     limit = 20
   ) {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('Chroma 向量数据库已禁用，无法执行自然语言查询');
     return {
       question: userQuestion,
@@ -354,7 +356,8 @@ export async function naturalLanguageQuery(
 
 // 获取所有已知的人名
 export async function getAllKnownPeople() {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('Chroma 向量数据库已禁用，无法获取已知人名');
     return [];
   }
@@ -455,7 +458,8 @@ export function fuzzyMatchPerson(partialName: string, knownPeople: string[]): st
 
 // 获取所有已知的项目
 export async function getAllKnownProjects() {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('Chroma 向量数据库已禁用，无法获取已知项目');
     return [];
   }
@@ -498,7 +502,8 @@ export async function getAllKnownProjects() {
 
 // 获取所有已知的主题
 export async function getAllKnownTopics() {
-  if (!ENABLE_CHROMA) {
+  const envConfig = await getEnvConfig();
+  if (!envConfig.ENABLE_CHROMA) {
     console.log('Chroma 向量数据库已禁用，无法获取已知主题');
     return [];
   }
