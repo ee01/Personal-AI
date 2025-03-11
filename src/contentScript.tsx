@@ -6,6 +6,7 @@ import { MARKDOWN_STYLE } from './markdownStyle';
 import { ViewModel } from './viewModel';
 import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
+import { getUserInfo } from './utils';
 
 
 // Insert the CSS styles into the DOM
@@ -51,12 +52,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const { type } = message;
 
-    if (type === 'GET_CONFIG') {
-        console.log('处理 GET_CONFIG 消息');
-        const configStr = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
-        const config = configStr ? JSON.parse(configStr) : null;
-        console.log('获取到的配置:', config);
-        sendResponse({ success: true, config });
+    if (type === 'GET_USER_INFO') {
+        console.log('处理 GET_USER_INFO 消息');
+        const userInfo = getUserInfo();
+        console.log('获取到的用户信息:', userInfo);
+        const username = userInfo.fullName.trim().split(' ').join('.').toLowerCase();
+        sendResponse({ success: true, data: {
+            fullName: userInfo.fullName,
+            username: username,
+            userEmail: userInfo.email ? userInfo.email : username + '@ringcentral.com',
+            extensionId: userInfo.extensionId,
+        } });
         return true;
     }
 
@@ -66,12 +72,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'done', type });
     }
 
-    if (type === 'FETCH_USER_DATA') {
-        console.log('处理 FETCH_USER_DATA 消息，参数:', message);
-        const { startTime, config } = message;
+    if (type === 'FETCH_USER_MESSAGES') {
+        console.log('处理 FETCH_USER_MESSAGES 消息，参数:', message);
+        const { startTime } = message;
+        const configStr = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
+        const config = configStr ? JSON.parse(configStr) : {
+            selectGroupNames: "",
+            enableMessage: true,
+            enableSms: false,
+            enableVoicemail: false,
+            enableCallTranscript: false,
+            enableCalendar: false,
+            enableCandidateQuestions: false,
+            selectFolderGroupIds: "",
+            username: "",
+            extensionId: "",
+            apiKey: "",
+            model: "4o"
+        };
         
         // 确保必要的参数存在
-        if (!startTime || !config) {
+        if (!startTime) {
             console.error('缺少必要的参数:', { startTime, config });
             sendResponse({ success: false, error: '缺少必要的参数' });
             return true;

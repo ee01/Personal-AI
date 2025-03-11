@@ -4,10 +4,20 @@ import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { analyzeMessages } from './messageDealing'; // 请确保路径正确
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from './background';
+import { getEnvConfig } from './utils';
+
+// 类型定义，帮助解决 lint 错误
+interface TabResponse {
+    success: boolean;
+    error?: string;
+    data?: any;
+    config?: any;
+}
 
 const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [envConfig, setEnvConfig] = useState<any>(null);
     const [analysisProgress, setAnalysisProgress] = useState<{
         total: number;
         lastAnalyzedIndex: number;
@@ -19,6 +29,10 @@ const Popup = () => {
             // 获取定时任务状态
             const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
             setIsScheduleActive(scheduleActive === true);
+            
+            // 获取配置
+            const envConfigData = await getEnvConfig();
+            setEnvConfig(envConfigData);
         })();
     }, []);
 
@@ -42,12 +56,17 @@ const Popup = () => {
                     chrome.storage.local.remove('ollamaAnalysisProgress');
                 }
             }
+            
+            // 监听配置变化
+            if (changes.envConfig) {
+                setEnvConfig(changes.envConfig.newValue);
+            }
         };
 
-        chrome.storage.local.onChanged.addListener(handleStorageChange);
+        chrome.storage.onChanged.addListener(handleStorageChange);
 
         return () => {
-            chrome.storage.local.onChanged.removeListener(handleStorageChange);
+            chrome.storage.onChanged.removeListener(handleStorageChange);
         };
     }, []);
 
@@ -64,21 +83,36 @@ const Popup = () => {
                 // 等待页面加载完成
                 await waitForTabLoad(rcTab.id);
             }
-            let { config } = await chrome.storage.local.get(['config'])
-            if (!config || config.username === '') config = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_CONFIG' })).config;
-            const startTime = new Date(Date.now() - (Number(process.env.SCHEDULED_INTERVAL || 120) + 5) * 60 * 1000);
-            const response = await chrome.tabs.sendMessage(rcTab.id, {
-                type: 'FETCH_USER_DATA',
-                startTime,
-                config
-            });
-            if (!response.success) {
-                throw new Error(response.error);
+            
+            if (!rcTab.id) {
+                throw new Error('Tab ID is undefined');
             }
+            
+            // 获取页面配置
+            let { userinfo } = await chrome.storage.local.get(['userinfo'])
+            if (!userinfo || userinfo.fullName === '') userinfo = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_USER_INFO' }) as TabResponse).data;
+            if (!userinfo || !userinfo.fullName) {
+                throw new Error('Failed to get page config');
+            }
+            
+            const scheduledInterval = envConfig ? Number(envConfig.SCHEDULED_INTERVAL) : 120;
+            const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
+            
+            // 获取用户数据
+            const response = await chrome.tabs.sendMessage(rcTab.id, {
+                type: 'FETCH_USER_MESSAGES',
+                startTime,
+            }) as TabResponse;
+            
+            if (!response || !response.success) {
+                throw new Error(response?.error || 'Unknown error');
+            }
+            
             const userData = response.data;
-            await analyzeMessages(userData, config);
+            await analyzeMessages(userData, userinfo.fullName);
         } catch (error) {
             console.error('Error sending data to Ollama:', error);
+            setIsLoading(false);
         }
     };
 
@@ -115,8 +149,16 @@ const Popup = () => {
         });
     };
     
-    const openOptionsPage = () => {
-        chrome.runtime.openOptionsPage();
+    // const openOptionsPage = () => {
+    //     chrome.runtime.openOptionsPage();
+    // };
+    
+    // 计算分析时间间隔的小时数
+    const getIntervalHours = () => {
+        if (envConfig) {
+            return (Number(envConfig.SCHEDULED_INTERVAL) / 60).toFixed(1);
+        }
+        return '2.0'; // 默认值
     };
 
     return (
@@ -131,7 +173,7 @@ const Popup = () => {
             >
                 {isLoading 
                     ? `正在分析 ${(analysisProgress?.lastAnalyzedIndex||0)+1}/${analysisProgress?.total||1} 条消息...` 
-                    : `将最近 ${(Number(process.env.SCHEDULED_INTERVAL || 120)/60).toFixed(1)} 小时 Glip 消息发给 LLM 分析`}
+                    : `将最近 ${getIntervalHours()} 小时 Glip 消息发给 LLM 分析`}
             </button>
             
             <button onClick={toggleSchedule}>
@@ -149,9 +191,9 @@ const Popup = () => {
                 Open Radar Sidebar
             </button>
             
-            <button onClick={openOptionsPage}>
+            {/* <button onClick={openOptionsPage}>
                 设置
-            </button>
+            </button> */}
         </div>
     );
 };

@@ -2,7 +2,17 @@ import { analyzeMessages, reviewMessageByLLMAndSendToBot } from './messageDealin
 import { initChromaClient } from './vectorStore';
 import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
-const scheduledInterval = process.env.SCHEDULED_INTERVAL || 120;  // 每2小时执行一次
+import { getEnvConfig } from './utils';
+
+// 全局配置变量
+let config: any = {};
+
+// 首先加载配置
+async function loadGlobalConfig() {
+  config = await getEnvConfig();
+  console.log('Global config loaded:', config);
+  return config;
+}
 
 console.log('Background script loaded');
 
@@ -10,6 +20,9 @@ console.log('Background script loaded');
 chrome.runtime.onInstalled.addListener(async () => {
     try {
         console.log('Extension installed/updated');
+        
+        // 加载配置
+        await loadGlobalConfig();
 
         // 初始化配置
         const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
@@ -50,7 +63,7 @@ chrome.runtime.onInstalled.addListener(async () => {
                 console.log('RingCentral tab refreshed');
                 
                 // 延迟获取 RC Radar 配置
-                await getConfigFromWebpage();
+                await getUserinfoFromRCpage();
             }
         } catch (error) {
             console.error('Error refreshing RingCentral tab:', error);
@@ -66,47 +79,18 @@ chrome.runtime.onInstalled.addListener(async () => {
 
         // 预先创建离屏文档
         await createOffscreenDocument();
-        
-        // 保存环境配置到storage
-        saveEnvConfigToStorage();
     } catch (error) {
         console.error('Error in onInstalled listener:', error);
     }
 });
 
-// 将.env中的配置保存到storage
-function saveEnvConfigToStorage() {
-    const envConfig = {
-        SCHEDULED_INTERVAL: process.env.SCHEDULED_INTERVAL || "120",
-        LLM_TYPE: process.env.LLM_TYPE || "dify",
-        LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
-        OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-        OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
-        OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
-        OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
-        DIFY_API_KEY: process.env.DIFY_API_KEY || "",
-        DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
-        DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-        OPENAI_MODEL: process.env.OPENAI_MODEL || "",
-        OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
-        OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
-        GROQ_API_KEY: process.env.GROQ_API_KEY || "",
-        GROQ_MODEL: process.env.GROQ_MODEL || "",
-        GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
-        BOT_TYPE: process.env.BOT_TYPE || "user",
-        BOT_TOKEN: process.env.BOT_TOKEN || "",
-        TEAM_ID: process.env.TEAM_ID || "",
-        ENABLE_BOT: process.env.ENABLE_BOT === "true",
-        LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
-        ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
-        CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
-        CHROMA_PORT: process.env.CHROMA_PORT || "8000"
-    };
-    
-    chrome.storage.local.set({ envConfig });
-    console.log('Saved environment config to storage:', envConfig);
-}
+// 监听 storage 变化，实时更新配置
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.envConfig) {
+    config = changes.envConfig.newValue;
+    console.log('Config updated:', config);
+  }
+});
 
 // 监听定时任务
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -152,41 +136,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     // 获取环境配置
     if (request.type === 'GET_ENV_CONFIG') {
-        chrome.storage.local.get(['envConfig'], (result) => {
-            if (result.envConfig) {
-                sendResponse({ success: true, config: result.envConfig });
-            } else {
-                const envConfig = {
-                    SCHEDULED_INTERVAL: process.env.SCHEDULED_INTERVAL || "120",
-                    LLM_TYPE: process.env.LLM_TYPE || "dify",
-                    LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
-                    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-                    OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
-                    OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
-                    OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
-                    DIFY_API_KEY: process.env.DIFY_API_KEY || "",
-                    DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
-                    DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
-                    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-                    OPENAI_MODEL: process.env.OPENAI_MODEL || "",
-                    OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
-                    OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
-                    GROQ_API_KEY: process.env.GROQ_API_KEY || "",
-                    GROQ_MODEL: process.env.GROQ_MODEL || "",
-                    GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
-                    BOT_TYPE: process.env.BOT_TYPE || "user",
-                    BOT_TOKEN: process.env.BOT_TOKEN || "",
-                    TEAM_ID: process.env.TEAM_ID || "",
-                    ENABLE_BOT: process.env.ENABLE_BOT === "true",
-                    LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
-                    ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
-                    CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
-                    CHROMA_PORT: process.env.CHROMA_PORT || "8000"
-                };
-                
-                chrome.storage.local.set({ envConfig });
-                sendResponse({ success: true, config: envConfig });
-            }
+        getEnvConfig().then(config => {
+            sendResponse({ success: true, config: config });
         });
         return true;
     }
@@ -194,6 +145,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 更新环境配置
     if (request.type === 'UPDATE_ENV_CONFIG') {
         chrome.storage.local.set({ envConfig: request.config });
+        config = request.config; // 同时更新全局变量
         console.log('Updated environment config:', request.config);
         sendResponse({ success: true });
         return true;
@@ -206,26 +158,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // 启动定时任务
 let timerFirstRunAlarms: NodeJS.Timeout | null = null;
 export function startScheduledCheck() {
-    timerFirstRunAlarms = setTimeout(() => {
-        runScheduledTask(); // 立即执行一次
-    }, 10000);
-    chrome.alarms.create('checkMessages', {
-        periodInMinutes: Number(scheduledInterval)
-    });
     chrome.storage.local.set({ scheduleActive: true });
-    console.log('Scheduled message check started');
+    
+    // 先清除可能存在的旧定时任务
+    chrome.alarms.clear('scheduledTask', () => {
+        console.log('Old alarm cleared');
+        
+        // 创建新的定时任务
+        chrome.alarms.create('scheduledTask', {
+            periodInMinutes: Number(config.SCHEDULED_INTERVAL)
+        });
+        
+        console.log(`Scheduled task set to run every ${config.SCHEDULED_INTERVAL} minutes`);
+    });
+    
+    // 在启动定时任务时直接运行一次
+    timerFirstRunAlarms = setTimeout(() => {
+        runScheduledTask();
+    }, 10000);
 }
 
 // 停止定时任务
 export function stopScheduledCheck() {
     clearTimeout(timerFirstRunAlarms);
-    chrome.alarms.clear('checkMessages');
     chrome.storage.local.set({ scheduleActive: false });
-    console.log('Scheduled message check stopped');
+    chrome.alarms.clear('scheduledTask', (wasCleared) => {
+        console.log('Scheduled task stopped:', wasCleared);
+    });
 }
 
 // 定时抓取分析消息
 async function runScheduledTask() {
+    console.log('Running scheduled task');
     try {
         // 查找或创建 RingCentral 标签页
         let rcTab = await findRingCentralTab();
@@ -235,20 +199,20 @@ async function runScheduledTask() {
             await waitForTabLoad(rcTab.id);
         }
 
-        let { config } = await chrome.storage.local.get(['config'])
-        if (!config || config.username === '') config = await getConfigFromWebpage();
-        const startTime = new Date(Date.now() - (Number(scheduledInterval) + 5) * 60 * 1000);
+        let { userinfo } = await chrome.storage.local.get(['userinfo'])
+        if (!userinfo || userinfo.fullName === '') userinfo = await getUserinfoFromRCpage();
+        const startTime = new Date(Date.now() - (Number(config.SCHEDULED_INTERVAL) + 5) * 60 * 1000);
 
         // 尝试发送消息，如果失败则重试
         const response = await sendMessageWithRetry(rcTab.id, {
-            type: 'FETCH_USER_DATA',
+            type: 'FETCH_USER_MESSAGES',
             startTime,
-            config
         });
-        await analyzeMessages(response.data, config);
+        await analyzeMessages(response.data, userinfo.fullName);
     } catch (error) {
         console.error('Background task error:', error);
     }
+
 }
 
 // 查找已打开的 RingCentral 标签页
@@ -309,7 +273,7 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Prom
     });
 }
 
-async function getConfigFromWebpage() {
+async function getUserinfoFromRCpage() {
     let rcTab = await findRingCentralTab();
     if (!rcTab) {
         rcTab = await createRingCentralTab();
@@ -319,27 +283,19 @@ async function getConfigFromWebpage() {
     
     try {
         const response = await sendMessageWithRetry(rcTab.id, {
-            type: 'GET_CONFIG'
+            type: 'GET_USER_INFO'
         });
         chrome.storage.local.set({
-            config: response.config || {
-                selectGroupNames: "",
-                enableMessage: true,
-                enableSms: false,
-                enableVoicemail: false,
-                enableCallTranscript: false,
-                enableCalendar: false,
-                enableCandidateQuestions: false,
-                selectFolderGroupIds: "",
+            userinfo: response.data || {
+                fullName: "",
                 username: "",
+                userEmail: "",
                 extensionId: "",
-                apiKey: "",
-                model: "4o"
             }
-        });
-        return response.config;
+        }); 
+        return response.data;
     } catch (error) {
-        console.error('Failed to get config:', error);
+        console.error('Failed to get userinfo:', error);
         return null;
     }
 }

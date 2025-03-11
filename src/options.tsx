@@ -34,6 +34,8 @@ interface ConfigOptions {
     GROQ_REVIEW_MODEL: string;
     
     // Bot 配置
+    BOT_API_BASE_URL: string;
+    BOT_ID: string;
     BOT_TYPE: string;
     BOT_TOKEN: string;
     TEAM_ID: string;
@@ -67,6 +69,8 @@ const defaultConfig: ConfigOptions = {
     GROQ_API_KEY: "",
     GROQ_MODEL: "",
     GROQ_REVIEW_MODEL: "",
+    BOT_API_BASE_URL: "https://botman.int.rclabenv.com/v2",
+    BOT_ID: "4700372020@37439510.bot.glip.net",
     BOT_TYPE: "user",
     BOT_TOKEN: "",
     TEAM_ID: "",
@@ -83,11 +87,11 @@ const Options = () => {
         message: '',
         type: ''
     });
-    const [activeSection, setActiveSection] = useState<string>('general');
 
     // 页面加载时从 Chrome 存储中获取配置
     useEffect(() => {
         chrome.storage.local.get(['envConfig'], (result) => {
+            console.log('result', result);
             if (result.envConfig) {
                 setConfig(result.envConfig);
             } else {
@@ -443,16 +447,16 @@ const Options = () => {
             )}
 
             <div className="form-section">
-                <h2>Bot 设置</h2>
+                <h2>推送设置</h2>
                 <div className="form-group">
-                    <label htmlFor="BOT_TYPE">Bot 类型</label>
+                    <label htmlFor="BOT_TYPE">消息推送对象</label>
                     <select
                         id="BOT_TYPE"
                         name="BOT_TYPE"
                         value={config.BOT_TYPE}
                         onChange={handleInputChange}
                     >
-                        <option value="user">用户</option>
+                        <option value="user">我</option>
                         <option value="team">团队</option>
                     </select>
                 </div>
