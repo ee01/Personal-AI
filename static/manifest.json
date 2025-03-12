@@ -24,7 +24,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Radar PoC"
+    "default_title": "Personal AI"
   },
   "options_page": "options.html",
   "host_permissions": [

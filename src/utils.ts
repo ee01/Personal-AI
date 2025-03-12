@@ -125,7 +125,8 @@ export async function getEnvConfig(): Promise<any> {
     LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
     ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
     CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
-    CHROMA_PORT: process.env.CHROMA_PORT || "8000"
+    CHROMA_PORT: process.env.CHROMA_PORT || "8000",
+    CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || ""
   };
 }
 
@@ -138,6 +139,7 @@ export function getUserInfo() {
 
   const accountUD = getLocalStorageItem('global.account.UD', '');
   const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
+  console.log('accountInfoList', accountInfoList, userInfo);
 
   const accountInfo = accountUD ? accountInfoList[accountUD] : accountInfoList.find((item:any) => item.displayName != '');
   return {

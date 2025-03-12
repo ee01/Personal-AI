@@ -47,15 +47,25 @@ export async function initChromaClient() {
       }
     };
     
-    if (!collections.includes('messages')) {
+    let username = '';
+    try {
+      const { userinfo } = await chrome.storage.local.get('userinfo');
+      username = userinfo.fullName.trim().split(' ').join('.').toLowerCase();
+      if (!username) throw new Error('username is empty');
+    } catch (error) {
+      envConfig.CHROMA_COLLECTION_NAME = 'messages'
+    }
+    const collectionName = envConfig.CHROMA_COLLECTION_NAME || username + '-messages';
+    console.log('collectionName', collectionName, envConfig.CHROMA_COLLECTION_NAME, username);
+    if (!collections.includes(collectionName)) {
       messageCollection = await chromaClient.createCollection({
-        name: 'messages',
+        name: collectionName,
         metadata: { description: "存储与关注项匹配的消息" },
         embeddingFunction
       });
     } else {
       messageCollection = await chromaClient.getCollection({
-        name: 'messages',
+        name: collectionName,
         embeddingFunction
       });
     }

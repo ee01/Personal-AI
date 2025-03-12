@@ -48,6 +48,7 @@ interface ConfigOptions {
     ENABLE_CHROMA: boolean;
     CHROMA_API_URL: string;
     CHROMA_PORT: string;
+    CHROMA_COLLECTION_NAME: string;
 }
 
 // 默认配置
@@ -78,7 +79,8 @@ const defaultConfig: ConfigOptions = {
     LLM_REVIEW_BEFORE_SEND: true,
     ENABLE_CHROMA: true,
     CHROMA_API_URL: "http://localhost:8000",
-    CHROMA_PORT: "8000"
+    CHROMA_PORT: "8000",
+    CHROMA_COLLECTION_NAME: ""
 };
 
 const Options = () => {
@@ -87,6 +89,7 @@ const Options = () => {
         message: '',
         type: ''
     });
+    const [enableCustomCollection, setEnableCustomCollection] = useState(false);
 
     // 页面加载时从 Chrome 存储中获取配置
     useEffect(() => {
@@ -514,6 +517,26 @@ const Options = () => {
                         value={config.CHROMA_PORT}
                         onChange={handleInputChange}
                     />
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="ENABLE_CUSTOM_COLLECTION"
+                            checked={enableCustomCollection}
+                            onChange={(e) => setEnableCustomCollection(e.target.checked)}
+                        />
+                        自定义集合名称
+                    </label>
+                    {enableCustomCollection && (
+                        <input
+                            type="text"
+                            id="CHROMA_COLLECTION_NAME"
+                            name="CHROMA_COLLECTION_NAME"
+                            value={config.CHROMA_COLLECTION_NAME}
+                            onChange={handleInputChange}
+                        />
+                    )}
                 </div>
             </div>
 
