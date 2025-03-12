@@ -50,8 +50,9 @@ chrome.runtime.onInstalled.addListener(async () => {
         // 如果没有 concernedItems 或已清空，设置默认值
         if (!concernedItems || concernedItems.length === 0) {
             chrome.storage.local.set({concernedItems: [
-                {text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
-                {text:'任何明确 @我 的消息，或者提到我的名字的消息'},
+                {text:'聊到关于公司政策，也可以是政策相关的八卦消息', pushToGlip: true},
+                {text:'任何提到我的名字的消息，排除 @Team，排除明确@{我的名字}，排除发送者是我', pushToGlip: false},
+                {text:'可能是回复我的消息，比如在我发完消息之后的答复。排除发送者是我', pushToGlip: true},
             ]});
         }
 

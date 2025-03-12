@@ -97,6 +97,7 @@ const Options = () => {
             console.log('result', result);
             if (result.envConfig) {
                 setConfig(result.envConfig);
+                if (result.envConfig.CHROMA_COLLECTION_NAME) setEnableCustomCollection(true);
             } else {
                 // 如果没有保存过配置，则尝试从 .env 加载
                 loadEnvDefaults();
@@ -250,7 +251,7 @@ const Options = () => {
                             checked={config.LLM_REVIEW_BEFORE_SEND}
                             onChange={handleInputChange}
                         />
-                        启用消息审核
+                        启用消息审核（若不启用审核，会推送所有关注消息）
                     </label>
                 </div>
             </div>
@@ -486,7 +487,7 @@ const Options = () => {
             </div>
 
             <div className="form-section">
-                <h2>Chroma 设置</h2>
+                <h2>RAG 设置</h2>
                 <div className="form-group">
                     <label>
                         <input
