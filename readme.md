@@ -1,5 +1,9 @@
 # Personal AI Chrome 插件
 
+## 安装 wiki
+
+https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools
+
 ## 开发环境设置
 
 ### 安装依赖

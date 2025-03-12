@@ -194,7 +194,7 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 	const envConfig = await getEnvConfig();
 	try {
 		const { concernedItems } = await chrome.storage.local.get('concernedItems');
-		const { fullName } = await chrome.storage.local.get('userinfo');
+		const { userinfo } = await chrome.storage.local.get('userinfo');
 		if (!body.prompt) body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
 		const [raw, jsonArray] = await handleLLMRequest(body);
 		console.log('LLM response:', raw);
@@ -208,7 +208,7 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 				  const reviewPrompt = `本条消息是由 ${json.sender} 在群 ${json.team_name} 中发送的，内容如下：
 <message_content>${json.message_content}</message_content>
 这是上下文的总结：<summary>${json.summary}</summary>
-请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${fullName}）：
+请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${userinfo.fullName}）：
 ${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n')}
 
 如果符合规则，请直接返回符合的规则原文，不要包含其他内容。如果不符合任何规则，请返回"不通过"。

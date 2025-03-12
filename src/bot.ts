@@ -12,7 +12,7 @@ interface MessageData {
 
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
     console.log("Sending bot message:", messageData);
-    const { userEmail } = await chrome.storage.local.get('userinfo');
+    const { userinfo } = await chrome.storage.local.get('userinfo');
     const envConfig = await getEnvConfig();
     const formattedMessage = `**监测到一条您可能关注的消息** (AI可能幻觉 仅供参考)
 
@@ -25,7 +25,7 @@ __回复建议__：${messageData.reply_advice}
 `;
 
     const payload = envConfig.BOT_TYPE === 'team' ? {
-        mentionList: [userEmail],
+        mentionList: [userinfo.userEmail],
         isTeamMention: false,
         teamName: messageData.team_name,
         teamId: envConfig.TEAM_ID,
@@ -33,7 +33,7 @@ __回复建议__：${messageData.reply_advice}
         skipMentionCheck: true
     } : {
         mention: true,
-        email: userEmail,
+        email: userinfo.userEmail,
         emailAutoCorrect: true,
         message: formattedMessage,
     };
