@@ -17,11 +17,11 @@ export async function analyzeMessages (data: any[], username: string) {
 
 	const system_prompt = `
 你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
-${envConfig.LLM_GROUP_ANALYSIS === 'true' ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}	
+${envConfig.LLM_GROUP_ANALYSIS ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}	
 
 ---- 以下是我的需求和你需要返回的内容定义 ----
-${envConfig.LLM_GROUP_ANALYSIS === 'true' ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
-1. 请仔细阅读 <message_group> 里的每条聊天消息，判断里面的 <message_content> 是否有符合以下规则其中一条${envConfig.LLM_GROUP_ANALYSIS === 'true' ? '' : '。如果没有则跳过并查看下一个 message_group'}：
+${envConfig.LLM_GROUP_ANALYSIS ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
+1. 请仔细阅读 <message_group> 里的每条聊天消息，判断里面的 <message_content> 是否有符合以下规则其中一条${envConfig.LLM_GROUP_ANALYSIS ? '' : '。如果没有则跳过并查看下一个 message_group'}：
 	${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n	')}
 2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
 	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
@@ -32,7 +32,7 @@ ${envConfig.LLM_GROUP_ANALYSIS === 'true' ? '针对消息内容' : '让我们来
 	- summary: 对这条消息所在的 message_group 的其他消息的上下文做出总结并适当的推理为什么sender会发出这个消息。请不要留空，这里可以用中文
 	- reply_advice: 针对这条消息的上下文，给出回复建议，回复用的语言跟随上下文聊天语言。如果觉得这条消息不需要回复，请回复空字符串
 	- entities: 提取消息中的实体信息，包括人物、项目、话题、行动项、情感和类别
-${envConfig.LLM_GROUP_ANALYSIS === 'true' ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
+${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
 
 将任务输出的数据进行如下验证：
 1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出空[]数组：
@@ -78,7 +78,7 @@ ${envConfig.LLM_GROUP_ANALYSIS === 'true' ? '' : '结束当前 <message_group> �
 	// data.splice(2);
 	// console.log(data);
 
-	if (envConfig.LLM_GROUP_ANALYSIS === 'true') {
+	if (envConfig.LLM_GROUP_ANALYSIS) {
 		// 拆分单条发送 LLM
 		let countAnalyzed = 0;
 		chrome.storage.local.set({
@@ -202,27 +202,53 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 		
 		if (jsonArray && jsonArray.length > 0) {
 			jsonArray.forEach(async json => {
+				// 如果需要推送 Glip 消息，则进行审核
+				let isPassReview = true;
 				let matched_rule = json.matched_rule;
-				if (envConfig.LLM_REVIEW_BEFORE_SEND === 'true') {
+				if (envConfig.LLM_REVIEW_BEFORE_SEND) {
 				  // 先进行 LLM 审核
+				  const concernedItemsForPush = concernedItems.filter((item:any) => item.pushToGlip);
 				  const reviewPrompt = `本条消息是由 ${json.sender} 在群 ${json.team_name} 中发送的，内容如下：
 <message_content>${json.message_content}</message_content>
 这是上下文的总结：<summary>${json.summary}</summary>
-请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${userinfo.fullName}）：
-${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n')}
 
-如果符合规则，请直接返回符合的规则原文，不要包含其他内容。如果不符合任何规则，请返回"不通过"。
+请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${userinfo.fullName}）：
+${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n')}
+
+如果符合规则，请直接返回符合的规则原文，符合多条规则用换行隔开，不要包含其他内容。如果不符合任何规则，请返回"不通过"。
 				  `;
 				  console.log('reviewPrompt:', reviewPrompt);
 				  const [reviewResponseRaw] = await handleLLMRequest({ prompt: reviewPrompt, type: 'review' });
 				  console.log('reviewResponseRaw:', reviewResponseRaw);
 				  const reviewResponse = reviewResponseRaw.replace(/<think>[\s\S]*?<\/think>/g, '').replace('\n', '').trim()
 				  if (reviewResponse.includes('不通过')) {
-					return; // 审核不通过直接跳过
+					isPassReview = false;
 				  }
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
-				if (envConfig.ENABLE_BOT === 'true') {
+
+				// 将匹配的消息存储到向量数据库
+				const messageId = uuidv4();
+				const entities = await extractEntities(json.message_content);
+				await storeMessage(
+					messageId,
+					json.message_content,
+					{
+						source: json.sender || 'unknown',
+						timestamp: Date.now(),
+						matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+						summary: json.summary || '',
+						teamName: json.team_name,
+						teamId: json.team_id,
+						entities: entities,
+						sentiment: entities.sentiment,
+						category: entities.category,
+						reply_advice: json.reply_advice
+					}
+				);
+
+				// 如果审核通过，则推送 Glip 消息
+				if (isPassReview && envConfig.ENABLE_BOT) {
 					sendBotMessage({
 						matched_rule,
 						team_name: body.messageData ? body.messageData.groupName : json.team_name,
@@ -233,26 +259,6 @@ ${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).joi
 						reply_advice: json.reply_advice
 					}).catch(console.error);
 				}
-				
-				// 将匹配的消息存储到向量数据库
-				const messageId = uuidv4();
-				const entities = await extractEntities(json.message_content);
-				await storeMessage(
-					messageId,
-					json.message_content,
-					{
-						source: json.sender || 'unknown',
-						timestamp: Date.now(),
-						matchedRules: json.matched_rule ? [json.matched_rule] : [],
-						summary: json.summary || '',
-						teamName: json.team_name,
-						teamId: json.team_id,
-						entities: entities,
-						sentiment: entities.sentiment,
-						category: entities.category,
-						reply_advice: json.reply_advice
-					}
-				);
 			});
 		}
 		return raw

@@ -99,6 +99,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         // 执行数据获取
+        console.log('执行数据获取', startTime, config);
         fetchUserData(startTime, config)
             .then(data => {
                 console.log('数据获取成功:', data);
