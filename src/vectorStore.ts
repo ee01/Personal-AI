@@ -91,13 +91,54 @@ export async function storeMessage(
     teamName?: string,             // 群组/团队名称
     teamId?: string,               // 群组/团队ID
     entities?: {                   // 实体识别结果
-      people?: string[],           // 消息中提到的人物
-      projects?: string[],         // 消息中提到的项目
-      topics?: string[],           // 消息中提到的话题
-      actions?: string[]           // 消息中提到的行动项
+      people?: Array<{
+        name: string,
+        role?: string,
+        mentioned_context?: string
+      }>,
+      time?: Array<{
+        raw: string,
+        normalized: string,
+        type: string
+      }>,
+      location?: Array<{
+        name: string,
+        type: string
+      }>,
+      projects?: Array<{
+        name: string,
+        status?: string,
+        related_people?: string[]
+      }>,
+      topics?: Array<{
+        name: string,
+        category?: string,
+        keywords?: string[]
+      }>,
+      resources?: Array<{
+        type: string,
+        name: string,
+        location?: string
+      }>
     },
-    sentiment?: string,            // 情感分析结果（正面/负面/中性）
-    category?: string[]            // 消息分类（如"决策"、"讨论"、"公告"等）
+    metadata?: {
+      sentiment?: string,         // positive/negative/neutral
+      priority?: string,          // high/medium/low
+      category?: string[],        // 消息类别
+      tags?: string[]            // 自动标签
+    },
+    relationships?: Array<{
+      source: string,
+      target: string,
+      relationship: string
+    }>,
+    actions?: Array<{
+      type: string,
+      description: string,
+      assignee?: string,
+      deadline?: number,
+      status?: string
+    }>
   }
 ) {
   const envConfig = await getEnvConfig();
@@ -118,40 +159,84 @@ export async function storeMessage(
     const embedding = await getEmbedding(content);
     
     // 简化元数据，确保它与 Chroma 兼容
-    // Chroma 只支持字符串、数字或布尔值作为元数据值
     const simplifiedMetadata: Record<string, string | number | boolean> = {
       source: metadata.source,
       timestamp: metadata.timestamp,
       matchedRules: JSON.stringify(metadata.matchedRules),
       summary: metadata.summary,
-      // 添加详细信息字段，用于展示详情
       details: content,
-      // 添加标签字段，用于展示标签
-      tags: JSON.stringify(metadata.category || []),
     };
     
     if (metadata.teamName) simplifiedMetadata.teamName = metadata.teamName;
     if (metadata.teamId) simplifiedMetadata.teamId = metadata.teamId;
     
-    // 将复杂对象序列化为字符串
+    // 处理实体数据
     if (metadata.entities) {
-      if (metadata.entities.people) simplifiedMetadata.people = JSON.stringify(metadata.entities.people);
-      if (metadata.entities.projects) simplifiedMetadata.projects = JSON.stringify(metadata.entities.projects);
-      if (metadata.entities.topics) simplifiedMetadata.topics = JSON.stringify(metadata.entities.topics);
-      if (metadata.entities.actions) simplifiedMetadata.actions = JSON.stringify(metadata.entities.actions);
+      // 存储完整的实体数据
+      simplifiedMetadata.entities = JSON.stringify(metadata.entities);
       
-      // 将实体添加到标签中
-      const allTags = [];
-      if (metadata.category) allTags.push(...metadata.category);
-      if (metadata.entities.people) allTags.push(...metadata.entities.people);
-      if (metadata.entities.projects) allTags.push(...metadata.entities.projects);
-      if (metadata.entities.topics) allTags.push(...metadata.entities.topics);
-      
-      // 更新标签字段
-      simplifiedMetadata.tags = JSON.stringify(allTags);
+      // 为了便于搜索，单独存储实体名称列表
+      if (metadata.entities.people) {
+        simplifiedMetadata.people = JSON.stringify(metadata.entities.people.map(p => p.name));
+      }
+      if (metadata.entities.projects) {
+        simplifiedMetadata.projects = JSON.stringify(metadata.entities.projects.map(p => p.name));
+      }
+      if (metadata.entities.topics) {
+        simplifiedMetadata.topics = JSON.stringify(metadata.entities.topics.map(t => t.name));
+      }
+      if (metadata.entities.location) {
+        simplifiedMetadata.locations = JSON.stringify(metadata.entities.location.map(l => l.name));
+      }
     }
     
-    if (metadata.sentiment) simplifiedMetadata.sentiment = metadata.sentiment;
+    // 处理元数据
+    if (metadata.metadata) {
+      if (metadata.metadata.sentiment) simplifiedMetadata.sentiment = metadata.metadata.sentiment;
+      if (metadata.metadata.priority) simplifiedMetadata.priority = metadata.metadata.priority;
+      if (metadata.metadata.category) simplifiedMetadata.category = JSON.stringify(metadata.metadata.category);
+      if (metadata.metadata.tags) simplifiedMetadata.tags = JSON.stringify(metadata.metadata.tags);
+    }
+    
+    // 处理关系数据
+    if (metadata.relationships) {
+      simplifiedMetadata.relationships = JSON.stringify(metadata.relationships);
+    }
+    
+    // 处理行动项
+    if (metadata.actions) {
+      simplifiedMetadata.actions = JSON.stringify(metadata.actions);
+    }
+    
+    // 生成搜索标签
+    const allTags = new Set<string>();
+    
+    // 添加所有实体名称到标签
+    if (metadata.entities) {
+      if (metadata.entities.people) {
+        metadata.entities.people.forEach(p => allTags.add(p.name));
+      }
+      if (metadata.entities.projects) {
+        metadata.entities.projects.forEach(p => allTags.add(p.name));
+      }
+      if (metadata.entities.topics) {
+        metadata.entities.topics.forEach(t => allTags.add(t.name));
+      }
+      if (metadata.entities.location) {
+        metadata.entities.location.forEach(l => allTags.add(l.name));
+      }
+    }
+    
+    // 添加分类和标签
+    if (metadata.metadata?.category) {
+      metadata.metadata.category.forEach(c => allTags.add(c));
+    }
+    if (metadata.metadata?.tags) {
+      metadata.metadata.tags.forEach(t => allTags.add(t));
+    }
+    
+    // 更新搜索标签
+    simplifiedMetadata.searchTags = JSON.stringify(Array.from(allTags));
     
     await messageCollection.add({
       ids: [messageId],
@@ -184,14 +269,18 @@ function generatePossibleJsonPatterns(value: string): string[] {
     `["${escapedValue}"]`,                   // 精确匹配单个值 ["value"]
     `["${escapedValue}", `,                  // 数组开头 ["value", ...
     `, "${escapedValue}"]`,                  // 数组结尾 ..., "value"]
-    `, "${escapedValue}", `                  // 数组中间 ..., "value", ...
+    `, "${escapedValue}", `,                 // 数组中间 ..., "value", ...
+    `"${escapedValue}"`,                     // 直接包含的值 "value"
   ];
   
   // 处理可能的空格变化
   patterns.push(`[ "${escapedValue}" ]`);    // 带空格的数组 [ "value" ]
+  patterns.push(`[ "${escapedValue}"]`);     // 混合空格样式 [ "value"]
+  patterns.push(`["${escapedValue}" ]`);     // 混合空格样式 ["value" ]
   
   // 处理不同的引号格式（单引号）
   patterns.push(`['${escapedValue}']`);      // 单引号格式 ['value']
+  patterns.push(`'${escapedValue}'`);        // 单引号直接值 'value'
   
   // 处理值本身包含的部分（用于子字符串搜索）
   if (escapedValue.includes(' ')) {
@@ -200,6 +289,7 @@ function generatePossibleJsonPatterns(value: string): string[] {
     for (const part of parts) {
       if (part.length > 2) {  // 只处理有意义的部分
         patterns.push(`"${part}"`);          // 匹配部分关键词 "keyword"
+        patterns.push(`'${part}'`);          // 单引号格式 'keyword'
       }
     }
   }
@@ -215,8 +305,16 @@ function createJsonPatternFilters(field: string, values: string[]): any {
     allPatterns.push(...generatePossibleJsonPatterns(value));
   }
   
-  // 将这些模式用 $in 操作符组合起来
-  return { [field]: { $in: allPatterns } };
+  // 处理两种可能情况：
+  // 1. 字段存储为JSON字符串数组  
+  // 2. 字段直接存储为普通字符串（没有JSON格式化）
+  return { 
+    "$or": [
+      { [field]: { $in: allPatterns } },
+      // 直接搜索原始值（针对可能未格式化为JSON的字段）
+      ...values.map(value => ({ [field]: value }))
+    ] 
+  };
 }
 
 // 修改：通用自然语言查询接口，添加 filters 参数
@@ -226,16 +324,48 @@ export async function naturalLanguageQuery(
       source?: string,              // 按发送者过滤
       teamName?: string,            // 按团队名称过滤
       entities?: {                  // 按实体过滤
-        people?: string[],          // 人物
-        projects?: string[],        // 项目
-        topics?: string[]           // 话题
+        people?: Array<{
+          name: string,
+          role?: string,
+          required?: boolean
+        }>,
+        projects?: Array<{
+          name: string,
+          status?: string,
+          required?: boolean
+        }>,
+        topics?: Array<{
+          name: string,
+          category?: string,
+          required?: boolean
+        }>,
+        location?: Array<{
+          name: string,
+          type?: string,
+          required?: boolean
+        }>
       },
-      startTime?: number,           // 开始时间
-      endTime?: number,             // 结束时间
-      sentiment?: string,           // 情感
-      category?: string[]           // 分类
+      time_range?: {
+        type: "recent" | "all" | "specific" | "range",
+        start?: number,
+        end?: number
+      },
+      metadata?: {
+        sentiment?: string,         // positive/negative/neutral
+        priority?: string,          // high/medium/low
+        category?: string[],        // 消息类别
+        tags?: string[]            // 标签
+      }
     },
-    limit = 20
+    output?: {
+      format?: string,             // list/timeline/summary/graph
+      fields?: string[],           // 需要返回的字段
+      sort?: {
+        field: string,
+        order: "asc" | "desc"
+      },
+      limit?: number
+    }
   ) {
   const envConfig = await getEnvConfig();
   if (!envConfig.ENABLE_CHROMA) {
@@ -260,71 +390,128 @@ export async function naturalLanguageQuery(
       throw new Error('向量数据库集合未初始化');
     }
     
-    // 1. 首先使用向量相似度查找相关消息
     const queryEmbedding = await getEmbedding(userQuestion);
     
-    // 构建查询参数
     const queryParams: any = {
       queryEmbeddings: [queryEmbedding],
-      nResults: limit
+      nResults: output?.limit || 20
     };
     
-    // 如果提供了过滤条件，添加到查询参数中
     if (filters && Object.keys(filters).length > 0) {
       const conditions = [];
       
-      // 处理来源过滤
+      // 处理基础过滤条件
       if (filters.source) {
         conditions.push({ source: filters.source });
       }
-      
-      // 处理团队名称过滤
       if (filters.teamName) {
         conditions.push({ teamName: filters.teamName });
       }
       
       // 处理时间范围过滤
-      if (filters.startTime && filters.endTime) {
-        conditions.push({ timestamp: { $gte: filters.startTime, $lte: filters.endTime } });
-      } else if (filters.startTime) {
-        conditions.push({ timestamp: { $gte: filters.startTime } });
-      } else if (filters.endTime) {
-        conditions.push({ timestamp: { $lte: filters.endTime } });
+      if (filters.time_range) {
+        const { type, start, end } = filters.time_range;
+        
+        // 对于"all"类型，不添加时间过滤
+        if (type === "all") {
+          console.log(`时间范围类型为"all"，不应用时间过滤`);
+        }
+        // 如果具有明确的start和end时间
+        else if (start && end) {
+          // 修复：Chroma不支持多个操作符在同一个对象中的写法
+          conditions.push({ "$and": [
+            { timestamp: { "$gte": start } },
+            { timestamp: { "$lte": end } }
+          ]});
+          console.log(`应用时间范围过滤: ${new Date(start).toISOString()} 到 ${new Date(end).toISOString()}`);
+        } 
+        // 如果只有start时间（从某时刻到现在）
+        else if (start && !end) {
+          conditions.push({ timestamp: { "$gte": start } });
+          console.log(`应用时间范围过滤: ${new Date(start).toISOString()} 到现在`);
+        }
+        // 如果只有end时间（到某个时刻为止）
+        else if (!start && end) {
+          conditions.push({ timestamp: { "$lte": end } });
+          console.log(`应用时间范围过滤: 从最早到 ${new Date(end).toISOString()}`);
+        }
+        // 如果是特定时间
+        else if (type === "specific" && start) {
+          // 为特定时间点添加一天的范围，以确保能捕获到该天的所有消息
+          const nextDay = start + (24 * 60 * 60 * 1000);
+          // 修复：Chroma不支持多个操作符在同一个对象中的写法
+          conditions.push({ "$and": [
+            { timestamp: { "$gte": start } },
+            { timestamp: { "$lte": nextDay } }
+          ]});
+          console.log(`应用特定时间过滤: ${new Date(start).toISOString()}`);
+        }
+        // 对于recent类型（如果走到这里，说明没有设置start和end）
+        else if (type === "recent") {
+          const now = new Date();
+          const sevenDaysAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+          conditions.push({ "$and": [
+            { timestamp: { "$gte": sevenDaysAgo } },
+            { timestamp: { "$lte": now.getTime() } }
+          ]});
+          console.log(`应用最近时间范围过滤(7天): ${new Date(sevenDaysAgo).toISOString()} 到 ${new Date().toISOString()}`);
+        }
       }
       
-      // 处理情感过滤
-      if (filters.sentiment) {
-        conditions.push({ sentiment: filters.sentiment });
-      }
-      
-      // 处理实体过滤（人物、项目、话题）
+      // 处理实体过滤
       if (filters.entities) {
-        // 人物过滤
-        if (filters.entities.people && filters.entities.people.length > 0) {
-          // 使用 $in 进行 JSON 模式匹配
-          conditions.push(createJsonPatternFilters('people', filters.entities.people));
+        // 处理人物过滤
+        if (filters.entities.people?.length) {
+          const peopleNames = filters.entities.people.map(p => p.name);
+          
+          // 增强人名匹配：同时检查 people 字段和 source 字段
+          const peopleCondition = {
+            "$or": [
+              createJsonPatternFilters('people', peopleNames),
+              // 同时检查source字段（发送者）
+              ...peopleNames.map(name => ({ source: name }))
+            ]
+          };
+          
+          conditions.push(peopleCondition);
         }
         
-        // 项目过滤
-        if (filters.entities.projects && filters.entities.projects.length > 0) {
-          // 使用 $in 进行 JSON 模式匹配
-          conditions.push(createJsonPatternFilters('projects', filters.entities.projects));
+        // 处理项目过滤
+        if (filters.entities.projects?.length) {
+          const projectNames = filters.entities.projects.map(p => p.name);
+          conditions.push(createJsonPatternFilters('projects', projectNames));
         }
         
-        // 话题过滤
-        if (filters.entities.topics && filters.entities.topics.length > 0) {
-          // 使用 $in 进行 JSON 模式匹配
-          conditions.push(createJsonPatternFilters('topics', filters.entities.topics));
+        // 处理话题过滤
+        if (filters.entities.topics?.length) {
+          const topicNames = filters.entities.topics.map(t => t.name);
+          conditions.push(createJsonPatternFilters('topics', topicNames));
+        }
+        
+        // 处理位置过滤
+        if (filters.entities.location?.length) {
+          const locationNames = filters.entities.location.map(l => l.name);
+          conditions.push(createJsonPatternFilters('locations', locationNames));
         }
       }
       
-      // 处理分类过滤
-      if (filters.category && filters.category.length > 0) {
-        // 使用 $in 进行 JSON 模式匹配
-        conditions.push(createJsonPatternFilters('category', filters.category));
+      // 处理元数据过滤
+      if (filters.metadata) {
+        if (filters.metadata.sentiment) {
+          conditions.push({ sentiment: filters.metadata.sentiment });
+        }
+        if (filters.metadata.priority) {
+          conditions.push({ priority: filters.metadata.priority });
+        }
+        if (filters.metadata.category?.length) {
+          conditions.push(createJsonPatternFilters('category', filters.metadata.category));
+        }
+        if (filters.metadata.tags?.length) {
+          conditions.push(createJsonPatternFilters('searchTags', filters.metadata.tags));
+        }
       }
       
-      // 如果有多个条件，使用 $and 操作符
+      // 合并所有条件
       if (conditions.length > 0) {
         if (conditions.length === 1) {
           queryParams.where = logQueryConditions(conditions[0]);
@@ -336,7 +523,7 @@ export async function naturalLanguageQuery(
     
     // 执行查询
     console.log('naturalLanguageQuery queryParams', queryParams);
-    const results = await messageCollection.query(queryParams);
+    let results = await messageCollection.query(queryParams);
     
     // 记录结果
     console.log(`查询结果: 找到 ${results.ids[0]?.length || 0} 条匹配记录`);
@@ -346,9 +533,37 @@ export async function naturalLanguageQuery(
         document: results.documents[0][0].substring(0, 100) + '...',
         metadata: results.metadatas[0][0]
       });
+    } else {
+      console.log('没有找到匹配记录，检查是否因为查询条件过于严格');
+      // 尝试仅通过向量相似度查询
+      console.log('尝试仅使用向量相似度查询，不添加过滤条件');
+      try {
+        results = await messageCollection.query({
+          queryEmbeddings: [queryEmbedding],
+          nResults: output?.limit || 20
+        });
+        console.log(`向量相似度查询结果: 找到 ${results.ids[0]?.length || 0} 条匹配记录`);
+        if (results.ids[0]?.length > 0 && filters.entities.people?.length) {
+          const simpleNames = filters.entities.people.map(p => p.name);
+          // 找出匹配的索引位置
+          const matchedIndices = results.metadatas[0].map((meta: any, index: number) => {
+            const source = meta.source?.toString().toLowerCase() || '';
+            return simpleNames.some(name => source.includes(name.toLowerCase())) ? index : -1;
+          }).filter(i => i !== -1);
+
+          // 根据匹配的索引过滤所有结果
+          results.ids[0] = matchedIndices.map(i => results.ids[0][i]);
+          results.metadatas[0] = matchedIndices.map(i => results.metadatas[0][i]);
+          results.documents[0] = matchedIndices.map(i => results.documents[0][i]);
+          results.distances[0] = matchedIndices.map(i => results.distances[0][i]);
+          console.log(`其中有 ${matchedIndices.length} 条与 ${simpleNames.join(', ')} 相关的消息`);
+        }
+      } catch (error) {
+        console.error('简单向量查询也失败了:', error);
+      }
     }
     
-    // 3. 返回查询结果和元数据
+    // 返回查询结果
     return {
       question: userQuestion,
       results: {

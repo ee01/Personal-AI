@@ -99,7 +99,7 @@ export async function getEnvConfig(): Promise<any> {
   
   // 如果获取失败或没有保存的配置，返回 process.env 默认值
   return {
-    SCHEDULED_INTERVAL: process.env.SCHEDULED_INTERVAL || "120",
+    SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120,
     LLM_TYPE: process.env.LLM_TYPE || "dify",
     LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
