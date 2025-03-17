@@ -2,9 +2,10 @@ import OpenAI from 'openai';
 import Groq from 'groq-sdk';
 import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics, fuzzyMatchEntityName } from './vectorStore';
 import { getEnvConfig } from './utils';
+import { extractEntitiesForQuery } from './entityExtraction';
 
 // 根据不同 LLM 服务处理 LLM 请求，并提取 JSON 数据
-export async function handleLLMRequest(body: any): Promise<[string, any[]]> {
+export async function handleLLMRequest(body: any): Promise<string> {
     const envConfig = await getEnvConfig();
     let handler;
     switch (envConfig.LLM_TYPE) {
@@ -26,8 +27,7 @@ export async function handleLLMRequest(body: any): Promise<[string, any[]]> {
             if (body.type === 'review') body.model = envConfig.OPENAI_REVIEW_MODEL;
     }
     const response = await handler(body);
-    const jsonData = extractJsonFromResponse(response);
-    return [response, jsonData];
+    return response;
 }
 
 // 处理 Ollama 请求。Ollama 安装后需要把 launchctl setenv OLLAMA_ORIGINS "*" 加入到 .bashrc 中
@@ -169,43 +169,110 @@ export async function knowledgeQuery(question: string) {
   console.log('knowledgeQuery', question, new Date().getTime());
   try {
     // 1. 从问题中识别查询意图和关键实体
-    const analysisPrompt = `
-    分析以下问题，提取查询意图和关键实体。按JSON格式返回：
-    
-    问题: "${question}"
-    
-    {
-      "queryType": "project_progress|person_info|topic_discussion|action_items|sentiment_analysis",
-      "entities": {
-        "people": [],
-        "projects": [],
-        "topics": []
-      },
-      "timeFrame": "recent|all|specific",
-      "specificTime": null
-    }
-    `;
-    
-    // 使用LLM分析问题
-    const queryIntent = await callLLMJsonAPI(analysisPrompt);
+    const queryIntent = await extractEntitiesForQuery(question);
     console.log('queryIntent', queryIntent, new Date().getTime());
+    
+    // 类型安全处理：确保时间范围有效
+    if (queryIntent?.query?.filters?.time_range) {
+      const timeRange = queryIntent.query.filters.time_range;
+      
+      // 处理时间疑问词
+      if (timeRange.type === 'specific' && typeof timeRange.start === 'string') {
+        console.warn(`非法的时间值: ${timeRange.start}，类型: ${typeof timeRange.start}`);
+        
+        // 检查是否是常见的时间疑问词
+        const timeQuestionWords = ["什么时候", "何时", "几点", "哪天", "什么日期", "什么时间", "几号", "什么时段", "几月", "哪一天", "什么季节"];
+        
+        if (timeQuestionWords.some(word => timeRange.start.includes(word))) {
+          console.log(`检测到时间疑问词: "${timeRange.start}"，将time_range.type设为"all"`);
+          timeRange.type = "all";
+          timeRange.start = null;
+          timeRange.end = null;
+        }
+      }
+      
+      // 根据时间描述设置具体的时间范围
+      if (timeRange.type === 'range' && timeRange.description) {
+        const now = new Date();
+        const thisYear = now.getFullYear();
+        const thisMonth = now.getMonth();
+        
+        if (/今年|本年|今年度|本年度/.test(timeRange.description)) {
+          // 今年范围：从今年1月1日到现在
+          const startOfYear = new Date(thisYear, 0, 1).getTime();
+          timeRange.start = startOfYear;
+          timeRange.end = now.getTime();
+          console.log(`设置今年时间范围: ${new Date(startOfYear).toISOString()} 到 ${new Date().toISOString()}`);
+        } 
+        else if (/这个月|本月|当月/.test(timeRange.description)) {
+          // 这个月范围：从本月1日到现在
+          const startOfMonth = new Date(thisYear, thisMonth, 1).getTime();
+          timeRange.start = startOfMonth;
+          timeRange.end = now.getTime();
+          console.log(`设置本月时间范围: ${new Date(startOfMonth).toISOString()} 到 ${new Date().toISOString()}`);
+        }
+        else if (/上个月|上月|前一个月/.test(timeRange.description)) {
+          // 上个月范围
+          const lastMonth = thisMonth === 0 ? 11 : thisMonth - 1;
+          const lastMonthYear = thisMonth === 0 ? thisYear - 1 : thisYear;
+          const startOfLastMonth = new Date(lastMonthYear, lastMonth, 1).getTime();
+          const endOfLastMonth = new Date(thisYear, thisMonth, 0).getTime();
+          timeRange.start = startOfLastMonth;
+          timeRange.end = endOfLastMonth;
+          console.log(`设置上月时间范围: ${new Date(startOfLastMonth).toISOString()} 到 ${new Date(endOfLastMonth).toISOString()}`);
+        }
+        else if (/去年|上一年|前一年/.test(timeRange.description)) {
+          // 去年范围
+          const lastYear = thisYear - 1;
+          const startOfLastYear = new Date(lastYear, 0, 1).getTime();
+          const endOfLastYear = new Date(lastYear, 11, 31, 23, 59, 59).getTime();
+          timeRange.start = startOfLastYear;
+          timeRange.end = endOfLastYear;
+          console.log(`设置去年时间范围: ${new Date(startOfLastYear).toISOString()} 到 ${new Date(endOfLastYear).toISOString()}`);
+        }
+        else if (/过去(\d+)天|最近(\d+)天/.test(timeRange.description)) {
+          // 过去N天
+          const matches = timeRange.description.match(/过去(\d+)天|最近(\d+)天/);
+          if (matches) {
+            const days = parseInt(matches[1] || matches[2]);
+            if (!isNaN(days)) {
+              const pastDays = now.getTime() - (days * 24 * 60 * 60 * 1000);
+              timeRange.start = pastDays;
+              timeRange.end = now.getTime();
+              console.log(`设置过去${days}天时间范围: ${new Date(pastDays).toISOString()} 到 ${new Date().toISOString()}`);
+            }
+          }
+        }
+      }
+      
+      // 如果是recent类型，设置默认为过去7天
+      if (timeRange.type === 'recent') {
+        const now = new Date();
+        const sevenDaysAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+        timeRange.start = sevenDaysAgo;
+        timeRange.end = now.getTime();
+        console.log(`设置最近时间范围(7天): ${new Date(sevenDaysAgo).toISOString()} 到 ${new Date().toISOString()}`);
+      }
+    }
     
     // 1.5 获取所有已知人名、项目和主题进行模糊匹配
     // 1.5.1 人名模糊匹配
-    if (queryIntent && queryIntent.entities && queryIntent.entities.people && 
-        Array.isArray(queryIntent.entities.people) && queryIntent.entities.people.length > 0) {
-      
+    if (queryIntent?.query?.filters?.entities?.people?.length > 0) {
       // 获取所有已知人名
       const knownPeople = await getAllKnownPeople();
       console.log('已知人名列表:', knownPeople);
       
       // 对每个识别出的人名进行模糊匹配
       const matchedPeople = [];
-      for (const person of queryIntent.entities.people) {
-        const matchedPerson = fuzzyMatchPerson(person, knownPeople);
+      for (const person of queryIntent.query.filters.entities.people) {
+        const matchedPerson = fuzzyMatchPerson(person.name, knownPeople);
         if (matchedPerson) {
-          console.log(`人名模糊匹配: "${person}" => "${matchedPerson}"`);
-          matchedPeople.push(matchedPerson);
+          console.log(`人名模糊匹配: "${person.name}" => "${matchedPerson}"`);
+          matchedPeople.push({
+            name: matchedPerson,
+            role: person.role,
+            required: person.required
+          });
         } else {
           // 如果没有匹配到，保留原始人名
           matchedPeople.push(person);
@@ -213,8 +280,8 @@ export async function knowledgeQuery(question: string) {
       }
       
       // 更新查询意图中的人名
-      queryIntent.entities.people = matchedPeople;
-      console.log('更新后的人名列表:', queryIntent.entities.people);
+      queryIntent.query.filters.entities.people = matchedPeople;
+      console.log('更新后的人名列表:', queryIntent.query.filters.entities.people);
     }
     
     // 1.5.2 项目和主题的模糊匹配
@@ -225,68 +292,88 @@ export async function knowledgeQuery(question: string) {
     console.log('已知主题列表:', knownTopics);
     
     // 项目模糊匹配
-    const projectEntities: string[] = [];
-    if (queryIntent && queryIntent.entities && queryIntent.entities.projects && 
-        Array.isArray(queryIntent.entities.projects) && queryIntent.entities.projects.length > 0) {
-      
-      for (const project of queryIntent.entities.projects) {
-        const matchedProjects = fuzzyMatchEntityName(project, knownProjects);
-        if (matchedProjects.length > 0) {
-          console.log(`项目模糊匹配: "${project}" => `, matchedProjects);
-          projectEntities.push(...matchedProjects);
+    if (queryIntent?.query?.filters?.entities?.projects?.length > 0) {
+      const matchedProjects = [];
+      for (const project of queryIntent.query.filters.entities.projects) {
+        const matchedNames = fuzzyMatchEntityName(project.name, knownProjects);
+        if (matchedNames.length > 0) {
+          console.log(`项目模糊匹配: "${project.name}" => `, matchedNames);
+          matchedNames.forEach(name => {
+            matchedProjects.push({
+              name,
+              status: project.status,
+              required: project.required
+            });
+          });
         } else {
           // 如果项目没匹配到，检查是否可以在主题中找到
-          const matchedTopicsForProject = fuzzyMatchEntityName(project, knownTopics);
-          if (matchedTopicsForProject.length > 0) {
-            console.log(`项目在主题中匹配: "${project}" => `, matchedTopicsForProject);
+          const matchedTopics = fuzzyMatchEntityName(project.name, knownTopics);
+          if (matchedTopics.length > 0) {
+            console.log(`项目在主题中匹配: "${project.name}" => `, matchedTopics);
             // 将匹配到的主题添加到主题列表中
-            if (!queryIntent.entities.topics) {
-              queryIntent.entities.topics = [];
+            if (!queryIntent.query.filters.entities.topics) {
+              queryIntent.query.filters.entities.topics = [];
             }
-            queryIntent.entities.topics.push(...matchedTopicsForProject);
+            matchedTopics.forEach(name => {
+              queryIntent.query.filters.entities.topics.push({
+                name,
+                category: '',
+                required: project.required
+              });
+            });
           } else {
-            projectEntities.push(project);
+            matchedProjects.push(project);
           }
         }
       }
       
       // 更新查询意图中的项目
-      queryIntent.entities.projects = projectEntities;
+      queryIntent.query.filters.entities.projects = matchedProjects;
     }
     
     // 主题模糊匹配
-    const topicEntities: string[] = [];
-    if (queryIntent && queryIntent.entities && queryIntent.entities.topics && 
-        Array.isArray(queryIntent.entities.topics) && queryIntent.entities.topics.length > 0) {
-      
-      for (const topic of queryIntent.entities.topics) {
-        const matchedTopics = fuzzyMatchEntityName(topic, knownTopics);
-        if (matchedTopics.length > 0) {
-          console.log(`主题模糊匹配: "${topic}" => `, matchedTopics);
-          topicEntities.push(...matchedTopics);
+    if (queryIntent?.query?.filters?.entities?.topics?.length > 0) {
+      const matchedTopics = [];
+      for (const topic of queryIntent.query.filters.entities.topics) {
+        const matchedNames = fuzzyMatchEntityName(topic.name, knownTopics);
+        if (matchedNames.length > 0) {
+          console.log(`主题模糊匹配: "${topic.name}" => `, matchedNames);
+          matchedNames.forEach(name => {
+            matchedTopics.push({
+              name,
+              category: topic.category,
+              required: topic.required
+            });
+          });
         } else {
           // 如果主题没匹配到，检查是否可以在项目中找到
-          const matchedProjectsForTopic = fuzzyMatchEntityName(topic, knownProjects);
-          if (matchedProjectsForTopic.length > 0) {
-            console.log(`主题在项目中匹配: "${topic}" => `, matchedProjectsForTopic);
+          const matchedProjects = fuzzyMatchEntityName(topic.name, knownProjects);
+          if (matchedProjects.length > 0) {
+            console.log(`主题在项目中匹配: "${topic.name}" => `, matchedProjects);
             // 将匹配到的项目添加到项目列表中
-            if (!queryIntent.entities.projects) {
-              queryIntent.entities.projects = [];
+            if (!queryIntent.query.filters.entities.projects) {
+              queryIntent.query.filters.entities.projects = [];
             }
-            queryIntent.entities.projects.push(...matchedProjectsForTopic);
+            matchedProjects.forEach(name => {
+              queryIntent.query.filters.entities.projects.push({
+                name,
+                status: '',
+                required: topic.required
+              });
+            });
           } else {
-            topicEntities.push(topic);
+            matchedTopics.push(topic);
           }
         }
       }
       
       // 更新查询意图中的主题
-      queryIntent.entities.topics = topicEntities;
+      queryIntent.query.filters.entities.topics = matchedTopics;
     }
     
     // 1.5.3 特殊处理：如果用户查询既没有指定项目也没有指定主题，但问题中含有实体名称，尝试从两者中匹配
-    if ((!queryIntent.entities.projects || queryIntent.entities.projects.length === 0) && 
-        (!queryIntent.entities.topics || queryIntent.entities.topics.length === 0)) {
+    if ((!queryIntent?.query?.filters?.entities?.projects?.length) && 
+        (!queryIntent?.query?.filters?.entities?.topics?.length)) {
       
       // 从问题中提取可能的实体名称（简单策略：提取所有名词短语）
       const words = question.split(/\s+/);
@@ -299,31 +386,47 @@ export async function knowledgeQuery(question: string) {
           const matchedProjects = fuzzyMatchEntityName(phrase, knownProjects);
           if (matchedProjects.length > 0) {
             console.log(`从问题中提取项目: "${phrase}" => `, matchedProjects);
-            if (!queryIntent.entities.projects) {
-              queryIntent.entities.projects = [];
+            if (!queryIntent.query.filters.entities.projects) {
+              queryIntent.query.filters.entities.projects = [];
             }
-            queryIntent.entities.projects.push(...matchedProjects);
+            matchedProjects.forEach(name => {
+              queryIntent.query.filters.entities.projects.push({
+                name,
+                status: '',
+                required: true
+              });
+            });
           }
           
           // 在主题中查找
           const matchedTopics = fuzzyMatchEntityName(phrase, knownTopics);
           if (matchedTopics.length > 0) {
             console.log(`从问题中提取主题: "${phrase}" => `, matchedTopics);
-            if (!queryIntent.entities.topics) {
-              queryIntent.entities.topics = [];
+            if (!queryIntent.query.filters.entities.topics) {
+              queryIntent.query.filters.entities.topics = [];
             }
-            queryIntent.entities.topics.push(...matchedTopics);
+            matchedTopics.forEach(name => {
+              queryIntent.query.filters.entities.topics.push({
+                name,
+                category: '',
+                required: true
+              });
+            });
           }
         }
       }
     }
     
-    // 去重
-    if (queryIntent.entities.projects) {
-      queryIntent.entities.projects = Array.from(new Set(queryIntent.entities.projects));
+    // 去重（基于name字段）
+    if (queryIntent?.query?.filters?.entities?.projects) {
+      queryIntent.query.filters.entities.projects = Array.from(
+        new Map(queryIntent.query.filters.entities.projects.map((item: { name: string }) => [item.name, item])).values()
+      );
     }
-    if (queryIntent.entities.topics) {
-      queryIntent.entities.topics = Array.from(new Set(queryIntent.entities.topics));
+    if (queryIntent?.query?.filters?.entities?.topics) {
+      queryIntent.query.filters.entities.topics = Array.from(
+        new Map(queryIntent.query.filters.entities.topics.map((item: { name: string }) => [item.name, item])).values()
+      );
     }
     
     console.log('最终查询意图:', queryIntent);
@@ -331,46 +434,33 @@ export async function knowledgeQuery(question: string) {
     // 2. 构建查询过滤条件
     const filters: any = {};
     
-    // 添加安全检查，确保 queryIntent 和 entities 存在
-    if (queryIntent && queryIntent.entities) {
-      // 检查 people 数组
-      if (queryIntent.entities.people && Array.isArray(queryIntent.entities.people) && queryIntent.entities.people.length > 0) {
-        // 如果是关于人的查询
-        if (queryIntent.queryType === "person_info") {
-          filters.source = queryIntent.entities.people[0];
-        } else {
-          filters.entities = { people: queryIntent.entities.people };
-        }
+    // 添加安全检查，确保 queryIntent 结构完整
+    if (queryIntent?.query?.filters) {
+      // 复制实体过滤器
+      if (queryIntent.query.filters.entities) {
+        filters.entities = queryIntent.query.filters.entities;
       }
       
-      // 检查 projects 数组
-      if (queryIntent.entities.projects && Array.isArray(queryIntent.entities.projects) && queryIntent.entities.projects.length > 0) {
-        if (!filters.entities) filters.entities = {};
-        filters.entities.projects = queryIntent.entities.projects;
+      // 复制时间范围
+      if (queryIntent.query.filters.time_range) {
+        filters.time_range = queryIntent.query.filters.time_range;
       }
-      
-      // 检查 topics 数组
-      if (queryIntent.entities.topics && Array.isArray(queryIntent.entities.topics) && queryIntent.entities.topics.length > 0) {
-        if (!filters.entities) filters.entities = {};
-        filters.entities.topics = queryIntent.entities.topics;
-      }
-      
-      // 3. 设置时间范围
-      if (queryIntent.timeFrame === "recent") {
-        const oneMonthAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-        filters.startTime = oneMonthAgo;
-      } else if (queryIntent.specificTime) {
-        // 处理特定时间范围
-        filters.startTime = queryIntent.specificTime;
-      }
-    } else {
-      console.warn('查询意图解析失败或格式不正确:', queryIntent);
     }
+    
+    // 设置输出选项
+    const output = queryIntent?.query?.output || {
+      format: "list",
+      limit: 20,
+      sort: {
+        field: "timestamp",
+        order: "desc" as const
+      }
+    };
     
     // 4. 查询向量数据库
     let queryResults;
     try {
-      queryResults = await naturalLanguageQuery(question, filters);
+      queryResults = await naturalLanguageQuery(question, filters, output);
       console.log('queryResults', queryResults, new Date().getTime());
     } catch (error) {
       console.error('向量数据库查询失败:', error);
@@ -412,8 +502,8 @@ export async function knowledgeQuery(question: string) {
     // 5. 根据查询类型构建不同的提示模板
     let promptTemplate = "";
     
-    switch (queryIntent.queryType) {
-      case "project_progress":
+    switch (queryIntent?.query?.intent?.secondary) {
+      case "project_status":
         promptTemplate = `
         以下是关于项目的一些信息:
         {{context}}
@@ -496,16 +586,18 @@ export async function knowledgeQuery(question: string) {
     let prompt = promptTemplate.replace('{{context}}', messagesContext);
     
     // 替换实体
-    if (queryIntent.queryType === "person_info" && queryIntent.entities.people.length > 0) {
-      prompt = prompt.replace('{{person}}', queryIntent.entities.people[0]);
+    if (queryIntent?.query?.intent?.secondary === "person_info" && 
+        queryIntent?.query?.filters?.entities?.people?.length > 0) {
+      prompt = prompt.replace('{{person}}', queryIntent.query.filters.entities.people[0].name);
     }
     
-    if (queryIntent.queryType === "topic_discussion" && queryIntent.entities.topics.length > 0) {
-      prompt = prompt.replace('{{topic}}', queryIntent.entities.topics[0]);
+    if (queryIntent?.query?.intent?.secondary === "topic_discussion" && 
+        queryIntent?.query?.filters?.entities?.topics?.length > 0) {
+      prompt = prompt.replace('{{topic}}', queryIntent.query.filters.entities.topics[0].name);
     }
     
     // 7. 调用 LLM 生成回答
-    const [ llmResponse ] = await handleLLMRequest({prompt});
+    const llmResponse = await handleLLMRequest({prompt});
     
     // 8. 构建符合 QueryResult 接口的结果
     const formattedResults = results.documents.map((doc, idx) => {
@@ -564,12 +656,10 @@ export async function knowledgeQuery(question: string) {
 }
 
 // 实现 callLLMJsonAPI 函数
-export async function callLLMJsonAPI(prompt: string): Promise<any> {
+export async function callLLMJsonAPI(body: any): Promise<any> {
   // 复用现有的 LLM 请求代码
-  const [, jsonData] = await handleLLMRequest({
-    prompt: prompt,
-    type: 'query',
-  });
+  const response = await handleLLMRequest(body);
+  const jsonData = extractJsonFromResponse(response);
   
   return jsonData;
 }

@@ -7,13 +7,6 @@ import { getEnvConfig } from './utils';
 // 全局配置变量
 let config: any = {};
 
-// 首先加载配置
-async function loadGlobalConfig() {
-  config = await getEnvConfig();
-  console.log('Global config loaded:', config);
-  return config;
-}
-
 console.log('Background script loaded');
 
 // 扩展安装或更新时，立即创建定时任务
@@ -22,7 +15,8 @@ chrome.runtime.onInstalled.addListener(async () => {
         console.log('Extension installed/updated');
         
         // 加载配置
-        await loadGlobalConfig();
+        config = await getEnvConfig();
+        console.log('Global config loaded:', config);
 
         // 初始化配置
         const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
@@ -55,6 +49,7 @@ chrome.runtime.onInstalled.addListener(async () => {
                 {text:'可能是回复我的消息，比如在我发完消息之后的答复。排除发送者是我', pushToGlip: true},
             ]});
         }
+        console.log('concernedItems', concernedItems);
 
         // 查找并刷新 RingCentral 标签页
         try {
@@ -183,6 +178,7 @@ export function startScheduledCheck() {
 export function stopScheduledCheck() {
     clearTimeout(timerFirstRunAlarms);
     chrome.storage.local.set({ scheduleActive: false });
+    chrome.storage.local.remove('ollamaAnalysisProgress');
     chrome.alarms.clear('scheduledTask', (wasCleared) => {
         console.log('Scheduled task stopped:', wasCleared);
     });
@@ -227,7 +223,7 @@ export async function findRingCentralTab() {
 // 创建新的 RingCentral 标签页
 export async function createRingCentralTab() {
     return await chrome.tabs.create({
-        url: "https://app.ringcentral.com/video",
+        url: "https://app.ringcentral.com/messages",
         active: false
     });
 }
@@ -246,7 +242,7 @@ export function waitForTabLoad(tabId: number): Promise<void> {
 }
 
 // 带重试机制的消息发送函数
-function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Promise<any> {
+function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3, retryInterval = 10000): Promise<any> {
     return new Promise((resolve, reject) => {
         let attempts = 0;
 
@@ -256,7 +252,7 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Prom
                 if (chrome.runtime.lastError) {
                     console.log(`Attempt ${attempts} failed:`, chrome.runtime.lastError);
                     if (attempts < maxRetries) {
-                        setTimeout(trySendMessage, 5000); // 5秒后重试
+                        setTimeout(trySendMessage, retryInterval); // 5秒后重试
                     } else {
                         reject(new Error('Failed to send message after multiple attempts'));
                     }
@@ -264,7 +260,8 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3): Prom
                     if (response && !response.error) {
                         resolve(response);
                     } else {
-                        reject(new Error('Failed to fetch user data: ' + response?.error));
+                        // 30秒后再尝试一次
+                        setTimeout(trySendMessage, retryInterval * 3);
                     }
                 }
             });

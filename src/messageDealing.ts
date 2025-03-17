@@ -1,9 +1,9 @@
 import { sendBotMessage } from './bot';
-import { handleLLMRequest } from './llm';
+import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
 import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
-import { extractEntities } from './entityExtraction';
+import { extractEntitiesToStore } from './entityExtraction';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string) {
@@ -35,27 +35,30 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '针对消息内容' : '让我们来一个一�
 ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
 
 将任务输出的数据进行如下验证：
-1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出空[]数组：
-[{
-	"message_content": "{message_content}",
-	"sender": "{sender}",
-	"matched_rule": "所符合的规则的内容",
-	"filter_reason": "",
-	"team_name": "{team_name}",
-	"team_id": "{team_id}",
-	"team_url": "https://app.ringcentral.com/messages/{team_id}",
-	"summary": "请总结上下文到这里",
-	"reply_advice": "建议的回复填入此",
-	"datetime": "{datetime}",
-	"entities": {
-      "people": ["消息中提到的人物"],
-      "projects": ["消息中提到的项目"],
-      "topics": ["消息中提到的话题"],
-      "actions": ["消息中需要执行的动作"]
-      "sentiment": "整体情感(positive/negative/neutral)",
-      "category": [消息类别，如"决策"、"讨论"、"公告"等]
-    }
-}]
+1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{error: "No messages matched any rules", data: []}：
+{
+	"error": "",
+	"data": [{
+		"message_content": "{message_content}",
+		"sender": "{sender}",
+		"matched_rule": "所符合的规则的内容",
+		"filter_reason": "",
+		"team_name": "{team_name}",
+		"team_id": "{team_id}",
+		"team_url": "https://app.ringcentral.com/messages/{team_id}",
+		"summary": "请总结上下文到这里",
+		"reply_advice": "建议的回复填入此",
+		"datetime": "{datetime}",
+		"entities": {
+		"people": ["消息中提到的人物"],
+		"projects": ["消息中提到的项目"],
+		"topics": ["消息中提到的话题"],
+		"actions": ["消息中需要执行的动作"]
+		"sentiment": "整体情感(positive/negative/neutral)",
+		"category": [消息类别，如"决策"、"讨论"、"公告"等]
+		}
+	}]
+}
 2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
 3. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
 `
@@ -88,14 +91,21 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
-		const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
+		let scheduleActive = false;
+		scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive;
+		chrome.storage.onChanged.addListener((changes, namespace) => {
+			if (namespace === 'local' && changes.scheduleActive) {
+				scheduleActive = changes.scheduleActive.newValue;
+			}
+		});
 		const isScheduledTask = typeof window === 'undefined'; // background script 环境中代表是定时任务
-		data.forEach(async (item: any, index: number) => await setTimeout(async () => {
+		for (let index = 0; index < data.length; index++) {
+			const item = data[index];
 			console.log(`--开始分析第 ${index+1}/${data.length} 条消息--`);
 			// 检查是否需要继续分析
 			if (!scheduleActive && isScheduledTask) {
 				console.log('分析任务已被终止');
-				return;
+				break;
 			}
 			const message = `<message_group team_name="${item.groupName}" team_id="${item.groupId}">${item.posts.map((post:any) => `
 	<message_content sender="${post.creator}" datetime="${post.time}">${post.text}</message_content>`).join('')}
@@ -109,14 +119,15 @@ ${message}
 `
 
 			await sendMessageToLLM(user_prompt, system_prompt, item);
-			chrome.storage.local.set({
-			ollamaAnalysisProgress: {
-				total: data.length,
-				lastAnalyzedIndex: ++countAnalyzed,
-				lastAnalyzedTime: new Date().toISOString()
-			}
+			if (scheduleActive) chrome.storage.local.set({
+				ollamaAnalysisProgress: {
+					total: data.length,
+					lastAnalyzedIndex: ++countAnalyzed,
+					lastAnalyzedTime: new Date().toISOString()
+				}
 			});
-		}, (envConfig.LLM_TYPE === 'local' ? 3 * 60 : 10) * 1000 * index + 1));
+			await new Promise(resolve => setTimeout(resolve, (envConfig.LLM_TYPE === 'local' ? 3 * 60 : 10) * 1000));
+		}
 	} else {
 		// 合并发送 LLM
 		const messages = data.reduce((acc, item) => `${acc}\n
@@ -150,7 +161,7 @@ ${messages}
 }
 
 const sendMessageToLLM = async (user_prompt: string, system_prompt: string, messageData?: any) => {
-	console.log(`Sending prompt to LLM:`, user_prompt, system_prompt, messageData);
+	if (messageData) console.log(`Sending messages to LLM:`, messageData);
 	try {
 		// 检查是否在 background script 环境中
 		const isBackground = typeof window === 'undefined';
@@ -196,12 +207,11 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 		const { concernedItems } = await chrome.storage.local.get('concernedItems');
 		const { userinfo } = await chrome.storage.local.get('userinfo');
 		if (!body.prompt) body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
-		const [raw, jsonArray] = await handleLLMRequest(body);
-		console.log('LLM response:', raw);
-		console.log('LLM jsonArray:', jsonArray);
+		const dealResponse = await callLLMJsonAPI(body);
+		console.log('MessageDealing response:', dealResponse, body);
 		
-		if (jsonArray && jsonArray.length > 0) {
-			jsonArray.forEach(async json => {
+		if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
+			dealResponse.data.forEach(async (json: any) => {
 				// 如果需要推送 Glip 消息，则进行审核
 				let isPassReview = true;
 				let matched_rule = json.matched_rule;
@@ -217,9 +227,8 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 
 如果符合规则，请直接返回符合的规则原文，符合多条规则用换行隔开，不要包含其他内容。如果不符合任何规则，请返回"不通过"。
 				  `;
-				  console.log('reviewPrompt:', reviewPrompt);
-				  const [reviewResponseRaw] = await handleLLMRequest({ prompt: reviewPrompt, type: 'review' });
-				  console.log('reviewResponseRaw:', reviewResponseRaw);
+				  const reviewResponseRaw = await handleLLMRequest({ prompt: reviewPrompt, type: 'review' });
+				  console.log('reviewResponseRaw:', reviewResponseRaw, reviewPrompt);
 				  const reviewResponse = reviewResponseRaw.replace(/<think>[\s\S]*?<\/think>/g, '').replace('\n', '').trim()
 				  if (reviewResponse.includes('不通过')) {
 					isPassReview = false;
@@ -229,7 +238,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 
 				// 将匹配的消息存储到向量数据库
 				const messageId = uuidv4();
-				const entities = await extractEntities(json.message_content);
+				const extractedEntities = await extractEntitiesToStore(json.message_content);
 				await storeMessage(
 					messageId,
 					json.message_content,
@@ -240,9 +249,15 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 						summary: json.summary || '',
 						teamName: json.team_name,
 						teamId: json.team_id,
-						entities: entities,
-						sentiment: entities.sentiment,
-						category: entities.category,
+						entities: extractedEntities.entities,
+						metadata: {
+							sentiment: extractedEntities.metadata.sentiment,
+							priority: extractedEntities.metadata.priority,
+							category: extractedEntities.metadata.category,
+							tags: extractedEntities.metadata.tags
+						},
+						relationships: extractedEntities.relationships,
+						actions: extractedEntities.actions,
 						reply_advice: json.reply_advice
 					}
 				);
@@ -261,7 +276,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				}
 			});
 		}
-		return raw
+		return dealResponse;
 	} catch (error) {
 		console.error('LLM error:', error);
 		return { 

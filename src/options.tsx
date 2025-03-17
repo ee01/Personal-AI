@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 // 配置选项接口
 interface ConfigOptions {
     // 定时任务配置
-    SCHEDULED_INTERVAL: string;
+    SCHEDULED_INTERVAL: number;
     
     // LLM 配置
     LLM_TYPE: string;
@@ -53,7 +53,7 @@ interface ConfigOptions {
 
 // 默认配置
 const defaultConfig: ConfigOptions = {
-    SCHEDULED_INTERVAL: "120",
+    SCHEDULED_INTERVAL: 120,
     LLM_TYPE: "dify",
     LLM_GROUP_ANALYSIS: false,
     OLLAMA_BASE_URL: "http://localhost:11434",
@@ -227,7 +227,14 @@ const Options = () => {
                         id="SCHEDULED_INTERVAL"
                         name="SCHEDULED_INTERVAL"
                         value={config.SCHEDULED_INTERVAL}
-                        onChange={handleInputChange}
+                        onChange={(e) => handleInputChange({
+                            ...e,
+                            target: {
+                                ...e.target,
+                                value: Number(e.target.value),
+                                name: e.target.name
+                            }
+                        })}
                     />
                 </div>
 
