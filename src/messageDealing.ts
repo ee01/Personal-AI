@@ -22,6 +22,7 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '每条 <message_group> 都是同一个群
 ---- 以下是我的需求和你需要返回的内容定义 ----
 ${envConfig.LLM_GROUP_ANALYSIS ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
 1. 请仔细阅读 <message_group> 里的每条聊天消息，判断里面的 <message_content> 是否有符合以下规则其中一条${envConfig.LLM_GROUP_ANALYSIS ? '' : '。如果没有则跳过并查看下一个 message_group'}：
+	- 规则0: 排除发送者是"SM AI undefined"的消息，排除发送者是自己的消息
 	${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n	')}
 2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
 	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
