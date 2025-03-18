@@ -238,7 +238,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 
 				// 将匹配的消息存储到向量数据库
 				const messageId = uuidv4();
-				const extractedEntities = await extractEntitiesToStore(json.message_content);
+				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
 				await storeMessage(
 					messageId,
 					json.message_content,

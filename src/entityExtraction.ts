@@ -2,14 +2,17 @@
 import { callLLMJsonAPI } from './llm';
 
 // 使用LLM提取消息中的实体
-export async function extractEntitiesToStore(content: string) {
+export async function extractEntitiesToStore(content: string, metadata: any = {}) {
   try {
     const prompt = `
     请分析以下消息，提取所有相关的实体信息和关系：
     
     消息内容：
     ${content}
-    
+    ${metadata.sender ? `消息发送者：${metadata.sender}` : ''}
+    ${metadata.team_name ? `消息所在群组：${metadata.team_name}` : ''}
+    ${metadata.summary ? `根据上下文得到的总结：${metadata.summary}` : ''}
+
     请严格按照以下 JSON 格式提取实体信息：
     {
       "entities": {
