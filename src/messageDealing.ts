@@ -214,6 +214,7 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 		if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
 			dealResponse.data.forEach(async (json: any) => {
 				// 如果需要推送 Glip 消息，则进行审核
+				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) return;
 				let isPassReview = true;
 				let matched_rule = json.matched_rule;
 				if (envConfig.LLM_REVIEW_BEFORE_SEND) {
