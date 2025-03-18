@@ -1,90 +1,11 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
+import { defaultEnvConfig, EnvConfigType } from './utils';
 
-// 配置选项接口
-interface ConfigOptions {
-    // 定时任务配置
-    SCHEDULED_INTERVAL: number;
-    
-    // LLM 配置
-    LLM_TYPE: string;
-    LLM_GROUP_ANALYSIS: boolean;
-    
-    // Ollama 配置
-    OLLAMA_BASE_URL: string;
-    OLLAMA_MODEL: string;
-    OLLAMA_REVIEW_MODEL: string;
-    OLLAMA_QUERY_MODEL: string;
-    
-    // Dify API 配置
-    DIFY_API_KEY: string;
-    DIFY_REVIEW_API_KEY: string;
-    DIFY_API_BASE_URL: string;
-    
-    // OpenAI 配置
-    OPENAI_API_KEY: string;
-    OPENAI_MODEL: string;
-    OPENAI_REVIEW_MODEL: string;
-    OPENAI_API_BASE_URL: string;
-    
-    // Groq 配置
-    GROQ_API_KEY: string;
-    GROQ_MODEL: string;
-    GROQ_REVIEW_MODEL: string;
-    
-    // Bot 配置
-    BOT_API_BASE_URL: string;
-    BOT_ID: string;
-    BOT_TYPE: string;
-    BOT_TOKEN: string;
-    TEAM_ID: string;
-    
-    // 功能开关
-    ENABLE_BOT: boolean;
-    LLM_REVIEW_BEFORE_SEND: boolean;
-    
-    // Chroma 配置
-    ENABLE_CHROMA: boolean;
-    CHROMA_API_URL: string;
-    CHROMA_PORT: string;
-    CHROMA_COLLECTION_NAME: string;
-}
-
-// 默认配置
-const defaultConfig: ConfigOptions = {
-    SCHEDULED_INTERVAL: 120,
-    LLM_TYPE: "dify",
-    LLM_GROUP_ANALYSIS: false,
-    OLLAMA_BASE_URL: "http://localhost:11434",
-    OLLAMA_MODEL: "deepseek-r1",
-    OLLAMA_REVIEW_MODEL: "llama3.1",
-    OLLAMA_QUERY_MODEL: "llama3.1",
-    DIFY_API_KEY: "",
-    DIFY_REVIEW_API_KEY: "",
-    DIFY_API_BASE_URL: "",
-    OPENAI_API_KEY: "",
-    OPENAI_MODEL: "",
-    OPENAI_REVIEW_MODEL: "",
-    OPENAI_API_BASE_URL: "",
-    GROQ_API_KEY: "",
-    GROQ_MODEL: "",
-    GROQ_REVIEW_MODEL: "",
-    BOT_API_BASE_URL: "https://botman.int.rclabenv.com/v2",
-    BOT_ID: "4700372020@37439510.bot.glip.net",
-    BOT_TYPE: "user",
-    BOT_TOKEN: "",
-    TEAM_ID: "",
-    ENABLE_BOT: true,
-    LLM_REVIEW_BEFORE_SEND: true,
-    ENABLE_CHROMA: true,
-    CHROMA_API_URL: "http://localhost:8000",
-    CHROMA_PORT: "8000",
-    CHROMA_COLLECTION_NAME: ""
-};
-
+// 使用从utils.ts导入的类型
 const Options = () => {
-    const [config, setConfig] = useState<ConfigOptions>({...defaultConfig});
+    const [config, setConfig] = useState<EnvConfigType>({...defaultEnvConfig});
     const [status, setStatus] = useState<{message: string, type: 'success' | 'error' | ''}>({
         message: '',
         type: ''
@@ -156,7 +77,7 @@ const Options = () => {
 
     // 重置配置为默认值
     const resetConfig = () => {
-        setConfig({...defaultConfig});
+        setConfig({...defaultEnvConfig});
         setStatus({
             message: '配置已重置为默认值',
             type: 'success'
@@ -171,7 +92,9 @@ const Options = () => {
             ...prev,
             [name]: type === 'checkbox' 
                 ? (e.target as HTMLInputElement).checked 
-                : value
+                : name === 'SCHEDULED_INTERVAL' || name === 'CHROMA_PORT'
+                    ? Number(value)
+                    : value
         }));
     };
 
@@ -227,14 +150,13 @@ const Options = () => {
                         id="SCHEDULED_INTERVAL"
                         name="SCHEDULED_INTERVAL"
                         value={config.SCHEDULED_INTERVAL}
-                        onChange={(e) => handleInputChange({
-                            ...e,
-                            target: {
-                                ...e.target,
-                                value: Number(e.target.value),
-                                name: e.target.name
-                            }
-                        })}
+                        onChange={(e) => {
+                            const numValue = Number(e.target.value);
+                            setConfig(prev => ({
+                                ...prev,
+                                SCHEDULED_INTERVAL: numValue
+                            }));
+                        }}
                     />
                 </div>
 
@@ -519,11 +441,17 @@ const Options = () => {
                 <div className="form-group">
                     <label htmlFor="CHROMA_PORT">Chroma 端口</label>
                     <input
-                        type="text"
+                        type="number"
                         id="CHROMA_PORT"
                         name="CHROMA_PORT"
                         value={config.CHROMA_PORT}
-                        onChange={handleInputChange}
+                        onChange={(e) => {
+                            const numValue = Number(e.target.value);
+                            setConfig(prev => ({
+                                ...prev,
+                                CHROMA_PORT: numValue
+                            }));
+                        }}
                     />
                 </div>
                 <div className="form-group">
