@@ -1,5 +1,37 @@
 import { getCurrentUserInfo, getLocalStorageItem } from "./storage";
 
+// 环境配置类型定义
+export interface EnvConfigType {
+  SCHEDULED_INTERVAL: number;
+  LLM_TYPE: string;
+  LLM_GROUP_ANALYSIS: boolean;
+  OLLAMA_BASE_URL: string;
+  OLLAMA_MODEL: string;
+  OLLAMA_REVIEW_MODEL: string;
+  OLLAMA_QUERY_MODEL: string;
+  DIFY_API_KEY: string;
+  DIFY_REVIEW_API_KEY: string;
+  DIFY_API_BASE_URL: string;
+  OPENAI_API_KEY: string;
+  OPENAI_MODEL: string;
+  OPENAI_REVIEW_MODEL: string;
+  OPENAI_API_BASE_URL: string;
+  GROQ_API_KEY: string;
+  GROQ_MODEL: string;
+  GROQ_REVIEW_MODEL: string;
+  BOT_API_BASE_URL: string;
+  BOT_TOKEN: string;
+  BOT_ID: string;
+  BOT_TYPE: string;
+  TEAM_ID: string;
+  ENABLE_BOT: boolean;
+  LLM_REVIEW_BEFORE_SEND: boolean;
+  ENABLE_CHROMA: boolean;
+  CHROMA_API_URL: string;
+  CHROMA_PORT: number;
+  CHROMA_COLLECTION_NAME: string;
+}
+
 export function formatDate(dateString: string | number) {
     const date = new Date(dateString);
     
@@ -86,48 +118,52 @@ export function transformPostLinks(inputString: string) {
   return transformedString;
 }
 
+// 默认环境配置
+export const defaultEnvConfig: EnvConfigType = {
+  SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120,
+  LLM_TYPE: process.env.LLM_TYPE || "dify",
+  LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
+  OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+  OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
+  OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
+  OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
+  DIFY_API_KEY: process.env.DIFY_API_KEY || "",
+  DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
+  DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  OPENAI_MODEL: process.env.OPENAI_MODEL || "",
+  OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
+  OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
+  GROQ_API_KEY: process.env.GROQ_API_KEY || "",
+  GROQ_MODEL: process.env.GROQ_MODEL || "",
+  GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
+  BOT_API_BASE_URL: process.env.BOT_API_BASE_URL || "https://botman.int.rclabenv.com/v2",
+  BOT_TOKEN: process.env.BOT_TOKEN || "",
+  BOT_ID: process.env.BOT_ID || "4700372020@37439510.bot.glip.net",
+  BOT_TYPE: process.env.BOT_TYPE || "user",
+  TEAM_ID: process.env.TEAM_ID || "",
+  ENABLE_BOT: process.env.ENABLE_BOT === "true",
+  LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
+  ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
+  CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
+  CHROMA_PORT: Number(process.env.CHROMA_PORT) || 8000,
+  CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || ""
+};
+
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
-export async function getEnvConfig(): Promise<any> {
+export async function getEnvConfig(): Promise<EnvConfigType> {
   try {
     const { envConfig } = await chrome.storage.local.get(['envConfig']);
     if (envConfig) {
-      return envConfig;
+      // 将存储的配置与默认配置合并，确保新增的配置项也会被包含
+      return { ...defaultEnvConfig, ...envConfig };
     }
   } catch (error) {
     console.error('获取配置失败:', error);
   }
   
-  // 如果获取失败或没有保存的配置，返回 process.env 默认值
-  return {
-    SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120,
-    LLM_TYPE: process.env.LLM_TYPE || "dify",
-    LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
-    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-    OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
-    OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
-    OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
-    DIFY_API_KEY: process.env.DIFY_API_KEY || "",
-    DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
-    DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-    OPENAI_MODEL: process.env.OPENAI_MODEL || "",
-    OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
-    OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
-    GROQ_API_KEY: process.env.GROQ_API_KEY || "",
-    GROQ_MODEL: process.env.GROQ_MODEL || "",
-    GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
-    BOT_API_BASE_URL: process.env.BOT_API_BASE_URL || "https://botman.int.rclabenv.com/v2",
-    BOT_TOKEN: process.env.BOT_TOKEN || "",
-    BOT_ID: process.env.BOT_ID || "4700372020@37439510.bot.glip.net",
-    BOT_TYPE: process.env.BOT_TYPE || "user",
-    TEAM_ID: process.env.TEAM_ID || "",
-    ENABLE_BOT: process.env.ENABLE_BOT === "true",
-    LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
-    ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
-    CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
-    CHROMA_PORT: process.env.CHROMA_PORT || "8000",
-    CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || ""
-  };
+  // 如果获取失败或没有保存的配置，返回默认值
+  return defaultEnvConfig;
 }
 
 export function getUserInfo() {
