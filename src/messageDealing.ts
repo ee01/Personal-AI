@@ -26,7 +26,7 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '针对消息内容' : '让我们来一个一�
 	${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n	')}
 2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
 	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
-	- <message_content> properties中的发送者sender和发送时间datetime, 还有<message_group> properties 中的 team_name, team_id, 以及符合的规则x
+	- <message_content> properties 中的发送者sender和发送时间datetime, 还有 <message_group> properties 中的 team_name, team_id, post_id
 3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这 4 个新字段：
 	- matched_rule: 上面第一步的符合到的规则x的原文内容
 	- filter_reason: 选择这条消息过滤出来的原因，可以用中文表达
@@ -44,6 +44,7 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 		"sender": "{sender}",
 		"matched_rule": "所符合的规则的内容",
 		"filter_reason": "",
+		"post_id": "{post_id}",
 		"team_name": "{team_name}",
 		"team_id": "{team_id}",
 		"team_url": "https://app.ringcentral.com/messages/{team_id}",
@@ -109,7 +110,7 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 				break;
 			}
 			const message = `<message_group team_name="${item.groupName}" team_id="${item.groupId}">${item.posts.map((post:any) => `
-	<message_content sender="${post.creator}" datetime="${post.time}">${post.text}</message_content>`).join('')}
+	<message_content sender="${post.creator}" datetime="${post.time}" post_id="${post.id}">${post.text}</message_content>`).join('')}
 </message_group>`
 			const user_prompt = `
 我的名字是：<current_user_name>${username}</current_user_name> （如果过滤规则中消息的内容 message_content 有提到我，可作为判断消息是否有@我，即便是不带姓氏@名字部分 也视为提及，排除 sender 是我的消息）
@@ -214,7 +215,8 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 		if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
 			dealResponse.data.forEach(async (json: any) => {
 				// 如果需要推送 Glip 消息，则进行审核
-				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) return;
+				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) return;	// Todo: sender 在 SM AI bot 中会被误判
+				if (json.team_name.includes('4700372020')) return;	// 排除 SM AI 的私人消息
 				let isPassReview = true;
 				let matched_rule = json.matched_rule;
 				if (envConfig.LLM_REVIEW_BEFORE_SEND) {
