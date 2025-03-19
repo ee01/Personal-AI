@@ -216,7 +216,7 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 			dealResponse.data.forEach(async (json: any) => {
 				// 如果需要推送 Glip 消息，则进行审核
 				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) return;	// Todo: sender 在 SM AI bot 中会被误判
-				if (json.team_name.includes('4700372020')) return;	// 排除 SM AI 的私人消息
+				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') return;	// 排除 SM AI 的私人消息
 				let isPassReview = true;
 				let matched_rule = json.matched_rule;
 				if (envConfig.LLM_REVIEW_BEFORE_SEND) {
