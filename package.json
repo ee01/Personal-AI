@@ -1,10 +1,11 @@
 {
-  "name": "radar-poc-fe",
-  "version": "1.0.0",
+  "name": "personal-ai",
+  "version": "3.2.0",
   "description": "Radar PoC chrome extension",
   "scripts": {
     "start": "webpack --watch --config webpack.dev.cjs",
     "build": "webpack --config webpack.prod.cjs",
+    "zip": "cd dist && zip -r ../personal-ai.zip .",
     "clean": "rm -rf dist/*"
   },
   "type": "module",
