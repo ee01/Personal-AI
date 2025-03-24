@@ -64,6 +64,7 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
 3. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
 `
+	data = data.filter(item => item.type === 'message')
 	console.log(data, concernedItems, username);
 	// 插入调试数据
 	// data.unshift({

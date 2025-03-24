@@ -73,8 +73,8 @@ export function transformMessagePosts(enableMessage: boolean, startTime: number,
       const transformedData = filteredPosts.map(post => ({
           id: post.id, // 使用 unique_id 作为 id
           parentId: post.parent_post_id, // 使用 parent_id 作为 parentId
-          groupName: groupsMap[post.group_id].name, // 使用 group_id 作为 group_name
-          groupType: groupsMap[post.group_id].is_team ? 'team' : 'direct message', // 使用 group_id 作为 group_type
+          groupName: groupsMap[post.group_id] ? groupsMap[post.group_id].name : 'Unknown Team', // 使用 group_id 作为 group_name
+          groupType: groupsMap[post.group_id] && groupsMap[post.group_id].is_team ? 'team' : 'direct message', // 使用 group_id 作为 group_type
           groupId: post.group_id, // 使用 group_id 作为 group_id
           type: 'message', // 固定为 message
           text: post.text, // 使用原始文本
