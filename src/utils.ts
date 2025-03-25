@@ -30,6 +30,8 @@ export interface EnvConfigType {
   CHROMA_API_URL: string;
   CHROMA_PORT: number;
   CHROMA_COLLECTION_NAME: string;
+  ENABLE_AGENT_SYSTEM: boolean;
+  ENABLE_INTELLIGENT_AGENT: boolean;
 }
 
 export function formatDate(dateString: string | number) {
@@ -147,7 +149,9 @@ export const defaultEnvConfig: EnvConfigType = {
   ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
   CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
   CHROMA_PORT: Number(process.env.CHROMA_PORT) || 8000,
-  CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || ""
+  CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || "",
+  ENABLE_AGENT_SYSTEM: process.env.ENABLE_AGENT_SYSTEM === "true",
+  ENABLE_INTELLIGENT_AGENT: process.env.ENABLE_INTELLIGENT_AGENT === "true"
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

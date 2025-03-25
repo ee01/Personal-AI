@@ -4,6 +4,8 @@ import { getEnvConfig, showToast } from './utils';
 import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesToStore } from './entityExtraction';
+import { processNewMessage } from './agentSystem';
+import { processMessage } from './intelligentAgent';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string) {
@@ -71,19 +73,109 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 	//   groupName: 'Recording Test',
 	//   groupId: '123',
 	//   posts: [
+	//     { creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
 	//     { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
 	//   ]
 	// });
-	// data.unshift({
-	//   groupName: '大群',
-	//   groupId: '2578219014',
-	//   posts: [
-	//     { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。' }
-	//   ]
-	// });
-	// data.splice(2);
+	data.unshift({
+	  groupName: '大群',
+	  groupId: '2578219014',
+	  posts: [
+	    { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。' },
+	    { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '好的' }
+	  ]
+	});
+	data.unshift({
+	  groupName: '小群',
+	  groupId: '321',
+	  posts: [
+	    { creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
+	  ]
+	});
+	data.splice(2);
 	// console.log(data);
 
+	// 如果启用了智能Agent系统，直接将消息传递给Agent处理
+	if (envConfig.ENABLE_INTELLIGENT_AGENT) {
+		console.log('使用智能Agent系统直接批量处理消息，支持消息降噪和上下文分析...');
+		
+		// 检查是否定时任务被终止
+		const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
+		const isScheduledTask = typeof window === 'undefined';
+		if (!scheduleActive && isScheduledTask) {
+			console.log('定时分析任务已被终止，跳过处理');
+			return;
+		}
+		
+		try {
+			// 设置初始进度信息
+			chrome.storage.local.set({
+				ollamaAnalysisProgress: {
+					total: 1,
+					lastAnalyzedIndex: 0,
+					lastAnalyzedTime: new Date().toISOString()
+				}
+			});
+			
+			// 构造消息组格式
+			const messageGroups = data.map(item => ({
+				groupName: item.groupName,
+				groupId: item.groupId,
+				posts: item.posts.map((post: any) => ({
+					sender: post.creator,
+					datetime: post.time,
+					post_id: post.id || '',
+					content: post.text,
+					raw: post
+				}))
+			}));
+			
+			// 一次性传递所有消息组给processMessage处理
+			console.log(`开始批量处理 ${messageGroups.length} 个群组的所有消息...`);
+			
+			// 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
+			const allResults = await processMessage({
+				messageGroups: messageGroups,
+				username: username,
+				concernedItems: concernedItems
+			});
+			
+			// 转换结果为数组格式，便于统计
+			const resultsArray = Array.isArray(allResults) ? allResults : [allResults];
+			
+			console.log('所有群组处理结果:', resultsArray);
+			
+			// 计算处理统计信息
+			const storedCount = resultsArray.filter((r: any) => r.shouldStore).length;
+			const notifiedCount = resultsArray.filter((r: any) => r.shouldNotify).length;
+			const importantCount = resultsArray.filter((r: any) => r.isImportant).length;
+			const noisyCount = resultsArray.length - storedCount - notifiedCount - importantCount;
+			
+			console.log(`处理完成: 共 ${resultsArray.length} 条消息, ${importantCount} 条重要, ${storedCount} 条已存储, ${notifiedCount} 条已通知, ${noisyCount} 条被降噪过滤`);
+			
+			// 更新进度为完成
+			chrome.storage.local.set({
+				ollamaAnalysisProgress: {
+					total: 1,
+					lastAnalyzedIndex: 1,
+					lastAnalyzedTime: new Date().toISOString(),
+					processingStats: {
+						total: resultsArray.length,
+						important: importantCount,
+						stored: storedCount,
+						notified: notifiedCount,
+						filtered: noisyCount
+					}
+				}
+			});
+		} catch (error) {
+			console.error('批量处理消息失败:', error);
+		}
+		
+		return; // 智能Agent处理完毕，提前返回
+	}
+
+	// 以下是原有的LLM处理逻辑，当未启用智能Agent时使用
 	if (envConfig.LLM_GROUP_ANALYSIS) {
 		// 拆分单条发送 LLM
 		let countAnalyzed = 0;
@@ -163,6 +255,7 @@ ${messages}
 	}
 }
 
+// 统一使用 background script 处理，防止跨域和权限问题
 const sendMessageToLLM = async (user_prompt: string, system_prompt: string, messageData?: any) => {
 	if (messageData) console.log(`Sending messages to LLM:`, messageData);
 	try {
@@ -214,10 +307,11 @@ export async function reviewMessageByLLMAndSendToBot(body: any) {
 		console.log('MessageDealing response:', dealResponse, body);
 		
 		if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
-			dealResponse.data.forEach(async (json: any) => {
+			for (const json of dealResponse.data) {
 				// 如果需要推送 Glip 消息，则进行审核
-				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) return;	// Todo: sender 在 SM AI bot 中会被误判
-				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') return;	// 排除 SM AI 的私人消息
+				if (body.messageData && (body.messageData.groupName.includes('4700372020') || body.messageData.groupName == 'SM AI')) continue;	// 排除 SM AI 的私人消息
+				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') continue;	// 排除 SM AI 的私人消息
+				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) continue;	// Todo: sender 在 SM AI bot 中会被误判
 				let isPassReview = true;
 				let matched_rule = json.matched_rule;
 				if (envConfig.LLM_REVIEW_BEFORE_SEND) {
@@ -241,45 +335,68 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
 
-				// 将匹配的消息存储到向量数据库
-				const messageId = uuidv4();
-				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
-				await storeMessage(
-					messageId,
-					json.message_content,
-					{
-						source: json.sender || 'unknown',
-						timestamp: Date.now(),
-						matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-						summary: json.summary || '',
-						teamName: json.team_name,
-						teamId: json.team_id,
-						entities: extractedEntities.entities,
-						metadata: {
-							sentiment: extractedEntities.metadata.sentiment,
-							priority: extractedEntities.metadata.priority,
-							category: extractedEntities.metadata.category,
-							tags: extractedEntities.metadata.tags
-						},
-						relationships: extractedEntities.relationships,
-						actions: extractedEntities.actions,
-						reply_advice: json.reply_advice
+				if (envConfig.ENABLE_AGENT_SYSTEM) {
+					// 使用原有Agent系统处理消息
+					const processResult = await processNewMessage({
+						...json,
+						matched_rule
+					});
+					
+					console.log('Agent处理结果:', processResult);
+					
+					// Agent系统已经处理了消息存储逻辑，这里只需处理发送消息
+					if (isPassReview && envConfig.ENABLE_BOT) {
+						sendBotMessage({
+							matched_rule,
+							team_name: body.messageData ? body.messageData.groupName : json.team_name,
+							team_id: body.messageData ? body.messageData.groupId : json.team_id,
+							sender: json.sender,
+							message_content: json.message_content,
+							summary: json.summary,
+							reply_advice: processResult.replyAdvice || json.reply_advice
+						}).catch(console.error);
 					}
-				);
+				} else {
+					// 原有逻辑：将匹配的消息存储到向量数据库
+					const messageId = uuidv4();
+					const extractedEntities = await extractEntitiesToStore(json.message_content, json);
+					await storeMessage(
+						messageId,
+						json.message_content,
+						{
+							source: json.sender || 'unknown',
+							timestamp: Date.now(),
+							matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+							summary: json.summary || '',
+							teamName: json.team_name,
+							teamId: json.team_id,
+							entities: extractedEntities.entities,
+							metadata: {
+								sentiment: extractedEntities.metadata.sentiment,
+								priority: extractedEntities.metadata.priority,
+								category: extractedEntities.metadata.category,
+								tags: extractedEntities.metadata.tags
+							},
+							relationships: extractedEntities.relationships,
+							actions: extractedEntities.actions,
+							reply_advice: json.reply_advice
+						}
+					);
 
-				// 如果审核通过，则推送 Glip 消息
-				if (isPassReview && envConfig.ENABLE_BOT) {
-					sendBotMessage({
-						matched_rule,
-						team_name: body.messageData ? body.messageData.groupName : json.team_name,
-						team_id: body.messageData ? body.messageData.groupId : json.team_id,
-						sender: json.sender,
-						message_content: json.message_content,
-						summary: json.summary,
-						reply_advice: json.reply_advice
-					}).catch(console.error);
+					// 如果审核通过，则推送 Glip 消息
+					if (isPassReview && envConfig.ENABLE_BOT) {
+						sendBotMessage({
+							matched_rule,
+							team_name: body.messageData ? body.messageData.groupName : json.team_name,
+							team_id: body.messageData ? body.messageData.groupId : json.team_id,
+							sender: json.sender,
+							message_content: json.message_content,
+							summary: json.summary,
+							reply_advice: json.reply_advice
+						}).catch(console.error);
+					}
 				}
-			});
+			}
 		}
 		return dealResponse;
 	} catch (error) {
