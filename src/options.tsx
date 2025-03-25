@@ -2,6 +2,9 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { defaultEnvConfig, EnvConfigType } from './utils';
+import { agentCoordinator } from './agentSystem';
+import { getToolDescriptions } from './intelligentAgent';
+import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
 
 // 使用从utils.ts导入的类型
 const Options = () => {
@@ -182,6 +185,31 @@ const Options = () => {
                         />
                         启用消息审核（若不启用审核，会推送所有关注消息）
                     </label>
+                </div>
+                
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="ENABLE_AGENT_SYSTEM"
+                            checked={config.ENABLE_AGENT_SYSTEM}
+                            onChange={handleInputChange}
+                        />
+                        启用 Agent 系统（智能分析消息中的实体、关系，自动判断消息重要性）
+                    </label>
+                </div>
+
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="ENABLE_INTELLIGENT_AGENT"
+                            checked={config.ENABLE_INTELLIGENT_AGENT}
+                            onChange={handleInputChange}
+                        />
+                        启用智能Agent系统（具有独立思考能力，按需调用工具分析消息）
+                    </label>
+                    <p className="help-text">启用后将替代标准Agent系统，提供更智能的消息分析能力</p>
                 </div>
             </div>
 
@@ -416,7 +444,7 @@ const Options = () => {
             </div>
 
             <div className="form-section">
-                <h2>RAG 设置</h2>
+                <h2>向量数据库设置</h2>
                 <div className="form-group">
                     <label>
                         <input
@@ -425,56 +453,76 @@ const Options = () => {
                             checked={config.ENABLE_CHROMA}
                             onChange={handleInputChange}
                         />
-                        启用 Chroma
+                        启用 Chroma 向量数据库
                     </label>
                 </div>
-                <div className="form-group">
-                    <label htmlFor="CHROMA_API_URL">Chroma API URL</label>
-                    <input
-                        type="url"
-                        id="CHROMA_API_URL"
-                        name="CHROMA_API_URL"
-                        value={config.CHROMA_API_URL}
-                        onChange={handleInputChange}
-                    />
-                </div>
-                <div className="form-group">
-                    <label htmlFor="CHROMA_PORT">Chroma 端口</label>
-                    <input
-                        type="number"
-                        id="CHROMA_PORT"
-                        name="CHROMA_PORT"
-                        value={config.CHROMA_PORT}
-                        onChange={(e) => {
-                            const numValue = Number(e.target.value);
-                            setConfig(prev => ({
-                                ...prev,
-                                CHROMA_PORT: numValue
-                            }));
-                        }}
-                    />
-                </div>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ENABLE_CUSTOM_COLLECTION"
-                            checked={enableCustomCollection}
-                            onChange={(e) => setEnableCustomCollection(e.target.checked)}
-                        />
-                        自定义集合名称
-                    </label>
-                    {enableCustomCollection && (
-                        <input
-                            type="text"
-                            id="CHROMA_COLLECTION_NAME"
-                            name="CHROMA_COLLECTION_NAME"
-                            value={config.CHROMA_COLLECTION_NAME}
-                            onChange={handleInputChange}
-                        />
-                    )}
-                </div>
+
+                {config.ENABLE_CHROMA && (
+                    <>
+                        <div className="form-group">
+                            <label htmlFor="CHROMA_API_URL">Chroma API URL</label>
+                            <input
+                                type="text"
+                                id="CHROMA_API_URL"
+                                name="CHROMA_API_URL"
+                                value={config.CHROMA_API_URL}
+                                onChange={handleInputChange}
+                                placeholder="http://localhost:8000"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="CHROMA_PORT">Chroma 端口</label>
+                            <input
+                                type="number"
+                                id="CHROMA_PORT"
+                                name="CHROMA_PORT"
+                                value={config.CHROMA_PORT}
+                                onChange={handleInputChange}
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={enableCustomCollection}
+                                    onChange={(e) => setEnableCustomCollection(e.target.checked)}
+                                />
+                                自定义集合名称
+                            </label>
+                        </div>
+
+                        {enableCustomCollection && (
+                            <div className="form-group">
+                                <label htmlFor="CHROMA_COLLECTION_NAME">集合名称</label>
+                                <input
+                                    type="text"
+                                    id="CHROMA_COLLECTION_NAME"
+                                    name="CHROMA_COLLECTION_NAME"
+                                    value={config.CHROMA_COLLECTION_NAME}
+                                    onChange={handleInputChange}
+                                    placeholder="默认为 <username>-messages"
+                                />
+                            </div>
+                        )}
+                    </>
+                )}
             </div>
+
+            {config.ENABLE_INTELLIGENT_AGENT && (
+                <div className="form-section">
+                    <h2>智能Agent系统设置</h2>
+                    <IntelligentAgentSettings />
+                </div>
+            )}
+
+            {config.ENABLE_AGENT_SYSTEM && !config.ENABLE_INTELLIGENT_AGENT && (
+                <div className="form-section">
+                    <h2>标准Agent系统设置</h2>
+                    <AgentSettings />
+                </div>
+            )}
 
             <div className="form-section">
                 <h2>配置导入/导出</h2>
@@ -500,6 +548,381 @@ const Options = () => {
                 <button onClick={resetConfig}>重置为默认值</button>
                 <button onClick={loadEnvDefaults}>从.env文件加载</button>
                 <button className="save-button" onClick={saveConfig}>保存配置</button>
+            </div>
+        </div>
+    );
+};
+
+// Agent系统设置组件
+const AgentSettings = () => {
+    const [agents, setAgents] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [errorMsg, setErrorMsg] = useState('');
+    
+    // 新Agent表单状态
+    const [newAgent, setNewAgent] = useState({
+        id: '',
+        name: '',
+        description: '',
+        enabled: true,
+        priority: 50,
+        tools: []
+    });
+    
+    // 获取可用工具列表
+    const availableTools = [
+        'entityExtraction',
+        'relationshipAnalysis',
+        'historySearch',
+        'relevanceJudgment',
+        'externalServiceQuery',
+        'replyAdviser'
+    ];
+    
+    // 加载当前Agent列表
+    useEffect(() => {
+        const loadAgents = async () => {
+            try {
+                setLoading(true);
+                const agentList = await agentCoordinator.getAgents();
+                setAgents(agentList);
+                setLoading(false);
+            } catch (error) {
+                console.error('加载Agent失败:', error);
+                setErrorMsg('加载Agent失败');
+                setLoading(false);
+            }
+        };
+        
+        loadAgents();
+    }, []);
+    
+    // 处理新Agent表单变化
+    const handleNewAgentChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+        const { name, value, type } = e.target;
+        setNewAgent(prev => ({
+            ...prev,
+            [name]: type === 'checkbox' 
+                ? (e.target as HTMLInputElement).checked 
+                : name === 'priority'
+                    ? Number(value)
+                    : value
+        }));
+    };
+    
+    // 处理工具选择变化
+    const handleToolChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const tool = e.target.name;
+        const isChecked = e.target.checked;
+        
+        setNewAgent(prev => {
+            const tools = isChecked
+                ? [...prev.tools, tool]
+                : prev.tools.filter(t => t !== tool);
+            
+            return {
+                ...prev,
+                tools
+            };
+        });
+    };
+    
+    // 添加新Agent
+    const handleAddAgent = async () => {
+        try {
+            if (!newAgent.id || !newAgent.name) {
+                setErrorMsg('请填写Agent ID和名称');
+                return;
+            }
+            
+            // 检查ID是否重复
+            if (agents.some(a => a.id === newAgent.id)) {
+                setErrorMsg('Agent ID已存在');
+                return;
+            }
+            
+            const success = await agentCoordinator.addAgent(newAgent);
+            if (success) {
+                // 重新加载Agent列表
+                const agentList = await agentCoordinator.getAgents();
+                setAgents(agentList);
+                
+                // 重置表单
+                setNewAgent({
+                    id: '',
+                    name: '',
+                    description: '',
+                    enabled: true,
+                    priority: 50,
+                    tools: []
+                });
+                
+                setErrorMsg('');
+            } else {
+                setErrorMsg('添加Agent失败');
+            }
+        } catch (error) {
+            console.error('添加Agent失败:', error);
+            setErrorMsg('添加Agent失败');
+        }
+    };
+    
+    return (
+        <div className="agent-settings">
+            <h3>当前 Agent 列表</h3>
+            {loading ? (
+                <p>加载中...</p>
+            ) : (
+                <table className="agent-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>名称</th>
+                            <th>描述</th>
+                            <th>优先级</th>
+                            <th>工具</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {agents.map(agent => (
+                            <tr key={agent.id}>
+                                <td>{agent.id}</td>
+                                <td>{agent.name}</td>
+                                <td>{agent.description}</td>
+                                <td>{agent.priority}</td>
+                                <td>{agent.tools.join(', ')}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+            
+            <h3>添加自定义 Agent</h3>
+            {errorMsg && <p className="error-message">{errorMsg}</p>}
+            
+            <div className="form-group">
+                <label htmlFor="agentId">Agent ID</label>
+                <input
+                    type="text"
+                    id="agentId"
+                    name="id"
+                    value={newAgent.id}
+                    onChange={handleNewAgentChange}
+                    placeholder="自定义Agent的唯一标识符"
+                />
+            </div>
+            
+            <div className="form-group">
+                <label htmlFor="agentName">名称</label>
+                <input
+                    type="text"
+                    id="agentName"
+                    name="name"
+                    value={newAgent.name}
+                    onChange={handleNewAgentChange}
+                    placeholder="Agent的显示名称"
+                />
+            </div>
+            
+            <div className="form-group">
+                <label htmlFor="agentDescription">描述</label>
+                <textarea
+                    id="agentDescription"
+                    name="description"
+                    value={newAgent.description}
+                    onChange={handleNewAgentChange}
+                    placeholder="Agent的功能描述"
+                />
+            </div>
+            
+            <div className="form-group">
+                <label htmlFor="agentPriority">优先级</label>
+                <input
+                    type="number"
+                    id="agentPriority"
+                    name="priority"
+                    value={newAgent.priority}
+                    onChange={handleNewAgentChange}
+                    min="1"
+                    max="100"
+                />
+                <span className="form-note">1-100，值越大优先级越高</span>
+            </div>
+            
+            <div className="form-group">
+                <label>可用工具</label>
+                <div className="tools-list">
+                    {availableTools.map(tool => (
+                        <div key={tool} className="tool-item">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name={tool}
+                                    checked={newAgent.tools.includes(tool)}
+                                    onChange={handleToolChange}
+                                />
+                                {tool}
+                            </label>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            
+            <button onClick={handleAddAgent}>添加 Agent</button>
+        </div>
+    );
+};
+
+// 智能Agent系统设置组件
+const IntelligentAgentSettings = () => {
+    const [tools, setTools] = useState<any[]>([]);
+    const [demoMode, setDemoMode] = useState(false);
+    const [demoThoughtProcess, setDemoThoughtProcess] = useState<any[]>([]);
+    const [demoResult, setDemoResult] = useState<any>(null);
+    
+    // 获取可用工具
+    useEffect(() => {
+        try {
+            const availableTools = getToolDescriptions();
+            setTools(availableTools);
+        } catch (error) {
+            console.error('加载工具失败:', error);
+        }
+    }, []);
+    
+    // 启动演示模式
+    const startDemo = () => {
+        setDemoMode(true);
+        setDemoThoughtProcess([]);
+        setDemoResult(null);
+        
+        // 模拟思考过程
+        const simulateThoughtProcess = async () => {
+            // 模拟初始思考
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            setDemoThoughtProcess([{
+                timestamp: Date.now(),
+                thought: '收到一条新消息，需要对其进行分析。首先我应该提取消息中的关键实体信息，了解消息的基本内容。',
+                action: '执行工具',
+                toolUsed: 'entityExtractor'
+            }]);
+            
+            // 模拟实体提取结果
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            setDemoThoughtProcess(prev => [...prev, {
+                timestamp: Date.now(),
+                thought: '我已经提取了消息中的实体信息。发现消息提及了一个项目和几个人物。接下来，我应该检查这个项目在JIRA中的状态，以便了解更多上下文。',
+                action: '执行工具',
+                toolUsed: 'jiraQuery',
+                result: {
+                    success: true,
+                    issue: {
+                        id: 'PROJ-1001',
+                        title: '示例项目任务',
+                        status: '进行中',
+                        assignee: '开发人员A'
+                    }
+                }
+            }]);
+            
+            // 模拟JIRA查询后的思考
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            setDemoThoughtProcess(prev => [...prev, {
+                timestamp: Date.now(),
+                thought: '我找到了与消息相关的JIRA任务。从任务状态来看，这是一个正在进行中的项目。消息中提到的人物可能与这个项目有关，接下来我应该查询他们之间的组织关系。',
+                action: '执行工具',
+                toolUsed: 'orgChart',
+                result: {
+                    success: true,
+                    person: '张工程师',
+                    role: '高级工程师',
+                    department: '研发部',
+                    manager: '李经理'
+                }
+            }]);
+            
+            // 模拟组织架构查询后的思考
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            setDemoThoughtProcess(prev => [...prev, {
+                timestamp: Date.now(),
+                thought: '我已经了解了消息中提到的人物的组织关系。综合JIRA任务信息和组织关系，我认为这条消息是关于项目进展的重要更新，应该存储下来并通知用户。',
+                action: 'finish'
+            }]);
+            
+            // 设置最终结果
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            setDemoResult({
+                isImportant: true,
+                shouldStore: true,
+                shouldNotify: true,
+                confidence: 0.85,
+                summary: '项目PROJ-1001的进展更新：开发工作正在按计划进行，预计下周完成。',
+                reasonsToStore: [
+                    '消息包含重要项目的进展信息',
+                    '涉及关键团队成员的工作状态',
+                    '有助于跟踪项目时间线'
+                ]
+            });
+        };
+        
+        simulateThoughtProcess();
+    };
+    
+    // 停止演示
+    const stopDemo = () => {
+        setDemoMode(false);
+    };
+    
+    return (
+        <div className="intelligent-agent-settings">
+            <h3>可用工具列表</h3>
+            <div className="tools-table-container">
+                <table className="tools-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>名称</th>
+                            <th>描述</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {tools.map(tool => (
+                            <tr key={tool.id}>
+                                <td>{tool.id}</td>
+                                <td>{tool.name}</td>
+                                <td>{tool.description}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div className="demo-section">
+                <h3>流程演示</h3>
+                <div className="demo-controls">
+                    {!demoMode ? (
+                        <button onClick={startDemo}>启动演示</button>
+                    ) : (
+                        <button onClick={stopDemo}>停止演示</button>
+                    )}
+                </div>
+                
+                {demoMode && (
+                    <>
+                        <AgentVisualizer 
+                            thoughtProcess={demoThoughtProcess} 
+                            isProcessing={demoResult === null}
+                        />
+                        
+                        <AgentFlowVisualizer 
+                            thoughtProcess={demoThoughtProcess}
+                        />
+                        
+                        {demoResult && (
+                            <AgentResultSummary result={demoResult} />
+                        )}
+                    </>
+                )}
             </div>
         </div>
     );

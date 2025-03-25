@@ -8,13 +8,16 @@ const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   entry: {
+    background: './src/background.ts',
     contentScript: './src/contentScript.tsx',
     popup: './src/popup.tsx',
-    background: './src/background.ts',
+    options: './src/options.tsx',
+    offscreen: './src/offscreen.ts',
+    entityExtraction: './src/entityExtraction.ts',
+    intelligentAgent: './src/intelligentAgent.ts',
+    agentVisualizer: './src/agent-visualizer.tsx',
     'topic-modal': './src/topic-modal.tsx',
     'knowledge-query': './src/knowledge-query.tsx',
-    offscreen: './src/offscreen.ts',
-    options: './src/options.tsx'
   },
   module: {
     rules: [
