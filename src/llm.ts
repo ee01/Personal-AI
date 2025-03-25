@@ -663,3 +663,566 @@ export async function callLLMJsonAPI(body: any): Promise<any> {
   
   return jsonData;
 }
+
+// 通用聊天消息接口
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'function';
+  content: string;
+  name?: string;
+}
+
+interface ChatOptions {
+  model: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+  onMessage?: (chunk: string) => void;
+  onComplete?: (fullResponse: string) => void;
+  onError?: (error: any) => void;
+}
+
+// OPENAI聊天实现
+class OpenAIChat {
+  private apiKey: string;
+  private baseUrl: string;
+  private openai: any; // OpenAI实例
+  private conversationId: string = ''; // 添加会话ID存储
+  private conversationHistory: Map<string, ChatMessage[]> = new Map(); // 存储不同会话的历史记录
+  
+  constructor(apiKey: string, baseUrl: string = 'https://api.openai.com/v1') {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
+    
+    // 初始化OpenAI客户端
+    this.openai = new OpenAI({
+      apiKey: this.apiKey,
+      baseURL: this.baseUrl,
+      dangerouslyAllowBrowser: true
+    });
+  }
+  
+  // 重置会话，开始新对话
+  resetConversation() {
+    this.conversationId = '';
+    return this;
+  }
+  
+  // 设置会话ID
+  setConversationId(id: string) {
+    this.conversationId = id;
+    if (!this.conversationHistory.has(id)) {
+      this.conversationHistory.set(id, []);
+    }
+    return this;
+  }
+  
+  // 获取当前会话ID
+  getConversationId(): string {
+    return this.conversationId;
+  }
+  
+  // 获取当前会话的历史记录
+  getConversationHistory(): ChatMessage[] {
+    return this.conversationHistory.get(this.conversationId) || [];
+  }
+
+  async chat(options: ChatOptions) {
+    const { model, messages, temperature = 0.7, max_tokens, stream = false, onMessage, onComplete, onError } = options;
+    
+    try {
+      // 如果没有会话ID，创建一个新的
+      if (!this.conversationId) {
+        this.conversationId = Date.now().toString();
+        this.conversationHistory.set(this.conversationId, []);
+      }
+      
+      // 获取当前会话的历史记录
+      const history = this.conversationHistory.get(this.conversationId) || [];
+      
+      const tokenLimit = model.includes('gpt-4') ? 8000 : 4000; // 根据模型调整
+      const optimizedHistory = this.optimizeHistory(history, tokenLimit);
+      const allMessages = [...optimizedHistory, ...messages];
+      
+      // 使用OpenAI SDK
+      if (stream) {
+        const stream = await this.openai.chat.completions.create({
+          model,
+          messages: allMessages,
+          temperature,
+          max_tokens,
+          stream: true
+        });
+        
+        let fullResponse = '';
+        for await (const part of stream) {
+          const content = part.choices[0]?.delta?.content || '';
+          if (content) {
+            fullResponse += content;
+            onMessage?.(content);
+          }
+        }
+        
+        // 更新会话历史
+        if (fullResponse) {
+          history.push(...messages); // 添加用户消息
+          history.push({ role: 'assistant', content: fullResponse }); // 添加助手回复
+          this.conversationHistory.set(this.conversationId, history);
+        }
+        
+        onComplete?.(fullResponse);
+        return fullResponse;
+      } else {
+        const completion = await this.openai.chat.completions.create({
+          model,
+          messages: allMessages,
+          temperature,
+          max_tokens
+        });
+        
+        const content = completion.choices[0].message.content || '';
+        
+        // 更新会话历史
+        if (content) {
+          history.push(...messages); // 添加用户消息
+          history.push({ role: 'assistant', content }); // 添加助手回复
+          this.conversationHistory.set(this.conversationId, history);
+        }
+        
+        onComplete?.(content);
+        return content;
+      }
+    } catch (error) {
+      onError?.(error);
+      throw error;
+    }
+  }
+
+  private optimizeHistory(messages: ChatMessage[], maxTokens: number = 4000): ChatMessage[] {
+    // 如果消息数量少，直接返回
+    if (messages.length <= 3) return messages;
+
+    // 保留系统消息
+    const systemMessages = messages.filter(m => m.role === 'system');
+    
+    // 获取非系统消息
+    let conversationMessages = messages.filter(m => m.role !== 'system');
+    
+    // 估算当前token数量（简单估算：每4个字符约1个token）
+    const estimateTokens = (msgs: ChatMessage[]): number => {
+      return msgs.reduce((sum, msg) => sum + Math.ceil(msg.content.length / 4), 0);
+    };
+    
+    // 如果预估token数量超过限制，开始裁剪历史
+    let estimatedTokens = estimateTokens(conversationMessages);
+    
+    // 保留最新的消息，逐步移除较早的消息对
+    while (estimatedTokens > maxTokens && conversationMessages.length > 2) {
+      // 移除最早的一对对话（用户+助手）
+      conversationMessages = conversationMessages.slice(2);
+      estimatedTokens = estimateTokens(conversationMessages);
+    }
+    
+    // 合并系统消息和优化后的对话
+    return [...systemMessages, ...conversationMessages];
+  }
+}
+
+// DIFY聊天实现
+class DifyChat {
+  private apiKey: string;
+  private baseUrl: string;
+  private conversationId: string = ''; // 添加会话ID存储
+  
+  constructor(apiKey: string, baseUrl: string) {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
+  }
+  
+  // 重置会话，开始新对话
+  resetConversation() {
+    this.conversationId = '';
+    return this;
+  }
+  
+  // 设置会话ID
+  setConversationId(id: string) {
+    this.conversationId = id;
+    return this;
+  }
+  
+  // 获取当前会话ID
+  getConversationId(): string {
+    return this.conversationId;
+  }
+
+  async chat(options: ChatOptions) {
+    const { messages, temperature = 0.7, stream = false, onMessage, onComplete, onError } = options;
+    
+    // 提取用户输入（最后一条用户消息）
+    const userInput = messages.filter(m => m.role === 'user').pop()?.content || '';
+    
+    // 提取历史消息
+    const history = messages.slice(0, -1).map(m => ({
+      role: m.role,
+      content: m.content
+    }));
+    
+    try {
+      const requestBody: any = {
+        inputs: {},
+        query: userInput,
+        response_mode: stream ? 'streaming' : 'blocking',
+        user: 'user-id', // 可自定义
+        temperature
+      };
+      
+      // 如果有会话ID，添加到请求中
+      if (this.conversationId) {
+        requestBody.conversation_id = this.conversationId;
+      }
+      
+      // 只在没有会话ID时添加历史消息
+      if (!this.conversationId && history.length > 0) {
+        requestBody.history = history;
+      }
+      
+      const response = await fetch(`${this.baseUrl}/chat-messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (stream) {
+        // 处理流式响应
+        const reader = response.body?.getReader();
+        let fullResponse = '';
+        let metaDataProcessed = false;
+        
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = new TextDecoder().decode(value);
+            const lines = chunk.split('\n').filter(line => line.trim());
+            
+            for (const line of lines) {
+              try {
+                const json = JSON.parse(line);
+                
+                // 保存会话ID (只需处理一次)
+                if (!metaDataProcessed && json.conversation_id) {
+                  this.conversationId = json.conversation_id;
+                  metaDataProcessed = true;
+                }
+                
+                if (json.event === 'message' && json.data) {
+                  fullResponse += json.data.answer || '';
+                  onMessage?.(json.data.answer || '');
+                }
+              } catch (e) {
+                // 忽略解析错误
+              }
+            }
+          }
+          onComplete?.(fullResponse);
+        }
+      } else {
+        const json = await response.json();
+        
+        // 保存会话ID
+        if (json.conversation_id) {
+          this.conversationId = json.conversation_id;
+        }
+        
+        const content = json.answer || '';
+        onComplete?.(content);
+        return content;
+      }
+    } catch (error) {
+      onError?.(error);
+      throw error;
+    }
+  }
+}
+
+// GROQ聊天实现
+class GroqChat {
+  private apiKey: string;
+  private groq: any; // Groq实例
+  private conversationId: string = ''; // 添加会话ID存储
+  private conversationHistory: Map<string, ChatMessage[]> = new Map(); // 存储不同会话的历史记录
+  
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+    
+    // 初始化Groq客户端
+    this.groq = new Groq({
+      apiKey: this.apiKey,
+      dangerouslyAllowBrowser: true
+    });
+  }
+  
+  // 重置会话，开始新对话
+  resetConversation() {
+    this.conversationId = '';
+    return this;
+  }
+  
+  // 设置会话ID
+  setConversationId(id: string) {
+    this.conversationId = id;
+    if (!this.conversationHistory.has(id)) {
+      this.conversationHistory.set(id, []);
+    }
+    return this;
+  }
+  
+  // 获取当前会话ID
+  getConversationId(): string {
+    return this.conversationId;
+  }
+  
+  // 获取当前会话的历史记录
+  getConversationHistory(): ChatMessage[] {
+    return this.conversationHistory.get(this.conversationId) || [];
+  }
+
+  async chat(options: ChatOptions) {
+    const { model, messages, temperature = 0.7, max_tokens, stream = false, onMessage, onComplete, onError } = options;
+    
+    try {
+      // 如果没有会话ID，创建一个新的
+      if (!this.conversationId) {
+        this.conversationId = Date.now().toString();
+        this.conversationHistory.set(this.conversationId, []);
+      }
+      
+      // 获取当前会话的历史记录
+      const history = this.conversationHistory.get(this.conversationId) || [];
+      
+      const tokenLimit = model.includes('gpt-4') ? 8000 : 4000; // 根据模型调整
+      const optimizedHistory = this.optimizeHistory(history, tokenLimit);
+      const allMessages = [...optimizedHistory, ...messages];
+      
+      // 使用Groq SDK
+      if (stream) {
+        const stream = await this.groq.chat.completions.create({
+          model,
+          messages: allMessages,
+          temperature,
+          max_tokens,
+          stream: true
+        });
+        
+        let fullResponse = '';
+        for await (const part of stream) {
+          const content = part.choices[0]?.delta?.content || '';
+          if (content) {
+            fullResponse += content;
+            onMessage?.(content);
+          }
+        }
+        
+        // 更新会话历史
+        if (fullResponse) {
+          history.push(...messages); // 添加用户消息
+          history.push({ role: 'assistant', content: fullResponse }); // 添加助手回复
+          this.conversationHistory.set(this.conversationId, history);
+        }
+        
+        onComplete?.(fullResponse);
+        return fullResponse;
+      } else {
+        const completion = await this.groq.chat.completions.create({
+          model,
+          messages: allMessages,
+          temperature,
+          max_tokens
+        });
+        
+        const content = completion.choices[0].message.content || '';
+        
+        // 更新会话历史
+        if (content) {
+          history.push(...messages); // 添加用户消息
+          history.push({ role: 'assistant', content }); // 添加助手回复
+          this.conversationHistory.set(this.conversationId, history);
+        }
+        
+        onComplete?.(content);
+        return content;
+      }
+    } catch (error) {
+      onError?.(error);
+      throw error;
+    }
+  }
+
+  private optimizeHistory(messages: ChatMessage[], maxTokens: number = 4000): ChatMessage[] {
+    // 如果消息数量少，直接返回
+    if (messages.length <= 3) return messages;
+
+    // 保留系统消息
+    const systemMessages = messages.filter(m => m.role === 'system');
+    
+    // 获取非系统消息
+    let conversationMessages = messages.filter(m => m.role !== 'system');
+    
+    // 估算当前token数量（简单估算：每4个字符约1个token）
+    const estimateTokens = (msgs: ChatMessage[]): number => {
+      return msgs.reduce((sum, msg) => sum + Math.ceil(msg.content.length / 4), 0);
+    };
+    
+    // 如果预估token数量超过限制，开始裁剪历史
+    let estimatedTokens = estimateTokens(conversationMessages);
+    
+    // 保留最新的消息，逐步移除较早的消息对
+    while (estimatedTokens > maxTokens && conversationMessages.length > 2) {
+      // 移除最早的一对对话（用户+助手）
+      conversationMessages = conversationMessages.slice(2);
+      estimatedTokens = estimateTokens(conversationMessages);
+    }
+    
+    // 合并系统消息和优化后的对话
+    return [...systemMessages, ...conversationMessages];
+  }
+}
+
+// Ollama聊天实现
+class OllamaChat {
+  private baseUrl: string;
+  private conversationId: string = ''; // 添加会话ID存储
+  private conversationHistory: Map<string, ChatMessage[]> = new Map(); // 存储不同会话的历史记录
+  
+  constructor(baseUrl: string = 'http://localhost:11434') {
+    this.baseUrl = baseUrl;
+  }
+  
+  // 重置会话，开始新对话
+  resetConversation() {
+    this.conversationId = '';
+    return this;
+  }
+  
+  // 设置会话ID
+  setConversationId(id: string) {
+    this.conversationId = id;
+    if (!this.conversationHistory.has(id)) {
+      this.conversationHistory.set(id, []);
+    }
+    return this;
+  }
+  
+  // 获取当前会话ID
+  getConversationId(): string {
+    return this.conversationId;
+  }
+  
+  // 获取当前会话的历史记录
+  getConversationHistory(): ChatMessage[] {
+    return this.conversationHistory.get(this.conversationId) || [];
+  }
+  
+  async chat(options: ChatOptions) {
+    const { model, messages, temperature = 0.7, stream = false, onMessage, onComplete, onError } = options;
+    
+    try {
+      // 如果没有会话ID，创建一个新的
+      if (!this.conversationId) {
+        this.conversationId = Date.now().toString();
+        this.conversationHistory.set(this.conversationId, []);
+      }
+      
+      // 获取当前会话的历史记录
+      const history = this.conversationHistory.get(this.conversationId) || [];
+      
+      // 合并历史记录和新消息，转换为Ollama的格式
+      const allMessages = [...history, ...messages].map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+      
+      const response = await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model,
+          messages: allMessages,
+          temperature,
+          stream
+        })
+      });
+      
+      if (stream) {
+        // 处理流式响应
+        const reader = response.body?.getReader();
+        let fullResponse = '';
+        
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = new TextDecoder().decode(value);
+            const lines = chunk.split('\n').filter(line => line.trim());
+            
+            for (const line of lines) {
+              try {
+                const json = JSON.parse(line);
+                if (json.message && json.message.content) {
+                  const content = json.message.content;
+                  fullResponse += content;
+                  onMessage?.(content);
+                }
+              } catch (e) {
+                // 忽略解析错误
+              }
+            }
+          }
+          
+          // 更新会话历史
+          if (fullResponse) {
+            history.push(...messages); // 添加用户消息
+            history.push({ role: 'assistant', content: fullResponse }); // 添加助手回复
+            this.conversationHistory.set(this.conversationId, history);
+          }
+          
+          onComplete?.(fullResponse);
+        }
+      } else {
+        const json = await response.json();
+        const content = json.message?.content || '';
+        
+        // 更新会话历史
+        if (content) {
+          history.push(...messages); // 添加用户消息
+          history.push({ role: 'assistant', content }); // 添加助手回复
+          this.conversationHistory.set(this.conversationId, history);
+        }
+        
+        onComplete?.(content);
+        return content;
+      }
+    } catch (error) {
+      onError?.(error);
+      throw error;
+    }
+  }
+}
+
+// 导出所有实现
+export {
+  ChatMessage,
+  ChatOptions,
+  OpenAIChat,
+  DifyChat,
+  GroqChat,
+  OllamaChat
+};
