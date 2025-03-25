@@ -91,7 +91,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // 监听定时任务
 chrome.alarms.onAlarm.addListener((alarm) => {
     console.log('alarm', alarm);
-    if (alarm.name === 'checkMessages') {
+    if (alarm.name === 'scheduledTask') {
         console.log('Running scheduled message check...');
         runScheduledTask();
     }
