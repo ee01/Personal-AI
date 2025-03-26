@@ -241,11 +241,14 @@ function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3, retry
 
         const trySendMessage = () => {
             attempts++;
-            chrome.tabs.sendMessage(tabId, message, response => {
+            chrome.tabs.sendMessage(tabId, message, async response => {
                 if (chrome.runtime.lastError) {
                     console.log(`Attempt ${attempts} failed:`, chrome.runtime.lastError);
                     if (attempts < maxRetries) {
-                        setTimeout(trySendMessage, retryInterval); // 5秒后重试
+                        if (chrome.runtime.lastError.message?.includes('Could not establish connection')) {
+                            await chrome.tabs.reload(tabId);
+                        }
+                        setTimeout(trySendMessage, retryInterval); // 10秒后重试
                     } else {
                         reject(new Error('Failed to send message after multiple attempts'));
                     }
