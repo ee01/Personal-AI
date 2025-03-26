@@ -1,7 +1,7 @@
 import { observable } from 'mobx';
 import { increment, indexing, fetchLastIndexTime, genTopics, customQuery, fetchDifyServer, delete_indexing, trendingTopics, globalQuery } from './api';
 import { formatDate, showToast, transformGroupLinks, transformPostLinks } from './utils';
-import { RadarPoCConfig } from './config';
+import { IConfig, RadarPoCConfig } from './config';
 import { fetchUserData } from './metadata';
 import { GET_INIT_TOPICS_QUERY, SALES_QUERY } from './prompt';
 import { getFolders, getLocalStorageItem, setLocalStorageItem, getGroupsMap } from './storage';
@@ -371,7 +371,7 @@ export class ViewModel {
 
         await this._handleDataProcessing(
             startTime,
-            analyzeMessages,
+            (data: any, config: IConfig) => analyzeMessages(data, config.username),
             'Initialization successful. You can use GraphRAG to generate a report or perform a custom query.'
         );
     };

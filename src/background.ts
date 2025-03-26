@@ -1,4 +1,4 @@
-import { analyzeMessages, reviewMessageByLLMAndSendToBot } from './messageDealing';
+import { analyzeMessages, analyzeMessagesInBackground } from './messageDealing';
 import { initChromaClient } from './vectorStore';
 import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
@@ -94,7 +94,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'MESSAGE_DEALING') {
         const { body } = request.data;
         console.log('Sending request to LLM:', body);
-        reviewMessageByLLMAndSendToBot(body).then(raw => {
+        analyzeMessagesInBackground(body.data, body.username).then(raw => {
             sendResponse({ data: raw });
         });
         return true;
