@@ -162,6 +162,32 @@ const Options = () => {
                         }}
                     />
                 </div>
+                
+                <div className="form-group">
+                    <label htmlFor="ANALYSIS_TYPE">分析系统类型</label>
+                    <select
+                        id="ANALYSIS_TYPE"
+                        name="ANALYSIS_TYPE"
+                        value={config.ANALYSIS_TYPE}
+                        onChange={handleInputChange}
+                    >
+                        <option value="filter">根据关注列表直接过滤</option>
+                        <option value="agentWorkflow">标准Agent工作流（按流程分析消息中的实体、关系，自动判断消息重要性）</option>
+                        <option value="agentThinking">智能Agent思考（具有独立思考能力，按需调用工具分析消息）</option>
+                    </select>
+                </div>
+
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="ANALYZE_BY_GROUP"
+                            checked={config.ANALYZE_BY_GROUP}
+                            onChange={handleInputChange}
+                        />
+                        拆开每个群组独立分析
+                    </label>
+                </div>
 
                 <div className="form-group">
                     <label>
@@ -169,9 +195,10 @@ const Options = () => {
                             type="checkbox"
                             name="ENABLE_BOT"
                             checked={config.ENABLE_BOT}
+                            disabled={config.ANALYSIS_TYPE === 'agentThinking'}
                             onChange={handleInputChange}
                         />
-                        启用消息提醒
+                        启用消息提醒 {config.ANALYSIS_TYPE === 'agentThinking' ? '(Agent思考模式下自我决断)' : ''}
                     </label>
                 </div>
 
@@ -180,36 +207,12 @@ const Options = () => {
                         <input
                             type="checkbox"
                             name="LLM_REVIEW_BEFORE_SEND"
+                            hidden={config.ANALYSIS_TYPE === 'agentThinking' || config.ANALYSIS_TYPE === 'agentWorkflow'}
                             checked={config.LLM_REVIEW_BEFORE_SEND}
                             onChange={handleInputChange}
                         />
                         启用消息审核（若不启用审核，会推送所有关注消息）
                     </label>
-                </div>
-                
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ENABLE_AGENT_SYSTEM"
-                            checked={config.ENABLE_AGENT_SYSTEM}
-                            onChange={handleInputChange}
-                        />
-                        启用 Agent 系统（智能分析消息中的实体、关系，自动判断消息重要性）
-                    </label>
-                </div>
-
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ENABLE_INTELLIGENT_AGENT"
-                            checked={config.ENABLE_INTELLIGENT_AGENT}
-                            onChange={handleInputChange}
-                        />
-                        启用智能Agent系统（具有独立思考能力，按需调用工具分析消息）
-                    </label>
-                    <p className="help-text">启用后将替代标准Agent系统，提供更智能的消息分析能力</p>
                 </div>
             </div>
 
@@ -228,18 +231,6 @@ const Options = () => {
                         <option value="groq">Groq</option>
                         <option value="dify">Dify</option>
                     </select>
-                </div>
-
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="LLM_GROUP_ANALYSIS"
-                            checked={config.LLM_GROUP_ANALYSIS}
-                            onChange={handleInputChange}
-                        />
-                        拆开每个群组独立分析
-                    </label>
                 </div>
             </div>
 
@@ -510,14 +501,14 @@ const Options = () => {
                 )}
             </div>
 
-            {config.ENABLE_INTELLIGENT_AGENT && (
+            {config.ANALYSIS_TYPE === 'agentThinking' && (
                 <div className="form-section">
                     <h2>智能Agent系统设置</h2>
                     <IntelligentAgentSettings />
                 </div>
             )}
 
-            {config.ENABLE_AGENT_SYSTEM && !config.ENABLE_INTELLIGENT_AGENT && (
+            {config.ANALYSIS_TYPE === 'agentWorkflow' && (
                 <div className="form-section">
                     <h2>标准Agent系统设置</h2>
                     <AgentSettings />

@@ -9,7 +9,56 @@ import { processMessage } from './intelligentAgent';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string) {
+	try {
+		// 检查是否在 background script 环境中
+		const isBackground = typeof window === 'undefined';
+		if (isBackground) {
+			// 在 background script 中直接调用处理函数
+			const response = await analyzeMessagesInBackground(data, username);
+			return response;
+		} else {
+			// 在 content script 或其他环境中使用 message passing
+			const response = await chrome.runtime.sendMessage({
+				type: 'MESSAGE_DEALING',
+				data: {
+					body: {
+						data,
+						username
+					}
+				}
+			});
+			
+			if (response.data) {
+				console.log("LLM's response:", response.data, {data, username});
+				// Todo: Toast 方法在 popup 中无法调用
+				showToast('Analysis complete, please check the console', 'success');
+				return response.data;
+			} else {
+				const error = new Error('Received invalid response format from LLM');
+				console.error("Unexpected response format:", response);
+				showToast(error.message, 'error');
+				throw error;
+			}
+		}
+	} catch (error) {
+		console.error("Error in sendMessageToLLM:", error);
+		showToast(`Error: ${error.message}`, 'error');
+	}
+}
+
+// 统一使用 background script 处理，防止跨域和权限问题
+export async function analyzeMessagesInBackground (data: any[], username: string) {
+    // 获取环境配置
     const envConfig = await getEnvConfig();
+		
+	// 检查是否定时任务被终止
+	const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
+	const isScheduledTask = typeof window === 'undefined';
+	if (!scheduleActive && isScheduledTask) {
+		console.log('定时分析任务已被终止，跳过处理');
+		return;
+	}
+
 	const concernedItems: {text: string}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
 		{text:'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况（关键词：recording/RCV mobile/BE dependencies，必须同时包含"recording"和"BE"相关关键词）'},
 		{text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
@@ -17,57 +66,7 @@ export async function analyzeMessages (data: any[], username: string) {
 		{text:'任何明确 @我 的消息，或者提到我的名字的消息'},
 	];
 
-	const system_prompt = `
-你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
-${envConfig.LLM_GROUP_ANALYSIS ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}	
-
----- 以下是我的需求和你需要返回的内容定义 ----
-${envConfig.LLM_GROUP_ANALYSIS ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
-1. 请仔细阅读 <message_group> 里的每条聊天消息，判断里面的 <message_content> 是否有符合以下规则其中一条${envConfig.LLM_GROUP_ANALYSIS ? '' : '。如果没有则跳过并查看下一个 message_group'}：
-	- 规则0: 排除发送者是"SM AI undefined"的消息，排除发送者是自己的消息
-	${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n	')}
-2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
-	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
-	- <message_content> properties 中的发送者sender和发送时间datetime, 还有 <message_group> properties 中的 team_name, team_id, post_id
-3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这 4 个新字段：
-	- matched_rule: 上面第一步的符合到的规则x的原文内容
-	- filter_reason: 选择这条消息过滤出来的原因，可以用中文表达
-	- summary: 对这条消息所在的 message_group 的其他消息的上下文做出总结并适当的推理为什么sender会发出这个消息。请不要留空，这里可以用中文
-	- reply_advice: 针对这条消息的上下文，给出回复建议，回复用的语言跟随上下文聊天语言。如果觉得这条消息不需要回复，请回复空字符串
-	- entities: 提取消息中的实体信息，包括人物、项目、话题、行动项、情感和类别
-${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
-
-将任务输出的数据进行如下验证：
-1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{error: "No messages matched any rules", data: []}：
-{
-	"error": "",
-	"data": [{
-		"message_content": "{message_content}",
-		"sender": "{sender}",
-		"matched_rule": "所符合的规则的内容",
-		"filter_reason": "",
-		"post_id": "{post_id}",
-		"team_name": "{team_name}",
-		"team_id": "{team_id}",
-		"team_url": "https://app.ringcentral.com/messages/{team_id}",
-		"summary": "请总结上下文到这里",
-		"reply_advice": "建议的回复填入此",
-		"datetime": "{datetime}",
-		"entities": {
-		"people": ["消息中提到的人物"],
-		"projects": ["消息中提到的项目"],
-		"topics": ["消息中提到的话题"],
-		"actions": ["消息中需要执行的动作"]
-		"sentiment": "整体情感(positive/negative/neutral)",
-		"category": [消息类别，如"决策"、"讨论"、"公告"等]
-		}
-	}]
-}
-2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
-3. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
-`
 	data = data.filter(item => item.type === 'message')
-	console.log(data, concernedItems, username);
 	// 插入调试数据
 	// data.unshift({
 	//   groupName: 'Recording Test',
@@ -81,8 +80,8 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 	  groupName: '大群',
 	  groupId: '2578219014',
 	  posts: [
-	    { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。' },
-	    { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '好的' }
+	    { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
+	    { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
 	  ]
 	});
 	data.unshift({
@@ -93,19 +92,13 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 	  ]
 	});
 	data.splice(2);
-	// console.log(data);
-
-	// 如果启用了智能Agent系统，直接将消息传递给Agent处理
-	if (envConfig.ENABLE_INTELLIGENT_AGENT) {
+	console.log(data, concernedItems, username);
+    
+    // 根据配置选择处理方式
+    if (envConfig.ANALYSIS_TYPE === 'agentThinking') {
+        // 使用智能 Agent 处理
+        console.log('Using Intelligent Agent to process messages');
 		console.log('使用智能Agent系统直接批量处理消息，支持消息降噪和上下文分析...');
-		
-		// 检查是否定时任务被终止
-		const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
-		const isScheduledTask = typeof window === 'undefined';
-		if (!scheduleActive && isScheduledTask) {
-			console.log('定时分析任务已被终止，跳过处理');
-			return;
-		}
 		
 		try {
 			// 设置初始进度信息
@@ -149,7 +142,7 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 			const storedCount = resultsArray.filter((r: any) => r.shouldStore).length;
 			const notifiedCount = resultsArray.filter((r: any) => r.shouldNotify).length;
 			const importantCount = resultsArray.filter((r: any) => r.isImportant).length;
-			const noisyCount = resultsArray.length - storedCount - notifiedCount - importantCount;
+			const noisyCount = resultsArray.filter((r: any) => !r.shouldStore && !r.shouldNotify && !r.isImportant).length;;
 			
 			console.log(`处理完成: 共 ${resultsArray.length} 条消息, ${importantCount} 条重要, ${storedCount} 条已存储, ${notifiedCount} 条已通知, ${noisyCount} 条被降噪过滤`);
 			
@@ -168,15 +161,153 @@ ${envConfig.LLM_GROUP_ANALYSIS ? '' : '结束当前 <message_group> 的三步任
 					}
 				}
 			});
+
+			// 处理 shouldNotify 和 shouldStore 标志
+			for (const result of resultsArray) {
+				// 处理 shouldNotify 标志
+				if (result.shouldNotify && envConfig.ENABLE_BOT) {
+					// 直接使用 result 中的信息，不需要复杂的查找
+					const originalMessage = result.originalMessage || {};
+					
+					sendBotMessage({
+						matched_rule: result.matchedRule || '',
+						team_name: originalMessage.team_name || '',
+						team_id: originalMessage.team_id || '',
+						sender: originalMessage.sender || '',
+						message_content: originalMessage.message_content || '',
+						summary: result.summary || '',
+						reply_advice: result.replyAdvice || ''
+					}).catch(console.error);
+				}
+				
+				// 处理 shouldStore 标志
+				if (result.shouldStore) {
+					try {
+						const originalMessage = result.originalMessage || {};
+						const messageId = uuidv4();
+						
+						// 提取实体信息，可以直接使用 result.enrichedData 中的实体信息
+						const entities = result.enrichedData?.entities || {};
+						const relationships = result.enrichedData?.relationships || [];
+						const actions = result.enrichedData?.actions || [];
+						
+						// 存储消息
+						await storeMessage(
+							messageId,
+							originalMessage.message_content || '',
+							{
+								source: originalMessage.sender || 'unknown',
+								timestamp: Date.now(),
+								matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
+								summary: result.summary || '',
+								teamName: originalMessage.team_name || '',
+								teamId: originalMessage.team_id || '',
+								entities: entities,
+								metadata: {
+									sentiment: result.enrichedData?.sentiment || 'neutral',
+									priority: result.notificationPriority || 'low',
+									category: result.enrichedData?.category || [],
+									tags: result.enrichedData?.tags || []
+								},
+								relationships: relationships,
+								actions: actions,
+								reply_advice: result.replyAdvice || ''
+							}
+						);
+						
+						console.log(`已存储消息: ${messageId}`);
+					} catch (error) {
+						console.error('存储消息失败:', error);
+					}
+				}
+			}
 		} catch (error) {
 			console.error('批量处理消息失败:', error);
 		}
+    } else if (envConfig.ANALYSIS_TYPE === 'agentWorkflow') {
+        // 使用智能 Agent 系统处理
+        console.log('Using Intelligent Agent System to process messages');
+		// 使用原有Agent系统处理消息
+		const processResult = await processNewMessage(data);
 		
-		return; // 智能Agent处理完毕，提前返回
-	}
+		console.log('Agent处理结果:', processResult);
+		
+		// Agent系统已经处理了消息存储逻辑，这里只需处理发送消息
+		if (envConfig.ENABLE_BOT) {
+			// 检查 data 的格式并正确获取 groupName 和 groupId
+			const groupInfo = Array.isArray(data) && data.length > 0 ? data[0] : null;
+			
+			sendBotMessage({
+				matched_rule: processResult.matched_rule || '', // 使用可选链或提供默认值
+				team_name: groupInfo?.groupName || '',
+				team_id: groupInfo?.groupId || '',
+				sender: processResult.sender || '',
+				message_content: processResult.message_content || '',
+				summary: processResult.summary || '',
+				reply_advice: processResult.replyAdvice || ''
+			}).catch(console.error);
+		}
+    } else {
+        // 使用普通模式处理
+        console.log('Using normal mode to process messages');
+        return await processMessageFilterByConcernedItems(data, concernedItems, username);
+    }
+}
+async function processMessageFilterByConcernedItems(data: any[], concernedItems: {text: string}[], username: string) {
+    const envConfig = await getEnvConfig();
+
+	const system_prompt = `
+你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
+${envConfig.ANALYZE_BY_GROUP ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}	
+
+---- 以下是我的需求和你需要返回的内容定义 ----
+${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
+1. 请仔细阅读 <message_group> 里的每条聊天消息，判断里面的 <message_content> 是否有符合以下规则其中一条${envConfig.ANALYZE_BY_GROUP ? '' : '。如果没有则跳过并查看下一个 message_group'}：
+	- 规则0: 排除发送者是"SM AI undefined"的消息，排除发送者是自己的消息
+	${concernedItems.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n	')}
+2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
+	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
+	- <message_content> properties 中的发送者sender和发送时间datetime, 还有 <message_group> properties 中的 team_name, team_id, post_id
+3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这 4 个新字段：
+	- matched_rule: 上面第一步的符合到的规则x的原文内容
+	- filter_reason: 选择这条消息过滤出来的原因，可以用中文表达
+	- summary: 对这条消息所在的 message_group 的其他消息的上下文做出总结并适当的推理为什么sender会发出这个消息。请不要留空，这里可以用中文
+	- reply_advice: 针对这条消息的上下文，给出回复建议，回复用的语言跟随上下文聊天语言。如果觉得这条消息不需要回复，请回复空字符串
+	- entities: 提取消息中的实体信息，包括人物、项目、话题、行动项、情感和类别
+${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
+
+将任务输出的数据进行如下验证：
+1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{error: "No messages matched any rules", data: []}：
+{
+	"error": "",
+	"data": [{
+		"message_content": "{message_content}",
+		"sender": "{sender}",
+		"matched_rule": "所符合的规则的内容",
+		"filter_reason": "",
+		"post_id": "{post_id}",
+		"team_name": "{team_name}",
+		"team_id": "{team_id}",
+		"team_url": "https://app.ringcentral.com/messages/{team_id}",
+		"summary": "请总结上下文到这里",
+		"reply_advice": "建议的回复填入此",
+		"datetime": "{datetime}",
+		"entities": {
+		"people": ["消息中提到的人物"],
+		"projects": ["消息中提到的项目"],
+		"topics": ["消息中提到的话题"],
+		"actions": ["消息中需要执行的动作"]
+		"sentiment": "整体情感(positive/negative/neutral)",
+		"category": [消息类别，如"决策"、"讨论"、"公告"等]
+		}
+	}]
+}
+2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
+3. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
+`
 
 	// 以下是原有的LLM处理逻辑，当未启用智能Agent时使用
-	if (envConfig.LLM_GROUP_ANALYSIS) {
+	if (envConfig.ANALYZE_BY_GROUP) {
 		// 拆分单条发送 LLM
 		let countAnalyzed = 0;
 		chrome.storage.local.set({
@@ -213,7 +344,7 @@ ${message}
 ---- 这是我收到的最近聊条消息结束 ----
 `
 
-			await sendMessageToLLM(user_prompt, system_prompt, item);
+			await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt, messageData: item});
 			if (scheduleActive) chrome.storage.local.set({
 				ollamaAnalysisProgress: {
 					total: data.length,
@@ -244,7 +375,7 @@ ${messages}
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
-		await sendMessageToLLM(user_prompt, system_prompt);
+		await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt});
 		chrome.storage.local.set({
 			ollamaAnalysisProgress: {
 				total: 1,
@@ -254,50 +385,8 @@ ${messages}
 		});
 	}
 }
-
-// 统一使用 background script 处理，防止跨域和权限问题
-const sendMessageToLLM = async (user_prompt: string, system_prompt: string, messageData?: any) => {
-	if (messageData) console.log(`Sending messages to LLM:`, messageData);
-	try {
-		// 检查是否在 background script 环境中
-		const isBackground = typeof window === 'undefined';
-		if (isBackground) {
-			// 在 background script 中直接调用处理函数
-			const response = await reviewMessageByLLMAndSendToBot({ user_prompt, system_prompt, messageData });
-			return response;
-		} else {
-			// 在 content script 或其他环境中使用 message passing
-			const response = await chrome.runtime.sendMessage({
-				type: 'MESSAGE_DEALING',
-				data: {
-					body: {
-						user_prompt,
-						system_prompt,
-						messageData
-					}
-				}
-			});
-			
-			if (response.data) {
-				console.log("LLM's response:", response.data, {user_prompt, messageData});
-				// Todo: Toast 方法在 popup 中无法调用
-				showToast('Analysis complete, please check the console', 'success');
-				return response.data;
-			} else {
-				const error = new Error('Received invalid response format from LLM');
-				console.error("Unexpected response format:", response);
-				showToast(error.message, 'error');
-				throw error;
-			}
-		}
-	} catch (error) {
-		console.error("Error in sendMessageToLLM:", error);
-		showToast(`Error: ${error.message}`, 'error');
-	}
-};
-
 // 整合处理请求以及推送 bot 消息
-export async function reviewMessageByLLMAndSendToBot(body: any) {
+async function reviewMessageByLLMAndSendToBot(body: any) {
 	const envConfig = await getEnvConfig();
 	try {
 		const { concernedItems } = await chrome.storage.local.get('concernedItems');
@@ -335,66 +424,43 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
 
-				if (envConfig.ENABLE_AGENT_SYSTEM) {
-					// 使用原有Agent系统处理消息
-					const processResult = await processNewMessage({
-						...json,
-						matched_rule
-					});
-					
-					console.log('Agent处理结果:', processResult);
-					
-					// Agent系统已经处理了消息存储逻辑，这里只需处理发送消息
-					if (isPassReview && envConfig.ENABLE_BOT) {
-						sendBotMessage({
-							matched_rule,
-							team_name: body.messageData ? body.messageData.groupName : json.team_name,
-							team_id: body.messageData ? body.messageData.groupId : json.team_id,
-							sender: json.sender,
-							message_content: json.message_content,
-							summary: json.summary,
-							reply_advice: processResult.replyAdvice || json.reply_advice
-						}).catch(console.error);
+				// 原有逻辑：将匹配的消息存储到向量数据库
+				const messageId = uuidv4();
+				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
+				await storeMessage(
+					messageId,
+					json.message_content,
+					{
+						source: json.sender || 'unknown',
+						timestamp: Date.now(),
+						matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+						summary: json.summary || '',
+						teamName: json.team_name,
+						teamId: json.team_id,
+						entities: extractedEntities.entities,
+						metadata: {
+							sentiment: extractedEntities.metadata.sentiment,
+							priority: extractedEntities.metadata.priority,
+							category: extractedEntities.metadata.category,
+							tags: extractedEntities.metadata.tags
+						},
+						relationships: extractedEntities.relationships,
+						actions: extractedEntities.actions,
+						reply_advice: json.reply_advice
 					}
-				} else {
-					// 原有逻辑：将匹配的消息存储到向量数据库
-					const messageId = uuidv4();
-					const extractedEntities = await extractEntitiesToStore(json.message_content, json);
-					await storeMessage(
-						messageId,
-						json.message_content,
-						{
-							source: json.sender || 'unknown',
-							timestamp: Date.now(),
-							matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-							summary: json.summary || '',
-							teamName: json.team_name,
-							teamId: json.team_id,
-							entities: extractedEntities.entities,
-							metadata: {
-								sentiment: extractedEntities.metadata.sentiment,
-								priority: extractedEntities.metadata.priority,
-								category: extractedEntities.metadata.category,
-								tags: extractedEntities.metadata.tags
-							},
-							relationships: extractedEntities.relationships,
-							actions: extractedEntities.actions,
-							reply_advice: json.reply_advice
-						}
-					);
+				);
 
-					// 如果审核通过，则推送 Glip 消息
-					if (isPassReview && envConfig.ENABLE_BOT) {
-						sendBotMessage({
-							matched_rule,
-							team_name: body.messageData ? body.messageData.groupName : json.team_name,
-							team_id: body.messageData ? body.messageData.groupId : json.team_id,
-							sender: json.sender,
-							message_content: json.message_content,
-							summary: json.summary,
-							reply_advice: json.reply_advice
-						}).catch(console.error);
-					}
+				// 如果审核通过，则推送 Glip 消息
+				if (isPassReview && envConfig.ENABLE_BOT) {
+					sendBotMessage({
+						matched_rule,
+						team_name: body.messageData ? body.messageData.groupName : json.team_name,
+						team_id: body.messageData ? body.messageData.groupId : json.team_id,
+						sender: json.sender,
+						message_content: json.message_content,
+						summary: json.summary,
+						reply_advice: json.reply_advice
+					}).catch(console.error);
 				}
 			}
 		}

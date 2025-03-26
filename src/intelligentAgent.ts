@@ -1,9 +1,6 @@
 import { callLLMJsonAPI } from './llm';
-import { storeMessage } from './vectorStore';
-import { extractEntitiesToStore } from './entityExtraction';
-import { naturalLanguageQuery, getAllKnownPeople, getAllKnownProjects, getAllKnownTopics } from './vectorStore';
+import { naturalLanguageQuery } from './vectorStore';
 import { getEnvConfig } from './utils';
-import { v4 as uuidv4 } from 'uuid';
 
 /**
  * 工具接口定义
@@ -62,6 +59,10 @@ interface MessageProcessResult {
   notificationPriority?: 'high' | 'medium' | 'low';
   replyAdvice?: string;
   thoughtProcess?: ThoughtStep[];
+  messageIndex?: number;
+  groupId?: string;
+  originalMessage?: any;
+  matchedRule?: string;
 }
 
 /**
@@ -94,33 +95,6 @@ export function registerTool(tool: Tool): void {
 export function getAvailableTools(): Tool[] {
   return Object.values(toolRegistry);
 }
-
-/**
- * 基础工具实现
- */
-// 实体提取工具
-registerTool({
-  id: 'entityExtractor',
-  name: '实体提取',
-  description: '从消息中提取人物、项目、时间等实体信息',
-  parameterDefs: [
-    {
-      name: 'content',
-      description: '需要提取实体的文本内容',
-      required: true,
-      type: 'string'
-    },
-    {
-      name: 'metadata',
-      description: '额外的元数据信息',
-      required: false,
-      type: 'object'
-    }
-  ],
-  execute: async (params) => {
-    return await extractEntitiesToStore(params.content, params.metadata || {});
-  }
-});
 
 // 历史消息搜索工具
 registerTool({
@@ -187,328 +161,106 @@ registerTool({
       filters.timeRange = params.timeRange;
     }
     
-    return await naturalLanguageQuery(query, filters, {
+    const result = await naturalLanguageQuery(query, filters, {
       limit: params.limit || 5,
       sort: {
         field: 'timestamp',
         order: 'desc'
       }
     });
+
+    console.log('历史消息搜索结果:', result);
+    return result.results.documents.map((doc: string, index: number ) => ({
+      summary: result.results.metadatas[index].summary,
+      sender: result.results.metadatas[index].source,
+    }));
   }
 });
 
-// 消息存储工具
-registerTool({
-  id: 'messageStore',
-  name: '消息存储',
-  description: '将重要消息存储到向量数据库',
-  parameterDefs: [
-    {
-      name: 'messageId',
-      description: '消息唯一标识符，不提供时会自动生成',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'content',
-      description: '需要存储的消息内容',
-      required: true,
-      type: 'string'
-    },
-    {
-      name: 'messageContent',
-      description: '需要存储的消息内容（content的别名）',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'message_content',
-      description: '需要存储的消息内容（content的别名）',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'sender',
-      description: '消息发送者',
-      required: true,
-      type: 'string'
-    },
-    {
-      name: 'timestamp',
-      description: '消息发送时间戳',
-      required: false,
-      type: 'number'
-    },
-    {
-      name: 'summary',
-      description: '消息摘要',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'teamName',
-      description: '团队名称',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'team_name',
-      description: '团队名称（teamName的别名）',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'teamId',
-      description: '团队ID',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'team_id',
-      description: '团队ID（teamId的别名）',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'matchedRules',
-      description: '匹配的规则数组',
-      required: false,
-      type: 'string[]'
-    },
-    {
-      name: 'importance',
-      description: '消息重要性',
-      required: false,
-      type: 'string',
-      options: ['high', 'medium', 'low']
-    },
-    {
-      name: 'reasons',
-      description: '存储原因',
-      required: false,
-      type: 'string[]'
-    },
-    {
-      name: 'entities',
-      description: '实体信息',
-      required: false,
-      type: 'object'
-    },
-    {
-      name: 'sentiment',
-      description: '情感倾向',
-      required: false,
-      type: 'string',
-      options: ['positive', 'negative', 'neutral']
-    },
-    {
-      name: 'priority',
-      description: '优先级',
-      required: false,
-      type: 'string',
-      options: ['high', 'medium', 'low']
-    },
-    {
-      name: 'category',
-      description: '分类标签',
-      required: false,
-      type: 'string[]'
-    },
-    {
-      name: 'tags',
-      description: '标签',
-      required: false,
-      type: 'string[]'
-    }
-  ],
-  execute: async (params) => {
-    if (!params.messageId) params.messageId = uuidv4();
-    
-    // 确保参数兼容性
-    const content = params.content || params.messageContent || params.message_content || '';
-    const sender = params.sender || 'unknown';
-    const timestamp = params.timestamp || Date.now();
-    const summary = params.summary || '';
-    
-    // 构建正确的元数据结构
-    const metadata: any = {
-      source: sender,
-      timestamp: timestamp,
-      matchedRules: params.matchedRules || [],
-      summary: summary,
-      teamName: params.teamName || params.team_name,
-      teamId: params.teamId || params.team_id,
-      reply_advice: params.replyAdvice || params.reply_advice || ''
-    };
-    
-    // 添加实体信息
-    if (params.entities) {
-      metadata.entities = params.entities;
-    }
-    
-    // 添加元数据信息
-    metadata.metadata = {
-      sentiment: params.sentiment || (params.metadata?.sentiment || 'neutral'),
-      priority: params.priority || (params.metadata?.priority || 'medium'),
-      category: params.category || (params.metadata?.category || []),
-      tags: params.tags || (params.metadata?.tags || [])
-    };
-    
-    // 处理自定义字段，保存到metadata对象
-    if (params.importance) {
-      metadata.importance = params.importance;
-    }
-    
-    if (params.reasons) {
-      metadata.reasons = params.reasons;
-    }
-    
-    if (params.extractedData) {
-      metadata.extractedData = params.extractedData;
-    }
-    
-    // 添加关系信息
-    if (params.relationships) {
-      metadata.relationships = params.relationships;
-    }
-    
-    // 添加行动信息
-    if (params.actions) {
-      metadata.actions = params.actions;
-    }
-    
-    await storeMessage(
-      params.messageId,
-      content,
-      metadata
-    );
-    
-    return {
-      success: true,
-      messageId: params.messageId
-    };
-  }
-});
-
-// 消息通知工具
-registerTool({
-  id: 'notifier',
-  name: '消息通知',
-  description: '通过bot向用户发送重要消息通知',
-  parameterDefs: [
-    {
-      name: 'messageId',
-      description: '消息唯一标识符',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'content',
-      description: '需要通知的消息内容',
-      required: true,
-      type: 'string'
-    },
-    {
-      name: 'summary',
-      description: '消息摘要',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'sender',
-      description: '原始消息发送者',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'teamName',
-      description: '团队名称',
-      required: false,
-      type: 'string'
-    },
-    {
-      name: 'priority',
-      description: '通知优先级',
-      required: false,
-      type: 'string',
-      options: ['high', 'medium', 'low'],
-      defaultValue: 'medium'
-    },
-    {
-      name: 'replyAdvice',
-      description: '回复建议',
-      required: false,
-      type: 'string'
-    }
-  ],
-  execute: async (params) => {
-    // 这里可以集成发送消息到bot的逻辑
-    console.log(`将通过Bot发送通知: ${params.content}`);
-    // 实际实现可能需要调用sendBotMessage等函数
-    return {
-      success: true,
-      notified: true,
-      messageId: params.messageId
-    };
-  }
-});
-
-// JIRA查询工具
+// JIRA查询工具改造为使用MCP服务
 registerTool({
   id: 'jiraQuery',
   name: 'JIRA信息查询',
-  description: '查询JIRA中的任务、需求和bug信息',
+  description: '通过MCP服务查询JIRA中的任务、需求和bug信息',
+  parameterDefs: [
+    {
+      name: 'issueId',
+      description: 'JIRA任务ID，例如 PROJ-1234',
+      required: false,
+      type: 'string'
+    },
+    {
+      name: 'keywords',
+      description: '搜索关键词',
+      required: false,
+      type: 'string'
+    },
+    {
+      name: 'project',
+      description: 'JIRA项目代号',
+      required: false,
+      type: 'string'
+    },
+    {
+      name: 'status',
+      description: '任务状态过滤',
+      required: false,
+      type: 'string'
+    }
+  ],
   execute: async (params) => {
-    // 模拟实现，实际环境中需要集成JIRA API
-    console.log(`查询JIRA信息: ${JSON.stringify(params)}`);
+    // 使用MCP服务查询JIRA
+    const mcpUrl = 'https://mcp.composio.dev/jira/dead-astonishing-rose-JWjfCI';
     
-    if (params.issueId) {
-      return {
-        success: true,
-        issue: {
-          id: params.issueId,
-          title: `模拟JIRA任务 ${params.issueId}`,
-          status: '进行中',
-          assignee: '开发人员',
-          reporter: '产品经理',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          description: '这是一个模拟的JIRA任务描述'
+    try {
+      // 构建查询参数
+      const queryParams = new URLSearchParams();
+      if (params.issueId) {
+        queryParams.append('issueId', params.issueId);
+      }
+      if (params.keywords) {
+        queryParams.append('keywords', params.keywords);
+      }
+      if (params.project) {
+        queryParams.append('project', params.project);
+      }
+      if (params.status) {
+        queryParams.append('status', params.status);
+      }
+      
+      // 发送请求到MCP服务
+      const response = await fetch(`${mcpUrl}/search?${queryParams.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
         }
-      };
-    }
-    
-    // 根据关键词搜索JIRA
-    if (params.keywords) {
+      });
+      
+      if (!response.ok) {
+        throw new Error(`MCP JIRA服务返回错误: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
       return {
         success: true,
-        issues: [
-          {
-            id: 'PROJ-1001',
-            title: `与"${params.keywords}"相关的任务1`,
-            status: '待处理',
-            assignee: '开发人员A'
-          },
-          {
-            id: 'PROJ-1002',
-            title: `与"${params.keywords}"相关的任务2`,
-            status: '进行中',
-            assignee: '开发人员B'
-          }
-        ]
+        source: 'mcp-jira',
+        data: result
+      };
+    } catch (error) {
+      console.error('JIRA查询失败:', error);
+      return {
+        success: false,
+        source: 'mcp-jira',
+        error: error.message || '查询JIRA时发生错误'
       };
     }
-    
-    return {
-      success: false,
-      message: '缺少必要的JIRA查询参数'
-    };
   }
 });
 
 // 组织架构查询工具
 registerTool({
-  id: 'orgChart',
+  id: 'orgStructure',
   name: '组织架构查询',
   description: '查询人员的组织架构关系',
   execute: async (params) => {
@@ -684,11 +436,21 @@ class IntelligentAgent {
       };
       
       // 最多执行10轮思考-行动循环，避免无限循环
-      const MAX_ACTIONS = 10;
+      const MAX_ACTIONS = 5;
       
       while (currentState.actionCount < MAX_ACTIONS) {
         // 思考下一步该做什么
-        const thoughtResult = await this.think(currentState);
+        let thoughtResult:ThoughtResult;
+        if (currentState.actionCount > 0) {
+          thoughtResult = await this.think(currentState);
+        }else{
+          thoughtResult = {
+            thought: initialAnalysis.thought,
+            nextAction: initialAnalysis.nextAction,
+            tools: initialAnalysis.tools,
+            params: initialAnalysis.params
+          }
+        }
         
         // 记录思考过程
         const thoughtStep: ThoughtStep = {
@@ -774,14 +536,16 @@ class IntelligentAgent {
         currentState.actionCount++;
       }
       
-      // 处理存储和通知
-      if (currentState.currentDecision.shouldStore && !result.shouldStore) {
-        // 执行存储逻辑
-      }
-      
-      if (currentState.currentDecision.shouldNotify && !result.shouldNotify) {
-        // 执行通知逻辑
-      }
+      // 收集处理结果，包含所有工具调用结果和提取的实体
+      result.enrichedData = {
+        ...currentState.memory,
+        thoughtProcess: this.thoughtProcess.slice(),
+        entities: currentState.memory.entityExtractor?.entities || message.entities || {},
+        relationships: currentState.memory.entityExtractor?.relationships || message.relationships || [],
+        actions: currentState.memory.entityExtractor?.actions || message.actions || [],
+        sentiment: initialAnalysis.sentiment || 'neutral',
+        category: initialAnalysis.category || []
+      };
       
       console.log('智能Agent处理完成:', result);
       return result;
@@ -865,6 +629,24 @@ ${message.concernedItems.map((item: any, i: number) => `- 规则${i+1}: ${item.t
       `;
     }
     
+    // 获取可用工具列表及其描述
+    const toolDescriptions = getAvailableTools().map(tool => {
+      let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
+      
+      // 添加参数描述
+      if (tool.parameterDefs && tool.parameterDefs.length > 0) {
+        description += '\n  参数:';
+        for (const param of tool.parameterDefs) {
+          const requiredMark = param.required ? '(必填)' : '(可选)';
+          const typeMark = param.type ? `[${param.type}]` : '';
+          const optionsMark = param.options ? ` 可选值:${param.options.join('/')}` : '';
+          description += `\n    - ${param.name} ${requiredMark} ${typeMark}: ${param.description}${optionsMark}`;
+        }
+      }
+      
+      return description;
+    }).join('\n');
+    
     // 构建分析提示
     const analysisPrompt = `
 分析以下消息，提取关键信息并判断其重要性:
@@ -876,6 +658,10 @@ ${messageContent}
 ${contextInfo}
 ${filterRulesInfo}
 
+# 可用工具
+以下是可用于处理消息的工具，可以在分析时考虑是否需要使用这些工具：
+${toolDescriptions}
+
 请分析:
 1. 这条消息是关于什么的？简要总结。
 2. 消息中提到了哪些人物、项目、时间点或其他关键实体？
@@ -884,19 +670,54 @@ ${filterRulesInfo}
 5. 消息的重要程度如何？(低/中/高)
 6. 消息是否需要特别关注或回复？
 7. 这条消息可能与哪些其他信息或系统(如JIRA, Wiki)相关？
+8. 是否建议使用某些工具来进一步处理这条消息？如果是，请推荐工具和参数。
 
 以JSON格式返回:
 {
   "summary": "消息简述",
-  "topics": ["主题1", "主题2"],
   "matchedRules": ["匹配的规则1", "匹配的规则2"],
   "matchReasons": ["匹配原因1", "匹配原因2"],
   "importanceLevel": "low|medium|high",
   "needsAttention": true|false,
   "sentiment": "positive|negative|neutral",
   "mentionedSystems": ["系统1", "系统2"],
-  "potentialNextSteps": ["可能的下一步操作1", "操作2"]
+  
+  // 与批量分析保持一致的决策和工具字段
+  "thought": "分析当前情况和下一步行动的详细思考过程",
+  "nextAction": "use_tool|finish",
+  "tools": ["选择的工具ID，如orgStructure"],
+  "params": {}, // 工具参数
+  "shouldStore": false,
+  "shouldNotify": false,
+  "confidence": 0.7,
+  "reasons": ["存储/忽略的理由1", "理由2"],
+  "notificationPriority": "low|medium|high",
+  "replyAdvice": "",
+  
+  // 实体提取结果
+  "entities": {
+    "people": [{"name": "人名", "role": "角色", "mentioned_context": "提及上下文"}],
+    "time": [{"raw": "原始表述", "normalized": "标准化时间", "type": "deadline|schedule|mentioned"}],
+    "projects": [{"name": "项目名", "status": "状态", "related_people": []}],
+    "topics": [{"name": "主题名", "category": "类别", "keywords": []}],
+    "location": [],
+    "resources": []
+  },
+  "relationships": [],
+  "actions": []
 }
+
+特别说明:
+1. 'nextAction'应该是'use_tool'或'finish'，表示是否需要进一步处理
+2. 如果不需要处理(nextAction为finish)，请提供完整的决策信息(shouldStore, shouldNotify等)
+3. 'tools'字段中只能包含上面列出的可用工具ID
+4. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义
+5. 对于entities字段，请尽可能完整提取实体信息
+
+工具选择建议:
+- 如果消息提到项目进度或问题，考虑使用jiraQuery
+- 如果消息涉及组织关系或人员，考虑使用orgStructure
+- 如果需要了解历史上下文，考虑使用historySearch
     `;
     
     try {
@@ -911,12 +732,30 @@ ${filterRulesInfo}
       // 返回基本分析结果以避免流程中断
       return {
         summary: `分析失败: ${error.message}`,
-        topics: [],
         importanceLevel: "low",
         needsAttention: false,
         sentiment: "neutral",
         mentionedSystems: [],
-        potentialNextSteps: []
+        thought: "分析失败，无法提供有效思考",
+        nextAction: "finish",
+        tools: [],
+        params: {},
+        shouldStore: false,
+        shouldNotify: false,
+        confidence: 0,
+        reasons: ["分析失败"],
+        notificationPriority: "low",
+        replyAdvice: "",
+        entities: {
+          people: [],
+          time: [],
+          projects: [],
+          topics: [],
+          location: [],
+          resources: []
+        },
+        relationships: [],
+        actions: []
       };
     }
   }
@@ -945,7 +784,7 @@ ${filterRulesInfo}
 
     // 增强已收集信息的显示，明确标出已执行过的工具
     const memoryContent = Object.entries(state.memory).map(([key, value]: [string, any]) => 
-      `- ${key} [已执行]: ${JSON.stringify(value).substring(0, 200)}${JSON.stringify(value).length > 200 ? '...' : ''}`
+      `- ${key} [已执行]: ${JSON.stringify(value).substring(0, 300)}${JSON.stringify(value).length > 300 ? '...' : ''}`
     ).join('\n');
 
     // 获取关注规则匹配信息
@@ -971,10 +810,15 @@ ${state.analysis.matchedRules.map((rule: string, i: number) =>
     if (state.groupContext && state.groupContext.allMessages && state.groupContext.allMessages.length > 0) {
       const currentIndex = state.groupContext.currentMessageIndex;
       const otherMessages = state.groupContext.allMessages
+        .map((msg: any, idx: number) => ({
+          ...msg,
+          messageIndex: idx
+        }))
         .filter((_: any, idx: number) => idx !== currentIndex)
-        .map((msg: any, idx: number) => {
-          const analysis = state.groupContext.allAnalyses.find((a: any) => a.messageIndex === idx);
-          return `消息 #${idx + 1}:
+        .filter((msg: any) => msg.team_id == state.message.team_id)
+        .map((msg: any, i: number) => {
+          const analysis = state.groupContext.allAnalyses.find((a: any) => a.messageIndex === msg.messageIndex);
+          return `消息 #${i + 1}:
 发送者: ${msg.sender || '未知'}
 内容: ${(msg.message_content || '').substring(0, 100)}${(msg.message_content || '').length > 100 ? '...' : ''}
 重要性: ${analysis?.importanceLevel || '未知'}
@@ -983,22 +827,13 @@ ${state.analysis.matchedRules.map((rule: string, i: number) =>
       
       groupContextInfo = `
 # 群组中的其他消息作为上下文
-群组名称: ${state.groupContext.groupName || '未知群组'}
+群组名称: ${state.groupContext.groupName || state.message.team_name || '未知群组'}
 ${otherMessages}
       `;
     }
     
-    // 定义可用工具列表
-    const availableTools = [
-      'entityExtractor',
-      'historySearch',
-      'messageStore',
-      'notifier',
-      'jiraQuerier',
-      'orgStructure',
-      'taskFetcher',
-      'sprintDataFetcher'
-    ];
+    // 获取可用工具列表
+    const availableTools = getAvailableTools().map(tool => tool.id);
 
     // 获取已执行的工具ID列表
     const executedTools = Object.keys(state.memory);
@@ -1055,7 +890,7 @@ ${matchedRulesInfo ? '2. 该消息已匹配关注规则，应重点关注并考�
 {
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "使用工具名或'finish'表示完成处理",
-  "tools": ["选择的一个或多个工具ID，如entityExtractor"],
+  "tools": ["选择的一个或多个工具ID，如orgStructure"],
   "params": {
     // 工具所需的参数
   },
@@ -1120,13 +955,15 @@ ${matchedRulesInfo ? '2. 该消息已匹配关注规则，应重点关注并考�
     if (messages.length === 0) {
       return [];
     }
+    const envConfig = await getEnvConfig();
     
     // 构建消息内容部分
     const messagesContent = messages.map((msg, index) => {
       return `消息 #${index + 1}:
 发送者: ${msg.sender || '未知发送者'}
 时间: ${msg.datetime || '未知时间'}
-内容: ${msg.message_content || '无内容'}`;
+内容: ${msg.message_content || '无内容'}
+${envConfig.ANALYZE_BY_GROUP ? '' : `所在群组: ${msg.team_name || '未知群组'}`}`;
     }).join('\n\n');
     
     // 构建群组上下文信息
@@ -1145,17 +982,39 @@ ${messages[0].concernedItems.map((item: any, i: number) => `- 规则${i+1}: ${it
       `;
     }
     
+    // 获取可用工具列表及其描述
+    const toolDescriptions = getAvailableTools().map(tool => {
+      let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
+      
+      // 添加参数描述
+      if (tool.parameterDefs && tool.parameterDefs.length > 0) {
+        description += '\n  参数:';
+        for (const param of tool.parameterDefs) {
+          const requiredMark = param.required ? '(必填)' : '(可选)';
+          const typeMark = param.type ? `[${param.type}]` : '';
+          const optionsMark = param.options ? ` 可选值:${param.options.join('/')}` : '';
+          description += `\n    - ${param.name} ${requiredMark} ${typeMark}: ${param.description}${optionsMark}`;
+        }
+      }
+      
+      return description;
+    }).join('\n');
+    
     // 构建批量分析提示
     const batchAnalysisPrompt = `
 分析以下群组中的一组消息，提取关键信息并判断各消息的重要性:
 
 群组信息:
-${groupInfo}
+${envConfig.ANALYZE_BY_GROUP ? groupInfo : '(多群组处理群组信息体现在消息列表中)'}
 
 消息列表:
 ${messagesContent}
 
 ${filterRulesInfo}
+
+# 可用工具
+以下是可用于处理消息的工具，当你推荐工具时请从这些工具中选择：
+${toolDescriptions}
 
 请分析:
 1. 这组消息的整体讨论主题是什么？
@@ -1171,7 +1030,6 @@ ${filterRulesInfo}
   {
     "messageIndex": 0,
     "summary": "第一条消息的简述",
-    "topics": ["主题1", "主题2"],
     "matchedRules": ["匹配的规则1", "匹配的规则2"],
     "matchReasons": ["匹配原因1", "匹配原因2"],
     "importanceLevel": "low|medium|high",
@@ -1183,9 +1041,10 @@ ${filterRulesInfo}
     "mentionedSystems": ["系统1", "系统2"],
     
     // 新增字段，提供初始思考和决策结果
-    "nextAction": "use_tool|finish",
-    "tools": ["entityExtractor"], // 推荐的初始工具，可以为空数组
-    "params": {}, // 工具参数
+    "thought": "分析当前情况和下一步行动的详细思考过程",
+    "nextAction": "使用工具名或'finish'表示完成处理",
+    "tools": ["选择的一个或多个工具ID，如orgStructure"],
+    "params": {}, // 工具参数，根据选择的工具提供适当的参数
     "shouldStore": false,
     "shouldNotify": false,
     "confidence": 0.7,
@@ -1214,7 +1073,14 @@ ${filterRulesInfo}
 3. 'nextAction'应该是'use_tool'或'finish'，表示是否需要进一步处理
 4. 如果不需要处理(nextAction为finish)，请提供完整的决策信息(shouldStore, shouldNotify等)
 5. 对于entities字段，请尽可能完整提取实体信息
-    `;
+6. 'tools'字段中只能包含上面列出的可用工具ID
+7. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义
+
+工具选择建议:
+- 如果消息提到项目进度或问题，考虑使用jiraQuery
+- 如果消息涉及组织关系或人员，考虑使用orgStructure
+- 如果需要了解历史上下文，考虑使用historySearch
+`;
     
     try {
       const analysisResults = await callLLMJsonAPI({
@@ -1229,6 +1095,19 @@ ${filterRulesInfo}
           if (result.messageIndex === undefined) {
             result.messageIndex = index;
           }
+          
+          // 确保实体信息字段存在
+          if (!result.entities) {
+            result.entities = {
+              people: [],
+              time: [],
+              projects: [],
+              topics: [],
+              location: [],
+              resources: []
+            };
+          }
+          
           return result;
         });
       } else {
@@ -1247,7 +1126,27 @@ ${filterRulesInfo}
           sentiment: "neutral",
           context: "未知",
           mentionedSystems: [] as string[],
-          potentialNextSteps: [] as string[]
+          potentialNextSteps: [] as string[],
+          thought: "分析失败，无法提供有效思考",
+          nextAction: "finish",
+          tools: [],
+          params: {},
+          shouldStore: false,
+          shouldNotify: false,
+          confidence: 0,
+          reasons: ["分析失败"],
+          notificationPriority: "low",
+          replyAdvice: "",
+          entities: {
+            people: [],
+            time: [],
+            projects: [],
+            topics: [],
+            location: [],
+            resources: []
+          },
+          relationships: [],
+          actions: []
         }));
       }
     } catch (error) {
@@ -1257,6 +1156,8 @@ ${filterRulesInfo}
         messageIndex: index,
         summary: `分析失败: ${error.message}`,
         topics: [] as string[],
+        matchedRules: [] as string[],
+        matchReasons: [] as string[],
         importanceLevel: "low",
         needsAttention: false,
         needsProcessing: false,
@@ -1264,7 +1165,27 @@ ${filterRulesInfo}
         sentiment: "neutral",
         context: "未知",
         mentionedSystems: [] as string[],
-        potentialNextSteps: [] as string[]
+        potentialNextSteps: [] as string[],
+        thought: "分析失败，无法提供有效思考",
+        nextAction: "finish",
+        tools: [],
+        params: {},
+        shouldStore: false,
+        shouldNotify: false,
+        confidence: 0,
+        reasons: ["分析失败"],
+        notificationPriority: "low",
+        replyAdvice: "",
+        entities: {
+          people: [],
+          time: [],
+          projects: [],
+          topics: [],
+          location: [],
+          resources: []
+        },
+        relationships: [],
+        actions: []
       }));
     }
   }
@@ -1287,7 +1208,7 @@ ${filterRulesInfo}
       const normalizedMessages = messages.map(msg => this.normalizeMessageFormat(msg));
       
       // 2. 批量分析所有消息，一次性分析所有消息以获取上下文
-      console.log("开始批量分析消息...");
+      console.log("开始批量分析消息...", normalizedMessages, groupContext);
       const batchAnalysisResults = await this.analyzeBatchMessages(normalizedMessages, groupContext);
       
       // 记录批量处理开始
@@ -1302,7 +1223,7 @@ ${filterRulesInfo}
       const results: MessageProcessResult[] = [];
       
       // 定义最大思考-行动循环次数
-      const MAX_ACTIONS = 10;
+      const MAX_ACTIONS = 5;
       
       for (let i = 0; i < normalizedMessages.length; i++) {
         const message = normalizedMessages[i];
@@ -1326,7 +1247,11 @@ ${filterRulesInfo}
               timestamp: Date.now(),
               thought: "经分析，这是噪音消息，无需进一步处理",
               action: "跳过处理"
-            }]
+            }],
+            messageIndex: i,
+            groupId: message.team_id || '',
+            originalMessage: message,
+            matchedRule: '' // 噪音消息一般不匹配任何规则
           });
           continue;
         }
@@ -1339,9 +1264,21 @@ ${filterRulesInfo}
           shouldNotify: false,
           confidence: 0,
           summary: analysis.summary || "",
-          enrichedData: {},
+          enrichedData: {
+            entities: analysis.entities || {},
+            relationships: analysis.relationships || [],
+            actions: analysis.actions || [],
+            sentiment: analysis.sentiment || 'neutral',
+            category: analysis.category || []
+          },
           reasonsToStore: [],
-          thoughtProcess: messageThoughtProcess
+          thoughtProcess: messageThoughtProcess,
+          messageIndex: i,
+          groupId: message.team_id || '',
+          originalMessage: message,
+          matchedRule: analysis.matchedRules && analysis.matchedRules.length > 0 
+            ? analysis.matchedRules.join('; ') 
+            : ''
         };
         
         // 准备当前消息的状态
@@ -1395,7 +1332,17 @@ ${filterRulesInfo}
         // 开始思考-行动循环，与单条消息处理保持一致
         while (currentState.actionCount < MAX_ACTIONS) {
           // 思考下一步该做什么(使用通用思考方法，支持群组上下文)
-          const thoughtResult = await this.think(currentState);
+          let thoughtResult:ThoughtResult;
+          if (currentState.actionCount > 0) {
+            thoughtResult = await this.think(currentState);
+          }else{
+            thoughtResult = {
+              thought: analysis.thought,
+              nextAction: analysis.nextAction,
+              tools: analysis.tools,
+              params: analysis.params
+            }
+          }
           
           // 记录思考过程
           const thoughtStep: ThoughtStep = {
@@ -1417,6 +1364,9 @@ ${filterRulesInfo}
             result.reasonsToStore = currentState.currentDecision.reasons;
             result.notificationPriority = currentState.currentDecision.notificationPriority;
             result.replyAdvice = currentState.currentDecision.replyAdvice;
+            if (currentState.analysis.matchedRules && currentState.analysis.matchedRules.length > 0) {
+              result.matchedRule = currentState.analysis.matchedRules.join('; ');
+            }
             break;
           }
           
@@ -1436,7 +1386,7 @@ ${filterRulesInfo}
                 };
               }
               
-              console.log(`执行工具: ${tool.name} (${tool.id})`);
+              console.log(`执行工具: ${tool.name} (${tool.id})`, thoughtResult.params);
               
               try {
                 const toolResult = await tool.execute(thoughtResult.params);
@@ -1482,43 +1432,25 @@ ${filterRulesInfo}
           currentState.actionCount++;
         }
         
-        // 处理存储和通知
-        if (currentState.currentDecision.shouldStore && !result.shouldStore) {
-          const messageId = uuidv4();
-          await toolRegistry.messageStore.execute({
-            messageId,
-            content: message.message_content,
-            sender: message.sender,
-            timestamp: new Date(message.datetime).getTime() || Date.now(),
-            matchedRules: message.matched_rule 
-              ? [message.matched_rule].filter(Boolean) 
-              : [],
-            summary: currentState.currentDecision.summary,
-            teamName: message.team_name,
-            teamId: message.team_id,
-            metadata: {
-              ...currentState.memory.entityExtractor,
-              importance: currentState.currentDecision.isImportant ? 'high' : 'medium',
-              reasons: currentState.currentDecision.reasons,
-              extractedData: currentState.memory
-            }
-          });
-          result.shouldStore = true;
-        }
-        
-        // 如果需要通知且尚未通知
-        if (currentState.currentDecision.shouldNotify && !result.shouldNotify) {
-          await toolRegistry.notifier.execute({
-            messageId: uuidv4(),
-            content: message.message_content,
-            summary: currentState.currentDecision.summary,
-            sender: message.sender,
-            teamName: message.team_name,
-            priority: currentState.currentDecision.notificationPriority,
-            replyAdvice: currentState.currentDecision.replyAdvice
-          });
-          result.shouldNotify = true;
-        }
+        // 收集完整的结果
+        result.enrichedData = {
+          ...result.enrichedData,
+          ...currentState.memory,
+          thoughtProcess: messageThoughtProcess.slice(),
+          entities: currentState.memory.entityExtractor?.entities || 
+                    result.enrichedData.entities || 
+                    message.entities || {},
+          relationships: currentState.memory.entityExtractor?.relationships || 
+                        result.enrichedData.relationships || 
+                        message.relationships || [],
+          actions: currentState.memory.entityExtractor?.actions || 
+                  result.enrichedData.actions || 
+                  message.actions || [],
+          message_content: message.message_content,
+          sender: message.sender,
+          team_id: message.team_id,
+          team_name: message.team_name
+        };
         
         results.push(result);
       }
@@ -1579,85 +1511,19 @@ function detectMessageFormat(input: any): string {
 }
 
 /**
- * 从消息组中提取单个消息
- * 将消息组(或多个消息组)转换为单个消息数组，以便逐个处理
- */
-function extractMessagesFromGroups(input: any): any[] {
-  const format = detectMessageFormat(input);
-  const messages: any[] = [];
-  
-  if (format === 'message_groups') {
-    // 多个消息组
-    for (const group of input.messageGroups) {
-      const groupName = group.groupName;
-      const groupId = group.groupId;
-      
-      for (const post of group.posts) {
-        messages.push({
-          message_content: post.content,
-          sender: post.sender,
-          datetime: post.datetime,
-          team_name: groupName,
-          team_id: groupId,
-          post_id: post.post_id,
-          raw_post: post,
-          concernedItems: input.concernedItems,
-          username: input.username
-        });
-      }
-    }
-  } else if (format === 'message_group') {
-    // 单个消息组
-    const groupName = input.groupName;
-    const groupId = input.groupId;
-    
-    for (const post of input.posts) {
-      messages.push({
-        message_content: post.content,
-        sender: post.sender,
-        datetime: post.datetime,
-        team_name: groupName,
-        team_id: groupId,
-        post_id: post.post_id,
-        raw_post: post,
-        concernedItems: input.concernedItems,
-        username: input.username
-      });
-    }
-  } else if (format === 'single_message') {
-    // 已经是单个消息格式
-    messages.push(input);
-  }
-  
-  return messages;
-}
-
-/**
  * 处理新消息(支持多种消息格式，支持批量处理)
  */
 export async function processMessage(input: any): Promise<MessageProcessResult | MessageProcessResult[]> {
-  const envConfig = await getEnvConfig();
-  if (!envConfig.ENABLE_INTELLIGENT_AGENT) {
-    console.log('智能Agent系统未启用，跳过处理');
-    return {
-      isImportant: false,
-      shouldStore: false,
-      shouldNotify: false,
-      confidence: 0,
-      summary: '智能Agent未启用'
-    };
-  }
-  
   // 检测输入格式
   const format = detectMessageFormat(input);
   console.log(`检测到消息格式: ${format}`);
   
-  // 根据不同的消息格式和LLM_GROUP_ANALYSIS设置决定处理方式
+  // 根据不同的消息格式和 ANALYZE_BY_GROUP 设置决定处理方式
   if (format === 'message_groups') {
     // 处理多个消息组
     const envConfig = await getEnvConfig();
     
-    if (envConfig.LLM_GROUP_ANALYSIS) {
+    if (envConfig.ANALYZE_BY_GROUP) {
       // 为每个消息组单独批量处理
       const results: MessageProcessResult[] = [];
       

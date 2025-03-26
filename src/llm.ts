@@ -687,10 +687,10 @@ class OpenAIChat {
   private apiKey: string;
   private baseUrl: string;
   private openai: any; // OpenAI实例
-  private conversationId: string = ''; // 添加会话ID存储
+  private conversationId = ''; // 添加会话ID存储
   private conversationHistory: Map<string, ChatMessage[]> = new Map(); // 存储不同会话的历史记录
   
-  constructor(apiKey: string, baseUrl: string = 'https://api.openai.com/v1') {
+  constructor(apiKey: string, baseUrl = 'https://api.openai.com/v1') {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     
@@ -798,7 +798,7 @@ class OpenAIChat {
     }
   }
 
-  private optimizeHistory(messages: ChatMessage[], maxTokens: number = 4000): ChatMessage[] {
+  private optimizeHistory(messages: ChatMessage[], maxTokens = 4000): ChatMessage[] {
     // 如果消息数量少，直接返回
     if (messages.length <= 3) return messages;
 
@@ -832,7 +832,7 @@ class OpenAIChat {
 class DifyChat {
   private apiKey: string;
   private baseUrl: string;
-  private conversationId: string = ''; // 添加会话ID存储
+  private conversationId = ''; // 添加会话ID存储
   
   constructor(apiKey: string, baseUrl: string) {
     this.apiKey = apiKey;
@@ -903,8 +903,10 @@ class DifyChat {
         let metaDataProcessed = false;
         
         if (reader) {
-          while (true) {
+          let isDone = false;
+          while (!isDone) {
             const { done, value } = await reader.read();
+            isDone = done;
             if (done) break;
             
             const chunk = new TextDecoder().decode(value);
@@ -954,7 +956,7 @@ class DifyChat {
 class GroqChat {
   private apiKey: string;
   private groq: any; // Groq实例
-  private conversationId: string = ''; // 添加会话ID存储
+  private conversationId = ''; // 添加会话ID存储
   private conversationHistory: Map<string, ChatMessage[]> = new Map(); // 存储不同会话的历史记录
   
   constructor(apiKey: string) {
@@ -1063,7 +1065,7 @@ class GroqChat {
     }
   }
 
-  private optimizeHistory(messages: ChatMessage[], maxTokens: number = 4000): ChatMessage[] {
+  private optimizeHistory(messages: ChatMessage[], maxTokens = 4000): ChatMessage[] {
     // 如果消息数量少，直接返回
     if (messages.length <= 3) return messages;
 
@@ -1095,11 +1097,11 @@ class GroqChat {
 
 // Ollama聊天实现
 class OllamaChat {
-  private baseUrl: string;
-  private conversationId: string = ''; // 添加会话ID存储
+  private baseUrl;
+  private conversationId = ''; // 移除了`: string`类型注解
   private conversationHistory: Map<string, ChatMessage[]> = new Map(); // 存储不同会话的历史记录
   
-  constructor(baseUrl: string = 'http://localhost:11434') {
+  constructor(baseUrl = 'http://localhost:11434') {
     this.baseUrl = baseUrl;
   }
   
@@ -1166,8 +1168,10 @@ class OllamaChat {
         let fullResponse = '';
         
         if (reader) {
-          while (true) {
+          let isDone = false;
+          while (!isDone) {
             const { done, value } = await reader.read();
+            isDone = done;
             if (done) break;
             
             const chunk = new TextDecoder().decode(value);

@@ -1,8 +1,7 @@
 import { callLLMJsonAPI } from './llm';
 import { storeMessage } from './vectorStore';
 import { extractEntitiesToStore } from './entityExtraction';
-import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics } from './vectorStore';
-import { getEnvConfig } from './utils';
+import { naturalLanguageQuery, getAllKnownPeople, getAllKnownProjects } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
 
 // Agent配置接口
@@ -284,12 +283,6 @@ class AgentCoordinator {
   
   // 执行Agent调度流程
   async processMessage(message: any): Promise<MessageProcessResult> {
-    const envConfig = await getEnvConfig();
-    if (envConfig?.ENABLE_AGENT_SYSTEM === false) {
-      console.log('Agent系统已禁用，跳过处理');
-      return { isRelevant: false, shouldStore: false };
-    }
-    
     const agents = await this.getAgents();
     // 按优先级排序
     const sortedAgents = agents

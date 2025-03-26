@@ -3,8 +3,9 @@ import { getCurrentUserInfo, getLocalStorageItem } from "./storage";
 // 环境配置类型定义
 export interface EnvConfigType {
   SCHEDULED_INTERVAL: number;
+  ANALYSIS_TYPE: string;
+  ANALYZE_BY_GROUP: boolean;
   LLM_TYPE: string;
-  LLM_GROUP_ANALYSIS: boolean;
   OLLAMA_BASE_URL: string;
   OLLAMA_MODEL: string;
   OLLAMA_REVIEW_MODEL: string;
@@ -30,8 +31,6 @@ export interface EnvConfigType {
   CHROMA_API_URL: string;
   CHROMA_PORT: number;
   CHROMA_COLLECTION_NAME: string;
-  ENABLE_AGENT_SYSTEM: boolean;
-  ENABLE_INTELLIGENT_AGENT: boolean;
 }
 
 export function formatDate(dateString: string | number) {
@@ -123,8 +122,9 @@ export function transformPostLinks(inputString: string) {
 // 默认环境配置
 export const defaultEnvConfig: EnvConfigType = {
   SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120,
+  ANALYSIS_TYPE: process.env.ANALYSIS_TYPE || "filter",
   LLM_TYPE: process.env.LLM_TYPE || "dify",
-  LLM_GROUP_ANALYSIS: process.env.LLM_GROUP_ANALYSIS === "true",
+  ANALYZE_BY_GROUP: process.env.ANALYZE_BY_GROUP === "true",
   OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
   OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
   OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
@@ -150,8 +150,6 @@ export const defaultEnvConfig: EnvConfigType = {
   CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
   CHROMA_PORT: Number(process.env.CHROMA_PORT) || 8000,
   CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || "",
-  ENABLE_AGENT_SYSTEM: process.env.ENABLE_AGENT_SYSTEM === "true",
-  ENABLE_INTELLIGENT_AGENT: process.env.ENABLE_INTELLIGENT_AGENT === "true"
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
