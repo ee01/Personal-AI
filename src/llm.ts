@@ -108,7 +108,6 @@ async function handleDifyRequest(body: any): Promise<string> {
     // 新增：初始化 Dify API 配置
     const difyConfig = {
         apiKey: envConfig.DIFY_API_KEY,
-        reviewApiKey: envConfig.DIFY_REVIEW_API_KEY,
         baseURL: envConfig.DIFY_API_BASE_URL || 'https://api.dify.ai/v1'
     };
     const response = await fetch(`${difyConfig.baseURL}/completion-messages`, {
