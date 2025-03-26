@@ -4,9 +4,6 @@ import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 
-// 全局配置变量
-let config: any = {};
-
 console.log('Background script loaded');
 
 // 扩展安装或更新时，立即创建定时任务
@@ -15,7 +12,7 @@ chrome.runtime.onInstalled.addListener(async () => {
         console.log('Extension installed/updated');
         
         // 加载配置
-        config = await getEnvConfig();
+        const config = await getEnvConfig();
         console.log('Global config loaded:', config);
 
         // 初始化配置
@@ -80,14 +77,6 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
 });
 
-// 监听 storage 变化，实时更新配置
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.envConfig) {
-    config = changes.envConfig.newValue;
-    console.log('Config updated:', config);
-  }
-});
-
 // 监听定时任务
 chrome.alarms.onAlarm.addListener((alarm) => {
     console.log('alarm', alarm);
@@ -141,7 +130,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 更新环境配置
     if (request.type === 'UPDATE_ENV_CONFIG') {
         chrome.storage.local.set({ envConfig: request.config });
-        config = request.config; // 同时更新全局变量
         console.log('Updated environment config:', request.config);
         sendResponse({ success: true });
         return true;
@@ -153,8 +141,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // 启动定时任务
 let timerFirstRunAlarms: NodeJS.Timeout | null = null;
-export function startScheduledCheck() {
+export async function startScheduledCheck() {
     chrome.storage.local.set({ scheduleActive: true });
+    
+    // 获取最新配置
+    const config = await getEnvConfig();
     
     // 先清除可能存在的旧定时任务
     chrome.alarms.clear('scheduledTask', () => {
@@ -188,6 +179,9 @@ export function stopScheduledCheck() {
 async function runScheduledTask() {
     console.log('Running scheduled task');
     try {
+        // 获取最新配置
+        const config = await getEnvConfig();
+        
         // 查找或创建 RingCentral 标签页
         let rcTab = await findRingCentralTab();
         if (!rcTab) {
@@ -209,7 +203,6 @@ async function runScheduledTask() {
     } catch (error) {
         console.error('Background task error:', error);
     }
-
 }
 
 // 查找已打开的 RingCentral 标签页
