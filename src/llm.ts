@@ -20,7 +20,7 @@ export async function handleLLMRequest(body: any): Promise<string> {
             break;
         case 'dify':
             handler = handleDifyRequest;
-            if (body.type === 'review') body.apiKey = envConfig.DIFY_REVIEW_MODEL;
+            if (body.type === 'review') body.apiKey = envConfig.DIFY_REVIEW_API_KEY;
             break;
         default:
             handler = handleOpenAIRequest;
