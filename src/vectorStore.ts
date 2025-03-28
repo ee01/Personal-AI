@@ -50,7 +50,7 @@ export async function initChromaClient() {
     let username = '';
     try {
       const { userinfo } = await chrome.storage.local.get('userinfo');
-      username = userinfo.fullName.trim().split(' ').join('.').toLowerCase();
+      username = userinfo.username || (userinfo.userEmail ? userinfo.userEmail.trim().split('@')[0] : userinfo.fullName.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''));
       if (!username) throw new Error('username is empty');
     } catch (error) {
       envConfig.CHROMA_COLLECTION_NAME = 'messages'
