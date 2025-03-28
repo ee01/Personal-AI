@@ -56,11 +56,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log('处理 GET_USER_INFO 消息');
         const userInfo = getUserInfo();
         console.log('获取到的用户信息:', userInfo);
-        const username = userInfo.fullName.trim().split(' ').join('.').toLowerCase();
         sendResponse({ success: true, data: {
             fullName: userInfo.fullName,
-            username: username,
-            userEmail: userInfo.email ? userInfo.email : username + '@ringcentral.com',
+            username: userInfo.username,
+            userEmail: userInfo.email,
             extensionId: userInfo.extensionId,
         } });
         return true;
