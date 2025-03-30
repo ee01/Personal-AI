@@ -64,8 +64,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
         // 安全地初始化Chroma
         try {
-            await initChromaClient();
-            console.log('Chroma client initialized');
+            if (await initChromaClient()) console.log('Chroma client initialized');
         } catch (error) {
             console.error('Failed to initialize Chroma:', error);
         }

@@ -55,6 +55,9 @@ const Options = () => {
     // 保存配置到 Chrome 存储
     const saveConfig = async () => {
         try {
+            if (!enableCustomCollection) {
+                config.CHROMA_COLLECTION_NAME = '';
+            }
             await chrome.storage.local.set({ envConfig: config });
             // 通知background脚本更新配置
             await chrome.runtime.sendMessage({

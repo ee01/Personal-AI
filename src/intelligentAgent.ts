@@ -60,9 +60,16 @@ interface MessageProcessResult {
   replyAdvice?: string;
   thoughtProcess?: ThoughtStep[];
   messageIndex?: number;
+  groupIndex?: number;
   groupId?: string;
+  groupName?: string;
   originalMessage?: any;
   matchedRule?: string;
+  llmCallCount?: number;       // 添加LLM调用次数
+  llmCallTokens?: number;      // 添加估计的token使用量
+  aggregateLlmCallCount?: number;  // 添加全局LLM调用次数
+  aggregateLlmCallTokens?: number; // 添加全局估计的token使用量
+  useTools?: string[];         // 添加使用过的工具列表
 }
 
 /**
@@ -380,6 +387,10 @@ class IntelligentAgent {
     
     // 初始化思考过程记录
     this.thoughtProcess = [];
+    // 初始化 LLM 调用统计
+    let llmCallCount = 0;
+    let llmCallTokens = 0;
+    const usedTools = new Set<string>();
     
     // 初始化处理结果
     const result: MessageProcessResult = {
@@ -390,7 +401,10 @@ class IntelligentAgent {
       summary: '',
       enrichedData: {},
       reasonsToStore: [],
-      thoughtProcess: this.thoughtProcess
+      thoughtProcess: this.thoughtProcess,
+      llmCallCount: 0,
+      llmCallTokens: 0,
+      useTools: []
     };
     
     try {
@@ -399,6 +413,8 @@ class IntelligentAgent {
       
       // 1. 先进行消息基本分析
       const initialAnalysis = await this.analyzeMessage(normalizedMessage);
+      llmCallCount += 1;
+      llmCallTokens += this.estimateTokens(normalizedMessage, initialAnalysis);
       
       // 2. 进入思考-行动循环
       const currentState: {
@@ -547,6 +563,11 @@ class IntelligentAgent {
         category: initialAnalysis.category || []
       };
       
+      // 在返回结果前更新统计数据
+      result.llmCallCount = llmCallCount;
+      result.llmCallTokens = llmCallTokens;
+      result.useTools = Array.from(usedTools);
+      
       console.log('智能Agent处理完成:', result);
       return result;
       
@@ -568,7 +589,10 @@ class IntelligentAgent {
         shouldNotify: false,
         confidence: 0,
         summary: `处理失败: ${error.message}`,
-        thoughtProcess: this.thoughtProcess
+        thoughtProcess: this.thoughtProcess,
+        llmCallCount,
+        llmCallTokens,
+        useTools: Array.from(usedTools)
       };
     }
   }
@@ -951,7 +975,7 @@ ${matchedRulesInfo ? '2. 该消息已匹配关注规则，应重点关注并考�
    * 批量分析多条消息，作为群组一次性分析
    * 这允许LLM在分析时考虑消息间的上下文关系
    */
-  private async analyzeBatchMessages(messages: any[], groupContext: any): Promise<any[]> {
+  private async analyzeBatchMessages(messages: any[], groupContext: any, onEveryGroupCompleted?: (results: MessageProcessResult[]) => void): Promise<any[]> {
     if (messages.length === 0) {
       return [];
     }
@@ -1193,7 +1217,7 @@ ${toolDescriptions}
   /**
    * 批量处理多条消息
    */
-  async processBatchMessages(messages: any[], groupContext: any): Promise<MessageProcessResult[]> {
+  async processBatchMessages(messages: any[], groupContext: any, onGroupCompleted?: (results: MessageProcessResult[]) => void): Promise<MessageProcessResult[]> {
     console.log(`智能Agent开始批量处理 ${messages.length} 条消息`);
     
     if (messages.length === 0) {
@@ -1202,6 +1226,9 @@ ${toolDescriptions}
     
     // 初始化思考过程记录
     this.thoughtProcess = [];
+    // 初始化 LLM 调用统计
+    const usedTools = new Set<string>();
+    let groupIndex = 0;
     
     try {
       // 1. 标准化所有消息格式
@@ -1210,6 +1237,10 @@ ${toolDescriptions}
       // 2. 批量分析所有消息，一次性分析所有消息以获取上下文
       console.log("开始批量分析消息...", normalizedMessages, groupContext);
       const batchAnalysisResults = await this.analyzeBatchMessages(normalizedMessages, groupContext);
+      // 记录第一次 LLM 调用
+      const analysisLlmCallTokens = this.estimateTokens(normalizedMessages, batchAnalysisResults);
+      groupContext.aggregateLlmCallCount += 1;
+      groupContext.aggregateLlmCallTokens += analysisLlmCallTokens;
       
       // 记录批量处理开始
       const batchStartStep: ThoughtStep = {
@@ -1233,6 +1264,8 @@ ${toolDescriptions}
           needsProcessing: false,
           isNoiseMessage: false
         };
+        let thoughtLlmCallCount = 0;
+        let thoughtLlmCallTokens = 0;
         
         // 如果是噪音消息且不需要处理，创建简化的结果
         if (analysis.isNoiseMessage === true && analysis.needsProcessing === false) {
@@ -1249,15 +1282,32 @@ ${toolDescriptions}
               action: "跳过处理"
             }],
             messageIndex: i,
+            groupIndex: groupContext.groupIndex || groupIndex,
             groupId: message.team_id || '',
+            groupName: message.team_name || '',
             originalMessage: message,
-            matchedRule: '' // 噪音消息一般不匹配任何规则
+            matchedRule: '', // 噪音消息一般不匹配任何规则
+            llmCallCount: 1,
+            llmCallTokens: analysisLlmCallTokens,
+            aggregateLlmCallCount: groupContext.aggregateLlmCallCount,
+            aggregateLlmCallTokens: groupContext.aggregateLlmCallTokens,
+            useTools: []
           });
+          if (i === normalizedMessages.length - 1 || normalizedMessages[i].team_id !== normalizedMessages[i+1]?.team_id) {
+            groupIndex++;
+            // 找出当前组的所有消息结果
+            const currentGroupResults = results.filter(r => r.groupId === message.team_id);
+            // 调用回调函数
+            if (onGroupCompleted && currentGroupResults.length > 0) {
+              onGroupCompleted(currentGroupResults);
+            }
+          }
           continue;
         }
         
         // 为需要处理的消息创建消息处理结果
         const messageThoughtProcess: ThoughtStep[] = [];
+        const messageUsedTools: string[] = [];
         const result: MessageProcessResult = {
           isImportant: analysis.importanceLevel === "high",
           shouldStore: false,
@@ -1274,11 +1324,18 @@ ${toolDescriptions}
           reasonsToStore: [],
           thoughtProcess: messageThoughtProcess,
           messageIndex: i,
+          groupIndex: groupContext.groupIndex || groupIndex,
           groupId: message.team_id || '',
+          groupName: message.team_name || '',
           originalMessage: message,
           matchedRule: analysis.matchedRules && analysis.matchedRules.length > 0 
             ? analysis.matchedRules.join('; ') 
-            : ''
+            : '',
+          llmCallCount: thoughtLlmCallCount,
+          llmCallTokens: thoughtLlmCallTokens,
+          aggregateLlmCallCount: groupContext.aggregateLlmCallCount,
+          aggregateLlmCallTokens: groupContext.aggregateLlmCallTokens,
+          useTools: messageUsedTools
         };
         
         // 准备当前消息的状态
@@ -1335,7 +1392,10 @@ ${toolDescriptions}
           let thoughtResult:ThoughtResult;
           if (currentState.actionCount > 0) {
             thoughtResult = await this.think(currentState);
-          }else{
+            // 记录思考的 LLM 调用
+            thoughtLlmCallCount += 1;
+            thoughtLlmCallTokens += this.estimateTokens(currentState, thoughtResult);
+          } else {
             thoughtResult = {
               thought: analysis.thought,
               nextAction: analysis.nextAction,
@@ -1373,6 +1433,12 @@ ${toolDescriptions}
           // 执行工具调用
           if (thoughtResult.tools && thoughtResult.tools.length > 0) {
             thoughtStep.toolUsed = thoughtResult.tools.join(', '); // 记录所有使用的工具
+            
+            // 记录使用的工具
+            thoughtResult.tools.forEach(toolId => {
+              messageUsedTools.push(toolId);
+              usedTools.add(toolId);
+            });
             
             // 并发执行所有选择的工具
             const toolPromises = thoughtResult.tools.map(async (toolId: string) => {
@@ -1452,13 +1518,33 @@ ${toolDescriptions}
           team_name: message.team_name
         };
         
+        // 更新 LLM 调用统计
+        result.llmCallCount = 1 + thoughtLlmCallCount;
+        result.llmCallTokens = analysisLlmCallTokens + thoughtLlmCallTokens;
+        result.useTools = Array.from(new Set(messageUsedTools)); // 去重
+        groupContext.aggregateLlmCallCount += thoughtLlmCallCount;
+        groupContext.aggregateLlmCallTokens += thoughtLlmCallTokens;
+        result.aggregateLlmCallCount = groupContext.aggregateLlmCallCount;
+        result.aggregateLlmCallTokens = groupContext.aggregateLlmCallTokens;
+        
         results.push(result);
+        
+        // 每条消息处理完成后，检查是否所有同一组的消息都已处理完毕
+        if (i === normalizedMessages.length - 1 || normalizedMessages[i].team_id !== normalizedMessages[i+1]?.team_id) {
+          groupIndex++;
+          // 找出当前组的所有消息结果
+          const currentGroupResults = results.filter(r => r.groupId === message.team_id);
+          // 调用回调函数
+          if (onGroupCompleted && currentGroupResults.length > 0) {
+            onGroupCompleted(currentGroupResults);
+          }
+        }
       }
       
       // 记录批量处理完成
       const batchEndStep: ThoughtStep = {
         timestamp: Date.now(),
-        thought: `完成批量处理 ${messages.length} 条消息，其中 ${results.filter((r: MessageProcessResult) => r.shouldStore).length} 条被存储，${results.filter((r: MessageProcessResult) => r.shouldNotify).length} 条需要通知`,
+        thought: `完成批量处理 ${messages.length} 条消息，其中 ${results.filter((r: MessageProcessResult) => r.shouldStore).length} 条被存储，${results.filter((r: MessageProcessResult) => r.shouldNotify).length} 条需要通知。共调用 LLM ${groupContext.aggregateLlmCallCount} 次，估计使用 ${groupContext.aggregateLlmCallTokens} tokens，使用工具：${Array.from(usedTools).join(', ')}`,
         action: '完成批量处理'
       };
       this.thoughtProcess.push(batchEndStep);
@@ -1478,15 +1564,40 @@ ${toolDescriptions}
       });
       
       // 返回错误结果
-      return messages.map(() => ({
+      const errorResults = messages.map(() => ({
         isImportant: false,
         shouldStore: false,
         shouldNotify: false,
         confidence: 0,
         summary: `批量处理失败: ${error.message}`,
-        thoughtProcess: this.thoughtProcess
+        thoughtProcess: this.thoughtProcess,
+        llmCallCount: groupContext.aggregateLlmCallCount,
+        llmCallTokens: groupContext.aggregateLlmCallTokens,
+        useTools: Array.from(usedTools)
       }));
+      
+      // 调用回调函数，通知处理失败
+      if (onGroupCompleted) {
+        onGroupCompleted(errorResults);
+      }
+      
+      return errorResults;
     }
+  }
+
+  /**
+   * 粗略估算处理消息所用的tokens数量
+   */
+  private estimateTokens(input: any, output: any): number {
+    // 一个简单的估算方法是计算字符数，然后按照一定比例转换为tokens
+    // 英文中大约每4个字符为1个token，为了简化我们使用字符数/3作为token估算
+    const inputStr = JSON.stringify(input);
+    const outputStr = JSON.stringify(output);
+    
+    const totalChars = inputStr.length + outputStr.length;
+    const estimatedTokens = Math.ceil(totalChars / 3);
+    
+    return estimatedTokens;
   }
 }
 
@@ -1513,7 +1624,7 @@ function detectMessageFormat(input: any): string {
 /**
  * 处理新消息(支持多种消息格式，支持批量处理)
  */
-export async function processMessage(input: any): Promise<MessageProcessResult | MessageProcessResult[]> {
+export async function processMessage(input: any, onEveryGroupCompleted?: (results: MessageProcessResult[]) => void): Promise<MessageProcessResult | MessageProcessResult[]> {
   // 检测输入格式
   const format = detectMessageFormat(input);
   console.log(`检测到消息格式: ${format}`);
@@ -1527,6 +1638,16 @@ export async function processMessage(input: any): Promise<MessageProcessResult |
       // 为每个消息组单独批量处理
       const results: MessageProcessResult[] = [];
       
+      // 添加 groupIndex 计数器
+      const groupContext = {
+        groupName: '',
+        groupId: '',
+        groupIndex: 0,
+        username: input.username,
+        aggregateLlmCallCount: 0,
+        aggregateLlmCallTokens: 0,
+      };
+      
       for (const group of input.messageGroups) {
         const groupMessages = group.posts.map((post: any) => ({
           message_content: post.content,
@@ -1539,27 +1660,48 @@ export async function processMessage(input: any): Promise<MessageProcessResult |
           concernedItems: input.concernedItems,
           username: input.username
         }));
-        
-        const groupContext = {
-          groupName: group.groupName,
-          groupId: group.groupId,
-          username: input.username
-        };
+
+        groupContext.groupId = group.groupId;
+        groupContext.groupName = group.groupName;
         
         try {
-          const groupResults = await intelligentAgent.processBatchMessages(groupMessages, groupContext);
+          const groupResults = await intelligentAgent.processBatchMessages(groupMessages, groupContext, onEveryGroupCompleted);
           results.push(...groupResults);
+          groupContext.aggregateLlmCallCount = groupResults[groupResults.length - 1].aggregateLlmCallCount;
+          groupContext.aggregateLlmCallTokens = groupResults[groupResults.length - 1].aggregateLlmCallTokens;
         } catch (error) {
           console.error(`处理消息组失败: ${group.groupName}`, error);
           // 为该组中的每条消息添加一个错误结果
-          results.push(...groupMessages.map(() => ({
+          const errorResults = groupMessages.map(() => ({
             isImportant: false,
             shouldStore: false,
             shouldNotify: false,
             confidence: 0,
-            summary: `批量处理消息组失败: ${error.message}`
-          })));
+            summary: `批量处理消息组失败: ${error.message}`,
+            llmCallCount: 0,
+            llmCallTokens: 0,
+            useTools: [],
+            reasonsToStore: [],
+            thoughtProcess: [{
+              timestamp: Date.now(),
+              thought: "批量处理消息组失败",
+              action: "跳过处理"
+            }],
+            messageIndex: 0,
+            groupIndex: groupContext.groupIndex,
+            groupId: '',
+            groupName: '',
+            originalMessage: {},
+            matchedRule: ''
+          }));
+          results.push(...errorResults);
+          if (onEveryGroupCompleted) {
+            onEveryGroupCompleted(errorResults);
+          }
         }
+        
+        // 每处理完一个组，增加 groupIndex
+        groupContext.groupIndex++;
       }
       
       return results;
@@ -1586,20 +1728,41 @@ export async function processMessage(input: any): Promise<MessageProcessResult |
       const globalContext = {
         groupCount: input.messageGroups.length,
         username: input.username,
-        concernedItems: input.concernedItems
+        concernedItems: input.concernedItems,
+        aggregateLlmCallCount: 0,
+        aggregateLlmCallTokens: 0,
       };
       
       try {
-        return await intelligentAgent.processBatchMessages(allMessages, globalContext);
+        return await intelligentAgent.processBatchMessages(allMessages, globalContext, onEveryGroupCompleted);
       } catch (error) {
         console.error('批量处理所有消息组失败:', error);
-        return allMessages.map(() => ({
+        const errorResults = allMessages.map(() => ({
           isImportant: false,
           shouldStore: false,
           shouldNotify: false,
           confidence: 0,
-          summary: `批量处理失败: ${error.message}`
+          summary: `批量处理失败: ${error.message}`,
+          llmCallCount: 0,
+          llmCallTokens: 0,
+          useTools: [],
+          reasonsToStore: [],
+          thoughtProcess: [{
+            timestamp: Date.now(),
+            thought: "批量处理失败",
+            action: "终止处理"
+          }],
+          messageIndex: 0,
+          groupIndex: 0,
+          groupId: '',
+          groupName: '',
+          originalMessage: {},
+          matchedRule: ''
         }));
+        if (onEveryGroupCompleted) {
+          onEveryGroupCompleted(errorResults);
+        }
+        return errorResults;
       }
     }
   } else if (format === 'message_group') {
@@ -1619,25 +1782,51 @@ export async function processMessage(input: any): Promise<MessageProcessResult |
     const groupContext = {
       groupName: input.groupName,
       groupId: input.groupId,
-      username: input.username
+      groupIndex: 0,
+      username: input.username,
+      aggregateLlmCallCount: 0,
+      aggregateLlmCallTokens: 0,
     };
     
     try {
-      const results = await intelligentAgent.processBatchMessages(messages, groupContext);
+      const results = await intelligentAgent.processBatchMessages(messages, groupContext, onEveryGroupCompleted);
       return results.length === 1 ? results[0] : results;
     } catch (error) {
       console.error('批量处理消息组失败:', error);
-      return messages.map(() => ({
+      const errorResults = messages.map(() => ({
         isImportant: false,
         shouldStore: false,
         shouldNotify: false,
         confidence: 0,
-        summary: `批量处理失败: ${error.message}`
+        summary: `批量处理失败: ${error.message}`,
+        llmCallCount: 0,
+        llmCallTokens: 0,
+        useTools: [],
+        reasonsToStore: [],
+        thoughtProcess: [{
+          timestamp: Date.now(),
+          thought: "批量处理失败",
+          action: "终止处理"
+        }],
+        messageIndex: 0,
+        groupIndex: 0,
+        groupId: '',
+        groupName: '',
+        originalMessage: {},
+        matchedRule: ''
       }));
+      if (onEveryGroupCompleted) {
+        onEveryGroupCompleted(errorResults);
+      }
+      return errorResults;
     }
   } else {
     // 单个消息，直接处理
-    return await intelligentAgent.processSingleMessage(input);
+    const result = await intelligentAgent.processSingleMessage(input);
+    if (onEveryGroupCompleted) {
+      onEveryGroupCompleted([result]);
+    }
+    return result;
   }
 }
 

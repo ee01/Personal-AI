@@ -1,6 +1,6 @@
 {
   "name": "personal-ai",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "description": "Radar PoC chrome extension",
   "scripts": {
     "start": "webpack --watch --config webpack.dev.cjs",

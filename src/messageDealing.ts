@@ -104,7 +104,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			// 设置初始进度信息
 			chrome.storage.local.set({
 				ollamaAnalysisProgress: {
-					total: 1,
+					total: data.length,
 					lastAnalyzedIndex: 0,
 					lastAnalyzedTime: new Date().toISOString()
 				}
@@ -127,10 +127,20 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			console.log(`开始批量处理 ${messageGroups.length} 个群组的所有消息...`);
 			
 			// 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
+			// Todo: progress记录onProcess, 记录LLM次数
 			const allResults = await processMessage({
 				messageGroups: messageGroups,
 				username: username,
 				concernedItems: concernedItems
+			}, (results: any[]) => {
+				console.log('已分析', results[0].groupIndex+1, '/' ,data.length ,'，当前群组 [', results[0].groupName, '] 处理结果:', results);
+				chrome.storage.local.set({
+					ollamaAnalysisProgress: {
+						total: data.length,
+						lastAnalyzedIndex: results[0].groupIndex + 1,
+						lastAnalyzedTime: new Date().toISOString(),
+					}
+				});
 			});
 			
 			// 转换结果为数组格式，便于统计
@@ -149,8 +159,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			// 更新进度为完成
 			chrome.storage.local.set({
 				ollamaAnalysisProgress: {
-					total: 1,
-					lastAnalyzedIndex: 1,
+					total: data.length,
+					lastAnalyzedIndex: data.length,
 					lastAnalyzedTime: new Date().toISOString(),
 					processingStats: {
 						total: resultsArray.length,
@@ -327,7 +337,7 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 		const isScheduledTask = typeof window === 'undefined'; // background script 环境中代表是定时任务
 		for (let index = 0; index < data.length; index++) {
 			const item = data[index];
-			console.log(`--开始分析第 ${index+1}/${data.length} 条消息--`);
+			console.log(`--开始分析第 ${index+1}/${data.length} 个群组的消息--`);
 			// 检查是否需要继续分析
 			if (!scheduleActive && isScheduledTask) {
 				console.log('分析任务已被终止');
