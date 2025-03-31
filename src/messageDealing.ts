@@ -76,22 +76,22 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	//     { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
 	//   ]
 	// });
-	data.unshift({
-	  groupName: '大群',
-	  groupId: '2578219014',
-	  posts: [
-	    { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
-	    { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
-	  ]
-	});
-	data.unshift({
-	  groupName: '小群',
-	  groupId: '321',
-	  posts: [
-	    { creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
-	  ]
-	});
-	data.splice(2);
+	// data.unshift({
+	//   groupName: '大群',
+	//   groupId: '2578219014',
+	//   posts: [
+	//     { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
+	//     { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
+	//   ]
+	// });
+	// data.unshift({
+	//   groupName: '小群',
+	//   groupId: '321',
+	//   posts: [
+	//     { creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
+	//   ]
+	// });
+	// data.splice(2);
 	console.log(data, concernedItems, username);
     
     // 根据配置选择处理方式
