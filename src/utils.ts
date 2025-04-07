@@ -31,6 +31,10 @@ export interface EnvConfigType {
   CHROMA_API_URL: string;
   CHROMA_PORT: number;
   CHROMA_COLLECTION_NAME: string;
+  // JIRA相关配置
+  JIRA_BASE_URL?: string;
+  JIRA_USERNAME?: string;
+  JIRA_API_TOKEN?: string;
 }
 
 export function formatDate(dateString: string | number) {
@@ -150,6 +154,9 @@ export const defaultEnvConfig: EnvConfigType = {
   CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
   CHROMA_PORT: Number(process.env.CHROMA_PORT) || 8000,
   CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || "",
+  JIRA_BASE_URL: process.env.JIRA_BASE_URL || "",
+  JIRA_USERNAME: process.env.JIRA_USERNAME || "",
+  JIRA_API_TOKEN: process.env.JIRA_API_TOKEN || "",
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

@@ -184,11 +184,22 @@ registerTool({
   }
 });
 
-// JIRA查询工具改造为使用MCP服务
+// 添加JIRA查询缓存
+const jiraCache: {
+  [key: string]: {
+    data: any;
+    timestamp: number;
+    expiresAt: number;
+  }
+} = {};
+
+// 缓存有效期（毫秒）
+const JIRA_CACHE_TTL = 30 * 60 * 1000; // 30分钟
+
 registerTool({
   id: 'jiraQuery',
   name: 'JIRA信息查询',
-  description: '通过MCP服务查询JIRA中的任务、需求和bug信息',
+  description: '直接调用JIRA REST API查询任务、需求和bug信息',
   parameterDefs: [
     {
       name: 'issueId',
@@ -198,68 +209,199 @@ registerTool({
     },
     {
       name: 'keywords',
-      description: '搜索关键词',
+      description: '搜索关键词，使用JQL中的text搜索',
       required: false,
       type: 'string'
     },
     {
       name: 'project',
-      description: 'JIRA项目代号',
+      description: 'JIRA项目代号，例如 PROJ',
       required: false,
       type: 'string'
     },
     {
       name: 'status',
-      description: '任务状态过滤',
+      description: '任务状态过滤，例如 "In Progress", "Done"',
       required: false,
       type: 'string'
+    },
+    {
+      name: 'forceRefresh',
+      description: '强制刷新缓存，不使用已缓存的数据',
+      required: false,
+      type: 'boolean',
+      defaultValue: false
     }
   ],
   execute: async (params) => {
-    // 使用MCP服务查询JIRA
-    const mcpUrl = 'https://mcp.composio.dev/jira/dead-astonishing-rose-JWjfCI';
+    console.log('执行JIRA REST API查询:', params);
     
     try {
-      // 构建查询参数
-      const queryParams = new URLSearchParams();
+      // 从环境配置或参数中获取JIRA连接信息
+      const envConfig = await getEnvConfig();
+      const jiraBaseUrl = envConfig.JIRA_BASE_URL || 'https://your-domain.atlassian.net';
+      const apiToken = envConfig.JIRA_API_TOKEN;
+      
+      // 检查认证信息是否可用
+      if (!apiToken) {
+        return {
+          success: false,
+          source: 'jira-api',
+          error: '缺少JIRA认证信息，请在参数中提供username和apiToken或在环境配置中设置'
+        };
+      }
+      
+      // 生成缓存键
+      let cacheKey = '';
       if (params.issueId) {
-        queryParams.append('issueId', params.issueId);
-      }
-      if (params.keywords) {
-        queryParams.append('keywords', params.keywords);
-      }
-      if (params.project) {
-        queryParams.append('project', params.project);
-      }
-      if (params.status) {
-        queryParams.append('status', params.status);
+        cacheKey = `issue-${params.issueId}`;
+      } else {
+        // 使用JQL参数生成缓存键
+        const jqlParams = [
+          params.project ? `project=${params.project}` : '',
+          params.status ? `status=${params.status}` : '',
+          params.keywords ? `keywords=${params.keywords}` : ''
+        ].filter(Boolean).join('&');
+        cacheKey = `search-${jqlParams}`;
       }
       
-      // 发送请求到MCP服务
-      const response = await fetch(`${mcpUrl}/search?${queryParams.toString()}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
+      // 检查缓存是否有效且未过期
+      const now = Date.now();
+      const cacheEntry = jiraCache[cacheKey];
+      
+      if (!params.forceRefresh && cacheEntry && cacheEntry.expiresAt > now) {
+        console.log(`使用缓存的JIRA数据: ${cacheKey}`);
+        return cacheEntry.data;
+      }
+      
+      // 为Basic认证创建Authorization头
+      const authHeader = `Bearer ${apiToken}`;
+      
+      let result;
+      // 处理不同的查询类型
+      if (params.issueId) {
+        // 查询单个JIRA问题
+        const issueUrl = `${jiraBaseUrl}/rest/api/2/issue/${params.issueId}`;
+        console.log(`查询JIRA问题: ${issueUrl}`);
+        
+        const response = await fetch(issueUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': authHeader
+          }
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`查询JIRA问题失败 (${response.status}): ${errorText}`);
         }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`MCP JIRA服务返回错误: ${response.status}`);
+        
+        const responseData = await response.json();
+        result = {
+          summary: responseData.fields.summary,
+          status: responseData.fields.status.name,
+          assignee: responseData.fields.assignee.displayName,
+          reporter: responseData.fields.reporter.displayName,
+          priority: responseData.fields.priority.name,
+          issuetype: responseData.fields.issuetype.name,
+          duedate: responseData.fields.duedate,
+          comments: responseData.fields.comment.comments.splice(-3).map((comment: any) => comment.author.displayName + ': ' + comment.body),
+          description: responseData.fields.description,
+        };
+      } else {
+        // 构建JQL查询
+        let jql = '';
+        
+        if (params.project) {
+          jql += `project = ${params.project}`;
+        }
+          
+        if (params.status) {
+          jql += jql ? ` AND status = "${params.status}"` : `status = "${params.status}"`;
+        }
+        
+        if (params.keywords) {
+          const keywordQuery = `text ~ "${params.keywords}"`;
+          jql += jql ? ` AND ${keywordQuery}` : keywordQuery;
+        }
+        
+        // 如果没有任何条件，搜索最近更新的问题
+        if (!jql) {
+          jql = 'updated >= -30d ORDER BY updated DESC';
+        }
+        
+        console.log(`执行JQL查询: ${jql}`);
+        
+        // 使用POST方法进行搜索以处理可能较长的JQL
+        const searchUrl = `${jiraBaseUrl}/rest/api/2/search`;
+        const response = await fetch(searchUrl, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Authorization': authHeader
+          },
+          body: JSON.stringify({
+            jql: jql,
+            maxResults: 10,
+            fields: [
+              'summary',
+              'status',
+              'assignee',
+              'description',
+              'priority',
+              'issuetype',
+              'created',
+              'updated',
+              'duedate',
+              'reporter'
+            ]
+          })
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`JIRA搜索查询失败 (${response.status}): ${errorText}`);
+        }
+        
+        result = await response.json();
       }
       
-      const result = await response.json();
-      
-      return {
-        success: true,
-        source: 'mcp-jira',
-        data: result
+      // 存储结果到缓存
+      jiraCache[cacheKey] = {
+        data: result,
+        timestamp: now,
+        expiresAt: now + JIRA_CACHE_TTL
       };
+      
+      return result;
     } catch (error) {
-      console.error('JIRA查询失败:', error);
+      console.error('JIRA API查询失败:', error);
+      
+      // 增强错误消息
+      let errorMessage = '查询JIRA时发生错误';
+      
+      if (error.message) {
+        errorMessage = error.message;
+        
+        // 细化错误消息
+        if (error.message.includes('401')) {
+          errorMessage = `JIRA认证失败: ${error.message}。请检查用户名和API令牌是否正确。`;
+        } else if (error.message.includes('403')) {
+          errorMessage = `JIRA权限不足: ${error.message}。请确保用户有权访问请求的资源。`;
+        } else if (error.message.includes('404')) {
+          errorMessage = `JIRA资源未找到: ${error.message}。请检查JIRA基础URL和问题ID是否正确。`;
+        } else if (error.message.includes('400')) {
+          errorMessage = `JIRA请求无效: ${error.message}。请检查JQL查询语法。`;
+        }
+      }
+      
       return {
         success: false,
-        source: 'mcp-jira',
-        error: error.message || '查询JIRA时发生错误'
+        source: 'jira-api',
+        error: errorMessage,
+        originalError: error
       };
     }
   }
@@ -404,7 +546,7 @@ class IntelligentAgent {
       thoughtProcess: this.thoughtProcess,
       llmCallCount: 0,
       llmCallTokens: 0,
-      useTools: []
+      useTools: [] as string[]
     };
     
     try {
@@ -557,8 +699,8 @@ class IntelligentAgent {
         ...currentState.memory,
         thoughtProcess: this.thoughtProcess.slice(),
         entities: currentState.memory.entityExtractor?.entities || message.entities || {},
-        relationships: currentState.memory.entityExtractor?.relationships || message.relationships || [],
-        actions: currentState.memory.entityExtractor?.actions || message.actions || [],
+        relationships: currentState.memory.entityExtractor?.relationships || message.relationships || [] as Record<string, any>[],
+        actions: currentState.memory.entityExtractor?.actions || message.actions || [] as Record<string, any>[],
         sentiment: initialAnalysis.sentiment || 'neutral',
         category: initialAnalysis.category || []
       };
@@ -592,7 +734,8 @@ class IntelligentAgent {
         thoughtProcess: this.thoughtProcess,
         llmCallCount,
         llmCallTokens,
-        useTools: Array.from(usedTools)
+        useTools: Array.from(usedTools) as string[],
+        reasonsToStore: [] as string[]
       };
     }
   }
@@ -771,15 +914,15 @@ ${toolDescriptions}
         notificationPriority: "low",
         replyAdvice: "",
         entities: {
-          people: [],
-          time: [],
-          projects: [],
-          topics: [],
-          location: [],
-          resources: []
+          people: [] as Record<string, any>[],
+          time: [] as Record<string, any>[],
+          projects: [] as Record<string, any>[],
+          topics: [] as Record<string, any>[],
+          location: [] as Record<string, any>[],
+          resources: [] as Record<string, any>[]
         },
-        relationships: [],
-        actions: []
+        relationships: [] as Record<string, any>[],
+        actions: [] as Record<string, any>[]
       };
     }
   }
@@ -808,7 +951,7 @@ ${toolDescriptions}
 
     // 增强已收集信息的显示，明确标出已执行过的工具
     const memoryContent = Object.entries(state.memory).map(([key, value]: [string, any]) => 
-      `- ${key} [已执行]: ${JSON.stringify(value).substring(0, 300)}${JSON.stringify(value).length > 300 ? '...' : ''}`
+      `- ${key} [已执行]: ${JSON.stringify(value).substring(0, 500)}${JSON.stringify(value).length > 300 ? '...' : ''}`
     ).join('\n');
 
     // 获取关注规则匹配信息
@@ -964,7 +1107,7 @@ ${matchedRulesInfo ? '2. 该消息已匹配关注规则，应重点关注并考�
       return {
         thought: `思考过程中出错: ${error.message}，决定结束处理`,
         nextAction: 'finish',
-        tools: [],
+        tools: [] as string[],
         params: {},
         ...state.currentDecision // 添加当前决策状态
       };
@@ -1123,12 +1266,12 @@ ${toolDescriptions}
           // 确保实体信息字段存在
           if (!result.entities) {
             result.entities = {
-              people: [],
-              time: [],
-              projects: [],
-              topics: [],
-              location: [],
-              resources: []
+              people: [] as Record<string, any>[],
+              time: [] as Record<string, any>[],
+              projects: [] as Record<string, any>[],
+              topics: [] as Record<string, any>[],
+              location: [] as Record<string, any>[],
+              resources: [] as Record<string, any>[]
             };
           }
           
@@ -1153,7 +1296,7 @@ ${toolDescriptions}
           potentialNextSteps: [] as string[],
           thought: "分析失败，无法提供有效思考",
           nextAction: "finish",
-          tools: [],
+          tools: [] as string[],
           params: {},
           shouldStore: false,
           shouldNotify: false,
@@ -1162,15 +1305,15 @@ ${toolDescriptions}
           notificationPriority: "low",
           replyAdvice: "",
           entities: {
-            people: [],
-            time: [],
-            projects: [],
-            topics: [],
-            location: [],
-            resources: []
+            people: [] as Record<string, any>[],
+            time: [] as Record<string, any>[],
+            projects: [] as Record<string, any>[],
+            topics: [] as Record<string, any>[],
+            location: [] as Record<string, any>[],
+            resources: [] as Record<string, any>[]
           },
-          relationships: [],
-          actions: []
+          relationships: [] as Record<string, any>[],
+          actions: [] as Record<string, any>[]
         }));
       }
     } catch (error) {
@@ -1192,7 +1335,7 @@ ${toolDescriptions}
         potentialNextSteps: [] as string[],
         thought: "分析失败，无法提供有效思考",
         nextAction: "finish",
-        tools: [],
+        tools: [] as string[],
         params: {},
         shouldStore: false,
         shouldNotify: false,
@@ -1201,15 +1344,15 @@ ${toolDescriptions}
         notificationPriority: "low",
         replyAdvice: "",
         entities: {
-          people: [],
-          time: [],
-          projects: [],
-          topics: [],
-          location: [],
-          resources: []
+          people: [] as Record<string, any>[],
+          time: [] as Record<string, any>[],
+          projects: [] as Record<string, any>[],
+          topics: [] as Record<string, any>[],
+          location: [] as Record<string, any>[],
+          resources: [] as Record<string, any>[]
         },
-        relationships: [],
-        actions: []
+        relationships: [] as Record<string, any>[],
+        actions: [] as Record<string, any>[]
       }));
     }
   }
@@ -1291,7 +1434,7 @@ ${toolDescriptions}
             llmCallTokens: analysisLlmCallTokens,
             aggregateLlmCallCount: groupContext.aggregateLlmCallCount,
             aggregateLlmCallTokens: groupContext.aggregateLlmCallTokens,
-            useTools: []
+            useTools: [] as string[]
           });
           if (i === normalizedMessages.length - 1 || normalizedMessages[i].team_id !== normalizedMessages[i+1]?.team_id) {
             groupIndex++;
@@ -1335,7 +1478,7 @@ ${toolDescriptions}
           llmCallTokens: thoughtLlmCallTokens,
           aggregateLlmCallCount: groupContext.aggregateLlmCallCount,
           aggregateLlmCallTokens: groupContext.aggregateLlmCallTokens,
-          useTools: messageUsedTools
+          useTools: messageUsedTools as string[]
         };
         
         // 准备当前消息的状态
@@ -1573,7 +1716,8 @@ ${toolDescriptions}
         thoughtProcess: this.thoughtProcess,
         llmCallCount: groupContext.aggregateLlmCallCount,
         llmCallTokens: groupContext.aggregateLlmCallTokens,
-        useTools: Array.from(usedTools)
+        useTools: Array.from(usedTools) as string[],
+        reasonsToStore: [] as string[]
       }));
       
       // 调用回调函数，通知处理失败
@@ -1680,8 +1824,8 @@ export async function processMessage(input: any, onEveryGroupCompleted?: (result
             summary: `批量处理消息组失败: ${error.message}`,
             llmCallCount: 0,
             llmCallTokens: 0,
-            useTools: [],
-            reasonsToStore: [],
+            useTools: [] as string[],
+            reasonsToStore: [] as string[],
             thoughtProcess: [{
               timestamp: Date.now(),
               thought: "批量处理消息组失败",
@@ -1745,7 +1889,7 @@ export async function processMessage(input: any, onEveryGroupCompleted?: (result
           summary: `批量处理失败: ${error.message}`,
           llmCallCount: 0,
           llmCallTokens: 0,
-          useTools: [],
+          useTools: [] as string[],
           reasonsToStore: [],
           thoughtProcess: [{
             timestamp: Date.now(),
@@ -1801,8 +1945,8 @@ export async function processMessage(input: any, onEveryGroupCompleted?: (result
         summary: `批量处理失败: ${error.message}`,
         llmCallCount: 0,
         llmCallTokens: 0,
-        useTools: [],
-        reasonsToStore: [],
+        useTools: [] as string[],
+        reasonsToStore: [] as string[],
         thoughtProcess: [{
           timestamp: Date.now(),
           thought: "批量处理失败",

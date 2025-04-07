@@ -14,6 +14,7 @@ services:
       - CHROMA_SERVER_AUTH_CREDENTIALS_FILE=
       - CHROMA_SERVER_AUTH_CREDENTIALS=
       - CHROMA_SERVER_AUTH_PROVIDER=
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=*
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
