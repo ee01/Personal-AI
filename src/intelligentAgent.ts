@@ -1118,7 +1118,7 @@ ${matchedRulesInfo ? '2. 该消息已匹配关注规则，应重点关注并考�
    * 批量分析多条消息，作为群组一次性分析
    * 这允许LLM在分析时考虑消息间的上下文关系
    */
-  private async analyzeBatchMessages(messages: any[], groupContext: any, onEveryGroupCompleted?: (results: MessageProcessResult[]) => void): Promise<any[]> {
+  private async analyzeBatchMessages(messages: any[], groupContext: any): Promise<any[]> {
     if (messages.length === 0) {
       return [];
     }

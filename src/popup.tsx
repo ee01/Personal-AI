@@ -14,107 +14,33 @@ interface TabResponse {
     config?: any;
 }
 
+const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
+    <div className="toggle-container">
+        <span className="toggle-label">{label}</span>
+        <label className="toggle-switch">
+            <input type="checkbox" checked={checked} onChange={onChange} />
+            <span className="toggle-slider"></span>
+        </label>
+    </div>
+);
+
 const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
     const [envConfig, setEnvConfig] = useState<any>(null);
-    const [analysisProgress, setAnalysisProgress] = useState<{
-        total: number;
-        lastAnalyzedIndex: number;
-        lastAnalyzedTime: string;
-    } | null>(null);
-
     useEffect(() => {
         (async () => {
             // 获取定时任务状态
             const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
             setIsScheduleActive(scheduleActive === true);
-            
-            // 获取配置
-            const envConfigData = await getEnvConfig();
-            setEnvConfig(envConfigData);
         })();
     }, []);
 
     useEffect(() => {
-        // 初始化时获取进度
-        chrome.storage.local.get('ollamaAnalysisProgress', (result) => {
-            console.log("ollamaAnalysisProgress:", result.ollamaAnalysisProgress);
-            if (result.ollamaAnalysisProgress) {
-                setAnalysisProgress(result.ollamaAnalysisProgress);
-                setIsLoading(result.ollamaAnalysisProgress && result.ollamaAnalysisProgress.lastAnalyzedIndex < result.ollamaAnalysisProgress.total);
-            }
-        });
-
-        // 监听 storage 变化
-        const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }) => {
-            if (changes.ollamaAnalysisProgress) {
-                setAnalysisProgress(changes.ollamaAnalysisProgress.newValue);
-                console.log("ollamaAnalysisProgress:", changes.ollamaAnalysisProgress);
-                setIsLoading(changes.ollamaAnalysisProgress.newValue && changes.ollamaAnalysisProgress.newValue.lastAnalyzedIndex < changes.ollamaAnalysisProgress.newValue.total);
-                if (changes.ollamaAnalysisProgress.newValue && changes.ollamaAnalysisProgress.newValue.lastAnalyzedIndex >= changes.ollamaAnalysisProgress.newValue.total) {
-                    chrome.storage.local.remove('ollamaAnalysisProgress');
-                }
-            }
-            
-            // 监听配置变化
-            if (changes.envConfig) {
-                setEnvConfig(changes.envConfig.newValue);
-            }
-        };
-
-        chrome.storage.onChanged.addListener(handleStorageChange);
-
-        return () => {
-            chrome.storage.onChanged.removeListener(handleStorageChange);
-        };
+        (async () => {
+            const envConfigData = await getEnvConfig();
+            setEnvConfig(envConfigData);
+        })();
     }, []);
-
-    const handleSendToLLM = async () => {
-        setIsLoading(true);
-        try {
-            // 直接调用 analyzeMessages 方法
-            let rcTab = await findRingCentralTab();
-            if (!rcTab) {
-                rcTab = await createRingCentralTab();
-                if (!rcTab.id) {
-                    throw new Error('Tab ID is undefined');
-                }
-                // 等待页面加载完成
-                await waitForTabLoad(rcTab.id);
-            }
-            
-            if (!rcTab.id) {
-                throw new Error('Tab ID is undefined');
-            }
-            
-            // 获取页面配置
-            let { userinfo } = await chrome.storage.local.get(['userinfo'])
-            if (!userinfo || userinfo.fullName === '') userinfo = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_USER_INFO' }) as TabResponse).data;
-            if (!userinfo || !userinfo.fullName) {
-                throw new Error('Failed to get page config');
-            }
-            
-            const scheduledInterval = envConfig ? Number(envConfig.SCHEDULED_INTERVAL) : 120;
-            const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
-            
-            // 获取用户数据
-            const response = await chrome.tabs.sendMessage(rcTab.id, {
-                type: 'FETCH_USER_MESSAGES',
-                startTime,
-            }) as TabResponse;
-            
-            if (!response || !response.success) {
-                throw new Error(response?.error || 'Unknown error');
-            }
-            
-            const userData = response.data;
-            await analyzeMessages(userData, userinfo.fullName);
-        } catch (error) {
-            console.error('Error sending data to Ollama:', error);
-            setIsLoading(false);
-        }
-    };
 
     const toggleSchedule = () => {
         const newState = !isScheduleActive;
@@ -152,7 +78,7 @@ const Popup = () => {
     // const openOptionsPage = () => {
     //     chrome.runtime.openOptionsPage();
     // };
-    
+
     // 计算分析时间间隔的小时数
     const getIntervalHours = () => {
         if (envConfig) {
@@ -163,21 +89,14 @@ const Popup = () => {
 
     return (
         <div className="popup-container">
+            <Toggle 
+                checked={isScheduleActive}
+                onChange={toggleSchedule}
+                label={`每隔 ${getIntervalHours()} 小时静默消息分析`}
+            />
+
             <button onClick={openKnowledgeQueryWindow}>
                 知识库查询
-            </button>
-
-            <button 
-                onClick={handleSendToLLM}
-                disabled={isLoading}
-            >
-                {isLoading 
-                    ? `正在分析 ${(analysisProgress?.lastAnalyzedIndex||0)+1}/${analysisProgress?.total||1} 条消息...` 
-                    : `将最近 ${getIntervalHours()} 小时 Glip 消息发给 LLM 分析`}
-            </button>
-            
-            <button onClick={toggleSchedule}>
-                {isScheduleActive ? '禁用' : '启用'} 静默定时消息分析
             </button>
             
             <button onClick={openTopicWindow}>
@@ -194,6 +113,64 @@ const Popup = () => {
             {/* <button onClick={openOptionsPage}>
                 设置
             </button> */}
+
+            <style>{`
+                .toggle-container {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    padding: 8px;
+                }
+
+                .toggle-label {
+                    margin-right: 10px;
+                }
+
+                .toggle-switch {
+                    position: relative;
+                    display: inline-block;
+                    width: 40px;
+                    height: 20px;
+                }
+
+                .toggle-switch input {
+                    opacity: 0;
+                    width: 0;
+                    height: 0;
+                }
+
+                .toggle-slider {
+                    position: absolute;
+                    cursor: pointer;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background-color: #ccc;
+                    transition: .4s;
+                    border-radius: 20px;
+                }
+
+                .toggle-slider:before {
+                    position: absolute;
+                    content: "";
+                    height: 16px;
+                    width: 16px;
+                    left: 2px;
+                    bottom: 2px;
+                    background-color: white;
+                    transition: .4s;
+                    border-radius: 50%;
+                }
+
+                input:checked + .toggle-slider {
+                    background-color: #2196F3;
+                }
+
+                input:checked + .toggle-slider:before {
+                    transform: translateX(20px);
+                }
+            `}</style>
         </div>
     );
 };

@@ -93,7 +93,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'MESSAGE_DEALING') {
         const { body } = request.data;
         console.log('Sending request to LLM:', body);
-        analyzeMessagesInBackground(body.data, body.username).then(raw => {
+        analyzeMessagesInBackground(body.data, body.username, body.isScheduledTask).then(raw => {
             sendResponse({ data: raw });
         });
         return true;
@@ -198,7 +198,7 @@ async function runScheduledTask() {
             type: 'FETCH_USER_MESSAGES',
             startTime,
         });
-        await analyzeMessages(response.data, userinfo.fullName);
+        await analyzeMessages(response.data, userinfo.fullName, true);
     } catch (error) {
         console.error('Background task error:', error);
     }
