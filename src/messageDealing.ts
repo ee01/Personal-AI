@@ -8,13 +8,13 @@ import { processNewMessage } from './agentSystem';
 import { processMessage } from './intelligentAgent';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
-export async function analyzeMessages (data: any[], username: string) {
+export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
 	try {
 		// 检查是否在 background script 环境中
 		const isBackground = typeof window === 'undefined';
 		if (isBackground) {
 			// 在 background script 中直接调用处理函数
-			const response = await analyzeMessagesInBackground(data, username);
+			const response = await analyzeMessagesInBackground(data, username, isScheduledTask);
 			return response;
 		} else {
 			// 在 content script 或其他环境中使用 message passing
@@ -23,13 +23,14 @@ export async function analyzeMessages (data: any[], username: string) {
 				data: {
 					body: {
 						data,
-						username
+						username,
+						isScheduledTask
 					}
 				}
 			});
 			
 			if (response.data) {
-				console.log("LLM's response:", response.data, {data, username});
+				console.log("LLM's response:", response.data, {data, isScheduledTask});
 				// Todo: Toast 方法在 popup 中无法调用
 				showToast('Analysis complete, please check the console', 'success');
 				return response.data;
@@ -47,13 +48,12 @@ export async function analyzeMessages (data: any[], username: string) {
 }
 
 // 统一使用 background script 处理，防止跨域和权限问题
-export async function analyzeMessagesInBackground (data: any[], username: string) {
+export async function analyzeMessagesInBackground (data: any[], username: string, isScheduledTask = false) {
     // 获取环境配置
     const envConfig = await getEnvConfig();
 		
 	// 检查是否定时任务被终止
 	const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
-	const isScheduledTask = typeof window === 'undefined';
 	if (!scheduleActive && isScheduledTask) {
 		console.log('定时分析任务已被终止，跳过处理');
 		return;
@@ -260,10 +260,10 @@ export async function analyzeMessagesInBackground (data: any[], username: string
     } else {
         // 使用普通模式处理
         console.log('Using normal mode to process messages');
-        return await processMessageFilterByConcernedItems(data, concernedItems, username);
+        return await processMessageFilterByConcernedItems(data, concernedItems, username, isScheduledTask);
     }
 }
-async function processMessageFilterByConcernedItems(data: any[], concernedItems: {text: string}[], username: string) {
+async function processMessageFilterByConcernedItems(data: any[], concernedItems: {text: string}[], username: string, isScheduledTask: boolean) {
     const envConfig = await getEnvConfig();
 
 	const system_prompt = `
@@ -334,7 +334,6 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 				scheduleActive = changes.scheduleActive.newValue;
 			}
 		});
-		const isScheduledTask = typeof window === 'undefined'; // background script 环境中代表是定时任务
 		for (let index = 0; index < data.length; index++) {
 			const item = data[index];
 			console.log(`--开始分析第 ${index+1}/${data.length} 个群组的消息--`);
@@ -355,7 +354,7 @@ ${message}
 `
 
 			await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt, messageData: item});
-			if (scheduleActive) chrome.storage.local.set({
+			chrome.storage.local.set({
 				ollamaAnalysisProgress: {
 					total: data.length,
 					lastAnalyzedIndex: ++countAnalyzed,

@@ -1,12 +1,22 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
+import { analyzeMessages } from './messageDealing';
+import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from './background';
+import { getEnvConfig } from './utils';
 
 interface TopicItem {
     id: string;
     text: string;
     expiredAt: number;
     pushToGlip?: boolean;
+}
+
+interface TabResponse {
+    success: boolean;
+    error?: string;
+    data?: any;
+    config?: any;
 }
 
 const TopicModal = () => {
@@ -18,9 +28,56 @@ const TopicModal = () => {
     const [newPushToGlip, setNewPushToGlip] = useState(true);
     const [draggedItem, setDraggedItem] = useState<number | null>(null);
     const [dragOverItem, setDragOverItem] = useState<number | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [envConfig, setEnvConfig] = useState<any>(null);
+    const [analysisProgress, setAnalysisProgress] = useState<{
+        total: number;
+        lastAnalyzedIndex: number;
+        lastAnalyzedTime: string;
+    } | null>(null);
 
     useEffect(() => {
         loadTopics();
+    }, []);
+
+    useEffect(() => {
+        (async () => {
+            const envConfigData = await getEnvConfig();
+            setEnvConfig(envConfigData);
+        })();
+    }, []);
+
+    useEffect(() => {
+        // 初始化时获取进度
+        chrome.storage.local.get('ollamaAnalysisProgress', (result) => {
+            console.log("ollamaAnalysisProgress:", result.ollamaAnalysisProgress);
+            if (result.ollamaAnalysisProgress) {
+                setAnalysisProgress(result.ollamaAnalysisProgress);
+                setIsLoading(result.ollamaAnalysisProgress && result.ollamaAnalysisProgress.lastAnalyzedIndex < result.ollamaAnalysisProgress.total);
+            }
+        });
+
+        // 监听 storage 变化
+        const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }) => {
+            if (changes.ollamaAnalysisProgress) {
+                setAnalysisProgress(changes.ollamaAnalysisProgress.newValue);
+                setIsLoading(changes.ollamaAnalysisProgress.newValue && changes.ollamaAnalysisProgress.newValue.lastAnalyzedIndex < changes.ollamaAnalysisProgress.newValue.total);
+                if (changes.ollamaAnalysisProgress.newValue && changes.ollamaAnalysisProgress.newValue.lastAnalyzedIndex >= changes.ollamaAnalysisProgress.newValue.total) {
+                    chrome.storage.local.remove('ollamaAnalysisProgress');
+                }
+            }
+            
+            // 监听配置变化
+            if (changes.envConfig) {
+                setEnvConfig(changes.envConfig.newValue);
+            }
+        };
+
+        chrome.storage.onChanged.addListener(handleStorageChange);
+
+        return () => {
+            chrome.storage.onChanged.removeListener(handleStorageChange);
+        };
     }, []);
 
     const loadTopics = async () => {
@@ -191,6 +248,59 @@ const TopicModal = () => {
             .replace(/'/g, '&apos;');
     };
 
+    const handleSendToLLM = async () => {
+        setIsLoading(true);
+        try {
+            // 直接调用 analyzeMessages 方法
+            let rcTab = await findRingCentralTab();
+            if (!rcTab) {
+                rcTab = await createRingCentralTab();
+                if (!rcTab.id) {
+                    throw new Error('Tab ID is undefined');
+                }
+                // 等待页面加载完成
+                await waitForTabLoad(rcTab.id);
+            }
+            
+            if (!rcTab.id) {
+                throw new Error('Tab ID is undefined');
+            }
+            
+            // 获取页面配置
+            let { userinfo } = await chrome.storage.local.get(['userinfo'])
+            if (!userinfo || userinfo.fullName === '') userinfo = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_USER_INFO' }) as TabResponse).data;
+            if (!userinfo || !userinfo.fullName) {
+                throw new Error('Failed to get page config');
+            }
+            
+            const scheduledInterval = envConfig ? Number(envConfig.SCHEDULED_INTERVAL) : 120;
+            const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
+            
+            // 获取用户数据
+            const response = await chrome.tabs.sendMessage(rcTab.id, {
+                type: 'FETCH_USER_MESSAGES',
+                startTime,
+            }) as TabResponse;
+            
+            if (!response || !response.success) {
+                throw new Error(response?.error || 'Unknown error');
+            }
+            
+            const userData = response.data;
+            await analyzeMessages(userData, userinfo.fullName);
+        } catch (error) {
+            console.error('Error sending data to Ollama:', error);
+            setIsLoading(false);
+        }
+    };
+
+    const getIntervalHours = () => {
+        if (envConfig) {
+            return (Number(envConfig.SCHEDULED_INTERVAL) / 60).toFixed(1);
+        }
+        return '2.0'; // 默认值
+    };
+
     return (
         <div className="topic-modal">
             <h2>关注话题管理</h2>
@@ -320,6 +430,18 @@ const TopicModal = () => {
                         onChange={importFromXML} 
                     />
                 </label>
+            </div>
+
+            <div className="analyze-button-container" style={{ marginTop: '16px' }}>
+                <button 
+                    onClick={handleSendToLLM}
+                    disabled={isLoading}
+                    style={{ width: '100%', padding: '8px', fontSize: '14px' }}
+                >
+                    {isLoading 
+                        ? `正在分析 ${(analysisProgress?.lastAnalyzedIndex||0)+1}/${analysisProgress?.total||1} 条消息...` 
+                        : `将最近 ${getIntervalHours()} 小时 Glip 消息发给 LLM 分析`}
+                </button>
             </div>
 
             <style>{`
