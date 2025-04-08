@@ -10,6 +10,7 @@ module.exports = {
   entry: {
     background: './src/background.ts',
     contentScript: './src/contentScript.tsx',
+    contentScriptGoogleSheet: './src/contentScriptGoogleSheet.tsx',
     popup: './src/popup.tsx',
     options: './src/options.tsx',
     offscreen: './src/offscreen.ts',

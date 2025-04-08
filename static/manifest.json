@@ -10,7 +10,8 @@
     "alarms",
     "background",
     "unlimitedStorage",
-    "offscreen"
+    "offscreen",
+    "scripting"
   ],
   "content_scripts": [
     {
@@ -20,6 +21,10 @@
         "https://app.ringcentral.com/*"
       ],
       "js": ["contentScript.js"]
+    },
+    {
+      "matches": ["https://docs.google.com/spreadsheets/*"],
+      "js": ["contentScriptGoogleSheet.js"]
     }
   ],
   "action": {
@@ -28,7 +33,8 @@
   },
   "options_page": "options.html",
   "host_permissions": [
-    "*://*/*"
+    "*://*/*",
+    "https://jira.ringcentral.com/*"
   ],
   "background": {
     "service_worker": "background.js",
