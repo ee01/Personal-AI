@@ -504,6 +504,45 @@ const Options = () => {
                 )}
             </div>
 
+            <div className="form-section">
+                <h2>Jira 设置</h2>
+                <div className="form-group">
+                    <label htmlFor="JIRA_BASE_URL">Jira Base URL</label>
+                    <input
+                        type="url"
+                        id="JIRA_BASE_URL"
+                        name="JIRA_BASE_URL"
+                        value={config.JIRA_BASE_URL}
+                        onChange={handleInputChange}
+                        placeholder="https://jira.example.com"
+                    />
+                </div>
+
+                <div className="form-group">
+                    <label htmlFor="JIRA_USERNAME">Jira Email</label>
+                    <input
+                        type="text"
+                        id="JIRA_USERNAME"
+                        name="JIRA_USERNAME"
+                        value={config.JIRA_USERNAME}
+                        onChange={handleInputChange}
+                        placeholder="your.email@example.com"
+                    />
+                </div>
+
+                <div className="form-group">
+                    <label htmlFor="JIRA_API_TOKEN">Jira Token (<a href="https://jira.ringcentral.com/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens" target="_blank" rel="noopener noreferrer">点击这里生成</a>)</label>
+                    <input
+                        type="text"
+                        id="JIRA_API_TOKEN"
+                        name="JIRA_API_TOKEN"
+                        value={config.JIRA_API_TOKEN}
+                        onChange={handleInputChange}
+                        placeholder="输入你的 Jira API Token"
+                    />
+                </div>
+            </div>
+
             {config.ANALYSIS_TYPE === 'agentThinking' && (
                 <div className="form-section">
                     <h2>智能Agent系统设置</h2>
