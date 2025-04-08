@@ -27,11 +27,19 @@ const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () =
 const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
     const [envConfig, setEnvConfig] = useState<any>(null);
+    const [isGoogleSheets, setIsGoogleSheets] = useState(false);
+
     useEffect(() => {
         (async () => {
             // 获取定时任务状态
             const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
             setIsScheduleActive(scheduleActive === true);
+
+            // 检查当前标签页是否是 Google Sheets
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab?.url?.includes('docs.google.com/spreadsheets')) {
+                setIsGoogleSheets(true);
+            }
         })();
     }, []);
 
@@ -87,6 +95,14 @@ const Popup = () => {
         return '2.0'; // 默认值
     };
 
+    const openJiraQueryDialog = () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]?.id) {
+                chrome.tabs.sendMessage(tabs[0].id, { type: 'OPEN_JIRA_QUERY_DIALOG' });
+            }
+        });
+    };
+
     return (
         <div className="popup-container">
             <Toggle 
@@ -94,6 +110,15 @@ const Popup = () => {
                 onChange={toggleSchedule}
                 label={`每隔 ${getIntervalHours()} 小时静默消息分析`}
             />
+
+            {isGoogleSheets && (
+                <button 
+                    onClick={openJiraQueryDialog}
+                    className="jira-button"
+                >
+                    查询 Jira Tickets
+                </button>
+            )}
 
             <button onClick={openKnowledgeQueryWindow}>
                 知识库查询
@@ -169,6 +194,21 @@ const Popup = () => {
 
                 input:checked + .toggle-slider:before {
                     transform: translateX(20px);
+                }
+
+                .jira-button {
+                    background-color: #0052CC;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    margin: 8px;
+                    width: calc(100% - 16px);
+                }
+
+                .jira-button:hover {
+                    background-color: #0065FF;
                 }
             `}</style>
         </div>

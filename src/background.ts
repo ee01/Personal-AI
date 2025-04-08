@@ -136,6 +136,74 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 监听来自离屏文档的消息
     handleEmbeddingResult(request);
+
+    // 处理 Jira tickets 获取
+    if (request.type === 'FETCH_JIRA_TICKETS') {
+        const { jql, requestId } = request;
+        const url = `https://jira.ringcentral.com/issues/?jql=${encodeURIComponent(jql)}`;
+        
+        // 创建新标签页
+        chrome.tabs.create({ url, active: false }, (tab) => {
+            if (!tab.id) {
+                chrome.runtime.sendMessage({
+                    type: 'JIRA_TICKETS_RESULT',
+                    requestId,
+                    error: '无法创建标签页'
+                });
+                return;
+            }
+
+            // 等待页面加载完成
+            const checkPageLoad = () => {
+                chrome.tabs.get(tab.id!, (updatedTab) => {
+                    if (updatedTab.status === 'complete') {
+                        // 注入内容脚本
+                        chrome.scripting.executeScript({
+                            target: { tabId: tab.id! },
+                            func: () => {
+                                const tickets: any[] = [];
+                                const rows = document.querySelectorAll('tr.issuerow');
+                                
+                                rows.forEach(row => {
+                                    const ticket = {
+                                        key: row.querySelector('.issuekey')?.textContent?.trim() || '',
+                                        summary: row.querySelector('.summary')?.textContent?.trim() || '',
+                                        status: row.querySelector('.status')?.textContent?.trim() || '',
+                                        assignee: row.querySelector('.assignee')?.textContent?.trim() || '',
+                                        reporter: row.querySelector('.reporter')?.textContent?.trim() || '',
+                                        priority: row.querySelector('.priority')?.textContent?.trim() || '',
+                                        created: row.querySelector('.created')?.textContent?.trim() || '',
+                                        updated: row.querySelector('.updated')?.textContent?.trim() || '',
+                                        duedate: row.querySelector('.duedate')?.textContent?.trim() || '',
+                                        description: row.querySelector('.description')?.textContent?.trim() || ''
+                                    };
+                                    tickets.push(ticket);
+                                });
+                                
+                                return tickets;
+                            }
+                        }, (results) => {
+                            // 发送结果
+                            chrome.runtime.sendMessage({
+                                type: 'JIRA_TICKETS_RESULT',
+                                requestId,
+                                tickets: results[0].result
+                            });
+                            
+                            // 关闭标签页
+                            chrome.tabs.remove(tab.id!);
+                        });
+                    } else {
+                        setTimeout(checkPageLoad, 100);
+                    }
+                });
+            };
+            
+            checkPageLoad();
+        });
+    }
+    
+    return true;
 });
 
 // 启动定时任务
