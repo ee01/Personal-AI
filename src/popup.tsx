@@ -2,8 +2,6 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
-import { analyzeMessages } from './messageDealing'; // 请确保路径正确
-import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from './background';
 import { getEnvConfig } from './utils';
 
 // 类型定义，帮助解决 lint 错误
@@ -116,7 +114,7 @@ const Popup = () => {
                     onClick={openJiraQueryDialog}
                     className="jira-button"
                 >
-                    查询 Jira Tickets
+                    抓取 Jira Tickets 到 Sheet
                 </button>
             )}
 

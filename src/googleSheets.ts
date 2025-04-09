@@ -1,5 +1,5 @@
-/// <reference types="@types/google-apps-script" />
 import { JiraTicket } from './types';
+import { getEnvConfig } from './utils';
 
 // 默认的 Jira 字段配置
 const DEFAULT_JIRA_FIELDS = {
@@ -15,43 +15,47 @@ const DEFAULT_JIRA_FIELDS = {
   'Description': 'description'
 };
 
-// 从配置表中读取字段映射
+// 从 Google Sheets 获取数据
 export async function getFieldMapping(sheetName: string): Promise<Record<string, string>> {
-  const configSheetName = `${sheetName}_config`;
-  const spreadsheet = (window as any).google?.sheets?.spreadsheets?.getActiveSpreadsheet();
-  const configSheet = spreadsheet?.getSheetByName(configSheetName);
-  
-  if (!configSheet) {
-    return DEFAULT_JIRA_FIELDS;
-  }
-
-  const range = configSheet.getDataRange();
-  const values = range.getValues();
-  
-  const mapping: Record<string, string> = {};
-  for (const [header, field] of values) {
-    if (header && field) {
-      mapping[header] = field;
-    }
-  }
-  
-  return mapping;
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: 'GET_SHEET_CONFIG',
+      sheetName: sheetName
+    }, response => {
+      if (chrome.runtime.lastError) {
+        console.error('获取配置失败:', chrome.runtime.lastError);
+        resolve(DEFAULT_JIRA_FIELDS);
+        return;
+      }
+      resolve(response?.mapping || DEFAULT_JIRA_FIELDS);
+    });
+  });
 }
 
 // 获取当前工作表的表头
-export function getSheetHeaders(sheet: any): string[] {
-  const range = sheet.getRange(1, 1, 1, sheet.getLastColumn());
-  return range.getValues()[0];
+export async function getSheetHeaders(): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: 'GET_SHEET_HEADERS'
+    }, response => {
+      if (chrome.runtime.lastError) {
+        console.error('获取表头失败:', chrome.runtime.lastError);
+        reject(chrome.runtime.lastError);
+        return;
+      }
+      resolve(response?.headers || []);
+    });
+  });
 }
 
 // 从 Jira 页面抓取数据
 export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
     return new Promise((resolve, reject) => {
-        // 创建一个唯一的 ID 用于标识这次请求
         const requestId = Math.random().toString(36).substring(7);
         
         // 监听来自 background script 的消息
         const messageListener = (message: any) => {
+            console.log('message111', message);
             if (message.type === 'JIRA_TICKETS_RESULT' && message.requestId === requestId) {
                 chrome.runtime.onMessage.removeListener(messageListener);
                 if (message.error) {
@@ -60,6 +64,7 @@ export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
                     resolve(message.tickets);
                 }
             }
+            return true;
         };
         
         chrome.runtime.onMessage.addListener(messageListener);
@@ -73,79 +78,89 @@ export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
     });
 }
 
-// 将 Jira tickets 写入 Google Sheet
-export async function writeTicketsToSheet(tickets: JiraTicket[]) {
-  // 获取当前工作表
-  const sheet = (window as any).google?.sheets?.spreadsheets?.getActiveSheet();
-  if (!sheet) {
-    throw new Error('无法获取当前工作表');
-  }
+// 然后在 FETCH_JIRA_TICKETS 函数中使用 sourceTabId
+export async function FETCH_JIRA_TICKETS(jql: string, requestId: string, sourceTabId: number) {
+  const envConfig = await getEnvConfig();
+  const url = `${envConfig.JIRA_BASE_URL}/issues/?jql=${encodeURIComponent(jql)}`;
+        
+  // 创建新标签页
+  chrome.tabs.create({ url, active: false }, (tab) => {
+      if (!tab.id) {
+          chrome.tabs.sendMessage(sourceTabId, {
+              type: 'JIRA_TICKETS_RESULT',
+              requestId,
+              error: '无法创建标签页'
+          });
+          return;
+      }
 
-  // 获取工作表名称
-  const sheetName = sheet.getName();
-  
-  // 获取字段映射
-  const fieldMapping = await getFieldMapping(sheetName);
-  
-  // 获取表头
-  const headers = getSheetHeaders(sheet);
-  
-  // 如果表头为空，使用默认字段
-  if (headers.length === 0 || headers[0] === '') {
-    const headerValues = [Object.keys(fieldMapping)];
-    sheet.getRange(1, 1, 1, headerValues[0].length).setValues(headerValues);
-  }
-  
-  // 准备数据
-  const data = tickets.map(ticket => {
-    return headers.map(header => {
-      const field = fieldMapping[header];
-      return ticket[field as keyof JiraTicket] || '';
+      // 等待页面加载完成
+      const checkPageLoad = () => {
+          chrome.tabs.get(tab.id!, (updatedTab) => {
+              if (updatedTab.status === 'complete') {
+                  // 注入内容脚本
+                  chrome.scripting.executeScript({
+                      target: { tabId: tab.id! },
+                      func: () => {
+                          const tickets: any[] = [];
+                          const rows = document.querySelectorAll('tr.issuerow');
+                          
+                          rows.forEach(row => {
+                              const ticket = {
+                                  key: row.querySelector('.issuekey')?.textContent?.trim() || '',
+                                  summary: row.querySelector('.summary')?.textContent?.trim() || '',
+                                  status: row.querySelector('.status')?.textContent?.trim() || '',
+                                  assignee: row.querySelector('.assignee')?.textContent?.trim() || '',
+                                  reporter: row.querySelector('.reporter')?.textContent?.trim() || '',
+                                  priority: row.querySelector('.priority')?.textContent?.trim() || '',
+                                  created: row.querySelector('.created')?.textContent?.trim() || '',
+                                  updated: row.querySelector('.updated')?.textContent?.trim() || '',
+                                  duedate: row.querySelector('.duedate')?.textContent?.trim() || '',
+                                  description: row.querySelector('.description')?.textContent?.trim() || ''
+                              };
+                              tickets.push(ticket);
+                          });
+                          
+                          return tickets;
+                      }
+                  }, (results) => {
+                    results[0].result = results[0].result.map(ticket => ({
+                      ...ticket,
+                      summary: ticket.summary.split('\n').slice(-1)[0].trim(),
+                    }));
+                    chrome.tabs.sendMessage(sourceTabId, {
+                    // 发送结果回源标签页
+                        type: 'JIRA_TICKETS_RESULT',
+                        requestId,
+                        tickets: results[0].result
+                    });
+                    
+                    // 关闭 Jira 标签页
+                    chrome.tabs.remove(tab.id!);
+                  });
+              } else {
+                  setTimeout(checkPageLoad, 100);
+              }
+          });
+      };
+      
+      checkPageLoad();
+  });
+}
+
+// 将 Jira tickets 写入 Google Sheet
+export async function writeTicketsToSheet(tickets: JiraTicket[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: 'WRITE_TICKETS',
+      tickets: tickets
+    }, response => {
+      if (chrome.runtime.lastError) {
+        console.error('写入数据失败:', chrome.runtime.lastError);
+        reject(chrome.runtime.lastError);
+        return;
+      }
+      resolve();
     });
   });
-  
-  // 写入数据
-  const startRow = sheet.getLastRow() + 1;
-  if (data.length > 0) {
-    sheet.getRange(startRow, 1, data.length, headers.length).setValues(data);
-  }
 }
-
-// 创建 JQL 查询对话框
-function createJqlDialog() {
-  const html = HtmlService.createHtmlOutput(`
-    <div style="padding: 20px;">
-      <h3>输入 JQL 查询</h3>
-      <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;"></textarea>
-      <button onclick="submitJql()">查询</button>
-    </div>
-    <script>
-      function submitJql() {
-        const jql = document.getElementById('jql').value;
-        google.script.run
-          .withSuccessHandler(() => google.script.host.close())
-          .withFailureHandler((error) => alert('Error: ' + error))
-          .processJqlQuery(jql);
-      }
-    </script>
-  `)
-    .setWidth(400)
-    .setHeight(200);
-  
-  SpreadsheetApp.getUi().showModalDialog(html, 'Jira 查询');
-}
-
-// 处理 JQL 查询
-async function processJqlQuery(jql: string) {
-  const sheet = SpreadsheetApp.getActiveSheet();
-  const tickets = await fetchJiraTickets(jql);
-  await writeTicketsToSheet(tickets);
-}
-
-// 添加菜单项
-function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu('Jira 工具')
-    .addItem('查询 Jira Tickets', 'createJqlDialog')
-    .addToUi();
-} 
