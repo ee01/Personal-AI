@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "permissions": [
     "tabs",
     "storage",
@@ -33,8 +33,7 @@
   },
   "options_page": "options.html",
   "host_permissions": [
-    "*://*/*",
-    "https://jira.ringcentral.com/*"
+    "*://*/*"
   ],
   "background": {
     "service_worker": "background.js",

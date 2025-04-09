@@ -1,4 +1,6 @@
 import { fetchJiraTickets, writeTicketsToSheet } from './googleSheets';
+import { JiraTicket } from './types';
+import { getEnvConfig } from './utils';
 
 // Main listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -19,7 +21,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // 创建 JQL 查询对话框
-function openJqlDialog() {
+async function openJqlDialog() {
+    const envConfig = await getEnvConfig();
     const dialog = document.createElement('div');
     dialog.style.cssText = `
         position: fixed;
@@ -55,11 +58,53 @@ function openJqlDialog() {
         if (jql) {
             try {
                 const tickets = await fetchJiraTickets(jql);
-                await writeTicketsToSheet(tickets);
+                console.log('tickets', tickets);
+                if (tickets.length > 0) {
+                    const fields = ['key', 'summary', 'status', 'assignee', 'reporter'];
+                    const headers = fields.join('\t');
+                    const formattedData = [headers, ...tickets.map(ticket => ({
+                        ...ticket,
+                        key: `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${ticket.key}", "${ticket.key}")`
+                      })).map(ticket => fields.map(field => ticket[field as keyof JiraTicket]).join('\t'))].join('\n');
+                    await navigator.clipboard.writeText(formattedData);
+                    console.log('formattedData', formattedData);
+                    showToast('Jira 数据已复制到剪贴板');
+                }
                 document.body.removeChild(dialog);
+                // await writeTicketsToSheet(tickets);
             } catch (error) {
                 alert('查询失败: ' + error);
             }
         }
     });
+}
+
+// 添加显示 toast 的函数
+function showToast(message: string) {
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 5px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        z-index: 10001;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    `;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+    });
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => {
+            document.body.removeChild(toast);
+        }, 300);
+    }, 3000);
 }
