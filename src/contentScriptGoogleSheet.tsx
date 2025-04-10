@@ -108,6 +108,11 @@ function addFloatingToolbar() {
     `;
     readButton.addEventListener('click', async () => {
         try {
+            // 使用更安全的方法扫描单元格，避免触发Google Sheets错误
+            scanVisibleCells();
+            
+            // 不再使用可能导致错误的readSheetData方法
+            /*
             const data = await readSheetData();
             if (data && data.length > 0) {
                 console.log('读取到的表格数据:', data);
@@ -122,6 +127,7 @@ function addFloatingToolbar() {
             } else {
                 showToast('未能读取到表格数据', 'error');
             }
+            */
         } catch (error) {
             console.error('读取表格数据失败:', error);
             showToast('读取表格数据时出错', 'error');
@@ -141,12 +147,23 @@ function addFloatingToolbar() {
     `;
     analyzeButton.addEventListener('click', async () => {
         try {
-            const data = await readSheetData();
-            if (data && data.length > 0) {
-                showDataAnalysisDialog(data);
-            } else {
-                showToast('没有可分析的数据', 'error');
-            }
+            // 使用安全的扫描方法获取数据并直接分析
+            chrome.storage.local.get(['sheetData'], (result) => {
+                if (result.sheetData) {
+                    try {
+                        const data = JSON.parse(result.sheetData);
+                        if (data && data.length > 0) {
+                            showDataAnalysisDialog(data);
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('解析存储的表格数据失败:', e);
+                    }
+                }
+                
+                // 如果没有缓存数据或解析失败，直接扫描当前表格
+                scanVisibleCellsForAnalysis();
+            });
         } catch (error) {
             console.error('分析数据失败:', error);
             showToast('分析数据时出错', 'error');
@@ -363,136 +380,231 @@ function scanVisibleCells() {
         // 4. 创建结果存储器
         const cellsData: {text: string, x: number, y: number, element: HTMLElement}[] = [];
         
-        // 5. 执行扫描
+        // 5. 执行扫描 - 使用更安全的方法
         setTimeout(() => {
-            // 使用深度优先搜索遍历DOM
-            const walkDOM = (element: HTMLElement, depth = 0) => {
-                // 检查是否可能是单元格
-                const maybeCell = isCellElement(element);
-                
-                // 获取元素在页面上的位置
-                const rect = element.getBoundingClientRect();
-                const isVisible = rect.width > 0 && rect.height > 0 && 
-                                 rect.right > 0 && rect.left < viewportWidth &&
-                                 rect.bottom > 0 && rect.top < viewportHeight;
-                
-                // 如果是可见的单元格元素，记录其信息
-                if (maybeCell && isVisible) {
-                    const text = element.textContent || '';
-                    if (text.trim()) { // 只记录非空单元格
-                        cellsData.push({
-                            text: text,
-                            x: rect.left,
-                            y: rect.top,
-                            element: element
-                        });
-                    }
-                }
-                
-                // 递归处理子元素
-                if (depth < 10) { // 限制递归深度
-                    Array.from(element.children).forEach(child => {
-                        walkDOM(child as HTMLElement, depth + 1);
-                    });
-                }
-            };
-            
-            // 检查元素是否可能是单元格
-            const isCellElement = (element: HTMLElement): boolean => {
-                // 检查常见的单元格特征
-                if (element.getAttribute('role') === 'gridcell') return true;
-                if (element.classList.contains('cell-content')) return true;
-                if (element.classList.contains('waffle-cell-content')) return true;
-                
-                // 检查元素样式特征
-                const style = window.getComputedStyle(element);
-                if (style.display === 'table-cell') return true;
-                
-                // 检查元素尺寸是否像单元格
-                const rect = element.getBoundingClientRect();
-                if (rect.width > 20 && rect.width < 300 && 
-                    rect.height > 15 && rect.height < 100) {
-                    // 检查是否有文本内容和边框
-                    if ((element.textContent || '').trim() && 
-                        (style.border || style.borderBottom || style.borderRight)) {
-                        return true;
-                    }
-                }
-                
-                return false;
-            };
-            
-            // 执行扫描
-            walkDOM(sheetsContainer as HTMLElement);
-            
-            console.log(`扫描完成，找到 ${cellsData.length} 个可能的单元格`);
-            
-            // 6. 处理扫描结果
-            if (cellsData.length > 0) {
-                // 按垂直位置排序，猜测行
-                cellsData.sort((a, b) => a.y - b.y);
-                
-                // 尝试识别行
-                const rowThreshold = 10; // 同一行的单元格垂直位置差异应小于这个值
-                const rows: typeof cellsData[] = [];
-                let currentRow: typeof cellsData = [];
-                let lastY = cellsData[0].y;
-                
-                cellsData.forEach(cell => {
-                    if (Math.abs(cell.y - lastY) > rowThreshold) {
-                        // 开始新的一行
-                        if (currentRow.length > 0) {
-                            rows.push(currentRow);
-                            currentRow = [];
+            try {
+                // 更安全的DOM扫描方法
+                const scanElements = (rootElem: HTMLElement) => {
+                    try {
+                        // 收集所有可能的单元格选择器
+                        const cellSelectors = [
+                            '[role="gridcell"]',
+                            '.cell-content',
+                            '.waffle-cell-content',
+                            '.grid-cell',
+                            '.cell'
+                        ];
+                        
+                        // 使用querySelectorAll一次性获取所有可能的单元格
+                        for (const selector of cellSelectors) {
+                            try {
+                                const cells = rootElem.querySelectorAll(selector);
+                                if (cells && cells.length > 0) {
+                                    console.log(`找到${cells.length}个 ${selector} 元素`);
+                                    
+                                    // 更新进度
+                                    const progressElem = document.getElementById('scan-progress');
+                                    if (progressElem) progressElem.textContent = '25%';
+                                    
+                                    // 安全遍历
+                                    for (let i = 0; i < cells.length; i++) {
+                                        try {
+                                            const cell = cells[i] as HTMLElement;
+                                            const rect = cell.getBoundingClientRect();
+                                            
+                                            // 检查是否在视口内
+                                            const isVisible = rect.width > 0 && rect.height > 0 && 
+                                                           rect.right > 0 && rect.left < viewportWidth &&
+                                                           rect.bottom > 0 && rect.top < viewportHeight;
+                                            
+                                            if (isVisible) {
+                                                const text = cell.textContent || '';
+                                                if (text.trim()) {
+                                                    cellsData.push({
+                                                        text,
+                                                        x: rect.left,
+                                                        y: rect.top,
+                                                        element: cell
+                                                    });
+                                                }
+                                            }
+                                            
+                                            // 每处理50个元素更新一次进度
+                                            if (i % 50 === 0 && progressElem) {
+                                                const percent = Math.min(90, 25 + Math.floor((i / cells.length) * 65));
+                                                progressElem.textContent = `${percent}%`;
+                                            }
+                                        } catch (cellError) {
+                                            // 单个单元格处理错误，继续下一个
+                                            console.warn('处理单元格时出错:', cellError);
+                                        }
+                                    }
+                                    
+                                    // 如果找到了足够多的单元格，就不再继续查找
+                                    if (cellsData.length > 10) {
+                                        break;
+                                    }
+                                }
+                            } catch (selectorError) {
+                                console.warn(`使用选择器 ${selector} 查找单元格时出错:`, selectorError);
+                            }
                         }
-                        lastY = cell.y;
+                        
+                        // 如果使用选择器没有找到单元格，尝试更简单的方法
+                        if (cellsData.length === 0) {
+                            console.log('使用备用方法找单元格...');
+                            
+                            // 获取所有可能的表格相关元素
+                            ['td', 'th', 'div'].forEach(tagName => {
+                                try {
+                                    const elements = rootElem.getElementsByTagName(tagName);
+                                    for (let i = 0; i < elements.length; i++) {
+                                        const elem = elements[i] as HTMLElement;
+                                        const rect = elem.getBoundingClientRect();
+                                        
+                                        // 用大小和位置判断可能的单元格
+                                        if (rect.width > 20 && rect.width < 300 && 
+                                            rect.height > 15 && rect.height < 100 &&
+                                            rect.right > 0 && rect.left < viewportWidth &&
+                                            rect.bottom > 0 && rect.top < viewportHeight) {
+                                            
+                                            const text = elem.textContent || '';
+                                            if (text.trim()) {
+                                                cellsData.push({
+                                                    text,
+                                                    x: rect.left,
+                                                    y: rect.top,
+                                                    element: elem
+                                                });
+                                            }
+                                        }
+                                    }
+                                } catch (tagError) {
+                                    console.warn(`获取 ${tagName} 元素时出错:`, tagError);
+                                }
+                            });
+                        }
+                    } catch (scanError) {
+                        console.error('扫描元素时出错:', scanError);
                     }
-                    currentRow.push(cell);
-                });
+                };
                 
-                // 添加最后一行
-                if (currentRow.length > 0) {
-                    rows.push(currentRow);
+                // 执行扫描
+                scanElements(sheetsContainer as HTMLElement);
+                
+                // 更新进度到95%
+                const progressElem = document.getElementById('scan-progress');
+                if (progressElem) progressElem.textContent = '95%';
+                
+                console.log(`扫描完成，找到 ${cellsData.length} 个可能的单元格`);
+                
+                // 6. 处理扫描结果
+                if (cellsData.length > 0) {
+                    // 按垂直位置排序，猜测行
+                    cellsData.sort((a, b) => a.y - b.y);
+                    
+                    // 尝试识别行，使用更稳健的算法
+                    const rows: Array<typeof cellsData> = [];
+                    
+                    // 使用聚类分析找出行
+                    const yPositions = cellsData.map(cell => cell.y);
+                    const uniqueYPositions = Array.from(new Set(yPositions)).sort((a, b) => a - b);
+                    
+                    // 合并接近的Y坐标
+                    const mergedYPositions: number[] = [];
+                    const yThreshold = 5; // 接近程度阈值
+                    
+                    for (const y of uniqueYPositions) {
+                        if (mergedYPositions.length === 0 || 
+                            Math.abs(y - mergedYPositions[mergedYPositions.length - 1]) > yThreshold) {
+                            mergedYPositions.push(y);
+                        }
+                    }
+                    
+                    // 基于合并后的Y坐标分组
+                    mergedYPositions.forEach(y => {
+                        const rowCells = cellsData.filter(cell => 
+                            Math.abs(cell.y - y) <= yThreshold
+                        );
+                        
+                        if (rowCells.length > 0) {
+                            // 按X坐标排序
+                            rowCells.sort((a, b) => a.x - b.x);
+                            rows.push(rowCells);
+                        }
+                    });
+                    
+                    console.log(`识别出 ${rows.length} 行数据`);
+                    
+                    // 转换为二维数组格式
+                    const data = rows.map(row => row.map(cell => cell.text));
+                    
+                    console.log('最终数据:', data);
+                    
+                    // 保存并显示结果
+                    try {
+                        chrome.storage.local.set({
+                            sheetData: JSON.stringify(data)
+                        }, () => {
+                            try {
+                                // 移除覆盖层
+                                if (document.body.contains(overlay)) {
+                                    document.body.removeChild(overlay);
+                                }
+                                
+                                showToast(`成功读取表格数据，共 ${data.length} 行`, 'success');
+                                
+                                // 显示一个简单的预览
+                                setTimeout(() => {
+                                    try {
+                                        showTablePreview(data);
+                                    } catch (previewError) {
+                                        console.error('显示表格预览时出错:', previewError);
+                                    }
+                                }, 100);
+                            } catch (uiError) {
+                                console.error('更新UI时出错:', uiError);
+                            }
+                        });
+                    } catch (storageError) {
+                        console.error('保存数据时出错:', storageError);
+                        
+                        // 确保覆盖层被移除
+                        if (document.body.contains(overlay)) {
+                            document.body.removeChild(overlay);
+                        }
+                        
+                        showToast('保存数据时出错', 'error');
+                    }
+                } else {
+                    // 没有找到单元格
+                    if (document.body.contains(overlay)) {
+                        document.body.removeChild(overlay);
+                    }
+                    
+                    showToast('未能识别任何单元格数据', 'error');
+                }
+            } catch (mainError) {
+                console.error('主扫描过程出错:', mainError);
+                
+                // 确保覆盖层被移除
+                if (document.body.contains(overlay)) {
+                    document.body.removeChild(overlay);
                 }
                 
-                // 按水平位置排序每一行
-                rows.forEach(row => {
-                    row.sort((a, b) => a.x - b.x);
-                });
-                
-                console.log(`识别出 ${rows.length} 行数据`);
-                
-                // 转换为二维数组格式
-                const data = rows.map(row => row.map(cell => cell.text));
-                
-                console.log('最终数据:', data);
-                
-                // 保存并显示结果
-                chrome.storage.local.set({
-                    sheetData: JSON.stringify(data)
-                }, () => {
-                    document.body.removeChild(overlay);
-                    showToast(`成功读取表格数据，共 ${data.length} 行`, 'success');
-                    
-                    // 显示一个简单的预览
-                    showTablePreview(data);
-                });
-            } else {
-                document.body.removeChild(overlay);
-                showToast('未能识别任何单元格数据', 'error');
+                showToast('扫描过程出错', 'error');
             }
         }, 100);
-        
     } catch (error) {
-        console.error('扫描单元格失败:', error);
+        console.error('初始化扫描过程失败:', error);
         
-        // 确保移除覆盖层
-        const overlay = document.querySelector('div[style*="position: fixed"][style*="z-index: 10000"]');
-        if (overlay && overlay.parentNode) {
-            overlay.parentNode.removeChild(overlay);
+        // 尝试移除任何可能已创建的覆盖层
+        const existingOverlay = document.querySelector('div[style*="position: fixed"][style*="z-index: 10000"]');
+        if (existingOverlay && existingOverlay.parentNode) {
+            existingOverlay.parentNode.removeChild(existingOverlay);
         }
         
-        showToast('扫描过程出错', 'error');
+        showToast('扫描初始化失败', 'error');
     }
 }
 
@@ -2094,5 +2206,145 @@ function exportAnalysisResults(data: string[][]) {
     } catch (error) {
         console.error('导出分析结果失败:', error);
         showToast('导出分析结果失败', 'error');
+    }
+}
+
+// 扫描并直接分析
+function scanVisibleCellsForAnalysis() {
+    try {
+        console.log('开始扫描可见单元格用于分析...');
+        
+        // 显示加载提示
+        showToast('正在扫描表格数据，请稍候...', 'info');
+        
+        // 扫描单元格但直接进入分析流程
+        const scanAndAnalyze = () => {
+            // 获取视口尺寸
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            
+            // 获取表格容器
+            const sheetsContainer = document.querySelector('#sheets-viewport') || 
+                                  document.querySelector('[role="grid"]') || 
+                                  document.body;
+            
+            // 创建结果存储器
+            const cellsData: {text: string, x: number, y: number, element: HTMLElement}[] = [];
+            
+            // 使用深度优先搜索遍历DOM
+            const walkDOM = (element: HTMLElement, depth = 0) => {
+                try {
+                    // 检查是否可能是单元格
+                    const maybeCell = element.getAttribute('role') === 'gridcell' || 
+                                      element.classList.contains('cell-content') ||
+                                      element.classList.contains('waffle-cell-content');
+                    
+                    // 获取元素在页面上的位置
+                    const rect = element.getBoundingClientRect();
+                    const isVisible = rect.width > 0 && rect.height > 0 && 
+                                    rect.right > 0 && rect.left < viewportWidth &&
+                                    rect.bottom > 0 && rect.top < viewportHeight;
+                    
+                    // 如果是可见的单元格元素，记录其信息
+                    if (maybeCell && isVisible) {
+                        const text = element.textContent || '';
+                        if (text.trim()) { // 只记录非空单元格
+                            cellsData.push({
+                                text: text,
+                                x: rect.left,
+                                y: rect.top,
+                                element: element
+                            });
+                        }
+                    }
+                    
+                    // 递归处理子元素
+                    if (depth < 10) { // 限制递归深度
+                        for (let i = 0; i < element.children.length; i++) {
+                            walkDOM(element.children[i] as HTMLElement, depth + 1);
+                        }
+                    }
+                } catch (e) {
+                    // 忽略单个元素处理错误，继续处理其他元素
+                    console.warn('处理DOM元素时出错:', e);
+                }
+            };
+            
+            try {
+                // 执行扫描
+                walkDOM(sheetsContainer as HTMLElement);
+            } catch (e) {
+                console.error('DOM遍历失败:', e);
+            }
+            
+            console.log(`扫描完成，找到 ${cellsData.length} 个可能的单元格`);
+            
+            // 处理扫描结果
+            if (cellsData.length > 0) {
+                // 按垂直位置排序，猜测行
+                cellsData.sort((a, b) => a.y - b.y);
+                
+                // 尝试识别行，使用更稳健的算法
+                const rows: Array<typeof cellsData> = [];
+                
+                // 使用聚类分析找出行
+                const yPositions = cellsData.map(cell => cell.y);
+                const uniqueYPositions = Array.from(new Set(yPositions)).sort((a, b) => a - b);
+                
+                // 合并接近的Y坐标
+                const mergedYPositions: number[] = [];
+                const yThreshold = 5; // 接近程度阈值
+                
+                for (const y of uniqueYPositions) {
+                    if (mergedYPositions.length === 0 || 
+                        Math.abs(y - mergedYPositions[mergedYPositions.length - 1]) > yThreshold) {
+                        mergedYPositions.push(y);
+                    }
+                }
+                
+                // 基于合并后的Y坐标分组
+                mergedYPositions.forEach(y => {
+                    const rowCells = cellsData.filter(cell => 
+                        Math.abs(cell.y - y) <= yThreshold
+                    );
+                    
+                    if (rowCells.length > 0) {
+                        // 按X坐标排序
+                        rowCells.sort((a, b) => a.x - b.x);
+                        rows.push(rowCells);
+                    }
+                });
+                
+                console.log(`识别出 ${rows.length} 行数据`);
+                
+                // 转换为二维数组格式
+                const data = rows.map(row => row.map(cell => cell.text));
+                
+                console.log('最终数据:', data);
+                
+                // 保存并显示分析对话框
+                chrome.storage.local.set({
+                    sheetData: JSON.stringify(data)
+                }, () => {
+                    console.log('表格数据已保存');
+                    
+                    // 显示分析对话框
+                    if (data.length > 0) {
+                        showDataAnalysisDialog(data);
+                    } else {
+                        showToast('无法识别有效的表格数据', 'error');
+                    }
+                });
+            } else {
+                showToast('未能识别任何单元格数据', 'error');
+            }
+        };
+        
+        // 执行扫描分析
+        setTimeout(scanAndAnalyze, 100);
+        
+    } catch (error) {
+        console.error('扫描单元格失败:', error);
+        showToast('扫描过程出错', 'error');
     }
 }
