@@ -15,39 +15,6 @@ const DEFAULT_JIRA_FIELDS = {
   'Description': 'description'
 };
 
-// 从 Google Sheets 获取数据
-export async function getFieldMapping(sheetName: string): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({
-      type: 'GET_SHEET_CONFIG',
-      sheetName: sheetName
-    }, response => {
-      if (chrome.runtime.lastError) {
-        console.error('获取配置失败:', chrome.runtime.lastError);
-        resolve(DEFAULT_JIRA_FIELDS);
-        return;
-      }
-      resolve(response?.mapping || DEFAULT_JIRA_FIELDS);
-    });
-  });
-}
-
-// 获取当前工作表的表头
-export async function getSheetHeaders(): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({
-      type: 'GET_SHEET_HEADERS'
-    }, response => {
-      if (chrome.runtime.lastError) {
-        console.error('获取表头失败:', chrome.runtime.lastError);
-        reject(chrome.runtime.lastError);
-        return;
-      }
-      resolve(response?.headers || []);
-    });
-  });
-}
-
 // 从 Jira 页面抓取数据
 export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
     return new Promise((resolve, reject) => {
@@ -145,22 +112,5 @@ export async function FETCH_JIRA_TICKETS(jql: string, requestId: string, sourceT
       };
       
       checkPageLoad();
-  });
-}
-
-// 将 Jira tickets 写入 Google Sheet
-export async function writeTicketsToSheet(tickets: JiraTicket[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({
-      type: 'WRITE_TICKETS',
-      tickets: tickets
-    }, response => {
-      if (chrome.runtime.lastError) {
-        console.error('写入数据失败:', chrome.runtime.lastError);
-        reject(chrome.runtime.lastError);
-        return;
-      }
-      resolve();
-    });
   });
 }
