@@ -3,7 +3,7 @@ import { initChromaClient } from './vectorStore';
 import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
-import { FETCH_JIRA_TICKETS } from './googleSheets';
+import { FETCH_JIRA_TICKETS } from './jira';
 
 console.log('Background script loaded');
 
@@ -142,6 +142,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'FETCH_JIRA_TICKETS') {
         const { jql, requestId } = request;
         FETCH_JIRA_TICKETS(jql, requestId, sender.tab?.id);
+        return true; // 保持消息通道开放
+    }
+
+    // 获取当前标签页 URL
+    if (request.type === 'GET_CURRENT_TAB_URL') {
+        chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+            sendResponse({ url: tab?.url });
+        });
         return true; // 保持消息通道开放
     }
     

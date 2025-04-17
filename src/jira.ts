@@ -22,7 +22,6 @@ export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
         
         // 监听来自 background script 的消息
         const messageListener = (message: any) => {
-            console.log('message111', message);
             if (message.type === 'JIRA_TICKETS_RESULT' && message.requestId === requestId) {
                 chrome.runtime.onMessage.removeListener(messageListener);
                 if (message.error) {
