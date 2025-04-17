@@ -1,6 +1,11 @@
-import { fetchJiraTickets } from './googleSheets';
+import { fetchJiraTickets } from './jira';
+import { Sheet } from './sheet';
 import { JiraTicket } from './types';
 import { getEnvConfig } from './utils';
+
+// 全局变量
+let url = null;
+let sheetToken = null;
 
 // Main listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -14,14 +19,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { type } = message;
 
     if (type === 'OPEN_JIRA_QUERY_DIALOG') {
-        openJqlDialog();
+        openJqlDialog(message.url, message.sheetToken);
+        url = message.url;
+        sheetToken = message.sheetToken;
     }
 
     return true; // 为所有消息保持消息通道开启
 });
 
 // 创建 JQL 查询对话框
-async function openJqlDialog() {
+async function openJqlDialog(url: string, sheetToken: string) {
     const envConfig = await getEnvConfig();
     const dialog = document.createElement('div');
     dialog.style.cssText = `
@@ -59,184 +66,235 @@ async function openJqlDialog() {
             try {
                 const tickets = await fetchJiraTickets(jql);
                 console.log('tickets', tickets);
-                if (tickets.length > 0) {
-                    const fields = ['key', 'summary', 'status', 'assignee', 'reporter'];
-                    const headers = fields.join('\t');
-                    const formattedData = [headers, ...tickets.map(ticket => ({
+                if (!tickets.length) {
+                    showToast('没有找到数据', 'error');
+                    return;
+                }
+                if (!sheetToken) {
+                    // 没有权限插入，用剪切板模式手动粘贴
+                    const headers = ['key', 'summary', 'status', 'assignee', 'reporter'];
+                    const formattedData = [headers.join('\t'), ...tickets.map(ticket => ({
                         ...ticket,
                         key: `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${ticket.key}", "${ticket.key}")`
-                      })).map(ticket => fields.map(field => ticket[field as keyof JiraTicket]).join('\t'))].join('\n');
+                      })).map(ticket => headers.map(field => ticket[field as keyof JiraTicket]).join('\t'))].join('\n');
                     await navigator.clipboard.writeText(formattedData);
                     console.log('formattedData', formattedData);
                     showToast('Jira 数据已复制到剪贴板');
+                } else {
+                    // 用接口模式自动插入数据
+                    if (!url || !sheetToken) {
+                        showToast('缺少必要参数', 'error');
+                        return;
+                    }
+
+                    // 尝试直接在当前打开的Google Sheets中插入数据
+                    const sheet = new Sheet(url, sheetToken);
+                    try {
+                        await sheet.init();
+                        const values = await sheet.readSheet();
+                        console.log('values', values);
+                        const sheetHeaders = await findValidJiraHeaders(sheet);
+                        console.log('sheetHeaders', sheetHeaders);
+                        
+                        const headers = ['key', 'summary', 'status', 'assignee', 'reporter'];
+                        // 获取表格现有数据的行数
+                        const lastRow = values.length;
+                        console.log('当前表格行数:', lastRow);
+
+                        // 根据现有表头的位置构建数据
+                        const formattedData = tickets.map(ticket => {
+                            const headerValues = Object.values(sheetHeaders).filter((value): value is string => 
+                                typeof value === 'string' && value.length > 0
+                            );
+                            const maxColIndex = getMaxColumnIndex(headerValues);
+                            const row = new Array(maxColIndex).fill(''); // 创建一个足够长的空数组
+
+                            // 根据表头位置填充数据
+                            headers.forEach(field => {
+                                const columnIndex = sheetHeaders[field as keyof JiraTicket];
+                                if (columnIndex && typeof columnIndex === 'string') {
+                                    try {
+                                        const colIndex = getColumnIndex(columnIndex);
+                                        if (field === 'key') {
+                                            row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${ticket.key}", "${ticket.key}")`;
+                                        } else {
+                                            row[colIndex] = ticket[field as keyof JiraTicket] || '';
+                                        }
+                                    } catch (error) {
+                                        console.error('处理列索引时出错:', error);
+                                        // 根据需要处理错误
+                                    }
+                                }
+                            });
+                            return row;
+                        });
+
+                        console.log('formattedData', formattedData);
+                        // 从最后一行开始追加数据
+                        const startPosition = `A${lastRow + 1}`;
+                        await sheet.writeSheet(formattedData, startPosition);
+                        showToast('Jira 数据已插入到Google Sheets');
+                    } catch (error) {
+                        console.error('Google Sheets 操作失败:', error);
+                        showToast('Google Sheets 操作失败: ' + error, 'error');
+                    }
                 }
                 document.body.removeChild(dialog);
-                
-                // 尝试直接在当前打开的Google Sheets中插入数据
-                // insertTicketsToActiveSheet(tickets, envConfig);
             } catch (error) {
+                console.error('查询失败: ', error);
                 alert('查询失败: ' + error);
             }
         }
     });
 }
 
-// 将文本复制到剪贴板
-async function copyToClipboard(text: string): Promise<boolean> {
+interface JiraHeaders {
+    summary: string;
+    description: string;
+    issueType: string;
+    priority: string;
+    assignee: string;
+    reporter: string;
+    labels: string;
+    components: string;
+    fixVersions: string;
+    affectsVersions: string;
+    linkedIssues: string;
+    epicLink: string;
+    sprint: string;
+    storyPoints: string;
+    customFields: { [key: string]: string };
+}
+
+// 查找有效的Jira字段表头
+async function findValidJiraHeaders(sheet: Sheet): Promise<JiraTicket> {
     try {
-        // 确保页面处于焦点状态
-        window.focus();
+        let headerMapping: { [key: string]: string } = {};
         
-        // 创建临时文本区域元素
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '0';
-        textArea.style.top = '0';
-        textArea.style.width = '2em';
-        textArea.style.height = '2em';
-        textArea.style.padding = '0';
-        textArea.style.border = 'none';
-        textArea.style.outline = 'none';
-        textArea.style.boxShadow = 'none';
-        textArea.style.background = 'transparent';
-        document.body.appendChild(textArea);
-        
-        // 选择文本
-        textArea.focus();
-        textArea.select();
-        
-        // 尝试使用 execCommand 复制
-        let success = false;
         try {
-            success = document.execCommand('copy');
-        } catch (err) {
-            console.error('execCommand错误:', err);
-            success = false;
-        }
-        
-        // 尝试使用现代的剪贴板API作为备选方案
-        if (!success && navigator.clipboard && window.isSecureContext) {
-            try {
-                // 等待焦点获取
-                setTimeout(async () => {
-                    try {
-                        await navigator.clipboard.writeText(text);
-                        console.log('使用Clipboard API复制成功');
-                        success = true;
-                    } catch (err) {
-                        console.error('Clipboard API错误:', err);
+            // 尝试读取配置表数据
+            const configData = await sheet.readConfigSheet();
+            console.log('configData', configData);
+            if (configData && configData.length >= 2) {
+                // 创建配置映射字典
+                for (let i = 1; i < configData.length; i++) {
+                    const row = configData[i];
+                    if (row.length >= 2) {
+                        if (row[1] === 'JIRA key') {
+                            headerMapping[row[0].toLowerCase()] = 'key';
+                        } else {
+                            headerMapping[row[0].toLowerCase()] = row[1];
+                        }
                     }
-                }, 100);
-            } catch (err) {
-                console.error('Clipboard API错误:', err);
-            }
-        }
-        
-        // 安全移除临时元素
-        try {
-            if (document.body.contains(textArea)) {
-                document.body.removeChild(textArea);
-            }
-        } catch (err) {
-            console.warn('移除临时元素失败，这是正常的:', err);
-        }
-        
-        if (success) {
-            showToast('数据已复制到剪贴板，请在单元格中按 Ctrl+V 粘贴', 'success');
-        } else {
-            showToast('无法自动复制数据，请手动选择并复制', 'error');
-        }
-        
-        return success;
-    } catch (error) {
-        console.error('复制到剪贴板错误:', error);
-        
-        // 确保清理
-        const tempElements = document.querySelectorAll('textarea[style*="position: fixed"]');
-        tempElements.forEach(el => {
-            try {
-                if (document.body.contains(el)) {
-                    document.body.removeChild(el);
-                } else if (el.parentNode) {
-                    el.parentNode.removeChild(el);
-                } else {
-                    el.remove();
                 }
-            } catch (err) {
-                // 忽略移除错误
+            } else throw new Error('配置表数据为空');
+        } catch (error) {
+            console.warn('读取配置表失败，将使用默认字段别名:', error);
+            // 使用默认的字段别名映射
+            headerMapping = {
+                'summary': 'summary',
+                '概要': 'summary',
+                'description': 'description',
+                '描述': 'description',
+                'type': 'issueType',
+                '类型': 'issueType',
+                'priority': 'priority',
+                '优先级': 'priority',
+                'assignee': 'assignee',
+                '经办人': 'assignee',
+                'reporter': 'reporter',
+                '报告人': 'reporter',
+                'labels': 'labels',
+                '标签': 'labels',
+                'components': 'components',
+                '模块': 'components',
+                'fix versions': 'fixVersions',
+                '修复版本': 'fixVersions',
+                'affects versions': 'affectsVersions',
+                '影响版本': 'affectsVersions',
+                'linked issues': 'linkedIssues',
+                '关联问题': 'linkedIssues',
+                'epic link': 'epicLink',
+                'epic': 'epicLink',
+                'sprint': 'sprint',
+                '冲刺': 'sprint',
+                'story points': 'storyPoints',
+                '故事点': 'storyPoints'
+            };
+        }
+
+        // 获取当前工作表的所有列标题
+        const headers = await sheet.getHeaders();
+        console.log('headers', headers);
+        const validHeaders: JiraTicket = {
+            key: '',
+            summary: '',
+            description: '',
+            issuetype: '',
+            priority: '',
+            assignee: '',
+            reporter: '',
+            labels: '',
+            components: '',
+            fixVersions: '',
+            affectsVersions: '',
+            linkedIssues: '',
+            epicLink: '',
+            sprint: '',
+            storyPoints: '',
+            status: '',
+        };
+
+        // 遍历所有列标题，查找匹配的 Jira 字段
+        headers.forEach((header: string, index: number) => {
+            const headerLower = header.toLowerCase();
+            const columnLetter = String.fromCharCode(65 + index);
+            
+            // 检查是否在配置映射中存在匹配
+            for (const [configKey, jiraField] of Object.entries(headerMapping)) {
+                if (headerLower.includes(configKey)) {
+                    console.log(`别名匹配: "${headerLower}" -> "${jiraField}" (列 ${columnLetter})`);
+                    (validHeaders as any)[jiraField] = columnLetter;
+                    break;
+                } else if (Object.keys(validHeaders).includes(headerLower)) {
+                    console.log(`字段匹配: "${headerLower}" (列 ${columnLetter})`);
+                    (validHeaders as any)[headerLower] = columnLetter;
+                    break;
+                }
+            }
+
+            // 检查是否直接匹配字段名
+            for (const field of Object.keys(validHeaders)) {
+                if (field !== 'customFields' && headerLower === field.toLowerCase()) {
+                    console.log(`直接匹配: "${headerLower}" -> "${field}" (列 ${columnLetter})`);
+                    (validHeaders as any)[field] = columnLetter;
+                    break;
+                }
             }
         });
-        
-        return false;
+
+        console.log('最终匹配结果:', validHeaders);
+        return validHeaders;
+    } catch (error) {
+        console.error('查找有效 Jira 标题时出错:', error);
+        throw error;
     }
 }
 
+function getColumnIndex(column: string): number {
+    if (!column || typeof column !== 'string' || column.length === 0) {
+        throw new Error('无效的列标识');
+    }
+    const upperColumn = column.toUpperCase();
+    return upperColumn.charCodeAt(0) - 65;
+}
 
-// 查找有效的Jira字段表头
-function findValidJiraHeaders(headers: string[], ticket: JiraTicket): string[] {
-    if (!headers || headers.length === 0 || !ticket) {
-        return [];
+function getMaxColumnIndex(headers: string[]): number {
+    if (!headers || !Array.isArray(headers) || headers.length === 0) {
+        return 0;
     }
-    
-    const validHeaders: string[] = [];
-    const possibleJiraFields = Object.keys(ticket).map(k => k.toLowerCase());
-    
-    // 打印所有可能的Jira字段名称，用于调试
-    console.log('可能的Jira字段:', possibleJiraFields);
-    console.log('票据样例:', ticket);
-    
-    headers.forEach(header => {
-        const headerLower = header.toLowerCase().trim();
-        
-        // 检查精确匹配
-        if (possibleJiraFields.includes(headerLower)) {
-            validHeaders.push(headerLower);
-            return;
-        }
-        
-        // 检查移除空格后匹配
-        const headerNoSpace = headerLower.replace(/\s+/g, '');
-        if (possibleJiraFields.includes(headerNoSpace)) {
-            validHeaders.push(headerLower);
-            return;
-        }
-        
-        // 检查部分匹配
-        for (const field of possibleJiraFields) {
-            if (headerLower.includes(field) || field.includes(headerLower)) {
-                validHeaders.push(headerLower);
-                console.log(`部分匹配: "${headerLower}" -> "${field}"`);
-                return;
-            }
-        }
-        
-        // 特殊处理常见的字段名别名
-        const fieldAliases: Record<string, string[]> = {
-            'key': ['id', 'ticket', 'jira', 'issue'],
-            'summary': ['title', 'name', 'description', '摘要', '标题'],
-            'status': ['state', '状态'],
-            'assignee': ['assigned', 'owner', '负责人', '经办人'],
-            'reporter': ['created by', 'author', '报告人', '创建人']
-        };
-        
-        for (const [field, aliases] of Object.entries(fieldAliases)) {
-            if (aliases.some(alias => headerLower.includes(alias))) {
-                validHeaders.push(field);
-                console.log(`别名匹配: "${headerLower}" -> "${field}"`);
-                return;
-            }
-        }
-    });
-    
-    // 如果没有有效头部但有输入头部，至少保留一些基本字段
-    if (validHeaders.length === 0 && headers.length > 0) {
-        console.log('未找到匹配的字段，使用基本字段映射');
-        // 尝试映射基本字段
-        return ['key', 'summary', 'status'].filter(f => possibleJiraFields.includes(f));
-    }
-    
-    return validHeaders;
+    const validHeaders = headers.filter(h => typeof h === 'string' && h.length > 0);
+    return Math.max(...validHeaders.map(col => col.toUpperCase().charCodeAt(0) - 64));
 }
 
 // 添加显示 toast 的函数

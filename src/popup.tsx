@@ -96,7 +96,14 @@ const Popup = () => {
     const openJiraQueryDialog = () => {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]?.id) {
-                chrome.tabs.sendMessage(tabs[0].id, { type: 'OPEN_JIRA_QUERY_DIALOG' });
+                chrome.identity.getAuthToken({ interactive: true }, (token) => {
+                    if (chrome.runtime.lastError) console.error('获取 token 失败: ', chrome.runtime.lastError);
+                    chrome.tabs.sendMessage(tabs[0].id, {
+                        type: 'OPEN_JIRA_QUERY_DIALOG',
+                        url: tabs[0].url,
+                        sheetToken: token
+                    });
+                });
             }
         });
     };
