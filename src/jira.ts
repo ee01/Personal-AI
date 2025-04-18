@@ -64,6 +64,15 @@ export async function FETCH_JIRA_TICKETS(jql: string, requestId: string, sourceT
       const checkPageLoad = () => {
           chrome.tabs.get(tab.id!, (updatedTab) => {
               if (updatedTab.status === 'complete') {
+                if (updatedTab.url.includes('login') || updatedTab.url.includes('okta')) {
+                    chrome.tabs.sendMessage(sourceTabId, {
+                        type: 'JIRA_TICKETS_RESULT',
+                        requestId,
+                        error: 'jira 需要登录，请登录后重新尝试'
+                    });
+                    setTimeout(() => chrome.tabs.update(tab.id!, { active: true }), 3000);
+                    return;
+                }
                   // 注入内容脚本
                   chrome.scripting.executeScript({
                       target: { tabId: tab.id! },

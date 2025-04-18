@@ -105,18 +105,37 @@ async function openJqlDialog(url: string, sheetToken: string) {
                         // 创建现有 key 到行号的映射
                         const keyToRowMap = new Map<string, number>();
                         values.forEach((row: string[], index: number) => {
-                            const key = row[keyColumnIndex]?.replace(/.*"([^"]+)".*/, '$1'); // 提取超链接中的 key
+                            const key = row[keyColumnIndex]?.replace(/.*"([^"]+)".*/, '$1');
                             if (key) {
                                 keyToRowMap.set(key, index);
                             }
                         });
 
+                        // 准备操作数据
+                        const operations: TicketOperation[] = tickets.map(ticket => {
+                            const existingRowIndex = keyToRowMap.get(ticket.key);
+                            return {
+                                ticket,
+                                type: existingRowIndex !== undefined ? 'update' : 'append',
+                                rowIndex: existingRowIndex
+                            };
+                        });
+
+                        // 显示确认弹窗
+                        const confirmedOperations = await showConfirmationDialog(operations, headers, sheetHeaders);
+                        
+                        if (confirmedOperations.length === 0) {
+                            showToast('操作已取消');
+                            document.body.removeChild(dialog);
+                            return;
+                        }
+
                         // 分离需要更新和需要追加的数据
                         const updatesData: UpdateData[] = [];
                         const appendData: string[][] = [];
 
-                        // 格式化每个 ticket 的数据
-                        tickets.forEach(ticket => {
+                        // 处理确认的操作
+                        confirmedOperations.forEach(operation => {
                             const headerValues = Object.values(sheetHeaders).filter((value): value is string => 
                                 typeof value === 'string' && value.length > 0
                             );
@@ -130,9 +149,9 @@ async function openJqlDialog(url: string, sheetToken: string) {
                                     try {
                                         const colIndex = getColumnIndex(columnIndex);
                                         if (field === 'key') {
-                                            row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${ticket.key}", "${ticket.key}")`;
+                                            row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
                                         } else {
-                                            row[colIndex] = ticket[field as keyof JiraTicket] || '';
+                                            row[colIndex] = operation.ticket[field as keyof JiraTicket] || '';
                                         }
                                     } catch (error) {
                                         console.error('处理列索引时出错:', error);
@@ -140,16 +159,12 @@ async function openJqlDialog(url: string, sheetToken: string) {
                                 }
                             });
 
-                            // 判断是更新还是追加
-                            const existingRowIndex = keyToRowMap.get(ticket.key);
-                            if (existingRowIndex !== undefined) {
-                                // 更新现有行
+                            if (operation.type === 'update' && operation.rowIndex !== undefined) {
                                 updatesData.push({
-                                    rowIndex: existingRowIndex,
+                                    rowIndex: operation.rowIndex,
                                     data: row
                                 });
                             } else {
-                                // 追加新行
                                 appendData.push(row);
                             }
                         });
@@ -210,6 +225,12 @@ interface JiraHeaders {
 interface UpdateData {
     rowIndex: number;
     data: string[];
+}
+
+interface TicketOperation {
+    ticket: JiraTicket;
+    type: 'update' | 'append';
+    rowIndex?: number;
 }
 
 // 查找有效的Jira字段表头
@@ -342,6 +363,126 @@ function getMaxColumnIndex(headers: string[]): number {
     }
     const validHeaders = headers.filter(h => typeof h === 'string' && h.length > 0);
     return Math.max(...validHeaders.map(col => col.toUpperCase().charCodeAt(0) - 64));
+}
+
+// 显示确认弹窗
+async function showConfirmationDialog(
+    operations: TicketOperation[],
+    headers: string[],
+    sheetHeaders: JiraTicket
+): Promise<TicketOperation[]> {
+    return new Promise((resolve) => {
+        const dialog = document.createElement('div');
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 10000;
+            width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+        `;
+
+        // 获取将要更新的列
+        const columnsToUpdate = headers
+            .filter(field => sheetHeaders[field as keyof JiraTicket])
+            .map(field => field);
+
+        const updateCount = operations.filter(op => op.type === 'update').length;
+        const appendCount = operations.filter(op => op.type === 'append').length;
+
+        dialog.innerHTML = `
+            <h3 style="margin-top: 0;">确认数据操作</h3>
+            <div style="margin-bottom: 15px;">
+                <div style="margin-bottom: 10px;">
+                    <strong>将要更新的列：</strong>
+                    <span style="color: #666;">${columnsToUpdate.join(', ')}</span>
+                </div>
+                <div style="color: #666;">
+                    <div>更新现有数据：${updateCount} 条</div>
+                    <div>新增数据：${appendCount} 条</div>
+                </div>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <label>
+                    <input type="checkbox" id="selectAll" checked>
+                    全选
+                </label>
+            </div>
+            <div style="margin-bottom: 15px; border: 1px solid #eee; border-radius: 4px; max-height: 400px; overflow-y: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f5f5f5;">
+                            <th style="padding: 8px; text-align: left; position: sticky; top: 0; background: #f5f5f5;">选择</th>
+                            <th style="padding: 8px; text-align: left; position: sticky; top: 0; background: #f5f5f5;">操作类型</th>
+                            <th style="padding: 8px; text-align: left; position: sticky; top: 0; background: #f5f5f5;">Key</th>
+                            <th style="padding: 8px; text-align: left; position: sticky; top: 0; background: #f5f5f5;">概要</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${operations.map((op, index) => `
+                            <tr style="border-bottom: 1px solid #eee;">
+                                <td style="padding: 8px;">
+                                    <input type="checkbox" class="ticket-checkbox" data-index="${index}" checked>
+                                </td>
+                                <td style="padding: 8px;">
+                                    <span style="color: ${op.type === 'update' ? '#f0ad4e' : '#5cb85c'}">
+                                        ${op.type === 'update' ? '更新' : '新增'}
+                                    </span>
+                                </td>
+                                <td style="padding: 8px;">${op.ticket.key}</td>
+                                <td style="padding: 8px;">${op.ticket.summary}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button id="cancelOperation" style="padding: 6px 12px;">取消</button>
+                <button id="confirmOperation" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px;">确认</button>
+            </div>
+        `;
+
+        document.body.appendChild(dialog);
+
+        // 全选/取消全选功能
+        const selectAllCheckbox = document.getElementById('selectAll') as HTMLInputElement;
+        const ticketCheckboxes = document.getElementsByClassName('ticket-checkbox') as HTMLCollectionOf<HTMLInputElement>;
+
+        selectAllCheckbox.addEventListener('change', () => {
+            Array.from(ticketCheckboxes).forEach(checkbox => {
+                checkbox.checked = selectAllCheckbox.checked;
+            });
+        });
+
+        // 监听单个 checkbox 变化，更新全选状态
+        Array.from(ticketCheckboxes).forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                selectAllCheckbox.checked = Array.from(ticketCheckboxes).every(cb => cb.checked);
+            });
+        });
+
+        // 取消按钮
+        document.getElementById('cancelOperation')?.addEventListener('click', () => {
+            document.body.removeChild(dialog);
+            resolve([]);
+        });
+
+        // 确认按钮
+        document.getElementById('confirmOperation')?.addEventListener('click', () => {
+            const selectedOperations = Array.from(ticketCheckboxes)
+                .filter(checkbox => checkbox.checked)
+                .map(checkbox => operations[parseInt(checkbox.dataset.index || '0')]);
+            
+            document.body.removeChild(dialog);
+            resolve(selectedOperations);
+        });
+    });
 }
 
 // 添加显示 toast 的函数
