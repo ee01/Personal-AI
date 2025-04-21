@@ -13,4 +13,36 @@
 
 .radar-button:hover {
   background-color: #1557b0;
+}
+
+.jira-button {
+  /* ... existing styles ... */
+}
+
+.jira-button:disabled {
+  background-color: #f0f0f0;
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.loading-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loading-text::after {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  border-top-color: transparent;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 } 

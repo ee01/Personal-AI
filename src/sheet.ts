@@ -71,6 +71,48 @@ export class Sheet {
     return res.json();
   }
 
+  // 插入行或列
+  async insertDimension(dimension: 'ROWS' | 'COLUMNS', startIndex: number, endIndex: number): Promise<void> {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}:batchUpdate`;
+    const request = {
+      requests: [{
+        insertDimension: {
+          range: {
+            sheetId: parseInt(this.gid),
+            dimension,
+            startIndex,
+            endIndex
+          },
+          inheritFromBefore: true
+        }
+      },
+      {
+        addDimensionGroup: {
+          range: {
+            sheetId: parseInt(this.gid),
+            dimension,
+            startIndex,
+            endIndex
+          }
+        }
+      }]
+    };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(request)
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(`插入维度失败: ${error.error?.message || '未知错误'}`);
+    }
+  }
+
   /**
    * 读取配置表数据
    * @param sheetName 配置表名称
