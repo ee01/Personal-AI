@@ -26,6 +26,8 @@ const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
     const [envConfig, setEnvConfig] = useState<any>(null);
     const [isGoogleSheets, setIsGoogleSheets] = useState(false);
+    const [isRingCentral, setIsRingCentral] = useState(false);
+    const [isExpandingEpic, setIsExpandingEpic] = useState(false);
 
     useEffect(() => {
         (async () => {
@@ -37,6 +39,9 @@ const Popup = () => {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tab?.url?.includes('docs.google.com/spreadsheets')) {
                 setIsGoogleSheets(true);
+            }
+            if (tab?.url?.includes('app.ringcentral.com')) {
+                setIsRingCentral(true);
             }
         })();
     }, []);
@@ -95,15 +100,63 @@ const Popup = () => {
 
     const openJiraQueryDialog = () => {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]?.id) {
+            const activeTab = tabs[0];
+            if (activeTab?.id && activeTab.url) { // Check for both id and url
+                const tabId = activeTab.id; // Store ID in a local constant
                 chrome.identity.getAuthToken({ interactive: true }, (token) => {
-                    if (chrome.runtime.lastError) console.error('获取 token 失败: ', chrome.runtime.lastError);
-                    chrome.tabs.sendMessage(tabs[0].id, {
-                        type: 'OPEN_JIRA_QUERY_DIALOG',
-                        url: tabs[0].url,
-                        sheetToken: token
-                    });
+                    if (chrome.runtime.lastError) {
+                        console.error('获取 token 失败: ', chrome.runtime.lastError);
+                        // Consider showing an error message to the user here
+                        return;
+                    }
+                    // Ensure token is not null/undefined before sending
+                    if (token) {
+                        chrome.tabs.sendMessage(tabId, { // Use the local constant
+                            type: 'OPEN_JIRA_QUERY_DIALOG',
+                            url: activeTab.url, // Pass the URL
+                            sheetToken: token
+                        });
+                    } else {
+                         console.error('获取到的 token 无效');
+                         // Consider showing an error message to the user here
+                    }
                 });
+            } else {
+                console.error("无法获取活动标签页 ID 或 URL");
+                // Consider showing an error message to the user here
+            }
+        });
+    };
+
+    const expandEpicTickets = () => {
+        setIsExpandingEpic(true);
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const activeTab = tabs[0];
+            if (activeTab?.id && activeTab.url) {
+                const tabId = activeTab.id;
+                chrome.identity.getAuthToken({ interactive: true }, (token) => {
+                    if (chrome.runtime.lastError) {
+                        console.error('获取 token 失败: ', chrome.runtime.lastError);
+                        setIsExpandingEpic(false);
+                        return;
+                    }
+                    if (token) {
+                        chrome.tabs.sendMessage(tabId, {
+                            type: 'EXPAND_EPIC_TICKETS',
+                            url: activeTab.url,
+                            sheetToken: token
+                        }, (response) => {
+                            // 当收到响应时（无论成功失败）都关闭 loading
+                            setIsExpandingEpic(false);
+                        });
+                    } else {
+                        console.error('获取到的 token 无效');
+                        setIsExpandingEpic(false);
+                    }
+                });
+            } else {
+                console.error("无法获取活动标签页 ID 或 URL");
+                setIsExpandingEpic(false);
             }
         });
     };
@@ -117,28 +170,43 @@ const Popup = () => {
             />
 
             {isGoogleSheets && (
-                <button 
-                    onClick={openJiraQueryDialog}
-                    className="jira-button"
-                >
-                    抓取 Jira Tickets 到 Sheet
-                </button>
+                <>
+                    <button 
+                        onClick={openJiraQueryDialog}
+                        className="jira-button"
+                    >
+                        抓取 Jira Tickets 到 Sheet
+                    </button>
+                    <button 
+                        onClick={expandEpicTickets}
+                        className="jira-button expand-button"
+                        disabled={isExpandingEpic}
+                    >
+                        {isExpandingEpic ? (
+                            <span className="loading-text">正在查找 Epic 子任务...</span>
+                        ) : (
+                            '展开 Epic 下面所有的 tickets'
+                        )}
+                    </button>
+                </>
             )}
 
-            <button onClick={openKnowledgeQueryWindow}>
+            <button onClick={openKnowledgeQueryWindow} className="message-button">
                 知识库查询
             </button>
             
-            <button onClick={openTopicWindow}>
+            <button onClick={openTopicWindow} className="message-button">
                 配置感兴趣的话题
             </button>
 
-            <button 
-                onClick={handleOpenRadar}
-                className="radar-button"
-            >
-                Open Radar Sidebar
-            </button>
+            {isRingCentral && (
+                <button 
+                    onClick={handleOpenRadar}
+                    className="radar-button"
+                >
+                    Open Radar Sidebar
+                </button>
+            )}
             
             {/* <button onClick={openOptionsPage}>
                 设置
@@ -150,17 +218,19 @@ const Popup = () => {
                     align-items: center;
                     justify-content: space-between;
                     padding: 8px;
+                    margin-bottom: 5px; /* Added margin */
                 }
 
                 .toggle-label {
                     margin-right: 10px;
+                    font-size: 12px; /* Adjusted font size */
                 }
 
                 .toggle-switch {
                     position: relative;
                     display: inline-block;
-                    width: 40px;
-                    height: 20px;
+                    width: 40px; /* Slightly wider */
+                    height: 20px; /* Slightly taller */
                 }
 
                 .toggle-switch input {
@@ -178,16 +248,16 @@ const Popup = () => {
                     bottom: 0;
                     background-color: #ccc;
                     transition: .4s;
-                    border-radius: 20px;
+                    border-radius: 20px; /* Match height */
                 }
 
                 .toggle-slider:before {
                     position: absolute;
                     content: "";
-                    height: 16px;
-                    width: 16px;
-                    left: 2px;
-                    bottom: 2px;
+                    height: 16px; /* Adjusted size */
+                    width: 16px;  /* Adjusted size */
+                    left: 2px;    /* Adjusted position */
+                    bottom: 2px;  /* Adjusted position */
                     background-color: white;
                     transition: .4s;
                     border-radius: 50%;
@@ -198,29 +268,63 @@ const Popup = () => {
                 }
 
                 input:checked + .toggle-slider:before {
-                    transform: translateX(20px);
+                    transform: translateX(20px); /* Adjusted translation */
+                }
+
+                button { /* General button styling */
+                    display: block; /* Make buttons take full width */
+                    width: calc(100% - 16px); /* Account for padding */
+                    padding: 8px 16px;
+                    margin: 8px 8px 0 8px; /* Adjust margins */
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    text-align: center;
+                    box-sizing: border-box;
+                }
+
+                button:hover {
+                    opacity: 0.9;
                 }
 
                 .jira-button {
                     background-color: #0052CC;
                     color: white;
-                    border: none;
-                    padding: 8px 16px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    margin: 8px;
-                    width: calc(100% - 16px);
                 }
 
                 .jira-button:hover {
                     background-color: #0065FF;
                 }
+
+                .expand-button { /* Style for the new button */
+                    background-color: #5bc0de; /* Example info blue */
+                    color: white;
+                }
+
+                .expand-button:hover {
+                     background-color: #31b0d5;
+                }
+
+                 .message-button { /* Example specific style if needed */
+                    background-color: #ff9900; /* Example orange */
+                    color: white;
+                 }
+                 .message-button:hover {
+                    background-color: #e68a00;
+                 }
+
+                 .popup-container {
+                    padding-bottom: 8px; /* Add padding at the bottom */
+                 }
             `}</style>
         </div>
     );
 };
 
 ReactDOM.render(
-    <Popup />,
+    <React.StrictMode> {/* Added StrictMode */}
+        <Popup />
+    </React.StrictMode>,
     document.getElementById('popup-root')
 ); 
