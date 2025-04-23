@@ -186,7 +186,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						sender: originalMessage.sender || '',
 						message_content: originalMessage.message_content || '',
 						summary: result.summary || '',
-						reply_advice: result.replyAdvice || ''
+						reply_advice: result.replyAdvice || '',
+						datetime: originalMessage.datetime || ''
 					}).catch(console.error);
 				}
 				
@@ -254,7 +255,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				sender: processResult.sender || '',
 				message_content: processResult.message_content || '',
 				summary: processResult.summary || '',
-				reply_advice: processResult.replyAdvice || ''
+				reply_advice: processResult.replyAdvice || '',
+				datetime: processResult.datetime || ''
 			}).catch(console.error);
 		}
     } else {
@@ -468,7 +470,8 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 						sender: json.sender,
 						message_content: json.message_content,
 						summary: json.summary,
-						reply_advice: json.reply_advice
+						reply_advice: json.reply_advice,
+						datetime: json.datetime
 					}).catch(console.error);
 				}
 			}

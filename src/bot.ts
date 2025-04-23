@@ -8,6 +8,7 @@ interface MessageData {
     message_content: string;
     summary: string;
     reply_advice: string;
+    datetime?: string;
 }
 
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
@@ -19,6 +20,7 @@ export async function sendBotMessage(messageData: MessageData): Promise<void> {
 __关注项__：\`${messageData.matched_rule}\`
 __在群__：<a class='at_mention_compose' rel='{"id":${messageData.team_id}}'>@${messageData.team_name}</a>
 __发送者__：${messageData.sender}
+__时间__：${messageData.datetime}
 __原文__：${messageData.message_content}
 __上下文__：${messageData.summary}
 __回复建议__：${messageData.reply_advice}
