@@ -107,19 +107,17 @@ const Popup = () => {
                     if (chrome.runtime.lastError) {
                         console.error('获取 token 失败: ', chrome.runtime.lastError);
                         // Consider showing an error message to the user here
-                        return;
                     }
                     // Ensure token is not null/undefined before sending
-                    if (token) {
-                        chrome.tabs.sendMessage(tabId, { // Use the local constant
-                            type: 'OPEN_JIRA_QUERY_DIALOG',
-                            url: activeTab.url, // Pass the URL
-                            sheetToken: token
-                        });
-                    } else {
+                    if (!token) {
                          console.error('获取到的 token 无效');
                          // Consider showing an error message to the user here
                     }
+                    chrome.tabs.sendMessage(tabId, { // Use the local constant
+                        type: 'OPEN_JIRA_QUERY_DIALOG',
+                        url: activeTab.url, // Pass the URL
+                        sheetToken: token
+                    });
                 });
             } else {
                 console.error("无法获取活动标签页 ID 或 URL");

@@ -3,10 +3,6 @@ import { Sheet } from './sheet';
 import { JiraTicket } from './types';
 import { getEnvConfig } from './utils';
 
-// 全局变量
-let url: string | null = null;
-let sheetToken: string | null = null;
-
 // Main listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('收到消息:', message, '发送者:', sender);
@@ -21,8 +17,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (type === 'OPEN_JIRA_QUERY_DIALOG') {
         openJqlDialog(message.url, message.sheetToken);
-        url = message.url;
-        sheetToken = message.sheetToken;
         sendResponse({ success: true });
     } else if (type === 'EXPAND_EPIC_TICKETS') {
         if (!message.url || !message.sheetToken) {
@@ -65,6 +59,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
     dialog.innerHTML = `
         <h3 style="margin-top: 0;">输入 JQL 查询</h3>
         <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;"></textarea>
+        <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
         <div style="display: flex; justify-content: flex-end;">
             <button id="cancel" style="margin-right: 10px;">取消</button>
             <button id="submit">查询</button>
@@ -171,18 +166,18 @@ async function openJqlDialog(url: string, sheetToken: string) {
 
                         confirmedOperations.forEach(operation => {
                             const row = new Array(maxColIndex).fill('');
-                            displayHeaders.forEach(field => {
-                                const columnLetter = sheetHeaders[field as keyof JiraTicket];
+                            Object.keys(operation.ticket).forEach(ticketKey => {
+                                const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
                                 if (columnLetter && typeof columnLetter === 'string') {
                                     try {
                                         const colIndex = getColumnIndex(columnLetter);
-                                        if (field === 'key') {
+                                        if (ticketKey === 'key') {
                                             row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
                                         } else {
-                                            row[colIndex] = operation.ticket[field as keyof JiraTicket] || '';
+                                            row[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
                                         }
                                     } catch (error) {
-                                        console.error(`处理列 ${columnLetter} (字段 ${field}) 时出错:`, error);
+                                        console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
                                     }
                                 }
                             });
@@ -206,7 +201,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
                         if (updatesData.length > 0) {
                             for (const update of updatesData) {
                                 const startColumn = 'A';
-                                const range = `${startColumn}${update.rowIndex}`; 
+                                const range = `${startColumn}${update.rowIndex+1}`; 
                                 console.log(`Updating range: ${range}`, update.data)
                                 await sheet.writeSheet([update.data], range);
                                 updatedCount++;
@@ -287,7 +282,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraHeaders> {
             const configData = await sheet.readConfigSheet();
             console.log('configData', configData);
             if (configData && configData.length >= 2) {
-                const sheetHeaderIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('sheet header'));
+                const sheetHeaderIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('sheet column'));
                 const jiraFieldIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('jira field'));
 
                 if (sheetHeaderIndex === -1 || jiraFieldIndex === -1) {
