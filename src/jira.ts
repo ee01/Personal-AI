@@ -1,20 +1,6 @@
 import { JiraTicket } from './types';
 import { getEnvConfig } from './utils';
 
-// 默认的 Jira 字段配置
-const DEFAULT_JIRA_FIELDS = {
-  'Key': 'key',
-  'Summary': 'summary',
-  'Status': 'status',
-  'Assignee': 'assignee',
-  'Reporter': 'reporter',
-  'Priority': 'priority',
-  'Created': 'created',
-  'Updated': 'updated',
-  'Due Date': 'duedate',
-  'Description': 'description'
-};
-
 // 从 Jira 页面抓取数据
 export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
     return new Promise((resolve, reject) => {
@@ -149,18 +135,29 @@ export async function FETCH_JIRA_TICKETS(jql: string, requestId: string, sourceT
                             const rows = document.querySelectorAll('tr.issuerow');
                               
                             rows.forEach(row => {
-                                const ticket = {
-                                    key: row.querySelector('.issuekey')?.textContent?.trim() || '',
-                                    summary: row.querySelector('.summary')?.textContent?.trim() || '',
-                                    status: row.querySelector('.status')?.textContent?.trim() || '',
-                                    assignee: row.querySelector('.assignee')?.textContent?.trim() || '',
-                                    reporter: row.querySelector('.reporter')?.textContent?.trim() || '',
-                                    priority: row.querySelector('.priority')?.textContent?.trim() || '',
-                                    created: row.querySelector('.created')?.textContent?.trim() || '',
-                                    updated: row.querySelector('.updated')?.textContent?.trim() || '',
-                                    duedate: row.querySelector('.duedate')?.textContent?.trim() || '',
-                                    description: row.querySelector('.description')?.textContent?.trim() || ''
-                                };
+                                const ticket: any = {};
+                                const cells = row.querySelectorAll('td');
+
+                                cells.forEach(cell => {
+                                    if (cell.classList && cell.classList.length > 0) {
+                                        let propertyName = cell.classList[0]; // Get the first class name
+                                        const value = cell.textContent?.trim() || '';
+
+                                        // If the class name is 'issuekey', the property in our object should be 'key'
+                                        if (propertyName === 'issuekey') propertyName = 'key';
+                                        if (propertyName === 'issuetype') propertyName = 'type';
+                                        
+                                        if (propertyName) { // Ensure propertyName is not empty
+                                           ticket[propertyName] = value;
+                                        }
+                                    }
+                                });
+
+                                // Ensure essential non-optional fields from JiraTicket are present, even if empty
+                                ticket.key = ticket.key || '';
+                                ticket.summary = ticket.summary || '';
+                                ticket.status = ticket.status || '';
+                                
                                 tickets.push(ticket);
                             });
                           }
