@@ -1,2 +1,2 @@
-@manifest.json = static/manifest.json 
+@manifest.json = manifest.json 
 @webpack.config.js = webpack.common.cjs
