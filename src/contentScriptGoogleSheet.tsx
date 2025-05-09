@@ -60,9 +60,12 @@ async function openJqlDialog(url: string, sheetToken: string) {
         <h3 style="margin-top: 0;">输入 JQL 查询</h3>
         <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;"></textarea>
         <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
-        <div style="display: flex; justify-content: flex-end;">
-            <button id="cancel" style="margin-right: 10px;">取消</button>
-            <button id="submit">查询</button>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+            <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">刷新 Sheet 上 tickets 数据</button>
+            <div>
+                <button id="cancel" style="margin-right: 10px;">取消</button>
+                <button id="submit">查询</button>
+            </div>
         </div>
     `;
 
@@ -79,164 +82,70 @@ async function openJqlDialog(url: string, sheetToken: string) {
         const jql = (document.getElementById('jql') as HTMLTextAreaElement).value;
         if (jql) {
             try {
-                showToast('正在查询 Jira...');
-                const tickets = await fetchJiraTickets(jql);
-                console.log('tickets', tickets);
-                if (!tickets.length) {
-                    showToast('没有找到数据', 'warning');
-                    if (document.body.contains(dialog)) document.body.removeChild(dialog);
-                    return;
-                }
-                if (!sheetToken) {
-                    // 剪切板模式
-                    const headers = ['key', 'summary', 'status', 'assignee', 'reporter'];
-                    const formattedData = [headers.join('\t'), ...tickets.map(ticket => ({
-                        ...ticket,
-                        key: `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${ticket.key}", "${ticket.key}")`
-                      })).map(ticket => headers.map(field => ticket[field as keyof JiraTicket] || '').join('\t'))].join('\n');
-                    await navigator.clipboard.writeText(formattedData);
-                    console.log('formattedData', formattedData);
-                    showToast('Jira 数据已复制到剪贴板', 'success');
-                } else {
-                    // 接口模式
-                    if (!url) {
-                        showToast('缺少表格 URL', 'error');
-                        return;
-                    }
-
-                    const sheet = new Sheet(url, sheetToken);
-                    try {
-                        await sheet.init();
-                        const values = await sheet.readSheet();
-                        console.log('values', values);
-                        const sheetHeaders = await findValidJiraHeaders(sheet);
-                        const displayHeaders = ['key', 'summary', 'status', 'assignee', 'reporter']; 
-
-                        const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
-                        if (keyColumnIndex === -1) {
-                            const inferredKeyIndex = values[0]?.findIndex((header: string) => header.toLowerCase().includes('key') || header.toLowerCase().includes('jira'));
-                            if (inferredKeyIndex !== -1 && inferredKeyIndex !== undefined) {
-                                sheetHeaders.key = String.fromCharCode(65 + inferredKeyIndex);
-                                console.warn(`未在配置中找到 Key 列，已推断为列 ${sheetHeaders.key}`);
-                            } else {
-                                throw new Error('未找到或无法推断 Jira Key 列，请检查表头或配置');
-                            }
-                        }
-
-                        const keyToRowMap = new Map<string, number>();
-                        values.slice(1).forEach((row: string[], index: number) => { 
-                            const keyCell = row[getColumnIndex(sheetHeaders.key!)];
-                             let key = '';
-                             if (keyCell) {
-                                 const match = keyCell.match(/browse\/([A-Z0-9]+-[0-9]+)/i);
-                                 if (match && match[1]) {
-                                     key = match[1];
-                                 } else if (/^[A-Z0-9]+-[0-9]+$/i.test(keyCell.trim())) {
-                                     key = keyCell.trim();
-                                 }
-                             }
-                            if (key) {
-                                keyToRowMap.set(key, index + 1);
-                            }
-                        });
-
-                        const operations: TicketOperation[] = tickets.map(ticket => {
-                            const existingRowIndex = keyToRowMap.get(ticket.key);
-                            return {
-                                ticket,
-                                type: existingRowIndex !== undefined ? 'update' : 'append',
-                                rowIndex: existingRowIndex
-                            };
-                        });
-
-                        const confirmedOperations = await showConfirmationDialog(operations, displayHeaders, sheetHeaders);
-                        
-                        if (confirmedOperations.length === 0) {
-                            showToast('操作已取消');
-                            if (document.body.contains(dialog)) document.body.removeChild(dialog);
-                            return;
-                        }
-
-                        const updatesData: UpdateData[] = [];
-                        const appendData: string[][] = [];
-                            const headerValues = Object.values(sheetHeaders).filter((value): value is string => 
-                                typeof value === 'string' && value.length > 0
-                            );
-                            const maxColIndex = getMaxColumnIndex(headerValues);
-
-                        confirmedOperations.forEach(operation => {
-                            const row = new Array(maxColIndex).fill('');
-                            Object.keys(operation.ticket).forEach(ticketKey => {
-                                const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
-                                if (columnLetter && typeof columnLetter === 'string') {
-                                    try {
-                                        const colIndex = getColumnIndex(columnLetter);
-                                        if (ticketKey === 'key') {
-                                            row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
-                                        } else {
-                                            row[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
-                                        }
-                                    } catch (error) {
-                                        console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
-                                    }
-                                }
-                            });
-
-                            if (operation.type === 'update' && operation.rowIndex !== undefined) {
-                                updatesData.push({
-                                    rowIndex: operation.rowIndex,
-                                    data: row
-                                });
-                            } else {
-                                appendData.push(row);
-                            }
-                        });
-
-                        console.log('更新数据:', updatesData);
-                        console.log('追加数据:', appendData);
-
-                        let updatedCount = 0;
-                        let appendedCount = 0;
-
-                        if (updatesData.length > 0) {
-                            for (const update of updatesData) {
-                                const startColumn = 'A';
-                                const range = `${startColumn}${update.rowIndex+1}`; 
-                                console.log(`Updating range: ${range}`, update.data)
-                                await sheet.writeSheet([update.data], range);
-                                updatedCount++;
-                            }
-                        }
-
-                        if (appendData.length > 0) {
-                            const startPosition = `A${values.length + 1}`;
-                            console.log(`Appending data starting from: ${startPosition}`, appendData);
-                            await sheet.writeSheet(appendData, startPosition);
-                            appendedCount = appendData.length;
-                        }
-
-                        let toastMessage = '';
-                        if (updatedCount > 0) toastMessage += `已更新 ${updatedCount} 条数据。`;
-                        if (appendedCount > 0) toastMessage += `已追加 ${appendedCount} 条新数据。`;
-                        if (toastMessage === '') toastMessage = '没有需要更新或追加的数据。';
-                        
-                        showToast(toastMessage.trim(), 'success');
-
-                    } catch (error) {
-                        console.error('Google Sheets 操作失败:', error);
-                        showToast('Google Sheets 操作失败: ' + (error instanceof Error ? error.message : error), 'error');
-                    }
-                }
-                if (document.body.contains(dialog)) {
-                document.body.removeChild(dialog);
-                }
+                handleFetchJiraTicketsToSheet(jql, url, sheetToken);
             } catch (error) {
                 console.error('查询或处理失败: ', error);
-                 showToast('查询或处理失败: ' + (error instanceof Error ? error.message : error), 'error');
-                 if (document.body.contains(dialog)) document.body.removeChild(dialog);
+                showToast('查询或处理失败: ' + (error instanceof Error ? error.message : error), 'error');
             }
+            if (document.body.contains(dialog)) document.body.removeChild(dialog);
         } else {
             showToast('请输入 JQL 查询语句', 'warning');
+        }
+    });
+
+    // 添加更新现有 tickets 的事件监听器
+    document.getElementById('updateExisting')?.addEventListener('click', async () => {
+        if (!sheetToken || !url) {
+            showToast('缺少表格 URL 或 token', 'error');
+            return;
+        }
+
+        try {
+            showToast('正在读取表格数据...');
+            if (document.body.contains(dialog)) document.body.removeChild(dialog);
+            const sheet = new Sheet(url, sheetToken);
+            await sheet.init();
+            const values = await sheet.readSheet();
+            const sheetHeaders = await findValidJiraHeaders(sheet);
+
+            if (!values || values.length <= 1) {
+                showToast('表格为空或只有表头', 'warning');
+                return;
+            }
+
+            // 获取所有现有的 Jira keys
+            const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
+            if (keyColumnIndex === -1) {
+                showToast('未找到 Jira Key 列', 'error');
+                return;
+            }
+
+            const existingKeys: string[] = [];
+            values.slice(1).forEach((row: string[]) => {
+                const keyCell = row[keyColumnIndex];
+                if (keyCell) {
+                    const match = keyCell.match(/browse\/([A-Z0-9]+-[0-9]+)/i);
+                    if (match && match[1]) {
+                        existingKeys.push(match[1]);
+                    } else if (/^[A-Z0-9]+-[0-9]+$/i.test(keyCell.trim())) {
+                        existingKeys.push(keyCell.trim());
+                    }
+                }
+            });
+
+            if (existingKeys.length === 0) {
+                showToast('未找到有效的 Jira tickets', 'warning');
+                return;
+            }
+
+            // 构建 JQL 查询
+            const jql = `key in (${existingKeys.join(',')})`;
+            console.log('jql', jql);
+            handleFetchJiraTicketsToSheet(jql, url, sheetToken);
+        } catch (error) {
+            console.error('更新现有 tickets 失败:', error);
+            showToast('更新失败: ' + (error instanceof Error ? error.message : error), 'error');
+            if (document.body.contains(dialog)) document.body.removeChild(dialog);
         }
     });
 }
@@ -607,6 +516,155 @@ function showToast(message: string, type = 'info') {
             document.body.removeChild(toast);
         }, 300);
     }, 3000);
+}
+
+// 从 Jira 查询 tickets 并更新到 Google Sheet
+async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, sheetToken: string) {
+    showToast('正在查询 Jira...');
+    const envConfig = await getEnvConfig();
+    const tickets = await fetchJiraTickets(jql);
+    console.log('tickets', tickets);
+    if (!tickets.length) {
+        showToast('没有找到数据', 'warning');
+        return;
+    }
+    if (!sheetToken) {
+        // 剪切板模式
+        const headers = ['key', 'summary', 'status', 'assignee', 'reporter'];
+        const formattedData = [headers.join('\t'), ...tickets.map(ticket => ({
+            ...ticket,
+            key: `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${ticket.key}", "${ticket.key}")`
+            })).map(ticket => headers.map(field => ticket[field as keyof JiraTicket] || '').join('\t'))].join('\n');
+        await navigator.clipboard.writeText(formattedData);
+        console.log('formattedData', formattedData);
+        showToast('Jira 数据已复制到剪贴板', 'success');
+    } else {
+        // 接口模式
+        if (!sheetUrl) {
+            throw new Error("缺少表格 URL");
+        }
+
+        const sheet = new Sheet(sheetUrl, sheetToken);
+        try {
+            await sheet.init();
+            const values = await sheet.readSheet();
+            console.log('values', values);
+            const sheetHeaders = await findValidJiraHeaders(sheet);
+            const displayHeaders = ['key', 'summary', 'status', 'assignee', 'reporter']; 
+
+            const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
+            if (keyColumnIndex === -1) {
+                const inferredKeyIndex = values[0]?.findIndex((header: string) => header.toLowerCase().includes('key') || header.toLowerCase().includes('jira'));
+                if (inferredKeyIndex !== -1 && inferredKeyIndex !== undefined) {
+                    sheetHeaders.key = String.fromCharCode(65 + inferredKeyIndex);
+                    console.warn(`未在配置中找到 Key 列，已推断为列 ${sheetHeaders.key}`);
+                } else {
+                    throw new Error('未找到或无法推断 Jira Key 列，请检查表头或配置');
+                }
+            }
+
+            const keyToRowMap = new Map<string, number>();
+            values.slice(1).forEach((row: string[], index: number) => { 
+                const keyCell = row[getColumnIndex(sheetHeaders.key!)];
+                    let key = '';
+                    if (keyCell) {
+                        const match = keyCell.match(/browse\/([A-Z0-9]+-[0-9]+)/i);
+                        if (match && match[1]) {
+                            key = match[1];
+                        } else if (/^[A-Z0-9]+-[0-9]+$/i.test(keyCell.trim())) {
+                            key = keyCell.trim();
+                        }
+                    }
+                if (key) {
+                    keyToRowMap.set(key, index + 1);
+                }
+            });
+
+            const operations: TicketOperation[] = tickets.map(ticket => {
+                const existingRowIndex = keyToRowMap.get(ticket.key);
+                return {
+                    ticket,
+                    type: existingRowIndex !== undefined ? 'update' : 'append',
+                    rowIndex: existingRowIndex
+                };
+            });
+
+            const confirmedOperations = await showConfirmationDialog(operations, displayHeaders, sheetHeaders);
+            
+            if (confirmedOperations.length === 0) {
+                showToast('操作已取消');
+            }
+
+            const updatesData: UpdateData[] = [];
+            const appendData: string[][] = [];
+                const headerValues = Object.values(sheetHeaders).filter((value): value is string => 
+                    typeof value === 'string' && value.length > 0
+                );
+                const maxColIndex = getMaxColumnIndex(headerValues);
+
+            confirmedOperations.forEach(operation => {
+                const row = new Array(maxColIndex).fill('');
+                Object.keys(operation.ticket).forEach(ticketKey => {
+                    const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
+                    if (columnLetter && typeof columnLetter === 'string') {
+                        try {
+                            const colIndex = getColumnIndex(columnLetter);
+                            if (ticketKey === 'key') {
+                                row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
+                            } else {
+                                row[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                            }
+                        } catch (error) {
+                            console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
+                        }
+                    }
+                });
+
+                if (operation.type === 'update' && operation.rowIndex !== undefined) {
+                    updatesData.push({
+                        rowIndex: operation.rowIndex,
+                        data: row
+                    });
+                } else {
+                    appendData.push(row);
+                }
+            });
+
+            console.log('更新数据:', updatesData);
+            console.log('追加数据:', appendData);
+
+            let updatedCount = 0;
+            let appendedCount = 0;
+
+            if (updatesData.length > 0) {
+                for (const update of updatesData) {
+                    const startColumn = 'A';
+                    const range = `${startColumn}${update.rowIndex+1}`; 
+                    console.log(`Updating range: ${range}`, update.data)
+                    await sheet.writeSheet([update.data], range);
+                    updatedCount++;
+                }
+            }
+
+            if (appendData.length > 0) {
+                const startPosition = `A${values.length + 1}`;
+                console.log(`Appending data starting from: ${startPosition}`, appendData);
+                await sheet.writeSheet(appendData, startPosition);
+                appendedCount = appendData.length;
+            }
+
+            let toastMessage = '';
+            if (updatedCount > 0) toastMessage += `已更新 ${updatedCount} 条数据。`;
+            if (appendedCount > 0) toastMessage += `已追加 ${appendedCount} 条新数据。`;
+            if (toastMessage === '') toastMessage = '没有需要更新或追加的数据。';
+            
+            showToast(toastMessage.trim(), 'success');
+
+        } catch (error) {
+            console.error('Google Sheets 操作失败:', error);
+            showToast('Google Sheets 操作失败: ' + (error instanceof Error ? error.message : error), 'error');
+        }
+    }
 }
 
 // 新增：处理展开 Epic Tickets 的函数
