@@ -4,7 +4,7 @@
   "description": "Radar PoC chrome extension",
   "scripts": {
     "start": "webpack --watch --config webpack.dev.cjs",
-    "build": "webpack --config webpack.prod.cjs",
+    "build": "webpack --config webpack.prod.cjs && npm run zip",
     "zip": "cd dist && zip -r ../personal-ai.zip .",
     "clean": "rm -rf dist/*"
   },
