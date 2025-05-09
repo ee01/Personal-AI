@@ -6,8 +6,8 @@ https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools
 
 ## 开发环境设置
 
-1. 确认 .env 配置
-2. 替换 manifest.json 中为测试 oauth client_id: 850492875483-m5hdm6mtj068npvdl9r8sr51n9cijndg.apps.googleusercontent.com （配置测试设备：https://console.cloud.google.com/auth/clients?invt=AbuzdQ&project=sync-data-with-jira）
+1. 从 .env.example 创建 .env.development 配置
+2. 替换 GOOGLE_CLIENT_ID: 850492875483-m5hdm6mtj068npvdl9r8sr51n9cijndg.apps.googleusercontent.com （配置测试设备：https://console.cloud.google.com/auth/clients?invt=AbuzdQ&project=sync-data-with-jira）
 
 ### 安装依赖
 ```bash
@@ -100,8 +100,7 @@ Chroma 服务默认在 `http://localhost:8000` 上运行，提供以下 API：
 
 ## 发布流程
 
-1. 确认 .env 文件以及内部的敏感字段清除
-2. 替换 manifest.json 中为正式 oauth client_id: 850492875483-kmbu6or52oi6lsnapoqklbs5fo94jplv.apps.googleusercontent.com
-3. npm start
-4. npm run zip
-5. 上传 zip 到 chrome store: https://chrome.google.com/webstore/devconsole/2ae6926c-357d-4b1b-b4fc-5313c4e19f24/kefnadjndpllbibeklhajjddgmlbafel/edit/package?pli=1
+1. 从 .env.example 创建 .env 文件以及内部的敏感字段清除
+2. 替换 GOOGLE_CLIENT_ID 为正式 oauth client_id: 850492875483-kmbu6or52oi6lsnapoqklbs5fo94jplv.apps.googleusercontent.com
+3. npm run build
+5. 上传 personal-ai.zip 到 chrome store: https://chrome.google.com/webstore/devconsole/2ae6926c-357d-4b1b-b4fc-5313c4e19f24/kefnadjndpllbibeklhajjddgmlbafel/edit/package?pli=1

@@ -141,11 +141,11 @@ export async function FETCH_JIRA_TICKETS(jql: string, requestId: string, sourceT
                                 cells.forEach(cell => {
                                     if (cell.classList && cell.classList.length > 0) {
                                         let propertyName = cell.classList[0]; // Get the first class name
-                                        const value = cell.textContent?.trim() || '';
+                                        const img = cell.querySelector('img[alt]');
+                                        const value = cell.textContent?.trim() || (img ? img.getAttribute('alt') || '' : '');
 
                                         // If the class name is 'issuekey', the property in our object should be 'key'
                                         if (propertyName === 'issuekey') propertyName = 'key';
-                                        if (propertyName === 'issuetype') propertyName = 'type';
                                         
                                         if (propertyName) { // Ensure propertyName is not empty
                                            ticket[propertyName] = value;

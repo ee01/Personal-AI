@@ -58,7 +58,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
 
     dialog.innerHTML = `
         <h3 style="margin-top: 0;">输入 JQL 查询</h3>
-        <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;"></textarea>
+        <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="filter=xxxx"></textarea>
         <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
             <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">刷新 Sheet 上 tickets 数据</button>
@@ -140,7 +140,6 @@ async function openJqlDialog(url: string, sheetToken: string) {
 
             // 构建 JQL 查询
             const jql = `key in (${existingKeys.join(',')})`;
-            console.log('jql', jql);
             handleFetchJiraTicketsToSheet(jql, url, sheetToken);
         } catch (error) {
             console.error('更新现有 tickets 失败:', error);

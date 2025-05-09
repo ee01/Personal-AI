@@ -160,11 +160,11 @@ async function FETCH_JIRA_TICKETS(jql, requestId, sourceTabId) {
                   cells.forEach(cell => {
                     if (cell.classList && cell.classList.length > 0) {
                       let propertyName = cell.classList[0]; // Get the first class name
-                      const value = cell.textContent?.trim() || '';
+                      const img = cell.querySelector('img[alt]');
+                      const value = cell.textContent?.trim() || (img ? img.getAttribute('alt') || '' : '');
 
                       // If the class name is 'issuekey', the property in our object should be 'key'
                       if (propertyName === 'issuekey') propertyName = 'key';
-                      if (propertyName === 'issuetype') propertyName = 'type';
                       if (propertyName) {
                         // Ensure propertyName is not empty
                         ticket[propertyName] = value;
@@ -561,16 +561,16 @@ function transformPostLinks(inputString) {
 
 // 默认环境配置
 const defaultEnvConfig = {
-  SCHEDULED_INTERVAL: Number("120") || 120,
+  SCHEDULED_INTERVAL: Number("180") || 120,
   ANALYSIS_TYPE: "filter" || 0,
   LLM_TYPE: "dify" || 0,
-  ANALYZE_BY_GROUP: "true" === "true",
+  ANALYZE_BY_GROUP: "false" === "true",
   OLLAMA_BASE_URL: "http://localhost:11434" || 0,
   OLLAMA_MODEL: "deepseek-r1" || 0,
   OLLAMA_REVIEW_MODEL: "llama3.1" || 0,
   OLLAMA_QUERY_MODEL: "llama3.1" || 0,
-  DIFY_API_KEY:  false || "",
-  DIFY_REVIEW_API_KEY:  false || "",
+  DIFY_API_KEY: "app-EQhkmjfMxIiyWWbMj9vz5vM9" || 0,
+  DIFY_REVIEW_API_KEY: "app-EQhkmjfMxIiyWWbMj9vz5vM9" || 0,
   DIFY_API_BASE_URL: "https://lap2-api-dev.int.rclabenv.com/v1" || 0,
   OPENAI_API_KEY:  false || "",
   OPENAI_MODEL: "deepseek-ai/deepseek-r1" || 0,
@@ -587,11 +587,11 @@ const defaultEnvConfig = {
   ENABLE_BOT: "true" === "true",
   LLM_REVIEW_BEFORE_SEND: "true" === "true",
   ENABLE_CHROMA: "true" === "true",
-  CHROMA_API_URL: "http://localhost:8000" || 0,
+  CHROMA_API_URL: "http://10.32.56.212:8000" || 0,
   CHROMA_PORT: Number("8000") || 8000,
   CHROMA_COLLECTION_NAME:  false || "",
-  JIRA_BASE_URL:  false || "https://jira.ringcentral.com",
-  JIRA_USERNAME:  false || "",
+  JIRA_BASE_URL: "https://jira.ringcentral.com" || 0,
+  JIRA_USERNAME: "esone.qiu@ringcentral.com" || 0,
   JIRA_API_TOKEN:  false || ""
 };
 
@@ -768,7 +768,7 @@ async function openJqlDialog(url, sheetToken) {
     `;
   dialog.innerHTML = `
         <h3 style="margin-top: 0;">输入 JQL 查询</h3>
-        <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;"></textarea>
+        <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="filter=xxxx"></textarea>
         <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
             <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">刷新 Sheet 上 tickets 数据</button>
@@ -844,7 +844,6 @@ async function openJqlDialog(url, sheetToken) {
 
       // 构建 JQL 查询
       const jql = `key in (${existingKeys.join(',')})`;
-      console.log('jql', jql);
       handleFetchJiraTicketsToSheet(jql, url, sheetToken);
     } catch (error) {
       console.error('更新现有 tickets 失败:', error);
