@@ -1890,7 +1890,7 @@ export async function processMessage(input: any, onEveryGroupCompleted?: (result
           llmCallCount: 0,
           llmCallTokens: 0,
           useTools: [] as string[],
-          reasonsToStore: [],
+          reasonsToStore: [] as string[],
           thoughtProcess: [{
             timestamp: Date.now(),
             thought: "批量处理失败",

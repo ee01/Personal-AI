@@ -28,6 +28,17 @@
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],
       "js": ["contentScriptGoogleSheet.js"]
+    },
+    {
+      "matches": [
+        "*://*.jira.com/browse/*",
+        "*://*.atlassian.net/browse/*",
+        "*://jira.ringcentral.com/browse/*"
+      ],
+      "js": [
+        "contentScriptJira.js"
+      ],
+      "run_at": "document_end"
     }
   ],
   "action": {
@@ -56,7 +67,7 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "oauth2": {
-    "client_id": "undefined",
+    "client_id": "850492875483-2b3avnvb8sqkpgpn20bddq79d5dqv13c.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/drive.readonly"
