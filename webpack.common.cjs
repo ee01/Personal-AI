@@ -8,7 +8,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 
 // 处理 manifest 模板
 const processManifestTemplate = (env) => {
-  const manifestTemplate = fs.readFileSync(path.resolve(__dirname, 'manifest.json'), 'utf8');
+  const manifestTemplate = fs.readFileSync(path.resolve(__dirname, 'src/manifest.json'), 'utf8');
   const manifestContent = manifestTemplate.replace('{{GOOGLE_CLIENT_ID}}', env.GOOGLE_CLIENT_ID);
   fs.writeFileSync(path.resolve(__dirname, 'static/manifest.json'), manifestContent);
 };
@@ -22,6 +22,7 @@ module.exports = (env) => {
       background: './src/background.ts',
       contentScript: './src/contentScript.tsx',
       contentScriptGoogleSheet: './src/contentScriptGoogleSheet.tsx',
+      contentScriptJira: './src/contentScriptJira.ts',
       popup: './src/popup.tsx',
       options: './src/options.tsx',
       offscreen: './src/offscreen.ts',

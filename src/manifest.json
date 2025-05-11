@@ -28,6 +28,17 @@
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],
       "js": ["contentScriptGoogleSheet.js"]
+    },
+    {
+      "matches": [
+        "*://*.jira.com/browse/*",
+        "*://*.atlassian.net/browse/*",
+        "*://jira.ringcentral.com/browse/*"
+      ],
+      "js": [
+        "contentScriptJira.js"
+      ],
+      "run_at": "document_end"
     }
   ],
   "action": {
