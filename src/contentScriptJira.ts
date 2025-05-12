@@ -30,6 +30,23 @@ function getParentLinkFromDOM(): { key: string; url: string } | null {
   return null;
 }
 
+// 从DOM中查找上级Epic ticket
+function getParentEpicFromDOM(): { key: string; url: string, name: string } | null {
+  // 查找Epic Link字段
+  const epicLinkElement = document.querySelector('#customfield_11450-val');
+  if (epicLinkElement) {
+    const linkElement = epicLinkElement.querySelector('a');
+    if (linkElement) {
+      return {
+        name: linkElement.textContent.trim(),
+        key: linkElement.href.split('/').pop() || '',
+        url: linkElement.href
+      };
+    }
+  }
+  return null;
+}
+
 // 调用Jira API获取票据信息
 async function fetchTicketData(ticketKey: string): Promise<any> {
   try {
@@ -80,6 +97,26 @@ async function getDesignLink(uxTicketKey: string): Promise<string | null> {
   }
 }
 
+// 获取Epic ticket的Parent Link
+async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: string } | null> {
+  try {
+    const response = await fetch(`/rest/api/2/issue/${epicKey}?fields=customfield_15751`);
+    if (!response.ok) throw new Error(`Failed to fetch Epic ticket: ${response.statusText}`);
+    const data = await response.json();
+    
+    const parentKey = data.fields.customfield_15751;
+    if (!parentKey) return null;
+    
+    return {
+      key: parentKey,
+      url: `/browse/${parentKey}`
+    };
+  } catch (error) {
+    console.error('Error fetching Epic parent link:', error);
+    return null;
+  }
+}
+
 // 显示设计链接
 function displayDesignLink(designLink: string): void {
   const summaryElement = document.querySelector('.issue-header-content');
@@ -90,12 +127,22 @@ function displayDesignLink(designLink: string): void {
   if (existingLink) return;
   
   const designLinkContainer = document.createElement('div');
+  
+  // 获取扩展内的 icon 路径
+  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+
   designLinkContainer.className = 'design-link-container';
   designLinkContainer.innerHTML = `
-    <span class="design-icon">✨</span>
-    <a href="${designLink}" target="_blank" class="design-link">
-      Design: Figma Link <span class="external-link-icon">↗️</span>
-    </a>
+    <div class="design-link-content">
+      <img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" />
+      Design Link: <a href="${designLink}" target="_blank" class="design-link">
+        ${designLink} <span class="external-link-icon">↗️</span>
+      </a>
+    </div>
+    <div class="design-link-footer">
+      <span class="footer-text">Personal AI provided</span>
+      <span class="author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank">Esone</a></span>
+    </div>
   `;
   
   // 插入到Summary下方
@@ -110,8 +157,66 @@ function displayDesignLink(designLink: string): void {
       background-color: #f0f5ff;
       border-radius: 4px;
       display: inline-flex;
-      align-items: center;
+      flex-direction: column;
       box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: visible;
+      max-height: 40px;
+      z-index: 1;
+    }
+    .design-link-container:hover {
+      max-height: 80px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+      transform: translateY(4px);
+      z-index: 1000;
+    }
+    .design-link-content {
+      display: flex;
+      align-items: center;
+      background-color: #f0f5ff;
+      position: relative;
+      z-index: 2;
+    }
+    .design-link-footer {
+      font-size: 12px;
+      color: #666;
+      margin-top: 0;
+      padding-top: 8px;
+      border-top: 1px dashed #ccc;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: all 0.3s ease;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background-color: #f0f5ff;
+      padding: 8px 12px;
+      border-radius: 0 0 4px 4px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .design-link-container:hover .design-link-footer {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .footer-text {
+      font-size: 12px;
+      color: #666;
+    }
+    .author-text {
+      font-size: 11px;
+      color: #666;
+    }
+    .author-text a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .author-text a:hover {
+      text-decoration: underline;
     }
     .design-icon {
       margin-right: 6px;
@@ -120,6 +225,7 @@ function displayDesignLink(designLink: string): void {
       color: #0052cc;
       font-weight: 500;
       text-decoration: none;
+      margin-left: 4px;
     }
     .design-link:hover {
       text-decoration: underline;
@@ -132,6 +238,20 @@ function displayDesignLink(designLink: string): void {
   document.head.appendChild(style);
 }
 
+// 判断是否为Epic ticket
+async function isEpicTicket(): Promise<boolean> {
+  try {
+    const issueTypeElement = document.querySelector('#type-val');
+    if (!issueTypeElement) return false;
+    
+    const issueType = issueTypeElement.textContent?.trim();
+    return issueType === 'Epic';
+  } catch (error) {
+    console.error('Error checking Epic type:', error);
+    return false;
+  }
+}
+
 // 主函数
 async function main(): Promise<void> {
   if (!isJiraTicketPage()) return;
@@ -142,10 +262,27 @@ async function main(): Promise<void> {
     console.log('Current Jira ticket:', ticketId);
     
     // 等待DOM加载完成
-    await waitForElement('#customfield_15751-val', 5000);
+    await waitForElement('#customfield_15751-val, #customfield_11450-val, #type-val', 5000);
     
-    // 从DOM获取Parent Link
-    const parentLink = getParentLinkFromDOM();
+    let parentLink;
+    
+    // 判断是否为Epic ticket
+    if (await isEpicTicket()) {
+      // 如果是Epic，直接获取INIT Link
+      parentLink = getParentLinkFromDOM();
+    } else {
+      // 如果不是Epic，先获取Epic Link
+      const epicLink = getParentEpicFromDOM();
+      if (!epicLink) {
+        console.log('No Epic link found');
+        return;
+      }
+      console.log('Epic ticket:', epicLink.key);
+      
+      // 通过API获取Epic的Parent Link
+      parentLink = await getEpicParentLink(epicLink.key);
+    }
+    
     if (!parentLink) {
       console.log('No parent link found');
       return;

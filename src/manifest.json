@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "5.2.1",
+  "version": "5.3.0",
   "permissions": [
     "tabs",
     "storage",
@@ -54,7 +54,7 @@
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html", "options.css", "agent-visualizer.css"],
+    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png"],
     "matches": ["<all_urls>"]
   }],
   "icons": {
