@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "5.2.1",
+  "version": "5.3.0",
   "permissions": [
     "tabs",
     "storage",
@@ -54,7 +54,7 @@
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html", "options.css", "agent-visualizer.css"],
+    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png"],
     "matches": ["<all_urls>"]
   }],
   "icons": {
@@ -67,7 +67,7 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "oauth2": {
-    "client_id": "850492875483-2b3avnvb8sqkpgpn20bddq79d5dqv13c.apps.googleusercontent.com",
+    "client_id": "850492875483-kmbu6or52oi6lsnapoqklbs5fo94jplv.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/drive.readonly"
