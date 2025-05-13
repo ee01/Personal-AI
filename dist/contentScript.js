@@ -7006,16 +7006,16 @@ function transformPostLinks(inputString) {
 
 // 默认环境配置
 const defaultEnvConfig = {
-  SCHEDULED_INTERVAL: Number("120") || 120,
+  SCHEDULED_INTERVAL: Number("180") || 120,
   ANALYSIS_TYPE: "filter" || 0,
   LLM_TYPE: "dify" || 0,
-  ANALYZE_BY_GROUP: "true" === "true",
+  ANALYZE_BY_GROUP: "false" === "true",
   OLLAMA_BASE_URL: "http://localhost:11434" || 0,
   OLLAMA_MODEL: "deepseek-r1" || 0,
   OLLAMA_REVIEW_MODEL: "llama3.1" || 0,
   OLLAMA_QUERY_MODEL: "llama3.1" || 0,
-  DIFY_API_KEY:  false || "",
-  DIFY_REVIEW_API_KEY:  false || "",
+  DIFY_API_KEY: "app-EQhkmjfMxIiyWWbMj9vz5vM9" || 0,
+  DIFY_REVIEW_API_KEY: "app-EQhkmjfMxIiyWWbMj9vz5vM9" || 0,
   DIFY_API_BASE_URL: "https://lap2-api-dev.int.rclabenv.com/v1" || 0,
   OPENAI_API_KEY:  false || "",
   OPENAI_MODEL: "deepseek-ai/deepseek-r1" || 0,
@@ -7032,11 +7032,11 @@ const defaultEnvConfig = {
   ENABLE_BOT: "true" === "true",
   LLM_REVIEW_BEFORE_SEND: "true" === "true",
   ENABLE_CHROMA: "true" === "true",
-  CHROMA_API_URL: "http://localhost:8000" || 0,
+  CHROMA_API_URL: "http://10.32.56.212:8000" || 0,
   CHROMA_PORT: Number("8000") || 8000,
   CHROMA_COLLECTION_NAME:  false || "",
-  JIRA_BASE_URL:  false || "https://jira.ringcentral.com",
-  JIRA_USERNAME:  false || "",
+  JIRA_BASE_URL: "https://jira.ringcentral.com" || 0,
+  JIRA_USERNAME: "esone.qiu@ringcentral.com" || 0,
   JIRA_API_TOKEN:  false || ""
 };
 
@@ -11620,771 +11620,6 @@ module.exports = self.fetch.bind(self);
 
 /***/ }),
 
-/***/ "./node_modules/mobx-react-lite/es/ObserverComponent.js":
-/*!**************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/ObserverComponent.js ***!
-  \**************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   Observer: () => (/* binding */ ObserverComponent)
-/* harmony export */ });
-/* harmony import */ var _useObserver__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./useObserver */ "./node_modules/mobx-react-lite/es/useObserver.js");
-
-function ObserverComponent(_a) {
-    var children = _a.children, render = _a.render;
-    var component = children || render;
-    if (typeof component !== "function") {
-        return null;
-    }
-    return (0,_useObserver__WEBPACK_IMPORTED_MODULE_0__.useObserver)(component);
-}
-ObserverComponent.propTypes = {
-    children: ObserverPropsCheck,
-    render: ObserverPropsCheck
-};
-ObserverComponent.displayName = "Observer";
-
-function ObserverPropsCheck(props, key, componentName, location, propFullName) {
-    var extraKey = key === "children" ? "render" : "children";
-    var hasProp = typeof props[key] === "function";
-    var hasExtraProp = typeof props[extraKey] === "function";
-    if (hasProp && hasExtraProp) {
-        return new Error("MobX Observer: Do not use children and render in the same time in`" + componentName);
-    }
-    if (hasProp || hasExtraProp) {
-        return null;
-    }
-    return new Error("Invalid prop `" +
-        propFullName +
-        "` of type `" +
-        typeof props[key] +
-        "` supplied to" +
-        " `" +
-        componentName +
-        "`, expected `function`.");
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/assertEnvironment.js":
-/*!**************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/assertEnvironment.js ***!
-  \**************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-
-
-if (!react__WEBPACK_IMPORTED_MODULE_1__.useState) {
-    throw new Error("mobx-react-lite requires React with Hooks support");
-}
-if (!mobx__WEBPACK_IMPORTED_MODULE_0__.spy) {
-    throw new Error("mobx-react-lite requires mobx at least version 4 to be available");
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/index.js":
-/*!**************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/index.js ***!
-  \**************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   Observer: () => (/* reexport safe */ _ObserverComponent__WEBPACK_IMPORTED_MODULE_6__.Observer),
-/* harmony export */   isObserverBatched: () => (/* reexport safe */ _observerBatching__WEBPACK_IMPORTED_MODULE_2__.isObserverBatched),
-/* harmony export */   isUsingStaticRendering: () => (/* reexport safe */ _staticRendering__WEBPACK_IMPORTED_MODULE_3__.isUsingStaticRendering),
-/* harmony export */   observer: () => (/* reexport safe */ _observer__WEBPACK_IMPORTED_MODULE_4__.observer),
-/* harmony export */   observerBatching: () => (/* reexport safe */ _observerBatching__WEBPACK_IMPORTED_MODULE_2__.observerBatching),
-/* harmony export */   useAsObservableSource: () => (/* reexport safe */ _useAsObservableSource__WEBPACK_IMPORTED_MODULE_8__.useAsObservableSource),
-/* harmony export */   useForceUpdate: () => (/* reexport safe */ _utils__WEBPACK_IMPORTED_MODULE_7__.useForceUpdate),
-/* harmony export */   useLocalStore: () => (/* reexport safe */ _useLocalStore__WEBPACK_IMPORTED_MODULE_9__.useLocalStore),
-/* harmony export */   useObserver: () => (/* reexport safe */ _useObserver__WEBPACK_IMPORTED_MODULE_5__.useObserver),
-/* harmony export */   useQueuedForceUpdate: () => (/* reexport safe */ _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_10__.useQueuedForceUpdate),
-/* harmony export */   useQueuedForceUpdateBlock: () => (/* reexport safe */ _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_10__.useQueuedForceUpdateBlock),
-/* harmony export */   useStaticRendering: () => (/* reexport safe */ _staticRendering__WEBPACK_IMPORTED_MODULE_3__.useStaticRendering)
-/* harmony export */ });
-/* harmony import */ var _assertEnvironment__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./assertEnvironment */ "./node_modules/mobx-react-lite/es/assertEnvironment.js");
-/* harmony import */ var _utils_reactBatchedUpdates__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils/reactBatchedUpdates */ "./node_modules/mobx-react-lite/es/utils/reactBatchedUpdates.js");
-/* harmony import */ var _observerBatching__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./observerBatching */ "./node_modules/mobx-react-lite/es/observerBatching.js");
-/* harmony import */ var _staticRendering__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./staticRendering */ "./node_modules/mobx-react-lite/es/staticRendering.js");
-/* harmony import */ var _observer__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./observer */ "./node_modules/mobx-react-lite/es/observer.js");
-/* harmony import */ var _useObserver__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./useObserver */ "./node_modules/mobx-react-lite/es/useObserver.js");
-/* harmony import */ var _ObserverComponent__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./ObserverComponent */ "./node_modules/mobx-react-lite/es/ObserverComponent.js");
-/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react-lite/es/utils.js");
-/* harmony import */ var _useAsObservableSource__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./useAsObservableSource */ "./node_modules/mobx-react-lite/es/useAsObservableSource.js");
-/* harmony import */ var _useLocalStore__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./useLocalStore */ "./node_modules/mobx-react-lite/es/useLocalStore.js");
-/* harmony import */ var _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./useQueuedForceUpdate */ "./node_modules/mobx-react-lite/es/useQueuedForceUpdate.js");
-
-
-
-(0,_observerBatching__WEBPACK_IMPORTED_MODULE_2__.observerBatching)(_utils_reactBatchedUpdates__WEBPACK_IMPORTED_MODULE_1__.unstable_batchedUpdates);
-
-
-
-
-
-
-
-
-
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/observer.js":
-/*!*****************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/observer.js ***!
-  \*****************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   observer: () => (/* binding */ observer)
-/* harmony export */ });
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-/* harmony import */ var _staticRendering__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./staticRendering */ "./node_modules/mobx-react-lite/es/staticRendering.js");
-/* harmony import */ var _useObserver__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./useObserver */ "./node_modules/mobx-react-lite/es/useObserver.js");
-var __assign = (undefined && undefined.__assign) || function () {
-    __assign = Object.assign || function(t) {
-        for (var s, i = 1, n = arguments.length; i < n; i++) {
-            s = arguments[i];
-            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
-                t[p] = s[p];
-        }
-        return t;
-    };
-    return __assign.apply(this, arguments);
-};
-
-
-
-// n.b. base case is not used for actual typings or exported in the typing files
-function observer(baseComponent, options) {
-    // The working of observer is explained step by step in this talk: https://www.youtube.com/watch?v=cPF4iBedoF0&feature=youtu.be&t=1307
-    if ((0,_staticRendering__WEBPACK_IMPORTED_MODULE_1__.isUsingStaticRendering)()) {
-        return baseComponent;
-    }
-    var realOptions = __assign({ forwardRef: false }, options);
-    var baseComponentName = baseComponent.displayName || baseComponent.name;
-    var wrappedComponent = function (props, ref) {
-        return (0,_useObserver__WEBPACK_IMPORTED_MODULE_2__.useObserver)(function () { return baseComponent(props, ref); }, baseComponentName);
-    };
-    wrappedComponent.displayName = baseComponentName;
-    // memo; we are not interested in deep updates
-    // in props; we assume that if deep objects are changed,
-    // this is in observables, which would have been tracked anyway
-    var memoComponent;
-    if (realOptions.forwardRef) {
-        // we have to use forwardRef here because:
-        // 1. it cannot go before memo, only after it
-        // 2. forwardRef converts the function into an actual component, so we can't let the baseComponent do it
-        //    since it wouldn't be a callable function anymore
-        memoComponent = (0,react__WEBPACK_IMPORTED_MODULE_0__.memo)((0,react__WEBPACK_IMPORTED_MODULE_0__.forwardRef)(wrappedComponent));
-    }
-    else {
-        memoComponent = (0,react__WEBPACK_IMPORTED_MODULE_0__.memo)(wrappedComponent);
-    }
-    copyStaticProperties(baseComponent, memoComponent);
-    memoComponent.displayName = baseComponentName;
-    return memoComponent;
-}
-// based on https://github.com/mridgway/hoist-non-react-statics/blob/master/src/index.js
-var hoistBlackList = {
-    $$typeof: true,
-    render: true,
-    compare: true,
-    type: true
-};
-function copyStaticProperties(base, target) {
-    Object.keys(base).forEach(function (key) {
-        if (!hoistBlackList[key]) {
-            Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(base, key));
-        }
-    });
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/observerBatching.js":
-/*!*************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/observerBatching.js ***!
-  \*************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   defaultNoopBatch: () => (/* binding */ defaultNoopBatch),
-/* harmony export */   isObserverBatched: () => (/* binding */ isObserverBatched),
-/* harmony export */   observerBatching: () => (/* binding */ observerBatching)
-/* harmony export */ });
-/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
-/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react-lite/es/utils.js");
-
-
-var observerBatchingConfiguredSymbol = (0,_utils__WEBPACK_IMPORTED_MODULE_1__.getSymbol)("observerBatching");
-function defaultNoopBatch(callback) {
-    callback();
-}
-function observerBatching(reactionScheduler) {
-    if (!reactionScheduler) {
-        reactionScheduler = defaultNoopBatch;
-        if (true) {
-            console.warn("[MobX] Failed to get unstable_batched updates from react-dom / react-native");
-        }
-    }
-    (0,mobx__WEBPACK_IMPORTED_MODULE_0__.configure)({ reactionScheduler: reactionScheduler });
-    (0,_utils__WEBPACK_IMPORTED_MODULE_1__.getGlobal)()[observerBatchingConfiguredSymbol] = true;
-}
-var isObserverBatched = function () { return !!(0,_utils__WEBPACK_IMPORTED_MODULE_1__.getGlobal)()[observerBatchingConfiguredSymbol]; };
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/printDebugValue.js":
-/*!************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/printDebugValue.js ***!
-  \************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   printDebugValue: () => (/* binding */ printDebugValue)
-/* harmony export */ });
-/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
-
-function printDebugValue(v) {
-    return (0,mobx__WEBPACK_IMPORTED_MODULE_0__.getDependencyTree)(v);
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/reactionCleanupTracking.js":
-/*!********************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/reactionCleanupTracking.js ***!
-  \********************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS: () => (/* binding */ CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS),
-/* harmony export */   CLEANUP_TIMER_LOOP_MILLIS: () => (/* binding */ CLEANUP_TIMER_LOOP_MILLIS),
-/* harmony export */   createTrackingData: () => (/* binding */ createTrackingData),
-/* harmony export */   forceCleanupTimerToRunNowForTests: () => (/* binding */ forceCleanupTimerToRunNowForTests),
-/* harmony export */   recordReactionAsCommitted: () => (/* binding */ recordReactionAsCommitted),
-/* harmony export */   resetCleanupScheduleForTests: () => (/* binding */ resetCleanupScheduleForTests),
-/* harmony export */   scheduleCleanupOfReactionIfLeaked: () => (/* binding */ scheduleCleanupOfReactionIfLeaked)
-/* harmony export */ });
-function createTrackingData(reaction) {
-    var trackingData = {
-        cleanAt: Date.now() + CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS,
-        reaction: reaction
-    };
-    return trackingData;
-}
-/**
- * The minimum time before we'll clean up a Reaction created in a render
- * for a component that hasn't managed to run its effects. This needs to
- * be big enough to ensure that a component won't turn up and have its
- * effects run without being re-rendered.
- */
-var CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS = 10000;
-/**
- * The frequency with which we'll check for leaked reactions.
- */
-var CLEANUP_TIMER_LOOP_MILLIS = 10000;
-/**
- * Reactions created by components that have yet to be fully mounted.
- */
-var uncommittedReactionRefs = new Set();
-/**
- * Latest 'uncommitted reactions' cleanup timer handle.
- */
-var reactionCleanupHandle;
-function ensureCleanupTimerRunning() {
-    if (reactionCleanupHandle === undefined) {
-        reactionCleanupHandle = setTimeout(cleanUncommittedReactions, CLEANUP_TIMER_LOOP_MILLIS);
-    }
-}
-function scheduleCleanupOfReactionIfLeaked(ref) {
-    uncommittedReactionRefs.add(ref);
-    ensureCleanupTimerRunning();
-}
-function recordReactionAsCommitted(reactionRef) {
-    uncommittedReactionRefs.delete(reactionRef);
-}
-/**
- * Run by the cleanup timer to dispose any outstanding reactions
- */
-function cleanUncommittedReactions() {
-    reactionCleanupHandle = undefined;
-    // Loop through all the candidate leaked reactions; those older
-    // than CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS get tidied.
-    var now = Date.now();
-    uncommittedReactionRefs.forEach(function (ref) {
-        var tracking = ref.current;
-        if (tracking) {
-            if (now >= tracking.cleanAt) {
-                // It's time to tidy up this leaked reaction.
-                tracking.reaction.dispose();
-                ref.current = null;
-                uncommittedReactionRefs.delete(ref);
-            }
-        }
-    });
-    if (uncommittedReactionRefs.size > 0) {
-        // We've just finished a round of cleanups but there are still
-        // some leak candidates outstanding.
-        ensureCleanupTimerRunning();
-    }
-}
-/* istanbul ignore next */
-/**
- * Only to be used by test functions; do not export outside of mobx-react-lite
- */
-function forceCleanupTimerToRunNowForTests() {
-    // This allows us to control the execution of the cleanup timer
-    // to force it to run at awkward times in unit tests.
-    if (reactionCleanupHandle) {
-        clearTimeout(reactionCleanupHandle);
-        cleanUncommittedReactions();
-    }
-}
-/* istanbul ignore next */
-function resetCleanupScheduleForTests() {
-    if (reactionCleanupHandle) {
-        clearTimeout(reactionCleanupHandle);
-        reactionCleanupHandle = undefined;
-    }
-    uncommittedReactionRefs.clear();
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/staticRendering.js":
-/*!************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/staticRendering.js ***!
-  \************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   isUsingStaticRendering: () => (/* binding */ isUsingStaticRendering),
-/* harmony export */   useStaticRendering: () => (/* binding */ useStaticRendering)
-/* harmony export */ });
-var globalIsUsingStaticRendering = false;
-function useStaticRendering(enable) {
-    globalIsUsingStaticRendering = enable;
-}
-function isUsingStaticRendering() {
-    return globalIsUsingStaticRendering;
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/useAsObservableSource.js":
-/*!******************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/useAsObservableSource.js ***!
-  \******************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   useAsObservableSource: () => (/* binding */ useAsObservableSource),
-/* harmony export */   useAsObservableSourceInternal: () => (/* binding */ useAsObservableSourceInternal)
-/* harmony export */ });
-/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react-lite/es/utils.js");
-var __read = (undefined && undefined.__read) || function (o, n) {
-    var m = typeof Symbol === "function" && o[Symbol.iterator];
-    if (!m) return o;
-    var i = m.call(o), r, ar = [], e;
-    try {
-        while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
-    }
-    catch (error) { e = { error: error }; }
-    finally {
-        try {
-            if (r && !r.done && (m = i["return"])) m.call(i);
-        }
-        finally { if (e) throw e.error; }
-    }
-    return ar;
-};
-
-
-
-function useAsObservableSourceInternal(current, usedByLocalStore) {
-    var culprit = usedByLocalStore ? "useLocalStore" : "useAsObservableSource";
-    if ( true && usedByLocalStore) {
-        var _a = __read(react__WEBPACK_IMPORTED_MODULE_1__.useState(current), 1), initialSource = _a[0];
-        if ((initialSource !== undefined && current === undefined) ||
-            (initialSource === undefined && current !== undefined)) {
-            throw new Error("make sure you never pass `undefined` to " + culprit);
-        }
-    }
-    if (usedByLocalStore && current === undefined) {
-        return undefined;
-    }
-    if ( true && !(0,_utils__WEBPACK_IMPORTED_MODULE_2__.isPlainObject)(current)) {
-        throw new Error(culprit + " expects a plain object as " + (usedByLocalStore ? "second" : "first") + " argument");
-    }
-    var _b = __read(react__WEBPACK_IMPORTED_MODULE_1__.useState(function () { return (0,mobx__WEBPACK_IMPORTED_MODULE_0__.observable)(current, {}, { deep: false }); }), 1), res = _b[0];
-    if ( true &&
-        Object.keys(res).length !== Object.keys(current).length) {
-        throw new Error("the shape of objects passed to " + culprit + " should be stable");
-    }
-    (0,mobx__WEBPACK_IMPORTED_MODULE_0__.runInAction)(function () {
-        Object.assign(res, current);
-    });
-    return res;
-}
-function useAsObservableSource(current) {
-    return useAsObservableSourceInternal(current, false);
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/useLocalStore.js":
-/*!**********************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/useLocalStore.js ***!
-  \**********************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   useLocalStore: () => (/* binding */ useLocalStore)
-/* harmony export */ });
-/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-/* harmony import */ var _useAsObservableSource__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./useAsObservableSource */ "./node_modules/mobx-react-lite/es/useAsObservableSource.js");
-/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react-lite/es/utils.js");
-
-
-
-
-function useLocalStore(initializer, current) {
-    var source = (0,_useAsObservableSource__WEBPACK_IMPORTED_MODULE_2__.useAsObservableSourceInternal)(current, true);
-    return react__WEBPACK_IMPORTED_MODULE_1__.useState(function () {
-        var local = (0,mobx__WEBPACK_IMPORTED_MODULE_0__.observable)(initializer(source));
-        if ((0,_utils__WEBPACK_IMPORTED_MODULE_3__.isPlainObject)(local)) {
-            (0,mobx__WEBPACK_IMPORTED_MODULE_0__.runInAction)(function () {
-                Object.keys(local).forEach(function (key) {
-                    var value = local[key];
-                    if (typeof value === "function") {
-                        // @ts-ignore No idea why ts2536 is popping out here
-                        local[key] = wrapInTransaction(value, local);
-                    }
-                });
-            });
-        }
-        return local;
-    })[0];
-}
-// tslint:disable-next-line: ban-types
-function wrapInTransaction(fn, context) {
-    return function () {
-        var args = [];
-        for (var _i = 0; _i < arguments.length; _i++) {
-            args[_i] = arguments[_i];
-        }
-        return (0,mobx__WEBPACK_IMPORTED_MODULE_0__.transaction)(function () { return fn.apply(context, args); });
-    };
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/useObserver.js":
-/*!********************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/useObserver.js ***!
-  \********************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   useObserver: () => (/* binding */ useObserver)
-/* harmony export */ });
-/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-/* harmony import */ var _printDebugValue__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./printDebugValue */ "./node_modules/mobx-react-lite/es/printDebugValue.js");
-/* harmony import */ var _reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./reactionCleanupTracking */ "./node_modules/mobx-react-lite/es/reactionCleanupTracking.js");
-/* harmony import */ var _staticRendering__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./staticRendering */ "./node_modules/mobx-react-lite/es/staticRendering.js");
-/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react-lite/es/utils.js");
-/* harmony import */ var _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./useQueuedForceUpdate */ "./node_modules/mobx-react-lite/es/useQueuedForceUpdate.js");
-
-
-
-
-
-
-
-var EMPTY_OBJECT = {};
-function observerComponentNameFor(baseComponentName) {
-    return "observer" + baseComponentName;
-}
-function useObserver(fn, baseComponentName, options) {
-    if (baseComponentName === void 0) { baseComponentName = "observed"; }
-    if (options === void 0) { options = EMPTY_OBJECT; }
-    if ((0,_staticRendering__WEBPACK_IMPORTED_MODULE_4__.isUsingStaticRendering)()) {
-        return fn();
-    }
-    var wantedForceUpdateHook = options.useForceUpdate || _utils__WEBPACK_IMPORTED_MODULE_5__.useForceUpdate;
-    var forceUpdate = wantedForceUpdateHook();
-    var queuedForceUpdate = (0,_useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_6__.useQueuedForceUpdate)(forceUpdate);
-    // StrictMode/ConcurrentMode/Suspense may mean that our component is
-    // rendered and abandoned multiple times, so we need to track leaked
-    // Reactions.
-    var reactionTrackingRef = react__WEBPACK_IMPORTED_MODULE_1__.useRef(null);
-    if (!reactionTrackingRef.current) {
-        // First render for this component (or first time since a previous
-        // reaction from an abandoned render was disposed).
-        var newReaction_1 = new mobx__WEBPACK_IMPORTED_MODULE_0__.Reaction(observerComponentNameFor(baseComponentName), function () {
-            // Observable has changed, meaning we want to re-render
-            // BUT if we're a component that hasn't yet got to the useEffect()
-            // stage, we might be a component that _started_ to render, but
-            // got dropped, and we don't want to make state changes then.
-            // (It triggers warnings in StrictMode, for a start.)
-            if (trackingData_1.mounted) {
-                // We have reached useEffect(), so we're mounted, and can trigger an update
-                queuedForceUpdate();
-            }
-            else {
-                // We haven't yet reached useEffect(), so we'll need to trigger a re-render
-                // when (and if) useEffect() arrives.  The easiest way to do that is just to
-                // drop our current reaction and allow useEffect() to recreate it.
-                newReaction_1.dispose();
-                reactionTrackingRef.current = null;
-            }
-        });
-        var trackingData_1 = (0,_reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__.createTrackingData)(newReaction_1);
-        reactionTrackingRef.current = trackingData_1;
-        (0,_reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__.scheduleCleanupOfReactionIfLeaked)(reactionTrackingRef);
-    }
-    var reaction = reactionTrackingRef.current.reaction;
-    react__WEBPACK_IMPORTED_MODULE_1__.useDebugValue(reaction, _printDebugValue__WEBPACK_IMPORTED_MODULE_2__.printDebugValue);
-    react__WEBPACK_IMPORTED_MODULE_1__.useEffect(function () {
-        // Called on first mount only
-        (0,_reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__.recordReactionAsCommitted)(reactionTrackingRef);
-        if (reactionTrackingRef.current) {
-            // Great. We've already got our reaction from our render;
-            // all we need to do is to record that it's now mounted,
-            // to allow future observable changes to trigger re-renders
-            reactionTrackingRef.current.mounted = true;
-        }
-        else {
-            // The reaction we set up in our render has been disposed.
-            // This is either due to bad timings of renderings, e.g. our
-            // component was paused for a _very_ long time, and our
-            // reaction got cleaned up, or we got a observable change
-            // between render and useEffect
-            // Re-create the reaction
-            reactionTrackingRef.current = {
-                reaction: new mobx__WEBPACK_IMPORTED_MODULE_0__.Reaction(observerComponentNameFor(baseComponentName), function () {
-                    // We've definitely already been mounted at this point
-                    queuedForceUpdate();
-                }),
-                cleanAt: Infinity
-            };
-            queuedForceUpdate();
-        }
-        return function () {
-            reactionTrackingRef.current.reaction.dispose();
-            reactionTrackingRef.current = null;
-        };
-    }, []);
-    // delay all force-update calls after rendering of this component
-    return (0,_useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_6__.useQueuedForceUpdateBlock)(function () {
-        // render the original component, but have the
-        // reaction track the observables, so that rendering
-        // can be invalidated (see above) once a dependency changes
-        var rendering;
-        var exception;
-        reaction.track(function () {
-            try {
-                rendering = fn();
-            }
-            catch (e) {
-                exception = e;
-            }
-        });
-        if (exception) {
-            throw exception; // re-throw any exceptions caught during rendering
-        }
-        return rendering;
-    });
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/useQueuedForceUpdate.js":
-/*!*****************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/useQueuedForceUpdate.js ***!
-  \*****************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   useQueuedForceUpdate: () => (/* binding */ useQueuedForceUpdate),
-/* harmony export */   useQueuedForceUpdateBlock: () => (/* binding */ useQueuedForceUpdateBlock)
-/* harmony export */ });
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-
-var insideRender = false;
-var forceUpdateQueue = [];
-function useQueuedForceUpdate(forceUpdate) {
-    return function () {
-        if (insideRender) {
-            forceUpdateQueue.push(forceUpdate);
-        }
-        else {
-            forceUpdate();
-        }
-    };
-}
-function useQueuedForceUpdateBlock(callback) {
-    // start intercepting force-update calls
-    insideRender = true;
-    forceUpdateQueue = [];
-    try {
-        var result = callback();
-        // stop intercepting force-update
-        insideRender = false;
-        // store queue or nothing if it was empty to execute useLayoutEffect only when necessary
-        var queue_1 = forceUpdateQueue.length > 0 ? forceUpdateQueue : undefined;
-        // run force-update queue in useLayoutEffect
-        react__WEBPACK_IMPORTED_MODULE_0__.useLayoutEffect(function () {
-            if (queue_1) {
-                queue_1.forEach(function (x) { return x(); });
-            }
-        }, [queue_1]);
-        return result;
-    }
-    finally {
-        insideRender = false;
-    }
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/utils.js":
-/*!**************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/utils.js ***!
-  \**************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   getGlobal: () => (/* binding */ getGlobal),
-/* harmony export */   getSymbol: () => (/* binding */ getSymbol),
-/* harmony export */   isPlainObject: () => (/* binding */ isPlainObject),
-/* harmony export */   useForceUpdate: () => (/* binding */ useForceUpdate),
-/* harmony export */   useUnmount: () => (/* binding */ useUnmount)
-/* harmony export */ });
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-var __read = (undefined && undefined.__read) || function (o, n) {
-    var m = typeof Symbol === "function" && o[Symbol.iterator];
-    if (!m) return o;
-    var i = m.call(o), r, ar = [], e;
-    try {
-        while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
-    }
-    catch (error) { e = { error: error }; }
-    finally {
-        try {
-            if (r && !r.done && (m = i["return"])) m.call(i);
-        }
-        finally { if (e) throw e.error; }
-    }
-    return ar;
-};
-
-var EMPTY_ARRAY = [];
-function useUnmount(fn) {
-    (0,react__WEBPACK_IMPORTED_MODULE_0__.useEffect)(function () { return fn; }, EMPTY_ARRAY);
-}
-function useForceUpdate() {
-    var _a = __read((0,react__WEBPACK_IMPORTED_MODULE_0__.useState)(0), 2), setTick = _a[1];
-    var update = (0,react__WEBPACK_IMPORTED_MODULE_0__.useCallback)(function () {
-        setTick(function (tick) { return tick + 1; });
-    }, []);
-    return update;
-}
-function isPlainObject(value) {
-    if (!value || typeof value !== "object") {
-        return false;
-    }
-    var proto = Object.getPrototypeOf(value);
-    return !proto || proto === Object.prototype;
-}
-function getSymbol(name) {
-    if (typeof Symbol === "function") {
-        return Symbol.for(name);
-    }
-    return "__$mobx-react " + name + "__";
-}
-var mockGlobal = {};
-function getGlobal() {
-    if (typeof window !== "undefined") {
-        return window;
-    }
-    if (typeof __webpack_require__.g !== "undefined") {
-        return __webpack_require__.g;
-    }
-    if (typeof self !== "undefined") {
-        return self;
-    }
-    return mockGlobal;
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mobx-react-lite/es/utils/reactBatchedUpdates.js":
-/*!**********************************************************************!*\
-  !*** ./node_modules/mobx-react-lite/es/utils/reactBatchedUpdates.js ***!
-  \**********************************************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   unstable_batchedUpdates: () => (/* reexport safe */ react_dom__WEBPACK_IMPORTED_MODULE_0__.unstable_batchedUpdates)
-/* harmony export */ });
-/* harmony import */ var react_dom__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react-dom */ "./node_modules/react-dom/index.js");
-
-
-
-/***/ }),
-
 /***/ "./node_modules/mobx-react/dist/mobxreact.esm.js":
 /*!*******************************************************!*\
   !*** ./node_modules/mobx-react/dist/mobxreact.esm.js ***!
@@ -12410,7 +11645,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
 /* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
-/* harmony import */ var mobx_react_lite__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! mobx-react-lite */ "./node_modules/mobx-react-lite/es/index.js");
+/* harmony import */ var mobx_react_lite__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! mobx-react-lite */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/index.js");
 
 
 
@@ -13226,6 +12461,771 @@ if (!mobx__WEBPACK_IMPORTED_MODULE_0__.observable) throw new Error("mobx-react r
 
 
 //# sourceMappingURL=mobxreact.esm.js.map
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/ObserverComponent.js":
+/*!**************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/ObserverComponent.js ***!
+  \**************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   Observer: () => (/* binding */ ObserverComponent)
+/* harmony export */ });
+/* harmony import */ var _useObserver__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./useObserver */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useObserver.js");
+
+function ObserverComponent(_a) {
+    var children = _a.children, render = _a.render;
+    var component = children || render;
+    if (typeof component !== "function") {
+        return null;
+    }
+    return (0,_useObserver__WEBPACK_IMPORTED_MODULE_0__.useObserver)(component);
+}
+ObserverComponent.propTypes = {
+    children: ObserverPropsCheck,
+    render: ObserverPropsCheck
+};
+ObserverComponent.displayName = "Observer";
+
+function ObserverPropsCheck(props, key, componentName, location, propFullName) {
+    var extraKey = key === "children" ? "render" : "children";
+    var hasProp = typeof props[key] === "function";
+    var hasExtraProp = typeof props[extraKey] === "function";
+    if (hasProp && hasExtraProp) {
+        return new Error("MobX Observer: Do not use children and render in the same time in`" + componentName);
+    }
+    if (hasProp || hasExtraProp) {
+        return null;
+    }
+    return new Error("Invalid prop `" +
+        propFullName +
+        "` of type `" +
+        typeof props[key] +
+        "` supplied to" +
+        " `" +
+        componentName +
+        "`, expected `function`.");
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/assertEnvironment.js":
+/*!**************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/assertEnvironment.js ***!
+  \**************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+
+
+if (!react__WEBPACK_IMPORTED_MODULE_1__.useState) {
+    throw new Error("mobx-react-lite requires React with Hooks support");
+}
+if (!mobx__WEBPACK_IMPORTED_MODULE_0__.spy) {
+    throw new Error("mobx-react-lite requires mobx at least version 4 to be available");
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/index.js":
+/*!**************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/index.js ***!
+  \**************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   Observer: () => (/* reexport safe */ _ObserverComponent__WEBPACK_IMPORTED_MODULE_6__.Observer),
+/* harmony export */   isObserverBatched: () => (/* reexport safe */ _observerBatching__WEBPACK_IMPORTED_MODULE_2__.isObserverBatched),
+/* harmony export */   isUsingStaticRendering: () => (/* reexport safe */ _staticRendering__WEBPACK_IMPORTED_MODULE_3__.isUsingStaticRendering),
+/* harmony export */   observer: () => (/* reexport safe */ _observer__WEBPACK_IMPORTED_MODULE_4__.observer),
+/* harmony export */   observerBatching: () => (/* reexport safe */ _observerBatching__WEBPACK_IMPORTED_MODULE_2__.observerBatching),
+/* harmony export */   useAsObservableSource: () => (/* reexport safe */ _useAsObservableSource__WEBPACK_IMPORTED_MODULE_8__.useAsObservableSource),
+/* harmony export */   useForceUpdate: () => (/* reexport safe */ _utils__WEBPACK_IMPORTED_MODULE_7__.useForceUpdate),
+/* harmony export */   useLocalStore: () => (/* reexport safe */ _useLocalStore__WEBPACK_IMPORTED_MODULE_9__.useLocalStore),
+/* harmony export */   useObserver: () => (/* reexport safe */ _useObserver__WEBPACK_IMPORTED_MODULE_5__.useObserver),
+/* harmony export */   useQueuedForceUpdate: () => (/* reexport safe */ _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_10__.useQueuedForceUpdate),
+/* harmony export */   useQueuedForceUpdateBlock: () => (/* reexport safe */ _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_10__.useQueuedForceUpdateBlock),
+/* harmony export */   useStaticRendering: () => (/* reexport safe */ _staticRendering__WEBPACK_IMPORTED_MODULE_3__.useStaticRendering)
+/* harmony export */ });
+/* harmony import */ var _assertEnvironment__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./assertEnvironment */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/assertEnvironment.js");
+/* harmony import */ var _utils_reactBatchedUpdates__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils/reactBatchedUpdates */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils/reactBatchedUpdates.js");
+/* harmony import */ var _observerBatching__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./observerBatching */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/observerBatching.js");
+/* harmony import */ var _staticRendering__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./staticRendering */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/staticRendering.js");
+/* harmony import */ var _observer__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./observer */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/observer.js");
+/* harmony import */ var _useObserver__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./useObserver */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useObserver.js");
+/* harmony import */ var _ObserverComponent__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./ObserverComponent */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/ObserverComponent.js");
+/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js");
+/* harmony import */ var _useAsObservableSource__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./useAsObservableSource */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useAsObservableSource.js");
+/* harmony import */ var _useLocalStore__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./useLocalStore */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useLocalStore.js");
+/* harmony import */ var _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./useQueuedForceUpdate */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useQueuedForceUpdate.js");
+
+
+
+(0,_observerBatching__WEBPACK_IMPORTED_MODULE_2__.observerBatching)(_utils_reactBatchedUpdates__WEBPACK_IMPORTED_MODULE_1__.unstable_batchedUpdates);
+
+
+
+
+
+
+
+
+
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/observer.js":
+/*!*****************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/observer.js ***!
+  \*****************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   observer: () => (/* binding */ observer)
+/* harmony export */ });
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+/* harmony import */ var _staticRendering__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./staticRendering */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/staticRendering.js");
+/* harmony import */ var _useObserver__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./useObserver */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useObserver.js");
+var __assign = (undefined && undefined.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
+
+
+
+// n.b. base case is not used for actual typings or exported in the typing files
+function observer(baseComponent, options) {
+    // The working of observer is explained step by step in this talk: https://www.youtube.com/watch?v=cPF4iBedoF0&feature=youtu.be&t=1307
+    if ((0,_staticRendering__WEBPACK_IMPORTED_MODULE_1__.isUsingStaticRendering)()) {
+        return baseComponent;
+    }
+    var realOptions = __assign({ forwardRef: false }, options);
+    var baseComponentName = baseComponent.displayName || baseComponent.name;
+    var wrappedComponent = function (props, ref) {
+        return (0,_useObserver__WEBPACK_IMPORTED_MODULE_2__.useObserver)(function () { return baseComponent(props, ref); }, baseComponentName);
+    };
+    wrappedComponent.displayName = baseComponentName;
+    // memo; we are not interested in deep updates
+    // in props; we assume that if deep objects are changed,
+    // this is in observables, which would have been tracked anyway
+    var memoComponent;
+    if (realOptions.forwardRef) {
+        // we have to use forwardRef here because:
+        // 1. it cannot go before memo, only after it
+        // 2. forwardRef converts the function into an actual component, so we can't let the baseComponent do it
+        //    since it wouldn't be a callable function anymore
+        memoComponent = (0,react__WEBPACK_IMPORTED_MODULE_0__.memo)((0,react__WEBPACK_IMPORTED_MODULE_0__.forwardRef)(wrappedComponent));
+    }
+    else {
+        memoComponent = (0,react__WEBPACK_IMPORTED_MODULE_0__.memo)(wrappedComponent);
+    }
+    copyStaticProperties(baseComponent, memoComponent);
+    memoComponent.displayName = baseComponentName;
+    return memoComponent;
+}
+// based on https://github.com/mridgway/hoist-non-react-statics/blob/master/src/index.js
+var hoistBlackList = {
+    $$typeof: true,
+    render: true,
+    compare: true,
+    type: true
+};
+function copyStaticProperties(base, target) {
+    Object.keys(base).forEach(function (key) {
+        if (!hoistBlackList[key]) {
+            Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(base, key));
+        }
+    });
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/observerBatching.js":
+/*!*************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/observerBatching.js ***!
+  \*************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   defaultNoopBatch: () => (/* binding */ defaultNoopBatch),
+/* harmony export */   isObserverBatched: () => (/* binding */ isObserverBatched),
+/* harmony export */   observerBatching: () => (/* binding */ observerBatching)
+/* harmony export */ });
+/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
+/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js");
+
+
+var observerBatchingConfiguredSymbol = (0,_utils__WEBPACK_IMPORTED_MODULE_1__.getSymbol)("observerBatching");
+function defaultNoopBatch(callback) {
+    callback();
+}
+function observerBatching(reactionScheduler) {
+    if (!reactionScheduler) {
+        reactionScheduler = defaultNoopBatch;
+        if (true) {
+            console.warn("[MobX] Failed to get unstable_batched updates from react-dom / react-native");
+        }
+    }
+    (0,mobx__WEBPACK_IMPORTED_MODULE_0__.configure)({ reactionScheduler: reactionScheduler });
+    (0,_utils__WEBPACK_IMPORTED_MODULE_1__.getGlobal)()[observerBatchingConfiguredSymbol] = true;
+}
+var isObserverBatched = function () { return !!(0,_utils__WEBPACK_IMPORTED_MODULE_1__.getGlobal)()[observerBatchingConfiguredSymbol]; };
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/printDebugValue.js":
+/*!************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/printDebugValue.js ***!
+  \************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   printDebugValue: () => (/* binding */ printDebugValue)
+/* harmony export */ });
+/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
+
+function printDebugValue(v) {
+    return (0,mobx__WEBPACK_IMPORTED_MODULE_0__.getDependencyTree)(v);
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/reactionCleanupTracking.js":
+/*!********************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/reactionCleanupTracking.js ***!
+  \********************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS: () => (/* binding */ CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS),
+/* harmony export */   CLEANUP_TIMER_LOOP_MILLIS: () => (/* binding */ CLEANUP_TIMER_LOOP_MILLIS),
+/* harmony export */   createTrackingData: () => (/* binding */ createTrackingData),
+/* harmony export */   forceCleanupTimerToRunNowForTests: () => (/* binding */ forceCleanupTimerToRunNowForTests),
+/* harmony export */   recordReactionAsCommitted: () => (/* binding */ recordReactionAsCommitted),
+/* harmony export */   resetCleanupScheduleForTests: () => (/* binding */ resetCleanupScheduleForTests),
+/* harmony export */   scheduleCleanupOfReactionIfLeaked: () => (/* binding */ scheduleCleanupOfReactionIfLeaked)
+/* harmony export */ });
+function createTrackingData(reaction) {
+    var trackingData = {
+        cleanAt: Date.now() + CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS,
+        reaction: reaction
+    };
+    return trackingData;
+}
+/**
+ * The minimum time before we'll clean up a Reaction created in a render
+ * for a component that hasn't managed to run its effects. This needs to
+ * be big enough to ensure that a component won't turn up and have its
+ * effects run without being re-rendered.
+ */
+var CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS = 10000;
+/**
+ * The frequency with which we'll check for leaked reactions.
+ */
+var CLEANUP_TIMER_LOOP_MILLIS = 10000;
+/**
+ * Reactions created by components that have yet to be fully mounted.
+ */
+var uncommittedReactionRefs = new Set();
+/**
+ * Latest 'uncommitted reactions' cleanup timer handle.
+ */
+var reactionCleanupHandle;
+function ensureCleanupTimerRunning() {
+    if (reactionCleanupHandle === undefined) {
+        reactionCleanupHandle = setTimeout(cleanUncommittedReactions, CLEANUP_TIMER_LOOP_MILLIS);
+    }
+}
+function scheduleCleanupOfReactionIfLeaked(ref) {
+    uncommittedReactionRefs.add(ref);
+    ensureCleanupTimerRunning();
+}
+function recordReactionAsCommitted(reactionRef) {
+    uncommittedReactionRefs.delete(reactionRef);
+}
+/**
+ * Run by the cleanup timer to dispose any outstanding reactions
+ */
+function cleanUncommittedReactions() {
+    reactionCleanupHandle = undefined;
+    // Loop through all the candidate leaked reactions; those older
+    // than CLEANUP_LEAKED_REACTIONS_AFTER_MILLIS get tidied.
+    var now = Date.now();
+    uncommittedReactionRefs.forEach(function (ref) {
+        var tracking = ref.current;
+        if (tracking) {
+            if (now >= tracking.cleanAt) {
+                // It's time to tidy up this leaked reaction.
+                tracking.reaction.dispose();
+                ref.current = null;
+                uncommittedReactionRefs.delete(ref);
+            }
+        }
+    });
+    if (uncommittedReactionRefs.size > 0) {
+        // We've just finished a round of cleanups but there are still
+        // some leak candidates outstanding.
+        ensureCleanupTimerRunning();
+    }
+}
+/* istanbul ignore next */
+/**
+ * Only to be used by test functions; do not export outside of mobx-react-lite
+ */
+function forceCleanupTimerToRunNowForTests() {
+    // This allows us to control the execution of the cleanup timer
+    // to force it to run at awkward times in unit tests.
+    if (reactionCleanupHandle) {
+        clearTimeout(reactionCleanupHandle);
+        cleanUncommittedReactions();
+    }
+}
+/* istanbul ignore next */
+function resetCleanupScheduleForTests() {
+    if (reactionCleanupHandle) {
+        clearTimeout(reactionCleanupHandle);
+        reactionCleanupHandle = undefined;
+    }
+    uncommittedReactionRefs.clear();
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/staticRendering.js":
+/*!************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/staticRendering.js ***!
+  \************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   isUsingStaticRendering: () => (/* binding */ isUsingStaticRendering),
+/* harmony export */   useStaticRendering: () => (/* binding */ useStaticRendering)
+/* harmony export */ });
+var globalIsUsingStaticRendering = false;
+function useStaticRendering(enable) {
+    globalIsUsingStaticRendering = enable;
+}
+function isUsingStaticRendering() {
+    return globalIsUsingStaticRendering;
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useAsObservableSource.js":
+/*!******************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/useAsObservableSource.js ***!
+  \******************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   useAsObservableSource: () => (/* binding */ useAsObservableSource),
+/* harmony export */   useAsObservableSourceInternal: () => (/* binding */ useAsObservableSourceInternal)
+/* harmony export */ });
+/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js");
+var __read = (undefined && undefined.__read) || function (o, n) {
+    var m = typeof Symbol === "function" && o[Symbol.iterator];
+    if (!m) return o;
+    var i = m.call(o), r, ar = [], e;
+    try {
+        while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
+    }
+    catch (error) { e = { error: error }; }
+    finally {
+        try {
+            if (r && !r.done && (m = i["return"])) m.call(i);
+        }
+        finally { if (e) throw e.error; }
+    }
+    return ar;
+};
+
+
+
+function useAsObservableSourceInternal(current, usedByLocalStore) {
+    var culprit = usedByLocalStore ? "useLocalStore" : "useAsObservableSource";
+    if ( true && usedByLocalStore) {
+        var _a = __read(react__WEBPACK_IMPORTED_MODULE_1__.useState(current), 1), initialSource = _a[0];
+        if ((initialSource !== undefined && current === undefined) ||
+            (initialSource === undefined && current !== undefined)) {
+            throw new Error("make sure you never pass `undefined` to " + culprit);
+        }
+    }
+    if (usedByLocalStore && current === undefined) {
+        return undefined;
+    }
+    if ( true && !(0,_utils__WEBPACK_IMPORTED_MODULE_2__.isPlainObject)(current)) {
+        throw new Error(culprit + " expects a plain object as " + (usedByLocalStore ? "second" : "first") + " argument");
+    }
+    var _b = __read(react__WEBPACK_IMPORTED_MODULE_1__.useState(function () { return (0,mobx__WEBPACK_IMPORTED_MODULE_0__.observable)(current, {}, { deep: false }); }), 1), res = _b[0];
+    if ( true &&
+        Object.keys(res).length !== Object.keys(current).length) {
+        throw new Error("the shape of objects passed to " + culprit + " should be stable");
+    }
+    (0,mobx__WEBPACK_IMPORTED_MODULE_0__.runInAction)(function () {
+        Object.assign(res, current);
+    });
+    return res;
+}
+function useAsObservableSource(current) {
+    return useAsObservableSourceInternal(current, false);
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useLocalStore.js":
+/*!**********************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/useLocalStore.js ***!
+  \**********************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   useLocalStore: () => (/* binding */ useLocalStore)
+/* harmony export */ });
+/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+/* harmony import */ var _useAsObservableSource__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./useAsObservableSource */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useAsObservableSource.js");
+/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js");
+
+
+
+
+function useLocalStore(initializer, current) {
+    var source = (0,_useAsObservableSource__WEBPACK_IMPORTED_MODULE_2__.useAsObservableSourceInternal)(current, true);
+    return react__WEBPACK_IMPORTED_MODULE_1__.useState(function () {
+        var local = (0,mobx__WEBPACK_IMPORTED_MODULE_0__.observable)(initializer(source));
+        if ((0,_utils__WEBPACK_IMPORTED_MODULE_3__.isPlainObject)(local)) {
+            (0,mobx__WEBPACK_IMPORTED_MODULE_0__.runInAction)(function () {
+                Object.keys(local).forEach(function (key) {
+                    var value = local[key];
+                    if (typeof value === "function") {
+                        // @ts-ignore No idea why ts2536 is popping out here
+                        local[key] = wrapInTransaction(value, local);
+                    }
+                });
+            });
+        }
+        return local;
+    })[0];
+}
+// tslint:disable-next-line: ban-types
+function wrapInTransaction(fn, context) {
+    return function () {
+        var args = [];
+        for (var _i = 0; _i < arguments.length; _i++) {
+            args[_i] = arguments[_i];
+        }
+        return (0,mobx__WEBPACK_IMPORTED_MODULE_0__.transaction)(function () { return fn.apply(context, args); });
+    };
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useObserver.js":
+/*!********************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/useObserver.js ***!
+  \********************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   useObserver: () => (/* binding */ useObserver)
+/* harmony export */ });
+/* harmony import */ var mobx__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! mobx */ "./node_modules/mobx/lib/mobx.module.js");
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+/* harmony import */ var _printDebugValue__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./printDebugValue */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/printDebugValue.js");
+/* harmony import */ var _reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./reactionCleanupTracking */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/reactionCleanupTracking.js");
+/* harmony import */ var _staticRendering__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./staticRendering */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/staticRendering.js");
+/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./utils */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js");
+/* harmony import */ var _useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./useQueuedForceUpdate */ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useQueuedForceUpdate.js");
+
+
+
+
+
+
+
+var EMPTY_OBJECT = {};
+function observerComponentNameFor(baseComponentName) {
+    return "observer" + baseComponentName;
+}
+function useObserver(fn, baseComponentName, options) {
+    if (baseComponentName === void 0) { baseComponentName = "observed"; }
+    if (options === void 0) { options = EMPTY_OBJECT; }
+    if ((0,_staticRendering__WEBPACK_IMPORTED_MODULE_4__.isUsingStaticRendering)()) {
+        return fn();
+    }
+    var wantedForceUpdateHook = options.useForceUpdate || _utils__WEBPACK_IMPORTED_MODULE_5__.useForceUpdate;
+    var forceUpdate = wantedForceUpdateHook();
+    var queuedForceUpdate = (0,_useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_6__.useQueuedForceUpdate)(forceUpdate);
+    // StrictMode/ConcurrentMode/Suspense may mean that our component is
+    // rendered and abandoned multiple times, so we need to track leaked
+    // Reactions.
+    var reactionTrackingRef = react__WEBPACK_IMPORTED_MODULE_1__.useRef(null);
+    if (!reactionTrackingRef.current) {
+        // First render for this component (or first time since a previous
+        // reaction from an abandoned render was disposed).
+        var newReaction_1 = new mobx__WEBPACK_IMPORTED_MODULE_0__.Reaction(observerComponentNameFor(baseComponentName), function () {
+            // Observable has changed, meaning we want to re-render
+            // BUT if we're a component that hasn't yet got to the useEffect()
+            // stage, we might be a component that _started_ to render, but
+            // got dropped, and we don't want to make state changes then.
+            // (It triggers warnings in StrictMode, for a start.)
+            if (trackingData_1.mounted) {
+                // We have reached useEffect(), so we're mounted, and can trigger an update
+                queuedForceUpdate();
+            }
+            else {
+                // We haven't yet reached useEffect(), so we'll need to trigger a re-render
+                // when (and if) useEffect() arrives.  The easiest way to do that is just to
+                // drop our current reaction and allow useEffect() to recreate it.
+                newReaction_1.dispose();
+                reactionTrackingRef.current = null;
+            }
+        });
+        var trackingData_1 = (0,_reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__.createTrackingData)(newReaction_1);
+        reactionTrackingRef.current = trackingData_1;
+        (0,_reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__.scheduleCleanupOfReactionIfLeaked)(reactionTrackingRef);
+    }
+    var reaction = reactionTrackingRef.current.reaction;
+    react__WEBPACK_IMPORTED_MODULE_1__.useDebugValue(reaction, _printDebugValue__WEBPACK_IMPORTED_MODULE_2__.printDebugValue);
+    react__WEBPACK_IMPORTED_MODULE_1__.useEffect(function () {
+        // Called on first mount only
+        (0,_reactionCleanupTracking__WEBPACK_IMPORTED_MODULE_3__.recordReactionAsCommitted)(reactionTrackingRef);
+        if (reactionTrackingRef.current) {
+            // Great. We've already got our reaction from our render;
+            // all we need to do is to record that it's now mounted,
+            // to allow future observable changes to trigger re-renders
+            reactionTrackingRef.current.mounted = true;
+        }
+        else {
+            // The reaction we set up in our render has been disposed.
+            // This is either due to bad timings of renderings, e.g. our
+            // component was paused for a _very_ long time, and our
+            // reaction got cleaned up, or we got a observable change
+            // between render and useEffect
+            // Re-create the reaction
+            reactionTrackingRef.current = {
+                reaction: new mobx__WEBPACK_IMPORTED_MODULE_0__.Reaction(observerComponentNameFor(baseComponentName), function () {
+                    // We've definitely already been mounted at this point
+                    queuedForceUpdate();
+                }),
+                cleanAt: Infinity
+            };
+            queuedForceUpdate();
+        }
+        return function () {
+            reactionTrackingRef.current.reaction.dispose();
+            reactionTrackingRef.current = null;
+        };
+    }, []);
+    // delay all force-update calls after rendering of this component
+    return (0,_useQueuedForceUpdate__WEBPACK_IMPORTED_MODULE_6__.useQueuedForceUpdateBlock)(function () {
+        // render the original component, but have the
+        // reaction track the observables, so that rendering
+        // can be invalidated (see above) once a dependency changes
+        var rendering;
+        var exception;
+        reaction.track(function () {
+            try {
+                rendering = fn();
+            }
+            catch (e) {
+                exception = e;
+            }
+        });
+        if (exception) {
+            throw exception; // re-throw any exceptions caught during rendering
+        }
+        return rendering;
+    });
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/useQueuedForceUpdate.js":
+/*!*****************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/useQueuedForceUpdate.js ***!
+  \*****************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   useQueuedForceUpdate: () => (/* binding */ useQueuedForceUpdate),
+/* harmony export */   useQueuedForceUpdateBlock: () => (/* binding */ useQueuedForceUpdateBlock)
+/* harmony export */ });
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+
+var insideRender = false;
+var forceUpdateQueue = [];
+function useQueuedForceUpdate(forceUpdate) {
+    return function () {
+        if (insideRender) {
+            forceUpdateQueue.push(forceUpdate);
+        }
+        else {
+            forceUpdate();
+        }
+    };
+}
+function useQueuedForceUpdateBlock(callback) {
+    // start intercepting force-update calls
+    insideRender = true;
+    forceUpdateQueue = [];
+    try {
+        var result = callback();
+        // stop intercepting force-update
+        insideRender = false;
+        // store queue or nothing if it was empty to execute useLayoutEffect only when necessary
+        var queue_1 = forceUpdateQueue.length > 0 ? forceUpdateQueue : undefined;
+        // run force-update queue in useLayoutEffect
+        react__WEBPACK_IMPORTED_MODULE_0__.useLayoutEffect(function () {
+            if (queue_1) {
+                queue_1.forEach(function (x) { return x(); });
+            }
+        }, [queue_1]);
+        return result;
+    }
+    finally {
+        insideRender = false;
+    }
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js":
+/*!**************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils.js ***!
+  \**************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   getGlobal: () => (/* binding */ getGlobal),
+/* harmony export */   getSymbol: () => (/* binding */ getSymbol),
+/* harmony export */   isPlainObject: () => (/* binding */ isPlainObject),
+/* harmony export */   useForceUpdate: () => (/* binding */ useForceUpdate),
+/* harmony export */   useUnmount: () => (/* binding */ useUnmount)
+/* harmony export */ });
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+var __read = (undefined && undefined.__read) || function (o, n) {
+    var m = typeof Symbol === "function" && o[Symbol.iterator];
+    if (!m) return o;
+    var i = m.call(o), r, ar = [], e;
+    try {
+        while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
+    }
+    catch (error) { e = { error: error }; }
+    finally {
+        try {
+            if (r && !r.done && (m = i["return"])) m.call(i);
+        }
+        finally { if (e) throw e.error; }
+    }
+    return ar;
+};
+
+var EMPTY_ARRAY = [];
+function useUnmount(fn) {
+    (0,react__WEBPACK_IMPORTED_MODULE_0__.useEffect)(function () { return fn; }, EMPTY_ARRAY);
+}
+function useForceUpdate() {
+    var _a = __read((0,react__WEBPACK_IMPORTED_MODULE_0__.useState)(0), 2), setTick = _a[1];
+    var update = (0,react__WEBPACK_IMPORTED_MODULE_0__.useCallback)(function () {
+        setTick(function (tick) { return tick + 1; });
+    }, []);
+    return update;
+}
+function isPlainObject(value) {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    var proto = Object.getPrototypeOf(value);
+    return !proto || proto === Object.prototype;
+}
+function getSymbol(name) {
+    if (typeof Symbol === "function") {
+        return Symbol.for(name);
+    }
+    return "__$mobx-react " + name + "__";
+}
+var mockGlobal = {};
+function getGlobal() {
+    if (typeof window !== "undefined") {
+        return window;
+    }
+    if (typeof __webpack_require__.g !== "undefined") {
+        return __webpack_require__.g;
+    }
+    if (typeof self !== "undefined") {
+        return self;
+    }
+    return mockGlobal;
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils/reactBatchedUpdates.js":
+/*!**********************************************************************************************!*\
+  !*** ./node_modules/mobx-react/node_modules/mobx-react-lite/es/utils/reactBatchedUpdates.js ***!
+  \**********************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   unstable_batchedUpdates: () => (/* reexport safe */ react_dom__WEBPACK_IMPORTED_MODULE_0__.unstable_batchedUpdates)
+/* harmony export */ });
+/* harmony import */ var react_dom__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! react-dom */ "./node_modules/react-dom/index.js");
+
 
 
 /***/ }),
@@ -59689,6 +59689,29 @@ function whitespace(thing) {
 
 /***/ }),
 
+/***/ "./node_modules/is-plain-obj/index.js":
+/*!********************************************!*\
+  !*** ./node_modules/is-plain-obj/index.js ***!
+  \********************************************/
+/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (/* binding */ isPlainObject)
+/* harmony export */ });
+function isPlainObject(value) {
+	if (typeof value !== 'object' || value === null) {
+		return false;
+	}
+
+	const prototype = Object.getPrototypeOf(value);
+	return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(Symbol.toStringTag in value) && !(Symbol.iterator in value);
+}
+
+
+/***/ }),
+
 /***/ "./node_modules/kleur/index.mjs":
 /*!**************************************!*\
   !*** ./node_modules/kleur/index.mjs ***!
@@ -93300,7 +93323,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var bail__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! bail */ "./node_modules/bail/index.js");
 /* harmony import */ var is_buffer__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! is-buffer */ "./node_modules/is-buffer/index.js");
 /* harmony import */ var extend__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! extend */ "./node_modules/extend/index.js");
-/* harmony import */ var is_plain_obj__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! is-plain-obj */ "./node_modules/unified/node_modules/is-plain-obj/index.js");
+/* harmony import */ var is_plain_obj__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! is-plain-obj */ "./node_modules/is-plain-obj/index.js");
 /* harmony import */ var trough__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! trough */ "./node_modules/trough/lib/index.js");
 /* harmony import */ var vfile__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! vfile */ "./node_modules/vfile/lib/index.js");
 /**
@@ -93901,29 +93924,6 @@ function looksLikeAVFile(value) {
  */
 function looksLikeAVFileValue(value) {
   return typeof value === 'string' || is_buffer__WEBPACK_IMPORTED_MODULE_0__(value)
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/unified/node_modules/is-plain-obj/index.js":
-/*!*****************************************************************!*\
-  !*** ./node_modules/unified/node_modules/is-plain-obj/index.js ***!
-  \*****************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   "default": () => (/* binding */ isPlainObject)
-/* harmony export */ });
-function isPlainObject(value) {
-	if (typeof value !== 'object' || value === null) {
-		return false;
-	}
-
-	const prototype = Object.getPrototypeOf(value);
-	return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(Symbol.toStringTag in value) && !(Symbol.iterator in value);
 }
 
 
