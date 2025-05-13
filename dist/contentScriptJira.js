@@ -63,16 +63,35 @@ async function fetchTicketData(ticketKey) {
   }
 }
 
+// 通过 JQL 查询 parent 字段获取所有 child issues
+async function fetchChildIssues(parentKey) {
+  try {
+    const jql = `issueFunction in portfolioChildrenOf("key=${parentKey}")`;
+    const url = `/rest/api/2/search?jql=${encodeURIComponent(jql)}&fields=key,summary,issuetype,status`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Failed to fetch child issues');
+    const data = await response.json();
+    return data.issues || [];
+  } catch (error) {
+    console.error('Error fetching child issues:', error);
+    return [];
+  }
+}
+
 // 查找UX类型的ticket
 async function findUXTicket(parentData, currentTicketKey) {
   try {
     // 获取所有关联的issues
     const issueLinks = parentData.fields.issuelinks || [];
     const subtasks = parentData.fields.subtasks || [];
-
+    // 通过 JQL 查找 child issues
+    const parentKey = parentData.key || parentData.id;
+    let childIssues = [];
+    if (parentKey) {
+      childIssues = await fetchChildIssues(parentKey);
+    }
     // 提取所有相关issue
-    const allRelatedIssues = [...subtasks.map(subtask => subtask), ...issueLinks.map(link => link.outwardIssue || link.inwardIssue).filter(issue => issue)];
-
+    const allRelatedIssues = [...subtasks.map(subtask => subtask), ...issueLinks.map(link => link.outwardIssue || link.inwardIssue).filter(issue => issue), ...childIssues];
     // 筛选UX开头且不是当前ticket的issue
     const uxTicket = allRelatedIssues.find(issue => issue.key && issue.key.startsWith('UX') && issue.key !== currentTicketKey);
     return uxTicket ? uxTicket.key : null;
