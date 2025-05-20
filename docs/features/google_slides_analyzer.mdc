@@ -1,0 +1,133 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Google Slides项目分析器
+
+## 功能概述
+
+Google Slides项目分析器是一个专门用于从Google Slides演示文稿中提取和更新项目信息的工具。它能够智能识别不同格式的幻灯片，包括表格式、文本式、列表式等多种展示方式，并自动提取项目相关信息。
+
+## 主要功能
+
+1. **智能格式识别**：自动识别不同格式的幻灯片内容，适应各种项目展示方式
+2. **多级结构分析**：支持分析Sprint、Epic、单个工单等多种项目结构
+3. **Jira工单识别**：自动识别并提取Jira工单ID和相关信息
+4. **LLM辅助分析**：对于复杂格式，可选使用LLM进行深度分析
+5. **项目更新支持**：支持将更新写回到原始幻灯片中
+
+## 使用方法
+
+### 基本使用
+
+```typescript
+import { createProjectAnalyzer } from 'personal-ai';
+
+// 创建分析器
+const projectAnalyzer = createProjectAnalyzer();
+
+// 获取授权
+const token = await projectAnalyzer.getToken();
+
+// 分析幻灯片
+const presentationId = 'your-presentation-id';
+const projects = await projectAnalyzer.analyzeSlide(presentationId, token);
+
+// 使用分析结果
+console.log(`找到${projects.length}个项目`);
+projects.forEach(project => {
+  console.log(`项目ID: ${project.id}, 名称: ${project.name}, 状态: ${project.status}`);
+});
+```
+
+### 启用LLM辅助分析
+
+```typescript
+// 创建支持LLM分析的分析器
+const projectAnalyzer = createProjectAnalyzer({
+  useLLMFallback: true,
+  minConfidence: 0.4
+});
+
+// 分析幻灯片 - 当常规分析器置信度低于阈值时会自动使用LLM
+const projects = await projectAnalyzer.analyzeSlide(presentationId, token);
+```
+
+### 应用项目更新
+
+```typescript
+// 创建更新数据
+const updates = [
+  {
+    projectId: 'ABC-123',
+    projectName: '示例项目',
+    currentStatus: '进行中',
+    suggestedStatus: '已完成',
+    reason: ['已交付所有需求'],
+    confidence: 0.9,
+    // ... 其他必要字段
+  }
+];
+
+// 应用更新
+const result = await projectAnalyzer.applyUpdates(presentationId, token, updates);
+console.log(`更新了${result.updatedCount}个字段`);
+```
+
+## 分析器类型
+
+该功能包含多种类型的分析器，用于处理不同的幻灯片内容：
+
+1. **表格分析器**：专门处理基于表格的项目数据展示，能识别表头并映射列
+2. **文本分析器**：处理基于文本和列表的项目展示，识别项目层次结构
+3. **LLM分析器**：处理复杂或非结构化的内容，通过AI理解内容含义
+
+## 技术细节
+
+### 项目数据结构
+
+每个项目数据包含以下字段：
+
+```typescript
+interface ProjectData {
+  id: string;              // 项目ID或Jira工单号
+  name: string;            // 项目名称
+  status: string;          // 当前状态
+  owner: string;           // 负责人
+  track?: string;          // 所属赛道
+  comments?: string;       // 备注/行动项
+  slideElementId?: string; // 幻灯片元素ID
+  row?: number;            // 表格行号
+  slideId?: string;        // 幻灯片ID
+  tableId?: string;        // 表格ID
+  columnIndices?: {        // 各列索引
+    status?: number;
+    description?: number;
+    owner?: number;
+    track?: number;
+    comments?: number;
+  };
+}
+```
+
+### 分析模式
+
+1. **结构检测阶段**：分析幻灯片包含的元素类型（表格、文本、列表等）
+2. **内容提取策略**：根据元素类型选择合适的分析策略
+3. **项目信息解析**：识别项目边界和字段映射
+4. **结果置信度评估**：评估分析结果的可靠性，决定是否需要LLM辅助
+
+## 配置选项
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `useLLMFallback` | 是否在常规分析器置信度低或失败时使用LLM | `false` |
+| `minConfidence` | 分析结果最小置信度阈值 | `0.3` |
+
+## 注意事项
+
+1. LLM分析需要网络连接，可能会产生额外的API调用
+2. 对于非标准化项目展示，推荐启用LLM辅助分析
+3. 分析结果的置信度反映了信息提取的可靠性
+4. 更新操作会修改原始幻灯片内容，请确保有适当的权限

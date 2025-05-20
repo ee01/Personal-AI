@@ -9,7 +9,10 @@ interface Tool {
   id: string;
   name: string;
   description: string;
-  execute: (params: any) => Promise<any>;
+  execute: (params: any) => Promise<{
+    message: string;
+    result?: Record<string, any>;
+  }>;
   parameterDefs?: ParameterDefinition[]; // 参数定义列表
 }
 
@@ -177,10 +180,13 @@ registerTool({
     });
 
     console.log('历史消息搜索结果:', result);
-    return result.results.documents.map((doc: string, index: number ) => ({
-      summary: result.results.metadatas[index].summary,
-      sender: result.results.metadatas[index].source,
-    }));
+    return {
+      message: `相关历史消息：\n  - ${result.results.documents.map((doc: string, index: number ) => `[${result.results.metadatas[index].summary}](${result.results.metadatas[index].source})`).join('\n  - ')}`,
+      result: result.results.documents.map((doc: string, index: number ) => ({
+        summary: result.results.metadatas[index].summary,
+        sender: result.results.metadatas[index].source,
+      }))
+    };
   }
 });
 
@@ -278,6 +284,7 @@ registerTool({
       const authHeader = `Bearer ${apiToken}`;
       
       let result;
+      let resultMessage = '';
       // 处理不同的查询类型
       if (params.issueId) {
         // 查询单个JIRA问题
@@ -301,14 +308,15 @@ registerTool({
         result = {
           summary: responseData.fields.summary,
           status: responseData.fields.status.name,
-          assignee: responseData.fields.assignee.displayName,
-          reporter: responseData.fields.reporter.displayName,
+          assignee: responseData.fields.assignee?.displayName,
+          reporter: responseData.fields.reporter?.displayName,
           priority: responseData.fields.priority.name,
           issuetype: responseData.fields.issuetype.name,
           duedate: responseData.fields.duedate,
           comments: responseData.fields.comment.comments.splice(-3).map((comment: any) => comment.author.displayName + ': ' + comment.body),
           description: responseData.fields.description,
         };
+        resultMessage = `[${params.issueId}][${result.status}]的查询数据: ${result.summary}\n - 执行者: ${result.assignee}\n - 预计完成时间: ${result.duedate}\n - 评论:\n  - ${result.comments.join('\n  - ').replace('\n', '')}`;
       } else {
         // 构建JQL查询
         let jql = '';
@@ -366,6 +374,7 @@ registerTool({
         }
         
         result = await response.json();
+        resultMessage = `[${result.issues.map((issue: any) => issue.fields.summary).join(', ')}][${result.issues[0].fields.status.name}]的查询数据: ${result.issues[0].fields.summary}\n - 执行者: ${result.issues[0].fields.assignee?.displayName}\n - 预计完成时间: ${result.issues[0].fields.duedate}\n - 评论:\n  - ${result.issues[0].fields.comment.comments.map((comment: any) => comment.author.displayName + ': ' + comment.body).join('\n  - ').replace('\n', '')}`;
       }
       
       // 存储结果到缓存
@@ -375,7 +384,10 @@ registerTool({
         expiresAt: now + JIRA_CACHE_TTL
       };
       
-      return result;
+      return {
+        message: resultMessage,
+        result
+      };
     } catch (error) {
       console.error('JIRA API查询失败:', error);
       
@@ -400,7 +412,7 @@ registerTool({
       return {
         success: false,
         source: 'jira-api',
-        error: errorMessage,
+        message: errorMessage,
         originalError: error
       };
     }
@@ -418,22 +430,28 @@ registerTool({
     
     if (params.person) {
       return {
-        success: true,
-        person: params.person,
-        role: '高级工程师',
-        department: '研发部',
-        manager: '张经理',
-        directReports: ['李工程师', '王工程师'],
-        peers: ['高工程师', '刘工程师']
+        message: `人员 ${params.person} 的查询数据: 角色: 高级工程师, 部门: 研发部, 经理: 张经理, 下属: 李工程师, 王工程师, 同事: 高工程师, 刘工程师`,
+        result: {
+          success: true,
+          person: params.person,
+          role: '高级工程师',
+          department: '研发部',
+          manager: '张经理',
+          directReports: ['李工程师', '王工程师'],
+          peers: ['高工程师', '刘工程师']
+        }
       };
     }
     
     if (params.department) {
       return {
-        success: true,
-        department: params.department,
-        head: '李总监',
-        members: ['张经理', '高工程师', '李工程师', '王工程师', '刘工程师']
+        message: `部门 ${params.department} 的查询数据: 部门负责人: 李总监, 成员: 张经理, 高工程师, 李工程师, 王工程师, 刘工程师`,
+        result: {
+          success: true,
+          department: params.department,
+          head: '李总监',
+          members: ['张经理', '高工程师', '李工程师', '王工程师', '刘工程师']
+        }
       };
     }
     
@@ -458,26 +476,29 @@ registerTool({
     const thisYear = now.getFullYear();
     
     return {
-      success: true,
-      month: `${thisYear}-${thisMonth}`,
-      releases: [
-        {
-          id: 'REL-2023-001',
-          name: '产品A 3.5版本',
-          scheduledDate: '2023-10-15',
-          status: '准备中',
-          features: ['功能1', '功能2', '功能3'],
-          owner: '张发布经理'
-        },
-        {
-          id: 'REL-2023-002',
-          name: '产品B 2.0版本',
-          scheduledDate: '2023-10-25',
-          status: '规划中',
-          features: ['新功能A', '性能优化'],
-          owner: '李发布经理'
-        }
-      ]
+      message: `本月发布任务信息: ${thisYear}-${thisMonth}`,
+      result: {
+        success: true,
+        month: `${thisYear}-${thisMonth}`,
+        releases: [
+          {
+            id: 'REL-2023-001',
+            name: '产品A 3.5版本',
+            scheduledDate: '2023-10-15',
+            status: '准备中',
+            features: ['功能1', '功能2', '功能3'],
+            owner: '张发布经理'
+          },
+          {
+            id: 'REL-2023-002',
+            name: '产品B 2.0版本',
+            scheduledDate: '2023-10-25',
+            status: '规划中',
+            features: ['新功能A', '性能优化'],
+            owner: '李发布经理'
+          }
+        ]
+      }
     };
   }
 });
@@ -492,25 +513,28 @@ registerTool({
     console.log(`查询Sprint数据: ${JSON.stringify(params)}`);
     
     return {
-      success: true,
-      sprintId: 'S-2023-10',
-      name: '2023年10月第2个Sprint',
-      startDate: '2023-10-09',
-      endDate: '2023-10-20',
-      progress: {
-        totalStoryPoints: 120,
-        completedStoryPoints: 45,
-        completionPercentage: 37.5
-      },
-      bugs: {
-        total: 24,
-        critical: 2,
-        major: 8,
-        minor: 14,
-        resolved: 10,
-        pending: 14
-      },
-      topContributors: ['张工程师', '李工程师', '王测试']
+      message: `当前Sprint数据: ${params.sprintId}`,
+      result: {
+        success: true,
+        sprintId: params.sprintId,
+        name: '2023年10月第2个Sprint',
+        startDate: '2023-10-09',
+        endDate: '2023-10-20',
+        progress: {
+          totalStoryPoints: 120,
+          completedStoryPoints: 45,
+          completionPercentage: 37.5
+        },
+        bugs: {
+          total: 24,
+          critical: 2,
+          major: 8,
+          minor: 14,
+          resolved: 10,
+          pending: 14
+        },
+        topContributors: ['张工程师', '李工程师', '王测试']
+      }
     };
   }
 });
@@ -651,7 +675,8 @@ class IntelligentAgent {
             console.log(`执行工具: ${tool.name} (${tool.id})`);
             
             try {
-              const toolResult = await tool.execute(thoughtResult.params);
+              const toolParams = thoughtResult.params[tool.id] || thoughtResult.params;
+              const toolResult = await tool.execute(toolParams);
               
               // 特殊处理：如果是存储或通知工具，更新最终结果
               if (tool.id === 'messageStore') {
@@ -662,6 +687,7 @@ class IntelligentAgent {
               
               return {
                 toolId: tool.id,
+                params: toolParams,
                 result: toolResult
               };
             } catch (error) {
@@ -685,7 +711,7 @@ class IntelligentAgent {
           // 将所有工具结果存入内存
           toolResults.forEach(tr => {
             if (!tr.error) {
-              currentState.memory[tr.toolId] = tr.result;
+              currentState.memory[tr.toolId] = {params: tr.params, result: tr.result};
             }
           });
         }
@@ -951,7 +977,7 @@ ${toolDescriptions}
 
     // 增强已收集信息的显示，明确标出已执行过的工具
     const memoryContent = Object.entries(state.memory).map(([key, value]: [string, any]) => 
-      `- ${key} [已执行]: ${JSON.stringify(value).substring(0, 500)}${JSON.stringify(value).length > 300 ? '...' : ''}`
+      `- ${key} [已执行]: ${value.result.message.substring(0, 500)}${value.result.message.length > 300 ? '...' : ''}`
     ).join('\n');
 
     // 获取关注规则匹配信息
@@ -1598,7 +1624,8 @@ ${toolDescriptions}
               console.log(`执行工具: ${tool.name} (${tool.id})`, thoughtResult.params);
               
               try {
-                const toolResult = await tool.execute(thoughtResult.params);
+                const toolParams = thoughtResult.params[tool.id] || thoughtResult.params;
+                const toolResult = await tool.execute(toolParams);
                 
                 // 特殊处理：如果是存储或通知工具，更新最终结果
                 if (tool.id === 'messageStore') {
@@ -1609,6 +1636,7 @@ ${toolDescriptions}
                 
                 return {
                   toolId: tool.id,
+                  params: toolParams,
                   result: toolResult
                 };
               } catch (error) {
@@ -1632,7 +1660,7 @@ ${toolDescriptions}
             // 将所有工具结果存入内存
             toolResults.forEach(tr => {
               if (!tr.error) {
-                currentState.memory[tr.toolId] = tr.result;
+                currentState.memory[tr.toolId] = {params: tr.params, result: tr.result};
               }
             });
           }
@@ -1978,19 +2006,22 @@ export async function processMessage(input: any, onEveryGroupCompleted?: (result
  * 获取工具描述，用于配置界面
  */
 export function getToolDescriptions(): any[] {
-  return Object.values(toolRegistry).map(tool => ({
-    id: tool.id,
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameterDefs ? tool.parameterDefs.map(param => ({
-      name: param.name,
-      description: param.description,
-      required: param.required,
-      type: param.type,
-      defaultValue: param.defaultValue,
-      options: param.options
-    })) : []
-  }));
+  return Object.values(toolRegistry).map(tool => {
+    let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
+    
+    // 添加参数描述
+    if (tool.parameterDefs && tool.parameterDefs.length > 0) {
+      description += '\n  参数:';
+      for (const param of tool.parameterDefs) {
+        const requiredMark = param.required ? '(必填)' : '(可选)';
+        const typeMark = param.type ? `[${param.type}]` : '';
+        const optionsMark = param.options ? ` 可选值:${param.options.join('/')}` : '';
+        description += `\n    - ${param.name} ${requiredMark} ${typeMark}: ${param.description}${optionsMark}`;
+      }
+    }
+    
+    return description;
+  }).join('\n');
 }
 
 /**

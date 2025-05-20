@@ -1,3 +1,8 @@
+/**
+ * 类型定义导出文件
+ * 包含项目中使用的所有主要类型
+ */
+
 export interface JiraTicket {
   key: string;
   issuetype: string;
@@ -18,4 +23,24 @@ export interface JiraTicket {
   updated?: string;
   duedate?: string;
   description?: string;
-} 
+}
+
+// 新的智能Agent系统类型导出
+export {
+  BaseAnalysisResult,
+  MessageAnalysisResult,
+  ProjectAnalysisResult,
+  MeetingAnalysisResult,
+  DocumentAnalysisResult,
+  GenericAnalysisResult,
+  AnalysisResult,
+  AnalysisConfig,
+  AnalysisContext,
+  ThoughtStep
+} from './interfaces/analysisInterfaces';
+
+// 工具适配器类型
+export {
+  ToolDescription,
+  ToolExecution
+} from './agentToolAdapter'; 

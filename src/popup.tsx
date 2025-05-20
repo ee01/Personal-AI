@@ -3,14 +3,7 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
-
-// 类型定义，帮助解决 lint 错误
-interface TabResponse {
-    success: boolean;
-    error?: string;
-    data?: any;
-    config?: any;
-}
+import { getAuthToken } from './slide';
 
 const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
     <div className="toggle-container">
@@ -26,6 +19,7 @@ const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
     const [envConfig, setEnvConfig] = useState<any>(null);
     const [isGoogleSheets, setIsGoogleSheets] = useState(false);
+    const [isGoogleSlides, setIsGoogleSlides] = useState(false);
     const [isRingCentral, setIsRingCentral] = useState(false);
     const [isExpandingEpic, setIsExpandingEpic] = useState(false);
 
@@ -35,10 +29,13 @@ const Popup = () => {
             const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
             setIsScheduleActive(scheduleActive === true);
 
-            // 检查当前标签页是否是 Google Sheets
+            // 检查当前标签页是否是 Google Sheets 或 Google Slides
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tab?.url?.includes('docs.google.com/spreadsheets')) {
                 setIsGoogleSheets(true);
+            }
+            if (tab?.url?.includes('docs.google.com/presentation')) {
+                setIsGoogleSlides(true);
             }
             if (tab?.url?.includes('app.ringcentral.com')) {
                 setIsRingCentral(true);
@@ -86,9 +83,30 @@ const Popup = () => {
         });
     };
     
-    // const openOptionsPage = () => {
-    //     chrome.runtime.openOptionsPage();
-    // };
+    const analyzeSlidesProjects = async () => {
+        try {
+            // 先获取OAuth token
+            const token = await getAuthToken();
+            if (!token) {
+                console.error('无法获取Google认证，请检查账号授权');
+                // 可以在界面上显示错误消息
+                return;
+            }
+
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                const activeTab = tabs[0];
+                if (activeTab?.id) {
+                    chrome.tabs.sendMessage(activeTab.id, { 
+                        type: 'ANALYZE_SLIDES_PROJECTS',
+                        token
+                    });
+                }
+            });
+        } catch (error) {
+            console.error('获取认证失败:', error);
+            // 可以在界面上显示错误消息
+        }
+    };
 
     // 计算分析时间间隔的小时数
     const getIntervalHours = () => {
@@ -159,6 +177,35 @@ const Popup = () => {
         });
     };
 
+    // 监听内容脚本发来的请求
+    useEffect(() => {
+        const handleMessage = async (message: any, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
+            if (message.type === 'REQUEST_SLIDES_ANALYSIS') {
+                // 获取当前标签页
+                const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                const activeTab = tabs[0];
+                
+                if (activeTab?.id && activeTab.url?.includes('docs.google.com/presentation')) {
+                    // 获取token并发送回内容脚本
+                    const token = await getAuthToken();
+                    if (token) {
+                        chrome.tabs.sendMessage(activeTab.id, { 
+                            type: 'ANALYZE_SLIDES_PROJECTS',
+                            token
+                        });
+                    } else {
+                        console.error('获取Google认证失败');
+                    }
+                }
+            }
+        };
+        
+        chrome.runtime.onMessage.addListener(handleMessage);
+        return () => {
+            chrome.runtime.onMessage.removeListener(handleMessage);
+        };
+    }, []);
+
     return (
         <div className="popup-container">
             <Toggle 
@@ -187,6 +234,15 @@ const Popup = () => {
                         )}
                     </button>
                 </>
+            )}
+            
+            {isGoogleSlides && (
+                <button 
+                    onClick={analyzeSlidesProjects}
+                    className="slides-button"
+                >
+                    分析 Slide 项目信息并更新
+                </button>
             )}
 
             <button onClick={openKnowledgeQueryWindow} className="message-button">
@@ -310,6 +366,15 @@ const Popup = () => {
                  }
                  .message-button:hover {
                     background-color: #e68a00;
+                 }
+                 
+                 .slides-button {
+                    background-color: #4285F4; /* Google blue */
+                    color: white;
+                 }
+                 
+                 .slides-button:hover {
+                    background-color: #2a75f3;
                  }
 
                  .popup-container {

@@ -2,7 +2,6 @@ const path = require('path');
 const webpack = require('webpack');
 const fs = require('fs');
 
-const DotenvPlugin = require('dotenv-webpack');
 const ESLintPlugin = require('eslint-webpack-plugin');
 const CopyPlugin = require('copy-webpack-plugin');
 
@@ -22,6 +21,7 @@ module.exports = (env) => {
       background: './src/background.ts',
       contentScript: './src/contentScript.tsx',
       contentScriptGoogleSheet: './src/contentScriptGoogleSheet.tsx',
+      contentScriptGoogleSlide: './src/contentScriptGoogleSlide.tsx',
       contentScriptJira: './src/contentScriptJira.ts',
       popup: './src/popup.tsx',
       options: './src/options.tsx',
@@ -31,6 +31,10 @@ module.exports = (env) => {
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/topic-modal.tsx',
       'knowledge-query': './src/knowledge-query.tsx',
+      'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
+      'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
+      'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
+      'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts'
     },
     module: {
       rules: [
@@ -55,9 +59,9 @@ module.exports = (env) => {
       filename: '[name].js',
       path: path.resolve(__dirname, 'dist'),
       clean: true,
+      publicPath: '/'
     },
     plugins: [
-      new DotenvPlugin(),
       new ESLintPlugin({
         extensions: ['js', 'ts', 'jsx', 'tsx'],
         overrideConfigFile: path.resolve(__dirname, '.eslintrc'),
@@ -68,6 +72,10 @@ module.exports = (env) => {
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],
       }),
+      new webpack.ProvidePlugin({
+        SlideAnalyzerFactoryImpl: ['./src/analyzers/analyzerFactory', 'SlideAnalyzerFactoryImpl'],
+        LLMContentAnalyzer: ['./src/analyzers/llmAnalyzer', 'LLMContentAnalyzer']
+      })
     ],
     optimization: {
       splitChunks: false,

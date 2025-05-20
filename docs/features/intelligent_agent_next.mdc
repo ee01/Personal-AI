@@ -1,0 +1,417 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# IntelligentAgentNext 智能Agent系统新版
+
+*最后更新: 2024-05-08*
+
+## 组件概述
+
+IntelligentAgentNext是一个基于新接口设计的通用分析框架，提供了统一的智能分析能力。该组件是原有IntelligentAgent的升级版本，采用更灵活、可扩展的架构设计，支持多种内容类型的分析处理。
+
+### 核心能力
+
+- **多类型内容分析**：支持消息、项目、会议、文档等多种内容的智能分析
+- **思考-行动循环**：实现基于LLM的思考-行动循环，提高分析深度
+- **批量处理能力**：支持高效的批量分析处理
+- **兼容性保障**：提供与旧版IntelligentAgent的兼容层
+- **灵活配置**：支持通过配置调整分析深度和行为
+
+## 架构设计
+
+IntelligentAgentNext采用模块化架构设计，将各类分析能力统一在一个框架下，同时保持扩展性。
+
+### 核心架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     IntelligentAgentNext                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌──────────┐ │
+│  │ 消息分析模块 │   │ 项目分析模块 │   │ 会议分析模块 │   │ 文档分析 │ │
+│  └─────┬───────┘   └──────┬──────┘   └──────┬──────┘   └────┬─────┘ │
+│        │                  │                 │                │      │
+│        └──────────────────┼─────────────────┼────────────────┘      │
+│                           │                 │                       │
+│                    ┌──────▼─────────────────▼────────┐              │
+│                    │       思考-行动循环引擎         │              │
+│                    └──────┬─────────────────┬────────┘              │
+│                           │                 │                       │
+│                    ┌──────▼─────┐     ┌─────▼──────┐                │
+│                    │  LLM调用层  │     │  工具系统  │                │
+│                    └──────┬─────┘     └─────┬──────┘                │
+│                           │                 │                       │
+│                    ┌──────▼─────────────────▼────────┐              │
+│                    │            兼容层               │              │
+│                    └────────────────────────────────┘              │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 数据流图
+
+```
+┌──────────┐     ┌───────────────┐      ┌─────────────┐     ┌──────────────┐
+│          │     │               │      │             │     │              │
+│   输入   │────►│ 输入标准化处理 │─────►│ 初始LLM分析 │────►│ 思考-行动循环 │
+│          │     │               │      │             │     │              │
+└──────────┘     └───────────────┘      └─────────────┘     └──────┬───────┘
+                                                                   │
+         ┌────────────────────────────────────────────────────────┘
+         │
+         │     ┌───────────┐     ┌───────────────┐     ┌──────────────┐
+         │     │           │     │               │     │              │
+         └────►│ 工具执行  │────►│ 结果整合处理  │────►│   输出结果   │
+               │           │     │               │     │              │
+               └───────────┘     └───────────────┘     └──────────────┘
+```
+
+## 接口定义
+
+### 公共API接口
+
+```typescript
+// 核心分析方法
+async analyze(input: any, config: AnalysisConfig, context?: AnalysisContext): Promise<AnalysisResult>
+
+// 批量分析方法
+async analyzeBatch(
+  items: any[],
+  config: AnalysisConfig,
+  context?: AnalysisContext,
+  onProgress?: (result: AnalysisResult) => void
+): Promise<AnalysisResult[]>
+
+// 兼容层方法
+convertToOldFormat(result: AnalysisResult): MessageProcessResult
+```
+
+### 关键数据结构
+
+```typescript
+// 分析配置
+interface AnalysisConfig {
+  type: 'message' | 'project' | 'meeting' | 'document' | 'generic';
+  analysisDepth?: 'quick' | 'normal' | 'deep';
+  maxActions?: number;
+  preferredTools?: string[];
+  customPrompts?: {
+    analysis?: string;
+    thinking?: string;
+  };
+}
+
+// 分析上下文
+interface AnalysisContext {
+  currentUser?: string;
+  concernedRules?: string[];
+  additionalContext?: Record<string, any>;
+}
+
+// 基础分析结果
+interface BaseAnalysisResult {
+  type: string;
+  confidence: number;
+  summary: string;
+  metaData: {
+    llmCallCount: number;
+    llmCallTokens: number;
+    usedTools: string[];
+    timestamp: number;
+  };
+}
+
+// 消息分析结果
+interface MessageAnalysisResult extends BaseAnalysisResult {
+  type: 'message';
+  isImportant: boolean;
+  shouldStore: boolean;
+  shouldNotify: boolean;
+  messageContext?: {
+    groupId: string;
+    groupName: string;
+    message_content: string;
+    sender: string;
+    datetime: string;
+    messageIndex?: number;
+    groupIndex?: number;
+  };
+  thoughtProcess: ThoughtStep[];
+  entities?: Record<string, any>;
+  relationships?: any[];
+  actions?: any[];
+  reasonsToStore?: string[];
+  notificationPriority?: 'high' | 'medium' | 'low';
+  replyAdvice?: string;
+  sentiment?: string;
+  category?: string[];
+}
+
+// 思考步骤
+interface ThoughtStep {
+  timestamp: number;
+  thought: string;
+  action: string;
+  toolUsed?: string;
+  toolResult?: string;
+}
+```
+
+## 功能模块
+
+### 1. 消息分析模块
+
+消息分析模块专注于处理消息类内容，包括聊天消息、邮件等。其主要功能包括：
+
+- 消息重要性判断
+- 实体抽取与关系识别
+- 消息情感分析
+- 关注规则匹配
+- 存储与通知建议
+
+实现方法：`analyzeMessage()`
+
+### 2. 项目分析模块
+
+项目分析模块用于分析项目相关信息，从而提供项目状态评估。主要功能包括：
+
+- 项目风险评估
+- 进度分析与预测
+- 资源利用情况分析
+- 优化建议生成
+
+实现方法：`analyzeProject()`
+
+### 3. 会议分析模块
+
+会议分析模块用于处理会议记录和内容，提取关键信息。主要功能包括：
+
+- 会议主题识别
+- 决策点提取
+- 行动项识别
+- 后续跟进项分析
+
+实现方法：`analyzeMeeting()`
+
+### 4. 文档分析模块
+
+文档分析模块专注于各类文档的内容理解和处理。主要功能包括：
+
+- 文档主题识别
+- 关键信息提取
+- 文档结构分析
+- 内容摘要生成
+
+实现方法：`analyzeDocument()`
+
+### 5. 项目分析提示构建
+
+项目分析模块的提示构建已优化，支持多种项目信息格式和特定场景：
+
+- 自动适配不同数据结构（支持project_data嵌套结构）
+- Jira工单信息的专门提取与格式化
+- Google Slides项目分析的特殊处理
+- 针对不同项目类型（JIRA工单、发布/迭代、项目级别）的分析指南
+- 细化的返回结构，包括status、owner、track等具体建议字段
+
+主要的提示构建方法：
+- `buildProjectAnalysisPrompt()`：构建项目分析提示
+- `buildMeetingAnalysisPrompt()`：构建会议分析提示
+- `buildDocumentAnalysisPrompt()`：构建文档分析提示
+- `buildGenericAnalysisPrompt()`：构建通用分析提示
+- `buildThinkingPrompt()`：构建思考过程提示
+
+### 6. 思考-行动循环引擎
+
+思考-行动循环引擎是系统的核心部分，负责驱动深度分析过程：
+
+- 基于LLM的思考生成
+- 动作决策与执行
+- 结果评估与下一步规划
+- 循环终止判断
+
+实现方法：`think()`
+
+### 7. 工具系统
+
+工具系统管理各种可用于增强分析能力的工具：
+
+- 工具注册与管理
+- 工具参数验证
+- 工具调用与错误处理
+- 结果解析与整合
+
+## 使用示例
+
+### 基础消息分析
+
+```typescript
+import { intelligentAgentNext } from './IntelligentAgentNext';
+
+// 分析一条消息
+const result = await intelligentAgentNext.analyze(
+  {
+    message_content: "团队会议将推迟到下周二，请大家准备项目进度报告。",
+    sender: "项目经理",
+    team_name: "产品开发组",
+    datetime: "2023-12-10T10:00:00Z"
+  },
+  {
+    type: 'message',
+    analysisDepth: 'normal',
+    maxActions: 3
+  }
+);
+
+console.log(result.summary); // 消息摘要
+console.log(result.isImportant); // 是否重要
+console.log(result.entities); // 提取的实体
+```
+
+### 项目分析
+
+```typescript
+// 分析项目状态
+const projectResult = await intelligentAgentNext.analyze(
+  {
+    id: "PRJ-2023-001",
+    name: "新版产品开发",
+    status: "进行中",
+    deadline: "2024-03-01",
+    tasks: [
+      { id: "T1", name: "需求分析", status: "已完成" },
+      { id: "T2", name: "设计阶段", status: "进行中" },
+      { id: "T3", name: "开发阶段", status: "未开始" }
+    ],
+    team: ["张三", "李四", "王五"]
+  },
+  {
+    type: 'project',
+    analysisDepth: 'deep'
+  }
+);
+
+console.log(projectResult.summary);
+console.log(projectResult.riskLevel);
+console.log(projectResult.suggestions);
+```
+
+### 使用兼容层
+
+```typescript
+// 使用兼容层处理消息
+import { processMessageCompatible } from './IntelligentAgentNext';
+
+const oldFormatResult = await processMessageCompatible({
+  message_content: "请查看新版设计文档，并在周五前提交反馈",
+  sender: "设计主管",
+  team_name: "UI设计组",
+  concernedItems: ["设计", "文档", "反馈"]
+});
+
+console.log(oldFormatResult.isImportant);
+console.log(oldFormatResult.summary);
+console.log(oldFormatResult.reasonsToStore);
+```
+
+## 扩展指南
+
+### 添加新的分析类型
+
+要添加新的分析类型，需要：
+
+1. 在`AnalysisConfig`接口中添加新的类型
+2. 创建相应的分析结果接口
+3. 在`analyze()`方法中添加新的case分支
+4. 实现具体的分析方法（如`analyzeNewType()`）
+5. 创建对应的提示模板构建方法
+
+示例：添加视频分析类型
+
+```typescript
+// 1. 更新配置接口
+interface AnalysisConfig {
+  type: 'message' | 'project' | 'meeting' | 'document' | 'generic' | 'video';
+  // ...其他属性
+}
+
+// 2. 创建结果接口
+interface VideoAnalysisResult extends BaseAnalysisResult {
+  type: 'video';
+  duration: number;
+  scenes: Scene[];
+  keyPoints: string[];
+  transcript?: string;
+  topics: string[];
+  sentiment: string;
+}
+
+// 3. 在analyze方法中添加分支
+async analyze(input: any, config: AnalysisConfig, context?: AnalysisContext): Promise<AnalysisResult> {
+  switch(config.type) {
+    // ...现有case
+    case 'video':
+      return this.analyzeVideo(input, config, context);
+    default:
+      return this.analyzeGeneric(input, config, context);
+  }
+}
+
+// 4. 实现分析方法
+private async analyzeVideo(input: any, config: AnalysisConfig, context?: AnalysisContext): Promise<VideoAnalysisResult> {
+  // 实现视频分析逻辑
+}
+
+// 5. 创建提示模板
+private buildVideoAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): string {
+  // 构建视频分析提示
+}
+```
+
+### 扩展工具系统
+
+要添加新工具，可以通过工具注册表添加：
+
+```typescript
+// 注册新工具
+toolRegistry['myNewTool'] = {
+  id: 'myNewTool',
+  name: '我的新工具',
+  description: '这是一个自定义工具，用于...',
+  parameters: [
+    {
+      name: 'param1',
+      type: 'string',
+      description: '参数1的说明',
+      required: true
+    },
+    {
+      name: 'param2',
+      type: 'number',
+      description: '参数2的说明',
+      required: false
+    }
+  ],
+  execute: async (params) => {
+    // 实现工具逻辑
+    return { result: '执行结果' };
+  }
+};
+```
+
+## 版本历史
+
+### v1.0.0 (2023-12-01)
+- 初始版本发布
+- 支持消息、项目、会议和文档分析
+- 实现思考-行动循环引擎
+- 提供与旧版IntelligentAgent的兼容层
+
+### v1.1.0 (计划中)
+- 添加视频内容分析能力
+- 优化思考-行动循环性能
+- 扩展工具系统
+- 完善批量处理能力 

@@ -1,2 +1,7 @@
 @manifest.json = src/manifest.json 
 @webpack.config.js = webpack.common.cjs
+@autoupdate.mdc = docs/autoupdate.mdc
+@autoload = autoupdate.mdc
+docs: If code contains a lot of docstrings, surface them to the user.
+doc-update: When discussing features described in docs/, Claude should check if discussion contains updates that should be reflected in documentation and offer to update relevant .mdc files.
+slides-analyzer: If discussing changes to google_slides_analyzer feature, check if docs/features/google_slides_analyzer.mdc needs to be updated.

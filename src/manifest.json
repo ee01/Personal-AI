@@ -13,7 +13,6 @@
     "offscreen",
     "scripting",
     "identity",
-    "clipboardRead",
     "clipboardWrite"
   ],
   "content_scripts": [
@@ -28,6 +27,10 @@
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],
       "js": ["contentScriptGoogleSheet.js"]
+    },
+    {
+      "matches": ["https://docs.google.com/presentation/*"],
+      "js": ["contentScriptGoogleSlide.js"]
     },
     {
       "matches": [
@@ -54,7 +57,7 @@
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png"],
+    "resources": ["topic-modal.html", "knowledge-query.html", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png", "slides-analysis.html", "slides-analysis.js", "slides-analysis.css"],
     "matches": ["<all_urls>"]
   }],
   "icons": {
@@ -70,7 +73,8 @@
     "client_id": "{{GOOGLE_CLIENT_ID}}",
     "scopes": [
       "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive.readonly"
+      "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/presentations"
     ]
   }
 }

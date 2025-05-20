@@ -175,6 +175,10 @@ export async function getEnvConfig(): Promise<EnvConfigType> {
   return defaultEnvConfig;
 }
 
+export function getDefaultEnvConfig(): EnvConfigType {
+  return defaultEnvConfig;
+}
+
 export function getUserInfo() {
   const accountUD = getLocalStorageItem('global.account.UD', '');
   const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
