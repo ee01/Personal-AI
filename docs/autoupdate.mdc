@@ -1,0 +1,300 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 文档自动更新规则
+
+*最后更新: 2024-01-10*
+
+## 概述
+
+本文档定义了如何在Cursor聊天中识别与处理文档更新需求的规则。当用户在Cursor聊天中讨论功能需求、修改或增强时，系统将自动分析对话内容并提供相关文档的更新建议。
+
+## 更新触发规则
+
+### 关键词触发
+
+当Cursor聊天中出现以下关键词或词组时，系统应考虑是否需要更新相关文档：
+
+1. "新增功能"、"新功能"、"添加功能"
+2. "修改功能"、"更改功能"、"调整功能"
+3. "重构"、"优化"、"改进"
+4. "修复错误"、"bug修复"、"问题修复"
+5. "API变更"、"接口变更"
+6. "UI变更"、"界面变更"
+7. "设计变更"、"架构变更"
+8. "新需求"、"需求变更"
+9. "添加文档"、"更新文档"
+
+### 功能关联映射
+
+以下是特定功能与其对应文档的映射关系：
+
+| 功能关键词 | 相关文档路径 |
+|-----------|------------|
+| Google Slides Analyzer, Slides分析器, 幻灯片分析器 | docs/features/google_slides_analyzer.mdc |
+| Google Slides Prompt, Slides提示, 幻灯片提示 | docs/features/google_slides_analyzer_prompt.mdc |
+| 自动更新, 文档更新 | docs/autoupdate.mdc |
+| IntelligentAgent, 智能Agent, 旧版Agent | docs/features/intelligent_agent.mdc |
+| IntelligentAgentNext, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/intelligent_agent_next.mdc |
+
+### 源代码与文档关联映射
+
+以下是源代码文件与其对应文档的映射关系，当这些文件发生变更时，应考虑更新相关文档：
+
+| 源代码文件 | 相关文档路径 |
+|-----------|------------|
+| src/contentScriptGoogleSlide.tsx | docs/features/google_slides_analyzer.mdc, docs/features/google_slides_analyzer_prompt.mdc |
+| src/slide.ts | docs/features/google_slides_analyzer.mdc |
+| src/IntelligentAgentNext.ts | docs/features/intelligent_agent_next.mdc |
+| src/intelligentAgent.ts | docs/features/intelligent_agent.mdc |
+| src/intelligentAgent.ts, src/IntelligentAgentNext.ts | docs/features/intelligent_agent_migration.mdc |
+| src/jira.ts | docs/features/google_slides_analyzer.mdc |
+| src/vectorStore.ts | docs/features/intelligent_agent.mdc, docs/features/intelligent_agent_next.mdc |
+
+## 智能Agent系统更新规则
+
+### IntelligentAgentNext组件
+
+当讨论或修改`IntelligentAgentNext.ts`相关内容时，需特别关注以下方面的变更：
+
+1. **分析类型变更**：
+   - 新增、修改或删除任何分析类型（消息分析、项目分析、会议分析、文档分析等）
+   - 变更分析结果接口定义
+   - 调整分析方法的行为或算法
+
+2. **工具使用变更**：
+   - 工具注册机制的修改
+   - 工具调用流程的调整
+   - 工具参数结构的变化
+
+3. **提示模板变更**：
+   - 修改任何分析提示模板
+   - 调整思考-行动循环逻辑
+   - 更新LLM调用方式
+
+4. **兼容层调整**：
+   - 修改与旧版`intelligentAgent.ts`的兼容机制
+   - 更新结果格式转换逻辑
+
+5. **接口定义变更**：
+   - 修改`AnalysisConfig`、`AnalysisContext`等接口
+   - 更新各类分析结果接口
+
+### 更新触发关键词
+
+与`IntelligentAgentNext`相关的特定触发关键词：
+
+- **核心功能**：analyze, analyzeMessage, analyzeProject, analyzeMeeting, analyzeDocument, analyzeGeneric, analyzeBatch
+- **思考循环**：think, thinking, thought process, action loop
+- **分析接口**：AnalysisResult, MessageAnalysisResult, ProjectAnalysisResult, MeetingAnalysisResult
+- **工具集成**：tool registry, tool descriptions, invoke tool
+- **分析上下文**：context, metadata, analysis depth, config
+
+### Google Slides Analyzer组件更新规则
+
+当讨论或修改`contentScriptGoogleSlide.tsx`或`slide.ts`相关内容时，需特别关注以下方面的变更：
+
+1. **分析功能变更**：
+   - 修改项目数据抽取逻辑
+   - 更新分析结果处理流程
+   - 调整建议生成算法
+
+2. **UI交互变更**：
+   - 更新分析结果展示界面
+   - 修改用户确认与选择机制
+   - 调整通知和反馈方式
+
+3. **API集成变更**：
+   - 更新与Google Slides API的交互方式
+   - 修改幻灯片内容的读取或更新方法
+   - 调整Jira数据获取与整合机制
+
+4. **数据处理变更**：
+   - 修改项目数据模型
+   - 更新结果分类与评估标准
+   - 调整更新建议生成逻辑
+
+5. **安全性调整**：
+   - 更新内容安全策略实现
+   - 修改窗口间通信机制
+   - 调整权限处理方式
+
+## 更新处理流程
+
+当识别到潜在的文档更新需求时，系统应：
+
+1. **分析对话内容**：理解讨论的功能变更本质
+2. **定位相关文档**：基于功能关键词或源代码文件映射找到对应的文档文件
+3. **生成更新建议**：提出具体的文档更新内容
+4. **询问用户确认**：展示更新建议并征求用户确认
+5. **执行更新**：用户确认后更新相应文档
+
+## 文档结构指南
+
+更新文档时，应遵循以下结构指南：
+
+### 功能文档 (xxx.mdc)
+
+1. **标题**：功能名称（简洁明了）
+2. **最后更新**：更新日期
+3. **功能概述**：简要描述功能目的和价值
+4. **功能说明**：详细介绍功能的核心能力
+5. **用户需求分析**：包括使用场景、核心关注信息和用户痛点
+6. **系统设计**：包括系统架构和用户交互流程
+7. **实现细节**：包括UI设计、技术实现和关键模块
+8. **技术挑战与解决方案**：记录开发过程中的难点及解决思路
+9. **未来计划**：潜在的功能增强和改进方向
+
+### 提示记录文档 (xxx_prompt.mdc)
+
+1. **标题**：功能名称 - 开发提示记录
+2. **概述**：简要说明文档的用途
+3. **提示记录**：按时间顺序记录关键提示
+   - **用户提示**：原始用户需求描述
+   - **分析/响应**：AI的分析和建议
+   - **时间标记**：提示发生的日期
+
+### 技术组件文档 (intelligent_agent_next.mdc等)
+
+1. **标题**：组件名称
+2. **最后更新**：更新日期
+3. **组件概述**：简要描述组件的目的和核心功能
+4. **架构设计**：组件的整体架构和设计模式
+5. **接口定义**：
+   - 公共API接口
+   - 关键数据结构
+   - 配置选项
+6. **功能模块**：
+   - 各子模块的职责和实现
+   - 模块间的交互方式
+7. **使用示例**：常见使用场景的代码示例
+8. **扩展指南**：如何扩展或定制组件功能
+9. **版本历史**：记录主要版本的变更内容
+
+## 自动更新规则
+
+以下规则定义了什么时候以及如何自动更新文档：
+
+1. **新功能添加**：
+   - 创建新的功能文档和提示记录文档
+   - 更新相关功能列表
+
+2. **现有功能更新**：
+   - 更新功能说明和系统设计部分
+   - 添加新的技术挑战和解决方案
+   - 更新用户交互流程图（如有变化）
+   - 更新最后更新日期
+
+3. **Bug修复**：
+   - 如果修复涉及重要算法或设计变更，更新技术实现部分
+   - 添加到技术挑战与解决方案部分（如果是重大问题）
+
+4. **技术组件变更**：
+   - 更新接口定义和功能模块说明
+   - 添加新的使用示例
+   - 在版本历史中记录重要变更
+   - 更新最后更新日期
+
+5. **文档格式更新**：
+   - 确保新内容遵循现有文档的风格和格式
+   - 保持图表和代码示例的一致性
+
+6. **源代码文件变更**：
+   - 当特定源代码文件有修改时，触发相关文档的审查与更新
+   - 每次修改应考虑是否需要更新相应文档的"最后更新"日期
+   - 对于重大修改，检查是否需要在"技术挑战与解决方案"部分添加新内容
+
+7. **定期审查**：
+   - 每月对主要功能文档进行一次全面审查
+   - 确保文档内容与最新代码实现保持一致
+
+## 实施细节
+
+### 文档更新建议格式
+
+当系统检测到需要更新文档时，应生成如下格式的更新建议：
+
+```
+检测到潜在文档更新需求：
+- 相关功能：[功能名称]
+- 建议更新文档：[文档路径]
+- 更新内容：
+  * [具体更新内容1]
+  * [具体更新内容2]
+  * ...
+
+是否需要我帮您更新此文档？
+```
+
+### 提示关键字
+
+对于特定类型的更新，系统应识别以下关键字：
+
+- **功能增强**：enhance, improvement, upgrade
+- **功能删除**：remove, deprecate, delete
+- **行为变更**：change behavior, modify logic
+- **参数变更**：new parameter, changed parameter
+- **返回值变更**：changed return, new return
+- **API契约变更**：API contract, breaking change
+- **分析能力变更**：analysis capability, analyzer update
+- **接口调整**：interface change, signature update
+
+## 使用示例
+
+### 示例1：功能增强
+
+用户：我们需要在Google Slides分析器中添加一个导出分析报告为PDF的功能。
+
+系统：
+```
+检测到潜在文档更新需求：
+- 相关功能：Google Slides Analyzer
+- 建议更新文档：docs/features/google_slides_analyzer.mdc
+- 更新内容：
+  * 在功能说明部分添加"导出分析报告"功能
+  * 在UI设计部分添加导出按钮的描述
+  * 在技术实现部分添加PDF生成相关模块
+
+是否需要我帮您更新此文档？
+```
+
+### 示例2：IntelligentAgentNext接口变更
+
+用户：我们需要在IntelligentAgentNext中添加对视频内容的分析能力，请增加analyzeVideo方法和相关接口。
+
+系统：
+```
+检测到潜在文档更新需求：
+- 相关功能：IntelligentAgentNext
+- 建议更新文档：docs/features/intelligent_agent_next.mdc
+- 更新内容：
+  * 在功能模块部分添加"视频分析"能力说明
+  * 更新接口定义部分，添加VideoAnalysisResult接口
+  * 添加analyzeVideo方法的使用示例
+  * 更新最后更新日期
+
+是否需要我帮您更新此文档？
+```
+
+### 示例3：源码文件变更触发更新
+
+用户：我修改了contentScriptGoogleSlide.tsx中的分析结果展示方式，使用了独立的HTML页面而不是内联脚本，以符合Chrome扩展的内容安全策略。
+
+系统：
+```
+检测到源代码文件变更：
+- 修改的文件：src/contentScriptGoogleSlide.tsx
+- 建议更新文档：docs/features/google_slides_analyzer.mdc
+- 更新内容：
+  * 更新"技术实现"部分中的"分析结果展示模块"
+  * 添加"符合Chrome扩展安全策略"的技术挑战与解决方案
+  * 更新最后更新日期
+
+是否需要我帮您更新此文档？
+```
+
+## 维护和审查
+
+本文档规则应定期审查和更新，确保其与项目发展保持一致。建议每季度至少进行一次审查，评估自动更新规则的有效性并进行必要的调整。

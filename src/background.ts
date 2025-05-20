@@ -4,6 +4,9 @@ import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
+import { getAuthToken } from './slide';
+import { intelligentAgentNext } from './IntelligentAgentNext';
+import { AnalysisResult, ProjectAnalysisResult } from './interfaces/analysisInterfaces';
 
 console.log('Background script loaded');
 
@@ -100,6 +103,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // 处理Google Slides项目分析请求
+    if (request.type === 'ANALYZE_PROJECT') {
+        console.log('处理单个项目分析请求:', request.data.request?.project_data?.project?.name, request.data);
+        const { request: projectRequest, config, context } = request.data;
+        
+        intelligentAgentNext.analyze(projectRequest, config, context)
+            .then((result: AnalysisResult) => {
+                console.log('单个项目分析结果:', result);
+                sendResponse(result);
+            })
+            .catch((error: Error) => {
+                console.error('单个项目分析失败:', error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true;
+    }
+
     if (request.type === 'CONTROL_SCHEDULED_CHECK') {
         if (request.action === 'start') {
             startScheduledCheck();
@@ -115,14 +135,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         knowledgeQuery(request.question).then(result => {
             console.log('General query result:', result);
             sendResponse(result);
-        });
-        return true;
-    }
-    
-    // 获取环境配置
-    if (request.type === 'GET_ENV_CONFIG') {
-        getEnvConfig().then(config => {
-            sendResponse({ success: true, config: config });
         });
         return true;
     }
@@ -152,8 +164,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true; // 保持消息通道开放
     }
+
+    // 处理分析幻灯片项目的请求
+    if (request.type === 'REQUEST_SLIDES_ANALYSIS' && sender.tab?.id) {
+        handleSlideAnalysisRequest(sender.tab.id);
+        return true;
+    }
     
-    return true;
+    if (request.type === 'GET_TOKEN') {
+        getToken().then(token => {
+            sendResponse({ token });
+        }).catch(error => {
+            sendResponse({ error: error.message });
+        });
+        return true;
+    } else if (request.type === 'REMOVE_TOKEN') {
+        removeToken().then(() => {
+            sendResponse({ success: true });
+        }).catch(error => {
+            sendResponse({ success: false, error: error.message });
+        });
+        return true;
+    }
+    
+    return false;
 });
 
 // 启动定时任务
@@ -308,5 +342,24 @@ async function getUserinfoFromRCpage() {
     } catch (error) {
         console.error('Failed to get userinfo:', error);
         return null;
+    }
+}
+
+// 处理幻灯片分析请求
+async function handleSlideAnalysisRequest(tabId: number) {
+    try {
+        // 获取认证token
+        const token = await getAuthToken();
+        if (token) {
+            // 发送回内容脚本
+            chrome.tabs.sendMessage(tabId, { 
+                type: 'ANALYZE_SLIDES_PROJECTS',
+                token
+            });
+        } else {
+            console.error('获取Google认证失败');
+        }
+    } catch (error) {
+        console.error('处理幻灯片分析请求时出错:', error);
     }
 }

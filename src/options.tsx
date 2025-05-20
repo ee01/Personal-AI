@@ -1,7 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
-import { defaultEnvConfig, EnvConfigType } from './utils';
+import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
 import { agentCoordinator } from './agentSystem';
 import { getToolDescriptions } from './intelligentAgent';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
@@ -32,17 +32,12 @@ const Options = () => {
     // 从.env加载默认值（通过background脚本）
     const loadEnvDefaults = async () => {
         try {
-            const response = await chrome.runtime.sendMessage({
-                type: 'GET_ENV_CONFIG'
+            const config = getDefaultEnvConfig();
+            setConfig(config);
+            setStatus({
+                message: '已从.env文件加载默认配置',
+                type: 'success'
             });
-            
-            if (response && response.success) {
-                setConfig(response.config);
-                setStatus({
-                    message: '已从.env文件加载默认配置',
-                    type: 'success'
-                });
-            }
         } catch (error) {
             console.error('加载环境配置失败:', error);
             setStatus({

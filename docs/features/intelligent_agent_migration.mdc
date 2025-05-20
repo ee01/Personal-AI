@@ -1,0 +1,267 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 智能Agent系统迁移指南
+
+本文档提供从旧版智能Agent系统迁移到新的IntelligentAgentNext系统的详细指南。新的设计提供了更灵活、更强大的分析框架，支持多种分析类型并改进了扩展性。
+
+## 迁移概述
+
+新的智能Agent系统提供以下改进：
+
+1. **灵活的分析框架**：支持消息、项目、会议和文档等多种分析类型
+2. **强类型支持**：使用TypeScript接口提供完整的类型安全
+3. **标准化的结果结构**：所有分析结果共享一致的基本结构
+4. **可配置的分析行为**：通过配置对象控制分析深度和行为
+5. **完备的上下文支持**：提供丰富的上下文信息以提高分析质量
+6. **兼容层支持**：提供与旧版API兼容的函数以简化迁移
+
+## 基本迁移步骤
+
+### 步骤1：导入新组件
+
+```typescript
+// 旧版导入
+import { processMessage } from '../intelligentAgent';
+
+// 新版导入
+import { processMessageCompatible } from '../IntelligentAgentNext';
+```
+
+### 步骤2：使用兼容层API
+
+对于使用旧版`processMessage`的代码，可以直接替换为兼容版本：
+
+```typescript
+// 旧版代码
+const results = await processMessage(messageData, onProgressCallback);
+
+// 新版代码（兼容模式）
+const results = await processMessageCompatible(messageData, onProgressCallback);
+```
+
+## 高级迁移：使用新API
+
+### 步骤1：导入新的接口和类
+
+```typescript
+import { 
+  IntelligentAgentNext, 
+  intelligentAgentNext,
+  AnalysisConfig, 
+  AnalysisContext,
+  MessageAnalysisResult 
+} from '../index';
+```
+
+### 步骤2：准备分析配置和上下文
+
+```typescript
+// 创建分析配置
+const config: AnalysisConfig = {
+  type: 'message',              // 分析类型：'message'|'project'|'meeting'|'document'|'generic'
+  analysisDepth: 'normal',      // 分析深度：'quick'|'normal'|'deep'
+  maxActions: 5,                // 最大行动次数
+  preferredTools: ['toolA', 'toolB']  // 首选工具
+};
+
+// 创建分析上下文
+const context: AnalysisContext = {
+  currentUser: 'username',
+  concernedRules: ['规则1', '规则2']   // 关注规则
+};
+```
+
+### 步骤3：执行分析
+
+```typescript
+// 单个分析
+const result = await intelligentAgentNext.analyze(inputData, config, context);
+
+// 批量分析
+const results = await intelligentAgentNext.analyzeBatch(
+  itemsArray, 
+  config, 
+  context,
+  (result) => {
+    // 进度回调处理
+    console.log('完成一项分析:', result.summary);
+  }
+);
+```
+
+### 步骤4：处理分析结果
+
+```typescript
+// 根据结果类型处理
+if (result.type === 'message') {
+  const messageResult = result as MessageAnalysisResult;
+  
+  if (messageResult.isImportant) {
+    // 处理重要消息
+    console.log('重要消息:', messageResult.summary);
+    console.log('原因:', messageResult.reasonsToStore.join(', '));
+  }
+  
+  // 访问提取的实体
+  if (messageResult.entities?.people?.length > 0) {
+    console.log('提及的人物:', messageResult.entities.people);
+  }
+}
+```
+
+## 工具适配
+
+新系统提供了工具适配层，用于在新旧系统之间桥接工具：
+
+```typescript
+import { toolAdapter, runTool } from '../agentToolAdapter';
+
+// 注册新工具
+toolAdapter.registerTool(
+  'newTool',
+  async (params) => {
+    // 工具实现
+    return { result: 'success' };
+  },
+  {
+    id: 'newTool',
+    name: '新工具',
+    description: '这是一个新工具',
+    parameters: [
+      {
+        name: 'param1',
+        description: '参数1',
+        required: true
+      }
+    ]
+  }
+);
+
+// 执行工具
+const result = await runTool('toolId', { param1: 'value1' });
+```
+
+## 处理消息分析的完整示例
+
+```typescript
+import { 
+  intelligentAgentNext, 
+  AnalysisConfig, 
+  AnalysisContext,
+  MessageAnalysisResult 
+} from '../index';
+
+async function analyzeMessage(message) {
+  // 1. 准备配置
+  const config: AnalysisConfig = {
+    type: 'message',
+    analysisDepth: 'normal',
+    maxActions: 3
+  };
+  
+  // 2. 准备上下文
+  const context: AnalysisContext = {
+    currentUser: '当前用户',
+    concernedRules: ['重要会议', '项目截止日期']
+  };
+  
+  // 3. 执行分析
+  const result = await intelligentAgentNext.analyze(message, config, context);
+  
+  // 4. 处理结果
+  if (result.type === 'message') {
+    const messageResult = result as MessageAnalysisResult;
+    
+    console.log('分析摘要:', messageResult.summary);
+    console.log('重要性:', messageResult.isImportant ? '重要' : '一般');
+    
+    if (messageResult.shouldNotify) {
+      sendNotification(messageResult);
+    }
+    
+    if (messageResult.shouldStore) {
+      storeMessage(messageResult);
+    }
+    
+    // 分析元数据
+    console.log('处理统计:', {
+      callCount: messageResult.metaData.llmCallCount,
+      tokens: messageResult.metaData.llmCallTokens,
+      usedTools: messageResult.metaData.usedTools
+    });
+  }
+}
+```
+
+## 处理项目和会议分析
+
+新系统支持除消息之外的其他分析类型：
+
+```typescript
+// 项目分析
+const projectConfig: AnalysisConfig = {
+  type: 'project',
+  analysisDepth: 'deep'
+};
+
+const projectResult = await intelligentAgentNext.analyze(projectData, projectConfig);
+if (projectResult.type === 'project') {
+  console.log('项目风险:', projectResult.riskLevel);
+  console.log('建议:', projectResult.suggestions);
+}
+
+// 会议分析
+const meetingConfig: AnalysisConfig = {
+  type: 'meeting'
+};
+
+const meetingResult = await intelligentAgentNext.analyze(meetingData, meetingConfig);
+if (meetingResult.type === 'meeting') {
+  console.log('会议主题:', meetingResult.topics);
+  console.log('决策:', meetingResult.decisions);
+  console.log('行动项:', meetingResult.actionItems);
+}
+```
+
+## 迁移常见问题
+
+### 1. 原始消息格式兼容性
+
+新系统支持与旧系统相同的输入格式，但提供了更严格的类型检查。确保您的输入数据符合预期结构。
+
+### 2. 工具使用变化
+
+新系统通过工具适配器管理工具，并提供了更严格的参数验证。如果您定义了自定义工具，需要使用新的工具注册API。
+
+### 3. 结果格式转换
+
+如果您的代码依赖于特定的结果结构，可以使用`convertToOldFormat`方法将新格式转换为旧格式：
+
+```typescript
+const newResult = await intelligentAgentNext.analyze(data, config);
+const oldFormatResult = intelligentAgentNext.convertToOldFormat(newResult as MessageAnalysisResult);
+```
+
+## 完整API参考
+
+请参考类型定义文件和文档获取完整的API参考：
+
+- `IntelligentAgentNext` - 核心分析类
+- `AnalysisConfig` - 分析配置接口
+- `AnalysisContext` - 分析上下文接口
+- `BaseAnalysisResult` - 基础结果接口
+- `MessageAnalysisResult` - 消息分析结果
+- `ProjectAnalysisResult` - 项目分析结果
+- `MeetingAnalysisResult` - 会议分析结果
+- `DocumentAnalysisResult` - 文档分析结果
+
+## 下一步
+
+1. 识别当前使用旧系统的代码
+2. 选择使用兼容层API还是完全迁移到新API
+3. 按部分逐步迁移，优先处理核心功能
+4. 利用TypeScript类型系统验证迁移正确性
+5. 运行全面测试确保功能一致性 
