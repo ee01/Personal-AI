@@ -197,17 +197,16 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
   
   /** 改进建议 */
   suggestions: {
-    status?: Array<{suggestion: string, newValue: string}>;
-    owner?: Array<{suggestion: string, newValue: string}>;
-    track?: Array<{suggestion: string, newValue: string}>;
-    process?: Array<{suggestion: string, newValue: string}>;
+    status?: string;
+    owner?: string;
+    track?: string;
+    highlights?: Array<string>;
     timeline?: string[];
     resources?: string[];
     documentation?: string[];
     risks?: string[];
     actionItems?: string[];
     followUp?: string[];
-    [key: string]: Array<{suggestion: string, newValue: string}> | string[] | undefined;
   };
   
   /** 项目依赖关系 */
