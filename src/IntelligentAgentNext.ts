@@ -1511,35 +1511,6 @@ ${jiraData.summary || jiraData.fields?.summary ? `- 摘要: ${jiraData.summary |
       depthNote = '注意：这是深度分析，尽可能使用多个工具收集完整信息，做出全面判断。';
     }
     
-    // 检测是否为Google Slides项目分析场景
-    const isGoogleSlidesAnalysis = normalizedInput.project_data?.project?.slideId || 
-                                   (projectId && projectId.match(/[A-Z]+-\d+/) && jiraData);
-    
-    // 为Google Slides分析添加特定指南
-    let slidesAnalysisGuide = '';
-    if (isGoogleSlidesAnalysis) {
-      slidesAnalysisGuide = `
-# Google Slides项目分析指南
-你正在分析Google Slides中的项目信息，需要完成以下任务:
-
-1. 分析项目状态与Jira状态是否一致，如果不一致，建议更新
-2. 评估项目是否需要更新负责人
-3. 根据项目状态评估其风险级别
-4. 考虑是否需要添加重要备注信息
-5. 查找与该项目相关的最新讨论和更新
-
-请主动使用historySearch工具查询与该项目相关的历史消息。如果项目ID符合Jira格式，请使用jiraQuery获取最新状态。
-
-返回的suggestions字段值格式要求：
-- status字段应该直接填入具体的状态值（如：进行中、已完成、阻塞中）
-- owner字段应该直接填入具体的人名或团队名
-- track字段应该直接填入具体的赛道名称
-- process字段应该直接填入具体的备注内容
-
-这些值将直接用于更新项目数据，需要是可以直接填写到报告中的具体值，而不是建议。
-`;
-    }
-    
     // 构建最终提示
     return `
 分析以下项目信息，评估项目状态与风险:
@@ -1557,8 +1528,6 @@ ${depthNote}
 以下是可用于分析项目的工具:
 ${toolDescriptions}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
-
-${slidesAnalysisGuide}
 
 # 分析指南
 请根据项目信息的结构类型进行分析:
@@ -1610,11 +1579,11 @@ ${slidesAnalysisGuide}
   
   // 建议
   "suggestions": {
-    "status": ["具体的新状态值，如：进行中、已完成、风险中"],
-    "owner": ["具体的负责人姓名，如：张三、李四、项目组"],
-    "track": ["具体的赛道值，如：技术、业务、设计"],
-    "process": ["具体的流程/备注内容，不要包含建议性质的句子"],
-    "actionItems": ["建议的行动项1", "建议的行动项2"],
+    "status": "(In Progress|Done|Blocked|Released)", // 用英文直接填入具体的状态值（如：进行中、已完成、阻塞中）
+    "owner": "", // 用英文直接填入具体的人名
+    "track": "", // 用英文直接填入具体的赛道名称或团队名
+    "highlights": ["highlight1", "highlight2"], // 用英文直接填入具体的备注内容
+    "actionItems": ["actionItem1", "actionItem2"],  // 用英文直接填入具体的行动项
     "documentation": ["文档更新建议"],
     "risks": ["风险描述1", "风险描述2"],
     "followUp": ["后续跟进项1", "后续跟进项2"]

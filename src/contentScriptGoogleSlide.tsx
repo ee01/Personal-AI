@@ -272,14 +272,14 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
         const hasCommentsColumn = project.columnIndices?.comments !== undefined;
         
         // 根据实际存在的列获取建议值
-        const suggestedStatus = hasStatusColumn && Array.isArray(result.suggestions.status) && result.suggestions.status.length > 0 
-                              ? String(result.suggestions.status[0]) : '';
-        const suggestedOwner = hasOwnerColumn && Array.isArray(result.suggestions.owner) && result.suggestions.owner.length > 0 
-                             ? String(result.suggestions.owner[0]) : '';
-        const suggestedTrack = hasTrackColumn && Array.isArray(result.suggestions.track) && result.suggestions.track.length > 0 
-                             ? String(result.suggestions.track[0]) : '';
-        const suggestedComments = hasCommentsColumn && Array.isArray(result.suggestions.process) && result.suggestions.process.length > 0 
-                                ? String(result.suggestions.process[0]) : '';
+        const suggestedStatus = hasStatusColumn && result.suggestions.status;
+        const suggestedOwner = hasOwnerColumn && result.suggestions.owner;
+        const suggestedTrack = hasTrackColumn && result.suggestions.track;
+        const comments = Array.isArray(result.suggestions.highlights) && result.suggestions.highlights.length > 0 
+        ? result.suggestions.highlights.join('\n') : result.suggestions.highlights
+        const actions = Array.isArray(result.suggestions.actionItems) && result.suggestions.actionItems.length > 0 
+        ? result.suggestions.actionItems.join('\n') : result.suggestions.actionItems
+        const suggestedComments = hasCommentsColumn && (comments + '\n' + actions);
         
         // 获取更新理由
         const reasons = Array.isArray(result.suggestions.risks) ? result.suggestions.risks : [];
