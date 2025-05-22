@@ -5,8 +5,9 @@ import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
 import { getAuthToken } from './slide';
-import { intelligentAgentNext } from './IntelligentAgentNext';
+import { IntelligentAgentNext } from './IntelligentAgentNext';
 import { AnalysisResult, ProjectAnalysisResult } from './interfaces/analysisInterfaces';
+import { intelligentAgentNext } from '.';
 
 console.log('Background script loaded');
 
@@ -108,7 +109,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('处理单个项目分析请求:', request.data.request?.project_data?.project?.name, request.data);
         const { request: projectRequest, config, context } = request.data;
         
-        intelligentAgentNext.analyze(projectRequest, config, context)
+        const intelligentAgentNextInstance = new IntelligentAgentNext();
+        intelligentAgentNextInstance.analyze(projectRequest, config, context)
             .then((result: AnalysisResult) => {
                 console.log('单个项目分析结果:', result);
                 sendResponse(result);
