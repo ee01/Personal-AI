@@ -7,7 +7,6 @@ import { callLLMJsonAPI } from './llm';
 import { naturalLanguageQuery } from './vectorStore';
 import { getEnvConfig } from './utils';
 import { 
-  BaseAnalysisResult, 
   AnalysisConfig, 
   AnalysisContext,
   AnalysisResult,
@@ -16,6 +15,7 @@ import {
   MeetingAnalysisResult,
   GenericAnalysisResult
 } from './interfaces/analysisInterfaces';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * 工具接口定义
@@ -54,13 +54,6 @@ const toolRegistry: Record<string, Tool> = {};
 function registerTool(tool: Tool): void {
   toolRegistry[tool.id] = tool;
   console.log(`工具已注册: ${tool.name} (${tool.id})`);
-}
-
-/**
- * 获取工具列表
- */
-function getAvailableTools(): Tool[] {
-  return Object.values(toolRegistry);
 }
 
 // 导入旧版IntelligentAgent相关接口以支持兼容层
@@ -139,14 +132,13 @@ interface ThoughtStep {
   toolResult?: string;
 }
 
-// 设置为从原始IntelligentAgent导入工具
-import { getToolDescriptions } from './intelligentAgent';
-
 /**
  * 核心智能Agent类，提供通用分析框架
  */
 export class IntelligentAgentNext {
   private thoughtProcess: ThoughtStep[] = [];
+  private aggregateLlmCallCount = 0;
+  private aggregateLlmCallTokens = 0;
   
   constructor() {
     // 确保工具已注册
@@ -430,7 +422,7 @@ export class IntelligentAgentNext {
             }
             
             result = await response.json();
-            resultMessage = `[${result.issues.map((issue: any) => issue.fields.summary).join(', ')}][${result.issues[0].fields.status.name}]的查询数据: ${result.issues[0].fields.summary}\n - 执行者: ${result.issues[0].fields.assignee?.displayName}\n - 预计完成时间: ${result.issues[0].fields.duedate}\n - 评论:\n  - ${result.issues[0].fields.comment.comments.map((comment: any) => comment.author.displayName + ': ' + comment.body).join('\n  - ').replace('\n', '')}`;
+            resultMessage = result.issues.map((issue: any) => `[${issue.key}][${issue.fields.status.name}]${issue.fields.summary}`).join('\n');
           }
           
           // 存储结果到缓存
@@ -602,12 +594,13 @@ export class IntelligentAgentNext {
   async analyze(
     input: any,
     config: AnalysisConfig,
-    context?: AnalysisContext
-  ): Promise<AnalysisResult> {
+    context?: AnalysisContext,
+    onEveryGroupCompleted?: (results: MessageAnalysisResult[]) => void
+  ): Promise<AnalysisResult | MessageAnalysisResult[]> {
     // 根据配置选择合适的分析流程
     switch(config.type) {
       case 'message':
-        return this.analyzeMessage(input, config, context);
+        return this.analyzeMessage(input, config, context, onEveryGroupCompleted);
       case 'project':
         return this.analyzeProject(input, config, context);
       case 'meeting':
@@ -626,7 +619,7 @@ export class IntelligentAgentNext {
     items: any[],
     config: AnalysisConfig,
     context?: AnalysisContext,
-    onProgress?: (result: AnalysisResult) => void
+    onProgress?: (result: AnalysisResult | MessageAnalysisResult[]) => void
   ): Promise<AnalysisResult[]> {
     const results: AnalysisResult[] = [];
     
@@ -637,7 +630,7 @@ export class IntelligentAgentNext {
         onProgress(result);
       }
       
-      results.push(result);
+      results.push(result as AnalysisResult);
     }
     
     return results;
@@ -649,159 +642,520 @@ export class IntelligentAgentNext {
   private async analyzeMessage(
     input: any,
     config: AnalysisConfig,
-    context?: AnalysisContext
-  ): Promise<MessageAnalysisResult> {
-    // 初始化思考过程记录
-    this.thoughtProcess = [];
+    context?: AnalysisContext,
+    onEveryGroupCompleted?: (results: MessageAnalysisResult[]) => void
+  ): Promise<MessageAnalysisResult | MessageAnalysisResult[]> {
+    // 检测输入格式
+    const format = this.detectMessageFormat(input);
+    console.log(`检测到消息格式: ${format}`);
     
-    // 初始化统计
-    let llmCallCount = 0;
-    let llmCallTokens = 0;
-    const usedTools = new Set<string>();
-    
-    try {
-      // 标准化输入
-      const normalizedInput = this.normalizeInput(input, config);
+    // 根据消息格式决定处理方式
+    if (format === 'message_groups') {
+      // 处理多个消息组
+      const results: MessageAnalysisResult[] = [];
       
-      // 初始分析
-      const initialAnalysis = await this.initialAnalysis(normalizedInput, config, context);
-      llmCallCount += 1;
-      llmCallTokens += this.estimateTokens(normalizedInput, initialAnalysis);
+      // 获取环境配置
+      const envConfig = await getEnvConfig();
       
-      // 创建初始结果对象
-      const result: MessageAnalysisResult = {
-        type: 'message',
-        confidence: initialAnalysis.confidence || 0,
-        summary: initialAnalysis.summary || '',
-        isImportant: initialAnalysis.importanceLevel === 'high',
-        shouldStore: initialAnalysis.shouldStore || false,
-        shouldNotify: initialAnalysis.shouldNotify || false,
-        messageContext: {
-          groupId: normalizedInput.team_id || '',
-          groupName: normalizedInput.team_name || '',
-          message_content: normalizedInput.message_content || '',
-          sender: normalizedInput.sender || '',
-          datetime: normalizedInput.datetime || ''
-        },
-        thoughtProcess: this.thoughtProcess,
-        metaData: {
-          llmCallCount,
-          llmCallTokens,
-          usedTools: Array.from(usedTools),
-          timestamp: Date.now()
-        },
-        entities: initialAnalysis.entities || {},
-        reasonsToStore: initialAnalysis.reasons || [],
-        notificationPriority: initialAnalysis.notificationPriority || 'low',
-        replyAdvice: initialAnalysis.replyAdvice || ''
-      };
-      
-      // 思考-行动循环
-      const maxActions = config.maxActions || 5;
-      const currentState = {
-        message: normalizedInput,
-        analysis: initialAnalysis,
-        result,
-        memory: {} as Record<string, any>,
-        actionCount: 0,
-        config,
-        context,
-        actionHistory: [] as ActionHistoryItem[],
-        currentDecision: {
-          isImportant: result.isImportant,
-          shouldStore: result.shouldStore,
-          shouldNotify: result.shouldNotify,
-          confidence: result.confidence,
-          summary: result.summary,
-          reasons: result.reasonsToStore,
-          notificationPriority: result.notificationPriority,
-          replyAdvice: result.replyAdvice
-        }
-      };
-      
-      while (currentState.actionCount < maxActions) {
-        // 思考下一步
-        let thoughtResult: ThoughtResult;
-        if (currentState.actionCount > 0) {
-          thoughtResult = await this.think(currentState);
-          llmCallCount += 1;
-          llmCallTokens += this.estimateTokens(currentState, thoughtResult);
-        } else {
-          thoughtResult = {
-            thought: initialAnalysis.thought || '',
-            nextAction: initialAnalysis.nextAction || 'finish',
-            tools: initialAnalysis.tools || [],
-            params: initialAnalysis.params || {}
+      if (envConfig.ANALYZE_BY_GROUP === true) {
+        // 为每个消息组单独批量处理
+        for (const group of input.messageGroups) {
+          const groupContext = {
+            ...context,
+            groupInfo: {
+              id: group.groupId,
+              name: group.groupName,
+              members: (group.members || []) as string[]
+            }
           };
-        }
-        
-        // 记录思考过程
-        const thoughtStep: ThoughtStep = {
-          timestamp: Date.now(),
-          thought: thoughtResult.thought,
-          action: thoughtResult.nextAction
-        };
-        this.thoughtProcess.push(thoughtStep);
-        
-        // 检查是否结束
-        if (thoughtResult.nextAction === 'finish') {
-          // 更新最终决策
-          this.updateFinalDecision(result, thoughtResult, currentState);
-          break;
-        }
-        
-        // 执行工具
-        if (thoughtResult.tools && thoughtResult.tools.length > 0) {
-          const toolResults = await this.executeTools(
-            thoughtResult.tools,
-            thoughtResult.params,
-            currentState,
-            thoughtStep,
-            usedTools
+          
+          // 提取组中的消息并标准化
+          const groupMessages = group.posts.map((post: any) => ({
+            messageContent: post.content,
+            sender: post.sender,
+            datetime: post.datetime,
+            groupName: group.groupName,
+            groupId: group.groupId,
+            postId: post.post_id
+          }));
+          
+          // 分析该组的消息
+          const groupResults = await this.analyzeGroupMessages(
+            groupMessages,
+            config,
+            groupContext,
+            onEveryGroupCompleted
           );
           
-          // 特殊处理某些工具的结果
-          thoughtResult.tools.forEach(toolId => {
-            // 如果是存储或通知工具，更新最终结果
-            if (toolId === 'messageStore') {
-              result.shouldStore = true;
-              currentState.currentDecision.shouldStore = true;
-            } else if (toolId === 'notifier') {
-              result.shouldNotify = true;
-              currentState.currentDecision.shouldNotify = true;
-            }
-          });
+          results.push(...groupResults);
+        }
+      } else {
+        // 将所有消息组合并处理
+        const allMessages: any[] = [];
+        
+        for (const group of input.messageGroups) {
+          const groupMessages = group.posts.map((post: any) => ({
+            messageContent: post.content,
+            sender: post.sender,
+            datetime: post.datetime,
+            groupName: group.groupName,
+            groupId: group.groupId,
+            postId: post.post_id
+          }));
+          
+          allMessages.push(...groupMessages);
         }
         
-        // 增加行动计数
-        currentState.actionCount++;
+        const globalContext = {
+          ...context,
+          groupInfo: {
+            id: '',
+            name: '多群组分析',
+            members: [] as string[]
+          }
+        };
+        
+        const groupResults = await this.analyzeGroupMessages(
+          allMessages,
+          config,
+          globalContext,
+          onEveryGroupCompleted
+        );
+        
+        results.push(...groupResults);
       }
       
-      // 更新元数据
-      result.metaData.llmCallCount = llmCallCount;
-      result.metaData.llmCallTokens = llmCallTokens;
-      result.metaData.usedTools = Array.from(usedTools);
+      return results;
+    } else if (format === 'message_group') {
+      // 处理单个消息组
+      const groupContext = {
+        ...context,
+        groupInfo: {
+          id: input.groupId,
+          name: input.groupName,
+          members: (input.members || []) as string[]
+        }
+      };
       
-      return result;
+      // 提取消息并标准化
+      const messages = input.posts.map((post: any) => ({
+        messageContent: post.content,
+        sender: post.sender,
+        datetime: post.datetime,
+        groupName: input.groupName,
+        groupId: input.groupId,
+        postId: post.post_id
+      }));
+      
+      // 分析消息
+      return await this.analyzeGroupMessages(
+        messages,
+        config,
+        groupContext,
+        onEveryGroupCompleted
+      );
+    } else {
+      // 处理单条消息
+      // 标准化
+      const normalizedInput = this.normalizeInput(input, config);
+      
+      // 将单条消息转换为数组进行处理
+      const results = await this.analyzeGroupMessages(
+        [normalizedInput],
+        config,
+        context,
+        onEveryGroupCompleted
+      );
+      
+      // 返回第一个结果
+      return results[0];
+    }
+  }
+
+  /**
+   * 分析消息组
+   * 处理标准化后的消息数组
+   * 降噪处理
+   */
+  private async analyzeGroupMessages(
+    messages: any[],
+    config: AnalysisConfig,
+    context?: AnalysisContext,
+    onGroupCompleted?: (results: MessageAnalysisResult[]) => void
+  ): Promise<MessageAnalysisResult[]> {
+    try {
+      if (messages.length === 0) {
+        return [];
+      }
+      
+      // 初始化统计
+      let llmCallCount = 0;
+      let llmCallTokens = 0;
+      const usedTools = new Set<string>();
+      
+      // 调用LLM分析
+      const analysisResult = await this.initialAnalysis(messages, config, context);
+      
+      // 记录初始LLM调用
+      llmCallCount += 1;
+      llmCallTokens += this.estimateTokens(messages, analysisResult);
+      
+      // 解析结果
+      // let analysisResult: MessageAnalysisResult[];
+      // 
+      // try {
+      //   // 如果是JSON数组，则直接解析
+      //   if (Array.isArray(analysisResult)) {
+      //     batchResults = analysisResult;
+      //   } else if (typeof analysisResult === 'object') {
+      //     // 如果是单个对象且分析单条消息，包装为数组
+      //     if (messages.length === 1) {
+      //       batchResults = [analysisResult as MessageAnalysisResult];
+      //     } else {
+      //       // 如果是批量分析但返回了单个对象，尝试查找数组属性
+      //       const possibleArrayFields = ['results', 'messages', 'analysis', 'messageAnalysis'];
+      //       for (const field of possibleArrayFields) {
+      //         if (Array.isArray(analysisResult[field])) {
+      //           batchResults = analysisResult[field];
+      //           break;
+      //         }
+      //       }
+            
+      //       // 如果没找到数组，使用原结果
+      //       if (!batchResults) {
+      //         batchResults = [analysisResult as MessageAnalysisResult];
+      //       }
+      //     }
+      //   } else if (typeof analysisResult === 'string') {
+      //     // 尝试解析JSON字符串
+      //     try {
+      //       const parsed = JSON.parse(analysisResult);
+      //       batchResults = Array.isArray(parsed) ? parsed : [parsed];
+      //     } catch (e) {
+      //     }
+      //   } else {
+      //     // 无法识别的结果类型
+      //     throw new Error('无法识别的分析结果格式');
+      //   }
+      // } catch (e) {
+      // }
+      
+      
+      // 准备最终结果数组
+      const finalResults: MessageAnalysisResult[] = [];
+      
+      // 定义最大思考-行动循环次数
+      const MAX_ACTIONS = config.maxActions || 5;
+      
+      // 为每条消息进行深度分析（思考-行动循环）
+      for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        const analysis = analysisResult.find((r:any) => r.messageIndex === i) || {
+          summary: "没有分析结果",
+          importanceLevel: "low",
+          needsProcessing: false,
+          isNoiseMessage: false
+        };
+        let groupIndex = 0;
+        
+        // 如果是噪音消息且不需要处理，创建简化的结果
+        if (analysis.isNoiseMessage === true && analysis.needsProcessing === false) {
+          finalResults.push({
+            type: 'message',
+            messageIndex: i,
+            messageContext: message,
+            isImportant: false,
+            shouldNotify: false,
+            shouldStore: false,
+            reasonsToStore: [],
+            confidence: 1.0, // 高确信度，这是噪音消息
+            summary: analysis.summary || "噪音消息",
+            thoughtProcess: [{
+              timestamp: Date.now(),
+              thought: "经分析，这是噪音消息，无需进一步处理",
+              action: "跳过处理"
+            }]
+          });
+          if (i === messages.length - 1 || messages[i].team_id !== messages[i+1]?.team_id) {
+            groupIndex++;
+            // 找出当前组的所有消息结果
+            const currentGroupResults = finalResults.filter(r => r.groupId === message.team_id);
+            // 调用回调函数
+            if (onGroupCompleted && currentGroupResults.length > 0) {
+              onGroupCompleted(currentGroupResults);
+            }
+          }
+          continue;
+        }
+        
+        const messageThoughtProcess: ThoughtStep[] = [];
+        const messageUsedTools: string[] = [];
+        
+        const result: MessageAnalysisResult = {
+          type: 'message',
+          isImportant: analysis.importanceLevel === "high",
+          shouldStore: false,
+          shouldNotify: false,
+          confidence: 0,
+          summary: analysis.summary || "",
+          enrichedData: {
+            entities: analysis.entities || {},
+            relationships: analysis.relationships || [],
+            actions: analysis.actions || [],
+            sentiment: analysis.sentiment || 'neutral',
+            category: analysis.category || []
+          },
+          reasonsToStore: [],
+          thoughtProcess: messageThoughtProcess,
+          messageIndex: i,
+          messageContext: message,
+          matchedRule: analysis.matchedRules && analysis.matchedRules.length > 0 
+            ? analysis.matchedRules.join('; ') 
+            : '',
+          metaData: {
+            llmCallCount: 0,
+            llmCallTokens: 0,
+            usedTools: messageUsedTools,
+            timestamp: Date.now()
+          }
+        };
+
+        // 执行思考-行动循环
+        this.loopThinking(result, message, analysis, config, context, usedTools);
+        
+        // 添加到最终结果列表
+        finalResults.push(result);
+        
+        // 每条消息处理完成后，检查是否所有同一组的消息都已处理完毕
+        if (i === messages.length - 1 || messages[i].team_id !== messages[i+1]?.team_id) {
+          groupIndex++;
+          // 找出当前组的所有消息结果
+          const currentGroupResults = finalResults.filter(r => r.groupId === message.team_id);
+          // 调用回调函数
+          if (onGroupCompleted && currentGroupResults.length > 0) {
+            onGroupCompleted(currentGroupResults);
+          }
+        }
+      
+        // 记录批量处理完成
+        const batchEndStep: ThoughtStep = {
+          timestamp: Date.now(),
+          thought: `完成批量处理 ${messages.length} 条消息，其中 ${finalResults.filter((r: MessageAnalysisResult) => r.shouldStore).length} 条被存储，${finalResults.filter((r: MessageAnalysisResult) => r.shouldNotify).length} 条需要通知。共调用 LLM ${this.aggregateLlmCallCount} 次，估计使用 ${this.aggregateLlmCallTokens} tokens，使用工具：${Array.from(usedTools).join(', ')}`,
+          action: '完成批量处理'
+        };
+        this.thoughtProcess.push(batchEndStep);
+        
+        console.log(`智能Agent批量处理完成，共处理 ${finalResults.length} 条消息`);
+        return finalResults;
+      }
     } catch (error) {
-      console.error('消息分析失败:', error);
+      console.error('智能Agent批量处理消息失败:', error);
       
-      return {
-        type: 'message',
-        confidence: 0,
-        summary: `分析失败: ${error.message}`,
+      // 记录错误
+      this.thoughtProcess.push({
+        timestamp: Date.now(),
+        thought: error.message,
+        action: '终止处理',
+      });
+      
+      // 返回错误结果
+      const errorResults = messages.map((message, index) => ({
+        type: 'message' as const,
+        messageIndex: index,
         isImportant: false,
         shouldStore: false,
         shouldNotify: false,
-        thoughtProcess: this.thoughtProcess,
+        confidence: 0,
+        summary: `批量处理失败: ${error.message}`,
+        reasonsToStore: [] as string[],
+        messageContext: message,
         metaData: {
-          llmCallCount,
-          llmCallTokens,
-          usedTools: Array.from(usedTools),
+          llmCallCount: this.aggregateLlmCallCount,
+          llmCallTokens: this.aggregateLlmCallTokens,
+          usedTools: Array.from(new Set<string>()),
           timestamp: Date.now()
-        },
-        reasonsToStore: []
+        }
+      }));
+      
+      // 调用回调函数，通知处理失败
+      if (onGroupCompleted) {
+        onGroupCompleted(errorResults);
+      }
+      
+      return errorResults;
+    }
+  }
+  
+  /**
+   * 获取工具描述文本
+   */
+  private getToolDescriptionsText(): string {
+    return this.getAvailableTools().map(tool => {
+      let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
+      
+      // 添加参数描述
+      if (tool.parameterDefs && tool.parameterDefs.length > 0) {
+        description += '\n  参数:';
+        for (const param of tool.parameterDefs) {
+          const requiredMark = param.required ? '(必填)' : '(可选)';
+          const typeMark = param.type ? `[${param.type}]` : '';
+          const optionsMark = param.options ? ` 可选值:${param.options.join('/')}` : '';
+          description += `\n    - ${param.name} ${requiredMark} ${typeMark}: ${param.description}${optionsMark}`;
+        }
+      }
+      
+      return description;
+    }).join('\n');
+  }
+  
+  /**
+   * 估算token数量
+   */
+  private estimateTokens(input: any, output: any): number {
+    // 一个简单的估算方法是计算字符数，然后按照一定比例转换为tokens
+    // 英文中大约每4个字符为1个token，为了简化我们使用字符数/4作为token估算
+    const inputStr = typeof input === 'string' ? input : JSON.stringify(input);
+    const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
+    
+    const totalChars = inputStr.length + outputStr.length;
+    const estimatedTokens = Math.ceil(totalChars / 4);
+    
+    return estimatedTokens;
+  }
+  
+  /**
+   * 执行思考-行动循环
+   * 抽取自原analyzeMessage方法，用于单条消息的深度分析
+   */
+  private async loopThinking(
+    result: AnalysisResult,
+    normalizedInput: any,
+    initialAnalysis: any,
+    config: AnalysisConfig,
+    context?: AnalysisContext,
+    usedTools: Set<string> = new Set()
+  ): Promise<void> {
+    // 初始化统计
+    let llmCallCount = result.metaData.llmCallCount || 0;
+    let llmCallTokens = result.metaData.llmCallTokens || 0;
+      
+    // 思考-行动循环
+    const maxActions = config.maxActions || 5;
+    const currentState = {
+      message: normalizedInput,
+      analysis: initialAnalysis,
+      result,
+      memory: {} as Record<string, any>,
+      actionCount: 0,
+      config,
+      context,
+      actionHistory: [] as ActionHistoryItem[],
+      currentDecision: {
+        confidence: result.confidence,
+        summary: result.summary,
+        // message
+        reasons: result.reasonsToStore || [],
+        isImportant: !!result.isImportant,
+        shouldStore: !!result.shouldStore,
+        shouldNotify: !!result.shouldNotify,
+        notificationPriority: result.notificationPriority,
+        replyAdvice: result.replyAdvice,
+        // project
+        riskLevel: result.riskLevel,
+        suggestions: result.suggestions || {}
+      }
+    };
+    
+    while (currentState.actionCount < maxActions) {
+      // 思考下一步
+      let thoughtResult: ThoughtResult;
+      if (currentState.actionCount > 0) {
+        thoughtResult = await this.think(currentState);
+        llmCallCount += 1;
+        llmCallTokens += this.estimateTokens(currentState, thoughtResult);
+      } else {
+        thoughtResult = {
+          thought: initialAnalysis.thought || '',
+          nextAction: initialAnalysis.nextAction || 'finish',
+          tools: initialAnalysis.tools || [],
+          params: initialAnalysis.params || {}
+        };
+      }
+      
+      // 记录思考过程
+      const thoughtStep: ThoughtStep = {
+        timestamp: Date.now(),
+        thought: thoughtResult.thought,
+        action: thoughtResult.nextAction
       };
+      this.thoughtProcess.push(thoughtStep);
+      result.thoughtProcess = this.thoughtProcess;
+      
+      // 检查是否结束
+      if (thoughtResult.nextAction === 'finish') {
+        // 更新最终决策
+        this.updateFinalDecision(result, thoughtResult, currentState);
+        break;
+      }
+      
+      // 执行工具
+      if (thoughtResult.tools && thoughtResult.tools.length > 0) {
+        await this.executeTools(
+          thoughtResult.tools,
+          thoughtResult.params,
+          currentState,
+          thoughtStep,
+          usedTools
+        );
+        
+        // 特殊处理某些工具的结果
+        thoughtResult.tools.forEach(toolId => {
+          // 如果是存储或通知工具，更新最终结果
+          if (toolId === 'messageStore') {
+            result.shouldStore = true;
+            currentState.currentDecision.shouldStore = true;
+          } else if (toolId === 'notifier') {
+            result.shouldNotify = true;
+            currentState.currentDecision.shouldNotify = true;
+          }
+        });
+        if (thoughtResult.tools.includes('jiraQuery') && currentState.memory['jiraQuery']) {
+          const latestJiraResult = currentState.memory['jiraQuery'][currentState.memory['jiraQuery'].length - 1];
+          if (latestJiraResult && latestJiraResult.result) {
+            result.jiraData = {
+              ...result.jiraData,
+              ...latestJiraResult.result
+            };
+          }
+        }
+      }
+      
+      // 增加行动计数
+      currentState.actionCount++;
+    }
+    
+    // 更新元数据
+    result.metaData.llmCallCount = llmCallCount;
+    result.metaData.llmCallTokens = llmCallTokens;
+    result.metaData.usedTools = Array.from(usedTools);
+    this.aggregateLlmCallCount += llmCallCount;
+    this.aggregateLlmCallTokens += llmCallTokens;
+  }
+
+  /**
+   * 检测消息格式
+   * 从全局函数移动到类方法
+   */
+  private detectMessageFormat(input: any): string {
+    if (input.messageGroups && Array.isArray(input.messageGroups)) {
+      return 'message_groups'; // 多个消息组
+    } else if (input.posts && Array.isArray(input.posts)) {
+      return 'message_group';  // 单个消息组
+    } else if (input.message_content || input.content) {
+      return 'single_message'; // 单个消息
+    } else {
+      console.warn('未知的消息格式:', input);
+      return 'unknown';
     }
   }
   
@@ -936,88 +1290,9 @@ export class IntelligentAgentNext {
       if (initialAnalysis.jiraData) {
         result.jiraData = initialAnalysis.jiraData;
       }
-      
-      // 思考-行动循环
-      const maxActions = config.maxActions || 5;
-      const currentState = {
-        message: normalizedInput,
-        analysis: initialAnalysis,
-        result,
-        memory: {} as Record<string, any>,
-        actionCount: 0,
-        config,
-        context,
-        actionHistory: [] as ActionHistoryItem[],
-        currentDecision: {
-          riskLevel: result.riskLevel,
-          confidence: result.confidence,
-          summary: result.summary,
-          suggestions: result.suggestions || {}
-        }
-      };
-      
-      while (currentState.actionCount < maxActions) {
-        // 思考下一步
-        let thoughtResult: ThoughtResult;
-        if (currentState.actionCount > 0) {
-          thoughtResult = await this.think(currentState);
-          llmCallCount += 1;
-          llmCallTokens += this.estimateTokens(currentState, thoughtResult);
-        } else {
-          thoughtResult = {
-            thought: initialAnalysis.thought || '',
-            nextAction: initialAnalysis.nextAction || 'finish',
-            tools: initialAnalysis.tools || [],
-            params: initialAnalysis.params || {}
-          };
-        }
-        
-        // 记录思考过程
-        const thoughtStep: ThoughtStep = {
-          timestamp: Date.now(),
-          thought: thoughtResult.thought,
-          action: thoughtResult.nextAction
-        };
-        this.thoughtProcess.push(thoughtStep);
-        
-        // 检查是否结束
-        if (thoughtResult.nextAction === 'finish') {
-          // 更新最终决策
-          this.updateFinalDecision(result, thoughtResult, currentState);
-          break;
-        }
-        
-        // 执行工具
-        if (thoughtResult.tools && thoughtResult.tools.length > 0) {
-          await this.executeTools(
-            thoughtResult.tools,
-            thoughtResult.params,
-            currentState,
-            thoughtStep,
-            usedTools
-          );
-          
-          // 特殊处理JIRA查询工具的结果
-          if (thoughtResult.tools.includes('jiraQuery') && currentState.memory['jiraQuery']) {
-            const latestJiraResult = currentState.memory['jiraQuery'][currentState.memory['jiraQuery'].length - 1];
-            if (latestJiraResult && latestJiraResult.result) {
-              result.jiraData = {
-                ...result.jiraData,
-                ...latestJiraResult.result
-              };
-            }
-          }
-        }
-        
-        // 增加行动计数
-        currentState.actionCount++;
-      }
-      
-      // 更新元数据
-      result.metaData.llmCallCount = llmCallCount;
-      result.metaData.llmCallTokens = llmCallTokens;
-      result.metaData.usedTools = Array.from(usedTools);
-      result.thoughtProcess = this.thoughtProcess;
+
+      // 执行思考-行动循环
+      this.loopThinking(result, normalizedInput, initialAnalysis, config, context, usedTools);
       
       return result;
     } catch (error) {
@@ -1100,10 +1375,10 @@ export class IntelligentAgentNext {
         };
       }
       
-      console.log(`执行工具: ${tool.name} (${tool.id})`);
+      const toolParams = params[tool.id] || params;
+      console.log(`执行工具: ${tool.name} (${tool.id})`, toolParams);
       
       try {
-        const toolParams = params[tool.id] || params;
         const toolResult = await tool.execute(toolParams, state);
         
         // 添加到已使用工具集合
@@ -1153,28 +1428,6 @@ export class IntelligentAgentNext {
     });
     
     return resultMap;
-  }
-  
-  /**
-   * 获取工具描述文本
-   */
-  private getToolDescriptionsText(): string {
-    return getAvailableTools().map(tool => {
-      let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
-      
-      // 添加参数描述
-      if (tool.parameterDefs && tool.parameterDefs.length > 0) {
-        description += '\n  参数:';
-        for (const param of tool.parameterDefs) {
-          const requiredMark = param.required ? '(必填)' : '(可选)';
-          const typeMark = param.type ? `[${param.type}]` : '';
-          const optionsMark = param.options ? ` 可选值:${param.options.join('/')}` : '';
-          description += `\n    - ${param.name} ${requiredMark} ${typeMark}: ${param.description}${optionsMark}`;
-        }
-      }
-      
-      return description;
-    }).join('\n');
   }
   
   /**
@@ -1270,17 +1523,22 @@ export class IntelligentAgentNext {
         normalized.message_content = normalized.content;
       }
       
-      // 确保team_name和team_id字段存在
-      if (!normalized.team_name && normalized.teamName) {
-        normalized.team_name = normalized.teamName;
+      // 确保groupName和groupId字段存在
+      if (!normalized.groupName && normalized.team_name) {
+        normalized.groupName = normalized.team_name;
       }
-      if (!normalized.team_id && normalized.teamId) {
-        normalized.team_id = normalized.teamId;
+      if (!normalized.groupId && normalized.team_id) {
+        normalized.groupId = normalized.team_id;
       }
       
       // 确保datetime字段存在
       if (!normalized.datetime && normalized.timestamp) {
         normalized.datetime = new Date(normalized.timestamp).toISOString();
+      }
+    
+      // 如果username字段存在但没有current_user字段，添加它
+      if (normalized.username && !normalized.current_user) {
+        normalized.current_user = normalized.username;
       }
     }
     
@@ -1300,7 +1558,7 @@ export class IntelligentAgentNext {
     
     switch (config.type) {
       case 'message':
-        analysisPrompt = this.buildMessageAnalysisPrompt(normalizedInput, config, context);
+        analysisPrompt = await this.buildMessageAnalysisPrompt(normalizedInput, config, context);
         break;
       case 'project':
         analysisPrompt = this.buildProjectAnalysisPrompt(normalizedInput, config, context);
@@ -1347,25 +1605,47 @@ export class IntelligentAgentNext {
       };
     }
   }
-  
+
   /**
    * 构建消息分析提示
+   * 修改以支持不同数量的消息
    */
-  private buildMessageAnalysisPrompt(
-    normalizedInput: any,
+  private async buildMessageAnalysisPrompt(
+    messages: any[],
     config: AnalysisConfig,
     context?: AnalysisContext
-  ): string {
-    // 构建消息内容部分
-    const messageContent = normalizedInput.message_content || '无消息内容';
+  ): Promise<string> {
+    // 获取环境配置
+    const envConfig = await getEnvConfig();
+    const analyzeByGroup = envConfig.ANALYZE_BY_GROUP === true;
     
-    // 构建上下文信息
-    const contextInfo = [
-      `发送者: ${normalizedInput.sender || '未知发送者'}`,
-      normalizedInput.team_name ? `群组名称: ${normalizedInput.team_name}` : '',
-      normalizedInput.datetime ? `发送时间: ${normalizedInput.datetime}` : '',
-      context?.currentUser ? `当前用户: ${context.currentUser}` : ''
-    ].filter(Boolean).join('\n');
+    // 构建消息内容部分
+    const messagesContent = messages.map((msg, index) => {
+      return `消息 #${index + 1}:
+发送者: ${msg.sender || '未知发送者'}
+${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '未知群组'}` : ''}
+时间: ${msg.datetime || '未知时间'}
+内容: ${msg.messageContent || '无内容'}`;
+    }).join('\n\n');
+    
+    // 构建群组上下文信息
+    let contextInfo = '';
+    if (messages.length > 1 && analyzeByGroup) {
+      // 如果是批量分析且按群组分析
+      contextInfo = [
+        `群组名称: ${context?.groupInfo?.name || messages[0].groupName || '未知群组'}`,
+        `群组ID: ${context?.groupInfo?.id || messages[0].groupId || '未知ID'}`,
+        context?.currentUser ? `当前用户: ${context.currentUser}` : ''
+      ].filter(Boolean).join('\n');
+    } else if (messages.length === 1) {
+      // 单条消息的上下文
+      contextInfo = [
+        `发送者: ${messages[0].sender || '未知发送者'}`,
+        messages[0].groupName ? `群组名称: ${messages[0].groupName}` : '',
+        messages[0].datetime ? `发送时间: ${messages[0].datetime}` : '',
+        context?.currentUser ? `当前用户: ${context.currentUser}` : ''
+      ].filter(Boolean).join('\n');
+    }
     
     // 构建关注规则
     const concernedRules = context?.concernedRules || [];
@@ -1374,10 +1654,9 @@ export class IntelligentAgentNext {
       : '';
     
     // 获取工具描述
-    // 暂时使用旧版本的工具描述
-    const toolDescriptions = getToolDescriptions();;
+    const toolDescriptions = this.getToolDescriptionsText();
     
-    // 添加分析深度相关内容
+    // 构造分析深度提示
     let depthNote = '';
     if (config.analysisDepth === 'quick') {
       depthNote = '注意：这是快速分析，无需使用工具，直接返回基本判断。';
@@ -1385,15 +1664,84 @@ export class IntelligentAgentNext {
       depthNote = '注意：这是深度分析，尽可能使用多个工具收集完整信息，做出全面判断。';
     }
     
+    // 构建提示前缀
+    const promptPrefix = messages.length > 1 
+      ? `分析以下群组中的一组消息，提取关键信息并判断各消息的重要性:` 
+      : `分析以下消息，提取关键信息并判断其重要性:`;
+    
+    // 构建分析要点
+    const analysisPoints = `请分析:
+1. 这条消息是关于什么的？简要总结。
+2. 消息中提到了哪些人物、项目、时间点或其他关键实体？
+3. 消息的情感是正面、负面还是中性的？
+4. 消息是否匹配任何上述关注规则？如果是，请指出匹配的规则和原因。
+5. 消息的重要程度如何？(低/中/高)
+6. 消息是否需要特别关注或回复？
+7. 这条消息可能与哪些其他信息或系统(如JIRA, Wiki)相关？
+8. 是否建议使用某些工具来进一步处理这条消息？如果是，请推荐工具和参数。
+${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是对前面消息的回应？` : ''}`;
+    
+    // 构建返回格式说明
+    const returnFormat = `请以JSON数组格式返回分析结果，每个元素对应一条消息:
+[
+  {
+    ${messages.length > 1 ? '"messageIndex": 0,' : ''}
+    "summary": "根据消息上下文，总结消息的简要内容",
+    "matchedRules": ["匹配的规则1", "匹配的规则2"],
+    "matchReasons": ["匹配原因1", "匹配原因2"],
+    "importanceLevel": "low|medium|high",
+    "needsAttention": true|false,
+    "needsProcessing": true|false,
+    "isNoiseMessage": false,
+    "sentiment": "positive|negative|neutral",
+    "context": "消息在对话中的角色，如'提问','回答','确认'等",
+    "mentionedSystems": ["系统1", "系统2"],
+    
+    // 决策和工具字段
+    "thought": "分析当前情况和下一步行动的详细思考过程",
+    "nextAction": "use_tool|finish",
+    "tools": ["选择的工具ID，如orgStructure"],
+    "params": {}, // 工具参数
+    "shouldStore": false,
+    "shouldNotify": false,
+    "confidence": 0.7,
+    "reasons": ["存储/忽略的理由1", "理由2"],
+    "notificationPriority": "low|medium|high",
+    "replyAdvice": "",
+    
+    // 实体提取结果
+    "entities": {
+      "people": [{"name": "人名", "role": "角色", "mentioned_context": "提及上下文"}],
+      "time": [{"raw": "原始表述", "normalized": "标准化时间", "type": "deadline|schedule|mentioned"}],
+      "projects": [{"name": "项目名", "status": "状态", "related_people": []}],
+      "topics": [{"name": "主题名", "category": "类别", "keywords": []}],
+      "location": [],
+      "resources": []
+    },
+    "relationships": [],
+    "actions": []
+  },
+  // ... 其他消息的分析结果
+]`
+    
+    // 构建特别说明
+    const specialNotes = `特别说明:
+1. 'needsProcessing'字段表示消息是否需要进一步处理(如存储、通知等)
+2. 'isNoiseMessage'字段标识是否为噪音消息(如单纯的"好的"、"谢谢"等)
+3. 'nextAction'应该是'use_tool'或'finish'，表示是否需要进一步处理
+4. 如果不需要处理(nextAction为finish)，请提供完整的决策信息(shouldStore, shouldNotify等)
+5. 对于entities字段，请尽可能完整提取实体信息
+6. 'tools'字段中只能包含上面列出的可用工具ID
+7. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义`
+    
     // 构建最终提示
     return `
-分析以下消息，提取关键信息并判断其重要性:
+${promptPrefix}
 
-消息内容:
-${messageContent}
+${messages.length > 1 ? `群组信息:\n${contextInfo}` : `上下文信息:\n${contextInfo}`}
 
-上下文信息:
-${contextInfo}
+${messages.length > 1 ? `消息列表:\n${messagesContent}` : `消息内容:\n${messagesContent}`}
+
 ${filterRulesInfo}
 
 ${depthNote}
@@ -1403,50 +1751,16 @@ ${depthNote}
 ${toolDescriptions}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
-请分析:
-1. 这条消息是关于什么的？简要总结。
-2. 消息中提到了哪些人物、项目、时间点或其他关键实体？
-3. 消息的情感是正面、负面还是中性的？
-4. 消息是否匹配任何上述关注规则？如果是，请指出匹配的规则和原因。
-5. 消息的重要程度如何？(低/中/高)
-6. 消息是否需要特别关注或回复？
-7. 这条消息可能与哪些其他信息或系统(如JIRA, Wiki)相关？
-8. 是否建议使用某些工具来进一步处理这条消息？如果是，请推荐工具和参数。
+${analysisPoints}
 
-以JSON格式返回:
-{
-  "summary": "消息简述",
-  "matchedRules": ["匹配的规则1", "匹配的规则2"],
-  "matchReasons": ["匹配原因1", "匹配原因2"],
-  "importanceLevel": "low|medium|high",
-  "needsAttention": true|false,
-  "sentiment": "positive|negative|neutral",
-  "mentionedSystems": ["系统1", "系统2"],
-  
-  // 决策和工具字段
-  "thought": "分析当前情况和下一步行动的详细思考过程",
-  "nextAction": "use_tool|finish",
-  "tools": ["选择的工具ID，如orgStructure"],
-  "params": {}, // 工具参数
-  "shouldStore": false,
-  "shouldNotify": false,
-  "confidence": 0.7,
-  "reasons": ["存储/忽略的理由1", "理由2"],
-  "notificationPriority": "low|medium|high",
-  "replyAdvice": "",
-  
-  // 实体提取结果
-  "entities": {
-    "people": [{"name": "人名", "role": "角色", "mentioned_context": "提及上下文"}],
-    "time": [{"raw": "原始表述", "normalized": "标准化时间", "type": "deadline|schedule|mentioned"}],
-    "projects": [{"name": "项目名", "status": "状态", "related_people": []}],
-    "topics": [{"name": "主题名", "category": "类别", "keywords": []}],
-    "location": [],
-    "resources": []
-  },
-  "relationships": [],
-  "actions": []
-}
+${returnFormat}
+
+${specialNotes}
+
+工具选择建议:
+- 如果消息提到项目进度或问题，考虑使用jiraQuery
+- 如果消息涉及组织关系或人员，考虑使用orgStructure
+- 如果需要了解历史上下文，考虑使用historySearch
 `;
   }
   
@@ -1501,7 +1815,7 @@ ${jiraData.summary || jiraData.fields?.summary ? `- 摘要: ${jiraData.summary |
     }
     
     // 获取工具描述
-    const toolDescriptions = getToolDescriptions();
+    const toolDescriptions = this.getToolDescriptionsText();
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -1643,7 +1957,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
     
     // 获取工具描述
-    const toolDescriptions = getToolDescriptions();;
+    const toolDescriptions = this.getToolDescriptionsText();;
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -1788,7 +2102,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
     
     // 获取工具描述
-    const toolDescriptions = getToolDescriptions();;
+    const toolDescriptions = this.getToolDescriptionsText();;
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -1950,7 +2264,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
     
     // 获取工具描述
-    const toolDescriptions = getToolDescriptions();;
+    const toolDescriptions = this.getToolDescriptionsText();;
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -2079,7 +2393,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
 当前分析的消息内容: ${state.message.message_content || state.message.content || '无内容'}
 发送者: ${state.message.sender || '未知'}
 发送时间: ${state.message.datetime || '未知'}
-群组/团队: ${state.message.team_name || '未知'}
+群组/团队: ${state.message.groupName || '未知'}
 
 当前决策:
 - 重要性: ${state.currentDecision.isImportant ? '重要' : '不重要'}
@@ -2159,13 +2473,13 @@ ${state.actionHistory.map((action: any, index: number) =>
     let memoryContent = '';
     if (Object.keys(memory).length > 0) {
       memoryContent = `
-当前记忆内容:
-${Object.entries(memory).map(([key, value]) => `- ${key}: ${JSON.stringify(value)}`).join('\n')}
+已执行的工具和收集的信息:
+${Object.entries(memory).map(([key, results]: [string, any]) => results.map((r:any) => `- ${key} [已执行]: ${r.result.message.substring(0, 500)}${r.result.message.length > 300 ? '...' : ''}`)).join('\n')}
 `;
     }
     
     // 获取工具描述
-    const toolDescriptions = getToolDescriptions();;
+    const toolDescriptions = this.getToolDescriptionsText();;
     
     // 构建最终提示
     return `
@@ -2211,20 +2525,6 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
   }
   
   /**
-   * 估计处理消息所用的tokens数量
-   */
-  private estimateTokens(input: any, output: any): number {
-    // 简单的token估算方法
-    const inputStr = JSON.stringify(input);
-    const outputStr = JSON.stringify(output);
-    
-    const totalChars = inputStr.length + outputStr.length;
-    const estimatedTokens = Math.ceil(totalChars / 3);
-    
-    return estimatedTokens;
-  }
-  
-  /**
    * 将新格式结果转换为旧格式（兼容层）
    */
   convertToOldFormat(result: AnalysisResult): MessageProcessResult {
@@ -2244,12 +2544,12 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
       notificationPriority: msgResult.notificationPriority,
       replyAdvice: msgResult.replyAdvice,
       thoughtProcess: msgResult.thoughtProcess,
-      messageIndex: msgResult.messageContext?.messageIndex,
+      messageIndex: msgResult.messageIndex,
       groupIndex: msgResult.messageContext?.groupIndex,
       groupId: msgResult.messageContext?.groupId,
       groupName: msgResult.messageContext?.groupName,
       originalMessage: {
-        message_content: msgResult.messageContext?.message_content,
+        message_content: msgResult.messageContext?.messageContent,
         sender: msgResult.messageContext?.sender,
         team_id: msgResult.messageContext?.groupId,
         team_name: msgResult.messageContext?.groupName,
@@ -2274,7 +2574,7 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
   /**
    * 批量分析多条消息，考虑消息间的上下文关系
    */
-  async analyzeBatchMessages(
+  async analyzeBatchMessage(
     messages: any[],
     config: AnalysisConfig,
     context?: AnalysisContext
@@ -2292,7 +2592,7 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
       const normalizedMessages = messages.map(msg => this.normalizeInput(msg, config));
       
       // 构建批量分析提示
-      const batchAnalysisPrompt = this.buildBatchAnalysisPrompt(
+      const groupAnalysisPrompt = this.buildGroupAnalysisPrompt(
         normalizedMessages, 
         config, 
         context
@@ -2300,8 +2600,8 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
       
       // 调用LLM进行批量分析
       const analysisResults = await callLLMJsonAPI({
-        prompt: batchAnalysisPrompt,
-        type: 'batchAnalysis'
+        prompt: groupAnalysisPrompt,
+        type: 'groupAnalysis'
       });
       
       // 更新统计
@@ -2328,13 +2628,13 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
             isImportant: analysis.importanceLevel === 'high',
             shouldStore: analysis.shouldStore || false,
             shouldNotify: analysis.shouldNotify || false,
+            messageIndex: i,
             messageContext: {
-              groupId: normalizedMessages[i].team_id || '',
-              groupName: normalizedMessages[i].team_name || '',
-              message_content: normalizedMessages[i].message_content || '',
+              groupId: normalizedMessages[i].groupId || '',
+              groupName: normalizedMessages[i].groupName || '',
+              messageContent: normalizedMessages[i].messageContent || '',
               sender: normalizedMessages[i].sender || '',
               datetime: normalizedMessages[i].datetime || '',
-              messageIndex: i
             },
             thoughtProcess: [{
               timestamp: Date.now(),
@@ -2382,7 +2682,7 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
   /**
    * 构建批量分析提示
    */
-  private buildBatchAnalysisPrompt(
+  private buildGroupAnalysisPrompt(
     messages: any[],
     config: AnalysisConfig,
     context?: AnalysisContext
@@ -2393,7 +2693,7 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
 发送者: ${msg.sender || '未知发送者'}
 时间: ${msg.datetime || '未知时间'}
 内容: ${msg.message_content || msg.content || '无内容'}
-${config.groupByTeam ? '' : `所在群组: ${msg.team_name || '未知群组'}`}`;
+${config.groupByTeam ? '' : `所在群组: ${msg.groupName || '未知群组'}`}`;
     }).join('\n\n');
     
     // 构建群组上下文信息
@@ -2521,10 +2821,11 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
           isImportant: false,
           shouldStore: false,
           shouldNotify: false,
+          messageIndex: 0,
           messageContext: {
-            groupId: input.team_id || '',
-            groupName: input.team_name || '',
-            message_content: input.message_content || input.content || '',
+            groupId: input.groupId || '',
+            groupName: input.groupName || '',
+            messageContent: input.messageContent || input.content || '',
             sender: input.sender || '',
             datetime: input.datetime || '',
             messageIndex: index
@@ -2596,10 +2897,16 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
         } as GenericAnalysisResult;
     }
   }
+
+  /**
+   * 获取可用工具列表
+   */
+  private getAvailableTools(): Tool[] {
+    // 根据配置返回工具列表
+    return Object.values(toolRegistry);
+  }
 }
 
-// 创建单例实例
-export const intelligentAgentNext = new IntelligentAgentNext();
 
 /**
  * 兼容层函数 - 支持原有processMessage接口
@@ -2609,6 +2916,8 @@ export async function processMessageCompatible(
   onProgress?: (results: MessageProcessResult[]) => void
 ): Promise<MessageProcessResult | MessageProcessResult[]> {
   try {
+    // 创建单例实例
+    const intelligentAgentNext = new IntelligentAgentNext();
     // 检测输入格式
     const format = detectMessageFormat(input);
     
@@ -2646,23 +2955,23 @@ export async function processMessageCompatible(
         
         // 提取组中的消息
         const groupMessages = group.posts.map((post: any) => ({
-          message_content: post.content,
+          messageContent: post.content,
           sender: post.sender,
           datetime: post.datetime,
-          team_name: group.groupName,
-          team_id: group.groupId,
-          post_id: post.post_id
+          groupName: group.groupName,
+          groupId: group.groupId,
+          postId: post.postId
         }));
         
         // 批量分析该组的消息
-        const groupAnalyses = await intelligentAgentNext.analyzeBatchMessages(
+        const groupAnalyses = await intelligentAgentNext.analyzeBatchMessage(
           groupMessages,
           config,
           context
         );
         
         // 转换为旧格式并添加到结果中
-        const groupResults = groupAnalyses.map(analysis => 
+        const groupResults = groupAnalyses.map((analysis:any) => 
           intelligentAgentNext.convertToOldFormat(analysis as MessageAnalysisResult)
         );
         
@@ -2696,23 +3005,23 @@ export async function processMessageCompatible(
       
       // 提取消息
       const messages = input.posts.map((post: any) => ({
-        message_content: post.content,
+        messageContent: post.content,
         sender: post.sender,
         datetime: post.datetime,
-        team_name: input.groupName,
-        team_id: input.groupId,
-        post_id: post.post_id
+        groupName: input.groupName,
+        groupId: input.groupId,
+        postId: post.post_id
       }));
       
       // 批量分析消息
-      const analyses = await intelligentAgentNext.analyzeBatchMessages(
+      const analyses = await intelligentAgentNext.analyzeBatchMessage(
         messages,
         config,
         context
       );
       
       // 转换为旧格式
-      const results = analyses.map(analysis => 
+      const results = analyses.map((analysis:any) => 
         intelligentAgentNext.convertToOldFormat(analysis as MessageAnalysisResult)
       );
       
@@ -2790,6 +3099,5 @@ function detectMessageFormat(input: any): string {
 export {
   Tool,
   ParameterDefinition,
-  registerTool,
-  getAvailableTools
+  registerTool
 }; 

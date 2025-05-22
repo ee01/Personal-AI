@@ -1,9 +1,6 @@
 import { fetchJiraTickets } from './jira';
 import { 
-  intelligentAgentNext,
-  // 移除 processMessageCompatible 引入
-  // processMessageCompatible, 
-  // MessageProcessResult
+  IntelligentAgentNext,
 } from './IntelligentAgentNext';
 import { 
   AnalysisConfig,
@@ -235,7 +232,8 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
     // 使用IntelligentAgentNext的批量分析功能
     if (isBackground) {
       // 在background环境使用新版API批量处理
-      analysisResults = await intelligentAgentNext.analyzeBatch(
+      const intelligentAgentNextInstance = new IntelligentAgentNext();
+      analysisResults = await intelligentAgentNextInstance.analyzeBatch(
         projectAnalysisRequests,
         config,
         context

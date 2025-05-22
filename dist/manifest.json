@@ -70,7 +70,7 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "oauth2": {
-    "client_id": "850492875483-kmbu6or52oi6lsnapoqklbs5fo94jplv.apps.googleusercontent.com",
+    "client_id": "850492875483-2b3avnvb8sqkpgpn20bddq79d5dqv13c.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/userinfo.profile",
       "https://www.googleapis.com/auth/userinfo.email",

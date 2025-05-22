@@ -36,7 +36,7 @@ export interface BaseAnalysisResult {
   summary: string;
   
   /** 元数据信息，包含分析过程相关统计信息 */
-  metaData: {
+  metaData?: {
     /** LLM调用次数 */
     llmCallCount: number;
     
@@ -85,12 +85,12 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
   
   /** 思考过程记录 */
   thoughtProcess?: ThoughtStep[];
+
+  /** 消息索引 */
+  messageIndex: number;
   
   /** 消息上下文信息 */
   messageContext?: {
-    /** 消息索引 */
-    messageIndex?: number;
-    
     /** 群组索引 */
     groupIndex?: number;
     
@@ -101,7 +101,7 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
     groupName?: string;
     
     /** 消息内容 */
-    message_content?: string;
+    messageContent?: string;
     
     /** 发送者 */
     sender?: string;

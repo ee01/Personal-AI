@@ -2021,7 +2021,7 @@ export function getToolDescriptions(): any[] {
     }
     
     return description;
-  }).join('\n');
+  });
 }
 
 /**
