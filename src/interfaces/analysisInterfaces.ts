@@ -89,11 +89,11 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
   /** 消息索引 */
   messageIndex: number;
   
+  /** 群组索引 */
+  groupIndex?: number;
+  
   /** 消息上下文信息 */
   messageContext?: {
-    /** 群组索引 */
-    groupIndex?: number;
-    
     /** 群组ID */
     groupId?: string;
     
@@ -374,10 +374,11 @@ export interface AnalysisContext {
     name: string;
     members: string[];
     type?: 'team' | 'department' | 'project';
+    index?: number;
   };
   
   /** 关注规则列表 */
-  concernedRules?: string[];
+  concernedRules?: {text: string}[];
   
   /** 用户偏好 */
   userPreferences?: {

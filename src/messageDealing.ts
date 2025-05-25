@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesToStore } from './entityExtraction';
 import { processNewMessage } from './agentSystem';
 import { processMessage } from './intelligentAgent';
+import { IntelligentAgentNext } from './IntelligentAgentNext';
+import { MessageAnalysisResult } from './types';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
@@ -127,13 +129,9 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			console.log(`开始批量处理 ${messageGroups.length} 个群组的所有消息...`);
 			
 			// 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
-			// Todo: progress记录onProcess, 记录LLM次数
-			const allResults = await processMessage({
-				messageGroups: messageGroups,
-				username: username,
-				concernedItems: concernedItems
-			}, (results: any[]) => {
-				console.log('已分析', results[0].groupIndex+1, '/' ,data.length ,'，当前群组 [', results[0].groupName, '] 处理结果:', results);
+			const agent = new IntelligentAgentNext();
+			const allResults = await agent.analyze(messageGroups, {type: 'message'}, {concernedRules: concernedItems}, results => {
+				console.log('已分析', results[0].groupIndex+1, '/' ,data.length ,'，当前群组 [', results[0].messageContext?.groupName, '] 处理结果:', results);
 				chrome.storage.local.set({
 					ollamaAnalysisProgress: {
 						total: data.length,
@@ -141,20 +139,18 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						lastAnalyzedTime: new Date().toISOString(),
 					}
 				});
-			});
+			}) as MessageAnalysisResult[];
 			
 			// 转换结果为数组格式，便于统计
 			const resultsArray = Array.isArray(allResults) ? allResults : [allResults];
 			
-			console.log('所有群组处理结果:', resultsArray);
-			
 			// 计算处理统计信息
-			const storedCount = resultsArray.filter((r: any) => r.shouldStore).length;
-			const notifiedCount = resultsArray.filter((r: any) => r.shouldNotify).length;
-			const importantCount = resultsArray.filter((r: any) => r.isImportant).length;
-			const noisyCount = resultsArray.filter((r: any) => !r.shouldStore && !r.shouldNotify && !r.isImportant).length;;
+			const storedCount = resultsArray.filter(r => r.shouldStore).length;
+			const notifiedCount = resultsArray.filter(r => r.shouldNotify).length;
+			const importantCount = resultsArray.filter(r => r.isImportant).length;
+			const noisyCount = resultsArray.filter(r => !r.shouldStore && !r.shouldNotify && !r.isImportant).length;
 			
-			console.log(`处理完成: 共 ${resultsArray.length} 条消息, ${importantCount} 条重要, ${storedCount} 条已存储, ${notifiedCount} 条已通知, ${noisyCount} 条被降噪过滤`);
+			console.log(`所有群组消息处理完成: 共 ${resultsArray.length} 条消息, ${importantCount} 条重要, ${storedCount} 条已存储, ${notifiedCount} 条已通知, ${noisyCount} 条被降噪过滤。结果细节：`, resultsArray);
 			
 			// 更新进度为完成
 			chrome.storage.local.set({
@@ -177,14 +173,14 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				// 处理 shouldNotify 标志
 				if (result.shouldNotify && envConfig.ENABLE_BOT) {
 					// 直接使用 result 中的信息，不需要复杂的查找
-					const originalMessage = result.originalMessage || {};
+					const originalMessage = result.messageContext || {};
 					
 					sendBotMessage({
 						matched_rule: result.matchedRule || '',
-						team_name: originalMessage.team_name || '',
-						team_id: originalMessage.team_id || '',
+						team_name: originalMessage.groupName || '',
+						team_id: originalMessage.groupId || '',
 						sender: originalMessage.sender || '',
-						message_content: originalMessage.message_content || '',
+						message_content: originalMessage.messageContent || '',
 						summary: result.summary || '',
 						reply_advice: result.replyAdvice || '',
 						datetime: originalMessage.datetime || ''
@@ -194,7 +190,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				// 处理 shouldStore 标志
 				if (result.shouldStore) {
 					try {
-						const originalMessage = result.originalMessage || {};
+						const originalMessage = result.messageContext || {};
 						const messageId = uuidv4();
 						
 						// 提取实体信息，可以直接使用 result.enrichedData 中的实体信息
@@ -205,14 +201,14 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						// 存储消息
 						await storeMessage(
 							messageId,
-							originalMessage.message_content || '',
+							originalMessage.messageContent || '',
 							{
 								source: originalMessage.sender || 'unknown',
 								timestamp: Date.now(),
 								matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
 								summary: result.summary || '',
-								teamName: originalMessage.team_name || '',
-								teamId: originalMessage.team_id || '',
+								teamName: originalMessage.groupName || '',
+								teamId: originalMessage.groupId || '',
 								entities: entities,
 								metadata: {
 									sentiment: result.enrichedData?.sentiment || 'neutral',
