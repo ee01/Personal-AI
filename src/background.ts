@@ -5,9 +5,8 @@ import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
 import { getAuthToken } from './slide';
-import { IntelligentAgentNext } from './IntelligentAgentNext';
-import { AnalysisResult, ProjectAnalysisResult } from './interfaces/analysisInterfaces';
-import { intelligentAgentNext } from '.';
+import { IntelligentAgent } from './agentThinking';
+import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
 
 console.log('Background script loaded');
 
@@ -109,9 +108,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('处理单个项目分析请求:', request.data.request?.project_data?.project?.name, request.data);
         const { request: projectRequest, config, context } = request.data;
         
-        const intelligentAgentNextInstance = new IntelligentAgentNext();
-        intelligentAgentNextInstance.analyze(projectRequest, config, context)
-            .then((result: AnalysisResult) => {
+        const agent = new IntelligentAgent();
+        agent.analyze(projectRequest, config, context)
+            .then((result: ProjectAnalysisResult) => {
                 console.log('单个项目分析结果:', result);
                 sendResponse(result);
             })
@@ -170,22 +169,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 处理分析幻灯片项目的请求
     if (request.type === 'REQUEST_SLIDES_ANALYSIS' && sender.tab?.id) {
         handleSlideAnalysisRequest(sender.tab.id);
-        return true;
-    }
-    
-    if (request.type === 'GET_TOKEN') {
-        getToken().then(token => {
-            sendResponse({ token });
-        }).catch(error => {
-            sendResponse({ error: error.message });
-        });
-        return true;
-    } else if (request.type === 'REMOVE_TOKEN') {
-        removeToken().then(() => {
-            sendResponse({ success: true });
-        }).catch(error => {
-            sendResponse({ success: false, error: error.message });
-        });
         return true;
     }
     

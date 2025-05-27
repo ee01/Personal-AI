@@ -37,7 +37,7 @@ alwaysApply: true
 | Google Slides Prompt, Slides提示, 幻灯片提示 | docs/features/google_slides_analyzer_prompt.mdc |
 | 自动更新, 文档更新 | docs/autoupdate.mdc |
 | IntelligentAgent, 智能Agent, 旧版Agent | docs/features/intelligent_agent.mdc |
-| IntelligentAgentNext, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/intelligent_agent_next.mdc |
+| agentThinking, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/agent_thinking.mdc |
 
 ### 源代码与文档关联映射
 
@@ -47,17 +47,16 @@ alwaysApply: true
 |-----------|------------|
 | src/contentScriptGoogleSlide.tsx | docs/features/google_slides_analyzer.mdc, docs/features/google_slides_analyzer_prompt.mdc |
 | src/slide.ts | docs/features/google_slides_analyzer.mdc |
-| src/IntelligentAgentNext.ts | docs/features/intelligent_agent_next.mdc |
+| src/agentThinking.ts | docs/features/agent_thinking.mdc |
 | src/intelligentAgent.ts | docs/features/intelligent_agent.mdc |
-| src/intelligentAgent.ts, src/IntelligentAgentNext.ts | docs/features/intelligent_agent_migration.mdc |
 | src/jira.ts | docs/features/google_slides_analyzer.mdc |
-| src/vectorStore.ts | docs/features/intelligent_agent.mdc, docs/features/intelligent_agent_next.mdc |
+| src/vectorStore.ts | docs/features/intelligent_agent.mdc, docs/features/agent_thinking.mdc |
 
 ## 智能Agent系统更新规则
 
-### IntelligentAgentNext组件
+### agentThinking组件
 
-当讨论或修改`IntelligentAgentNext.ts`相关内容时，需特别关注以下方面的变更：
+当讨论或修改`agentThinking.ts`相关内容时，需特别关注以下方面的变更：
 
 1. **分析类型变更**：
    - 新增、修改或删除任何分析类型（消息分析、项目分析、会议分析、文档分析等）
@@ -84,7 +83,7 @@ alwaysApply: true
 
 ### 更新触发关键词
 
-与`IntelligentAgentNext`相关的特定触发关键词：
+与`agentThinking`相关的特定触发关键词：
 
 - **核心功能**：analyze, analyzeMessage, analyzeProject, analyzeMeeting, analyzeDocument, analyzeGeneric, analyzeBatch
 - **思考循环**：think, thinking, thought process, action loop
@@ -156,7 +155,7 @@ alwaysApply: true
    - **分析/响应**：AI的分析和建议
    - **时间标记**：提示发生的日期
 
-### 技术组件文档 (intelligent_agent_next.mdc等)
+### 技术组件文档 (agent_thinking.mdc等)
 
 1. **标题**：组件名称
 2. **最后更新**：更新日期
@@ -260,15 +259,15 @@ alwaysApply: true
 是否需要我帮您更新此文档？
 ```
 
-### 示例2：IntelligentAgentNext接口变更
+### 示例2：agentThinking接口变更
 
-用户：我们需要在IntelligentAgentNext中添加对视频内容的分析能力，请增加analyzeVideo方法和相关接口。
+用户：我们需要在agentThinking中添加对视频内容的分析能力，请增加analyzeVideo方法和相关接口。
 
 系统：
 ```
 检测到潜在文档更新需求：
-- 相关功能：IntelligentAgentNext
-- 建议更新文档：docs/features/intelligent_agent_next.mdc
+- 相关功能：agentThinking
+- 建议更新文档：docs/features/agent_thinking.mdc
 - 更新内容：
   * 在功能模块部分添加"视频分析"能力说明
   * 更新接口定义部分，添加VideoAnalysisResult接口

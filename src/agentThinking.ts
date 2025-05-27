@@ -135,7 +135,7 @@ interface ThoughtStep {
 /**
  * 核心智能Agent类，提供通用分析框架
  */
-export class IntelligentAgentNext {
+export class IntelligentAgent {
   private thoughtProcess: ThoughtStep[] = [];
   private aggregateLlmCallCount = 0;
   private aggregateLlmCallTokens = 0;
@@ -627,7 +627,7 @@ export class IntelligentAgentNext {
       const result = await this.analyze(items[i], config, context);
       
       if (onProgress) {
-        onProgress(result);
+        onProgress(result as MessageAnalysisResult);
       }
       
       results.push(result as AnalysisResult);

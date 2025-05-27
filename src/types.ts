@@ -38,9 +38,3 @@ export {
   AnalysisContext,
   ThoughtStep
 } from './interfaces/analysisInterfaces';
-
-// 工具适配器类型
-export {
-  ToolDescription,
-  ToolExecution
-} from './agentToolAdapter'; 
