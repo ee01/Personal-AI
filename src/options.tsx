@@ -2,7 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
-import { agentCoordinator } from './agentSystem';
+import { agentCoordinator } from './agentWorkflow';
 import { getToolDescriptions } from './intelligentAgent';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
 

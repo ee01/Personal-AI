@@ -1,7 +1,7 @@
 import { fetchJiraTickets } from './jira';
 import { 
-  IntelligentAgentNext,
-} from './IntelligentAgentNext';
+  IntelligentAgent,
+} from './agentThinking';
 import { 
   AnalysisConfig,
   AnalysisContext,
@@ -199,7 +199,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
     }
     
     // 直接构建结构化数据，不再构建具体的消息内容
-    // IntelligentAgentNext.ts中的buildProjectAnalysisPrompt将处理提示构建
+    // agentThinking.ts中的buildProjectAnalysisPrompt将处理提示构建
     const analysisRequest = {
       type: 'project_analysis',
       sender: 'system',
@@ -229,11 +229,11 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
     // 分析结果数组
     let analysisResults = [];
     
-    // 使用IntelligentAgentNext的批量分析功能
+    // 使用agentThinking的批量分析功能
     if (isBackground) {
       // 在background环境使用新版API批量处理
-      const intelligentAgentNextInstance = new IntelligentAgentNext();
-      analysisResults = await intelligentAgentNextInstance.analyzeBatch(
+      const agent = new IntelligentAgent();
+      analysisResults = await agent.analyzeBatch(
         projectAnalysisRequests,
         config,
         context

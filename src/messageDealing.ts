@@ -4,9 +4,8 @@ import { getEnvConfig, showToast } from './utils';
 import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesToStore } from './entityExtraction';
-import { processNewMessage } from './agentSystem';
-import { processMessage } from './intelligentAgent';
-import { IntelligentAgentNext } from './IntelligentAgentNext';
+import { processNewMessage } from './agentWorkflow';
+import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
@@ -129,7 +128,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			console.log(`开始批量处理 ${messageGroups.length} 个群组的所有消息...`);
 			
 			// 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
-			const agent = new IntelligentAgentNext();
+			const agent = new IntelligentAgent();
 			const allResults = await agent.analyze(messageGroups, {type: 'message'}, {concernedRules: concernedItems}, results => {
 				console.log('已分析', results[0].groupIndex+1, '/' ,data.length ,'，当前群组 [', results[0].messageContext?.groupName, '] 处理结果:', results);
 				chrome.storage.local.set({
