@@ -1,3 +1,10 @@
+// 在文件顶部添加全局声明
+declare global {
+  interface Window {
+    analysisPopupWindow?: Window | null;
+  }
+}
+
 import { fetchJiraTickets } from './jira';
 import { 
   IntelligentAgent,
@@ -62,8 +69,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     
-    analyzeSlideProjects(token);
-    sendResponse({ success: true });
+    analyzeSlideProjects(token).then(() => {
+      sendResponse({ success: true });
+    });
   } else {
     console.log('未处理的消息类型:', type);
   }
@@ -201,12 +209,9 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
     // 直接构建结构化数据，不再构建具体的消息内容
     // agentThinking.ts中的buildProjectAnalysisPrompt将处理提示构建
     const analysisRequest = {
-      type: 'project_analysis',
-      sender: 'system',
-      project_data: {
-        project: project,
-        jiraData: jiraData
-      }
+      name: project.name,
+      project: project,
+      jiraData: jiraData
     };
     
     projectAnalysisRequests.push(analysisRequest);
@@ -319,10 +324,12 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
           // 只添加实际存在列的建议更新字段
           if (hasStatusColumn && suggestedStatus) {
             suggestion.suggestedStatus = suggestedStatus;
+            suggestion.suggestedStatusReason = (result.suggestions.statusReason || '');
           }
           
           if (hasOwnerColumn && suggestedOwner) {
             suggestion.suggestedOwner = suggestedOwner;
+            suggestion.suggestedOwnerReason = (result.suggestions.ownerReason || '');
           }
           
           if (hasTrackColumn && suggestedTrack) {
@@ -331,6 +338,8 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
           
           if (hasCommentsColumn && suggestedComments) {
             suggestion.suggestedComments = suggestedComments;
+            suggestion.suggestedCommentsReason = (result.suggestions.highlightsReason || '');
+            suggestion.suggestedCommentsReason += '\n' + (result.suggestions.actionItemsReason || '');
           }
           
           analysisResult.updateSuggestions.push(suggestion);
@@ -408,6 +417,10 @@ function showAnalysisResults(result: AnalysisResult, presentationId: string, tok
     return;
   }
   
+  // 保存弹窗引用到全局变量
+  window.analysisPopupWindow = newWindow;
+  console.log('保存分析窗口引用到全局变量');
+  
   // 添加消息监听器，处理来自新窗口的消息
   const messageHandler = async (event: MessageEvent) => {
     console.log('收到来自弹出窗口的消息:', event.data);
@@ -419,16 +432,16 @@ function showAnalysisResults(result: AnalysisResult, presentationId: string, tok
         // 确保所有需要的字段都存在
         if (!presentationId || !token || !selectedUpdates || !Array.isArray(selectedUpdates)) {
           console.error('收到无效的更新请求', event.data);
-      return;
-    }
+          return;
+        }
     
-    await applyProjectUpdates(presentationId, token, selectedUpdates);
+        await applyProjectUpdates(presentationId, token, selectedUpdates);
       } catch (error) {
         console.error('处理项目更新请求时出错:', error);
         showToast(`处理更新失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
       }
     } else if (event.data && event.data.type === 'POPUP_READY') {
-      console.log('弹出窗口已准备就绪');
+      console.log('弹出窗口已准备好接收消息');
     }
   };
   
@@ -446,16 +459,39 @@ async function applyProjectUpdates(presentationId: string, token: string, select
     const result = await applySlideUpdates(presentationId, token, selectedUpdates);
     
     if (result.success) {
-      showToast(`已更新 ${result.updatedCount} 个项目信息`, 'success');
+      showToast(`成功更新了 ${result.updatedCount} 个项目字段`, 'success');
+      console.log('更新成功:', result);
       
-      // 通知弹出窗口更新已成功
+      // 显示成功消息并通知弹出窗口
       showSuccessInPopup(selectedUpdates, result.updatedCount);
     } else {
-      showToast(`更新失败: ${result.errors?.join('; ')}`, 'error');
+      const errorMessage = result.errors && result.errors.length > 0 
+        ? result.errors.join('; ') 
+        : '更新失败，请重试';
+      
+      showToast(`更新失败: ${errorMessage}`, 'error');
+      console.error('更新失败:', result.errors);
+      
+      // 向弹出窗口发送错误消息
+      if (window.analysisPopupWindow) {
+        window.analysisPopupWindow.postMessage({
+          type: 'UPDATE_ERROR',
+          errorMessage
+        }, '*');
+      }
     }
   } catch (error) {
-    console.error('应用项目更新失败:', error);
-    showToast(`更新失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    showToast(`更新处理错误: ${errorMessage}`, 'error');
+    console.error('处理更新时出错:', error);
+    
+    // 向弹出窗口发送错误消息
+    if (window.analysisPopupWindow) {
+      window.analysisPopupWindow.postMessage({
+        type: 'UPDATE_ERROR',
+        errorMessage
+      }, '*');
+    }
   }
 }
 
@@ -470,22 +506,36 @@ function showSuccessInPopup(updates: ProjectUpdateSuggestion[], updatedCount: nu
   
   // 尝试向弹出窗口发送消息
   try {
-    // 检查是否有窗口引用
-    const openPopups = Array.from(window.opener ? [window.opener] : []);
+    console.log('准备发送UPDATE_SUCCESS消息给分析窗口');
     
-    // 如果当前窗口是父窗口，则向所有子窗口发送消息
-    if (window.opener === null) {
-      openPopups.push(...Array.from(window.frames));
+    // 首先尝试使用已保存的窗口引用
+    if (window.analysisPopupWindow) {
+      console.log('使用已保存的分析窗口引用发送消息');
+      window.analysisPopupWindow.postMessage(message, '*');
+      return;
     }
     
-    // 向所有窗口发送消息
-    openPopups.forEach(popup => {
-      try {
-        popup.postMessage(message, '*');
-      } catch (e) {
-        console.warn('向弹出窗口发送消息失败', e);
+    console.log('未找到已保存的分析窗口引用，尝试使用其他方法');
+    
+    // 如果没有保存的窗口引用，尝试其他方法
+    // 检查当前窗口是否有子窗口
+    if (window.frames && window.frames.length > 0) {
+      console.log(`尝试向 ${window.frames.length} 个子窗口发送消息`);
+      for (let i = 0; i < window.frames.length; i++) {
+        try {
+          window.frames[i].postMessage(message, '*');
+          console.log(`向子窗口 ${i} 发送消息成功`);
+        } catch (e) {
+          console.warn(`向子窗口 ${i} 发送消息失败`, e);
+        }
       }
-    });
+    }
+    
+    // 尝试向opener窗口发送消息
+    if (window.opener) {
+      console.log('尝试向opener窗口发送消息');
+      window.opener.postMessage(message, '*');
+    }
   } catch (e) {
     console.warn('处理弹出窗口引用失败', e);
   }

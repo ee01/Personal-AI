@@ -27,7 +27,7 @@ module.exports = (env) => {
       options: './src/options.tsx',
       offscreen: './src/offscreen.ts',
       entityExtraction: './src/entityExtraction.ts',
-      intelligentAgent: './src/intelligentAgent.ts',
+      agentThinking: './src/agentThinking.ts',
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/topic-modal.tsx',
       'knowledge-query': './src/knowledge-query.tsx',

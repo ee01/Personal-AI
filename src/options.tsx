@@ -3,7 +3,7 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
 import { agentCoordinator } from './agentWorkflow';
-import { getToolDescriptions } from './intelligentAgent';
+import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
 
 // 使用从utils.ts导入的类型
@@ -801,6 +801,8 @@ const AgentSettings = () => {
     );
 };
 
+const agent = new IntelligentAgent();
+
 // 智能Agent系统设置组件
 const IntelligentAgentSettings = () => {
     const [tools, setTools] = useState<any[]>([]);
@@ -811,7 +813,7 @@ const IntelligentAgentSettings = () => {
     // 获取可用工具
     useEffect(() => {
         try {
-            const availableTools = getToolDescriptions();
+            const availableTools = agent.getToolDescriptions();
             setTools(availableTools);
         } catch (error) {
             console.error('加载工具失败:', error);

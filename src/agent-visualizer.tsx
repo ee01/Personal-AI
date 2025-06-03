@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useState, useEffect } from 'react';
-import { ThoughtStep } from './intelligentAgent';
+import { ThoughtStep } from './agentThinking';
 
 interface AgentVisualizerProps {
   thoughtProcess: ThoughtStep[];
@@ -62,7 +62,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     
     if (step.toolUsed) {
       // 检查是否有错误
-      if (step.result && step.result.error) {
+      if (!step.toolResult) {
         return { color: '#F44336', icon: '✗' }; // 错误-红色
       }
       return { color: '#2196F3', icon: '🔧' }; // 工具调用-蓝色
@@ -119,7 +119,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     {step.toolUsed && (
                       <div className="tool-result">
                         <h4>工具结果:</h4>
-                        <pre>{formatToolResult(step.result)}</pre>
+                        <pre>{formatToolResult(step.toolResult)}</pre>
                       </div>
                     )}
                   </div>
@@ -159,7 +159,7 @@ const AgentFlowVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess })
       flowSteps.push({
         type: 'tool',
         name: step.toolUsed,
-        result: step.result && step.result.error 
+        result: !step.toolResult
           ? '失败'
           : '成功',
         time: formatTime(step.timestamp)

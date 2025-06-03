@@ -198,14 +198,18 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
   /** 改进建议 */
   suggestions: {
     status?: string;
+    statusReason?: string;
     owner?: string;
+    ownerReason?: string;
     track?: string;
     highlights?: Array<string>;
+    highlightsReason?: string;
     timeline?: string[];
     resources?: string[];
     documentation?: string[];
     risks?: string[];
     actionItems?: string[];
+    actionItemsReason?: string;
     followUp?: string[];
   };
   
@@ -402,3 +406,28 @@ export interface AnalysisContext {
   /** 额外上下文 */
   [key: string]: any;
 } 
+
+
+/* 
+ * 项目输入接口
+ * 用于分析项目状态和风险
+ */
+export interface ProjectInput {
+  name?: string;
+  type?: string;
+  project: {
+    id: string;
+    name: string;
+    status: string;
+    owner: string;
+    [key: string]: any;
+  };
+  jiraData?: {
+    key: string;
+    summary: string;
+    status: string;
+    assignee: string;
+    duedate: string;
+    [key: string]: any;
+  };
+}
