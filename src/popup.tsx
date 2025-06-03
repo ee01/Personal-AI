@@ -22,6 +22,7 @@ const Popup = () => {
     const [isGoogleSlides, setIsGoogleSlides] = useState(false);
     const [isRingCentral, setIsRingCentral] = useState(false);
     const [isExpandingEpic, setIsExpandingEpic] = useState(false);
+    const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
 
     useEffect(() => {
         (async () => {
@@ -85,11 +86,13 @@ const Popup = () => {
     
     const analyzeSlidesProjects = async () => {
         try {
+            setIsAnalyzingSlides(true);
             // 先获取OAuth token
             const token = await getAuthToken();
             if (!token) {
                 console.error('无法获取Google认证，请检查账号授权');
                 // 可以在界面上显示错误消息
+                setIsAnalyzingSlides(false);
                 return;
             }
 
@@ -99,12 +102,18 @@ const Popup = () => {
                     chrome.tabs.sendMessage(activeTab.id, { 
                         type: 'ANALYZE_SLIDES_PROJECTS',
                         token
+                    }, (response) => {
+                        // 当收到响应时关闭loading状态
+                        setIsAnalyzingSlides(false);
                     });
+                } else {
+                    setIsAnalyzingSlides(false);
                 }
             });
         } catch (error) {
             console.error('获取认证失败:', error);
             // 可以在界面上显示错误消息
+            setIsAnalyzingSlides(false);
         }
     };
 
@@ -240,8 +249,13 @@ const Popup = () => {
                 <button 
                     onClick={analyzeSlidesProjects}
                     className="slides-button"
+                    disabled={isAnalyzingSlides}
                 >
-                    分析 Slide 项目信息并更新
+                    {isAnalyzingSlides ? (
+                        <span className="loading-text">正在分析 Slide 项目信息...</span>
+                    ) : (
+                        '分析 Slide 项目信息并更新'
+                    )}
                 </button>
             )}
 
@@ -379,6 +393,12 @@ const Popup = () => {
 
                  .popup-container {
                     padding-bottom: 8px; /* Add padding at the bottom */
+                 }
+
+                 .loading-text {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
                  }
             `}</style>
         </div>

@@ -13,7 +13,8 @@ import {
   MessageAnalysisResult,
   ProjectAnalysisResult,
   MeetingAnalysisResult,
-  GenericAnalysisResult
+  GenericAnalysisResult,
+  ProjectInput
 } from './interfaces/analysisInterfaces';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -88,8 +89,10 @@ export interface MessageProcessResult {
 interface ThoughtResult {
   thought: string;
   nextAction: string;
-  tools: string[];
-  params: Record<string, any>;
+  tools: {
+    id: string;
+    params: Record<string, any>;
+  }[];
   messageIndex?: number;
   isImportant?: boolean;
   shouldStore?: boolean;
@@ -124,7 +127,7 @@ interface ActionHistoryItem {
 /**
  * 思考步骤
  */
-interface ThoughtStep {
+export interface ThoughtStep {
   timestamp: number;
   thought: string;
   action: string;
@@ -229,7 +232,7 @@ export class IntelligentAgent {
 
         console.log('历史消息搜索结果:', result);
         return {
-          message: `相关历史消息：\n  - ${result.results.documents.map((doc: string, index: number ) => `[${result.results.metadatas[index].summary}](${result.results.metadatas[index].source})`).join('\n  - ')}`,
+          message: `「${params.content.substring(0, 100)}...」相关历史消息：\n  - ${result.results.documents.map((doc: string, index: number ) => `${result.results.metadatas[index].summary}——${result.results.metadatas[index].source}`).join('\n  - ')}`,
           result: result.results.documents.map((doc: string, index: number ) => ({
             summary: result.results.metadatas[index].summary,
             sender: result.results.metadatas[index].source,
@@ -253,29 +256,23 @@ export class IntelligentAgent {
     registerTool({
       id: 'jiraQuery',
       name: 'JIRA信息查询',
-      description: '直接调用JIRA REST API查询任务、需求和bug信息。如果有issueId可直接查询结果，否则用其他参数进行JQL查询',
+      description: '直接调用JIRA REST API查询任务、需求和bug信息。如果有issueId可直接查询单issue结果，否则用其他参数进行多issues查询',
       parameterDefs: [
         {
           name: 'issueId',
-          description: 'JIRA任务ID，例如 PROJ-1234',
+          description: 'JIRA任务ID/key，例如 PROJ-1234',
           required: false,
           type: 'string'
+        },
+        {
+          name: 'issueIds',
+          description: '多个JIRA任务ID/key，例如 ["PROJ-1234", "PROJ-1235"]',
+          required: false,
+          type: 'array'
         },
         {
           name: 'keywords',
           description: '搜索关键词，使用JQL中的text搜索',
-          required: false,
-          type: 'string'
-        },
-        {
-          name: 'project',
-          description: 'JIRA项目代号，一般是大写字母，例如 PROJ',
-          required: false,
-          type: 'string'
-        },
-        {
-          name: 'status',
-          description: '任务状态过滤，例如 "In Progress", "Done"',
           required: false,
           type: 'string'
         },
@@ -288,13 +285,12 @@ export class IntelligentAgent {
         }
       ],
       execute: async (params) => {
-        console.log('执行JIRA REST API查询:', params);
-        
         try {
           // 从环境配置或参数中获取JIRA连接信息
           const envConfig = await getEnvConfig();
           const jiraBaseUrl = envConfig.JIRA_BASE_URL || 'https://your-domain.atlassian.net';
           const apiToken = envConfig.JIRA_API_TOKEN;
+          const excludeCommentKeyworkds = ['Esone\'s AI', 'SDET bot'];
           
           // 检查认证信息是否可用
           if (!apiToken) {
@@ -337,7 +333,6 @@ export class IntelligentAgent {
           if (params.issueId) {
             // 查询单个JIRA问题
             const issueUrl = `${jiraBaseUrl}/rest/api/2/issue/${params.issueId}`;
-            console.log(`查询JIRA问题: ${issueUrl}`);
             
             const response = await fetch(issueUrl, {
               method: 'GET',
@@ -356,12 +351,12 @@ export class IntelligentAgent {
             result = {
               summary: responseData.fields.summary,
               status: responseData.fields.status.name,
-              assignee: responseData.fields.assignee?.displayName,
-              reporter: responseData.fields.reporter?.displayName,
+              assignee: responseData.fields.assignee?.displayName || '',
+              reporter: responseData.fields.reporter?.displayName || '',
               priority: responseData.fields.priority.name,
               issuetype: responseData.fields.issuetype.name,
               duedate: responseData.fields.duedate,
-              comments: responseData.fields.comment.comments.splice(-3).map((comment: any) => comment.author.displayName + ': ' + comment.body),
+              comments: responseData.fields.comment.comments.splice(-3).map((comment: any) => comment.author.displayName + ': ' + comment.body).filter((comment: string) => !excludeCommentKeyworkds.some(keyword => comment.includes(keyword))),
               description: responseData.fields.description,
             };
             resultMessage = `[${params.issueId}][${result.status}]的查询数据: ${result.summary}\n - 执行者: ${result.assignee}\n - 预计完成时间: ${result.duedate}\n - 评论:\n  - ${result.comments.join('\n  - ').replace('\n', '')}`;
@@ -427,7 +422,10 @@ export class IntelligentAgent {
           
           // 存储结果到缓存
           jiraCache[cacheKey] = {
-            data: result,
+            data: {
+              message: resultMessage,
+              result
+            },
             timestamp: now,
             expiresAt: now + JIRA_CACHE_TTL
           };
@@ -466,7 +464,7 @@ export class IntelligentAgent {
         }
       }
     });
-
+/* 
     // 组织架构查询工具
     registerTool({
       id: 'orgStructure',
@@ -585,7 +583,7 @@ export class IntelligentAgent {
           }
         };
       }
-    });
+    }); */
   }
   
   /**
@@ -958,7 +956,7 @@ export class IntelligentAgent {
   /**
    * 获取工具描述文本
    */
-  private getToolDescriptionsText(): string {
+  public getToolDescriptions(): string[] {
     return this.getAvailableTools().map(tool => {
       let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
       
@@ -974,7 +972,7 @@ export class IntelligentAgent {
       }
       
       return description;
-    }).join('\n');
+    });
   }
   
   /**
@@ -1011,7 +1009,7 @@ export class IntelligentAgent {
     // 思考-行动循环
     const maxActions = config.maxActions || 5;
     const currentState = {
-      message: normalizedInput,
+      input: normalizedInput,
       analysis: initialAnalysis,
       result,
       memory: {} as Record<string, any>,
@@ -1041,13 +1039,12 @@ export class IntelligentAgent {
       if (currentState.actionCount > 0) {
         thoughtResult = await this.think(currentState);
         llmCallCount += 1;
-        llmCallTokens += this.estimateTokens(currentState, thoughtResult);
+        llmCallTokens += this.estimateTokens(currentState, thoughtResult);  // todo: 评估buildPromptTokens
       } else {
         thoughtResult = {
           thought: initialAnalysis.thought || '',
           nextAction: initialAnalysis.nextAction || 'finish',
           tools: initialAnalysis.tools || [],
-          params: initialAnalysis.params || {}
         };
       }
       
@@ -1071,24 +1068,23 @@ export class IntelligentAgent {
       if (thoughtResult.tools && thoughtResult.tools.length > 0) {
         await this.executeTools(
           thoughtResult.tools,
-          thoughtResult.params,
           currentState,
           thoughtStep,
           usedTools
         );
         
         // 特殊处理某些工具的结果
-        thoughtResult.tools.forEach(toolId => {
+        thoughtResult.tools.forEach(tool => {
           // 如果是存储或通知工具，更新最终结果
-          if (toolId === 'messageStore') {
+          if (tool.id === 'messageStore') {
             result.shouldStore = true;
             currentState.currentDecision.shouldStore = true;
-          } else if (toolId === 'notifier') {
+          } else if (tool.id === 'notifier') {
             result.shouldNotify = true;
             currentState.currentDecision.shouldNotify = true;
           }
         });
-        if (thoughtResult.tools.includes('jiraQuery') && currentState.memory['jiraQuery']) {
+        if (thoughtResult.tools.some(tool => tool.id === 'jiraQuery') && currentState.memory['jiraQuery']) {
           const latestJiraResult = currentState.memory['jiraQuery'][currentState.memory['jiraQuery'].length - 1];
           if (latestJiraResult && latestJiraResult.result) {
             result.jiraData = {
@@ -1240,8 +1236,8 @@ export class IntelligentAgent {
         type: 'project',
         confidence: initialAnalysis.confidence || 0,
         summary: initialAnalysis.summary || '',
-        projectId: normalizedInput.id || normalizedInput.project_data?.project?.id || '',
-        projectName: normalizedInput.name || normalizedInput.project_data?.project?.name || '',
+        projectId: normalizedInput.id || normalizedInput.project?.id || '',
+        projectName: normalizedInput.name || normalizedInput.project?.name || '',
         riskLevel: initialAnalysis.riskLevel || 'normal',
         timeline: initialAnalysis.timeline || { onTrack: true, concerns: [] },
         resourceAllocation: initialAnalysis.resourceAllocation || { concerns: [] },
@@ -1261,7 +1257,7 @@ export class IntelligentAgent {
       }
 
       // 执行思考-行动循环
-      this.loopThinking(result, normalizedInput, initialAnalysis, config, context, usedTools);
+      await this.loopThinking(result, normalizedInput, initialAnalysis, config, context, usedTools);
       
       return result;
     } catch (error) {
@@ -1271,8 +1267,8 @@ export class IntelligentAgent {
         type: 'project',
         confidence: 0,
         summary: `分析失败: ${error.message}`,
-        projectId: input.id || input.project_data?.project?.id || '',
-        projectName: input.name || input.project_data?.project?.name || '',
+        projectId: input.id || input.project?.id || '',
+        projectName: input.name || input.project?.name || '',
         riskLevel: 'normal',
         metaData: {
           llmCallCount,
@@ -1319,8 +1315,7 @@ export class IntelligentAgent {
    * 批量执行多个工具
    */
   private async executeTools(
-    tools: string[], 
-    params: Record<string, any>, 
+    tools: { id: string; params: Record<string, any> }[], 
     state: any, 
     thoughtStep: ThoughtStep,
     usedTools: Set<string>
@@ -1332,7 +1327,8 @@ export class IntelligentAgent {
     thoughtStep.toolUsed = tools.join(', '); // 记录所有使用的工具
     
     // 并发执行所有选择的工具
-    const toolPromises = tools.map(async (toolId: string) => {
+    const toolPromises = tools.map(async (t: { id: string; params: Record<string, any> }) => {
+      const toolId = t.id;
       const tool = toolRegistry[toolId];
       
       if (!tool) {
@@ -1343,18 +1339,17 @@ export class IntelligentAgent {
         };
       }
       
-      const toolParams = params[tool.id] || params;
-      console.log(`执行工具: ${tool.name} (${tool.id})`, toolParams);
+      console.log(`执行工具: ${tool.name} (${tool.id})`, t.params);
       
       try {
-        const toolResult = await tool.execute(toolParams, state);
+        const toolResult = await tool.execute(t.params, state);
         
         // 添加到已使用工具集合
         usedTools.add(toolId);
         
         return {
           toolId: tool.id,
-          params: toolParams,
+          params: t.params,
           result: toolResult
         };
       } catch (error) {
@@ -1564,7 +1559,6 @@ export class IntelligentAgent {
         sentiment: "neutral",
         nextAction: "finish",
         tools: [],
-        params: {},
         shouldStore: false,
         shouldNotify: false,
         confidence: 0,
@@ -1622,7 +1616,7 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
       : '';
     
     // 获取工具描述
-    const toolDescriptions = this.getToolDescriptionsText();
+    const toolDescriptions = this.getToolDescriptions().join('\n');
     
     // 构造分析深度提示
     let depthNote = '';
@@ -1668,8 +1662,10 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     // 决策和工具字段
     "thought": "分析当前情况和下一步行动的详细思考过程",
     "nextAction": "use_tool|finish",
-    "tools": ["选择的工具ID，如orgStructure"],
-    "params": {}, // 工具参数
+    "tools": [{
+      "id": "工具ID",
+      "params": {}, // 工具所需参数
+    }], // 如果nextAction为use_tool
     "shouldStore": false,
     "shouldNotify": false,
     "confidence": 0.7,
@@ -1735,14 +1731,14 @@ ${specialNotes}
   /**
    * 构建项目分析提示
    */
-  private buildProjectAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): string {
+  private buildProjectAnalysisPrompt(normalizedInput: ProjectInput, config: AnalysisConfig, context?: AnalysisContext): string {
     // 获取项目基本信息
-    const projectId = normalizedInput.id || normalizedInput.projectId || normalizedInput.project_data?.project?.id || '未知项目ID';
-    const projectName = normalizedInput.name || normalizedInput.projectName || normalizedInput.project_data?.project?.name || normalizedInput.title || '未知项目';
+    const projectId = normalizedInput.project?.id || '未知项目ID';
+    const projectName = normalizedInput.name || normalizedInput.project?.name || '未知项目';
     const projectType = normalizedInput.type || 'generic'; // 可能的类型：jira_ticket, release, sprint, project
     
     // 处理可能的Jira数据
-    const jiraData = normalizedInput.jiraData || normalizedInput.project_data?.jiraData || null;
+    const jiraData = normalizedInput.jiraData || normalizedInput.jiraData || null;
     
     // 构建上下文信息
     const contextInfo = [
@@ -1750,11 +1746,11 @@ ${specialNotes}
       `项目名称: ${projectName}`,
       `项目类型: ${projectType}`,
       context?.currentUser ? `当前用户: ${context.currentUser}` : '',
-      normalizedInput.owner || normalizedInput.project_data?.project?.owner ? `负责人: ${normalizedInput.owner || normalizedInput.project_data?.project?.owner}` : '',
-      normalizedInput.status || normalizedInput.project_data?.project?.status ? `当前状态: ${normalizedInput.status || normalizedInput.project_data?.project?.status}` : '',
-      normalizedInput.dueDate ? `截止日期: ${normalizedInput.dueDate}` : '',
-      normalizedInput.project_data?.project?.track ? `赛道: ${normalizedInput.project_data?.project?.track}` : '',
-      normalizedInput.project_data?.project?.comments ? `备注: ${normalizedInput.project_data?.project?.comments}` : '',
+      normalizedInput.project?.owner ? `负责人: ${normalizedInput.project?.owner}` : '',
+      normalizedInput.project?.status ? `当前状态: ${normalizedInput.project?.status}` : '',
+      normalizedInput.project?.dueDate ? `截止日期: ${normalizedInput.project?.dueDate}` : '',
+      normalizedInput.project?.track ? `赛道: ${normalizedInput.project?.track}` : '',
+      normalizedInput.project?.comments ? `备注: ${normalizedInput.project?.comments}` : '',
     ].filter(Boolean).join('\n');
     
     // 构建Jira数据信息
@@ -1763,27 +1759,27 @@ ${specialNotes}
       jiraInfo = `
 Jira工单信息:
 - 工单ID: ${jiraData.key || jiraData.id || '未知'}
+${jiraData.summary || jiraData.fields?.summary ? `- 摘要: ${jiraData.summary || jiraData.fields?.summary}` : ''}
 - 工单状态: ${jiraData.status || jiraData.fields?.status?.name || '未知'}
 - 负责人: ${jiraData.assignee || jiraData.fields?.assignee?.displayName || '未知'}
-- 更新时间: ${jiraData.updated || jiraData.fields?.updated || '未知'}
-${jiraData.summary || jiraData.fields?.summary ? `- 摘要: ${jiraData.summary || jiraData.fields?.summary}` : ''}
+- 预计完成时间: ${jiraData.duedate || jiraData.fields?.duedate || '未知'}
 `;
     }
     
     // 构建项目内容描述
     let contentDescription = '';
-    if (normalizedInput.description) {
-      contentDescription = `项目描述:\n${normalizedInput.description}`;
-    } else if (normalizedInput.content || normalizedInput.message_content) {
-      contentDescription = `项目内容:\n${normalizedInput.content || normalizedInput.message_content}`;
-    } else if (normalizedInput.tickets && Array.isArray(normalizedInput.tickets)) {
-      contentDescription = `相关工单:\n${normalizedInput.tickets.map((ticket: any, i: number) => 
+    if (normalizedInput.project?.description) {
+      contentDescription = `项目描述:\n${normalizedInput.project?.description}`;
+    } else if (normalizedInput.project?.content || normalizedInput.project?.message_content) {
+      contentDescription = `项目内容:\n${normalizedInput.project?.content || normalizedInput.project?.message_content}`;
+    } else if (normalizedInput.project?.tickets && Array.isArray(normalizedInput.project?.tickets)) {
+      contentDescription = `相关工单:\n${normalizedInput.project?.tickets.map((ticket: any, i: number) => 
         `- 工单${i+1}: ${ticket.id || ''} ${ticket.title || ''} [${ticket.status || ''}]`
       ).join('\n')}`;
     }
     
     // 获取工具描述
-    const toolDescriptions = this.getToolDescriptionsText();
+    const toolDescriptions = this.getToolDescriptions().join('\n');
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -1855,17 +1851,23 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   // 决策和工具字段
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "use_tool|finish",
-  "tools": ["选择的工具ID"],
-  "params": {}, // 工具参数
+  "tools": [{
+    "id": "工具ID",
+    "params": {}, // 工具所需参数
+  }], // 如果nextAction为use_tool
   "confidence": 0.7,
   
   // 建议
   "suggestions": {
-    "status": "(In Progress|Done|Blocked|Released)", // 用英文直接填入具体的状态值（如：进行中、已完成、阻塞中）
-    "owner": "", // 用英文直接填入具体的人名
-    "track": "", // 用英文直接填入具体的赛道名称或团队名
-    "highlights": ["highlight1", "highlight2"], // 用英文直接填入具体的备注内容
-    "actionItems": ["actionItem1", "actionItem2"],  // 用英文直接填入具体的行动项
+    "status": "(In Progress|Done|Blocked|Released)", // 用英文直接填入具体的状态值（如：进行中、已完成、阻塞中），没有变化可留空
+    "statusReason": "建议修改状态的原因", // 用中文给出状态变化的原因
+    "owner": "", // 用英文直接填入具体的人名，没有变化可留空
+    "ownerReason": "建议修改负责人的原因", // 用中文给出修改负责人的原因
+    "track": "", // 用英文直接填入具体的赛道名称或团队名，没有变化可留空
+    "highlights": ["highlight1", "highlight2"], // 用英文直接填入具体的备注内容，没有变化可留空
+    "highlightsReason": "建议修改备注的原因", // 用中文给出备注变化的原因
+    "actionItems": ["actionItem1", "actionItem2"],  // 用英文直接填入具体的行动项，没有变化可留空
+    "actionItemsReason": "建议修改行动项的原因", // 用中文给出行动项变化的原因
     "documentation": ["文档更新建议"],
     "risks": ["风险描述1", "风险描述2"],
     "followUp": ["后续跟进项1", "后续跟进项2"]
@@ -1925,7 +1927,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
     
     // 获取工具描述
-    const toolDescriptions = this.getToolDescriptionsText();;
+    const toolDescriptions = this.getToolDescriptions().join('\n');
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -2013,8 +2015,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   // 决策和工具字段
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "use_tool|finish",
-  "tools": ["选择的工具ID"],
-  "params": {}, // 工具参数
+  "tools": [{
+    "id": "工具ID",
+    "params": {}, // 工具所需参数
+  }], // 如果nextAction为use_tool
   "confidence": 0.7,
   
   // 会议效果评估
@@ -2070,7 +2074,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
     
     // 获取工具描述
-    const toolDescriptions = this.getToolDescriptionsText();;
+    const toolDescriptions = this.getToolDescriptions().join('\n');
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -2154,8 +2158,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   // 决策和工具字段
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "use_tool|finish",
-  "tools": ["选择的工具ID"],
-  "params": {}, // 工具参数
+  "tools": [{
+    "id": "工具ID",
+    "params": {}, // 工具所需参数
+  }], // 如果nextAction为use_tool
   "confidence": 0.7,
   
   // 质量评估
@@ -2232,7 +2238,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
     
     // 获取工具描述
-    const toolDescriptions = this.getToolDescriptionsText();;
+    const toolDescriptions = this.getToolDescriptions().join('\n');
     
     // 添加分析深度相关内容
     let depthNote = '';
@@ -2282,8 +2288,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   // 决策和工具字段
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "use_tool|finish",
-  "tools": ["选择的工具ID"],
-  "params": {}, // 工具参数
+  "tools": [{
+    "id": "工具ID",
+    "params": {}, // 工具所需参数
+  }], // 如果nextAction为use_tool
   "confidence": 0.7,
   
   // 建议
@@ -2331,7 +2339,6 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
         thought: `思考过程中出错: ${error.message}，决定结束处理`,
         nextAction: 'finish',
         tools: [],
-        params: {},
         ...state.currentDecision
       };
     }
@@ -2358,10 +2365,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     switch (analysisType) {
       case 'message':
         stateDescription = `
-当前分析的消息内容: ${state.message.message_content || state.message.content || '无内容'}
-发送者: ${state.message.sender || '未知'}
-发送时间: ${state.message.datetime || '未知'}
-群组/团队: ${state.message.groupName || '未知'}
+当前分析的消息内容: ${state.input.message_content || state.input.content || '无内容'}
+发送者: ${state.input.sender || '未知'}
+发送时间: ${state.input.datetime || '未知'}
+群组/团队: ${state.input.groupName || '未知'}
 
 当前决策:
 - 重要性: ${state.currentDecision.isImportant ? '重要' : '不重要'}
@@ -2377,10 +2384,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
         
       case 'project':
         stateDescription = `
-当前分析的项目: ${state.message.name || state.message.title || '未命名项目'}
-项目ID: ${state.message.id || state.message.projectId || '未知ID'}
-状态: ${state.message.status || '未知状态'}
-负责人: ${state.message.owner || '未知'}
+当前分析的项目: ${state.input.project?.name|| '未命名项目'}
+项目ID: ${state.input.project?.id || '未知ID'}
+状态: ${state.input.project?.status || state.input.jiraData?.status || '未知状态'}
+负责人: ${state.input.project?.owner || '未知'}
 
 当前分析结果:
 - 风险级别: ${currentResult.riskLevel || '未评估'}
@@ -2388,12 +2395,13 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
 - 建议操作: ${currentResult.suggestions?.actionItems?.join(', ') || '无'}
 `;
         break;
-        
+      
+      // Todo: 未命名会议
       case 'meeting':
         stateDescription = `
-当前分析的会议: ${state.message.title || '未命名会议'}
-会议时间: ${state.message.datetime || '未知时间'}
-参会人员: ${Array.isArray(state.message.attendees) ? state.message.attendees.join(', ') : (state.message.attendees || '未知')}
+当前分析的会议: ${state.input.title || '未命名会议'}
+会议时间: ${state.input.datetime || '未知时间'}
+参会人员: ${Array.isArray(state.input.attendees) ? state.input.attendees.join(', ') : (state.input.attendees || '未知')}
 
 当前分析结果:
 - 主题数量: ${currentResult.topics?.length || 0}
@@ -2403,11 +2411,12 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
 `;
         break;
         
+      // Todo: 未命名文档
       case 'document':
         stateDescription = `
-当前分析的文档: ${state.message.title || '未命名文档'}
-文档类型: ${state.message.type || '未知类型'}
-作者: ${state.message.author || '未知'}
+当前分析的文档: ${state.input.title || '未命名文档'}
+文档类型: ${state.input.type || '未知类型'}
+作者: ${state.input.author || '未知'}
 
 当前分析结果:
 - 文档目的: ${currentResult.purpose || '未确定'}
@@ -2416,7 +2425,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
 - 主要发现: ${currentResult.findings?.join(', ') || '无'}
 `;
         break;
-        
+
       default:
         stateDescription = `
 当前分析的内容类型: ${analysisType || '未知类型'}
@@ -2432,7 +2441,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       actionHistory = `
 过去采取的行动:
 ${state.actionHistory.map((action: any, index: number) => 
-  `${index + 1}. 工具: ${action.tool || '无'}, 参数: ${JSON.stringify(action.params || {})}, 结果: ${action.result || '无结果'}`
+  `${index + 1}. 工具: ${action.tool || '无'}, 参数: ${JSON.stringify(action.params || {})}, 结果: 参见[已执行的工具和收集的信息]`
 ).join('\n')}
 `;
     }
@@ -2447,7 +2456,7 @@ ${Object.entries(memory).map(([key, results]: [string, any]) => results.map((r:a
     }
     
     // 获取工具描述
-    const toolDescriptions = this.getToolDescriptionsText();;
+    const toolDescriptions = this.getToolDescriptions().join('\n');
     
     // 构建最终提示
     return `
@@ -2468,7 +2477,7 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
 请仔细思考当前状态和已有信息，决定下一步行动:
 
 1. 评估已获取的信息是否足够做出决策
-2. 考虑是否需要使用工具获取更多信息
+2. 考虑是否需要使用工具获取更多信息(如果已经执行过同样或类似参数的工具，则不需要重复执行)
 3. 如果需要使用工具，选择最合适的工具并确定参数
 4. 如果已有足够信息，可以结束分析并给出最终决策
 
@@ -2476,8 +2485,10 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
 {
   "thought": "详细解释你的思考过程，包括对当前状态的分析和决策理由",
   "nextAction": "use_tool或finish",
-  "tools": ["选择的工具ID"], // 如果nextAction为use_tool
-  "params": {}, // 工具所需参数
+  "tools": [{
+    "id": "工具ID",
+    "params": {}, // 工具所需参数
+  }], // 如果nextAction为use_tool
   
   // 如果决定结束，更新当前决策
   "isImportant": true|false,

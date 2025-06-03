@@ -48,12 +48,16 @@ export interface ProjectUpdateSuggestion {
   projectName: string;
   currentStatus: string;
   suggestedStatus?: string;
+  suggestedStatusReason?: string;
   currentOwner: string;
   suggestedOwner?: string;
+  suggestedOwnerReason?: string;
   currentTrack?: string;
   suggestedTrack?: string;
+  suggestedTrackReason?: string;
   currentComments?: string;
   suggestedComments?: string;
+  suggestedCommentsReason?: string;
   reason: string[];
   sourceInfo: {
     jiraStatus?: string;

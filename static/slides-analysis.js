@@ -80,7 +80,7 @@ function updateUI() {
               </div>
             </div>
             
-            ${hasStatusColumn && suggestion.suggestedStatus ? `
+            ${hasStatusColumn && suggestion.suggestedStatus && suggestion.suggestedStatus !== suggestion.currentStatus ? `
             <div class="update-item">
               <input type="checkbox" id="update-status-${index}" class="update-item-checkbox" 
                 data-project-index="${index}" data-field="status" data-current="${suggestion.currentStatus}" 
@@ -91,6 +91,7 @@ function updateUI() {
                 <div class="update-tag">
                   🔄 更新: Status列从"${suggestion.currentStatus}"更新为"${suggestion.suggestedStatus}"
                 </div>
+                ${suggestion.statusReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 理由: ${suggestion.statusReason}</div>` : ''}
               </div>
             </div>
             ` : ''}
@@ -104,11 +105,12 @@ function updateUI() {
                 <div class="update-tag">
                   🔄 更新: Comment列${suggestion.currentComments ? '添加' : '设置为'}"${suggestion.suggestedComments}"
                 </div>
+                ${suggestion.suggestedCommentsReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 原因: ${suggestion.suggestedCommentsReason}</div>` : ''}
               </div>
             </div>
             ` : ''}
             
-            ${hasOwnerColumn && suggestion.suggestedOwner ? `
+            ${hasOwnerColumn && suggestion.suggestedOwner && suggestion.suggestedOwner !== suggestion.currentOwner ? `
             <div class="update-item">
               <input type="checkbox" id="update-owner-${index}" class="update-item-checkbox" 
                 data-project-index="${index}" data-field="owner" data-current="${suggestion.currentOwner || ''}" 
@@ -119,11 +121,12 @@ function updateUI() {
                 <div class="update-tag">
                   🔄 更新: Owner列从"${suggestion.currentOwner || '无'}"更新为"${suggestion.suggestedOwner}"
                 </div>
+                ${suggestion.ownerReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 原因: ${suggestion.ownerReason}</div>` : ''}
               </div>
             </div>
             ` : ''}
             
-            ${hasTrackColumn && suggestion.suggestedTrack ? `
+            ${hasTrackColumn && suggestion.suggestedTrack && suggestion.suggestedTrack !== suggestion.currentTrack ? `
             <div class="update-item">
               <input type="checkbox" id="update-track-${index}" class="update-item-checkbox" 
                 data-project-index="${index}" data-field="track" data-current="${suggestion.currentTrack || ''}" 
@@ -301,8 +304,22 @@ function handleApplyUpdates() {
       showToast('正在应用更新...', 'info');
       
       // 禁用应用更新按钮，防止重复提交
-      document.getElementById('apply-updates-button').disabled = true;
-      document.getElementById('apply-updates-button').textContent = '正在更新...';
+      const applyButton = document.getElementById('apply-updates-button');
+      if (applyButton) {
+        applyButton.disabled = true;
+        applyButton.textContent = '正在更新...';
+      }
+      
+      // 设置超时检查，如果一段时间后仍未收到响应，则恢复按钮状态
+      setTimeout(() => {
+        const currentApplyButton = document.getElementById('apply-updates-button');
+        if (currentApplyButton && currentApplyButton.textContent === '正在更新...') {
+          currentApplyButton.disabled = false;
+          currentApplyButton.textContent = '应用选定更新';
+          showToast('未收到更新确认，请重试或检查父窗口状态', 'warning');
+          debugLog('等待更新确认超时');
+        }
+      }, 10000); // 10秒超时
     } else {
       showToast('无法与父窗口通信，请重新打开分析窗口', 'error');
       debugLog('父窗口引用不存在');
@@ -321,17 +338,28 @@ function handleParentMessage(event) {
     source: event.origin
   }));
   
-  if (event.data && event.data.type === 'UPDATE_SUCCESS') {
-    // 显示成功消息
-    const successMessage = document.getElementById('success-message');
-    const successDetails = document.getElementById('success-details');
+  try {
+    if (!event.data) {
+      debugLog('接收到空消息数据');
+      return;
+    }
     
-    if (successMessage && successDetails) {
-      successDetails.textContent = `已成功更新 ${event.data.updatedCount} 个项目信息`;
-      successMessage.style.display = 'block';
+    if (event.data.type === 'UPDATE_SUCCESS') {
+      debugLog('收到更新成功消息: ' + JSON.stringify(event.data));
       
-      // 滚动到顶部
-      window.scrollTo(0, 0);
+      // 显示成功消息
+      const successMessage = document.getElementById('success-message');
+      const successDetails = document.getElementById('success-details');
+      
+      if (successMessage && successDetails) {
+        successDetails.textContent = `已成功更新 ${event.data.updatedCount || '0'} 个项目信息`;
+        successMessage.style.display = 'block';
+        
+        // 滚动到顶部
+        window.scrollTo(0, 0);
+      } else {
+        showToast(`更新成功: 已更新 ${event.data.updatedCount || '0'} 个项目`, 'success');
+      }
       
       // 更新应用按钮状态
       const applyButton = document.getElementById('apply-updates-button');
@@ -360,6 +388,27 @@ function handleParentMessage(event) {
           });
         });
       }
+    } else if (event.data.type === 'UPDATE_ERROR') {
+      // 处理更新错误消息
+      showToast('更新失败: ' + (event.data.errorMessage || '未知错误'), 'error');
+      debugLog('收到更新错误消息: ' + JSON.stringify(event.data));
+      
+      // 恢复按钮状态
+      const applyButton = document.getElementById('apply-updates-button');
+      if (applyButton) {
+        applyButton.disabled = false;
+        applyButton.textContent = '应用选定更新';
+      }
+    }
+  } catch (err) {
+    debugLog('处理消息时出错: ' + err.message);
+    console.error('处理父窗口消息时出错:', err);
+    
+    // 恢复按钮状态
+    const applyButton = document.getElementById('apply-updates-button');
+    if (applyButton && applyButton.textContent === '正在更新...') {
+      applyButton.disabled = false;
+      applyButton.textContent = '应用选定更新';
     }
   }
 }
