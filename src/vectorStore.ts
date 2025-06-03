@@ -56,7 +56,6 @@ export async function initChromaClient() {
       envConfig.CHROMA_COLLECTION_NAME = 'messages'
     }
     const collectionName = envConfig.CHROMA_COLLECTION_NAME || username + '-messages';
-    console.log('collectionName', collectionName, envConfig.CHROMA_COLLECTION_NAME, username);
     if (!collections.includes(collectionName)) {
       messageCollection = await chromaClient.createCollection({
         name: collectionName,
