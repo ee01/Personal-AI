@@ -31,6 +31,7 @@ module.exports = (env) => {
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/topic-modal.tsx',
       'knowledge-query': './src/knowledge-query.tsx',
+      'slides-analysis': './src/slides-analysis.tsx',
       'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
       'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',

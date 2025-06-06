@@ -26,7 +26,7 @@ import {
 import { JiraTicket } from './types';
 
 // 分析结果接口
-interface AnalysisResult {
+export interface DisplaySlideAnalysisResult {
   projects: ProjectData[];
   updateSuggestions: ProjectUpdateSuggestion[];
   summary: {
@@ -170,9 +170,9 @@ async function analyzeSlideProjects(token: string) {
 }
 
 // 分析项目数据
-async function analyzeProjectsData(projectsData: ProjectData[]): Promise<AnalysisResult> {
+async function analyzeProjectsData(projectsData: ProjectData[]): Promise<DisplaySlideAnalysisResult> {
   // 初始化分析结果
-  const analysisResult: AnalysisResult = {
+  const analysisResult: DisplaySlideAnalysisResult = {
     projects: projectsData,
     updateSuggestions: [],
     summary: {
@@ -437,7 +437,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
 }
 
 // 显示分析结果
-function showAnalysisResults(result: AnalysisResult, presentationId: string, token: string) {
+function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId: string, token: string) {
   // 准备要传递的数据
   const analysisData = {
     result,
@@ -445,14 +445,11 @@ function showAnalysisResults(result: AnalysisResult, presentationId: string, tok
     token
   };
   
-  // 将数据转为JSON字符串并编码
-  const encodedData = encodeURIComponent(JSON.stringify(analysisData));
-  
-  // 获取扩展URL
+  // 获取扩展URL (不再使用URL参数)
   const extensionUrl = chrome.runtime.getURL('slides-analysis.html');
   
-  // 打开新窗口，带上数据作为URL参数
-  const newWindow = window.open(`${extensionUrl}?data=${encodedData}`, '_blank', 'width=800,height=800,resizable=yes,scrollbars=yes');
+  // 打开新窗口
+  const newWindow = window.open(extensionUrl, '_blank', 'width=1000,height=800,resizable=yes,scrollbars=yes');
   
   if (!newWindow) {
     showToast('弹出窗口被阻止，请允许弹出窗口并重试', 'error');
@@ -467,7 +464,14 @@ function showAnalysisResults(result: AnalysisResult, presentationId: string, tok
   const messageHandler = async (event: MessageEvent) => {
     console.log('收到来自弹出窗口的消息:', event.data);
     
-    if (event.data && event.data.type === 'APPLY_PROJECT_UPDATES') {
+    if (event.data && event.data.type === 'REQUEST_ANALYSIS_DATA') {
+      // 新窗口请求分析数据
+      console.log('向弹出窗口发送分析数据');
+      newWindow.postMessage({
+        type: 'ANALYSIS_DATA',
+        data: analysisData
+      }, '*');
+    } else if (event.data && event.data.type === 'APPLY_PROJECT_UPDATES') {
       console.log('处理项目更新请求', event.data.selectedUpdates?.length || 0);
       try {
         const { presentationId, token, selectedUpdates } = event.data;
@@ -482,8 +486,6 @@ function showAnalysisResults(result: AnalysisResult, presentationId: string, tok
         console.error('处理项目更新请求时出错:', error);
         showToast(`处理更新失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
       }
-    } else if (event.data && event.data.type === 'POPUP_READY') {
-      console.log('弹出窗口已准备好接收消息');
     }
   };
   
