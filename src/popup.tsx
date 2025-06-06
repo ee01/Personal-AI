@@ -91,6 +91,7 @@ const Popup = () => {
             const token = await getAuthToken();
             if (!token) {
                 console.error('无法获取Google认证，请检查账号授权');
+                alert('无法获取Google认证，请检查账号授权');
                 // 可以在界面上显示错误消息
                 setIsAnalyzingSlides(false);
                 return;

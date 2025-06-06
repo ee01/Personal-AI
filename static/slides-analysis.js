@@ -72,6 +72,48 @@ function updateUI() {
           <div class="project-item">
             <div style="margin-bottom: 10px;">
               <span style="font-weight: bold;">项目 ${suggestion.projectId}: ${suggestion.projectName}</span>
+              
+              <!-- Jira信息显示区域 -->
+              ${suggestion.sourceInfo.jiraIssues && suggestion.sourceInfo.jiraIssues.length > 0 ? `
+              <div class="jira-issues-container" style="margin-top: 8px; margin-bottom: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 13px;">
+                <div style="font-weight: bold; margin-bottom: 5px;">相关Jira问题:</div>
+                ${suggestion.sourceInfo.jiraIssues.map(issue => `
+                  <div class="jira-issue-item" style="margin-bottom: 8px; padding: 5px; border-left: 3px solid #0052CC;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <a href="${issue.url || '#'}" target="_blank" style="color: #0052CC; font-weight: bold; text-decoration: none;">${issue.key}</a>
+                      <div style="display: flex; align-items: center;">
+                        ${issue.priority ? `
+                          <span class="jira-priority" style="padding: 2px 6px; margin-right: 5px; border-radius: 3px; font-size: 11px; background-color: ${getPriorityColor(issue.priority)}; color: white;">${issue.priority}</span>
+                        ` : ''}
+                        <span class="jira-status" style="padding: 2px 6px; border-radius: 3px; font-size: 11px; background-color: ${getStatusColor(issue.status)}; color: white;">${issue.status}</span>
+                      </div>
+                    </div>
+                    <div style="margin-top: 3px; font-weight: 500;">${issue.summary}</div>
+                    <div style="display: flex; flex-wrap: wrap; margin-top: 5px; font-size: 11px; color: #555;">
+                      ${issue.assignee ? `
+                        <div style="margin-right: 10px; display: flex; align-items: center;">
+                          <span style="color: #777; margin-right: 3px;">处理人:</span>
+                          <span style="background: #dfe1e6; padding: 1px 5px; border-radius: 3px;">${issue.assignee}</span>
+                        </div>
+                      ` : ''}
+                      ${issue.reporter ? `
+                        <div style="margin-right: 10px; display: flex; align-items: center;">
+                          <span style="color: #777; margin-right: 3px;">报告人:</span>
+                          <span style="background: #dfe1e6; padding: 1px 5px; border-radius: 3px;">${issue.reporter}</span>
+                        </div>
+                      ` : ''}
+                      ${issue.dueDate ? `
+                        <div style="margin-right: 10px; display: flex; align-items: center;">
+                          <span style="color: #777; margin-right: 3px;">截止日期:</span>
+                          <span style="color: ${new Date(issue.dueDate) < new Date() ? '#FF5630' : '#333'}; font-weight: ${new Date(issue.dueDate) < new Date() ? 'bold' : 'normal'};">${formatDate(issue.dueDate)}</span>
+                        </div>
+                      ` : ''}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+              ` : ''}
+              
               <div style="margin-top: 5px; margin-bottom: 10px; font-size: 12px; color: #666;">
                 <span style="display: inline-block; margin-right: 10px;">
                   <input type="checkbox" id="select-all-${index}" class="select-all-checkbox" data-index="${index}">
@@ -105,7 +147,7 @@ function updateUI() {
                 <div class="update-tag">
                   🔄 更新: Comment列${suggestion.currentComments ? '添加' : '设置为'}"${suggestion.suggestedComments}"
                 </div>
-                ${suggestion.suggestedCommentsReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 原因: ${suggestion.suggestedCommentsReason}</div>` : ''}
+                ${suggestion.suggestedCommentsReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 理由: ${suggestion.suggestedCommentsReason}</div>` : ''}
               </div>
             </div>
             ` : ''}
@@ -121,7 +163,7 @@ function updateUI() {
                 <div class="update-tag">
                   🔄 更新: Owner列从"${suggestion.currentOwner || '无'}"更新为"${suggestion.suggestedOwner}"
                 </div>
-                ${suggestion.ownerReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 原因: ${suggestion.ownerReason}</div>` : ''}
+                ${suggestion.ownerReason ? `<div class="reason-tag" style="margin-top: 5px; font-size: 12px; color: #555; font-style: italic;">📝 理由: ${suggestion.ownerReason}</div>` : ''}
               </div>
             </div>
             ` : ''}
@@ -440,6 +482,64 @@ function showToast(message, type = 'info') {
 // 调试辅助函数
 function debugLog(message) {
   console.log('[分析窗口]', message);
+}
+
+// 根据状态返回对应的颜色
+function getStatusColor(status) {
+  if (!status) return '#999';
+  
+  status = status.toLowerCase();
+  if (status.includes('done') || status.includes('完成') || status.includes('resolved') || status.includes('已解决')) {
+    return '#36B37E';  // 绿色
+  } else if (status.includes('progress') || status.includes('进行中') || status.includes('处理中') || status.includes('实现中')) {
+    return '#0052CC';  // 蓝色
+  } else if (status.includes('todo') || status.includes('待办') || status.includes('open') || status.includes('待处理')) {
+    return '#6554C0';  // 紫色
+  } else if (status.includes('block') || status.includes('阻塞') || status.includes('stuck')) {
+    return '#FF5630';  // 红色
+  } else if (status.includes('review') || status.includes('审核') || status.includes('待验证')) {
+    return '#FF9000';  // 橙色
+  } else if (status.includes('test') || status.includes('测试') || status.includes('qa')) {
+    return '#00B8D9';  // 青色
+  } else if (status.includes('backlog') || status.includes('规划中')) {
+    return '#998DD9';  // 淡紫色
+  } else if (status.includes('cancel') || status.includes('取消') || status.includes('won\'t')) {
+    return '#7A869A';  // 灰色
+  } else {
+    return '#999';     // 默认灰色
+  }
+}
+
+// 根据优先级返回对应的颜色
+function getPriorityColor(priority) {
+  if (!priority) return '#999';
+  
+  priority = priority.toLowerCase();
+  if (priority.includes('highest') || priority.includes('紧急') || priority.includes('critical')) {
+    return '#FF5630';  // 红色
+  } else if (priority.includes('high') || priority.includes('高')) {
+    return '#FF8B00';  // 橙色
+  } else if (priority.includes('medium') || priority.includes('中')) {
+    return '#FFAB00';  // 黄色
+  } else if (priority.includes('low') || priority.includes('低')) {
+    return '#36B37E';  // 绿色
+  } else if (priority.includes('lowest') || priority.includes('微小')) {
+    return '#7A869A';  // 灰色
+  } else {
+    return '#999';     // 默认灰色
+  }
+}
+
+// 格式化日期
+function formatDate(dateString) {
+  if (!dateString) return '';
+  
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('zh-CN');
+  } catch (e) {
+    return dateString;
+  }
 }
 
 // 页面加载完成后初始化

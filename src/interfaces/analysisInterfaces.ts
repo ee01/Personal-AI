@@ -3,6 +3,8 @@
  * 包含所有与分析相关的接口类型
  */
 
+import { JiraTicket } from "../types";
+
 /**
  * 思考步骤接口
  * 记录分析过程中的思考步骤
@@ -175,6 +177,14 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
   
   /** 项目风险等级 */
   riskLevel: 'critical' | 'high' | 'normal' | 'low';
+  
+  /** Jira数据（单个工单，旧版兼容） */
+  jiraData?: Record<string, any>;
+  
+  /** Jira数据（多个工单，新版格式） */
+  jiraIssues?: {
+    [key: string]: JiraTicket;
+  };
   
   /** 里程碑状态 */
   milestones?: Array<{
@@ -429,5 +439,15 @@ export interface ProjectInput {
     assignee: string;
     duedate: string;
     [key: string]: any;
+  };
+  jiraIssues?: {
+    [key: string]: {
+      key: string;
+      summary: string;
+      status: string;
+      assignee: string;
+      duedate: string;
+      [key: string]: any;
+    }
   };
 }

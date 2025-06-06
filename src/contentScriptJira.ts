@@ -148,7 +148,7 @@ function displayDesignLink(designLink: string): void {
   const designLinkContainer = document.createElement('div');
   
   // 获取扩展内的 icon 路径
-  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+  const iconUrl = chrome.runtime.getURL('icons/icon48.png');
 
   designLinkContainer.className = 'design-link-container';
   designLinkContainer.innerHTML = `
