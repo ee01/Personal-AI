@@ -23,6 +23,7 @@ import {
   ProjectData,
   ProjectUpdateSuggestion
 } from './slide';
+import { JiraTicket } from './types';
 
 // 分析结果接口
 interface AnalysisResult {
@@ -193,16 +194,58 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
   // 逐个准备项目分析请求
   for (const project of projectsData) {
     // 获取Jira工单信息
-    let jiraData: Record<string, any> | null = null;
+    const jiraIssues: Record<string, JiraTicket> = {};
+    
+    // 首先，检查project.id是否是JIRA格式，如果是，添加到jiraIssues
     if (project.id && project.id.match(/[A-Z]+-\d+/)) {
       try {
         // 使用封装的Jira API获取数据
         const jiraTickets = await fetchJiraTickets(`key = ${project.id}`);
         if (jiraTickets && jiraTickets.length > 0) {
-          jiraData = jiraTickets[0];
+          jiraIssues[project.id] = jiraTickets[0];
         }
       } catch (error) {
         console.warn(`获取Jira工单信息失败: ${project.id}`, error);
+      }
+    }
+    
+    // 其次，在项目的其他字段中查找JIRA ID，如状态、注释等
+    const jiraIdRegex = /[A-Z]+-\d+/g;
+    
+    // 可能包含JIRA ID的字段列表
+    const fieldsToCheck = ['name', 'status', 'comments', 'description', 'track'];
+    
+    // 从所有可能的字段中提取JIRA ID
+    // 遍历project对象的所有字段，查找匹配的字段
+    for (const [projectKey, projectValue] of Object.entries(project)) {
+      // 检查字段值是否为字符串类型
+      if (projectValue && typeof projectValue === 'string') {
+        // 检查字段名是否匹配（忽略大小写或包含关系）
+        const shouldCheck = fieldsToCheck.some(field => {
+          const lowerProjectKey = projectKey.toLowerCase();
+          const lowerField = field.toLowerCase();
+          // 精确匹配或包含关系
+          return lowerProjectKey === lowerField || lowerProjectKey.includes(lowerField);
+        });
+        
+        if (shouldCheck) {
+          const matches = projectValue.match(jiraIdRegex);
+          if (matches) {
+            // 对每个找到的JIRA ID获取数据
+            for (const jiraId of matches) {
+              if (!jiraIssues[jiraId]) {  // 避免重复获取
+                try {
+                  const jiraTickets = await fetchJiraTickets(`key = ${jiraId}`);
+                  if (jiraTickets && jiraTickets.length > 0) {
+                    jiraIssues[jiraId] = jiraTickets[0];
+                  }
+                } catch (error) {
+                  console.warn(`获取Jira工单信息失败: ${jiraId}`, error);
+                }
+              }
+            }
+          }
+        }
       }
     }
     
@@ -211,7 +254,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
     const analysisRequest = {
       name: project.name,
       project: project,
-      jiraData: jiraData
+      jiraIssues: Object.keys(jiraIssues).length > 0 ? jiraIssues : {}
     };
     
     projectAnalysisRequests.push(analysisRequest);
@@ -304,8 +347,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Analysi
             currentComments: project.comments,
             reason: reasons,
             sourceInfo: {
-              jiraStatus: result.jiraData?.status || '',
-              jiraComments: Array.isArray(result.jiraData?.comments) ? result.jiraData?.comments : [],
+              jiraIssues: Object.values(result.jiraIssues) || [],  // 稍后填充
               chatHistory: []
             },
             confidence: result.confidence || 0.5,

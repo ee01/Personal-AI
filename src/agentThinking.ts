@@ -99,7 +99,7 @@ interface ThoughtResult {
   shouldNotify?: boolean;
   confidence?: number;
   summary?: string;
-  reasons?: string[];
+  reasonsToStore?: string[];
   notificationPriority?: 'high' | 'medium' | 'low';
   replyAdvice?: string;
   extractedEntities?: any;
@@ -329,6 +329,7 @@ export class IntelligentAgent {
           
           let result;
           let resultMessage = '';
+          let type = 'single';
           // 处理不同的查询类型
           if (params.issueId) {
             // 查询单个JIRA问题
@@ -349,6 +350,7 @@ export class IntelligentAgent {
             
             const responseData = await response.json();
             result = {
+              key: responseData.key,
               summary: responseData.fields.summary,
               status: responseData.fields.status.name,
               assignee: responseData.fields.assignee?.displayName || '',
@@ -416,8 +418,20 @@ export class IntelligentAgent {
               throw new Error(`JIRA搜索查询失败 (${response.status}): ${errorText}`);
             }
             
-            result = await response.json();
-            resultMessage = result.issues.map((issue: any) => `[${issue.key}][${issue.fields.status.name}]${issue.fields.summary}`).join('\n');
+            const responseData = await response.json();
+            type = 'multiple';
+            result = responseData.issues.map((issue: any) => ({
+              key: issue.key,
+              issuetype: issue.fields.issuetype.name,
+              summary: issue.fields.summary,
+              status: issue.fields.status.name,
+              assignee: issue.fields.assignee?.displayName || '',
+              reporter: issue.fields.reporter?.displayName || '',
+              priority: issue.fields.priority.name,
+              duedate: issue.fields.duedate,
+              description: issue.fields.description
+            }));
+            resultMessage = `[${result.map((issue: any) => `[${issue.key}][${issue.status}]${issue.summary}`).join('\n')}`;
           }
           
           // 存储结果到缓存
@@ -432,6 +446,7 @@ export class IntelligentAgent {
           
           return {
             message: resultMessage,
+            type,
             result
           };
         } catch (error) {
@@ -1021,7 +1036,7 @@ export class IntelligentAgent {
         confidence: result.confidence,
         summary: result.summary,
         // message
-        reasons: result.reasonsToStore || [],
+        reasonsToStore: result.reasonsToStore || [],
         isImportant: !!result.isImportant,
         shouldStore: !!result.shouldStore,
         shouldNotify: !!result.shouldNotify,
@@ -1086,11 +1101,21 @@ export class IntelligentAgent {
         });
         if (thoughtResult.tools.some(tool => tool.id === 'jiraQuery') && currentState.memory['jiraQuery']) {
           const latestJiraResult = currentState.memory['jiraQuery'][currentState.memory['jiraQuery'].length - 1];
-          if (latestJiraResult && latestJiraResult.result) {
-            result.jiraData = {
-              ...result.jiraData,
-              ...latestJiraResult.result
-            };
+          if (latestJiraResult && latestJiraResult.result && latestJiraResult.result.result) {
+            // 如果是多个Jira issues，添加到jiraIssues
+            if (latestJiraResult.result.type === 'multiple' && Array.isArray(latestJiraResult.result.result)) {
+              if (!result.jiraIssues) {
+                result.jiraIssues = {};
+              }
+              
+              latestJiraResult.result.result.forEach((issue: any) => {
+                if (issue.key) {
+                  result.jiraIssues[issue.key] = issue;
+                }
+              });
+            } else {
+              result.jiraIssues[latestJiraResult.result.result.key] = latestJiraResult.result.result;
+            }
           }
         }
       }
@@ -1129,12 +1154,22 @@ export class IntelligentAgent {
    */
   private updateFinalDecision(result: any, thoughtResult: ThoughtResult, state: any): void {
     // 更新消息分析结果
+    if (thoughtResult.isImportant !== undefined) {
+      result.isImportant = thoughtResult.isImportant;
+      state.currentDecision.isImportant = thoughtResult.isImportant;
+    }
+    
+    if (thoughtResult.confidence !== undefined) {
+      result.confidence = thoughtResult.confidence;
+      state.currentDecision.confidence = thoughtResult.confidence;
+    }
+    
+    if (thoughtResult.summary) {
+      result.summary = thoughtResult.summary;
+      state.currentDecision.summary = thoughtResult.summary;
+    }
+
     if (result.type === 'message') {
-      if (thoughtResult.isImportant !== undefined) {
-        result.isImportant = thoughtResult.isImportant;
-        state.currentDecision.isImportant = thoughtResult.isImportant;
-      }
-      
       if (thoughtResult.shouldStore !== undefined) {
         result.shouldStore = thoughtResult.shouldStore;
         state.currentDecision.shouldStore = thoughtResult.shouldStore;
@@ -1145,19 +1180,9 @@ export class IntelligentAgent {
         state.currentDecision.shouldNotify = thoughtResult.shouldNotify;
       }
       
-      if (thoughtResult.confidence !== undefined) {
-        result.confidence = thoughtResult.confidence;
-        state.currentDecision.confidence = thoughtResult.confidence;
-      }
-      
-      if (thoughtResult.summary) {
-        result.summary = thoughtResult.summary;
-        state.currentDecision.summary = thoughtResult.summary;
-      }
-      
-      if (thoughtResult.reasons) {
-        result.reasonsToStore = thoughtResult.reasons;
-        state.currentDecision.reasons = thoughtResult.reasons;
+      if (thoughtResult.reasonsToStore) {
+        result.reasonsToStore = thoughtResult.reasonsToStore;
+        state.currentDecision.reasonsToStore = thoughtResult.reasonsToStore;
       }
       
       if (thoughtResult.notificationPriority) {
@@ -1177,17 +1202,7 @@ export class IntelligentAgent {
         state.currentDecision.riskLevel = thoughtResult.riskLevel;
       }
       
-      if (thoughtResult.confidence !== undefined) {
-        result.confidence = thoughtResult.confidence;
-        state.currentDecision.confidence = thoughtResult.confidence;
-      }
-      
-      if (thoughtResult.summary) {
-        result.summary = thoughtResult.summary;
-        state.currentDecision.summary = thoughtResult.summary;
-      }
-      
-      if (thoughtResult.suggestions) {
+      if (thoughtResult.suggestions && Object.keys(thoughtResult.suggestions).length > 0) {
         result.suggestions = {
           ...result.suggestions,
           ...thoughtResult.suggestions
@@ -1197,10 +1212,7 @@ export class IntelligentAgent {
       
       if (thoughtResult.timeline) {
         result.timeline = thoughtResult.timeline;
-      }
-      
-      if (thoughtResult.resourceAllocation) {
-        result.resourceAllocation = thoughtResult.resourceAllocation;
+        state.currentDecision.timeline = thoughtResult.timeline;
       }
     }
     // 如果需要，可以添加其他类型的结果更新逻辑
@@ -1243,6 +1255,7 @@ export class IntelligentAgent {
         resourceAllocation: initialAnalysis.resourceAllocation || { concerns: [] },
         suggestions: initialAnalysis.suggestions || {},
         thoughtProcess: [] as ThoughtStep[],
+        jiraIssues: normalizedInput.jiraIssues || {},
         metaData: {
           llmCallCount,
           llmCallTokens,
@@ -1252,9 +1265,6 @@ export class IntelligentAgent {
       };
       
       // 如果有Jira数据，添加到结果
-      if (initialAnalysis.jiraData) {
-        result.jiraData = initialAnalysis.jiraData;
-      }
 
       // 执行思考-行动循环
       await this.loopThinking(result, normalizedInput, initialAnalysis, config, context, usedTools);
@@ -1562,7 +1572,7 @@ export class IntelligentAgent {
         shouldStore: false,
         shouldNotify: false,
         confidence: 0,
-        reasons: ["分析失败"],
+        reasonsToStore: ["分析失败"],
         entities: {}
       };
     }
@@ -1669,7 +1679,7 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     "shouldStore": false,
     "shouldNotify": false,
     "confidence": 0.7,
-    "reasons": ["存储/忽略的理由1", "理由2"],
+    "reasonsToStore": ["存储/忽略的理由1", "理由2"],
     "notificationPriority": "low|medium|high",
     "replyAdvice": "",
     
@@ -1738,7 +1748,7 @@ ${specialNotes}
     const projectType = normalizedInput.type || 'generic'; // 可能的类型：jira_ticket, release, sprint, project
     
     // 处理可能的Jira数据
-    const jiraData = normalizedInput.jiraData || normalizedInput.jiraData || null;
+    const jiraIssues = normalizedInput.jiraIssues || {}; // 新增支持多个JIRA issues
     
     // 构建上下文信息
     const contextInfo = [
@@ -1755,15 +1765,21 @@ ${specialNotes}
     
     // 构建Jira数据信息
     let jiraInfo = '';
-    if (jiraData) {
-      jiraInfo = `
-Jira工单信息:
-- 工单ID: ${jiraData.key || jiraData.id || '未知'}
-${jiraData.summary || jiraData.fields?.summary ? `- 摘要: ${jiraData.summary || jiraData.fields?.summary}` : ''}
-- 工单状态: ${jiraData.status || jiraData.fields?.status?.name || '未知'}
-- 负责人: ${jiraData.assignee || jiraData.fields?.assignee?.displayName || '未知'}
-- 预计完成时间: ${jiraData.duedate || jiraData.fields?.duedate || '未知'}
-`;
+    // 处理多个Jira工单信息
+    if (jiraIssues && Object.keys(jiraIssues).length > 0) {
+      const jiraKeys = Object.keys(jiraIssues);
+      jiraInfo += `
+多个Jira工单信息:`;
+      
+      jiraKeys.forEach(key => {
+        const issue = jiraIssues[key];
+        jiraInfo += `
+- 工单ID: ${issue.key || issue.id || key}
+${issue.summary || issue.fields?.summary ? `  - 摘要: ${issue.summary || issue.fields?.summary}` : ''}
+  - 工单状态: ${issue.status || issue.fields?.status?.name || '未知'}
+  - 负责人: ${issue.assignee || issue.fields?.assignee?.displayName || '未知'}
+  - 预计完成时间: ${issue.duedate || issue.fields?.duedate || '未知'}`;
+      });
     }
     
     // 构建项目内容描述
@@ -1879,14 +1895,6 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     "milestones": [{"name": "里程碑名称", "date": "日期", "status": "状态"}],
     "dependencies": [{"from": "项目A", "to": "项目B", "type": "类型"}]
   },
-  
-  // Jira相关数据
-  "jiraData": {
-    "status": "Jira工单状态",
-    "assignee": "Jira负责人",
-    "updated": "最后更新时间",
-    "comments": ["Jira评论1", "Jira评论2"],
-    "statusMatch": true|false
   }
 }
 `;
@@ -2376,7 +2384,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
 - 需要通知: ${state.currentDecision.shouldNotify ? '是' : '否'}
 - 置信度: ${state.currentDecision.confidence || 0}
 - 摘要: ${state.currentDecision.summary || '无摘要'}
-- 理由: ${state.currentDecision.reasons?.join(', ') || '无理由'}
+- 理由: ${state.currentDecision.reasonsToStore?.join(', ') || '无理由'}
 - 通知优先级: ${state.currentDecision.notificationPriority || 'low'}
 - 回复建议: ${state.currentDecision.replyAdvice || '无建议'}
 `;
@@ -2386,7 +2394,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
         stateDescription = `
 当前分析的项目: ${state.input.project?.name|| '未命名项目'}
 项目ID: ${state.input.project?.id || '未知ID'}
-状态: ${state.input.project?.status || state.input.jiraData?.status || '未知状态'}
+状态: ${state.input.project?.status || '未知状态'}
 负责人: ${state.input.project?.owner || '未知'}
 
 当前分析结果:
@@ -2494,11 +2502,29 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
   "isImportant": true|false,
   "shouldStore": true|false,
   "shouldNotify": true|false,
-  "confidence": 0.9,
   "summary": "最终摘要",
-  "reasons": ["理由1", "理由2"],
+  "reasonsToStore": ["理由1", "理由2"],
   "notificationPriority": "high|medium|low",
-  "replyAdvice": "回复建议"
+  ${analysisType === 'message' ? '"replyAdvice": "回复建议",' : ''}
+  ${analysisType === 'meeting' ? '"topics": ["topic1", "topic2"],' : ''}
+  ${analysisType === 'document' ? '"keyThemes": ["theme1", "theme2"],' : ''}
+  ${analysisType === 'project' ? '"riskLevel": "low|medium|high",' : ''}
+  ${analysisType === 'project' ? '"timeline": {onTrack: true|false, concerns: []},' : ''}
+  ${analysisType === 'project' ? `"suggestions": {
+    "status": "(In Progress|Done|Blocked|Released)", // 用英文直接填入具体的状态值（如：进行中、已完成、阻塞中），没有变化可留空
+    "statusReason": "建议修改状态的原因", // 用中文给出状态变化的原因
+    "owner": "", // 用英文直接填入具体的人名，没有变化可留空
+    "ownerReason": "建议修改负责人的原因", // 用中文给出修改负责人的原因
+    "track": "", // 用英文直接填入具体的赛道名称或团队名，没有变化可留空
+    "highlights": ["highlight1", "highlight2"], // 用英文直接填入具体的备注内容，没有变化可留空
+    "highlightsReason": "建议修改备注的原因", // 用中文给出备注变化的原因
+    "actionItems": ["actionItem1", "actionItem2"],  // 用英文直接填入具体的行动项，没有变化可留空
+    "actionItemsReason": "建议修改行动项的原因", // 用中文给出行动项变化的原因
+    "documentation": ["文档更新建议"],
+    "risks": ["风险描述1", "风险描述2"],
+    "followUp": ["后续跟进项1", "后续跟进项2"]
+  },` : ''}
+  "confidence": 0.9
 }
 `;
   }

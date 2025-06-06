@@ -16,6 +16,7 @@ import {
 // 静态导入分析器相关模块，避免动态加载问题
 import { SlideAnalyzerFactoryImpl } from './analyzers/analyzerFactory';
 import { LLMContentAnalyzer } from './analyzers/llmAnalyzer';
+import { JiraTicket } from './types';
 
 /**
  * 项目数据接口定义
@@ -27,6 +28,7 @@ export interface ProjectData {
   owner: string;           // 负责人
   track?: string;          // 所属赛道
   comments?: string;       // 备注/行动项
+  description?: string;    // 项目描述
   slideElementId?: string; // 幻灯片元素ID
   row?: number;            // 表格行号
   slideId?: string;        // 幻灯片ID
@@ -38,6 +40,7 @@ export interface ProjectData {
     track?: number;
     comments?: number;
   };
+  [key: string]: any;      // 支持其他动态属性
 }
 
 /**
@@ -60,8 +63,7 @@ export interface ProjectUpdateSuggestion {
   suggestedCommentsReason?: string;
   reason: string[];
   sourceInfo: {
-    jiraStatus?: string;
-    jiraComments?: string[];
+    jiraIssues?: JiraTicket[];
     chatHistory?: Array<{
       content: string;
       source: string;
