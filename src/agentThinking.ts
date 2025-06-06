@@ -365,9 +365,9 @@ export class IntelligentAgent {
           } else {
             // 构建JQL查询
             let jql = '';
-            
-            if (params.project) {
-              jql += `project = ${params.project}`;
+              
+            if (params.issueIds) {
+              jql += jql ? ` AND key IN (${params.issueIds.map((id: string) => `"${id}"`).join(',')})` : `key IN (${params.issueIds.map((id: string) => `"${id}"`).join(',')})`;
             }
               
             if (params.status) {

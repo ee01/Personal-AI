@@ -23,6 +23,7 @@ export interface JiraTicket {
   updated?: string;
   duedate?: string;
   description?: string;
+  url?: string;
 }
 
 // 新的智能Agent系统类型导出
