@@ -1,9 +1,9 @@
-import * as React from 'react';
+
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
-import { analyzeMessages } from './messageDealing';
-import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from './background';
-import { getEnvConfig } from './utils';
+import { analyzeMessages } from '../messageDealing';
+import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../background';
+import { getEnvConfig } from '../utils';
 
 interface TopicItem {
     id: string;

@@ -180,7 +180,7 @@ interface ProjectData {
           ▼                                                          ▼
 ┌───────────────────────┐                               ┌────────────────────────┐
 │                       │                               │                        │
-│  项目分析结果弹窗      │                               │  intelligentAgent.ts   │
+│  项目分析结果弹窗      │                               │  agentThinking.ts   │
 │  (单独HTML页面)        │                               │  (项目数据分析引擎)    │
 │                       │                               │                        │
 └───────────────────────┘                               └────────────────────────┘
@@ -333,7 +333,7 @@ interface ProjectData {
    - 执行批量内容更新操作
 
 3. **项目分析引擎**
-   - 使用intelligentAgent处理项目信息
+   - 使用agentThinking处理项目信息
    - 收集并分析相关Jira工单
    - 分析聊天历史记录中的相关信息
    - 生成状态对比和更新建议
@@ -356,7 +356,7 @@ interface ProjectData {
    - 处理更新过程中可能出现的错误
 
 3. **跨API数据整合**
-   - 解决方案: 使用intelligentAgent工具协调不同来源的数据
+   - 解决方案: 使用agentThinking工具协调不同来源的数据
    - 设计统一的数据模型表示项目状态与更新
 
 4. **用户友好的更新界面**
@@ -375,7 +375,7 @@ interface ProjectData {
 3. ✅ 创建slide.ts模块处理Google Slides API操作
 4. ✅ 在popup.tsx中添加新的功能按钮
 5. ✅ 使用Google Slides API获取幻灯片内容
-6. ✅ 复用intelligentAgent进行数据收集和分析
+6. ✅ 复用agentThinking进行数据收集和分析
 7. ✅ 设计和开发项目分析结果展示界面
 8. ✅ 实现Slides内容更新功能
 9. ✅ 优化分析结果界面，符合Chrome扩展安全策略

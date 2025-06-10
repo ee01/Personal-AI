@@ -14,8 +14,6 @@ import {
   AnalysisContext,
   ProjectAnalysisResult
 } from './interfaces/analysisInterfaces';
-import { naturalLanguageQuery } from './vectorStore';
-import { getEnvConfig } from './utils';
 import { 
   getProjectsFromSlide, 
   applyProjectUpdates as applySlideUpdates, 
@@ -38,18 +36,6 @@ export interface DisplaySlideAnalysisResult {
     keyFindings: string[];
   };
 }
-
-// 不再需要扩展MessageProcessResult接口
-// 使用ProjectAnalysisResult代替
-// interface ExtendedMessageProcessResult extends MessageProcessResult {
-//   enrichedData?: {
-//     suggestedStatus?: string;
-//     suggestedOwner?: string;
-//     suggestedTrack?: string;
-//     suggestedComments?: string;
-//     [key: string]: any;
-//   };
-// }
 
 // 主监听器
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

@@ -33,11 +33,10 @@ alwaysApply: true
 
 | 功能关键词 | 相关文档路径 |
 |-----------|------------|
+| 自动更新, 文档更新 | docs/autoupdate.mdc |
+| agentThinking, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/agent_thinking.mdc |
 | Google Slides Analyzer, Slides分析器, 幻灯片分析器 | docs/features/google_slides_analyzer.mdc |
 | Google Slides Prompt, Slides提示, 幻灯片提示 | docs/features/google_slides_analyzer_prompt.mdc |
-| 自动更新, 文档更新 | docs/autoupdate.mdc |
-| IntelligentAgent, 智能Agent, 旧版Agent | docs/features/intelligent_agent.mdc |
-| agentThinking, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/agent_thinking.mdc |
 
 ### 源代码与文档关联映射
 
@@ -48,7 +47,6 @@ alwaysApply: true
 | src/contentScriptGoogleSlide.tsx | docs/features/google_slides_analyzer.mdc, docs/features/google_slides_analyzer_prompt.mdc |
 | src/slide.ts | docs/features/google_slides_analyzer.mdc |
 | src/agentThinking.ts | docs/features/agent_thinking.mdc |
-| src/intelligentAgent.ts | docs/features/intelligent_agent.mdc |
 | src/jira.ts | docs/features/google_slides_analyzer.mdc |
 | src/vectorStore.ts | docs/features/intelligent_agent.mdc, docs/features/agent_thinking.mdc |
 
@@ -73,11 +71,7 @@ alwaysApply: true
    - 调整思考-行动循环逻辑
    - 更新LLM调用方式
 
-4. **兼容层调整**：
-   - 修改与旧版`intelligentAgent.ts`的兼容机制
-   - 更新结果格式转换逻辑
-
-5. **接口定义变更**：
+4. **接口定义变更**：
    - 修改`AnalysisConfig`、`AnalysisContext`等接口
    - 更新各类分析结果接口
 

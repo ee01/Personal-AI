@@ -47,7 +47,7 @@ alwaysApply: true
 系统架构设计包括:
 - Google Slides页面内容脚本
 - 项目分析结果弹窗
-- intelligentAgent.ts项目数据分析引擎
+- agentThinking.ts项目数据分析引擎
 - Slides API和Jira API调用集成
 - 聊天历史查询功能
 
