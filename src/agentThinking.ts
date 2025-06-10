@@ -57,8 +57,6 @@ function registerTool(tool: Tool): void {
   console.log(`工具已注册: ${tool.name} (${tool.id})`);
 }
 
-// 导入旧版IntelligentAgent相关接口以支持兼容层
-// 从旧版intelligentAgent.ts文件导出的接口
 export interface MessageProcessResult {
   isImportant: boolean;
   shouldStore: boolean;
@@ -360,6 +358,7 @@ export class IntelligentAgent {
               duedate: responseData.fields.duedate,
               comments: responseData.fields.comment.comments.splice(-3).map((comment: any) => comment.author.displayName + ': ' + comment.body).filter((comment: string) => !excludeCommentKeyworkds.some(keyword => comment.includes(keyword))),
               description: responseData.fields.description,
+              url: `${jiraBaseUrl}/browse/${responseData.key}`,
             };
             resultMessage = `[${params.issueId}][${result.status}]的查询数据: ${result.summary}\n - 执行者: ${result.assignee}\n - 预计完成时间: ${result.duedate}\n - 评论:\n  - ${result.comments.join('\n  - ').replace('\n', '')}`;
           } else {
@@ -429,7 +428,8 @@ export class IntelligentAgent {
               reporter: issue.fields.reporter?.displayName || '',
               priority: issue.fields.priority.name,
               duedate: issue.fields.duedate,
-              description: issue.fields.description
+              description: issue.fields.description,
+              url: `${jiraBaseUrl}/browse/${issue.key}`
             }));
             resultMessage = `[${result.map((issue: any) => `[${issue.key}][${issue.status}]${issue.summary}`).join('\n')}`;
           }

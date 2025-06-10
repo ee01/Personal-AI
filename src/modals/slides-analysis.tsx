@@ -1,8 +1,8 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
-import { ProjectUpdateSuggestion } from './slide';
-import { DisplaySlideAnalysisResult } from './contentScriptGoogleSlide';
+import { ProjectUpdateSuggestion } from '../slide';
+import { DisplaySlideAnalysisResult } from '../contentScriptGoogleSlide';
 
 interface AnalysisData {
     result: DisplaySlideAnalysisResult;
