@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自定义提示词与用户上下文配置</title>
+    <link rel="stylesheet" href="options.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+        }
+        
+        .config-container {
+            max-width: 100%;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .config-header {
+            background: linear-gradient(135deg, #4285F4, #34A853);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .config-header h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 500;
+        }
+        
+        .config-tabs {
+            display: flex;
+            border-bottom: 1px solid #e0e0e0;
+            background: white;
+        }
+        
+        .config-tab {
+            flex: 1;
+            padding: 12px 16px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+        }
+        
+        .config-tab.active {
+            color: #4285F4;
+            border-bottom-color: #4285F4;
+        }
+        
+        .config-tab:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .config-content {
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .config-section {
+            display: none;
+        }
+        
+        .config-section.active {
+            display: block;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        
+        .form-group textarea {
+            min-height: 120px;
+            resize: vertical;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #4285F4;
+            box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+        }
+        
+        .form-help {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+        
+        .dynamic-list {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            background: #f8f9fa;
+        }
+        
+        .dynamic-item {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+        
+        .dynamic-item input {
+            flex: 1;
+            margin: 0;
+        }
+        
+        .dynamic-item button {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .add-item-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .config-actions {
+            padding: 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        
+        .config-actions button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .btn-primary {
+            background: #4285F4;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .status-message {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .user-info-display {
+            background: #e3f2fd;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        
+        @media (max-width: 768px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+            
+            .config-tabs {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="config-container">
+        <div class="config-header">
+            <h1>自定义提示词与用户上下文配置</h1>
+        </div>
+        
+        <div class="config-tabs">
+            <button class="config-tab active" data-tab="prompts">自定义提示词</button>
+            <button class="config-tab" data-tab="personal">个人信息</button>
+            <button class="config-tab" data-tab="team">团队设置</button>
+            <button class="config-tab" data-tab="focus">工作关注点</button>
+            <button class="config-tab" data-tab="analysis">分析偏好</button>
+        </div>
+        
+        <div class="config-content">
+            <div id="status-message" class="status-message" style="display: none;"></div>
+            
+            <!-- 自定义提示词 Tab -->
+            <div class="config-section active" data-section="prompts">
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="enable-message-prompt">
+                        <label for="enable-message-prompt">启用消息分析自定义提示词</label>
+                    </div>
+                    <textarea id="message-prompt" placeholder="输入消息分析的额外提示词，将注入到消息分析流程中指导AI如何分析消息...
+
+示例：
+- 特别关注项目风险和时间节点
+- 识别需要跟进的行动项
+- 提取与stakeholders相关的信息"></textarea>
+                    <div class="form-help">此内容将注入到消息分析流程中，用于指导AI如何分析消息</div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="enable-project-prompt">
+                        <label for="enable-project-prompt">启用项目分析自定义提示词</label>
+                    </div>
+                    <textarea id="project-prompt" placeholder="输入项目分析的额外提示词，将注入到项目分析流程中指导AI如何分析项目...
+
+示例：
+- 重点评估交付风险和依赖关系
+- 关注跨团队协作的阻塞点
+- 识别需要上报给管理层的问题"></textarea>
+                    <div class="form-help">此内容将注入到项目分析流程中，用于指导AI如何分析项目</div>
+                </div>
+            </div>
+            
+            <!-- 个人信息 Tab -->
+            <div class="config-section" data-section="personal">
+                <div class="user-info-display" id="current-user-info">
+                    <strong>当前用户信息:</strong> 
+                    <span id="display-name">加载中...</span> | 
+                    <span id="display-email">加载中...</span>
+                </div>
+                
+                <div class="two-column">
+                    <div class="form-group">
+                        <label for="user-title">职位头衔</label>
+                        <input type="text" id="user-title" placeholder="如: 敏捷教练, 高级开发工程师">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="user-department">部门/团队</label>
+                        <input type="text" id="user-department" placeholder="如: Integration团队, 产品部">
+                    </div>
+                </div>
+                
+                <div class="two-column">
+                    <div class="form-group">
+                        <label for="user-location">工作地点</label>
+                        <input type="text" id="user-location" placeholder="如: 上海, 美国西雅图">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="user-timezone">时区</label>
+                        <select id="user-timezone">
+                            <option value="GMT+8">GMT+8 北京时间</option>
+                            <option value="GMT-8">GMT-8 美国西部时间</option>
+                            <option value="GMT-5">GMT-5 美国东部时间</option>
+                            <option value="GMT+0">GMT+0 格林威治时间</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="direct-manager">直接汇报上级</label>
+                    <input type="text" id="direct-manager" placeholder="如: Sophia (Jinmei) Lin - 产品总监">
+                </div>
+                
+                <div class="form-group">
+                    <label>关键利益相关者</label>
+                    <div id="stakeholders-list" class="dynamic-list">
+                        <!-- 动态生成的利益相关者列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-stakeholder-btn">+ 添加利益相关者</button>
+                </div>
+            </div>
+            
+            <!-- 团队设置 Tab -->
+            <div class="config-section" data-section="team">
+                <div class="form-group">
+                    <label for="team-name">团队名称</label>
+                    <input type="text" id="team-name" placeholder="如: Integration团队">
+                </div>
+                
+                <div class="form-group">
+                    <label for="team-mission">团队使命/职责</label>
+                    <textarea id="team-mission" placeholder="如: 负责公司产品在各个平台如Salesforce, Outlook的集成"></textarea>
+                </div>
+                
+                <div class="two-column">
+                    <div class="form-group">
+                        <label for="team-size">团队规模</label>
+                        <input type="number" id="team-size" placeholder="人数" min="1">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="working-hours">工作时间</label>
+                        <input type="text" id="working-hours" placeholder="如: 北京时间9:00-18:00">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>团队成员</label>
+                    <div id="team-members-list" class="dynamic-list">
+                        <!-- 动态生成的团队成员列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-team-member-btn">+ 添加团队成员</button>
+                </div>
+            </div>
+            
+            <!-- 工作关注点 Tab -->
+            <div class="config-section" data-section="focus">
+                <div class="form-group">
+                    <label>主要关注点</label>
+                    <div id="primary-concerns-list" class="dynamic-list">
+                        <!-- 动态生成的关注点列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-primary-concern-btn">+ 添加关注点</button>
+                    <div class="form-help">如: 项目风险, 依赖方进展, 交付质量</div>
+                </div>
+                
+                <div class="form-group">
+                    <label>业务领域</label>
+                    <div id="business-domains-list" class="dynamic-list">
+                        <!-- 动态生成的业务领域列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-business-domain-btn">+ 添加业务领域</button>
+                    <div class="form-help">如: 平台集成, API开发, 第三方对接</div>
+                </div>
+                
+                <div class="form-group">
+                    <label>关键指标</label>
+                    <div id="key-metrics-list" class="dynamic-list">
+                        <!-- 动态生成的关键指标列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-key-metric-btn">+ 添加关键指标</button>
+                    <div class="form-help">如: 发布成功率, bug数量, 客户满意度</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="risk-tolerance">风险承受能力</label>
+                    <select id="risk-tolerance">
+                        <option value="low">低风险偏好</option>
+                        <option value="medium">适中</option>
+                        <option value="high">高风险承受</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- 分析偏好 Tab -->
+            <div class="config-section" data-section="analysis">
+                <h3>消息分析偏好</h3>
+                
+                <div class="form-group">
+                    <label>消息分析关注领域</label>
+                    <div id="message-focus-areas-list" class="dynamic-list">
+                        <!-- 动态生成的关注领域列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-message-focus-area-btn">+ 添加关注领域</button>
+                    <div class="form-help">如: 风险识别, 行动项提取, 决策点</div>
+                </div>
+                
+                <div class="form-group">
+                    <label>忽略的话题</label>
+                    <div id="ignored-topics-list" class="dynamic-list">
+                        <!-- 动态生成的忽略话题列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-ignored-topic-btn">+ 添加忽略话题</button>
+                    <div class="form-help">如: 日常闲聊, 技术细节讨论</div>
+                </div>
+                
+                <div class="form-group">
+                    <label>紧急关键词</label>
+                    <div id="urgency-keywords-list" class="dynamic-list">
+                        <!-- 动态生成的紧急关键词列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-urgency-keyword-btn">+ 添加紧急关键词</button>
+                    <div class="form-help">触发高优先级的关键词，如: 紧急, 阻塞, 延期</div>
+                </div>
+                
+                <hr style="margin: 30px 0;">
+                
+                <h3>项目分析偏好</h3>
+                
+                <div class="form-group">
+                    <label>风险因素</label>
+                    <div id="risk-factors-list" class="dynamic-list">
+                        <!-- 动态生成的风险因素列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-risk-factor-btn">+ 添加风险因素</button>
+                </div>
+                
+                <div class="form-group">
+                    <label>成功标准</label>
+                    <div id="success-criteria-list" class="dynamic-list">
+                        <!-- 动态生成的成功标准列表 -->
+                    </div>
+                    <button type="button" class="add-item-btn" id="add-success-criteria-btn">+ 添加成功标准</button>
+                </div>
+                
+                <div class="form-group">
+                    <label for="review-cycle">评估周期</label>
+                    <select id="review-cycle">
+                        <option value="daily">每日评估</option>
+                        <option value="weekly">每周评估</option>
+                        <option value="biweekly">每两周评估</option>
+                        <option value="milestone">里程碑检查</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <div class="config-actions">
+            <button type="button" class="btn-secondary" id="reset-config-btn">重置为默认</button>
+            <button type="button" class="btn-primary" id="reload-config-btn">重新加载</button>
+            <button type="button" class="btn-success" id="save-config-btn">保存配置</button>
+        </div>
+    </div>
+    
+    <script src="prompt-config.js"></script>
+</body>
+</html> 

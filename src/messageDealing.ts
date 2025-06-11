@@ -129,6 +129,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			
 			// 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
 			const agent = new IntelligentAgent();
+			chrome.storage.onChanged.addListener((changes, namespace) => {
+			  if (namespace === 'local' && changes.scheduleActive) {
+				const scheduleActive = changes.scheduleActive.newValue;
+				if (!scheduleActive && isScheduledTask) agent.stop();
+			  }
+			});
 			const allResults = await agent.analyze(messageGroups, {type: 'message'}, {concernedRules: concernedItems}, results => {
 				console.log('已分析', results[0].groupIndex+1, '/' ,data.length ,'，当前群组 [', results[0].messageContext?.groupName, '] 处理结果:', results);
 				chrome.storage.local.set({
