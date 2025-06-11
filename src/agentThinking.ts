@@ -137,13 +137,218 @@ export interface ThoughtStep {
  * 核心智能Agent类，提供通用分析框架
  */
 export class IntelligentAgent {
-  private thoughtProcess: ThoughtStep[] = [];
+  private tools: Map<string, Tool> = new Map();
+  private thoughtProcess: ThoughtStep[] = [];  
   private aggregateLlmCallCount = 0;
   private aggregateLlmCallTokens = 0;
-  
+  private stopRequested = false;
+
   constructor() {
-    // 确保工具已注册
     this.initializeDefaultTools();
+  }
+  
+  /**
+   * 从 chrome.storage.local 加载用户自定义配置
+   */
+  private async loadUserConfiguration(): Promise<{
+    customPrompts: {
+      message?: {
+        enabled: boolean;
+        content: string;
+        position?: 'before' | 'after_analysis_guide';
+      };
+      project?: {
+        enabled: boolean;
+        content: string;
+        position?: 'before' | 'after_analysis_guide';
+      };
+    };
+    userContextConfig: {
+      personalInfo: {
+        name: string;
+        email: string;
+        title: string;
+        department: string;
+        location: string;
+      };
+      reportingInfo: {
+        directManager: {
+          name: string;
+          title: string;
+          relationship: string;
+          reportingFrequency: string;
+        };
+        stakeholders: Array<{
+          name: string;
+          title: string;
+          relationship: string;
+          reportingFrequency: string;
+        }>;
+      };
+      teamInfo: {
+        teamName: string;
+        teamMission: string;
+        teamSize: number;
+        teamMembers: Array<{
+          name: string;
+          role: string;
+          responsibilities: string;
+        }>;
+        workingHours: {
+          timezone: string;
+          hours: string;
+        };
+      };
+      workFocus: {
+        primaryConcerns: string[];
+        businessDomains: string[];
+        keyMetrics: string[];
+        riskTolerance: string;
+      };
+      communicationContext: {
+        audienceType: string;
+        communicationStyle: string;
+        culturalContext: string;
+        languagePreference: string;
+        reportingFormat: string;
+      };
+      analysisPreferences: {
+        messageFocusAreas: string[];
+        projectFocusAreas: string[];
+        ignoredTopics: string[];
+        urgencyKeywords: string[];
+      };
+    };
+  }> {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['customPrompts', 'userContextConfig'], (result) => {
+        const defaultConfig = {
+          customPrompts: {
+            messageAnalysis: '',
+            projectAnalysis: ''
+          },
+          userContextConfig: {
+            personalInfo: {
+              name: '',
+              email: '',
+              title: '',
+              department: '',
+              location: ''
+            },
+            reportingInfo: {
+              directManager: {
+                name: '',
+                title: '',
+                relationship: '',
+                reportingFrequency: ''
+              },
+              stakeholders: [] as Array<{
+                name: string;
+                title: string;
+                relationship: string;
+                reportingFrequency: string;
+              }>
+            },
+            teamInfo: {
+              teamName: '',
+              teamMission: '',
+              teamSize: 0,
+              teamMembers: [] as Array<{
+                name: string;
+                role: string;
+                responsibilities: string;
+              }>,
+              workingHours: {
+                timezone: '',
+                hours: ''
+              }
+            },
+            workFocus: {
+              primaryConcerns: [] as string[],
+              businessDomains: [] as string[],
+              keyMetrics: [] as string[],
+              riskTolerance: ''
+            },
+            communicationContext: {
+              audienceType: '',
+              communicationStyle: '',
+              culturalContext: '',
+              languagePreference: '',
+              reportingFormat: ''
+            },
+            analysisPreferences: {
+              messageFocusAreas: [] as string[],
+              projectFocusAreas: [] as string[],
+              ignoredTopics: [] as string[],
+              urgencyKeywords: [] as string[]
+            }
+          }
+        };
+
+        resolve({
+          customPrompts: result.customPrompts || defaultConfig.customPrompts,
+          userContextConfig: result.userContextConfig || defaultConfig.userContextConfig
+        });
+      });
+    });
+  }
+
+  /**
+   * 构建用户上下文信息字符串
+   */
+  private buildUserContextInfo(userContextConfig: any): string {
+    const parts: string[] = [];
+
+    // 个人信息
+    if (userContextConfig.personalInfo?.name) {
+      parts.push(`用户姓名: ${userContextConfig.personalInfo.name}`);
+    }
+    if (userContextConfig.personalInfo?.title) {
+      parts.push(`职位头衔: ${userContextConfig.personalInfo.title}`);
+    }
+    if (userContextConfig.personalInfo?.department) {
+      parts.push(`所属部门: ${userContextConfig.personalInfo.department}`);
+    }
+
+    // 汇报关系
+    if (userContextConfig.reportingInfo?.directManager?.name) {
+      parts.push(`直接汇报经理: ${userContextConfig.reportingInfo.directManager.name} (${userContextConfig.reportingInfo.directManager.title})`);
+    }
+    if (userContextConfig.reportingInfo?.stakeholders?.length > 0) {
+      const stakeholders = userContextConfig.reportingInfo.stakeholders
+        .map((s: any) => `${s.name} (${s.title})`)
+        .join(', ');
+      parts.push(`关键干系人: ${stakeholders}`);
+    }
+
+    // 团队信息
+    if (userContextConfig.teamInfo?.teamName) {
+      parts.push(`团队名称: ${userContextConfig.teamInfo.teamName}`);
+    }
+    if (userContextConfig.teamInfo?.teamMission) {
+      parts.push(`团队使命: ${userContextConfig.teamInfo.teamMission}`);
+    }
+    if (userContextConfig.teamInfo?.teamMembers?.length > 0) {
+      const members = userContextConfig.teamInfo.teamMembers
+        .map((m: any) => `${m.name} (${m.role})`)
+        .join(', ');
+      parts.push(`团队成员: ${members}`);
+    }
+
+    // 工作重点
+    if (userContextConfig.workFocus?.primaryConcerns?.length > 0) {
+      parts.push(`主要关注点: ${userContextConfig.workFocus.primaryConcerns.join(', ')}`);
+    }
+    if (userContextConfig.workFocus?.businessDomains?.length > 0) {
+      parts.push(`业务领域: ${userContextConfig.workFocus.businessDomains.join(', ')}`);
+    }
+
+    // 分析偏好
+    if (userContextConfig.analysisPreferences?.urgencyKeywords?.length > 0) {
+      parts.push(`紧急关键词: ${userContextConfig.analysisPreferences.urgencyKeywords.join(', ')}`);
+    }
+
+    return parts.length > 0 ? `# 用户上下文信息\n${parts.join('\n')}\n` : '';
   }
   
   /**
@@ -673,6 +878,11 @@ export class IntelligentAgent {
       if (envConfig.ANALYZE_BY_GROUP === true) {
         // 为每个消息组单独批量处理
         for (let i = 0; i < input.length; i++) {
+          // 检查是否需要继续分析
+          if (this.stopRequested) {
+            console.log('分析任务已被终止');
+            break;
+          }
           const group = input[i];
           const groupContext = {
             ...context,
@@ -1534,16 +1744,16 @@ export class IntelligentAgent {
         analysisPrompt = await this.buildMessageAnalysisPrompt(normalizedInput, config, context);
         break;
       case 'project':
-        analysisPrompt = this.buildProjectAnalysisPrompt(normalizedInput, config, context);
+        analysisPrompt = await this.buildProjectAnalysisPrompt(normalizedInput, config, context);
         break;
       case 'meeting':
-        analysisPrompt = this.buildMeetingAnalysisPrompt(normalizedInput, config, context);
+        analysisPrompt = await this.buildMeetingAnalysisPrompt(normalizedInput, config, context);
         break;
       case 'document':
-        analysisPrompt = this.buildDocumentAnalysisPrompt(normalizedInput, config, context);
+        analysisPrompt = await this.buildDocumentAnalysisPrompt(normalizedInput, config, context);
         break;
       default:
-        analysisPrompt = this.buildGenericAnalysisPrompt(normalizedInput, config, context);
+        analysisPrompt = await this.buildGenericAnalysisPrompt(normalizedInput, config, context);
     }
     
     // 如果存在自定义分析提示，则使用自定义提示
@@ -1587,6 +1797,9 @@ export class IntelligentAgent {
     config: AnalysisConfig,
     context?: AnalysisContext
   ): Promise<string> {
+    // 加载用户自定义配置
+    const userConfig = await this.loadUserConfiguration();
+    
     // 获取环境配置
     const envConfig = await getEnvConfig();
     const analyzeByGroup = envConfig.ANALYZE_BY_GROUP === true;
@@ -1618,6 +1831,9 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
         context?.currentUser ? `当前用户: ${context.currentUser}` : ''
       ].filter(Boolean).join('\n');
     }
+    
+    // 构建用户上下文信息
+    const userContextInfo = this.buildUserContextInfo(userConfig.userContextConfig);
     
     // 构建关注规则
     const concernedRules = context?.concernedRules || [];
@@ -1652,6 +1868,11 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
 7. 这条消息可能与哪些其他信息或系统(如JIRA, Wiki)相关？
 8. 是否建议使用某些工具来进一步处理这条消息？如果是，请推荐工具和参数。
 ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是对前面消息的回应？` : ''}`;
+    
+    // 构建自定义prompt部分
+    const customPromptSection = userConfig.customPrompts?.message?.enabled 
+      ? `\n# 用户自定义分析要求\n${userConfig.customPrompts.message.content}\n` 
+      : '';
     
     // 构建返回格式说明
     const returnFormat = `请以JSON数组格式返回分析结果，每个元素对应一条消息:
@@ -1720,13 +1941,15 @@ ${filterRulesInfo}
 
 ${depthNote}
 
+${userContextInfo}
+
 # 可用工具
 以下是可用于处理消息的工具，可以在分析时考虑是否需要使用这些工具：
 ${toolDescriptions}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
 ${analysisPoints}
-
+${customPromptSection}
 ${returnFormat}
 
 ${specialNotes}
@@ -1741,7 +1964,10 @@ ${specialNotes}
   /**
    * 构建项目分析提示
    */
-  private buildProjectAnalysisPrompt(normalizedInput: ProjectInput, config: AnalysisConfig, context?: AnalysisContext): string {
+  private async buildProjectAnalysisPrompt(normalizedInput: ProjectInput, config: AnalysisConfig, context?: AnalysisContext): Promise<string> {
+    // 加载用户自定义配置
+    const userConfig = await this.loadUserConfiguration();
+    
     // 获取项目基本信息
     const projectId = normalizedInput.project?.id || '未知项目ID';
     const projectName = normalizedInput.name || normalizedInput.project?.name || '未知项目';
@@ -1762,6 +1988,9 @@ ${specialNotes}
       normalizedInput.project?.track ? `赛道: ${normalizedInput.project?.track}` : '',
       normalizedInput.project?.comments ? `备注: ${normalizedInput.project?.comments}` : '',
     ].filter(Boolean).join('\n');
+    
+    // 构建用户上下文信息
+    const userContextInfo = this.buildUserContextInfo(userConfig.userContextConfig);
     
     // 构建Jira数据信息
     let jiraInfo = '';
@@ -1805,6 +2034,11 @@ ${issue.summary || issue.fields?.summary ? `  - 摘要: ${issue.summary || issue
       depthNote = '注意：这是深度分析，尽可能使用多个工具收集完整信息，做出全面判断。';
     }
     
+    // 构建自定义prompt部分
+    const customPromptSection = userConfig.customPrompts?.project?.enabled 
+      ? `\n# 用户自定义分析要求\n${userConfig.customPrompts.project.content}\n` 
+      : '';
+    
     // 构建最终提示
     return `
 分析以下项目信息，评估项目状态与风险:
@@ -1818,6 +2052,7 @@ ${contentDescription}
 
 ${depthNote}
 
+${userContextInfo}
 # 可用工具
 以下是可用于分析项目的工具:
 ${toolDescriptions}
@@ -1846,7 +2081,7 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
    - 资源分配是否合理
    - 是否有需要特别关注的子项目或工单
    - 项目文档是否需要更新
-
+${customPromptSection}
 请分析项目中可能存在的风险点，并提出相应的建议。如果需要更多信息来做判断，请指出可以使用哪些工具获取这些信息。
 
 以JSON格式返回:
@@ -1903,7 +2138,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   /**
    * 构建会议分析提示
    */
-  private buildMeetingAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): string {
+  private async buildMeetingAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): Promise<string> {
+    // 加载用户自定义配置
+    const userConfig = await this.loadUserConfiguration();
+    
     // 获取会议基本信息
     const meetingId = normalizedInput.id || normalizedInput.meetingId || '未知会议ID';
     const meetingTitle = normalizedInput.title || normalizedInput.name || '未知会议';
@@ -1921,6 +2159,9 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       normalizedInput.attendees ? `参会人员: ${Array.isArray(normalizedInput.attendees) ? normalizedInput.attendees.join(', ') : normalizedInput.attendees}` : '',
       context?.currentUser ? `当前用户: ${context.currentUser}` : ''
     ].filter(Boolean).join('\n');
+    
+    // 构建用户上下文信息
+    const userContextInfo = this.buildUserContextInfo(userConfig.userContextConfig);
     
     // 构建会议内容描述
     let contentDescription = '';
@@ -1945,9 +2186,14 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       depthNote = '注意：这是深度分析，请尽可能提取详细的会议信息，包括决策点、行动项和跟进事项。';
     }
     
+    // 构建自定义prompt部分 - 这里可以使用项目分析的自定义prompt，或创建专门的会议分析prompt
+    const customPromptSection = userConfig.customPrompts?.project?.enabled 
+      ? `\n# 用户自定义分析要求\n${userConfig.customPrompts.project.content}\n` 
+      : '';
+    
     // 构建最终提示
     return `
-分析以下会议内容，提取关键信息并总结重要决策与行动项:
+${userContextInfo}分析以下会议内容，提取关键信息并总结重要决策与行动项:
 
 会议基本信息:
 ${contextInfo}
@@ -1977,71 +2223,49 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
    
 3. 如果是规划会议:
    - 总结确定的目标和优先级
-   - 提取资源分配决策
-   - 识别关键里程碑和时间点
-   - 总结风险评估结果
+   - 识别资源分配决策
+   - 总结时间线和里程碑
+   - 明确责任分工和下一步行动${customPromptSection}
+请根据会议内容提取关键信息，重点关注决策点、行动项和后续跟进事项。
 
-请提取会议中讨论的所有主题，识别关键决策，列出所有行动项及其负责人和截止日期，并总结需要跟进的事项。
-
-以JSON格式返回:
+以JSON格式返回分析结果:
 {
-  "summary": "会议总体摘要",
+  "summary": "会议主要内容总结",
   "meetingType": "识别出的会议类型",
-  "attendees": ["参会人员1", "参会人员2"],
-  "topics": [
-    {
-      "title": "讨论主题",
-      "summary": "讨论内容摘要",
-      "keyPoints": ["要点1", "要点2"]
-    }
-  ],
-  "decisions": [
-    {
-      "topic": "相关主题",
-      "decision": "决策内容",
-      "rationale": "决策理由",
-      "stakeholders": ["相关人员"]
-    }
-  ],
+  "keyDecisions": ["决策1", "决策2"],
   "actionItems": [
     {
-      "description": "行动项描述",
-      "assignee": "负责人",
+      "item": "行动项描述",
+      "owner": "负责人",
       "dueDate": "截止日期",
-      "priority": "high|medium|low",
-      "relatedTopic": "相关主题"
+      "priority": "high|medium|low"
     }
   ],
-  "followups": [
+  "followUpMeetings": [
     {
-      "description": "需要跟进的事项",
-      "by": "跟进人",
-      "byWhen": "跟进时间"
+      "topic": "会议主题",
+      "participants": ["参与者1", "参与者2"],
+      "scheduledDate": "计划日期"
     }
   ],
+  "risks": ["风险点1", "风险点2"],
+  "blockers": ["阻碍1", "阻碍2"],
   
   // 决策和工具字段
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "use_tool|finish",
   "tools": [{
     "id": "工具ID",
-    "params": {}, // 工具所需参数
-  }], // 如果nextAction为use_tool
-  "confidence": 0.7,
+    "params": {}
+  }],
+  "confidence": 0.8,
   
-  // 会议效果评估
-  "meetingEffectiveness": {
-    "clarity": "high|medium|low", // 会议目标清晰度
-    "participation": "high|medium|low", // 参与度
-    "decisions": "effective|mixed|ineffective", // 决策有效性
-    "timeUsage": "efficient|adequate|inefficient" // 时间利用
-  },
-  
-  // 实体提取
+  // 提取的实体
   "entities": {
-    "projects": [{"name": "项目名", "status": "状态"}],
-    "issues": [{"id": "问题ID", "description": "问题描述"}],
-    "deadlines": [{"event": "事件", "date": "日期"}]
+    "people": [{"name": "人名", "role": "角色在会议中的作用"}],
+    "projects": [{"name": "项目名", "status": "讨论的状态"}],
+    "deadlines": [{"item": "事项", "date": "截止日期"}],
+    "decisions": [{"topic": "决策主题", "decision": "具体决策", "rationale": "决策理由"}]
   }
 }
 `;
@@ -2050,11 +2274,14 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   /**
    * 构建文档分析提示
    */
-  private buildDocumentAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): string {
+  private async buildDocumentAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): Promise<string> {
+    // 加载用户自定义配置
+    const userConfig = await this.loadUserConfiguration();
+    
     // 获取文档基本信息
     const documentId = normalizedInput.id || normalizedInput.documentId || '未知文档ID';
     const documentTitle = normalizedInput.title || normalizedInput.name || '未知文档';
-    const documentType = normalizedInput.type || normalizedInput.format || 'generic'; // 可能的类型：report, spec, proposal, presentation
+    const documentType = normalizedInput.type || 'generic'; // 可能的类型：specification, report, policy, guide
     
     // 构建文档上下文信息
     const contextInfo = [
@@ -2062,12 +2289,14 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       `文档标题: ${documentTitle}`,
       `文档类型: ${documentType}`,
       normalizedInput.author ? `作者: ${normalizedInput.author}` : '',
-      normalizedInput.createdAt ? `创建时间: ${normalizedInput.createdAt}` : '',
       normalizedInput.lastModified ? `最后修改: ${normalizedInput.lastModified}` : '',
       normalizedInput.version ? `版本: ${normalizedInput.version}` : '',
-      normalizedInput.tags ? `标签: ${Array.isArray(normalizedInput.tags) ? normalizedInput.tags.join(', ') : normalizedInput.tags}` : '',
+      normalizedInput.status ? `状态: ${normalizedInput.status}` : '',
       context?.currentUser ? `当前用户: ${context.currentUser}` : ''
     ].filter(Boolean).join('\n');
+    
+    // 构建用户上下文信息
+    const userContextInfo = this.buildUserContextInfo(userConfig.userContextConfig);
     
     // 构建文档内容描述
     let contentDescription = '';
@@ -2077,8 +2306,8 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       contentDescription = `文档摘要:\n${normalizedInput.summary}`;
     } else if (normalizedInput.sections && Array.isArray(normalizedInput.sections)) {
       contentDescription = `文档章节:\n${normalizedInput.sections.map((section: any, i: number) => 
-        `## ${section.title || `章节${i+1}`}\n${section.content || '无内容'}`
-      ).join('\n\n')}`;
+        `- 第${i+1}章: ${section.title || section.name || ''} ${section.summary || ''}`
+      ).join('\n')}`;
     }
     
     // 获取工具描述
@@ -2087,14 +2316,19 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     // 添加分析深度相关内容
     let depthNote = '';
     if (config.analysisDepth === 'quick') {
-      depthNote = '注意：这是快速分析，直接返回文档基本摘要和关键点。';
+      depthNote = '注意：这是快速分析，无需使用工具，直接返回基本文档摘要。';
     } else if (config.analysisDepth === 'deep') {
-      depthNote = '注意：这是深度分析，请详细提取文档结构、主题、观点、论据和建议等内容。';
+      depthNote = '注意：这是深度分析，请尽可能提取详细的文档信息，包括关键决策、行动项和风险点。';
     }
+    
+    // 构建自定义prompt部分
+    const customPromptSection = userConfig.customPrompts?.project?.enabled 
+      ? `\n# 用户自定义分析要求\n${userConfig.customPrompts.project.content}\n` 
+      : '';
     
     // 构建最终提示
     return `
-分析以下文档内容，提取关键信息和主要观点:
+${userContextInfo}分析以下文档内容，提取关键信息并总结重要洞察:
 
 文档基本信息:
 ${contextInfo}
@@ -2111,80 +2345,52 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
 # 分析指南
 根据文档类型进行有针对性的分析:
 
-1. 如果是技术规格/设计文档:
-   - 分析功能需求和技术要求
-   - 提取架构设计和组件关系
-   - 总结技术限制和依赖条件
-   - 识别可能的实现风险
+1. 如果是技术规范文档:
+   - 提取关键技术要求和约束
+   - 识别实施风险和依赖项
+   - 总结接口定义和数据结构
    
-2. 如果是项目报告/提案:
-   - 提取项目背景和问题定义
-   - 分析解决方案和论据支持
-   - 总结建议行动和预期结果
-   - 识别资源需求和时间线
+2. 如果是报告文档:
+   - 总结主要发现和结论
+   - 提取数据洞察和趋势
+   - 识别推荐的行动项
    
-3. 如果是演示文稿/培训材料:
-   - 提取主要观点和教学目标
-   - 分析内容组织和逻辑流程
-   - 总结关键示例和案例研究
-   - 识别适用场景和预期受众
+3. 如果是政策指南文档:
+   - 总结关键政策条款
+   - 识别合规要求
+   - 提取流程和程序要点${customPromptSection}
+请根据文档内容提取关键信息，重点关注可执行的洞察和行动项。
 
-请分析文档的整体结构、主要主题、关键论点和支持证据，并总结文档的主要目的和关键发现。
-
-以JSON格式返回:
+以JSON格式返回分析结果:
 {
-  "summary": "文档整体摘要",
+  "summary": "文档主要内容总结",
   "documentType": "识别出的文档类型",
-  "purpose": "文档目的",
-  "audience": "目标受众",
-  "structure": {
-    "sections": [
-      {
-        "title": "章节标题",
-        "summary": "章节内容摘要",
-        "keyPoints": ["关键点1", "关键点2"]
-      }
-    ]
-  },
-  "keyThemes": [
+  "keyInsights": ["洞察1", "洞察2"],
+  "actionItems": [
     {
-      "theme": "主题名称",
-      "description": "主题描述",
-      "relatedSections": ["相关章节"]
+      "item": "行动项描述",
+      "priority": "high|medium|low",
+      "timeline": "时间线"
     }
   ],
-  "arguments": [
-    {
-      "claim": "论点",
-      "evidence": ["支持证据1", "支持证据2"],
-      "strength": "strong|moderate|weak"
-    }
-  ],
-  "findings": ["发现1", "发现2"],
-  "recommendations": ["建议1", "建议2"],
+  "risks": ["风险点1", "风险点2"],
+  "dependencies": ["依赖项1", "依赖项2"],
   
   // 决策和工具字段
   "thought": "分析当前情况和下一步行动的详细思考过程",
   "nextAction": "use_tool|finish",
   "tools": [{
     "id": "工具ID",
-    "params": {}, // 工具所需参数
-  }], // 如果nextAction为use_tool
-  "confidence": 0.7,
+    "params": {}
+  }],
+  "confidence": 0.8,
   
-  // 质量评估
-  "documentQuality": {
-    "clarity": "high|medium|low", // 清晰度
-    "completeness": "high|medium|low", // 完整性
-    "consistency": "high|medium|low", // 一致性
-    "supportedClaims": "well|partially|poorly" // 观点支持程度
-  },
-  
-  // 实体提取
+  // 提取的实体
   "entities": {
-    "concepts": [{"name": "概念名", "definition": "定义"}],
-    "technologies": [{"name": "技术名", "context": "使用上下文"}],
-    "references": [{"text": "引用文本", "source": "来源"}]
+    "requirements": [{"item": "需求", "priority": "优先级", "status": "状态"}],
+    "stakeholders": [{"name": "干系人", "role": "角色", "responsibility": "职责"}],
+    "timelines": [{"milestone": "里程碑", "date": "日期", "status": "状态"}],
+    "resources": [{"type": "资源类型", "name": "资源名称", "allocation": "分配情况"}]
   }
 }
 `;
@@ -2193,22 +2399,29 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
   /**
    * 构建通用分析提示
    */
-  private buildGenericAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): string {
+  private async buildGenericAnalysisPrompt(normalizedInput: any, config: AnalysisConfig, context?: AnalysisContext): Promise<string> {
+    // 加载用户自定义配置
+    const userConfig = await this.loadUserConfiguration();
+    
     // 尝试确定输入类型
     let inputType = 'unknown';
-    let inputTitle = '未命名内容';
+    let inputTitle = '未知内容';
     
-    // 基于输入属性尝试推断类型
-    if (normalizedInput.message_content || normalizedInput.content && normalizedInput.sender) {
+    // 根据输入特征推断类型
+    if (normalizedInput.message_content || normalizedInput.messageContent) {
       inputType = 'message';
+    } else if (normalizedInput.project || normalizedInput.id) {
+      inputType = 'project';
+    } else if (normalizedInput.title && normalizedInput.content) {
+      inputType = 'document';
     } else if (normalizedInput.transcript || normalizedInput.attendees) {
       inputType = 'meeting';
-    } else if (normalizedInput.tickets || normalizedInput.release) {
-      inputType = 'project';
-    } else if (normalizedInput.sections || normalizedInput.author) {
-      inputType = 'document';
+    } else if (typeof normalizedInput === 'string') {
+      inputType = 'text';
+    } else if (normalizedInput.url) {
+      inputType = 'url';
     }
-    
+
     // 尝试获取标题
     if (normalizedInput.title) {
       inputTitle = normalizedInput.title;
@@ -2218,6 +2431,9 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       inputTitle = normalizedInput.subject;
     }
     
+    // 构建用户上下文信息
+    const userContextInfo = this.buildUserContextInfo(userConfig.userContextConfig);
+
     // 构建上下文信息
     const contextInfo = [
       `内容标题: ${inputTitle}`,
@@ -2256,9 +2472,19 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       depthNote = '注意：这是深度分析，请尽可能详细地提取信息和见解。';
     }
     
+    // 构建自定义提示部分
+    let customPromptSection = '';
+    if (userConfig.customPrompts?.message || userConfig.customPrompts?.project) {
+      customPromptSection = `
+# 用户自定义分析要求
+${userConfig.customPrompts.message ? `消息分析要求: ${userConfig.customPrompts.message}` : ''}
+${userConfig.customPrompts.project ? `项目分析要求: ${userConfig.customPrompts.project}` : ''}
+`;
+    }
+    
     // 构建最终提示
     return `
-分析以下内容，提取关键信息和见解:
+${userContextInfo}分析以下内容，提取关键信息和见解:
 
 基本信息:
 ${contextInfo}
@@ -2266,7 +2492,7 @@ ${contextInfo}
 ${contentDescription}
 
 ${depthNote}
-
+${customPromptSection}
 # 可用工具
 以下是可用于分析的工具:
 ${toolDescriptions}
@@ -2527,6 +2753,10 @@ ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推
   "confidence": 0.9
 }
 `;
+  }
+
+  public stop() {
+    this.stopRequested = true;
   }
 }
 

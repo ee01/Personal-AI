@@ -34,9 +34,9 @@ alwaysApply: true
 | 功能关键词 | 相关文档路径 |
 |-----------|------------|
 | 自动更新, 文档更新 | docs/autoupdate.mdc |
-| agentThinking, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/agent_thinking.mdc |
-| Google Slides Analyzer, Slides分析器, 幻灯片分析器 | docs/features/google_slides_analyzer.mdc |
-| Google Slides Prompt, Slides提示, 幻灯片提示 | docs/features/google_slides_analyzer_prompt.mdc |
+| agentThinking, 智能Agent新版, 新版Agent, 通用分析框架 | docs/features/agent_thinking.md |
+| Google Slides Analyzer, Slides分析器, 幻灯片分析器 | docs/features/google_slides_analyzer.md |
+| Google Slides Prompt, Slides提示, 幻灯片提示 | docs/features/google_slides_analyzer_prompt.md |
 
 ### 源代码与文档关联映射
 
@@ -44,11 +44,12 @@ alwaysApply: true
 
 | 源代码文件 | 相关文档路径 |
 |-----------|------------|
-| src/contentScriptGoogleSlide.tsx | docs/features/google_slides_analyzer.mdc, docs/features/google_slides_analyzer_prompt.mdc |
-| src/slide.ts | docs/features/google_slides_analyzer.mdc |
-| src/agentThinking.ts | docs/features/agent_thinking.mdc |
-| src/jira.ts | docs/features/google_slides_analyzer.mdc |
-| src/vectorStore.ts | docs/features/intelligent_agent.mdc, docs/features/agent_thinking.mdc |
+| src/contentScriptGoogleSlide.tsx | docs/features/google_slides_analyzer.md, docs/features/google_slides_analyzer_prompt.md |
+| src/slide.ts | docs/features/google_slides_analyzer.md |
+| src/agentThinking.ts | docs/features/agent_thinking.md |
+| src/jira.ts | docs/features/google_slides_analyzer.md |
+| src/vectorStore.ts | docs/features/agent_thinking.md |
+| src/modals/prompt-config.tsx | docs/features/custom_prompts.md |
 
 ## 智能Agent系统更新规则
 
@@ -128,7 +129,7 @@ alwaysApply: true
 
 更新文档时，应遵循以下结构指南：
 
-### 功能文档 (xxx.mdc)
+### 功能文档 (xxx.md)
 
 1. **标题**：功能名称（简洁明了）
 2. **最后更新**：更新日期
@@ -140,7 +141,7 @@ alwaysApply: true
 8. **技术挑战与解决方案**：记录开发过程中的难点及解决思路
 9. **未来计划**：潜在的功能增强和改进方向
 
-### 提示记录文档 (xxx_prompt.mdc)
+### 提示记录文档 (xxx_prompt.md)
 
 1. **标题**：功能名称 - 开发提示记录
 2. **概述**：简要说明文档的用途
@@ -149,7 +150,7 @@ alwaysApply: true
    - **分析/响应**：AI的分析和建议
    - **时间标记**：提示发生的日期
 
-### 技术组件文档 (agent_thinking.mdc等)
+### 技术组件文档 (agent_thinking.md等)
 
 1. **标题**：组件名称
 2. **最后更新**：更新日期
@@ -244,7 +245,7 @@ alwaysApply: true
 ```
 检测到潜在文档更新需求：
 - 相关功能：Google Slides Analyzer
-- 建议更新文档：docs/features/google_slides_analyzer.mdc
+- 建议更新文档：docs/features/google_slides_analyzer.md
 - 更新内容：
   * 在功能说明部分添加"导出分析报告"功能
   * 在UI设计部分添加导出按钮的描述
@@ -261,7 +262,7 @@ alwaysApply: true
 ```
 检测到潜在文档更新需求：
 - 相关功能：agentThinking
-- 建议更新文档：docs/features/agent_thinking.mdc
+- 建议更新文档：docs/features/agent_thinking.md
 - 更新内容：
   * 在功能模块部分添加"视频分析"能力说明
   * 更新接口定义部分，添加VideoAnalysisResult接口
@@ -279,7 +280,7 @@ alwaysApply: true
 ```
 检测到源代码文件变更：
 - 修改的文件：src/contentScriptGoogleSlide.tsx
-- 建议更新文档：docs/features/google_slides_analyzer.mdc
+- 建议更新文档：docs/features/google_slides_analyzer.md
 - 更新内容：
   * 更新"技术实现"部分中的"分析结果展示模块"
   * 添加"符合Chrome扩展安全策略"的技术挑战与解决方案

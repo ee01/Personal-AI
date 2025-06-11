@@ -84,6 +84,16 @@ const Popup = () => {
         });
     };
     
+    const openPromptConfigWindow = () => {
+        chrome.windows.create({
+            url: 'prompt-config.html',
+            type: 'popup',
+            width: 900,
+            height: 800,
+            focused: true
+        });
+    };
+    
     const analyzeSlidesProjects = async () => {
         try {
             setIsAnalyzingSlides(true);
@@ -247,17 +257,26 @@ const Popup = () => {
             )}
             
             {isGoogleSlides && (
-                <button 
-                    onClick={analyzeSlidesProjects}
-                    className="slides-button"
-                    disabled={isAnalyzingSlides}
-                >
-                    {isAnalyzingSlides ? (
-                        <span className="loading-text">正在分析 Slide 项目信息...</span>
-                    ) : (
-                        '分析 Slide 项目信息并更新'
-                    )}
-                </button>
+                <div className="slides-button-group">
+                    <button 
+                        onClick={analyzeSlidesProjects}
+                        className="slides-button main-button"
+                        disabled={isAnalyzingSlides}
+                    >
+                        {isAnalyzingSlides ? (
+                            <span className="loading-text">正在分析 Slide 项目信息...</span>
+                        ) : (
+                            '分析 Slide 项目信息并更新'
+                        )}
+                    </button>
+                    <button 
+                        onClick={openPromptConfigWindow}
+                        className="slides-button config-button"
+                        title="配置自定义提示词和用户上下文"
+                    >
+                        ⚙️
+                    </button>
+                </div>
             )}
 
             <button onClick={openKnowledgeQueryWindow} className="message-button">
@@ -383,12 +402,32 @@ const Popup = () => {
                     background-color: #e68a00;
                  }
                  
-                 .slides-button {
+                 .slides-button-group {
+                    display: flex;
+                    gap: 4px;
+                    margin: 8px 8px 0 8px;
+                 }
+                 
+                 .slides-button.main-button {
+                    flex: 1;
                     background-color: #4285F4; /* Google blue */
                     color: white;
                  }
                  
-                 .slides-button:hover {
+                 .slides-button.config-button {
+                    width: 36px;
+                    min-width: 36px;
+                    background-color: #6c757d;
+                    color: white;
+                    font-size: 16px;
+                    padding: 8px 4px;
+                 }
+                 
+                 .slides-button.config-button:hover {
+                    background-color: #5a6268;
+                 }
+                 
+                 .slides-button.main-button:hover {
                     background-color: #2a75f3;
                  }
 
