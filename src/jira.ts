@@ -33,7 +33,7 @@ export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
 // 然后在 FETCH_JIRA_TICKETS 函数中使用 sourceTabId
 export async function FETCH_JIRA_TICKETS(jql: string, requestId: string, sourceTabId: number) {
   const envConfig = await getEnvConfig();
-  const url = `${envConfig.JIRA_BASE_URL}/issues/?jql=${encodeURIComponent(jql)}`;
+  const url = `${envConfig.JIRA_BASE_URL}/issues/?jql=${encodeURIComponent(jql)}&wildcardFlag=true`;
         
   // 创建新标签页
   chrome.tabs.create({ url, active: false }, (tab) => {
