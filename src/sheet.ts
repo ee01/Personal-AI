@@ -49,8 +49,8 @@ export class Sheet {
     return sheet ? sheet.properties.title : sheets[0].properties.title; // 如果找不到对应的gid,返回第一个sheet的名称
   }
 
-  async readSheet(): Promise<string[][]> {
-    const sheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}/values/${this.sheetName}`;
+  async readSheet(valueRenderOption: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA' = 'FORMATTED_VALUE'): Promise<string[][]> {
+    const sheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}/values/${this.sheetName}?valueRenderOption=${valueRenderOption}`;
     const res = await fetch(sheetUrl, {
         headers: { Authorization: `Bearer ${this.token}` }
     });

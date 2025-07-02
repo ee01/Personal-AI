@@ -105,7 +105,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
             const sheet = new Sheet(url, sheetToken);
             await sheet.init();
-            const values = await sheet.readSheet();
+            const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
             const sheetHeaders = await findValidJiraHeaders(sheet);
 
             if (!values || values.length <= 1) {
@@ -171,7 +171,7 @@ interface JiraHeaders {
 
 interface UpdateData {
     rowIndex: number;
-    data: string[];
+    columnUpdates: { [columnIndex: number]: string };
 }
 
 interface TicketOperation {
@@ -345,6 +345,35 @@ function getMaxColumnIndex(columnLetters: string[]): number {
     }
      const indices = validLetters.map(col => getColumnIndex(col));
      return Math.max(...indices) + 1;
+}
+
+// 将列索引按连续范围分组
+function groupConsecutiveColumns(columnIndices: number[]): { start: number; end: number }[] {
+    if (columnIndices.length === 0) return [];
+    
+    // 排序列索引
+    const sorted = columnIndices.sort((a, b) => a - b);
+    const ranges: { start: number; end: number }[] = [];
+    
+    let start = sorted[0];
+    let end = sorted[0];
+    
+    for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i] === end + 1) {
+            // 连续的列，扩展当前范围
+            end = sorted[i];
+        } else {
+            // 非连续，保存当前范围并开始新范围
+            ranges.push({ start, end });
+            start = sorted[i];
+            end = sorted[i];
+        }
+    }
+    
+    // 添加最后一个范围
+    ranges.push({ start, end });
+    
+    return ranges;
 }
 
 // 显示确认弹窗
@@ -546,7 +575,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
         const sheet = new Sheet(sheetUrl, sheetToken);
         try {
             await sheet.init();
-            const values = await sheet.readSheet();
+            const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
             console.log('values', values);
             const sheetHeaders = await findValidJiraHeaders(sheet);
             const displayHeaders = ['key', 'summary', 'status', 'assignee', 'reporter']; 
@@ -602,29 +631,48 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 const maxColIndex = getMaxColumnIndex(headerValues);
 
             confirmedOperations.forEach(operation => {
-                const row = new Array(maxColIndex).fill('');
-                Object.keys(operation.ticket).forEach(ticketKey => {
-                    const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
-                    if (columnLetter && typeof columnLetter === 'string') {
-                        try {
-                            const colIndex = getColumnIndex(columnLetter);
-                            if (ticketKey === 'key') {
-                                row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
-                            } else {
-                                row[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
-                            }
-                        } catch (error) {
-                            console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
-                        }
-                    }
-                });
-
                 if (operation.type === 'update' && operation.rowIndex !== undefined) {
+                    // 对于更新操作，收集需要更新的列数据
+                    const columnUpdates: { [columnIndex: number]: string } = {};
+                    
+                    Object.keys(operation.ticket).forEach(ticketKey => {
+                        const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
+                        if (columnLetter && typeof columnLetter === 'string') {
+                            try {
+                                const colIndex = getColumnIndex(columnLetter);
+                                if (ticketKey === 'key') {
+                                    columnUpdates[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
+                                } else {
+                                    columnUpdates[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                                }
+                            } catch (error) {
+                                console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
+                            }
+                        }
+                    });
+
                     updatesData.push({
                         rowIndex: operation.rowIndex,
-                        data: row
+                        columnUpdates
                     });
                 } else {
+                    // 对于新增操作，创建完整行数据
+                    const row = new Array(maxColIndex).fill('');
+                    Object.keys(operation.ticket).forEach(ticketKey => {
+                        const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
+                        if (columnLetter && typeof columnLetter === 'string') {
+                            try {
+                                const colIndex = getColumnIndex(columnLetter);
+                                if (ticketKey === 'key') {
+                                    row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
+                                } else {
+                                    row[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                                }
+                            } catch (error) {
+                                console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
+                            }
+                        }
+                    });
                     appendData.push(row);
                 }
             });
@@ -637,10 +685,25 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
 
             if (updatesData.length > 0) {
                 for (const update of updatesData) {
-                    const startColumn = 'A';
-                    const range = `${startColumn}${update.rowIndex+1}`; 
-                    console.log(`Updating range: ${range}`, update.data)
-                    await sheet.writeSheet([update.data], range);
+                    // 将需要更新的列按连续范围分组
+                    const columnRanges = groupConsecutiveColumns(Object.keys(update.columnUpdates).map(Number));
+                    
+                    for (const range of columnRanges) {
+                        const startColumn = String.fromCharCode(65 + range.start);
+                        const endColumn = String.fromCharCode(65 + range.end);
+                        const rangeName = range.start === range.end 
+                            ? `${startColumn}${update.rowIndex + 1}`
+                            : `${startColumn}${update.rowIndex + 1}:${endColumn}${update.rowIndex + 1}`;
+                        
+                        // 构建该范围内的数据
+                        const rangeData = [];
+                        for (let col = range.start; col <= range.end; col++) {
+                            rangeData.push(update.columnUpdates[col] || '');
+                        }
+                        
+                        console.log(`Updating range: ${rangeName}`, rangeData);
+                        await sheet.writeSheet([rangeData], rangeName);
+                    }
                     updatedCount++;
                 }
             }
@@ -674,7 +737,7 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
     
     try {
         await sheet.init();
-        const values = await sheet.readSheet();
+        const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
         if (!values || values.length === 0) {
             showToast('表格为空或无法读取', 'error');
             return;
