@@ -47,6 +47,79 @@ function getParentEpicFromDOM(): { key: string; url: string, name: string } | nu
   return null;
 }
 
+// 从DOM description中查找figma链接
+function getFigmaLinksFromDescription(): { type: 'figma'; url: string; source: 'description' }[] {
+  const figmaLinks: { type: 'figma'; url: string; source: 'description' }[] = [];
+  
+  // 查找description字段
+  const descriptionElement = document.querySelector('#description-val') as HTMLElement;
+  if (descriptionElement) {
+    const text = descriptionElement.innerText || descriptionElement.textContent || '';
+    const links = descriptionElement.querySelectorAll('a');
+    
+    // 从链接元素中查找figma链接
+    links.forEach(link => {
+      const href = link.href;
+      if (href && (href.includes('figma.com') || href.includes('www.figma.com'))) {
+        figmaLinks.push({
+          type: 'figma',
+          url: href,
+          source: 'description'
+        });
+      }
+    });
+    
+    // 从文本中使用正则查找figma链接
+    const figmaRegex = /https?:\/\/(?:www\.)?figma\.com\/[^\s]+/g;
+    const matches = text.match(figmaRegex);
+    if (matches) {
+      matches.forEach((url: string) => {
+        // 避免重复添加
+        if (!figmaLinks.some(link => link.url === url)) {
+          figmaLinks.push({
+            type: 'figma',
+            url: url,
+            source: 'description'
+          });
+        }
+      });
+    }
+  }
+  
+  return figmaLinks;
+}
+
+// 从DOM中查找linked issues中的UX tickets
+function getUXTicketsFromLinkedIssues(): { key: string; url: string; summary: string; source: 'linked_issues' }[] {
+  const uxTickets: { key: string; url: string; summary: string; source: 'linked_issues' }[] = [];
+  
+  // 查找Issue Links部分
+  const issueLinkSections = document.querySelectorAll('.links-list .links-section');
+  
+  issueLinkSections.forEach(section => {
+    const links = section.querySelectorAll('.issue-link-key');
+    links.forEach(linkElement => {
+      const key = linkElement.textContent?.trim();
+      const href = (linkElement as HTMLAnchorElement).href;
+      
+      if (key && key.startsWith('UX') && href) {
+        // 尝试获取summary
+        const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
+        const summary = summaryElement?.textContent?.trim() || key;
+        
+        uxTickets.push({
+          key: key,
+          url: href,
+          summary: summary,
+          source: 'linked_issues'
+        });
+      }
+    });
+  });
+  
+  return uxTickets;
+}
+
 // 调用Jira API获取票据信息
 async function fetchTicketData(ticketKey: string): Promise<any> {
   try {
@@ -75,8 +148,10 @@ async function fetchChildIssues(parentKey: string): Promise<any[]> {
 }
 
 // 查找UX类型的ticket
-async function findUXTicket(parentData: any, currentTicketKey: string): Promise<string | null> {
+async function findUXTickets(parentData: any, currentTicketKey: string): Promise<{ key: string; summary: string; source: string }[]> {
   try {
+    const uxTickets: { key: string; summary: string; source: string }[] = [];
+    
     // 获取所有关联的issues
     const issueLinks = parentData.fields.issuelinks || [];
     const subtasks = parentData.fields.subtasks || [];
@@ -86,20 +161,32 @@ async function findUXTicket(parentData: any, currentTicketKey: string): Promise<
     if (parentKey) {
       childIssues = await fetchChildIssues(parentKey);
     }
+    
     // 提取所有相关issue
     const allRelatedIssues = [
-      ...subtasks.map((subtask: any) => subtask),
-      ...issueLinks.map((link: any) => link.outwardIssue || link.inwardIssue).filter((issue: any) => issue),
-      ...childIssues
+      ...subtasks.map((subtask: any) => ({ ...subtask, source: 'subtask' })),
+      ...issueLinks.map((link: any) => ({ 
+        ...(link.outwardIssue || link.inwardIssue), 
+        source: 'issue_link' 
+      })).filter((issue: any) => issue.key),
+      ...childIssues.map((issue: any) => ({ ...issue, source: 'child_issue' }))
     ];
+    
     // 筛选UX开头且不是当前ticket的issue
-    const uxTicket = allRelatedIssues.find((issue: any) => 
-      issue.key && issue.key.startsWith('UX') && issue.key !== currentTicketKey
-    );
-    return uxTicket ? uxTicket.key : null;
+    allRelatedIssues.forEach((issue: any) => {
+      if (issue.key && issue.key.startsWith('UX') && issue.key !== currentTicketKey) {
+        uxTickets.push({
+          key: issue.key,
+          summary: issue.fields?.summary || issue.summary || issue.key,
+          source: issue.source
+        });
+      }
+    });
+    
+    return uxTickets;
   } catch (error) {
-    console.error('Error finding UX ticket:', error);
-    return null;
+    console.error('Error finding UX tickets:', error);
+    return [];
   }
 }
 
@@ -136,41 +223,83 @@ async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: s
   }
 }
 
+// 从Epic ticket中查找UX linked issues
+async function getUXTicketsFromEpic(epicKey: string): Promise<{ key: string; summary: string; source: string }[]> {
+  try {
+    const epicData = await fetchTicketData(epicKey);
+    return await findUXTickets(epicData, ''); // 传空字符串作为currentTicketKey
+  } catch (error) {
+    console.error('Error fetching UX tickets from Epic:', error);
+    return [];
+  }
+}
+
 // 显示设计链接
-function displayDesignLink(designLink: string): void {
+function displayDesignLinks(designData: { 
+  type: 'figma' | 'ux_ticket'; 
+  url: string; 
+  summary?: string; 
+  uxTicketKey?: string;
+  source: string;
+}[]): void {
   const summaryElement = document.querySelector('.issue-header-content');
   if (!summaryElement) return;
   
   // 检查是否已经存在设计链接元素
-  const existingLink = document.querySelector('.design-link-container');
-  if (existingLink) return;
+  const existingLink = document.querySelector('.design-links-container');
+  if (existingLink) existingLink.remove();
   
-  const designLinkContainer = document.createElement('div');
+  if (designData.length === 0) return;
+  
+  const designLinksContainer = document.createElement('div');
   
   // 获取扩展内的 icon 路径
   const iconUrl = chrome.runtime.getURL('icons/icon48.png');
 
-  designLinkContainer.className = 'design-link-container';
-  designLinkContainer.innerHTML = `
-    <div class="design-link-content">
-      <img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" />
-      Design Link: <a href="${designLink}" target="_blank" class="design-link">
-        ${designLink} <span class="external-link-icon">↗️</span>
-      </a>
+  designLinksContainer.className = 'design-links-container';
+  
+  let linksHtml = '';
+  designData.forEach((design, index) => {
+    if (design.type === 'figma') {
+      linksHtml += `
+        <div class="design-link-item">
+          <img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" />
+          Design Link: <a href="${design.url}" target="_blank" class="design-link">
+            Figma Design <span class="external-link-icon">↗️</span>
+          </a>
+          <span class="source-tag">${design.source}</span>
+        </div>
+      `;
+    } else if (design.type === 'ux_ticket') {
+      linksHtml += `
+        <div class="design-link-item">
+          <img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" />
+          Design Link: <a href="${design.url}" target="_blank" class="design-link">
+            ${design.summary || design.uxTicketKey} <span class="external-link-icon">↗️</span>
+          </a>
+          <span class="source-tag">${design.source}</span>
+        </div>
+      `;
+    }
+  });
+  
+  designLinksContainer.innerHTML = `
+    <div class="design-links-content">
+      ${linksHtml}
     </div>
-    <div class="design-link-footer">
+    <div class="design-links-footer">
       <span class="footer-text">Personal AI provided</span>
       <span class="author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank">Esone</a></span>
     </div>
   `;
   
   // 插入到Summary下方
-  summaryElement.insertAdjacentElement('afterend', designLinkContainer);
+  summaryElement.insertAdjacentElement('afterend', designLinksContainer);
   
   // 添加样式
   const style = document.createElement('style');
   style.textContent = `
-    .design-link-container {
+    .design-links-container {
       margin: 10px 0;
       padding: 8px 12px;
       background-color: #f0f5ff;
@@ -181,23 +310,32 @@ function displayDesignLink(designLink: string): void {
       transition: all 0.3s ease;
       position: relative;
       overflow: visible;
-      max-height: 40px;
+      max-height: ${40 + (designData.length - 1) * 30}px;
       z-index: 1;
     }
-    .design-link-container:hover {
-      max-height: 80px;
+    .design-links-container:hover {
+      max-height: ${80 + (designData.length - 1) * 30}px;
       box-shadow: 0 4px 8px rgba(0,0,0,0.15);
       transform: translateY(4px);
       z-index: 1000;
     }
-    .design-link-content {
+    .design-links-content {
       display: flex;
-      align-items: center;
+      flex-direction: column;
       background-color: #f0f5ff;
       position: relative;
       z-index: 2;
     }
-    .design-link-footer {
+    .design-link-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 4px;
+      position: relative;
+    }
+    .design-link-item:last-child {
+      margin-bottom: 0;
+    }
+    .design-links-footer {
       font-size: 12px;
       color: #666;
       margin-top: 0;
@@ -218,7 +356,7 @@ function displayDesignLink(designLink: string): void {
       justify-content: space-between;
       align-items: center;
     }
-    .design-link-container:hover .design-link-footer {
+    .design-links-container:hover .design-links-footer {
       opacity: 1;
       transform: translateY(0);
     }
@@ -253,6 +391,14 @@ function displayDesignLink(designLink: string): void {
       font-size: 12px;
       margin-left: 4px;
     }
+    .source-tag {
+      font-size: 10px;
+      color: #666;
+      background-color: #e6e6e6;
+      padding: 2px 6px;
+      border-radius: 10px;
+      margin-left: 8px;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -283,58 +429,132 @@ async function main(): Promise<void> {
     // 等待DOM加载完成
     await waitForElement('#customfield_15751-val, #customfield_11450-val, #type-val', 5000);
     
-    let parentLink;
+    const allDesignData: { 
+      type: 'figma' | 'ux_ticket'; 
+      url: string; 
+      summary?: string; 
+      uxTicketKey?: string;
+      source: string;
+    }[] = [];
+    
+    // 1. 从description中查找figma链接
+    const figmaLinks = getFigmaLinksFromDescription();
+    figmaLinks.forEach(link => {
+      allDesignData.push({
+        type: 'figma',
+        url: link.url,
+        source: link.source
+      });
+    });
+    
+    // 2. 从当前页面的linked issues中查找UX tickets
+    const linkedUXTickets = getUXTicketsFromLinkedIssues();
+    for (const uxTicket of linkedUXTickets) {
+      const designLink = await getDesignLink(uxTicket.key);
+      if (designLink) {
+        allDesignData.push({
+          type: 'ux_ticket',
+          url: designLink,
+          summary: uxTicket.summary,
+          uxTicketKey: uxTicket.key,
+          source: uxTicket.source
+        });
+      }
+    }
     
     // 判断是否为Epic ticket
     if (await isEpicTicket()) {
-      // 如果是Epic，直接获取INIT Link
-      parentLink = getParentLinkFromDOM();
+      // 如果是Epic，直接从Epic中查找UX linked issues
+      const epicUXTickets = await getUXTicketsFromEpic(ticketId);
+      for (const uxTicket of epicUXTickets) {
+        const designLink = await getDesignLink(uxTicket.key);
+        if (designLink) {
+          allDesignData.push({
+            type: 'ux_ticket',
+            url: designLink,
+            summary: uxTicket.summary,
+            uxTicketKey: uxTicket.key,
+            source: `epic_${uxTicket.source}`
+          });
+        }
+      }
+      
+      // 还需要检查Epic的Parent Link
+      const parentLink = getParentLinkFromDOM();
+      if (parentLink) {
+        console.log('Parent ticket:', parentLink.key);
+        const parentData = await fetchTicketData(parentLink.key);
+        const parentUXTickets = await findUXTickets(parentData, ticketId);
+        for (const uxTicket of parentUXTickets) {
+          const designLink = await getDesignLink(uxTicket.key);
+          if (designLink) {
+            allDesignData.push({
+              type: 'ux_ticket',
+              url: designLink,
+              summary: uxTicket.summary,
+              uxTicketKey: uxTicket.key,
+              source: `parent_${uxTicket.source}`
+            });
+          }
+        }
+      }
     } else {
       // 如果不是Epic，先获取Epic Link
       const epicLink = getParentEpicFromDOM();
-      if (!epicLink) {
-        console.log('No Epic link found');
-        return;
+      if (epicLink) {
+        console.log('Epic ticket:', epicLink.key);
+        
+        // 从Epic中查找UX linked issues
+        const epicUXTickets = await getUXTicketsFromEpic(epicLink.key);
+        for (const uxTicket of epicUXTickets) {
+          const designLink = await getDesignLink(uxTicket.key);
+          if (designLink) {
+            allDesignData.push({
+              type: 'ux_ticket',
+              url: designLink,
+              summary: uxTicket.summary,
+              uxTicketKey: uxTicket.key,
+              source: `epic_${uxTicket.source}`
+            });
+          }
+        }
+        
+        // 通过API获取Epic的Parent Link
+        const parentLink = await getEpicParentLink(epicLink.key);
+        if (parentLink) {
+          console.log('Parent ticket:', parentLink.key);
+          const parentData = await fetchTicketData(parentLink.key);
+          const parentUXTickets = await findUXTickets(parentData, ticketId);
+          for (const uxTicket of parentUXTickets) {
+            const designLink = await getDesignLink(uxTicket.key);
+            if (designLink) {
+              allDesignData.push({
+                type: 'ux_ticket',
+                url: designLink,
+                summary: uxTicket.summary,
+                uxTicketKey: uxTicket.key,
+                source: `parent_${uxTicket.source}`
+              });
+            }
+          }
+        }
       }
-      console.log('Epic ticket:', epicLink.key);
-      
-      // 通过API获取Epic的Parent Link
-      parentLink = await getEpicParentLink(epicLink.key);
     }
     
-    if (!parentLink) {
-      console.log('No parent link found');
-      return;
+    // 去重处理
+    const uniqueDesignData = allDesignData.filter((item, index, self) => 
+      index === self.findIndex(t => t.url === item.url)
+    );
+    
+    if (uniqueDesignData.length > 0) {
+      console.log('Design links found:', uniqueDesignData);
+      displayDesignLinks(uniqueDesignData);
+    } else {
+      console.log('No design links found');
     }
-    
-    console.log('Parent ticket:', parentLink.key);
-    
-    // 获取Parent ticket数据
-    const parentData = await fetchTicketData(parentLink.key);
-    
-    // 查找UX ticket
-    const uxTicketKey = await findUXTicket(parentData, ticketId);
-    if (!uxTicketKey) {
-      console.log('No UX ticket found');
-      return;
-    }
-    
-    console.log('UX ticket:', uxTicketKey);
-    
-    // 获取设计链接
-    const designLink = await getDesignLink(uxTicketKey);
-    if (!designLink) {
-      console.log('No design link found');
-      return;
-    }
-    
-    console.log('Design link found:', designLink);
-    
-    // 显示设计链接
-    displayDesignLink(designLink);
     
   } catch (error) {
-    console.error('Error fetching design link:', error);
+    console.error('Error fetching design links:', error);
   }
 }
 
