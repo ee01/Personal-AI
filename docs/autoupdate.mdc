@@ -49,7 +49,7 @@ alwaysApply: true
 | src/agentThinking.ts | docs/features/agent_thinking.md |
 | src/jira.ts | docs/features/google_slides_analyzer.md |
 | src/vectorStore.ts | docs/features/agent_thinking.md |
-| src/modals/prompt-config.tsx | docs/features/custom_prompts.md |
+| static/prompt-config.js | docs/features/custom_prompts.md |
 
 ## 智能Agent系统更新规则
 
