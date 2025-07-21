@@ -23,6 +23,7 @@ module.exports = (env) => {
       contentScriptGoogleSheet: './src/contentScriptGoogleSheet.tsx',
       contentScriptGoogleSlide: './src/contentScriptGoogleSlide.tsx',
       contentScriptJira: './src/contentScriptJira.ts',
+      contentScriptJiraAutomation: './src/contentScriptJiraAutomation.ts',
       popup: './src/popup.tsx',
       options: './src/options.tsx',
       offscreen: './src/offscreen.ts',

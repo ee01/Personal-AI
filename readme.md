@@ -98,6 +98,42 @@ Chroma 服务默认在 `http://localhost:8000` 上运行，提供以下 API：
 详细 API 文档请参考 [Chroma 官方文档](https://docs.trychroma.com/api-reference)
 
 
+## 主要功能
+
+### AI 智能消息分析过滤功能
+- **智能消息过滤**：基于自定义规则自动过滤重要消息
+- **多模式分析**：支持智能Agent、Agent工作流和普通模式三种分析方式
+- **上下文理解**：智能分析消息上下文，提供相关性和重要性评估
+- **实体提取**：自动提取消息中的人物、项目、话题、行动项等实体信息
+- **情感分析**：识别消息的情感倾向（积极/消极/中性）
+- **智能通知**：根据消息重要性自动推送到指定渠道
+- **消息存储**：将重要消息存储到向量数据库，支持后续检索和分析
+- **回复建议**：基于消息上下文提供智能回复建议
+- **定时分析**：支持定时任务自动分析新消息
+- **进度跟踪**：实时显示分析进度和统计信息
+- 详细文档：[docs/features/message_analysis_filter.md](docs/features/message_analysis_filter.md)
+
+### Jira 设计链接显示功能
+- 在 Jira ticket 页面自动显示相关的设计链接
+- 支持从 Epic、Parent Link 和 Linked Issues 中查找 UX ticket 的设计链接
+- 详细文档：[docs/features/jira_design_links.md](docs/features/jira_design_links.md)
+
+### Jira 自动化规则导入功能
+- 在 Jira 自动化管理页面添加导入功能
+- 支持导入之前导出的自动化规则 JSON 文件
+- 自动格式转换和 API 调用
+- 详细文档：[docs/features/jira_automation_import.md](docs/features/jira_automation_import.md)
+
+### Google Slides 分析功能
+- AI 驱动的幻灯片内容分析
+- 智能内容提取和总结
+- 详细文档：[docs/features/google_slides_analyzer.md](docs/features/google_slides_analyzer.md)
+
+### Agent 思维可视化
+- 显示 AI 代理的思考过程
+- 交互式思维流程图
+- 详细文档：[docs/features/agent_thinking.md](docs/features/agent_thinking.md)
+
 ## 发布流程
 
 1. 从 .env.example 创建 .env 文件以及内部的敏感字段清除
