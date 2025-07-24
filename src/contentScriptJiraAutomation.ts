@@ -68,120 +68,150 @@ function isJiraAutomationPage(): boolean {
   return false;
 }
 
-// 从localStorage获取当前用户名
-function getCurrentUsername(): string {
+// 从localStorage获取当前ownerId
+function getCurrentOwnerId(): string {
   // 首先尝试从localStorage获取
-  const username = getLocalStorageItem('displayName', '');
-  if (username && username !== 'radar-poc') {
-    console.log('Found username from localStorage:', username);
-    return username;
+  const ownerId = getLocalStorageItem('ownerId', '');
+  if (ownerId && ownerId !== 'radar-poc') {
+    console.log('Found ownerId from localStorage:', ownerId);
+    return ownerId;
   }
   
   // 如果localStorage中没有，尝试从页面获取（仅在主页面）
   if (window === window.top) {
     const userProfileElement = document.querySelector('#header-details-user-fullname');
     if (userProfileElement) {
-      const username = userProfileElement.getAttribute('data-username');
-      if (username) {
-        console.log('Found username from profile button:', username);
-        // 保存到localStorage
-        setLocalStorageItem('displayName', username);
-        return username;
+      // 从img标签的src属性中获取ownerId
+      const imgElement = userProfileElement.querySelector('img');
+      if (imgElement) {
+        const src = imgElement.getAttribute('src');
+        if (src) {
+          const ownerIdMatch = src.match(/ownerId=([^&]+)/);
+          if (ownerIdMatch && ownerIdMatch[1]) {
+            const ownerId = ownerIdMatch[1];
+            console.log('Found ownerId from profile image src:', ownerId);
+            // 保存到localStorage
+            setLocalStorageItem('ownerId', ownerId);
+            return ownerId;
+          }
+        }
       }
     }
     
     // 备选方案：尝试其他可能的选择器
     const alternativeSelectors = [
-      '[data-username]',
-      '.user-profile[data-username]',
-      '.aui-dropdown2-trigger[data-username]'
+      '[data-username] img',
+      '.user-profile[data-username] img',
+      '.aui-dropdown2-trigger[data-username] img'
     ];
     
     for (const selector of alternativeSelectors) {
-      const element = document.querySelector(selector);
-      if (element) {
-        const username = element.getAttribute('data-username');
-        if (username) {
-          console.log('Found username from alternative selector:', username);
-          // 保存到localStorage
-          setLocalStorageItem('displayName', username);
-          return username;
+      const imgElement = document.querySelector(selector);
+      if (imgElement) {
+        const src = imgElement.getAttribute('src');
+        if (src) {
+          const ownerIdMatch = src.match(/ownerId=([^&]+)/);
+          if (ownerIdMatch && ownerIdMatch[1]) {
+            const ownerId = ownerIdMatch[1];
+            console.log('Found ownerId from alternative selector:', ownerId);
+            // 保存到localStorage
+            setLocalStorageItem('ownerId', ownerId);
+            return ownerId;
+          }
         }
       }
     }
   }
   
   // 如果都找不到，使用默认值
-  console.warn('Could not find username, using default');
+  console.warn('Could not find ownerId, using default');
   return 'esone.qiu2';
 }
 
-// 从localStorage获取项目ID
+// 全局变量存储当前项目ID
+declare global {
+  interface Window {
+    __PERSONAL_AI_PROJECT_ID__?: string;
+  }
+}
+
+// 从页面动态获取项目ID
 function getProjectId(): string {
-  // 首先尝试从localStorage获取
-  const projectId = getLocalStorageItem('jiraProjectId', '');
-  if (projectId) {
-    console.log('Found project ID from localStorage:', projectId);
-    return projectId;
+  // 如果是iframe，尝试从父页面获取全局变量
+  if (window !== window.top) {
+    try {
+      const parentProjectId = (window.top as any)?.__PERSONAL_AI_PROJECT_ID__;
+      if (parentProjectId) {
+        console.log('Found project ID from parent window global variable:', parentProjectId);
+        return parentProjectId;
+      }
+    } catch (error) {
+      console.log('Cannot access parent window, trying local detection...');
+    }
   }
   
-  // 如果localStorage中没有，尝试从页面获取（仅在主页面）
-  if (window === window.top) {
-    // 首先尝试从页面全局变量获取
-    if (typeof (window as any).WRM !== 'undefined' && (window as any).WRM._unparsedData && (window as any).WRM._unparsedData["project-id"]) {
-      const projectId = (window as any).WRM._unparsedData["project-id"];
-      console.log('Found project ID from WRM._unparsedData:', projectId);
-      // 保存到localStorage
-      setLocalStorageItem('jiraProjectId', projectId);
-      return projectId;
-    }
-    
-    // 备选方案1：从项目编辑链接中获取projectId
+  // 动态从页面获取项目ID
+  let projectId = '';
+  
+  // 方案1：从页面全局变量获取
+  if (typeof (window as any).WRM !== 'undefined' && (window as any).WRM._unparsedData && (window as any).WRM._unparsedData["project-id"]) {
+    projectId = (window as any).WRM._unparsedData["project-id"];
+    console.log('Found project ID from WRM._unparsedData:', projectId);
+  }
+  
+  // 方案2：从项目编辑链接中获取projectId
+  if (!projectId) {
     const editProjectLink = document.querySelector('#edit_project');
     if (editProjectLink) {
       const href = editProjectLink.getAttribute('href');
       if (href) {
         const pidMatch = href.match(/pid=(\d+)/);
         if (pidMatch && pidMatch[1]) {
-          const projectId = pidMatch[1];
+          projectId = pidMatch[1];
           console.log('Found project ID from edit project link:', projectId);
-          // 保存到localStorage
-          setLocalStorageItem('jiraProjectId', projectId);
-          return projectId;
         }
       }
     }
-    
-    // 备选方案2：尝试其他可能包含projectId的链接
+  }
+  
+  // 方案3：尝试其他可能包含projectId的链接
+  if (!projectId) {
     const projectLinks = document.querySelectorAll('a[href*="pid="]');
     for (const link of Array.from(projectLinks)) {
       const href = link.getAttribute('href');
       if (href) {
         const pidMatch = href.match(/pid=(\d+)/);
         if (pidMatch && pidMatch[1]) {
-          const projectId = pidMatch[1];
+          projectId = pidMatch[1];
           console.log('Found project ID from project link:', projectId);
-          // 保存到localStorage
-          setLocalStorageItem('jiraProjectId', projectId);
-          return projectId;
+          break;
         }
       }
     }
-    
-    // 备选方案3：从URL获取projectKey
+  }
+  
+  // 方案4：从URL获取projectKey
+  if (!projectId) {
     const urlParams = new URLSearchParams(window.location.search);
     const projectKey = urlParams.get('projectKey') || '';
     if (projectKey) {
-      console.log('Using projectKey from URL as fallback:', projectKey);
-      // 保存到localStorage
-      setLocalStorageItem('jiraProjectId', projectKey);
-      return projectKey;
+      projectId = projectKey;
+      console.log('Using projectKey from URL as fallback:', projectId);
     }
   }
   
+  // 如果在主页面且找到了项目ID，存储到全局变量供iframe使用
+  if (projectId && window === window.top) {
+    (window as any).__PERSONAL_AI_PROJECT_ID__ = projectId;
+    console.log('Stored project ID in global variable:', projectId);
+  }
+  
   // 如果都找不到，返回空字符串
-  console.warn('Could not find project ID');
-  return '';
+  if (!projectId) {
+    console.warn('Could not find project ID');
+  }
+  
+  return projectId;
 }
 
 // 等待元素出现
@@ -246,7 +276,7 @@ function waitForIframe(): Promise<Document> {
 // 转换导出的JSON格式为API所需格式
 function convertExportedRuleToImportFormat(exportedRule: ExportedRule, projectId: string): ImportRule {
   const now = Date.now();
-  const username = getCurrentUsername();
+  const ownerId = getCurrentOwnerId();
   
   // 为components生成新的ID
   const convertedComponents = exportedRule.components.map((component, index) => ({
@@ -267,12 +297,12 @@ function convertExportedRuleToImportFormat(exportedRule: ExportedRule, projectId
   }));
   
   return {
-    name: '-Imported by Personal AI- ' + exportedRule.name,
+    name: '(Imported by Personal AI) ' + exportedRule.name,
     isNewRule: true,
     state: exportedRule.state,
     canOtherRuleTrigger: exportedRule.canOtherRuleTrigger,
     notifyOnError: exportedRule.notifyOnError,
-    authorAccountId: username,
+    authorAccountId: ownerId,
     created: now,
     updated: now,
     components: convertedComponents,
@@ -411,6 +441,11 @@ function handleFileImport(file: File, projectId: string): void {
 
 // 创建Import按钮
 function createImportButton(iframeDoc: Document, projectId: string): void {
+  if (iframeDoc.getElementById('import-rule-button')) {
+    console.log('Import rule button already exists');
+    return;
+  }
+
   console.log('Looking for Create rule button...');
   
   // 首先尝试通过文本内容查找按钮
@@ -426,25 +461,30 @@ function createImportButton(iframeDoc: Document, projectId: string): void {
     }
   });
   
-  if (!foundButton) {
-    console.warn('Create rule button not found by text, trying CSS selectors...');
+  // if (!foundButton) {
+  //   console.warn('Create rule button not found by text, trying CSS selectors...');
     
-    // 尝试CSS选择器作为备选方案
-    const createButton = iframeDoc.querySelector('button[data-testid="create-rule-button"], .create-rule-button, [class*="create"], [class*="Create"]');
+  //   // 尝试CSS选择器作为备选方案
+  //   const createButton = iframeDoc.querySelector('button[data-testid="create-rule-button"], .create-rule-button, [class*="create"], [class*="Create"]');
     
-    if (createButton) {
-      foundButton = createButton;
-      console.log('Found Create rule button by CSS selector');
-    }
-  }
+  //   if (createButton) {
+  //     foundButton = createButton;
+  //     console.log('Found Create rule button by CSS selector');
+  //   }
+  // }
   
+  // if (!foundButton) {
+  //   console.warn('Could not find Create rule button, will append to first available container');
+  //   const container = iframeDoc.querySelector('div[class*="header"], .page-header, .toolbar, .actions') 
+  //                    || iframeDoc.body.firstElementChild;
+  //   if (container) {
+  //     appendImportButton(container as HTMLElement, projectId, iframeDoc);
+  //   }
+  //   return;
+  // }
+
   if (!foundButton) {
-    console.warn('Could not find Create rule button, will append to first available container');
-    const container = iframeDoc.querySelector('div[class*="header"], .page-header, .toolbar, .actions') 
-                     || iframeDoc.body.firstElementChild;
-    if (container) {
-      appendImportButton(container as HTMLElement, projectId, iframeDoc);
-    }
+    console.warn('Could not find Create import rule button!');
     return;
   }
   
@@ -475,6 +515,7 @@ function createImportButtonElement(projectId: string, iframeDoc: Document): HTML
   // 创建Import按钮
   const importButton = iframeDoc.createElement('button');
   importButton.textContent = 'Import rule';
+  importButton.id = 'import-rule-button';
   importButton.style.cssText = `
     margin-left: 8px;
     padding: 8px 16px;
@@ -551,8 +592,8 @@ async function main(): Promise<void> {
       // 如果在主页面，等待iframe加载
       console.log('Running in main page, waiting for iframe...');
 
-      const username = getCurrentUsername();
-      console.log('Username:', username);
+      const ownerId = getCurrentOwnerId();
+      console.log('OwnerId:', ownerId);
       
       const projectId = getProjectId();
       if (!projectId) {
