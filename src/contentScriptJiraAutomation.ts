@@ -214,6 +214,22 @@ function getProjectId(): string {
   return projectId;
 }
 
+// 获取项目Key (用于URL构建)
+function getProjectKey(): string {
+  // 首先尝试从URL参数获取projectKey
+  const urlParams = new URLSearchParams(window.location.search);
+  const projectKey = urlParams.get('projectKey');
+  if (projectKey) {
+    console.log('Found projectKey from URL params:', projectKey);
+    return projectKey;
+  }
+  
+  // 如果URL中没有projectKey，尝试从其他地方获取
+  // 这里可以根据需要添加更多的获取逻辑
+  console.warn('Could not find projectKey, using default');
+  return 'MTR'; // 默认值
+}
+
 // 等待元素出现
 function waitForElement(selector: string, timeout = 10000): Promise<Element> {
   return new Promise((resolve, reject) => {
@@ -265,6 +281,26 @@ function waitForIframe(): Promise<Document> {
     };
 
     iframe.addEventListener('load', () => {
+      // 检查是否有待跳转的URL
+      try {
+        if (window.top) {
+          const pendingUrl = (window.top as any).__PERSONAL_AI_PENDING_NAVIGATION__;
+          if (pendingUrl) {
+            console.log('Found pending navigation URL on iframe load:', pendingUrl);
+            
+            // 清除存储的URL
+            (window.top as any).__PERSONAL_AI_PENDING_NAVIGATION__ = null;
+            
+            console.log('Executing navigation from iframe load event to:', pendingUrl);
+            window.top.location.href = pendingUrl;
+            
+            return; // 有待跳转URL时，不需要继续执行其他逻辑
+          }
+        }
+      } catch (error) {
+        console.error('Error checking pending navigation on iframe load:', error);
+      }
+      
       checkIframeContent();
     });
 
@@ -420,10 +456,34 @@ function handleFileImport(file: File, projectId: string): void {
       
       showSuccessMessage(`Automation rule "${ruleToImport.name}" imported successfully!`);
       
-      // 刷新页面以显示新导入的rule
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
+      // 跳转到导入后的automation脚本页面
+      if (result && result.id) {
+        const projectKey = getProjectKey();
+        const ruleUrl = `https://jira.ringcentral.com/secure/AutomationProjectAdminAction!default.jspa?projectKey=${projectKey}#/rule/${result.id}`;
+        console.log('Navigating to rule page:', ruleUrl);
+        
+        setTimeout(() => {
+          console.log('Storing navigation URL and refreshing iframe:', ruleUrl);
+          
+          // 将跳转URL存储到父窗口的属性中
+          if (window.top) {
+            try {
+              (window.top as any).__PERSONAL_AI_PENDING_NAVIGATION__ = ruleUrl;
+              console.log('Stored navigation URL in parent window:', ruleUrl);
+            } catch (error) {
+              console.error('Failed to store navigation URL in parent window:', error);
+            }
+          }
+          
+          // 刷新当前iframe页面
+          window.location.reload();
+        }, 2000);
+      } else {
+        console.warn('Rule ID not found in response, falling back to page refresh');
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      }
       
     } catch (error) {
       console.error('Error importing rule:', error);
@@ -558,6 +618,8 @@ function createImportButtonElement(projectId: string, iframeDoc: Document): HTML
   
   return container;
 }
+
+
 
 // 主函数
 async function main(): Promise<void> {
