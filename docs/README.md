@@ -5,8 +5,30 @@
 ## 目录结构
 
 - `features/` - 功能详细设计文档
-  - 每个功能有独立的`.mdc`文件描述其设计和实现
-  - 对应的`_prompt.mdc`文件记录开发过程中的关键AI对话
+  - 每个功能有独立的`.md`文件描述其设计和实现
+  - 对应的`_prompt.md`文件记录开发过程中的关键AI对话
+
+## 功能文档索引
+
+### 核心分析系统
+- [`agent_thinking.md`](features/agent_thinking.md) - 智能Agent思考系统
+- [`agent_workflow.md`](features/agent_workflow.md) - Agent工作流系统 **(最新)**
+- [`message_analysis_filter.md`](features/message_analysis_filter.md) - AI智能消息分析过滤功能 **(已更新)**
+
+### 专项功能
+- [`custom_prompts.md`](features/custom_prompts.md) - 自定义提示词功能
+- [`google_slides_analyzer.md`](features/google_slides_analyzer.md) - Google幻灯片分析器
+
+### 集成功能
+- [`jira_automation_import.md`](features/jira_automation_import.md) - Jira自动化导入
+- [`jira_design_links.md`](features/jira_design_links.md) - Jira设计链接功能
+
+## 最新更新
+
+**2024-12-20**
+- ✨ 新增 Agent工作流系统文档
+- 🔄 更新 消息分析过滤功能文档，添加@我功能说明
+- 📝 完善关注项管理和智能通知系统说明
 
 ## 文档维护指南
 
@@ -17,5 +39,22 @@
 
 ## 文档命名规范
 
-- 功能文档：`feature_name.mdc`
-- 提示记录：`feature_name_prompt.mdc` 
+- 功能文档：`feature_name.md`
+- 提示记录：`feature_name_prompt.md`
+
+## 文档编写指南
+
+### 功能文档结构
+1. **功能概述** - 简要描述功能的核心价值
+2. **系统架构** - 详细的技术架构说明
+3. **接口定义** - 关键接口和数据结构
+4. **使用方法** - 配置和使用指南
+5. **性能优化** - 性能相关的说明
+6. **故障排除** - 常见问题和解决方案
+7. **未来规划** - 功能发展方向
+
+### 更新原则
+- 代码功能更新时同步更新文档
+- 保持文档的时效性和准确性
+- 使用清晰的标题和分段
+- 包含必要的代码示例和配置说明 

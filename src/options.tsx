@@ -604,8 +604,20 @@ const AgentSettings = () => {
         'historySearch',
         'relevanceJudgment',
         'externalServiceQuery',
-        'replyAdviser'
+        'replyAdviser',
+        'concernedItemMatcher'  // 新增：关注项匹配工具
     ];
+    
+    // 工具名称映射
+    const toolNameMap: Record<string, string> = {
+        'entityExtraction': '实体提取工具',
+        'relationshipAnalysis': '关系分析工具',
+        'historySearch': '历史消息搜索工具',
+        'relevanceJudgment': '重要性判断工具',
+        'externalServiceQuery': '外部服务查询工具',
+        'replyAdviser': '回复建议工具',
+        'concernedItemMatcher': '关注项匹配工具'
+    };
     
     // 加载当前Agent列表
     useEffect(() => {
@@ -718,7 +730,7 @@ const AgentSettings = () => {
                                 <td>{agent.name}</td>
                                 <td>{agent.description}</td>
                                 <td>{agent.priority}</td>
-                                <td>{agent.tools.join(', ')}</td>
+                                <td>{agent.tools.map((tool: string) => toolNameMap[tool] || tool).join(', ')}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -789,7 +801,7 @@ const AgentSettings = () => {
                                     checked={newAgent.tools.includes(tool)}
                                     onChange={handleToolChange}
                                 />
-                                {tool}
+                                {toolNameMap[tool] || tool}
                             </label>
                         </div>
                     ))}

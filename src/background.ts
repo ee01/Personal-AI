@@ -47,7 +47,7 @@ chrome.runtime.onInstalled.addListener(async () => {
             chrome.storage.local.set({concernedItems: [
                 {text:'聊到关于公司政策，也可以是政策相关的八卦消息', pushToGlip: true},
                 {text:'任何提到我的名字的消息，排除 @Team，排除明确@{我的名字}，排除发送者是我', pushToGlip: false},
-                {text:'可能是回复我的消息，比如在我发完消息之后的答复。排除发送者是我', pushToGlip: true},
+                {text:'可能是回复我的消息，比如在我发完消息之后的答复。排除发送者是我，排除明确@{我的名字}', pushToGlip: true, mentionMe: true},
             ]});
         }
         console.log('concernedItems', concernedItems);

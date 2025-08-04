@@ -1,4 +1,5 @@
 
+import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { analyzeMessages } from '../messageDealing';
@@ -10,6 +11,7 @@ interface TopicItem {
     text: string;
     expiredAt: number;
     pushToGlip?: boolean;
+    mentionMe?: boolean;
 }
 
 interface TabResponse {
@@ -26,6 +28,7 @@ const TopicModal = () => {
     const [newTopic, setNewTopic] = useState('');
     const [newExpiry, setNewExpiry] = useState('30');
     const [newPushToGlip, setNewPushToGlip] = useState(true);
+    const [newMentionMe, setNewMentionMe] = useState(true);
     const [draggedItem, setDraggedItem] = useState<number | null>(null);
     const [dragOverItem, setDragOverItem] = useState<number | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -86,7 +89,8 @@ const TopicModal = () => {
             const topicsWithIds = result.concernedItems.map((topic: TopicItem) => ({
                 ...topic,
                 id: topic.id || Math.random().toString(36).substr(2, 9),
-                pushToGlip: topic.pushToGlip || false
+                pushToGlip: topic.pushToGlip || false,
+                mentionMe: topic.mentionMe || false
             }));
             setTopics(topicsWithIds);
         }
@@ -123,13 +127,15 @@ const TopicModal = () => {
             id: Math.random().toString(36).substr(2, 9),
             text: newTopic,
             expiredAt: newExpiry ? Date.now() + (parseInt(newExpiry) * 24 * 60 * 60 * 1000) : 0,
-            pushToGlip: newPushToGlip
+            pushToGlip: newPushToGlip,
+            mentionMe: newMentionMe
         };
         
         await saveTopics([...topics, newTopicItem]);
         setNewTopic('');
         setNewExpiry('30');
         setNewPushToGlip(true);
+        setNewMentionMe(true);
         setShowAddForm(false);
     };
 
@@ -180,6 +186,7 @@ const TopicModal = () => {
             xml += `    <text>${encodeXML(topic.text)}</text>\n`;
             xml += `    <expiredAt>${topic.expiredAt}</expiredAt>\n`;
             xml += `    <pushToGlip>${topic.pushToGlip || false}</pushToGlip>\n`;
+            xml += `    <mentionMe>${topic.mentionMe || false}</mentionMe>\n`;
             xml += `  </topic>\n`;
         });
         xml += '</topics>';
@@ -221,13 +228,16 @@ const TopicModal = () => {
                 const expiredAt = parseInt(expiredAtStr);
                 const pushToGlipStr = topicEl.getElementsByTagName("pushToGlip")[0]?.textContent || "false";
                 const pushToGlip = pushToGlipStr === "true";
+                const mentionMeStr = topicEl.getElementsByTagName("mentionMe")[0]?.textContent || "false";
+                const mentionMe = mentionMeStr === "true";
                 
                 if (text) {
                     importedTopics.push({
                         id,
                         text,
                         expiredAt,
-                        pushToGlip
+                        pushToGlip,
+                        mentionMe
                     });
                 }
             }
@@ -268,7 +278,7 @@ const TopicModal = () => {
             
             // 获取页面配置
             let { userinfo } = await chrome.storage.local.get(['userinfo'])
-            if (!userinfo || userinfo.fullName === '') userinfo = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_USER_INFO' }) as TabResponse).data;
+            if (!userinfo || userinfo.fullName === '') userinfo = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_USER_INFO' }) as unknown as TabResponse).data;
             if (!userinfo || !userinfo.fullName) {
                 throw new Error('Failed to get page config');
             }
@@ -280,7 +290,7 @@ const TopicModal = () => {
             const response = await chrome.tabs.sendMessage(rcTab.id, {
                 type: 'FETCH_USER_MESSAGES',
                 startTime,
-            }) as TabResponse;
+            }) as unknown as TabResponse;
             
             if (!response || !response.success) {
                 throw new Error(response?.error || 'Unknown error');
@@ -352,10 +362,24 @@ const TopicModal = () => {
                                             checked={editingTopic.pushToGlip || false}
                                             onChange={e => setEditingTopic({
                                                 ...editingTopic,
-                                                pushToGlip: e.target.checked
+                                                pushToGlip: e.target.checked,
+                                                mentionMe: e.target.checked ? (editingTopic.mentionMe || false) : false
                                             })}
                                         />
                                         <label htmlFor={`push-glip-${topic.id}`}>推送Glip消息</label>
+                                    </div>
+                                    <div className="checkbox-container">
+                                        <input
+                                            type="checkbox"
+                                            id={`mention-me-${topic.id}`}
+                                            checked={editingTopic.mentionMe || false}
+                                            disabled={!editingTopic.pushToGlip}
+                                            onChange={e => setEditingTopic({
+                                                ...editingTopic,
+                                                mentionMe: e.target.checked
+                                            })}
+                                        />
+                                        <label htmlFor={`mention-me-${topic.id}`}>@我</label>
                                     </div>
                                     <button onClick={handleSaveEdit}>保存</button>
                                     <button onClick={() => setEditingTopic(null)}>取消</button>
@@ -365,10 +389,16 @@ const TopicModal = () => {
                             <div className="topic-display">
                                 <div className="drag-handle">⋮⋮</div>
                                 <span className="topic-text">{topic.text}</span>
-                                <span className="topic-expiry">
-                                    还剩 {getDaysRemaining(topic.expiredAt)} 天
-                                </span>
-                                {topic.pushToGlip && <span className="glip-indicator">Glip ✓</span>}
+                                {topic.expiredAt > 0 && getDaysRemaining(topic.expiredAt) > 0 && (
+                                    <span className="topic-expiry">
+                                        还剩 {getDaysRemaining(topic.expiredAt)} 天
+                                    </span>
+                                )}
+                                {topic.pushToGlip && (
+                                    <span className="glip-indicator">
+                                        Glip ✓{topic.mentionMe && <span className="mention-indicator"> @</span>}
+                                    </span>
+                                )}
                                 <button onClick={() => handleEdit(topic)}>✏️</button>
                                 <button onClick={() => handleDelete(topics.indexOf(topic))}>🗑️</button>
                             </div>
@@ -407,9 +437,22 @@ const TopicModal = () => {
                                 type="checkbox"
                                 id="new-push-glip"
                                 checked={newPushToGlip}
-                                onChange={e => setNewPushToGlip(e.target.checked)}
+                                onChange={e => {
+                                    setNewPushToGlip(e.target.checked);
+                                    if (!e.target.checked) setNewMentionMe(false);
+                                }}
                             />
                             <label htmlFor="new-push-glip">推送Glip消息</label>
+                        </div>
+                        <div className="checkbox-container">
+                            <input
+                                type="checkbox"
+                                id="new-mention-me"
+                                checked={newMentionMe}
+                                disabled={!newPushToGlip}
+                                onChange={e => setNewMentionMe(e.target.checked)}
+                            />
+                            <label htmlFor="new-mention-me">@我</label>
                         </div>
                         <button onClick={handleAdd}>确认</button>
                         <button onClick={() => setShowAddForm(false)}>取消</button>
@@ -582,6 +625,11 @@ const TopicModal = () => {
                     color: #4CAF50;
                     font-weight: bold;
                     font-size: 0.9em;
+                }
+
+                .mention-indicator {
+                    color: #f44336;
+                    font-weight: bold;
                 }
                 
                 button {

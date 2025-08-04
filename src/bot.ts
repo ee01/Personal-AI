@@ -9,6 +9,7 @@ interface MessageData {
     summary: string;
     reply_advice: string;
     datetime?: string;
+    mention?: boolean;
 }
 
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
@@ -26,15 +27,17 @@ __上下文__：${messageData.summary}
 __回复建议__：${messageData.reply_advice}
 `;
 
+    const shouldMention = messageData.mention !== false; // 默认为true，除非明确设置为false
+    
     const payload = envConfig.BOT_TYPE === 'team' ? {
-        mentionList: [userinfo.userEmail],
+        mentionList: shouldMention ? [userinfo.userEmail] : [],
         isTeamMention: false,
         teamName: messageData.team_name,
         teamId: envConfig.TEAM_ID,
         message: formattedMessage,
-        skipMentionCheck: true
+        skipMentionCheck: !shouldMention
     } : {
-        mention: true,
+        mention: shouldMention,
         email: userinfo.userEmail,
         emailAutoCorrect: true,
         message: formattedMessage,

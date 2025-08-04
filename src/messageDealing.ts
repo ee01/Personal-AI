@@ -60,7 +60,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 		return;
 	}
 
-	const concernedItems: {text: string}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
+	const concernedItems: {text: string, pushToGlip?: boolean, mentionMe?: boolean}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
 		{text:'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况（关键词：recording/RCV mobile/BE dependencies，必须同时包含"recording"和"BE"相关关键词）'},
 		{text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
 		{text:'Sophia (Jinmei) Lin 发送的所有消息（只需要检查发送者是否完全匹配）'},
@@ -94,6 +94,10 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	// });
 	// data.splice(2);
 	console.log(data, concernedItems, username);
+	if (data.length === 0) {
+		console.log('没有消息数据，跳过处理');
+		return;
+	}
     
     // 根据配置选择处理方式
     if (envConfig.ANALYSIS_TYPE === 'agentThinking') {
@@ -180,6 +184,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					// 直接使用 result 中的信息，不需要复杂的查找
 					const originalMessage = result.messageContext || {};
 					
+					// 查找匹配的关注项，确定是否需要mention
+					const matchedConcernedItem = concernedItems.find((item: any) => 
+						result.matchedRule && result.matchedRule.includes(item.text)
+					);
+					const shouldMention = matchedConcernedItem?.mentionMe || false;
+					
 					sendBotMessage({
 						matched_rule: result.matchedRule || '',
 						team_name: originalMessage.groupName || '',
@@ -188,7 +198,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						message_content: originalMessage.messageContent || '',
 						summary: result.summary || '',
 						reply_advice: result.replyAdvice || '',
-						datetime: originalMessage.datetime || ''
+						datetime: originalMessage.datetime || '',
+						mention: shouldMention
 					}).catch(console.error);
 				}
 				
@@ -238,27 +249,56 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 		}
     } else if (envConfig.ANALYSIS_TYPE === 'agentWorkflow') {
         // 使用智能 Agent 系统处理
-        console.log('Using Intelligent Agent System to process messages');
-		// 使用原有Agent系统处理消息
-		const processResult = await processNewMessage(data);
+        console.log('Using Intelligent Agent Workflow to process messages');
 		
-		console.log('Agent处理结果:', processResult);
-		
-		// Agent系统已经处理了消息存储逻辑，这里只需处理发送消息
-		if (envConfig.ENABLE_BOT) {
-			// 检查 data 的格式并正确获取 groupName 和 groupId
-			const groupInfo = Array.isArray(data) && data.length > 0 ? data[0] : null;
+		// agentWorkflow 模式需要逐个处理每个群组的消息
+		for (let index = 0; index < data.length; index++) {
+			const item = data[index];
+			console.log(`--开始使用 Agent Workflow 分析第 ${index+1}/${data.length} 个群组的消息--`);
 			
-			sendBotMessage({
-				matched_rule: processResult.matched_rule || '', // 使用可选链或提供默认值
-				team_name: groupInfo?.groupName || '',
-				team_id: groupInfo?.groupId || '',
-				sender: processResult.sender || '',
-				message_content: processResult.message_content || '',
-				summary: processResult.summary || '',
-				reply_advice: processResult.replyAdvice || '',
-				datetime: processResult.datetime || ''
-			}).catch(console.error);
+			// 检查是否需要继续分析
+			const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
+			if (!scheduleActive && isScheduledTask) {
+				console.log('分析任务已被终止');
+				break;
+			}
+			
+			// 处理该群组的每条消息
+			for (const post of item.posts) {
+				const messageData = {
+					team_id: item.groupId,
+					team_name: item.groupName,
+					message_content: post.text,
+					sender: post.creator,
+					datetime: post.time,
+					username: username // 传递用户名用于匹配关注项
+				};
+				
+				// 使用Agent系统处理单条消息
+				const processResult = await processNewMessage(messageData);
+				console.log(`Agent处理消息结果:`, processResult);
+				
+				// 如果需要发送通知
+				if (processResult.shouldNotify && envConfig.ENABLE_BOT) {
+					// 查找匹配的关注项，确定是否需要mention
+					const matchedConcernedItem = concernedItems.find((item: any) => 
+						processResult.matchedRule && processResult.matchedRule.includes(item.text)
+					);
+					const shouldMention = matchedConcernedItem?.mentionMe || false;
+					
+					sendBotMessage({
+						matched_rule: processResult.matchedRule || '',
+						team_name: processResult.messageContext?.groupName || '',
+						team_id: processResult.messageContext?.groupId || '',
+						sender: processResult.messageContext?.sender || '',
+						message_content: processResult.messageContext?.messageContent || '',
+						summary: processResult.summary || '',
+						reply_advice: processResult.replyAdvice || '',
+						datetime: processResult.messageContext?.datetime || '',
+						mention: shouldMention
+					}).catch(console.error);
+				}
+			}
 		}
     } else {
         // 使用普通模式处理
@@ -464,6 +504,12 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 
 				// 如果审核通过，则推送 Glip 消息
 				if (isPassReview && envConfig.ENABLE_BOT) {
+					// 查找匹配的关注项，确定是否需要mention
+					const matchedConcernedItem = concernedItems.find((item: any) => 
+						matched_rule && matched_rule.includes(item.text)
+					);
+					const shouldMention = matchedConcernedItem?.mentionMe || false;
+					
 					sendBotMessage({
 						matched_rule,
 						team_name: body.messageData ? body.messageData.groupName : json.team_name,
@@ -472,7 +518,8 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 						message_content: json.message_content,
 						summary: json.summary,
 						reply_advice: json.reply_advice,
-						datetime: json.datetime
+						datetime: json.datetime,
+						mention: shouldMention
 					}).catch(console.error);
 				}
 			}

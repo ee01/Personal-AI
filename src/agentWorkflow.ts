@@ -25,6 +25,17 @@ interface AgentTool {
 interface MessageProcessResult {
   isRelevant: boolean;
   shouldStore: boolean;
+  shouldNotify: boolean;           // 新增：是否需要发送通知
+  confidence: number;              // 新增：置信度
+  summary: string;                 // 新增：消息摘要
+  matchedRule?: string;            // 新增：匹配的规则
+  messageContext?: {               // 新增：消息上下文信息
+    groupId?: string;              // 群组ID (team_id)
+    groupName?: string;            // 群组名称 (team_name)
+    messageContent?: string;       // 消息内容 (message_content)
+    sender?: string;               // 发送者 (sender)
+    datetime?: string;             // 发送时间 (datetime)
+  };
   enrichedData?: any;
   actions?: any[];
   replyAdvice?: string;
@@ -36,7 +47,7 @@ const availableTools: Record<string, AgentTool> = {
     name: '实体提取工具',
     description: '从消息中提取人物、时间、地点、项目等实体信息',
     execute: async (params) => {
-      return await extractEntitiesToStore(params.content, params.metadata);
+      return await extractEntitiesToStore(params.message_content || params.content, params.metadata);
     }
   },
   relationshipAnalysis: {
@@ -52,7 +63,7 @@ const availableTools: Record<string, AgentTool> = {
       ${people.map((p: {name: string}) => p.name).join(', ')}
       
       消息上下文:
-      ${params.content}
+      ${params.message_content || params.content}
       
       ${params.summary ? `上下文总结: ${params.summary}` : ''}
       
@@ -113,7 +124,7 @@ const availableTools: Record<string, AgentTool> = {
       分析以下消息的重要性:
       
       消息内容:
-      ${params.content}
+      ${params.message_content || params.content}
       
       发送者: ${params.sender}
       ${params.team_name ? `聊天群组: ${params.team_name}` : ''}
@@ -178,7 +189,7 @@ const availableTools: Record<string, AgentTool> = {
       分析以下消息并提供回复建议:
       
       消息内容:
-      ${params.content}
+      ${params.message_content || params.content}
       
       发送者: ${params.sender}
       ${params.team_name ? `聊天群组: ${params.team_name}` : ''}
@@ -200,6 +211,61 @@ const availableTools: Record<string, AgentTool> = {
       `;
       
       return await callLLMJsonAPI({prompt: replyPrompt, type: 'query'});
+    }
+  },
+  concernedItemMatcher: {
+    name: '关注项匹配工具',
+    description: '检查消息是否匹配用户关注的话题并生成通知',
+    execute: async (params) => {
+      // 获取关注项配置
+      const { concernedItems } = await chrome.storage.local.get('concernedItems');
+      const items = concernedItems || [];
+      
+      if (items.length === 0) {
+        return {
+          shouldNotify: false,
+          matchedRule: '',
+          summary: '',
+          confidence: 0
+        };
+      }
+      
+      // 构建匹配分析提示
+      const matchPrompt = `
+      分析以下消息是否符合用户关注的话题:
+      
+      消息内容: ${params.message_content || params.content}
+      发送者: ${params.sender}
+      群组: ${params.team_name || ''}
+      用户名: ${params.username || ''}
+      
+      关注项规则:
+      ${items.map((item: any, i: number) => `${i + 1}. ${item.text}`).join('\n')}
+      
+      请判断:
+      1. 消息是否匹配任何关注项 (true/false)
+      2. 如果匹配，返回匹配的规则原文
+      3. 生成消息摘要
+      4. 判断置信度 (0-1)
+      5. 是否需要推送通知 (true/false)
+      
+      以JSON格式返回:
+      {
+        "shouldNotify": true/false,
+        "matchedRule": "匹配的规则原文",
+        "summary": "消息摘要和上下文分析",
+        "confidence": 0.8,
+        "reason": "匹配原因"
+      }
+      `;
+      
+      const matchResult = await callLLMJsonAPI({prompt: matchPrompt, type: 'query'});
+      return matchResult || {
+        shouldNotify: false,
+        matchedRule: '',
+        summary: '无法分析消息内容',
+        confidence: 0
+      };
     }
   }
 };
@@ -250,6 +316,14 @@ class AgentCoordinator {
         enabled: true,
         priority: 60,
         tools: ['replyAdviser']
+      },
+      {
+        id: 'notificationJudge',
+        name: '通知判断Agent',
+        description: '检查消息是否匹配关注项并决定是否发送通知',
+        enabled: true,
+        priority: 95, // 高优先级，在实体识别后立即执行
+        tools: ['concernedItemMatcher']
       }
     ];
   }
@@ -295,6 +369,17 @@ class AgentCoordinator {
     const result: MessageProcessResult = {
       isRelevant: false,
       shouldStore: false,
+      shouldNotify: false,               // 新增字段
+      confidence: 0,                     // 新增字段
+      summary: '',                       // 新增字段
+      matchedRule: '',                   // 新增字段
+      messageContext: {                  // 新增字段：填充消息上下文
+        groupId: message.team_id || message.groupId,
+        groupName: message.team_name || message.groupName,
+        messageContent: message.message_content || message.content || message.text,
+        sender: message.sender || message.creator,
+        datetime: message.datetime || message.time
+      },
       enrichedData: {},
       actions: []
     };
@@ -351,6 +436,13 @@ class AgentCoordinator {
             ? toolResults.replyAdviser.replyText 
             : '';
         }
+        
+        if (toolResults.concernedItemMatcher) {
+          result.shouldNotify = toolResults.concernedItemMatcher.shouldNotify || false;
+          result.matchedRule = toolResults.concernedItemMatcher.matchedRule || '';
+          result.summary = toolResults.concernedItemMatcher.summary || '';
+          result.confidence = toolResults.concernedItemMatcher.confidence || 0;
+        }
       } catch (error) {
         console.error(`Agent "${agent.name}" 执行失败:`, error);
       }
@@ -368,7 +460,7 @@ const agentCoordinator = new AgentCoordinator();
 export async function processNewMessage(message: any): Promise<MessageProcessResult> {
   console.log('Agent系统接收到新消息:', message);
   
-  // 调用Agent协调器处理消息
+  // 调用Agent协调器处理消息，传递完整的消息上下文
   const processResult = await agentCoordinator.processMessage(message);
   
   // 如果消息需要存储到向量数据库
