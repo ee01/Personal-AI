@@ -84,6 +84,16 @@ const Popup = () => {
         });
     };
     
+    const openProjectDashboard = () => {
+        chrome.windows.create({
+            url: 'project-dashboard.html',
+            type: 'popup',
+            width: 1200,
+            height: 900,
+            focused: true
+        });
+    };
+    
     const openPromptConfigWindow = () => {
         chrome.windows.create({
             url: 'prompt-config.html',
@@ -279,6 +289,10 @@ const Popup = () => {
                 </div>
             )}
 
+            <button onClick={openProjectDashboard} className="dashboard-button">
+                📊 项目进度仪表盘
+            </button>
+
             <button onClick={openKnowledgeQueryWindow} className="message-button">
                 知识库查询
             </button>
@@ -393,6 +407,19 @@ const Popup = () => {
                 .expand-button:hover {
                      background-color: #31b0d5;
                 }
+
+                 .dashboard-button {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    font-weight: 600;
+                    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+                    transition: all 0.3s ease;
+                 }
+                 
+                 .dashboard-button:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+                 }
 
                  .message-button { /* Example specific style if needed */
                     background-color: #ff9900; /* Example orange */

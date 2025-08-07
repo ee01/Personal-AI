@@ -665,7 +665,7 @@ const ProjectDashboard: React.FC = () => {
   }
 
   function getStatusLabel(status: string): string {
-    const labels = {
+    const labels: Record<string, string> = {
       'planning': '规划中',
       'in-progress': '进行中',
       'at-risk': '有风险',
@@ -677,7 +677,7 @@ const ProjectDashboard: React.FC = () => {
   }
 
   function getMilestoneColor(status: string): string {
-    const colors = {
+    const colors: Record<string, string> = {
       'on-track': '#52c41a',
       'at-risk': '#fa8c16',
       'delayed': '#ff4d4f',

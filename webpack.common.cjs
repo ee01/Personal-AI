@@ -24,6 +24,7 @@ module.exports = (env) => {
       contentScriptGoogleSlide: './src/contentScriptGoogleSlide.tsx',
       contentScriptJira: './src/contentScriptJira.ts',
       contentScriptJiraAutomation: './src/contentScriptJiraAutomation.ts',
+      contentScriptWebIntelligence: './src/contentScriptWebIntelligence.ts',
       popup: './src/popup.tsx',
       options: './src/options.tsx',
       offscreen: './src/offscreen.ts',

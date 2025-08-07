@@ -5,6 +5,7 @@
 
 import EnhancedVectorStore from './EnhancedVectorStore';
 import KnowledgeGraphStore from './KnowledgeGraphStore';
+import HybridGraphStore, { GraphEntity, GraphRelationship } from './HybridGraphStore';
 import { MemoryLifecycleManager } from '../memory-management/MemoryLifecycleManager';
 
 export interface StorageConfig {
@@ -76,6 +77,7 @@ export interface StorageHealthStatus {
 export class UnifiedStorageManager {
   private vectorStore: EnhancedVectorStore;
   private knowledgeGraph: KnowledgeGraphStore;
+  private hybridGraph: HybridGraphStore;
   private memoryManager: MemoryLifecycleManager;
   private config: StorageConfig;
   private isInitialized = false;
@@ -84,6 +86,7 @@ export class UnifiedStorageManager {
     this.config = config;
     this.vectorStore = new EnhancedVectorStore();
     this.knowledgeGraph = new KnowledgeGraphStore();
+    this.hybridGraph = new HybridGraphStore();
     this.memoryManager = new MemoryLifecycleManager();
   }
 
@@ -113,6 +116,14 @@ export class UnifiedStorageManager {
         results.push(graphResult);
         if (!graphResult) {
           console.warn('⚠️ 知识图谱初始化失败');
+        }
+        
+        // 初始化混合图存储（优先使用）
+        console.log('🔄 初始化混合图存储...');
+        const hybridResult = await this.hybridGraph.initialize();
+        results.push(hybridResult);
+        if (!hybridResult) {
+          console.warn('⚠️ 混合图存储初始化失败，将使用传统图存储');
         }
       }
 
@@ -172,18 +183,54 @@ export class UnifiedStorageManager {
         );
       }
 
-      // 2. 提取实体和关系到知识图谱
+      // 2. 提取实体和关系到知识图谱（优先使用混合图存储）
       if (this.config.knowledgeGraph.enabled) {
-        const graphData = await this.knowledgeGraph.extractFromMessage({
-          messageId: messageData.messageId,
-          content: messageData.content,
-          source: messageData.metadata.source,
-          entities: messageData.metadata.entities,
-          relationships: messageData.metadata.relationships
-        });
-        
-        result.graphEntities = graphData.entities.length;
-        result.graphRelationships = graphData.relationships.length;
+        try {
+          // 优先使用混合图存储
+          const hybridStats = this.hybridGraph.getStatistics();
+          if (hybridStats.isCloudAvailable) {
+            const graphData = await this.hybridGraph.extractFromMessage({
+              messageId: messageData.messageId,
+              content: messageData.content,
+              source: messageData.metadata.source,
+              entities: messageData.metadata.entities,
+              relationships: messageData.metadata.relationships,
+              timestamp: messageData.metadata.timestamp
+            });
+            
+            result.graphEntities = graphData.entities.length;
+            result.graphRelationships = graphData.relationships.length;
+          } else {
+            // 回退到传统图存储
+            const graphData = await this.knowledgeGraph.extractFromMessage({
+              messageId: messageData.messageId,
+              content: messageData.content,
+              source: messageData.metadata.source,
+              entities: messageData.metadata.entities,
+              relationships: messageData.metadata.relationships
+            });
+            
+            result.graphEntities = graphData.entities.length;
+            result.graphRelationships = graphData.relationships.length;
+          }
+        } catch (error) {
+          console.error('图存储失败，尝试回退:', error);
+          // 如果混合图存储失败，尝试传统图存储
+          try {
+            const graphData = await this.knowledgeGraph.extractFromMessage({
+              messageId: messageData.messageId,
+              content: messageData.content,
+              source: messageData.metadata.source,
+              entities: messageData.metadata.entities,
+              relationships: messageData.metadata.relationships
+            });
+            
+            result.graphEntities = graphData.entities.length;
+            result.graphRelationships = graphData.relationships.length;
+          } catch (fallbackError) {
+            console.error('传统图存储也失败:', fallbackError);
+          }
+        }
       }
 
       // 3. 创建记忆条目

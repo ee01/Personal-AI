@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>增强知识查询</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            min-height: 100vh;
+        }
+
+        .enhanced-knowledge-query {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+
+        .search-section {
+            margin-bottom: 30px;
+        }
+
+        .search-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .search-header h2 {
+            margin: 0;
+            color: #2c3e50;
+            font-size: 1.8em;
+        }
+
+        .search-stats {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+
+        .search-input-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .search-button {
+            padding: 12px 24px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background 0.3s ease;
+        }
+
+        .search-button:hover:not(:disabled) {
+            background: #2980b9;
+        }
+
+        .search-button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        .search-options {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .option-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            gap: 15px;
+        }
+
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+        }
+
+        .results-summary {
+            background: #e8f4fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .summary-stats {
+            display: flex;
+            gap: 15px;
+        }
+
+        .summary-stats span {
+            background: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            border: 1px solid #ddd;
+        }
+
+        .view-options {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .filter-options {
+            display: flex;
+            gap: 10px;
+        }
+
+        .filter-options select {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .graph-view-toggle {
+            padding: 8px 15px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .results-section {
+            margin-top: 20px;
+        }
+
+        .results-list {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .result-card {
+            background: white;
+            border: 1px solid #e1e8ed;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            transition: box-shadow 0.3s ease;
+        }
+
+        .result-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .result-card[data-type="vector"] {
+            border-left: 4px solid #3498db;
+        }
+
+        .result-card[data-type="entity"] {
+            border-left: 4px solid #9b59b6;
+        }
+
+        .result-card[data-type="relationship"] {
+            border-left: 4px solid #27ae60;
+        }
+
+        .result-header {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            gap: 15px;
+        }
+
+        .result-type-badge {
+            font-size: 1.5em;
+            width: 40px;
+            text-align: center;
+        }
+
+        .result-title {
+            flex: 1;
+        }
+
+        .result-title h4 {
+            margin: 0 0 8px 0;
+            color: #2c3e50;
+            font-size: 1.1em;
+        }
+
+        .result-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.85em;
+            color: #7f8c8d;
+        }
+
+        .expand-button {
+            padding: 6px 12px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .result-details {
+            padding: 0 15px 15px 15px;
+            border-top: 1px solid #e1e8ed;
+        }
+
+        .result-content {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+
+        .result-content pre {
+            margin: 0;
+            white-space: pre-wrap;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .result-tags {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+            margin: 10px 0;
+        }
+
+        .tag {
+            background: #e9ecef;
+            color: #495057;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+        }
+
+        .entity-info, .relationship-info, .neighbors-info, .reply-advice {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .entity-info h5, .relationship-info h5, .neighbors-info h5, .reply-advice h5 {
+            margin: 0 0 8px 0;
+            color: #2c3e50;
+            font-size: 0.9em;
+        }
+
+        .entity-info p, .relationship-info p {
+            margin: 4px 0;
+            font-size: 0.9em;
+        }
+
+        .neighbors-list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .neighbor-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 10px;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid #e1e8ed;
+        }
+
+        .neighbor-name {
+            font-weight: 500;
+        }
+
+        .neighbor-relation {
+            color: #7f8c8d;
+            font-size: 0.85em;
+        }
+
+        .neighbor-more {
+            text-align: center;
+            color: #7f8c8d;
+            font-style: italic;
+            font-size: 0.9em;
+            padding: 5px;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .history-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e1e8ed;
+        }
+
+        .history-section h3 {
+            margin: 0 0 15px 0;
+            color: #2c3e50;
+        }
+
+        .history-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .history-item {
+            padding: 8px 15px;
+            background: #f8f9fa;
+            border: 1px solid #e1e8ed;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+        }
+
+        .history-item:hover {
+            background: #e9ecef;
+            transform: translateY(-1px);
+        }
+
+        .graph-visualization {
+            background: #f8f9fa;
+            border: 1px solid #e1e8ed;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .graph-info {
+            margin-bottom: 15px;
+            color: #7f8c8d;
+        }
+
+        .graph-container {
+            background: white;
+            border: 1px solid #e1e8ed;
+            border-radius: 6px;
+            padding: 40px;
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .graph-placeholder {
+            text-align: center;
+            color: #7f8c8d;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        .status-healthy { background: #27ae60; }
+        .status-warning { background: #f39c12; }
+        .status-error { background: #e74c3c; }
+        .status-loading { 
+            background: #3498db; 
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div class="enhanced-knowledge-query">
+        <div class="search-section">
+            <div class="search-header">
+                <h2>🧠 智能知识查询</h2>
+                <div class="search-stats" id="search-stats">
+                    <span class="status-indicator status-loading"></span>
+                    正在连接...
+                </div>
+            </div>
+            
+            <div class="search-input-container">
+                <textarea
+                    id="query-input"
+                    class="search-input"
+                    placeholder="输入您的问题（支持语义搜索和关系查询）...&#10;例如：张三参与了哪些项目？&#10;或者：前端团队负责的任务有哪些？"
+                    rows="2"
+                >张三参与了哪些项目？</textarea>
+                <button id="search-button" class="search-button">
+                    🔍 搜索
+                </button>
+            </div>
+            
+            <!-- 搜索选项 -->
+            <div class="search-options">
+                <div class="option-group">
+                    <label>搜索范围:</label>
+                    <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" id="search-vector" checked> 📄 向量搜索
+                        </label>
+                        <label>
+                            <input type="checkbox" id="search-graph" checked> 🕸️ 图搜索
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="option-group">
+                    <label>
+                        <input type="checkbox" id="include-neighbors" checked>
+                        🔗 包含关联实体
+                    </label>
+                </div>
+                
+                <div class="option-group">
+                    <label>最大关联深度:</label>
+                    <select id="max-depth">
+                        <option value="1">1层</option>
+                        <option value="2" selected>2层</option>
+                        <option value="3">3层</option>
+                    </select>
+                </div>
+                
+                <div class="option-group">
+                    <label>结果数量:</label>
+                    <select id="result-limit">
+                        <option value="10">10个</option>
+                        <option value="20" selected>20个</option>
+                        <option value="50">50个</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 结果统计 -->
+        <div id="results-summary" class="results-summary" style="display: none;">
+            <div class="summary-stats" id="summary-stats">
+                <span>总结果: 0</span>
+                <span>向量: 0</span>
+                <span>实体: 0</span>
+                <span>关系: 0</span>
+            </div>
+            
+            <div class="view-options">
+                <div class="filter-options">
+                    <select id="result-filter">
+                        <option value="all">所有结果</option>
+                        <option value="vector">向量结果</option>
+                        <option value="entity">实体结果</option>
+                        <option value="relationship">关系结果</option>
+                    </select>
+                    
+                    <select id="sort-by">
+                        <option value="relevance">按相关性</option>
+                        <option value="timestamp">按时间</option>
+                        <option value="connections">按连接数</option>
+                    </select>
+                </div>
+                
+                <button id="graph-view-toggle" class="graph-view-toggle" style="display: none;">
+                    🕸️ 图视图
+                </button>
+            </div>
+        </div>
+
+        <!-- 结果展示区域 -->
+        <div class="results-section">
+            <div id="results-list" class="results-list">
+                <div class="no-results">
+                    <p>输入问题开始智能搜索</p>
+                    <p>💡 支持向量语义搜索和知识图谱关系查询</p>
+                </div>
+            </div>
+            
+            <div id="graph-visualization" class="graph-visualization" style="display: none;">
+                <div class="graph-info">
+                    <p id="graph-info-text">📊 图可视化: 0 个节点, 0 条边</p>
+                    <p>💡 提示: 节点大小表示连接数，颜色表示实体类型</p>
+                </div>
+                <div class="graph-container">
+                    <div class="graph-placeholder">
+                        <p>🚧 图可视化组件待集成</p>
+                        <p>当前显示的是文本版本的图数据</p>
+                        <div id="graph-text-display"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 历史查询 -->
+        <div id="history-section" class="history-section" style="display: none;">
+            <h3>📚 历史查询</h3>
+            <div id="history-list" class="history-list">
+                <!-- 历史查询项将动态添加 -->
+            </div>
+        </div>
+    </div>
+
+    <script src="enhanced-knowledge-query.js"></script>
+</body>
+</html>
