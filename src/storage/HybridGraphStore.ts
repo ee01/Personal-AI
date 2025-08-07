@@ -6,7 +6,7 @@
 
 import { ChromaClient, Collection } from 'chromadb';
 import { getEmbeddingViaOffscreen } from '../embeddings';
-import { getEnvConfig } from '../utils';
+import { getEnvConfig, EnvConfigType } from '../utils';
 
 export interface GraphEntity {
   id: string;
@@ -492,6 +492,250 @@ export class HybridGraphStore {
       console.error('❌ 云端恢复失败:', error);
       return false;
     }
+  }
+
+  /**
+   * 从消息数据中提取实体和关系
+   */
+  async extractFromMessage(messageData: {
+    messageId: string;
+    content: string;
+    source: string;
+    entities?: any;
+    relationships?: any;
+    timestamp?: number;
+  }): Promise<{ entities: GraphEntity[], relationships: GraphRelationship[] }> {
+    const extractedEntities: GraphEntity[] = [];
+    const extractedRelationships: GraphRelationship[] = [];
+    const timestamp = messageData.timestamp || Date.now();
+
+    try {
+      if (messageData.entities) {
+        // 提取人员实体
+        if (messageData.entities.people) {
+          for (const person of messageData.entities.people) {
+            const entityId = `person_${this.normalizeId(person.name)}`;
+            const entity = await this.upsertEntity({
+              id: entityId,
+              type: 'Person',
+              name: person.name,
+              properties: {
+                role: person.role || '',
+                department: person.department || '',
+                source: messageData.source,
+                firstMentioned: timestamp,
+                lastMentioned: timestamp
+              }
+            });
+            extractedEntities.push(entity);
+          }
+        }
+
+        // 提取项目实体
+        if (messageData.entities.projects) {
+          for (const project of messageData.entities.projects) {
+            const entityId = `project_${this.normalizeId(project.name)}`;
+            const entity = await this.upsertEntity({
+              id: entityId,
+              type: 'Project',
+              name: project.name,
+              properties: {
+                status: project.status || 'unknown',
+                priority: project.priority || '',
+                deadline: project.deadline || '',
+                source: messageData.source,
+                firstMentioned: timestamp,
+                lastMentioned: timestamp
+              }
+            });
+            extractedEntities.push(entity);
+          }
+        }
+
+        // 提取任务实体
+        if (messageData.entities.tasks) {
+          for (const task of messageData.entities.tasks) {
+            const entityId = `task_${this.normalizeId(task.name)}`;
+            const entity = await this.upsertEntity({
+              id: entityId,
+              type: 'Task',
+              name: task.name,
+              properties: {
+                status: task.status || 'unknown',
+                assignee: task.assignee || '',
+                deadline: task.deadline || '',
+                source: messageData.source,
+                firstMentioned: timestamp,
+                lastMentioned: timestamp
+              }
+            });
+            extractedEntities.push(entity);
+          }
+        }
+
+        // 提取组织实体
+        if (messageData.entities.organizations) {
+          for (const org of messageData.entities.organizations) {
+            const entityId = `org_${this.normalizeId(org.name)}`;
+            const entity = await this.upsertEntity({
+              id: entityId,
+              type: 'Organization',
+              name: org.name,
+              properties: {
+                type: org.type || '',
+                source: messageData.source,
+                firstMentioned: timestamp,
+                lastMentioned: timestamp
+              }
+            });
+            extractedEntities.push(entity);
+          }
+        }
+      }
+
+      // 创建关系
+      if (messageData.relationships) {
+        for (const rel of messageData.relationships) {
+          const relationship = await this.createRelationship({
+            type: rel.type || 'RELATED',
+            fromId: rel.fromId,
+            toId: rel.toId,
+            properties: {
+              messageId: messageData.messageId,
+              source: messageData.source,
+              timestamp: timestamp,
+              context: messageData.content.substring(0, 200),
+              confidence: rel.confidence || 0.7
+            },
+            strength: rel.strength || 0.7
+          });
+          extractedRelationships.push(relationship);
+        }
+      } else {
+        // 自动推断关系
+        const autoRelationships = await this.inferRelationshipsFromEntities(
+          extractedEntities,
+          messageData
+        );
+        extractedRelationships.push(...autoRelationships);
+      }
+
+      console.log(`📊 从消息提取: ${extractedEntities.length}个实体, ${extractedRelationships.length}个关系`);
+      return { entities: extractedEntities, relationships: extractedRelationships };
+
+    } catch (error) {
+      console.error('从消息提取实体关系失败:', error);
+      return { entities: [], relationships: [] };
+    }
+  }
+
+  /**
+   * 自动推断实体间关系
+   */
+  private async inferRelationshipsFromEntities(
+    entities: GraphEntity[],
+    messageData: { messageId: string; content: string; source: string; timestamp?: number }
+  ): Promise<GraphRelationship[]> {
+    const relationships: GraphRelationship[] = [];
+    const timestamp = messageData.timestamp || Date.now();
+
+    // 人员与项目的关系
+    const people = entities.filter(e => e.type === 'Person');
+    const projects = entities.filter(e => e.type === 'Project');
+    const tasks = entities.filter(e => e.type === 'Task');
+
+    // 人员参与项目关系
+    for (const person of people) {
+      for (const project of projects) {
+        const relationship = await this.createRelationship({
+          type: 'WORKS_ON',
+          fromId: person.id,
+          toId: project.id,
+          properties: {
+            messageId: messageData.messageId,
+            source: messageData.source,
+            timestamp: timestamp,
+            context: messageData.content.substring(0, 200),
+            inferred: true
+          },
+          strength: 0.6
+        });
+        relationships.push(relationship);
+      }
+    }
+
+    // 人员负责任务关系
+    for (const person of people) {
+      for (const task of tasks) {
+        const relationship = await this.createRelationship({
+          type: 'ASSIGNED_TO',
+          fromId: task.id,
+          toId: person.id,
+          properties: {
+            messageId: messageData.messageId,
+            source: messageData.source,
+            timestamp: timestamp,
+            context: messageData.content.substring(0, 200),
+            inferred: true
+          },
+          strength: 0.6
+        });
+        relationships.push(relationship);
+      }
+    }
+
+    // 任务属于项目关系
+    for (const task of tasks) {
+      for (const project of projects) {
+        const relationship = await this.createRelationship({
+          type: 'BELONGS_TO',
+          fromId: task.id,
+          toId: project.id,
+          properties: {
+            messageId: messageData.messageId,
+            source: messageData.source,
+            timestamp: timestamp,
+            context: messageData.content.substring(0, 200),
+            inferred: true
+          },
+          strength: 0.5
+        });
+        relationships.push(relationship);
+      }
+    }
+
+    // 人员之间的协作关系
+    for (let i = 0; i < people.length; i++) {
+      for (let j = i + 1; j < people.length; j++) {
+        const relationship = await this.createRelationship({
+          type: 'COLLABORATES_WITH',
+          fromId: people[i].id,
+          toId: people[j].id,
+          properties: {
+            messageId: messageData.messageId,
+            source: messageData.source,
+            timestamp: timestamp,
+            context: messageData.content.substring(0, 200),
+            inferred: true
+          },
+          strength: 0.4
+        });
+        relationships.push(relationship);
+      }
+    }
+
+    return relationships;
+  }
+
+  /**
+   * 规范化ID
+   */
+  private normalizeId(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/[^\w\u4e00-\u9fff]/g, '_')  // 保留中文字符
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
   }
 
   /**

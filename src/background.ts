@@ -7,6 +7,16 @@ import { FETCH_JIRA_TICKETS } from './jira';
 import { getAuthToken } from './slide';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
+import { 
+    executeEnhancedKnowledgeQuery, 
+    getGraphStatistics, 
+    syncGraphData, 
+    backupGraphData 
+} from './enhancedKnowledgeQuery';
+import { getMessageProcessingEnhancer } from './storage/MessageProcessingEnhancer';
+import { getStorageHealthMonitor } from './storage/StorageHealthMonitor';
+import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
+import { DashboardMessageHandler } from './utils/dashboardIntegration';
 
 console.log('Background script loaded');
 
@@ -75,6 +85,24 @@ chrome.runtime.onInstalled.addListener(async () => {
 
         // 预先创建离屏文档
         await createOffscreenDocument();
+
+        // 初始化混合图存储和健康监控
+        try {
+            console.log('🔄 初始化混合图存储系统...');
+            
+            // 初始化消息处理增强器
+            const enhancer = await getMessageProcessingEnhancer();
+            const enhancerStats = enhancer.getGraphStatistics();
+            console.log('📊 消息处理增强器状态:', enhancerStats);
+            
+            // 启动存储健康监控
+            const healthMonitor = await getStorageHealthMonitor();
+            healthMonitor.startMonitoring(10); // 每10分钟检查一次
+            console.log('🎯 存储健康监控已启动');
+            
+        } catch (error) {
+            console.error('❌ 混合图存储系统初始化失败:', error);
+        }
     } catch (error) {
         console.error('Error in onInstalled listener:', error);
     }
@@ -90,6 +118,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 // 原来的监听器简化为：
+// 初始化仪表盘消息处理器
+const dashboardHandler = new DashboardMessageHandler();
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background received message:', request);
 
@@ -169,6 +200,372 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 处理分析幻灯片项目的请求
     if (request.type === 'REQUEST_SLIDES_ANALYSIS' && sender.tab?.id) {
         handleSlideAnalysisRequest(sender.tab.id);
+        return true;
+    }
+
+    // 处理增强知识查询请求
+    if (request.type === 'ENHANCED_KNOWLEDGE_QUERY') {
+        const { query, options } = request;
+        executeEnhancedKnowledgeQuery(query, options)
+            .then(response => sendResponse(response))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message,
+                query,
+                options,
+                data: { graphConnections: 0, totalResults: 0 },
+                queryTime: 0
+            }));
+        return true; // 保持消息通道开放
+    }
+
+    // 处理图存储统计请求
+    if (request.type === 'GET_GRAPH_STATISTICS') {
+        getGraphStatistics()
+            .then(response => sendResponse(response))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
+        return true;
+    }
+
+    // 处理图数据同步请求
+    if (request.type === 'SYNC_GRAPH_DATA') {
+        syncGraphData()
+            .then(response => sendResponse(response))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
+        return true;
+    }
+
+    // 处理图数据备份请求
+    if (request.type === 'BACKUP_GRAPH_DATA') {
+        backupGraphData()
+            .then(response => sendResponse(response))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
+        return true;
+    }
+
+    // 处理数据迁移请求
+    if (request.type === 'MIGRATE_DATA_TO_GRAPH') {
+        const { migrateExistingData } = require('./storage/DataMigrationTool');
+        migrateExistingData((progress: any) => {
+            // 发送进度更新
+            chrome.runtime.sendMessage({
+                type: 'MIGRATION_PROGRESS',
+                progress
+            }).catch(() => {}); // 忽略发送失败
+        })
+            .then((result: any) => sendResponse({
+                success: true,
+                migrationResult: result
+            }))
+            .catch((error: any) => sendResponse({
+                success: false,
+                error: error.message
+            }));
+        return true;
+    }
+
+    // 处理存储健康检查请求
+    if (request.type === 'GET_STORAGE_HEALTH') {
+        getStorageHealthMonitor()
+            .then(monitor => monitor.performHealthCheck())
+            .then(healthMetrics => sendResponse({
+                success: true,
+                healthMetrics
+            }))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
+        return true;
+    }
+
+    // 处理维护任务执行请求
+    if (request.type === 'RUN_MAINTENANCE_TASK') {
+        const { taskId } = request;
+        getStorageHealthMonitor()
+            .then(monitor => monitor.runMaintenanceTask(taskId))
+            .then(success => sendResponse({
+                success,
+                message: success ? '维护任务执行成功' : '维护任务执行失败'
+            }))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
+        return true;
+    }
+
+    // 处理智能网页分析请求
+    if (request.type === 'WEB_INTELLIGENCE_ANALYSIS') {
+        const { pageContent, analysisResult, timestamp } = request;
+        
+        try {
+            console.log('🧠 收到智能网页分析结果:', {
+                url: pageContent.url,
+                title: pageContent.title,
+                confidence: analysisResult.confidence,
+                isRelevant: analysisResult.isRelevant,
+                suggestedStorage: analysisResult.suggestedStorage,
+                extractedInfo: Object.keys(analysisResult.extractedInfo || {})
+            });
+
+            // 如果分析结果建议存储，进行进一步处理
+            if (analysisResult.suggestedStorage || (analysisResult.isRelevant && analysisResult.confidence > 0.5)) {
+                console.log('✅ 满足深度处理条件，调用agentThinking...');
+                // 调用agentThinking进行深度分析和存储
+                const agent = new IntelligentAgent();
+                agent.analyze({
+                    type: 'webpage',
+                    url: pageContent.url,
+                    title: pageContent.title,
+                    content: pageContent.mainContent,
+                    metadata: pageContent.metadata,
+                    extractedInfo: analysisResult.extractedInfo
+                }, {
+                    type: 'webpage',
+                    analysisDepth: 'normal'
+                })
+                .then(result => {
+                    console.log('✅ 网页内容已通过agentThinking处理:', result);
+                    sendResponse({ success: true, processed: true, result });
+                })
+                .catch(error => {
+                    console.error('❌ agentThinking处理失败:', error);
+                    sendResponse({ success: false, error: error.message });
+                });
+            } else {
+                // 记录但不进行深度处理
+                console.log('⏭️ 跳过深度处理:', {
+                    suggestedStorage: analysisResult.suggestedStorage,
+                    isRelevant: analysisResult.isRelevant,
+                    confidence: analysisResult.confidence,
+                    required: 'suggestedStorage=true OR (isRelevant=true AND confidence>0.5)'
+                });
+                sendResponse({ success: true, processed: false, reason: 'conditions_not_met' });
+            }
+        } catch (error) {
+            console.error('❌ 处理智能网页分析失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        
+        return true; // 保持消息通道开放
+    }
+
+    // 获取智能网页分析统计
+    if (request.type === 'GET_WEB_INTELLIGENCE_STATS') {
+        try {
+            const integrator = getWebIntelligenceIntegrator();
+            const stats = integrator.getSystemStats();
+            const componentStatus = integrator.getComponentStatus();
+            
+            sendResponse({
+                success: true,
+                stats,
+                componentStatus
+            });
+        } catch (error) {
+            console.error('❌ 获取智能分析统计失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 智能网页分析健康检查
+    if (request.type === 'WEB_INTELLIGENCE_HEALTH_CHECK') {
+        try {
+            const integrator = getWebIntelligenceIntegrator();
+            integrator.healthCheck()
+                .then(healthStatus => sendResponse({
+                    success: true,
+                    health: healthStatus
+                }))
+                .catch(error => sendResponse({
+                    success: false,
+                    error: error.message
+                }));
+        } catch (error) {
+            console.error('❌ 智能分析健康检查失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 使用仪表盘消息处理器处理项目相关消息
+    if (request.type === 'GET_PROJECT_DATA' || 
+        request.type === 'UPDATE_PROJECT_ITEM' || 
+        request.type === 'QUICK_ACTION') {
+        (async () => {
+            await dashboardHandler.handleMessage(request, sendResponse);
+        })();
+        return true;
+    }
+
+    // 深度分析网页内容
+    if (request.type === 'DEEP_ANALYZE_WEB_CONTENT') {
+        try {
+            const { pageContent, quickResult, userAction } = request.data;
+            
+            console.log('🔍 深度分析网页内容:', {
+                url: pageContent.url,
+                title: pageContent.title,
+                userAction
+            });
+            
+            // 调用agentThinking进行深度分析
+            const agent = new IntelligentAgent();
+            const result = await agent.analyze({
+                type: 'webpage_deep',
+                url: pageContent.url,
+                title: pageContent.title,
+                content: pageContent.mainContent,
+                metadata: pageContent.metadata,
+                quickAnalysis: quickResult,
+                userAction
+                            }, {
+                    type: 'webpage',
+                    analysisDepth: 'deep'
+                });
+            
+            sendResponse({ success: true, result });
+        } catch (error) {
+            console.error('❌ 深度分析失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 快速保存网页内容
+    if (request.type === 'QUICK_SAVE_WEB_CONTENT') {
+        try {
+            const { pageContent, quickResult, userAction } = request.data;
+            
+            console.log('💾 快速保存网页内容:', {
+                url: pageContent.url,
+                title: pageContent.title,
+                userAction
+            });
+            
+            // 轻量级保存，不进行深度分析
+            const agent = new IntelligentAgent();
+            const result = await agent.analyze({
+                type: 'webpage_quick_save',
+                url: pageContent.url,
+                title: pageContent.title,
+                content: pageContent.mainContent,
+                metadata: pageContent.metadata,
+                quickAnalysis: quickResult,
+                userAction
+                            }, {
+                    type: 'webpage',
+                    analysisDepth: 'quick'
+                });
+            
+            sendResponse({ success: true, result });
+        } catch (error) {
+            console.error('❌ 快速保存失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 记录分析结果
+    if (request.type === 'RECORD_ANALYSIS_RESULT') {
+        try {
+            const { url, result, timestamp } = request.data;
+            
+            // 记录到本地存储用于统计
+            const analysisHistory = await chrome.storage.local.get('analysisHistory') || { analysisHistory: [] };
+            analysisHistory.analysisHistory.push({
+                url,
+                result,
+                timestamp
+            });
+            
+            // 保留最近100条记录
+            if (analysisHistory.analysisHistory.length > 100) {
+                analysisHistory.analysisHistory = analysisHistory.analysisHistory.slice(-100);
+            }
+            
+            await chrome.storage.local.set({ analysisHistory: analysisHistory.analysisHistory });
+            
+            sendResponse({ success: true });
+        } catch (error) {
+            console.error('❌ 记录分析结果失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 记录用户行为
+    if (request.type === 'RECORD_USER_ACTION') {
+        try {
+            const { action, url, timestamp } = request.data;
+            
+            // 记录用户行为用于改进推荐
+            const userActions = await chrome.storage.local.get('userActions') || { userActions: [] };
+            userActions.userActions.push({
+                action,
+                url,
+                timestamp
+            });
+            
+            // 保留最近500条记录
+            if (userActions.userActions.length > 500) {
+                userActions.userActions = userActions.userActions.slice(-500);
+            }
+            
+            await chrome.storage.local.set({ userActions: userActions.userActions });
+            
+            sendResponse({ success: true });
+        } catch (error) {
+            console.error('❌ 记录用户行为失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 更新智能网页分析配置
+    if (request.type === 'UPDATE_WEB_INTELLIGENCE_CONFIG') {
+        try {
+            const { config } = request;
+            const integrator = getWebIntelligenceIntegrator();
+            integrator.updateConfig(config);
+            
+            sendResponse({ success: true, message: '配置已更新' });
+        } catch (error) {
+            console.error('❌ 更新智能分析配置失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
+
+    // 重启智能网页分析组件
+    if (request.type === 'RESTART_WEB_INTELLIGENCE_COMPONENT') {
+        try {
+            const { component } = request;
+            const integrator = getWebIntelligenceIntegrator();
+            integrator.restartComponent(component)
+                .then(success => sendResponse({
+                    success,
+                    message: success ? `组件 ${component} 重启成功` : `组件 ${component} 重启失败`
+                }))
+                .catch(error => sendResponse({
+                    success: false,
+                    error: error.message
+                }));
+        } catch (error) {
+            console.error('❌ 重启智能分析组件失败:', error);
+            sendResponse({ success: false, error: error.message });
+        }
         return true;
     }
     
@@ -346,5 +743,332 @@ async function handleSlideAnalysisRequest(tabId: number) {
         }
     } catch (error) {
         console.error('处理幻灯片分析请求时出错:', error);
+    }
+}
+
+// 生成项目数据 (模拟函数)
+async function generateProjectData(projectId?: string) {
+    // 模拟项目数据 - 实际实现中会从Jira、GitHub等数据源获取
+    const mockProjects = [
+        {
+            id: 'project-1',
+            name: '个人AI助手扩展',
+            description: '基于Chrome扩展的智能项目管理和信息处理平台',
+            status: 'in-progress',
+            overallProgress: 75,
+            startDate: new Date('2024-01-01'),
+            endDate: new Date('2024-12-31'),
+            milestones: [
+                {
+                    id: 'milestone-1',
+                    name: '网页智能分析系统',
+                    description: '实现通用网页内容智能分析',
+                    progress: 90,
+                    plannedDate: new Date('2024-03-15'),
+                    actualDate: new Date('2024-03-20'),
+                    status: 'completed',
+                    dependencies: [],
+                    assignees: [{ id: 'user1', name: '开发者A', role: '前端工程师' }],
+                    tasks: [
+                        {
+                            id: 'task-1',
+                            title: '实现UniversalContentScript',
+                            description: '通用内容脚本开发',
+                            status: 'done',
+                            assignee: 'user1',
+                            estimatedHours: 16,
+                            actualHours: 18,
+                            priority: 'high',
+                            dependencies: [],
+                            startDate: new Date('2024-03-01'),
+                            endDate: new Date('2024-03-10')
+                        },
+                        {
+                            id: 'task-2',
+                            title: '集成Chrome AI',
+                            description: '集成Chrome内置AI能力',
+                            status: 'done',
+                            assignee: 'user1',
+                            estimatedHours: 12,
+                            actualHours: 14,
+                            priority: 'medium',
+                            dependencies: ['task-1'],
+                            startDate: new Date('2024-03-10'),
+                            endDate: new Date('2024-03-18')
+                        }
+                    ]
+                },
+                {
+                    id: 'milestone-2',
+                    name: '项目可视化仪表盘',
+                    description: '项目进度和团队状态可视化',
+                    progress: 60,
+                    plannedDate: new Date('2024-06-15'),
+                    status: 'in-progress',
+                    dependencies: ['milestone-1'],
+                    assignees: [{ id: 'user1', name: '开发者A', role: '前端工程师' }],
+                    tasks: [
+                        {
+                            id: 'task-3',
+                            title: '甘特图组件开发',
+                            description: '实现交互式甘特图',
+                            status: 'in-progress',
+                            assignee: 'user1',
+                            estimatedHours: 24,
+                            actualHours: 16,
+                            priority: 'high',
+                            dependencies: [],
+                            startDate: new Date('2024-05-01'),
+                            endDate: new Date('2024-05-20')
+                        },
+                        {
+                            id: 'task-4',
+                            title: '依赖关系图组件',
+                            description: '项目依赖关系可视化',
+                            status: 'todo',
+                            assignee: 'user1',
+                            estimatedHours: 20,
+                            priority: 'medium',
+                            dependencies: ['task-3'],
+                            startDate: new Date('2024-05-20'),
+                            endDate: new Date('2024-06-10')
+                        }
+                    ]
+                }
+            ],
+            dependencies: [
+                {
+                    id: 'dep-1',
+                    type: 'design',
+                    source: 'milestone-1',
+                    target: 'milestone-2',
+                    status: 'completed',
+                    criticality: 'high',
+                    estimatedCompletion: new Date('2024-03-31'),
+                    actualCompletion: new Date('2024-03-20')
+                }
+            ],
+            team: [
+                {
+                    id: 'user1',
+                    name: '开发者A',
+                    role: '全栈工程师',
+                    currentWorkload: 75,
+                    availability: 80,
+                    skills: ['React', 'TypeScript', 'Chrome Extensions', 'AI Integration'],
+                    status: 'available'
+                }
+            ],
+            risks: [
+                {
+                    id: 'risk-1',
+                    title: 'Chrome AI API变更风险',
+                    description: 'Chrome内置AI API仍在实验阶段，可能发生破坏性变更',
+                    severity: 'medium',
+                    probability: 30,
+                    impact: '可能需要重写AI集成部分',
+                    mitigation: '维护fallback方案，使用云端AI作为备选',
+                    owner: 'user1',
+                    status: 'mitigating',
+                    identifiedDate: new Date('2024-02-15'),
+                    targetResolutionDate: new Date('2024-08-01'),
+                    category: 'technical'
+                }
+            ],
+            lastUpdated: new Date()
+        }
+    ];
+    
+    if (projectId) {
+        return mockProjects.filter(p => p.id === projectId);
+    }
+    
+    return mockProjects;
+}
+
+// 同步项目数据
+async function syncProjectData(projectId: string) {
+    console.log('🔄 同步项目数据:', projectId);
+    
+    try {
+        // 模拟从多个数据源同步
+        // 实际实现中会调用Jira API、GitHub API等
+        
+        const syncResults = {
+            jira: { synced: 5, updated: 2, errors: 0 },
+            github: { synced: 8, updated: 1, errors: 0 },
+            confluence: { synced: 3, updated: 0, errors: 0 }
+        };
+        
+        // 记录同步结果到agentThinking
+        const agent = new IntelligentAgent();
+        await agent.analyze({
+            type: 'data_sync',
+            projectId,
+            syncResults,
+            timestamp: Date.now()
+        }, {
+            type: 'system_operation',
+            analysisDepth: 'light'
+        });
+        
+        return {
+            success: true,
+            syncResults,
+            message: '数据同步完成'
+        };
+    } catch (error) {
+        console.error('❌ 数据同步失败:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// 导出项目报告
+async function exportProjectReport(projectId: string) {
+    console.log('📊 导出项目报告:', projectId);
+    
+    try {
+        const projectData = await generateProjectData(projectId);
+        const project = projectData[0];
+        
+        if (!project) {
+            throw new Error('项目不存在');
+        }
+        
+        // 生成报告数据
+        const report = {
+            projectName: project.name,
+            generatedAt: new Date().toISOString(),
+            overallProgress: project.overallProgress,
+            milestones: project.milestones.map(m => ({
+                name: m.name,
+                progress: m.progress,
+                status: m.status,
+                tasksTotal: m.tasks.length,
+                tasksCompleted: m.tasks.filter(t => t.status === 'done').length
+            })),
+            teamMetrics: {
+                totalMembers: project.team.length,
+                averageWorkload: project.team.reduce((sum, m) => sum + m.currentWorkload, 0) / project.team.length,
+                skillDistribution: project.team.flatMap(m => m.skills)
+            },
+            riskSummary: {
+                totalRisks: project.risks.length,
+                highRisks: project.risks.filter(r => r.severity === 'high').length,
+                openRisks: project.risks.filter(r => r.status === 'open').length
+            }
+        };
+        
+        // 记录导出操作
+        const agent = new IntelligentAgent();
+        await agent.analyze({
+            type: 'report_export',
+            projectId,
+            reportType: 'project_summary',
+            timestamp: Date.now()
+        }, {
+            type: 'system_operation',
+            analysisDepth: 'light'
+        });
+        
+        return {
+            success: true,
+            report,
+            downloadUrl: `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(report, null, 2))}`
+        };
+    } catch (error) {
+        console.error('❌ 报告导出失败:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// 创建项目项目
+async function createProjectItem(actionType: string, data: any) {
+    console.log('✅ 创建项目项目:', actionType, data);
+    
+    try {
+        const { projectId, type, content, timestamp } = data;
+        
+        // 根据类型创建不同的项目
+        let newItem = null;
+        
+        switch (actionType) {
+            case 'create_milestone':
+                newItem = {
+                    id: `milestone-${Date.now()}`,
+                    name: content.split('\n')[0] || '新里程碑',
+                    description: content,
+                    progress: 0,
+                    plannedDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30天后
+                    status: 'on-track',
+                    dependencies: [],
+                    assignees: [],
+                    tasks: []
+                };
+                break;
+                
+            case 'create_task':
+                newItem = {
+                    id: `task-${Date.now()}`,
+                    title: content.split('\n')[0] || '新任务',
+                    description: content,
+                    status: 'todo',
+                    assignee: '',
+                    estimatedHours: 8,
+                    priority: 'medium',
+                    dependencies: [],
+                    startDate: new Date(),
+                    endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7天后
+                };
+                break;
+                
+            case 'log_risk':
+                newItem = {
+                    id: `risk-${Date.now()}`,
+                    title: content.split('\n')[0] || '新风险',
+                    description: content,
+                    severity: 'medium',
+                    probability: 50,
+                    impact: '待评估',
+                    mitigation: '待制定',
+                    owner: '',
+                    status: 'open',
+                    identifiedDate: new Date(),
+                    targetResolutionDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14天后
+                    category: 'general'
+                };
+                break;
+        }
+        
+        // 记录创建操作到agentThinking
+        const agent = new IntelligentAgent();
+        await agent.analyze({
+            type: 'item_creation',
+            projectId,
+            itemType: type,
+            newItem,
+            timestamp
+        }, {
+            type: 'project_management',
+            analysisDepth: 'light'
+        });
+        
+        return {
+            success: true,
+            newItem,
+            message: `${type}创建成功`
+        };
+    } catch (error) {
+        console.error('❌ 创建项目项目失败:', error);
+        return {
+            success: false,
+            error: error.message
+        };
     }
 }

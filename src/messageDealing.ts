@@ -7,6 +7,7 @@ import { extractEntitiesToStore } from './entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
+import { getMessageProcessingEnhancer, EnhancedMessageResult } from './storage/MessageProcessingEnhancer';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
@@ -476,31 +477,71 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
 
-				// 原有逻辑：将匹配的消息存储到向量数据库
+				// 增强逻辑：使用新的混合存储系统
 				const messageId = uuidv4();
 				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
-				await storeMessage(
-					messageId,
-					json.message_content,
-					{
-						source: json.sender || 'unknown',
-						timestamp: Date.now(),
-						matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-						summary: json.summary || '',
-						teamName: json.team_name,
-						teamId: json.team_id,
-						entities: extractedEntities.entities,
+				
+				// 使用增强的消息处理器，同时存储到向量数据库和图数据库
+				try {
+					const enhancer = await getMessageProcessingEnhancer();
+					const enhancedResult: EnhancedMessageResult = await enhancer.processMessage({
+						messageId,
+						content: json.message_content,
 						metadata: {
-							sentiment: extractedEntities.metadata.sentiment,
-							priority: extractedEntities.metadata.priority,
-							category: extractedEntities.metadata.category,
-							tags: extractedEntities.metadata.tags
-						},
-						relationships: extractedEntities.relationships,
-						actions: extractedEntities.actions,
-						reply_advice: json.reply_advice
-					}
-				);
+							source: json.sender || 'unknown',
+							timestamp: Date.now(),
+							matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+							summary: json.summary || '',
+							teamName: json.team_name,
+							teamId: json.team_id,
+							entities: extractedEntities.entities,
+							metadata: {
+								sentiment: extractedEntities.metadata.sentiment,
+								priority: extractedEntities.metadata.priority,
+								category: extractedEntities.metadata.category,
+								tags: extractedEntities.metadata.tags
+							},
+							relationships: extractedEntities.relationships,
+							actions: extractedEntities.actions,
+							reply_advice: json.reply_advice
+						}
+					});
+
+					// 记录存储结果
+					console.log(`📊 消息存储统计 [${messageId.slice(0,8)}]:`, {
+						向量存储: enhancedResult.vectorStored ? '✅' : '❌',
+						图实体: enhancedResult.graphEntities,
+						图关系: enhancedResult.graphRelationships,
+						图存储类型: enhancedResult.graphStorageUsed,
+						处理时间: `${enhancedResult.processingTime}ms`
+					});
+
+				} catch (enhancedError) {
+					console.error('增强存储失败，回退到原有方式:', enhancedError);
+					// 如果增强存储失败，回退到原有的storeMessage方式
+					await storeMessage(
+						messageId,
+						json.message_content,
+						{
+							source: json.sender || 'unknown',
+							timestamp: Date.now(),
+							matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+							summary: json.summary || '',
+							teamName: json.team_name,
+							teamId: json.team_id,
+							entities: extractedEntities.entities,
+							metadata: {
+								sentiment: extractedEntities.metadata.sentiment,
+								priority: extractedEntities.metadata.priority,
+								category: extractedEntities.metadata.category,
+								tags: extractedEntities.metadata.tags
+							},
+							relationships: extractedEntities.relationships,
+							actions: extractedEntities.actions,
+							reply_advice: json.reply_advice
+						}
+					);
+				}
 
 				// 如果审核通过，则推送 Glip 消息
 				if (isPassReview && envConfig.ENABLE_BOT) {
