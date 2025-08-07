@@ -13,7 +13,7 @@ alwaysApply: false
 
 ### 核心能力
 
-- **多类型内容分析**：支持消息、项目、会议、文档等多种内容的智能分析
+- **多类型内容分析**：支持消息、项目、会议、文档、网页等多种内容的智能分析
 - **思考-行动循环**：实现基于LLM的思考-行动循环，提高分析深度
 - **批量处理能力**：支持高效的批量分析处理
 - **兼容性保障**：提供与旧版IntelligentAgent的兼容层
@@ -226,6 +226,49 @@ console.log(projectResult.riskLevel);
 console.log(projectResult.suggestions);
 ```
 
+### 网页内容分析
+
+```typescript
+const webpageResult = await agent.analyze(
+  {
+    title: "项目进度更新 - 前端重构完成情况",
+    url: "https://company.com/project-updates/frontend-refactor",
+    mainContent: `
+      前端重构项目目前已完成60%，主要完成了以下模块：
+      - 用户登录系统重构 ✅
+      - 数据可视化组件优化 ✅
+      - 响应式设计改进 🔄 (进行中)
+      
+      预计12月底前完成所有重构工作。
+      负责人：张三、李四
+      下一步：优化性能，准备上线测试
+    `,
+    chromeAIResult: {
+      relevance: 0.85,
+      shouldStore: true,
+      entities: {
+        projects: ["前端重构项目"],
+        people: ["张三", "李四"],
+        deadlines: ["2024-12-31"]
+      },
+      reasoning: "包含明确的项目进度信息和截止日期"
+    }
+  },
+  {
+    type: 'webpage',
+    analysisDepth: 'deep',
+    maxActions: 3,
+    preferredTools: ['entityExtraction', 'historySearch', 'storeMessage']
+  }
+);
+
+console.log(webpageResult.summary);
+console.log(webpageResult.contentRelevance);
+console.log(webpageResult.extractedEntities);
+console.log(webpageResult.shouldStore);
+console.log(webpageResult.actionSuggestions);
+```
+
 ## 系统优势
 
 ### 技术优势
@@ -240,6 +283,13 @@ console.log(projectResult.suggestions);
 4. **批量处理**：支持高效的批量分析
 
 ## 版本历史
+
+### v2.1.0 (2024-12-20)
+- 新增网页内容分析类型 (webpage)
+- 添加WebpageAnalysisResult和WebpageAnalysisInput接口
+- 实现与Chrome内置AI的集成分析流程
+- 支持Chrome AI预分析 + agentThinking深度分析的分层架构
+- 增加网页分析专用的思考-行动循环和工具处理逻辑
 
 ### v2.0.0 (2024-12-20)
 - 整合所有相关文档，形成统一的综合文档

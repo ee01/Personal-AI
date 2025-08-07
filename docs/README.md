@@ -6,7 +6,7 @@
 
 - `features/` - 功能详细设计文档
   - 每个功能有独立的`.md`文件描述其设计和实现
-  - 对应的`_prompt.md`文件记录开发过程中的关键AI对话
+- `prompts/` - 对应的`_prompt.md`文件记录开发过程中的关键AI对话
 
 ## 功能文档索引
 
@@ -22,13 +22,6 @@
 ### 集成功能
 - [`jira_automation_import.md`](features/jira_automation_import.md) - Jira自动化导入
 - [`jira_design_links.md`](features/jira_design_links.md) - Jira设计链接功能
-
-## 最新更新
-
-**2024-12-20**
-- ✨ 新增 Agent工作流系统文档
-- 🔄 更新 消息分析过滤功能文档，添加@我功能说明
-- 📝 完善关注项管理和智能通知系统说明
 
 ## 文档维护指南
 
