@@ -411,125 +411,133 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 深度分析网页内容
     if (request.type === 'DEEP_ANALYZE_WEB_CONTENT') {
-        try {
-            const { pageContent, quickResult, userAction } = request.data;
-            
-            console.log('🔍 深度分析网页内容:', {
-                url: pageContent.url,
-                title: pageContent.title,
-                userAction
-            });
-            
-            // 调用agentThinking进行深度分析
-            const agent = new IntelligentAgent();
-            const result = await agent.analyze({
-                type: 'webpage_deep',
-                url: pageContent.url,
-                title: pageContent.title,
-                content: pageContent.mainContent,
-                metadata: pageContent.metadata,
-                quickAnalysis: quickResult,
-                userAction
-                            }, {
-                    type: 'webpage',
-                    analysisDepth: 'deep'
+        (async () => {
+            try {
+                const { pageContent, quickResult, userAction } = request.data;
+                
+                console.log('🔍 深度分析网页内容:', {
+                    url: pageContent.url,
+                    title: pageContent.title,
+                    userAction
                 });
-            
-            sendResponse({ success: true, result });
-        } catch (error) {
-            console.error('❌ 深度分析失败:', error);
-            sendResponse({ success: false, error: error.message });
-        }
+                
+                // 调用agentThinking进行深度分析
+                const agent = new IntelligentAgent();
+                const result = await agent.analyze({
+                    type: 'webpage_deep',
+                    url: pageContent.url,
+                    title: pageContent.title,
+                    content: pageContent.mainContent,
+                    metadata: pageContent.metadata,
+                    quickAnalysis: quickResult,
+                    userAction
+                                }, {
+                        type: 'webpage',
+                        analysisDepth: 'deep'
+                    });
+                
+                sendResponse({ success: true, result });
+            } catch (error) {
+                console.error('❌ 深度分析失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
         return true;
     }
 
     // 快速保存网页内容
     if (request.type === 'QUICK_SAVE_WEB_CONTENT') {
-        try {
-            const { pageContent, quickResult, userAction } = request.data;
-            
-            console.log('💾 快速保存网页内容:', {
-                url: pageContent.url,
-                title: pageContent.title,
-                userAction
-            });
-            
-            // 轻量级保存，不进行深度分析
-            const agent = new IntelligentAgent();
-            const result = await agent.analyze({
-                type: 'webpage_quick_save',
-                url: pageContent.url,
-                title: pageContent.title,
-                content: pageContent.mainContent,
-                metadata: pageContent.metadata,
-                quickAnalysis: quickResult,
-                userAction
-                            }, {
-                    type: 'webpage',
-                    analysisDepth: 'quick'
+        (async () => {
+            try {
+                const { pageContent, quickResult, userAction } = request.data;
+                
+                console.log('💾 快速保存网页内容:', {
+                    url: pageContent.url,
+                    title: pageContent.title,
+                    userAction
                 });
-            
-            sendResponse({ success: true, result });
-        } catch (error) {
-            console.error('❌ 快速保存失败:', error);
-            sendResponse({ success: false, error: error.message });
-        }
+                
+                // 轻量级保存，不进行深度分析
+                const agent = new IntelligentAgent();
+                const result = await agent.analyze({
+                    type: 'webpage_quick_save',
+                    url: pageContent.url,
+                    title: pageContent.title,
+                    content: pageContent.mainContent,
+                    metadata: pageContent.metadata,
+                    quickAnalysis: quickResult,
+                    userAction
+                                }, {
+                        type: 'webpage',
+                        analysisDepth: 'quick'
+                    });
+                
+                sendResponse({ success: true, result });
+            } catch (error) {
+                console.error('❌ 快速保存失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
         return true;
     }
 
     // 记录分析结果
     if (request.type === 'RECORD_ANALYSIS_RESULT') {
-        try {
-            const { url, result, timestamp } = request.data;
-            
-            // 记录到本地存储用于统计
-            const analysisHistory = await chrome.storage.local.get('analysisHistory') || { analysisHistory: [] };
-            analysisHistory.analysisHistory.push({
-                url,
-                result,
-                timestamp
-            });
-            
-            // 保留最近100条记录
-            if (analysisHistory.analysisHistory.length > 100) {
-                analysisHistory.analysisHistory = analysisHistory.analysisHistory.slice(-100);
+        (async () => {
+            try {
+                const { url, result, timestamp } = request.data;
+                
+                // 记录到本地存储用于统计
+                const analysisHistory = await chrome.storage.local.get('analysisHistory') || { analysisHistory: [] };
+                analysisHistory.analysisHistory.push({
+                    url,
+                    result,
+                    timestamp
+                });
+                
+                // 保留最近100条记录
+                if (analysisHistory.analysisHistory.length > 100) {
+                    analysisHistory.analysisHistory = analysisHistory.analysisHistory.slice(-100);
+                }
+                
+                await chrome.storage.local.set({ analysisHistory: analysisHistory.analysisHistory });
+                
+                sendResponse({ success: true });
+            } catch (error) {
+                console.error('❌ 记录分析结果失败:', error);
+                sendResponse({ success: false, error: error.message });
             }
-            
-            await chrome.storage.local.set({ analysisHistory: analysisHistory.analysisHistory });
-            
-            sendResponse({ success: true });
-        } catch (error) {
-            console.error('❌ 记录分析结果失败:', error);
-            sendResponse({ success: false, error: error.message });
-        }
+        })();
         return true;
     }
 
     // 记录用户行为
     if (request.type === 'RECORD_USER_ACTION') {
-        try {
-            const { action, url, timestamp } = request.data;
-            
-            // 记录用户行为用于改进推荐
-            const userActions = await chrome.storage.local.get('userActions') || { userActions: [] };
-            userActions.userActions.push({
-                action,
-                url,
-                timestamp
-            });
-            
-            // 保留最近500条记录
-            if (userActions.userActions.length > 500) {
-                userActions.userActions = userActions.userActions.slice(-500);
+        (async () => {
+            try {
+                const { action, url, timestamp } = request.data;
+                
+                // 记录用户行为用于改进推荐
+                const userActions = await chrome.storage.local.get('userActions') || { userActions: [] };
+                userActions.userActions.push({
+                    action,
+                    url,
+                    timestamp
+                });
+                
+                // 保留最近500条记录
+                if (userActions.userActions.length > 500) {
+                    userActions.userActions = userActions.userActions.slice(-500);
+                }
+                
+                await chrome.storage.local.set({ userActions: userActions.userActions });
+                
+                sendResponse({ success: true });
+            } catch (error) {
+                console.error('❌ 记录用户行为失败:', error);
+                sendResponse({ success: false, error: error.message });
             }
-            
-            await chrome.storage.local.set({ userActions: userActions.userActions });
-            
-            sendResponse({ success: true });
-        } catch (error) {
-            console.error('❌ 记录用户行为失败:', error);
-            sendResponse({ success: false, error: error.message });
-        }
+        })();
         return true;
     }
 
