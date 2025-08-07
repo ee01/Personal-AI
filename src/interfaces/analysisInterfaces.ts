@@ -322,6 +322,112 @@ export interface DocumentAnalysisResult extends BaseAnalysisResult {
 }
 
 /**
+ * 网页分析结果
+ * 专门用于网页内容的智能分析
+ */
+export interface WebpageAnalysisResult extends BaseAnalysisResult {
+  type: 'webpage';
+  
+  /** 网页基本信息 */
+  pageInfo: {
+    title: string;
+    url: string;
+    domain: string;
+    extractedAt: number;
+  };
+  
+  /** Chrome AI 预分析结果 */
+  chromeAIAnalysis?: {
+    relevance: number;
+    reasoning: string;
+    initialEntities: Record<string, any>;
+  };
+  
+  /** 智能分析结果 */
+  contentRelevance: number; // 0-1, 与项目管理的相关性
+  shouldStore: boolean;
+  shouldNotify: boolean;
+  
+  /** 提取的实体信息 */
+  extractedEntities: {
+    projects?: string[];
+    people?: string[];
+    deadlines?: Date[];
+    actionItems?: string[];
+    technologies?: string[];
+    organizations?: string[];
+    topics?: string[];
+  };
+  
+  /** 关联分析 */
+  relatedProjects?: Array<{
+    projectId: string;
+    projectName: string;
+    relevanceScore: number;
+    relationshipType: 'direct' | 'dependency' | 'reference' | 'similar';
+  }>;
+  
+  relatedMemories?: Array<{
+    memoryId: string;
+    summary: string;
+    relevanceScore: number;
+    type: 'message' | 'project' | 'document' | 'webpage';
+  }>;
+  
+  /** 分类结果 */
+  contentCategory: 'project_update' | 'technical_doc' | 'meeting_notes' | 'planning' | 'announcement' | 'general';
+  tags: string[];
+  
+  /** 存储建议 */
+  storageRecommendation: {
+    priority: 'high' | 'medium' | 'low';
+    expiryDate?: Date;
+    importanceScore: number;
+    retentionReason?: string;
+  };
+  
+  /** 行动建议 */
+  actionSuggestions?: Array<{
+    type: 'notify_team' | 'update_project' | 'schedule_follow_up' | 'create_task';
+    description: string;
+    priority: 'urgent' | 'important' | 'normal';
+    suggestedDate?: Date;
+  }>;
+}
+
+/**
+ * 网页分析输入
+ */
+export interface WebpageAnalysisInput {
+  /** 页面基本信息 */
+  title: string;
+  url: string;
+  domain?: string;
+  
+  /** 页面内容 */
+  mainContent: string;
+  metadata?: Record<string, any>;
+  
+  /** Chrome AI 预分析结果 */
+  chromeAIResult?: {
+    relevance: number;
+    shouldStore: boolean;
+    entities: Record<string, any>;
+    reasoning: string;
+    summary?: string;
+    keyInsights?: string[];
+    actionableItems?: string[];
+  };
+  
+  /** 用户上下文 */
+  userContext?: {
+    currentProjects?: string[];
+    concernedTopics?: string[];
+    teamMembers?: string[];
+  };
+}
+
+/**
  * 通用分析结果接口
  * 用于未指定具体类型的通用分析
  */
@@ -339,6 +445,7 @@ export type AnalysisResult =
   | ProjectAnalysisResult
   | MeetingAnalysisResult
   | DocumentAnalysisResult
+  | WebpageAnalysisResult
   | GenericAnalysisResult;
 
 /**
@@ -347,7 +454,7 @@ export type AnalysisResult =
  */
 export interface AnalysisConfig {
   /** 分析类型 */
-  type: 'message' | 'project' | 'meeting' | 'document' | 'generic';
+  type: 'message' | 'project' | 'meeting' | 'document' | 'webpage' | 'generic';
   
   /** 分析深度 */
   analysisDepth?: 'quick' | 'normal' | 'deep';
