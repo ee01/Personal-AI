@@ -736,7 +736,7 @@ const EnhancedKnowledgeQuery = () => {
 };
 
 // 渲染到页面
-const container = document.getElementById('knowledge-query-root');
+const container = document.getElementById('enhanced-knowledge-query-root');
 if (container) {
     ReactDOM.render(<EnhancedKnowledgeQuery />, container);
 }
