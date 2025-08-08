@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>项目进展 · 交互版</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --line: #d8deea;
+      --text: #1f2430;
+      --muted: #7a8194;
+      --primary: #5b7cfa;
+      --primary-weak: rgba(91, 124, 250, 0.13);
+      --dep: #3f51b5;
+      --epic: #111111;
+      --success: #2ecc71;
+      --warning: #f39c12;
+      --danger: #e74c3c;
+      --info: #3498db;
+      --beta: #27ae60;
+      --ga: #4f7cfb;
+      --shadow: 0 10px 24px rgba(0,0,0,.06), 0 2px 6px rgba(0,0,0,.04);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, var(--bg), #eef2fb 100%);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+
+    .page { padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+    header.topbar {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+    .title {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .title h1 {
+      font-size: 22px; font-weight: 700; margin: 0;
+    }
+    .title .sub { color: var(--muted); font-size: 13px; }
+
+    .filters, .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .chip {
+      background: var(--card); border: 1px solid var(--line);
+      padding: 6px 10px; border-radius: 999px; font-size: 12px; color: var(--muted);
+      display: inline-flex; align-items: center; gap: 8px;
+    }
+    .chip input[type="checkbox"] { width: 14px; height: 14px; }
+    .chip .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .chip .dot.dep { background: var(--dep); }
+    .chip .dot.epic { background: var(--epic); }
+
+    .search {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; width: 260px;
+      box-shadow: inset 0 1px 0 rgba(0,0,0,.02);
+    }
+    .btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 8px 14px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+    .btn.ghost { background: var(--primary-weak); color: var(--primary); box-shadow: none; }
+    .btn.flat { background: var(--card); color: var(--text); border: 1px solid var(--line); box-shadow: none; }
+
+    .legend {
+      display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 12px; margin-bottom: 16px;
+    }
+    .legend .pill { padding: 4px 8px; border-radius: 999px; color: white; font-weight: 600; font-size: 11px; }
+    .pill.beta { background: var(--beta); }
+    .pill.ga { background: var(--ga); }
+
+    .grid {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .project-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px 16px 18px;
+    }
+    .project-head {
+      display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; margin-bottom: 12px;
+    }
+    .project-title { font-weight: 700; }
+    .badges { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+    .badge { background: var(--primary-weak); color: var(--primary); border-radius: 8px; padding: 4px 8px; }
+
+    .project-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .timeline { position: relative; height: 84px; margin: 8px 0 4px; }
+    .timeline .base { position: absolute; left: 8px; right: 8px; top: 40px; height: 6px; background: var(--line); border-radius: 999px; }
+    .timeline .arrow { position: absolute; right: 2px; top: 33px; width: 0; height: 0; border-left: 14px solid var(--line); border-top: 10px solid transparent; border-bottom: 10px solid transparent; }
+
+    .milestone { position: absolute; transform: translateX(-50%); top: 12px; text-align: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+    .milestone .dot { width: 18px; height: 18px; border-radius: 50%; margin: 0 auto 6px; box-shadow: var(--shadow); border: 3px solid white; }
+    .milestone.beta .dot { background: var(--beta); }
+    .milestone.ga .dot { background: var(--ga); width: 20px; height: 20px; }
+    .milestone .date { color: var(--text); font-weight: 600; }
+
+    .task { position: absolute; width: 220px; background: #fff; border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow); cursor: pointer; transition: transform .1s ease; }
+    .task:hover { transform: translateY(-2px); }
+    .task.dep { border-left: 5px solid var(--dep); top: -52px; }
+    .task.epic { border-left: 5px solid var(--epic); top: 66px; }
+    .task.done { opacity: 0.6; transform: scale(0.9); }
+    .task.done:hover { transform: scale(0.9) translateY(-1px); }
+    .task h4 { margin: 0 0 6px; font-size: 14px; }
+    .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+    
+    .epic-details { margin-top: 6px; font-size: 11px; }
+    .epic-progress { display: flex; gap: 6px; flex-wrap: wrap; }
+    .platform { background: var(--primary-weak); color: var(--primary); padding: 2px 6px; border-radius: 6px; font-size: 10px; font-weight: 600; }
+    .platform.done { background: var(--success); color: white; }
+    .platform.progress { background: var(--info); color: white; }
+    .platform.pending { background: var(--warning); color: white; }
+
+    .status { padding: 3px 8px; border-radius: 999px; color: white; font-size: 11px; font-weight: 700; }
+    .s-Pending { background: var(--warning); }
+    .s-Blocked { background: var(--danger); }
+    .s-In\ Progress { background: var(--info); }
+    .s-In\ Review { background: #8e44ad; }
+    .s-Done { background: var(--success); }
+
+    /* 弹窗 */
+    .modal { display: none; position: fixed; z-index: 1000; inset: 0; background: rgba(0,0,0,.35); }
+    .dialog { width: 520px; max-width: 92vw; background: var(--card); margin: 8vh auto; border-radius: 14px; box-shadow: var(--shadow); padding: 18px 18px 12px; }
+    .dialog h3 { margin: 0 0 12px; }
+    .form-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 10px; margin: 8px 0; }
+    .form-row label { color: var(--muted); font-size: 13px; }
+    .input, textarea, select { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+    textarea { resize: vertical; min-height: 72px; }
+    .dialog .footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+    .danger { background: var(--danger); }
+
+    /* 里程碑编辑小卡 */
+    .ms-pop { position: absolute; transform: translate(-50%, -100%); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px; box-shadow: var(--shadow); width: 220px; display: none; z-index: 10; }
+    .ms-pop .row { display: grid; grid-template-columns: 70px 1fr; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; }
+    .ms-pop input[type="range"] { width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="title">
+        <h1>项目进展</h1>
+        <span class="sub">Beta / GA / 依赖 / Epic · 可编辑</span>
+      </div>
+      <div class="filters">
+        <input id="search" class="search" placeholder="搜索任务或项目…" />
+        <span class="chip"><span class="dot dep"></span>依赖<input id="f-dep" type="checkbox" checked></span>
+        <span class="chip"><span class="dot epic"></span>Epic<input id="f-epic" type="checkbox" checked></span>
+        <span class="chip">状态: Pending<input type="checkbox" class="f-status" value="Pending" checked></span>
+        <span class="chip">In Progress<input type="checkbox" class="f-status" value="In Progress" checked></span>
+        <span class="chip">In Review<input type="checkbox" class="f-status" value="In Review" checked></span>
+        <span class="chip">Blocked<input type="checkbox" class="f-status" value="Blocked" checked></span>
+        <span class="chip">Done<input type="checkbox" class="f-status" value="Done" checked></span>
+      </div>
+      <div class="actions">
+        <button class="btn flat" id="toggleAll">折叠全部</button>
+        <button class="btn ghost" id="exportBtn">导出JSON</button>
+        <button class="btn ghost" id="importBtn">导入JSON</button>
+      </div>
+    </header>
+
+    <div class="legend">
+      <span class="pill beta">Beta</span>
+      <span class="pill ga">GA</span>
+      <span>点击任务可编辑，点击里程碑可修改日期/位置</span>
+    </div>
+
+    <section id="grid" class="grid"></section>
+  </div>
+
+  <!-- 任务编辑弹窗 -->
+  <div id="taskModal" class="modal">
+    <div class="dialog">
+      <h3 id="dlgTitle">编辑任务</h3>
+      <div class="form-row">
+        <label>所属项目</label>
+        <select id="mProject" class="input"></select>
+      </div>
+      <div class="form-row">
+        <label>任务类型</label>
+        <select id="mType" class="input">
+          <option value="dep">依赖</option>
+          <option value="epic">Epic</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>标题</label>
+        <input id="mTitle" class="input" placeholder="任务名称" />
+      </div>
+      <div class="form-row">
+        <label>状态</label>
+        <select id="mStatus" class="input">
+          <option>Pending</option>
+          <option>In Progress</option>
+          <option>In Review</option>
+          <option>Blocked</option>
+          <option>Done</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>ETA</label>
+        <input id="mEta" class="input" type="date" />
+      </div>
+      <div class="form-row">
+        <label>位置(%)</label>
+        <input id="mPercent" class="input" type="range" min="0" max="100" step="1" />
+      </div>
+      <div id="platformsRow" class="form-row" style="display:none;">
+        <label>平台进展</label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <div>SDK: <select id="pSDK" class="input"><option>pending</option><option>progress</option><option>done</option></select></div>
+          <div>iOS: <select id="piOS" class="input"><option>pending</option><option>progress</option><option>done</option></select></div>
+          <div>Android: <select id="pAndroid" class="input"><option>pending</option><option>progress</option><option>done</option></select></div>
+          <div>QA: <select id="pQA" class="input"><option>pending</option><option>progress</option><option>done</option></select></div>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>描述</label>
+        <textarea id="mDesc"></textarea>
+      </div>
+      <div class="footer">
+        <button id="deleteBtn" class="btn danger" style="margin-right:auto; display:none">删除</button>
+        <button class="btn flat" id="cancelBtn">取消</button>
+        <button class="btn" id="saveBtn">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 里程碑小编辑 -->
+  <div id="msPop" class="ms-pop">
+    <div class="row"><span>名称</span><strong id="msName">Beta</strong></div>
+    <div class="row"><span>日期</span><input type="date" id="msDate"></div>
+    <div class="row"><span>位置</span><input id="msPercent" type="range" min="0" max="100"></div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+      <button id="msCancel" class="btn flat">取消</button>
+      <button id="msSave" class="btn">保存</button>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'project_timeline_data_v1';
+
+    const initialData = [
+      {
+        id: 'p1',
+        name: 'Project 1',
+        collapsed: false,
+        milestones: [
+          { key: 'beta', label: 'Beta', percent: 20, date: '2025-05-05' },
+          { key: 'ga', label: 'GA', percent: 85, date: '2025-06-10' },
+        ],
+        tasks: [
+          { id: 't1', type: 'dep', title: 'BE dependency', percent: 18, eta: '2025-05-02', status: 'In Progress', desc: 'RCV-xxxx BUG FOR XXX' },
+          { id: 't2', type: 'epic', title: 'Epic 1', percent: 50, eta: '2025-04-24', status: 'In Review', desc: 'JIRA: E1-1234', platforms: { sdk: 'done', ios: 'progress', android: 'progress', qa: 'pending' } },
+          { id: 't3', type: 'epic', title: 'Epic 2', percent: 70, eta: '2025-04-30', status: 'Done', desc: 'JIRA: E2-5678', platforms: { sdk: 'done', ios: 'done', android: 'done', qa: 'done' } },
+        ],
+      },
+      {
+        id: 'p2',
+        name: 'Project 2',
+        collapsed: false,
+        milestones: [
+          { key: 'beta', label: 'Beta', percent: 30, date: '2025-04-15' },
+          { key: 'ga', label: 'GA', percent: 90, date: '2025-06-30' },
+        ],
+        tasks: [
+          { id: 't1', type: 'epic', title: 'Epic A', percent: 35, eta: '2025-04-20', status: 'In Progress', desc: 'Frontend', platforms: { sdk: 'progress', ios: 'pending', android: 'pending', qa: 'pending' } },
+          { id: 't2', type: 'epic', title: 'Epic B', percent: 60, eta: '2025-05-10', status: 'Done', desc: '', platforms: { sdk: 'done', ios: 'done', android: 'done', qa: 'done' } },
+          { id: 't3', type: 'dep', title: 'BE API v2', percent: 55, eta: '2025-05-01', status: 'Blocked', desc: '等待网关升级' },
+        ],
+      },
+      {
+        id: 'p3',
+        name: 'Project 3',
+        collapsed: true,
+        milestones: [
+          { key: 'beta', label: 'Beta', percent: 15, date: '2025-04-08' },
+          { key: 'ga', label: 'GA', percent: 75, date: '2025-05-28' },
+        ],
+        tasks: [
+          { id: 't1', type: 'dep', title: 'Security Review', percent: 22, eta: '2025-04-18', status: 'In Review', desc: '' },
+          { id: 't2', type: 'epic', title: 'Mobile Epic', percent: 46, eta: '2025-05-02', status: 'In Progress', desc: '', platforms: { sdk: 'done', ios: 'progress', android: 'progress', qa: 'pending' } },
+          { id: 't3', type: 'epic', title: 'Web Epic', percent: 66, eta: '2025-05-12', status: 'Pending', desc: '', platforms: { sdk: 'pending', ios: 'pending', android: 'pending', qa: 'pending' } },
+        ],
+      },
+    ];
+
+    // 状态徽章颜色类名映射（已在 CSS 使用 .s- 前缀）
+    function statusClass(status) {
+      return 'status s-' + status.replace(' ', '\\ ');
+    }
+
+    function loadData() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return JSON.parse(JSON.stringify(initialData));
+        return JSON.parse(raw);
+      } catch (e) {
+        return JSON.parse(JSON.stringify(initialData));
+      }
+    }
+    function saveData(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+
+    let data = loadData();
+    let currentEdit = { projectId: null, taskId: null };
+    const grid = document.getElementById('grid');
+
+    // 自动计算里程碑位置
+    function autoPositionMilestones(project) {
+      const tasks = project.tasks;
+      if (!tasks.length) return;
+      
+      const depTasks = tasks.filter(t => t.type === 'dep');
+      const epicTasks = tasks.filter(t => t.type === 'epic');
+      
+      // Beta位置：取依赖任务的平均位置，如果没有依赖任务则取25%
+      const betaPercent = depTasks.length > 0 
+        ? Math.round(depTasks.reduce((sum, t) => sum + t.percent, 0) / depTasks.length)
+        : 25;
+      
+      // GA位置：取Epic任务的平均位置，如果没有Epic任务则取75%  
+      const gaPercent = epicTasks.length > 0
+        ? Math.round(epicTasks.reduce((sum, t) => sum + t.percent, 0) / epicTasks.length)
+        : 75;
+      
+      const beta = project.milestones.find(m => m.key === 'beta');
+      const ga = project.milestones.find(m => m.key === 'ga');
+      if (beta) beta.percent = Math.max(10, Math.min(90, betaPercent));
+      if (ga) ga.percent = Math.max(10, Math.min(90, gaPercent));
+    }
+
+    function render() {
+      grid.innerHTML = '';
+      const search = document.getElementById('search').value.trim().toLowerCase();
+      const showDep = document.getElementById('f-dep').checked;
+      const showEpic = document.getElementById('f-epic').checked;
+      const statuses = Array.from(document.querySelectorAll('.f-status:checked')).map(i => i.value);
+
+      for (const project of data) {
+        // 自动定位里程碑
+        autoPositionMilestones(project);
+        
+        const card = document.createElement('div');
+        card.className = 'project-card';
+
+        // header
+        const head = document.createElement('div');
+        head.className = 'project-head';
+
+        const left = document.createElement('div');
+        left.style.display = 'flex'; left.style.alignItems = 'center'; left.style.gap = '10px';
+        const t = document.createElement('div'); t.className = 'project-title'; t.textContent = project.name;
+        const badges = document.createElement('div'); badges.className = 'badges';
+        const beta = project.milestones.find(m => m.key==='beta');
+        const ga = project.milestones.find(m => m.key==='ga');
+        const badgeBeta = document.createElement('span'); badgeBeta.className = 'badge'; badgeBeta.innerHTML = `Beta: <strong>${beta?.date||'-'}</strong>`;
+        const badgeGa = document.createElement('span'); badgeGa.className = 'badge'; badgeGa.innerHTML = `GA: <strong>${ga?.date||'-'}</strong>`;
+        badges.append(badgeBeta, badgeGa);
+        left.append(t, badges);
+
+        const tools = document.createElement('div');
+        tools.className = 'project-tools';
+        const btnToggle = document.createElement('button'); btnToggle.className = 'btn flat'; btnToggle.textContent = project.collapsed ? '展开' : '折叠';
+        btnToggle.onclick = ()=>{ project.collapsed=!project.collapsed; saveData(data); render(); };
+        const btnAdd = document.createElement('button'); btnAdd.className = 'btn'; btnAdd.textContent = '添加任务';
+        btnAdd.onclick = ()=> openTaskModal({ projectId: project.id });
+        tools.append(btnToggle, btnAdd);
+
+        head.append(left, tools);
+        card.append(head);
+
+        // timeline area
+        const tl = document.createElement('div'); tl.className = 'timeline'; tl.dataset.projectId = project.id;
+        const base = document.createElement('div'); base.className = 'base';
+        const arrow = document.createElement('div'); arrow.className = 'arrow';
+        tl.append(base, arrow);
+
+        // milestones
+        for (const m of project.milestones) {
+          const el = document.createElement('div');
+          el.className = 'milestone ' + m.key; el.style.left = (m.percent||0) + '%'; el.dataset.projectId = project.id; el.dataset.key = m.key;
+          el.innerHTML = `<div class="dot"></div><div>${m.label}</div><div class="date">${m.date||''}</div>`;
+          el.onclick = (e)=> openMsPop(e.currentTarget, project.id, m.key);
+          tl.append(el);
+        }
+
+        // tasks
+        if (!project.collapsed) {
+          for (const task of project.tasks) {
+            const typeOk = (task.type==='dep' && showDep) || (task.type==='epic' && showEpic);
+            const statusOk = statuses.includes(task.status);
+            const text = (task.title + ' ' + (task.desc||'') + ' ' + project.name).toLowerCase();
+            const searchOk = !search || text.includes(search);
+            if (!typeOk || !statusOk || !searchOk) continue;
+
+            const el = document.createElement('div');
+            let taskClasses = 'task ' + task.type;
+            if (task.status === 'Done') taskClasses += ' done';
+            el.className = taskClasses;
+            el.style.left = (task.percent||0) + '%';
+            
+            let taskHtml = `
+              <h4>${task.title}</h4>
+              <div class="meta">
+                <span class="${statusClass(task.status)}">${task.status}</span>
+                <span>ETA: ${task.eta||'-'}</span>
+              </div>
+            `;
+            
+            // Epic任务显示平台进展
+            if (task.type === 'epic' && task.platforms) {
+              taskHtml += `
+                <div class="epic-details">
+                  <div class="epic-progress">
+                    <span class="platform ${task.platforms.sdk}">SDK</span>
+                    <span class="platform ${task.platforms.ios}">iOS</span>
+                    <span class="platform ${task.platforms.android}">Android</span>
+                    <span class="platform ${task.platforms.qa}">QA</span>
+                  </div>
+                </div>
+              `;
+            }
+            
+            el.innerHTML = taskHtml;
+            el.onclick = ()=> openTaskModal({ projectId: project.id, taskId: task.id });
+            tl.append(el);
+          }
+        }
+
+        card.append(tl);
+        grid.append(card);
+      }
+    }
+
+    // 任务弹窗逻辑
+    const taskModal = document.getElementById('taskModal');
+    const mProject = document.getElementById('mProject');
+    const mType = document.getElementById('mType');
+    const mTitle = document.getElementById('mTitle');
+    const mStatus = document.getElementById('mStatus');
+    const mEta = document.getElementById('mEta');
+    const mPercent = document.getElementById('mPercent');
+    const mDesc = document.getElementById('mDesc');
+    const dlgTitle = document.getElementById('dlgTitle');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const platformsRow = document.getElementById('platformsRow');
+    const pSDK = document.getElementById('pSDK');
+    const piOS = document.getElementById('piOS');
+    const pAndroid = document.getElementById('pAndroid');
+    const pQA = document.getElementById('pQA');
+
+    function openTaskModal({ projectId, taskId = null }) {
+      // 填充项目下拉
+      mProject.innerHTML = '';
+      for (const p of data) {
+        const opt = document.createElement('option');
+        opt.value = p.id; opt.textContent = p.name; if (p.id===projectId) opt.selected = true;
+        mProject.append(opt);
+      }
+
+      currentEdit = { projectId, taskId };
+      const project = data.find(p => p.id===projectId);
+      const task = taskId ? project.tasks.find(t => t.id===taskId) : { type:'epic', title:'', status:'Pending', eta:'', percent:50, desc:'', platforms: { sdk: 'pending', ios: 'pending', android: 'pending', qa: 'pending' } };
+
+      dlgTitle.textContent = (taskId ? '编辑任务' : '创建任务');
+      mType.value = task.type;
+      mTitle.value = task.title || '';
+      mStatus.value = task.status || 'Pending';
+      mEta.value = task.eta || '';
+      mPercent.value = task.percent ?? 50;
+      mDesc.value = task.desc || '';
+      deleteBtn.style.display = taskId ? 'inline-block' : 'none';
+      
+      // 显示/隐藏平台进展
+      const isEpic = task.type === 'epic';
+      platformsRow.style.display = isEpic ? 'grid' : 'none';
+      if (isEpic && task.platforms) {
+        pSDK.value = task.platforms.sdk || 'pending';
+        piOS.value = task.platforms.ios || 'pending';
+        pAndroid.value = task.platforms.android || 'pending';
+        pQA.value = task.platforms.qa || 'pending';
+      }
+      
+      // 任务类型变更时切换平台进展显示
+      mType.onchange = () => {
+        platformsRow.style.display = mType.value === 'epic' ? 'grid' : 'none';
+      };
+
+      taskModal.style.display = 'block';
+    }
+
+    function closeTaskModal() { taskModal.style.display = 'none'; }
+    document.getElementById('cancelBtn').onclick = closeTaskModal;
+    window.addEventListener('click', (e)=>{ if (e.target===taskModal) closeTaskModal(); });
+
+    document.getElementById('saveBtn').onclick = () => {
+      const project = data.find(p => p.id===mProject.value);
+      if (!project) return;
+      
+      const taskData = {
+        type: mType.value,
+        title: mTitle.value.trim(),
+        status: mStatus.value,
+        eta: mEta.value,
+        percent: Number(mPercent.value),
+        desc: mDesc.value
+      };
+      
+      // Epic任务保存平台进展
+      if (mType.value === 'epic') {
+        taskData.platforms = {
+          sdk: pSDK.value,
+          ios: piOS.value,
+          android: pAndroid.value,
+          qa: pQA.value
+        };
+      }
+      
+      if (currentEdit.taskId) {
+        // 更新
+        const t = data.find(p => p.id===currentEdit.projectId).tasks.find(t => t.id===currentEdit.taskId);
+        // 如果变更了所属项目，则移动
+        if (currentEdit.projectId !== project.id) {
+          data.find(p => p.id===currentEdit.projectId).tasks = data.find(p => p.id===currentEdit.projectId).tasks.filter(x => x.id !== t.id);
+          project.tasks.push(t);
+        }
+        Object.assign(t, taskData);
+      } else {
+        // 创建
+        const id = 't' + Math.random().toString(36).slice(2, 8);
+        project.tasks.push({ id, ...taskData });
+      }
+      saveData(data); closeTaskModal(); render();
+    };
+
+    deleteBtn.onclick = () => {
+      if (!currentEdit.taskId) return;
+      const project = data.find(p => p.id===currentEdit.projectId);
+      project.tasks = project.tasks.filter(t => t.id !== currentEdit.taskId);
+      saveData(data); closeTaskModal(); render();
+    };
+
+    // 里程碑编辑弹层
+    const msPop = document.getElementById('msPop');
+    const msName = document.getElementById('msName');
+    const msDate = document.getElementById('msDate');
+    const msPercent = document.getElementById('msPercent');
+    let msCtx = { projectId: null, key: null };
+
+    function openMsPop(anchor, projectId, key) {
+      const rect = anchor.getBoundingClientRect();
+      msPop.style.left = (rect.left + rect.width/2) + 'px';
+      msPop.style.top = (window.scrollY + rect.top - 8) + 'px';
+      const p = data.find(p => p.id===projectId); const m = p.milestones.find(x => x.key===key);
+      msCtx = { projectId, key };
+      msName.textContent = m.label; msDate.value = m.date || ''; msPercent.value = m.percent || 0;
+      msPop.style.display = 'block';
+    }
+    function closeMsPop(){ msPop.style.display = 'none'; }
+    document.getElementById('msCancel').onclick = closeMsPop;
+    document.getElementById('msSave').onclick = () => {
+      const p = data.find(p => p.id===msCtx.projectId); const m = p.milestones.find(x => x.key===msCtx.key);
+      m.date = msDate.value; m.percent = Number(msPercent.value);
+      saveData(data); closeMsPop(); render();
+    };
+    window.addEventListener('click', (e)=>{ if (e.target===msPop) return; if (!msPop.contains(e.target) && !e.target.closest('.milestone')) closeMsPop(); });
+
+    // 过滤与工具
+    document.getElementById('search').addEventListener('input', render);
+    document.getElementById('f-dep').addEventListener('change', render);
+    document.getElementById('f-epic').addEventListener('change', render);
+    document.querySelectorAll('.f-status').forEach(i => i.addEventListener('change', render));
+
+    document.getElementById('toggleAll').onclick = () => {
+      const anyOpen = data.some(p => !p.collapsed);
+      for (const p of data) p.collapsed = anyOpen ? true : false;
+      saveData(data); render();
+    };
+
+    // 导入导出
+    document.getElementById('exportBtn').onclick = () => {
+      const text = JSON.stringify(data, null, 2);
+      navigator.clipboard.writeText(text).then(()=>{
+        alert('已复制到剪贴板');
+      }).catch(()=>{
+        const blob = new Blob([text], {type: 'application/json'});
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'projects.json'; a.click();
+      });
+    };
+    document.getElementById('importBtn').onclick = async () => {
+      const text = prompt('粘贴 JSON 数据以导入：');
+      if (!text) return;
+      try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) { data = parsed; saveData(data); render(); } else { alert('格式不正确'); } } catch { alert('JSON 解析失败'); }
+    };
+
+    // 首次渲染
+    render();
+  </script>
+</body>
+</html>
