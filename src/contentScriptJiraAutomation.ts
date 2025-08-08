@@ -69,7 +69,7 @@ function isJiraAutomationPage(): boolean {
 }
 
 // 从localStorage获取当前ownerId
-function getCurrentOwnerId(): string {
+async function getCurrentOwnerId(): Promise<string> {
   // 首先尝试从localStorage获取
   const ownerId = getLocalStorageItem('ownerId', '');
   if (ownerId && ownerId !== 'radar-poc') {
@@ -98,34 +98,36 @@ function getCurrentOwnerId(): string {
       }
     }
     
-    // 备选方案：尝试其他可能的选择器
-    const alternativeSelectors = [
-      '[data-username] img',
-      '.user-profile[data-username] img',
-      '.aui-dropdown2-trigger[data-username] img'
-    ];
-    
-    for (const selector of alternativeSelectors) {
-      const imgElement = document.querySelector(selector);
-      if (imgElement) {
-        const src = imgElement.getAttribute('src');
-        if (src) {
-          const ownerIdMatch = src.match(/ownerId=([^&]+)/);
-          if (ownerIdMatch && ownerIdMatch[1]) {
-            const ownerId = ownerIdMatch[1];
-            console.log('Found ownerId from alternative selector:', ownerId);
-            // 保存到localStorage
-            setLocalStorageItem('ownerId', ownerId);
-            return ownerId;
-          }
+    // 如果页面元素中也获取不到，尝试通过API获取
+    try {
+      console.log('Trying to get ownerId from JIRA API...');
+      const response = await fetch('https://jira.ringcentral.com/rest/api/2/myself', {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
         }
+      });
+      
+      if (response.ok) {
+        const userInfo = await response.json();
+        if (userInfo.key) {
+          const ownerId = userInfo.key;
+          console.log('Found ownerId from JIRA API:', ownerId);
+          // 保存到localStorage
+          setLocalStorageItem('ownerId', ownerId);
+          return ownerId;
+        }
+      } else {
+        console.warn('Failed to fetch user info from JIRA API:', response.status, response.statusText);
       }
+    } catch (error) {
+      console.warn('Error fetching user info from JIRA API:', error);
     }
   }
   
-  // 如果都找不到，使用默认值
-  console.warn('Could not find ownerId, using default');
-  return 'esone.qiu2';
+  console.warn('Could not find ownerId');
+  return '';
 }
 
 // 全局变量存储当前项目ID
@@ -310,9 +312,9 @@ function waitForIframe(): Promise<Document> {
 }
 
 // 转换导出的JSON格式为API所需格式
-function convertExportedRuleToImportFormat(exportedRule: ExportedRule, projectId: string): ImportRule {
+async function convertExportedRuleToImportFormat(exportedRule: ExportedRule, projectId: string): Promise<ImportRule> {
   const now = Date.now();
-  const ownerId = getCurrentOwnerId();
+  const ownerId = await getCurrentOwnerId();
   
   // 为components生成新的ID
   const convertedComponents = exportedRule.components.map((component, index) => ({
@@ -446,7 +448,7 @@ function handleFileImport(file: File, projectId: string): void {
       
       // 只导入第一个rule（如果有多个的话）
       const ruleToImport = exportedData.rules[0];
-      const convertedRule = convertExportedRuleToImportFormat(ruleToImport, projectId);
+      const convertedRule = await convertExportedRuleToImportFormat(ruleToImport, projectId);
       
       console.log('Importing rule:', convertedRule);
       
@@ -654,7 +656,7 @@ async function main(): Promise<void> {
       // 如果在主页面，等待iframe加载
       console.log('Running in main page, waiting for iframe...');
 
-      const ownerId = getCurrentOwnerId();
+      const ownerId = await getCurrentOwnerId();
       console.log('OwnerId:', ownerId);
       
       const projectId = getProjectId();
