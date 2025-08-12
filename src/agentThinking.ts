@@ -1316,12 +1316,9 @@ export class IntelligentAgent {
         if (thoughtResult.tools.some(tool => tool.id === 'jiraQuery') && currentState.memory['jiraQuery']) {
           const latestJiraResult = currentState.memory['jiraQuery'][currentState.memory['jiraQuery'].length - 1];
           if (latestJiraResult && latestJiraResult.result && latestJiraResult.result.result) {
+            if (!result.jiraIssues) result.jiraIssues = {};
             // 如果是多个Jira issues，添加到jiraIssues
             if (latestJiraResult.result.type === 'multiple' && Array.isArray(latestJiraResult.result.result)) {
-              if (!result.jiraIssues) {
-                result.jiraIssues = {};
-              }
-              
               latestJiraResult.result.result.forEach((issue: any) => {
                 if (issue.key) {
                   result.jiraIssues[issue.key] = issue;

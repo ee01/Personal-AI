@@ -332,14 +332,38 @@ export class DashboardDataManager {
    * 获取项目数据
    */
   async getProjectData(projectId?: string): Promise<ProjectData[]> {
+    console.log('🗂️ DashboardDataManager.getProjectData 开始:', {
+      projectId,
+      mockDataLength: this.mockData?.length || 0,
+      timestamp: new Date().toISOString()
+    });
+    
+    // 检查模拟数据是否已初始化
+    if (!this.mockData || this.mockData.length === 0) {
+      console.warn('⚠️ 模拟数据为空，重新初始化...');
+      this.initializeMockData();
+    }
+    
     // 模拟异步操作
     await new Promise(resolve => setTimeout(resolve, 100));
     
+    let result: ProjectData[];
     if (projectId) {
-      return this.mockData.filter(p => p.id === projectId);
+      result = this.mockData.filter(p => p.id === projectId);
+      console.log('🔍 按项目ID筛选结果:', {
+        projectId,
+        foundProjects: result.length,
+        projectNames: result.map(p => p.name)
+      });
+    } else {
+      result = this.mockData;
+      console.log('📋 返回所有项目:', {
+        totalProjects: result.length,
+        projectNames: result.map(p => p.name)
+      });
     }
     
-    return this.mockData;
+    return result;
   }
 
   /**
@@ -362,12 +386,13 @@ export class DashboardDataManager {
         case 'project':
           Object.assign(project, changes);
           break;
-        case 'milestone':
+        case 'milestone': {
           const milestone = project.milestones.find(m => m.id === itemId);
           if (milestone) {
             Object.assign(milestone, changes);
           }
           break;
+        }
         case 'task':
           for (const milestone of project.milestones) {
             const task = milestone.tasks.find(t => t.id === itemId);
@@ -377,12 +402,13 @@ export class DashboardDataManager {
             }
           }
           break;
-        case 'risk':
+        case 'risk': {
           const risk = project.risks.find(r => r.id === itemId);
           if (risk) {
             Object.assign(risk, changes);
           }
           break;
+        }
       }
 
       project.lastUpdated = new Date();
@@ -522,36 +548,68 @@ export class DashboardMessageHandler {
     this.dataManager = DashboardDataManager.getInstance();
   }
 
-  async handleMessage(request: any, sendResponse: Function): Promise<boolean> {
+  async handleMessage(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+    console.log('🔧 DashboardMessageHandler处理消息:', {
+      type: request.type,
+      timestamp: new Date().toISOString(),
+      request: request
+    });
+    
     switch (request.type) {
       case 'GET_PROJECT_DATA':
-        this.handleGetProjectData(request, sendResponse);
+        console.log('📊 处理获取项目数据请求');
+        await this.handleGetProjectData(request, sendResponse);
         return true;
         
       case 'UPDATE_PROJECT_ITEM':
-        this.handleUpdateProjectItem(request, sendResponse);
+        console.log('✏️ 处理更新项目项目请求');
+        await this.handleUpdateProjectItem(request, sendResponse);
         return true;
         
       case 'QUICK_ACTION':
-        this.handleQuickAction(request, sendResponse);
+        console.log('⚡ 处理快速操作请求');
+        await this.handleQuickAction(request, sendResponse);
         return true;
         
       default:
+        console.warn('⚠️ 未知的消息类型:', request.type);
+        sendResponse({ success: false, error: `未知的消息类型: ${request.type}` });
         return false;
     }
   }
 
-  private async handleGetProjectData(request: any, sendResponse: Function) {
+  private async handleGetProjectData(request: any, sendResponse: (response: any) => void) {
     try {
       const { projectId } = request;
+      console.log('🗃️ 开始获取项目数据:', { projectId });
+      
+      // 检查数据管理器是否初始化
+      if (!this.dataManager) {
+        console.error('❌ 数据管理器未初始化');
+        sendResponse({ success: false, error: '数据管理器未初始化' });
+        return;
+      }
+      
       const projects = await this.dataManager.getProjectData(projectId);
+      
+      console.log('✅ 项目数据获取成功:', {
+        projectCount: projects?.length || 0,
+        projects: projects,
+        requestedProjectId: projectId
+      });
+      
       sendResponse({ success: true, projects });
     } catch (error: any) {
+      console.error('❌ 获取项目数据失败:', {
+        error: error.message,
+        stack: error.stack,
+        projectId: request.projectId
+      });
       sendResponse({ success: false, error: error.message });
     }
   }
 
-  private async handleUpdateProjectItem(request: any, sendResponse: Function) {
+  private async handleUpdateProjectItem(request: any, sendResponse: (response: any) => void) {
     try {
       const { projectId, itemType, itemId, changes } = request;
       const result = await this.dataManager.updateProjectItem(projectId, itemType, itemId, changes);
@@ -561,7 +619,7 @@ export class DashboardMessageHandler {
     }
   }
 
-  private async handleQuickAction(request: any, sendResponse: Function) {
+  private async handleQuickAction(request: any, sendResponse: (response: any) => void) {
     try {
       const { action, data } = request;
       let result = null;
@@ -575,10 +633,11 @@ export class DashboardMessageHandler {
           break;
         case 'create_milestone':
         case 'create_task':
-        case 'log_risk':
+        case 'log_risk': {
           const itemType = action.replace('create_', '').replace('log_', '');
           result = await this.dataManager.createProjectItem(data.projectId, itemType, data);
           break;
+        }
         default:
           throw new Error(`Unknown quick action: ${action}`);
       }

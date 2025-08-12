@@ -4,7 +4,7 @@
  */
 
 import * as React from 'react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { GanttChart } from './charts/GanttChart';
 import { DependencyGraph } from './charts/DependencyGraph';
 import { BurndownChart } from './charts/BurndownChart';
@@ -103,37 +103,169 @@ const ProjectDashboard: React.FC = () => {
   const [editMode, setEditMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  
+  // 用于调试的ref
+  const projectsRef = useRef<ProjectData[]>([]);
 
-  // 获取项目数据
-  const loadProjectData = useCallback(async () => {
+  // 日期处理函数：修复Chrome消息传递中的日期序列化问题
+  const processProjectDates = (projects: any[]): ProjectData[] => {
+    console.log('🔄 开始处理项目日期数据...');
+    
+    return projects.map(project => {
+      try {
+        return {
+          ...project,
+          startDate: new Date(project.startDate),
+          endDate: new Date(project.endDate),
+          lastUpdated: new Date(project.lastUpdated),
+          milestones: project.milestones.map((milestone: any) => ({
+            ...milestone,
+            plannedDate: new Date(milestone.plannedDate),
+            actualDate: milestone.actualDate ? new Date(milestone.actualDate) : undefined,
+            tasks: milestone.tasks.map((task: any) => ({
+              ...task,
+              startDate: new Date(task.startDate),
+              endDate: new Date(task.endDate)
+            }))
+          })),
+          dependencies: project.dependencies.map((dep: any) => ({
+            ...dep,
+            estimatedCompletion: new Date(dep.estimatedCompletion),
+            actualCompletion: dep.actualCompletion ? new Date(dep.actualCompletion) : undefined
+          })),
+          risks: project.risks.map((risk: any) => ({
+            ...risk,
+            identifiedDate: new Date(risk.identifiedDate),
+            targetResolutionDate: new Date(risk.targetResolutionDate),
+            actualResolutionDate: risk.actualResolutionDate ? new Date(risk.actualResolutionDate) : undefined
+          }))
+        };
+      } catch (error) {
+        console.error('❌ 处理项目日期时出错:', project.id, error);
+        // 返回原始项目数据作为备选
+        return project;
+      }
+    });
+  };
+
+  // 获取项目数据 - 移除依赖项解决闭包问题
+  const loadProjectData = useCallback(async (targetProjectId?: string) => {
+    const projectId = targetProjectId ?? selectedProject;
+    console.log('🔄 开始加载项目数据...', { projectId, timestamp: new Date().toISOString() });
     setIsLoading(true);
+    
     try {
+      // 检查chrome.runtime是否可用
+      if (!chrome || !chrome.runtime) {
+        console.error('❌ Chrome运行时不可用');
+        showNotification('Chrome扩展运行时错误', 'error');
+        return;
+      }
+
+      console.log('📤 发送消息到后台脚本:', {
+        type: 'GET_PROJECT_DATA',
+        projectId: projectId
+      });
+
       // 从多个数据源获取项目信息
       const response = await chrome.runtime.sendMessage({
         type: 'GET_PROJECT_DATA',
-        projectId: selectedProject
+        projectId: projectId
       });
       
-      if (response.success) {
-        setProjects(response.projects);
+      console.log('📥 收到后台脚本响应:', response);
+      
+      if (response && response.success) {
+        console.log('✅ 项目数据加载成功:', {
+          projectCount: response.projects?.length || 0,
+          projects: response.projects
+        });
+        
+        // 调试：检查即将设置的项目数据
+        console.log('🔄 正在更新React状态...');
+        console.log('设置的项目数据:', response.projects);
+        
+        const newProjects = response.projects || [];
+        
+        // 🔧 修复日期序列化问题：将字符串转换回Date对象
+        const processedProjects = processProjectDates(newProjects);
+        
+        console.log('🔄 日期处理后的项目数据:', processedProjects);
+        
+        // 强制触发状态更新
+        setProjects(() => {
+          console.log('🔄 setProjects函数式更新执行:', processedProjects.length);
+          return processedProjects;
+        });
+        projectsRef.current = processedProjects;
         setLastRefresh(new Date());
+        
+        // 使用更长的延迟确保状态更新完成
+        setTimeout(() => {
+          console.log('🔍 React状态更新后检查:', {
+            'newProjects.length': newProjects.length,
+            'projectsRef.current.length': projectsRef.current.length,
+            'projectsRef内容': projectsRef.current.map(p => ({ id: p.id, name: p.name }))
+          });
+        }, 200);
+        
+        showNotification(`成功加载${processedProjects.length}个项目`, 'success');
+      } else {
+        console.warn('⚠️ 响应格式异常或失败:', response);
+        const errorMsg = response?.error || '未知错误';
+        showNotification(`加载失败: ${errorMsg}`, 'error');
+        
+        // 设置空数组避免组件错误
+        setProjects([]);
       }
     } catch (error) {
-      console.error('加载项目数据失败:', error);
+      console.error('❌ 加载项目数据失败:', {
+        error: error.message,
+        stack: error.stack,
+        projectId
+      });
+      showNotification(`加载错误: ${error.message}`, 'error');
+      setProjects([]);
     } finally {
       setIsLoading(false);
+      console.log('🏁 项目数据加载完成');
     }
-  }, [selectedProject]);
+  }, []); // 移除依赖项
 
   // 初始化和定期刷新
   useEffect(() => {
-    loadProjectData();
+    console.log('🚀 项目仪表盘组件初始化', {
+      timestamp: new Date().toISOString(),
+      selectedProject,
+      userAgent: navigator.userAgent
+    });
+    
+    // 延迟一点时间确保扩展完全加载
+    setTimeout(() => {
+      console.log('⏰ 开始首次数据加载');
+      loadProjectData();
+    }, 100);
     
     // 每30秒自动刷新一次
-    const interval = setInterval(loadProjectData, 30000);
+    const interval = setInterval(() => {
+      console.log('🔄 定时刷新项目数据');
+      loadProjectData();
+    }, 30000);
     
-    return () => clearInterval(interval);
+    return () => {
+      console.log('🛑 清理项目仪表盘定时器');
+      clearInterval(interval);
+    };
   }, [loadProjectData]);
+
+  // 监听projects状态变化
+  useEffect(() => {
+    console.log('📊 projects状态已更新:', {
+      projectsLength: projects.length,
+      projectNames: projects.map(p => p.name),
+      timestamp: new Date().toISOString()
+    });
+  }, [projects]);
 
   // 处理快速编辑
   const handleQuickEdit = async (itemType: string, itemId: string, changes: any) => {
@@ -204,40 +336,105 @@ const ProjectDashboard: React.FC = () => {
 
   // 显示通知
   const showNotification = (message: string, type: 'success' | 'error' | 'info') => {
-    // 这里可以集成一个通知组件
-    console.log(`${type.toUpperCase()}: ${message}`);
+    const timestamp = new Date().toLocaleTimeString();
+    const emoji = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+    const logMessage = `${emoji} [${timestamp}] ${message}`;
+    
+    // 控制台日志
+    console.log(`${type.toUpperCase()}: ${logMessage}`);
+    
+    // 尝试在页面上显示通知（如果有通知区域）
+    try {
+      const notificationArea = document.getElementById('notification-area');
+      if (notificationArea) {
+        const notification = document.createElement('div');
+        notification.className = `notification notification-${type}`;
+        notification.textContent = logMessage;
+        notification.style.cssText = `
+          padding: 8px 16px;
+          margin: 4px 0;
+          border-radius: 4px;
+          background: ${type === 'success' ? '#f6ffed' : type === 'error' ? '#fff2f0' : '#e6f7ff'};
+          color: ${type === 'success' ? '#52c41a' : type === 'error' ? '#ff4d4f' : '#1890ff'};
+          border: 1px solid ${type === 'success' ? '#52c41a' : type === 'error' ? '#ff4d4f' : '#1890ff'};
+          font-size: 14px;
+        `;
+        notificationArea.appendChild(notification);
+        
+        // 3秒后自动移除
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+          }
+        }, 3000);
+      }
+    } catch (err) {
+      console.log('无法显示页面通知:', err);
+    }
   };
 
   // 获取当前项目数据
   const currentProject = projects.find(p => p.id === selectedProject);
 
+  // 调试：在每次渲染时检查项目状态
+  console.log('🎨 ProjectDashboard 渲染中:', {
+    projectsLength: projects.length,
+    projectNames: projects.map(p => p.name),
+    selectedProject,
+    currentProject: currentProject?.name
+  });
+
   return (
     <div className="project-dashboard">
+      {/* 通知区域 */}
+      <div id="notification-area" className="notification-area"></div>
+      
       {/* 头部区域 */}
       <div className="dashboard-header">
         <div className="project-selector">
           <select 
             value={selectedProject || ''} 
-            onChange={(e) => setSelectedProject(e.target.value || null)}
+            onChange={(e) => {
+              console.log('📝 项目选择改变:', e.target.value);
+              setSelectedProject(e.target.value || null);
+            }}
           >
             <option value="">选择项目</option>
-            {projects.map(project => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
+            {projects.map((project, index) => {
+              console.log(`🔗 渲染项目选项 ${index + 1}:`, project.name, project.id);
+              return (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              );
+            })}
           </select>
           
           <button 
             className="refresh-btn"
-            onClick={loadProjectData}
+            onClick={() => loadProjectData()}
             disabled={isLoading}
           >
             {isLoading ? '刷新中...' : '刷新'}
           </button>
           
+          <button 
+            className="refresh-btn"
+            onClick={() => {
+              console.log('🔄 手动触发状态更新');
+              setProjects([...projectsRef.current]);
+            }}
+            style={{marginLeft: '8px', background: '#52c41a'}}
+          >
+            强制更新
+          </button>
+          
           <span className="last-refresh">
             最后更新: {lastRefresh.toLocaleTimeString()}
+          </span>
+          
+          <span className="debug-info" style={{marginLeft: '16px', fontSize: '12px', color: '#666'}}>
+            (调试: {projects.length} 个项目)
           </span>
         </div>
 
@@ -392,6 +589,33 @@ const ProjectDashboard: React.FC = () => {
           flex-direction: column;
           height: 100vh;
           background: #f5f5f5;
+        }
+
+        .notification-area {
+          position: fixed;
+          top: 16px;
+          right: 16px;
+          z-index: 1000;
+          max-width: 400px;
+          pointer-events: none;
+        }
+
+        .notification {
+          pointer-events: auto;
+          margin-bottom: 8px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
         }
 
         .dashboard-header {

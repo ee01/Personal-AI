@@ -119,7 +119,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // 原来的监听器简化为：
 // 初始化仪表盘消息处理器
-const dashboardHandler = new DashboardMessageHandler();
+console.log('🚀 初始化仪表盘消息处理器...');
+let dashboardHandler: DashboardMessageHandler;
+try {
+  dashboardHandler = new DashboardMessageHandler();
+  console.log('✅ 仪表盘消息处理器初始化成功');
+} catch (error) {
+  console.error('❌ 仪表盘消息处理器初始化失败:', error);
+}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background received message:', request);
@@ -403,8 +410,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'GET_PROJECT_DATA' || 
         request.type === 'UPDATE_PROJECT_ITEM' || 
         request.type === 'QUICK_ACTION') {
+        console.log('📊 仪表盘消息处理开始:', {
+            type: request.type,
+            projectId: request.projectId,
+            timestamp: new Date().toISOString(),
+            sender: sender.tab?.url || 'extension',
+            request: request
+        });
+        
+        // 检查仪表盘处理器是否已初始化
+        if (!dashboardHandler) {
+            console.error('❌ 仪表盘处理器未初始化，尝试重新创建...');
+            try {
+                dashboardHandler = new DashboardMessageHandler();
+                console.log('✅ 仪表盘处理器重新创建成功');
+            } catch (error) {
+                console.error('❌ 无法创建仪表盘处理器:', error);
+                sendResponse({ success: false, error: '仪表盘处理器初始化失败' });
+                return true;
+            }
+        }
+        
         (async () => {
-            await dashboardHandler.handleMessage(request, sendResponse);
+            try {
+                await dashboardHandler.handleMessage(request, sendResponse);
+                console.log('✅ 仪表盘消息处理完成:', request.type);
+            } catch (error) {
+                console.error('❌ 仪表盘消息处理失败:', {
+                    type: request.type,
+                    error: error.message,
+                    stack: error.stack
+                });
+                sendResponse({ success: false, error: error.message });
+            }
         })();
         return true;
     }
