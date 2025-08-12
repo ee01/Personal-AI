@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>项目仪表盘调试页面</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .debug-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+        .test-button {
+            background: #1890ff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        .test-button:hover {
+            background: #40a9ff;
+        }
+        .log-area {
+            background: #f8f8f8;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #d0d0d0;
+        }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .status.success {
+            background: #f6ffed;
+            color: #52c41a;
+            border: 1px solid #52c41a;
+        }
+        .status.error {
+            background: #fff2f0;
+            color: #ff4d4f;
+            border: 1px solid #ff4d4f;
+        }
+        .status.info {
+            background: #e6f7ff;
+            color: #1890ff;
+            border: 1px solid #1890ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="debug-container">
+        <h1>🔧 项目仪表盘调试工具</h1>
+        
+        <div class="test-section">
+            <h3>🚀 环境检查</h3>
+            <button class="test-button" onclick="checkEnvironment()">检查环境</button>
+            <div id="env-status"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>📊 项目数据测试</h3>
+            <button class="test-button" onclick="testGetProjectData()">获取项目列表</button>
+            <button class="test-button" onclick="testGetSpecificProject()">获取特定项目</button>
+            <div id="project-status"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>🔍 消息传递测试</h3>
+            <button class="test-button" onclick="testMessagePassing()">测试消息传递</button>
+            <button class="test-button" onclick="testInvalidMessage()">测试无效消息</button>
+            <div id="message-status"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>📝 调试日志</h3>
+            <button class="test-button" onclick="clearLogs()">清空日志</button>
+            <div id="log-area" class="log-area">等待测试...</div>
+        </div>
+    </div>
+
+    <script>
+        let logArea = document.getElementById('log-area');
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const emoji = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+            const logMessage = `${emoji} [${timestamp}] ${message}\n`;
+            logArea.textContent += logMessage;
+            logArea.scrollTop = logArea.scrollHeight;
+            
+            // 同时在控制台输出
+            console.log(logMessage);
+        }
+
+        function showStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function clearLogs() {
+            logArea.textContent = '日志已清空\n';
+        }
+
+        async function checkEnvironment() {
+            log('开始环境检查...');
+            
+            try {
+                // 检查Chrome扩展API
+                if (!chrome) {
+                    throw new Error('Chrome API 不可用');
+                }
+                log('Chrome API: 可用', 'success');
+
+                if (!chrome.runtime) {
+                    throw new Error('Chrome Runtime API 不可用');
+                }
+                log('Chrome Runtime API: 可用', 'success');
+
+                // 检查扩展ID
+                const extensionId = chrome.runtime.id;
+                log(`扩展ID: ${extensionId}`, 'success');
+
+                // 检查当前页面URL
+                const currentUrl = window.location.href;
+                log(`当前页面: ${currentUrl}`, 'info');
+
+                showStatus('env-status', '环境检查通过', 'success');
+                
+            } catch (error) {
+                log(`环境检查失败: ${error.message}`, 'error');
+                showStatus('env-status', `环境检查失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function testGetProjectData() {
+            log('测试获取项目数据...');
+            
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    type: 'GET_PROJECT_DATA'
+                });
+                
+                log(`消息发送成功，响应: ${JSON.stringify(response, null, 2)}`, 'info');
+                
+                if (response && response.success) {
+                    const projectCount = response.projects?.length || 0;
+                    log(`成功获取 ${projectCount} 个项目`, 'success');
+                    
+                    if (response.projects && response.projects.length > 0) {
+                        response.projects.forEach((project, index) => {
+                            log(`项目 ${index + 1}: ${project.name} (ID: ${project.id})`, 'info');
+                        });
+                    }
+                    
+                    showStatus('project-status', `成功获取 ${projectCount} 个项目`, 'success');
+                } else {
+                    const errorMsg = response?.error || '未知错误';
+                    log(`获取项目数据失败: ${errorMsg}`, 'error');
+                    showStatus('project-status', `获取失败: ${errorMsg}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`消息发送失败: ${error.message}`, 'error');
+                showStatus('project-status', `消息发送失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function testGetSpecificProject() {
+            log('测试获取特定项目数据...');
+            
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    type: 'GET_PROJECT_DATA',
+                    projectId: 'project-1'
+                });
+                
+                log(`消息发送成功，响应: ${JSON.stringify(response, null, 2)}`, 'info');
+                
+                if (response && response.success) {
+                    const projectCount = response.projects?.length || 0;
+                    log(`成功获取特定项目，数量: ${projectCount}`, 'success');
+                    showStatus('project-status', `成功获取特定项目`, 'success');
+                } else {
+                    const errorMsg = response?.error || '未知错误';
+                    log(`获取特定项目失败: ${errorMsg}`, 'error');
+                    showStatus('project-status', `获取失败: ${errorMsg}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`消息发送失败: ${error.message}`, 'error');
+                showStatus('project-status', `消息发送失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function testMessagePassing() {
+            log('测试一般消息传递...');
+            
+            try {
+                const testMessage = {
+                    type: 'TEST_MESSAGE',
+                    timestamp: Date.now(),
+                    data: 'Hello from debug page'
+                };
+                
+                const response = await chrome.runtime.sendMessage(testMessage);
+                log(`测试消息响应: ${JSON.stringify(response, null, 2)}`, 'info');
+                showStatus('message-status', '消息传递测试完成', 'success');
+                
+            } catch (error) {
+                log(`消息传递测试失败: ${error.message}`, 'error');
+                showStatus('message-status', `消息传递失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function testInvalidMessage() {
+            log('测试无效消息处理...');
+            
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    type: 'INVALID_MESSAGE_TYPE'
+                });
+                
+                log(`无效消息响应: ${JSON.stringify(response, null, 2)}`, 'info');
+                showStatus('message-status', '无效消息测试完成', 'info');
+                
+            } catch (error) {
+                log(`无效消息测试失败: ${error.message}`, 'error');
+                showStatus('message-status', `测试失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载时自动进行环境检查
+        window.addEventListener('load', () => {
+            log('调试页面已加载');
+            setTimeout(() => {
+                checkEnvironment();
+            }, 1000);
+        });
+    </script>
+</body>
+</html>
