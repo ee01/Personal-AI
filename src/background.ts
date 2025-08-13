@@ -409,7 +409,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 使用仪表盘消息处理器处理项目相关消息
     if (request.type === 'GET_PROJECT_DATA' || 
         request.type === 'UPDATE_PROJECT_ITEM' || 
-        request.type === 'QUICK_ACTION') {
+        request.type === 'QUICK_ACTION' ||
+        request.type === 'ADD_PROJECT' ||
+        request.type === 'SUGGEST_PROJECTS') {
         console.log('📊 仪表盘消息处理开始:', {
             type: request.type,
             projectId: request.projectId,
