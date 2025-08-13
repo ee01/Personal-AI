@@ -521,7 +521,7 @@ export async function naturalLanguageQuery(
     }
     
     // 执行查询
-    console.log('naturalLanguageQuery queryParams', queryParams);
+    console.log(userQuestion, ' - queryParams', queryParams);
     let results = await messageCollection.query(queryParams);
     
     // 记录结果

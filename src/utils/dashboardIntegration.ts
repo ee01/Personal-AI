@@ -3,6 +3,45 @@
  * 为项目仪表盘组件提供数据接口和消息处理
  */
 
+// ==================== 鱼骨时间线新模型类型（对齐 demo 结构） ====================
+export type FishboneTaskType = 'dep' | 'task' | 'design';
+export type DepStatus = 'todo' | 'progress' | 'testBuild' | 'rollout' | 'blocked';
+export type DesignStatus = 'todo' | 'progress' | 'review' | 'done';
+export type TaskStatus = 'todo' | 'progress' | 'testing' | 'closed' | 'rollout';
+export type PlatformKey = 'sdk' | 'ios' | 'android' | 'qa' | 'dev';
+
+export interface PlatformState {
+  status: string;
+  assignee?: string;
+  jira?: string;
+}
+
+export interface FishboneTask {
+  id: string;
+  type: FishboneTaskType;
+  title: string;
+  status: DepStatus | DesignStatus | TaskStatus | string;
+  eta?: string;
+  desc?: string;
+  platforms?: Partial<Record<PlatformKey, PlatformState>>;
+  jira?: Array<{ key: string; title: string }>;
+}
+
+export interface MilestonePoint {
+  id: string;
+  label: string;    // 如 Beta / GA / M1
+  date?: string;    // YYYY-MM-DD 可选
+}
+
+export interface FishboneProject {
+  id: string;
+  name: string;
+  description?: string;
+  milestones: MilestonePoint[];
+  tasks: FishboneTask[];
+  platformConfig?: PlatformKey[]; // 默认: sdk/ios/android/qa，可选 dev
+}
+
 export interface ProjectData {
   id: string;
   name: string;
@@ -94,7 +133,10 @@ export interface Risk {
  */
 export class DashboardDataManager {
   private static instance: DashboardDataManager;
+  // 旧 mockData 将逐步废弃，保留定义避免其他引用报错
   private mockData: ProjectData[] = [];
+  // 新鱼骨模型数据源
+  private fishboneProjects: FishboneProject[] = [];
 
   static getInstance(): DashboardDataManager {
     if (!DashboardDataManager.instance) {
@@ -104,11 +146,12 @@ export class DashboardDataManager {
   }
 
   constructor() {
-    this.initializeMockData();
+    this.initializeMockData(); // 兼容旧接口（即使前端不再使用）
+    this.initializeFishboneMock();
   }
 
   /**
-   * 初始化模拟数据
+   * 初始化模拟数据（旧结构，保留以兼容历史函数）
    */
   private initializeMockData() {
     this.mockData = [
@@ -221,7 +264,7 @@ export class DashboardDataManager {
             description: '智能记忆生命周期管理和遗忘机制',
             progress: 60,
             plannedDate: new Date('2024-09-15'),
-            status: 'in-progress',
+            status: 'on-track',
             dependencies: ['milestone-2'],
             assignees: [
               { id: 'user1', name: '开发者A', role: '前端工程师', currentWorkload: 75, availability: 80, skills: ['React', 'TypeScript'], status: 'available' }
@@ -329,9 +372,155 @@ export class DashboardDataManager {
   }
 
   /**
+   * 初始化鱼骨模型的模拟数据
+   */
+  private initializeFishboneMock() {
+    this.fishboneProjects = [
+      {
+        id: 'p1',
+        name: 'Project 1',
+        description: '核心功能开发项目',
+        milestones: [
+          { id: 'ms-beta', label: 'Beta', date: '2025-05-05' },
+          { id: 'ms-ga', label: 'GA', date: '2025-06-10' }
+        ],
+        tasks: [
+          {
+            id: 't1',
+            type: 'dep',
+            title: 'BE dependency',
+            status: 'progress',
+            eta: '2025-05-02',
+            desc: 'RCV-xxxx BUG FOR XXX - 后端依赖修复',
+            jira: [
+              { key: 'PROJ-1234', title: '修复登录接口bug' },
+              { key: 'PROJ-1235', title: '优化数据库查询性能' }
+            ]
+          },
+          {
+            id: 't2',
+            type: 'design',
+            title: 'Design',
+            status: 'progress',
+            eta: '2025-04-20',
+            desc: 'UI/UX设计方案制定',
+            jira: [ { key: 'DESIGN-101', title: '用户界面设计评审' } ]
+          },
+          {
+            id: 't3',
+            type: 'task',
+            title: 'Epic 1',
+            status: 'review',
+            eta: '2025-04-24',
+            desc: '用户认证系统重构',
+            jira: [
+              { key: 'E1-1234', title: 'Epic: 用户认证系统' },
+              { key: 'E1-1235', title: 'Story: 单点登录集成' }
+            ],
+            platforms: {
+              sdk: { status: 'done', assignee: 'Alice Wang', jira: 'SDK-123' },
+              ios: { status: 'done', assignee: 'Bob Chen', jira: 'IOS-456' },
+              android: { status: 'progress', assignee: 'Carol Li', jira: 'AND-789' },
+              qa: { status: 'progress', assignee: 'David Zhang', jira: 'QA-101' }
+            }
+          },
+          {
+            id: 't4',
+            type: 'task',
+            title: 'Epic 2',
+            status: 'done',
+            eta: '2025-04-30',
+            desc: '数据分析模块',
+            jira: [ { key: 'E2-5678', title: 'Epic: 数据分析功能' } ],
+            platforms: {
+              sdk: { status: 'done', assignee: 'Alice Wang', jira: 'SDK-124' },
+              ios: { status: 'done', assignee: 'Bob Chen', jira: 'IOS-457' },
+              android: { status: 'done', assignee: 'Carol Li', jira: 'AND-790' },
+              qa: { status: 'done', assignee: 'David Zhang', jira: 'QA-102' }
+            }
+          }
+        ],
+        platformConfig: ['sdk', 'ios', 'android', 'qa']
+      },
+      {
+        id: 'p2',
+        name: 'Project 2',
+        description: '性能优化项目',
+        milestones: [
+          { id: 'ms-beta', label: 'Beta', date: '2025-04-15' },
+          { id: 'ms-ga', label: 'GA', date: '2025-06-30' }
+        ],
+        tasks: [
+          {
+            id: 't5',
+            type: 'task',
+            title: 'Epic A',
+            status: 'progress',
+            eta: '2025-04-20',
+            desc: 'Frontend性能优化',
+            jira: [ { key: 'EA-100', title: 'Epic: 前端性能优化' } ],
+            platforms: {
+              sdk: { status: 'progress', assignee: 'Eve Liu', jira: 'SDK-125' },
+              ios: { status: 'pending', assignee: 'Frank Wu', jira: 'IOS-458' },
+              android: { status: 'pending', assignee: 'Grace Zhou', jira: 'AND-791' },
+              qa: { status: 'pending', assignee: 'Henry Xu', jira: 'QA-103' }
+            }
+          },
+          {
+            id: 't6',
+            type: 'dep',
+            title: 'BE API v2',
+            status: 'blocked',
+            eta: '2025-05-01',
+            desc: '等待网关升级完成',
+            jira: [ { key: 'API-200', title: 'API v2 开发计划' } ]
+          }
+        ],
+        platformConfig: ['sdk', 'ios', 'android', 'qa']
+      },
+      {
+        id: 'p3',
+        name: 'Project 3',
+        description: '移动端适配项目',
+        milestones: [
+          { id: 'ms-beta', label: 'Beta', date: '2025-04-08' },
+          { id: 'ms-ga', label: 'GA', date: '2025-05-28' }
+        ],
+        tasks: [
+          {
+            id: 't7',
+            type: 'design',
+            title: 'Mobile Design',
+            status: 'review',
+            eta: '2025-04-10',
+            desc: '移动端UI适配设计',
+            jira: [ { key: 'MOB-001', title: '移动端设计规范' } ]
+          },
+          {
+            id: 't8',
+            type: 'task',
+            title: 'Mobile Epic',
+            status: 'progress',
+            eta: '2025-05-02',
+            desc: '移动端功能开发',
+            jira: [ { key: 'ME-001', title: 'Epic: 移动端功能' } ],
+            platforms: {
+              sdk: { status: 'done', assignee: 'Iris Chen', jira: 'SDK-126' },
+              ios: { status: 'progress', assignee: 'Jack Wang', jira: 'IOS-459' },
+              android: { status: 'progress', assignee: 'Kate Li', jira: 'AND-792' },
+              qa: { status: 'pending', assignee: 'Leo Zhang', jira: 'QA-104' }
+            }
+          }
+        ],
+        platformConfig: ['sdk', 'ios', 'android', 'qa']
+      }
+    ];
+  }
+
+  /**
    * 获取项目数据
    */
-  async getProjectData(projectId?: string): Promise<ProjectData[]> {
+  async getProjectData(projectId?: string): Promise<any[]> {
     console.log('🗂️ DashboardDataManager.getProjectData 开始:', {
       projectId,
       mockDataLength: this.mockData?.length || 0,
@@ -344,26 +533,14 @@ export class DashboardDataManager {
       this.initializeMockData();
     }
     
-    // 模拟异步操作
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    let result: ProjectData[];
-    if (projectId) {
-      result = this.mockData.filter(p => p.id === projectId);
-      console.log('🔍 按项目ID筛选结果:', {
-        projectId,
-        foundProjects: result.length,
-        projectNames: result.map(p => p.name)
-      });
-    } else {
-      result = this.mockData;
-      console.log('📋 返回所有项目:', {
-        totalProjects: result.length,
-        projectNames: result.map(p => p.name)
-      });
+    // 新模型优先：返回鱼骨项目
+    if (!this.fishboneProjects || this.fishboneProjects.length === 0) {
+      this.initializeFishboneMock();
     }
-    
-    return result;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const list = projectId ? this.fishboneProjects.filter(p => p.id === projectId) : this.fishboneProjects;
+    console.log('📋 返回鱼骨项目:', { totalProjects: list.length, names: list.map(p => p.name) });
+    return list;
   }
 
   /**
@@ -376,42 +553,31 @@ export class DashboardDataManager {
     changes: any
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const project = this.mockData.find(p => p.id === projectId);
+      const project = this.fishboneProjects.find(p => p.id === projectId);
       if (!project) {
         return { success: false, error: '项目不存在' };
       }
 
-      // 根据类型更新对应的项目
+      // 根据类型更新对应的项目（鱼骨模型）
       switch (itemType) {
         case 'project':
           Object.assign(project, changes);
           break;
         case 'milestone': {
-          const milestone = project.milestones.find(m => m.id === itemId);
-          if (milestone) {
-            Object.assign(milestone, changes);
-          }
+          const milestone = project.milestones.find((m: any) => m.id === itemId);
+          if (!milestone) return { success: false, error: '里程碑不存在' };
+          Object.assign(milestone, changes);
           break;
         }
         case 'task':
-          for (const milestone of project.milestones) {
-            const task = milestone.tasks.find(t => t.id === itemId);
-            if (task) {
-              Object.assign(task, changes);
-              break;
-            }
-          }
-          break;
-        case 'risk': {
-          const risk = project.risks.find(r => r.id === itemId);
-          if (risk) {
-            Object.assign(risk, changes);
-          }
+        case 'dep':
+        case 'design': {
+          const task = project.tasks.find((t: any) => t.id === itemId);
+          if (!task) return { success: false, error: '任务不存在' };
+          Object.assign(task, changes);
           break;
         }
       }
-
-      project.lastUpdated = new Date();
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -427,45 +593,31 @@ export class DashboardDataManager {
     itemData: any
   ): Promise<{ success: boolean; newItem?: any; error?: string }> {
     try {
-      const project = this.mockData.find(p => p.id === projectId);
+      const project = this.fishboneProjects.find(p => p.id === projectId);
       if (!project) {
         return { success: false, error: '项目不存在' };
       }
 
-      const newItem = {
-        id: `${itemType}-${Date.now()}`,
-        ...itemData,
-        createdAt: new Date()
-      };
-
+      const newItem = { id: `${itemType}-${Date.now()}`, ...itemData };
       switch (itemType) {
         case 'milestone':
-          project.milestones.push(newItem);
+          project.milestones.push({ id: newItem.id, label: newItem.label || 'M', date: newItem.date });
           break;
         case 'task':
-          // 添加到第一个里程碑（或创建默认里程碑）
-          if (project.milestones.length === 0) {
-            project.milestones.push({
-              id: `milestone-${Date.now()}`,
-              name: '默认里程碑',
-              description: '自动创建的默认里程碑',
-              progress: 0,
-              plannedDate: new Date(),
-              status: 'on-track',
-              dependencies: [],
-              assignees: [],
-              tasks: [newItem]
-            });
-          } else {
-            project.milestones[0].tasks.push(newItem);
-          }
-          break;
-        case 'risk':
-          project.risks.push(newItem);
+        case 'dep':
+        case 'design':
+          project.tasks.push({
+            id: newItem.id,
+            type: (itemData.type || 'task'),
+            title: itemData.title || '新任务',
+            status: itemData.status || 'todo',
+            eta: itemData.eta,
+            desc: itemData.desc,
+            platforms: itemData.platforms,
+            jira: itemData.jira
+          });
           break;
       }
-
-      project.lastUpdated = new Date();
       return { success: true, newItem };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -487,10 +639,7 @@ export class DashboardDataManager {
       };
 
       // 更新项目最后同步时间
-      const project = this.mockData.find(p => p.id === projectId);
-      if (project) {
-        project.lastUpdated = new Date();
-      }
+      // 鱼骨模型暂不更新 lastUpdated 字段
 
       return { success: true, syncResults };
     } catch (error: any) {
@@ -503,7 +652,7 @@ export class DashboardDataManager {
    */
   async exportProjectReport(projectId: string): Promise<{ success: boolean; report?: any; error?: string }> {
     try {
-      const project = this.mockData.find(p => p.id === projectId);
+      const project = this.fishboneProjects.find(p => p.id === projectId);
       if (!project) {
         return { success: false, error: '项目不存在' };
       }
@@ -511,29 +660,67 @@ export class DashboardDataManager {
       const report = {
         projectName: project.name,
         generatedAt: new Date().toISOString(),
-        overallProgress: project.overallProgress,
-        milestones: project.milestones.map(m => ({
-          name: m.name,
-          progress: m.progress,
-          status: m.status,
-          tasksTotal: m.tasks.length,
-          tasksCompleted: m.tasks.filter(t => t.status === 'done').length
-        })),
-        teamMetrics: {
-          totalMembers: project.team.length,
-          averageWorkload: project.team.reduce((sum, m) => sum + m.currentWorkload, 0) / project.team.length,
-          skillDistribution: project.team.flatMap(m => m.skills)
-        },
-        riskSummary: {
-          totalRisks: project.risks.length,
-          highRisks: project.risks.filter(r => r.severity === 'high').length,
-          openRisks: project.risks.filter(r => r.status === 'open').length
-        }
+        milestones: project.milestones,
+        tasks: project.tasks
       };
 
       return { success: true, report };
     } catch (error: any) {
       return { success: false, error: error.message };
+    }
+  }
+
+  /** 新增项目（前端新增入口调用；目前仅内存保存） */
+  async createProject(data: {
+    name: string;
+    description?: string;
+    platformConfig?: PlatformKey[];
+    prompt?: string;
+  }): Promise<{ success: boolean; project?: FishboneProject; error?: string }> {
+    try {
+      const id = `p_${Date.now()}`;
+      const project: FishboneProject = {
+        id,
+        name: data.name,
+        description: data.description || '',
+        milestones: [],
+        tasks: [],
+        platformConfig: data.platformConfig?.length ? data.platformConfig : ['sdk', 'ios', 'android', 'qa']
+      };
+      this.fishboneProjects.push(project);
+      return { success: true, project };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  /** 使用向量数据库为项目名提供建议 */
+  async suggestProjects(question: string): Promise<{ success: boolean; suggestions: string[]; error?: string }> {
+    try {
+      const { naturalLanguageQuery } = await import('../vectorStore');
+      const result: any = await naturalLanguageQuery(question, undefined, { limit: 10 });
+      const metadatas: any[] = result?.results?.metadatas || [];
+      const names = new Set<string>();
+      for (const m of metadatas) {
+        try {
+          if (m.projects) {
+            const arr = JSON.parse(m.projects as string);
+            arr.forEach((n: string) => n && names.add(String(n)));
+          }
+          if (m.searchTags) {
+            const tags = JSON.parse(m.searchTags as string);
+            tags.forEach((t: string) => {
+              if (typeof t === 'string' && /project|项目|计划|epic/i.test(t)) names.add(t);
+            });
+          }
+        } catch (_) {
+          // 忽略 JSON 解析错误
+        }
+      }
+      const suggestions = Array.from(names).slice(0, 8);
+      return { success: true, suggestions };
+    } catch (e: any) {
+      return { success: false, suggestions: [], error: e.message };
     }
   }
 }
@@ -569,6 +756,21 @@ export class DashboardMessageHandler {
       case 'QUICK_ACTION':
         console.log('⚡ 处理快速操作请求');
         await this.handleQuickAction(request, sendResponse);
+        return true;
+
+      case 'ADD_PROJECT':
+        console.log('➕ 新增项目');
+        await this.handleAddProject(request, sendResponse);
+        return true;
+
+      case 'SUGGEST_PROJECTS':
+        console.log('🤖 项目名称建议');
+        await this.handleSuggestProjects(request, sendResponse);
+        return true;
+
+      case 'ADD_PROJECT_ITEM':
+        console.log('➕ 添加项目项目');
+        await this.handleAddProjectItem(request, sendResponse);
         return true;
         
       default:
@@ -625,24 +827,55 @@ export class DashboardMessageHandler {
       let result = null;
 
       switch (action) {
+        case 'create_milestone': {
+          result = await this.dataManager.createProjectItem(data.projectId, 'milestone', data);
+          break;
+        }
+        case 'create_task': {
+          result = await this.dataManager.createProjectItem(data.projectId, (data.type || 'task'), data);
+          break;
+        }
         case 'sync_data':
           result = await this.dataManager.syncProjectData(data.projectId);
           break;
         case 'export_report':
           result = await this.dataManager.exportProjectReport(data.projectId);
           break;
-        case 'create_milestone':
-        case 'create_task':
-        case 'log_risk': {
-          const itemType = action.replace('create_', '').replace('log_', '');
-          result = await this.dataManager.createProjectItem(data.projectId, itemType, data);
-          break;
-        }
         default:
           throw new Error(`Unknown quick action: ${action}`);
       }
 
       sendResponse({ success: true, result });
+    } catch (error: any) {
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  private async handleAddProject(request: any, sendResponse: (response: any) => void) {
+    try {
+      const { name, description, platformConfig, prompt } = request;
+      const res = await this.dataManager.createProject({ name, description, platformConfig, prompt });
+      sendResponse(res);
+    } catch (e: any) {
+      sendResponse({ success: false, error: e.message });
+    }
+  }
+
+  private async handleSuggestProjects(request: any, sendResponse: (response: any) => void) {
+    try {
+      const { question } = request;
+      const res = await this.dataManager.suggestProjects(question || '建议项目');
+      sendResponse(res);
+    } catch (e: any) {
+      sendResponse({ success: false, error: e.message, suggestions: [] });
+    }
+  }
+
+  private async handleAddProjectItem(request: any, sendResponse: (response: any) => void) {
+    try {
+      const { projectId, itemType, itemData } = request;
+      const result = await this.dataManager.createProjectItem(projectId, itemType, itemData);
+      sendResponse(result);
     } catch (error: any) {
       sendResponse({ success: false, error: error.message });
     }
