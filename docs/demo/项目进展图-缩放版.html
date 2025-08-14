@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>项目进展 · 缩放版</title>
+  <!-- GSAP CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/Draggable.min.js"></script>
   <style>
     :root {
       --bg: #f8fafc;
@@ -121,7 +124,7 @@
     /* 鱼骨图容器 */
     .fishbone-container {
       position: relative;
-      height: 200px;
+      height: 260px; /* 增加高度以适应新的卡片位置 */
       margin: 20px 0;
       background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
       border-radius: 12px;
@@ -218,10 +221,11 @@
       border-radius: 12px;
       padding: 12px 16px;
       min-width: 180px;
-      cursor: pointer;
-      transition: all 0.3s ease;
+      cursor: grab;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
       box-shadow: var(--shadow);
       z-index: 5;
+      user-select: none;
     }
 
     .task-bone:hover {
@@ -230,20 +234,60 @@
       z-index: 15;
     }
 
+    .task-bone.dragging {
+      cursor: grabbing;
+      transform: scale(1.08);
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15), 0 5px 15px rgba(0, 0, 0, 0.1);
+      z-index: 20;
+      transition: none;
+      filter: brightness(1.05);
+    }
+
+    /* 弹窗激活时降低拖拽卡片的z-index */
+    body.modal-open .task-bone {
+      z-index: 1 !important;
+    }
+    
+    body.modal-open .task-bone.dragging {
+      z-index: 2 !important;
+    }
+
+    .task-bone::before {
+      content: '';
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      right: -4px;
+      bottom: -4px;
+      background: linear-gradient(135deg, var(--primary), var(--success), var(--warning));
+      border-radius: 16px;
+      opacity: 0;
+      z-index: -1;
+      transition: opacity 0.3s ease;
+    }
+
+    .task-bone:hover::before {
+      opacity: 0.1;
+    }
+
+    .task-bone.dragging::before {
+      opacity: 0.2;
+    }
+
     /* 任务分支类型样式 */
     .task-bone.dep {
       border-color: var(--dep-color);
-      top: 20px;
+      top: 16px; /* 距离主线40px */
     }
 
     .task-bone.epic {
       border-color: var(--epic-color);
-      bottom: 20px;
+      bottom: 2px; /* 距离主线40px */
     }
 
     .task-bone.design {
       border-color: var(--design-color);
-      top: 20px;
+      top: 16px; /* 距离主线40px */
       left: 60px;
     }
 
@@ -252,29 +296,37 @@
       position: absolute;
       background: currentColor;
       z-index: 1;
+      pointer-events: none; /* 避免影响卡片交互 */
     }
 
     .bone-connector.dep {
-      width: 2px;
-      height: 60px;
+      width: 112px;
+      height: 2px;
       color: var(--dep-color);
-      top: 80px;
+      bottom: -40px; /* 向下延伸到时间线 */
+      right: -28px;
+      transform: rotate(75deg);
+      transform-origin: right center;
     }
 
     .bone-connector.epic {
-      width: 2px;
-      height: 60px;
+      width: 120px;
+      height: 2px;
       color: var(--epic-color);
-      bottom: 80px;
+      top: -40px; /* 向上延伸到时间线 */
+      right: -32px;
+      transform: rotate(-75deg);
+      transform-origin: right center;
     }
 
     .bone-connector.design {
-      width: 60px;
+      width: 112px;
       height: 2px;
       color: var(--design-color);
-      top: 50%;
-      left: 60px;
-      transform: translateY(-50%);
+      bottom: -40px; /* 向下延伸到时间线 */
+      right: -28px;
+      transform: rotate(75deg);
+      transform-origin: right center;
     }
 
     .task-title {
@@ -658,7 +710,7 @@
       }
       
       .fishbone-container {
-        height: 160px;
+        height: 200px; /* 移动端适配新高度 */
         padding: 15px;
       }
       
@@ -697,7 +749,7 @@
   <div class="container">
     <div class="header">
       <h1>项目进展报告</h1>
-      <p>点击鱼骨图上的任务分支查看详细信息</p>
+      <p>点击鱼骨图上的任务分支查看详细信息 | 拖拽卡片可调整时间线位置</p>
     </div>
 
     <div class="project-list" id="projectList">
@@ -972,8 +1024,8 @@
           </div>` : '';
 
         html += `
-          <div class="bone-connector ${task.type}" style="left: ${task.percent}%"></div>
-          <div class="task-bone ${task.type}" style="left: ${task.percent}%" data-task="${task.id}">
+          <div class="task-bone ${task.type}" style="left: ${task.percent}%" data-task="${task.id}" data-project="${project.id}">
+            <div class="bone-connector ${task.type}" data-connector="${task.id}"></div>
             <div class="task-title">${task.title}</div>
             <div class="task-meta">
               <span class="status-tag status-${task.status}">${task.status}</span>
@@ -1099,6 +1151,7 @@
 
       document.getElementById('zoomBody').innerHTML = content;
       document.getElementById('zoomOverlay').classList.add('active');
+      document.body.classList.add('modal-open');
     }
 
     // 查找任务
@@ -1113,17 +1166,24 @@
     // 关闭详情
     function closeDetail() {
       document.getElementById('zoomOverlay').classList.remove('active');
+      document.body.classList.remove('modal-open');
     }
 
     // 事件监听
     function setupEventListeners() {
-      // 任务点击事件
+      // 任务点击事件（只在非拖拽时触发）
       document.addEventListener('click', (e) => {
         const taskBone = e.target.closest('.task-bone');
-        if (taskBone) {
+        if (taskBone && !taskBone.classList.contains('was-dragging')) {
           const taskId = taskBone.dataset.task;
           showTaskDetail(taskId);
         }
+        // 清除拖拽标记
+        setTimeout(() => {
+          document.querySelectorAll('.task-bone').forEach(bone => {
+            bone.classList.remove('was-dragging');
+          });
+        }, 100);
       });
 
       // 关闭按钮
@@ -1144,10 +1204,162 @@
       });
     }
 
+    // 存储拖拽实例
+    let dragInstances = [];
+
+    // 初始化拖拽功能
+    function initDragFunctionality() {
+      // 先销毁现有的拖拽实例
+      dragInstances.forEach(instance => {
+        if (instance && instance.kill) {
+          instance.kill();
+        }
+      });
+      dragInstances = [];
+
+      // 等待DOM渲染完成
+      setTimeout(() => {
+        document.querySelectorAll('.task-bone').forEach((taskBone, index) => {
+          const taskId = taskBone.dataset.task;
+          const projectId = taskBone.dataset.project;
+          const fishboneContainer = taskBone.closest('.fishbone-container');
+          
+          if (!fishboneContainer) return;
+          
+          // 获取当前任务的百分比位置
+          const project = projects.find(p => p.id === projectId);
+          const task = project?.tasks.find(t => t.id === taskId);
+          if (!task) return;
+          
+          const containerRect = fishboneContainer.getBoundingClientRect();
+          const containerPadding = 40; // 左右padding
+          const availableWidth = containerRect.width - (containerPadding * 2) - taskBone.offsetWidth;
+          
+          // 将百分比转换为像素位置（考虑卡片宽度）
+          const currentPercent = task.percent;
+          const pixelPosition = containerPadding + (currentPercent - 10) / 80 * availableWidth;
+          
+          // 设置初始位置
+          gsap.set(taskBone, { x: pixelPosition });
+          
+          // 移除CSS的left定位，避免与GSAP冲突
+          taskBone.style.left = 'auto';
+          
+          // 连接线现在在卡片内部，会自动跟随移动
+          
+          // 调试信息（可选）
+          console.log(`Task ${taskId}: ${currentPercent}% = ${pixelPosition}px`);
+          
+          const minLeft = containerPadding;
+          const maxLeft = containerPadding + availableWidth;
+          
+          // 创建GSAP拖拽实例
+          const dragInstance = Draggable.create(taskBone, {
+            type: "x", // 只允许水平拖拽
+            bounds: {
+              minX: minLeft,
+              maxX: maxLeft
+            },
+            inertia: true, // 添加惯性
+            edgeResistance: 0.8, // 边缘阻力
+            onDragStart: function() {
+              taskBone.classList.add('dragging');
+            },
+            onDrag: function() {
+              // 计算新的百分比位置
+              const currentLeft = this.x;
+              const percentage = ((currentLeft - containerPadding) / availableWidth) * 80 + 10; // 10%-90%范围
+              
+              // 更新数据
+              updateTaskPosition(taskId, projectId, percentage);
+            },
+            onDragEnd: function() {
+              taskBone.classList.remove('dragging');
+              taskBone.classList.add('was-dragging'); // 标记已拖拽，避免触发点击事件
+              
+              // 添加一个轻微的弹性动画
+              gsap.to(taskBone, {
+                scale: 1,
+                duration: 0.2,
+                ease: "back.out(1.2)"
+              });
+            },
+            snap: {
+              x: function(endValue) {
+                // 可选：添加吸附到里程碑的功能
+                const milestones = [25, 80]; // Beta和GA的位置百分比
+                const tolerance = 5; // 容差范围
+                const currentPercent = ((endValue - containerPadding) / availableWidth) * 80 + 10;
+                
+                for (let milestone of milestones) {
+                  if (Math.abs(currentPercent - milestone) < tolerance) {
+                    const snapX = containerPadding + ((milestone - 10) / 80) * availableWidth;
+                    return snapX;
+                  }
+                }
+                return endValue;
+              }
+            }
+          });
+          
+          // 存储拖拽实例
+          if (dragInstance && dragInstance.length > 0) {
+            dragInstances.push(dragInstance[0]);
+          }
+        });
+      }, 200);
+    }
+
+    // 更新任务位置数据
+    function updateTaskPosition(taskId, projectId, percentage) {
+      const project = projects.find(p => p.id === projectId);
+      if (project) {
+        const task = project.tasks.find(t => t.id === taskId);
+        if (task) {
+          task.percent = percentage;
+        }
+      }
+    }
+
+    // 响应窗口大小变化
+    function handleResize() {
+      // 延迟重新初始化拖拽功能，避免频繁调用
+      clearTimeout(window.resizeTimeout);
+      window.resizeTimeout = setTimeout(() => {
+        // 重新计算所有卡片的位置
+        document.querySelectorAll('.task-bone').forEach(taskBone => {
+          const taskId = taskBone.dataset.task;
+          const projectId = taskBone.dataset.project;
+          const project = projects.find(p => p.id === projectId);
+          const task = project?.tasks.find(t => t.id === taskId);
+          
+          if (task) {
+            const fishboneContainer = taskBone.closest('.fishbone-container');
+            if (fishboneContainer) {
+              const containerRect = fishboneContainer.getBoundingClientRect();
+              const containerPadding = 40;
+              const availableWidth = containerRect.width - (containerPadding * 2) - taskBone.offsetWidth;
+              const pixelPosition = containerPadding + (task.percent - 10) / 80 * availableWidth;
+              
+              // 重置位置
+              gsap.set(taskBone, { x: pixelPosition });
+            }
+          }
+        });
+        
+        // 重新初始化拖拽功能
+        initDragFunctionality();
+      }, 300);
+    }
+
     // 初始化
     function init() {
       renderProjects();
       setupEventListeners();
+      initDragFunctionality();
+      
+      // 监听窗口大小变化
+      window.addEventListener('resize', handleResize);
     }
 
     // 当前编辑的任务ID
