@@ -58,6 +58,38 @@ const ProjectDashboard: React.FC = () => {
   const [showAddTask, setShowAddTask] = useState<{projectId: string; position: number} | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskType, setNewTaskType] = useState<'dep'|'task'|'design'>('task');
+  
+  // 拖拽功能状态
+  const [dragState, setDragState] = useState<{
+    isDragging: boolean;
+    draggedTask: string | null;
+    startX: number;
+    startAnchorPosition: number;
+    containerWidth: number;
+    originalOrder: string[];
+  }>({ isDragging: false, draggedTask: null, startX: 0, startAnchorPosition: 0, containerWidth: 0, originalOrder: [] });
+  
+  // 任务顺序管理（基于锚点位置）
+  const [taskOrders, setTaskOrders] = useState<Record<string, string[]>>({});
+  
+  // ETA编辑弹窗状态
+  const [etaEditModal, setETAEditModal] = useState<{
+    isOpen: boolean;
+    taskId: string;
+    projectId: string;
+    conflictType: 'missing_eta' | 'eta_conflict';
+    message: string;
+    newOrder: string[];
+    originalOrder: string[];
+  } | null>(null);
+
+  // 里程碑编辑状态
+  const [milestoneEditModal, setMilestoneEditModal] = useState<{
+    isOpen: boolean;
+    milestoneId: string;
+    projectId: string;
+    currentDate: string;
+  } | null>(null);
 
   const selectedTask = useMemo(() => {
     for (const p of projects) {
@@ -90,13 +122,91 @@ const ProjectDashboard: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // 将任务均匀分布在 10% ~ 90% 的横向范围，排序优先使用 eta
-  const computeLeftPercent = (index: number, total: number) => {
+  // 计算任务锚点位置的辅助函数
+  const getTaskAnchorOffset = (taskType: 'dep'|'task'|'design') => {
+    // 基于CSS中连接线的right偏移量
+    switch (taskType) {
+      case 'dep': return 28;    // right: -28px
+      case 'task': return 32;   // right: -32px  
+      case 'design': return 28; // right: -28px
+      default: return 30;
+    }
+  };
+
+  // 根据ETA时间计算初始顺序和位置
+  const computeTaskOrder = (project: FishboneProject) => {
+    const tasks = [...project.tasks];
+    const milestones = project.milestones || [];
+    
+    // 将任务和里程碑按ETA排序
+    const allItems = [
+      ...tasks.map(t => ({ 
+        id: t.id, 
+        type: 'task' as const, 
+        eta: t.eta || '9999-12-31',
+        item: t 
+      })),
+      ...milestones.map(m => ({ 
+        id: m.id, 
+        type: 'milestone' as const, 
+        eta: m.date || '9999-12-31',
+        item: m 
+      }))
+    ].sort((a, b) => a.eta.localeCompare(b.eta));
+    
+    return allItems;
+  };
+
+  // 将任务均匀分布在 10% ~ 90% 的横向范围，基于锚点位置
+  const computeAnchorPercent = (index: number, total: number) => {
     if (total <= 1) return 50;
     const start = 10;
     const end = 90;
     const step = (end - start) / (total - 1);
     return start + step * index;
+  };
+
+  // 获取任务卡片位置（基于锚点计算）
+  const getTaskCardPosition = (anchorPercent: number, taskType: 'dep'|'task'|'design', cardWidth: number = 180) => {
+    const anchorOffset = getTaskAnchorOffset(taskType);
+    // 锚点位置减去卡片右边距到锚点的距离，但这里需要考虑容器宽度
+    const containerWidth = 1200; // 假设容器宽度，实际应该动态获取
+    const offsetPercent = (anchorOffset / containerWidth) * 100;
+    return anchorPercent;
+  };
+
+  // 获取任务锚点位置（用于拖拽计算）
+  const getTaskAnchorPosition = (taskId: string, projectId: string) => {
+    // 检查是否有自定义顺序
+    const customOrder = taskOrders[projectId];
+    if (customOrder) {
+      const index = customOrder.findIndex(id => id === taskId);
+      if (index >= 0) {
+        return computeAnchorPercent(index, customOrder.length);
+      }
+    }
+    
+    // 使用默认的ETA顺序
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return 50;
+    
+    const orderedItems = computeTaskOrder(project);
+    const taskIndex = orderedItems.findIndex(item => item.id === taskId);
+    
+    if (taskIndex >= 0) {
+      return computeAnchorPercent(taskIndex, orderedItems.length);
+    }
+    
+    return 50;
+  };
+
+  // 获取任务卡片的渲染位置（锚点转换为卡片left位置）
+  const getTaskRenderPosition = (taskId: string, projectId: string, task: FishboneTask) => {
+    const anchorPercent = getTaskAnchorPosition(taskId, projectId);
+    const anchorOffset = getTaskAnchorOffset(task.type);
+    
+    // 这里简化处理，实际可以更精确
+    return anchorPercent - (anchorOffset * 0.15); // 近似转换
   };
 
   const openDetail = (taskId: string) => setDetailTaskId(taskId);
@@ -279,10 +389,10 @@ const ProjectDashboard: React.FC = () => {
     if (project?.milestones) {
       // 找到最接近的milestone
       let closestMilestone = project.milestones[0];
-      let minDistance = Math.abs(computeLeftPercent(0, project.milestones.length) - position);
+      let minDistance = Math.abs(computeAnchorPercent(0, project.milestones.length) - position);
       
       project.milestones.forEach((milestone, index) => {
-        const milestonePosition = computeLeftPercent(index, project.milestones.length);
+        const milestonePosition = computeAnchorPercent(index, project.milestones.length);
         const distance = Math.abs(milestonePosition - position);
         if (distance < minDistance) {
           minDistance = distance;
@@ -297,7 +407,7 @@ const ProjectDashboard: React.FC = () => {
     console.log(`点击位置 ${position.toFixed(1)}% 对应milestone: ${selectedMilestone}`);
   };
 
-  // 任务拖拽完成处理
+  // 任务拖拽完成处理（旧版本，保留兼容性）
   const handleTaskDragEnd = async (task: FishboneTask, projectId: string, e: React.DragEvent) => {
     const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
     const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
@@ -314,6 +424,349 @@ const ProjectDashboard: React.FC = () => {
     
     // 这里可以实现重新排序逻辑，或者更新任务的ETA时间
     // 暂时只在控制台输出，实际实现可以调用后端API更新任务位置
+  };
+
+  // 新的拖拽功能实现（基于锚点）
+  const handleMouseDown = (e: React.MouseEvent, task: FishboneTask, projectId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const target = e.currentTarget as HTMLElement;
+    const container = target.closest('.fishbone-container') as HTMLElement;
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    const containerPadding = 40;
+    const availableWidth = rect.width - (containerPadding * 2);
+    
+    // 获取当前锚点位置
+    const currentAnchorPercent = getTaskAnchorPosition(task.id, projectId);
+    const currentAnchorPixelPosition = containerPadding + ((currentAnchorPercent - 10) / 80) * availableWidth;
+    
+    // 保存原始顺序用于取消时恢复
+    const project = projects.find(p => p.id === projectId);
+    const originalOrder = project ? computeTaskOrder(project).map(item => item.id) : [];
+    
+    setDragState({
+      isDragging: true,
+      draggedTask: task.id,
+      startX: e.clientX,
+      startAnchorPosition: currentAnchorPixelPosition,
+      containerWidth: availableWidth,
+      originalOrder
+    });
+    
+    // 添加拖拽样式
+    target.classList.add('dragging');
+    document.body.classList.add('modal-open');
+  };
+  
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!dragState.isDragging || !dragState.draggedTask) return;
+    
+    const deltaX = e.clientX - dragState.startX;
+    const newAnchorPixelPosition = dragState.startAnchorPosition + deltaX;
+    const containerPadding = 40;
+    
+    // 限制锚点在边界内
+    const clampedAnchorPosition = Math.max(containerPadding, Math.min(containerPadding + dragState.containerWidth, newAnchorPixelPosition));
+    
+    // 转换为锚点百分比
+    let newAnchorPercent = ((clampedAnchorPosition - containerPadding) / dragState.containerWidth) * 80 + 10;
+    
+    // 应用吸附功能
+    const projectId = projects.find(p => p.tasks.some(t => t.id === dragState.draggedTask))?.id;
+    if (projectId) {
+      newAnchorPercent = getSnapToMilestone(newAnchorPercent, projectId);
+    }
+    
+    // 实时更新拖拽任务的位置（临时状态，不保存到taskOrders）
+    setTaskOrders(prev => {
+      if (!projectId) return prev;
+      
+      const project = projects.find(p => p.id === projectId);
+      if (!project) return prev;
+      
+      const orderedItems = computeTaskOrder(project);
+      const newOrder = [...orderedItems.map(item => item.id)];
+      
+      // 移除拖拽的任务
+      const draggedIndex = newOrder.findIndex(id => id === dragState.draggedTask);
+      if (draggedIndex >= 0) {
+        newOrder.splice(draggedIndex, 1);
+      }
+      
+      // 根据新位置插入任务
+      const insertIndex = Math.round((newAnchorPercent - 10) / 80 * (newOrder.length));
+      const clampedInsertIndex = Math.max(0, Math.min(newOrder.length, insertIndex));
+      newOrder.splice(clampedInsertIndex, 0, dragState.draggedTask!);
+      
+      return {
+        ...prev,
+        [projectId]: newOrder
+      };
+    });
+  };
+  
+  const handleMouseUp = () => {
+    if (!dragState.isDragging || !dragState.draggedTask) return;
+    
+    const projectId = projects.find(p => p.tasks.some(t => t.id === dragState.draggedTask))?.id;
+    if (!projectId) return;
+    
+    const currentOrder = taskOrders[projectId];
+    if (!currentOrder) return;
+    
+    // 检查ETA冲突
+    const conflict = checkETAConflict(dragState.draggedTask, currentOrder, projectId);
+    
+    if (conflict) {
+      // 显示ETA编辑弹窗
+      setETAEditModal({
+        isOpen: true,
+        taskId: dragState.draggedTask,
+        projectId,
+        conflictType: conflict.type,
+        message: conflict.message,
+        newOrder: currentOrder,
+        originalOrder: dragState.originalOrder
+      });
+    } else {
+      // 没有冲突，直接保存新顺序
+      // 这里可以调用API保存顺序
+      console.log('保存新顺序:', currentOrder);
+    }
+    
+    // 清除拖拽样式
+    document.querySelectorAll('.task-bone.dragging').forEach(el => {
+      el.classList.remove('dragging');
+      el.classList.add('was-dragging');
+    });
+    document.body.classList.remove('modal-open');
+    
+    // 重置拖拽状态
+    setDragState({ 
+      isDragging: false, 
+      draggedTask: null, 
+      startX: 0, 
+      startAnchorPosition: 0, 
+      containerWidth: 0,
+      originalOrder: []
+    });
+    
+    // 清除was-dragging标记
+    setTimeout(() => {
+      document.querySelectorAll('.task-bone.was-dragging').forEach(el => {
+        el.classList.remove('was-dragging');
+      });
+    }, 100);
+  };
+  
+  // 移除旧的getTaskPosition函数，已被getTaskRenderPosition替代
+  
+  // 处理点击事件（避免拖拽完成后触发）
+  const handleTaskClick = (taskId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLElement;
+    if (target.classList.contains('was-dragging')) {
+      return;
+    }
+    openDetail(taskId);
+  };
+
+  // 里程碑编辑处理
+  const handleMilestoneEdit = (milestoneId: string, projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    const milestone = project?.milestones?.find(m => m.id === milestoneId);
+    if (!milestone) return;
+
+    setMilestoneEditModal({
+      isOpen: true,
+      milestoneId,
+      projectId,
+      currentDate: milestone.date || ''
+    });
+  };
+
+  // 保存里程碑编辑
+  const handleSaveMilestone = async (newDate: string) => {
+    if (!milestoneEditModal) return;
+
+    try {
+      // 这里调用API更新里程碑日期
+      await chrome.runtime.sendMessage({
+        type: 'UPDATE_MILESTONE',
+        projectId: milestoneEditModal.projectId,
+        milestoneId: milestoneEditModal.milestoneId,
+        date: newDate
+      });
+
+      setMilestoneEditModal(null);
+      await loadProjects();
+    } catch (error) {
+      console.error('更新里程碑失败:', error);
+    }
+  };
+
+  // ETA编辑处理
+  const handleSaveETA = async (newETA: string) => {
+    if (!etaEditModal) return;
+
+    try {
+      const task = projects
+        .find(p => p.id === etaEditModal.projectId)
+        ?.tasks.find(t => t.id === etaEditModal.taskId);
+      
+      if (!task) return;
+
+      // 更新任务ETA
+      await updateTask(etaEditModal.projectId, task.type, etaEditModal.taskId, { eta: newETA });
+
+      // 保存新顺序
+      setTaskOrders(prev => ({
+        ...prev,
+        [etaEditModal.projectId]: etaEditModal.newOrder
+      }));
+
+      setETAEditModal(null);
+    } catch (error) {
+      console.error('更新ETA失败:', error);
+    }
+  };
+
+  // 取消ETA编辑，恢复原始位置
+  const handleCancelETA = () => {
+    if (!etaEditModal) return;
+
+    // 恢复原始顺序
+    setTaskOrders(prev => ({
+      ...prev,
+      [etaEditModal.projectId]: etaEditModal.originalOrder
+    }));
+
+    setETAEditModal(null);
+  };
+
+  // 监听全局鼠标事件
+  React.useEffect(() => {
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (dragState.isDragging) {
+        handleMouseMove(e as any);
+      }
+    };
+    
+    const handleGlobalMouseUp = () => {
+      if (dragState.isDragging) {
+        handleMouseUp();
+      }
+    };
+    
+    if (dragState.isDragging) {
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+    }
+    
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [dragState.isDragging, dragState.startX, dragState.startAnchorPosition]);
+
+  // 响应式处理 - 监听窗口大小变化
+  React.useEffect(() => {
+    let resizeTimeout: NodeJS.Timeout;
+    
+    const handleResize = () => {
+      // 延迟重新计算位置，避免频繁调用
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        // 响应式处理：窗口大小变化时重新计算任务顺序
+        // 由于使用基于锚点的相对位置，通常不需要重新计算
+        // 除非有特殊的响应式需求
+        console.log('窗口大小已变化，任务位置自动适应');
+      }, 300);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(resizeTimeout);
+    };
+  }, [projects]);
+
+  // 吸附功能 - 任务拖拽时可以吸附到里程碑（基于锚点）
+  const getSnapToMilestone = (currentAnchorPercent: number, projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project?.milestones) return currentAnchorPercent;
+    
+    const tolerance = 5; // 吸附容差
+    
+    for (let i = 0; i < project.milestones.length; i++) {
+      const milestonePercent = computeAnchorPercent(i, project.milestones.length);
+      if (Math.abs(currentAnchorPercent - milestonePercent) < tolerance) {
+        return milestonePercent;
+      }
+    }
+    
+    return currentAnchorPercent;
+  };
+
+  // ETA冲突检测和处理
+  const checkETAConflict = (draggedTaskId: string, newOrder: string[], projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return null;
+    
+    const draggedTask = project.tasks.find(t => t.id === draggedTaskId);
+    if (!draggedTask) return null;
+    
+    // 获取原始ETA顺序
+    const etaOrder = computeTaskOrder(project).map(item => item.id);
+    
+    // 检查是否顺序改变了
+    const draggedIndexInETA = etaOrder.findIndex(id => id === draggedTaskId);
+    const draggedIndexInNew = newOrder.findIndex(id => id === draggedTaskId);
+    
+    // 如果拖拽的任务没有ETA，但现在有了新位置
+    if (!draggedTask.eta || draggedTask.eta === '9999-12-31') {
+      return {
+        type: 'missing_eta' as const,
+        message: '请设置此任务的预计完成时间(ETA)以保存新位置',
+        suggestedETA: ''
+      };
+    }
+    
+    // 检查顺序是否与ETA不一致
+    let hasConflict = false;
+    for (let i = 0; i < newOrder.length - 1; i++) {
+      const currentId = newOrder[i];
+      const nextId = newOrder[i + 1];
+      
+      const currentItem = project.tasks.find(t => t.id === currentId) || 
+                          project.milestones?.find(m => m.id === currentId);
+      const nextItem = project.tasks.find(t => t.id === nextId) ||
+                       project.milestones?.find(m => m.id === nextId);
+      
+      if (currentItem && nextItem) {
+        const currentETA = 'eta' in currentItem ? currentItem.eta : 'date' in currentItem ? currentItem.date : null;
+        const nextETA = 'eta' in nextItem ? nextItem.eta : 'date' in nextItem ? nextItem.date : null;
+        
+        if (currentETA && nextETA && currentETA > nextETA) {
+          hasConflict = true;
+          break;
+        }
+      }
+    }
+    
+    if (hasConflict) {
+      return {
+        type: 'eta_conflict' as const,
+        message: '新位置与ETA时间顺序不一致，请更新ETA时间',
+        suggestedETA: ''
+      };
+    }
+    
+    return null;
   };
 
               return (
@@ -377,46 +830,55 @@ const ProjectDashboard: React.FC = () => {
                   <div className="add-task-hint">💡 点击时间线空白处添加任务</div>
 
                   {milestones.map((m, i) => (
-                    <div key={m.id} className={`milestone ${m.label.toLowerCase()}`} style={{ left: `${computeLeftPercent(i, milestones.length)}%` }}>
+                    <div 
+                      key={m.id} 
+                      className={`milestone ${m.label.toLowerCase()}`} 
+                      style={{ left: `${computeAnchorPercent(i, milestones.length)}%` }}
+                      onClick={() => handleMilestoneEdit(m.id, project.id)}
+                      title="点击编辑里程碑时间"
+                    >
                       <div className="milestone-label">{m.label}</div>
                       {m.date && <div className="milestone-date">{m.date}</div>}
                       {m.label}
-        </div>
+                    </div>
                   ))}
 
-                  {tasks.map((t, i) => (
-                    <React.Fragment key={t.id}>
-                      <div className={`bone-connector ${t.type}`} style={{ left: `${computeLeftPercent(i, tasks.length)}%` }} />
-                      <div 
-                        className={`task-bone ${t.type}`} 
-                        style={{ left: `${computeLeftPercent(i, tasks.length)}%` }} 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openDetail(t.id);
-                        }}
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
-                          openDetail(t.id);
-                        }}
-                        draggable
-                        onDragEnd={(e) => handleTaskDragEnd(t, project.id, e)}
-                      >
-                        <div className="task-title">{t.title}</div>
-                        <div className="task-meta">
-                          <span className={`status-tag status-${(t.status || 'pending').toLowerCase()}`}>{t.status}</span>
-                          {t.eta && <span className="eta-tag">ETA: {t.eta}</span>}
+                  {tasks.map((t, i) => {
+                    const taskPosition = getTaskRenderPosition(t.id, project.id, t);
+                    return (
+                      <React.Fragment key={t.id}>
+                        <div 
+                          className={`task-bone ${t.type}`} 
+                          style={{ 
+                            left: `${taskPosition}%`,
+                            transform: dragState.draggedTask === t.id ? 'scale(1.08)' : undefined,
+                            transition: dragState.draggedTask === t.id ? 'none' : 'all 0.3s ease',
+                            zIndex: dragState.draggedTask === t.id ? 20 : undefined
+                          }} 
+                          onClick={(e) => handleTaskClick(t.id, e)}
+                          onDoubleClick={(e) => handleTaskClick(t.id, e)}
+                          onMouseDown={(e) => handleMouseDown(e, t, project.id)}
+                        >
+                          {/* 连接线现在在卡片内部 */}
+                          <div className={`bone-connector ${t.type}`} />
+                          
+                          <div className="task-title">{t.title}</div>
+                          <div className="task-meta">
+                            <span className={`status-tag status-${(t.status || 'pending').toLowerCase()}`}>{t.status}</span>
+                            {t.eta && <span className="eta-tag">ETA: {t.eta}</span>}
+                          </div>
+                          {t.platforms && (
+                            <div className="platforms">
+                              {Object.entries(t.platforms).map(([name, p]) => (
+                                <div key={name} className={`platform-dot ${(p?.status || 'pending').toLowerCase()}`} title={`${name.toUpperCase()}: ${p?.status}${p?.assignee ? ' - ' + p.assignee : ''}${p?.jira ? ' (' + p.jira + ')' : ''}`} />
+                              ))}
+                            </div>
+                          )}
+                          <div className="drag-indicator">⋮⋮</div>
                         </div>
-                        {t.platforms && (
-                          <div className="platforms">
-                            {Object.entries(t.platforms).map(([name, p]) => (
-                              <div key={name} className={`platform-dot ${(p?.status || 'pending').toLowerCase()}`} title={`${name.toUpperCase()}: ${p?.status}${p?.assignee ? ' - ' + p.assignee : ''}${p?.jira ? ' (' + p.jira + ')' : ''}`} />
-            ))}
-          </div>
-                        )}
-                        <div className="drag-indicator">⋮⋮</div>
-                      </div>
-                    </React.Fragment>
-            ))}
+                      </React.Fragment>
+                    );
+                  })}
           </div>
               </div>
             );
@@ -698,6 +1160,94 @@ const ProjectDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* ETA编辑弹窗 */}
+      {etaEditModal && (
+        <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) handleCancelETA(); }}>
+          <div className="zoom-content" style={{ width: 500 }}>
+            <div className="zoom-header">
+              <h2 className="zoom-title">
+                {etaEditModal.conflictType === 'missing_eta' ? '设置任务ETA' : '更新任务ETA'}
+              </h2>
+              <button className="close-btn" onClick={handleCancelETA}>×</button>
+            </div>
+            <div className="zoom-body">
+              <div className="detail-section">
+                <p style={{ color: 'var(--warning)', marginBottom: 16 }}>
+                  {etaEditModal.message}
+                </p>
+                <div className="info-item">
+                  <span className="info-label">预计完成时间 (ETA)</span>
+                  <input 
+                    className="edit-input" 
+                    type="date" 
+                    defaultValue={(() => {
+                      const task = projects
+                        .find(p => p.id === etaEditModal.projectId)
+                        ?.tasks.find(t => t.id === etaEditModal.taskId);
+                      return task?.eta || '';
+                    })()} 
+                    onChange={e => {
+                      const newETA = e.target.value;
+                      if (newETA) {
+                        handleSaveETA(newETA);
+                      }
+                    }}
+                    autoFocus
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                  <button 
+                    className="cancel-btn" 
+                    onClick={handleCancelETA}
+                  >
+                    取消并恢复位置
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 里程碑编辑弹窗 */}
+      {milestoneEditModal && (
+        <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) setMilestoneEditModal(null); }}>
+          <div className="zoom-content" style={{ width: 400 }}>
+            <div className="zoom-header">
+              <h2 className="zoom-title">编辑里程碑时间</h2>
+              <button className="close-btn" onClick={() => setMilestoneEditModal(null)}>×</button>
+            </div>
+            <div className="zoom-body">
+              <div className="detail-section">
+                <div className="info-item">
+                  <span className="info-label">里程碑日期</span>
+                  <input 
+                    className="edit-input" 
+                    type="date" 
+                    defaultValue={milestoneEditModal.currentDate}
+                    onChange={e => {
+                      const newDate = e.target.value;
+                      if (newDate) {
+                        handleSaveMilestone(newDate);
+                      }
+                    }}
+                    autoFocus
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                  <button 
+                    className="cancel-btn" 
+                    onClick={() => setMilestoneEditModal(null)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
         :root {
           --bg: #f8fafc;
@@ -757,15 +1307,104 @@ const ProjectDashboard: React.FC = () => {
         .milestone-label { position: absolute; top: -35px; left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
         .milestone-date { position: absolute; bottom: -35px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
-        .bone-connector { position: absolute; background: currentColor; z-index: 1; width: 2px; height: 60px; color: var(--epic-color); top: 80px; }
-        .bone-connector.dep { color: var(--dep-color); }
-        .bone-connector.design { color: var(--design-color); height: 60px; top: 80px; }
+        /* 连接线现在在task-bone内部 */
+        .bone-connector { 
+          position: absolute; 
+          background: currentColor; 
+          z-index: 1; 
+          pointer-events: none;
+        }
+        .bone-connector.dep { 
+          color: var(--dep-color);
+          width: 105px;
+          height: 2px;
+          bottom: -45px; 
+          right: -27px;
+          transform: rotate(75deg);
+          transform-origin: right center;
+        }
+        .bone-connector.task { 
+          color: var(--epic-color);
+          width: 112px;
+          height: 2px;
+          top: -40px; 
+          right: -30px;
+          transform: rotate(-75deg);
+          transform-origin: right center;
+        }
+        .bone-connector.design { 
+          color: var(--design-color);
+          width: 105px;
+          height: 2px;
+          bottom: -45px; 
+          right: -27px;
+          transform: rotate(75deg);
+          transform-origin: right center;
+        }
 
-        .task-bone { position: absolute; background: var(--card); border: 2px solid; border-radius: 12px; padding: 12px 16px; min-width: 180px; cursor: move; transition: all 0.3s ease; box-shadow: var(--shadow); z-index: 5; }
-        .task-bone.dep { border-color: var(--dep-color); top: 20px; }
-        .task-bone.task { border-color: var(--epic-color); bottom: 20px; }
-        .task-bone.design { border-color: var(--design-color); top: 20px; left: 60px; }
-        .task-bone:hover { transform: scale(1.05); box-shadow: var(--shadow-lg); z-index: 15; }
+        .task-bone { 
+          position: absolute; 
+          background: var(--card); 
+          border: 2px solid; 
+          border-radius: 12px; 
+          padding: 12px 16px; 
+          min-width: 180px; 
+          cursor: grab; 
+          transition: transform 0.2s ease, box-shadow 0.2s ease; 
+          box-shadow: var(--shadow); 
+          z-index: 5; 
+          user-select: none;
+        }
+        .task-bone.dep { border-color: var(--dep-color); top: 10px; }
+        .task-bone.task { border-color: var(--epic-color); bottom: 2px; }
+        .task-bone.design { border-color: var(--design-color); top: 10px; }
+        .task-bone:hover { 
+          transform: scale(1.05); 
+          box-shadow: var(--shadow-lg); 
+          z-index: 15; 
+        }
+        
+        /* 拖拽样式 */
+        .task-bone.dragging {
+          cursor: grabbing;
+          transform: scale(1.08);
+          box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15), 0 5px 15px rgba(0, 0, 0, 0.1);
+          z-index: 20;
+          transition: none;
+          filter: brightness(1.05);
+        }
+        
+        /* 弹窗激活时降低拖拽卡片的z-index */
+        body.modal-open .task-bone {
+          z-index: 1 !important;
+        }
+        
+        body.modal-open .task-bone.dragging {
+          z-index: 2 !important;
+        }
+        
+        /* 悬停时的渐变背景效果 */
+        .task-bone::before {
+          content: '';
+          position: absolute;
+          top: -4px;
+          left: -4px;
+          right: -4px;
+          bottom: -4px;
+          background: linear-gradient(135deg, var(--primary), var(--success), var(--warning));
+          border-radius: 16px;
+          opacity: 0;
+          z-index: -1;
+          transition: opacity 0.3s ease;
+        }
+        
+        .task-bone:hover::before {
+          opacity: 0.1;
+        }
+        
+        .task-bone.dragging::before {
+          opacity: 0.2;
+        }
         .task-title { font-size: 14px; font-weight: 600; margin: 0 0 6px; color: var(--text); }
         .task-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .status-tag { padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; color: white; text-transform: lowercase; }
