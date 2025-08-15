@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实体记忆查询系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+            color: #ffffff;
+            overflow-x: hidden;
+            min-height: 100vh;
+        }
+
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* 左侧导航 */
+        .sidebar {
+            width: 280px;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(148, 163, 184, 0.1);
+            padding: 2rem 0;
+            transition: all 0.3s ease;
+        }
+
+        .sidebar-header {
+            padding: 0 2rem 2rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .entity-types {
+            padding: 1.5rem 0;
+        }
+
+        .entity-type {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 2rem;
+            margin: 0.25rem 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
+        }
+
+        .entity-type:hover {
+            background: rgba(59, 130, 246, 0.1);
+            border-left-color: #60a5fa;
+        }
+
+        .entity-type.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-left-color: #60a5fa;
+        }
+
+        .entity-icon {
+            width: 1.5rem;
+            height: 1.5rem;
+            margin-right: 0.75rem;
+            font-size: 1.2rem;
+        }
+
+        .entity-name {
+            font-weight: 500;
+        }
+
+        .entity-count {
+            margin-left: auto;
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        /* 主内容区 */
+        .main-content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        /* 顶部搜索栏 */
+        .search-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .search-box {
+            flex: 1;
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 0.75rem 1rem 0.75rem 3rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 0.75rem;
+            color: #ffffff;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.1);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #64748b;
+        }
+
+        .filter-btn {
+            padding: 0.75rem 1.5rem;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.75rem;
+            color: #60a5fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .filter-btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        /* 首页概览 */
+        .overview-section {
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .greeting-card {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .greeting-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .greeting-content {
+            color: #cbd5e1;
+            line-height: 1.6;
+        }
+
+        .quick-summary {
+            list-style: none;
+            margin: 1rem 0;
+        }
+
+        .quick-summary li {
+            padding: 0.5rem 0;
+            border-left: 3px solid #60a5fa;
+            padding-left: 1rem;
+            margin: 0.5rem 0;
+        }
+
+        /* 内容网格 */
+        .content-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .content-card {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .content-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-badge {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .card-content {
+            color: #cbd5e1;
+            line-height: 1.5;
+            margin-bottom: 1rem;
+        }
+
+        .info-list {
+            list-style: none;
+        }
+
+        .info-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .info-item:hover {
+            background: rgba(59, 130, 246, 0.05);
+            border-radius: 0.5rem;
+            padding-left: 0.5rem;
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-time {
+            color: #64748b;
+            font-size: 0.875rem;
+            margin-left: auto;
+        }
+
+        .view-more-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #60a5fa;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .view-more-btn:hover {
+            color: #93c5fd;
+        }
+
+        /* 时间轴视图 */
+        .timeline-view {
+            display: none;
+        }
+
+        .timeline-view.active {
+            display: block;
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .timeline-item {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: 1.25rem;
+            top: 3rem;
+            width: 2px;
+            height: calc(100% - 2rem);
+            background: linear-gradient(to bottom, #60a5fa, transparent);
+        }
+
+        .timeline-dot {
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            color: white;
+            flex-shrink: 0;
+            z-index: 1;
+        }
+
+        .timeline-content {
+            flex: 1;
+        }
+
+        .timeline-time {
+            color: #64748b;
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        /* 实体详情视图 */
+        .entity-detail {
+            display: none;
+        }
+
+        .entity-detail.active {
+            display: block;
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .entity-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .entity-avatar {
+            width: 3rem;
+            height: 3rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+
+        .entity-info h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .entity-meta {
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 100%;
+                position: fixed;
+                top: 0;
+                left: -100%;
+                z-index: 1000;
+                transition: left 0.3s ease;
+            }
+
+            .sidebar.active {
+                left: 0;
+            }
+
+            .main-content {
+                padding: 1rem;
+            }
+
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 动画 */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in-up {
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        /* 加载动画 */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+
+        .loading::after {
+            content: '';
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid rgba(96, 165, 250, 0.3);
+            border-top: 2px solid #60a5fa;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* 滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.3);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(59, 130, 246, 0.3);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(59, 130, 246, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 左侧导航 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">🧠 记忆查询系统</div>
+            </div>
+            
+            <div class="entity-types">
+                <div class="entity-type active" data-type="overview">
+                    <div class="entity-icon">🏠</div>
+                    <div class="entity-name">首页概览</div>
+                </div>
+                <div class="entity-type" data-type="timeline">
+                    <div class="entity-icon">⏰</div>
+                    <div class="entity-name">时间轴</div>
+                </div>
+                <hr style="margin: 1rem 0; border: none; border-top: 1px solid rgba(148, 163, 184, 0.1);">
+                <div class="entity-type" data-type="project">
+                    <div class="entity-icon">🚀</div>
+                    <div class="entity-name">项目</div>
+                    <div class="entity-count">12</div>
+                </div>
+                <div class="entity-type" data-type="topic">
+                    <div class="entity-icon">💡</div>
+                    <div class="entity-name">主题</div>
+                    <div class="entity-count">28</div>
+                </div>
+                <div class="entity-type" data-type="people">
+                    <div class="entity-icon">👥</div>
+                    <div class="entity-name">人物</div>
+                    <div class="entity-count">45</div>
+                </div>
+                <div class="entity-type" data-type="organization">
+                    <div class="entity-icon">🏢</div>
+                    <div class="entity-name">组织</div>
+                    <div class="entity-count">8</div>
+                </div>
+                <div class="entity-type" data-type="document">
+                    <div class="entity-icon">📄</div>
+                    <div class="entity-name">文档</div>
+                    <div class="entity-count">156</div>
+                </div>
+                <div class="entity-type" data-type="resource">
+                    <div class="entity-icon">📚</div>
+                    <div class="entity-name">资源</div>
+                    <div class="entity-count">89</div>
+                </div>
+                <div class="entity-type" data-type="tool">
+                    <div class="entity-icon">🔧</div>
+                    <div class="entity-name">工具</div>
+                    <div class="entity-count">23</div>
+                </div>
+                <div class="entity-type" data-type="event">
+                    <div class="entity-icon">📅</div>
+                    <div class="entity-name">事件</div>
+                    <div class="entity-count">67</div>
+                </div>
+                <div class="entity-type" data-type="location">
+                    <div class="entity-icon">📍</div>
+                    <div class="entity-name">地点</div>
+                    <div class="entity-count">15</div>
+                </div>
+                <div class="entity-type" data-type="idea">
+                    <div class="entity-icon">✨</div>
+                    <div class="entity-name">想法</div>
+                    <div class="entity-count">34</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- 搜索头部 -->
+            <div class="search-header">
+                <div class="search-box">
+                    <div class="search-icon">🔍</div>
+                    <input type="text" class="search-input" placeholder="搜索任何内容、实体或关键词...">
+                </div>
+                <div class="filter-btn">📊 过滤器</div>
+                <div class="filter-btn">⚙️ 设置</div>
+            </div>
+
+            <!-- 首页概览 -->
+            <div class="overview-section" id="overview">
+                <div class="greeting-card">
+                    <div class="greeting-title">
+                        <span>🌅</span>
+                        <span>早上好！今天的重点信息</span>
+                    </div>
+                    <div class="greeting-content">
+                        <p>你今天的主要项目进展如下：</p>
+                        <ul class="quick-summary">
+                            <li>🚀 Personal-AI 项目已进入测试阶段，Jira 看板有 3 个新任务</li>
+                            <li>💬 "AI CoP 讨论" 主题中新增了 5 条重要对话</li>
+                            <li>📚 你收藏的《被讨厌的勇气》读书笔记今天值得复习</li>
+                            <li>🔧 Figma 工具使用技巧文档被团队成员更新了</li>
+                        </ul>
+                        <p>我帮你整理了今天你可能想先看的内容 👇</p>
+                    </div>
+                </div>
+
+                <div class="content-grid">
+                    <!-- 今日重点项目 -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>🚀</span>
+                                <span>今日重点项目</span>
+                            </div>
+                            <div class="card-badge">3 个活跃</div>
+                        </div>
+                        <div class="card-content">
+                            最近活跃的项目和相关信息
+                        </div>
+                        <ul class="info-list">
+                            <li class="info-item">
+                                <span>🔥</span>
+                                <span>Personal-AI - Chrome 扩展开发</span>
+                                <span class="info-time">2 小时前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>📊</span>
+                                <span>Data Pipeline - 性能优化</span>
+                                <span class="info-time">5 小时前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>🎨</span>
+                                <span>Design System - 组件库更新</span>
+                                <span class="info-time">1 天前</span>
+                            </li>
+                        </ul>
+                        <div class="view-more-btn">
+                            <span>查看所有项目</span>
+                            <span>→</span>
+                        </div>
+                    </div>
+
+                    <!-- 热门主题讨论 -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>💡</span>
+                                <span>热门主题讨论</span>
+                            </div>
+                            <div class="card-badge">5 个活跃</div>
+                        </div>
+                        <div class="card-content">
+                            最近讨论频繁的话题和观点
+                        </div>
+                        <ul class="info-list">
+                            <li class="info-item">
+                                <span>🤖</span>
+                                <span>AI 工作流自动化实践</span>
+                                <span class="info-time">30 分钟前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>⚡</span>
+                                <span>前端性能优化策略</span>
+                                <span class="info-time">2 小时前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>🎯</span>
+                                <span>产品设计思维方法</span>
+                                <span class="info-time">4 小时前</span>
+                            </li>
+                        </ul>
+                        <div class="view-more-btn">
+                            <span>查看所有主题</span>
+                            <span>→</span>
+                        </div>
+                    </div>
+
+                    <!-- 重要联系人动态 -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>👥</span>
+                                <span>重要联系人动态</span>
+                            </div>
+                            <div class="card-badge">新消息</div>
+                        </div>
+                        <div class="card-content">
+                            来自同事和合作伙伴的重要更新
+                        </div>
+                        <ul class="info-list">
+                            <li class="info-item">
+                                <span>👤</span>
+                                <span>张三 - 代码审查反馈</span>
+                                <span class="info-time">1 小时前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>👤</span>
+                                <span>李四 - 设计稿更新通知</span>
+                                <span class="info-time">3 小时前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>👤</span>
+                                <span>王五 - 会议纪要分享</span>
+                                <span class="info-time">6 小时前</span>
+                            </li>
+                        </ul>
+                        <div class="view-more-btn">
+                            <span>查看所有联系人</span>
+                            <span>→</span>
+                        </div>
+                    </div>
+
+                    <!-- AI 推荐内容 -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>🎯</span>
+                                <span>AI 推荐内容</span>
+                            </div>
+                            <div class="card-badge">智能推荐</div>
+                        </div>
+                        <div class="card-content">
+                            基于你的兴趣和工作习惯推荐的内容
+                        </div>
+                        <ul class="info-list">
+                            <li class="info-item">
+                                <span>📖</span>
+                                <span>《Clean Architecture》读书笔记复习</span>
+                                <span class="info-time">推荐</span>
+                            </li>
+                            <li class="info-item">
+                                <span>🔧</span>
+                                <span>Webpack 5 迁移指南</span>
+                                <span class="info-time">推荐</span>
+                            </li>
+                            <li class="info-item">
+                                <span>💡</span>
+                                <span>React 18 新特性总结</span>
+                                <span class="info-time">推荐</span>
+                            </li>
+                        </ul>
+                        <div class="view-more-btn">
+                            <span>查看更多推荐</span>
+                            <span>→</span>
+                        </div>
+                    </div>
+
+                    <!-- 今日提醒事项 -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>⏰</span>
+                                <span>今日提醒事项</span>
+                            </div>
+                            <div class="card-badge">3 项待办</div>
+                        </div>
+                        <div class="card-content">
+                            来自日历、Jira 和 AI 生成的待办事项
+                        </div>
+                        <ul class="info-list">
+                            <li class="info-item">
+                                <span>🎯</span>
+                                <span>完成 Personal-AI 的单元测试</span>
+                                <span class="info-time">今天</span>
+                            </li>
+                            <li class="info-item">
+                                <span>📞</span>
+                                <span>与产品团队的同步会议</span>
+                                <span class="info-time">14:00</span>
+                            </li>
+                            <li class="info-item">
+                                <span>📝</span>
+                                <span>更新项目文档</span>
+                                <span class="info-time">明天</span>
+                            </li>
+                        </ul>
+                        <div class="view-more-btn">
+                            <span>查看完整日程</span>
+                            <span>→</span>
+                        </div>
+                    </div>
+
+                    <!-- 最近浏览网站 -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>🌐</span>
+                                <span>最近浏览记录</span>
+                            </div>
+                            <div class="card-badge">技术文档</div>
+                        </div>
+                        <div class="card-content">
+                            你最近查看的技术文档和学习资源
+                        </div>
+                        <ul class="info-list">
+                            <li class="info-item">
+                                <span>📘</span>
+                                <span>React Query 官方文档</span>
+                                <span class="info-time">2 小时前</span>
+                            </li>
+                            <li class="info-item">
+                                <span>🎨</span>
+                                <span>Figma API 开发指南</span>
+                                <span class="info-time">昨天</span>
+                            </li>
+                            <li class="info-item">
+                                <span>⚡</span>
+                                <span>Vite 构建优化技巧</span>
+                                <span class="info-time">2 天前</span>
+                            </li>
+                        </ul>
+                        <div class="view-more-btn">
+                            <span>查看浏览历史</span>
+                            <span>→</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 时间轴视图 -->
+            <div class="timeline-view" id="timeline">
+                <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 600;">📅 今日时间轴</h2>
+                
+                <div class="timeline-item">
+                    <div class="timeline-dot">🌅</div>
+                    <div class="timeline-content">
+                        <div class="timeline-time">今天 08:30</div>
+                        <div class="content-card" style="margin: 0;">
+                            <div class="card-title">开始新的一天</div>
+                            <div class="card-content">查看了昨天的工作总结和今日计划</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-dot">💬</div>
+                    <div class="timeline-content">
+                        <div class="timeline-time">今天 09:15</div>
+                        <div class="content-card" style="margin: 0;">
+                            <div class="card-title">团队晨会讨论</div>
+                            <div class="card-content">讨论了 Personal-AI 项目的进展，张三提出了代码审查建议</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-dot">🔧</div>
+                    <div class="timeline-content">
+                        <div class="timeline-time">今天 10:45</div>
+                        <div class="content-card" style="margin: 0;">
+                            <div class="card-title">技术文档更新</div>
+                            <div class="card-content">更新了 React Query 集成文档，添加了错误处理最佳实践</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-dot">📊</div>
+                    <div class="timeline-content">
+                        <div class="timeline-time">今天 11:30</div>
+                        <div class="content-card" style="margin: 0;">
+                            <div class="card-title">Jira 任务更新</div>
+                            <div class="card-content">完成了 3 个 bug 修复，更新了任务状态到"待测试"</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-dot">🎯</div>
+                    <div class="timeline-content">
+                        <div class="timeline-time">今天 14:00 (即将开始)</div>
+                        <div class="content-card" style="margin: 0; opacity: 0.7;">
+                            <div class="card-title">产品同步会议</div>
+                            <div class="card-content">与产品团队讨论下一阶段的功能规划</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 实体详情视图 -->
+            <div class="entity-detail" id="entity-detail">
+                <div class="entity-header">
+                    <div class="entity-avatar">🚀</div>
+                    <div class="entity-info">
+                        <h2 id="entity-title">Personal-AI 项目</h2>
+                        <div class="entity-meta">Chrome 扩展 • 最后更新：2 小时前 • 活跃度：高</div>
+                    </div>
+                </div>
+
+                <div class="content-grid" id="entity-content">
+                    <!-- 动态内容将在这里加载 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 示例数据
+        const entityData = {
+            project: {
+                title: '🚀 项目',
+                items: [
+                    {
+                        name: 'Personal-AI',
+                        type: 'Chrome 扩展',
+                        status: '开发中',
+                        lastUpdate: '2 小时前',
+                        messages: ['团队讨论了新功能实现方案', '代码审查完成，发现3个需要优化的地方'],
+                        jiraItems: ['AI-123: 实现智能推荐算法', 'AI-124: 优化用户界面响应速度'],
+                        documents: ['技术架构文档', 'API 设计文档', '用户手册']
+                    },
+                    {
+                        name: 'Data Pipeline',
+                        type: '数据处理',
+                        status: '测试中',
+                        lastUpdate: '5 小时前',
+                        messages: ['性能测试结果超出预期', '准备部署到生产环境'],
+                        jiraItems: ['DP-456: 数据验证逻辑优化', 'DP-457: 监控告警配置'],
+                        documents: ['数据流程图', '性能测试报告']
+                    }
+                ]
+            },
+            topic: {
+                title: '💡 主题',
+                items: [
+                    {
+                        name: 'AI 工作流自动化',
+                        category: '技术',
+                        discussions: 12,
+                        lastUpdate: '30 分钟前',
+                        messages: ['分享了最新的 GPT-4 API 集成经验', '讨论了自动化测试的实现方案'],
+                        resources: ['《AI 自动化实践指南》', 'OpenAI API 文档'],
+                        relatedProjects: ['Personal-AI', 'Automation-Tools']
+                    },
+                    {
+                        name: '前端性能优化',
+                        category: '技术',
+                        discussions: 8,
+                        lastUpdate: '2 小时前',
+                        messages: ['分析了 React 18 的并发特性', 'Bundle 体积优化技巧分享'],
+                        resources: ['React 官方文档', 'Webpack 性能指南'],
+                        relatedProjects: ['Personal-AI', 'Web-Platform']
+                    }
+                ]
+            },
+            people: {
+                title: '👥 人物',
+                items: [
+                    {
+                        name: '张三',
+                        role: '前端工程师',
+                        team: '技术团队',
+                        lastContact: '1 小时前',
+                        recentMessages: ['代码审查反馈：建议优化组件性能', '分享了一个有用的 React Hook'],
+                        collaborations: ['Personal-AI', 'Design System'],
+                        expertise: ['React', 'TypeScript', '性能优化']
+                    },
+                    {
+                        name: '李四',
+                        role: 'UI/UX 设计师',
+                        team: '设计团队',
+                        lastContact: '3 小时前',
+                        recentMessages: ['更新了用户界面设计稿', '用户体验测试报告已完成'],
+                        collaborations: ['Personal-AI', 'Mobile App'],
+                        expertise: ['用户体验', 'Figma', '交互设计']
+                    }
+                ]
+            },
+            tool: {
+                title: '🔧 工具',
+                items: [
+                    {
+                        name: 'Figma',
+                        category: '设计工具',
+                        usageFrequency: '每日',
+                        lastUsed: '1 小时前',
+                        relatedNotes: ['设计系统组件库更新', '新的设计规范讨论'],
+                        tips: ['快捷键使用技巧', '组件管理最佳实践'],
+                        relatedProjects: ['Design System', 'Personal-AI']
+                    },
+                    {
+                        name: 'VS Code',
+                        category: '开发工具',
+                        usageFrequency: '每日',
+                        lastUsed: '刚刚',
+                        relatedNotes: ['新插件推荐列表', '自定义配置分享'],
+                        tips: ['调试技巧', '扩展推荐'],
+                        relatedProjects: ['Personal-AI', 'Data Pipeline']
+                    }
+                ]
+            }
+        };
+
+        // DOM 元素
+        const entityTypes = document.querySelectorAll('.entity-type');
+        const overviewSection = document.getElementById('overview');
+        const timelineView = document.getElementById('timeline');
+        const entityDetail = document.getElementById('entity-detail');
+        const entityTitle = document.getElementById('entity-title');
+        const entityContent = document.getElementById('entity-content');
+
+        // 事件监听
+        entityTypes.forEach(type => {
+            type.addEventListener('click', () => {
+                // 移除所有活跃状态
+                entityTypes.forEach(t => t.classList.remove('active'));
+                
+                // 添加当前活跃状态
+                type.classList.add('active');
+                
+                // 获取类型
+                const dataType = type.getAttribute('data-type');
+                
+                // 隐藏所有视图
+                overviewSection.style.display = 'none';
+                timelineView.classList.remove('active');
+                entityDetail.classList.remove('active');
+                
+                // 显示对应视图
+                if (dataType === 'overview') {
+                    overviewSection.style.display = 'block';
+                } else if (dataType === 'timeline') {
+                    timelineView.classList.add('active');
+                } else {
+                    showEntityDetail(dataType);
+                }
+            });
+        });
+
+        // 显示实体详情
+        function showEntityDetail(entityType) {
+            const data = entityData[entityType];
+            if (!data) {
+                // 显示加载状态
+                entityDetail.classList.add('active');
+                entityTitle.textContent = `${getEntityIcon(entityType)} ${getEntityName(entityType)}`;
+                entityContent.innerHTML = '<div class="loading">正在加载数据...</div>';
+                
+                // 模拟加载延迟
+                setTimeout(() => {
+                    entityContent.innerHTML = '<div class="content-card"><div class="card-content">暂无相关数据</div></div>';
+                }, 1000);
+                return;
+            }
+
+            entityDetail.classList.add('active');
+            entityTitle.textContent = data.title;
+            
+            // 生成内容
+            let contentHTML = '';
+            data.items.forEach(item => {
+                contentHTML += generateEntityCard(item, entityType);
+            });
+            
+            entityContent.innerHTML = contentHTML;
+        }
+
+        // 生成实体卡片
+        function generateEntityCard(item, entityType) {
+            let cardContent = '';
+            
+            switch(entityType) {
+                case 'project':
+                    cardContent = `
+                        <div class="content-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <span>🚀</span>
+                                    <span>${item.name}</span>
+                                </div>
+                                <div class="card-badge">${item.status}</div>
+                            </div>
+                            <div class="card-content">
+                                类型：${item.type} • 最后更新：${item.lastUpdate}
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">💬 相关讨论</h4>
+                                <ul class="info-list">
+                                    ${item.messages.map(msg => `<li class="info-item"><span>💭</span><span>${msg}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">📋 Jira 任务</h4>
+                                <ul class="info-list">
+                                    ${item.jiraItems.map(jira => `<li class="info-item"><span>🎯</span><span>${jira}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">📄 相关文档</h4>
+                                <ul class="info-list">
+                                    ${item.documents.map(doc => `<li class="info-item"><span>📋</span><span>${doc}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                    break;
+                    
+                case 'topic':
+                    cardContent = `
+                        <div class="content-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <span>💡</span>
+                                    <span>${item.name}</span>
+                                </div>
+                                <div class="card-badge">${item.discussions} 讨论</div>
+                            </div>
+                            <div class="card-content">
+                                分类：${item.category} • 最后更新：${item.lastUpdate}
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">💬 最新讨论</h4>
+                                <ul class="info-list">
+                                    ${item.messages.map(msg => `<li class="info-item"><span>💭</span><span>${msg}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">📚 相关资源</h4>
+                                <ul class="info-list">
+                                    ${item.resources.map(resource => `<li class="info-item"><span>📖</span><span>${resource}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">🔗 关联项目</h4>
+                                <ul class="info-list">
+                                    ${item.relatedProjects.map(project => `<li class="info-item"><span>🚀</span><span>${project}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                    break;
+                    
+                case 'people':
+                    cardContent = `
+                        <div class="content-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <span>👤</span>
+                                    <span>${item.name}</span>
+                                </div>
+                                <div class="card-badge">${item.role}</div>
+                            </div>
+                            <div class="card-content">
+                                团队：${item.team} • 最后联系：${item.lastContact}
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">💬 最近消息</h4>
+                                <ul class="info-list">
+                                    ${item.recentMessages.map(msg => `<li class="info-item"><span>💭</span><span>${msg}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">🤝 协作项目</h4>
+                                <ul class="info-list">
+                                    ${item.collaborations.map(collab => `<li class="info-item"><span>🚀</span><span>${collab}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">🎯 专业技能</h4>
+                                <ul class="info-list">
+                                    ${item.expertise.map(skill => `<li class="info-item"><span>⭐</span><span>${skill}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                    break;
+                    
+                case 'tool':
+                    cardContent = `
+                        <div class="content-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <span>🔧</span>
+                                    <span>${item.name}</span>
+                                </div>
+                                <div class="card-badge">${item.usageFrequency}</div>
+                            </div>
+                            <div class="card-content">
+                                分类：${item.category} • 最后使用：${item.lastUsed}
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">📝 相关笔记</h4>
+                                <ul class="info-list">
+                                    ${item.relatedNotes.map(note => `<li class="info-item"><span>📋</span><span>${note}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">💡 使用技巧</h4>
+                                <ul class="info-list">
+                                    ${item.tips.map(tip => `<li class="info-item"><span>✨</span><span>${tip}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div style="margin: 1rem 0;">
+                                <h4 style="color: #60a5fa; margin-bottom: 0.5rem;">🔗 相关项目</h4>
+                                <ul class="info-list">
+                                    ${item.relatedProjects.map(project => `<li class="info-item"><span>🚀</span><span>${project}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                    break;
+            }
+            
+            return cardContent;
+        }
+
+        // 获取实体图标
+        function getEntityIcon(type) {
+            const icons = {
+                project: '🚀',
+                topic: '💡',
+                people: '👥',
+                organization: '🏢',
+                document: '📄',
+                resource: '📚',
+                tool: '🔧',
+                event: '📅',
+                location: '📍',
+                idea: '✨'
+            };
+            return icons[type] || '📂';
+        }
+
+        // 获取实体名称
+        function getEntityName(type) {
+            const names = {
+                project: '项目',
+                topic: '主题',
+                people: '人物',
+                organization: '组织',
+                document: '文档',
+                resource: '资源',
+                tool: '工具',
+                event: '事件',
+                location: '地点',
+                idea: '想法'
+            };
+            return names[type] || '未知类型';
+        }
+
+        // 搜索功能
+        document.querySelector('.search-input').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            // 这里可以实现搜索逻辑
+            console.log('搜索:', searchTerm);
+        });
+
+        // 添加卡片点击事件
+        document.addEventListener('click', function(e) {
+            if (e.target.closest('.view-more-btn')) {
+                const card = e.target.closest('.content-card');
+                const title = card.querySelector('.card-title').textContent;
+                console.log('查看更多:', title);
+                // 这里可以实现查看更多的逻辑
+            }
+            
+            if (e.target.closest('.info-item')) {
+                const item = e.target.closest('.info-item');
+                const text = item.textContent;
+                console.log('点击项目:', text);
+                // 这里可以实现项目详情查看逻辑
+            }
+        });
+
+        // 初始化动画
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(() => {
+                document.querySelectorAll('.content-card').forEach((card, index) => {
+                    setTimeout(() => {
+                        card.style.opacity = '0';
+                        card.style.transform = 'translateY(20px)';
+                        card.style.transition = 'all 0.6s ease-out';
+                        
+                        setTimeout(() => {
+                            card.style.opacity = '1';
+                            card.style.transform = 'translateY(0)';
+                        }, 50);
+                    }, index * 100);
+                });
+            }, 100);
+        });
+    </script>
+</body>
+</html>
