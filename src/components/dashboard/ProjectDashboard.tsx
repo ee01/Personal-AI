@@ -598,6 +598,19 @@ const ProjectDashboard: React.FC = () => {
     };
   }, [projects]);
 
+  // 计算任务应该在上方还是下方（动态交替排列）
+  const getTaskVerticalPosition = (taskId: string, projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return 'top';
+    
+    // 按照ETA排序，如果没有ETA则按ID排序
+    const sortedTasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+    const taskIndex = sortedTasks.findIndex(t => t.id === taskId);
+    
+    // 奇数索引在上方，偶数索引在下方（或者反过来）
+    return taskIndex % 2 === 0 ? 'top' : 'bottom';
+  };
+
   // 吸附功能 - 任务锚点拖拽时可以吸附到里程碑
   const getSnapPosition = (currentAnchorPercent: number, projectId: string) => {
     const project = projects.find(p => p.id === projectId);
@@ -685,10 +698,11 @@ const ProjectDashboard: React.FC = () => {
 
                   {tasks.map((t, i) => {
                     const taskPosition = getTaskPosition(t.id, project.id);
+                    const verticalPosition = getTaskVerticalPosition(t.id, project.id);
                     return (
                       <React.Fragment key={t.id}>
                         <div 
-                          className={`task-bone ${t.type}`} 
+                          className={`task-bone ${t.type} ${verticalPosition}`} 
                           data-task-id={t.id}
                           style={{ 
                             left: `${taskPosition}%`,
@@ -700,8 +714,8 @@ const ProjectDashboard: React.FC = () => {
                           onDoubleClick={(e) => handleTaskClick(t.id, e)}
                           onMouseDown={(e) => handleMouseDown(e, t, project.id)}
                         >
-                          {/* 连接线现在在卡片内部 */}
-                          <div className={`bone-connector ${t.type}`} />
+                          {/* 连接线现在在卡片内部，支持动态位置 */}
+                          <div className={`bone-connector ${t.type} ${verticalPosition}`} />
                           
                           <div className="task-title">{t.title}</div>
                           <div className="task-meta">
@@ -1060,39 +1074,49 @@ const ProjectDashboard: React.FC = () => {
         .milestone-label { position: absolute; top: -35px; left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
         .milestone-date { position: absolute; bottom: -35px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
-        /* 连接线现在在task-bone内部 */
+        /* 连接线现在在task-bone内部，支持动态上下位置 */
         .bone-connector { 
           position: absolute; 
           background: currentColor; 
           z-index: 1; 
           pointer-events: none;
         }
-        .bone-connector.dep { 
-          color: var(--dep-color);
-          width: 105px;
-          height: 2px;
-          bottom: -45px; 
-          right: -27px;
-          transform: rotate(75deg);
-          transform-origin: right center;
-        }
-        .bone-connector.task { 
+        
+        /* 上方任务的连接线 */
+        .task-bone.top .bone-connector { 
           color: var(--epic-color);
-          width: 112px;
-          height: 2px;
-          top: -40px; 
-          right: -30px;
-          transform: rotate(-75deg);
-          transform-origin: right center;
-        }
-        .bone-connector.design { 
-          color: var(--design-color);
           width: 105px;
           height: 2px;
-          bottom: -45px; 
-          right: -27px;
-          transform: rotate(75deg);
+          top: 4px; 
+          right: 0;
+          transform: rotate(255deg);
           transform-origin: right center;
+        }
+        .task-bone.top .bone-connector.dep { 
+          color: var(--dep-color);
+        }
+        .task-bone.top .bone-connector.design { 
+          color: var(--design-color);
+        }
+        .task-bone.top .bone-connector.design { 
+          color: var(--design-color);
+        }
+        
+        /* 下方任务的连接线 */
+        .task-bone.bottom .bone-connector {
+          color: var(--epic-color);
+          width: 114px;
+          height: 2px;
+          bottom: 4px; 
+          right: 0;
+          transform: rotate(-255deg);
+          transform-origin: right center;
+        }
+        .task-bone.bottom .bone-connector.dep { 
+          color: var(--dep-color);
+        }
+        .task-bone.bottom .bone-connector.design { 
+          color: var(--design-color);
         }
 
         .task-bone { 
@@ -1108,9 +1132,15 @@ const ProjectDashboard: React.FC = () => {
           z-index: 5; 
           user-select: none;
         }
-        .task-bone.dep { border-color: var(--dep-color); top: 10px; }
-        .task-bone.task { border-color: var(--epic-color); bottom: 2px; }
-        .task-bone.design { border-color: var(--design-color); top: 10px; }
+        
+        /* 类型颜色样式 */
+        .task-bone.dep { border-color: var(--dep-color); }
+        .task-bone.task { border-color: var(--epic-color); }
+        .task-bone.design { border-color: var(--design-color); }
+        
+        /* 动态位置样式 */
+        .task-bone.top { top: 10px; }
+        .task-bone.bottom { bottom: 2px; }
         .task-bone:hover { 
           transform: scale(1.05); 
           box-shadow: var(--shadow-lg); 
