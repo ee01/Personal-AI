@@ -8,6 +8,8 @@ import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
 import { getMessageProcessingEnhancer, EnhancedMessageResult } from './storage/MessageProcessingEnhancer';
+import UnifiedStorageManager from './storage/UnifiedStorageManager';
+import { Entity } from './storage/EntitySimilarityManager';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
@@ -204,42 +206,65 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					}).catch(console.error);
 				}
 				
-				// 处理 shouldStore 标志
+				// 处理 shouldStore 标志 - 使用新的统一存储系统
 				if (result.shouldStore) {
 					try {
 						const originalMessage = result.messageContext || {};
 						const messageId = uuidv4();
 						
-						// 提取实体信息，可以直接使用 result.enrichedData 中的实体信息
-						const entities = result.enrichedData?.entities || {};
-						const relationships = result.enrichedData?.relationships || [];
-						const actions = result.enrichedData?.actions || [];
+						// 构建消息元数据
+						const messageMetadata = {
+							source: originalMessage.sender || 'unknown',
+							timestamp: Date.now(),
+							matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
+							summary: result.summary || '',
+							teamName: originalMessage.groupName || '',
+							teamId: originalMessage.groupId || '',
+							entities: result.enrichedData?.entities || {},
+							metadata: {
+								sentiment: result.enrichedData?.sentiment || 'neutral',
+								priority: result.notificationPriority || 'low',
+								category: result.enrichedData?.category || [],
+								tags: result.enrichedData?.tags || []
+							},
+							relationships: result.enrichedData?.relationships || [],
+							actions: result.enrichedData?.actions || [],
+							reply_advice: result.replyAdvice || ''
+						};
+
+						// 提取实体信息用于相似性检查
+						const extractedEntities = extractEntitiesFromMetadata(messageMetadata);
+
+						// 使用统一存储管理器存储
+						try {
+							const storageManager = await getUnifiedStorageManager();
+							const storageResult = await storageManager.storeContent({
+								type: 'message',
+								id: messageId,
+								content: originalMessage.messageContent || '',
+								metadata: messageMetadata,
+								entities: extractedEntities
+							});
+
+							console.log(`✅ 消息存储完成 [新系统]: ${messageId}`, {
+								...storageResult,
+								entityTypes: extractedEntities.map(e => e.type),
+								entityNames: extractedEntities.map(e => e.name)
+							});
+
+						} catch (unifiedError) {
+							console.error('统一存储系统失败，回退到原有方式:', unifiedError);
+							
+							// 回退到原有的存储方式
+							await storeMessage(
+								messageId,
+								originalMessage.messageContent || '',
+								messageMetadata
+							);
+							
+							console.log(`📦 消息存储完成 [回退系统]: ${messageId}`);
+						}
 						
-						// 存储消息
-						await storeMessage(
-							messageId,
-							originalMessage.messageContent || '',
-							{
-								source: originalMessage.sender || 'unknown',
-								timestamp: Date.now(),
-								matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
-								summary: result.summary || '',
-								teamName: originalMessage.groupName || '',
-								teamId: originalMessage.groupId || '',
-								entities: entities,
-								metadata: {
-									sentiment: result.enrichedData?.sentiment || 'neutral',
-									priority: result.notificationPriority || 'low',
-									category: result.enrichedData?.category || [],
-									tags: result.enrichedData?.tags || []
-								},
-								relationships: relationships,
-								actions: actions,
-								reply_advice: result.replyAdvice || ''
-							}
-						);
-						
-						console.log(`已存储消息: ${messageId}`);
 					} catch (error) {
 						console.error('存储消息失败:', error);
 					}
@@ -477,70 +502,76 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
 
-				// 增强逻辑：使用新的混合存储系统
+				// 增强逻辑：使用新的统一存储系统
 				const messageId = uuidv4();
 				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
 				
-				// 使用增强的消息处理器，同时存储到向量数据库和图数据库
+				// 构建消息元数据
+				const messageMetadata = {
+					source: json.sender || 'unknown',
+					timestamp: Date.now(),
+					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+					summary: json.summary || '',
+					teamName: json.team_name,
+					teamId: json.team_id,
+					entities: extractedEntities.entities,
+					metadata: {
+						sentiment: extractedEntities.metadata.sentiment,
+						priority: extractedEntities.metadata.priority,
+						category: extractedEntities.metadata.category,
+						tags: extractedEntities.metadata.tags
+					},
+					relationships: extractedEntities.relationships,
+					actions: extractedEntities.actions,
+					reply_advice: json.reply_advice
+				};
+
+				// 提取实体信息用于相似性检查
+				const entitiesForSimilarity = extractEntitiesFromMetadata(messageMetadata);
+
+				// 优先使用新的统一存储系统
 				try {
-					const enhancer = await getMessageProcessingEnhancer();
-					const enhancedResult: EnhancedMessageResult = await enhancer.processMessage({
-						messageId,
+					const storageManager = await getUnifiedStorageManager();
+					const storageResult = await storageManager.storeContent({
+						type: 'message',
+						id: messageId,
 						content: json.message_content,
-						metadata: {
-							source: json.sender || 'unknown',
-							timestamp: Date.now(),
-							matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-							summary: json.summary || '',
-							teamName: json.team_name,
-							teamId: json.team_id,
-							entities: extractedEntities.entities,
-							metadata: {
-								sentiment: extractedEntities.metadata.sentiment,
-								priority: extractedEntities.metadata.priority,
-								category: extractedEntities.metadata.category,
-								tags: extractedEntities.metadata.tags
-							},
-							relationships: extractedEntities.relationships,
-							actions: extractedEntities.actions,
-							reply_advice: json.reply_advice
-						}
+						metadata: messageMetadata,
+						entities: entitiesForSimilarity
 					});
 
-					// 记录存储结果
-					console.log(`📊 消息存储统计 [${messageId.slice(0,8)}]:`, {
-						向量存储: enhancedResult.vectorStored ? '✅' : '❌',
-						图实体: enhancedResult.graphEntities,
-						图关系: enhancedResult.graphRelationships,
-						图存储类型: enhancedResult.graphStorageUsed,
-						处理时间: `${enhancedResult.processingTime}ms`
+					console.log(`✅ 消息存储完成 [统一系统]: ${messageId.slice(0,8)}`, {
+						...storageResult,
+						entityMerges: storageResult.mergeActions > 0 ? `${storageResult.mergeActions}个实体合并` : '无合并',
+						performance: `${storageResult.processingTime}ms`
 					});
 
-				} catch (enhancedError) {
-					console.error('增强存储失败，回退到原有方式:', enhancedError);
-					// 如果增强存储失败，回退到原有的storeMessage方式
-					await storeMessage(
-						messageId,
-						json.message_content,
-						{
-							source: json.sender || 'unknown',
-							timestamp: Date.now(),
-							matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-							summary: json.summary || '',
-							teamName: json.team_name,
-							teamId: json.team_id,
-							entities: extractedEntities.entities,
-							metadata: {
-								sentiment: extractedEntities.metadata.sentiment,
-								priority: extractedEntities.metadata.priority,
-								category: extractedEntities.metadata.category,
-								tags: extractedEntities.metadata.tags
-							},
-							relationships: extractedEntities.relationships,
-							actions: extractedEntities.actions,
-							reply_advice: json.reply_advice
-						}
-					);
+				} catch (unifiedError) {
+					console.error('统一存储系统失败，尝试增强存储处理器:', unifiedError);
+					
+					// 回退到增强的消息处理器
+					try {
+						const enhancer = await getMessageProcessingEnhancer();
+						const enhancedResult: EnhancedMessageResult = await enhancer.processMessage({
+							messageId,
+							content: json.message_content,
+							metadata: messageMetadata
+						});
+
+						console.log(`📊 消息存储统计 [增强系统]: ${messageId.slice(0,8)}`, {
+							向量存储: enhancedResult.vectorStored ? '✅' : '❌',
+							图实体: enhancedResult.graphEntities,
+							图关系: enhancedResult.graphRelationships,
+							处理时间: `${enhancedResult.processingTime}ms`
+						});
+
+					} catch (enhancedError) {
+						console.error('增强存储也失败，回退到基础存储:', enhancedError);
+						
+						// 最后回退到原有的storeMessage方式
+						await storeMessage(messageId, json.message_content, messageMetadata);
+						console.log(`📦 消息存储完成 [基础系统]: ${messageId.slice(0,8)}`);
+					}
 				}
 
 				// 如果审核通过，则推送 Glip 消息
@@ -573,4 +604,109 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 			details: `Failed to connect to ${envConfig.LLM_TYPE} service`
 		}
 	}
+}
+
+
+// 全局统一存储管理器实例
+let unifiedStorage: UnifiedStorageManager | null = null;
+
+// 获取或创建统一存储管理器
+async function getUnifiedStorageManager(): Promise<UnifiedStorageManager> {
+  if (!unifiedStorage) {
+    const envConfig = await getEnvConfig();
+    
+    unifiedStorage = new UnifiedStorageManager({
+      vectorStore: {
+        enabled: envConfig.ENABLE_CHROMA,
+        chromaUrl: envConfig.CHROMA_API_URL
+      },
+      knowledgeGraph: {
+        enabled: true, // 默认启用知识图谱
+        engine: 'chrome_storage'
+      },
+      memoryLifecycle: {
+        enabled: true, // 默认启用记忆生命周期管理
+        retentionDays: 90,
+        cleanupInterval: 6
+      }
+    });
+    
+    await unifiedStorage.initialize();
+  }
+  
+  return unifiedStorage;
+}
+
+// 将消息元数据转换为实体信息
+function extractEntitiesFromMetadata(metadata: any): Array<Omit<Entity, 'id' | 'created' | 'lastAccessed' | 'accessCount'>> {
+  const entities: Array<Omit<Entity, 'id' | 'created' | 'lastAccessed' | 'accessCount'>> = [];
+  
+  if (metadata.entities) {
+    // 提取人员实体
+    if (metadata.entities.people) {
+      for (const person of metadata.entities.people) {
+        entities.push({
+          type: 'Person',
+          name: person.name,
+          properties: {
+            role: person.role,
+            mentioned_context: person.mentioned_context,
+            source: 'message_analysis',
+            teamName: metadata.teamName || ''
+          },
+          importance: 0.7 // 默认重要性
+        });
+      }
+    }
+    
+    // 提取项目实体
+    if (metadata.entities.projects) {
+      for (const project of metadata.entities.projects) {
+        entities.push({
+          type: 'Project',
+          name: project.name,
+          properties: {
+            status: project.status,
+            related_people: project.related_people,
+            source: 'message_analysis',
+            teamName: metadata.teamName || ''
+          },
+          importance: 0.8 // 项目通常更重要
+        });
+      }
+    }
+    
+    // 提取话题实体
+    if (metadata.entities.topics) {
+      for (const topic of metadata.entities.topics) {
+        entities.push({
+          type: 'Topic',
+          name: topic.name,
+          properties: {
+            category: topic.category,
+            keywords: topic.keywords,
+            source: 'message_analysis',
+            teamName: metadata.teamName || ''
+          },
+          importance: 0.5 // 话题重要性较低
+        });
+      }
+    }
+    
+    // 提取组织实体
+    if (metadata.teamName && metadata.teamName !== 'SM AI') {
+      entities.push({
+        type: 'Organization',
+        name: metadata.teamName,
+        properties: {
+          teamId: metadata.teamId,
+          source: 'message_analysis',
+          type: 'team'
+        },
+        importance: 0.6
+      });
+    }
+  }
+  
+  return entities;
 }
