@@ -448,6 +448,621 @@
             }
         }
 
+        /* 主题详情视图 */
+        .topic-detail {
+            display: none;
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .topic-detail.active {
+            display: block;
+        }
+
+        .detail-header {
+            margin-bottom: 2rem;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.5rem;
+            padding: 0.5rem 1rem;
+            color: #60a5fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+
+        .back-btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        .topic-header {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 1rem;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .topic-avatar {
+            width: 4rem;
+            height: 4rem;
+            border-radius: 1rem;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            flex-shrink: 0;
+        }
+
+        .topic-info {
+            flex: 1;
+        }
+
+        .topic-info h2 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .topic-meta {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .meta-item {
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }
+
+        .topic-actions {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .action-btn {
+            padding: 0.5rem 1rem;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.5rem;
+            color: #60a5fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .action-btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        /* 选项卡样式 */
+        .tab-navigation {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+            padding-bottom: 1rem;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            padding: 0.75rem 1.5rem;
+            background: transparent;
+            border: none;
+            border-radius: 0.5rem;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            font-size: 0.875rem;
+        }
+
+        .tab-btn.active {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+
+        .tab-btn:hover:not(.active) {
+            background: rgba(59, 130, 246, 0.1);
+            color: #93c5fd;
+        }
+
+        /* 选项卡内容 */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeInUp 0.4s ease-out;
+        }
+
+        /* 概览页面 */
+        .overview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .summary-card {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 1rem;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 0.75rem;
+        }
+
+        .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #60a5fa;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            margin-top: 0.25rem;
+        }
+
+        .trend-chart {
+            margin-top: 1rem;
+        }
+
+        .trend-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin: 0.75rem 0;
+        }
+
+        .trend-date {
+            width: 4rem;
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+
+        .trend-bar {
+            flex: 1;
+            height: 0.5rem;
+            background: rgba(148, 163, 184, 0.2);
+            border-radius: 0.25rem;
+            overflow: hidden;
+        }
+
+        .trend-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #60a5fa, #a78bfa);
+            transition: width 0.5s ease;
+        }
+
+        .trend-value {
+            width: 3rem;
+            font-size: 0.75rem;
+            color: #60a5fa;
+            text-align: right;
+        }
+
+        /* 列表项样式 */
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+        }
+
+        .section-header h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .add-btn {
+            padding: 0.5rem 1rem;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            border-radius: 0.5rem;
+            color: #22c55e;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .add-btn:hover {
+            background: rgba(34, 197, 94, 0.2);
+        }
+
+        .items-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1rem;
+        }
+
+        .item-card {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .item-card:hover {
+            border-color: rgba(59, 130, 246, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+
+        .item-title {
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .item-actions {
+            display: flex;
+            gap: 0.25rem;
+        }
+
+        .item-action {
+            padding: 0.25rem;
+            background: transparent;
+            border: none;
+            border-radius: 0.25rem;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .item-action:hover {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+
+        .item-content {
+            color: #cbd5e1;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        /* 搜索控件 */
+        .search-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .filter-select {
+            padding: 0.5rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 0.5rem;
+            color: #ffffff;
+            min-width: 120px;
+        }
+
+        /* 聊天记录样式 */
+        .conversations-list {
+            margin-bottom: 2rem;
+        }
+
+        .conversation-item {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+
+        .conversation-item:hover {
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .conversation-item.expanded {
+            cursor: default;
+        }
+
+        .conversation-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+        }
+
+        .conversation-meta {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .sender-avatar {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+        }
+
+        .sender-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .sender-name {
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .group-name {
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+
+        .conversation-time {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+
+        .conversation-summary {
+            color: #cbd5e1;
+            line-height: 1.5;
+            margin-bottom: 0.5rem;
+        }
+
+        .context-indicator {
+            font-size: 0.75rem;
+            color: #60a5fa;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            transition: all 0.3s ease;
+            display: inline-block;
+        }
+
+        .context-indicator:hover {
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .context-indicator.expanded {
+            color: #93c5fd;
+        }
+
+        .context-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            margin-top: 0;
+        }
+
+        .context-content.expanded {
+            max-height: 500px;
+            margin-top: 1rem;
+        }
+
+        .context-divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.3), transparent);
+            margin: 0.75rem 0;
+        }
+
+        .context-item {
+            padding: 0.5rem 0.75rem;
+            margin: 0.25rem 0;
+            border-radius: 0.5rem;
+            background: rgba(148, 163, 184, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .context-item:hover {
+            background: rgba(148, 163, 184, 0.1);
+        }
+
+        .context-item.main {
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            position: relative;
+        }
+
+        .context-item.main::before {
+            content: '📌';
+            position: absolute;
+            right: 0.5rem;
+            top: 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .context-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.25rem;
+        }
+
+        .context-sender {
+            font-weight: 600;
+            font-size: 0.75rem;
+            color: #cbd5e1;
+        }
+
+        .context-time {
+            font-size: 0.65rem;
+            color: #94a3b8;
+        }
+
+        .context-message {
+            font-size: 0.8rem;
+            line-height: 1.4;
+            color: #e2e8f0;
+        }
+
+        .context-item.main .context-sender {
+            color: #60a5fa;
+        }
+
+        .context-item.main .context-message {
+            color: #ffffff;
+        }
+
+        /* 网页记录样式 */
+        .webpages-list {
+            margin-bottom: 2rem;
+        }
+
+        .webpage-item {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .webpage-item:hover {
+            border-color: rgba(59, 130, 246, 0.3);
+            transform: translateY(-1px);
+        }
+
+        .webpage-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .webpage-icon {
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 0.5rem;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            flex-shrink: 0;
+        }
+
+        .webpage-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .webpage-title {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .webpage-url {
+            font-size: 0.75rem;
+            color: #60a5fa;
+            margin-bottom: 0.5rem;
+            word-break: break-all;
+        }
+
+        .webpage-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+
+        .webpage-content {
+            color: #cbd5e1;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            margin-bottom: 0.75rem;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .webpage-tags {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .webpage-tag {
+            padding: 0.25rem 0.5rem;
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+        }
+
+        /* 分页样式 */
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+        }
+
+        .page-btn {
+            padding: 0.5rem 1rem;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.5rem;
+            color: #60a5fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .page-btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        .page-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .page-info {
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }
+
         /* 滚动条样式 */
         ::-webkit-scrollbar {
             width: 8px;
@@ -856,6 +1471,189 @@
                     <!-- 动态内容将在这里加载 -->
                 </div>
             </div>
+
+            <!-- 主题详情视图 -->
+            <div class="topic-detail" id="topic-detail">
+                <div class="detail-header">
+                    <button class="back-btn" id="back-btn">
+                        <span>←</span>
+                        <span>返回主题列表</span>
+                    </button>
+                    <div class="topic-header">
+                        <div class="topic-avatar">💡</div>
+                        <div class="topic-info">
+                            <h2 id="topic-detail-title">AI 工作流自动化</h2>
+                            <div class="topic-meta">
+                                <span class="meta-item">📈 12 条讨论</span>
+                                <span class="meta-item">🔗 5 个关联项目</span>
+                                <span class="meta-item">⏰ 最后更新：30 分钟前</span>
+                            </div>
+                        </div>
+                        <div class="topic-actions">
+                            <button class="action-btn">📝 编辑主题</button>
+                            <button class="action-btn">🔗 添加关联</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="topic-detail-content">
+                    <!-- 选项卡导航 -->
+                    <div class="tab-navigation">
+                        <button class="tab-btn active" data-tab="overview">📊 概览</button>
+                        <button class="tab-btn" data-tab="projects">🚀 相关项目</button>
+                        <button class="tab-btn" data-tab="resources">📚 相关资源</button>
+                        <button class="tab-btn" data-tab="tickets">🎯 相关Tickets</button>
+                        <button class="tab-btn" data-tab="conversations">💬 聊天记录</button>
+                        <button class="tab-btn" data-tab="webpages">🌐 网页记录</button>
+                    </div>
+
+                    <!-- 概览标签页 -->
+                    <div class="tab-content active" id="tab-overview">
+                        <div class="overview-grid">
+                            <div class="summary-card">
+                                <div class="card-header">
+                                    <div class="card-title">
+                                        <span>📈</span>
+                                        <span>主题统计</span>
+                                    </div>
+                                </div>
+                                <div class="stats-grid">
+                                    <div class="stat-item">
+                                        <div class="stat-number">12</div>
+                                        <div class="stat-label">讨论条数</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-number">5</div>
+                                        <div class="stat-label">相关项目</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-number">8</div>
+                                        <div class="stat-label">参与人员</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-number">15</div>
+                                        <div class="stat-label">相关资源</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="card-header">
+                                    <div class="card-title">
+                                        <span>🔥</span>
+                                        <span>热度趋势</span>
+                                    </div>
+                                </div>
+                                <div class="trend-chart">
+                                    <div class="trend-item">
+                                        <span class="trend-date">本周</span>
+                                        <div class="trend-bar">
+                                            <div class="trend-fill" style="width: 80%"></div>
+                                        </div>
+                                        <span class="trend-value">8 条</span>
+                                    </div>
+                                    <div class="trend-item">
+                                        <span class="trend-date">上周</span>
+                                        <div class="trend-bar">
+                                            <div class="trend-fill" style="width: 60%"></div>
+                                        </div>
+                                        <span class="trend-value">6 条</span>
+                                    </div>
+                                    <div class="trend-item">
+                                        <span class="trend-date">两周前</span>
+                                        <div class="trend-bar">
+                                            <div class="trend-fill" style="width: 40%"></div>
+                                        </div>
+                                        <span class="trend-value">4 条</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 相关项目标签页 -->
+                    <div class="tab-content" id="tab-projects">
+                        <div class="section-header">
+                            <h3>📂 相关项目</h3>
+                            <button class="add-btn" id="add-project-btn">+ 添加项目</button>
+                        </div>
+                        <div class="items-grid" id="projects-grid">
+                            <!-- 项目卡片将在这里加载 -->
+                        </div>
+                    </div>
+
+                    <!-- 相关资源标签页 -->
+                    <div class="tab-content" id="tab-resources">
+                        <div class="section-header">
+                            <h3>📚 相关资源</h3>
+                            <button class="add-btn" id="add-resource-btn">+ 添加资源</button>
+                        </div>
+                        <div class="items-grid" id="resources-grid">
+                            <!-- 资源卡片将在这里加载 -->
+                        </div>
+                    </div>
+
+                    <!-- 相关Tickets标签页 -->
+                    <div class="tab-content" id="tab-tickets">
+                        <div class="section-header">
+                            <h3>🎯 相关Tickets</h3>
+                            <button class="add-btn" id="add-ticket-btn">+ 添加Ticket</button>
+                        </div>
+                        <div class="items-grid" id="tickets-grid">
+                            <!-- Ticket卡片将在这里加载 -->
+                        </div>
+                    </div>
+
+                    <!-- 聊天记录标签页 -->
+                    <div class="tab-content" id="tab-conversations">
+                        <div class="section-header">
+                            <h3>💬 聊天记录</h3>
+                            <div class="search-controls">
+                                <input type="text" class="search-input" placeholder="搜索聊天记录..." id="chat-search">
+                                <select class="filter-select" id="chat-filter">
+                                    <option value="all">全部群组</option>
+                                    <option value="team">团队群</option>
+                                    <option value="project">项目群</option>
+                                    <option value="tech">技术讨论</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="conversations-list" id="conversations-list">
+                            <!-- 聊天记录将在这里加载 -->
+                        </div>
+                        <div class="pagination" id="chat-pagination">
+                            <button class="page-btn" data-page="prev">上一页</button>
+                            <span class="page-info">第 1 页，共 5 页</span>
+                            <button class="page-btn" data-page="next">下一页</button>
+                        </div>
+                    </div>
+
+                    <!-- 网页记录标签页 -->
+                    <div class="tab-content" id="tab-webpages">
+                        <div class="section-header">
+                            <h3>🌐 网页记录</h3>
+                            <div class="search-controls">
+                                <input type="text" class="search-input" placeholder="搜索网页记录..." id="webpage-search">
+                                <select class="filter-select" id="webpage-filter">
+                                    <option value="all">全部类型</option>
+                                    <option value="jira">Jira</option>
+                                    <option value="confluence">Confluence</option>
+                                    <option value="github">GitHub</option>
+                                    <option value="docs">文档</option>
+                                    <option value="blog">博客</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="webpages-list" id="webpages-list">
+                            <!-- 网页记录将在这里加载 -->
+                        </div>
+                        <div class="pagination" id="webpage-pagination">
+                            <button class="page-btn" data-page="prev">上一页</button>
+                            <span class="page-info">第 1 页，共 3 页</span>
+                            <button class="page-btn" data-page="next">下一页</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -958,9 +1756,6 @@
 
         // DOM 元素
         const entityTypes = document.querySelectorAll('.entity-type');
-        const overviewSection = document.getElementById('overview');
-        const timelineView = document.getElementById('timeline');
-        const entityDetail = document.getElementById('entity-detail');
         const entityTitle = document.getElementById('entity-title');
         const entityContent = document.getElementById('entity-content');
 
@@ -1062,8 +1857,8 @@
                     
                 case 'topic':
                     cardContent = `
-                        <div class="content-card">
-                            <div class="card-header">
+                        <div class="content-card" data-topic-name="${item.name}">
+                            <div class="card-header topic-card-header" style="cursor: pointer;">
                                 <div class="card-title">
                                     <span>💡</span>
                                     <span>${item.name}</span>
@@ -1227,8 +2022,455 @@
             }
         });
 
+        // 主题详情数据
+        const topicDetailData = {
+            'AI 工作流自动化': {
+                id: 'ai-workflow',
+                title: 'AI 工作流自动化',
+                discussions: 12,
+                projects: 5,
+                participants: 8,
+                resources: 15,
+                relatedProjects: [
+                    { id: 'personal-ai', name: 'Personal-AI', status: '开发中', description: 'Chrome扩展智能助手' },
+                    { id: 'automation-tools', name: 'Automation Tools', status: '规划中', description: 'CI/CD自动化工具链' },
+                    { id: 'ai-training', name: 'AI Training Pipeline', status: '测试中', description: '机器学习训练流水线' }
+                ],
+                relatedResources: [
+                    { id: 'gpt-api-doc', name: 'GPT-4 API文档', type: '技术文档', url: 'https://platform.openai.com/docs' },
+                    { id: 'automation-guide', name: '自动化实践指南', type: '最佳实践', url: '#' },
+                    { id: 'workflow-templates', name: '工作流模板库', type: '模板资源', url: '#' }
+                ],
+                relatedTickets: [
+                    { id: 'AI-123', title: '实现智能推荐算法', status: '进行中', assignee: '张三', priority: '高' },
+                    { id: 'AI-124', title: '优化用户界面响应速度', status: '待开始', assignee: '李四', priority: '中' },
+                    { id: 'AI-125', title: '集成第三方AI服务', status: '已完成', assignee: '王五', priority: '低' }
+                ],
+                conversations: [
+                    {
+                        id: 'conv-1',
+                        sender: '张三',
+                        group: '技术讨论组',
+                        time: '30分钟前',
+                        summary: '分享了最新的GPT-4 API集成经验，讨论了Token优化策略',
+                        context: [
+                            { sender: '李四', content: '最近GPT-4的API调用成本有点高', time: '35分钟前' },
+                            { sender: '张三', content: '我找到了一些优化Token使用的方法，可以减少30%的成本', time: '30分钟前', isMain: true },
+                            { sender: '王五', content: '能分享一下具体的优化策略吗？', time: '28分钟前' }
+                        ]
+                    },
+                    {
+                        id: 'conv-2',
+                        sender: '李四',
+                        group: '产品团队',
+                        time: '2小时前',
+                        summary: '讨论了自动化测试的实现方案，提出了新的测试框架选型建议',
+                        context: [
+                            { sender: '产品经理', content: '我们需要一个更好的自动化测试方案', time: '2.5小时前' },
+                            { sender: '李四', content: '建议采用Playwright + Jest的组合，覆盖率会更高', time: '2小时前', isMain: true },
+                            { sender: '测试负责人', content: '这个方案看起来不错，我们可以试试', time: '1.5小时前' }
+                        ]
+                    }
+                ],
+                webpages: [
+                    {
+                        id: 'webpage-1',
+                        title: 'OpenAI GPT-4 API 官方文档',
+                        url: 'https://platform.openai.com/docs/models/gpt-4',
+                        type: 'github',
+                        visitTime: '2小时前',
+                        relevanceScore: 0.95,
+                        summary: '详细介绍了GPT-4 API的使用方法、参数配置和最佳实践',
+                        extractedInfo: {
+                            projects: ['Personal-AI'],
+                            technologies: ['GPT-4', 'API', 'OpenAI'],
+                            actionItems: ['集成GPT-4 API', '优化Token使用']
+                        },
+                        tags: ['API文档', 'GPT-4', '官方文档']
+                    },
+                    {
+                        id: 'webpage-2',
+                        title: 'Chrome Extension Automation Best Practices',
+                        url: 'https://developer.chrome.com/docs/extensions/mv3/automation',
+                        type: 'docs',
+                        visitTime: '昨天',
+                        relevanceScore: 0.78,
+                        summary: 'Chrome扩展自动化开发的最佳实践和技术指南',
+                        extractedInfo: {
+                            projects: ['Personal-AI'],
+                            technologies: ['Chrome Extension', 'Automation'],
+                            actionItems: ['更新扩展架构', '实现自动化测试']
+                        },
+                        tags: ['Chrome扩展', '自动化', '最佳实践']
+                    }
+                ]
+            }
+        };
+
+        // DOM元素引用
+        const overviewSection = document.getElementById('overview');
+        const timelineView = document.getElementById('timeline');
+        const entityDetail = document.getElementById('entity-detail');
+        const topicDetail = document.getElementById('topic-detail');
+        const backBtn = document.getElementById('back-btn');
+
+        // 显示主题详情
+        function showTopicDetail(topicName) {
+            const topicData = topicDetailData[topicName];
+            if (!topicData) {
+                console.error('主题数据不存在:', topicName);
+                return;
+            }
+
+            // 隐藏其他视图
+            overviewSection.style.display = 'none';
+            timelineView.classList.remove('active');
+            entityDetail.classList.remove('active');
+
+            // 显示主题详情视图
+            topicDetail.classList.add('active');
+
+            // 更新主题标题和元信息
+            document.getElementById('topic-detail-title').textContent = topicData.title;
+
+            // 加载默认的概览标签页
+            loadTopicOverview(topicData);
+        }
+
+        // 加载主题概览数据
+        function loadTopicOverview(topicData) {
+            // 更新统计数据
+            const statsGrid = document.querySelector('.stats-grid');
+            if (statsGrid) {
+                statsGrid.innerHTML = `
+                    <div class="stat-item">
+                        <div class="stat-number">${topicData.discussions}</div>
+                        <div class="stat-label">讨论条数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">${topicData.projects}</div>
+                        <div class="stat-label">相关项目</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">${topicData.participants}</div>
+                        <div class="stat-label">参与人员</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">${topicData.resources}</div>
+                        <div class="stat-label">相关资源</div>
+                    </div>
+                `;
+            }
+        }
+
+        // 加载相关项目
+        function loadTopicProjects(topicData) {
+            const projectsGrid = document.getElementById('projects-grid');
+            projectsGrid.innerHTML = topicData.relatedProjects.map(project => `
+                <div class="item-card">
+                    <div class="item-header">
+                        <div class="item-title">
+                            <span>🚀</span>
+                            <span>${project.name}</span>
+                        </div>
+                        <div class="item-actions">
+                            <button class="item-action" title="取消关联">❌</button>
+                        </div>
+                    </div>
+                    <div class="item-content">
+                        <div style="margin-bottom: 0.5rem;">
+                            <span class="card-badge">${project.status}</span>
+                        </div>
+                        <p>${project.description}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 加载相关资源
+        function loadTopicResources(topicData) {
+            const resourcesGrid = document.getElementById('resources-grid');
+            resourcesGrid.innerHTML = topicData.relatedResources.map(resource => `
+                <div class="item-card">
+                    <div class="item-header">
+                        <div class="item-title">
+                            <span>📚</span>
+                            <span>${resource.name}</span>
+                        </div>
+                        <div class="item-actions">
+                            <button class="item-action" title="删除资源">❌</button>
+                        </div>
+                    </div>
+                    <div class="item-content">
+                        <div style="margin-bottom: 0.5rem;">
+                            <span class="card-badge">${resource.type}</span>
+                        </div>
+                        <p><a href="${resource.url}" style="color: #60a5fa;">查看资源</a></p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 加载相关Tickets
+        function loadTopicTickets(topicData) {
+            const ticketsGrid = document.getElementById('tickets-grid');
+            ticketsGrid.innerHTML = topicData.relatedTickets.map(ticket => `
+                <div class="item-card">
+                    <div class="item-header">
+                        <div class="item-title">
+                            <span>🎯</span>
+                            <span>${ticket.id}</span>
+                        </div>
+                        <div class="item-actions">
+                            <button class="item-action" title="取消关联">❌</button>
+                        </div>
+                    </div>
+                    <div class="item-content">
+                        <h4 style="margin-bottom: 0.5rem;">${ticket.title}</h4>
+                        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <span class="card-badge">${ticket.status}</span>
+                            <span class="card-badge">${ticket.priority}</span>
+                        </div>
+                        <p>负责人：${ticket.assignee}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 加载聊天记录
+        function loadTopicConversations(topicData) {
+            const conversationsList = document.getElementById('conversations-list');
+            conversationsList.innerHTML = topicData.conversations.map(conv => `
+                <div class="conversation-item" data-id="${conv.id}">
+                    <div class="conversation-header">
+                        <div class="conversation-meta">
+                            <div class="sender-avatar">${conv.sender.charAt(0)}</div>
+                            <div class="sender-info">
+                                <div class="sender-name">${conv.sender}</div>
+                                <div class="group-name">${conv.group}</div>
+                            </div>
+                        </div>
+                        <div class="conversation-time">${conv.time}</div>
+                    </div>
+                    <div class="conversation-summary">${conv.summary}</div>
+                    <div class="context-indicator" data-conv-id="${conv.id}">
+                        <span class="indicator-text">🔍 查看上下文 (${conv.context.length} 条相关消息)</span>
+                    </div>
+                    <div class="context-content" data-conv-id="${conv.id}">
+                        <div class="context-divider"></div>
+                        ${conv.context.map(ctx => `
+                            <div class="context-item ${ctx.isMain ? 'main' : ''}">
+                                <div class="context-header">
+                                    <span class="context-sender">${ctx.sender}</span>
+                                    <span class="context-time">${ctx.time}</span>
+                                </div>
+                                <div class="context-message">${ctx.content}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 加载网页记录
+        function loadTopicWebpages(topicData) {
+            const webpagesList = document.getElementById('webpages-list');
+            webpagesList.innerHTML = topicData.webpages.map(webpage => `
+                <div class="webpage-item">
+                    <div class="webpage-header">
+                        <div class="webpage-icon">${getWebpageIcon(webpage.type)}</div>
+                        <div class="webpage-info">
+                            <div class="webpage-title">${webpage.title}</div>
+                            <div class="webpage-url">${webpage.url}</div>
+                            <div class="webpage-meta">
+                                <span>访问时间：${webpage.visitTime}</span>
+                                <span>相关性：${(webpage.relevanceScore * 100).toFixed(0)}%</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="webpage-content">${webpage.summary}</div>
+                    <div class="webpage-tags">
+                        ${webpage.tags.map(tag => `<span class="webpage-tag">${tag}</span>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 获取网页图标
+        function getWebpageIcon(type) {
+            const icons = {
+                jira: '🎯',
+                confluence: '📝',
+                github: '🐙',
+                docs: '📄',
+                blog: '📰'
+            };
+            return icons[type] || '🌐';
+        }
+
+        // 选项卡切换功能
+        function initTopicDetailTabs() {
+            const tabBtns = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const targetTab = btn.getAttribute('data-tab');
+                    
+                    // 移除所有活跃状态
+                    tabBtns.forEach(b => b.classList.remove('active'));
+                    tabContents.forEach(c => c.classList.remove('active'));
+                    
+                    // 激活当前选项卡
+                    btn.classList.add('active');
+                    document.getElementById(`tab-${targetTab}`).classList.add('active');
+                    
+                    // 加载对应的数据
+                    const currentTopicData = getCurrentTopicData();
+                    if (currentTopicData) {
+                        switch(targetTab) {
+                            case 'projects':
+                                loadTopicProjects(currentTopicData);
+                                break;
+                            case 'resources':
+                                loadTopicResources(currentTopicData);
+                                break;
+                            case 'tickets':
+                                loadTopicTickets(currentTopicData);
+                                break;
+                            case 'conversations':
+                                loadTopicConversations(currentTopicData);
+                                break;
+                            case 'webpages':
+                                loadTopicWebpages(currentTopicData);
+                                break;
+                        }
+                    }
+                });
+            });
+        }
+
+        // 获取当前主题数据
+        function getCurrentTopicData() {
+            const currentTitle = document.getElementById('topic-detail-title').textContent;
+            return topicDetailData[currentTitle];
+        }
+
+        // 返回按钮功能
+        function initBackButton() {
+            backBtn.addEventListener('click', () => {
+                topicDetail.classList.remove('active');
+                
+                // 显示主题列表
+                const topicType = document.querySelector('[data-type="topic"]');
+                if (topicType) {
+                    topicType.click();
+                }
+            });
+        }
+
+        // 上下文展开功能
+        function initContextExpansion() {
+            document.addEventListener('click', (e) => {
+                // 检查是否点击了上下文指示器
+                if (e.target.closest('.context-indicator')) {
+                    const indicator = e.target.closest('.context-indicator');
+                    const convId = indicator.getAttribute('data-conv-id');
+                    const conversationItem = indicator.closest('.conversation-item');
+                    const contextContent = conversationItem.querySelector('.context-content');
+                    const indicatorText = indicator.querySelector('.indicator-text');
+                    
+                    // 切换展开状态
+                    const isExpanded = contextContent.classList.contains('expanded');
+                    
+                    if (isExpanded) {
+                        // 收缩
+                        contextContent.classList.remove('expanded');
+                        indicator.classList.remove('expanded');
+                        conversationItem.classList.remove('expanded');
+                        indicatorText.innerHTML = `🔍 查看上下文 (${contextContent.querySelectorAll('.context-item').length} 条相关消息)`;
+                    } else {
+                        // 先收缩所有其他展开的上下文
+                        document.querySelectorAll('.context-content.expanded').forEach(content => {
+                            content.classList.remove('expanded');
+                        });
+                        document.querySelectorAll('.context-indicator.expanded').forEach(ind => {
+                            ind.classList.remove('expanded');
+                        });
+                        document.querySelectorAll('.conversation-item.expanded').forEach(item => {
+                            item.classList.remove('expanded');
+                        });
+                        document.querySelectorAll('.indicator-text').forEach(text => {
+                            const count = text.closest('.conversation-item').querySelectorAll('.context-item').length;
+                            text.innerHTML = `🔍 查看上下文 (${count} 条相关消息)`;
+                        });
+                        
+                        // 展开当前上下文
+                        contextContent.classList.add('expanded');
+                        indicator.classList.add('expanded');
+                        conversationItem.classList.add('expanded');
+                        indicatorText.innerHTML = `🔼 收起上下文`;
+                    }
+                    
+                    // 阻止事件冒泡
+                    e.stopPropagation();
+                }
+                
+                // 点击聊天记录外的地方收缩所有上下文
+                if (!e.target.closest('.conversations-list')) {
+                    document.querySelectorAll('.context-content.expanded').forEach(content => {
+                        content.classList.remove('expanded');
+                    });
+                    document.querySelectorAll('.context-indicator.expanded').forEach(ind => {
+                        ind.classList.remove('expanded');
+                    });
+                    document.querySelectorAll('.conversation-item.expanded').forEach(item => {
+                        item.classList.remove('expanded');
+                    });
+                    document.querySelectorAll('.indicator-text').forEach(text => {
+                        const count = text.closest('.conversation-item').querySelectorAll('.context-item').length;
+                        text.innerHTML = `🔍 查看上下文 (${count} 条相关消息)`;
+                    });
+                }
+            });
+        }
+
+        // 修改现有的卡片点击事件
+        document.addEventListener('click', function(e) {
+            // 主题卡片点击事件
+            if (e.target.closest('.topic-card-header')) {
+                const topicCard = e.target.closest('.content-card');
+                if (topicCard) {
+                    const topicName = topicCard.getAttribute('data-topic-name');
+                    if (topicDetailData[topicName]) {
+                        showTopicDetail(topicName);
+                        return;
+                    }
+                }
+            }
+            
+            // 原有的事件处理...
+            if (e.target.closest('.view-more-btn')) {
+                const card = e.target.closest('.content-card');
+                const title = card.querySelector('.card-title').textContent;
+                console.log('查看更多:', title);
+            }
+            
+            if (e.target.closest('.info-item')) {
+                const item = e.target.closest('.info-item');
+                const text = item.textContent;
+                console.log('点击项目:', text);
+            }
+        });
+
         // 初始化动画
         document.addEventListener('DOMContentLoaded', function() {
+            // 初始化主题详情功能
+            initTopicDetailTabs();
+            initBackButton();
+            initContextExpansion();
+            
+            // 原有的初始化动画
             setTimeout(() => {
                 document.querySelectorAll('.content-card').forEach((card, index) => {
                     setTimeout(() => {
