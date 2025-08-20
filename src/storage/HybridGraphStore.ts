@@ -289,7 +289,7 @@ export class HybridGraphStore {
       if (depth < maxDepth) {
         const entityRelations = this.entityToRelations.get(currentEntityId) || new Set();
         
-        for (const relationId of entityRelations) {
+        for (const relationId of Array.from(entityRelations)) {
           const relation = this.relationshipIndex.get(relationId);
           if (!relation || visitedRelationships.has(relationId)) continue;
           
@@ -324,6 +324,121 @@ export class HybridGraphStore {
   }
 
   /**
+   * 新设备初始同步：从云端下载数据到本地
+   */
+  private async performInitialSync(): Promise<GraphSyncStatus> {
+    if (!this.entitiesCollection) {
+      console.log('⚠️ ChromaDB不可用，无法执行初始同步');
+      return this.getSyncStatus();
+    }
+
+    this.syncInProgress = true;
+    console.log('🔄 开始新设备初始同步...');
+
+    try {
+      let downloadedEntities = 0;
+      let restoredRelationships = 0;
+
+      // 1. 下载所有云端实体并建立本地类型索引
+      const cloudEntities = await this.getAllEntitiesFromChroma();
+      
+      for (const entity of cloudEntities) {
+        // 建立实体类型索引
+        if (!this.typeToEntities.has(entity.type)) {
+          this.typeToEntities.set(entity.type, new Set());
+        }
+        this.typeToEntities.get(entity.type)!.add(entity.id);
+        downloadedEntities++;
+      }
+
+      // 2. 尝试从云端恢复关系数据备份
+      const relationshipRestored = await this.restoreRelationshipsFromCloud();
+      if (relationshipRestored) {
+        restoredRelationships = this.relationshipIndex.size;
+      }
+
+      // 3. 保存本地索引
+      await this.saveLocalIndexes();
+      
+      // 4. 更新同步状态
+      this.lastSyncTime = Date.now();
+      await this.saveSyncStatus();
+
+      console.log(`✅ 初始同步完成: 下载${downloadedEntities}个实体, 恢复${restoredRelationships}个关系`);
+
+      return {
+        lastSync: this.lastSyncTime,
+        localEntities: this.typeToEntities.size,
+        cloudEntities: cloudEntities.length,
+        localRelationships: this.relationshipIndex.size,
+        pendingSync: 0,
+        conflicts: 0
+      };
+
+    } catch (error) {
+      console.error('❌ 初始同步失败:', error);
+      return this.getSyncStatus();
+    } finally {
+      this.syncInProgress = false;
+    }
+  }
+
+  /**
+   * 从云端恢复关系数据（不输出日志，内部使用）
+   */
+  private async restoreRelationshipsFromCloud(): Promise<boolean> {
+    try {
+      // 查找最新的备份
+      const backups = await this.entitiesCollection!.get({
+        where: { type: 'graph_backup' }
+      });
+
+      if (!backups.ids || backups.ids.length === 0) {
+        console.log('📭 云端没有关系数据备份');
+        return false;
+      }
+
+      // 获取最新备份
+      const latestBackupIndex = backups.metadatas!
+        .map((meta: any, index: number) => ({ meta, index }))
+        .sort((a, b) => (b.meta.backupTime || 0) - (a.meta.backupTime || 0))[0].index;
+
+      const backupContent = backups.documents![latestBackupIndex];
+      const backupData = JSON.parse(backupContent);
+
+      // 恢复关系数据
+      this.relationshipIndex = new Map(backupData.relationships);
+      this.entityToRelations = new Map(
+        backupData.entityToRelations.map(([key, value]: [string, string[]]) => [key, new Set(value)])
+      );
+      
+      // 合并类型索引（保留已下载的实体类型信息）
+      if (backupData.typeToEntities) {
+        const backupTypeToEntities: [string, string[]][] = backupData.typeToEntities;
+        
+        for (const [type, entityIds] of backupTypeToEntities) {
+          if (!this.typeToEntities.has(type)) {
+            this.typeToEntities.set(type, new Set());
+          }
+          for (const entityId of entityIds) {
+            this.typeToEntities.get(type)!.add(entityId);
+          }
+        }
+      }
+
+      // 保存到本地
+      await this.saveLocalRelationships();
+
+      console.log(`📥 已恢复关系数据: ${this.relationshipIndex.size}个关系`);
+      return true;
+
+    } catch (error) {
+      console.error('关系数据恢复失败:', error);
+      return false;
+    }
+  }
+
+  /**
    * 数据同步：本地 ↔ 云端
    */
   async performSync(force: boolean = false): Promise<GraphSyncStatus> {
@@ -350,13 +465,13 @@ export class HybridGraphStore {
         
         // 2. 检查本地关系中引用的实体是否存在于云端
         const localEntityIds = new Set<string>();
-        for (const relation of this.relationshipIndex.values()) {
+        for (const relation of Array.from(this.relationshipIndex.values())) {
           localEntityIds.add(relation.fromId);
           localEntityIds.add(relation.toId);
         }
 
         // 3. 为不存在的实体创建占位符并上传
-        for (const entityId of localEntityIds) {
+        for (const entityId of Array.from(localEntityIds)) {
           const existsInCloud = cloudEntities.some(e => e.id === entityId);
           if (!existsInCloud) {
             await this.createPlaceholderEntity(entityId);
@@ -931,10 +1046,59 @@ export class HybridGraphStore {
       this.lastSyncTime = graphSyncStatus.lastSync || 0;
     }
 
+    // 检测新设备场景：本地无数据但云端可能有数据
+    const isNewDevice = await this.detectNewDevice();
+    if (isNewDevice) {
+      console.log('🆕 检测到新设备，执行初始同步...');
+      await this.performInitialSync();
+      return;
+    }
+
     // 如果超过24小时未同步，自动执行同步
     if (Date.now() - this.lastSyncTime > 24 * 60 * 60 * 1000) {
       console.log('⏰ 超过24小时未同步，执行自动同步...');
       await this.performSync();
+    }
+  }
+
+  /**
+   * 检测是否为新设备场景
+   */
+  private async detectNewDevice(): Promise<boolean> {
+    try {
+      // 1. 检查本地是否有关系数据
+      const hasLocalRelationships = this.relationshipIndex.size > 0;
+      
+      // 2. 检查本地是否有实体类型索引
+      const hasLocalEntityTypes = this.typeToEntities.size > 0;
+      
+      // 3. 检查是否有同步历史
+      const hasSyncHistory = this.lastSyncTime > 0;
+      
+      // 如果本地有任何数据或同步历史，则不是新设备
+      if (hasLocalRelationships || hasLocalEntityTypes || hasSyncHistory) {
+        return false;
+      }
+      
+      // 4. 检查云端是否有数据
+      if (!this.entitiesCollection) {
+        return false; // ChromaDB不可用，无法检查云端数据
+      }
+      
+      const cloudEntityCount = await this.getCloudEntityCount();
+      
+      // 如果云端有数据但本地无数据，认为是新设备
+      const isNewDevice = cloudEntityCount > 0;
+      
+      if (isNewDevice) {
+        console.log(`🔍 新设备检测: 本地无数据，云端有${cloudEntityCount}个实体`);
+      }
+      
+      return isNewDevice;
+      
+    } catch (error) {
+      console.error('新设备检测失败:', error);
+      return false;
     }
   }
 
@@ -997,7 +1161,7 @@ export class HybridGraphStore {
     let cleanedCount = 0;
 
     // 清理过期关系
-    for (const [id, relationship] of this.relationshipIndex) {
+    for (const [id, relationship] of Array.from(this.relationshipIndex)) {
       if (relationship.created < cutoffTime && relationship.strength < 0.3) {
         this.relationshipIndex.delete(id);
         cleanedCount++;
@@ -1015,7 +1179,7 @@ export class HybridGraphStore {
   private async rebuildIndexes(): Promise<void> {
     this.entityToRelations.clear();
     
-    for (const relationship of this.relationshipIndex.values()) {
+    for (const relationship of Array.from(this.relationshipIndex.values())) {
       if (!this.entityToRelations.has(relationship.fromId)) {
         this.entityToRelations.set(relationship.fromId, new Set());
       }
