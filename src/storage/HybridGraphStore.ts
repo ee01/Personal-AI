@@ -352,15 +352,24 @@ export class HybridGraphStore {
       }
 
       // 2. 尝试从云端恢复关系数据备份
-      const relationshipRestored = await this.restoreRelationshipsFromCloud();
+      let relationshipRestored = await this.restoreRelationshipsFromCloud();
       if (relationshipRestored) {
         restoredRelationships = this.relationshipIndex.size;
       }
 
-      // 3. 保存本地索引
+      // 3. 如果没有备份数据，尝试从消息数据重建关系表
+      if (!relationshipRestored) {
+        console.log('🔄 尝试从消息数据重建关系表...');
+        relationshipRestored = await this.rebuildRelationshipsFromMessages();
+        if (relationshipRestored) {
+          restoredRelationships = this.relationshipIndex.size;
+        }
+      }
+
+      // 4. 保存本地索引
       await this.saveLocalIndexes();
       
-      // 4. 更新同步状态
+      // 5. 更新同步状态
       this.lastSyncTime = Date.now();
       await this.saveSyncStatus();
 
@@ -435,6 +444,232 @@ export class HybridGraphStore {
     } catch (error) {
       console.error('关系数据恢复失败:', error);
       return false;
+    }
+  }
+
+  /**
+   * 从消息数据重建关系表
+   */
+  private async rebuildRelationshipsFromMessages(): Promise<boolean> {
+    try {
+      console.log('🔄 开始从消息数据重建关系表...');
+      
+      // 获取messages collection
+      const messagesCollection = await this.getMessagesCollection();
+      if (!messagesCollection) {
+        console.log('⚠️ 无法访问messages collection');
+        return false;
+      }
+
+      // 获取所有消息数据
+      const messagesData = await messagesCollection.get();
+      if (!messagesData.ids || messagesData.ids.length === 0) {
+        console.log('📭 没有找到消息数据');
+        return false;
+      }
+
+      let rebuiltRelationships = 0;
+      const relationshipMap = new Map<string, GraphRelationship>();
+      const entityRelationsMap = new Map<string, Set<string>>();
+
+      for (let i = 0; i < messagesData.ids.length; i++) {
+        const metadata = messagesData.metadatas![i] as any;
+        
+        if (metadata.relationships) {
+          try {
+            const relationships = typeof metadata.relationships === 'string' 
+              ? JSON.parse(metadata.relationships) 
+              : metadata.relationships;
+            
+            if (Array.isArray(relationships)) {
+              for (const rel of relationships) {
+                // 生成关系ID
+                const relationshipId = this.generateRelationshipId(rel.source, rel.target, rel.relationship);
+                
+                // 构建GraphRelationship对象
+                const graphRelationship: GraphRelationship = {
+                  id: relationshipId,
+                  type: rel.relationship,
+                  fromId: this.normalizeEntityId(rel.source),
+                  toId: this.normalizeEntityId(rel.target),
+                  properties: {
+                    source: 'message',
+                    messageId: messagesData.ids[i],
+                    discoveredAt: metadata.timestamp || Date.now()
+                  },
+                  strength: 0.7, // 默认强度
+                  created: metadata.timestamp || Date.now(),
+                  updated: metadata.timestamp || Date.now()
+                };
+
+                // 避免重复添加相同关系
+                if (!relationshipMap.has(relationshipId)) {
+                  relationshipMap.set(relationshipId, graphRelationship);
+                  
+                  // 更新实体-关系映射
+                  if (!entityRelationsMap.has(graphRelationship.fromId)) {
+                    entityRelationsMap.set(graphRelationship.fromId, new Set());
+                  }
+                  if (!entityRelationsMap.has(graphRelationship.toId)) {
+                    entityRelationsMap.set(graphRelationship.toId, new Set());
+                  }
+                  
+                  entityRelationsMap.get(graphRelationship.fromId)!.add(relationshipId);
+                  entityRelationsMap.get(graphRelationship.toId)!.add(relationshipId);
+                  
+                  rebuiltRelationships++;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`解析消息关系数据失败 ${messagesData.ids[i]}:`, e);
+          }
+        }
+      }
+
+      // 合并到现有关系索引中
+      for (const [id, relationship] of Array.from(relationshipMap.entries())) {
+        this.relationshipIndex.set(id, relationship);
+      }
+      
+      for (const [entityId, relationIds] of Array.from(entityRelationsMap.entries())) {
+        if (!this.entityToRelations.has(entityId)) {
+          this.entityToRelations.set(entityId, new Set());
+        }
+        for (const relationId of Array.from(relationIds)) {
+          this.entityToRelations.get(entityId)!.add(relationId);
+        }
+      }
+
+      // 保存到本地
+      await this.saveLocalRelationships();
+
+      console.log(`✅ 从消息数据重建关系表完成: 新增${rebuiltRelationships}个关系`);
+      return rebuiltRelationships > 0;
+
+    } catch (error) {
+      console.error('❌ 从消息数据重建关系表失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 获取messages collection
+   */
+  private async getMessagesCollection(): Promise<Collection | null> {
+    try {
+      if (!this.chromaClient) return null;
+      
+      const username = await this.getUsernameFromStorage();
+      const messagesCollectionName = `${username}-messages`;
+      
+      const collections = await this.chromaClient.listCollections();
+      if (!collections.includes(messagesCollectionName)) {
+        return null;
+      }
+
+      const embeddingFunction = {
+        generate: async (texts: string[]) => {
+          return new Array(texts.length).fill(new Array(384).fill(0));
+        }
+      };
+
+      return await this.chromaClient.getCollection({
+        name: messagesCollectionName,
+        embeddingFunction
+      });
+    } catch (error) {
+      console.error('获取messages collection失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 生成关系ID
+   */
+  private generateRelationshipId(source: string, target: string, relationType: string): string {
+    const fromId = this.normalizeEntityId(source);
+    const toId = this.normalizeEntityId(target);
+    return `rel_${fromId}_${toId}_${relationType}`;
+  }
+
+  /**
+   * 标准化实体ID
+   */
+  private normalizeEntityId(name: string): string {
+    if (!name || typeof name !== 'string') {
+      return '';
+    }
+    
+    // 移除引号和特殊符号，保留中英文字符
+    let normalized = name.trim()
+      .replace(/["']/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, '_')
+      .replace(/[^\w\u4e00-\u9fff]/g, '');
+    
+    // 如果标准化后为空，返回原始名称的hash
+    if (!normalized) {
+      normalized = `entity_${name.replace(/\s+/g, '_')}`;
+    }
+    
+    return normalized;
+  }
+
+  /**
+   * 获取同步统计信息
+   */
+  async getSyncStatistics(): Promise<{
+    localEntities: number;
+    localRelationships: number;
+    localEntityTypes: number;
+    lastSyncTime: number;
+    isInitialized: boolean;
+  }> {
+    return {
+      localEntities: Array.from(this.typeToEntities.values()).reduce((sum, set) => sum + set.size, 0),
+      localRelationships: this.relationshipIndex.size,
+      localEntityTypes: this.typeToEntities.size,
+      lastSyncTime: this.lastSyncTime,
+      isInitialized: this.chromaClient !== null
+    };
+  }
+
+  /**
+   * 公开方法：手动从消息数据重建关系表
+   */
+  async rebuildRelationshipsFromMessagesManually(): Promise<{
+    success: boolean;
+    rebuiltCount: number;
+    message: string;
+  }> {
+    try {
+      console.log('🛠️ 用户手动触发关系表重建...');
+      
+      const originalCount = this.relationshipIndex.size;
+      const success = await this.rebuildRelationshipsFromMessages();
+      const rebuiltCount = this.relationshipIndex.size - originalCount;
+      
+      if (success) {
+        return {
+          success: true,
+          rebuiltCount,
+          message: `✅ 成功重建关系表，新增 ${rebuiltCount} 个关系`
+        };
+      } else {
+        return {
+          success: false,
+          rebuiltCount: 0,
+          message: '❌ 关系表重建失败，请检查消息数据是否存在'
+        };
+      }
+    } catch (error) {
+      console.error('手动关系重建失败:', error);
+      return {
+        success: false,
+        rebuiltCount: 0,
+        message: `❌ 关系表重建出错: ${error.message}`
+      };
     }
   }
 
