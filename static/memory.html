@@ -24,7 +24,7 @@
             height: 100vh;
         }
 
-        /* PWA相关样式将通过pwa-init.js动态注入 */
+
 
         @keyframes slideDown {
             from {
@@ -107,21 +107,13 @@
             }
         }
     </style>
-    <!-- PWA manifest -->
-    <link rel="manifest" href="pwa-manifest.json">
-    <meta name="theme-color" content="#1a1a2e">
     <meta name="description" content="个人AI记忆系统 - 智能实体记忆查询与知识图谱">
     
-    <!-- PWA 图标 -->
+    <!-- 应用图标 -->
     <link rel="icon" type="image/png" sizes="16x16" href="icons/icon16.png">
     <link rel="icon" type="image/png" sizes="32x32" href="icons/icon32.png">
     <link rel="icon" type="image/png" sizes="48x48" href="icons/icon48.png">
-    <link rel="apple-touch-icon" sizes="128x128" href="icons/icon128.png">
-    
-    <!-- PWA 启动屏幕 -->
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="记忆查询">
+    <link rel="icon" type="image/png" sizes="128x128" href="icons/icon128.png">
 </head>
 <body>
     <!-- 加载遮罩 -->
@@ -133,27 +125,12 @@
         </div>
     </div>
 
-    <!-- PWA 安装横幅 -->
-    <div id="pwa-install-banner" class="pwa-install-banner">
-        <div class="pwa-banner-content">
-            <div class="pwa-banner-icon">📱</div>
-            <div class="pwa-banner-text">
-                <div class="pwa-banner-title">安装到主屏幕</div>
-                <div class="pwa-banner-subtitle">更快访问您的记忆系统</div>
-            </div>
-        </div>
-        <div class="pwa-banner-actions">
-            <button id="pwa-install-btn" class="pwa-btn install">安装</button>
-            <button id="pwa-dismiss-btn" class="pwa-btn dismiss">稍后</button>
-        </div>
-    </div>
+
 
     <!-- React 组件挂载点 -->
     <div id="memory-root"></div>
 
     <!-- 注入的脚本会在这里加载 -->
-    <script src="sw.js"></script>
-    <script src="pwa-init.js"></script>
     <script src="memory.js"></script>
 </body>
 </html>

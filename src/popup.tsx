@@ -95,27 +95,9 @@ const Popup = () => {
     };
     
     const openMemoryInterface = () => {
-        // 打开独立的PWA应用（如果已部署）
-        const pwaUrl = 'https://your-domain.com/memory.html'; // 替换为你的PWA部署地址
-        
-        // 检查是否有自定义PWA URL设置
-        chrome.storage.sync.get(['pwaMemoryUrl'], (result) => {
-            const targetUrl = result.pwaMemoryUrl || pwaUrl;
-            
-            // 如果是开发模式或没有PWA地址，fallback到扩展内页面
-            if (targetUrl === 'https://your-domain.com/memory.html' || !targetUrl) {
-                // 显示PWA设置提示
-                chrome.tabs.create({
-                    url: chrome.runtime.getURL('memory-launcher.html'),
-                    active: true
-                });
-            } else {
-                // 打开PWA应用
-                chrome.tabs.create({
-                    url: targetUrl,
-                    active: true
-                });
-            }
+        chrome.tabs.create({
+            url: chrome.runtime.getURL('memory.html'),
+            active: true
         });
     };
     

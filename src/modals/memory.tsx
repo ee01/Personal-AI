@@ -81,6 +81,20 @@ const MemoryInterface = () => {
   // 初始化数据
   useEffect(() => {
     initializeMemoryInterface();
+    
+    // 额外的安全措施：延迟隐藏loading overlay以防初始化过快
+    const hideLoadingTimeout = setTimeout(() => {
+      const loadingOverlay = document.getElementById('loading-overlay');
+      if (loadingOverlay && !loadingOverlay.classList.contains('hidden')) {
+        loadingOverlay.classList.add('hidden');
+        console.log('⏰ 延迟隐藏加载遮罩（安全措施）');
+      }
+    }, 2000);
+
+    // 清理定时器
+    return () => {
+      clearTimeout(hideLoadingTimeout);
+    };
   }, []);
 
   // 监听搜索变化
@@ -112,9 +126,11 @@ const MemoryInterface = () => {
     } finally {
       setIsLoading(false);
       
-      // 通知HTML页面隐藏加载遮罩
-      if (typeof window.hideLoadingOverlay === 'function') {
-        window.hideLoadingOverlay();
+      // 直接操作DOM隐藏HTML中的加载遮罩
+      const loadingOverlay = document.getElementById('loading-overlay');
+      if (loadingOverlay) {
+        loadingOverlay.classList.add('hidden');
+        console.log('📱 加载遮罩已隐藏');
       }
     }
   };
