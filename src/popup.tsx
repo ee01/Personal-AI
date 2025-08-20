@@ -94,6 +94,31 @@ const Popup = () => {
         });
     };
     
+    const openMemoryInterface = () => {
+        // 打开独立的PWA应用（如果已部署）
+        const pwaUrl = 'https://your-domain.com/memory.html'; // 替换为你的PWA部署地址
+        
+        // 检查是否有自定义PWA URL设置
+        chrome.storage.sync.get(['pwaMemoryUrl'], (result) => {
+            const targetUrl = result.pwaMemoryUrl || pwaUrl;
+            
+            // 如果是开发模式或没有PWA地址，fallback到扩展内页面
+            if (targetUrl === 'https://your-domain.com/memory.html' || !targetUrl) {
+                // 显示PWA设置提示
+                chrome.tabs.create({
+                    url: chrome.runtime.getURL('memory-launcher.html'),
+                    active: true
+                });
+            } else {
+                // 打开PWA应用
+                chrome.tabs.create({
+                    url: targetUrl,
+                    active: true
+                });
+            }
+        });
+    };
+    
     const openPromptConfigWindow = () => {
         chrome.windows.create({
             url: 'prompt-config.html',
@@ -293,6 +318,10 @@ const Popup = () => {
                 📊 项目进度仪表盘
             </button>
 
+            <button onClick={openMemoryInterface} className="memory-button">
+                🧠 实体记忆查询
+            </button>
+
             <button onClick={openKnowledgeQueryWindow} className="message-button">
                 知识库查询
             </button>
@@ -419,6 +448,19 @@ const Popup = () => {
                  .dashboard-button:hover {
                     transform: translateY(-1px);
                     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+                 }
+                 
+                 .memory-button {
+                    background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+                    color: white;
+                    font-weight: 600;
+                    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+                    transition: all 0.3s ease;
+                 }
+                 
+                 .memory-button:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
                  }
 
                  .message-button { /* Example specific style if needed */

@@ -16,6 +16,19 @@ export interface GraphEntity {
   description?: string;
   created: number;
   updated: number;
+  
+  // 扩展的统计信息字段
+  accessCount?: number;         // 访问次数
+  lastAccessed?: number;        // 最后访问时间
+  importance?: number;          // 重要性评分 (0-1)
+  tags?: string[];              // 标签列表
+  status?: string;              // 状态 (active, inactive, archived, etc.)
+  avatarUrl?: string;           // 头像URL（用于显示）
+  
+  // 关联统计（动态计算，不存储）
+  relatedMessagesCount?: number;  // 相关消息数量
+  relatedWebpagesCount?: number;  // 相关网页数量
+  relationshipsCount?: number;    // 关系数量
 }
 
 export interface GraphRelationship {
@@ -50,6 +63,9 @@ export class HybridGraphStore {
   private entityToRelations: Map<string, Set<string>> = new Map(); // entityId -> relationshipIds
   private typeToEntities: Map<string, Set<string>> = new Map(); // entityType -> entityIds
   
+  // 本地实体索引 (用于快速查找，从 ChromaDB 同步)
+  private entityIndex: Map<string, GraphEntity> = new Map();
+  
   // 同步状态
   private lastSyncTime = 0;
   private syncInProgress = false;
@@ -64,8 +80,9 @@ export class HybridGraphStore {
       // 1. 初始化ChromaDB (存储实体)
       const chromaInitialized = await this.initializeChromaDB();
       
-      // 2. 加载本地关系索引
+      // 2. 加载本地关系索引和实体索引
       await this.loadLocalRelationships();
+      await this.loadLocalEntities();
       
       // 3. 执行同步检查
       if (chromaInitialized) {
@@ -151,13 +168,16 @@ export class HybridGraphStore {
         await this.storeEntityToChroma(fullEntity);
       }
 
-      // 2. 更新本地类型索引
+      // 2. 更新本地实体索引
+      this.entityIndex.set(entity.id, fullEntity);
+
+      // 3. 更新本地类型索引
       if (!this.typeToEntities.has(entity.type)) {
         this.typeToEntities.set(entity.type, new Set());
       }
       this.typeToEntities.get(entity.type)!.add(entity.id);
 
-      // 3. 保存本地索引
+      // 4. 保存本地索引
       await this.saveLocalIndexes();
 
       console.log(`📝 实体已保存: ${entity.type}(${entity.name})`);
@@ -1257,16 +1277,181 @@ export class HybridGraphStore {
   }
 
   /**
+   * 加载本地实体数据
+   */
+  private async loadLocalEntities(): Promise<void> {
+    try {
+      // 检查多个可能的存储字段，包括legacy格式
+      const storageKeys = ['entityIndex', 'typeToEntities', 'graphIndexes', 'entities'];
+      const storageData = await chrome.storage.local.get(storageKeys);
+      
+      console.log('🔍 检查localStorage中的实体数据:', {
+        entityIndex: storageData.entityIndex ? `${Array.isArray(storageData.entityIndex) ? storageData.entityIndex.length : 'Map数据'}个实体` : '无',
+        typeToEntities: storageData.typeToEntities ? `${Array.isArray(storageData.typeToEntities) ? storageData.typeToEntities.length : 'Map数据'}个类型` : '无',
+        graphIndexes: storageData.graphIndexes ? (typeof storageData.graphIndexes === 'object' ? JSON.stringify(storageData.graphIndexes).substring(0, 100) + '...' : storageData.graphIndexes) : '无',
+        entities: storageData.entities ? `${Array.isArray(storageData.entities) ? storageData.entities.length : 'Object数据'}` : '无'
+      });
+      
+      // 优先加载 entityIndex
+      if (storageData.entityIndex) {
+        this.entityIndex = new Map(storageData.entityIndex || []);
+        console.log(`📝 已加载本地实体(entityIndex): ${this.entityIndex.size}个实体`);
+      }
+      // 如果没有 entityIndex，尝试从 graphIndexes 迁移
+      else if (storageData.graphIndexes && typeof storageData.graphIndexes === 'object') {
+        console.log('🔄 检测到legacy格式数据(graphIndexes)，尝试迁移...');
+        
+        // 尝试不同的迁移策略
+        if (Array.isArray(storageData.graphIndexes)) {
+          // 如果是数组格式
+          const migratedEntities: [string, GraphEntity][] = [];
+          for (const item of storageData.graphIndexes) {
+            if (item && item.id && item.name) {
+              const entity: GraphEntity = {
+                id: item.id,
+                type: item.type || 'Unknown',
+                name: item.name,
+                description: item.description || '',
+                properties: item.properties || {},
+                importance: item.importance || 0,
+                created: item.created || Date.now(),
+                updated: item.updated || Date.now()
+              };
+              migratedEntities.push([item.id, entity]);
+            }
+          }
+          this.entityIndex = new Map(migratedEntities);
+          console.log(`📝 从graphIndexes迁移了 ${migratedEntities.length} 个实体`);
+          
+          // 保存到新格式
+          await chrome.storage.local.set({ 
+            entityIndex: Array.from(this.entityIndex.entries())
+          });
+        } else if (storageData.graphIndexes.entities) {
+          // 如果有entities属性
+          const migratedEntities: [string, GraphEntity][] = [];
+          for (const [id, item] of Object.entries(storageData.graphIndexes.entities as Record<string, any>)) {
+            if (item && typeof item === 'object') {
+              const entity: GraphEntity = {
+                id: id,
+                type: item.type || 'Unknown',
+                name: item.name || id,
+                description: item.description || '',
+                properties: item.properties || {},
+                importance: item.importance || 0,
+                created: item.created || Date.now(),
+                updated: item.updated || Date.now()
+              };
+              migratedEntities.push([id, entity]);
+            }
+          }
+          this.entityIndex = new Map(migratedEntities);
+          console.log(`📝 从graphIndexes.entities迁移了 ${migratedEntities.length} 个实体`);
+          
+          // 保存到新格式
+          await chrome.storage.local.set({ 
+            entityIndex: Array.from(this.entityIndex.entries())
+          });
+        }
+      }
+      // 如果都没有，检查其他可能的格式
+      else if (storageData.entities) {
+        console.log('🔄 检测到entities数据，尝试迁移...');
+        const migratedEntities: [string, GraphEntity][] = [];
+        
+        if (Array.isArray(storageData.entities)) {
+          for (const item of storageData.entities) {
+            if (item && item.id && item.name) {
+              const entity: GraphEntity = {
+                id: item.id,
+                type: item.type || 'Unknown',
+                name: item.name,
+                description: item.description || '',
+                properties: item.properties || {},
+                importance: item.importance || 0,
+                created: item.created || Date.now(),
+                updated: item.updated || Date.now()
+              };
+              migratedEntities.push([item.id, entity]);
+            }
+          }
+        } else if (typeof storageData.entities === 'object') {
+          for (const [id, item] of Object.entries(storageData.entities as Record<string, any>)) {
+            if (item && typeof item === 'object') {
+              const entity: GraphEntity = {
+                id: id,
+                type: item.type || 'Unknown',
+                name: item.name || id,
+                description: item.description || '',
+                properties: item.properties || {},
+                importance: item.importance || 0,
+                created: item.created || Date.now(),
+                updated: item.updated || Date.now()
+              };
+              migratedEntities.push([id, entity]);
+            }
+          }
+        }
+        
+        if (migratedEntities.length > 0) {
+          this.entityIndex = new Map(migratedEntities);
+          console.log(`📝 从entities迁移了 ${migratedEntities.length} 个实体`);
+          
+          // 保存到新格式
+          await chrome.storage.local.set({ 
+            entityIndex: Array.from(this.entityIndex.entries())
+          });
+        }
+      }
+
+      // 加载或重建类型索引
+      if (storageData.typeToEntities) {
+        this.typeToEntities = new Map(
+          (storageData.typeToEntities || []).map(([key, value]: [string, string[]]) => [key, new Set(value)])
+        );
+        console.log(`📋 已加载实体类型索引: ${this.typeToEntities.size}个类型`);
+      } else if (this.entityIndex.size > 0) {
+        // 重建类型索引
+        console.log('🔄 重建实体类型索引...');
+        this.typeToEntities.clear();
+        Array.from(this.entityIndex.entries()).forEach(([entityId, entity]) => {
+          if (!this.typeToEntities.has(entity.type)) {
+            this.typeToEntities.set(entity.type, new Set());
+          }
+          this.typeToEntities.get(entity.type)!.add(entityId);
+        });
+        
+        // 保存重建的索引
+        await chrome.storage.local.set({
+          typeToEntities: Array.from(this.typeToEntities.entries())
+            .map(([key, value]) => [key, Array.from(value)])
+        });
+        
+        console.log(`📋 重建了实体类型索引: ${this.typeToEntities.size}个类型`);
+      }
+      
+      console.log(`✅ 实体数据加载完成: ${this.entityIndex.size}个实体, ${this.typeToEntities.size}个类型`);
+      
+    } catch (error) {
+      console.error('❌ 加载本地实体失败:', error);
+    }
+  }
+
+  /**
    * 保存本地索引
    */
   private async saveLocalIndexes(): Promise<void> {
     try {
-      const data = {
-        typeToEntities: Array.from(this.typeToEntities.entries())
-          .map(([key, value]) => [key, Array.from(value)])
-      };
+      const entityIndexData = Array.from(this.entityIndex.entries());
+      const typeToEntitiesData = Array.from(this.typeToEntities.entries())
+        .map(([key, value]) => [key, Array.from(value)]);
       
-      await chrome.storage.local.set({ graphIndexes: data });
+      await chrome.storage.local.set({ 
+        entityIndex: entityIndexData,
+        typeToEntities: typeToEntitiesData 
+      });
+
+      console.log(`💾 已保存本地索引: ${this.entityIndex.size}个实体, ${this.typeToEntities.size}个类型`);
     } catch (error) {
       console.error('保存本地索引失败:', error);
     }
@@ -1386,6 +1571,724 @@ export class HybridGraphStore {
       lastSync: this.lastSyncTime,
       isCloudAvailable: !!this.entitiesCollection
     };
+  }
+
+  /**
+   * 按实体查询相关聊天记录
+   */
+  async queryEntityMessages(entityId: string, options?: {
+    limit?: number;
+    timeRange?: { start: number; end: number };
+  }): Promise<Array<{
+    messageId: string;
+    content: string;
+    source: string;
+    timestamp: number;
+    relevanceScore: number;
+  }>> {
+    try {
+      if (!this.chromaClient) {
+        console.warn('ChromaDB不可用，无法查询聊天记录');
+        return [];
+      }
+
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return [];
+      }
+
+      // 获取消息collection
+      const messagesCollection = await this.getMessagesCollection();
+      if (!messagesCollection) {
+        return [];
+      }
+
+      // 构建查询条件
+      const queryFilters: any = {
+        $or: [
+          { entities: { $contains: entity.name } },
+          { content: { $contains: entity.name } }
+        ]
+      };
+
+      // 添加时间范围过滤
+      if (options?.timeRange) {
+        queryFilters.timestamp = {
+          $gte: options.timeRange.start,
+          $lte: options.timeRange.end
+        };
+      }
+
+      // 执行查询
+      const queryResult = await messagesCollection.query({
+        queryTexts: [entity.name],
+        nResults: options?.limit || 20,
+        where: queryFilters
+      });
+
+      const results: Array<{
+        messageId: string;
+        content: string;
+        source: string;
+        timestamp: number;
+        relevanceScore: number;
+      }> = [];
+
+      if (queryResult.ids && queryResult.ids[0]) {
+        for (let i = 0; i < queryResult.ids[0].length; i++) {
+          const metadata = queryResult.metadatas?.[0]?.[i] as any;
+          results.push({
+            messageId: queryResult.ids[0][i],
+            content: queryResult.documents?.[0]?.[i] || '',
+            source: metadata?.source || 'unknown',
+            timestamp: metadata?.timestamp || Date.now(),
+            relevanceScore: 1 - (queryResult.distances?.[0]?.[i] || 0)
+          });
+        }
+      }
+
+      // 按时间倒序排列
+      results.sort((a, b) => b.timestamp - a.timestamp);
+      
+      console.log(`📱 查询实体 ${entity.name} 的消息记录: ${results.length} 条`);
+      return results;
+
+    } catch (error) {
+      console.error('查询实体消息失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 按实体查询相关网页记录
+   */
+  async queryEntityWebpages(entityId: string, options?: {
+    limit?: number;
+    timeRange?: { start: number; end: number };
+  }): Promise<Array<{
+    webpageId: string;
+    title: string;
+    url: string;
+    domain: string;
+    content: string;
+    visitTime: number;
+    relevanceScore: number;
+    tags: string[];
+  }>> {
+    try {
+      if (!this.chromaClient) {
+        console.warn('ChromaDB不可用，无法查询网页记录');
+        return [];
+      }
+
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return [];
+      }
+
+      // 获取网页collection
+      const username = await this.getUsernameFromStorage();
+      const webpagesCollectionName = `${username}-webpages`;
+      
+      let webpagesCollection;
+      try {
+        const embeddingFunction = {
+          generate: async (texts: string[]) => {
+            return new Array(texts.length).fill(new Array(384).fill(0));
+          }
+        };
+        
+        webpagesCollection = await this.chromaClient.getCollection({ 
+          name: webpagesCollectionName,
+          embeddingFunction
+        });
+      } catch (error) {
+        console.log('网页collection不存在');
+        return [];
+      }
+
+      // 构建查询条件
+      const queryFilters: any = {
+        $or: [
+          { projects: { $contains: entity.name } },
+          { people: { $contains: entity.name } },
+          { content: { $contains: entity.name } }
+        ]
+      };
+
+      // 添加时间范围过滤
+      if (options?.timeRange) {
+        queryFilters.extractedAt = {
+          $gte: options.timeRange.start,
+          $lte: options.timeRange.end
+        };
+      }
+
+      // 执行查询
+      const queryResult = await webpagesCollection.query({
+        queryTexts: [entity.name],
+        nResults: options?.limit || 10,
+        where: queryFilters
+      });
+
+      const results: Array<{
+        webpageId: string;
+        title: string;
+        url: string;
+        domain: string;
+        content: string;
+        visitTime: number;
+        relevanceScore: number;
+        tags: string[];
+      }> = [];
+
+      if (queryResult.ids && queryResult.ids[0]) {
+        for (let i = 0; i < queryResult.ids[0].length; i++) {
+          const metadata = queryResult.metadatas?.[0]?.[i] as any;
+          results.push({
+            webpageId: queryResult.ids[0][i],
+            title: metadata?.title || 'Untitled',
+            url: metadata?.url || '',
+            domain: metadata?.domain || '',
+            content: queryResult.documents?.[0]?.[i] || '',
+            visitTime: metadata?.extractedAt || Date.now(),
+            relevanceScore: 1 - (queryResult.distances?.[0]?.[i] || 0),
+            tags: this.parseTagsFromMetadata(metadata)
+          });
+        }
+      }
+
+      // 按访问时间倒序排列
+      results.sort((a, b) => b.visitTime - a.visitTime);
+      
+      console.log(`🌐 查询实体 ${entity.name} 的网页记录: ${results.length} 条`);
+      return results;
+
+    } catch (error) {
+      console.error('查询实体网页失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取实体时间轴
+   */
+  async getEntityTimeline(entityId: string, options?: {
+    limit?: number;
+    timeRange?: { start: number; end: number };
+  }): Promise<Array<{
+    id: string;
+    type: 'message' | 'webpage' | 'relation_created' | 'entity_updated';
+    title: string;
+    content: string;
+    timestamp: number;
+    source?: string;
+    metadata?: any;
+  }>> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return [];
+      }
+
+      const timeline: Array<{
+        id: string;
+        type: 'message' | 'webpage' | 'relation_created' | 'entity_updated';
+        title: string;
+        content: string;
+        timestamp: number;
+        source?: string;
+        metadata?: any;
+      }> = [];
+
+      // 1. 获取相关消息
+      const messages = await this.queryEntityMessages(entityId, options);
+      for (const msg of messages) {
+        timeline.push({
+          id: `msg-${msg.messageId}`,
+          type: 'message',
+          title: '聊天消息',
+          content: msg.content,
+          timestamp: msg.timestamp,
+          source: msg.source,
+          metadata: { relevanceScore: msg.relevanceScore }
+        });
+      }
+
+      // 2. 获取相关网页
+      const webpages = await this.queryEntityWebpages(entityId, options);
+      for (const webpage of webpages) {
+        timeline.push({
+          id: `web-${webpage.webpageId}`,
+          type: 'webpage',
+          title: webpage.title,
+          content: webpage.content,
+          timestamp: webpage.visitTime,
+          metadata: { 
+            url: webpage.url, 
+            domain: webpage.domain,
+            relevanceScore: webpage.relevanceScore 
+          }
+        });
+      }
+
+      // 3. 获取关系创建记录
+      const relationships = this.queryRelationships({ fromId: entityId });
+      const incomingRelationships = this.queryRelationships({ toId: entityId });
+      
+      for (const rel of [...relationships, ...incomingRelationships]) {
+        timeline.push({
+          id: `rel-${rel.id}`,
+          type: 'relation_created',
+          title: `建立关系: ${rel.type}`,
+          content: `与 ${rel.fromId === entityId ? rel.toId : rel.fromId} 建立了 ${rel.type} 关系`,
+          timestamp: rel.created,
+          metadata: { relationship: rel }
+        });
+      }
+
+      // 4. 添加实体更新记录
+      timeline.push({
+        id: `entity-created-${entity.id}`,
+        type: 'entity_updated',
+        title: '实体创建',
+        content: `${entity.type} "${entity.name}" 被创建`,
+        timestamp: entity.created
+      });
+
+      if (entity.updated > entity.created) {
+        timeline.push({
+          id: `entity-updated-${entity.id}`,
+          type: 'entity_updated',
+          title: '实体更新',
+          content: `${entity.type} "${entity.name}" 被更新`,
+          timestamp: entity.updated
+        });
+      }
+
+      // 按时间倒序排列
+      timeline.sort((a, b) => b.timestamp - a.timestamp);
+      
+      // 应用限制
+      const limitedTimeline = options?.limit ? timeline.slice(0, options.limit) : timeline;
+      
+      console.log(`⏰ 生成实体 ${entity.name} 的时间轴: ${limitedTimeline.length} 个事件`);
+      return limitedTimeline;
+
+    } catch (error) {
+      console.error('生成实体时间轴失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取实体统计信息
+   */
+  async getEntityStatistics(): Promise<{
+    entityCounts: Record<string, number>;
+    totalEntities: number;
+    totalRelationships: number;
+    topEntitiesByType: Record<string, Array<{
+      id: string;
+      name: string;
+      relationCount: number;
+      lastActivity: number;
+    }>>;
+    relationshipTypes: Record<string, number>;
+    activityStats: {
+      entitiesCreatedToday: number;
+      entitiesCreatedThisWeek: number;
+      entitiesCreatedThisMonth: number;
+    };
+  }> {
+    try {
+      // 确保数据已加载
+      if (this.entityIndex.size === 0) {
+        console.log('⚠️ 实体索引为空，尝试重新加载数据...');
+        await this.loadLocalEntities();
+      }
+      
+      console.log('📊 生成实体统计信息:', {
+        entityIndexSize: this.entityIndex.size,
+        relationshipIndexSize: this.relationshipIndex.size,
+        typeToEntitiesSize: this.typeToEntities.size
+      });
+      
+      const stats = {
+        entityCounts: {} as Record<string, number>,
+        totalEntities: this.entityIndex.size,
+        totalRelationships: this.relationshipIndex.size,
+        topEntitiesByType: {} as Record<string, Array<{
+          id: string;
+          name: string;
+          relationCount: number;
+          lastActivity: number;
+        }>>,
+        relationshipTypes: {} as Record<string, number>,
+        activityStats: {
+          entitiesCreatedToday: 0,
+          entitiesCreatedThisWeek: 0,
+          entitiesCreatedThisMonth: 0
+        }
+      };
+
+      const now = Date.now();
+      const today = now - 24 * 60 * 60 * 1000;
+      const thisWeek = now - 7 * 24 * 60 * 60 * 1000;
+      const thisMonth = now - 30 * 24 * 60 * 60 * 1000;
+
+      // 统计实体数量和活动
+      Array.from(this.entityIndex.entries()).forEach(([entityId, entity]) => {
+        // 按类型统计
+        stats.entityCounts[entity.type] = (stats.entityCounts[entity.type] || 0) + 1;
+
+        // 活动统计
+        if (entity.created > today) {
+          stats.activityStats.entitiesCreatedToday++;
+        }
+        if (entity.created > thisWeek) {
+          stats.activityStats.entitiesCreatedThisWeek++;
+        }
+        if (entity.created > thisMonth) {
+          stats.activityStats.entitiesCreatedThisMonth++;
+        }
+
+        // 计算关系数量
+        const relations = this.entityToRelations.get(entityId);
+        const relationCount = relations ? relations.size : 0;
+
+        // 按类型记录top实体
+        if (!stats.topEntitiesByType[entity.type]) {
+          stats.topEntitiesByType[entity.type] = [];
+        }
+        
+        stats.topEntitiesByType[entity.type].push({
+          id: entityId,
+          name: entity.name,
+          relationCount,
+          lastActivity: Math.max(entity.created, entity.updated)
+        });
+      });
+
+      // 排序top实体（按关系数量和最近活动时间）
+      for (const type in stats.topEntitiesByType) {
+        stats.topEntitiesByType[type].sort((a, b) => {
+          if (a.relationCount !== b.relationCount) {
+            return b.relationCount - a.relationCount; // 关系多的在前
+          }
+          return b.lastActivity - a.lastActivity; // 最近活动的在前
+        });
+        // 只保留前10个
+        stats.topEntitiesByType[type] = stats.topEntitiesByType[type].slice(0, 10);
+      }
+
+      // 统计关系类型
+      Array.from(this.relationshipIndex.entries()).forEach(([relationId, relationship]) => {
+        stats.relationshipTypes[relationship.type] = 
+          (stats.relationshipTypes[relationship.type] || 0) + 1;
+      });
+
+      console.log('📊 实体统计信息生成完成:', stats);
+      return stats;
+
+    } catch (error) {
+      console.error('获取实体统计失败:', error);
+      return {
+        entityCounts: {},
+        totalEntities: 0,
+        totalRelationships: 0,
+        topEntitiesByType: {},
+        relationshipTypes: {},
+        activityStats: {
+          entitiesCreatedToday: 0,
+          entitiesCreatedThisWeek: 0,
+          entitiesCreatedThisMonth: 0
+        }
+      };
+    }
+  }
+
+  /**
+   * 更新实体访问统计
+   */
+  async updateEntityAccess(entityId: string): Promise<void> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return;
+      }
+
+      // 更新访问统计
+      entity.lastAccessed = Date.now();
+      entity.accessCount = (entity.accessCount || 0) + 1;
+      entity.updated = Date.now();
+
+      // 重新计算重要性评分
+      await this.recalculateEntityImportance(entity);
+
+      // 保存更新
+      this.entityIndex.set(entityId, entity);
+      
+      // 如果有云端存储，同步更新
+      if (this.entitiesCollection) {
+        await this.storeEntityToChroma(entity);
+      }
+
+      console.log(`📊 更新实体访问统计: ${entity.name}, 访问次数: ${entity.accessCount}`);
+
+    } catch (error) {
+      console.error('更新实体访问统计失败:', error);
+    }
+  }
+
+  /**
+   * 重新计算实体重要性评分
+   */
+  private async recalculateEntityImportance(entity: GraphEntity): Promise<void> {
+    try {
+      let importance = 0;
+
+      // 基础分数（基于类型）
+      const typeImportance = {
+        'Person': 0.3,
+        'Project': 0.4,
+        'Organization': 0.3,
+        'Task': 0.2,
+        'Document': 0.2,
+        'Technology': 0.2,
+        'Topic': 0.3
+      };
+      importance += typeImportance[entity.type] || 0.2;
+
+      // 关系数量影响（最多+0.3）
+      const relations = this.entityToRelations.get(entity.id);
+      const relationCount = relations ? relations.size : 0;
+      importance += Math.min(0.3, relationCount * 0.05);
+
+      // 访问频率影响（最多+0.2）
+      const accessCount = entity.accessCount || 0;
+      importance += Math.min(0.2, accessCount * 0.01);
+
+      // 最近活动影响（最多+0.2）
+      const daysSinceActivity = (Date.now() - (entity.lastAccessed || entity.updated)) / (24 * 60 * 60 * 1000);
+      if (daysSinceActivity < 1) {
+        importance += 0.2; // 今天访问过
+      } else if (daysSinceActivity < 7) {
+        importance += 0.1; // 一周内访问过
+      } else if (daysSinceActivity < 30) {
+        importance += 0.05; // 一个月内访问过
+      }
+
+      // 确保评分在0-1范围内
+      entity.importance = Math.min(1.0, Math.max(0.0, importance));
+
+    } catch (error) {
+      console.error('计算实体重要性失败:', error);
+      entity.importance = 0.5; // 默认值
+    }
+  }
+
+  /**
+   * 批量更新实体的关联统计
+   */
+  async enrichEntitiesWithStats(entities: GraphEntity[]): Promise<GraphEntity[]> {
+    try {
+      const enrichedEntities = await Promise.all(
+        entities.map(async (entity) => {
+          // 计算关系数量
+          const relations = this.entityToRelations.get(entity.id);
+          entity.relationshipsCount = relations ? relations.size : 0;
+
+          // 查询相关消息数量（如果ChromaDB可用）
+          if (this.chromaClient) {
+            try {
+              const messages = await this.queryEntityMessages(entity.id, { limit: 1 });
+              // 这里只是为了获取总数，实际实现中可以优化为只获取计数
+              entity.relatedMessagesCount = messages.length > 0 ? Math.min(100, messages.length) : 0;
+            } catch (error) {
+              entity.relatedMessagesCount = 0;
+            }
+
+            try {
+              const webpages = await this.queryEntityWebpages(entity.id, { limit: 1 });
+              entity.relatedWebpagesCount = webpages.length > 0 ? Math.min(50, webpages.length) : 0;
+            } catch (error) {
+              entity.relatedWebpagesCount = 0;
+            }
+          } else {
+            entity.relatedMessagesCount = 0;
+            entity.relatedWebpagesCount = 0;
+          }
+
+          // 确保有默认的统计值
+          entity.accessCount = entity.accessCount || 0;
+          entity.lastAccessed = entity.lastAccessed || entity.updated;
+          entity.importance = entity.importance || 0.5;
+          entity.tags = entity.tags || [];
+          entity.status = entity.status || 'active';
+
+          return entity;
+        })
+      );
+
+      return enrichedEntities;
+
+    } catch (error) {
+      console.error('丰富实体统计信息失败:', error);
+      return entities;
+    }
+  }
+
+  /**
+   * 获取实体详细信息（包含所有统计）
+   */
+  async getEntityDetails(entityId: string): Promise<GraphEntity | null> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        return null;
+      }
+
+      // 更新访问统计
+      await this.updateEntityAccess(entityId);
+
+      // 丰富统计信息
+      const enrichedEntities = await this.enrichEntitiesWithStats([entity]);
+      
+      return enrichedEntities[0] || null;
+
+    } catch (error) {
+      console.error('获取实体详情失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 设置实体标签
+   */
+  async setEntityTags(entityId: string, tags: string[]): Promise<boolean> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return false;
+      }
+
+      entity.tags = Array.from(new Set(tags)); // 去重
+      entity.updated = Date.now();
+
+      this.entityIndex.set(entityId, entity);
+
+      // 同步到云端
+      if (this.entitiesCollection) {
+        await this.storeEntityToChroma(entity);
+      }
+
+      console.log(`🏷️ 设置实体标签: ${entity.name} -> ${tags.join(', ')}`);
+      return true;
+
+    } catch (error) {
+      console.error('设置实体标签失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 设置实体状态
+   */
+  async setEntityStatus(entityId: string, status: string): Promise<boolean> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return false;
+      }
+
+      entity.status = status;
+      entity.updated = Date.now();
+
+      this.entityIndex.set(entityId, entity);
+
+      // 同步到云端
+      if (this.entitiesCollection) {
+        await this.storeEntityToChroma(entity);
+      }
+
+      console.log(`📊 设置实体状态: ${entity.name} -> ${status}`);
+      return true;
+
+    } catch (error) {
+      console.error('设置实体状态失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 根据重要性排序实体
+   */
+  getEntitiesByImportance(entityType?: string, limit: number = 20): GraphEntity[] {
+    try {
+      let entities: GraphEntity[];
+      
+      if (entityType) {
+        const entityIds = this.typeToEntities.get(entityType);
+        if (!entityIds) return [];
+        entities = Array.from(entityIds).map(id => this.entityIndex.get(id)!).filter(Boolean);
+      } else {
+        entities = Array.from(this.entityIndex.values());
+      }
+
+      // 按重要性排序
+      entities.sort((a, b) => {
+        const importanceA = a.importance || 0;
+        const importanceB = b.importance || 0;
+        
+        if (Math.abs(importanceA - importanceB) < 0.05) {
+          // 重要性相近时，按最近访问时间排序
+          return (b.lastAccessed || b.updated) - (a.lastAccessed || a.updated);
+        }
+        
+        return importanceB - importanceA;
+      });
+
+      return entities.slice(0, limit);
+
+    } catch (error) {
+      console.error('按重要性排序实体失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 解析标签从元数据
+   */
+  private parseTagsFromMetadata(metadata: any): string[] {
+    const tags: string[] = [];
+    
+    try {
+      if (metadata?.contentCategory) {
+        tags.push(metadata.contentCategory);
+      }
+      if (metadata?.domain) {
+        tags.push(metadata.domain);
+      }
+      if (metadata?.projects) {
+        const projects = typeof metadata.projects === 'string' 
+          ? JSON.parse(metadata.projects) 
+          : metadata.projects;
+        if (Array.isArray(projects)) {
+          tags.push(...projects);
+        }
+      }
+    } catch (error) {
+      console.warn('解析标签失败:', error);
+    }
+    
+    return tags;
   }
 
   /**

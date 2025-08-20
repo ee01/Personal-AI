@@ -79,7 +79,7 @@
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "knowledge-query.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "static/graph-integration-demo.html", "static/enhanced-knowledge-query.html", "static/enhanced-knowledge-query.js", "static/web-intelligence-demo.html"],
+    "resources": ["topic-modal.html", "knowledge-query.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "static/graph-integration-demo.html", "static/enhanced-knowledge-query.html", "static/enhanced-knowledge-query.js", "static/web-intelligence-demo.html", "memory.html", "memory.js", "memory-launcher.html", "pwa-init.js", "pwa-manifest.json", "sw.js"],
     "matches": ["<all_urls>"]
   }],
   "icons": {

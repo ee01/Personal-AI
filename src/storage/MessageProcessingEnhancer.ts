@@ -399,6 +399,16 @@ export class MessageProcessingEnhancer {
   }
 
   /**
+   * 获取混合图存储实例
+   */
+  getHybridGraphStore(): HybridGraphStore {
+    if (!this.isInitialized) {
+      throw new Error('MessageProcessingEnhancer 未初始化');
+    }
+    return this.hybridGraph;
+  }
+
+  /**
    * 销毁增强器
    */
   destroy(): void {

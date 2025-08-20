@@ -311,6 +311,297 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // ========== 记忆界面相关消息处理 ==========
+    
+    // 获取实体统计信息
+    if (request.type === 'GET_ENTITY_STATISTICS') {
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.getEntityStatistics())
+            .then(stats => sendResponse({
+                success: true,
+                data: stats
+            }))
+            .catch(error => {
+                console.error('获取实体统计失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: {
+                        entityCounts: {},
+                        totalEntities: 0,
+                        totalRelationships: 0,
+                        topEntitiesByType: {},
+                        relationshipTypes: {},
+                        activityStats: {
+                            entitiesCreatedToday: 0,
+                            entitiesCreatedThisWeek: 0,
+                            entitiesCreatedThisMonth: 0
+                        }
+                    }
+                });
+            });
+        return true;
+    }
+
+    // 获取实体类型列表
+    if (request.type === 'GET_ENTITY_TYPES') {
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.getEntityStatistics())
+            .then(stats => sendResponse({
+                success: true,
+                data: {
+                    entityCounts: stats.entityCounts,
+                    totalEntities: stats.totalEntities
+                }
+            }))
+            .catch(error => {
+                console.error('获取实体类型失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: { entityCounts: {}, totalEntities: 0 }
+                });
+            });
+        return true;
+    }
+
+    // 按类型获取实体列表
+    if (request.type === 'GET_ENTITIES_BY_TYPE') {
+        const { entityType, limit = 50 } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                const entities = hybridStore.getEntitiesByImportance(entityType, limit);
+                return hybridStore.enrichEntitiesWithStats(entities);
+            })
+            .then(enrichedEntities => sendResponse({
+                success: true,
+                data: enrichedEntities
+            }))
+            .catch(error => {
+                console.error('获取实体列表失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: []
+                });
+            });
+        return true;
+    }
+
+    // 搜索实体
+    if (request.type === 'SEARCH_ENTITIES') {
+        const { query, entityType, limit = 30 } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                const searchOptions: any = { limit };
+                if (entityType) {
+                    searchOptions.type = entityType;
+                }
+                if (query) {
+                    searchOptions.textQuery = query;
+                }
+                
+                const entities = hybridStore.queryEntities(searchOptions);
+                return hybridStore.enrichEntitiesWithStats(entities);
+            })
+            .then(enrichedEntities => sendResponse({
+                success: true,
+                data: enrichedEntities
+            }))
+            .catch(error => {
+                console.error('搜索实体失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: []
+                });
+            });
+        return true;
+    }
+
+    // 获取最近时间轴
+    if (request.type === 'GET_RECENT_TIMELINE') {
+        const { limit = 50 } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                // 获取最重要的几个实体的时间轴
+                const topEntities = hybridStore.getEntitiesByImportance(undefined, 10);
+                const timelinePromises = topEntities.map(entity => 
+                    hybridStore.getEntityTimeline(entity.id, { limit: 5 })
+                );
+                
+                return Promise.all(timelinePromises);
+            })
+            .then(timelines => {
+                // 合并并排序所有时间轴
+                const allEvents = timelines.flat();
+                allEvents.sort((a, b) => b.timestamp - a.timestamp);
+                
+                sendResponse({
+                    success: true,
+                    data: allEvents.slice(0, limit)
+                });
+            })
+            .catch(error => {
+                console.error('获取时间轴失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: []
+                });
+            });
+        return true;
+    }
+
+    // 更新实体访问统计
+    if (request.type === 'UPDATE_ENTITY_ACCESS') {
+        const { entityId } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.updateEntityAccess(entityId))
+            .then(() => sendResponse({
+                success: true,
+                message: '实体访问统计已更新'
+            }))
+            .catch(error => {
+                console.error('更新实体访问失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message
+                });
+            });
+        return true;
+    }
+
+    // 获取实体详细信息
+    if (request.type === 'GET_ENTITY_DETAILS') {
+        const { entityId } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.getEntityDetails(entityId))
+            .then(entityDetails => sendResponse({
+                success: true,
+                data: entityDetails
+            }))
+            .catch(error => {
+                console.error('获取实体详情失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: null
+                });
+            });
+        return true;
+    }
+
+    // 获取实体时间轴
+    if (request.type === 'GET_ENTITY_TIMELINE') {
+        const { entityId, limit = 50, timeRange } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.getEntityTimeline(entityId, { limit, timeRange }))
+            .then(timeline => sendResponse({
+                success: true,
+                data: timeline
+            }))
+            .catch(error => {
+                console.error('获取实体时间轴失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: []
+                });
+            });
+        return true;
+    }
+
+    // 获取实体相关消息
+    if (request.type === 'GET_ENTITY_MESSAGES') {
+        const { entityId, limit = 20, timeRange } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.queryEntityMessages(entityId, { limit, timeRange }))
+            .then(messages => sendResponse({
+                success: true,
+                data: messages
+            }))
+            .catch(error => {
+                console.error('获取实体消息失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: []
+                });
+            });
+        return true;
+    }
+
+    // 获取实体相关网页
+    if (request.type === 'GET_ENTITY_WEBPAGES') {
+        const { entityId, limit = 10, timeRange } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.queryEntityWebpages(entityId, { limit, timeRange }))
+            .then(webpages => sendResponse({
+                success: true,
+                data: webpages
+            }))
+            .catch(error => {
+                console.error('获取实体网页失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: []
+                });
+            });
+        return true;
+    }
+
+    // 设置实体标签
+    if (request.type === 'SET_ENTITY_TAGS') {
+        const { entityId, tags } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.setEntityTags(entityId, tags))
+            .then(success => sendResponse({
+                success,
+                message: success ? '实体标签设置成功' : '实体标签设置失败'
+            }))
+            .catch(error => {
+                console.error('设置实体标签失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message
+                });
+            });
+        return true;
+    }
+
+    // 设置实体状态
+    if (request.type === 'SET_ENTITY_STATUS') {
+        const { entityId, status } = request;
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => hybridStore.setEntityStatus(entityId, status))
+            .then(success => sendResponse({
+                success,
+                message: success ? '实体状态设置成功' : '实体状态设置失败'
+            }))
+            .catch(error => {
+                console.error('设置实体状态失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message
+                });
+            });
+        return true;
+    }
+
     // 处理智能网页分析请求
     if (request.type === 'WEB_INTELLIGENCE_ANALYSIS') {
         const { pageContent, analysisResult, timestamp } = request;

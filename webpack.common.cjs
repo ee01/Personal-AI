@@ -40,7 +40,8 @@ module.exports = (env) => {
       'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
       'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
-      'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts'
+      'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts',
+      'memory': './src/modals/memory.tsx',
     },
     module: {
       rules: [
