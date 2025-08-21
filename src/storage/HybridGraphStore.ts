@@ -51,6 +51,55 @@ export interface GraphSyncStatus {
   conflicts: number;
 }
 
+export interface EntityTypeInfo {
+  type: string;
+  name: string;
+  icon: string;
+  count: number;
+  description?: string;
+}
+
+/**
+ * 实体类型配置（中文映射）
+ */
+export const ENTITY_TYPE_CONFIG: Record<string, { name: string; icon: string; description: string }> = {
+  'Person': { 
+    name: '人物', 
+    icon: '👥', 
+    description: '团队成员、联系人、项目相关人员等'
+  },
+  'Project': { 
+    name: '项目', 
+    icon: '🚀', 
+    description: '工作项目、产品开发、研究项目等'
+  },
+  'Task': { 
+    name: '任务', 
+    icon: '📋', 
+    description: '具体工作任务、待办事项、行动项等'
+  },
+  'Organization': { 
+    name: '组织', 
+    icon: '🏢', 
+    description: '公司、部门、团队、客户组织等'
+  },
+  'Document': { 
+    name: '文档', 
+    icon: '📄', 
+    description: '文件、资料、规范、报告等'
+  },
+  'Technology': { 
+    name: '技术', 
+    icon: '🔧', 
+    description: '技术栈、工具、框架、平台等'
+  },
+  'Topic': { 
+    name: '主题', 
+    icon: '💡', 
+    description: '讨论话题、知识领域、专业概念等'
+  }
+};
+
 /**
  * 混合图存储：实体存储在ChromaDB，关系索引存储在Chrome Storage
  */
@@ -359,10 +408,13 @@ export class HybridGraphStore {
       let downloadedEntities = 0;
       let restoredRelationships = 0;
 
-      // 1. 下载所有云端实体并建立本地类型索引
+      // 1. 下载所有云端实体并建立本地索引
       const cloudEntities = await this.getAllEntitiesFromChroma();
       
       for (const entity of cloudEntities) {
+        // 存储到实体索引
+        this.entityIndex.set(entity.id, entity);
+        
         // 建立实体类型索引
         if (!this.typeToEntities.has(entity.type)) {
           this.typeToEntities.set(entity.type, new Set());
@@ -397,7 +449,7 @@ export class HybridGraphStore {
 
       return {
         lastSync: this.lastSyncTime,
-        localEntities: this.typeToEntities.size,
+        localEntities: this.entityIndex.size,
         cloudEntities: cloudEntities.length,
         localRelationships: this.relationshipIndex.size,
         pendingSync: 0,
@@ -750,7 +802,7 @@ export class HybridGraphStore {
 
       return {
         lastSync: this.lastSyncTime,
-        localEntities: this.typeToEntities.size,
+        localEntities: this.entityIndex.size,
         cloudEntities: this.entitiesCollection ? await this.getCloudEntityCount() : 0,
         localRelationships: this.relationshipIndex.size,
         pendingSync: 0,
@@ -799,7 +851,7 @@ export class HybridGraphStore {
           type: 'graph_backup',
           backupTime: Date.now(),
           relationshipCount: this.relationshipIndex.size,
-          entityCount: this.typeToEntities.size
+          entityCount: this.entityIndex.size
         }]
       });
 
@@ -1181,14 +1233,51 @@ export class HybridGraphStore {
     name?: string;
     limit?: number;
   }): Promise<GraphEntity[]> {
-    // 本地只有类型索引，无法进行复杂搜索
-    // 这里返回类型匹配的实体ID，实际实体数据需要从ChromaDB获取
     const results: GraphEntity[] = [];
+    const limit = options.limit || 50;
     
     if (options.type) {
+      // 按类型搜索
       const entityIds = this.typeToEntities.get(options.type) || new Set();
-      // 注意：这里需要从ChromaDB获取实际实体数据
-      // 为了简化，这里返回空数组，实际应用中需要实现
+      
+      for (const entityId of Array.from(entityIds)) {
+        const entity = this.entityIndex.get(entityId);
+        if (entity) {
+          // 如果有名称过滤条件，检查名称匹配
+          if (options.name) {
+            if (entity.name.toLowerCase().includes(options.name.toLowerCase())) {
+              results.push(entity);
+            }
+          } else {
+            results.push(entity);
+          }
+          
+          // 达到限制数量时停止
+          if (results.length >= limit) {
+            break;
+          }
+        }
+      }
+    } else if (options.name) {
+      // 仅按名称搜索，遍历所有实体
+      for (const entity of Array.from(this.entityIndex.values())) {
+        if (entity.name.toLowerCase().includes(options.name.toLowerCase())) {
+          results.push(entity);
+          if (results.length >= limit) {
+            break;
+          }
+        }
+      }
+    } else {
+      // 无过滤条件，返回所有实体（限制数量）
+      let count = 0;
+      for (const entity of Array.from(this.entityIndex.values())) {
+        results.push(entity);
+        count++;
+        if (count >= limit) {
+          break;
+        }
+      }
     }
 
     return results;
@@ -1281,137 +1370,29 @@ export class HybridGraphStore {
    */
   private async loadLocalEntities(): Promise<void> {
     try {
-      // 检查多个可能的存储字段，包括legacy格式
-      const storageKeys = ['entityIndex', 'typeToEntities', 'graphIndexes', 'entities'];
+      // 只加载新格式数据
+      const storageKeys = ['entityIndex', 'typeToEntities'];
       const storageData = await chrome.storage.local.get(storageKeys);
       
       console.log('🔍 检查localStorage中的实体数据:', {
         entityIndex: storageData.entityIndex ? `${Array.isArray(storageData.entityIndex) ? storageData.entityIndex.length : 'Map数据'}个实体` : '无',
-        typeToEntities: storageData.typeToEntities ? `${Array.isArray(storageData.typeToEntities) ? storageData.typeToEntities.length : 'Map数据'}个类型` : '无',
-        graphIndexes: storageData.graphIndexes ? (typeof storageData.graphIndexes === 'object' ? JSON.stringify(storageData.graphIndexes).substring(0, 100) + '...' : storageData.graphIndexes) : '无',
-        entities: storageData.entities ? `${Array.isArray(storageData.entities) ? storageData.entities.length : 'Object数据'}` : '无'
+        typeToEntities: storageData.typeToEntities ? `${Array.isArray(storageData.typeToEntities) ? storageData.typeToEntities.length : 'Map数据'}个类型` : '无'
       });
       
-      // 优先加载 entityIndex
-      if (storageData.entityIndex) {
-        this.entityIndex = new Map(storageData.entityIndex || []);
-        console.log(`📝 已加载本地实体(entityIndex): ${this.entityIndex.size}个实体`);
-      }
-      // 如果没有 entityIndex，尝试从 graphIndexes 迁移
-      else if (storageData.graphIndexes && typeof storageData.graphIndexes === 'object') {
-        console.log('🔄 检测到legacy格式数据(graphIndexes)，尝试迁移...');
-        
-        // 尝试不同的迁移策略
-        if (Array.isArray(storageData.graphIndexes)) {
-          // 如果是数组格式
-          const migratedEntities: [string, GraphEntity][] = [];
-          for (const item of storageData.graphIndexes) {
-            if (item && item.id && item.name) {
-              const entity: GraphEntity = {
-                id: item.id,
-                type: item.type || 'Unknown',
-                name: item.name,
-                description: item.description || '',
-                properties: item.properties || {},
-                importance: item.importance || 0,
-                created: item.created || Date.now(),
-                updated: item.updated || Date.now()
-              };
-              migratedEntities.push([item.id, entity]);
-            }
-          }
-          this.entityIndex = new Map(migratedEntities);
-          console.log(`📝 从graphIndexes迁移了 ${migratedEntities.length} 个实体`);
-          
-          // 保存到新格式
-          await chrome.storage.local.set({ 
-            entityIndex: Array.from(this.entityIndex.entries())
-          });
-        } else if (storageData.graphIndexes.entities) {
-          // 如果有entities属性
-          const migratedEntities: [string, GraphEntity][] = [];
-          for (const [id, item] of Object.entries(storageData.graphIndexes.entities as Record<string, any>)) {
-            if (item && typeof item === 'object') {
-              const entity: GraphEntity = {
-                id: id,
-                type: item.type || 'Unknown',
-                name: item.name || id,
-                description: item.description || '',
-                properties: item.properties || {},
-                importance: item.importance || 0,
-                created: item.created || Date.now(),
-                updated: item.updated || Date.now()
-              };
-              migratedEntities.push([id, entity]);
-            }
-          }
-          this.entityIndex = new Map(migratedEntities);
-          console.log(`📝 从graphIndexes.entities迁移了 ${migratedEntities.length} 个实体`);
-          
-          // 保存到新格式
-          await chrome.storage.local.set({ 
-            entityIndex: Array.from(this.entityIndex.entries())
-          });
-        }
-      }
-      // 如果都没有，检查其他可能的格式
-      else if (storageData.entities) {
-        console.log('🔄 检测到entities数据，尝试迁移...');
-        const migratedEntities: [string, GraphEntity][] = [];
-        
-        if (Array.isArray(storageData.entities)) {
-          for (const item of storageData.entities) {
-            if (item && item.id && item.name) {
-              const entity: GraphEntity = {
-                id: item.id,
-                type: item.type || 'Unknown',
-                name: item.name,
-                description: item.description || '',
-                properties: item.properties || {},
-                importance: item.importance || 0,
-                created: item.created || Date.now(),
-                updated: item.updated || Date.now()
-              };
-              migratedEntities.push([item.id, entity]);
-            }
-          }
-        } else if (typeof storageData.entities === 'object') {
-          for (const [id, item] of Object.entries(storageData.entities as Record<string, any>)) {
-            if (item && typeof item === 'object') {
-              const entity: GraphEntity = {
-                id: id,
-                type: item.type || 'Unknown',
-                name: item.name || id,
-                description: item.description || '',
-                properties: item.properties || {},
-                importance: item.importance || 0,
-                created: item.created || Date.now(),
-                updated: item.updated || Date.now()
-              };
-              migratedEntities.push([id, entity]);
-            }
-          }
-        }
-        
-        if (migratedEntities.length > 0) {
-          this.entityIndex = new Map(migratedEntities);
-          console.log(`📝 从entities迁移了 ${migratedEntities.length} 个实体`);
-          
-          // 保存到新格式
-          await chrome.storage.local.set({ 
-            entityIndex: Array.from(this.entityIndex.entries())
-          });
-        }
+      // 加载实体索引
+      if (storageData.entityIndex && Array.isArray(storageData.entityIndex)) {
+        this.entityIndex = new Map(storageData.entityIndex);
+        console.log(`📝 已加载本地实体: ${this.entityIndex.size}个实体`);
       }
 
-      // 加载或重建类型索引
-      if (storageData.typeToEntities) {
+      // 加载类型索引
+      if (storageData.typeToEntities && Array.isArray(storageData.typeToEntities)) {
         this.typeToEntities = new Map(
-          (storageData.typeToEntities || []).map(([key, value]: [string, string[]]) => [key, new Set(value)])
+          storageData.typeToEntities.map(([key, value]: [string, string[]]) => [key, new Set(value)])
         );
         console.log(`📋 已加载实体类型索引: ${this.typeToEntities.size}个类型`);
       } else if (this.entityIndex.size > 0) {
-        // 重建类型索引
+        // 如果没有类型索引但有实体数据，重建类型索引
         console.log('🔄 重建实体类型索引...');
         this.typeToEntities.clear();
         Array.from(this.entityIndex.entries()).forEach(([entityId, entity]) => {
@@ -1531,7 +1512,7 @@ export class HybridGraphStore {
   private getSyncStatus(): GraphSyncStatus {
     return {
       lastSync: this.lastSyncTime,
-      localEntities: this.typeToEntities.size,
+      localEntities: this.entityIndex.size,
       cloudEntities: 0,
       localRelationships: this.relationshipIndex.size,
       pendingSync: 0,
@@ -2331,12 +2312,441 @@ export class HybridGraphStore {
   }
 
   /**
+   * 获取实体类型信息列表
+   */
+  async getEntityTypes(): Promise<EntityTypeInfo[]> {
+    try {
+      const entityTypes: EntityTypeInfo[] = [];
+      
+      // 遍历所有已知的实体类型
+      for (const [type, entityIds] of Array.from(this.typeToEntities.entries())) {
+        const config = ENTITY_TYPE_CONFIG[type];
+        if (config) {
+          entityTypes.push({
+            type,
+            name: config.name,
+            icon: config.icon,
+            count: entityIds.size,
+            description: config.description
+          });
+        } else {
+          // 未知类型，使用默认配置
+          entityTypes.push({
+            type,
+            name: type,
+            icon: '📂',
+            count: entityIds.size,
+            description: `自定义类型: ${type}`
+          });
+        }
+      }
+      
+      // 按数量排序
+      entityTypes.sort((a, b) => b.count - a.count);
+      
+      console.log(`📋 获取实体类型列表: ${entityTypes.length}个类型`);
+      return entityTypes;
+      
+    } catch (error) {
+      console.error('获取实体类型失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 按类型获取实体列表（优化的版本）
+   */
+  async getEntitiesByType(entityType: string, options?: {
+    limit?: number;
+    offset?: number;
+    sortBy?: 'name' | 'importance' | 'lastAccessed' | 'created';
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<GraphEntity[]> {
+    try {
+      const {
+        limit = 50,
+        offset = 0,
+        sortBy = 'importance',
+        sortOrder = 'desc'
+      } = options || {};
+
+      // 获取该类型的所有实体ID
+      const entityIds = this.typeToEntities.get(entityType);
+      if (!entityIds || entityIds.size === 0) {
+        console.log(`⚠️ 类型 ${entityType} 没有找到实体`);
+        return [];
+      }
+
+      // 获取实体对象
+      const entities: GraphEntity[] = [];
+      for (const entityId of Array.from(entityIds)) {
+        const entity = this.entityIndex.get(entityId);
+        if (entity) {
+          entities.push(entity);
+        }
+      }
+
+      // 排序
+      entities.sort((a, b) => {
+        let valueA: any, valueB: any;
+        
+        switch (sortBy) {
+          case 'name':
+            valueA = a.name.toLowerCase();
+            valueB = b.name.toLowerCase();
+            break;
+          case 'importance':
+            valueA = a.importance || 0;
+            valueB = b.importance || 0;
+            break;
+          case 'lastAccessed':
+            valueA = a.lastAccessed || a.updated;
+            valueB = b.lastAccessed || b.updated;
+            break;
+          case 'created':
+            valueA = a.created;
+            valueB = b.created;
+            break;
+          default:
+            valueA = a.importance || 0;
+            valueB = b.importance || 0;
+        }
+
+        if (sortOrder === 'asc') {
+          return valueA > valueB ? 1 : -1;
+        } else {
+          return valueA < valueB ? 1 : -1;
+        }
+      });
+
+      // 分页
+      const paginatedEntities = entities.slice(offset, offset + limit);
+      
+      // 丰富统计信息
+      const enrichedEntities = await this.enrichEntitiesWithStats(paginatedEntities);
+      
+      console.log(`📊 获取${entityType}类型实体: ${enrichedEntities.length}/${entities.length}个`);
+      return enrichedEntities;
+      
+    } catch (error) {
+      console.error(`获取${entityType}类型实体失败:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * 通用搜索实体方法（改进版）
+   */
+  async searchEntities(options: {
+    query?: string;
+    entityType?: string;
+    tags?: string[];
+    status?: string;
+    limit?: number;
+    timeRange?: { start: number; end: number };
+  }): Promise<GraphEntity[]> {
+    try {
+      const { query, entityType, tags, status, limit = 30, timeRange } = options;
+      
+      let candidates: GraphEntity[] = [];
+      
+      // 1. 首先按类型过滤
+      if (entityType) {
+        const entityIds = this.typeToEntities.get(entityType);
+        if (entityIds) {
+          candidates = Array.from(entityIds)
+            .map(id => this.entityIndex.get(id))
+            .filter(Boolean) as GraphEntity[];
+        }
+      } else {
+        candidates = Array.from(this.entityIndex.values());
+      }
+      
+      // 2. 按文本查询过滤
+      if (query && query.trim()) {
+        const lowerQuery = query.toLowerCase();
+        candidates = candidates.filter(entity => {
+          // 搜索名称
+          if (entity.name.toLowerCase().includes(lowerQuery)) return true;
+          
+          // 搜索描述
+          if (entity.description && entity.description.toLowerCase().includes(lowerQuery)) return true;
+          
+          // 搜索属性
+          const propertiesStr = JSON.stringify(entity.properties).toLowerCase();
+          if (propertiesStr.includes(lowerQuery)) return true;
+          
+          return false;
+        });
+      }
+      
+      // 3. 按标签过滤
+      if (tags && tags.length > 0) {
+        candidates = candidates.filter(entity => {
+          if (!entity.tags || entity.tags.length === 0) return false;
+          return tags.some(tag => entity.tags!.includes(tag));
+        });
+      }
+      
+      // 4. 按状态过滤
+      if (status) {
+        candidates = candidates.filter(entity => entity.status === status);
+      }
+      
+      // 5. 按时间范围过滤
+      if (timeRange) {
+        candidates = candidates.filter(entity => {
+          const entityTime = entity.lastAccessed || entity.updated;
+          return entityTime >= timeRange.start && entityTime <= timeRange.end;
+        });
+      }
+      
+      // 6. 按重要性排序
+      candidates.sort((a, b) => {
+        const importanceA = a.importance || 0;
+        const importanceB = b.importance || 0;
+        
+        if (Math.abs(importanceA - importanceB) < 0.01) {
+          // 重要性相近时，按最近访问时间排序
+          return (b.lastAccessed || b.updated) - (a.lastAccessed || a.updated);
+        }
+        
+        return importanceB - importanceA;
+      });
+      
+      // 7. 限制结果数量
+      const results = candidates.slice(0, limit);
+      
+      // 8. 丰富统计信息
+      const enrichedResults = await this.enrichEntitiesWithStats(results);
+      
+      console.log(`🔍 搜索实体结果: ${enrichedResults.length}个 (查询: "${query || ''}", 类型: ${entityType || 'all'})`);
+      return enrichedResults;
+      
+    } catch (error) {
+      console.error('搜索实体失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 更新实体信息（支持编辑）
+   */
+  async updateEntity(entityId: string, updates: Partial<GraphEntity>): Promise<boolean> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return false;
+      }
+
+      // 合并更新
+      const updatedEntity: GraphEntity = {
+        ...entity,
+        ...updates,
+        id: entityId, // 确保ID不被覆盖
+        updated: Date.now()
+      };
+
+      // 更新本地索引
+      this.entityIndex.set(entityId, updatedEntity);
+
+      // 如果类型发生变化，需要更新类型索引
+      if (updates.type && updates.type !== entity.type) {
+        // 从旧类型中移除
+        const oldTypeEntities = this.typeToEntities.get(entity.type);
+        if (oldTypeEntities) {
+          oldTypeEntities.delete(entityId);
+          if (oldTypeEntities.size === 0) {
+            this.typeToEntities.delete(entity.type);
+          }
+        }
+        
+        // 添加到新类型
+        if (!this.typeToEntities.has(updates.type)) {
+          this.typeToEntities.set(updates.type, new Set());
+        }
+        this.typeToEntities.get(updates.type)!.add(entityId);
+      }
+
+      // 保存到本地存储
+      await this.saveLocalIndexes();
+
+      // 同步到云端
+      if (this.entitiesCollection) {
+        await this.storeEntityToChroma(updatedEntity);
+      }
+
+      console.log(`✏️ 更新实体: ${updatedEntity.name}`);
+      return true;
+
+    } catch (error) {
+      console.error('更新实体失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 创建新实体（从界面编辑）
+   */
+  async createEntity(entityData: Omit<GraphEntity, 'id' | 'created' | 'updated'>): Promise<GraphEntity | null> {
+    try {
+      // 生成ID
+      const entityId = `${entityData.type.toLowerCase()}_${this.normalizeId(entityData.name)}_${Date.now()}`;
+      
+      const entity = await this.upsertEntity({
+        ...entityData,
+        id: entityId
+      });
+
+      console.log(`➕ 创建新实体: ${entity.type} - ${entity.name}`);
+      return entity;
+
+    } catch (error) {
+      console.error('创建实体失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 删除实体
+   */
+  async deleteEntity(entityId: string): Promise<boolean> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return false;
+      }
+
+      // 删除相关关系
+      const relatedRelations = this.entityToRelations.get(entityId);
+      if (relatedRelations) {
+        for (const relationId of Array.from(relatedRelations)) {
+          this.relationshipIndex.delete(relationId);
+        }
+        this.entityToRelations.delete(entityId);
+      }
+
+      // 从类型索引中移除
+      const typeEntities = this.typeToEntities.get(entity.type);
+      if (typeEntities) {
+        typeEntities.delete(entityId);
+        if (typeEntities.size === 0) {
+          this.typeToEntities.delete(entity.type);
+        }
+      }
+
+      // 从实体索引中移除
+      this.entityIndex.delete(entityId);
+
+      // 保存更改
+      await this.saveLocalIndexes();
+      await this.saveLocalRelationships();
+
+      // 从云端删除（如果可用）
+      if (this.entitiesCollection) {
+        try {
+          await this.entitiesCollection.delete({ ids: [entityId] });
+        } catch (error) {
+          console.warn('从云端删除实体失败:', error);
+        }
+      }
+
+      console.log(`🗑️ 删除实体: ${entity.name}`);
+      return true;
+
+    } catch (error) {
+      console.error('删除实体失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 获取实体关联的JIRA issues（如果配置了相关属性）
+   */
+  async getEntityJiraIssues(entityId: string): Promise<Array<{
+    key: string;
+    summary: string;
+    status: string;
+    assignee?: string;
+    url: string;
+  }>> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) return [];
+
+      // 检查实体属性中是否有JIRA相关信息
+      const jiraKeys: string[] = [];
+      
+      if (entity.properties.jiraKeys) {
+        jiraKeys.push(...entity.properties.jiraKeys);
+      }
+      
+      if (entity.properties.jiraProjects) {
+        // 这里可以根据项目名称查询相关的JIRA issues
+        // 实际实现需要调用JIRA API
+      }
+
+      // 简化实现：返回存储在属性中的JIRA issues
+      if (entity.properties.jiraIssues) {
+        return entity.properties.jiraIssues;
+      }
+
+      return [];
+
+    } catch (error) {
+      console.error('获取实体JIRA issues失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 更新实体的JIRA关联
+   */
+  async updateEntityJiraAssociation(entityId: string, jiraData: {
+    keys?: string[];
+    projects?: string[];
+    issues?: Array<{
+      key: string;
+      summary: string;
+      status: string;
+      assignee?: string;
+      url: string;
+    }>;
+  }): Promise<boolean> {
+    try {
+      const entity = this.entityIndex.get(entityId);
+      if (!entity) {
+        console.warn(`实体 ${entityId} 不存在`);
+        return false;
+      }
+
+      // 更新JIRA相关属性
+      const updatedProperties = {
+        ...entity.properties,
+        ...jiraData,
+        lastJiraSync: Date.now()
+      };
+
+      return await this.updateEntity(entityId, {
+        properties: updatedProperties
+      });
+
+    } catch (error) {
+      console.error('更新实体JIRA关联失败:', error);
+      return false;
+    }
+  }
+
+  /**
    * 销毁存储
    */
   destroy(): void {
     this.relationshipIndex.clear();
     this.entityToRelations.clear();
     this.typeToEntities.clear();
+    this.entityIndex.clear();
     this.chromaClient = null;
     this.entitiesCollection = null;
   }

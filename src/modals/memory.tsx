@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
+import { ENTITY_TYPE_CONFIG } from '../storage/HybridGraphStore';
 
 // 扩展Window接口
 declare global {
@@ -67,16 +68,7 @@ const MemoryInterface = () => {
   const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
   const [entityTypes, setEntityTypes] = useState<EntityType[]>([]);
 
-  // 实体类型配置
-  const ENTITY_TYPE_CONFIG: Record<string, { name: string; icon: string }> = {
-    'Person': { name: '人物', icon: '👥' },
-    'Project': { name: '项目', icon: '🚀' },
-    'Task': { name: '任务', icon: '📋' },
-    'Organization': { name: '组织', icon: '🏢' },
-    'Document': { name: '文档', icon: '📄' },
-    'Technology': { name: '技术', icon: '🔧' },
-    'Topic': { name: '主题', icon: '💡' }
-  };
+  // 实体类型配置已从 HybridGraphStore 导入
 
   // 初始化数据
   useEffect(() => {
@@ -109,20 +101,25 @@ const MemoryInterface = () => {
   // 初始化接口
   const initializeMemoryInterface = async () => {
     setIsLoading(true);
+    console.log('🚀 开始初始化记忆界面...');
     try {
       // 加载概览统计
+      console.log('📊 加载概览统计...');
       await loadOverviewStats();
       
       // 加载实体类型统计
+      console.log('📋 加载实体类型...');
       await loadEntityTypes();
       
       // 加载最近时间轴
       if (activeView === 'timeline') {
+        console.log('⏰ 加载时间轴...');
         await loadRecentTimeline();
       }
 
+      console.log('✅ 记忆界面初始化完成');
     } catch (error) {
-      console.error('初始化记忆界面失败:', error);
+      console.error('❌ 初始化记忆界面失败:', error);
     } finally {
       setIsLoading(false);
       
@@ -138,17 +135,22 @@ const MemoryInterface = () => {
   // 加载概览统计
   const loadOverviewStats = async () => {
     try {
+      console.log('📊 请求实体统计数据...');
       const response = await chrome.runtime.sendMessage({
         type: 'GET_ENTITY_STATISTICS'
       });
 
+      console.log('📊 实体统计响应:', response);
       if (response && response.success) {
+        console.log('📊 设置概览统计数据:', response.data);
         setOverviewStats(response.data);
+      } else {
+        console.warn('📊 获取实体统计失败:', response?.error);
       }
     } catch (error) {
-      console.error('加载概览统计失败:', error);
+      console.error('❌ 加载概览统计失败:', error);
       // 设置默认数据
-      setOverviewStats({
+      const defaultStats = {
         totalEntities: 0,
         totalRelationships: 0,
         entitiesCreatedToday: 0,
@@ -156,36 +158,59 @@ const MemoryInterface = () => {
         entitiesCreatedThisMonth: 0,
         entityCounts: {},
         topEntitiesByType: {}
-      });
+      };
+      console.log('📊 使用默认统计数据:', defaultStats);
+      setOverviewStats(defaultStats);
     }
   };
 
   // 加载实体类型
   const loadEntityTypes = async () => {
     try {
+      console.log('📋 请求实体类型数据...');
       const response = await chrome.runtime.sendMessage({
         type: 'GET_ENTITY_TYPES'
       });
 
+      console.log('📋 实体类型响应:', response);
       if (response && response.success) {
-        const types: EntityType[] = Object.entries(response.data.entityCounts || {}).map(([type, count]) => ({
-          type,
-          name: ENTITY_TYPE_CONFIG[type]?.name || type,
-          icon: ENTITY_TYPE_CONFIG[type]?.icon || '📂',
-          count: count as number
-        }));
-        
-        setEntityTypes(types);
+        // 使用新的API响应格式
+        if (response.data.entityTypes && Array.isArray(response.data.entityTypes)) {
+          console.log('📋 使用新格式的实体类型数据:', response.data.entityTypes);
+          const types: EntityType[] = response.data.entityTypes.map((entityType: any) => ({
+            type: entityType.type,
+            name: entityType.name,
+            icon: entityType.icon,
+            count: entityType.count
+          }));
+          console.log('📋 设置实体类型:', types);
+          setEntityTypes(types);
+        } else {
+          // 向后兼容：使用entityCounts
+          console.log('📋 使用向后兼容格式:', response.data.entityCounts);
+          const types: EntityType[] = Object.entries(response.data.entityCounts || {}).map(([type, count]) => ({
+            type,
+            name: ENTITY_TYPE_CONFIG[type]?.name || type,
+            icon: ENTITY_TYPE_CONFIG[type]?.icon || '📂',
+            count: count as number
+          }));
+          console.log('📋 设置兼容格式实体类型:', types);
+          setEntityTypes(types);
+        }
+      } else {
+        console.warn('📋 获取实体类型失败:', response?.error);
       }
     } catch (error) {
-      console.error('加载实体类型失败:', error);
+      console.error('❌ 加载实体类型失败:', error);
       // 设置默认类型
-      setEntityTypes(Object.entries(ENTITY_TYPE_CONFIG).map(([type, config]) => ({
+      const defaultTypes = Object.entries(ENTITY_TYPE_CONFIG).map(([type, config]) => ({
         type,
         name: config.name,
         icon: config.icon,
         count: 0
-      })));
+      }));
+      console.log('📋 使用默认实体类型:', defaultTypes);
+      setEntityTypes(defaultTypes);
     }
   };
 
@@ -296,6 +321,79 @@ const MemoryInterface = () => {
   const handleSearchKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       handleSearch();
+    }
+  };
+
+  // 调试功能
+  const handleDiagnoseData = async () => {
+    console.log('🔍 开始诊断数据状态...');
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'DIAGNOSE_ENTITY_DATA'
+      });
+      
+      console.log('🔍 诊断结果:', response);
+      if (response.success) {
+        const diagnosis = response.data;
+        alert(`诊断结果：
+实体数量: ${diagnosis.entitiesCount}
+关系数量: ${diagnosis.relationshipsCount}
+实体类型: ${diagnosis.entityTypes.join(', ')}
+
+问题: ${diagnosis.issues.join('; ')}
+建议: ${diagnosis.suggestions.join('; ')}`);
+      }
+    } catch (error) {
+      console.error('诊断失败:', error);
+      alert('诊断失败: ' + error.message);
+    }
+  };
+
+  const handleInitializeSampleData = async () => {
+    if (!confirm('确定要初始化示例数据吗？这将创建一些测试实体和关系。')) {
+      return;
+    }
+    
+    console.log('🚀 开始初始化示例数据...');
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'INITIALIZE_SAMPLE_DATA'
+      });
+      
+      console.log('🚀 初始化结果:', response);
+      if (response.success) {
+        alert(response.data.message);
+        // 刷新界面数据
+        await initializeMemoryInterface();
+      } else {
+        alert('初始化失败: ' + (response.error || response.data?.message));
+      }
+    } catch (error) {
+      console.error('初始化失败:', error);
+      alert('初始化失败: ' + error.message);
+    }
+  };
+
+  const handleRebuildIndexes = async () => {
+    if (!confirm('确定要重建实体索引吗？')) {
+      return;
+    }
+    
+    console.log('🔄 开始重建索引...');
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'REBUILD_ENTITY_INDEXES'
+      });
+      
+      console.log('🔄 重建结果:', response);
+      alert(response.message);
+      if (response.success) {
+        // 刷新界面数据
+        await initializeMemoryInterface();
+      }
+    } catch (error) {
+      console.error('重建失败:', error);
+      alert('重建失败: ' + error.message);
     }
   };
 
@@ -477,6 +575,15 @@ const MemoryInterface = () => {
           </div>
           <div className="filter-btn" onClick={() => setSearchQuery('')}>
             🔄 重置
+          </div>
+          <div className="filter-btn debug-btn" onClick={handleDiagnoseData} title="诊断数据状态">
+            🔍 诊断
+          </div>
+          <div className="filter-btn debug-btn" onClick={handleInitializeSampleData} title="初始化示例数据">
+            🚀 示例数据
+          </div>
+          <div className="filter-btn debug-btn" onClick={handleRebuildIndexes} title="重建索引">
+            🔄 重建索引
           </div>
         </div>
 
@@ -850,6 +957,17 @@ const MemoryInterface = () => {
 
         .filter-btn:hover {
           background: rgba(59, 130, 246, 0.2);
+        }
+
+        .filter-btn.debug-btn {
+          background: rgba(255, 165, 0, 0.1);
+          border-color: rgba(255, 165, 0, 0.3);
+          color: #ffb366;
+          font-size: 0.75rem;
+        }
+
+        .filter-btn.debug-btn:hover {
+          background: rgba(255, 165, 0, 0.2);
         }
 
         /* 概览部分样式 */

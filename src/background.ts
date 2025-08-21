@@ -13,6 +13,7 @@ import {
     syncGraphData, 
     backupGraphData 
 } from './enhancedKnowledgeQuery';
+import { EntityDataInitializer } from './storage/EntityDataInitializer';
 import { getMessageProcessingEnhancer } from './storage/MessageProcessingEnhancer';
 import { getStorageHealthMonitor } from './storage/StorageHealthMonitor';
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
@@ -348,12 +349,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'GET_ENTITY_TYPES') {
         getMessageProcessingEnhancer()
             .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.getEntityStatistics())
-            .then(stats => sendResponse({
+            .then(hybridStore => hybridStore.getEntityTypes())
+            .then(entityTypes => sendResponse({
                 success: true,
                 data: {
-                    entityCounts: stats.entityCounts,
-                    totalEntities: stats.totalEntities
+                    entityTypes,
+                    // 保持向后兼容性
+                    entityCounts: entityTypes.reduce((acc, type) => {
+                        acc[type.type] = type.count;
+                        return acc;
+                    }, {} as Record<string, number>),
+                    totalEntities: entityTypes.reduce((sum, type) => sum + type.count, 0)
                 }
             }))
             .catch(error => {
@@ -361,7 +367,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 sendResponse({
                     success: false,
                     error: error.message,
-                    data: { entityCounts: {}, totalEntities: 0 }
+                    data: { 
+                        entityTypes: [],
+                        entityCounts: {}, 
+                        totalEntities: 0 
+                    }
                 });
             });
         return true;
@@ -369,16 +379,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 按类型获取实体列表
     if (request.type === 'GET_ENTITIES_BY_TYPE') {
-        const { entityType, limit = 50 } = request;
+        const { entityType, limit = 50, offset = 0, sortBy = 'importance', sortOrder = 'desc' } = request;
         getMessageProcessingEnhancer()
             .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                const entities = hybridStore.getEntitiesByImportance(entityType, limit);
-                return hybridStore.enrichEntitiesWithStats(entities);
-            })
-            .then(enrichedEntities => sendResponse({
+            .then(hybridStore => hybridStore.getEntitiesByType(entityType, {
+                limit,
+                offset,
+                sortBy,
+                sortOrder
+            }))
+            .then(entities => sendResponse({
                 success: true,
-                data: enrichedEntities
+                data: entities
             }))
             .catch(error => {
                 console.error('获取实体列表失败:', error);
@@ -393,24 +405,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 搜索实体
     if (request.type === 'SEARCH_ENTITIES') {
-        const { query, entityType, limit = 30 } = request;
+        const { query, entityType, tags, status, limit = 30, timeRange } = request;
         getMessageProcessingEnhancer()
             .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                const searchOptions: any = { limit };
-                if (entityType) {
-                    searchOptions.type = entityType;
-                }
-                if (query) {
-                    searchOptions.textQuery = query;
-                }
-                
-                const entities = hybridStore.queryEntities(searchOptions);
-                return hybridStore.enrichEntitiesWithStats(entities);
-            })
-            .then(enrichedEntities => sendResponse({
+            .then(hybridStore => hybridStore.searchEntities({
+                query,
+                entityType,
+                tags,
+                status,
+                limit,
+                timeRange
+            }))
+            .then(entities => sendResponse({
                 success: true,
-                data: enrichedEntities
+                data: entities
             }))
             .catch(error => {
                 console.error('搜索实体失败:', error);
@@ -597,6 +605,106 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 sendResponse({
                     success: false,
                     error: error.message
+                });
+            });
+        return true;
+    }
+
+    // ========== 实体数据调试和初始化 ==========
+    
+    // 诊断实体数据状态
+    if (request.type === 'DIAGNOSE_ENTITY_DATA') {
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                const initializer = new EntityDataInitializer(hybridStore);
+                return initializer.diagnoseDataState();
+            })
+            .then(diagnosis => sendResponse({
+                success: true,
+                data: diagnosis
+            }))
+            .catch(error => {
+                console.error('诊断实体数据失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: null
+                });
+            });
+        return true;
+    }
+
+    // 初始化示例数据
+    if (request.type === 'INITIALIZE_SAMPLE_DATA') {
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                const initializer = new EntityDataInitializer(hybridStore);
+                return initializer.initializeSampleData();
+            })
+            .then(result => sendResponse({
+                success: result.success,
+                data: result,
+                message: result.message
+            }))
+            .catch(error => {
+                console.error('初始化示例数据失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    data: {
+                        success: false,
+                        entitiesCreated: 0,
+                        relationshipsCreated: 0,
+                        message: `初始化失败: ${error.message}`
+                    }
+                });
+            });
+        return true;
+    }
+
+    // 重建实体索引
+    if (request.type === 'REBUILD_ENTITY_INDEXES') {
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                const initializer = new EntityDataInitializer(hybridStore);
+                return initializer.rebuildIndexes();
+            })
+            .then(result => sendResponse({
+                success: result.success,
+                message: result.message
+            }))
+            .catch(error => {
+                console.error('重建实体索引失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: `重建失败: ${error.message}`
+                });
+            });
+        return true;
+    }
+
+    // 清空所有实体数据
+    if (request.type === 'CLEAR_ALL_ENTITY_DATA') {
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(hybridStore => {
+                const initializer = new EntityDataInitializer(hybridStore);
+                return initializer.clearAllData();
+            })
+            .then(result => sendResponse({
+                success: result.success,
+                message: result.message
+            }))
+            .catch(error => {
+                console.error('清空实体数据失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: `清空失败: ${error.message}`
                 });
             });
         return true;
