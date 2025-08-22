@@ -7,9 +7,7 @@ import { extractEntitiesToStore } from './entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
-import { getMessageProcessingEnhancer, EnhancedMessageResult } from './storage/MessageProcessingEnhancer';
-import UnifiedStorageManager from './storage/UnifiedStorageManager';
-import { Entity } from './storage/EntitySimilarityManager';
+import { memorySystem, StoreResult } from './memory';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
@@ -235,11 +233,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						// 提取实体信息用于相似性检查
 						const extractedEntities = extractEntitiesFromMetadata(messageMetadata);
 
-						// 使用统一存储管理器存储
+						// 使用新的记忆系统存储
 						try {
-							const storageManager = await getUnifiedStorageManager();
-							const storageResult = await storageManager.storeContent({
-								type: 'message',
+							// 确保记忆系统已初始化
+							await memorySystem.initialize();
+							
+							const storeResult: StoreResult = await memorySystem.storeMessage({
 								id: messageId,
 								content: originalMessage.messageContent || '',
 								metadata: messageMetadata,
@@ -247,7 +246,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							});
 
 							console.log(`✅ 消息存储完成 [新系统]: ${messageId}`, {
-								...storageResult,
+								...storeResult,
 								entityTypes: extractedEntities.map(e => e.type),
 								entityNames: extractedEntities.map(e => e.name)
 							});
@@ -556,49 +555,30 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				// 提取实体信息用于相似性检查
 				const entitiesForSimilarity = extractEntitiesFromMetadata(messageMetadata);
 
-				// 优先使用新的统一存储系统
+				// 使用新的记忆系统存储
 				try {
-					const storageManager = await getUnifiedStorageManager();
-					const storageResult = await storageManager.storeContent({
-						type: 'message',
+					// 确保记忆系统已初始化
+					await memorySystem.initialize();
+					
+					const storeResult: StoreResult = await memorySystem.storeMessage({
 						id: messageId,
 						content: json.message_content,
 						metadata: messageMetadata,
 						entities: entitiesForSimilarity
 					});
 
-					console.log(`✅ 消息存储完成 [统一系统]: ${messageId.slice(0,8)}`, {
-						...storageResult,
-						entityMerges: storageResult.mergeActions > 0 ? `${storageResult.mergeActions}个实体合并` : '无合并',
-						performance: `${storageResult.processingTime}ms`
+					console.log(`✅ 消息存储完成 [记忆系统]: ${messageId.slice(0,8)}`, {
+						...storeResult,
+						entityMerges: storeResult.relationshipsCreated > 0 ? `${storeResult.relationshipsCreated}个关系创建` : '无关系',
+						performance: `${storeResult.processingTime}ms`
 					});
 
-				} catch (unifiedError) {
-					console.error('统一存储系统失败，尝试增强存储处理器:', unifiedError);
+				} catch (memoryError) {
+					console.error('记忆系统失败，回退到基础存储:', memoryError);
 					
-					// 回退到增强的消息处理器
-					try {
-						const enhancer = await getMessageProcessingEnhancer();
-						const enhancedResult: EnhancedMessageResult = await enhancer.processMessage({
-							messageId,
-							content: json.message_content,
-							metadata: messageMetadata
-						});
-
-						console.log(`📊 消息存储统计 [增强系统]: ${messageId.slice(0,8)}`, {
-							向量存储: enhancedResult.vectorStored ? '✅' : '❌',
-							图实体: enhancedResult.graphEntities,
-							图关系: enhancedResult.graphRelationships,
-							处理时间: `${enhancedResult.processingTime}ms`
-						});
-
-					} catch (enhancedError) {
-						console.error('增强存储也失败，回退到基础存储:', enhancedError);
-						
-						// 最后回退到原有的storeMessage方式
-						await storeMessage(messageId, json.message_content, messageMetadata);
-						console.log(`📦 消息存储完成 [基础系统]: ${messageId.slice(0,8)}`);
-					}
+					// 回退到基础存储
+					await storeMessage(messageId, json.message_content, messageMetadata);
+					console.log(`📦 消息存储完成 [基础系统]: ${messageId.slice(0,8)}`);
 				}
 
 				// 如果审核通过，则推送 Glip 消息
@@ -634,39 +614,11 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 }
 
 
-// 全局统一存储管理器实例
-let unifiedStorage: UnifiedStorageManager | null = null;
-
-// 获取或创建统一存储管理器
-async function getUnifiedStorageManager(): Promise<UnifiedStorageManager> {
-  if (!unifiedStorage) {
-    const envConfig = await getEnvConfig();
-    
-    unifiedStorage = new UnifiedStorageManager({
-      vectorStore: {
-        enabled: envConfig.ENABLE_CHROMA,
-        chromaUrl: envConfig.CHROMA_API_URL
-      },
-      knowledgeGraph: {
-        enabled: true, // 默认启用知识图谱
-        engine: 'chrome_storage'
-      },
-      memoryLifecycle: {
-        enabled: true, // 默认启用记忆生命周期管理
-        retentionDays: 90,
-        cleanupInterval: 6
-      }
-    });
-    
-    await unifiedStorage.initialize();
-  }
-  
-  return unifiedStorage;
-}
+// 函数已移除，使用新的记忆系统 (memorySystem) 替代
 
 // 将消息元数据转换为实体信息
-function extractEntitiesFromMetadata(metadata: any): Array<Omit<Entity, 'id' | 'created' | 'lastAccessed' | 'accessCount'>> {
-  const entities: Array<Omit<Entity, 'id' | 'created' | 'lastAccessed' | 'accessCount'>> = [];
+function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'created' | 'updated'>> {
+  const entities: Array<Omit<any, 'id' | 'created' | 'updated'>> = [];
   
   if (metadata.entities) {
     // 提取人员实体

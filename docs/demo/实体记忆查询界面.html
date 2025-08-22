@@ -1483,9 +1483,11 @@
                         <div class="topic-avatar">💡</div>
                         <div class="topic-info">
                             <h2 id="topic-detail-title">AI 工作流自动化</h2>
-                            <div class="topic-meta">
+                            <div class="topic-meta" id="topic-meta-stats">
                                 <span class="meta-item">📈 12 条讨论</span>
                                 <span class="meta-item">🔗 5 个关联项目</span>
+                                <span class="meta-item">👥 8 位参与者</span>
+                                <span class="meta-item">📚 15 个资源</span>
                                 <span class="meta-item">⏰ 最后更新：30 分钟前</span>
                             </div>
                         </div>
@@ -1499,76 +1501,14 @@
                 <div class="topic-detail-content">
                     <!-- 选项卡导航 -->
                     <div class="tab-navigation">
-                        <button class="tab-btn active" data-tab="overview">📊 概览</button>
                         <button class="tab-btn" data-tab="projects">🚀 相关项目</button>
                         <button class="tab-btn" data-tab="resources">📚 相关资源</button>
                         <button class="tab-btn" data-tab="tickets">🎯 相关Tickets</button>
-                        <button class="tab-btn" data-tab="conversations">💬 聊天记录</button>
+                        <button class="tab-btn active" data-tab="conversations">💬 聊天记录</button>
                         <button class="tab-btn" data-tab="webpages">🌐 网页记录</button>
                     </div>
 
-                    <!-- 概览标签页 -->
-                    <div class="tab-content active" id="tab-overview">
-                        <div class="overview-grid">
-                            <div class="summary-card">
-                                <div class="card-header">
-                                    <div class="card-title">
-                                        <span>📈</span>
-                                        <span>主题统计</span>
-                                    </div>
-                                </div>
-                                <div class="stats-grid">
-                                    <div class="stat-item">
-                                        <div class="stat-number">12</div>
-                                        <div class="stat-label">讨论条数</div>
-                                    </div>
-                                    <div class="stat-item">
-                                        <div class="stat-number">5</div>
-                                        <div class="stat-label">相关项目</div>
-                                    </div>
-                                    <div class="stat-item">
-                                        <div class="stat-number">8</div>
-                                        <div class="stat-label">参与人员</div>
-                                    </div>
-                                    <div class="stat-item">
-                                        <div class="stat-number">15</div>
-                                        <div class="stat-label">相关资源</div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="summary-card">
-                                <div class="card-header">
-                                    <div class="card-title">
-                                        <span>🔥</span>
-                                        <span>热度趋势</span>
-                                    </div>
-                                </div>
-                                <div class="trend-chart">
-                                    <div class="trend-item">
-                                        <span class="trend-date">本周</span>
-                                        <div class="trend-bar">
-                                            <div class="trend-fill" style="width: 80%"></div>
-                                        </div>
-                                        <span class="trend-value">8 条</span>
-                                    </div>
-                                    <div class="trend-item">
-                                        <span class="trend-date">上周</span>
-                                        <div class="trend-bar">
-                                            <div class="trend-fill" style="width: 60%"></div>
-                                        </div>
-                                        <span class="trend-value">6 条</span>
-                                    </div>
-                                    <div class="trend-item">
-                                        <span class="trend-date">两周前</span>
-                                        <div class="trend-bar">
-                                            <div class="trend-fill" style="width: 40%"></div>
-                                        </div>
-                                        <span class="trend-value">4 条</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+
 
                     <!-- 相关项目标签页 -->
                     <div class="tab-content" id="tab-projects">
@@ -1604,7 +1544,7 @@
                     </div>
 
                     <!-- 聊天记录标签页 -->
-                    <div class="tab-content" id="tab-conversations">
+                    <div class="tab-content active" id="tab-conversations">
                         <div class="section-header">
                             <h3>💬 聊天记录</h3>
                             <div class="search-controls">
@@ -2132,33 +2072,24 @@
 
             // 更新主题标题和元信息
             document.getElementById('topic-detail-title').textContent = topicData.title;
+            
+            // 更新顶部统计数据
+            updateTopicMetaStats(topicData);
 
-            // 加载默认的概览标签页
-            loadTopicOverview(topicData);
+            // 加载默认的聊天记录标签页
+            loadTopicConversations(topicData);
         }
 
-        // 加载主题概览数据
-        function loadTopicOverview(topicData) {
-            // 更新统计数据
-            const statsGrid = document.querySelector('.stats-grid');
-            if (statsGrid) {
-                statsGrid.innerHTML = `
-                    <div class="stat-item">
-                        <div class="stat-number">${topicData.discussions}</div>
-                        <div class="stat-label">讨论条数</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number">${topicData.projects}</div>
-                        <div class="stat-label">相关项目</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number">${topicData.participants}</div>
-                        <div class="stat-label">参与人员</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number">${topicData.resources}</div>
-                        <div class="stat-label">相关资源</div>
-                    </div>
+        // 更新主题顶部统计数据
+        function updateTopicMetaStats(topicData) {
+            const topicMetaStats = document.getElementById('topic-meta-stats');
+            if (topicMetaStats) {
+                topicMetaStats.innerHTML = `
+                    <span class="meta-item">📈 ${topicData.discussions} 条讨论</span>
+                    <span class="meta-item">🔗 ${topicData.projects} 个关联项目</span>
+                    <span class="meta-item">👥 ${topicData.participants} 位参与者</span>
+                    <span class="meta-item">📚 ${topicData.resources} 个资源</span>
+                    <span class="meta-item">⏰ 最后更新：30 分钟前</span>
                 `;
             }
         }

@@ -13,9 +13,9 @@ import {
     syncGraphData, 
     backupGraphData 
 } from './enhancedKnowledgeQuery';
-import { EntityDataInitializer } from './storage/EntityDataInitializer';
-import { getMessageProcessingEnhancer } from './storage/MessageProcessingEnhancer';
-import { getStorageHealthMonitor } from './storage/StorageHealthMonitor';
+import { memorySystem } from './memory';
+import { handleMemoryMessage } from './memoryMessageHandler';
+// 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
 import { DashboardMessageHandler } from './utils/dashboardIntegration';
 
@@ -134,17 +134,19 @@ chrome.runtime.onInstalled.addListener(async () => {
 
         // 初始化混合图存储和健康监控
         try {
-            console.log('🔄 初始化混合图存储系统...');
+            console.log('🔄 初始化记忆系统...');
             
-            // 初始化消息处理增强器
-            const enhancer = await getMessageProcessingEnhancer();
-            const enhancerStats = enhancer.getGraphStatistics();
-            console.log('📊 消息处理增强器状态:', enhancerStats);
+            // 初始化记忆系统
+            const initResult = await memorySystem.initialize();
+            if (initResult) {
+                const systemStatus = await memorySystem.getSystemStatus();
+                console.log('📊 记忆系统状态:', systemStatus);
+            } else {
+                console.error('❌ 记忆系统初始化失败');
+            }
             
-            // 启动存储健康监控
-            const healthMonitor = await getStorageHealthMonitor();
-            healthMonitor.startMonitoring(10); // 每10分钟检查一次
-            console.log('🎯 存储健康监控已启动');
+            // 记忆系统已包含自动健康监控
+            console.log('🎯 记忆系统监控已启动（内置于系统中）');
             
         } catch (error) {
             console.error('❌ 混合图存储系统初始化失败:', error);
@@ -174,7 +176,7 @@ try {
   console.error('❌ 仪表盘消息处理器初始化失败:', error);
 }
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
     console.log('Background received message:', request);
 
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
@@ -305,34 +307,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    // 处理数据迁移请求
+    // 数据迁移功能已移除，使用新的记忆系统
     if (request.type === 'MIGRATE_DATA_TO_GRAPH') {
-        const { migrateExistingData } = require('./storage/DataMigrationTool');
-        migrateExistingData((progress: any) => {
-            // 发送进度更新
-            chrome.runtime.sendMessage({
-                type: 'MIGRATION_PROGRESS',
-                progress
-            }).catch(() => {}); // 忽略发送失败
-        })
-            .then((result: any) => sendResponse({
-                success: true,
-                migrationResult: result
-            }))
-            .catch((error: any) => sendResponse({
-                success: false,
-                error: error.message
-            }));
+        sendResponse({
+            success: false,
+            error: '数据迁移功能已弃用，请使用新的记忆系统进行数据管理'
+        });
         return true;
     }
 
     // 处理存储健康检查请求
     if (request.type === 'GET_STORAGE_HEALTH') {
-        getStorageHealthMonitor()
-            .then(monitor => monitor.performHealthCheck())
-            .then(healthMetrics => sendResponse({
+        memorySystem.performHealthCheck()
+            .then(healthStatus => sendResponse({
                 success: true,
-                healthMetrics
+                healthMetrics: healthStatus
             }))
             .catch(error => sendResponse({
                 success: false,
@@ -344,11 +333,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 处理维护任务执行请求
     if (request.type === 'RUN_MAINTENANCE_TASK') {
         const { taskId } = request;
-        getStorageHealthMonitor()
-            .then(monitor => monitor.runMaintenanceTask(taskId))
-            .then(success => sendResponse({
-                success,
-                message: success ? '维护任务执行成功' : '维护任务执行失败'
+        memorySystem.performSystemMaintenance()
+            .then(maintenanceResult => sendResponse({
+                success: maintenanceResult.success,
+                data: maintenanceResult,
+                message: maintenanceResult.success ? '维护任务执行成功' : '维护任务执行失败'
             }))
             .catch(error => sendResponse({
                 success: false,
@@ -359,11 +348,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // ========== 记忆界面相关消息处理 ==========
     
-    // 获取实体统计信息
+    // 先尝试用新的记忆消息处理器处理
+    const memoryHandled = await handleMemoryMessage(request, sendResponse);
+    if (memoryHandled) {
+        return true;
+    }
+    
+    // 获取实体统计信息（兼容性保留）
     if (request.type === 'GET_ENTITY_STATISTICS') {
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.getEntityStatistics())
+        memorySystem.getEntityStatistics()
             .then(stats => sendResponse({
                 success: true,
                 data: stats
@@ -392,19 +385,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 获取实体类型列表
     if (request.type === 'GET_ENTITY_TYPES') {
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.getEntityTypes())
+        // 获取所有实体类型
+        Promise.resolve(['Person', 'Project', 'Task', 'Organization', 'Document', 'Technology', 'Topic'])
             .then(entityTypes => sendResponse({
                 success: true,
                 data: {
                     entityTypes,
                     // 保持向后兼容性
                     entityCounts: entityTypes.reduce((acc, type) => {
-                        acc[type.type] = type.count;
+                        acc[type] = 0; // 默认计数为0，实际应该从记忆系统获取
                         return acc;
                     }, {} as Record<string, number>),
-                    totalEntities: entityTypes.reduce((sum, type) => sum + type.count, 0)
+                    totalEntities: 0 // 实际应该从记忆系统获取
                 }
             }))
             .catch(error => {
@@ -426,163 +418,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'GET_TOPIC_DETAIL') {
         const { topicId } = request;
         
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(async (hybridStore) => {
-                try {
-                    // 获取主题基础信息
-                    const topicEntity = await hybridStore.getEntityDetails(topicId);
-                    if (!topicEntity) {
-                        throw new Error('主题不存在');
-                    }
-
-                    // 获取相关项目（首先尝试通过关系查询，然后回退到全部项目）
-                    let relatedProjects: any[] = [];
-                    try {
-                        // 暂时跳过关系查询，直接查询所有项目
-                        // TODO: 等HybridGraphStore支持关系查询后再启用
-                        // const relationships = await hybridStore.getEntityRelationships(topicId);
-                        
-                        // 如果没有直接关联的项目，查询所有项目实体
-                        if (relatedProjects.length === 0) {
-                            const allProjects = await hybridStore.getEntitiesByType('Project', { limit: 3 });
-                            relatedProjects = allProjects.map((project: any) => ({
-                                id: project.id,
-                                name: project.name || '未知项目',
-                                status: project.properties?.status || project.metadata?.status || '开发中',
-                                description: project.description || `项目: ${project.name || '未命名项目'}`
-                            }));
-                        }
-                    } catch (error) {
-                        console.warn('获取相关项目失败:', error);
-                        relatedProjects = [];
-                    }
-
-                    // 获取相关资源（首先尝试通过关系查询，然后查询网页记录）
-                    let relatedResources: any[] = [];
-                    try {
-                        // 尝试获取与主题相关的文档实体
-                        const documentEntities = await hybridStore.getEntitiesByType('Document', { limit: 3 });
-                        const documentResources = documentEntities.map((doc: any) => ({
-                            id: doc.id,
-                            name: doc.name || '文档资源',
-                            type: '文档',
-                            url: doc.properties?.url || doc.metadata?.url || '#'
-                        }));
-
-                        // 获取相关网页记录
-                        const webpageResults = await hybridStore.queryEntityWebpages(topicId, { 
-                            limit: 3,
-                            sortBy: 'relevance',
-                            sortOrder: 'desc'
-                        });
-                        const webpageResources = webpageResults.map((webpage: any) => ({
-                            id: webpage.webpageId,
-                            name: webpage.title || '网页资源',
-                            type: '网页',
-                            url: webpage.url || '#'
-                        }));
-
-                        // 合并所有资源
-                        relatedResources = [...documentResources, ...webpageResources].slice(0, 3);
-                        
-                        // 如果仍然没有资源，提供默认示例
-                        if (relatedResources.length === 0) {
-                            relatedResources = [{
-                                id: 'default-resource',
-                                name: `${topicEntity.name} 相关资源`,
-                                type: '搜索建议',
-                                url: `https://www.google.com/search?q=${encodeURIComponent(topicEntity.name)}`
-                            }];
-                        }
-                    } catch (error) {
-                        console.warn('获取相关资源失败:', error);
-                        relatedResources = [];
-                    }
-
-                    // 获取相关对话（从实际消息数据中查询）
-                    const conversations = await hybridStore.queryEntityMessages(topicId, { 
-                        limit: 100, 
-                        minRelevanceScore: 0.5,  // 余弦距离系统，阈值降低 
-                        sortBy: 'relevance',
-                        sortOrder: 'desc'
-                    });
-                    
-                    // 转换为前端需要的格式
-                    const formattedConversations = conversations.map(msg => {
-                        // 处理上下文消息：从metadata中提取contextMessages
-                        let context: any[] = [];
-                        if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
-                            context = msg.metadata.contextMessages.map((ctx: any) => ({
-                                id: ctx.id,
-                                sender: ctx.sender,
-                                content: ctx.content,
-                                time: ctx.datetime ? formatTimeAgo(new Date(ctx.datetime).getTime()) : '未知时间',
-                                datetime: ctx.datetime,
-                                isMainMessage: ctx.isMainMessage || false
-                            }));
-                        }
-
-                        return {
-                            id: msg.messageId,
-                            sender: msg.source,
-                            group: msg.metadata?.teamName || '聊天记录', // 使用真实群组名称
-                            time: formatTimeAgo(msg.timestamp),
-                            datetime: new Date(msg.timestamp).toISOString(),
-                            summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
-                            originalContent: msg.content,
-                            highlightText: msg.metadata?.highlightText || msg.content,
-                            teamUrl: msg.metadata?.team_url || '#', // 使用真实的团队URL
-                            matchedRules: msg.metadata?.matchedRules || [], // 使用真实的匹配规则
-                            relevanceScore: msg.relevanceScore,
-                            context: context // 使用真实的上下文消息
-                        };
-                    });
-
-                    // 统计参与者（从相关消息中提取不同的发送者）
-                    const participants = new Set(formattedConversations.map(conv => conv.sender)).size;
-
-                    const topicDetail = {
-                        overview: {
-                            discussions: formattedConversations.length,
-                            projects: relatedProjects.length,
-                            participants: participants || 1, // 至少有一个参与者
-                            resources: relatedResources.length
-                        },
-                        entity: topicEntity,
-                        projects: relatedProjects,
-                        resources: relatedResources,
-                        conversations: formattedConversations,
-                        // 使用真实的网页记录而不是demo数据
-                        webpages: relatedResources.filter(r => r.type === '网页').map(webpage => ({
-                            id: webpage.id,
-                            title: webpage.name,
-                            url: webpage.url,
-                            type: 'webpage',
-                            visitTime: '最近访问',
-                            summary: `与${topicEntity.name}相关的网页内容`,
-                            tags: [topicEntity.name, '网页']
-                        }))
-                    };
-
-                    sendResponse({
-                        success: true,
-                        data: topicDetail
-                    });
-                } catch (error) {
-                    console.error('获取主题详情失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('GET_TOPIC_DETAIL 消息未被新处理器处理，使用默认错误响应');
                     sendResponse({
                         success: false,
-                        error: error.message
-                    });
-                }
-            })
-            .catch(error => {
-                console.error('获取主题详情失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
@@ -590,14 +430,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 按类型获取实体列表
     if (request.type === 'GET_ENTITIES_BY_TYPE') {
         const { entityType, limit = 50, offset = 0, sortBy = 'importance', sortOrder = 'desc' } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.getEntitiesByType(entityType, {
-                limit,
-                offset,
-                sortBy,
-                sortOrder
-            }))
+        memorySystem.queryEntities(entityType, undefined, {
+            limit,
+            offset,
+            sortBy,
+            sortOrder
+        }).then(result => result.data)
             .then(entities => sendResponse({
                 success: true,
                 data: entities
@@ -615,207 +453,99 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 搜索实体
     if (request.type === 'SEARCH_ENTITIES') {
-        const { query, entityType, tags, status, limit = 30, timeRange } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.searchEntities({
-                query,
-                entityType,
-                tags,
-                status,
-                limit,
-                timeRange
-            }))
-            .then(entities => sendResponse({
-                success: true,
-                data: entities
-            }))
-            .catch(error => {
-                console.error('搜索实体失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('SEARCH_ENTITIES 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: []
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 获取最近时间轴
     if (request.type === 'GET_RECENT_TIMELINE') {
-        const { limit = 50 } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                // 获取最重要的几个实体的时间轴
-                const topEntities = hybridStore.getEntitiesByImportance(undefined, 10);
-                const timelinePromises = topEntities.map(entity => 
-                    hybridStore.getEntityTimeline(entity.id, { limit: 5 })
-                );
-                
-                return Promise.all(timelinePromises);
-            })
-            .then(timelines => {
-                // 合并并排序所有时间轴
-                const allEvents = timelines.flat();
-                allEvents.sort((a, b) => b.timestamp - a.timestamp);
-                
-                sendResponse({
-                    success: true,
-                    data: allEvents.slice(0, limit)
-                });
-            })
-            .catch(error => {
-                console.error('获取时间轴失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('GET_RECENT_TIMELINE 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: []
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 更新实体访问统计
     if (request.type === 'UPDATE_ENTITY_ACCESS') {
-        const { entityId } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.updateEntityAccess(entityId))
-            .then(() => sendResponse({
-                success: true,
-                message: '实体访问统计已更新'
-            }))
-            .catch(error => {
-                console.error('更新实体访问失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('UPDATE_ENTITY_ACCESS 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 获取实体详细信息
     if (request.type === 'GET_ENTITY_DETAILS') {
-        const { entityId } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.getEntityDetails(entityId))
-            .then(entityDetails => sendResponse({
-                success: true,
-                data: entityDetails
-            }))
-            .catch(error => {
-                console.error('获取实体详情失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('GET_ENTITY_DETAILS 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: null
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 获取实体时间轴
     if (request.type === 'GET_ENTITY_TIMELINE') {
-        const { entityId, limit = 50, timeRange } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.getEntityTimeline(entityId, { limit, timeRange }))
-            .then(timeline => sendResponse({
-                success: true,
-                data: timeline
-            }))
-            .catch(error => {
-                console.error('获取实体时间轴失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('GET_ENTITY_TIMELINE 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: []
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 获取实体相关消息
     if (request.type === 'GET_ENTITY_MESSAGES') {
-        const { entityId, limit = 20, timeRange } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.queryEntityMessages(entityId, { limit, timeRange }))
-            .then(messages => sendResponse({
-                success: true,
-                data: messages
-            }))
-            .catch(error => {
-                console.error('获取实体消息失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('GET_ENTITY_MESSAGES 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: []
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 获取实体相关网页
     if (request.type === 'GET_ENTITY_WEBPAGES') {
-        const { entityId, limit = 10, timeRange } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.queryEntityWebpages(entityId, { limit, timeRange }))
-            .then(webpages => sendResponse({
-                success: true,
-                data: webpages
-            }))
-            .catch(error => {
-                console.error('获取实体网页失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('GET_ENTITY_WEBPAGES 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: []
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 设置实体标签
     if (request.type === 'SET_ENTITY_TAGS') {
-        const { entityId, tags } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.setEntityTags(entityId, tags))
-            .then(success => sendResponse({
-                success,
-                message: success ? '实体标签设置成功' : '实体标签设置失败'
-            }))
-            .catch(error => {
-                console.error('设置实体标签失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('SET_ENTITY_TAGS 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 设置实体状态
     if (request.type === 'SET_ENTITY_STATUS') {
-        const { entityId, status } = request;
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => hybridStore.setEntityStatus(entityId, status))
-            .then(success => sendResponse({
-                success,
-                message: success ? '实体状态设置成功' : '实体状态设置失败'
-            }))
-            .catch(error => {
-                console.error('设置实体状态失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('SET_ENTITY_STATUS 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
@@ -824,98 +554,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     // 诊断实体数据状态
     if (request.type === 'DIAGNOSE_ENTITY_DATA') {
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                const initializer = new EntityDataInitializer(hybridStore);
-                return initializer.diagnoseDataState();
-            })
-            .then(diagnosis => sendResponse({
-                success: true,
-                data: diagnosis
-            }))
-            .catch(error => {
-                console.error('诊断实体数据失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('DIAGNOSE_ENTITY_DATA 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: null
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 初始化示例数据
     if (request.type === 'INITIALIZE_SAMPLE_DATA') {
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                const initializer = new EntityDataInitializer(hybridStore);
-                return initializer.initializeSampleData();
-            })
-            .then(result => sendResponse({
-                success: result.success,
-                data: result,
-                message: result.message
-            }))
-            .catch(error => {
-                console.error('初始化示例数据失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('INITIALIZE_SAMPLE_DATA 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: {
-                        success: false,
-                        entitiesCreated: 0,
-                        relationshipsCreated: 0,
-                        message: `初始化失败: ${error.message}`
-                    }
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 重建实体索引
     if (request.type === 'REBUILD_ENTITY_INDEXES') {
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                const initializer = new EntityDataInitializer(hybridStore);
-                return initializer.rebuildIndexes();
-            })
-            .then(result => sendResponse({
-                success: result.success,
-                message: result.message
-            }))
-            .catch(error => {
-                console.error('重建实体索引失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('REBUILD_ENTITY_INDEXES 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    message: `重建失败: ${error.message}`
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
 
     // 清空所有实体数据
     if (request.type === 'CLEAR_ALL_ENTITY_DATA') {
-        getMessageProcessingEnhancer()
-            .then(enhancer => enhancer.getHybridGraphStore())
-            .then(hybridStore => {
-                const initializer = new EntityDataInitializer(hybridStore);
-                return initializer.clearAllData();
-            })
-            .then(result => sendResponse({
-                success: result.success,
-                message: result.message
-            }))
-            .catch(error => {
-                console.error('清空实体数据失败:', error);
+        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
+        console.warn('CLEAR_ALL_ENTITY_DATA 消息未被新处理器处理，使用默认错误响应');
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    message: `清空失败: ${error.message}`
-                });
+            error: '消息处理器配置错误'
             });
         return true;
     }
@@ -1424,7 +1100,7 @@ async function generateProjectData(projectId?: string) {
                     plannedDate: new Date('2024-03-15'),
                     actualDate: new Date('2024-03-20'),
                     status: 'completed',
-                    dependencies: [],
+                    dependencies: [] as string[],
                     assignees: [{ id: 'user1', name: '开发者A', role: '前端工程师' }],
                     tasks: [
                         {
@@ -1474,7 +1150,7 @@ async function generateProjectData(projectId?: string) {
                             estimatedHours: 24,
                             actualHours: 16,
                             priority: 'high',
-                            dependencies: [],
+                            dependencies: [] as string[],
                             startDate: new Date('2024-05-01'),
                             endDate: new Date('2024-05-20')
                         },
@@ -1565,8 +1241,8 @@ async function syncProjectData(projectId: string) {
             syncResults,
             timestamp: Date.now()
         }, {
-            type: 'system_operation',
-            analysisDepth: 'light'
+            type: 'generic',
+            analysisDepth: 'quick'
         });
         
         return {
@@ -1627,8 +1303,8 @@ async function exportProjectReport(projectId: string) {
             reportType: 'project_summary',
             timestamp: Date.now()
         }, {
-            type: 'system_operation',
-            analysisDepth: 'light'
+            type: 'generic',
+            analysisDepth: 'quick'
         });
         
         return {
@@ -1664,9 +1340,9 @@ async function createProjectItem(actionType: string, data: any) {
                     progress: 0,
                     plannedDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30天后
                     status: 'on-track',
-                    dependencies: [],
-                    assignees: [],
-                    tasks: []
+                    dependencies: [] as string[],
+                    assignees: [] as any[],
+                    tasks: [] as any[]
                 };
                 break;
                 
@@ -1679,7 +1355,7 @@ async function createProjectItem(actionType: string, data: any) {
                     assignee: '',
                     estimatedHours: 8,
                     priority: 'medium',
-                    dependencies: [],
+                    dependencies: [] as string[],
                     startDate: new Date(),
                     endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7天后
                 };
@@ -1712,8 +1388,8 @@ async function createProjectItem(actionType: string, data: any) {
             newItem,
             timestamp
         }, {
-            type: 'project_management',
-            analysisDepth: 'light'
+            type: 'project',
+            analysisDepth: 'quick'
         });
         
         return {

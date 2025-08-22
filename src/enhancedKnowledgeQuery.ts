@@ -1,181 +1,198 @@
 /**
  * 增强知识查询处理器
  * 处理来自增强查询界面的请求，协调向量搜索和图查询
+ * 重构版本 - 使用新的记忆系统
  */
 
 import { knowledgeQuery } from './llm';
-import { getMessageProcessingEnhancer } from './storage/MessageProcessingEnhancer';
+import { memorySystem } from './memory';
 import { getEnvConfig } from './utils';
 
 export interface EnhancedQueryOptions {
     searchTargets: ('vector' | 'graph')[];
     entityTypes: string[];
-    relationshipTypes: string[];
-    timeRange: { start: number; end: number } | null;
     includeNeighbors: boolean;
     maxDepth: number;
     limit: number;
 }
 
-export interface EnhancedQueryResponse {
-    success: boolean;
-    query: string;
-    options: EnhancedQueryOptions;
-    data: {
-        vectorResults?: any[];
-        entityResults?: any[];
-        relationshipResults?: any[];
-        graphConnections: number;
-        totalResults: number;
-    };
-    queryTime: number;
-    analysis?: string;
-    error?: string;
-}
-
 /**
- * 执行增强的知识查询
+ * 执行增强知识查询
  */
 export async function executeEnhancedKnowledgeQuery(
     query: string,
     options: EnhancedQueryOptions
-): Promise<EnhancedQueryResponse> {
+): Promise<{
+    success: boolean;
+    searchResults: any[];
+    vectorResults: any[];
+    graphResults: any[];
+    reasoning: string;
+    confidence: number;
+    processingTime: number;
+    error?: string;
+}> {
     const startTime = Date.now();
-    const response: EnhancedQueryResponse = {
-        success: false,
-        query,
-        options,
-        data: {
-            vectorResults: [],
-            entityResults: [],
-            relationshipResults: [],
-            graphConnections: 0,
-            totalResults: 0
-        },
-        queryTime: 0
-    };
-
+    
     try {
-        console.log('🔍 开始执行增强知识查询:', { query, options });
-
-        const searchPromises: Promise<any>[] = [];
-
-        // 1. 向量搜索（原有的语义搜索）
+        console.log('🔍 开始增强知识查询:', query);
+        console.log('查询选项:', options);
+        
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
+        
+        const searchResults: any[] = [];
+        const vectorResults: any[] = [];
+        const graphResults: any[] = [];
+        
+        // 1. 向量搜索
         if (options.searchTargets.includes('vector')) {
-            console.log('📄 执行向量搜索...');
-            searchPromises.push(
-                executeVectorSearch(query, options).then(results => ({
-                    type: 'vector',
-                    results
-                }))
-            );
-        }
-
-        // 2. 图搜索（实体和关系查询）
-        if (options.searchTargets.includes('graph')) {
-            console.log('🕸️ 执行图搜索...');
-            searchPromises.push(
-                executeGraphSearch(query, options).then(results => ({
-                    type: 'graph',
-                    results
-                }))
-            );
-        }
-
-        // 3. 并行执行所有搜索
-        const searchResults = await Promise.allSettled(searchPromises);
-
-        // 4. 处理搜索结果
-        for (const promiseResult of searchResults) {
-            if (promiseResult.status === 'fulfilled') {
-                const { type, results } = promiseResult.value;
+            try {
+                console.log('🎯 执行向量搜索...');
                 
-                if (type === 'vector') {
-                    response.data.vectorResults = results.results || [];
-                    response.analysis = results.analysis;
-                } else if (type === 'graph') {
-                    response.data.entityResults = results.entities || [];
-                    response.data.relationshipResults = results.relationships || [];
-                    response.data.graphConnections = results.totalConnections || 0;
+                if (options.entityTypes.length > 0) {
+                    // 分类型搜索
+                    for (const entityType of options.entityTypes) {
+                        const results = await memorySystem.searchByVector(query, entityType, {
+                            nResults: Math.floor(options.limit / options.entityTypes.length),
+                            threshold: 0.7
+                        });
+                        vectorResults.push(...results.data);
+                    }
+                } else {
+                    // 全类型搜索
+                    const results = await memorySystem.searchByVector(query, undefined, {
+                        nResults: options.limit,
+                        threshold: 0.7
+                    });
+                    vectorResults.push(...results.data);
                 }
-            } else {
-                console.error(`${promiseResult.reason?.type || '未知'}搜索失败:`, promiseResult.reason);
+                
+                console.log(`📊 向量搜索结果: ${vectorResults.length} 个实体`);
+            } catch (error) {
+                console.error('向量搜索失败:', error);
             }
         }
+        
+        // 2. 图查询
+        if (options.searchTargets.includes('graph')) {
+            try {
+                console.log('🕸️ 执行图查询...');
+                
+                // 普通实体查询
+                const entityResults = await memorySystem.queryEntities(
+                    options.entityTypes.length > 0 ? options.entityTypes[0] : undefined,
+                    query,
+                    { limit: options.limit }
+                );
+                
+                graphResults.push(...entityResults.data);
+                
+                // 如果需要包含邻居，获取关系网络
+                if (options.includeNeighbors && graphResults.length > 0) {
+                    const topEntity = graphResults[0];
+                    const relationshipNetwork = await memorySystem.getRelationships(
+                        topEntity.id, 
+                        options.maxDepth
+                    );
+                    
+                    // 添加相关实体
+                    graphResults.push(...relationshipNetwork.entities);
+                }
+                
+                console.log(`📊 图查询结果: ${graphResults.length} 个实体`);
+            } catch (error) {
+                console.error('图查询失败:', error);
+            }
+        }
+        
+        // 3. 合并去重结果
+        const allResults = [...vectorResults, ...graphResults];
+        const uniqueResults = allResults.filter((item, index, self) => 
+            index === self.findIndex(t => t.id === item.id)
+        );
+        
+        searchResults.push(...uniqueResults);
+        
+        // 4. 使用 LLM 分析结果
+        let reasoning = '';
+        let confidence = 0.5;
+        
+        try {
+            if (searchResults.length > 0) {
+                const analysisPrompt = `
+查询问题: ${query}
 
-        // 5. 计算总结果数
-        response.data.totalResults = 
-            (response.data.vectorResults?.length || 0) +
-            (response.data.entityResults?.length || 0) +
-            (response.data.relationshipResults?.length || 0);
+搜索结果:
+${searchResults.slice(0, 5).map((item, index) => `
+${index + 1}. ${item.name || item.title || '未知'}
+   类型: ${item.type || '未知'}
+   描述: ${item.description || '无描述'}
+`).join('')}
 
-        response.success = true;
-        response.queryTime = Date.now() - startTime;
+请分析这些搜索结果与查询问题的相关性，并给出：
+1. 推理过程（150字以内）
+2. 置信度评分（0-1之间的数字）
 
-        console.log('✅ 增强知识查询完成:', {
-            向量结果: response.data.vectorResults?.length || 0,
-            实体结果: response.data.entityResults?.length || 0,
-            关系结果: response.data.relationshipResults?.length || 0,
-            图连接: response.data.graphConnections,
-            总用时: `${response.queryTime}ms`
-        });
+格式：
+推理：[你的分析]
+置信度：[0-1的数字]
+`;
 
-        return response;
-
+                const analysisResult = await knowledgeQuery(analysisPrompt);
+                
+                // 解析 LLM 响应
+                const analysisText = typeof analysisResult === 'string' ? analysisResult : analysisResult.analysis || '';
+                const reasoningMatch = analysisText.match(/推理：(.+?)(?=置信度：|$)/s);
+                const confidenceMatch = analysisText.match(/置信度：([0-9.]+)/);
+                
+                reasoning = reasoningMatch?.[1]?.trim() || '搜索结果分析中...';
+                confidence = parseFloat(confidenceMatch?.[1] || '0.5');
+                
+                console.log('🧠 LLM 分析完成:', { reasoning: reasoning.slice(0, 50) + '...', confidence });
+            } else {
+                reasoning = '未找到相关结果，建议尝试不同的关键词或搜索条件。';
+                confidence = 0.1;
+            }
+        } catch (error) {
+            console.error('LLM 分析失败:', error);
+            reasoning = '结果分析失败，但搜索结果仍然可用。';
+        }
+        
+        const processingTime = Date.now() - startTime;
+        
+        console.log(`✅ 增强查询完成: ${searchResults.length} 个结果，耗时 ${processingTime}ms`);
+        
+        return {
+            success: true,
+            searchResults,
+            vectorResults,
+            graphResults,
+            reasoning,
+            confidence,
+            processingTime
+        };
+        
     } catch (error) {
         console.error('❌ 增强知识查询失败:', error);
-        response.error = error.message;
-        response.queryTime = Date.now() - startTime;
-        return response;
+        
+        return {
+            success: false,
+            searchResults: [],
+            vectorResults: [],
+            graphResults: [],
+            reasoning: `查询处理失败: ${error.message}`,
+            confidence: 0,
+            processingTime: Date.now() - startTime,
+            error: error.message
+        };
     }
 }
 
 /**
- * 执行向量搜索
+ * 执行图数据查询（兼容旧接口）
  */
-async function executeVectorSearch(
-    query: string,
-    options: EnhancedQueryOptions
-): Promise<{ results: any[]; analysis?: string }> {
-    try {
-        // 使用现有的 knowledgeQuery 函数
-        const vectorResponse = await knowledgeQuery(query);
-        
-        if (vectorResponse && vectorResponse.results) {
-            // 应用时间范围过滤
-            let filteredResults = vectorResponse.results;
-            
-            if (options.timeRange) {
-                filteredResults = filteredResults.filter((result: any) => {
-                    const resultTime = new Date(result.timestamp).getTime();
-                    return resultTime >= options.timeRange!.start && 
-                           resultTime <= options.timeRange!.end;
-                });
-            }
-            
-            // 限制结果数量
-            if (options.limit > 0) {
-                filteredResults = filteredResults.slice(0, options.limit);
-            }
-            
-            return {
-                results: filteredResults,
-                analysis: vectorResponse.analysis
-            };
-        }
-        
-        return { results: [] };
-
-    } catch (error) {
-        console.error('向量搜索失败:', error);
-        throw { type: 'vector', message: error.message };
-    }
-}
-
-/**
- * 执行图搜索
- */
-async function executeGraphSearch(
+export async function executeGraphQuery(
     query: string,
     options: EnhancedQueryOptions
 ): Promise<{
@@ -184,293 +201,167 @@ async function executeGraphSearch(
     totalConnections: number;
 }> {
     try {
-        const enhancer = await getMessageProcessingEnhancer();
+        await memorySystem.initialize();
         
-        // 构建图查询选项
-        const graphQueryOptions = {
-            textQuery: query,
-            includeNeighbors: options.includeNeighbors,
-            maxDepth: options.maxDepth,
-            limit: options.limit
-        };
-        
-        // 如果指定了实体类型，分别查询
-        if (options.entityTypes.length > 0) {
-            const entityPromises = options.entityTypes.map(entityType =>
-                enhancer.queryGraphData({
-                    ...graphQueryOptions,
-                    entityType
-                })
-            );
-            
-            const entityResults = await Promise.all(entityPromises);
-            
-            // 合并结果
-            const allEntities: any[] = [];
-            const allRelationships: any[] = [];
-            let totalConnections = 0;
-            
-            entityResults.forEach(result => {
-                allEntities.push(...result.entities);
-                allRelationships.push(...result.relationships);
-                
-                result.neighbors?.forEach(neighbor => {
-                    totalConnections += neighbor.neighbors.relationships?.length || 0;
-                });
-            });
-            
-            return {
-                entities: removeDuplicates(allEntities, 'id'),
-                relationships: removeDuplicates(allRelationships, 'id'),
-                totalConnections
-            };
-        }
-        
-        // 如果指定了关系类型，查询特定关系
-        if (options.relationshipTypes.length > 0) {
-            const relationshipPromises = options.relationshipTypes.map(relType =>
-                enhancer.queryGraphData({
-                    ...graphQueryOptions,
-                    relationshipType: relType
-                })
-            );
-            
-            const relationshipResults = await Promise.all(relationshipPromises);
-            
-            const allEntities: any[] = [];
-            const allRelationships: any[] = [];
-            let totalConnections = 0;
-            
-            relationshipResults.forEach(result => {
-                allEntities.push(...result.entities);
-                allRelationships.push(...result.relationships);
-                totalConnections += result.relationships.length;
-            });
-            
-            return {
-                entities: removeDuplicates(allEntities, 'id'),
-                relationships: removeDuplicates(allRelationships, 'id'),
-                totalConnections
-            };
-        }
-        
-        // 默认的通用图搜索
-        const graphResult = await enhancer.queryGraphData(graphQueryOptions);
-        
-        // 计算连接数
-        let totalConnections = graphResult.relationships.length;
-        graphResult.neighbors?.forEach(neighbor => {
-            totalConnections += neighbor.neighbors.relationships?.length || 0;
+        // 使用新的记忆系统进行搜索
+        const searchResults = await memorySystem.searchByVector(query, undefined, {
+            nResults: options.limit || 20
         });
         
+        // 获取关系网络（如果需要）
+        let relationships: any[] = [];
+        if (options.includeNeighbors && searchResults.data.length > 0) {
+            const topEntityId = searchResults.data[0].id;
+            const relationshipNetwork = await memorySystem.getRelationships(topEntityId, options.maxDepth || 1);
+            relationships = relationshipNetwork.relationships;
+        }
+        
         return {
-            entities: graphResult.entities,
-            relationships: graphResult.relationships,
-            totalConnections
+            entities: searchResults.data,
+            relationships,
+            totalConnections: searchResults.data.length
         };
-
     } catch (error) {
-        console.error('图搜索失败:', error);
-        throw { type: 'graph', message: error.message };
+        console.error('图查询失败:', error);
+        return {
+            entities: [],
+            relationships: [],
+            totalConnections: 0
+        };
     }
 }
 
 /**
- * 去除重复项
- */
-function removeDuplicates<T>(array: T[], keyField: keyof T): T[] {
-    const seen = new Set();
-    return array.filter(item => {
-        const key = item[keyField];
-        if (seen.has(key)) {
-            return false;
-        }
-        seen.add(key);
-        return true;
-    });
-}
-
-/**
- * 获取图存储统计信息
+ * 获取图统计信息
  */
 export async function getGraphStatistics(): Promise<{
     success: boolean;
-    statistics?: any;
+    totalEntities: number;
+    totalRelationships: number;
+    entityTypes: Record<string, number>;
+    lastUpdated: number;
     error?: string;
 }> {
     try {
-        const enhancer = await getMessageProcessingEnhancer();
-        const statistics = enhancer.getGraphStatistics();
+        await memorySystem.initialize();
+        const statistics = await memorySystem.getEntityStatistics();
         
         return {
             success: true,
-            statistics
+            totalEntities: statistics.totalEntities,
+            totalRelationships: statistics.totalRelationships,
+            entityTypes: statistics.entityCounts,
+            lastUpdated: Date.now()
         };
-
     } catch (error) {
-        console.error('获取图统计失败:', error);
+        console.error('获取图统计信息失败:', error);
         return {
             success: false,
+            totalEntities: 0,
+            totalRelationships: 0,
+            entityTypes: {},
+            lastUpdated: Date.now(),
             error: error.message
         };
     }
 }
 
 /**
- * 执行图数据同步
+ * 同步图数据
  */
 export async function syncGraphData(): Promise<{
     success: boolean;
-    syncStatus?: any;
+    synced: boolean;
+    syncedEntities: number;
+    syncedRelationships: number;
+    syncTime: number;
     error?: string;
 }> {
     try {
         console.log('🔄 开始图数据同步...');
         
-        const enhancer = await getMessageProcessingEnhancer();
-        const syncResult = await enhancer.syncGraphData();
+        await memorySystem.initialize();
+        const syncResult = await memorySystem.performInitialSyncIfNeeded();
         
-        if (syncResult.synced) {
-            console.log('✅ 图数据同步完成');
+        if (syncResult.syncPerformed) {
+            console.log(`✅ 同步完成: ${syncResult.entitiesDownloaded} 个实体, ${syncResult.relationshipsRestored} 个关系`);
             return {
                 success: true,
-                syncStatus: syncResult.syncStatus
+                synced: true,
+                syncedEntities: syncResult.entitiesDownloaded,
+                syncedRelationships: syncResult.relationshipsRestored,
+                syncTime: Date.now()
             };
         } else {
-            console.warn('⚠️ 图数据同步失败:', syncResult.error);
+            console.log('📝 无需同步，数据已是最新');
             return {
-                success: false,
-                error: syncResult.error
+                success: true,
+                synced: false,
+                syncedEntities: 0,
+                syncedRelationships: 0,
+                syncTime: Date.now()
             };
         }
-
     } catch (error) {
         console.error('❌ 图数据同步失败:', error);
         return {
             success: false,
+            synced: false,
+            syncedEntities: 0,
+            syncedRelationships: 0,
+            syncTime: Date.now(),
             error: error.message
         };
     }
 }
 
 /**
- * 执行图数据备份
+ * 备份图数据
  */
 export async function backupGraphData(): Promise<{
     success: boolean;
-    backupTime?: number;
+    backed: boolean;
+    backedEntities: number;
+    backedRelationships: number;
+    backupTime: number;
     error?: string;
 }> {
     try {
         console.log('☁️ 开始图数据备份...');
         
-        const enhancer = await getMessageProcessingEnhancer();
-        const backupResult = await enhancer.backupGraphData();
+        await memorySystem.initialize();
+        const backupSuccess = await memorySystem.backupRelationships();
         
-        if (backupResult.backed) {
-            console.log('✅ 图数据备份完成');
+        if (backupSuccess) {
+            const statistics = await memorySystem.getEntityStatistics();
+            console.log(`✅ 备份完成: ${statistics.totalEntities} 个实体, ${statistics.totalRelationships} 个关系`);
+            
             return {
                 success: true,
-                backupTime: backupResult.backupTime
+                backed: true,
+                backedEntities: statistics.totalEntities,
+                backedRelationships: statistics.totalRelationships,
+                backupTime: Date.now()
             };
         } else {
-            console.warn('⚠️ 图数据备份失败:', backupResult.error);
+            console.log('⚠️ 备份失败或无数据需要备份');
             return {
-                success: false,
-                error: backupResult.error
+                success: true,
+                backed: false,
+                backedEntities: 0,
+                backedRelationships: 0,
+                backupTime: Date.now()
             };
         }
-
     } catch (error) {
         console.error('❌ 图数据备份失败:', error);
         return {
             success: false,
+            backed: false,
+            backedEntities: 0,
+            backedRelationships: 0,
+            backupTime: Date.now(),
             error: error.message
         };
     }
 }
-
-/**
- * 智能查询意图分析
- */
-export async function analyzeQueryIntent(query: string): Promise<{
-    intent: 'entity_search' | 'relationship_search' | 'semantic_search' | 'mixed_search';
-    entities: {
-        people: string[];
-        projects: string[];
-        topics: string[];
-        organizations: string[];
-    };
-    relationships: string[];
-    timeExpressions: string[];
-    confidence: number;
-}> {
-    // 简单的意图分析，可以后续集成更复杂的NLP
-    const analysis = {
-        intent: 'semantic_search' as const,
-        entities: {
-            people: [] as string[],
-            projects: [] as string[],
-            topics: [] as string[],
-            organizations: [] as string[]
-        },
-        relationships: [] as string[],
-        timeExpressions: [] as string[],
-        confidence: 0.5
-    };
-
-    const queryLower = query.toLowerCase();
-
-    // 检测关系查询关键词
-    const relationshipKeywords = [
-        '关系', '连接', '协作', '依赖', '参与', '负责', '属于',
-        'works on', 'assigned to', 'collaborates with', 'depends on'
-    ];
-    
-    if (relationshipKeywords.some(keyword => queryLower.includes(keyword))) {
-        analysis.intent = 'relationship_search';
-        analysis.confidence = 0.8;
-    }
-
-    // 检测实体查询关键词
-    const entityKeywords = [
-        '谁', '什么', '哪个', '哪些', '人员', '项目', '团队', '组织',
-        'who', 'what', 'which', 'person', 'project', 'team', 'organization'
-    ];
-    
-    if (entityKeywords.some(keyword => queryLower.includes(keyword))) {
-        analysis.intent = analysis.intent === 'relationship_search' ? 'mixed_search' : 'entity_search';
-        analysis.confidence = Math.max(analysis.confidence, 0.7);
-    }
-
-    // 简单的实体提取（基于常见模式）
-    const namePattern = /([A-Z][a-z]+ [A-Z][a-z]+|[\u4e00-\u9fff]{2,4})/g;
-    const names = query.match(namePattern);
-    if (names) {
-        analysis.entities.people = names;
-    }
-
-    // 项目名称模式
-    const projectPattern = /(项目|Project|project)\s*[：:]?\s*([^\s,，。.]{2,20})/g;
-    const projectMatches = [...query.matchAll(projectPattern)];
-    if (projectMatches.length > 0) {
-        analysis.entities.projects = projectMatches.map(match => match[2]);
-    }
-
-    // 时间表达式
-    const timePattern = /(昨天|今天|明天|上周|本周|下周|上月|本月|下月|\d+天前|\d+周前|\d+月前)/g;
-    const timeMatches = query.match(timePattern);
-    if (timeMatches) {
-        analysis.timeExpressions = timeMatches;
-    }
-
-    return analysis;
-}
-
-export default {
-    executeEnhancedKnowledgeQuery,
-    getGraphStatistics,
-    syncGraphData,
-    backupGraphData,
-    analyzeQueryIntent
-};

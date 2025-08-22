@@ -1,7 +1,46 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
-import { ENTITY_TYPE_CONFIG } from '../storage/HybridGraphStore';
+import { memorySystem } from '../memory';
+
+// 实体类型配置（中文映射）
+const ENTITY_TYPE_CONFIG: Record<string, { name: string; icon: string; description: string }> = {
+  'Person': { 
+    name: '人物', 
+    icon: '👥', 
+    description: '团队成员、联系人、项目相关人员等'
+  },
+  'Project': { 
+    name: '项目', 
+    icon: '🚀', 
+    description: '工作项目、产品开发、研究项目等'
+  },
+  'Task': { 
+    name: '任务', 
+    icon: '📋', 
+    description: '具体工作任务、待办事项、行动项等'
+  },
+  'Organization': { 
+    name: '组织', 
+    icon: '🏢', 
+    description: '公司、部门、团队、客户组织等'
+  },
+  'Document': { 
+    name: '文档', 
+    icon: '📄', 
+    description: '文件、资料、规范、报告等'
+  },
+  'Technology': { 
+    name: '技术', 
+    icon: '🔧', 
+    description: '技术栈、工具、框架、平台等'
+  },
+  'Topic': { 
+    name: '主题', 
+    icon: '💡', 
+    description: '讨论话题、知识领域、专业概念等'
+  }
+};
 
 // 扩展Window接口
 declare global {
@@ -81,7 +120,7 @@ const MemoryInterface = () => {
   // 主题最新讨论缓存
   const [topicDiscussions, setTopicDiscussions] = useState<Record<string, any[]>>({});
 
-  // 实体类型配置已从 HybridGraphStore 导入
+  // 实体类型配置在文件顶部定义
 
   // 初始化数据
   useEffect(() => {
@@ -116,6 +155,13 @@ const MemoryInterface = () => {
     setIsLoading(true);
     console.log('🚀 开始初始化记忆界面...');
     try {
+      // 初始化记忆系统
+      console.log('🧠 初始化记忆系统...');
+      const memoryInitialized = await memorySystem.initialize();
+      if (!memoryInitialized) {
+        console.warn('⚠️ 记忆系统初始化失败，将使用降级模式');
+      }
+      
       // 加载概览统计
       console.log('📊 加载概览统计...');
       await loadOverviewStats();
@@ -254,28 +300,80 @@ const MemoryInterface = () => {
     }
   };
 
-  // 加载主题最新讨论
+  // 加载主题最新讨论（优化版：优先使用本地缓存）
   const loadTopicDiscussions = async (topics: EntityItem[]) => {
     const discussions: Record<string, any[]> = {};
+    const topicsNeedingCloudQuery: EntityItem[] = [];
     
+    // 1. 先尝试从本地缓存获取数据
     for (const topic of topics.slice(0, 10)) { // 限制并发数量
       try {
-        const response = await chrome.runtime.sendMessage({
-          type: 'GET_TOPIC_DETAIL',
-          topicId: topic.id
-        });
+        // 获取缓存的最近数据
+        const cachedData = await memorySystem.getRecentData(topic.id);
         
-        if (response && response.success && response.data.conversations) {
-          // 取最新的2条讨论
-          discussions[topic.id] = response.data.conversations.slice(0, 2);
+        if (cachedData && cachedData.conversations.length > 0) {
+          // 使用缓存数据，取最新的2条
+          discussions[topic.id] = cachedData.conversations.slice(0, 2);
+          console.log(`📦 主题 ${topic.name} 使用缓存数据 (${cachedData.conversations.length} 条)`);
+        } else {
+          // 缓存中没有数据，需要从云端查询
+          topicsNeedingCloudQuery.push(topic);
         }
       } catch (error) {
-        console.warn(`加载主题 ${topic.id} 的讨论失败:`, error);
-        discussions[topic.id] = [];
+        console.warn(`获取主题 ${topic.id} 的缓存数据失败:`, error);
+        topicsNeedingCloudQuery.push(topic);
+      }
+    }
+    
+    // 2. 对没有缓存的主题进行云端查询（批量处理以提高性能）
+    if (topicsNeedingCloudQuery.length > 0) {
+      console.log(`☁️ 需要从云端查询 ${topicsNeedingCloudQuery.length} 个主题的数据`);
+      
+      // 限制并发数量，避免一次性发起太多请求
+      const batchSize = 3;
+      for (let i = 0; i < topicsNeedingCloudQuery.length; i += batchSize) {
+        const batch = topicsNeedingCloudQuery.slice(i, i + batchSize);
+        
+        await Promise.allSettled(batch.map(async (topic) => {
+          try {
+            const response = await chrome.runtime.sendMessage({
+              type: 'GET_TOPIC_DETAIL',
+              topicId: topic.id
+            });
+            
+            if (response && response.success && response.data.conversations) {
+              // 取最新的2条讨论
+              const recentConversations = response.data.conversations.slice(0, 2);
+              discussions[topic.id] = recentConversations;
+              
+              // 缓存前5条数据到本地，供下次使用
+              const conversationsToCache = response.data.conversations.slice(0, 5);
+              for (const conversation of conversationsToCache) {
+                await memorySystem.updateRecentData(topic.id, 'conversation', conversation);
+              }
+              
+              console.log(`☁️ 主题 ${topic.name} 从云端获取并缓存了 ${conversationsToCache.length} 条数据`);
+            } else {
+              discussions[topic.id] = [];
+            }
+          } catch (error) {
+            console.warn(`从云端加载主题 ${topic.id} 的讨论失败:`, error);
+            discussions[topic.id] = [];
+          }
+        }));
+        
+        // 小延迟避免请求过于密集
+        if (i + batchSize < topicsNeedingCloudQuery.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       }
     }
     
     setTopicDiscussions(discussions);
+    
+    const cachedCount = topics.length - topicsNeedingCloudQuery.length;
+    const cloudCount = topicsNeedingCloudQuery.length;
+    console.log(`📊 主题讨论加载完成: ${cachedCount} 个使用缓存, ${cloudCount} 个从云端获取`);
   };
 
   // 执行搜索
@@ -378,19 +476,68 @@ const MemoryInterface = () => {
     }
   };
 
-  // 加载主题详情数据
+  // 加载主题详情数据（优化版：使用缓存策略）
   const loadTopicDetailData = async (topicId: string) => {
     setIsLoading(true);
     try {
+      // 1. 先尝试从本地缓存获取完整的主题详情
+      const cachedTopicDetails = await memorySystem.getCachedTopicDetails(topicId);
+      
+      if (cachedTopicDetails) {
+        console.log(`📦 主题详情页使用缓存数据: ${topicId}`);
+        setTopicDetailData(cachedTopicDetails);
+        setIsLoading(false);
+        return;
+      }
+
+      // 2. 缓存不存在，从云端获取数据
+      console.log(`☁️ 从云端获取主题详情: ${topicId}`);
       const response = await chrome.runtime.sendMessage({
         type: 'GET_TOPIC_DETAIL',
         topicId: topicId
       });
 
       if (response && response.success) {
-        setTopicDetailData(response.data);
+        const topicData = response.data;
+        setTopicDetailData(topicData);
+
+        // 3. 缓存详情数据到本地，供下次使用
+        try {
+          await memorySystem.cacheTopicDetails(topicId, {
+            conversations: topicData.conversations || [],
+            resources: topicData.relatedResources || [],
+            projects: topicData.relatedProjects || [],
+            webpages: topicData.webpages || []
+          });
+
+          // 4. 同时更新最近数据缓存（前5条）
+          const itemsToCache = [
+            { type: 'conversation', items: topicData.conversations },
+            { type: 'resource', items: topicData.relatedResources },
+            { type: 'project', items: topicData.relatedProjects },
+            { type: 'webpage', items: topicData.webpages }
+          ];
+
+          for (const { type, items } of itemsToCache) {
+            if (items && Array.isArray(items)) {
+              const recentItems = items.slice(0, 5);
+              for (const item of recentItems) {
+                await memorySystem.updateRecentData(
+                  topicId,
+                  type as 'conversation' | 'resource' | 'project' | 'webpage',
+                  item
+                );
+              }
+            }
+          }
+
+          console.log(`💾 主题详情已缓存: ${topicId}`);
+        } catch (cacheError) {
+          console.warn('缓存主题详情失败:', cacheError);
+        }
       } else {
         // 如果后端接口不存在，使用模拟数据
+        console.log(`🎭 使用模拟数据: ${topicId}`);
         const mockTopicData = {
           overview: {
             discussions: 12,
