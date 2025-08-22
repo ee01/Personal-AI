@@ -221,7 +221,7 @@ const EnhancedKnowledgeQuery = () => {
                     details: vectorResult.details || vectorResult.content || '',
                     timestamp: vectorResult.timestamp || '',
                     source: vectorResult.source || 'unknown',
-                    relevance: 1 - (vectorResult.distance || 0),
+                    relevance: 1 - (vectorResult.distance || 0), // 余弦距离转换为相关度评分
                     tags: vectorResult.tags || [],
                     reply_advice: vectorResult.reply_advice,
                     team: vectorResult.team

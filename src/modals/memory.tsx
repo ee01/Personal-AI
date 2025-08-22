@@ -58,15 +58,28 @@ interface OverviewStats {
 // 实体记忆查询组件
 const MemoryInterface = () => {
   // 状态管理
-  const [activeView, setActiveView] = useState<'overview' | 'timeline' | 'entity-detail'>('overview');
+  const [activeView, setActiveView] = useState<'overview' | 'timeline' | 'entity-detail' | 'topic-detail'>('overview');
   const [selectedEntityType, setSelectedEntityType] = useState<string>('overview');
   const [selectedEntity, setSelectedEntity] = useState<EntityItem | null>(null);
+  const [selectedTopic, setSelectedTopic] = useState<EntityItem | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [entities, setEntities] = useState<EntityItem[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
   const [entityTypes, setEntityTypes] = useState<EntityType[]>([]);
+  const [topicDetailData, setTopicDetailData] = useState<any>(null);
+  const [activeTopicTab, setActiveTopicTab] = useState<string>('overview');
+  
+  // 聊天记录相关状态
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [chatFilter, setChatFilter] = useState('all');
+  const [chatPage, setChatPage] = useState(1);
+  const [chatPageSize] = useState(10);
+  const [expandedConversations, setExpandedConversations] = useState<Set<string>>(new Set());
+  
+  // 主题最新讨论缓存
+  const [topicDiscussions, setTopicDiscussions] = useState<Record<string, any[]>>({});
 
   // 实体类型配置已从 HybridGraphStore 导入
 
@@ -225,7 +238,13 @@ const MemoryInterface = () => {
       });
 
       if (response && response.success) {
-        setEntities(response.data || []);
+        const entitiesData = response.data || [];
+        setEntities(entitiesData);
+        
+        // 如果是Topic类型，加载每个主题的最新讨论
+        if (entityType === 'Topic') {
+          await loadTopicDiscussions(entitiesData);
+        }
       }
     } catch (error) {
       console.error('加载实体失败:', error);
@@ -233,6 +252,30 @@ const MemoryInterface = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // 加载主题最新讨论
+  const loadTopicDiscussions = async (topics: EntityItem[]) => {
+    const discussions: Record<string, any[]> = {};
+    
+    for (const topic of topics.slice(0, 10)) { // 限制并发数量
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'GET_TOPIC_DETAIL',
+          topicId: topic.id
+        });
+        
+        if (response && response.success && response.data.conversations) {
+          // 取最新的2条讨论
+          discussions[topic.id] = response.data.conversations.slice(0, 2);
+        }
+      } catch (error) {
+        console.warn(`加载主题 ${topic.id} 的讨论失败:`, error);
+        discussions[topic.id] = [];
+      }
+    }
+    
+    setTopicDiscussions(discussions);
   };
 
   // 执行搜索
@@ -297,6 +340,10 @@ const MemoryInterface = () => {
 
   // 查看实体详情
   const handleEntityClick = async (entity: EntityItem) => {
+    if (entity.type === 'Topic') {
+      // 如果是主题，显示主题详情页
+      await handleTopicClick(entity);
+    } else {
     setSelectedEntity(entity);
     
     // 更新访问统计
@@ -307,7 +354,98 @@ const MemoryInterface = () => {
       });
     } catch (error) {
       console.error('更新实体访问失败:', error);
+      }
     }
+  };
+
+  // 查看主题详情
+  const handleTopicClick = async (topic: EntityItem) => {
+    setSelectedTopic(topic);
+    setActiveView('topic-detail');
+    setActiveTopicTab('overview');
+    
+    // 加载主题详情数据
+    await loadTopicDetailData(topic.id);
+    
+    // 更新访问统计
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'UPDATE_ENTITY_ACCESS',
+        entityId: topic.id
+      });
+    } catch (error) {
+      console.error('更新主题访问失败:', error);
+    }
+  };
+
+  // 加载主题详情数据
+  const loadTopicDetailData = async (topicId: string) => {
+    setIsLoading(true);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_TOPIC_DETAIL',
+        topicId: topicId
+      });
+
+      if (response && response.success) {
+        setTopicDetailData(response.data);
+      } else {
+        // 如果后端接口不存在，使用模拟数据
+        const mockTopicData = {
+          overview: {
+            discussions: 12,
+            projects: 5,
+            participants: 8,
+            resources: 15
+          },
+          relatedProjects: [
+            { id: 'project-1', name: 'Personal-AI', status: '开发中', description: 'Chrome扩展智能助手' },
+            { id: 'project-2', name: 'Automation Tools', status: '规划中', description: 'CI/CD自动化工具链' }
+          ],
+          relatedResources: [
+            { id: 'resource-1', name: 'AI开发最佳实践', type: '技术文档', url: '#' },
+            { id: 'resource-2', name: '自动化工具指南', type: '教程', url: '#' }
+          ],
+          conversations: [
+            {
+              id: 'conv-1',
+              sender: '张三',
+              group: '技术讨论组',
+              time: '30分钟前',
+              summary: '分享了最新的AI实现方案和技术心得',
+              context: [
+                { sender: '李四', content: '这个AI方案看起来很有潜力', time: '35分钟前' },
+                { sender: '张三', content: '是的，我们可以在下个版本中集成', time: '30分钟前', isMainMessage: true }
+              ]
+            }
+          ],
+          webpages: [
+            {
+              id: 'webpage-1',
+              title: 'AI开发技术文档',
+              url: 'https://example.com/ai-docs',
+              type: 'docs',
+              visitTime: '2小时前',
+              summary: '详细介绍了AI开发的关键技术和实现方法',
+              tags: ['AI', '技术文档', '开发指南']
+            }
+          ]
+        };
+        setTopicDetailData(mockTopicData);
+      }
+    } catch (error) {
+      console.error('加载主题详情失败:', error);
+      setTopicDetailData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 返回主题列表
+  const handleBackToTopicList = () => {
+    setActiveView('entity-detail');
+    setSelectedTopic(null);
+    setTopicDetailData(null);
   };
 
   // 执行搜索
@@ -514,6 +652,83 @@ const MemoryInterface = () => {
     return icons[type] || '📅';
   };
 
+  // 聊天记录相关函数
+  const handleChatSearch = (query: string) => {
+    setChatSearchQuery(query);
+    setChatPage(1); // 重置到第一页
+  };
+
+  const handleChatFilter = (filter: string) => {
+    setChatFilter(filter);
+    setChatPage(1); // 重置到第一页
+  };
+
+  const toggleConversationExpand = (conversationId: string) => {
+    const newExpanded = new Set(expandedConversations);
+    if (newExpanded.has(conversationId)) {
+      newExpanded.delete(conversationId);
+    } else {
+      // 收缩其他展开的对话
+      newExpanded.clear();
+      newExpanded.add(conversationId);
+    }
+    setExpandedConversations(newExpanded);
+  };
+
+  const getFilteredConversations = () => {
+    if (!topicDetailData?.conversations) return [];
+    
+    let filtered = topicDetailData.conversations;
+    
+    // 应用搜索过滤
+    if (chatSearchQuery.trim()) {
+      const query = chatSearchQuery.toLowerCase();
+      filtered = filtered.filter((conv: any) => 
+        conv.summary.toLowerCase().includes(query) ||
+        conv.sender.toLowerCase().includes(query) ||
+        conv.group.toLowerCase().includes(query) ||
+        conv.originalContent?.toLowerCase().includes(query)
+      );
+    }
+    
+    // 应用群组过滤
+    if (chatFilter !== 'all') {
+      filtered = filtered.filter((conv: any) => {
+        switch (chatFilter) {
+          case 'team':
+            return conv.group.includes('团队') || conv.group.includes('Team');
+          case 'project':
+            return conv.group.includes('项目') || conv.group.includes('Project');
+          case 'tech':
+            return conv.group.includes('技术') || conv.group.includes('Tech') || conv.group.includes('开发');
+          default:
+            return true;
+        }
+      });
+    }
+    
+    return filtered;
+  };
+
+  const getPaginatedConversations = () => {
+    const filtered = getFilteredConversations();
+    const startIndex = (chatPage - 1) * chatPageSize;
+    const endIndex = startIndex + chatPageSize;
+    return filtered.slice(startIndex, endIndex);
+  };
+
+  const getTotalChatPages = () => {
+    const filtered = getFilteredConversations();
+    return Math.ceil(filtered.length / chatPageSize);
+  };
+
+  const highlightText = (text: string, searchQuery: string) => {
+    if (!searchQuery.trim()) return text;
+    
+    const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return text.replace(regex, '<mark class="highlight">$1</mark>');
+  };
+
   return (
     <div className="memory-container">
       {/* 左侧导航 */}
@@ -608,33 +823,215 @@ const MemoryInterface = () => {
             </div>
 
             <div className="content-grid">
-              {entityTypes.slice(0, 6).map((entityType) => (
-                <div key={entityType.type} className="content-card" onClick={() => handleEntityTypeSelect(entityType.type)}>
+              {/* 今日重点项目 */}
+              <div className="content-card" onClick={() => handleEntityTypeSelect('Project')}>
                   <div className="card-header">
                     <div className="card-title">
-                      <span>{entityType.icon}</span>
-                      <span>{entityType.name}</span>
+                    <span>🚀</span>
+                    <span>今日重点项目</span>
                     </div>
-                    <div className="card-badge">{entityType.count} 个</div>
+                  <div className="card-badge">{entityTypes.find(t => t.type === 'Project')?.count || 0} 个活跃</div>
                   </div>
                   <div className="card-content">
-                    最近活跃的{entityType.name}信息
+                  最近活跃的项目和相关信息
                   </div>
                   <div className="info-list">
-                    {overviewStats?.topEntitiesByType[entityType.type]?.slice(0, 3).map((entity) => (
-                      <div key={entity.id} className="info-item">
-                        <span>{getEntityIcon(entity.type)}</span>
-                        <span>{entity.name}</span>
-                        <span className="info-time">{formatTime(entity.lastAccessed || entity.updated || Date.now())}</span>
+                  <div className="info-item">
+                    <span>🔥</span>
+                    <span>Personal-AI - Chrome 扩展开发</span>
+                    <span className="info-time">2 小时前</span>
                       </div>
-                    ))}
+                  <div className="info-item">
+                    <span>📊</span>
+                    <span>Data Pipeline - 性能优化</span>
+                    <span className="info-time">5 小时前</span>
+                  </div>
+                  <div className="info-item">
+                    <span>🎨</span>
+                    <span>Design System - 组件库更新</span>
+                    <span className="info-time">1 天前</span>
+                  </div>
                   </div>
                   <div className="view-more-btn">
-                    <span>查看全部{entityType.name}</span>
+                  <span>查看所有项目</span>
                     <span>→</span>
                   </div>
                 </div>
-              ))}
+
+              {/* 热门主题讨论 */}
+              <div className="content-card" onClick={() => handleEntityTypeSelect('Topic')}>
+                <div className="card-header">
+                  <div className="card-title">
+                    <span>💡</span>
+                    <span>热门主题讨论</span>
+                  </div>
+                  <div className="card-badge">{entityTypes.find(t => t.type === 'Topic')?.count || 0} 个活跃</div>
+                </div>
+                <div className="card-content">
+                  最近讨论频繁的话题和观点
+                </div>
+                <div className="info-list">
+                  <div className="info-item">
+                    <span>🤖</span>
+                    <span>AI 工作流自动化实践</span>
+                    <span className="info-time">30 分钟前</span>
+                  </div>
+                  <div className="info-item">
+                    <span>⚡</span>
+                    <span>前端性能优化策略</span>
+                    <span className="info-time">2 小时前</span>
+                  </div>
+                  <div className="info-item">
+                    <span>🎯</span>
+                    <span>产品设计思维方法</span>
+                    <span className="info-time">4 小时前</span>
+                  </div>
+                </div>
+                <div className="view-more-btn">
+                  <span>查看所有主题</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              {/* 重要联系人动态 */}
+              <div className="content-card" onClick={() => handleEntityTypeSelect('People')}>
+                <div className="card-header">
+                  <div className="card-title">
+                    <span>👥</span>
+                    <span>重要联系人动态</span>
+                  </div>
+                  <div className="card-badge">新消息</div>
+                </div>
+                <div className="card-content">
+                  来自同事和合作伙伴的重要更新
+                </div>
+                <div className="info-list">
+                  <div className="info-item">
+                    <span>👤</span>
+                    <span>张三 - 代码审查反馈</span>
+                    <span className="info-time">1 小时前</span>
+                  </div>
+                  <div className="info-item">
+                    <span>👤</span>
+                    <span>李四 - 设计稿更新通知</span>
+                    <span className="info-time">3 小时前</span>
+                  </div>
+                  <div className="info-item">
+                    <span>👤</span>
+                    <span>王五 - 会议纪要分享</span>
+                    <span className="info-time">6 小时前</span>
+                  </div>
+                </div>
+                <div className="view-more-btn">
+                  <span>查看所有联系人</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              {/* AI 推荐内容 */}
+              <div className="content-card">
+                <div className="card-header">
+                  <div className="card-title">
+                    <span>🎯</span>
+                    <span>AI 推荐内容</span>
+                  </div>
+                  <div className="card-badge">智能推荐</div>
+                </div>
+                <div className="card-content">
+                  基于你的兴趣和工作习惯推荐的内容
+                </div>
+                <div className="info-list">
+                  <div className="info-item">
+                    <span>📖</span>
+                    <span>《Clean Architecture》读书笔记复习</span>
+                    <span className="info-time">推荐</span>
+                  </div>
+                  <div className="info-item">
+                    <span>🔧</span>
+                    <span>Webpack 5 迁移指南</span>
+                    <span className="info-time">推荐</span>
+                  </div>
+                  <div className="info-item">
+                    <span>💡</span>
+                    <span>React 18 新特性总结</span>
+                    <span className="info-time">推荐</span>
+                  </div>
+                </div>
+                <div className="view-more-btn">
+                  <span>查看更多推荐</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              {/* 今日提醒事项 */}
+              <div className="content-card">
+                <div className="card-header">
+                  <div className="card-title">
+                    <span>⏰</span>
+                    <span>今日提醒事项</span>
+                  </div>
+                  <div className="card-badge">3 项待办</div>
+                </div>
+                <div className="card-content">
+                  来自日历、Jira 和 AI 生成的待办事项
+                </div>
+                <div className="info-list">
+                  <div className="info-item">
+                    <span>🎯</span>
+                    <span>完成 Personal-AI 的单元测试</span>
+                    <span className="info-time">今天</span>
+                  </div>
+                  <div className="info-item">
+                    <span>📞</span>
+                    <span>与产品团队的同步会议</span>
+                    <span className="info-time">14:00</span>
+                  </div>
+                  <div className="info-item">
+                    <span>📝</span>
+                    <span>更新项目文档</span>
+                    <span className="info-time">明天</span>
+                  </div>
+                </div>
+                <div className="view-more-btn">
+                  <span>查看完整日程</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              {/* 最近浏览记录 */}
+              <div className="content-card">
+                <div className="card-header">
+                  <div className="card-title">
+                    <span>🌐</span>
+                    <span>最近浏览记录</span>
+                  </div>
+                  <div className="card-badge">技术文档</div>
+                </div>
+                <div className="card-content">
+                  你最近查看的技术文档和学习资源
+                </div>
+                <div className="info-list">
+                  <div className="info-item">
+                    <span>📘</span>
+                    <span>React Query 官方文档</span>
+                    <span className="info-time">2 小时前</span>
+                  </div>
+                  <div className="info-item">
+                    <span>🎨</span>
+                    <span>Figma API 开发指南</span>
+                    <span className="info-time">昨天</span>
+                  </div>
+                  <div className="info-item">
+                    <span>⚡</span>
+                    <span>Vite 构建优化技巧</span>
+                    <span className="info-time">2 天前</span>
+                  </div>
+                </div>
+                <div className="view-more-btn">
+                  <span>查看浏览历史</span>
+                  <span>→</span>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -675,6 +1072,323 @@ const MemoryInterface = () => {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* 主题详情视图 */}
+        {activeView === 'topic-detail' && selectedTopic && (
+          <div className="topic-detail">
+            <div className="detail-header">
+              <button className="back-btn" onClick={handleBackToTopicList}>
+                <span>←</span>
+                <span>返回主题列表</span>
+              </button>
+              <div className="topic-header">
+                <div className="topic-avatar">{getEntityIcon(selectedTopic.type)}</div>
+                <div className="topic-info">
+                  <h2>{selectedTopic.name}</h2>
+                  <div className="topic-meta">
+                    <span className="meta-item">📈 {topicDetailData?.overview?.discussions || 0} 条讨论</span>
+                    <span className="meta-item">🔗 {topicDetailData?.overview?.projects || 0} 个关联项目</span>
+                    <span className="meta-item">⏰ 最后更新：{formatTime(selectedTopic.lastAccessed || Date.now())}</span>
+                  </div>
+                </div>
+                <div className="topic-actions">
+                  <button className="action-btn">📝 编辑主题</button>
+                  <button className="action-btn">🔗 添加关联</button>
+                </div>
+              </div>
+            </div>
+
+            <div className="topic-detail-content">
+              {/* 选项卡导航 */}
+              <div className="tab-navigation">
+                <button 
+                  className={`tab-btn ${activeTopicTab === 'overview' ? 'active' : ''}`}
+                  onClick={() => setActiveTopicTab('overview')}
+                >
+                  📊 概览
+                </button>
+                <button 
+                  className={`tab-btn ${activeTopicTab === 'projects' ? 'active' : ''}`}
+                  onClick={() => setActiveTopicTab('projects')}
+                >
+                  🚀 相关项目
+                </button>
+                <button 
+                  className={`tab-btn ${activeTopicTab === 'resources' ? 'active' : ''}`}
+                  onClick={() => setActiveTopicTab('resources')}
+                >
+                  📚 相关资源
+                </button>
+                <button 
+                  className={`tab-btn ${activeTopicTab === 'conversations' ? 'active' : ''}`}
+                  onClick={() => setActiveTopicTab('conversations')}
+                >
+                  💬 聊天记录
+                </button>
+                <button 
+                  className={`tab-btn ${activeTopicTab === 'webpages' ? 'active' : ''}`}
+                  onClick={() => setActiveTopicTab('webpages')}
+                >
+                  🌐 网页记录
+                </button>
+              </div>
+
+              {/* 概览标签页 */}
+              {activeTopicTab === 'overview' && (
+                <div className="tab-content active">
+                  <div className="overview-grid">
+                    <div className="summary-card">
+                      <div className="card-header">
+                        <div className="card-title">
+                          <span>📈</span>
+                          <span>主题统计</span>
+                        </div>
+                      </div>
+                      <div className="stats-grid">
+                        <div className="stat-item">
+                          <div className="stat-number">{topicDetailData?.overview?.discussions || 0}</div>
+                          <div className="stat-label">讨论条数</div>
+                        </div>
+                        <div className="stat-item">
+                          <div className="stat-number">{topicDetailData?.overview?.projects || 0}</div>
+                          <div className="stat-label">相关项目</div>
+                        </div>
+                        <div className="stat-item">
+                          <div className="stat-number">{topicDetailData?.overview?.participants || 0}</div>
+                          <div className="stat-label">参与人员</div>
+                        </div>
+                        <div className="stat-item">
+                          <div className="stat-number">{topicDetailData?.overview?.resources || 0}</div>
+                          <div className="stat-label">相关资源</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 相关项目标签页 */}
+              {activeTopicTab === 'projects' && (
+                <div className="tab-content active">
+                  <div className="section-header">
+                    <h3>📂 相关项目</h3>
+                    <button className="add-btn">+ 添加项目</button>
+                  </div>
+                  <div className="items-grid">
+                    {topicDetailData?.relatedProjects?.map((project: any) => (
+                      <div key={project.id} className="item-card">
+                        <div className="item-header">
+                          <div className="item-title">
+                            <span>🚀</span>
+                            <span>{project.name}</span>
+                          </div>
+                          <div className="item-actions">
+                            <button className="item-action" title="取消关联">❌</button>
+                          </div>
+                        </div>
+                        <div className="item-content">
+                          <div className="card-badge-container">
+                            <span className="card-badge">{project.status}</span>
+                          </div>
+                          <p>{project.description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 相关资源标签页 */}
+              {activeTopicTab === 'resources' && (
+                <div className="tab-content active">
+                  <div className="section-header">
+                    <h3>📚 相关资源</h3>
+                    <button className="add-btn">+ 添加资源</button>
+                  </div>
+                  <div className="items-grid">
+                    {topicDetailData?.relatedResources?.map((resource: any) => (
+                      <div key={resource.id} className="item-card">
+                        <div className="item-header">
+                          <div className="item-title">
+                            <span>📚</span>
+                            <span>{resource.name}</span>
+                          </div>
+                          <div className="item-actions">
+                            <button className="item-action" title="删除资源">❌</button>
+                          </div>
+                        </div>
+                        <div className="item-content">
+                          <div className="card-badge-container">
+                            <span className="card-badge">{resource.type}</span>
+                          </div>
+                          <p><a href={resource.url} style={{color: '#60a5fa'}}>查看资源</a></p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 聊天记录标签页 */}
+              {activeTopicTab === 'conversations' && (
+                <div className="tab-content active">
+                  <div className="section-header">
+                    <h3>💬 聊天记录</h3>
+                    <div className="search-controls">
+                      <input 
+                        type="text" 
+                        className="search-input" 
+                        placeholder="搜索聊天记录..." 
+                        value={chatSearchQuery}
+                        onChange={(e) => handleChatSearch(e.target.value)}
+                      />
+                      <select 
+                        className="filter-select"
+                        value={chatFilter}
+                        onChange={(e) => handleChatFilter(e.target.value)}
+                      >
+                        <option value="all">全部群组</option>
+                        <option value="team">团队群</option>
+                        <option value="project">项目群</option>
+                        <option value="tech">技术讨论</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="conversations-list">
+                    {getPaginatedConversations().map((conv: any) => {
+                      const isExpanded = expandedConversations.has(conv.id);
+                      return (
+                        <div key={conv.id} className={`conversation-item ${isExpanded ? 'expanded' : ''}`}>
+                          <div className="conversation-header">
+                            <div className="conversation-meta">
+                              <div className="sender-avatar">{conv.sender.charAt(0)}</div>
+                              <div className="sender-info">
+                                <div className="sender-name">{conv.sender}</div>
+                                <div className="group-name">{conv.group}</div>
+                              </div>
+                            </div>
+                            <div className="conversation-time">{conv.time}</div>
+                          </div>
+                          <div 
+                            className="conversation-summary"
+                            dangerouslySetInnerHTML={{
+                              __html: highlightText(conv.summary, chatSearchQuery)
+                            }}
+                          />
+                          {conv.matchedRules && conv.matchedRules.length > 0 && (
+                            <div className="matched-rules">
+                              <span className="rules-label">匹配规则:</span>
+                              {conv.matchedRules.map((rule: string, index: number) => (
+                                <span key={index} className="rule-tag">{rule}</span>
+                              ))}
+                            </div>
+                          )}
+                          <div 
+                            className={`context-indicator ${isExpanded ? 'expanded' : ''}`}
+                            onClick={() => toggleConversationExpand(conv.id)}
+                          >
+                            <span className="indicator-text">
+                              {isExpanded ? '🔼 收起上下文' : `🔍 查看上下文 (${conv.context?.length || 0} 条相关消息)`}
+                            </span>
+                          </div>
+                          {isExpanded && conv.context && conv.context.length > 0 && (
+                            <div className="context-content expanded">
+                              <div className="context-divider"></div>
+                              {conv.context.map((contextMsg: any, index: number) => (
+                                <div key={index} className={`context-item ${contextMsg.isMainMessage ? 'main-message' : ''}`}>
+                                  <div className="context-header">
+                                    <div className="context-sender">{contextMsg.sender}</div>
+                                    <div className="context-time">{contextMsg.time || contextMsg.datetime}</div>
+                                  </div>
+                                  <div 
+                                    className="context-content-text"
+                                    dangerouslySetInnerHTML={{
+                                      __html: contextMsg.isMainMessage 
+                                        ? highlightText(contextMsg.content, chatSearchQuery)
+                                        : contextMsg.content
+                                    }}
+                                  />
+                                </div>
+                              ))}
+                              {conv.teamUrl && (
+                                <div className="context-actions">
+                                  <a href={conv.teamUrl} target="_blank" rel="noopener noreferrer" className="view-in-team-btn">
+                                    🔗 在团队中查看完整对话
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {getTotalChatPages() > 1 && (
+                    <div className="pagination">
+                      <button 
+                        className="page-btn"
+                        disabled={chatPage === 1}
+                        onClick={() => setChatPage(chatPage - 1)}
+                      >
+                        上一页
+                      </button>
+                      <span className="page-info">
+                        第 {chatPage} 页，共 {getTotalChatPages()} 页 ({getFilteredConversations().length} 条记录)
+                      </span>
+                      <button 
+                        className="page-btn"
+                        disabled={chatPage === getTotalChatPages()}
+                        onClick={() => setChatPage(chatPage + 1)}
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 网页记录标签页 */}
+              {activeTopicTab === 'webpages' && (
+                <div className="tab-content active">
+                  <div className="section-header">
+                    <h3>🌐 网页记录</h3>
+                    <div className="search-controls">
+                      <input type="text" className="search-input" placeholder="搜索网页记录..." />
+                      <select className="filter-select">
+                        <option value="all">全部类型</option>
+                        <option value="docs">文档</option>
+                        <option value="blog">博客</option>
+                        <option value="github">GitHub</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="webpages-list">
+                    {topicDetailData?.webpages?.map((webpage: any) => (
+                      <div key={webpage.id} className="webpage-item">
+                        <div className="webpage-header">
+                          <div className="webpage-icon">🌐</div>
+                          <div className="webpage-info">
+                            <div className="webpage-title">{webpage.title}</div>
+                            <div className="webpage-url">{webpage.url}</div>
+                            <div className="webpage-meta">
+                              <span>访问时间：{webpage.visitTime}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="webpage-content">{webpage.summary}</div>
+                        <div className="webpage-tags">
+                          {webpage.tags?.map((tag: string, index: number) => (
+                            <span key={index} className="webpage-tag">{tag}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -742,6 +1456,60 @@ const MemoryInterface = () => {
                         <span>{entity.accessCount || 0} 访问</span>
                       </div>
                     </div>
+                    
+                    {/* 主题特殊预览信息 */}
+                    {entity.type === 'Topic' && (
+                      <div className="topic-preview">
+                        <h4 className="preview-title">💬 最新讨论</h4>
+                        <div className="preview-messages">
+                          {topicDiscussions[entity.id] && topicDiscussions[entity.id].length > 0 ? (
+                            topicDiscussions[entity.id].map((conversation: any, idx: number) => (
+                              <div key={idx} className="preview-message">
+                                <span className="message-sender">{conversation.sender}</span>
+                                <span className="message-content">
+                                  {conversation.summary.length > 30 
+                                    ? conversation.summary.substring(0, 30) + '...' 
+                                    : conversation.summary}
+                                </span>
+                                <span className="message-time">{conversation.time}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="preview-message">
+                              <span className="message-content" style={{color: '#888', fontStyle: 'italic'}}>
+                                暂无相关讨论
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <h4 className="preview-title">🔗 关联项目</h4>
+                        <div className="preview-projects">
+                          <div className="preview-project">
+                            <span className="project-icon">🚀</span>
+                            <span className="project-name">Personal-AI</span>
+                            <span className="project-status">开发中</span>
+                          </div>
+                          <div className="preview-project">
+                            <span className="project-icon">🔧</span>
+                            <span className="project-name">Automation Tools</span>
+                            <span className="project-status">规划中</span>
+                          </div>
+                        </div>
+                        
+                        <h4 className="preview-title">📚 相关资源</h4>
+                        <div className="preview-resources">
+                          <div className="preview-resource">
+                            <span className="resource-icon">📖</span>
+                            <span className="resource-name">技术文档</span>
+                          </div>
+                          <div className="preview-resource">
+                            <span className="resource-icon">💡</span>
+                            <span className="resource-name">最佳实践</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     
                     {/* 项目特殊操作按钮 */}
                     {entity.type === 'Project' && (
@@ -878,6 +1646,7 @@ const MemoryInterface = () => {
         .entity-name {
           font-weight: 500;
           flex: 1;
+          font-size: 1rem;
         }
 
         .entity-count {
@@ -885,7 +1654,7 @@ const MemoryInterface = () => {
           color: #60a5fa;
           padding: 0.25rem 0.5rem;
           border-radius: 0.75rem;
-          font-size: 0.75rem;
+          font-size: 0.875rem;
           font-weight: 600;
         }
 
@@ -985,7 +1754,7 @@ const MemoryInterface = () => {
         }
 
         .greeting-title {
-          font-size: 1.5rem;
+          font-size: 1.75rem;
           font-weight: 600;
           margin-bottom: 1rem;
           display: flex;
@@ -996,6 +1765,7 @@ const MemoryInterface = () => {
         .greeting-content {
           color: #cbd5e1;
           line-height: 1.6;
+          font-size: 1.1rem;
         }
 
         .quick-summary {
@@ -1055,7 +1825,7 @@ const MemoryInterface = () => {
           color: #60a5fa;
           padding: 0.25rem 0.75rem;
           border-radius: 1rem;
-          font-size: 0.75rem;
+          font-size: 0.875rem;
           font-weight: 500;
         }
 
@@ -1063,6 +1833,7 @@ const MemoryInterface = () => {
           color: #cbd5e1;
           line-height: 1.5;
           margin-bottom: 1rem;
+          font-size: 1rem;
         }
 
         .info-list {
@@ -1197,14 +1968,14 @@ const MemoryInterface = () => {
         }
 
         .entity-info h2 {
-          font-size: 1.5rem;
+          font-size: 1.75rem;
           font-weight: 600;
           margin-bottom: 0.25rem;
         }
 
         .entity-meta {
           color: #64748b;
-          font-size: 0.875rem;
+          font-size: 1rem;
         }
 
         /* 实体网格样式 */
@@ -1240,6 +2011,7 @@ const MemoryInterface = () => {
           display: flex;
           align-items: center;
           gap: 0.5rem;
+          font-size: 1.1rem;
         }
 
         .importance-indicator {
@@ -1308,6 +2080,86 @@ const MemoryInterface = () => {
           align-items: center;
           font-size: 0.75rem;
           color: #64748b;
+        }
+
+        /* 主题预览样式 */
+        .topic-preview {
+          margin-top: 1rem;
+          border-top: 1px solid rgba(148, 163, 184, 0.1);
+          padding-top: 1rem;
+        }
+
+        .preview-title {
+          font-size: 0.875rem;
+          font-weight: 600;
+          color: #60a5fa;
+          margin-bottom: 0.5rem;
+          margin-top: 0.75rem;
+        }
+
+        .preview-title:first-child {
+          margin-top: 0;
+        }
+
+        .preview-messages, .preview-projects, .preview-resources {
+          margin-bottom: 0.75rem;
+        }
+
+        .preview-message {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.375rem 0;
+          border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+          font-size: 0.75rem;
+        }
+
+        .preview-message:last-child {
+          border-bottom: none;
+        }
+
+        .message-sender {
+          font-weight: 600;
+          color: #93c5fd;
+          min-width: 3rem;
+        }
+
+        .message-content {
+          flex: 1;
+          color: #cbd5e1;
+        }
+
+        .message-time {
+          color: #64748b;
+          font-size: 0.625rem;
+          min-width: 4rem;
+          text-align: right;
+        }
+
+        .preview-project, .preview-resource {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.25rem 0;
+          font-size: 0.75rem;
+        }
+
+        .project-icon, .resource-icon {
+          width: 1rem;
+          font-size: 0.875rem;
+        }
+
+        .project-name, .resource-name {
+          flex: 1;
+          color: #cbd5e1;
+        }
+
+        .project-status {
+          padding: 0.125rem 0.375rem;
+          background: rgba(59, 130, 246, 0.2);
+          color: #60a5fa;
+          border-radius: 0.25rem;
+          font-size: 0.625rem;
         }
 
         /* 项目操作按钮样式 */
@@ -1422,6 +2274,640 @@ const MemoryInterface = () => {
           }
         }
 
+        /* 主题详情页样式 */
+        .topic-detail {
+          animation: fadeInUp 0.6s ease-out;
+        }
+
+        .detail-header {
+          margin-bottom: 2rem;
+        }
+
+        .back-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid rgba(59, 130, 246, 0.3);
+          border-radius: 0.5rem;
+          padding: 0.75rem 1.5rem;
+          color: #60a5fa;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          margin-bottom: 1.5rem;
+        }
+
+        .back-btn:hover {
+          background: rgba(59, 130, 246, 0.2);
+        }
+
+        .topic-header {
+          display: flex;
+          align-items: center;
+          gap: 1.5rem;
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          border-radius: 1rem;
+          padding: 2rem;
+          backdrop-filter: blur(10px);
+        }
+
+        .topic-avatar {
+          width: 4rem;
+          height: 4rem;
+          border-radius: 1rem;
+          background: linear-gradient(135deg, #60a5fa, #a78bfa);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 2rem;
+          flex-shrink: 0;
+        }
+
+        .topic-info {
+          flex: 1;
+        }
+
+        .topic-info h2 {
+          font-size: 1.75rem;
+          font-weight: 600;
+          margin-bottom: 0.75rem;
+        }
+
+        .topic-meta {
+          display: flex;
+          gap: 1.5rem;
+          flex-wrap: wrap;
+        }
+
+        .meta-item {
+          color: #94a3b8;
+          font-size: 0.875rem;
+        }
+
+        .topic-actions {
+          display: flex;
+          gap: 0.75rem;
+        }
+
+        .action-btn {
+          padding: 0.75rem 1.5rem;
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid rgba(59, 130, 246, 0.3);
+          border-radius: 0.5rem;
+          color: #60a5fa;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          white-space: nowrap;
+        }
+
+        .action-btn:hover {
+          background: rgba(59, 130, 246, 0.2);
+        }
+
+        /* 选项卡样式 */
+        .tab-navigation {
+          display: flex;
+          gap: 0.5rem;
+          margin-bottom: 2rem;
+          border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+          padding-bottom: 1rem;
+          overflow-x: auto;
+        }
+
+        .tab-btn {
+          padding: 0.75rem 1.5rem;
+          background: transparent;
+          border: none;
+          border-radius: 0.5rem;
+          color: #94a3b8;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          white-space: nowrap;
+          font-size: 0.875rem;
+        }
+
+        .tab-btn.active {
+          background: rgba(59, 130, 246, 0.2);
+          color: #60a5fa;
+        }
+
+        .tab-btn:hover:not(.active) {
+          background: rgba(59, 130, 246, 0.1);
+          color: #93c5fd;
+        }
+
+        /* 选项卡内容 */
+        .tab-content {
+          display: block;
+          animation: fadeInUp 0.4s ease-out;
+        }
+
+        /* 概览页面 */
+        .overview-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+          gap: 1.5rem;
+        }
+
+        .summary-card {
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          border-radius: 1rem;
+          padding: 1.5rem;
+          backdrop-filter: blur(10px);
+        }
+
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 1rem;
+          margin-top: 1rem;
+        }
+
+        .stat-item {
+          text-align: center;
+          padding: 1rem;
+          background: rgba(59, 130, 246, 0.1);
+          border-radius: 0.75rem;
+        }
+
+        .stat-number {
+          font-size: 1.75rem;
+          font-weight: 700;
+          color: #60a5fa;
+        }
+
+        .stat-label {
+          font-size: 0.875rem;
+          color: #94a3b8;
+          margin-top: 0.25rem;
+        }
+
+        /* 列表项样式 */
+        .section-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 1.5rem;
+        }
+
+        .section-header h3 {
+          font-size: 1.25rem;
+          font-weight: 600;
+        }
+
+        .add-btn {
+          padding: 0.75rem 1.5rem;
+          background: rgba(34, 197, 94, 0.1);
+          border: 1px solid rgba(34, 197, 94, 0.3);
+          border-radius: 0.5rem;
+          color: #22c55e;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          font-size: 1rem;
+        }
+
+        .add-btn:hover {
+          background: rgba(34, 197, 94, 0.2);
+        }
+
+        .items-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+          gap: 1rem;
+        }
+
+        .item-card {
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          border-radius: 0.75rem;
+          padding: 1rem;
+          transition: all 0.3s ease;
+          cursor: pointer;
+        }
+
+        .item-card:hover {
+          border-color: rgba(59, 130, 246, 0.3);
+          transform: translateY(-2px);
+        }
+
+        .item-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 0.5rem;
+        }
+
+        .item-title {
+          font-weight: 600;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          font-size: 1.1rem;
+        }
+
+        .item-actions {
+          display: flex;
+          gap: 0.25rem;
+        }
+
+        .item-action {
+          padding: 0.25rem;
+          background: transparent;
+          border: none;
+          border-radius: 0.25rem;
+          color: #94a3b8;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+
+        .item-action:hover {
+          background: rgba(239, 68, 68, 0.1);
+          color: #ef4444;
+        }
+
+        .item-content {
+          color: #cbd5e1;
+          font-size: 1rem;
+          line-height: 1.5;
+        }
+
+        .card-badge-container {
+          margin-bottom: 0.5rem;
+        }
+
+        /* 搜索控件 */
+        .search-controls {
+          display: flex;
+          gap: 1rem;
+          align-items: center;
+        }
+
+        .filter-select {
+          padding: 0.75rem;
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          border-radius: 0.5rem;
+          color: #ffffff;
+          min-width: 120px;
+          font-size: 1rem;
+        }
+
+        /* 聊天记录样式 */
+        .conversations-list {
+          margin-bottom: 2rem;
+        }
+
+        .conversation-item {
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          border-radius: 0.75rem;
+          padding: 1rem;
+          margin-bottom: 1rem;
+          position: relative;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+
+        .conversation-item:hover {
+          border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .conversation-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 0.75rem;
+        }
+
+        .conversation-meta {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+
+        .sender-avatar {
+          width: 2.5rem;
+          height: 2.5rem;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #60a5fa, #a78bfa);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1rem;
+        }
+
+        .sender-info {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .sender-name {
+          font-weight: 600;
+          font-size: 1rem;
+        }
+
+        .group-name {
+          font-size: 0.875rem;
+          color: #94a3b8;
+        }
+
+        .conversation-time {
+          font-size: 0.875rem;
+          color: #64748b;
+        }
+
+        .conversation-summary {
+          color: #cbd5e1;
+          line-height: 1.5;
+          margin-bottom: 0.5rem;
+          font-size: 1rem;
+        }
+
+        /* 匹配规则样式 */
+        .matched-rules {
+          margin: 0.75rem 0;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+
+        .rules-label {
+          font-size: 0.875rem;
+          color: #94a3b8;
+          font-weight: 500;
+        }
+
+        .rule-tag {
+          background: rgba(34, 197, 94, 0.2);
+          color: #4ade80;
+          padding: 0.25rem 0.5rem;
+          border-radius: 0.375rem;
+          font-size: 0.75rem;
+          font-weight: 500;
+        }
+
+        /* 上下文指示器样式 */
+        .context-indicator {
+          margin-top: 0.75rem;
+          padding: 0.5rem 0.75rem;
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid rgba(59, 130, 246, 0.3);
+          border-radius: 0.5rem;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          user-select: none;
+        }
+
+        .context-indicator:hover {
+          background: rgba(59, 130, 246, 0.2);
+          border-color: rgba(59, 130, 246, 0.5);
+        }
+
+        .context-indicator.expanded {
+          background: rgba(59, 130, 246, 0.2);
+          border-color: rgba(59, 130, 246, 0.4);
+        }
+
+        .indicator-text {
+          font-size: 0.875rem;
+          color: #60a5fa;
+          font-weight: 500;
+        }
+
+        /* 上下文内容样式 */
+        .context-content {
+          max-height: 0;
+          overflow: hidden;
+          transition: max-height 0.3s ease;
+        }
+
+        .context-content.expanded {
+          max-height: 500px;
+          overflow-y: auto;
+        }
+
+        .context-divider {
+          height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.3), transparent);
+          margin: 1rem 0;
+        }
+
+        .context-item {
+          background: rgba(30, 41, 59, 0.4);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          border-radius: 0.5rem;
+          padding: 0.75rem;
+          margin-bottom: 0.5rem;
+          transition: all 0.3s ease;
+        }
+
+        .context-item:last-child {
+          margin-bottom: 0;
+        }
+
+        .context-item.main-message {
+          border-color: rgba(34, 197, 94, 0.3);
+          background: rgba(34, 197, 94, 0.1);
+        }
+
+        .context-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.5rem;
+        }
+
+        .context-sender {
+          font-weight: 600;
+          font-size: 0.875rem;
+          color: #e2e8f0;
+        }
+
+        .context-time {
+          font-size: 0.75rem;
+          color: #94a3b8;
+        }
+
+        .context-content-text {
+          color: #cbd5e1;
+          line-height: 1.5;
+          font-size: 0.875rem;
+        }
+
+        .context-actions {
+          margin-top: 1rem;
+          padding-top: 0.75rem;
+          border-top: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .view-in-team-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 1rem;
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid rgba(59, 130, 246, 0.3);
+          border-radius: 0.5rem;
+          color: #60a5fa;
+          text-decoration: none;
+          font-size: 0.875rem;
+          font-weight: 500;
+          transition: all 0.3s ease;
+        }
+
+        .view-in-team-btn:hover {
+          background: rgba(59, 130, 246, 0.2);
+          border-color: rgba(59, 130, 246, 0.5);
+          transform: translateY(-1px);
+        }
+
+        /* 高亮样式 */
+        .highlight {
+          background: rgba(251, 191, 36, 0.3);
+          color: #fbbf24;
+          padding: 0.125rem 0.25rem;
+          border-radius: 0.25rem;
+          font-weight: 600;
+        }
+
+        /* 分页样式改进 */
+        .pagination {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 1rem;
+          margin-top: 2rem;
+          padding: 1rem 0;
+          border-top: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .page-btn {
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid rgba(59, 130, 246, 0.3);
+          border-radius: 0.5rem;
+          color: #60a5fa;
+          padding: 0.5rem 1rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+
+        .page-btn:hover:not(:disabled) {
+          background: rgba(59, 130, 246, 0.2);
+          border-color: rgba(59, 130, 246, 0.5);
+          transform: translateY(-1px);
+        }
+
+        .page-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .page-info {
+          font-size: 0.875rem;
+          color: #94a3b8;
+          font-weight: 500;
+        }
+
+        /* 网页记录样式 */
+        .webpages-list {
+          margin-bottom: 2rem;
+        }
+
+        .webpage-item {
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          border-radius: 0.75rem;
+          padding: 1rem;
+          margin-bottom: 1rem;
+          transition: all 0.3s ease;
+        }
+
+        .webpage-item:hover {
+          border-color: rgba(59, 130, 246, 0.3);
+          transform: translateY(-1px);
+        }
+
+        .webpage-header {
+          display: flex;
+          align-items: flex-start;
+          gap: 1rem;
+          margin-bottom: 0.75rem;
+        }
+
+        .webpage-icon {
+          width: 2.5rem;
+          height: 2.5rem;
+          border-radius: 0.5rem;
+          background: linear-gradient(135deg, #60a5fa, #a78bfa);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.25rem;
+          flex-shrink: 0;
+        }
+
+        .webpage-info {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .webpage-title {
+          font-weight: 600;
+          margin-bottom: 0.25rem;
+          font-size: 1.1rem;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .webpage-url {
+          font-size: 0.875rem;
+          color: #60a5fa;
+          margin-bottom: 0.5rem;
+          word-break: break-all;
+        }
+
+        .webpage-meta {
+          display: flex;
+          gap: 1rem;
+          font-size: 0.875rem;
+          color: #94a3b8;
+        }
+
+        .webpage-content {
+          color: #cbd5e1;
+          font-size: 1rem;
+          line-height: 1.5;
+          margin-bottom: 0.75rem;
+          display: -webkit-box;
+          -webkit-line-clamp: 3;
+          line-clamp: 3;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .webpage-tags {
+          display: flex;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+
+        .webpage-tag {
+          padding: 0.25rem 0.5rem;
+          background: rgba(59, 130, 246, 0.2);
+          color: #60a5fa;
+          border-radius: 0.25rem;
+          font-size: 0.875rem;
+        }
+
         /* 响应式设计 */
         @media (max-width: 768px) {
           .memory-container {
@@ -1450,6 +2936,25 @@ const MemoryInterface = () => {
 
           .search-box {
             width: 100%;
+          }
+
+          .topic-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1rem;
+          }
+
+          .topic-actions {
+            width: 100%;
+            justify-content: stretch;
+          }
+
+          .action-btn {
+            flex: 1;
+          }
+
+          .tab-navigation {
+            overflow-x: auto;
           }
         }
       `}</style>

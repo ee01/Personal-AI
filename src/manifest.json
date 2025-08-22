@@ -70,6 +70,15 @@
     "default_popup": "popup.html",
     "default_title": "Personal AI"
   },
+  "commands": {
+    "open-memory-interface": {
+      "suggested_key": {
+        "default": "Alt+A",
+        "mac": "Alt+A"
+      },
+      "description": "打开记忆查询界面"
+    }
+  },
   "options_page": "options.html",
   "host_permissions": [
     "*://*/*"

@@ -2055,7 +2055,7 @@
                         summary: '分享了最新的GPT-4 API集成经验，讨论了Token优化策略',
                         context: [
                             { sender: '李四', content: '最近GPT-4的API调用成本有点高', time: '35分钟前' },
-                            { sender: '张三', content: '我找到了一些优化Token使用的方法，可以减少30%的成本', time: '30分钟前', isMain: true },
+                            { sender: '张三', content: '我找到了一些优化Token使用的方法，可以减少30%的成本', time: '30分钟前', isMainMessage: true },
                             { sender: '王五', content: '能分享一下具体的优化策略吗？', time: '28分钟前' }
                         ]
                     },
@@ -2067,7 +2067,7 @@
                         summary: '讨论了自动化测试的实现方案，提出了新的测试框架选型建议',
                         context: [
                             { sender: '产品经理', content: '我们需要一个更好的自动化测试方案', time: '2.5小时前' },
-                            { sender: '李四', content: '建议采用Playwright + Jest的组合，覆盖率会更高', time: '2小时前', isMain: true },
+                            { sender: '李四', content: '建议采用Playwright + Jest的组合，覆盖率会更高', time: '2小时前', isMainMessage: true },
                             { sender: '测试负责人', content: '这个方案看起来不错，我们可以试试', time: '1.5小时前' }
                         ]
                     }
@@ -2259,7 +2259,7 @@
                     <div class="context-content" data-conv-id="${conv.id}">
                         <div class="context-divider"></div>
                         ${conv.context.map(ctx => `
-                            <div class="context-item ${ctx.isMain ? 'main' : ''}">
+                            <div class="context-item ${ctx.isMainMessage ? 'main' : ''}">
                                 <div class="context-header">
                                     <span class="context-sender">${ctx.sender}</span>
                                     <span class="context-time">${ctx.time}</span>

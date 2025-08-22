@@ -76,23 +76,23 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	//   groupName: 'Recording Test',
 	//   groupId: '123',
 	//   posts: [
-	//     { creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
-	//     { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
+	//     { id: '1231', creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
+	//     { id: '1232', creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
 	//   ]
 	// });
 	// data.unshift({
 	//   groupName: '大群',
 	//   groupId: '2578219014',
 	//   posts: [
-	//     { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
-	//     { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
+	//     { id: '25782190141', creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
+	//     { id: '25782190142', creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
 	//   ]
 	// });
 	// data.unshift({
 	//   groupName: '小群',
 	//   groupId: '321',
 	//   posts: [
-	//     { creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
+	//     { id: '3211', creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
 	//   ]
 	// });
 	// data.splice(2);
@@ -292,6 +292,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			// 处理该群组的每条消息
 			for (const post of item.posts) {
 				const messageData = {
+					post_id: post.id,
 					team_id: item.groupId,
 					team_name: item.groupName,
 					message_content: post.text,
@@ -372,13 +373,22 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 		"reply_advice": "建议的回复填入此",
 		"datetime": "{datetime}",
 		"entities": {
-		"people": ["消息中提到的人物"],
-		"projects": ["消息中提到的项目"],
-		"topics": ["消息中提到的话题"],
-		"actions": ["消息中需要执行的动作"]
-		"sentiment": "整体情感(positive/negative/neutral)",
-		"category": [消息类别，如"决策"、"讨论"、"公告"等]
-		}
+			"people": ["消息中提到的人物"],
+			"projects": ["消息中提到的项目"],
+			"topics": ["消息中提到的话题"],
+			"actions": ["消息中需要执行的动作"],
+			"documents": [{"name": "文档名称", "url": "链接", "type": "文档类型"}],
+			"technologies": [{"name": "技术名称", "category": "技术分类", "version": "版本号"}],
+			"sentiment": "整体情感(positive/negative/neutral)",
+			"category": [消息类别，如"决策"、"讨论"、"公告"等]
+		},
+		"contextMessages": [{
+			"id": "message_group内所有相关消息的post_id",
+			"sender": "message_group内所有相关消息的发送者",
+			"content": "message_group内所有相关消息原文",
+			"datetime": "message_group内所有相关消息的发送时间",
+			"isMainMessage": false // 是否是符合条件过滤出来的关键消息
+		}]
 	}]
 }
 2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
@@ -506,14 +516,31 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				const messageId = uuidv4();
 				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
 				
-				// 构建消息元数据
+				// 构建消息元数据（包含上下文信息）
+				const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
+					id: post.id,
+					sender: post.creator,
+					content: post.text,
+					datetime: post.time,
+					isMainMessage: post.id == json.post_id
+				})) : json.contextMessages;
 				const messageMetadata = {
 					source: json.sender || 'unknown',
 					timestamp: Date.now(),
+					datetime: json.datetime, // 原始时间
+					post_id: json.post_id,   // 原始消息ID
 					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
 					summary: json.summary || '',
 					teamName: json.team_name,
 					teamId: json.team_id,
+					team_url: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
+					// 消息内容（用于高亮）
+					originalContent: json.message_content, // 原始消息内容
+					highlightText: json.message_content,   // 用于高亮的文本
+					// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
+					contextMessages: contextMessages,
+					// 当前消息在上下文中的位置
+					messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
 					entities: extractedEntities.entities,
 					metadata: {
 						sentiment: extractedEntities.metadata.sentiment,
@@ -689,6 +716,45 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<Entity, 'id' | '
             teamName: metadata.teamName || ''
           },
           importance: 0.5 // 话题重要性较低
+        });
+      }
+    }
+    
+    // 提取文档/资源实体（从消息中提取的技术文档、链接等资源）
+    if (metadata.entities.documents || metadata.entities.resources) {
+      const documentsList = [...(metadata.entities.documents || []), ...(metadata.entities.resources || [])];
+      for (const doc of documentsList) {
+        entities.push({
+          type: 'Document',
+          name: doc.name || doc.title,
+          properties: {
+            url: doc.url,
+            type: doc.type || 'document',
+            description: doc.description,
+            source: 'message_analysis',
+            teamName: metadata.teamName || ''
+          },
+          importance: 0.6
+        });
+      }
+    }
+
+    // 提取技术实体（从消息中提到的技术栈、工具等）
+    if (metadata.entities.technologies || metadata.entities.tools) {
+      const techList = [...(metadata.entities.technologies || []), ...(metadata.entities.tools || [])];
+      for (const tech of techList) {
+        entities.push({
+          type: 'Document', // 将Technology类型归类为Document类型
+          name: tech.name,
+          properties: {
+            category: tech.category,
+            version: tech.version,
+            usage_context: tech.usage_context,
+            source: 'message_analysis',
+            teamName: metadata.teamName || '',
+            type: 'technology' // 在properties中标记具体类型
+          },
+          importance: 0.6
         });
       }
     }

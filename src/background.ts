@@ -21,6 +21,51 @@ import { DashboardMessageHandler } from './utils/dashboardIntegration';
 
 console.log('Background script loaded');
 
+// 辅助函数：格式化时间为相对时间
+function formatTimeAgo(timestamp: number): string {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes}分钟前`;
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 30) return `${days}天前`;
+    return new Date(timestamp).toLocaleDateString();
+}
+
+// 监听扩展命令
+chrome.commands.onCommand.addListener(async (command) => {
+    console.log('Command received:', command);
+    
+    if (command === 'open-memory-interface') {
+        try {
+            // 获取当前活跃的标签页
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            
+            if (activeTab?.id) {
+                // 打开记忆查询界面
+                const memoryUrl = chrome.runtime.getURL('memory.html');
+                
+                // 使用弹窗方式打开记忆界面
+                await chrome.windows.create({
+                    url: memoryUrl,
+                    type: 'popup',
+                    width: 1400,
+                    height: 900,
+                    focused: true
+                });
+                
+                console.log('Memory interface opened via command shortcut');
+            }
+        } catch (error) {
+            console.error('Failed to open memory interface:', error);
+        }
+    }
+});
+
 // 扩展安装或更新时，立即创建定时任务
 chrome.runtime.onInstalled.addListener(async () => {
     try {
@@ -372,6 +417,171 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         entityCounts: {}, 
                         totalEntities: 0 
                     }
+                });
+            });
+        return true;
+    }
+
+    // 获取主题详情数据
+    if (request.type === 'GET_TOPIC_DETAIL') {
+        const { topicId } = request;
+        
+        getMessageProcessingEnhancer()
+            .then(enhancer => enhancer.getHybridGraphStore())
+            .then(async (hybridStore) => {
+                try {
+                    // 获取主题基础信息
+                    const topicEntity = await hybridStore.getEntityDetails(topicId);
+                    if (!topicEntity) {
+                        throw new Error('主题不存在');
+                    }
+
+                    // 获取相关项目（首先尝试通过关系查询，然后回退到全部项目）
+                    let relatedProjects: any[] = [];
+                    try {
+                        // 暂时跳过关系查询，直接查询所有项目
+                        // TODO: 等HybridGraphStore支持关系查询后再启用
+                        // const relationships = await hybridStore.getEntityRelationships(topicId);
+                        
+                        // 如果没有直接关联的项目，查询所有项目实体
+                        if (relatedProjects.length === 0) {
+                            const allProjects = await hybridStore.getEntitiesByType('Project', { limit: 3 });
+                            relatedProjects = allProjects.map((project: any) => ({
+                                id: project.id,
+                                name: project.name || '未知项目',
+                                status: project.properties?.status || project.metadata?.status || '开发中',
+                                description: project.description || `项目: ${project.name || '未命名项目'}`
+                            }));
+                        }
+                    } catch (error) {
+                        console.warn('获取相关项目失败:', error);
+                        relatedProjects = [];
+                    }
+
+                    // 获取相关资源（首先尝试通过关系查询，然后查询网页记录）
+                    let relatedResources: any[] = [];
+                    try {
+                        // 尝试获取与主题相关的文档实体
+                        const documentEntities = await hybridStore.getEntitiesByType('Document', { limit: 3 });
+                        const documentResources = documentEntities.map((doc: any) => ({
+                            id: doc.id,
+                            name: doc.name || '文档资源',
+                            type: '文档',
+                            url: doc.properties?.url || doc.metadata?.url || '#'
+                        }));
+
+                        // 获取相关网页记录
+                        const webpageResults = await hybridStore.queryEntityWebpages(topicId, { 
+                            limit: 3,
+                            sortBy: 'relevance',
+                            sortOrder: 'desc'
+                        });
+                        const webpageResources = webpageResults.map((webpage: any) => ({
+                            id: webpage.webpageId,
+                            name: webpage.title || '网页资源',
+                            type: '网页',
+                            url: webpage.url || '#'
+                        }));
+
+                        // 合并所有资源
+                        relatedResources = [...documentResources, ...webpageResources].slice(0, 3);
+                        
+                        // 如果仍然没有资源，提供默认示例
+                        if (relatedResources.length === 0) {
+                            relatedResources = [{
+                                id: 'default-resource',
+                                name: `${topicEntity.name} 相关资源`,
+                                type: '搜索建议',
+                                url: `https://www.google.com/search?q=${encodeURIComponent(topicEntity.name)}`
+                            }];
+                        }
+                    } catch (error) {
+                        console.warn('获取相关资源失败:', error);
+                        relatedResources = [];
+                    }
+
+                    // 获取相关对话（从实际消息数据中查询）
+                    const conversations = await hybridStore.queryEntityMessages(topicId, { 
+                        limit: 100, 
+                        minRelevanceScore: 0.5,  // 余弦距离系统，阈值降低 
+                        sortBy: 'relevance',
+                        sortOrder: 'desc'
+                    });
+                    
+                    // 转换为前端需要的格式
+                    const formattedConversations = conversations.map(msg => {
+                        // 处理上下文消息：从metadata中提取contextMessages
+                        let context: any[] = [];
+                        if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
+                            context = msg.metadata.contextMessages.map((ctx: any) => ({
+                                id: ctx.id,
+                                sender: ctx.sender,
+                                content: ctx.content,
+                                time: ctx.datetime ? formatTimeAgo(new Date(ctx.datetime).getTime()) : '未知时间',
+                                datetime: ctx.datetime,
+                                isMainMessage: ctx.isMainMessage || false
+                            }));
+                        }
+
+                        return {
+                            id: msg.messageId,
+                            sender: msg.source,
+                            group: msg.metadata?.teamName || '聊天记录', // 使用真实群组名称
+                            time: formatTimeAgo(msg.timestamp),
+                            datetime: new Date(msg.timestamp).toISOString(),
+                            summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
+                            originalContent: msg.content,
+                            highlightText: msg.metadata?.highlightText || msg.content,
+                            teamUrl: msg.metadata?.team_url || '#', // 使用真实的团队URL
+                            matchedRules: msg.metadata?.matchedRules || [], // 使用真实的匹配规则
+                            relevanceScore: msg.relevanceScore,
+                            context: context // 使用真实的上下文消息
+                        };
+                    });
+
+                    // 统计参与者（从相关消息中提取不同的发送者）
+                    const participants = new Set(formattedConversations.map(conv => conv.sender)).size;
+
+                    const topicDetail = {
+                        overview: {
+                            discussions: formattedConversations.length,
+                            projects: relatedProjects.length,
+                            participants: participants || 1, // 至少有一个参与者
+                            resources: relatedResources.length
+                        },
+                        entity: topicEntity,
+                        projects: relatedProjects,
+                        resources: relatedResources,
+                        conversations: formattedConversations,
+                        // 使用真实的网页记录而不是demo数据
+                        webpages: relatedResources.filter(r => r.type === '网页').map(webpage => ({
+                            id: webpage.id,
+                            title: webpage.name,
+                            url: webpage.url,
+                            type: 'webpage',
+                            visitTime: '最近访问',
+                            summary: `与${topicEntity.name}相关的网页内容`,
+                            tags: [topicEntity.name, '网页']
+                        }))
+                    };
+
+                    sendResponse({
+                        success: true,
+                        data: topicDetail
+                    });
+                } catch (error) {
+                    console.error('获取主题详情失败:', error);
+                    sendResponse({
+                        success: false,
+                        error: error.message
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('获取主题详情失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message
                 });
             });
         return true;

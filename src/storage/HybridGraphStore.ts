@@ -164,7 +164,14 @@ export class HybridGraphStore {
 
       const embeddingFunction = {
         generate: async (texts: string[]) => {
-          return new Array(texts.length).fill(new Array(384).fill(0));
+          // 这个函数实际不会被调用，因为我们显式传入 embeddings
+          // 但需要提供一个有效的函数避免错误，返回二维数组
+          const embeddings = [];
+          for (const text of texts) {
+            const embedding = await getEmbeddingViaOffscreen(text || '');
+            embeddings.push(embedding);
+          }
+          return embeddings;
         }
       };
 
@@ -185,7 +192,8 @@ export class HybridGraphStore {
           name: collectionName,
           metadata: { 
             description: '图实体数据存储',
-            version: '2.0'
+            version: '2.0',
+            "hnsw:space": "cosine"  // 明确使用余弦相似度
           },
           embeddingFunction
         });
@@ -642,7 +650,7 @@ export class HybridGraphStore {
 
       const embeddingFunction = {
         generate: async (texts: string[]) => {
-          return new Array(texts.length).fill(new Array(384).fill(0));
+          return texts.map(() => new Array(384).fill(0));
         }
       };
 
@@ -1560,12 +1568,16 @@ export class HybridGraphStore {
   async queryEntityMessages(entityId: string, options?: {
     limit?: number;
     timeRange?: { start: number; end: number };
+    sortBy?: 'relevance' | 'time';  // 排序方式：相关度（默认）或时间
+    sortOrder?: 'desc' | 'asc';     // 排序顺序：降序（默认）或升序
+    minRelevanceScore?: number;     // 最低相关度阈值 (0-1)
   }): Promise<Array<{
     messageId: string;
     content: string;
     source: string;
     timestamp: number;
     relevanceScore: number;
+    metadata?: any;  // 包含完整的metadata信息，如contextMessages等
   }>> {
     try {
       if (!this.chromaClient) {
@@ -1586,12 +1598,7 @@ export class HybridGraphStore {
       }
 
       // 构建查询条件
-      const queryFilters: any = {
-        $or: [
-          { entities: { $contains: entity.name } },
-          { content: { $contains: entity.name } }
-        ]
-      };
+      const queryFilters: any = {};
 
       // 添加时间范围过滤
       if (options?.timeRange) {
@@ -1601,12 +1608,22 @@ export class HybridGraphStore {
         };
       }
 
+      // 生成查询向量
+      const queryEmbedding = await getEmbeddingViaOffscreen(entity.name);
+      console.log(`🔍 查询实体 "${entity.name}" 的embedding长度: ${queryEmbedding?.length || 0}`);
+      
       // 执行查询
-      const queryResult = await messagesCollection.query({
-        queryTexts: [entity.name],
-        nResults: options?.limit || 20,
-        where: queryFilters
-      });
+      const queryParams: any = {
+        queryEmbeddings: [queryEmbedding],  // 使用真实embedding而不是queryTexts
+        nResults: options?.limit || 20
+      };
+      
+      // 只有当有过滤条件时才添加 where 参数
+      if (Object.keys(queryFilters).length > 0) {
+        queryParams.where = queryFilters;
+      }
+      
+      const queryResult = await messagesCollection.query(queryParams);
 
       const results: Array<{
         messageId: string;
@@ -1614,26 +1631,63 @@ export class HybridGraphStore {
         source: string;
         timestamp: number;
         relevanceScore: number;
+        metadata?: any;
       }> = [];
 
       if (queryResult.ids && queryResult.ids[0]) {
+        const distances = queryResult.distances?.[0] || [];
+        console.log(`📊 查询返回 ${queryResult.ids[0].length} 条结果，距离分布:`, {
+          min: Math.min(...distances),
+          max: Math.max(...distances),
+          avg: distances.reduce((a, b) => a + b, 0) / distances.length,
+          sample: distances.slice(0, 3)
+        });
+        
         for (let i = 0; i < queryResult.ids[0].length; i++) {
           const metadata = queryResult.metadatas?.[0]?.[i] as any;
+          const distance = queryResult.distances?.[0]?.[i] || 0;
+          const relevanceScore = 1 / (1 + distance); // 余弦距离转换为相关度评分
+          
+          // 处理反序列化metadata中的对象字段
+          const processedMetadata = this.deserializeMetadata(metadata || {});
+          
           results.push({
             messageId: queryResult.ids[0][i],
             content: queryResult.documents?.[0]?.[i] || '',
             source: metadata?.source || 'unknown',
             timestamp: metadata?.timestamp || Date.now(),
-            relevanceScore: 1 - (queryResult.distances?.[0]?.[i] || 0)
+            relevanceScore,
+            metadata: processedMetadata  // 包含反序列化后的完整metadata信息
           });
         }
       }
 
-      // 按时间倒序排列
-      results.sort((a, b) => b.timestamp - a.timestamp);
+      // 应用最低相关度过滤
+      let filteredResults = results;
+      if (options?.minRelevanceScore !== undefined) {
+        filteredResults = results.filter(result => result.relevanceScore >= options.minRelevanceScore!);
+      }
+
+      // 应用排序
+      const sortBy = options?.sortBy || 'relevance';
+      const sortOrder = options?.sortOrder || 'desc';
       
-      console.log(`📱 查询实体 ${entity.name} 的消息记录: ${results.length} 条`);
-      return results;
+      filteredResults.sort((a, b) => {
+        let valueA: number, valueB: number;
+        
+        if (sortBy === 'relevance') {
+          valueA = a.relevanceScore;
+          valueB = b.relevanceScore;
+        } else {
+          valueA = a.timestamp;
+          valueB = b.timestamp;
+        }
+        
+        return sortOrder === 'desc' ? valueB - valueA : valueA - valueB;
+      });
+      
+      console.log(`📱 查询实体 ${entity.name} 的消息记录: ${filteredResults.length}/${results.length} 条 (排序:${sortBy}, 最低评分:${options?.minRelevanceScore || '无'})`);
+      return filteredResults;
 
     } catch (error) {
       console.error('查询实体消息失败:', error);
@@ -1642,11 +1696,71 @@ export class HybridGraphStore {
   }
 
   /**
+   * 反序列化 metadata 中的对象字段
+   */
+  private deserializeMetadata(metadata: any): any {
+    const processed = { ...metadata };
+    
+    try {
+      // 反序列化 contextMessages 字段
+      if (processed.contextMessages && typeof processed.contextMessages === 'string') {
+        processed.contextMessages = JSON.parse(processed.contextMessages);
+      }
+    } catch (error) {
+    }
+      
+    try {
+      // 反序列化 matchedRules 字段
+      if (processed.matchedRules && typeof processed.matchedRules === 'string') {
+        processed.matchedRules = JSON.parse(processed.matchedRules);
+      }
+    } catch (error) {
+    }
+      
+    try {
+      // 反序列化 entities 字段
+      if (processed.entities && typeof processed.entities === 'string') {
+        processed.entities = JSON.parse(processed.entities);
+      }
+    } catch (error) {
+    }
+      
+    try {
+      // 反序列化 relationships 字段
+      if (processed.relationships && typeof processed.relationships === 'string') {
+        processed.relationships = JSON.parse(processed.relationships);
+      }
+    } catch (error) {
+    }
+      
+    try {
+      // 反序列化 metadata 嵌套字段
+      if (processed.metadata && typeof processed.metadata === 'string') {
+        processed.metadata = JSON.parse(processed.metadata);
+      }
+    } catch (error) {
+    }
+      
+    try {
+      // 反序列化 actions 字段
+      if (processed.actions && typeof processed.actions === 'string') {
+        processed.actions = JSON.parse(processed.actions);
+      }
+    } catch (error) {
+    }
+    
+    return processed;
+  }
+
+  /**
    * 按实体查询相关网页记录
    */
   async queryEntityWebpages(entityId: string, options?: {
     limit?: number;
     timeRange?: { start: number; end: number };
+    sortBy?: 'relevance' | 'time';  // 排序方式：相关度（默认）或时间
+    sortOrder?: 'desc' | 'asc';     // 排序顺序：降序（默认）或升序
+    minRelevanceScore?: number;     // 最低相关度阈值 (0-1)
   }): Promise<Array<{
     webpageId: string;
     title: string;
@@ -1677,7 +1791,7 @@ export class HybridGraphStore {
       try {
         const embeddingFunction = {
           generate: async (texts: string[]) => {
-            return new Array(texts.length).fill(new Array(384).fill(0));
+            return texts.map(() => new Array(384).fill(0));
           }
         };
         
@@ -1691,13 +1805,7 @@ export class HybridGraphStore {
       }
 
       // 构建查询条件
-      const queryFilters: any = {
-        $or: [
-          { projects: { $contains: entity.name } },
-          { people: { $contains: entity.name } },
-          { content: { $contains: entity.name } }
-        ]
-      };
+      const queryFilters: any = {};
 
       // 添加时间范围过滤
       if (options?.timeRange) {
@@ -1708,11 +1816,17 @@ export class HybridGraphStore {
       }
 
       // 执行查询
-      const queryResult = await webpagesCollection.query({
+      const queryParams: any = {
         queryTexts: [entity.name],
-        nResults: options?.limit || 10,
-        where: queryFilters
-      });
+        nResults: options?.limit || 10
+      };
+      
+      // 只有当有过滤条件时才添加 where 参数
+      if (Object.keys(queryFilters).length > 0) {
+        queryParams.where = queryFilters;
+      }
+      
+      const queryResult = await webpagesCollection.query(queryParams);
 
       const results: Array<{
         webpageId: string;
@@ -1728,24 +1842,50 @@ export class HybridGraphStore {
       if (queryResult.ids && queryResult.ids[0]) {
         for (let i = 0; i < queryResult.ids[0].length; i++) {
           const metadata = queryResult.metadatas?.[0]?.[i] as any;
+          const relevanceScore = 1 / (1 + queryResult.distances?.[0]?.[i] || 0); // 余弦距离转换为相关度评分
+          
+          // 处理反序列化metadata中的对象字段
+          const processedMetadata = this.deserializeMetadata(metadata || {});
+          
           results.push({
             webpageId: queryResult.ids[0][i],
-            title: metadata?.title || 'Untitled',
-            url: metadata?.url || '',
-            domain: metadata?.domain || '',
+            title: processedMetadata?.title || 'Untitled',
+            url: processedMetadata?.url || '',
+            domain: processedMetadata?.domain || '',
             content: queryResult.documents?.[0]?.[i] || '',
-            visitTime: metadata?.extractedAt || Date.now(),
-            relevanceScore: 1 - (queryResult.distances?.[0]?.[i] || 0),
-            tags: this.parseTagsFromMetadata(metadata)
+            visitTime: processedMetadata?.extractedAt || Date.now(),
+            relevanceScore,
+            tags: this.parseTagsFromMetadata(processedMetadata)
           });
         }
       }
 
-      // 按访问时间倒序排列
-      results.sort((a, b) => b.visitTime - a.visitTime);
+      // 应用最低相关度过滤
+      let filteredResults = results;
+      if (options?.minRelevanceScore !== undefined) {
+        filteredResults = results.filter(result => result.relevanceScore >= options.minRelevanceScore!);
+      }
+
+      // 应用排序
+      const sortBy = options?.sortBy || 'relevance';
+      const sortOrder = options?.sortOrder || 'desc';
       
-      console.log(`🌐 查询实体 ${entity.name} 的网页记录: ${results.length} 条`);
-      return results;
+      filteredResults.sort((a, b) => {
+        let valueA: number, valueB: number;
+        
+        if (sortBy === 'relevance') {
+          valueA = a.relevanceScore;
+          valueB = b.relevanceScore;
+        } else {
+          valueA = a.visitTime;
+          valueB = b.visitTime;
+        }
+        
+        return sortOrder === 'desc' ? valueB - valueA : valueA - valueB;
+      });
+      
+      console.log(`🌐 查询实体 ${entity.name} 的网页记录: ${filteredResults.length}/${results.length} 条 (排序:${sortBy}, 最低评分:${options?.minRelevanceScore || '无'})`);
+      return filteredResults;
 
     } catch (error) {
       console.error('查询实体网页失败:', error);
