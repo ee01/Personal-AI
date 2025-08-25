@@ -91,8 +91,8 @@ export class WebIntelligenceAnalyzer {
    */
   private async initializeUserProfile(): Promise<void> {
     try {
-      const userInfo = await chrome.storage.local.get(['userInfo']);
-      const userId = userInfo?.userInfo?.email || 'default_user';
+      const result = await chrome.storage.local.get(['userinfo']);
+      const userId = result?.userinfo?.email || 'default_user';
       
       this.userProfileManager = new UserProfileManager(userId);
       this.userProfile = await this.userProfileManager.initialize();

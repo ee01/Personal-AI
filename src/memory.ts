@@ -151,6 +151,12 @@ export class MemorySystem {
    * 初始化记忆系统
    */
   async initialize(): Promise<boolean> {
+    // 防止重复初始化
+    if (this.isInitialized) {
+      console.log('⚠️ 记忆系统已初始化，跳过重复初始化');
+      return true;
+    }
+
     try {
       console.log('🧠 初始化记忆系统...');
       
@@ -179,6 +185,7 @@ export class MemorySystem {
       return this.isInitialized;
     } catch (error) {
       console.error('❌ 记忆系统初始化异常:', error);
+      this.isInitialized = false; // 确保失败时重置状态
       return false;
     }
   }
@@ -779,8 +786,8 @@ export class MemorySystem {
   private async initializeUserProfile(): Promise<void> {
     try {
       // 获取当前用户信息
-      const userInfo = await chrome.storage.local.get(['userInfo']);
-      const userId = userInfo?.userInfo?.email || 'default_user';
+      const userinfo = await chrome.storage.local.get(['userinfo']);
+      const userId = userinfo?.userinfo?.email || 'default_user';
       
       // 重用现有的 CloudStorage 实例，避免重复初始化
       this.userProfileManager = new UserProfileManager(userId, {}, this.cloudStorage);

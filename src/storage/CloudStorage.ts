@@ -50,8 +50,8 @@ export class CloudStorage {
       }
 
       // 获取用户信息
-      const userInfo = await this.getUserInfo();
-      this.username = userInfo.username;
+      const userinfo = await this.getUserInfo();
+      this.username = userinfo.username;
 
       // 初始化 ChromaDB 客户端
       this.client = new ChromaClient({
@@ -710,8 +710,8 @@ export class CloudStorage {
 
   private async getUserInfo(): Promise<{ username: string }> {
     try {
-      const result = await chrome.storage.local.get(['userInfo']);
-      return result.userInfo || { username: 'default-user' };
+      const result = await chrome.storage.local.get(['userinfo']);
+      return result.userinfo || { username: 'default-user' };
     } catch (error) {
       console.warn('获取用户信息失败，使用默认值');
       return { username: 'default-user' };

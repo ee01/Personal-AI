@@ -44,9 +44,10 @@ export class CacheStrategy {
   private localCache: LocalCache;
   private config: StrategyConfig;
   private metrics: PerformanceMetrics;
-  private syncTimer: NodeJS.Timeout | null = null;
   private alarmListenerAdded: boolean = false;
   private isInitialized = false;
+  private backgroundSyncStarted = false;
+  private isSyncing = false;
 
   constructor(cloudStorage: CloudStorage, localCache: LocalCache) {
     this.cloudStorage = cloudStorage;
@@ -545,10 +546,10 @@ export class CacheStrategy {
    * 启动后台同步
    */
   startBackgroundSync(): void {
-    // 清除旧的定时器和alarm
-    if (this.syncTimer) {
-      clearInterval(this.syncTimer);
-      this.syncTimer = null;
+    // 防止重复启动
+    if (this.backgroundSyncStarted) {
+      console.log('⚠️ 后台同步已启动，跳过重复启动');
+      return;
     }
 
     // 使用 Chrome alarms API 进行后台同步
@@ -561,6 +562,15 @@ export class CacheStrategy {
       });
       
       console.log(`🔄 后台同步已启动，间隔: ${this.config.syncInterval / (60 * 1000)} 分钟`);
+    });
+    
+    // 标记为已启动
+    this.backgroundSyncStarted = true;
+    
+    // 在启动定时任务时直接运行一次，但添加防抖
+    console.log('🔄 首次执行定时同步...');
+    this.syncCache().catch(error => {
+      console.error('后台同步失败:', error);
     });
 
     // 监听 alarm 事件
@@ -578,7 +588,6 @@ export class CacheStrategy {
 
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === 'memory-system-sync') {
-        console.log('🔄 执行定时同步...');
         this.syncCache().catch(error => {
           console.error('后台同步失败:', error);
         });
@@ -592,16 +601,13 @@ export class CacheStrategy {
    * 停止后台同步
    */
   stopBackgroundSync(): void {
-    // 清除旧的定时器
-    if (this.syncTimer) {
-      clearInterval(this.syncTimer);
-      this.syncTimer = null;
-    }
-
     // 清除 Chrome alarm
     chrome.alarms.clear('memory-system-sync', (wasCleared) => {
       console.log('⏹️ 后台同步已停止:', wasCleared);
     });
+    
+    // 重置状态
+    this.backgroundSyncStarted = false;
   }
 
   /**
@@ -787,6 +793,12 @@ export class CacheStrategy {
    * 同步缓存
    */
   async syncCache(): Promise<void> {
+    if (this.isSyncing) {
+      // console.log('⏭️ 同步程序还在进行，跳过本次同步');
+      return;
+    }
+    this.isSyncing = true;
+    console.log('🔄 执行定时同步...');
     this.ensureInitialized();
 
     try {
@@ -811,6 +823,7 @@ export class CacheStrategy {
     } catch (error) {
       console.error('❌ 缓存同步失败:', error);
     }
+    this.isSyncing = false;
   }
 
   /**
@@ -830,42 +843,65 @@ export class CacheStrategy {
       console.log('🔄 开始双向数据同步...');
       let syncedEntities = 0;
 
-      // 1. 从云端拉取新实体
+      // 1. 从云端拉取新实体（限制数量）
       const cloudEntities = await this.cloudStorage.getAllEntities();
       
-      // 2. 同步云端实体到本地
-      for (const entity of cloudEntities) {
-        const localEntity = await this.localCache.getEntity(entity.id);
-        if (!localEntity || localEntity.updated < entity.updated) {
-          await this.localCache.cacheEntity(entity);
-          syncedEntities++;
+      // 2. 批量同步云端实体到本地
+      const cloudBatches = this.chunkArray(cloudEntities, 20); // 每批最多20个
+      for (const batch of cloudBatches) {
+        for (const entity of batch) {
+          const localEntity = await this.localCache.getEntity(entity.id);
+          if (!localEntity || localEntity.updated < entity.updated) {
+            await this.localCache.cacheEntity(entity);
+            syncedEntities++;
+          }
+        }
+        // 批间延迟，避免阻塞
+        if (cloudBatches.length > 1) {
+          await this.delay(100);
         }
       }
 
-      // 3. 检查本地实体是否需要上传到云端
+      // 3. 检查本地实体是否需要上传到云端（分批处理+限制数量）
       const localEntities = await this.localCache.getAllEntities();
       let uploadedCount = 0;
       
-      for (const entity of localEntities) {
-        try {
-          // 检查云端是否存在此实体
-          const cloudEntity = await this.cloudStorage.getEntity(entity.id);
-          if (!cloudEntity) {
-            // 云端不存在，上传到云端
-            const success = await this.cloudStorage.storeEntity(entity as any);
-            if (success) {
-              uploadedCount++;
-              console.log(`📤 上传实体到云端: ${entity.name}`);
+      // 限制单次同步的实体数量，避免大量数据处理
+      const maxSyncEntities = 50;
+      const entitiesToSync = localEntities.slice(0, maxSyncEntities);
+      
+      console.log(`📊 本地实体总数: ${localEntities.length}, 本次同步数量: ${entitiesToSync.length}`);
+      
+      // 分批处理本地实体
+      const localBatches = this.chunkArray(entitiesToSync, 10); // 每批最多10个
+      
+      for (const batch of localBatches) {
+        for (const entity of batch) {
+          try {
+            // 检查云端是否存在此实体
+            const cloudEntity = await this.cloudStorage.getEntity(entity.id);
+            if (!cloudEntity) {
+              // 云端不存在，上传到云端
+              const success = await this.cloudStorage.storeEntity(entity as any);
+              if (success) {
+                uploadedCount++;
+                console.log(`📤 上传实体到云端: ${entity.name}`);
+              }
+            } else if (entity.updated > cloudEntity.updated) {
+              // 本地版本更新，更新云端
+              const success = await this.cloudStorage.updateEntity(entity.id, entity as any);
+              if (success) {
+                console.log(`🔄 更新云端实体: ${entity.name}`);
+              }
             }
-          } else if (entity.updated > cloudEntity.updated) {
-            // 本地版本更新，更新云端
-            const success = await this.cloudStorage.updateEntity(entity.id, entity as any);
-            if (success) {
-              console.log(`🔄 更新云端实体: ${entity.name}`);
-            }
+          } catch (error) {
+            console.warn(`同步实体 ${entity.id} 失败:`, error);
           }
-        } catch (error) {
-          console.warn(`同步实体 ${entity.id} 失败:`, error);
+        }
+        
+        // 批间延迟，避免阻塞和频繁请求
+        if (localBatches.length > 1) {
+          await this.delay(200);
         }
       }
       
@@ -876,7 +912,7 @@ export class CacheStrategy {
       // 4. 同步关系数据
       await this.syncRelationshipData();
 
-      console.log(`✅ 双向同步完成: 同步了${syncedEntities}个实体`);
+      console.log(`✅ 双向同步完成: 同步了${syncedEntities}个实体，上传了${uploadedCount}个实体`);
 
     } catch (error) {
       console.error('❌ 双向数据同步失败:', error);
