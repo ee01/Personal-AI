@@ -7,89 +7,82 @@ import { memorySystem } from './memory';
 
 /**
  * 处理记忆系统相关的消息
+ * @param request 请求对象
+ * @returns Promise<any> 返回响应数据，如果不是记忆系统相关消息则返回 null
  */
-export async function handleMemoryMessage(request: any, sendResponse: (response: any) => void): Promise<boolean> {
-    try {
-        // 确保记忆系统已初始化
-        await memorySystem.initialize();
+export function handleMemoryMessage(request: any): Promise<any> | null {
+    switch (request.type) {
+        case 'GET_ENTITY_STATISTICS':
+            return handleGetEntityStatistics();
 
-        switch (request.type) {
-            case 'GET_ENTITY_STATISTICS':
-                return await handleGetEntityStatistics(sendResponse);
+        case 'GET_ENTITY_TYPES':
+            return handleGetEntityTypes();
 
-            case 'GET_ENTITY_TYPES':
-                return await handleGetEntityTypes(sendResponse);
+        case 'GET_TOPIC_DETAIL':
+            return handleGetTopicDetail(request);
 
-            case 'GET_TOPIC_DETAIL':
-                return await handleGetTopicDetail(request, sendResponse);
+        case 'GET_ENTITIES_BY_TYPE':
+            return handleGetEntitiesByType(request);
 
-            case 'GET_ENTITIES_BY_TYPE':
-                return await handleGetEntitiesByType(request, sendResponse);
+        case 'SEARCH_ENTITIES':
+            return handleSearchEntities(request);
 
-            case 'SEARCH_ENTITIES':
-                return await handleSearchEntities(request, sendResponse);
+        case 'GET_RECENT_TIMELINE':
+            return handleGetRecentTimeline(request);
 
-            case 'GET_RECENT_TIMELINE':
-                return await handleGetRecentTimeline(request, sendResponse);
+        case 'UPDATE_ENTITY_ACCESS':
+            return handleUpdateEntityAccess(request);
 
-            case 'UPDATE_ENTITY_ACCESS':
-                return await handleUpdateEntityAccess(request, sendResponse);
+        case 'GET_ENTITY_DETAILS':
+            return handleGetEntityDetails(request);
 
-            case 'GET_ENTITY_DETAILS':
-                return await handleGetEntityDetails(request, sendResponse);
+        case 'GET_ENTITY_TIMELINE':
+            return handleGetEntityTimeline(request);
 
-            case 'GET_ENTITY_TIMELINE':
-                return await handleGetEntityTimeline(request, sendResponse);
+        case 'GET_ENTITY_MESSAGES':
+            return handleGetEntityMessages(request);
 
-            case 'GET_ENTITY_MESSAGES':
-                return await handleGetEntityMessages(request, sendResponse);
+        case 'GET_ENTITY_WEBPAGES':
+            return handleGetEntityWebpages(request);
 
-            case 'GET_ENTITY_WEBPAGES':
-                return await handleGetEntityWebpages(request, sendResponse);
+        case 'SET_ENTITY_TAGS':
+            return handleSetEntityTags(request);
 
-            case 'SET_ENTITY_TAGS':
-                return await handleSetEntityTags(request, sendResponse);
+        case 'SET_ENTITY_STATUS':
+            return handleSetEntityStatus(request);
 
-            case 'SET_ENTITY_STATUS':
-                return await handleSetEntityStatus(request, sendResponse);
+        case 'DIAGNOSE_ENTITY_DATA':
+            return handleDiagnoseEntityData();
 
-            case 'DIAGNOSE_ENTITY_DATA':
-                return await handleDiagnoseEntityData(sendResponse);
+        case 'INITIALIZE_SAMPLE_DATA':
+            return handleInitializeSampleData();
 
-            case 'INITIALIZE_SAMPLE_DATA':
-                return await handleInitializeSampleData(sendResponse);
+        case 'REBUILD_ENTITY_INDEXES':
+            return handleRebuildEntityIndexes();
 
-            case 'REBUILD_ENTITY_INDEXES':
-                return await handleRebuildEntityIndexes(sendResponse);
+        case 'CLEAR_ALL_ENTITY_DATA':
+            return handleClearAllEntityData();
 
-            case 'CLEAR_ALL_ENTITY_DATA':
-                return await handleClearAllEntityData(sendResponse);
-
-            default:
-                return false; // 不是记忆系统相关的消息
-        }
-    } catch (error) {
-        console.error('记忆系统消息处理失败:', error);
-        sendResponse({
-            success: false,
-            error: error.message
-        });
-        return true;
+        default:
+            return null; // 不是记忆系统相关的消息
     }
 }
 
 // ========== 具体处理函数 ==========
 
-async function handleGetEntityStatistics(sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetEntityStatistics(): Promise<any> {
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
+        
         const stats = await memorySystem.getEntityStatistics();
-        sendResponse({
+        return {
             success: true,
             data: stats
-        });
+        };
     } catch (error) {
         console.error('获取实体统计失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: {
@@ -101,35 +94,52 @@ async function handleGetEntityStatistics(sendResponse: (response: any) => void):
                 entitiesCreatedThisMonth: 0,
                 topEntitiesByType: {}
             }
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetEntityTypes(sendResponse: (response: any) => void): Promise<boolean> {
-    const entityTypes = ['Person', 'Project', 'Task', 'Organization', 'Document', 'Technology', 'Topic'];
-    sendResponse({
-        success: true,
-        data: {
-            entityTypes,
-            totalCount: entityTypes.length
-        }
-    });
-    return true;
+async function handleGetEntityTypes(): Promise<any> {
+    try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
+        
+        // 使用新的 getEntityTypes 方法
+        const entityTypes = await memorySystem.getEntityTypes();
+        
+        return {
+            success: true,
+            data: {
+                entityTypes,
+                totalCount: entityTypes.length
+            }
+        };
+    } catch (error) {
+        console.error('获取实体类型失败:', error);
+        return {
+            success: false,
+            error: error.message,
+            data: {
+                entityTypes: [],
+                totalCount: 0
+            }
+        };
+    }
 }
 
-async function handleGetTopicDetail(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetTopicDetail(request: any): Promise<any> {
     const { topicId } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
+        
         // 优先从缓存获取主题详情
         const cachedDetails = await memorySystem.getCachedTopicDetails(topicId);
         if (cachedDetails) {
-            sendResponse({
+            return {
                 success: true,
                 data: cachedDetails
-            });
-            return true;
+            };
         }
 
         // 获取主题基础信息
@@ -177,24 +187,25 @@ async function handleGetTopicDetail(request: any, sendResponse: (response: any) 
         // 缓存主题详情
         await memorySystem.cacheTopicDetails(topicId, response);
 
-        sendResponse({
+        return {
             success: true,
             data: response
-        });
+        };
     } catch (error) {
         console.error('获取主题详情失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetEntitiesByType(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetEntitiesByType(request: any): Promise<any> {
     const { entityType, limit = 50, offset = 0, sortBy = 'importance', sortOrder = 'desc' } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         const result = await memorySystem.queryEntities(entityType, undefined, {
             limit,
             offset,
@@ -202,223 +213,233 @@ async function handleGetEntitiesByType(request: any, sendResponse: (response: an
             sortOrder
         });
         
-        sendResponse({
+        return {
             success: true,
             data: result.data
-        });
+        };
     } catch (error) {
         console.error('获取实体列表失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: []
-        });
+        };
     }
-    return true;
 }
 
-async function handleSearchEntities(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleSearchEntities(request: any): Promise<any> {
     const { query, entityType, tags, status, limit = 30, timeRange } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         const searchResults = await memorySystem.searchEntities(query, entityType, { limit });
         
-        sendResponse({
+        return {
             success: true,
             data: searchResults.data,
             total: searchResults.total,
             source: searchResults.source
-        });
+        };
     } catch (error) {
         console.error('搜索实体失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: [],
             total: 0
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetRecentTimeline(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetRecentTimeline(request: any): Promise<any> {
     const { limit = 50 } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         const timeline = await memorySystem.getTimeline(limit);
         
-        sendResponse({
+        return {
             success: true,
             data: timeline
-        });
+        };
     } catch (error) {
         console.error('获取时间轴失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: []
-        });
+        };
     }
-    return true;
 }
 
-async function handleUpdateEntityAccess(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleUpdateEntityAccess(request: any): Promise<any> {
     const { entityId } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 记忆系统中暂时没有直接的访问统计更新接口
         // 可以通过获取实体详情来模拟访问
         await memorySystem.getEntityDetails(entityId);
         
-        sendResponse({
+        return {
             success: true,
             message: '实体访问已记录'
-        });
+        };
     } catch (error) {
         console.error('更新实体访问失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetEntityDetails(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetEntityDetails(request: any): Promise<any> {
     const { entityId } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         const entityDetails = await memorySystem.getEntityDetails(entityId);
         
-        sendResponse({
+        return {
             success: true,
             data: entityDetails
-        });
+        };
     } catch (error) {
         console.error('获取实体详情失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: null
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetEntityTimeline(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetEntityTimeline(request: any): Promise<any> {
     const { entityId, limit = 50, timeRange } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         const timeline = await memorySystem.getEntityTimeline(entityId, { limit, timeRange });
         
-        sendResponse({
+        return {
             success: true,
             data: timeline
-        });
+        };
     } catch (error) {
         console.error('获取实体时间轴失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: []
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetEntityMessages(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetEntityMessages(request: any): Promise<any> {
     const { entityId, limit = 20, timeRange } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 使用时间轴代替消息查询
         const timeline = await memorySystem.getEntityTimeline(entityId, { limit, timeRange });
         const messages = timeline.filter(item => item.type === 'message');
         
-        sendResponse({
+        return {
             success: true,
             data: messages
-        });
+        };
     } catch (error) {
         console.error('获取实体消息失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: []
-        });
+        };
     }
-    return true;
 }
 
-async function handleGetEntityWebpages(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleGetEntityWebpages(request: any): Promise<any> {
     const { entityId, limit = 10, timeRange } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 使用时间轴代替网页查询
         const timeline = await memorySystem.getEntityTimeline(entityId, { limit, timeRange });
         const webpages = timeline.filter(item => item.type === 'webpage');
         
-        sendResponse({
+        return {
             success: true,
             data: webpages
-        });
+        };
     } catch (error) {
         console.error('获取实体网页失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: []
-        });
+        };
     }
-    return true;
 }
 
-async function handleSetEntityTags(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleSetEntityTags(request: any): Promise<any> {
     const { entityId, tags } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 通过更新实体来设置标签
         const result = await memorySystem.updateEntity(entityId, { tags });
         
-        sendResponse({
+        return {
             success: result.success,
             message: result.success ? '标签设置成功' : '标签设置失败'
-        });
+        };
     } catch (error) {
         console.error('设置实体标签失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message
-        });
+        };
     }
-    return true;
 }
 
-async function handleSetEntityStatus(request: any, sendResponse: (response: any) => void): Promise<boolean> {
+async function handleSetEntityStatus(request: any): Promise<any> {
     const { entityId, status } = request;
     
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 通过更新实体来设置状态
         const result = await memorySystem.updateEntity(entityId, { status });
         
-        sendResponse({
+        return {
             success: result.success,
             message: result.success ? '状态设置成功' : '状态设置失败'
-        });
+        };
     } catch (error) {
         console.error('设置实体状态失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message
-        });
+        };
     }
-    return true;
 }
 
-async function handleDiagnoseEntityData(sendResponse: (response: any) => void): Promise<boolean> {
+async function handleDiagnoseEntityData(): Promise<any> {
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         const healthStatus = await memorySystem.performHealthCheck();
         
-        sendResponse({
+        return {
             success: true,
             data: {
                 status: healthStatus.overall.status,
@@ -428,10 +449,10 @@ async function handleDiagnoseEntityData(sendResponse: (response: any) => void): 
                 cloudStorage: healthStatus.cloudStorage,
                 localCache: healthStatus.localCache
             }
-        });
+        };
     } catch (error) {
         console.error('诊断实体数据失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: {
@@ -440,13 +461,14 @@ async function handleDiagnoseEntityData(sendResponse: (response: any) => void): 
                 issues: ['诊断失败'],
                 recommendations: ['请检查系统状态']
             }
-        });
+        };
     }
-    return true;
 }
 
-async function handleInitializeSampleData(sendResponse: (response: any) => void): Promise<boolean> {
+async function handleInitializeSampleData(): Promise<any> {
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 创建一些示例实体
         const sampleEntities = [
             {
@@ -473,17 +495,17 @@ async function handleInitializeSampleData(sendResponse: (response: any) => void)
 
         const results = await memorySystem.batchStoreEntities(sampleEntities);
         
-        sendResponse({
+        return {
             success: true,
             data: {
                 created: results.success,
                 failed: results.failed,
                 details: results.results
             }
-        });
+        };
     } catch (error) {
         console.error('初始化示例数据失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: {
@@ -491,59 +513,60 @@ async function handleInitializeSampleData(sendResponse: (response: any) => void)
                 failed: 0,
                 details: []
             }
-        });
+        };
     }
-    return true;
 }
 
-async function handleRebuildEntityIndexes(sendResponse: (response: any) => void): Promise<boolean> {
+async function handleRebuildEntityIndexes(): Promise<any> {
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 执行缓存同步来重建索引
         await memorySystem.syncCache();
         
-        sendResponse({
+        return {
             success: true,
             data: {
                 rebuilt: true,
                 message: '索引重建完成'
             }
-        });
+        };
     } catch (error) {
         console.error('重建实体索引失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: {
                 rebuilt: false,
                 message: '索引重建失败'
             }
-        });
+        };
     }
-    return true;
 }
 
-async function handleClearAllEntityData(sendResponse: (response: any) => void): Promise<boolean> {
+async function handleClearAllEntityData(): Promise<any> {
     try {
+        // 确保记忆系统已初始化
+        await memorySystem.initialize();
         // 执行缓存清理
         await memorySystem.clearExpiredCache();
         
-        sendResponse({
+        return {
             success: true,
             data: {
                 cleared: true,
                 message: '实体数据清理完成'
             }
-        });
+        };
     } catch (error) {
         console.error('清空实体数据失败:', error);
-        sendResponse({
+        return {
             success: false,
             error: error.message,
             data: {
                 cleared: false,
                 message: '数据清理失败'
             }
-        });
+        };
     }
-    return true;
 }

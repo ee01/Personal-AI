@@ -75,6 +75,54 @@ export interface VectorSearchOptions extends QueryOptions {
   nResults?: number;
 }
 
+// 实体类型信息接口
+export interface EntityTypeInfo {
+  type: string;
+  name: string;
+  icon: string;
+  count: number;
+  description: string;
+}
+
+// 实体类型配置
+const ENTITY_TYPE_CONFIG: Record<string, { name: string; icon: string; description: string }> = {
+  'Person': { 
+    name: '人物', 
+    icon: '👥', 
+    description: '团队成员、联系人、项目相关人员等'
+  },
+  'Project': { 
+    name: '项目', 
+    icon: '🚀', 
+    description: '工作项目、产品开发、研究项目等'
+  },
+  'Task': { 
+    name: '任务', 
+    icon: '📋', 
+    description: '具体工作任务、待办事项、行动项等'
+  },
+  'Organization': { 
+    name: '组织', 
+    icon: '🏢', 
+    description: '公司、部门、团队、客户组织等'
+  },
+  'Document': { 
+    name: '文档', 
+    icon: '📄', 
+    description: '文件、资料、规范、报告等'
+  },
+  'Technology': { 
+    name: '技术', 
+    icon: '🔧', 
+    description: '技术栈、工具、框架、平台等'
+  },
+  'Topic': { 
+    name: '主题', 
+    icon: '💡', 
+    description: '讨论话题、知识领域、专业概念等'
+  }
+};
+
 /**
  * 统一记忆系统管理器
  */
@@ -191,6 +239,52 @@ export class MemorySystem {
   }> {
     this.ensureInitialized();
     return this.localCache.getEntityStatistics();
+  }
+
+  /**
+   * 获取实体类型信息列表
+   */
+  async getEntityTypes(): Promise<EntityTypeInfo[]> {
+    try {
+      const entityTypes: EntityTypeInfo[] = [];
+      
+      // 获取实体统计信息，包含各类型的数量
+      const statistics = await this.getEntityStatistics();
+      const entityCounts = statistics.entityCounts;
+      
+      // 遍历所有已知的实体类型
+      for (const [type, count] of Object.entries(entityCounts)) {
+        const config = ENTITY_TYPE_CONFIG[type];
+        if (config) {
+          entityTypes.push({
+            type,
+            name: config.name,
+            icon: config.icon,
+            count,
+            description: config.description
+          });
+        } else {
+          // 未知类型，使用默认配置
+          entityTypes.push({
+            type,
+            name: type,
+            icon: '📂',
+            count,
+            description: `自定义类型: ${type}`
+          });
+        }
+      }
+      
+      // 按数量排序
+      entityTypes.sort((a, b) => b.count - a.count);
+      
+      console.log(`📋 获取实体类型列表: ${entityTypes.length}个类型`);
+      return entityTypes;
+      
+    } catch (error) {
+      console.error('获取实体类型失败:', error);
+      return [];
+    }
   }
 
   /**

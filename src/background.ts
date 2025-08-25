@@ -176,7 +176,7 @@ try {
   console.error('❌ 仪表盘消息处理器初始化失败:', error);
 }
 
-chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background received message:', request);
 
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
@@ -345,255 +345,21 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
             }));
         return true;
     }
-
-    // ========== 记忆界面相关消息处理 ==========
     
-    // 先尝试用新的记忆消息处理器处理
-    const memoryHandled = await handleMemoryMessage(request, sendResponse);
-    if (memoryHandled) {
-        return true;
-    }
-    
-    // 获取实体统计信息（兼容性保留）
-    if (request.type === 'GET_ENTITY_STATISTICS') {
-        memorySystem.getEntityStatistics()
-            .then(stats => sendResponse({
-                success: true,
-                data: stats
-            }))
+    // 记忆界面相关消息处理
+    const memoryResult = handleMemoryMessage(request);
+    if (memoryResult !== null) {
+        // 是记忆相关消息，处理异步结果
+        memoryResult
+            .then(response => sendResponse(response))
             .catch(error => {
-                console.error('获取实体统计失败:', error);
+                console.error('记忆消息处理失败:', error);
                 sendResponse({
                     success: false,
-                    error: error.message,
-                    data: {
-                        entityCounts: {},
-                        totalEntities: 0,
-                        totalRelationships: 0,
-                        topEntitiesByType: {},
-                        relationshipTypes: {},
-                        activityStats: {
-                            entitiesCreatedToday: 0,
-                            entitiesCreatedThisWeek: 0,
-                            entitiesCreatedThisMonth: 0
-                        }
-                    }
+                    error: error.message
                 });
             });
-        return true;
-    }
-
-    // 获取实体类型列表
-    if (request.type === 'GET_ENTITY_TYPES') {
-        // 获取所有实体类型
-        Promise.resolve(['Person', 'Project', 'Task', 'Organization', 'Document', 'Technology', 'Topic'])
-            .then(entityTypes => sendResponse({
-                success: true,
-                data: {
-                    entityTypes,
-                    // 保持向后兼容性
-                    entityCounts: entityTypes.reduce((acc, type) => {
-                        acc[type] = 0; // 默认计数为0，实际应该从记忆系统获取
-                        return acc;
-                    }, {} as Record<string, number>),
-                    totalEntities: 0 // 实际应该从记忆系统获取
-                }
-            }))
-            .catch(error => {
-                console.error('获取实体类型失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    data: { 
-                        entityTypes: [],
-                        entityCounts: {}, 
-                        totalEntities: 0 
-                    }
-                });
-            });
-        return true;
-    }
-
-    // 获取主题详情数据
-    if (request.type === 'GET_TOPIC_DETAIL') {
-        const { topicId } = request;
-        
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('GET_TOPIC_DETAIL 消息未被新处理器处理，使用默认错误响应');
-                    sendResponse({
-                        success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 按类型获取实体列表
-    if (request.type === 'GET_ENTITIES_BY_TYPE') {
-        const { entityType, limit = 50, offset = 0, sortBy = 'importance', sortOrder = 'desc' } = request;
-        memorySystem.queryEntities(entityType, undefined, {
-            limit,
-            offset,
-            sortBy,
-            sortOrder
-        }).then(result => result.data)
-            .then(entities => sendResponse({
-                success: true,
-                data: entities
-            }))
-            .catch(error => {
-                console.error('获取实体列表失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    data: []
-                });
-            });
-        return true;
-    }
-
-    // 搜索实体
-    if (request.type === 'SEARCH_ENTITIES') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('SEARCH_ENTITIES 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 获取最近时间轴
-    if (request.type === 'GET_RECENT_TIMELINE') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('GET_RECENT_TIMELINE 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 更新实体访问统计
-    if (request.type === 'UPDATE_ENTITY_ACCESS') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('UPDATE_ENTITY_ACCESS 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 获取实体详细信息
-    if (request.type === 'GET_ENTITY_DETAILS') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('GET_ENTITY_DETAILS 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 获取实体时间轴
-    if (request.type === 'GET_ENTITY_TIMELINE') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('GET_ENTITY_TIMELINE 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 获取实体相关消息
-    if (request.type === 'GET_ENTITY_MESSAGES') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('GET_ENTITY_MESSAGES 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 获取实体相关网页
-    if (request.type === 'GET_ENTITY_WEBPAGES') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('GET_ENTITY_WEBPAGES 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 设置实体标签
-    if (request.type === 'SET_ENTITY_TAGS') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('SET_ENTITY_TAGS 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 设置实体状态
-    if (request.type === 'SET_ENTITY_STATUS') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('SET_ENTITY_STATUS 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // ========== 实体数据调试和初始化 ==========
-    
-    // 诊断实体数据状态
-    if (request.type === 'DIAGNOSE_ENTITY_DATA') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('DIAGNOSE_ENTITY_DATA 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 初始化示例数据
-    if (request.type === 'INITIALIZE_SAMPLE_DATA') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('INITIALIZE_SAMPLE_DATA 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 重建实体索引
-    if (request.type === 'REBUILD_ENTITY_INDEXES') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('REBUILD_ENTITY_INDEXES 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
-    }
-
-    // 清空所有实体数据
-    if (request.type === 'CLEAR_ALL_ENTITY_DATA') {
-        // 这个消息类型已经被新的记忆消息处理器处理，这里不应该执行到
-        console.warn('CLEAR_ALL_ENTITY_DATA 消息未被新处理器处理，使用默认错误响应');
-                sendResponse({
-                    success: false,
-            error: '消息处理器配置错误'
-            });
-        return true;
+        return true; // 保持消息通道开放
     }
 
     // 处理智能网页分析请求
