@@ -8,6 +8,8 @@ import { GraphRelationship, LocalCache } from './storage/LocalCache';
 import { CacheStrategy } from './storage/CacheStrategy';
 import { EntitySimilarityTool, ProcessedEntity, EntityMergePair } from './storage/EntitySimilarityTool';
 import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSystemMaintenanceTool } from './storage/SystemMaintenanceTool';
+import { UserProfileManager } from './services/UserProfileManager';
+import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
 
 // 统一的实体接口
 export interface MemoryEntity {
@@ -82,6 +84,7 @@ export class MemorySystem {
   private cacheStrategy: CacheStrategy;
   private entitySimilarityTool: EntitySimilarityTool;
   private systemMaintenanceTool: SystemMaintenanceTool;
+  private userProfileManager: UserProfileManager | null = null;
   private isInitialized = false;
 
   constructor() {
@@ -118,6 +121,9 @@ export class MemorySystem {
         this.cacheStrategy.startBackgroundSync();
         // 启动系统监控
         this.systemMaintenanceTool.startMonitoring();
+        
+        // 初始化用户画像管理器
+        await this.initializeUserProfile();
       } else {
         console.error('❌ 记忆系统初始化失败');
       }
@@ -253,7 +259,29 @@ export class MemorySystem {
     entities?: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>;
   }): Promise<StoreResult> {
     this.ensureInitialized();
-    return this.cacheStrategy.storeMessage(messageData);
+    
+    try {
+      // 存储到记忆系统
+      const result = await this.cacheStrategy.storeMessage(messageData);
+      
+      // 同时更新用户画像
+      if (result.success && this.userProfileManager && messageData.entities) {
+        await this.updateUserProfileFromEntities(messageData.entities, {
+          actionType: 'mention',
+          timestamp: Date.now(),
+          context: 'message_analysis',
+          metadata: {
+            messageId: messageData.id,
+            source: messageData.metadata?.source || 'unknown'
+          }
+        });
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('存储消息失败:', error);
+      throw error;
+    }
   }
 
   /**
@@ -268,7 +296,31 @@ export class MemorySystem {
     entities?: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>;
   }): Promise<StoreResult> {
     this.ensureInitialized();
-    return this.cacheStrategy.storeWebpage(webpageData);
+    
+    try {
+      // 存储到记忆系统
+      const result = await this.cacheStrategy.storeWebpage(webpageData);
+      
+      // 同时更新用户画像
+      if (result.success && this.userProfileManager && webpageData.entities) {
+        await this.updateUserProfileFromEntities(webpageData.entities, {
+          actionType: 'view',
+          timestamp: Date.now(),
+          context: 'webpage_analysis',
+          metadata: {
+            webpageId: webpageData.id,
+            url: webpageData.url,
+            title: webpageData.title,
+            domain: new URL(webpageData.url).hostname
+          }
+        });
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('存储网页失败:', error);
+      throw error;
+    }
   }
 
   /**
@@ -549,7 +601,180 @@ export class MemorySystem {
     return this.systemMaintenanceTool.getSystemStatus();
   }
 
+  // ==================== 用户画像接口 ====================
+
+  /**
+   * 获取用户画像
+   */
+  async getUserProfile(): Promise<{ profile: UserProfile | null; analysis: UserProfileAnalysis | null }> {
+    this.ensureInitialized();
+    
+    if (!this.userProfileManager) {
+      return { profile: null, analysis: null };
+    }
+    
+    try {
+      const profile = this.userProfileManager.getProfile();
+      const analysis = await this.userProfileManager.analyzeProfile();
+      return { profile, analysis };
+    } catch (error) {
+      console.error('获取用户画像失败:', error);
+      return { profile: null, analysis: null };
+    }
+  }
+
+  /**
+   * 更新用户画像
+   */
+  async updateUserProfile(update: UserProfileUpdate): Promise<boolean> {
+    this.ensureInitialized();
+    
+    if (!this.userProfileManager) {
+      console.warn('用户画像管理器未初始化');
+      return false;
+    }
+    
+    try {
+      await this.userProfileManager.updateProfile(update);
+      return true;
+    } catch (error) {
+      console.error('更新用户画像失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 设置用户明确重要性
+   */
+  async setUserExplicitImportance(
+    itemId: string,
+    type: 'project' | 'person' | 'topic' | 'jira' | 'technology' | 'document',
+    importance: number
+  ): Promise<boolean> {
+    this.ensureInitialized();
+    
+    if (!this.userProfileManager) {
+      return false;
+    }
+    
+    try {
+      await this.userProfileManager.setExplicitImportance(itemId, type, importance);
+      return true;
+    } catch (error) {
+      console.error('设置用户重要性失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 应用用户画像权重衰变
+   */
+  async applyUserProfileDecay(): Promise<void> {
+    this.ensureInitialized();
+    
+    if (this.userProfileManager) {
+      await this.userProfileManager.applyWeightDecay();
+    }
+  }
+
   // ==================== 私有方法 ====================
+
+  /**
+   * 初始化用户画像管理器
+   */
+  private async initializeUserProfile(): Promise<void> {
+    try {
+      // 获取当前用户信息
+      const userInfo = await chrome.storage.local.get(['userInfo']);
+      const userId = userInfo?.userInfo?.email || 'default_user';
+      
+      // 重用现有的 CloudStorage 实例，避免重复初始化
+      this.userProfileManager = new UserProfileManager(userId, {}, this.cloudStorage);
+      await this.userProfileManager.initialize();
+      
+      console.log('✅ 用户画像管理器初始化成功');
+    } catch (error) {
+      console.error('❌ 用户画像管理器初始化失败:', error);
+      // 不要抛出异常，允许记忆系统继续运行
+    }
+  }
+
+  /**
+   * 从实体列表更新用户画像
+   */
+  private async updateUserProfileFromEntities(
+    entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>,
+    baseAction: Omit<UserAction, 'weight'>
+  ): Promise<void> {
+    if (!this.userProfileManager) return;
+
+    try {
+      for (const entity of entities) {
+        // 映射实体类型到用户画像类型
+        let profileType: 'project' | 'person' | 'topic' | 'jira' | 'technology' | 'document';
+        switch (entity.type) {
+          case 'Person':
+            profileType = 'person';
+            break;
+          case 'Project':
+            profileType = 'project';
+            break;
+          case 'Task':
+            profileType = 'jira';
+            break;
+          case 'Technology':
+            profileType = 'technology';
+            break;
+          case 'Document':
+            profileType = 'document';
+            break;
+          case 'Topic':
+          default:
+            profileType = 'topic';
+            break;
+        }
+
+        // 根据实体类型调整权重
+        let weight = 0.1; // 默认权重
+        switch (profileType) {
+          case 'project':
+            weight *= 1.5; // 项目权重更高
+            break;
+          case 'person':
+            weight *= 1.3; // 人员权重稍高
+            break;
+          case 'jira':
+            weight *= 1.2; // JIRA 权重稍高
+            break;
+          default:
+            break;
+        }
+
+        const action: UserAction = {
+          ...baseAction,
+          weight,
+        };
+
+        await this.userProfileManager.updateProfile({
+          userId: this.userProfileManager['userId'],
+          action,
+          targetItem: {
+            id: entity.name.replace(/\s+/g, '_').toLowerCase(),
+            type: profileType,
+            name: entity.name,
+            metadata: {
+              entityType: entity.type,
+              description: entity.description,
+              importance: entity.importance,
+              tags: entity.tags
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.error('从实体更新用户画像失败:', error);
+    }
+  }
 
   private ensureInitialized(): void {
     if (!this.isInitialized) {

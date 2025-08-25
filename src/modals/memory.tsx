@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
 import { memorySystem } from '../memory';
+import { UserProfile, UserProfileAnalysis, UserAction, UserInterestItem, UserProfileUpdate } from '../types/userProfile';
 
 // 实体类型配置（中文映射）
 const ENTITY_TYPE_CONFIG: Record<string, { name: string; icon: string; description: string }> = {
@@ -97,7 +98,7 @@ interface OverviewStats {
 // 实体记忆查询组件
 const MemoryInterface = () => {
   // 状态管理
-  const [activeView, setActiveView] = useState<'overview' | 'timeline' | 'entity-detail' | 'topic-detail'>('overview');
+  const [activeView, setActiveView] = useState<'overview' | 'timeline' | 'entity-detail' | 'topic-detail' | 'user-profile'>('overview');
   const [selectedEntityType, setSelectedEntityType] = useState<string>('overview');
   const [selectedEntity, setSelectedEntity] = useState<EntityItem | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<EntityItem | null>(null);
@@ -107,6 +108,11 @@ const MemoryInterface = () => {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
   const [entityTypes, setEntityTypes] = useState<EntityType[]>([]);
+  
+  // 用户画像相关状态
+  const [userProfileManager, setUserProfileManager] = useState<any | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [userProfileAnalysis, setUserProfileAnalysis] = useState<UserProfileAnalysis | null>(null);
   const [topicDetailData, setTopicDetailData] = useState<any>(null);
   const [activeTopicTab, setActiveTopicTab] = useState<string>('overview');
   
@@ -121,6 +127,20 @@ const MemoryInterface = () => {
   const [topicDiscussions, setTopicDiscussions] = useState<Record<string, any[]>>({});
 
   // 实体类型配置在文件顶部定义
+  
+  // 映射实体类型到用户画像类型
+  const mapEntityTypeToProfileType = (entityType: string): UserInterestItem['type'] => {
+    const mapping: Record<string, UserInterestItem['type']> = {
+      'Person': 'person',
+      'Project': 'project',
+      'Task': 'jira',
+      'Organization': 'person',
+      'Document': 'document',
+      'Technology': 'technology',
+      'Topic': 'topic'
+    };
+    return mapping[entityType] || 'topic';
+  };
 
   // 初始化数据
   useEffect(() => {
@@ -160,6 +180,18 @@ const MemoryInterface = () => {
       const memoryInitialized = await memorySystem.initialize();
       if (!memoryInitialized) {
         console.warn('⚠️ 记忆系统初始化失败，将使用降级模式');
+      }
+      
+      // 初始化用户画像系统（通过统一的记忆系统接口）
+      console.log('👤 初始化用户画像系统...');
+      try {
+        const profileData = await memorySystem.getUserProfile();
+        setUserProfile(profileData.profile);
+        setUserProfileAnalysis(profileData.analysis);
+        setUserProfileManager(true); // 标记已初始化
+        console.log('✅ 用户画像系统初始化成功');
+      } catch (error) {
+        console.error('❌ 用户画像系统初始化失败:', error);
       }
       
       // 加载概览统计
@@ -438,6 +470,39 @@ const MemoryInterface = () => {
 
   // 查看实体详情
   const handleEntityClick = async (entity: EntityItem) => {
+    // 记录用户行为到画像系统
+    if (userProfileManager) {
+      try {
+        const userAction: UserAction = {
+          actionType: 'view',
+          timestamp: Date.now(),
+          context: 'memory_interface',
+          weight: 0.1,
+          metadata: {
+            source: 'entity_list',
+            entityType: entity.type
+          }
+        };
+        
+        await memorySystem.updateUserProfile({
+          userId: 'default_user',
+          action: userAction,
+          targetItem: {
+            id: entity.id,
+            type: mapEntityTypeToProfileType(entity.type),
+            name: entity.name,
+            metadata: {
+              description: entity.description,
+              importance: entity.importance,
+              tags: entity.tags
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Failed to update user profile:', error);
+      }
+    }
+    
     if (entity.type === 'Topic') {
       // 如果是主题，显示主题详情页
       await handleTopicClick(entity);
@@ -899,6 +964,14 @@ const MemoryInterface = () => {
           >
             <div className="entity-icon">⏰</div>
             <div className="entity-name">时间轴</div>
+          </div>
+          
+          <div 
+            className={`entity-type ${activeView === 'user-profile' ? 'active' : ''}`}
+            onClick={() => setActiveView('user-profile')}
+          >
+            <div className="entity-icon">👤</div>
+            <div className="entity-name">用户画像</div>
           </div>
           
           <hr className="sidebar-divider" />
@@ -1717,6 +1790,149 @@ const MemoryInterface = () => {
                     )}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* 用户画像视图 */}
+        {activeView === 'user-profile' && (
+          <div className="user-profile-section">
+            <div className="profile-header">
+              <h2>👤 用户画像分析</h2>
+              <p>基于您的行为模式和兴趣偏好生成的个性化画像</p>
+            </div>
+            
+            {userProfile && userProfileAnalysis ? (
+              <div className="profile-content">
+                {/* 核心兴趣概览 */}
+                <div className="profile-card">
+                  <h3>🎯 当前关注重点</h3>
+                  <div className="interest-grid">
+                    <div className="interest-category">
+                      <h4>📁 项目</h4>
+                      <div className="interest-list">
+                        {userProfileAnalysis.topInterests.projects.map((project, idx) => (
+                          <div key={idx} className="interest-item">
+                            <span className="interest-icon">🚀</span>
+                            <span>{project}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div className="interest-category">
+                      <h4>👥 人员</h4>
+                      <div className="interest-list">
+                        {userProfileAnalysis.topInterests.people.map((person, idx) => (
+                          <div key={idx} className="interest-item">
+                            <span className="interest-icon">👤</span>
+                            <span>{person}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div className="interest-category">
+                      <h4>💡 主题</h4>
+                      <div className="interest-list">
+                        {userProfileAnalysis.topInterests.topics.map((topic, idx) => (
+                          <div key={idx} className="interest-item">
+                            <span className="interest-icon">💭</span>
+                            <span>{topic}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* 行为洞察 */}
+                <div className="profile-card">
+                  <h3>🔍 行为洞察</h3>
+                  <div className="insights-grid">
+                    <div className="insight-item">
+                      <h4>⏰ 工作模式</h4>
+                      <p>{userProfileAnalysis.insights.workingPattern}</p>
+                    </div>
+                    <div className="insight-item">
+                      <h4>🤝 协作风格</h4>
+                      <p>{userProfileAnalysis.insights.collaborationStyle}</p>
+                    </div>
+                    <div className="insight-item">
+                      <h4>🎓 专业领域</h4>
+                      <div className="tag-list">
+                        {userProfileAnalysis.insights.focusAreas.map((area, idx) => (
+                          <span key={idx} className="focus-tag">{area}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* 智能推荐 */}
+                <div className="profile-card">
+                  <h3>💡 智能推荐</h3>
+                  <div className="suggestions-list">
+                    {userProfileAnalysis.insights.suggestedContent.map((suggestion, idx) => (
+                      <div key={idx} className="suggestion-item">
+                        <span className="suggestion-icon">📌</span>
+                        <span>{suggestion}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* 预测兴趣 */}
+                {userProfileAnalysis.predictedInterests.length > 0 && (
+                  <div className="profile-card">
+                    <h3>🔮 预测您可能感兴趣的内容</h3>
+                    <div className="predictions-list">
+                      {userProfileAnalysis.predictedInterests.map((prediction, idx) => (
+                        <div key={idx} className="prediction-item">
+                          <div className="prediction-header">
+                            <span className="prediction-type">{prediction.type}</span>
+                            <span className="prediction-confidence">
+                              置信度: {Math.round(prediction.confidence * 100)}%
+                            </span>
+                          </div>
+                          <div className="prediction-content">
+                            <strong>{prediction.item}</strong>
+                            <p>{prediction.reason}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* 统计数据 */}
+                <div className="profile-card">
+                  <h3>📊 活动统计</h3>
+                  <div className="stats-grid">
+                    <div className="stat-card">
+                      <div className="stat-value">{userProfile.statistics.totalInteractions}</div>
+                      <div className="stat-label">总交互次数</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="stat-value">{userProfile.statistics.averageDailyActivity.toFixed(1)}</div>
+                      <div className="stat-label">日均活动</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="stat-value">{userProfile.interests.projects.length}</div>
+                      <div className="stat-label">关注项目数</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="stat-value">{userProfile.interests.people.length}</div>
+                      <div className="stat-label">协作人员数</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="loading-container">
+                <div className="loading-spinner"></div>
+                <span>加载用户画像数据...</span>
               </div>
             )}
           </div>
@@ -3054,6 +3270,221 @@ const MemoryInterface = () => {
           border-radius: 0.25rem;
           font-size: 0.875rem;
         }
+        
+        /* 用户画像样式 */
+        .user-profile-section {
+          max-width: 1200px;
+          margin: 0 auto;
+        }
+        
+        .profile-header {
+          text-align: center;
+          margin-bottom: 3rem;
+        }
+        
+        .profile-header h2 {
+          font-size: 2.5rem;
+          font-weight: 700;
+          background: linear-gradient(135deg, #60a5fa, #a78bfa);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          margin-bottom: 1rem;
+        }
+        
+        .profile-header p {
+          color: #94a3b8;
+          font-size: 1.1rem;
+        }
+        
+        .profile-content {
+          display: grid;
+          gap: 2rem;
+        }
+        
+        .profile-card {
+          background: rgba(30, 41, 59, 0.8);
+          backdrop-filter: blur(10px);
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          border-radius: 1rem;
+          padding: 2rem;
+          transition: all 0.3s ease;
+        }
+        
+        .profile-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+        
+        .profile-card h3 {
+          font-size: 1.5rem;
+          font-weight: 600;
+          margin-bottom: 1.5rem;
+          color: #e2e8f0;
+        }
+        
+        .interest-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 1.5rem;
+        }
+        
+        .interest-category h4 {
+          color: #94a3b8;
+          font-size: 1rem;
+          margin-bottom: 1rem;
+        }
+        
+        .interest-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+        
+        .interest-item {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.75rem 1rem;
+          background: rgba(59, 130, 246, 0.1);
+          border-radius: 0.5rem;
+          transition: all 0.2s ease;
+        }
+        
+        .interest-item:hover {
+          background: rgba(59, 130, 246, 0.2);
+          transform: translateX(4px);
+        }
+        
+        .insights-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+          gap: 1.5rem;
+        }
+        
+        .insight-item {
+          padding: 1.25rem;
+          background: rgba(15, 23, 42, 0.6);
+          border-radius: 0.75rem;
+          border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .insight-item h4 {
+          color: #60a5fa;
+          margin-bottom: 0.75rem;
+          font-size: 1.1rem;
+        }
+        
+        .insight-item p {
+          color: #cbd5e1;
+          line-height: 1.6;
+        }
+        
+        .tag-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+        }
+        
+        .focus-tag {
+          padding: 0.25rem 0.75rem;
+          background: rgba(139, 92, 246, 0.2);
+          color: #a78bfa;
+          border-radius: 1rem;
+          font-size: 0.875rem;
+        }
+        
+        .suggestions-list {
+          display: flex;
+          flex-direction: column;
+          gap: 1rem;
+        }
+        
+        .suggestion-item {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          padding: 1rem 1.25rem;
+          background: rgba(16, 185, 129, 0.1);
+          border-radius: 0.75rem;
+          border: 1px solid rgba(16, 185, 129, 0.2);
+          transition: all 0.2s ease;
+        }
+        
+        .suggestion-item:hover {
+          background: rgba(16, 185, 129, 0.2);
+          transform: translateX(4px);
+        }
+        
+        .predictions-list {
+          display: grid;
+          gap: 1rem;
+        }
+        
+        .prediction-item {
+          padding: 1.25rem;
+          background: rgba(251, 191, 36, 0.1);
+          border-radius: 0.75rem;
+          border: 1px solid rgba(251, 191, 36, 0.2);
+        }
+        
+        .prediction-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.75rem;
+        }
+        
+        .prediction-type {
+          padding: 0.25rem 0.75rem;
+          background: rgba(251, 191, 36, 0.2);
+          color: #fbbf24;
+          border-radius: 0.5rem;
+          font-size: 0.875rem;
+          text-transform: uppercase;
+        }
+        
+        .prediction-confidence {
+          color: #94a3b8;
+          font-size: 0.875rem;
+        }
+        
+        .prediction-content strong {
+          color: #f3f4f6;
+          display: block;
+          margin-bottom: 0.5rem;
+        }
+        
+        .prediction-content p {
+          color: #cbd5e1;
+          font-size: 0.9rem;
+        }
+        
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          gap: 1rem;
+        }
+        
+        .stat-card {
+          padding: 1.5rem;
+          background: rgba(15, 23, 42, 0.6);
+          border-radius: 0.75rem;
+          text-align: center;
+          border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .stat-value {
+          font-size: 2rem;
+          font-weight: 700;
+          color: #60a5fa;
+          margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+          color: #94a3b8;
+          font-size: 0.875rem;
+        }
 
         /* 响应式设计 */
         @media (max-width: 768px) {
@@ -3107,6 +3538,45 @@ const MemoryInterface = () => {
       `}</style>
     </div>
   );
+};
+
+// 用户画像功能已集成到统一的记忆系统中
+
+// 导出用户画像相关功能，通过统一的记忆系统接口
+(window as any).getUserProfile = async () => {
+  try {
+    await memorySystem.initialize();
+    return await memorySystem.getUserProfile();
+  } catch (error) {
+    console.error('Failed to get user profile:', error);
+    return { profile: null, analysis: null };
+  }
+};
+
+// 创建全局更新用户画像的函数
+(window as any).updateUserProfile = async (update: UserProfileUpdate) => {
+  try {
+    await memorySystem.initialize();
+    return await memorySystem.updateUserProfile(update);
+  } catch (error) {
+    console.error('Failed to update user profile:', error);
+    return false;
+  }
+};
+
+// 创建全局设置用户重要性的函数
+(window as any).setUserExplicitImportance = async (
+  itemId: string,
+  type: 'project' | 'person' | 'topic' | 'jira' | 'technology' | 'document',
+  importance: number
+) => {
+  try {
+    await memorySystem.initialize();
+    return await memorySystem.setUserExplicitImportance(itemId, type, importance);
+  } catch (error) {
+    console.error('Failed to set user importance:', error);
+    return false;
+  }
 };
 
 // 渲染组件

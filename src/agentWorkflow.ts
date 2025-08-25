@@ -1,7 +1,7 @@
 import { callLLMJsonAPI } from './llm';
-import { storeMessage } from './vectorStore';
 import { extractEntitiesToStore } from './entityExtraction';
 import { naturalLanguageQuery, getAllKnownPeople, getAllKnownProjects } from './vectorStore';
+import { memorySystem, StoreResult } from './memory';
 import { v4 as uuidv4 } from 'uuid';
 
 // Agent配置接口
@@ -465,22 +465,33 @@ export async function processNewMessage(message: any): Promise<MessageProcessRes
   
   // 如果消息需要存储到向量数据库
   if (processResult.shouldStore) {
-    const messageId = uuidv4();
-    await storeMessage(
-      messageId,
-      message.message_content,
-      {
-        source: message.sender || 'unknown',
-        timestamp: new Date(message.datetime).getTime(),
-        matchedRules: [message.matched_rule],
-        summary: message.summary || '',
-        reply_advice: processResult.replyAdvice || message.reply_advice || '',
-        teamName: message.team_name,
-        teamId: message.team_id,
-        ...processResult.enrichedData
-      }
-    );
-    console.log(`消息已存储到向量数据库，ID: ${messageId}`);
+    try {
+      await memorySystem.initialize();
+      
+      const messageId = uuidv4();
+      const storeResult: StoreResult = await memorySystem.storeMessage({
+        id: messageId,
+        content: message.message_content,
+        metadata: {
+          source: message.sender || 'unknown',
+          timestamp: new Date(message.datetime).getTime(),
+          matchedRules: [message.matched_rule],
+          summary: message.summary || '',
+          reply_advice: processResult.replyAdvice || message.reply_advice || '',
+          teamName: message.team_name,
+          teamId: message.team_id,
+          ...processResult.enrichedData
+        }
+      });
+      
+      console.log(`✅ 消息存储完成 [新系统]: ${messageId}`, {
+        success: storeResult.success,
+        cloudStored: storeResult.cloudStored,
+        localCached: storeResult.localCached
+      });
+    } catch (error) {
+      console.error('存储消息失败:', error);
+    }
   }
   
   return processResult;

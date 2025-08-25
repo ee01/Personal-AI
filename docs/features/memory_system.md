@@ -107,6 +107,96 @@ graph TB
   - 数据清理优化
   - 性能监控报告
 
+## 👤 用户画像系统
+
+### 概述
+
+用户画像系统是记忆系统的核心智能组件，通过追踪和分析用户的行为模式，构建动态的个性化画像，为智能网页分析、主动推荐等功能提供精准的个性化支持。
+
+### 核心功能
+
+#### 1. **行为追踪与分析**
+- 自动记录用户对各类实体的交互行为
+- 支持多种行为类型：查看、编辑、创建、关联、提及、搜索、收藏
+- 基于行为权重和时间衰变计算兴趣度
+
+#### 2. **多维度兴趣建模**
+```typescript
+interface UserProfile {
+  interests: {
+    projects: UserInterestItem[];      // 项目兴趣
+    people: UserInterestItem[];        // 人员关注
+    topics: UserInterestItem[];        // 主题偏好
+    jiraTickets: UserInterestItem[];   // 任务关注
+    technologies: UserInterestItem[];  // 技术栈
+    documents: UserInterestItem[];     // 文档阅读
+  };
+  behaviorPatterns: BehaviorPatterns; // 行为模式
+  derivedPreferences: Preferences;    // 衍生偏好
+}
+```
+
+#### 3. **智能权重衰变机制**
+- 基于埃宾浩斯遗忘曲线的权重衰变算法
+- 考虑多维因素：访问频率、用户标记、持续互动
+- 自动清理低权重兴趣项，保持画像精准度
+
+#### 4. **实时画像更新**
+- 在用户浏览网页时实时更新兴趣
+- 在记忆查询时记录查看行为
+- 支持用户主动标记重要性
+
+### 与Web Intelligence集成
+
+用户画像系统深度集成到Web Intelligence分析流程中：
+
+1. **相关性判断增强**
+   - 根据用户画像中的项目权重调整分析得分
+   - 优先识别用户高度关注的内容
+
+2. **自动兴趣更新**
+   - 分析结果中的实体自动更新到用户画像
+   - 权重根据分析置信度和用户行为动态调整
+
+3. **个性化推荐**
+   - 基于用户画像预测可能感兴趣的内容
+   - 智能推荐相关项目、技术和协作者
+
+### 可视化界面
+
+用户画像系统提供直观的可视化界面：
+
+- **当前关注重点**：展示用户最关注的项目、人员和主题
+- **行为洞察**：分析工作模式、协作风格和专业领域
+- **智能推荐**：基于画像生成的个性化内容推荐
+- **预测兴趣**：AI预测的潜在兴趣内容
+- **活动统计**：总交互次数、日均活动等统计数据
+
+### API接口
+
+```typescript
+// 获取用户画像
+const { profile, analysis } = await getUserProfile();
+
+// 更新用户行为
+await updateUserProfile(action, targetItem);
+
+// 查询特定类型的兴趣
+const topProjects = await userProfileManager.queryProfile({
+  interestTypes: ['project'],
+  minWeight: 0.5,
+  sortBy: 'weight',
+  limit: 10
+});
+
+// 设置明确重要性
+await userProfileManager.setExplicitImportance(
+  itemId, 
+  'project', 
+  0.9
+);
+```
+
 ## 🔧 系统维护与监控
 
 ### 自动健康检查

@@ -4,6 +4,8 @@
  */
 
 import { ChromeBuiltInAIAnalyzer, ChromeAIAnalysisResult } from './ChromeBuiltInAI';
+import { UserProfileManager } from '../services/UserProfileManager';
+import { UserProfile, UserProfileAnalysis, UserInterestItem } from '../types/userProfile';
 
 export interface PageContent {
   title: string;
@@ -74,10 +76,32 @@ export class WebIntelligenceAnalyzer {
   private analysisContext: AnalysisContext | null = null;
   private modelCache: Map<string, any> = new Map();
   private chromeAI: ChromeBuiltInAIAnalyzer;
+  private userProfileManager: UserProfileManager | null = null;
+  private userProfile: UserProfile | null = null;
+  private userProfileAnalysis: UserProfileAnalysis | null = null;
 
   constructor() {
     this.loadAnalysisContext();
     this.chromeAI = new ChromeBuiltInAIAnalyzer();
+    this.initializeUserProfile();
+  }
+
+  /**
+   * 初始化用户画像
+   */
+  private async initializeUserProfile(): Promise<void> {
+    try {
+      const userInfo = await chrome.storage.local.get(['userInfo']);
+      const userId = userInfo?.userInfo?.email || 'default_user';
+      
+      this.userProfileManager = new UserProfileManager(userId);
+      this.userProfile = await this.userProfileManager.initialize();
+      this.userProfileAnalysis = await this.userProfileManager.analyzeProfile();
+      
+      console.log('✅ 用户画像初始化成功');
+    } catch (error) {
+      console.error('❌ 用户画像初始化失败:', error);
+    }
   }
 
   /**
@@ -90,13 +114,43 @@ export class WebIntelligenceAnalyzer {
         'organizationContext', 'analysisHistory'
       ]);
       
-      this.analysisContext = {
+      // 从存储获取基本上下文
+      const baseContext = {
         userProjects: result.userProjects || [],
         userKeywords: result.userKeywords || [],
         recentTopics: result.recentTopics || [],
         organizationContext: result.organizationContext || [],
         analysisHistory: result.analysisHistory || []
       };
+      
+      // 从用户画像补充上下文
+      if (this.userProfileAnalysis) {
+        // 添加用户最关注的项目
+        baseContext.userProjects = [
+          ...new Set([
+            ...baseContext.userProjects,
+            ...this.userProfileAnalysis.topInterests.projects
+          ])
+        ];
+        
+        // 添加用户关注的主题
+        baseContext.recentTopics = [
+          ...new Set([
+            ...baseContext.recentTopics,
+            ...this.userProfileAnalysis.topInterests.topics
+          ])
+        ];
+        
+        // 添加专业领域作为关键词
+        baseContext.userKeywords = [
+          ...new Set([
+            ...baseContext.userKeywords,
+            ...this.userProfileAnalysis.insights.focusAreas
+          ])
+        ];
+      }
+      
+      this.analysisContext = baseContext;
     } catch (error) {
       console.warn('Failed to load analysis context:', error);
       this.analysisContext = {
@@ -114,14 +168,23 @@ export class WebIntelligenceAnalyzer {
    */
   async quickAnalyze(pageContent: PageContent): Promise<WebAnalysisResult> {
     try {
+      let result: WebAnalysisResult;
+      
       // 优先尝试使用Chrome内置AI
       if (this.chromeAI.isAvailable()) {
         console.log('🧠 使用Chrome内置AI分析');
-        return await this.analyzeWithChromeAI(pageContent);
+        result = await this.analyzeWithChromeAI(pageContent);
+      } else {
+        console.log('⚙️ Chrome AI不可用，使用规则引擎');
+        result = await this.analyzeWithRuleEngine(pageContent);
       }
       
-      console.log('⚙️ Chrome AI不可用，使用规则引擎');
-      return await this.analyzeWithRuleEngine(pageContent);
+      // 如果页面相关，更新用户画像
+      if (result.isRelevant && this.userProfileManager) {
+        await this.updateUserProfileFromAnalysis(pageContent, result);
+      }
+      
+      return result;
       
     } catch (error) {
       console.error('Quick analysis failed:', error);
@@ -314,8 +377,19 @@ export class WebIntelligenceAnalyzer {
     // 项目关键词匹配
     for (const project of this.analysisContext.userProjects) {
       if (content.includes(project.toLowerCase())) {
+        // 检查用户画像中的项目权重
+        let weight = 0.3;
+        if (this.userProfile) {
+          const profileProject = this.userProfile.interests.projects.find(
+            p => p.name.toLowerCase() === project.toLowerCase()
+          );
+          if (profileProject) {
+            // 根据用户画像中的权重调整得分
+            weight = 0.3 * (0.5 + profileProject.currentWeight * 0.5);
+          }
+        }
         matches.push(`项目: ${project}`);
-        score += 0.3;
+        score += weight;
       }
     }
 
@@ -637,6 +711,135 @@ export class WebIntelligenceAnalyzer {
     }
 
     return Array.from(new Set(categories));
+  }
+
+  /**
+   * 根据分析结果更新用户画像
+   */
+  private async updateUserProfileFromAnalysis(
+    pageContent: PageContent, 
+    analysisResult: WebAnalysisResult
+  ): Promise<void> {
+    if (!this.userProfileManager) return;
+    
+    try {
+      // 根据分析结果的实体更新用户画像
+      const extractedInfo = analysisResult.extractedInfo;
+      
+      // 更新项目兴趣
+      if (extractedInfo.projects) {
+        for (const project of extractedInfo.projects) {
+          await this.userProfileManager.updateProfile({
+            userId: this.userProfileManager['userId'],
+            action: {
+              actionType: 'view',
+              timestamp: Date.now(),
+              context: 'web_analysis',
+              weight: analysisResult.confidence * 0.2,
+              metadata: {
+                url: pageContent.url,
+                title: pageContent.title,
+                analysisConfidence: analysisResult.confidence
+              }
+            },
+            targetItem: {
+              id: `project_${project}`,
+              type: 'project',
+              name: project,
+              metadata: {
+                source: pageContent.domain,
+                firstSeenUrl: pageContent.url
+              }
+            }
+          });
+        }
+      }
+      
+      // 更新人员兴趣
+      if (extractedInfo.people) {
+        for (const person of extractedInfo.people) {
+          await this.userProfileManager.updateProfile({
+            userId: this.userProfileManager['userId'],
+            action: {
+              actionType: 'view',
+              timestamp: Date.now(),
+              context: 'web_analysis',
+              weight: analysisResult.confidence * 0.15,
+              metadata: {
+                url: pageContent.url,
+                title: pageContent.title
+              }
+            },
+            targetItem: {
+              id: `person_${person}`,
+              type: 'person',
+              name: person,
+              metadata: {
+                source: pageContent.domain
+              }
+            }
+          });
+        }
+      }
+      
+      // 更新技术兴趣
+      if (extractedInfo.technologies) {
+        for (const tech of extractedInfo.technologies) {
+          await this.userProfileManager.updateProfile({
+            userId: this.userProfileManager['userId'],
+            action: {
+              actionType: 'view',
+              timestamp: Date.now(),
+              context: 'web_analysis',
+              weight: analysisResult.confidence * 0.1,
+              metadata: {
+                url: pageContent.url,
+                title: pageContent.title
+              }
+            },
+            targetItem: {
+              id: `tech_${tech}`,
+              type: 'technology',
+              name: tech,
+              metadata: {
+                source: pageContent.domain
+              }
+            }
+          });
+        }
+      }
+      
+      // 更新主题兴趣
+      if (extractedInfo.topics) {
+        for (const topic of extractedInfo.topics) {
+          await this.userProfileManager.updateProfile({
+            userId: this.userProfileManager['userId'],
+            action: {
+              actionType: 'view',
+              timestamp: Date.now(),
+              context: 'web_analysis',
+              weight: analysisResult.confidence * 0.15,
+              metadata: {
+                url: pageContent.url,
+                title: pageContent.title
+              }
+            },
+            targetItem: {
+              id: `topic_${topic}`,
+              type: 'topic',
+              name: topic,
+              metadata: {
+                source: pageContent.domain
+              }
+            }
+          });
+        }
+      }
+      
+      console.log('✅ 用户画像已更新');
+    } catch (error) {
+      console.error('更新用户画像失败:', error);
+    }
   }
 
   /**

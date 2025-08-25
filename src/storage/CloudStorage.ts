@@ -8,6 +8,7 @@ import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
 import { MemoryEntity, QueryResult, VectorSearchOptions } from '../memory';
 import { GraphEntity } from './HybridGraphStore';
+import { UserProfile } from '../types/userProfile';
 
 export interface CloudStorageConfig {
   chromaUrl: string;
@@ -763,6 +764,137 @@ export class CloudStorage {
       chunks.push(array.slice(i, i + size));
     }
     return chunks;
+  }
+
+  /**
+   * 存储用户画像到云端
+   */
+  async storeUserProfile(userId: string, profile: UserProfile): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      // 获取或创建用户画像集合
+      const collectionName = `${this.username}-userprofiles`;
+      let collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        collection = await this.client!.getOrCreateCollection({
+          name: collectionName,
+          metadata: { type: 'user_profiles' }
+        });
+        this.collections.set(collectionName, collection);
+      }
+
+      // 为用户画像创建向量表示
+      const profileText = this.createProfileText(profile);
+      const embedding = await getEmbeddingViaOffscreen(profileText);
+
+      // 存储用户画像
+      await collection.upsert({
+        ids: [userId],
+        documents: [profileText],
+        embeddings: [embedding],
+        metadatas: [{
+          userId: userId,
+          lastUpdated: profile.lastUpdated,
+          createdAt: profile.createdAt,
+          totalInteractions: profile.statistics.totalInteractions,
+          profileData: JSON.stringify(profile)
+        }]
+      });
+
+      console.log(`✅ 用户画像 ${userId} 已存储到云端`);
+      return true;
+    } catch (error) {
+      console.error('存储用户画像到云端失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 从云端获取用户画像
+   */
+  async getUserProfile(userId: string): Promise<UserProfile | null> {
+    this.ensureInitialized();
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      const collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        return null;
+      }
+
+      const result = await collection.get({
+        ids: [userId],
+        include: ['metadatas']
+      });
+
+      if (result.metadatas && result.metadatas.length > 0) {
+        const metadata = result.metadatas[0] as any;
+        if (metadata.profileData) {
+          return JSON.parse(metadata.profileData) as UserProfile;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('从云端获取用户画像失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 创建用户画像的文本表示（用于向量化）
+   */
+  private createProfileText(profile: UserProfile): string {
+    const parts: string[] = [];
+    
+    // 用户ID和基本信息
+    parts.push(`用户: ${profile.userId}`);
+    
+    // 兴趣项目
+    if (profile.interests.projects.length > 0) {
+      parts.push('关注项目: ' + profile.interests.projects
+        .slice(0, 5)
+        .map(p => `${p.name}(权重:${p.currentWeight.toFixed(2)})`)
+        .join(', '));
+    }
+    
+    // 关注人员
+    if (profile.interests.people.length > 0) {
+      parts.push('关注人员: ' + profile.interests.people
+        .slice(0, 5)
+        .map(p => `${p.name}(权重:${p.currentWeight.toFixed(2)})`)
+        .join(', '));
+    }
+    
+    // 技术栈
+    if (profile.interests.technologies.length > 0) {
+      parts.push('技术栈: ' + profile.interests.technologies
+        .slice(0, 5)
+        .map(t => `${t.name}(权重:${t.currentWeight.toFixed(2)})`)
+        .join(', '));
+    }
+    
+    // 主题
+    if (profile.interests.topics.length > 0) {
+      parts.push('关注主题: ' + profile.interests.topics
+        .slice(0, 5)
+        .map(t => `${t.name}(权重:${t.currentWeight.toFixed(2)})`)
+        .join(', '));
+    }
+    
+    // 专业领域
+    if (profile.derivedPreferences.expertiseAreas.length > 0) {
+      parts.push('专业领域: ' + profile.derivedPreferences.expertiseAreas.join(', '));
+    }
+    
+    // 统计信息
+    parts.push(`总交互次数: ${profile.statistics.totalInteractions}`);
+    parts.push(`日均活动: ${profile.statistics.averageDailyActivity.toFixed(1)}`);
+    
+    return parts.join('\n');
   }
 
   private ensureInitialized(): void {
