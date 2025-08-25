@@ -108,15 +108,27 @@ chrome.runtime.onInstalled.addListener(async () => {
         }
         console.log('concernedItems', concernedItems);
 
-        // 查找并刷新 RingCentral 标签页
+        // 获取用户信息
         try {
+            let userinfo = null;
+            // 查找并刷新 RingCentral 标签页
             const rcTab = await findRingCentralTab();
             if (rcTab && rcTab.id) {
                 await chrome.tabs.reload(rcTab.id);
                 console.log('RingCentral tab refreshed');
                 
                 // 延迟获取 RC Radar 配置
-                await getUserinfoFromRCpage();
+                userinfo = await getUserinfoFromRCpage();
+            }
+            // 如果获取不到用户信息，则从 jira.ringcentral.com 获取用户信息
+            if (!userinfo) {
+                const jiraTab = await findJiraTab();
+                if (jiraTab && jiraTab.id) {
+                    await chrome.tabs.reload(jiraTab.id);
+                    console.log('Jira tab refreshed');
+                    
+                    userinfo = await getUserinfoFromJiraPage();
+                }
             }
         } catch (error) {
             console.error('Error refreshing RingCentral tab:', error);
@@ -822,6 +834,69 @@ async function getUserinfoFromRCpage() {
         return response.data;
     } catch (error) {
         console.error('Failed to get userinfo:', error);
+        return null;
+    }
+}
+
+// 查找已打开的 JIRA 标签页
+async function findJiraTab() {
+    const tabs = await chrome.tabs.query({
+        url: "*://jira.ringcentral.com/browse/*"
+    });
+    return tabs[0];
+}
+
+// 创建新的 JIRA 标签页
+async function createJiraTab() {
+    return await chrome.tabs.create({
+        url: "https://jira.ringcentral.com/browse/MTR-1",
+        active: false
+    });
+}
+
+// 从 JIRA 页面获取用户信息
+async function getUserinfoFromJiraPage() {
+    let jiraTab = await findJiraTab();
+    let shouldCloseTab = false;
+    
+    if (!jiraTab) {
+        jiraTab = await createJiraTab();
+        shouldCloseTab = true; // 标记需要关闭这个新创建的tab
+        // 等待页面加载完成
+        await waitForTabLoad(jiraTab.id);
+    }
+    
+    try {
+        const response = await sendMessageWithRetry(jiraTab.id, {
+            type: 'GET_USER_INFO'
+        });
+        
+        const userinfo = response.data || {
+            fullName: "",
+            username: "",
+            userEmail: "",
+            extensionId: "",
+        };
+        
+        chrome.storage.local.set({ userinfo });
+        if (userinfo.ownerId) chrome.storage.local.set({ ownerId: userinfo.ownerId });
+        
+        // 如果是新创建的tab，关闭它
+        if (shouldCloseTab && jiraTab.id) {
+            setTimeout(() => {
+                chrome.tabs.remove(jiraTab.id);
+            }, 1000); // 延迟1秒关闭，确保数据已保存
+        }
+        
+        return userinfo;
+    } catch (error) {
+        console.error('Failed to get userinfo from JIRA:', error);
+        
+        // 如果出错且是新创建的tab，也要关闭它
+        if (shouldCloseTab && jiraTab.id) {
+            chrome.tabs.remove(jiraTab.id);
+        }
+        
         return null;
     }
 }

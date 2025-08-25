@@ -101,7 +101,7 @@ async function getCurrentOwnerId(): Promise<string> {
     // 如果页面元素中也获取不到，尝试通过API获取
     try {
       console.log('Trying to get ownerId from JIRA API...');
-      const response = await fetch('https://jira.ringcentral.com/rest/api/2/myself', {
+      const response = await fetch(window.location.origin + '/rest/api/2/myself', {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
