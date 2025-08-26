@@ -4,7 +4,8 @@
  */
 
 import { ChromaClient, Collection } from 'chromadb';
-import { DefaultEmbeddingFunction } from '@chroma-core/default-embed';
+// 移除 DefaultEmbeddingFunction 导入，使用离屏文档方案代替
+// import { DefaultEmbeddingFunction } from '@chroma-core/default-embed';
 import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
 import { MemoryEntity, QueryResult, VectorSearchOptions } from '../memory';
@@ -696,8 +697,8 @@ export class CloudStorage {
   private async initializeCollections(): Promise<void> {
     if (!this.client) throw new Error('ChromaDB 客户端未初始化');
 
-    // 创建默认嵌入函数
-    const embeddingFunction = new DefaultEmbeddingFunction();
+    // 注释：不在 background 脚本中创建嵌入函数，使用离屏文档方案
+    // const embeddingFunction = new DefaultEmbeddingFunction();
 
     for (const collectionType of this.config.collections) {
       const collectionName = `${this.username}-${collectionType}`;
@@ -705,7 +706,7 @@ export class CloudStorage {
       try {
         const collection = await this.client.getOrCreateCollection({ 
           name: collectionName,
-          embeddingFunction: embeddingFunction
+          // embeddingFunction: embeddingFunction
         });
         this.collections.set(collectionName, collection);
         console.log(`✅ 集合已初始化: ${collectionName}`);
@@ -788,7 +789,7 @@ export class CloudStorage {
         collection = await this.client!.getOrCreateCollection({
           name: collectionName,
           metadata: { type: 'user_profiles' },
-          embeddingFunction: new DefaultEmbeddingFunction()
+          // embeddingFunction: new DefaultEmbeddingFunction()
         });
         this.collections.set(collectionName, collection);
       }
@@ -925,7 +926,7 @@ export class CloudStorage {
         relationshipCollection = await this.client!.getOrCreateCollection({
           name: relationshipCollectionName,
           metadata: { type: 'relationships' },
-          embeddingFunction: new DefaultEmbeddingFunction()
+          // embeddingFunction: new DefaultEmbeddingFunction()
         });
       } catch (error) {
         console.error('❌ 无法创建关系集合:', error);
