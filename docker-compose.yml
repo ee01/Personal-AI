@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   chroma:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:1.0.0
     container_name: chroma-server
     volumes:
       - ./chroma-data:/chroma/chroma
