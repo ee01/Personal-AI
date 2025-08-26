@@ -3,14 +3,21 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 import { createPinia } from 'pinia';
 import MemoryExploring from './memory-exploring.vue';
 
-// 路由配置（简单路由，让Vue组件内部处理具体逻辑）
+// 导入页面组件
+import OverviewPage from './components/OverviewPage.vue';
+import TimelinePage from './components/TimelinePage.vue';
+import EntityDetailPage from './components/EntityDetailPage.vue';
+import TopicDetailPage from './components/TopicDetailPage.vue';
+import PlaceholderPage from './components/PlaceholderPage.vue';
+
+// 路由配置
 const routes = [
-  { path: '/', name: 'home' },
-  { path: '/timeline', name: 'timeline' },
-  { path: '/user-profile', name: 'profile' },
-  { path: '/entity/:type', name: 'entity' },
-  { path: '/topic/:id', name: 'topic' },
-  { path: '/search', name: 'search' }
+  { path: '/', name: 'Overview', component: OverviewPage },
+  { path: '/timeline', name: 'Timeline', component: TimelinePage },
+  { path: '/user-profile', name: 'UserProfile', component: PlaceholderPage },
+  { path: '/entity/:type', name: 'EntityDetail', component: EntityDetailPage, props: true },
+  { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
+  { path: '/search', name: 'Search', component: PlaceholderPage }
 ];
 
 // 等待DOM加载完成

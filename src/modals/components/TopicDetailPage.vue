@@ -1,0 +1,325 @@
+<template>
+  <div class="topic-detail">
+    <div class="detail-header">
+      <button class="back-btn" @click="goBack">
+        <span>←</span>
+        <span>返回主题列表</span>
+      </button>
+      <div v-if="topicData" class="topic-header">
+        <div class="topic-avatar">💡</div>
+        <div class="topic-info">
+          <h2>{{ topicData.title }}</h2>
+          <div class="topic-meta">
+            <span class="meta-item">📈 {{ topicData.overview?.discussions || 0 }} 条讨论</span>
+            <span class="meta-item">🔗 {{ topicData.overview?.projects || 0 }} 个关联项目</span>
+            <span class="meta-item">👥 {{ topicData.overview?.participants || 0 }} 位参与者</span>
+            <span class="meta-item">📚 {{ topicData.overview?.resources || 0 }} 个资源</span>
+            <span class="meta-item">⏰ 最后更新：30 分钟前</span>
+          </div>
+        </div>
+        <div class="topic-actions">
+          <button class="action-btn">📝 编辑主题</button>
+          <button class="action-btn">🔗 添加关联</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isLoading" class="loading-container">
+      <div class="loading-spinner"></div>
+      <span>加载主题详情...</span>
+    </div>
+
+    <div v-else-if="topicData" class="topic-detail-content">
+      <div class="tab-navigation">
+        <button 
+          v-for="tab in tabs" 
+          :key="tab.key"
+          :class="['tab-btn', { active: activeTab === tab.key }]"
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+
+      <!-- 相关项目标签页 -->
+      <div v-if="activeTab === 'projects'" class="tab-content active">
+        <div class="section-header">
+          <h3>📂 相关项目</h3>
+          <button class="add-btn">+ 添加项目</button>
+        </div>
+        <div class="items-grid">
+          <div v-for="project in topicData.relatedProjects" :key="project.id" class="item-card">
+            <div class="item-header">
+              <div class="item-title">
+                <span>🚀</span>
+                <span>{{ project.name }}</span>
+              </div>
+              <div class="item-actions">
+                <button class="item-action" title="取消关联">❌</button>
+              </div>
+            </div>
+            <div class="item-content">
+              <div style="margin-bottom: 0.5rem;">
+                <span class="card-badge">{{ project.status }}</span>
+              </div>
+              <p>{{ project.description }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 相关资源标签页 -->
+      <div v-if="activeTab === 'resources'" class="tab-content active">
+        <div class="section-header">
+          <h3>📚 相关资源</h3>
+          <button class="add-btn">+ 添加资源</button>
+        </div>
+        <div class="items-grid">
+          <div v-for="resource in topicData.relatedResources" :key="resource.id" class="item-card">
+            <div class="item-header">
+              <div class="item-title">
+                <span>📚</span>
+                <span>{{ resource.name }}</span>
+              </div>
+              <div class="item-actions">
+                <button class="item-action" title="删除资源">❌</button>
+              </div>
+            </div>
+            <div class="item-content">
+              <div style="margin-bottom: 0.5rem;">
+                <span class="card-badge">{{ resource.type }}</span>
+              </div>
+              <p><a :href="resource.url" style="color: #60a5fa;">查看资源</a></p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 聊天记录标签页 -->
+      <div v-if="activeTab === 'conversations'" class="tab-content active">
+        <div class="section-header">
+          <h3>💬 聊天记录</h3>
+          <div class="search-controls">
+            <input type="text" class="search-input" placeholder="搜索聊天记录..." v-model="convSearchQuery" />
+            <select class="filter-select" v-model="convFilter">
+              <option value="all">全部群组</option>
+              <option value="team">团队群</option>
+              <option value="project">项目群</option>
+              <option value="tech">技术讨论</option>
+            </select>
+          </div>
+        </div>
+        <div class="conversations-list">
+          <div 
+            v-for="conv in filteredConversations" 
+            :key="conv.id" 
+            class="conversation-item"
+            :class="{ expanded: expandedConversations.has(conv.id) }"
+          >
+            <div class="conversation-header">
+              <div class="conversation-meta">
+                <div class="sender-avatar">{{ conv.sender.charAt(0) }}</div>
+                <div class="sender-info">
+                  <div class="sender-name">{{ conv.sender }}</div>
+                  <div class="group-name">{{ conv.group }}</div>
+                </div>
+              </div>
+              <div class="conversation-time">{{ conv.time }}</div>
+            </div>
+            <div class="conversation-summary" v-html="highlightText(conv.summary, convSearchQuery)"></div>
+            <div 
+              class="context-indicator"
+              :class="{ expanded: expandedConversations.has(conv.id) }"
+              @click="toggleConversationExpand(conv.id)"
+            >
+              <span class="indicator-text">
+                {{ expandedConversations.has(conv.id) ? '🔼 收起上下文' : `🔍 查看上下文 (${conv.context?.length || 0} 条相关消息)` }}
+              </span>
+            </div>
+            <div 
+              v-if="conv.context" 
+              class="context-content"
+              :class="{ expanded: expandedConversations.has(conv.id) }"
+            >
+              <div class="context-divider"></div>
+              <div 
+                v-for="(contextMsg, index) in conv.context" 
+                :key="index" 
+                class="context-item"
+                :class="{ 'main-message': contextMsg.isMainMessage }"
+              >
+                <div class="context-header">
+                  <div class="context-sender">{{ contextMsg.sender }}</div>
+                  <div class="context-time">{{ contextMsg.time }}</div>
+                </div>
+                <div 
+                  class="context-content-text"
+                  v-html="contextMsg.isMainMessage ? highlightText(contextMsg.content, convSearchQuery) : contextMsg.content"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 网页记录标签页 -->
+      <div v-if="activeTab === 'webpages'" class="tab-content active">
+        <div class="section-header">
+          <h3>🌐 网页记录</h3>
+          <div class="search-controls">
+            <input type="text" class="search-input" placeholder="搜索网页记录..." v-model="webSearchQuery" />
+            <select class="filter-select" v-model="webTypeFilter">
+              <option value="all">全部类型</option>
+              <option value="jira">Jira</option>
+              <option value="confluence">Confluence</option>
+              <option value="github">GitHub</option>
+              <option value="docs">文档</option>
+              <option value="blog">博客</option>
+            </select>
+          </div>
+        </div>
+        <div class="webpages-list">
+          <div v-for="webpage in filteredWebpages" :key="webpage.id" class="webpage-item">
+            <div class="webpage-header">
+              <div class="webpage-icon">{{ getWebpageIcon(webpage.type) }}</div>
+              <div class="webpage-info">
+                <div class="webpage-title">{{ webpage.title }}</div>
+                <div class="webpage-url">{{ webpage.url }}</div>
+                <div class="webpage-meta">
+                  <span>访问时间：{{ webpage.visitTime }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="webpage-content">{{ webpage.summary }}</div>
+            <div v-if="webpage.tags" class="webpage-tags">
+              <span v-for="tag in webpage.tags" :key="tag" class="webpage-tag">{{ tag }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { useMemoryStore } from '../memory-store';
+
+const route = useRoute();
+const router = useRouter();
+const store = useMemoryStore();
+
+const topicId = computed(() => route.params.id as string);
+const topicData = computed(() => store.topicDetailData);
+const isLoading = computed(() => store.isLoading);
+const activeTab = ref('conversations');
+
+const convSearchQuery = ref('');
+const convFilter = ref('all');
+const webSearchQuery = ref('');
+const webTypeFilter = ref('all');
+const expandedConversations = ref(new Set());
+
+const tabs = [
+  { key: 'projects', label: '🚀 相关项目' },
+  { key: 'resources', label: '📚 相关资源' },
+  { key: 'conversations', label: '💬 聊天记录' },
+  { key: 'webpages', label: '🌐 网页记录' }
+];
+
+const filteredConversations = computed(() => {
+  let filtered = topicData.value?.conversations || [];
+  
+  if (convSearchQuery.value.trim()) {
+    const query = convSearchQuery.value.toLowerCase();
+    filtered = filtered.filter(conv => 
+      conv.summary.toLowerCase().includes(query) ||
+      conv.sender.toLowerCase().includes(query) ||
+      conv.group.toLowerCase().includes(query)
+    );
+  }
+  
+  if (convFilter.value !== 'all') {
+    filtered = filtered.filter(conv => {
+      switch (convFilter.value) {
+        case 'team':
+          return conv.group.includes('团队') || conv.group.includes('Team');
+        case 'project':
+          return conv.group.includes('项目') || conv.group.includes('Project');
+        case 'tech':
+          return conv.group.includes('技术') || conv.group.includes('Tech') || conv.group.includes('开发');
+        default:
+          return true;
+      }
+    });
+  }
+  
+  return filtered;
+});
+
+const filteredWebpages = computed(() => {
+  let filtered = topicData.value?.webpages || [];
+  
+  if (webSearchQuery.value.trim()) {
+    const query = webSearchQuery.value.toLowerCase();
+    filtered = filtered.filter(webpage => 
+      webpage.title.toLowerCase().includes(query) ||
+      webpage.summary.toLowerCase().includes(query) ||
+      webpage.url.toLowerCase().includes(query)
+    );
+  }
+  
+  if (webTypeFilter.value !== 'all') {
+    filtered = filtered.filter(webpage => webpage.type === webTypeFilter.value);
+  }
+  
+  return filtered;
+});
+
+const goBack = () => {
+  router.push('/entity/Topic');
+};
+
+const toggleConversationExpand = (conversationId: string) => {
+  const newExpanded = new Set(expandedConversations.value);
+  if (newExpanded.has(conversationId)) {
+    newExpanded.delete(conversationId);
+  } else {
+    newExpanded.clear();
+    newExpanded.add(conversationId);
+  }
+  expandedConversations.value = newExpanded;
+};
+
+const highlightText = (text: string, searchQuery: string) => {
+  if (!searchQuery.trim()) return text;
+  
+  const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return text.replace(regex, '<mark style="background: rgba(251, 191, 36, 0.3); color: #fbbf24; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-weight: 600;">$1</mark>');
+};
+
+const getWebpageIcon = (type: string) => {
+  const icons = {
+    jira: '🎯',
+    confluence: '📝',
+    github: '🐙',
+    docs: '📄',
+    blog: '📰'
+  };
+  return icons[type] || '🌐';
+};
+
+watch(topicId, (newId) => {
+  if (newId) {
+    store.loadTopicDetail(newId);
+  }
+}, { immediate: true });
+
+watch(() => route.query, (newQuery) => {
+  if (newQuery.messageId) {
+    activeTab.value = 'conversations';
+    console.log('定位到消息:', newQuery.messageId);
+  }
+});
+</script>
