@@ -316,7 +316,7 @@ export class MemorySystem {
   /**
    * 获取关系网络
    */
-  async getRelationships(entityId: string, depth: number = 1): Promise<{
+  async getRelationships(entityId: string, depth = 1): Promise<{
     entities: MemoryEntity[];
     relationships: GraphRelationship[];
   }> {
@@ -327,7 +327,7 @@ export class MemorySystem {
   /**
    * 获取时间轴数据
    */
-  async getTimeline(limit: number = 50): Promise<Array<{
+  async getTimeline(limit = 50): Promise<Array<{
     id: string;
     type: string;
     title: string;

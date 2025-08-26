@@ -93,7 +93,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	//     { id: '3211', creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
 	//   ]
 	// });
-	// data.splice(2);
+	// data.splice(3);
 	console.log(data, concernedItems, username);
 	if (data.length === 0) {
 		console.log('没有消息数据，跳过处理');

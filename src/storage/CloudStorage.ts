@@ -4,10 +4,11 @@
  */
 
 import { ChromaClient, Collection } from 'chromadb';
+import { DefaultEmbeddingFunction } from '@chroma-core/default-embed';
 import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
 import { MemoryEntity, QueryResult, VectorSearchOptions } from '../memory';
-import { GraphEntity } from './HybridGraphStore';
+// GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
 
 export interface CloudStorageConfig {
@@ -24,7 +25,7 @@ export class CloudStorage {
   private client: ChromaClient | null = null;
   private collections: Map<string, Collection> = new Map();
   private config: CloudStorageConfig;
-  private username: string = '';
+  private username = '';
   private isInitialized = false;
 
   constructor() {
@@ -172,7 +173,7 @@ export class CloudStorage {
   /**
    * 存储实体到云端
    */
-  async storeEntity(entity: GraphEntity): Promise<boolean> {
+  async storeEntity(entity: MemoryEntity): Promise<boolean> {
     this.ensureInitialized();
 
     try {
@@ -279,7 +280,7 @@ export class CloudStorage {
   /**
    * 更新实体
    */
-  async updateEntity(entityId: string, updates: Partial<GraphEntity>): Promise<boolean> {
+  async updateEntity(entityId: string, updates: Partial<MemoryEntity>): Promise<boolean> {
     this.ensureInitialized();
 
     try {
@@ -295,7 +296,7 @@ export class CloudStorage {
       if (!existing.metadatas?.[0]?.[0]) return false;
 
       // 合并更新
-      const currentMetadata = existing.metadatas[0][0];
+      const currentMetadata = existing.metadatas[0][0] as any;
       const updatedMetadata = {
         ...currentMetadata,
         ...Object.fromEntries(
@@ -308,7 +309,7 @@ export class CloudStorage {
       };
 
       // 更新文档
-      const description = `${updates.name || currentMetadata.name} ${updates.description || currentMetadata.description || ''} ${JSON.stringify(updates.properties || JSON.parse(currentMetadata.properties || '{}'))}`;
+      const description = `${updates.name || currentMetadata.name || ''} ${updates.description || currentMetadata.description || ''} ${JSON.stringify(updates.properties || JSON.parse(currentMetadata.properties || '{}'))}`;
       const embedding = await getEmbeddingViaOffscreen(description);
 
       await collection.update({
@@ -349,7 +350,7 @@ export class CloudStorage {
   /**
    * 获取时间轴数据
    */
-  async getTimeline(limit: number = 50): Promise<Array<{
+  async getTimeline(limit = 50): Promise<Array<{
     id: string;
     type: string;
     title: string;
@@ -633,7 +634,9 @@ export class CloudStorage {
       const messagesCollectionName = `${this.username}-messages`;
       const collections = await this.client.listCollections();
       
-      if (!collections.includes(messagesCollectionName)) {
+      // ChromaDB 3.x returns Collection objects, not strings
+      const collectionNames = collections.map(c => c.name);
+      if (!collectionNames.includes(messagesCollectionName)) {
         return null;
       }
 
@@ -693,12 +696,16 @@ export class CloudStorage {
   private async initializeCollections(): Promise<void> {
     if (!this.client) throw new Error('ChromaDB 客户端未初始化');
 
+    // 创建默认嵌入函数
+    const embeddingFunction = new DefaultEmbeddingFunction();
+
     for (const collectionType of this.config.collections) {
       const collectionName = `${this.username}-${collectionType}`;
       
       try {
         const collection = await this.client.getOrCreateCollection({ 
-          name: collectionName 
+          name: collectionName,
+          embeddingFunction: embeddingFunction
         });
         this.collections.set(collectionName, collection);
         console.log(`✅ 集合已初始化: ${collectionName}`);
@@ -780,7 +787,8 @@ export class CloudStorage {
       if (!collection) {
         collection = await this.client!.getOrCreateCollection({
           name: collectionName,
-          metadata: { type: 'user_profiles' }
+          metadata: { type: 'user_profiles' },
+          embeddingFunction: new DefaultEmbeddingFunction()
         });
         this.collections.set(collectionName, collection);
       }
@@ -916,7 +924,8 @@ export class CloudStorage {
       try {
         relationshipCollection = await this.client!.getOrCreateCollection({
           name: relationshipCollectionName,
-          metadata: { type: 'relationships' }
+          metadata: { type: 'relationships' },
+          embeddingFunction: new DefaultEmbeddingFunction()
         });
       } catch (error) {
         console.error('❌ 无法创建关系集合:', error);

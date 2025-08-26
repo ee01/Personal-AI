@@ -96,7 +96,7 @@ const Popup = () => {
     
     const openMemoryInterface = () => {
         chrome.tabs.create({
-            url: chrome.runtime.getURL('memory.html'),
+            url: chrome.runtime.getURL('memory-exploring.html'),
             active: true
         });
     };

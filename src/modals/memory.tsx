@@ -165,10 +165,8 @@ const MemoryInterface = () => {
   useEffect(() => {
     if (searchQuery.length > 2) {
       performSearch(searchQuery);
-    } else if (selectedEntityType !== 'overview' && selectedEntityType !== 'timeline') {
-      loadEntitiesByType(selectedEntityType);
     }
-  }, [searchQuery, selectedEntityType]);
+  }, [searchQuery]);
 
   // 初始化接口
   const initializeMemoryInterface = async () => {
