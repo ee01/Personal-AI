@@ -897,6 +897,138 @@ export class CloudStorage {
     return parts.join('\n');
   }
 
+  /**
+   * 备份关系数据到独立的关系集合
+   */
+  async backupRelationshipsToCollection(relationshipData: any): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      if (!relationshipData.relationships || relationshipData.relationships.length === 0) {
+        console.log('📭 没有关系数据需要备份');
+        return true;
+      }
+
+      const relationshipCollectionName = `${this.username}-graph-relationships`;
+
+      // 获取或创建关系集合
+      let relationshipCollection;
+      try {
+        relationshipCollection = await this.client!.getOrCreateCollection({
+          name: relationshipCollectionName,
+          metadata: { type: 'relationships' }
+        });
+      } catch (error) {
+        console.error('❌ 无法创建关系集合:', error);
+        return false;
+      }
+
+      const relationships = relationshipData.relationships || [];
+      let storedCount = 0;
+
+      // 按实体类型和时间进行分组存储，减少数据量
+      const groupedRelationships = this.groupRelationshipsForStorage(relationships);
+
+      for (const [groupKey, groupData] of Object.entries(groupedRelationships)) {
+        try {
+          const groupDoc = {
+            id: `rel-group-${groupKey}-${Date.now()}`,
+            groupKey,
+            relationshipCount: groupData.relationships.length,
+            timeRange: groupData.timeRange,
+            entityTypes: groupData.entityTypes,
+            relationshipTypes: groupData.relationshipTypes,
+            createdAt: Date.now(),
+            data: JSON.stringify(groupData.relationships)
+          };
+
+          // 为文档内容生成向量（用于检索）
+          const searchableContent = [
+            `关系组 ${groupKey}`,
+            `实体类型: ${groupData.entityTypes.join(', ')}`,
+            `关系类型: ${groupData.relationshipTypes.join(', ')}`,
+            `时间范围: ${new Date(groupData.timeRange.start).toLocaleDateString()} - ${new Date(groupData.timeRange.end).toLocaleDateString()}`
+          ].join('\n');
+
+          const embedding = await getEmbeddingViaOffscreen(searchableContent);
+
+          await relationshipCollection.add({
+            ids: [groupDoc.id],
+            documents: [searchableContent],
+            embeddings: [embedding],
+            metadatas: [groupDoc]
+          });
+
+          storedCount += groupData.relationships.length;
+        } catch (error) {
+          console.error(`❌ 存储关系组 ${groupKey} 失败:`, error);
+        }
+      }
+
+      console.log(`☁️ 关系数据已备份到独立集合: ${storedCount} 个关系，${Object.keys(groupedRelationships).length} 个分组`);
+      return true;
+      
+    } catch (error) {
+      console.error('❌ 云端备份关系数据失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 按类型和时间对关系进行分组，优化存储和检索
+   */
+  private groupRelationshipsForStorage(relationships: any[]): Record<string, any> {
+    const groups: Record<string, any> = {};
+    const timeSpan = 7 * 24 * 60 * 60 * 1000; // 7天为一组
+
+    for (const [id, relationship] of relationships) {
+      if (!relationship) continue;
+
+      // 计算时间分组
+      const timestamp = relationship.created || Date.now();
+      const timeGroup = Math.floor(timestamp / timeSpan);
+      
+      // 获取实体类型（从 ID 推断）
+      const fromType = this.getEntityTypeFromId(relationship.fromId);
+      const toType = this.getEntityTypeFromId(relationship.toId);
+      const entityTypesKey = [fromType, toType].sort().join('-');
+      
+      // 生成分组键：实体类型_关系类型_时间组
+      const groupKey = `${entityTypesKey}_${relationship.type}_${timeGroup}`;
+
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          relationships: [],
+          timeRange: {
+            start: timeGroup * timeSpan,
+            end: (timeGroup + 1) * timeSpan
+          },
+          entityTypes: [fromType, toType],
+          relationshipTypes: new Set()
+        };
+      }
+
+      groups[groupKey].relationships.push([id, relationship]);
+      groups[groupKey].relationshipTypes.add(relationship.type);
+    }
+
+    // 转换 Set 为 Array
+    Object.values(groups).forEach((group: any) => {
+      group.relationshipTypes = Array.from(group.relationshipTypes);
+    });
+
+    return groups;
+  }
+
+  /**
+   * 从实体ID推断实体类型
+   */
+  private getEntityTypeFromId(entityId: string): string {
+    if (!entityId) return 'Unknown';
+    const parts = entityId.split('_');
+    return parts[0] || 'Unknown';
+  }
+
   private ensureInitialized(): void {
     if (!this.isInitialized || !this.client) {
       throw new Error('云端存储未初始化');

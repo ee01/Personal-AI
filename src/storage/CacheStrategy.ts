@@ -878,6 +878,12 @@ export class CacheStrategy {
       for (const batch of localBatches) {
         for (const entity of batch) {
           try {
+            // 跳过本地占位符（不同步到云端）
+            if (entity.properties?.localOnly === true || entity.properties?.placeholder === true) {
+              console.log(`⏭️ 跳过本地占位符: ${entity.name} (不同步到云端)`);
+              continue;
+            }
+
             // 检查云端是否存在此实体
             const cloudEntity = await this.cloudStorage.getEntity(entity.id);
             if (!cloudEntity) {
@@ -939,27 +945,38 @@ export class CacheStrategy {
           allEntityIds.add(relationship.toId);
         }
 
-        // 为不存在的实体创建占位符
-        let placeholderCount = 0;
+        // 检查关系中引用的实体，记录缺失的实体但不创建占位符
+        let missingEntityCount = 0;
+        const missingEntities: string[] = [];
+        
         for (const entityId of Array.from(allEntityIds)) {
           try {
             const cloudEntity = await this.cloudStorage.getEntity(entityId);
             if (!cloudEntity) {
-              await this.createPlaceholderEntity(entityId);
-              placeholderCount++;
-              console.log(`📝 创建占位符实体: ${entityId}`);
+              missingEntities.push(entityId);
+              missingEntityCount++;
+              
+              // 仅在本地缓存中创建占位符，保持云端干净
+              await this.createLocalPlaceholder(entityId);
             }
           } catch (error) {
             console.warn(`检查实体 ${entityId} 失败:`, error);
+            missingEntities.push(entityId);
+            missingEntityCount++;
           }
         }
         
-        if (placeholderCount > 0) {
-          console.log(`📝 为关系数据创建了 ${placeholderCount} 个占位符实体`);
+        if (missingEntityCount > 0) {
+          console.log(`⚠️  发现 ${missingEntityCount} 个缺失实体，已在本地缓存中创建占位符`);
+          console.log(`缺失实体: ${missingEntities.slice(0, 5).join(', ')}${missingEntities.length > 5 ? '...' : ''}`);
         }
 
-        // 备份关系数据到云端
-        await this.backupRelationshipsToCloud(relationshipData.graphRelationships);
+        // 使用 CloudStorage 的方法来备份关系数据
+        const success = await this.cloudStorage.backupRelationshipsToCollection(relationshipData);
+        if (!success) {
+          console.error('❌ 关系数据备份失败');
+          return;
+        }
       }
 
     } catch (error) {
@@ -968,17 +985,17 @@ export class CacheStrategy {
   }
 
   /**
-   * 创建占位符实体
+   * 在本地缓存中创建占位符实体（不上传到云端）
    */
-  private async createPlaceholderEntity(entityId: string): Promise<void> {
+  private async createLocalPlaceholder(entityId: string): Promise<void> {
     try {
       const [type, name] = entityId.split('_', 2);
       const entity: MemoryEntity = {
         id: entityId,
         type: (type.charAt(0).toUpperCase() + type.slice(1)) as any,
         name: name?.replace(/_/g, ' ') || entityId,
-        properties: { placeholder: true, createdBy: 'system' },
-        description: `自动生成的占位符实体`,
+        properties: { placeholder: true, createdBy: 'system', localOnly: true },
+        description: `本地占位符实体（缺失的关系引用）`,
         created: Date.now(),
         updated: Date.now(),
         accessCount: 0,
@@ -986,43 +1003,24 @@ export class CacheStrategy {
         importance: 0.1
       };
 
-      await this.cloudStorage.storeEntity(entity);
-      console.log(`📝 创建占位符实体: ${entity.name}`);
+      // 只缓存到本地，不上传到云端
+      await this.localCache.cacheEntity(entity);
+      console.log(`📝 本地缓存占位符: ${entity.name}`);
       
     } catch (error) {
-      console.error(`创建占位符实体 ${entityId} 失败:`, error);
+      console.error(`创建本地占位符 ${entityId} 失败:`, error);
     }
   }
 
   /**
-   * 备份关系数据到云端
+   * 获取用户信息
    */
-  private async backupRelationshipsToCloud(relationshipData: any): Promise<void> {
+  private async getUserInfo(): Promise<{ username: string }> {
     try {
-      const backupEntity: MemoryEntity = {
-        id: `graph-backup-${Date.now()}`,
-        type: 'Document',
-        name: '图关系数据备份',
-        properties: {
-          backupType: 'graph_relationships',
-          relationshipCount: relationshipData.relationships?.length || 0,
-          entityToRelationsCount: relationshipData.entityToRelations?.length || 0,
-          backupTime: Date.now(),
-          data: JSON.stringify(relationshipData)
-        },
-        description: '自动备份的图关系数据',
-        created: Date.now(),
-        updated: Date.now(),
-        accessCount: 0,
-        lastAccessed: Date.now(),
-        importance: 0.9
-      };
-
-      await this.cloudStorage.storeEntity(backupEntity);
-      console.log(`☁️ 关系数据已备份到云端: ${backupEntity.id}`);
-      
+      const result = await chrome.storage.local.get(['userinfo']);
+      return result.userinfo || { username: 'default-user' };
     } catch (error) {
-      console.error('❌ 云端备份关系数据失败:', error);
+      return { username: 'default-user' };
     }
   }
 

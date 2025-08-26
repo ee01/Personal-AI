@@ -140,3 +140,10 @@ Chroma 服务默认在 `http://localhost:8000` 上运行，提供以下 API：
 2. 替换 GOOGLE_CLIENT_ID 为正式 oauth client_id: 850492875483-kmbu6or52oi6lsnapoqklbs5fo94jplv.apps.googleusercontent.com
 3. npm run build
 5. 上传 personal-ai.zip 到 chrome store: https://chrome.google.com/webstore/devconsole/2ae6926c-357d-4b1b-b4fc-5313c4e19f24/kefnadjndpllbibeklhajjddgmlbafel/edit/package?pli=1
+
+## 数据备份
+
+运行如下命令备份本地 chroma data 文件夹
+```bash
+tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data
+```

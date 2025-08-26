@@ -3,7 +3,6 @@
  * 在Jira automation管理页面添加导入功能
  */
 
-import { getUserInfo } from "./utils";
 import { getLocalStorageItem, setLocalStorageItem } from "./storage";
 
 // 类型定义

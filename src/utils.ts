@@ -1,5 +1,3 @@
-import { getCurrentUserInfo, getLocalStorageItem } from "./storage";
-
 // 环境配置类型定义
 export interface EnvConfigType {
   SCHEDULED_INTERVAL: number;
@@ -179,25 +177,7 @@ export function getDefaultEnvConfig(): EnvConfigType {
   return defaultEnvConfig;
 }
 
-export function getUserInfo() {
-  const accountUD = getLocalStorageItem('global.account.UD', '');
-  const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
-
-  const accountInfo = accountUD ? accountInfoList[accountUD] : accountInfoList.find((item:any) => item.displayName != '');
-  console.log('accountInfoList', accountInfoList, accountInfo);
-  if (accountInfo) return {
-    extensionId: accountInfo.extensionId,
-    email: accountInfo.email,
-    fullName: accountInfo.displayName,
-    username: accountInfo.email ? accountInfo.email.trim().split('@')[0] : accountInfo.displayName.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
-  }
-
-  const userInfo = getCurrentUserInfo();
-  return {
-    extensionId: userInfo.extensionId,
-    fullName: userInfo.username,
-    username: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
-    email: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, '') + '@ringcentral.com'
-  };
+export async function getUserInfo() {
+  let { userinfo } = await chrome.storage.local.get(['userinfo'])
+  return userinfo;
 }
-

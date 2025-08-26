@@ -258,23 +258,19 @@ const MemoryInterface = () => {
   // 加载实体类型
   const loadEntityTypes = async () => {
     try {
-      console.log('📋 请求实体类型数据...');
       const response = await chrome.runtime.sendMessage({
         type: 'GET_ENTITY_TYPES'
       });
 
-      console.log('📋 实体类型响应:', response);
       if (response && response.success) {
         // 使用新的API响应格式
         if (response.data.entityTypes && Array.isArray(response.data.entityTypes)) {
-          console.log('📋 使用新格式的实体类型数据:', response.data.entityTypes);
           const types: EntityType[] = response.data.entityTypes.map((entityType: any) => ({
             type: entityType.type,
             name: entityType.name,
             icon: entityType.icon,
             count: entityType.count
           }));
-          console.log('📋 设置实体类型:', types);
           setEntityTypes(types);
         } else {
           // 向后兼容：使用entityCounts

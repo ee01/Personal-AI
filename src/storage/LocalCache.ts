@@ -942,10 +942,12 @@ export class LocalCache {
 
     visited.add(entityId);
 
-    // 获取当前实体
+    // 获取当前实体（可能不存在）
     const entity = await this.getEntity(entityId);
     if (entity) {
       foundEntities.push(entity);
+    } else {
+      console.warn(`关系遍历中发现缺失实体: ${entityId}`);
     }
 
     // 获取相关关系
@@ -955,20 +957,34 @@ export class LocalCache {
     for (const relationshipId of relationshipIds) {
       const relationship = this.memoryRelationships.get(relationshipId);
       if (relationship) {
-        foundRelationships.push(relationship);
-
-        // 递归遍历相关实体
-        const relatedEntityId = relationship.fromId === entityId 
-          ? relationship.toId 
-          : relationship.fromId;
+        // 验证关系的两端实体是否存在
+        const fromEntity = await this.getEntity(relationship.fromId);
+        const toEntity = await this.getEntity(relationship.toId);
         
-        await this.traverseRelationships(
-          relatedEntityId,
-          remainingDepth - 1,
-          visited,
-          foundEntities,
-          foundRelationships
-        );
+        // 只有当至少一端实体存在时才包含此关系
+        if (fromEntity || toEntity) {
+          foundRelationships.push(relationship);
+
+          // 递归遍历相关实体（跳过不存在的实体）
+          const relatedEntityId = relationship.fromId === entityId 
+            ? relationship.toId 
+            : relationship.fromId;
+          
+          // 只有当相关实体存在时才继续遍历
+          if (await this.getEntity(relatedEntityId)) {
+            await this.traverseRelationships(
+              relatedEntityId,
+              remainingDepth - 1,
+              visited,
+              foundEntities,
+              foundRelationships
+            );
+          } else {
+            console.warn(`跳过不存在的相关实体: ${relatedEntityId}`);
+          }
+        } else {
+          console.warn(`跳过无效关系 (两端实体都不存在): ${relationshipId}`);
+        }
       }
     }
   }

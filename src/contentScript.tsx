@@ -6,7 +6,7 @@ import { MARKDOWN_STYLE } from './markdownStyle';
 import { ViewModel } from './viewModel';
 import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
-import { getUserInfo } from './utils';
+import { getLocalStorageItem, getCurrentUserInfo } from './storage';
 
 
 // Insert the CSS styles into the DOM
@@ -54,7 +54,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (type === 'GET_USER_INFO') {
         console.log('处理 GET_USER_INFO 消息');
-        const userInfo = getUserInfo();
+        const userInfo = getUserInfoInRCTab();
         console.log('获取到的用户信息:', userInfo);
         sendResponse({ success: true, data: {
             fullName: userInfo.fullName,
@@ -113,3 +113,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     return true; // 为所有消息保持消息通道开启
 });
+
+function getUserInfoInRCTab() {
+    const accountUD = getLocalStorageItem('global.account.UD', '');
+    const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
+  
+    const accountInfo = accountUD ? accountInfoList[accountUD] : accountInfoList.find((item:any) => item.displayName != '');
+    console.log('accountInfoList', accountInfoList, accountInfo);
+    if (accountInfo) return {
+      extensionId: accountInfo.extensionId,
+      email: accountInfo.email,
+      fullName: accountInfo.displayName,
+      username: accountInfo.email ? accountInfo.email.trim().split('@')[0] : accountInfo.displayName.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
+    }
+  
+    const userInfo = getCurrentUserInfo();
+    return {
+      extensionId: userInfo.extensionId,
+      fullName: userInfo.username,
+      username: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
+      email: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, '') + '@ringcentral.com'
+    };
+  }
