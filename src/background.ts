@@ -1,5 +1,5 @@
 import { analyzeMessages, analyzeMessagesInBackground } from './messageDealing';
-import { initChromaClient } from './vectorStore';
+import { CloudStorage } from './storage/CloudStorage';
 import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
@@ -134,11 +134,14 @@ chrome.runtime.onInstalled.addListener(async () => {
             console.error('Error refreshing RingCentral tab:', error);
         }
 
-        // 安全地初始化Chroma
+        // 安全地初始化Chroma - 使用新的CloudStorage系统
         try {
-            if (await initChromaClient()) console.log('Chroma client initialized');
+            const cloudStorage = new CloudStorage();
+            if (await cloudStorage.initialize()) {
+                console.log('ChromaDB cloud storage initialized');
+            }
         } catch (error) {
-            console.error('Failed to initialize Chroma:', error);
+            console.error('Failed to initialize ChromaDB cloud storage:', error);
         }
 
         // 预先创建离屏文档

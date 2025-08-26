@@ -3,9 +3,7 @@
  * 专门管理 ChromaDB 操作，包括向量搜索和完整数据存储
  */
 
-import { ChromaClient, Collection } from 'chromadb';
-// 移除 DefaultEmbeddingFunction 导入，使用离屏文档方案代替
-// import { DefaultEmbeddingFunction } from '@chroma-core/default-embed';
+import { ChromaClient, Collection, EmbeddingFunction } from 'chromadb';
 import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
 import { MemoryEntity, QueryResult, VectorSearchOptions } from '../memory';
@@ -17,6 +15,17 @@ export interface CloudStorageConfig {
   collections: string[];
   batchSize: number;
   timeout: number;
+}
+
+/**
+ * 自定义空嵌入函数 - 禁用 ChromaDB v3 的默认嵌入
+ * 实际嵌入计算通过离屏文档完成
+ */
+class NullEmbeddingFunction implements EmbeddingFunction {
+  async generate(texts: string[]): Promise<number[][]> {
+    // 不实际计算嵌入向量，因为我们使用离屏文档方案
+    throw new Error('嵌入计算应通过离屏文档完成，不应调用此函数');
+  }
 }
 
 /**
@@ -697,8 +706,8 @@ export class CloudStorage {
   private async initializeCollections(): Promise<void> {
     if (!this.client) throw new Error('ChromaDB 客户端未初始化');
 
-    // 注释：不在 background 脚本中创建嵌入函数，使用离屏文档方案
-    // const embeddingFunction = new DefaultEmbeddingFunction();
+    // ChromaDB v3: 显式指定嵌入函数，防止默认加载 @chroma-core/default-embed
+    const nullEmbeddingFunction = new NullEmbeddingFunction();
 
     for (const collectionType of this.config.collections) {
       const collectionName = `${this.username}-${collectionType}`;
@@ -706,7 +715,7 @@ export class CloudStorage {
       try {
         const collection = await this.client.getOrCreateCollection({ 
           name: collectionName,
-          // embeddingFunction: embeddingFunction
+          embeddingFunction: nullEmbeddingFunction
         });
         this.collections.set(collectionName, collection);
         console.log(`✅ 集合已初始化: ${collectionName}`);
@@ -789,7 +798,7 @@ export class CloudStorage {
         collection = await this.client!.getOrCreateCollection({
           name: collectionName,
           metadata: { type: 'user_profiles' },
-          // embeddingFunction: new DefaultEmbeddingFunction()
+          embeddingFunction: new NullEmbeddingFunction()
         });
         this.collections.set(collectionName, collection);
       }
@@ -926,7 +935,7 @@ export class CloudStorage {
         relationshipCollection = await this.client!.getOrCreateCollection({
           name: relationshipCollectionName,
           metadata: { type: 'relationships' },
-          // embeddingFunction: new DefaultEmbeddingFunction()
+          embeddingFunction: new NullEmbeddingFunction()
         });
       } catch (error) {
         console.error('❌ 无法创建关系集合:', error);
