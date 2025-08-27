@@ -36,6 +36,10 @@ interface CacheConfig {
   statisticsCacheDuration: number; // 统计信息缓存时长
   recentDataCacheDuration: number; // 最近数据缓存时长
   topicDetailsCacheDuration: number; // 主题详情缓存时长
+  // 新增：最近数据同步配置
+  enableRecentDataSync: boolean; // 是否启用基于关系的最近数据同步
+  recentDataSyncBatchSize: number; // 最近数据同步批次大小
+  recentDataQueryLimit: number; // 单个实体最近数据查询限制
 }
 
 // 缓存元数据
@@ -82,7 +86,11 @@ export class LocalCache {
       maxRecentDataPerEntity: 5, // 每个实体最多保存5条最近数据
       statisticsCacheDuration: 30 * 60 * 1000, // 30分钟
       recentDataCacheDuration: 6 * 60 * 60 * 1000, // 6小时
-      topicDetailsCacheDuration: 60 * 60 * 1000 // 1小时
+      topicDetailsCacheDuration: 60 * 60 * 1000, // 1小时
+      // 新增：最近数据同步配置
+      enableRecentDataSync: true, // 启用基于关系的最近数据同步
+      recentDataSyncBatchSize: 10, // 每批处理10个实体的最近数据
+      recentDataQueryLimit: 5 // 每个实体最多查询5条最近数据
     };
   }
 
@@ -393,6 +401,13 @@ export class LocalCache {
   }
 
   /**
+   * 🆕 存储关系（对外接口）
+   */
+  async storeRelationship(relationship: GraphRelationship): Promise<void> {
+    await this.cacheRelationship(relationship);
+  }
+
+  /**
    * 缓存关系
    */
   async cacheRelationship(relationship: GraphRelationship): Promise<void> {
@@ -410,18 +425,21 @@ export class LocalCache {
       // 更新关系索引
       await this.updateRelationshipIndex(relationship);
 
+      // 🆕 更新聚合关系数据（用于同步）
+      await this.updateAggregatedRelationshipData();
+
     } catch (error) {
       console.error('缓存关系失败:', error);
     }
   }
 
   /**
-   * 恢复关系数据（新设备同步）
+   * 恢复关系数据（新设备同步）- 简化版
    */
   async restoreRelationshipData(relationshipData: {
     relationships: any[];
-    entityToRelations: any[];
     typeToEntities: any[];
+    entityToRelations?: any[]; // 🆕 向后兼容，可选
   }): Promise<void> {
     this.ensureInitialized();
 
@@ -470,17 +488,19 @@ export class LocalCache {
       });
 
       console.log(`✅ 恢复了 ${relationshipMap.size} 个关系到本地缓存`);
+      
+      // 🆕 更新聚合关系数据（用于同步）
+      await this.updateAggregatedRelationshipData();
     } catch (error) {
       console.error('恢复关系数据失败:', error);
     }
   }
 
   /**
-   * 获取关系数据备份（用于云端备份）
+   * 🆕 获取简化的关系数据备份
    */
-  async getRelationshipBackupData(): Promise<{
+  async getSimplifiedRelationshipData(): Promise<{
     relationships: any[];
-    entityToRelations: any[];
     typeToEntities: any[];
   } | null> {
     this.ensureInitialized();
@@ -493,20 +513,15 @@ export class LocalCache {
         return null;
       }
 
-      // 2. 获取关系索引
-      const relationshipIndex = await this.getRelationshipIndex();
-      const entityToRelations = Array.from(Object.entries(relationshipIndex))
-        .map(([key, value]) => [key, Array.from(value)]);
-
-      // 3. 获取类型索引
+      // 2. 获取类型索引（保留此索引用于快速按类型查询）
       const typeIndex = await this.getTypeIndex();
       const typeToEntities = Array.from(Object.entries(typeIndex))
         .map(([key, value]) => [key, Array.from(value)]);
 
       return {
         relationships,
-        entityToRelations,
         typeToEntities
+        // 🚫 移除 entityToRelations，关系信息在查询时动态计算
       };
     } catch (error) {
       console.error('获取关系备份数据失败:', error);
@@ -589,6 +604,234 @@ export class LocalCache {
 
     } catch (error) {
       console.error('更新最近数据失败:', error);
+    }
+  }
+
+  /**
+   * 🆕 基于本地关系数据批量更新实体的最近数据缓存
+   */
+  async batchUpdateRecentDataCacheFromRelations(entities: MemoryEntity[]): Promise<number> {
+    if (!this.config.enableRecentDataSync) {
+      return 0;
+    }
+
+    let updatedCount = 0;
+    const batches = this.chunkArray(entities, this.config.recentDataSyncBatchSize);
+    
+    for (const batch of batches) {
+      // 并行处理批内实体，但控制并发数量
+      const promises = batch.map(entity => this.updateEntityRecentDataFromRelations(entity));
+      const results = await Promise.allSettled(promises);
+      
+      // 统计成功更新的数量
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          updatedCount++;
+        }
+      }
+      
+      // 批间延迟，避免过度负载
+      if (batches.length > 1) {
+        await this.delay(50); // 减少延迟，因为本地查询更快
+      }
+    }
+    
+    return updatedCount;
+  }
+
+  /**
+   * 🆕 基于本地关系数据更新单个实体的最近数据缓存
+   */
+  private async updateEntityRecentDataFromRelations(entity: MemoryEntity): Promise<boolean> {
+    try {
+      const entityName = entity.name;
+      let hasUpdates = false;
+
+      // 🔗 1. 获取实体的关系网络（深度1，只获取直接相关的实体）
+      const relationshipNetwork = await this.getRelationshipNetwork(entity.id, 1);
+      
+      if (relationshipNetwork.relationships.length === 0) {
+        // console.log(`实体 ${entityName} 没有发现关系数据`);
+        return false;
+      }
+
+      // 📊 2. 按数据来源分类关系
+      const relationshipsBySource = {
+        conversations: [] as any[],
+        webpages: [] as any[],
+        projects: [] as any[],
+        resources: [] as any[]
+      };
+
+      for (const relationship of relationshipNetwork.relationships) {
+        const properties = relationship.properties || {};
+        const source = properties.source;
+        const discoveredAt = properties.discoveredAt || relationship.created;
+        
+        // 构建基础数据对象
+        const baseData = {
+          id: properties.messageId || properties.webpageId || properties.projectId || relationship.id,
+          relationshipId: relationship.id,
+          timestamp: discoveredAt,
+          relationType: relationship.type,
+          strength: relationship.strength
+        };
+
+        // 根据数据来源分类
+        switch (source) {
+          case 'message':
+            relationshipsBySource.conversations.push({
+              ...baseData,
+              content: `通过关系"${relationship.type}"发现的相关消息`,
+              summary: `与${this.getRelatedEntityName(relationship, entity.id)}的关系`,
+              sender: 'system', // 可以后续优化为从原始消息获取
+              messageId: properties.messageId
+            });
+            break;
+            
+          case 'webpage':
+            relationshipsBySource.webpages.push({
+              ...baseData,
+              title: `通过关系"${relationship.type}"发现的相关网页`,
+              url: properties.url || '',
+              summary: `与${this.getRelatedEntityName(relationship, entity.id)}的关系`,
+              visitTime: discoveredAt,
+              domain: properties.domain || 'unknown'
+            });
+            break;
+            
+          case 'project':
+            relationshipsBySource.projects.push({
+              ...baseData,
+              name: `通过关系"${relationship.type}"发现的相关项目`,
+              description: `与${this.getRelatedEntityName(relationship, entity.id)}的关系`,
+              status: properties.status || 'active'
+            });
+            break;
+            
+          default:
+            // 其他类型归类为资源
+            relationshipsBySource.resources.push({
+              ...baseData,
+              name: `通过关系"${relationship.type}"发现的相关资源`,
+              description: `与${this.getRelatedEntityName(relationship, entity.id)}的关系`,
+              type: source || 'unknown'
+            });
+            break;
+        }
+      }
+
+      // 📝 3. 批量更新最近数据缓存
+      const updatePromises = [];
+      
+      // 更新conversations
+      if (relationshipsBySource.conversations.length > 0) {
+        const sortedConversations = relationshipsBySource.conversations
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, this.config.recentDataQueryLimit);
+        
+        for (const conversation of sortedConversations) {
+          updatePromises.push(
+            this.updateRecentData(entity.id, 'conversation', conversation)
+          );
+        }
+        hasUpdates = true;
+      }
+
+      // 更新webpages
+      if (relationshipsBySource.webpages.length > 0) {
+        const sortedWebpages = relationshipsBySource.webpages
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, this.config.recentDataQueryLimit);
+        
+        for (const webpage of sortedWebpages) {
+          updatePromises.push(
+            this.updateRecentData(entity.id, 'webpage', webpage)
+          );
+        }
+        hasUpdates = true;
+      }
+
+      // 更新projects
+      if (relationshipsBySource.projects.length > 0) {
+        const sortedProjects = relationshipsBySource.projects
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, this.config.recentDataQueryLimit);
+        
+        for (const project of sortedProjects) {
+          updatePromises.push(
+            this.updateRecentData(entity.id, 'project', project)
+          );
+        }
+        hasUpdates = true;
+      }
+
+      // 更新resources
+      if (relationshipsBySource.resources.length > 0) {
+        const sortedResources = relationshipsBySource.resources
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, this.config.recentDataQueryLimit);
+        
+        for (const resource of sortedResources) {
+          updatePromises.push(
+            this.updateRecentData(entity.id, 'resource', resource)
+          );
+        }
+        hasUpdates = true;
+      }
+
+      // 🚀 4. 并行执行所有更新
+      if (updatePromises.length > 0) {
+        await Promise.allSettled(updatePromises);
+        console.log(`📝 基于${relationshipNetwork.relationships.length}个关系更新了实体 ${entityName} 的最近数据缓存`);
+      }
+
+      return hasUpdates;
+
+    } catch (error) {
+      console.error(`基于关系数据更新实体 ${entity.name} 的最近数据缓存失败:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * 🔗 获取关系中相关实体的名称
+   */
+  private getRelatedEntityName(relationship: GraphRelationship, currentEntityId: string): string {
+    const relatedEntityId = relationship.fromId === currentEntityId 
+      ? relationship.toId 
+      : relationship.fromId;
+    
+    // 从实体ID中提取可读名称（简化版）
+    const namePart = relatedEntityId.split('_').slice(1).join(' ');
+    return namePart || relatedEntityId;
+  }
+
+  /**
+   * 🆕 更新聚合关系数据到本地存储（用于云端同步）- 简化版
+   */
+  private async updateAggregatedRelationshipData(): Promise<void> {
+    this.ensureInitialized();
+
+    try {
+      // 🆕 获取简化的关系数据
+      const backupData = await this.getSimplifiedRelationshipData();
+      
+      if (backupData) {
+        // 存储简化的关系数据
+        await chrome.storage.local.set({
+          'cache_graph_relationships': {
+            relationships: backupData.relationships,
+            typeToEntities: backupData.typeToEntities,
+            lastUpdated: Date.now()
+            // 🚫 移除冗余的 entityToRelations
+          }
+        });
+        
+        console.log(`📊 更新聚合关系数据: ${backupData.relationships.length} 个关系`);
+      }
+    } catch (error) {
+      console.error('更新聚合关系数据失败:', error);
     }
   }
 
@@ -957,33 +1200,43 @@ export class LocalCache {
     for (const relationshipId of relationshipIds) {
       const relationship = this.memoryRelationships.get(relationshipId);
       if (relationship) {
-        // 验证关系的两端实体是否存在
-        const fromEntity = await this.getEntity(relationship.fromId);
-        const toEntity = await this.getEntity(relationship.toId);
+        // 🆕 优化：区分实体-实体关系和实体-消息关系
+        const isEntityMessageRelation = relationship.type === 'discovered_in';
         
-        // 只有当至少一端实体存在时才包含此关系
-        if (fromEntity || toEntity) {
-          foundRelationships.push(relationship);
-
-          // 递归遍历相关实体（跳过不存在的实体）
-          const relatedEntityId = relationship.fromId === entityId 
-            ? relationship.toId 
-            : relationship.fromId;
+        if (isEntityMessageRelation) {
+          // 对于实体-消息关系，只验证实体端
+          const entitySideId = relationship.fromId === entityId ? relationship.fromId : relationship.toId;
+          const messageSideId = relationship.fromId === entityId ? relationship.toId : relationship.fromId;
           
-          // 只有当相关实体存在时才继续遍历
-          if (await this.getEntity(relatedEntityId)) {
-            await this.traverseRelationships(
-              relatedEntityId,
-              remainingDepth - 1,
-              visited,
-              foundEntities,
-              foundRelationships
-            );
-          } else {
-            console.warn(`跳过不存在的相关实体: ${relatedEntityId}`);
+          if (await this.getEntity(entitySideId)) {
+            foundRelationships.push(relationship);
+            console.log(`🔗 发现实体-消息关系: ${entitySideId} -> ${messageSideId.slice(0, 8)}`);
           }
+          
+          // 实体-消息关系不继续递归遍历
         } else {
-          console.warn(`跳过无效关系 (两端实体都不存在): ${relationshipId}`);
+          // 对于实体-实体关系，验证两端实体
+          const fromEntity = await this.getEntity(relationship.fromId);
+          const toEntity = await this.getEntity(relationship.toId);
+          
+          if (fromEntity || toEntity) {
+            foundRelationships.push(relationship);
+
+            // 递归遍历相关实体
+            const relatedEntityId = relationship.fromId === entityId 
+              ? relationship.toId 
+              : relationship.fromId;
+            
+            if (await this.getEntity(relatedEntityId)) {
+              await this.traverseRelationships(
+                relatedEntityId,
+                remainingDepth - 1,
+                visited,
+                foundEntities,
+                foundRelationships
+              );
+            }
+          }
         }
       }
     }
@@ -1080,6 +1333,18 @@ export class LocalCache {
     setInterval(() => {
       this.clearExpiredCache();
     }, 60 * 60 * 1000);
+  }
+
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
+  }
+
+  private async delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private ensureInitialized(): void {

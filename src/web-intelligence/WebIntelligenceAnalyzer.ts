@@ -92,7 +92,7 @@ export class WebIntelligenceAnalyzer {
   private async initializeUserProfile(): Promise<void> {
     try {
       const result = await chrome.storage.local.get(['userinfo']);
-      const userId = result?.userinfo?.email || 'default_user';
+      const userId = result?.userinfo?.username || 'default_user';
       
       this.userProfileManager = new UserProfileManager(userId);
       this.userProfile = await this.userProfileManager.initialize();

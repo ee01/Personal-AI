@@ -31,14 +31,14 @@ export async function analyzeMessages (data: any[], username: string, isSchedule
 				}
 			});
 			
-			if (response.data) {
-				console.log("LLM's response:", response.data, {data, isScheduledTask});
+			// 检查响应格式 - 支持新的统一响应格式
+			if (response && response.success) {
+				console.log("LLM's response:", response, {data, isScheduledTask});
 				// Todo: Toast 方法在 popup 中无法调用
-				showToast('Analysis complete, please check the console', 'success');
-				return response.data;
+				showToast(response.message || 'Analysis complete', 'success');
+				return response;
 			} else {
-				const error = new Error('Received invalid response format from LLM');
-				console.error("Unexpected response format:", response);
+				const error = new Error(response.message || 'Analysis failed');
 				showToast(error.message, 'error');
 				throw error;
 			}
@@ -58,7 +58,11 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
 	if (!scheduleActive && isScheduledTask) {
 		console.log('定时分析任务已被终止，跳过处理');
-		return;
+		return { 
+			success: false, 
+			message: '定时分析任务已被终止', 
+			data: [] as any[]
+		};
 	}
 
 	const concernedItems: {text: string, pushToGlip?: boolean, mentionMe?: boolean}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
@@ -97,7 +101,11 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	console.log(data, concernedItems, username);
 	if (data.length === 0) {
 		console.log('没有消息数据，跳过处理');
-		return;
+		return { 
+			success: true, 
+			message: '没有消息数据需要处理', 
+			data: [] as any[]
+		};
 	}
     
     // 根据配置选择处理方式
@@ -231,7 +239,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						};
 
 						// 提取实体信息用于相似性检查
-						const extractedEntities = extractEntitiesFromMetadata(messageMetadata);
+						const extractedEntities = extractEntitiesFromMetadata(messageMetadata, messageId);
 
 						// 使用新的记忆系统存储
 						try {
@@ -269,8 +277,28 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					}
 				}
 			}
+
+			// 返回处理结果
+			return {
+				success: true,
+				message: `agentThinking处理完成: ${resultsArray.length} 条消息, ${storedCount} 条已存储, ${notifiedCount} 条已通知`,
+				data: resultsArray,
+				stats: {
+					total: resultsArray.length,
+					important: importantCount,
+					stored: storedCount,
+					notified: notifiedCount,
+					filtered: noisyCount
+				}
+			};
 		} catch (error) {
 			console.error('批量处理消息失败:', error);
+			return {
+				success: false,
+				message: `agentThinking处理失败: ${error.message}`,
+				data: [] as any[],
+				error: error.message
+			};
 		}
     } else if (envConfig.ANALYSIS_TYPE === 'agentWorkflow') {
         // 使用智能 Agent 系统处理
@@ -326,6 +354,17 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				}
 			}
 		}
+		
+		// agentWorkflow 处理完成
+		return {
+			success: true,
+			message: `agentWorkflow处理完成: 共处理 ${data.length} 个群组`,
+			data: [] as any[],
+			stats: {
+				total: data.length,
+				processed: data.length
+			}
+		};
     } else {
         // 使用普通模式处理
         console.log('Using normal mode to process messages');
@@ -553,7 +592,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				};
 
 				// 提取实体信息用于相似性检查
-				const entitiesForSimilarity = extractEntitiesFromMetadata(messageMetadata);
+				const entitiesForSimilarity = extractEntitiesFromMetadata(messageMetadata, messageId);
 
 				// 使用新的记忆系统存储
 				try {
@@ -617,7 +656,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 // 函数已移除，使用新的记忆系统 (memorySystem) 替代
 
 // 将消息元数据转换为实体信息
-function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'created' | 'updated'>> {
+function extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<any, 'id' | 'created' | 'updated'>> {
   const entities: Array<Omit<any, 'id' | 'created' | 'updated'>> = [];
   
   if (metadata.entities) {
@@ -631,7 +670,10 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'cre
             role: person.role,
             mentioned_context: person.mentioned_context,
             source: 'message_analysis',
-            teamName: metadata.teamName || ''
+            teamName: metadata.teamName || '',
+            // 🆕 添加消息来源信息
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
           },
           importance: 0.7 // 默认重要性
         });
@@ -648,7 +690,10 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'cre
             status: project.status,
             related_people: project.related_people,
             source: 'message_analysis',
-            teamName: metadata.teamName || ''
+            teamName: metadata.teamName || '',
+            // 🆕 添加消息来源信息
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
           },
           importance: 0.8 // 项目通常更重要
         });
@@ -665,7 +710,10 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'cre
             category: topic.category,
             keywords: topic.keywords,
             source: 'message_analysis',
-            teamName: metadata.teamName || ''
+            teamName: metadata.teamName || '',
+            // 🆕 添加消息来源信息
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
           },
           importance: 0.5 // 话题重要性较低
         });
@@ -684,7 +732,10 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'cre
             type: doc.type || 'document',
             description: doc.description,
             source: 'message_analysis',
-            teamName: metadata.teamName || ''
+            teamName: metadata.teamName || '',
+            // 🆕 添加消息来源信息
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
           },
           importance: 0.6
         });
@@ -704,7 +755,10 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'cre
             usage_context: tech.usage_context,
             source: 'message_analysis',
             teamName: metadata.teamName || '',
-            type: 'technology' // 在properties中标记具体类型
+            type: 'technology', // 在properties中标记具体类型
+            // 🆕 添加消息来源信息
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
           },
           importance: 0.6
         });
@@ -719,7 +773,10 @@ function extractEntitiesFromMetadata(metadata: any): Array<Omit<any, 'id' | 'cre
         properties: {
           teamId: metadata.teamId,
           source: 'message_analysis',
-          type: 'team'
+          type: 'team',
+          // 🆕 添加消息来源信息
+          messageId: messageId,
+          timestamp: metadata.timestamp || Date.now()
         },
         importance: 0.6
       });

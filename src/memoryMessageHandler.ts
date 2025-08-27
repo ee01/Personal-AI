@@ -6,6 +6,28 @@
 import { memorySystem } from './memory';
 
 /**
+ * 格式化时间为相对时间
+ */
+function formatTimeAgo(timestamp: number): string {
+    const now = Date.now();
+    const diff = now - timestamp;
+    
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    const weeks = Math.floor(days / 7);
+    const months = Math.floor(days / 30);
+    
+    if (months > 0) return `${months}个月前`;
+    if (weeks > 0) return `${weeks}周前`;
+    if (days > 0) return `${days}天前`;
+    if (hours > 0) return `${hours}小时前`;
+    if (minutes > 0) return `${minutes}分钟前`;
+    return '刚刚';
+}
+
+/**
  * 处理记忆系统相关的消息
  * @param request 请求对象
  * @returns Promise<any> 返回响应数据，如果不是记忆系统相关消息则返回 null
@@ -166,30 +188,82 @@ async function handleGetTopicDetail(request: any): Promise<any> {
             url: doc.properties?.url || '#'
         }));
 
-        // 获取时间轴数据作为对话
-        const timeline = await memorySystem.getTimeline(10);
-        const conversations = timeline.map((item: any) => ({
-            id: item.id,
-            title: item.title || '对话',
-            content: item.content || '',
-            timestamp: item.timestamp || Date.now(),
-            source: item.source || '未知来源'
-        }));
+        // 使用新的queryEntityMessages方法获取相关对话详细信息
+        const conversations = await memorySystem.queryEntityMessages(topicEntity.name, { 
+            limit: 100, 
+            // minRelevanceScore: 0.5,  // 相关度阈值
+            sortBy: 'relevance',
+            sortOrder: 'desc'
+        });
+        
+        // 转换为前端需要的格式，包含完整的contextMessages
+        const formattedConversations = conversations.map(msg => {
+            // 处理上下文消息：从metadata中提取contextMessages
+            let context: any[] = [];
+            if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
+                context = msg.metadata.contextMessages.map((ctx: any) => ({
+                    id: ctx.id,
+                    sender: ctx.sender,
+                    content: ctx.content,
+                    time: ctx.datetime ? formatTimeAgo(new Date(ctx.datetime).getTime()) : '未知时间',
+                    datetime: ctx.datetime,
+                    isMainMessage: ctx.isMainMessage || false
+                }));
+            }
 
-        const response = {
-            topic: topicEntity,
-            conversations,
-            resources: relatedResources,
+            return {
+                id: msg.messageId,
+                sender: msg.source,
+                group: msg.metadata?.teamName || '聊天记录', // 使用真实群组名称
+                time: formatTimeAgo(msg.timestamp),
+                datetime: new Date(msg.timestamp).toISOString(),
+                summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
+                originalContent: msg.content,
+                highlightText: msg.metadata?.highlightText || msg.content,
+                teamUrl: msg.metadata?.team_url || '#', // 使用真实的团队URL
+                matchedRules: msg.metadata?.matchedRules || [], // 使用真实的匹配规则
+                relevanceScore: msg.relevanceScore,
+                context: context // 使用真实的上下文消息
+            };
+        });
+
+        // 统计参与者（从相关消息中提取不同的发送者）
+        const participants = new Set(formattedConversations.map(conv => conv.sender)).size;
+
+        // 获取相关网页记录（如果有的话）
+        const webpageResults = formattedConversations
+            .filter(conv => conv.context && conv.context.length > 0)
+            .slice(0, 3)
+            .map(conv => ({
+                id: `web-${conv.id}`,
+                title: `${topicEntity.name}相关网页`,
+                url: conv.teamUrl || '#',
+                type: 'webpage',
+                visitTime: conv.time,
+                summary: `与${topicEntity.name}相关的内容`,
+                tags: [topicEntity.name, '聊天记录']
+            }));
+
+        const topicDetail = {
+            overview: {
+                discussions: formattedConversations.length,
+                projects: relatedProjects.length,
+                participants: participants || 1, // 至少有一个参与者
+                resources: relatedResources.length
+            },
+            entity: topicEntity,
             projects: relatedProjects,
-            webpages: [] as any[]
+            resources: relatedResources,
+            conversations: formattedConversations,
+            webpages: webpageResults
         };
 
         // 缓存主题详情
-        await memorySystem.cacheTopicDetails(topicId, response);
+        await memorySystem.cacheTopicDetails(topicId, topicDetail);
 
         return {
             success: true,
-            data: response
+            data: topicDetail
         };
     } catch (error) {
         console.error('获取主题详情失败:', error);

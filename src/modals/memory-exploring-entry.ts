@@ -8,16 +8,21 @@ import OverviewPage from './components/OverviewPage.vue';
 import TimelinePage from './components/TimelinePage.vue';
 import EntityDetailPage from './components/EntityDetailPage.vue';
 import TopicDetailPage from './components/TopicDetailPage.vue';
+import UserProfilePage from './components/UserProfilePage.vue';
+import PersonDetailPage from './components/PersonDetailPage.vue';
+import SearchResultPage from './components/SearchResultPage.vue';
 import PlaceholderPage from './components/PlaceholderPage.vue';
 
 // 路由配置
 const routes = [
   { path: '/', name: 'Overview', component: OverviewPage },
   { path: '/timeline', name: 'Timeline', component: TimelinePage },
-  { path: '/user-profile', name: 'UserProfile', component: PlaceholderPage },
+  { path: '/user-profile', name: 'UserProfile', component: UserProfilePage },
   { path: '/entity/:type', name: 'EntityDetail', component: EntityDetailPage, props: true },
   { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
-  { path: '/search', name: 'Search', component: PlaceholderPage }
+  { path: '/person/:id', name: 'PersonDetail', component: PersonDetailPage, props: true },
+  { path: '/project/:id', name: 'ProjectDetail', component: PlaceholderPage, props: true },
+  { path: '/search', name: 'Search', component: SearchResultPage }
 ];
 
 // 等待DOM加载完成

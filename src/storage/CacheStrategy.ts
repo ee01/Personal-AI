@@ -322,6 +322,13 @@ export class CacheStrategy {
           if (entityResult.success) {
             result.relationshipsCreated++;
             
+            // 🆕 创建实体与消息的关系
+            await this.createEntityMessageRelationship(
+              entityResult.entityId,
+              messageData.id,
+              messageData.metadata
+            );
+            
             // 更新相关实体的最近数据缓存
             await this.localCache.updateRecentData(
               entityResult.entityId,
@@ -610,75 +617,41 @@ export class CacheStrategy {
     this.backgroundSyncStarted = false;
   }
 
+
+
   /**
-   * 检测并执行新设备初始同步
+   * 🆕 创建实体与消息的关系
    */
-  async performInitialSyncIfNeeded(): Promise<{
-    isNewDevice: boolean;
-    syncPerformed: boolean;
-    entitiesDownloaded: number;
-    relationshipsRestored: number;
-  }> {
-    this.ensureInitialized();
-
-    const result = {
-      isNewDevice: false,
-      syncPerformed: false,
-      entitiesDownloaded: 0,
-      relationshipsRestored: 0
-    };
-
+  private async createEntityMessageRelationship(
+    entityId: string,
+    messageId: string,
+    messageMetadata: any
+  ): Promise<void> {
     try {
-      // 1. 检测是否为新设备
-      const isNewDevice = await this.cloudStorage.detectNewDevice();
-      result.isNewDevice = isNewDevice;
+      const relationship = {
+        id: `rel_${entityId}_${messageId}_discovered_in`,
+        type: 'discovered_in',
+        fromId: entityId,
+        toId: messageId,
+        properties: {
+          source: 'message',
+          messageId: messageId,
+          discoveredAt: Date.now(),
+          sender: messageMetadata.source || 'unknown',
+          teamName: messageMetadata.teamName || '',
+          teamId: messageMetadata.teamId || ''
+        },
+        strength: 0.8, // 实体与发现它的消息关系较强
+        created: Date.now(),
+        updated: Date.now()
+      };
 
-      if (!isNewDevice) {
-        console.log('⏭️ 非新设备，跳过初始同步');
-        return result;
-      }
-
-      console.log('🆕 检测到新设备，开始初始同步...');
-
-      // 2. 从云端下载所有实体
-      const cloudEntities = await this.cloudStorage.getAllEntities();
+      // 存储关系到本地缓存
+      await this.localCache.storeRelationship(relationship);
       
-      if (cloudEntities.length > 0) {
-        // 批量缓存实体到本地
-        await this.localCache.batchCacheEntities(cloudEntities);
-        result.entitiesDownloaded = cloudEntities.length;
-        console.log(`📥 下载并缓存了 ${cloudEntities.length} 个实体`);
-      }
-
-      // 3. 尝试恢复关系数据
-      const relationshipData = await this.cloudStorage.restoreRelationships();
-      
-      if (relationshipData) {
-        // 将关系数据保存到本地
-        await this.localCache.restoreRelationshipData(relationshipData);
-        result.relationshipsRestored = relationshipData.relationships.length;
-        console.log(`📥 恢复了 ${relationshipData.relationships.length} 个关系`);
-      } else {
-        // 如果没有关系备份，尝试从消息重建
-        console.log('🔄 尝试从消息数据重建关系...');
-        const rebuiltCount = await this.rebuildRelationshipsFromMessages();
-        result.relationshipsRestored = rebuiltCount;
-      }
-
-      // 4. 更新同步状态
-      await chrome.storage.local.set({
-        'cloud_last_sync_time': Date.now(),
-        'initial_sync_completed': true
-      });
-
-      result.syncPerformed = true;
-      console.log(`✅ 新设备初始同步完成: ${result.entitiesDownloaded} 个实体, ${result.relationshipsRestored} 个关系`);
-
-      return result;
-
+      console.log(`✅ 创建实体-消息关系: ${entityId} -> ${messageId}`);
     } catch (error) {
-      console.error('❌ 新设备初始同步失败:', error);
-      return result;
+      console.error('创建实体-消息关系失败:', error);
     }
   }
 
@@ -804,11 +777,8 @@ export class CacheStrategy {
     try {
       console.log('🔄 开始同步缓存...');
 
-      // 检查并执行新设备初始同步
-      await this.performInitialSyncIfNeeded();
-
-      // 执行双向数据同步
-      await this.performBidirectionalSync();
+      // 执行云端到本地单向同步
+      await this.performCloudToLocalSync();
 
       // 清理过期缓存
       await this.localCache.clearExpiredCache();
@@ -827,202 +797,95 @@ export class CacheStrategy {
   }
 
   /**
-   * 执行双向数据同步（本地 ↔ 云端）
+   * 执行云端到本地单向同步 - 只从云端拉取数据到本地缓存
    */
-  private async performBidirectionalSync(): Promise<void> {
+  private async performCloudToLocalSync(): Promise<void> {
     try {
       const lastSyncData = await chrome.storage.local.get('cache_last_sync_time');
       const lastSyncTime = lastSyncData.cache_last_sync_time || 0;
       
-      // 如果距离上次同步不足5分钟，跳过双向同步
+      // 如果距离上次同步不足5分钟，跳过同步
       if (Date.now() - lastSyncTime < 5 * 60 * 1000) {
-        console.log('⏭️ 距离上次双向同步不足5分钟，跳过');
+        console.log('⏭️ 距离上次单向同步不足5分钟，跳过');
         return;
       }
 
-      console.log('🔄 开始双向数据同步...');
+      console.log('📥 开始云端到本地单向同步...');
       let syncedEntities = 0;
+      let recentDataUpdated = 0;
 
-      // 1. 从云端拉取新实体（限制数量）
+      // 1. 从云端拉取所有实体
       const cloudEntities = await this.cloudStorage.getAllEntities();
       
       // 2. 批量同步云端实体到本地
       const cloudBatches = this.chunkArray(cloudEntities, 20); // 每批最多20个
+      const entitiesToUpdate: MemoryEntity[] = [];
+      
       for (const batch of cloudBatches) {
         for (const entity of batch) {
           const localEntity = await this.localCache.getEntity(entity.id);
           if (!localEntity || localEntity.updated < entity.updated) {
+            // 🔄 缓存实体到本地
             await this.localCache.cacheEntity(entity);
             syncedEntities++;
+            entitiesToUpdate.push(entity);
           }
         }
+        
         // 批间延迟，避免阻塞
         if (cloudBatches.length > 1) {
           await this.delay(100);
         }
       }
 
-      // 3. 检查本地实体是否需要上传到云端（分批处理+限制数量）
-      const localEntities = await this.localCache.getAllEntities();
-      let uploadedCount = 0;
-      
-      // 限制单次同步的实体数量，避免大量数据处理
-      const maxSyncEntities = 50;
-      const entitiesToSync = localEntities.slice(0, maxSyncEntities);
-      
-      console.log(`📊 本地实体总数: ${localEntities.length}, 本次同步数量: ${entitiesToSync.length}`);
-      
-      // 分批处理本地实体
-      const localBatches = this.chunkArray(entitiesToSync, 10); // 每批最多10个
-      
-      for (const batch of localBatches) {
-        for (const entity of batch) {
-          try {
-            // 跳过本地占位符（不同步到云端）
-            if (entity.properties?.localOnly === true || entity.properties?.placeholder === true) {
-              console.log(`⏭️ 跳过本地占位符: ${entity.name} (不同步到云端)`);
-              continue;
-            }
+      // 3. 从云端恢复关系数据
+      await this.syncRelationshipsFromCloud();
 
-            // 检查云端是否存在此实体
-            const cloudEntity = await this.cloudStorage.getEntity(entity.id);
-            if (!cloudEntity) {
-              // 云端不存在，上传到云端
-              const success = await this.cloudStorage.storeEntity(entity as any);
-              if (success) {
-                uploadedCount++;
-                console.log(`📤 上传实体到云端: ${entity.name}`);
-              }
-            } else if (entity.updated > cloudEntity.updated) {
-              // 本地版本更新，更新云端
-              const success = await this.cloudStorage.updateEntity(entity.id, entity as any);
-              if (success) {
-                console.log(`🔄 更新云端实体: ${entity.name}`);
-              }
-            }
-          } catch (error) {
-            console.warn(`同步实体 ${entity.id} 失败:`, error);
-          }
-        }
-        
-        // 批间延迟，避免阻塞和频繁请求
-        if (localBatches.length > 1) {
-          await this.delay(200);
-        }
-      }
-      
-      if (uploadedCount > 0) {
-        console.log(`📤 上传了 ${uploadedCount} 个本地实体到云端`);
+      // 4. 基于同步的关系数据，批量更新最近数据缓存
+      if (entitiesToUpdate.length > 0) {
+        console.log(`🔗 开始基于关系数据更新最近数据缓存...`);
+        const recentDataCount = await this.localCache.batchUpdateRecentDataCacheFromRelations(entitiesToUpdate);
+        recentDataUpdated += recentDataCount;
       }
 
-      // 4. 同步关系数据
-      await this.syncRelationshipData();
-
-      console.log(`✅ 双向同步完成: 同步了${syncedEntities}个实体，上传了${uploadedCount}个实体`);
+      console.log(`✅ 单向同步完成: 同步了${syncedEntities}个实体，更新了${recentDataUpdated}个实体的最近数据缓存`);
 
     } catch (error) {
-      console.error('❌ 双向数据同步失败:', error);
+      console.error('❌ 云端到本地同步失败:', error);
     }
   }
 
+
+
   /**
-   * 同步关系数据
+   * 从云端同步关系数据到本地
    */
-  private async syncRelationshipData(): Promise<void> {
+  private async syncRelationshipsFromCloud(): Promise<void> {
     try {
-      // 获取本地关系数据
-      const relationshipData = await chrome.storage.local.get('graphRelationships');
+      console.log('🔗 开始从云端恢复关系数据...');
       
-      if (relationshipData.graphRelationships) {
-        const relationships = relationshipData.graphRelationships.relationships || [];
-        const entityToRelations = relationshipData.graphRelationships.entityToRelations || [];
-        
-        // 检查关系中引用的实体是否都存在于云端
-        const allEntityIds = new Set<string>();
-        
-        for (const [, relationship] of relationships) {
-          allEntityIds.add(relationship.fromId);
-          allEntityIds.add(relationship.toId);
-        }
-
-        // 检查关系中引用的实体，记录缺失的实体但不创建占位符
-        let missingEntityCount = 0;
-        const missingEntities: string[] = [];
-        
-        for (const entityId of Array.from(allEntityIds)) {
-          try {
-            const cloudEntity = await this.cloudStorage.getEntity(entityId);
-            if (!cloudEntity) {
-              missingEntities.push(entityId);
-              missingEntityCount++;
-              
-              // 仅在本地缓存中创建占位符，保持云端干净
-              await this.createLocalPlaceholder(entityId);
-            }
-          } catch (error) {
-            console.warn(`检查实体 ${entityId} 失败:`, error);
-            missingEntities.push(entityId);
-            missingEntityCount++;
-          }
-        }
-        
-        if (missingEntityCount > 0) {
-          console.log(`⚠️  发现 ${missingEntityCount} 个缺失实体，已在本地缓存中创建占位符`);
-          console.log(`缺失实体: ${missingEntities.slice(0, 5).join(', ')}${missingEntities.length > 5 ? '...' : ''}`);
-        }
-
-        // 使用 CloudStorage 的方法来备份关系数据
-        const success = await this.cloudStorage.backupRelationshipsToCollection(relationshipData);
-        if (!success) {
-          console.error('❌ 关系数据备份失败');
-          return;
-        }
+      // 尝试从云端恢复关系数据
+      const relationshipData = await this.cloudStorage.restoreRelationships();
+      
+      if (relationshipData) {
+        // 将关系数据保存到本地
+        await this.localCache.restoreRelationshipData(relationshipData);
+        console.log(`✅ 从云端恢复了 ${relationshipData.relationships.length} 个关系到本地缓存`);
+      } else {
+        // 如果云端没有关系备份，尝试从消息重建
+        console.log('🔄 云端无关系备份，尝试从消息数据重建关系...');
+        const rebuiltCount = await this.rebuildRelationshipsFromMessages();
+        console.log(`🔄 从消息重建了 ${rebuiltCount} 个关系`);
       }
 
     } catch (error) {
-      console.error('❌ 同步关系数据失败:', error);
+      console.error('❌ 从云端同步关系数据失败:', error);
     }
   }
 
-  /**
-   * 在本地缓存中创建占位符实体（不上传到云端）
-   */
-  private async createLocalPlaceholder(entityId: string): Promise<void> {
-    try {
-      const [type, name] = entityId.split('_', 2);
-      const entity: MemoryEntity = {
-        id: entityId,
-        type: (type.charAt(0).toUpperCase() + type.slice(1)) as any,
-        name: name?.replace(/_/g, ' ') || entityId,
-        properties: { placeholder: true, createdBy: 'system', localOnly: true },
-        description: `本地占位符实体（缺失的关系引用）`,
-        created: Date.now(),
-        updated: Date.now(),
-        accessCount: 0,
-        lastAccessed: Date.now(),
-        importance: 0.1
-      };
 
-      // 只缓存到本地，不上传到云端
-      await this.localCache.cacheEntity(entity);
-      console.log(`📝 本地缓存占位符: ${entity.name}`);
-      
-    } catch (error) {
-      console.error(`创建本地占位符 ${entityId} 失败:`, error);
-    }
-  }
 
-  /**
-   * 获取用户信息
-   */
-  private async getUserInfo(): Promise<{ username: string }> {
-    try {
-      const result = await chrome.storage.local.get(['userinfo']);
-      return result.userinfo || { username: 'default-user' };
-    } catch (error) {
-      return { username: 'default-user' };
-    }
-  }
+
 
   /**
    * 获取最后同步时间

@@ -95,6 +95,35 @@
         </div>
       </div>
 
+      <!-- 相关Tickets标签页 -->
+      <div v-if="activeTab === 'tickets'" class="tab-content active">
+        <div class="section-header">
+          <h3>🎯 相关Tickets</h3>
+          <button class="add-btn">+ 添加Ticket</button>
+        </div>
+        <div class="items-grid">
+          <div v-for="ticket in topicData.relatedTickets" :key="ticket.id" class="item-card">
+            <div class="item-header">
+              <div class="item-title">
+                <span>🎯</span>
+                <span>{{ ticket.id }}</span>
+              </div>
+              <div class="item-actions">
+                <button class="item-action" title="取消关联">❌</button>
+              </div>
+            </div>
+            <div class="item-content">
+              <h4 style="margin-bottom: 0.5rem; font-weight: 600;">{{ ticket.title }}</h4>
+              <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <span class="card-badge">{{ ticket.status }}</span>
+                <span class="card-badge" :style="getPriorityStyle(ticket.priority)">{{ ticket.priority }}</span>
+              </div>
+              <p style="font-size: 0.875rem; color: #94a3b8;">负责人：{{ ticket.assignee }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 聊天记录标签页 -->
       <div v-if="activeTab === 'conversations'" class="tab-content active">
         <div class="section-header">
@@ -118,15 +147,15 @@
           >
             <div class="conversation-header">
               <div class="conversation-meta">
-                <div class="sender-avatar">{{ conv.sender.charAt(0) }}</div>
+                <div class="sender-avatar">{{ (conv.sender || '?').charAt(0) }}</div>
                 <div class="sender-info">
-                  <div class="sender-name">{{ conv.sender }}</div>
-                  <div class="group-name">{{ conv.group }}</div>
+                  <div class="sender-name">{{ conv.sender || '未知用户' }}</div>
+                  <div class="group-name">{{ conv.group || '未知群组' }}</div>
                 </div>
               </div>
-              <div class="conversation-time">{{ conv.time }}</div>
+              <div class="conversation-time">{{ conv.time || '未知时间' }}</div>
             </div>
-            <div class="conversation-summary" v-html="highlightText(conv.summary, convSearchQuery)"></div>
+            <div class="conversation-summary" v-html="highlightText(conv.summary || '暂无摘要', convSearchQuery)"></div>
             <div 
               class="context-indicator"
               :class="{ expanded: expandedConversations.has(conv.id) }"
@@ -149,12 +178,12 @@
                 :class="{ 'main-message': contextMsg.isMainMessage }"
               >
                 <div class="context-header">
-                  <div class="context-sender">{{ contextMsg.sender }}</div>
-                  <div class="context-time">{{ contextMsg.time }}</div>
+                  <div class="context-sender">{{ contextMsg.sender || '未知用户' }}</div>
+                  <div class="context-time">{{ contextMsg.time || '未知时间' }}</div>
                 </div>
                 <div 
                   class="context-content-text"
-                  v-html="contextMsg.isMainMessage ? highlightText(contextMsg.content, convSearchQuery) : contextMsg.content"
+                  v-html="contextMsg.isMainMessage ? highlightText(contextMsg.content || '', convSearchQuery) : (contextMsg.content || '内容为空')"
                 ></div>
               </div>
             </div>
@@ -183,14 +212,15 @@
             <div class="webpage-header">
               <div class="webpage-icon">{{ getWebpageIcon(webpage.type) }}</div>
               <div class="webpage-info">
-                <div class="webpage-title">{{ webpage.title }}</div>
-                <div class="webpage-url">{{ webpage.url }}</div>
+                <div class="webpage-title">{{ webpage.title || '未知标题' }}</div>
+                <div class="webpage-url">{{ webpage.url || '#' }}</div>
                 <div class="webpage-meta">
-                  <span>访问时间：{{ webpage.visitTime }}</span>
+                  <span>访问时间：{{ webpage.visitTime || '未知时间' }}</span>
+                  <span v-if="webpage.relevanceScore">相关性：{{ (webpage.relevanceScore * 100).toFixed(0) }}%</span>
                 </div>
               </div>
             </div>
-            <div class="webpage-content">{{ webpage.summary }}</div>
+            <div class="webpage-content">{{ webpage.summary || '暂无摘要' }}</div>
             <div v-if="webpage.tags" class="webpage-tags">
               <span v-for="tag in webpage.tags" :key="tag" class="webpage-tag">{{ tag }}</span>
             </div>
@@ -224,6 +254,7 @@ const expandedConversations = ref(new Set());
 const tabs = [
   { key: 'projects', label: '🚀 相关项目' },
   { key: 'resources', label: '📚 相关资源' },
+  { key: 'tickets', label: '🎯 相关Tickets' },
   { key: 'conversations', label: '💬 聊天记录' },
   { key: 'webpages', label: '🌐 网页记录' }
 ];
@@ -308,6 +339,15 @@ const getWebpageIcon = (type: string) => {
     blog: '📰'
   };
   return icons[type] || '🌐';
+};
+
+const getPriorityStyle = (priority: string) => {
+  const styles = {
+    '高': { background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444' },
+    '中': { background: 'rgba(251, 191, 36, 0.2)', color: '#f59e0b' },
+    '低': { background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e' }
+  };
+  return styles[priority] || styles['中'];
 };
 
 watch(topicId, (newId) => {

@@ -97,30 +97,43 @@ export class CloudStorage {
   }
 
   /**
-   * 向量搜索
+   * 增强向量搜索 - 支持多种搜索模式和返回格式
    */
   async searchByVector(
     query: string,
     type?: string,
     options: VectorSearchOptions = {}
-  ): Promise<QueryResult<MemoryEntity>> {
+  ): Promise<QueryResult<any>> {
     this.ensureInitialized();
     
     const startTime = Date.now();
-    const { limit = 20, threshold = 0.7, nResults = 10 } = options;
+    const { 
+      limit = 20, 
+      threshold = 0.7, 
+      nResults = 20,
+      collections = ['entities', 'messages', 'webpages'],
+      returnType = 'entities',
+      sortBy = 'relevance',
+      sortOrder = 'desc',
+      timeRange,
+      minRelevanceScore
+    } = options;
 
     try {
       // 生成查询向量
       const queryEmbedding = await getEmbeddingViaOffscreen(query);
       
       // 确定搜索的集合
-      const collectionsToSearch = type ? [`${this.username}-graph-entities`] : [
-        `${this.username}-graph-entities`,
-        `${this.username}-messages`,
-        `${this.username}-webpages`
-      ];
+      const collectionMap = {
+        'entities': `${this.username}-graph-entities`,
+        'messages': `${this.username}-messages`, 
+        'webpages': `${this.username}-webpages`
+      };
+      
+      const collectionsToSearch = type ? [`${this.username}-graph-entities`] : 
+        collections.map(c => collectionMap[c]).filter(Boolean);
 
-      const allResults: MemoryEntity[] = [];
+      const allResults: any[] = [];
 
       // 在多个集合中搜索
       for (const collectionName of collectionsToSearch) {
@@ -128,25 +141,59 @@ export class CloudStorage {
         if (!collection) continue;
 
         try {
-          const searchResults = await collection.query({
+          // 构建查询参数
+          const queryParams: any = {
             queryEmbeddings: [queryEmbedding],
             nResults,
             include: ['metadatas', 'documents', 'distances']
-          });
+          };
+
+          // 添加时间范围过滤（仅对 messages 和 webpages 有效）
+          if (timeRange && (collectionName.includes('messages') || collectionName.includes('webpages'))) {
+            const timeField = collectionName.includes('messages') ? 'timestamp' : 'extractedAt';
+            queryParams.where = {
+              [timeField]: {
+                $gte: timeRange.start,
+                $lte: timeRange.end
+              }
+            };
+          }
+          
+          const searchResults = await collection.query(queryParams);
 
           // 处理搜索结果
           if (searchResults.metadatas?.[0]) {
             for (let i = 0; i < searchResults.metadatas[0].length; i++) {
               const metadata = searchResults.metadatas[0][i];
               const distance = searchResults.distances?.[0]?.[i] || 1;
+              const relevanceScore = 1 / (1 + distance); // 转换为0-1的相关度评分
               
               // 过滤低相关性结果
               if (distance > (1 - threshold)) continue;
+              if (minRelevanceScore && relevanceScore < minRelevanceScore) continue;
               
-              // 根据集合类型构建实体
-              const entity = await this.buildEntityFromMetadata(metadata, collectionName);
-              if (entity && (!type || entity.type === type)) {
-                allResults.push(entity);
+              if (returnType === 'entities') {
+                // 返回实体格式
+                const entity = await this.buildEntityFromMetadata(metadata, collectionName);
+                if (entity && (!type || entity.type === type)) {
+                  // 添加相关度评分
+                  (entity as any).relevanceScore = relevanceScore;
+                  allResults.push(entity);
+                }
+              } else {
+                // 返回原始数据格式（用于消息查询）
+                const processedMetadata = this.deserializeMetadata(metadata || {});
+                allResults.push({
+                  id: searchResults.ids?.[0]?.[i] || `result_${i}`,
+                  messageId: searchResults.ids?.[0]?.[i],
+                  content: searchResults.documents?.[0]?.[i] || '',
+                  source: metadata?.source || 'unknown',
+                  timestamp: metadata?.timestamp || metadata?.extractedAt || Date.now(),
+                  relevanceScore,
+                  distance,
+                  collectionType: this.getCollectionType(collectionName),
+                  metadata: processedMetadata
+                });
               }
             }
           }
@@ -155,13 +202,39 @@ export class CloudStorage {
         }
       }
 
-      // 排序和分页
-      const sortedResults = allResults
-        .sort((a, b) => b.importance - a.importance)
-        .slice(0, limit);
+      // 应用排序
+      allResults.sort((a, b) => {
+        let valueA: number, valueB: number;
+        
+        switch (sortBy) {
+          case 'relevance':
+            valueA = a.relevanceScore || 0;
+            valueB = b.relevanceScore || 0;
+            break;
+          case 'time':
+            valueA = a.timestamp || a.updated || a.created || 0;
+            valueB = b.timestamp || b.updated || b.created || 0;
+            break;
+          case 'importance':
+            valueA = a.importance || 0;
+            valueB = b.importance || 0;
+            break;
+          default:
+            // 默认按相关度排序
+            valueA = a.relevanceScore || 0;
+            valueB = b.relevanceScore || 0;
+        }
+        
+        return sortOrder === 'desc' ? valueB - valueA : valueA - valueB;
+      });
+
+      // 分页
+      const paginatedResults = allResults.slice(0, limit);
+      
+      console.log(`🔍 向量搜索完成: "${query}" -> ${paginatedResults.length}/${allResults.length} 条结果 (${returnType}, 排序:${sortBy})`);
 
       return {
-        data: sortedResults,
+        data: paginatedResults,
         total: allResults.length,
         source: 'cloud',
         cached: false,
@@ -178,6 +251,16 @@ export class CloudStorage {
         queryTime: Date.now() - startTime
       };
     }
+  }
+
+  /**
+   * 获取集合类型
+   */
+  private getCollectionType(collectionName: string): string {
+    if (collectionName.includes('messages')) return 'message';
+    if (collectionName.includes('webpages')) return 'webpage';
+    if (collectionName.includes('entities')) return 'entity';
+    return 'unknown';
   }
 
   /**
@@ -236,11 +319,14 @@ export class CloudStorage {
 
       const embedding = await getEmbeddingViaOffscreen(messageData.content);
 
+      // 转换复杂元数据为 ChromaDB 兼容格式
+      const chromaMetadata = this.convertMetadataForChroma(messageData.metadata);
+
       await collection.add({
         ids: [messageData.id],
         documents: [messageData.content],
         embeddings: [embedding],
-        metadatas: [messageData.metadata]
+        metadatas: [chromaMetadata]
       });
 
       return true;
@@ -435,6 +521,69 @@ export class CloudStorage {
       console.error('获取时间轴数据失败:', error);
       return [];
     }
+  }
+
+  /**
+   * 反序列化 metadata 中的对象字段
+   */
+  private deserializeMetadata(metadata: any): any {
+    const processed = { ...metadata };
+    
+    try {
+      // 反序列化 contextMessages 字段
+      if (processed.contextMessages && typeof processed.contextMessages === 'string') {
+        processed.contextMessages = JSON.parse(processed.contextMessages);
+      }
+    } catch (error) {
+      // 忽略解析错误
+    }
+      
+    try {
+      // 反序列化 matchedRules 字段
+      if (processed.matchedRules && typeof processed.matchedRules === 'string') {
+        processed.matchedRules = JSON.parse(processed.matchedRules);
+      }
+    } catch (error) {
+      // 忽略解析错误
+    }
+      
+    try {
+      // 反序列化 entities 字段
+      if (processed.entities && typeof processed.entities === 'string') {
+        processed.entities = JSON.parse(processed.entities);
+      }
+    } catch (error) {
+      // 忽略解析错误
+    }
+      
+    try {
+      // 反序列化 relationships 字段
+      if (processed.relationships && typeof processed.relationships === 'string') {
+        processed.relationships = JSON.parse(processed.relationships);
+      }
+    } catch (error) {
+      // 忽略解析错误
+    }
+      
+    try {
+      // 反序列化 metadata 嵌套字段
+      if (processed.metadata && typeof processed.metadata === 'string') {
+        processed.metadata = JSON.parse(processed.metadata);
+      }
+    } catch (error) {
+      // 忽略解析错误
+    }
+      
+    try {
+      // 反序列化 actions 字段
+      if (processed.actions && typeof processed.actions === 'string') {
+        processed.actions = JSON.parse(processed.actions);
+      }
+    } catch (error) {
+      // 忽略解析错误
+    }
+    
+    return processed;
   }
 
   /**
@@ -1046,6 +1195,41 @@ export class CloudStorage {
     if (!entityId) return 'Unknown';
     const parts = entityId.split('_');
     return parts[0] || 'Unknown';
+  }
+
+  /**
+   * 将复杂元数据转换为 ChromaDB 兼容的格式
+   * ChromaDB 只支持 string, number, boolean, null 类型
+   */
+  private convertMetadataForChroma(metadata: any): Record<string, string | number | boolean | null> {
+    const converted: Record<string, string | number | boolean | null> = {};
+    
+    if (!metadata) return converted;
+
+    // 递归处理函数
+    const processValue = (key: string, value: any): void => {
+      if (value === null || value === undefined) {
+        converted[key] = null;
+      } else if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        converted[key] = value;
+      } else if (Array.isArray(value)) {
+        // 数组转换为JSON字符串
+        converted[key] = JSON.stringify(value);
+      } else if (typeof value === 'object') {
+        // 对象转换为JSON字符串
+        converted[key] = JSON.stringify(value);
+      } else {
+        // 其他类型转换为字符串
+        converted[key] = String(value);
+      }
+    };
+
+    // 处理顶级字段
+    for (const [key, value] of Object.entries(metadata)) {
+      processValue(key, value);
+    }
+
+    return converted;
   }
 
   private ensureInitialized(): void {

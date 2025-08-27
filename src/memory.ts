@@ -69,10 +69,15 @@ export interface QueryOptions {
 }
 
 // 向量搜索选项
-export interface VectorSearchOptions extends QueryOptions {
+export interface VectorSearchOptions extends Omit<QueryOptions, 'sortBy'> {
   threshold?: number;
   includeMetadata?: boolean;
   nResults?: number;
+  collections?: ('entities' | 'messages' | 'webpages')[]; // 指定搜索的集合
+  returnType?: 'entities' | 'raw';  // 返回类型：实体对象或原始数据
+  sortBy?: 'relevance' | 'time' | 'importance'; // 向量搜索特定的排序方式
+  timeRange?: { start: number; end: number }; // 时间范围过滤
+  minRelevanceScore?: number; // 最低相关度阈值
 }
 
 // 实体类型信息接口
@@ -305,8 +310,13 @@ export class MemorySystem {
     this.ensureInitialized();
     
     if (query.length > 2) {
-      // 使用向量搜索
-      return this.searchByVector(query, entityType, options);
+      // 使用向量搜索 - 确保返回实体格式
+      const vectorOptions: VectorSearchOptions = {
+        ...options,
+        returnType: 'entities',  // 确保返回实体格式
+        sortBy: 'relevance'      // 默认按相关度排序
+      };
+      return this.searchByVector(query, entityType, vectorOptions);
     } else {
       // 使用普通查询
       return this.queryEntities(entityType, query, options);
@@ -338,6 +348,39 @@ export class MemorySystem {
   }>> {
     this.ensureInitialized();
     return this.cloudStorage.getTimeline(limit);
+  }
+
+  /**
+   * 查询实体相关的详细消息（包含contextMessages等完整数据）
+   */
+  async queryEntityMessages(entityName: string, options?: {
+    limit?: number;
+    timeRange?: { start: number; end: number };
+    sortBy?: 'relevance' | 'time';
+    sortOrder?: 'desc' | 'asc';
+    minRelevanceScore?: number;
+  }): Promise<Array<{
+    messageId: string;
+    content: string;
+    source: string;
+    timestamp: number;
+    relevanceScore: number;
+    metadata?: any;
+  }>> {
+    this.ensureInitialized();
+    
+    // 使用增强的 searchByVector 方法，专门搜索消息并返回原始数据格式
+    const result = await this.cloudStorage.searchByVector(entityName, undefined, {
+      collections: ['messages'], // 只搜索消息集合
+      returnType: 'raw',         // 返回原始数据格式
+      limit: options?.limit,
+      sortBy: options?.sortBy,
+      sortOrder: options?.sortOrder,
+      timeRange: options?.timeRange,
+      minRelevanceScore: options?.minRelevanceScore
+    });
+    
+    return result.data || [];
   }
 
   // ==================== 存储接口 ====================
