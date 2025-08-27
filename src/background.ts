@@ -121,14 +121,9 @@ chrome.runtime.onInstalled.addListener(async () => {
                 userinfo = await getUserinfoFromRCpage();
             }
             // 如果获取不到用户信息，则从 jira.ringcentral.com 获取用户信息
-            if (!userinfo) {
-                const jiraTab = await findJiraTab();
-                if (jiraTab && jiraTab.id) {
-                    await chrome.tabs.reload(jiraTab.id);
-                    console.log('Jira tab refreshed');
-                    
-                    userinfo = await getUserinfoFromJiraPage();
-                }
+            const cacheUserinfo = await chrome.storage.local.get(['userinfo']);
+            if (!userinfo && !cacheUserinfo.userinfo) {
+                userinfo = await getUserinfoFromJiraPage();
             }
         } catch (error) {
             console.error('Error refreshing RingCentral tab:', error);

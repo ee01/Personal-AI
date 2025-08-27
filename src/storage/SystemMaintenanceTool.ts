@@ -4,7 +4,7 @@
  */
 
 import { CloudStorage } from './CloudStorage';
-import { LocalCache } from './LocalCache';
+import { LocalStorage } from './LocalStorage';
 import { CacheStrategy } from './CacheStrategy';
 
 export interface SystemHealthStatus {
@@ -48,7 +48,7 @@ export interface MaintenanceResult {
  */
 export class SystemMaintenanceTool {
   private cloudStorage: CloudStorage;
-  private localCache: LocalCache;
+  private localStorage: LocalStorage;
   private cacheStrategy: CacheStrategy;
   
   private isMonitoringActive = false;
@@ -59,9 +59,9 @@ export class SystemMaintenanceTool {
   private readonly MAINTENANCE_INTERVAL = 6 * 60 * 60 * 1000; // 6小时
   private readonly CACHE_CLEANUP_THRESHOLD = 1000; // 实体数量阈值
 
-  constructor(cloudStorage: CloudStorage, localCache: LocalCache, cacheStrategy: CacheStrategy) {
+  constructor(cloudStorage: CloudStorage, localStorage: LocalStorage, cacheStrategy: CacheStrategy) {
     this.cloudStorage = cloudStorage;
-    this.localCache = localCache;
+    this.localStorage = localStorage;
     this.cacheStrategy = cacheStrategy;
   }
 
@@ -198,10 +198,10 @@ export class SystemMaintenanceTool {
   private async checkLocalCacheHealth(status: SystemHealthStatus): Promise<void> {
     try {
       status.localCache.available = true;
-      status.localCache.cacheSize = await this.localCache.getCacheSize();
+      status.localCache.cacheSize = await this.localStorage.getCacheSize();
       
       // 获取实体统计
-      const entityStats = await this.localCache.getEntityStatistics();
+      const entityStats = await this.localStorage.getEntityStatistics();
       status.localCache.entityCount = entityStats.totalEntities;
       status.localCache.relationshipCount = entityStats.totalRelationships;
 
@@ -318,7 +318,7 @@ export class SystemMaintenanceTool {
 
       // 1. 清理过期缓存
       try {
-        await this.localCache.clearExpiredCache();
+        await this.localStorage.clearExpiredCache();
         result.tasksCompleted.push('清理过期缓存');
       } catch (error) {
         result.tasksFailed.push('清理过期缓存失败');
@@ -338,7 +338,7 @@ export class SystemMaintenanceTool {
       try {
         const lastBackup = await this.getLastBackupTime();
         if (Date.now() - lastBackup > 24 * 60 * 60 * 1000) {
-          const relationshipData = await this.localCache.getRelationshipBackupData();
+          const relationshipData = await this.localStorage.getRelationshipBackupData();
           if (relationshipData) {
             const backupSuccess = await this.cloudStorage.backupRelationships(relationshipData);
             if (backupSuccess) {
@@ -354,7 +354,7 @@ export class SystemMaintenanceTool {
       }
 
       // 4. 计算释放的空间
-      const finalCacheSize = await this.localCache.getCacheSize();
+      const finalCacheSize = await this.localStorage.getCacheSize();
       result.freedSpace = Math.max(0, finalCacheSize);
 
       result.success = result.tasksFailed.length === 0;
@@ -404,11 +404,11 @@ export class SystemMaintenanceTool {
     try {
       console.log('🔧 开始完整维护...');
 
-      const initialCacheSize = await this.localCache.getCacheSize();
+      const initialCacheSize = await this.localStorage.getCacheSize();
 
       // 1. 清理过期缓存
       try {
-        await this.localCache.clearExpiredCache();
+        await this.localStorage.clearExpiredCache();
         result.tasksCompleted.push('清理过期缓存');
       } catch (error) {
         result.tasksFailed.push('清理过期缓存失败');
@@ -427,7 +427,7 @@ export class SystemMaintenanceTool {
       // 3. 备份数据（如果请求）
       if (opts.backupData) {
         try {
-          const relationshipData = await this.localCache.getRelationshipBackupData();
+          const relationshipData = await this.localStorage.getRelationshipBackupData();
           if (relationshipData) {
             const backupSuccess = await this.cloudStorage.backupRelationships(relationshipData);
             if (backupSuccess) {
@@ -442,7 +442,7 @@ export class SystemMaintenanceTool {
       }
 
       // 4. 计算释放的空间
-      const finalCacheSize = await this.localCache.getCacheSize();
+      const finalCacheSize = await this.localStorage.getCacheSize();
       result.freedSpace = initialCacheSize - finalCacheSize;
 
       result.success = result.tasksFailed.length === 0;
@@ -518,8 +518,8 @@ export class SystemMaintenanceTool {
 // 创建工厂函数
 export function createSystemMaintenanceTool(
   cloudStorage: CloudStorage,
-  localCache: LocalCache,
+  localStorage: LocalStorage,
   cacheStrategy: CacheStrategy
 ): SystemMaintenanceTool {
-  return new SystemMaintenanceTool(cloudStorage, localCache, cacheStrategy);
+  return new SystemMaintenanceTool(cloudStorage, localStorage, cacheStrategy);
 }

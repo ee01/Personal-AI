@@ -4,8 +4,9 @@
  */
 
 import { CloudStorage } from './CloudStorage';
-import { LocalCache } from './LocalCache';
-import { MemoryEntity, QueryResult, StoreResult, QueryOptions } from '../memory';
+import { LocalStorage } from './LocalStorage';
+import { MemoryEntity, QueryResult, StoreResult, QueryOptions, VectorSearchOptions } from '../memory';
+import { v4 as uuidv4 } from 'uuid';
 
 // 策略配置
 interface StrategyConfig {
@@ -41,7 +42,7 @@ interface PerformanceMetrics {
  */
 export class CacheStrategy {
   private cloudStorage: CloudStorage;
-  private localCache: LocalCache;
+  private localStorage: LocalStorage;
   private config: StrategyConfig;
   private metrics: PerformanceMetrics;
   private alarmListenerAdded: boolean = false;
@@ -49,9 +50,9 @@ export class CacheStrategy {
   private backgroundSyncStarted = false;
   private isSyncing = false;
 
-  constructor(cloudStorage: CloudStorage, localCache: LocalCache) {
+  constructor(cloudStorage: CloudStorage, localStorage: LocalStorage) {
     this.cloudStorage = cloudStorage;
-    this.localCache = localCache;
+    this.localStorage = localStorage;
     
     this.config = {
       preferLocalForEntityQueries: true,
@@ -117,7 +118,10 @@ export class CacheStrategy {
     try {
       // 如果有搜索词且长度大于2，考虑使用向量搜索
       if (searchTerm && searchTerm.length > 2) {
-        return await this.handleVectorSearch(searchTerm, type, options);
+        const cloudResult = await this.cloudStorage.searchByVector(searchTerm, type, options as VectorSearchOptions);
+        // 缓存结果到本地
+        await this.cacheCloudResults(cloudResult.data);
+        return cloudResult;
       }
 
       // 普通实体查询，先尝试本地
@@ -125,7 +129,7 @@ export class CacheStrategy {
         const localResult = await this.queryFromLocal(type, searchTerm, options);
         
         // 如果本地结果充足，直接返回
-        if (localResult.data.length >= this.config.localSearchThreshold || !options.useCache) {
+        if (localResult.data.length >= this.config.localSearchThreshold || options.useCache) {
           this.updateMetrics('local', Date.now() - startTime);
           return localResult;
         }
@@ -180,18 +184,19 @@ export class CacheStrategy {
 
     try {
       // 先从本地获取
-      const localEntity = await this.localCache.getEntity(entityId);
+      const localEntity = await this.localStorage.getEntity(entityId);
       if (localEntity) {
         this.metrics.localHits++;
         return localEntity;
       }
 
       // 本地没有，从云端获取
-      const cloudResult = await this.cloudStorage.searchByVector(`id:${entityId}`, undefined, { limit: 1 });
+      const vectorOptions: VectorSearchOptions = { limit: 1 };
+      const cloudResult = await this.cloudStorage.searchByVector(`id:${entityId}`, undefined, vectorOptions);
       if (cloudResult.data.length > 0) {
         const entity = cloudResult.data[0];
         // 缓存到本地
-        await this.localCache.cacheEntity(entity);
+        await this.localStorage.cacheEntity(entity);
         this.metrics.cloudHits++;
         return entity;
       }
@@ -213,7 +218,7 @@ export class CacheStrategy {
     this.ensureInitialized();
 
     const startTime = Date.now();
-    const entityId = `entity_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const entityId = this.generateEntityId(entity.name);
     
     const result: StoreResult = {
       success: false,
@@ -256,7 +261,7 @@ export class CacheStrategy {
 
       // 2. 更新本地缓存
       try {
-        await this.localCache.cacheEntity(fullEntity);
+        await this.localStorage.cacheEntity(fullEntity);
         result.localCached = true;
       } catch (error) {
         console.warn('本地缓存失败:', error);
@@ -330,7 +335,7 @@ export class CacheStrategy {
             );
             
             // 更新相关实体的最近数据缓存
-            await this.localCache.updateRecentData(
+            await this.localStorage.updateRecentData(
               entityResult.entityId,
               'conversation',
               {
@@ -395,7 +400,7 @@ export class CacheStrategy {
             result.relationshipsCreated++;
             
             // 更新相关实体的最近数据缓存
-            await this.localCache.updateRecentData(
+            await this.localStorage.updateRecentData(
               entityResult.entityId,
               'webpage',
               {
@@ -453,10 +458,10 @@ export class CacheStrategy {
       result.cloudStored = cloudSuccess;
 
       // 2. 更新本地缓存
-      const localEntity = await this.localCache.getEntity(entityId);
+      const localEntity = await this.localStorage.getEntity(entityId);
       if (localEntity) {
         const updatedEntity = { ...localEntity, ...updatedData };
-        await this.localCache.cacheEntity(updatedEntity);
+        await this.localStorage.cacheEntity(updatedEntity);
         result.localCached = true;
       }
 
@@ -647,7 +652,7 @@ export class CacheStrategy {
       };
 
       // 存储关系到本地缓存
-      await this.localCache.storeRelationship(relationship);
+      await this.localStorage.storeRelationship(relationship);
       
       console.log(`✅ 创建实体-消息关系: ${entityId} -> ${messageId}`);
     } catch (error) {
@@ -726,7 +731,7 @@ export class CacheStrategy {
           typeToEntities: [] as any[]
         };
         
-        await this.localCache.restoreRelationshipData(relationshipData);
+        await this.localStorage.restoreRelationshipData(relationshipData);
       }
 
       console.log(`🔄 从消息数据重建了 ${rebuiltRelationships} 个关系`);
@@ -763,6 +768,63 @@ export class CacheStrategy {
   }
 
   /**
+   * 检查并执行新设备初始同步
+   */
+  async performInitialSyncIfNeeded(): Promise<{
+    isNewDevice: boolean;
+    syncPerformed: boolean;
+    entitiesDownloaded: number;
+    relationshipsRestored: number;
+  }> {
+    const result = {
+      isNewDevice: false,
+      syncPerformed: false,
+      entitiesDownloaded: 0,
+      relationshipsRestored: 0
+    };
+
+    try {
+      // 检查是否是新设备
+      const lastSyncData = await chrome.storage.local.get(['cache_last_sync_time', 'cache_device_initialized']);
+      const isNewDevice = !lastSyncData.cache_device_initialized;
+      result.isNewDevice = isNewDevice;
+
+      if (isNewDevice) {
+        console.log('🆕 检测到新设备，开始初始同步...');
+        
+        // 从云端拉取实体
+        const {data: cloudEntities} = await this.cloudStorage.queryEntities();
+        result.entitiesDownloaded = cloudEntities.length;
+        
+        if (cloudEntities.length > 0) {
+          await this.localStorage.batchCacheEntities(cloudEntities);
+        }
+
+        // 恢复关系数据
+        const relationshipData = await this.cloudStorage.restoreRelationships();
+        if (relationshipData) {
+          await this.localStorage.restoreRelationshipData(relationshipData);
+          result.relationshipsRestored = relationshipData.relationships.length;
+        }
+
+        // 标记设备已初始化
+        await chrome.storage.local.set({
+          cache_device_initialized: true,
+          cache_last_sync_time: Date.now()
+        });
+
+        result.syncPerformed = true;
+        console.log(`✅ 新设备初始同步完成: ${result.entitiesDownloaded} 个实体, ${result.relationshipsRestored} 个关系`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error('新设备初始同步失败:', error);
+      return result;
+    }
+  }
+
+  /**
    * 同步缓存
    */
   async syncCache(): Promise<void> {
@@ -781,7 +843,7 @@ export class CacheStrategy {
       await this.performCloudToLocalSync();
 
       // 清理过期缓存
-      await this.localCache.clearExpiredCache();
+      await this.localStorage.clearExpiredCache();
 
       // 更新最后同步时间
       await chrome.storage.local.set({
@@ -815,7 +877,7 @@ export class CacheStrategy {
       let recentDataUpdated = 0;
 
       // 1. 从云端拉取所有实体
-      const cloudEntities = await this.cloudStorage.getAllEntities();
+      const {data: cloudEntities} = await this.cloudStorage.queryEntities();
       
       // 2. 批量同步云端实体到本地
       const cloudBatches = this.chunkArray(cloudEntities, 20); // 每批最多20个
@@ -823,10 +885,10 @@ export class CacheStrategy {
       
       for (const batch of cloudBatches) {
         for (const entity of batch) {
-          const localEntity = await this.localCache.getEntity(entity.id);
+          const localEntity = await this.localStorage.getEntity(entity.id);
           if (!localEntity || localEntity.updated < entity.updated) {
             // 🔄 缓存实体到本地
-            await this.localCache.cacheEntity(entity);
+            await this.localStorage.cacheEntity(entity);
             syncedEntities++;
             entitiesToUpdate.push(entity);
           }
@@ -844,7 +906,7 @@ export class CacheStrategy {
       // 4. 基于同步的关系数据，批量更新最近数据缓存
       if (entitiesToUpdate.length > 0) {
         console.log(`🔗 开始基于关系数据更新最近数据缓存...`);
-        const recentDataCount = await this.localCache.batchUpdateRecentDataCacheFromRelations(entitiesToUpdate);
+        const recentDataCount = await this.localStorage.batchUpdateRecentDataCacheFromRelations(entitiesToUpdate);
         recentDataUpdated += recentDataCount;
       }
 
@@ -869,7 +931,7 @@ export class CacheStrategy {
       
       if (relationshipData) {
         // 将关系数据保存到本地
-        await this.localCache.restoreRelationshipData(relationshipData);
+        await this.localStorage.restoreRelationshipData(relationshipData);
         console.log(`✅ 从云端恢复了 ${relationshipData.relationships.length} 个关系到本地缓存`);
       } else {
         // 如果云端没有关系备份，尝试从消息重建
@@ -914,18 +976,80 @@ export class CacheStrategy {
 
   // ==================== 私有方法 ====================
 
-  private async handleVectorSearch(
-    searchTerm: string,
-    type?: string,
-    options: QueryOptions = {}
-  ): Promise<QueryResult<MemoryEntity>> {
-    // 向量搜索直接查询云端
-    const cloudResult = await this.cloudStorage.searchByVector(searchTerm, type, options);
-    
-    // 缓存结果到本地
-    await this.cacheCloudResults(cloudResult.data);
-    
-    return cloudResult;
+  /**
+   * 生成基于实体名称和UUID的实体ID
+   */
+  private generateEntityId(entityName: string): string {
+    // 清理和转换名称
+    const cleanName = this.sanitizeEntityName(entityName);
+    const uuid = uuidv4().substring(0, 8); // 取UUID的前8位
+    return `${cleanName}_${uuid}`;
+  }
+
+  /**
+   * 清理实体名称，处理中文和特殊字符
+   */
+  private sanitizeEntityName(name: string): string {
+    if (!name || name.trim() === '') {
+      return 'entity';
+    }
+
+    // 简单的中文转拼音映射（部分常用字符）
+    const chineseToPinyin: Record<string, string> = {
+      '项目': 'xiangmu',
+      '文档': 'wendang',
+      '人员': 'renyuan',
+      '主题': 'zhuti',
+      '任务': 'renwu',
+      '团队': 'tuandui',
+      '公司': 'gongsi',
+      '系统': 'xitong',
+      '数据': 'shuju',
+      '功能': 'gongneng',
+      '需求': 'xuqiu',
+      '设计': 'sheji',
+      '开发': 'kaifa',
+      '测试': 'ceshi',
+      '部署': 'bushu',
+      '维护': 'weihu',
+      '管理': 'guanli',
+      '分析': 'fenxi',
+      '报告': 'baogao',
+      '会议': 'huiyi'
+    };
+
+    let cleanName = name.trim();
+
+    // 替换中文词汇为拼音
+    for (const [chinese, pinyin] of Object.entries(chineseToPinyin)) {
+      cleanName = cleanName.replace(new RegExp(chinese, 'g'), pinyin);
+    }
+
+    // 移除其他中文字符（通过Unicode范围）
+    cleanName = cleanName.replace(/[\u4e00-\u9fff]/g, '');
+
+    // 只保留字母、数字和连字符
+    cleanName = cleanName.replace(/[^a-zA-Z0-9\-_]/g, '');
+
+    // 移除多余的连字符和下划线
+    cleanName = cleanName.replace(/[-_]+/g, '_');
+
+    // 移除开头和结尾的连字符和下划线
+    cleanName = cleanName.replace(/^[-_]+|[-_]+$/g, '');
+
+    // 限制长度并确保不为空
+    if (cleanName.length === 0) {
+      cleanName = 'entity';
+    } else if (cleanName.length > 20) {
+      cleanName = cleanName.substring(0, 20);
+    }
+
+    // 确保以字母开头
+    if (!/^[a-zA-Z]/.test(cleanName)) {
+      cleanName = 'entity_' + cleanName;
+    }
+
+    return cleanName.toLowerCase();
   }
 
   private async queryFromLocal(
@@ -934,9 +1058,9 @@ export class CacheStrategy {
     options: QueryOptions = {}
   ): Promise<QueryResult<MemoryEntity>> {
     if (type) {
-      return this.localCache.queryEntitiesByType(type, options);
+      return this.localStorage.queryEntitiesByType(type, options);
     } else if (searchTerm) {
-      return this.localCache.searchEntities(searchTerm, type, options);
+      return this.localStorage.searchEntities(searchTerm, type, options);
     } else {
       // 返回所有实体（分页）
       return {
@@ -954,18 +1078,23 @@ export class CacheStrategy {
     searchTerm?: string,
     options: QueryOptions = {}
   ): Promise<QueryResult<MemoryEntity>> {
-    if (searchTerm) {
-      return this.cloudStorage.searchByVector(searchTerm, type, options);
-    } else {
-      // 云端没有按类型的直接查询接口，返回空结果
-      return {
-        data: [],
-        total: 0,
-        source: 'cloud',
-        cached: false,
-        queryTime: 0
+    // 如果有搜索词且长度大于2，使用向量搜索获得更好的语义匹配
+    if (searchTerm && searchTerm.length > 2 && !type) {
+      // 转换为向量搜索选项
+      const vectorOptions: VectorSearchOptions = {
+        limit: options.limit,
+        offset: options.offset,
+        useCache: options.useCache,
+        includeCounts: options.includeCounts,
+        sortBy: options.sortBy === 'relevance' ? 'relevance' : 
+                options.sortBy === 'importance' ? 'importance' : 'relevance',
+        sortOrder: options.sortOrder
       };
+      return this.cloudStorage.searchByVector(searchTerm, type, vectorOptions);
     }
+    
+    // 使用新的云端实体查询接口，支持按type过滤
+    return this.cloudStorage.queryEntities(type, searchTerm, options);
   }
 
   private mergeQueryResults(
@@ -1004,7 +1133,7 @@ export class CacheStrategy {
   private async cacheCloudResults(entities: MemoryEntity[]): Promise<void> {
     try {
       if (entities.length > 0) {
-        await this.localCache.batchCacheEntities(entities);
+        await this.localStorage.batchCacheEntities(entities);
       }
     } catch (error) {
       console.error('缓存云端结果失败:', error);

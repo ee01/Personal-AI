@@ -171,7 +171,7 @@ async function handleGetTopicDetail(request: any): Promise<any> {
         }
 
         // 获取相关项目（查询 Project 类型实体）
-        const projectResults = await memorySystem.queryEntities('Project', undefined, { limit: 3 });
+        const projectResults = await memorySystem.queryEntities('Project');
         const relatedProjects = projectResults.data.map((project: any) => ({
             id: project.id,
             name: project.name || '未知项目',
@@ -180,7 +180,7 @@ async function handleGetTopicDetail(request: any): Promise<any> {
         }));
 
         // 获取相关资源（查询 Document 类型实体）
-        const documentResults = await memorySystem.queryEntities('Document', undefined, { limit: 3 });
+        const documentResults = await memorySystem.queryEntities('Document');
         const relatedResources = documentResults.data.map((doc: any) => ({
             id: doc.id,
             name: doc.name || '文档资源',

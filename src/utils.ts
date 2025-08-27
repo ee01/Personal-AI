@@ -178,6 +178,6 @@ export function getDefaultEnvConfig(): EnvConfigType {
 }
 
 export async function getUserInfo() {
-  let { userinfo } = await chrome.storage.local.get(['userinfo'])
+  const { userinfo } = await chrome.storage.local.get(['userinfo'])
   return userinfo;
 }

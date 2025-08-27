@@ -6,7 +6,7 @@
 import { ChromaClient, Collection, EmbeddingFunction } from 'chromadb';
 import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
-import { MemoryEntity, QueryResult, VectorSearchOptions } from '../memory';
+import { MemoryEntity, QueryResult, VectorSearchOptions, QueryOptions } from '../memory';
 // GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
 
@@ -109,7 +109,6 @@ export class CloudStorage {
     const startTime = Date.now();
     const { 
       limit = 20, 
-      threshold = 0.7, 
       nResults = 20,
       collections = ['entities', 'messages', 'webpages'],
       returnType = 'entities',
@@ -169,15 +168,19 @@ export class CloudStorage {
               const relevanceScore = 1 / (1 + distance); // 转换为0-1的相关度评分
               
               // 过滤低相关性结果
-              if (distance > (1 - threshold)) continue;
               if (minRelevanceScore && relevanceScore < minRelevanceScore) continue;
               
               if (returnType === 'entities') {
                 // 返回实体格式
-                const entity = await this.buildEntityFromMetadata(metadata, collectionName);
+                const entity = await this.buildEntity({
+                  metadata,
+                  id: searchResults.ids?.[0]?.[i],
+                  document: searchResults.documents?.[0]?.[i],
+                  distance,
+                  relevanceScore,
+                  collectionName
+                });
                 if (entity && (!type || entity.type === type)) {
-                  // 添加相关度评分
-                  (entity as any).relevanceScore = relevanceScore;
                   allResults.push(entity);
                 }
               } else {
@@ -587,30 +590,6 @@ export class CloudStorage {
   }
 
   /**
-   * 新设备同步检测
-   */
-  async detectNewDevice(): Promise<boolean> {
-    this.ensureInitialized();
-
-    try {
-      // 检查本地是否有同步历史
-      const result = await chrome.storage.local.get('cloud_last_sync_time');
-      const lastSyncTime = result.cloud_last_sync_time || 0;
-      
-      // 如果从未同步过，检查云端是否有数据
-      if (lastSyncTime === 0) {
-        const entityCount = await this.getEntityCount();
-        return entityCount > 0; // 云端有数据但本地没有同步记录 = 新设备
-      }
-      
-      return false;
-    } catch (error) {
-      console.error('新设备检测失败:', error);
-      return false;
-    }
-  }
-
-  /**
    * 获取云端实体数量
    */
   async getEntityCount(): Promise<number> {
@@ -649,7 +628,12 @@ export class CloudStorage {
         // 跳过备份数据
         if (metadata.type === 'graph_backup') return null;
         
-        const entity = await this.buildEntityFromMetadata(metadata, 'graph-entities');
+        const entity = await this.buildEntity({
+          metadata,
+          id: result.ids[0],
+          document: result.documents?.[0],
+          collectionName: 'graph-entities'
+        });
         return entity;
       }
 
@@ -661,14 +645,28 @@ export class CloudStorage {
   }
 
   /**
-   * 获取所有云端实体（用于新设备初始同步）
+   * 查询云端实体（支持按type过滤）
    */
-  async getAllEntities(): Promise<MemoryEntity[]> {
+  async queryEntities(
+    type?: string,
+    searchTerm?: string,
+    options: QueryOptions = {}
+  ): Promise<QueryResult<MemoryEntity>> {
     this.ensureInitialized();
+
+    const startTime = Date.now();
 
     try {
       const collection = this.collections.get(`${this.username}-graph-entities`);
-      if (!collection) return [];
+      if (!collection) {
+        return {
+          data: [],
+          total: 0,
+          source: 'cloud',
+          cached: false,
+          queryTime: Date.now() - startTime
+        };
+      }
 
       const result = await collection.get({
         include: ['metadatas', 'documents']
@@ -682,18 +680,74 @@ export class CloudStorage {
           // 跳过备份数据
           if (metadata.type === 'graph_backup') continue;
           
-          const entity = await this.buildEntityFromMetadata(metadata, 'graph-entities');
+          // 按type过滤
+          if (type && metadata.type !== type) continue;
+          
+          const entity = await this.buildEntity({
+            metadata,
+            id: result.ids[i],
+            document: result.documents?.[i],
+            collectionName: 'graph-entities'
+          });
           if (entity) {
+            // 如果有搜索词，进行简单的文本匹配
+            if (searchTerm) {
+              const searchLower = searchTerm.toLowerCase();
+              const nameMatch = entity.name.toLowerCase().includes(searchLower);
+              const descMatch = entity.description?.toLowerCase().includes(searchLower);
+              const tagMatch = entity.tags?.some(tag => tag.toLowerCase().includes(searchLower));
+              
+              if (!nameMatch && !descMatch && !tagMatch) continue;
+            }
+            
             entities.push(entity);
           }
         }
       }
 
-      console.log(`📥 从云端获取了 ${entities.length} 个实体`);
-      return entities;
+      // 应用排序
+      if (options.sortBy) {
+        entities.sort((a, b) => {
+          const order = options.sortOrder === 'desc' ? -1 : 1;
+          switch (options.sortBy) {
+            case 'name':
+              return order * a.name.localeCompare(b.name);
+            case 'created':
+              return order * (a.created - b.created);
+            case 'updated':
+              return order * (a.updated - b.updated);
+            case 'importance':
+              return order * (a.importance - b.importance);
+            default:
+              return 0;
+          }
+        });
+      }
+
+      // 应用分页
+      const total = entities.length;
+      const offset = options.offset || 0;
+      const limit = options.limit || total;
+      const paginatedEntities = entities.slice(offset, offset + limit);
+
+      console.log(`📥 从云端查询了 ${paginatedEntities.length}/${total} 个实体 (type: ${type || '全部'})`);
+      
+      return {
+        data: paginatedEntities,
+        total: total,
+        source: 'cloud',
+        cached: false,
+        queryTime: Date.now() - startTime
+      };
     } catch (error) {
-      console.error('获取所有实体失败:', error);
-      return [];
+      console.error('查询云端实体失败:', error);
+      return {
+        data: [],
+        total: 0,
+        source: 'cloud',
+        cached: false,
+        queryTime: Date.now() - startTime
+      };
     }
   }
 
@@ -884,39 +938,58 @@ export class CloudStorage {
     }
   }
 
-  private async buildEntityFromMetadata(metadata: any, collectionName: string): Promise<MemoryEntity | null> {
+  private async buildEntity(entityData: {
+    metadata?: any;
+    id?: string;
+    document?: string;
+    distance?: number;
+    relevanceScore?: number;
+    collectionName: string;
+  }): Promise<MemoryEntity | null> {
     try {
+      const { metadata, id, document, distance, relevanceScore, collectionName } = entityData;
+      
       if (collectionName.includes('graph-entities')) {
         return {
-          id: metadata.id || `entity_${Date.now()}`,
+          id,
           type: metadata.type || 'Document',
           name: metadata.name || '未知实体',
-          description: metadata.description,
-          properties: JSON.parse(metadata.properties || '{}'),
+          description: metadata.description || metadata.summary || document,
+          properties: typeof metadata.properties === 'string' ? JSON.parse(metadata.properties || '{}') : (metadata.properties || {}),
           created: metadata.created || Date.now(),
           updated: metadata.updated || Date.now(),
           accessCount: metadata.accessCount || 0,
           lastAccessed: metadata.lastAccessed || Date.now(),
           importance: metadata.importance || 0.5,
-          tags: JSON.parse(metadata.tags || '[]'),
-          status: metadata.status || 'active'
+          tags: typeof metadata.tags === 'string' ? JSON.parse(metadata.tags || '[]') : (metadata.tags || []),
+          status: metadata.status || 'active',
+          // 添加搜索相关信息
+          ...(distance !== undefined && { searchDistance: distance }),
+          ...(relevanceScore !== undefined && { relevanceScore })
         };
       }
 
       // 从其他集合构建虚拟实体
       return {
-        id: `virtual_${Date.now()}_${Math.random()}`,
+        id: id || `virtual_${Date.now()}_${Math.random()}`,
         type: 'Document',
-        name: metadata.title || metadata.summary || '相关内容',
-        description: metadata.summary || '相关内容',
-        properties: metadata,
-        created: metadata.timestamp || metadata.extractedAt || Date.now(),
-        updated: metadata.timestamp || metadata.extractedAt || Date.now(),
-        accessCount: 1,
-        lastAccessed: Date.now(),
-        importance: 0.3,
+        name: metadata.title || metadata.summary || metadata.name || '相关内容',
+        description: metadata.summary || metadata.description || document || '相关内容',
+        properties: {
+          ...metadata,
+          ...(document && { originalDocument: document }),
+          collectionSource: collectionName
+        },
+        created: metadata.timestamp || metadata.extractedAt || metadata.created || Date.now(),
+        updated: metadata.timestamp || metadata.extractedAt || metadata.updated || Date.now(),
+        accessCount: metadata.accessCount || 1,
+        lastAccessed: metadata.lastAccessed || Date.now(),
+        importance: metadata.importance || 0.3,
         tags: metadata.tags || [],
-        status: 'active'
+        status: metadata.status || 'active',
+        // 添加搜索相关信息
+        ...(distance !== undefined && { searchDistance: distance }),
+        ...(relevanceScore !== undefined && { relevanceScore })
       };
     } catch (error) {
       console.error('构建实体失败:', error);

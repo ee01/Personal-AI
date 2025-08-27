@@ -4,7 +4,7 @@
  */
 
 import { CloudStorage } from './storage/CloudStorage';
-import { GraphRelationship, LocalCache } from './storage/LocalCache';
+import { GraphRelationship, LocalStorage } from './storage/LocalStorage';
 import { CacheStrategy } from './storage/CacheStrategy';
 import { EntitySimilarityTool, ProcessedEntity, EntityMergePair } from './storage/EntitySimilarityTool';
 import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSystemMaintenanceTool } from './storage/SystemMaintenanceTool';
@@ -26,6 +26,9 @@ export interface MemoryEntity {
   tags?: string[];
   status?: string;
   avatarUrl?: string;
+  // 搜索相关字段（可选）
+  searchDistance?: number;
+  relevanceScore?: number;
 }
 
 // 查询结果接口
@@ -70,7 +73,6 @@ export interface QueryOptions {
 
 // 向量搜索选项
 export interface VectorSearchOptions extends Omit<QueryOptions, 'sortBy'> {
-  threshold?: number;
   includeMetadata?: boolean;
   nResults?: number;
   collections?: ('entities' | 'messages' | 'webpages')[]; // 指定搜索的集合
@@ -133,7 +135,7 @@ const ENTITY_TYPE_CONFIG: Record<string, { name: string; icon: string; descripti
  */
 export class MemorySystem {
   private cloudStorage: CloudStorage;
-  private localCache: LocalCache;
+  private localStorage: LocalStorage;
   private cacheStrategy: CacheStrategy;
   private entitySimilarityTool: EntitySimilarityTool;
   private systemMaintenanceTool: SystemMaintenanceTool;
@@ -142,12 +144,12 @@ export class MemorySystem {
 
   constructor() {
     this.cloudStorage = new CloudStorage();
-    this.localCache = new LocalCache();
-    this.cacheStrategy = new CacheStrategy(this.cloudStorage, this.localCache);
+    this.localStorage = new LocalStorage();
+    this.cacheStrategy = new CacheStrategy(this.cloudStorage, this.localStorage);
     this.entitySimilarityTool = new EntitySimilarityTool();
     this.systemMaintenanceTool = createSystemMaintenanceTool(
       this.cloudStorage, 
-      this.localCache, 
+      this.localStorage, 
       this.cacheStrategy
     );
   }
@@ -168,7 +170,7 @@ export class MemorySystem {
       // 并行初始化各组件
       const [cloudInit, localInit, strategyInit] = await Promise.all([
         this.cloudStorage.initialize(),
-        this.localCache.initialize(),
+        this.localStorage.initialize(),
         this.cacheStrategy.initialize()
       ]);
 
@@ -234,7 +236,7 @@ export class MemorySystem {
    */
   async getRecentData(entityId: string): Promise<RecentData | null> {
     this.ensureInitialized();
-    return this.localCache.getRecentData(entityId);
+    return this.localStorage.getRecentData(entityId);
   }
 
   /**
@@ -250,7 +252,7 @@ export class MemorySystem {
     topEntitiesByType: Record<string, MemoryEntity[]>;
   }> {
     this.ensureInitialized();
-    return this.localCache.getEntityStatistics();
+    return this.localStorage.getEntityStatistics();
   }
 
   /**
@@ -331,7 +333,7 @@ export class MemorySystem {
     relationships: GraphRelationship[];
   }> {
     this.ensureInitialized();
-    return this.localCache.getRelationshipNetwork(entityId, depth);
+    return this.localStorage.getRelationshipNetwork(entityId, depth);
   }
 
   /**
@@ -502,7 +504,7 @@ export class MemorySystem {
    */
   async updateRecentData(entityId: string, type: 'conversation' | 'resource' | 'project' | 'webpage', data: any): Promise<void> {
     this.ensureInitialized();
-    return this.localCache.updateRecentData(entityId, type, data);
+    return this.localStorage.updateRecentData(entityId, type, data);
   }
 
   /**
@@ -515,7 +517,7 @@ export class MemorySystem {
     webpages: any[];
   }): Promise<void> {
     this.ensureInitialized();
-    return this.localCache.cacheTopicDetails(topicId, details);
+    return this.localStorage.cacheTopicDetails(topicId, details);
   }
 
   /**
@@ -528,7 +530,7 @@ export class MemorySystem {
     webpages: any[];
   } | null> {
     this.ensureInitialized();
-    return this.localCache.getCachedTopicDetails(topicId);
+    return this.localStorage.getCachedTopicDetails(topicId);
   }
 
   /**
@@ -536,7 +538,7 @@ export class MemorySystem {
    */
   async clearExpiredCache(): Promise<void> {
     this.ensureInitialized();
-    return this.localCache.clearExpiredCache();
+    return this.localStorage.clearExpiredCache();
   }
 
   /**
@@ -568,7 +570,7 @@ export class MemorySystem {
     
     try {
       // 获取本地关系数据
-      const relationshipData = await this.localCache.getRelationshipBackupData();
+      const relationshipData = await this.localStorage.getRelationshipBackupData();
       
       if (!relationshipData) {
         console.log('⚠️ 没有关系数据需要备份');
@@ -606,7 +608,7 @@ export class MemorySystem {
         updated: Date.now()
       };
 
-      await this.localCache.cacheRelationship(fullRelationship);
+      await this.localStorage.cacheRelationship(fullRelationship);
       return true;
     } catch (error) {
       console.error('创建关系失败:', error);
@@ -652,7 +654,7 @@ export class MemorySystem {
     return {
       isInitialized: this.isInitialized,
       cloudConnected: await this.cloudStorage.isConnected(),
-      localCacheSize: await this.localCache.getCacheSize(),
+      localCacheSize: await this.localStorage.getCacheSize(),
       lastSyncTime: await this.cacheStrategy.getLastSyncTime(),
       performance: await this.cacheStrategy.getPerformanceMetrics()
     };

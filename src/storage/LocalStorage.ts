@@ -72,9 +72,9 @@ interface RelationshipIndex {
 }
 
 /**
- * 本地缓存管理器
+ * 本地存储管理器
  */
-export class LocalCache {
+export class LocalStorage {
   private config: CacheConfig;
   private memoryEntities: Map<string, MemoryEntity> = new Map();
   private memoryRelationships: Map<string, GraphRelationship> = new Map();
@@ -503,6 +503,23 @@ export class LocalCache {
     relationships: any[];
     typeToEntities: any[];
   } | null> {
+    const fullData = await this.getRelationshipBackupData();
+    if (!fullData) return null;
+    
+    return {
+      relationships: fullData.relationships,
+      typeToEntities: fullData.typeToEntities
+    };
+  }
+
+  /**
+   * 获取完整的关系数据备份（包含entityToRelations）
+   */
+  async getRelationshipBackupData(): Promise<{
+    relationships: any[];
+    entityToRelations: any[];
+    typeToEntities: any[];
+  } | null> {
     this.ensureInitialized();
 
     try {
@@ -513,15 +530,19 @@ export class LocalCache {
         return null;
       }
 
-      // 2. 获取类型索引（保留此索引用于快速按类型查询）
+      // 2. 获取类型索引
       const typeIndex = await this.getTypeIndex();
       const typeToEntities = Array.from(Object.entries(typeIndex))
         .map(([key, value]) => [key, Array.from(value)]);
 
+      // 3. 获取关系索引（entityToRelations）
+      const relationshipIndex = await this.getRelationshipIndex();
+      const entityToRelations = Array.from(Object.entries(relationshipIndex));
+
       return {
         relationships,
+        entityToRelations,
         typeToEntities
-        // 🚫 移除 entityToRelations，关系信息在查询时动态计算
       };
     } catch (error) {
       console.error('获取关系备份数据失败:', error);

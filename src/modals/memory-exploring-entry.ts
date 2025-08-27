@@ -6,7 +6,7 @@ import MemoryExploring from './memory-exploring.vue';
 // 导入页面组件
 import OverviewPage from './components/OverviewPage.vue';
 import TimelinePage from './components/TimelinePage.vue';
-import EntityDetailPage from './components/EntityDetailPage.vue';
+import EntityListPage from './components/EntityListPage.vue';
 import TopicDetailPage from './components/TopicDetailPage.vue';
 import UserProfilePage from './components/UserProfilePage.vue';
 import PersonDetailPage from './components/PersonDetailPage.vue';
@@ -18,7 +18,7 @@ const routes = [
   { path: '/', name: 'Overview', component: OverviewPage },
   { path: '/timeline', name: 'Timeline', component: TimelinePage },
   { path: '/user-profile', name: 'UserProfile', component: UserProfilePage },
-  { path: '/entity/:type', name: 'EntityDetail', component: EntityDetailPage, props: true },
+  { path: '/entity/:type', name: 'EntityDetail', component: EntityListPage, props: true },
   { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
   { path: '/person/:id', name: 'PersonDetail', component: PersonDetailPage, props: true },
   { path: '/project/:id', name: 'ProjectDetail', component: PlaceholderPage, props: true },

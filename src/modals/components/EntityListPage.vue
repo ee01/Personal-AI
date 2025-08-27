@@ -1,5 +1,5 @@
 <template>
-  <div class="entity-detail">
+  <div class="entity-list">
     <div class="entity-header">
       <div class="entity-avatar">{{ getEntityIcon(entityType) }}</div>
       <div class="entity-info">
