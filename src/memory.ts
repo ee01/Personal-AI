@@ -3,33 +3,19 @@
  * 提供清晰的读取和存储接口，管理本地缓存和云端存储
  */
 
-import { CloudStorage } from './storage/CloudStorage';
-import { GraphRelationship, LocalStorage } from './storage/LocalStorage';
+import { CloudStorage, MemoryEntity } from './storage/CloudStorage';
+import { GraphRelationship, LocalStorage, CachedEntityDetail } from './storage/LocalStorage';
 import { CacheStrategy } from './storage/CacheStrategy';
 import { EntitySimilarityTool, ProcessedEntity, EntityMergePair } from './storage/EntitySimilarityTool';
 import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSystemMaintenanceTool } from './storage/SystemMaintenanceTool';
 import { UserProfileManager } from './services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
 
-// 统一的实体接口
-export interface MemoryEntity {
-  id: string;
-  type: 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
-  name: string;
-  description?: string;
-  properties: Record<string, any>;
-  created: number;
-  updated: number;
-  accessCount: number;
-  lastAccessed: number;
-  importance: number;
-  tags?: string[];
-  status?: string;
-  avatarUrl?: string;
-  // 搜索相关字段（可选）
-  searchDistance?: number;
-  relevanceScore?: number;
-}
+// 重新导出接口供其他模块使用
+export { MemoryEntity } from './storage/CloudStorage';
+export { CachedEntityDetail } from './storage/LocalStorage';
+
+
 
 // 查询结果接口
 export interface QueryResult<T> {
@@ -51,15 +37,7 @@ export interface StoreResult {
   errors?: string[];
 }
 
-// 最近数据接口
-export interface RecentData {
-  entityId: string;
-  conversations: any[];  // 最近5条聊天记录
-  resources: any[];      // 最近5条资源
-  projects: any[];       // 最近5条项目
-  webpages: any[];       // 最近5条浏览历史
-  lastUpdated: number;
-}
+
 
 // 查询选项
 export interface QueryOptions {
@@ -206,7 +184,7 @@ export class MemorySystem {
     type?: string,
     searchTerm?: string,
     options: QueryOptions = {}
-  ): Promise<QueryResult<MemoryEntity>> {
+  ): Promise<QueryResult<CachedEntityDetail>> {
     this.ensureInitialized();
     return this.cacheStrategy.queryEntities(type, searchTerm, options);
   }
@@ -234,7 +212,7 @@ export class MemorySystem {
   /**
    * 获取实体的最近数据缓存
    */
-  async getRecentData(entityId: string): Promise<RecentData | null> {
+  async getRecentData(entityId: string): Promise<CachedEntityDetail | null> {
     this.ensureInitialized();
     return this.localStorage.getRecentData(entityId);
   }
@@ -507,30 +485,14 @@ export class MemorySystem {
     return this.localStorage.updateRecentData(entityId, type, data);
   }
 
-  /**
-   * 缓存主题详情数据（用于主题列表优化）
-   */
-  async cacheTopicDetails(topicId: string, details: {
-    conversations: any[];
-    resources: any[];
-    projects: any[];
-    webpages: any[];
-  }): Promise<void> {
-    this.ensureInitialized();
-    return this.localStorage.cacheTopicDetails(topicId, details);
-  }
+  // TOPIC_DETAILS 缓存方法已移除，统一使用 getRecentData() 避免重复存储
 
   /**
-   * 获取缓存的主题详情
+   * 将基础实体扩展为详细缓存实体
    */
-  async getCachedTopicDetails(topicId: string): Promise<{
-    conversations: any[];
-    resources: any[];
-    projects: any[];
-    webpages: any[];
-  } | null> {
+  async extendEntityToDetailCache(entity: MemoryEntity): Promise<CachedEntityDetail> {
     this.ensureInitialized();
-    return this.localStorage.getCachedTopicDetails(topicId);
+    return this.cloudStorage.extendEntityToDetailCache(entity);
   }
 
   /**

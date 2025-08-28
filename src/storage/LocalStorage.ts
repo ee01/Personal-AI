@@ -3,7 +3,75 @@
  * 专门管理 Chrome Storage 缓存，包括实体基础信息、关系索引和最近数据
  */
 
-import { MemoryEntity, RecentData, QueryResult, QueryOptions } from '../memory';
+import { QueryResult, QueryOptions } from '../memory';
+import { MemoryEntity } from './CloudStorage';
+
+// 统一的缓存实体详情接口 - 包含所有本地缓存数据
+export interface CachedEntityDetail extends MemoryEntity {
+  cachedAt: number;
+  
+  // 缓存的近期数据
+  latestConversations: {
+    id: string;
+    sender: string;
+    group: string; // 使用真实群组名称
+    datetime: string;
+    summary: string;
+    originalContent: string;
+    highlightText: string;
+    teamUrl: string; // 使用真实的团队URL
+    matchedRules: string[]; // 使用真实的匹配规则
+    relevanceScore: number;
+    context: {
+      id: string;
+      sender: string;
+      content: string;
+      datetime: string;
+      isMainMessage: boolean;
+    }[]; // 使用真实的上下文消息
+  }[];
+  latestWebpages: {
+    id: string;
+    title: string;
+    url: string;
+    type: string;
+    visitTime: string;
+    summary: string;
+    tags: string[];
+  }[];
+  relatedResources: {
+    id: string;
+    name: string;
+    type?: string;
+    url?: string;
+  }[];
+  relatedProjects: {
+    id: string;
+    name: string;
+    status: string;
+    description?: string;
+  }[];
+  relatedParticipants: {
+    id: string;
+    name: string;
+    role: string;
+    team: string;
+    lastContact: number;
+  }[];
+  
+  // Person类型特有字段
+  role?: string;
+  team?: string;
+  lastContact?: number;
+  expertise?: string[];
+  
+  // Project类型特有字段
+  isHighlighted?: boolean;
+  
+  // 额外的 UI 字段（向后兼容）
+  lastUpdated?: number;
+}
+
 // 关系类型定义
 export interface GraphRelationship {
   id: string;
@@ -18,13 +86,11 @@ export interface GraphRelationship {
 
 // 缓存键前缀
 const CACHE_KEYS = {
-  ENTITIES: 'cache_entities',
+  ENTITIES: 'cache_entities', // 统一存储 CachedEntityDetail 格式，移除 RECENT_DATA
   ENTITY_INDEX: 'cache_entity_index',
   TYPE_INDEX: 'cache_type_index',
   RELATIONSHIPS: 'cache_relationships',
   RELATIONSHIP_INDEX: 'cache_relationship_index',
-  RECENT_DATA: 'cache_recent_data',
-  TOPIC_DETAILS: 'cache_topic_details',
   STATISTICS: 'cache_statistics',
   CACHE_META: 'cache_metadata'
 };
@@ -35,7 +101,6 @@ interface CacheConfig {
   maxRecentDataPerEntity: number;
   statisticsCacheDuration: number; // 统计信息缓存时长
   recentDataCacheDuration: number; // 最近数据缓存时长
-  topicDetailsCacheDuration: number; // 主题详情缓存时长
   // 新增：最近数据同步配置
   enableRecentDataSync: boolean; // 是否启用基于关系的最近数据同步
   recentDataSyncBatchSize: number; // 最近数据同步批次大小
@@ -86,7 +151,6 @@ export class LocalStorage {
       maxRecentDataPerEntity: 5, // 每个实体最多保存5条最近数据
       statisticsCacheDuration: 30 * 60 * 1000, // 30分钟
       recentDataCacheDuration: 6 * 60 * 60 * 1000, // 6小时
-      topicDetailsCacheDuration: 60 * 60 * 1000, // 1小时
       // 新增：最近数据同步配置
       enableRecentDataSync: true, // 启用基于关系的最近数据同步
       recentDataSyncBatchSize: 10, // 每批处理10个实体的最近数据
@@ -123,32 +187,30 @@ export class LocalStorage {
   // ==================== 实体缓存管理 ====================
 
   /**
-   * 获取实体（先内存后存储）
+   * 获取实体详情（统一的CachedEntityDetail格式，先内存后存储）
    */
-  async getEntity(entityId: string): Promise<MemoryEntity | null> {
+  async getEntity(entityId: string): Promise<CachedEntityDetail | null> {
     this.ensureInitialized();
 
-    // 先从内存获取
-    const memoryEntity = this.memoryEntities.get(entityId);
-    if (memoryEntity) {
-      // 更新访问时间
-      memoryEntity.lastAccessed = Date.now();
-      memoryEntity.accessCount = (memoryEntity.accessCount || 0) + 1;
-      return memoryEntity;
-    }
-
-    // 从存储获取
+    // 从存储获取完整的 CachedEntityDetail
     try {
       const result = await chrome.storage.local.get(`${CACHE_KEYS.ENTITIES}_${entityId}`);
-      const entity = result[`${CACHE_KEYS.ENTITIES}_${entityId}`] as MemoryEntity;
+      const entity = result[`${CACHE_KEYS.ENTITIES}_${entityId}`] as CachedEntityDetail;
       
       if (entity) {
-        // 加载到内存（如果空间允许）
+        // 更新访问时间
+        entity.lastAccessed = Date.now();
+        entity.accessCount = (entity.accessCount || 0) + 1;
+        
+        // 确保实体包含所有必要的字段
+        this.ensureDetailEntityFields(entity);
+        
+        // 同步基础实体到内存（如果空间允许）
         if (this.memoryEntities.size < this.config.maxEntitiesInMemory) {
-          entity.lastAccessed = Date.now();
-          entity.accessCount = (entity.accessCount || 0) + 1;
-          this.memoryEntities.set(entityId, entity);
+          const baseEntity = this.convertToBaseEntity(entity);
+          this.memoryEntities.set(entityId, baseEntity);
         }
+        
         return entity;
       }
     } catch (error) {
@@ -279,31 +341,40 @@ export class LocalStorage {
   }
 
   /**
-   * 缓存实体
+   * 缓存实体（统一存储为CachedEntityDetail格式）
    */
-  async cacheEntity(entity: MemoryEntity): Promise<void> {
+  async cacheEntity(entity: MemoryEntity | CachedEntityDetail): Promise<void> {
     this.ensureInitialized();
 
     try {
-      // 存储到持久化存储
+      // 转换为 CachedEntityDetail 格式
+      const detailEntity = this.isCachedEntityDetail(entity) 
+        ? entity 
+        : this.convertToDetailEntity(entity as MemoryEntity);
+      
+      // 确保包含所有必要字段
+      this.ensureDetailEntityFields(detailEntity);
+      
+      // 存储到持久化存储（统一使用 CachedEntityDetail 格式）
       await chrome.storage.local.set({
-        [`${CACHE_KEYS.ENTITIES}_${entity.id}`]: entity
+        [`${CACHE_KEYS.ENTITIES}_${entity.id}`]: detailEntity
       });
 
-      // 加载到内存（如果空间允许）
+      // 加载基础实体到内存（如果空间允许）
+      const baseEntity = this.convertToBaseEntity(detailEntity);
       if (this.memoryEntities.size < this.config.maxEntitiesInMemory) {
-        this.memoryEntities.set(entity.id, entity);
+        this.memoryEntities.set(entity.id, baseEntity);
       } else {
         // 移除最少使用的实体
         const lruEntity = this.findLRUEntity();
         if (lruEntity) {
           this.memoryEntities.delete(lruEntity.id);
         }
-        this.memoryEntities.set(entity.id, entity);
+        this.memoryEntities.set(entity.id, baseEntity);
       }
 
       // 更新索引
-      await this.updateEntityIndex(entity);
+      await this.updateEntityIndex(baseEntity);
 
     } catch (error) {
       console.error('缓存实体失败:', error);
@@ -553,35 +624,15 @@ export class LocalStorage {
   // ==================== 最近数据缓存 ====================
 
   /**
-   * 获取实体的最近数据
+   * 获取实体详情（别名方法，保持向后兼容）
+   * @deprecated 推荐使用 getEntity() 替代
    */
-  async getRecentData(entityId: string): Promise<RecentData | null> {
-    this.ensureInitialized();
-
-    try {
-      const result = await chrome.storage.local.get(`${CACHE_KEYS.RECENT_DATA}_${entityId}`);
-      const recentData = result[`${CACHE_KEYS.RECENT_DATA}_${entityId}`] as RecentData;
-
-      if (recentData) {
-        // 检查是否过期
-        const now = Date.now();
-        if (now - recentData.lastUpdated < this.config.recentDataCacheDuration) {
-          return recentData;
-        } else {
-          // 过期，删除
-          await chrome.storage.local.remove(`${CACHE_KEYS.RECENT_DATA}_${entityId}`);
-        }
-      }
-
-      return null;
-    } catch (error) {
-      console.error('获取最近数据失败:', error);
-      return null;
-    }
+  async getRecentData(entityId: string): Promise<CachedEntityDetail | null> {
+    return this.getEntity(entityId);
   }
 
   /**
-   * 更新实体的最近数据
+   * 更新实体的详细数据（统一存储到ENTITIES）
    */
   async updateRecentData(
     entityId: string,
@@ -591,40 +642,74 @@ export class LocalStorage {
     this.ensureInitialized();
 
     try {
-      let recentData = await this.getRecentData(entityId);
+      let entityDetail = await this.getEntity(entityId);
       
-      if (!recentData) {
-        recentData = {
-          entityId,
-          conversations: [],
-          resources: [],
-          projects: [],
-          webpages: [],
+      if (!entityDetail) {
+        // 如果实体不存在，创建一个基础的 CachedEntityDetail
+        entityDetail = {
+          id: entityId,
+          type: 'Topic', // 默认类型，后续可以根据需要调整
+          name: entityId,
+          description: '',
+          properties: {},
+          created: Date.now(),
+          updated: Date.now(),
+          accessCount: 0,
+          lastAccessed: Date.now(),
+          importance: 0.5,
+          statistic: {
+            conversations: 0,
+            projects: 0,
+            participants: 1,
+            resources: 0,
+            documents: 0,
+            webpages: 0,
+            relationships: 0
+          },
+          cachedAt: Date.now(),
+          latestConversations: [],
+          latestWebpages: [],
+          relatedResources: [],
+          relatedProjects: [],
+          relatedParticipants: [],
           lastUpdated: Date.now()
         };
       }
 
       // 添加新数据到对应数组的开头
-      const arrayKey = type === 'conversation' ? 'conversations' : 
-                       type === 'resource' ? 'resources' : 
-                       type === 'project' ? 'projects' : 'webpages';
-      
-      recentData[arrayKey].unshift(data);
-      
-      // 保持最多5条记录
-      if (recentData[arrayKey].length > this.config.maxRecentDataPerEntity) {
-        recentData[arrayKey] = recentData[arrayKey].slice(0, this.config.maxRecentDataPerEntity);
+      if (type === 'conversation') {
+        entityDetail.latestConversations.unshift(data);
+        if (entityDetail.latestConversations.length > this.config.maxRecentDataPerEntity) {
+          entityDetail.latestConversations = entityDetail.latestConversations.slice(0, this.config.maxRecentDataPerEntity);
+        }
+      } else if (type === 'resource') {
+        entityDetail.relatedResources.unshift(data);
+        if (entityDetail.relatedResources.length > this.config.maxRecentDataPerEntity) {
+          entityDetail.relatedResources = entityDetail.relatedResources.slice(0, this.config.maxRecentDataPerEntity);
+        }
+      } else if (type === 'project') {
+        entityDetail.relatedProjects.unshift(data);
+        if (entityDetail.relatedProjects.length > this.config.maxRecentDataPerEntity) {
+          entityDetail.relatedProjects = entityDetail.relatedProjects.slice(0, this.config.maxRecentDataPerEntity);
+        }
+      } else { // webpage
+        entityDetail.latestWebpages.unshift(data);
+        if (entityDetail.latestWebpages.length > this.config.maxRecentDataPerEntity) {
+          entityDetail.latestWebpages = entityDetail.latestWebpages.slice(0, this.config.maxRecentDataPerEntity);
+        }
       }
 
-      recentData.lastUpdated = Date.now();
+      entityDetail.lastUpdated = Date.now();
+      entityDetail.updated = Date.now();
 
-      // 保存更新
-      await chrome.storage.local.set({
-        [`${CACHE_KEYS.RECENT_DATA}_${entityId}`]: recentData
-      });
+      // 重新计算统计字段
+      this.recalculateUIFields(entityDetail);
+
+      // 保存更新到统一的ENTITIES存储
+      await this.cacheEntity(entityDetail);
 
     } catch (error) {
-      console.error('更新最近数据失败:', error);
+      console.error('更新实体详细数据失败:', error);
     }
   }
 
@@ -858,64 +943,79 @@ export class LocalStorage {
 
   // ==================== 主题详情缓存 ====================
 
+  // ==================== 实体格式转换辅助方法 ====================
+
   /**
-   * 缓存主题详情
+   * 确保 CachedEntityDetail 包含所有必要字段
    */
-  async cacheTopicDetails(topicId: string, details: {
-    conversations: any[];
-    resources: any[];
-    projects: any[];
-    webpages: any[];
-  }): Promise<void> {
-    this.ensureInitialized();
-
-    try {
-      const cacheData = {
-        ...details,
-        cachedAt: Date.now()
+  private ensureDetailEntityFields(entity: CachedEntityDetail): void {
+    if (!entity.latestConversations) entity.latestConversations = [];
+    if (!entity.latestWebpages) entity.latestWebpages = [];
+    if (!entity.relatedResources) entity.relatedResources = [];
+    if (!entity.relatedProjects) entity.relatedProjects = [];
+    if (!entity.relatedParticipants) entity.relatedParticipants = [];
+    if (!entity.statistic) {
+      entity.statistic = {
+        conversations: entity.latestConversations.length,
+        projects: entity.relatedProjects.length,
+        participants: entity.relatedParticipants.length,
+        resources: entity.relatedResources.length,
+        documents: entity.relatedResources.filter(r => r.type === '文档').length,
+        webpages: entity.latestWebpages.length,
+        relationships: 0
       };
-
-      await chrome.storage.local.set({
-        [`${CACHE_KEYS.TOPIC_DETAILS}_${topicId}`]: cacheData
-      });
-
-    } catch (error) {
-      console.error('缓存主题详情失败:', error);
     }
+    if (!entity.cachedAt) entity.cachedAt = Date.now();
+    if (!entity.lastUpdated) entity.lastUpdated = Date.now();
   }
 
   /**
-   * 获取缓存的主题详情
+   * 将 CachedEntityDetail 转换为基础的 MemoryEntity（用于内存存储）
    */
-  async getCachedTopicDetails(topicId: string): Promise<{
-    conversations: any[];
-    resources: any[];
-    projects: any[];
-    webpages: any[];
-  } | null> {
-    this.ensureInitialized();
+  private convertToBaseEntity(detailEntity: CachedEntityDetail): MemoryEntity {
+    return {
+      id: detailEntity.id,
+      type: detailEntity.type,
+      name: detailEntity.name,
+      description: detailEntity.description,
+      properties: detailEntity.properties,
+      created: detailEntity.created,
+      updated: detailEntity.updated,
+      accessCount: detailEntity.accessCount,
+      lastAccessed: detailEntity.lastAccessed,
+      importance: detailEntity.importance,
+      tags: detailEntity.tags,
+      status: detailEntity.status,
+      searchDistance: detailEntity.searchDistance,
+      relevanceScore: detailEntity.relevanceScore,
+      statistic: detailEntity.statistic
+    };
+  }
 
-    try {
-      const result = await chrome.storage.local.get(`${CACHE_KEYS.TOPIC_DETAILS}_${topicId}`);
-      const cached = result[`${CACHE_KEYS.TOPIC_DETAILS}_${topicId}`];
+  /**
+   * 将基础 MemoryEntity 转换为 CachedEntityDetail
+   */
+  private convertToDetailEntity(baseEntity: MemoryEntity): CachedEntityDetail {
+    const detailEntity: CachedEntityDetail = {
+      ...baseEntity,
+      cachedAt: Date.now(),
+      latestConversations: [],
+      latestWebpages: [],
+      relatedResources: [],
+      relatedProjects: [],
+      relatedParticipants: [],
+      lastUpdated: Date.now()
+    };
+    
+    this.ensureDetailEntityFields(detailEntity);
+    return detailEntity;
+  }
 
-      if (cached) {
-        // 检查是否过期
-        const now = Date.now();
-        if (now - cached.cachedAt < this.config.topicDetailsCacheDuration) {
-          const { cachedAt, ...details } = cached;
-          return details;
-        } else {
-          // 过期，删除
-          await chrome.storage.local.remove(`${CACHE_KEYS.TOPIC_DETAILS}_${topicId}`);
-        }
-      }
-
-      return null;
-    } catch (error) {
-      console.error('获取缓存的主题详情失败:', error);
-      return null;
-    }
+  /**
+   * 检查实体是否为 CachedEntityDetail 格式
+   */
+  private isCachedEntityDetail(entity: MemoryEntity | CachedEntityDetail): entity is CachedEntityDetail {
+    return 'latestConversations' in entity && 'cachedAt' in entity;
   }
 
   // ==================== 统计信息缓存 ====================
@@ -973,15 +1073,14 @@ export class LocalStorage {
       const keysToRemove: string[] = [];
 
       for (const key of allKeys) {
-        if (key.startsWith(CACHE_KEYS.RECENT_DATA) || key.startsWith(CACHE_KEYS.TOPIC_DETAILS)) {
+        if (key.startsWith(CACHE_KEYS.ENTITIES)) {
           const result = await chrome.storage.local.get(key);
-          const data = result[key];
+          const data = result[key] as CachedEntityDetail;
           
-          if (data && data.lastUpdated) {
-            const age = now - data.lastUpdated;
-            const maxAge = key.startsWith(CACHE_KEYS.RECENT_DATA) 
-              ? this.config.recentDataCacheDuration
-              : this.config.topicDetailsCacheDuration;
+          // 只清理有 cachedAt 字段的 CachedEntityDetail 实体（表示有详细缓存数据）
+          if (data && data.cachedAt && this.isCachedEntityDetail(data)) {
+            const age = now - data.cachedAt;
+            const maxAge = this.config.recentDataCacheDuration;
             
             if (age > maxAge) {
               keysToRemove.push(key);
@@ -1366,6 +1465,138 @@ export class LocalStorage {
 
   private async delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * 创建空的扩展缓存对象
+   */
+  private createEmptyExtendedCache(entityId: string): Partial<CachedEntityDetail> {
+    return {
+      lastUpdated: Date.now(),
+      cachedAt: Date.now(),
+      
+      // UI字段（已重构后的正确字段）
+      latestConversations: [],
+      latestWebpages: [],
+      relatedResources: [],
+      relatedProjects: [],
+      expertise: [],
+      
+      // 统计字段
+      statistic: {
+        conversations: 0,
+        projects: 0,
+        participants: 0,
+        resources: 0,
+        documents: 0,
+        webpages: 0,
+        relationships: 0
+      }
+    };
+  }
+
+  /**
+   * 确保缓存数据包含所有必要的UI字段
+   */
+  private ensureUIFields(cache: CachedEntityDetail): void {
+    // 如果缺少UI字段，重新计算
+    if (!cache.statistic || 
+        !cache.latestConversations || 
+        !cache.relatedResources) {
+      this.recalculateUIFields(cache);
+    }
+  }
+
+  /**
+   * 重新计算UI字段
+   */
+  private recalculateUIFields(cache: CachedEntityDetail): void {
+    // 确保缓存字段存在（使用正确的字段名）
+    if (!cache.latestConversations) cache.latestConversations = [];
+    if (!cache.relatedResources) cache.relatedResources = [];
+    if (!cache.relatedProjects) cache.relatedProjects = [];
+    if (!cache.latestWebpages) cache.latestWebpages = [];
+
+    // 更新统计字段到 statistic 对象中
+    if (!cache.statistic) {
+      cache.statistic = {
+        conversations: 0,
+        projects: 0,
+        participants: 0,
+        resources: 0,
+        documents: 0,
+        webpages: 0,
+        relationships: 0
+      };
+    }
+
+    // 重新计算统计字段
+    cache.statistic.conversations = cache.latestConversations.length;
+    cache.statistic.webpages = cache.latestWebpages.length;
+    cache.statistic.resources = cache.relatedResources.length;
+    cache.statistic.projects = cache.relatedProjects.length;
+
+    // 确保必要字段存在
+    if (!cache.expertise) cache.expertise = [];
+    if (!cache.lastUpdated) cache.lastUpdated = Date.now();
+  }
+
+  /**
+   * 获取所有本地缓存的实体数据（用于统计信息上传）
+   */
+  async getAllRecentDataEntries(): Promise<CachedEntityDetail[]> {
+    this.ensureInitialized();
+
+    try {
+      const entityEntries: CachedEntityDetail[] = [];
+      
+      // 获取所有键，然后过滤出 ENTITIES 相关的键
+      const allKeys = await this.getAllCacheKeys();
+      
+      for (const key of allKeys) {
+        if (key.startsWith(CACHE_KEYS.ENTITIES + '_')) {
+          try {
+            const result = await chrome.storage.local.get(key);
+            const data = result[key] as CachedEntityDetail;
+            
+            if (data && this.isCachedEntityDetail(data)) {
+              // 检查数据是否过期
+              const now = Date.now();
+              if (data.cachedAt && now - data.cachedAt < this.config.recentDataCacheDuration) {
+                entityEntries.push(data);
+              }
+            }
+          } catch (error) {
+            console.error(`解析缓存数据失败 (${key}):`, error);
+          }
+        }
+      }
+
+      console.log(`📊 找到 ${entityEntries.length} 个本地缓存实体`);
+      return entityEntries;
+
+    } catch (error) {
+      console.error('获取所有本地缓存数据失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 格式化时间为相对时间
+   */
+  private formatTimeAgo(timestamp: number): string {
+    const now = Date.now();
+    const diff = now - timestamp;
+    
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    const weeks = Math.floor(diff / 604800000);
+    
+    if (hours < 1) return '刚刚';
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+    if (weeks < 4) return `${weeks}周前`;
+    return new Date(timestamp).toLocaleDateString();
   }
 
   private ensureInitialized(): void {

@@ -155,8 +155,8 @@ async function handleGetTopicDetail(request: any): Promise<any> {
         // 确保记忆系统已初始化
         await memorySystem.initialize();
         
-        // 优先从缓存获取主题详情
-        const cachedDetails = await memorySystem.getCachedTopicDetails(topicId);
+        // 优先从统一缓存获取主题详情（使用 RECENT_DATA 替代 TOPIC_DETAILS）
+        const cachedDetails = await memorySystem.getRecentData(topicId);
         if (cachedDetails) {
             return {
                 success: true,
@@ -170,96 +170,32 @@ async function handleGetTopicDetail(request: any): Promise<any> {
             throw new Error('主题不存在');
         }
 
-        // 获取相关项目（查询 Project 类型实体）
-        const projectResults = await memorySystem.queryEntities('Project');
-        const relatedProjects = projectResults.data.map((project: any) => ({
-            id: project.id,
-            name: project.name || '未知项目',
-            status: project.properties?.status || project.status || '开发中',
-            description: project.description || `项目: ${project.name || '未命名项目'}`
-        }));
+        // 使用 CloudStorage 的新方法将基础实体扩展为详细缓存实体
+        const topicDetail = await memorySystem.extendEntityToDetailCache(topicEntity);
 
-        // 获取相关资源（查询 Document 类型实体）
-        const documentResults = await memorySystem.queryEntities('Document');
-        const relatedResources = documentResults.data.map((doc: any) => ({
-            id: doc.id,
-            name: doc.name || '文档资源',
-            type: '文档',
-            url: doc.properties?.url || '#'
-        }));
-
-        // 使用新的queryEntityMessages方法获取相关对话详细信息
-        const conversations = await memorySystem.queryEntityMessages(topicEntity.name, { 
-            limit: 100, 
-            // minRelevanceScore: 0.5,  // 相关度阈值
-            sortBy: 'relevance',
-            sortOrder: 'desc'
-        });
-        
-        // 转换为前端需要的格式，包含完整的contextMessages
-        const formattedConversations = conversations.map(msg => {
-            // 处理上下文消息：从metadata中提取contextMessages
-            let context: any[] = [];
-            if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
-                context = msg.metadata.contextMessages.map((ctx: any) => ({
-                    id: ctx.id,
-                    sender: ctx.sender,
-                    content: ctx.content,
-                    time: ctx.datetime ? formatTimeAgo(new Date(ctx.datetime).getTime()) : '未知时间',
-                    datetime: ctx.datetime,
-                    isMainMessage: ctx.isMainMessage || false
-                }));
+        // 缓存主题详情到统一的 RECENT_DATA 缓存（替代 TOPIC_DETAILS）
+        // 这样可以避免重复存储，同时为实体列表页面提供快速访问
+        // 将详情数据拆分存储为各个组件
+        if (topicDetail.latestConversations) {
+            for (const conv of topicDetail.latestConversations.slice(0, 3)) {
+                await memorySystem.updateRecentData(topicId, 'conversation', conv);
             }
-
-            return {
-                id: msg.messageId,
-                sender: msg.source,
-                group: msg.metadata?.teamName || '聊天记录', // 使用真实群组名称
-                time: formatTimeAgo(msg.timestamp),
-                datetime: new Date(msg.timestamp).toISOString(),
-                summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
-                originalContent: msg.content,
-                highlightText: msg.metadata?.highlightText || msg.content,
-                teamUrl: msg.metadata?.team_url || '#', // 使用真实的团队URL
-                matchedRules: msg.metadata?.matchedRules || [], // 使用真实的匹配规则
-                relevanceScore: msg.relevanceScore,
-                context: context // 使用真实的上下文消息
-            };
-        });
-
-        // 统计参与者（从相关消息中提取不同的发送者）
-        const participants = new Set(formattedConversations.map(conv => conv.sender)).size;
-
-        // 获取相关网页记录（如果有的话）
-        const webpageResults = formattedConversations
-            .filter(conv => conv.context && conv.context.length > 0)
-            .slice(0, 3)
-            .map(conv => ({
-                id: `web-${conv.id}`,
-                title: `${topicEntity.name}相关网页`,
-                url: conv.teamUrl || '#',
-                type: 'webpage',
-                visitTime: conv.time,
-                summary: `与${topicEntity.name}相关的内容`,
-                tags: [topicEntity.name, '聊天记录']
-            }));
-
-        const topicDetail = {
-            overview: {
-                discussions: formattedConversations.length,
-                projects: relatedProjects.length,
-                participants: participants || 1, // 至少有一个参与者
-                resources: relatedResources.length
-            },
-            entity: topicEntity,
-            projects: relatedProjects,
-            resources: relatedResources,
-            conversations: formattedConversations,
-            webpages: webpageResults
-        };
-
-        // 缓存主题详情
-        await memorySystem.cacheTopicDetails(topicId, topicDetail);
+        }
+        if (topicDetail.relatedResources) {
+            for (const resource of topicDetail.relatedResources.slice(0, 3)) {
+                await memorySystem.updateRecentData(topicId, 'resource', resource);
+            }
+        }
+        if (topicDetail.relatedProjects) {
+            for (const project of topicDetail.relatedProjects.slice(0, 3)) {
+                await memorySystem.updateRecentData(topicId, 'project', project);
+            }
+        }
+        if (topicDetail.latestWebpages) {
+            for (const webpage of topicDetail.latestWebpages.slice(0, 3)) {
+                await memorySystem.updateRecentData(topicId, 'webpage', webpage);
+            }
+        }
 
         return {
             success: true,
@@ -553,7 +489,16 @@ async function handleInitializeSampleData(): Promise<any> {
                 importance: 0.8,
                 accessCount: 0,
                 lastAccessed: Date.now(),
-                tags: ['示例', '开发者']
+                tags: ['示例', '开发者'],
+                statistic: {
+                    conversations: 5,
+                    projects: 2,
+                    participants: 1,
+                    resources: 3,
+                    documents: 2,
+                    webpages: 1,
+                    relationships: 4
+                }
             },
             {
                 type: 'Project' as const,
@@ -563,7 +508,16 @@ async function handleInitializeSampleData(): Promise<any> {
                 importance: 0.9,
                 accessCount: 0,
                 lastAccessed: Date.now(),
-                tags: ['示例', '项目']
+                tags: ['示例', '项目'],
+                statistic: {
+                    conversations: 12,
+                    projects: 1,
+                    participants: 8,
+                    resources: 15,
+                    documents: 10,
+                    webpages: 5,
+                    relationships: 6
+                }
             }
         ];
 

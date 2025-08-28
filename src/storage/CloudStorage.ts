@@ -6,7 +6,35 @@
 import { ChromaClient, Collection, EmbeddingFunction } from 'chromadb';
 import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
-import { MemoryEntity, QueryResult, VectorSearchOptions, QueryOptions } from '../memory';
+import { QueryResult, VectorSearchOptions, QueryOptions } from '../memory';
+
+// 基础实体接口 - CloudStorage 专用
+export interface MemoryEntity {
+  id: string;
+  type: 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
+  name: string;
+  description?: string;
+  properties: Record<string, any>;
+  created: number;
+  updated: number;
+  accessCount: number;
+  lastAccessed: number;
+  importance: number;
+  tags?: string[];
+  status?: string;
+  // 搜索相关字段（可选）
+  searchDistance?: number;
+  relevanceScore?: number;
+  statistic: {
+    conversations: number;
+    projects: number;
+    participants: number;
+    resources: number; 
+    documents: number;
+    webpages: number;
+    relationships: number;
+  };
+}
 // GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
 
@@ -645,7 +673,7 @@ export class CloudStorage {
   }
 
   /**
-   * 查询云端实体（支持按type过滤）
+   * 查询云端实体（支持按type过滤和真正的分页）
    */
   async queryEntities(
     type?: string,
@@ -655,6 +683,8 @@ export class CloudStorage {
     this.ensureInitialized();
 
     const startTime = Date.now();
+    const limit = options.limit || 30; // 默认30条
+    const offset = options.offset || 0;
 
     try {
       const collection = this.collections.get(`${this.username}-graph-entities`);
@@ -668,45 +698,73 @@ export class CloudStorage {
         };
       }
 
+      // 如果有搜索词，使用向量搜索
+      if (searchTerm && searchTerm.length > 2) {
+        // 转换 sortBy 参数为向量搜索支持的类型
+        let vectorSortBy: 'relevance' | 'time' | 'importance' = 'relevance';
+        if (options.sortBy === 'importance') {
+          vectorSortBy = 'importance';
+        } else if (options.sortBy === 'created' || options.sortBy === 'updated') {
+          vectorSortBy = 'time';
+        }
+        
+        return await this.searchByVector(searchTerm, type, {
+          limit,
+          nResults: limit * 2, // 获取更多结果以应对过滤
+          collections: ['entities'],
+          returnType: 'entities',
+          sortBy: vectorSortBy,
+          sortOrder: options.sortOrder
+        });
+      }
+
+      // 构建 where 查询条件
+      const whereCondition: any = {
+        type: { $ne: 'graph_backup' } // 排除备份数据
+      };
+      
+      // 如果指定了实体类型，添加类型过滤
+      if (type) {
+        whereCondition.type = type;
+      }
+
+      // 直接使用 where 查询，真正的分页
       const result = await collection.get({
-        include: ['metadatas', 'documents']
+        where: whereCondition,
+        include: ['metadatas', 'documents'],
+        limit,
+        offset
       });
 
+      if (!result.ids || result.ids.length === 0) {
+        return {
+          data: [],
+          total: 0,
+          source: 'cloud',
+          cached: false,
+          queryTime: Date.now() - startTime
+        };
+      }
+
+      // 构建实体列表
       const entities: MemoryEntity[] = [];
-      if (result.ids && result.metadatas) {
-        for (let i = 0; i < result.ids.length; i++) {
-          const metadata = result.metadatas[i] as any;
-          
-          // 跳过备份数据
-          if (metadata.type === 'graph_backup') continue;
-          
-          // 按type过滤
-          if (type && metadata.type !== type) continue;
-          
-          const entity = await this.buildEntity({
-            metadata,
-            id: result.ids[i],
-            document: result.documents?.[i],
-            collectionName: 'graph-entities'
-          });
-          if (entity) {
-            // 如果有搜索词，进行简单的文本匹配
-            if (searchTerm) {
-              const searchLower = searchTerm.toLowerCase();
-              const nameMatch = entity.name.toLowerCase().includes(searchLower);
-              const descMatch = entity.description?.toLowerCase().includes(searchLower);
-              const tagMatch = entity.tags?.some(tag => tag.toLowerCase().includes(searchLower));
-              
-              if (!nameMatch && !descMatch && !tagMatch) continue;
-            }
-            
-            entities.push(entity);
-          }
+      for (let i = 0; i < result.ids.length; i++) {
+        const metadata = result.metadatas![i] as any;
+        
+        const entity = await this.buildEntity({
+          metadata,
+          id: result.ids[i],
+          document: result.documents?.[i],
+          collectionName: 'graph-entities'
+        });
+        
+        if (entity) {
+          entities.push(entity);
         }
       }
 
       // 应用排序
-      if (options.sortBy) {
+      if (options.sortBy && entities.length > 0) {
         entities.sort((a, b) => {
           const order = options.sortOrder === 'desc' ? -1 : 1;
           switch (options.sortBy) {
@@ -724,16 +782,17 @@ export class CloudStorage {
         });
       }
 
-      // 应用分页
-      const total = entities.length;
-      const offset = options.offset || 0;
-      const limit = options.limit || total;
-      const paginatedEntities = entities.slice(offset, offset + limit);
+      // 获取总数 (这里需要单独查询总数，因为分页查询不返回总数)
+      const countResult = await collection.get({
+        where: whereCondition,
+        include: [] // 只获取 ID，不需要其他数据
+      });
+      const total = countResult.ids?.length || 0;
 
-      console.log(`📥 从云端查询了 ${paginatedEntities.length}/${total} 个实体 (type: ${type || '全部'})`);
+      console.log(`📥 从云端分页查询了 ${entities.length} 个实体 (offset: ${offset}, limit: ${limit}, type: ${type || '全部'})`);
       
       return {
-        data: paginatedEntities,
+        data: entities,
         total: total,
         source: 'cloud',
         cached: false,
@@ -963,6 +1022,15 @@ export class CloudStorage {
           importance: metadata.importance || 0.5,
           tags: typeof metadata.tags === 'string' ? JSON.parse(metadata.tags || '[]') : (metadata.tags || []),
           status: metadata.status || 'active',
+          statistic: {
+            conversations: 0,
+            projects: 0,
+            participants: 0,
+            resources: 0,
+            documents: 0,
+            webpages: 0,
+            relationships: 0
+          },
           // 添加搜索相关信息
           ...(distance !== undefined && { searchDistance: distance }),
           ...(relevanceScore !== undefined && { relevanceScore })
@@ -987,6 +1055,15 @@ export class CloudStorage {
         importance: metadata.importance || 0.3,
         tags: metadata.tags || [],
         status: metadata.status || 'active',
+        statistic: {
+          conversations: 0,
+          projects: 0,
+          participants: 0,
+          resources: 0,
+          documents: 0,
+          webpages: 0,
+          relationships: 0
+        },
         // 添加搜索相关信息
         ...(distance !== undefined && { searchDistance: distance }),
         ...(relevanceScore !== undefined && { relevanceScore })
@@ -1303,6 +1380,243 @@ export class CloudStorage {
     }
 
     return converted;
+  }
+
+  /**
+   * 将基础 MemoryEntity 扩展为包含完整缓存数据的实体
+   */
+  async extendEntityToDetailCache(entity: MemoryEntity): Promise<any> {
+    this.ensureInitialized();
+
+    try {
+      // 获取相关项目（查询 Project 类型实体）
+      const projectResults = await this.queryEntities('Project');
+      const relatedProjects = projectResults.data.slice(0, 5).map((project: MemoryEntity) => ({
+        id: project.id,
+        name: project.name || '未知项目',
+        status: project.properties?.status || project.status || '开发中',
+        description: project.description || `项目: ${project.name || '未命名项目'}`
+      }));
+
+      // 获取相关资源（查询 Document 类型实体）
+      const documentResults = await this.queryEntities('Document');
+      const relatedResources = documentResults.data.slice(0, 5).map((doc: MemoryEntity) => ({
+        id: doc.id,
+        name: doc.name || '文档资源',
+        type: '文档',
+        url: doc.properties?.url || '#'
+      }));
+
+      // 使用向量搜索获取相关对话详细信息
+      const conversationResults = await this.searchByVector(entity.name, undefined, {
+        collections: ['messages'],
+        returnType: 'raw',
+        limit: 100,
+        sortBy: 'relevance',
+        sortOrder: 'desc'
+      });
+
+      // 转换为前端需要的格式，包含完整的contextMessages
+      const latestConversations = conversationResults.data.map((msg: any) => {
+        // 处理上下文消息：从metadata中提取contextMessages
+        let context: any[] = [];
+        if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
+          context = msg.metadata.contextMessages.map((ctx: any) => ({
+            id: ctx.id,
+            sender: ctx.sender,
+            content: ctx.content,
+            datetime: ctx.datetime,
+            isMainMessage: ctx.isMainMessage || false
+          }));
+        }
+
+        return {
+          id: msg.messageId,
+          sender: msg.source,
+          group: msg.metadata?.teamName || '聊天记录',
+          datetime: new Date(msg.timestamp).toISOString(),
+          summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
+          originalContent: msg.content,
+          highlightText: msg.metadata?.highlightText || msg.content,
+          teamUrl: msg.metadata?.team_url || '#',
+          matchedRules: msg.metadata?.matchedRules || [],
+          relevanceScore: msg.relevanceScore,
+          context: context
+        };
+      });
+
+      // 获取相关网页记录
+      const latestWebpages = latestConversations
+        .filter(conv => conv.context && conv.context.length > 0)
+        .slice(0, 3)
+        .map(conv => ({
+          id: `web-${conv.id}`,
+          title: `${entity.name}相关网页`,
+          url: conv.teamUrl || '#',
+          type: 'webpage',
+          visitTime: this.formatTimeAgo(new Date(conv.datetime).getTime()),
+          summary: `与${entity.name}相关的内容`,
+          tags: [entity.name, '聊天记录']
+        }));
+
+      // 统计参与者
+      const participants = new Set(latestConversations.map(conv => conv.sender)).size;
+
+      // 构建扩展后的实体详情
+      return {
+        ...entity,
+        statistic: {
+          conversations: latestConversations.length,
+          projects: relatedProjects.length,
+          participants: participants || 1,
+          resources: relatedResources.length,
+          documents: relatedResources.filter(r => r.type === '文档').length,
+          webpages: latestWebpages.length,
+          relationships: 0
+        },
+        latestConversations: latestConversations.slice(0, 5), // 只保留前5条
+        latestWebpages: latestWebpages,
+        relatedResources: relatedResources,
+        relatedProjects: relatedProjects,
+        relatedParticipants: [], // 由 LocalStorage 在本地填充
+        cachedAt: Date.now()
+      };
+    } catch (error) {
+      console.error('扩展实体详情失败:', error);
+      // 返回基础实体和默认值
+      return {
+        ...entity,
+        statistic: {
+          conversations: 0,
+          projects: 0,
+          participants: 1,
+          resources: 0,
+          documents: 0,
+          webpages: 0,
+          relationships: 0
+        },
+        latestConversations: [],
+        latestWebpages: [],
+        relatedResources: [],
+        relatedProjects: [],
+        relatedParticipants: [],
+        cachedAt: Date.now()
+      };
+    }
+  }
+
+  /**
+   * 格式化时间为相对时间
+   */
+  private formatTimeAgo(timestamp: number): string {
+    const now = Date.now();
+    const diff = now - timestamp;
+    
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    const weeks = Math.floor(diff / 604800000);
+    
+    if (hours < 1) return '刚刚';
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+    if (weeks < 4) return `${weeks}周前`;
+    return new Date(timestamp).toLocaleDateString();
+  }
+
+  /**
+   * 批量更新实体的统计信息
+   */
+  async batchUpdateEntityStatistics(updates: Array<{
+    entityId: string;
+    statistic: {
+      conversations: number;
+      projects: number;
+      participants: number;
+      resources: number;
+      documents: number;
+      webpages: number;
+      relationships: number;
+    };
+    lastUpdated: number;
+  }>): Promise<void> {
+    this.ensureInitialized();
+
+    if (!updates || updates.length === 0) {
+      console.log('📊 没有统计信息需要更新');
+      return;
+    }
+
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) {
+        throw new Error('graph-entities 集合未找到');
+      }
+
+      console.log(`📊 开始批量更新 ${updates.length} 个实体的统计信息...`);
+
+      // 分批处理，避免一次性操作过多
+      const batchSize = 50;
+      for (let i = 0; i < updates.length; i += batchSize) {
+        const batch = updates.slice(i, i + batchSize);
+        
+        try {
+          // 获取当前批次的实体
+          const entityIds = batch.map(u => u.entityId);
+          const existingEntities = await collection.get({
+            ids: entityIds,
+            include: ['metadatas']
+          });
+
+          if (!existingEntities.ids || existingEntities.ids.length === 0) {
+            console.log(`📊 批次 ${i / batchSize + 1}: 没有找到对应的实体`);
+            continue;
+          }
+
+          // 准备更新的元数据
+          const updateMetadatas = [];
+          const updateIds = [];
+
+          for (let j = 0; j < existingEntities.ids.length; j++) {
+            const entityId = existingEntities.ids[j];
+            const updateInfo = batch.find(u => u.entityId === entityId);
+            
+            if (updateInfo && existingEntities.metadatas) {
+              const currentMetadata = existingEntities.metadatas[j] as any;
+              
+              // 更新统计信息
+              const updatedMetadata = {
+                ...currentMetadata,
+                statistic: updateInfo.statistic,
+                lastStatisticUpdate: updateInfo.lastUpdated,
+                updated: Date.now()
+              };
+
+              updateMetadatas.push(updatedMetadata);
+              updateIds.push(entityId);
+            }
+          }
+
+          if (updateIds.length > 0) {
+            // 执行批量更新
+            await collection.update({
+              ids: updateIds,
+              metadatas: updateMetadatas
+            });
+
+            console.log(`📊 批次 ${i / batchSize + 1}: 成功更新 ${updateIds.length} 个实体的统计信息`);
+          }
+
+        } catch (batchError) {
+          console.error(`📊 批次 ${i / batchSize + 1} 更新失败:`, batchError);
+        }
+      }
+
+      console.log(`📊 批量统计信息更新完成`);
+
+    } catch (error) {
+      console.error('📊 批量更新实体统计信息失败:', error);
+      throw error;
+    }
   }
 
   private ensureInitialized(): void {

@@ -5,7 +5,9 @@
 
 import { CloudStorage } from './CloudStorage';
 import { LocalStorage } from './LocalStorage';
-import { MemoryEntity, QueryResult, StoreResult, QueryOptions, VectorSearchOptions } from '../memory';
+import { QueryResult, StoreResult, QueryOptions, VectorSearchOptions } from '../memory';
+import { MemoryEntity } from './CloudStorage';
+import { CachedEntityDetail } from './LocalStorage';
 import { v4 as uuidv4 } from 'uuid';
 
 // 策略配置
@@ -109,7 +111,7 @@ export class CacheStrategy {
     type?: string,
     searchTerm?: string,
     options: QueryOptions = {}
-  ): Promise<QueryResult<MemoryEntity>> {
+  ): Promise<QueryResult<CachedEntityDetail>> {
     this.ensureInitialized();
 
     const startTime = Date.now();
@@ -121,40 +123,37 @@ export class CacheStrategy {
         const cloudResult = await this.cloudStorage.searchByVector(searchTerm, type, options as VectorSearchOptions);
         // 缓存结果到本地
         await this.cacheCloudResults(cloudResult.data);
-        return cloudResult;
+        // 扩展实体信息
+        const extendedData = await this.extendEntitiesFromCache(cloudResult.data);
+        return {
+          ...cloudResult,
+          data: extendedData
+        };
       }
 
-      // 普通实体查询，先尝试本地
-      if (this.config.preferLocalForEntityQueries && type) {
-        const localResult = await this.queryFromLocal(type, searchTerm, options);
-        
-        // 如果本地结果充足，直接返回
-        if (localResult.data.length >= this.config.localSearchThreshold || options.useCache) {
-          this.updateMetrics('local', Date.now() - startTime);
-          return localResult;
-        }
+      // 设置默认分页参数（第一页30条数据）
+      const queryOptions = {
+        ...options,
+        limit: options.limit || 30,
+        offset: options.offset || 0
+      };
 
-        // 本地结果不足，尝试云端补充
-        const cloudResult = await this.queryFromCloud(type, searchTerm, options);
-        
-        // 合并结果
-        const mergedResult = this.mergeQueryResults(localResult, cloudResult);
-        this.updateMetrics('hybrid', Date.now() - startTime);
-        
-        // 将云端新结果缓存到本地
-        await this.cacheCloudResults(cloudResult.data);
-        
-        return mergedResult;
-      }
-
-      // 直接查询云端
-      const cloudResult = await this.queryFromCloud(type, searchTerm, options);
+      // 优先查询云端获取分页数据
+      const cloudResult = await this.queryFromCloud(type, searchTerm, queryOptions);
       this.updateMetrics('cloud', Date.now() - startTime);
       
       // 缓存结果到本地
       await this.cacheCloudResults(cloudResult.data);
       
-      return cloudResult;
+      // 扩展实体信息：合并recent data
+      const extendedData = await this.extendEntitiesFromCache(cloudResult.data);
+      
+      console.log(`🎯 CacheStrategy.queryEntities: 查询到 ${cloudResult.data.length} 个实体，扩展信息后 ${extendedData.length} 个`);
+      
+      return {
+        ...cloudResult,
+        data: extendedData
+      };
 
     } catch (error) {
       console.error('查询实体失败:', error);
@@ -162,8 +161,12 @@ export class CacheStrategy {
       // 出错时尝试返回本地结果
       if (type) {
         const fallbackResult = await this.queryFromLocal(type, searchTerm, options);
-        fallbackResult.source = 'local';
-        return fallbackResult;
+        const extendedData = await this.extendEntitiesFromCache(fallbackResult.data);
+        return {
+          ...fallbackResult,
+          data: extendedData,
+          source: 'local'
+        };
       }
 
       return {
@@ -842,6 +845,9 @@ export class CacheStrategy {
       // 执行云端到本地单向同步
       await this.performCloudToLocalSync();
 
+      // 上传本地统计信息到云端
+      await this.uploadLocalStatisticsToCloud();
+
       // 清理过期缓存
       await this.localStorage.clearExpiredCache();
 
@@ -856,6 +862,55 @@ export class CacheStrategy {
       console.error('❌ 缓存同步失败:', error);
     }
     this.isSyncing = false;
+  }
+
+  /**
+   * 上传本地统计信息到云端
+   */
+  private async uploadLocalStatisticsToCloud(): Promise<void> {
+    try {
+      console.log('📊 开始上传本地统计信息到云端...');
+
+      // 获取所有本地缓存的实体
+      const recentDataEntries = await this.localStorage.getAllRecentDataEntries();
+      
+      if (!recentDataEntries || recentDataEntries.length === 0) {
+        console.log('📊 没有本地统计信息需要上传');
+        return;
+      }
+
+      // 收集需要更新的统计信息
+      const statisticsUpdates = [];
+      
+      for (const entry of recentDataEntries) {
+        try {
+          // 计算当前统计信息
+          const updatedStatistic = entry.statistic;
+
+          statisticsUpdates.push({
+            entityId: entry.id,
+            statistic: updatedStatistic,
+            lastUpdated: entry.lastUpdated || Date.now()
+          });
+
+        } catch (error) {
+          console.error(`处理实体 ${entry.id} 统计信息失败:`, error);
+        }
+      }
+
+      if (statisticsUpdates.length === 0) {
+        console.log('📊 没有有效的统计信息需要上传');
+        return;
+      }
+
+      // 批量更新云端实体的统计信息
+      await this.cloudStorage.batchUpdateEntityStatistics(statisticsUpdates);
+      
+      console.log(`📊 成功上传 ${statisticsUpdates.length} 个实体的统计信息`);
+
+    } catch (error) {
+      console.error('📊 上传统计信息失败:', error);
+    }
   }
 
   /**
@@ -1200,6 +1255,100 @@ export class CacheStrategy {
       chunks.push(array.slice(i, i + size));
     }
     return chunks;
+  }
+
+  /**
+   * 从缓存扩展实体信息：直接合并缓存数据（简化版）
+   */
+  private async extendEntitiesFromCache(entities: MemoryEntity[]): Promise<CachedEntityDetail[]> {
+    const extendedEntities: CachedEntityDetail[] = [];
+    
+    for (const entity of entities) {
+      const extendedEntity: CachedEntityDetail = {
+        ...entity,
+        cachedAt: Date.now(),
+        // 初始化必要的数组字段
+        latestConversations: [],
+        latestWebpages: [],
+        relatedResources: [],
+        relatedProjects: []
+      };
+      
+      try {
+        // 获取扩展缓存数据
+        const cacheData = await this.localStorage.getRecentData(entity.id);
+        
+        if (cacheData) {
+          // 直接合并缓存数据到实体对象
+          Object.assign(extendedEntity, cacheData);
+        } else {
+          // 没有缓存数据时，设置默认值  
+          this.setDefaultExtendedFields(extendedEntity, entity);
+        }
+      } catch (error) {
+        console.error(`扩展实体 ${entity.id} 信息失败:`, error);
+        // 设置默认值
+        this.setDefaultExtendedFields(extendedEntity, entity);
+      }
+      
+      extendedEntities.push(extendedEntity);
+    }
+    
+    return extendedEntities;
+  }
+
+  /**
+   * 设置扩展字段的默认值
+   */
+  private setDefaultExtendedFields(extendedEntity: CachedEntityDetail, entity: MemoryEntity): void {
+    // 设置必要的数组字段默认值
+    extendedEntity.latestConversations = [];
+    extendedEntity.latestWebpages = [];
+    extendedEntity.relatedResources = [];
+    extendedEntity.relatedProjects = [];
+    
+    // 确保统计字段存在
+    if (!extendedEntity.statistic) {
+      extendedEntity.statistic = {
+        conversations: 0,
+        projects: 0,
+        participants: 1,
+        resources: 0,
+        documents: 0,
+        webpages: 0,
+        relationships: entity.properties?.relationshipsCount || 0
+      };
+    }
+    
+    // 根据实体类型设置特定默认值
+    if (entity.type === 'Person') {
+      extendedEntity.role = entity.properties?.role || '团队成员';
+      extendedEntity.team = entity.properties?.team || '';
+      extendedEntity.expertise = entity.properties?.expertise || entity.tags || [];
+    }
+    
+    if (entity.type === 'Project') {
+      extendedEntity.isHighlighted = entity.properties?.isHighlighted || false;
+    }
+  }
+
+  /**
+   * 格式化时间为相对时间
+   */
+  private formatTimeAgo(timestamp: number | string): string {
+    const now = Date.now();
+    const time = typeof timestamp === 'string' ? new Date(timestamp).getTime() : timestamp;
+    const diff = now - time;
+    
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    const weeks = Math.floor(diff / 604800000);
+    
+    if (hours < 1) return '刚刚';
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+    if (weeks < 4) return `${weeks}周前`;
+    return new Date(time).toLocaleDateString();
   }
 
   private ensureInitialized(): void {

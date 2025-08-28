@@ -52,8 +52,8 @@ export const useMemoryStore = defineStore('memory', () => {
     isLoading.value = true;
     try {
       const response = await chromeAPI.sendMessage({ type: 'GET_ENTITY_STATISTICS' });
-      if (response && response.success) {
-        overviewStats.value = response.data;
+      if (response && (response as any).success) {
+        overviewStats.value = (response as any).data;
       }
     } catch (error) {
       console.warn('获取实体统计失败，使用模拟数据');
@@ -62,17 +62,23 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
-  const loadEntitiesByType = async (entityType: string) => {
+  const loadEntitiesByType = async (entityType: string, offset = 0, limit = 30) => {
     isLoading.value = true;
     try {
       const response = await chromeAPI.sendMessage({
         type: 'GET_ENTITIES_BY_TYPE',
         entityType,
-        limit: 50
+        limit,
+        offset
       });
       
-      if (response && response.success) {
-        entities.value = response.data || [];
+      if (response && (response as any).success) {
+        entities.value = (response as any).data || [];
+        
+        // 如果是第一页数据，检查 Topic 类型实体是否需要补充 recent data
+        if (offset === 0 && entityType === 'Topic') {
+          await enrichTopicEntitiesWithDetails(entities.value);
+        }
       } else {
         entities.value = generateMockEntities(entityType);
       }
@@ -80,6 +86,44 @@ export const useMemoryStore = defineStore('memory', () => {
       entities.value = generateMockEntities(entityType);
     } finally {
       isLoading.value = false;
+    }
+  };
+
+  // 为 Topic 实体补充详细信息
+  const enrichTopicEntitiesWithDetails = async (topicEntities: any[]) => {
+    for (const entity of topicEntities) {
+      // 检查是否缺少 recent data（没有讨论、资源、项目）
+      const hasRecentData = (
+        (entity.statistic?.conversations > 0) ||
+        (entity.latestConversations && entity.latestConversations.length > 0) ||
+        (entity.relatedResources && entity.relatedResources.length > 0) ||
+        (entity.relatedProjects && entity.relatedProjects.length > 0)
+      );
+      
+      if (!hasRecentData) {
+        try {
+          // 调用 handleGetTopicDetail 获取详细信息
+          const detailResponse = await chromeAPI.sendMessage({
+            type: 'GET_TOPIC_DETAIL',
+            topicId: entity.id
+          });
+          
+          if (detailResponse && (detailResponse as any).success && (detailResponse as any).data) {
+            const details = (detailResponse as any).data;
+            
+            // 更新实体信息（使用统一的 CachedEntityDetail 结构）
+            if (!entity.statistic) entity.statistic = {};
+            entity.statistic.conversations = details.statistic?.conversations || 0;
+            entity.statistic.webpages = details.statistic?.webpages || 0;
+            entity.latestConversations = details.latestConversations?.slice(0, 2) || [];
+            entity.relatedResources = details.relatedResources?.slice(0, 2) || [];
+            entity.relatedProjects = details.relatedProjects?.slice(0, 2) || [];
+            entity.cachedAt = details.cachedAt || Date.now();
+          }
+        } catch (error) {
+          console.error(`补充 Topic ${entity.id} 详细信息失败:`, error);
+        }
+      }
     }
   };
 
@@ -92,8 +136,8 @@ export const useMemoryStore = defineStore('memory', () => {
         query,
         limit: 30
       });
-      if (response && response.success) {
-        entities.value = response.data || [];
+      if (response && (response as any).success) {
+        entities.value = (response as any).data || [];
       }
     } catch (error) {
       console.error('搜索失败:', error);
@@ -112,8 +156,8 @@ export const useMemoryStore = defineStore('memory', () => {
         query,
         limit: 20
       });
-      if (response && response.success) {
-        entities.value = response.data || [];
+      if (response && (response as any).success) {
+        entities.value = (response as any).data || [];
       } else {
         // 使用模拟数据展示向量搜索结果
         entities.value = generateMockVectorSearchResults(query);
@@ -131,8 +175,8 @@ export const useMemoryStore = defineStore('memory', () => {
     isLoading.value = true;
     try {
       const response = await chromeAPI.sendMessage({ type: 'GET_TOPIC_DETAIL', topicId });
-      if (response && response.success) {
-        topicDetailData.value = response.data;
+      if (response && (response as any).success) {
+        topicDetailData.value = (response as any).data;
       } else {
         topicDetailData.value = getMockTopicDetail(topicId);
       }
@@ -144,7 +188,7 @@ export const useMemoryStore = defineStore('memory', () => {
   };
 
   const generateMockEntities = (entityType: string) => {
-    const config = ENTITY_TYPE_CONFIG[entityType];
+    const config = ENTITY_TYPE_CONFIG[entityType as keyof typeof ENTITY_TYPE_CONFIG];
     if (!config) return [];
     
     if (entityType === 'Topic') {
@@ -155,18 +199,33 @@ export const useMemoryStore = defineStore('memory', () => {
           type: entityType,
           description: '讨论AI在工作流程中的应用和自动化实践',
           importance: 0.9,
-          discussionsCount: 12,
           updated: Date.now() - 1800000, // 30分钟前
-          latestDiscussions: [
+          latestConversations: [
             {
               id: 'msg-1',
+              sender: '张三',
+              group: '技术讨论组',
+              datetime: new Date(Date.now() - 1800000).toISOString(),
               summary: '分享了最新的GPT-4 API集成经验，讨论了Token优化策略',
-              time: '30分钟前'
+              originalContent: '我找到了一些优化Token使用的方法，可以减少30%的成本',
+              highlightText: 'GPT-4 API Token优化策略',
+              teamUrl: '#',
+              matchedRules: ['AI', '优化'],
+              relevanceScore: 0.95,
+              context: [] as any[]
             },
             {
-              id: 'msg-2', 
+              id: 'msg-2',
+              sender: '李四',
+              group: '产品团队',
+              datetime: new Date(Date.now() - 7200000).toISOString(),
               summary: '讨论了自动化测试的实现方案，提出了新的测试框架选型建议',
-              time: '2小时前'
+              originalContent: '建议采用Playwright + Jest的组合，覆盖率会更高',
+              highlightText: '自动化测试实现方案',
+              teamUrl: '#',
+              matchedRules: ['测试', '自动化'],
+              relevanceScore: 0.88,
+              context: [] as any[]
             }
           ],
           relatedResources: [
@@ -194,7 +253,17 @@ export const useMemoryStore = defineStore('memory', () => {
             }
           ],
           tags: ['AI', '自动化', '工作流'],
-          status: 'active'
+          status: 'active',
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 12,
+            projects: 2,
+            participants: 8,
+            resources: 2,
+            documents: 1,
+            webpages: 3,
+            relationships: 5
+          }
         },
         {
           id: 'topic-frontend-optimization',
@@ -202,18 +271,33 @@ export const useMemoryStore = defineStore('memory', () => {
           type: entityType,
           description: '前端应用性能优化的技术讨论和最佳实践分享',
           importance: 0.8,
-          discussionsCount: 8,
           updated: Date.now() - 7200000, // 2小时前
-          latestDiscussions: [
+          latestConversations: [
             {
               id: 'msg-3',
+              sender: '王五',
+              group: '前端团队',
+              datetime: new Date(Date.now() - 7200000).toISOString(),
               summary: '分析了React 18的并发特性对性能的影响',
-              time: '2小时前'
+              originalContent: 'React 18的并发特性可以显著提升用户体验',
+              highlightText: 'React 18并发特性',
+              teamUrl: '#',
+              matchedRules: ['React', '性能'],
+              relevanceScore: 0.92,
+              context: [] as any[]
             },
             {
               id: 'msg-4',
+              sender: '张三',
+              group: '技术讨论组',
+              datetime: new Date(Date.now() - 14400000).toISOString(),
               summary: 'Bundle体积优化技巧分享，减少30%的包大小',
-              time: '4小时前'
+              originalContent: '通过Webpack配置优化，我们成功减少了30%的Bundle大小',
+              highlightText: 'Bundle体积优化',
+              teamUrl: '#',
+              matchedRules: ['优化', 'Webpack'],
+              relevanceScore: 0.89,
+              context: [] as any[]
             }
           ],
           relatedResources: [
@@ -236,7 +320,17 @@ export const useMemoryStore = defineStore('memory', () => {
             }
           ],
           tags: ['前端', '性能', 'React'],
-          status: 'active'
+          status: 'active',
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 8,
+            projects: 1,
+            participants: 5,
+            resources: 2,
+            documents: 2,
+            webpages: 1,
+            relationships: 3
+          }
         },
         {
           id: 'topic-design-thinking',
@@ -244,18 +338,33 @@ export const useMemoryStore = defineStore('memory', () => {
           type: entityType,
           description: '产品设计流程、用户体验设计方法论的探讨',
           importance: 0.7,
-          discussionsCount: 6,
           updated: Date.now() - 14400000, // 4小时前
-          latestDiscussions: [
+          latestConversations: [
             {
               id: 'msg-5',
+              sender: '李四',
+              group: '设计团队',
+              datetime: new Date(Date.now() - 14400000).toISOString(),
               summary: '用户研究方法在产品迭代中的应用案例分析',
-              time: '4小时前'
+              originalContent: '通过用户访谈和行为分析，我们发现了几个重要的改进点',
+              highlightText: '用户研究方法应用',
+              teamUrl: '#',
+              matchedRules: ['用户研究', '产品迭代'],
+              relevanceScore: 0.87,
+              context: [] as any[]
             },
             {
               id: 'msg-6',
+              sender: '产品经理',
+              group: '产品团队',
+              datetime: new Date(Date.now() - 21600000).toISOString(),
               summary: '设计系统在大型项目中的管理经验分享',
-              time: '6小时前'
+              originalContent: '建立统一的设计系统对大型项目的协作效率有显著提升',
+              highlightText: '设计系统管理经验',
+              teamUrl: '#',
+              matchedRules: ['设计系统', '项目管理'],
+              relevanceScore: 0.85,
+              context: [] as any[]
             }
           ],
           relatedResources: [
@@ -278,7 +387,17 @@ export const useMemoryStore = defineStore('memory', () => {
             }
           ],
           tags: ['设计', 'UX', '产品'],
-          status: 'active'
+          status: 'active',
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 6,
+            projects: 2,
+            participants: 4,
+            resources: 1,
+            documents: 1,
+            webpages: 2,
+            relationships: 2
+          }
         }
       ];
     }
@@ -293,12 +412,23 @@ export const useMemoryStore = defineStore('memory', () => {
           importance: 0.95,
           accessCount: 156,
           lastAccessed: Date.now() - 7200000, // 2小时前
-          relationshipsCount: 23,
-          relatedMessagesCount: 67,
-          relatedWebpagesCount: 34,
           tags: ['Chrome扩展', 'AI', '智能助手'],
           status: 'active',
-          isHighlighted: true
+          isHighlighted: true,
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 67,
+            projects: 1,
+            participants: 8,
+            resources: 15,
+            documents: 10,
+            webpages: 34,
+            relationships: 23
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[],
+          relatedResources: [] as any[],
+          relatedProjects: [] as any[]
         },
         {
           id: 'project-data-pipeline',
@@ -308,12 +438,23 @@ export const useMemoryStore = defineStore('memory', () => {
           importance: 0.8,
           accessCount: 89,
           lastAccessed: Date.now() - 18000000, // 5小时前
-          relationshipsCount: 15,
-          relatedMessagesCount: 42,
-          relatedWebpagesCount: 18,
           tags: ['数据处理', 'ETL', '大数据'],
           status: 'active',
-          isHighlighted: false
+          isHighlighted: false,
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 42,
+            projects: 1,
+            participants: 5,
+            resources: 8,
+            documents: 5,
+            webpages: 18,
+            relationships: 15
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[],
+          relatedResources: [] as any[],
+          relatedProjects: [] as any[]
         },
         {
           id: 'project-web-platform',
@@ -323,12 +464,23 @@ export const useMemoryStore = defineStore('memory', () => {
           importance: 0.7,
           accessCount: 134,
           lastAccessed: Date.now() - 43200000, // 12小时前
-          relationshipsCount: 28,
-          relatedMessagesCount: 78,
-          relatedWebpagesCount: 45,
           tags: ['前端', 'Web', '用户体验'],
           status: 'active',
-          isHighlighted: true
+          isHighlighted: true,
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 78,
+            projects: 1,
+            participants: 12,
+            resources: 20,
+            documents: 15,
+            webpages: 45,
+            relationships: 28
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[],
+          relatedResources: [] as any[],
+          relatedProjects: [] as any[]
         },
         {
           id: 'project-design-system',
@@ -338,12 +490,23 @@ export const useMemoryStore = defineStore('memory', () => {
           importance: 0.6,
           accessCount: 67,
           lastAccessed: Date.now() - 86400000, // 1天前
-          relationshipsCount: 12,
-          relatedMessagesCount: 29,
-          relatedWebpagesCount: 16,
           tags: ['设计系统', 'UI组件', '规范'],
           status: 'active',
-          isHighlighted: false
+          isHighlighted: false,
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 29,
+            projects: 1,
+            participants: 6,
+            resources: 10,
+            documents: 8,
+            webpages: 16,
+            relationships: 12
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[],
+          relatedResources: [] as any[],
+          relatedProjects: [] as any[]
         },
         {
           id: 'project-automation-tools',
@@ -353,12 +516,23 @@ export const useMemoryStore = defineStore('memory', () => {
           importance: 0.75,
           accessCount: 93,
           lastAccessed: Date.now() - 172800000, // 2天前
-          relationshipsCount: 18,
-          relatedMessagesCount: 36,
-          relatedWebpagesCount: 22,
           tags: ['自动化', 'CI/CD', '工具链'],
           status: 'active',
-          isHighlighted: false
+          isHighlighted: false,
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 36,
+            projects: 1,
+            participants: 8,
+            resources: 12,
+            documents: 7,
+            webpages: 22,
+            relationships: 18
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[],
+          relatedResources: [] as any[],
+          relatedProjects: [] as any[]
         }
       ];
     }
@@ -401,7 +575,19 @@ export const useMemoryStore = defineStore('memory', () => {
             }
           ],
           tags: ['前端', '技术专家', 'React'],
-          status: 'active'
+          status: 'active',
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 25,
+            projects: 2,
+            participants: 1,
+            resources: 5,
+            documents: 3,
+            webpages: 8,
+            relationships: 12
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[]
         },
         {
           id: 'person-lisi',
@@ -439,7 +625,19 @@ export const useMemoryStore = defineStore('memory', () => {
             }
           ],
           tags: ['设计', 'UX', '原型'],
-          status: 'active'
+          status: 'active',
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 18,
+            projects: 2,
+            participants: 1,
+            resources: 8,
+            documents: 5,
+            webpages: 12,
+            relationships: 8
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[]
         },
         {
           id: 'person-wangwu',
@@ -477,7 +675,19 @@ export const useMemoryStore = defineStore('memory', () => {
             }
           ],
           tags: ['后端', '架构师', 'API'],
-          status: 'active'
+          status: 'active',
+          cachedAt: Date.now(),
+          statistic: {
+            conversations: 22,
+            projects: 2,
+            participants: 1,
+            resources: 12,
+            documents: 8,
+            webpages: 6,
+            relationships: 15
+          },
+          latestConversations: [] as any[],
+          latestWebpages: [] as any[]
         }
       ];
     }
@@ -491,11 +701,22 @@ export const useMemoryStore = defineStore('memory', () => {
       importance: Math.random(),
       accessCount: Math.floor(Math.random() * 100),
       lastAccessed: Date.now() - Math.floor(Math.random() * 86400000),
-      relationshipsCount: Math.floor(Math.random() * 20),
-      relatedMessagesCount: Math.floor(Math.random() * 50),
-      relatedWebpagesCount: Math.floor(Math.random() * 30),
       tags: ['示例', '测试'],
-      status: 'active'
+      status: 'active',
+      cachedAt: Date.now(),
+      statistic: {
+        conversations: Math.floor(Math.random() * 50),
+        projects: Math.floor(Math.random() * 10),
+        participants: Math.floor(Math.random() * 15),
+        resources: Math.floor(Math.random() * 20),
+        documents: Math.floor(Math.random() * 10),
+        webpages: Math.floor(Math.random() * 30),
+        relationships: Math.floor(Math.random() * 20)
+      },
+      latestConversations: [] as any[],
+      latestWebpages: [] as any[],
+      relatedResources: [] as any[],
+      relatedProjects: [] as any[]
     }));
   };
 

@@ -539,11 +539,11 @@ const MemoryInterface = () => {
   const loadTopicDetailData = async (topicId: string) => {
     setIsLoading(true);
     try {
-      // 1. 先尝试从本地缓存获取完整的主题详情
-      const cachedTopicDetails = await memorySystem.getCachedTopicDetails(topicId);
+      // 1. 先尝试从统一缓存获取完整的主题详情（使用 RECENT_DATA 替代 TOPIC_DETAILS）
+      const cachedTopicDetails = await memorySystem.getRecentData(topicId);
       
       if (cachedTopicDetails) {
-        console.log(`📦 主题详情页使用缓存数据: ${topicId}`);
+        console.log(`📦 主题详情页使用统一缓存数据: ${topicId}`);
         setTopicDetailData(cachedTopicDetails);
         setIsLoading(false);
         return;
@@ -560,40 +560,9 @@ const MemoryInterface = () => {
         const topicData = response.data;
         setTopicDetailData(topicData);
 
-        // 3. 缓存详情数据到本地，供下次使用
-        try {
-          await memorySystem.cacheTopicDetails(topicId, {
-            conversations: topicData.conversations || [],
-            resources: topicData.relatedResources || [],
-            projects: topicData.relatedProjects || [],
-            webpages: topicData.webpages || []
-          });
+        // 3. 数据已由 memoryMessageHandler.ts 自动缓存到统一的 RECENT_DATA，无需重复缓存
 
-          // 4. 同时更新最近数据缓存（前5条）
-          const itemsToCache = [
-            { type: 'conversation', items: topicData.conversations },
-            { type: 'resource', items: topicData.relatedResources },
-            { type: 'project', items: topicData.relatedProjects },
-            { type: 'webpage', items: topicData.webpages }
-          ];
-
-          for (const { type, items } of itemsToCache) {
-            if (items && Array.isArray(items)) {
-              const recentItems = items.slice(0, 5);
-              for (const item of recentItems) {
-                await memorySystem.updateRecentData(
-                  topicId,
-                  type as 'conversation' | 'resource' | 'project' | 'webpage',
-                  item
-                );
-              }
-            }
-          }
-
-          console.log(`💾 主题详情已缓存: ${topicId}`);
-        } catch (cacheError) {
-          console.warn('缓存主题详情失败:', cacheError);
-        }
+        console.log(`💾 主题详情已通过统一缓存机制存储: ${topicId}`);
       } else {
         // 如果后端接口不存在，使用模拟数据
         console.log(`🎭 使用模拟数据: ${topicId}`);
@@ -612,7 +581,7 @@ const MemoryInterface = () => {
             { id: 'resource-1', name: 'AI开发最佳实践', type: '技术文档', url: '#' },
             { id: 'resource-2', name: '自动化工具指南', type: '教程', url: '#' }
           ],
-          conversations: [
+          latestConversations: [
             {
               id: 'conv-1',
               sender: '张三',
@@ -625,7 +594,7 @@ const MemoryInterface = () => {
               ]
             }
           ],
-          webpages: [
+          latestWebpages: [
             {
               id: 'webpage-1',
               title: 'AI开发技术文档',
