@@ -6,51 +6,13 @@
 import { QueryResult, QueryOptions } from '../memory';
 import { MemoryEntity } from './CloudStorage';
 
-// 统一的缓存实体详情接口 - 包含所有本地缓存数据
+// 🆕 精简的缓存实体详情接口 - 大部分关联数据已迁移到 MemoryEntity.relatedData
 export interface CachedEntityDetail extends MemoryEntity {
   cachedAt: number;
   
-  // 缓存的近期数据
-  latestConversations: {
-    id: string;
-    sender: string;
-    group: string; // 使用真实群组名称
-    datetime: string;
-    summary: string;
-    originalContent: string;
-    highlightText: string;
-    teamUrl: string; // 使用真实的团队URL
-    matchedRules: string[]; // 使用真实的匹配规则
-    relevanceScore: number;
-    context: {
-      id: string;
-      sender: string;
-      content: string;
-      datetime: string;
-      isMainMessage: boolean;
-    }[]; // 使用真实的上下文消息
-  }[];
-  latestWebpages: {
-    id: string;
-    title: string;
-    url: string;
-    type: string;
-    visitTime: string;
-    summary: string;
-    tags: string[];
-  }[];
-  relatedResources: {
-    id: string;
-    name: string;
-    type?: string;
-    url?: string;
-  }[];
-  relatedProjects: {
-    id: string;
-    name: string;
-    status: string;
-    description?: string;
-  }[];
+  // 🆕 保留本地快速查询相关的字段，其他已迁移到 MemoryEntity.relatedData
+  
+  // 本地特有的参与者关系（通过关系表快速查询）
   relatedParticipants: {
     id: string;
     name: string;
@@ -59,17 +21,69 @@ export interface CachedEntityDetail extends MemoryEntity {
     lastContact: number;
   }[];
   
-  // Person类型特有字段
-  role?: string;
-  team?: string;
-  lastContact?: number;
-  expertise?: string[];
-  
-  // Project类型特有字段
-  isHighlighted?: boolean;
-  
   // 额外的 UI 字段（向后兼容）
   lastUpdated?: number;
+  
+  // 🆕 UI 便捷访问：将 MemoryEntity.relatedData 转换为 UI 友好格式（通过辅助函数提供）
+  latestConversations?: {
+    id: string;
+    sender: string;
+    group: string;
+    datetime: string;
+    summary: string;
+    originalContent: string; // 从 context 中提取主消息
+    highlightText: string;
+    teamUrl: string;
+    matchedRules: string[];
+    relevanceScore: number;
+    context: {
+      id: string;
+      sender: string;
+      content: string;
+      datetime: string;
+      isMainMessage: boolean;
+    }[];
+  }[];
+  
+  latestWebpages?: {
+    id: string;
+    title: string;
+    url: string;
+    type: string;
+    visitTime: string;
+    summary: string;
+    tags: string[];
+  }[];
+  
+  relatedResources?: {
+    id: string;
+    name: string;
+    type?: string;
+    url?: string;
+  }[];
+  
+  relatedProjects?: {
+    id: string;
+    name: string;
+    status: string;
+    description?: string;
+  }[];
+  
+  relatedTopics?: {
+    id: string;
+    name: string;
+    summary: string;
+    category: string;
+  }[];
+  
+  relatedJiraTickets?: {
+    id: string;
+    key: string;
+    summary: string;
+    status: string;
+    assignee: string;
+    priority: string;
+  }[];
 }
 
 // 关系类型定义
@@ -91,8 +105,7 @@ const CACHE_KEYS = {
   TYPE_INDEX: 'cache_type_index',
   RELATIONSHIPS: 'cache_relationships',
   RELATIONSHIP_INDEX: 'cache_relationship_index',
-  STATISTICS: 'cache_statistics',
-  CACHE_META: 'cache_metadata'
+  STATISTICS: 'cache_statistics'
 };
 
 // 缓存配置
@@ -107,14 +120,7 @@ interface CacheConfig {
   recentDataQueryLimit: number; // 单个实体最近数据查询限制
 }
 
-// 缓存元数据
-interface CacheMetadata {
-  entityCount: number;
-  relationshipCount: number;
-  lastCleanup: number;
-  lastSync: number;
-  cacheSize: number;
-}
+
 
 // 实体索引
 interface EntityIndex {
@@ -1094,9 +1100,6 @@ export class LocalStorage {
         console.log(`🧹 清理了 ${keysToRemove.length} 个过期缓存项`);
       }
 
-      // 更新清理时间
-      await this.updateCacheMetadata({ lastCleanup: now });
-
     } catch (error) {
       console.error('清理过期缓存失败:', error);
     }
@@ -1433,20 +1436,7 @@ export class LocalStorage {
     }
   }
 
-  private async updateCacheMetadata(updates: Partial<CacheMetadata>): Promise<void> {
-    try {
-      const result = await chrome.storage.local.get(CACHE_KEYS.CACHE_META);
-      const metadata = result[CACHE_KEYS.CACHE_META] || {};
-      
-      const updatedMetadata = { ...metadata, ...updates };
-      
-      await chrome.storage.local.set({
-        [CACHE_KEYS.CACHE_META]: updatedMetadata
-      });
-    } catch (error) {
-      console.error('更新缓存元数据失败:', error);
-    }
-  }
+
 
   private startPeriodicCleanup(): void {
     // 每小时清理一次过期缓存

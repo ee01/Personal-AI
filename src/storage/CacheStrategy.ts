@@ -297,13 +297,12 @@ export class CacheStrategy {
   }
 
   /**
-   * 存储消息（先云端后本地）
+   * 存储消息（先云端后本地）- 🆕 简化版，不再处理实体关联数据
    */
   async storeMessage(messageData: {
     id: string;
     content: string;
     metadata: any;
-    entities?: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>;
   }): Promise<StoreResult> {
     this.ensureInitialized();
 
@@ -319,43 +318,14 @@ export class CacheStrategy {
     };
 
     try {
-      // 1. 存储消息到云端
+      // 存储消息到云端（实体数据已包含在metadata中）
       const cloudSuccess = await this.cloudStorage.storeMessage(messageData);
       result.cloudStored = cloudSuccess;
-
-      // 2. 处理实体（如果有）
-      if (messageData.entities && messageData.entities.length > 0) {
-        for (const entityData of messageData.entities) {
-          const entityResult = await this.storeEntity(entityData);
-          if (entityResult.success) {
-            result.relationshipsCreated++;
-            
-            // 🆕 创建实体与消息的关系
-            await this.createEntityMessageRelationship(
-              entityResult.entityId,
-              messageData.id,
-              messageData.metadata
-            );
-            
-            // 更新相关实体的最近数据缓存
-            await this.localStorage.updateRecentData(
-              entityResult.entityId,
-              'conversation',
-              {
-                id: messageData.id,
-                content: messageData.content.substring(0, 200),
-                summary: messageData.metadata.summary || '',
-                timestamp: messageData.metadata.timestamp || Date.now(),
-                sender: messageData.metadata.sender || 'unknown'
-              }
-            );
-          }
-        }
-      }
 
       result.success = result.cloudStored;
       result.processingTime = Date.now() - startTime;
 
+      console.log(`✅ 消息存储完成: ${messageData.id}, 成功: ${result.success ? '✅' : '❌'}`);
       return result;
 
     } catch (error) {
@@ -630,121 +600,9 @@ export class CacheStrategy {
   /**
    * 🆕 创建实体与消息的关系
    */
-  private async createEntityMessageRelationship(
-    entityId: string,
-    messageId: string,
-    messageMetadata: any
-  ): Promise<void> {
-    try {
-      const relationship = {
-        id: `rel_${entityId}_${messageId}_discovered_in`,
-        type: 'discovered_in',
-        fromId: entityId,
-        toId: messageId,
-        properties: {
-          source: 'message',
-          messageId: messageId,
-          discoveredAt: Date.now(),
-          sender: messageMetadata.source || 'unknown',
-          teamName: messageMetadata.teamName || '',
-          teamId: messageMetadata.teamId || ''
-        },
-        strength: 0.8, // 实体与发现它的消息关系较强
-        created: Date.now(),
-        updated: Date.now()
-      };
+  // 🗑️ 已删除：createEntityMessageRelationship - 关联数据现在直接存储在 MemoryEntity.relatedData 中
 
-      // 存储关系到本地缓存
-      await this.localStorage.storeRelationship(relationship);
-      
-      console.log(`✅ 创建实体-消息关系: ${entityId} -> ${messageId}`);
-    } catch (error) {
-      console.error('创建实体-消息关系失败:', error);
-    }
-  }
-
-  /**
-   * 从消息数据重建关系表
-   */
-  private async rebuildRelationshipsFromMessages(): Promise<number> {
-    try {
-      const messagesCollection = await this.cloudStorage.getMessagesCollection();
-      if (!messagesCollection) {
-        console.log('⚠️ 无法访问消息集合');
-        return 0;
-      }
-
-      // 获取所有消息数据
-      const messagesData = await messagesCollection.get({
-        include: ['metadatas' as any]
-      });
-
-      if (!messagesData.ids || messagesData.ids.length === 0) {
-        console.log('📭 没有找到消息数据');
-        return 0;
-      }
-
-      let rebuiltRelationships = 0;
-      const relationshipMap = new Map<string, any>();
-
-      for (let i = 0; i < messagesData.ids.length; i++) {
-        const metadata = messagesData.metadatas![i] as any;
-        
-        if (metadata.relationships) {
-          try {
-            const relationships = typeof metadata.relationships === 'string' 
-              ? JSON.parse(metadata.relationships) 
-              : metadata.relationships;
-            
-            if (Array.isArray(relationships)) {
-              for (const rel of relationships) {
-                const relationshipId = this.generateRelationshipId(rel.source, rel.target, rel.relationship);
-                
-                if (!relationshipMap.has(relationshipId)) {
-                  relationshipMap.set(relationshipId, {
-                    id: relationshipId,
-                    type: rel.relationship,
-                    fromId: this.normalizeEntityId(rel.source),
-                    toId: this.normalizeEntityId(rel.target),
-                    properties: {
-                      source: 'message',
-                      messageId: messagesData.ids[i],
-                      discoveredAt: metadata.timestamp || Date.now()
-                    },
-                    strength: 0.7,
-                    created: metadata.timestamp || Date.now(),
-                    updated: metadata.timestamp || Date.now()
-                  });
-                  
-                  rebuiltRelationships++;
-                }
-              }
-            }
-          } catch (e) {
-            console.warn(`解析消息关系数据失败 ${messagesData.ids[i]}:`, e);
-          }
-        }
-      }
-
-      // 保存重建的关系到本地
-      if (rebuiltRelationships > 0) {
-        const relationshipData = {
-          relationships: Array.from(relationshipMap.entries()),
-          entityToRelations: [] as any[], // 稍后会重建
-          typeToEntities: [] as any[]
-        };
-        
-        await this.localStorage.restoreRelationshipData(relationshipData);
-      }
-
-      console.log(`🔄 从消息数据重建了 ${rebuiltRelationships} 个关系`);
-      return rebuiltRelationships;
-
-    } catch (error) {
-      console.error('❌ 从消息数据重建关系失败:', error);
-      return 0;
-    }
-  }
+  // 🗑️ 已删除：rebuildRelationshipsFromMessages - 关联数据现在直接存储在 MemoryEntity.relatedData 中
 
   /**
    * 生成关系ID
@@ -955,14 +813,11 @@ export class CacheStrategy {
         }
       }
 
-      // 3. 从云端恢复关系数据
-      await this.syncRelationshipsFromCloud();
-
-      // 4. 基于同步的关系数据，批量更新最近数据缓存
+      // 3. 🆕 关联数据现在直接存储在 MemoryEntity.relatedData 中，无需单独同步关系
+      console.log(`📊 实体关联数据已通过 MemoryEntity.relatedData 同步，无需额外关系处理`);
+      
       if (entitiesToUpdate.length > 0) {
-        console.log(`🔗 开始基于关系数据更新最近数据缓存...`);
-        const recentDataCount = await this.localStorage.batchUpdateRecentDataCacheFromRelations(entitiesToUpdate);
-        recentDataUpdated += recentDataCount;
+        recentDataUpdated = entitiesToUpdate.length;
       }
 
       console.log(`✅ 单向同步完成: 同步了${syncedEntities}个实体，更新了${recentDataUpdated}个实体的最近数据缓存`);
@@ -977,28 +832,7 @@ export class CacheStrategy {
   /**
    * 从云端同步关系数据到本地
    */
-  private async syncRelationshipsFromCloud(): Promise<void> {
-    try {
-      console.log('🔗 开始从云端恢复关系数据...');
-      
-      // 尝试从云端恢复关系数据
-      const relationshipData = await this.cloudStorage.restoreRelationships();
-      
-      if (relationshipData) {
-        // 将关系数据保存到本地
-        await this.localStorage.restoreRelationshipData(relationshipData);
-        console.log(`✅ 从云端恢复了 ${relationshipData.relationships.length} 个关系到本地缓存`);
-      } else {
-        // 如果云端没有关系备份，尝试从消息重建
-        console.log('🔄 云端无关系备份，尝试从消息数据重建关系...');
-        const rebuiltCount = await this.rebuildRelationshipsFromMessages();
-        console.log(`🔄 从消息重建了 ${rebuiltCount} 个关系`);
-      }
-
-    } catch (error) {
-      console.error('❌ 从云端同步关系数据失败:', error);
-    }
-  }
+  // 🗑️ 已删除：syncRelationshipsFromCloud - 关联数据现在直接存储在 MemoryEntity.relatedData 中
 
 
 
@@ -1271,7 +1105,8 @@ export class CacheStrategy {
         latestConversations: [],
         latestWebpages: [],
         relatedResources: [],
-        relatedProjects: []
+        relatedProjects: [],
+        relatedParticipants: [] // 🆕 添加缺失的字段
       };
       
       try {
@@ -1316,7 +1151,9 @@ export class CacheStrategy {
         resources: 0,
         documents: 0,
         webpages: 0,
-        relationships: entity.properties?.relationshipsCount || 0
+        relationships: entity.properties?.relationshipsCount || 0,
+        topics: 0, // 🆕 添加缺失的字段
+        jiraTickets: 0 // 🆕 添加缺失的字段
       };
     }
     

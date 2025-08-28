@@ -374,23 +374,22 @@ export class MemorySystem {
   }
 
   /**
-   * 存储消息（先云端后本地）
+   * 存储消息（先云端后本地）- 🆕 简化版，不再处理实体关联数据
    */
   async storeMessage(messageData: {
     id: string;
     content: string;
     metadata: any;
-    entities?: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>;
   }): Promise<StoreResult> {
     this.ensureInitialized();
     
     try {
-      // 存储到记忆系统
+      // 存储到记忆系统（实体数据已包含在metadata中）
       const result = await this.cacheStrategy.storeMessage(messageData);
       
       // 同时更新用户画像
-      if (result.success && this.userProfileManager && messageData.entities) {
-        await this.updateUserProfileFromEntities(messageData.entities, {
+      if (result.success && this.userProfileManager && messageData.metadata?.entities) {
+        await this.updateUserProfileFromEntities(messageData.metadata?.entities, {
           actionType: 'mention',
           timestamp: Date.now(),
           context: 'message_analysis',
@@ -783,6 +782,17 @@ export class MemorySystem {
     if (this.userProfileManager) {
       await this.userProfileManager.applyWeightDecay();
     }
+  }
+
+  /**
+   * 🆕 更新实体关联数据 - 从消息元数据中提取实体并更新其关联信息
+   */
+  async updateEntitiesWithRelatedData(
+    messageMetadata: any,
+    messageId: string
+  ): Promise<void> {
+    this.ensureInitialized();
+    return this.cloudStorage.updateEntitiesWithRelatedData(messageMetadata, messageId, this);
   }
 
   // ==================== 私有方法 ====================

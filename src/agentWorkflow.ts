@@ -463,34 +463,47 @@ export async function processNewMessage(message: any): Promise<MessageProcessRes
   // 调用Agent协调器处理消息，传递完整的消息上下文
   const processResult = await agentCoordinator.processMessage(message);
   
-  // 如果消息需要存储到向量数据库
+  // 🆕 如果消息需要存储到向量数据库（更新为新的关联数据存储）
   if (processResult.shouldStore) {
     try {
       await memorySystem.initialize();
       
       const messageId = uuidv4();
+      const messageMetadata = {
+        source: message.sender || 'unknown',
+        timestamp: new Date(message.datetime).getTime(),
+        datetime: message.datetime || new Date().toISOString(),
+        matchedRules: [message.matched_rule],
+        summary: message.summary || '',
+        reply_advice: processResult.replyAdvice || message.reply_advice || '',
+        teamName: message.team_name,
+        teamId: message.team_id,
+        contextMessages: [], // agentWorkflow 模式下暂无上下文
+        ...processResult.enrichedData
+      };
+
+      // 🆕 使用新的分离式存储系统
+      // 1. 存储消息到 messages collection（实体数据已包含在metadata中）
       const storeResult: StoreResult = await memorySystem.storeMessage({
         id: messageId,
         content: message.message_content,
-        metadata: {
-          source: message.sender || 'unknown',
-          timestamp: new Date(message.datetime).getTime(),
-          matchedRules: [message.matched_rule],
-          summary: message.summary || '',
-          reply_advice: processResult.replyAdvice || message.reply_advice || '',
-          teamName: message.team_name,
-          teamId: message.team_id,
-          ...processResult.enrichedData
-        }
+        metadata: messageMetadata
       });
+
+      // 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
+      await memorySystem.updateEntitiesWithRelatedData(
+        messageMetadata,
+        messageId
+      );
       
-      console.log(`✅ 消息存储完成 [新系统]: ${messageId}`, {
+      console.log(`✅ 消息和实体关联存储完成 [agentWorkflow新系统]: ${messageId}`, {
         success: storeResult.success,
         cloudStored: storeResult.cloudStored,
-        localCached: storeResult.localCached
+        localCached: storeResult.localCached,
+        performance: `${storeResult.processingTime}ms`
       });
     } catch (error) {
-      console.error('存储消息失败:', error);
+      console.error('🚨 agentWorkflow存储消息失败:', error);
     }
   }
   

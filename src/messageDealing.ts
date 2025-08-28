@@ -212,7 +212,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					}).catch(console.error);
 				}
 				
-				// 处理 shouldStore 标志 - 使用新的统一存储系统
+				// 🆕 处理 shouldStore 标志 - 实现新的实体关联存储
 				if (result.shouldStore) {
 					try {
 						const originalMessage = result.messageContext || {};
@@ -222,10 +222,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						const messageMetadata = {
 							source: originalMessage.sender || 'unknown',
 							timestamp: Date.now(),
+							datetime: originalMessage.datetime || new Date().toISOString(),
 							matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
 							summary: result.summary || '',
 							teamName: originalMessage.groupName || '',
 							teamId: originalMessage.groupId || '',
+							contextMessages: [] as any[], // 暂时设为空数组，稍后从其他地方获取
 							entities: result.enrichedData?.entities || {},
 							metadata: {
 								sentiment: result.enrichedData?.sentiment || 'neutral',
@@ -238,29 +240,31 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							reply_advice: result.replyAdvice || ''
 						};
 
-						// 提取实体信息用于相似性检查
-						const extractedEntities = extractEntitiesFromMetadata(messageMetadata, messageId);
+													// 🆕 使用新的分离式存储系统
+							try {
+								// 确保记忆系统已初始化
+								await memorySystem.initialize();
+								
+								// 1. 存储消息到 messages collection（实体数据已包含在metadata中）
+								const storeResult: StoreResult = await memorySystem.storeMessage({
+									id: messageId,
+									content: originalMessage.messageContent || '',
+									metadata: messageMetadata
+								});
 
-						// 使用新的记忆系统存储
-						try {
-							// 确保记忆系统已初始化
-							await memorySystem.initialize();
-							
-							const storeResult: StoreResult = await memorySystem.storeMessage({
-								id: messageId,
-								content: originalMessage.messageContent || '',
-								metadata: messageMetadata,
-								entities: extractedEntities
-							});
+								// 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
+								await memorySystem.updateEntitiesWithRelatedData(
+									messageMetadata,
+									messageId
+								);
 
-							console.log(`✅ 消息存储完成 [新系统]: ${messageId}`, {
-								...storeResult,
-								entityTypes: extractedEntities.map(e => e.type),
-								entityNames: extractedEntities.map(e => e.name)
-							});
+								console.log(`✅ 消息和实体关联存储完成: ${messageId}`, {
+									...storeResult,
+									performance: `${storeResult.processingTime}ms`
+								});
 
 						} catch (unifiedError) {
-							console.error('统一存储系统失败，回退到原有方式:', unifiedError);
+							console.error('🚨 统一存储系统失败，回退到原有方式:', unifiedError);
 							
 							// 回退到原有的存储方式
 							await storeMessage(
@@ -591,33 +595,35 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					reply_advice: json.reply_advice
 				};
 
-				// 提取实体信息用于相似性检查
-				const entitiesForSimilarity = extractEntitiesFromMetadata(messageMetadata, messageId);
-
-				// 使用新的记忆系统存储
+				// 🆕 使用新的分离式存储系统（与 agentThinking 方式一致）
 				try {
 					// 确保记忆系统已初始化
 					await memorySystem.initialize();
 					
+					// 1. 存储消息到 messages collection（实体数据已包含在metadata中）
 					const storeResult: StoreResult = await memorySystem.storeMessage({
 						id: messageId,
 						content: json.message_content,
-						metadata: messageMetadata,
-						entities: entitiesForSimilarity
+						metadata: messageMetadata
 					});
 
-					console.log(`✅ 消息存储完成 [记忆系统]: ${messageId.slice(0,8)}`, {
+					// 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
+					await memorySystem.updateEntitiesWithRelatedData(
+						messageMetadata,
+						messageId
+					);
+
+					console.log(`✅ 消息和实体关联存储完成 [新系统]: ${messageId.slice(0,8)}`, {
 						...storeResult,
-						entityMerges: storeResult.relationshipsCreated > 0 ? `${storeResult.relationshipsCreated}个关系创建` : '无关系',
 						performance: `${storeResult.processingTime}ms`
 					});
 
 				} catch (memoryError) {
-					console.error('记忆系统失败，回退到基础存储:', memoryError);
+					console.error('🚨 统一存储系统失败，回退到原有方式:', memoryError);
 					
 					// 回退到基础存储
 					await storeMessage(messageId, json.message_content, messageMetadata);
-					console.log(`📦 消息存储完成 [基础系统]: ${messageId.slice(0,8)}`);
+					console.log(`📦 消息存储完成 [回退系统]: ${messageId.slice(0,8)}`);
 				}
 
 				// 如果审核通过，则推送 Glip 消息
@@ -655,133 +661,5 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 
 // 函数已移除，使用新的记忆系统 (memorySystem) 替代
 
-// 将消息元数据转换为实体信息
-function extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<any, 'id' | 'created' | 'updated'>> {
-  const entities: Array<Omit<any, 'id' | 'created' | 'updated'>> = [];
-  
-  if (metadata.entities) {
-    // 提取人员实体
-    if (metadata.entities.people) {
-      for (const person of metadata.entities.people) {
-        entities.push({
-          type: 'Person',
-          name: person.name,
-          properties: {
-            role: person.role,
-            mentioned_context: person.mentioned_context,
-            source: 'message_analysis',
-            teamName: metadata.teamName || '',
-            // 🆕 添加消息来源信息
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.7 // 默认重要性
-        });
-      }
-    }
-    
-    // 提取项目实体
-    if (metadata.entities.projects) {
-      for (const project of metadata.entities.projects) {
-        entities.push({
-          type: 'Project',
-          name: project.name,
-          properties: {
-            status: project.status,
-            related_people: project.related_people,
-            source: 'message_analysis',
-            teamName: metadata.teamName || '',
-            // 🆕 添加消息来源信息
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.8 // 项目通常更重要
-        });
-      }
-    }
-    
-    // 提取话题实体
-    if (metadata.entities.topics) {
-      for (const topic of metadata.entities.topics) {
-        entities.push({
-          type: 'Topic',
-          name: topic.name,
-          properties: {
-            category: topic.category,
-            keywords: topic.keywords,
-            source: 'message_analysis',
-            teamName: metadata.teamName || '',
-            // 🆕 添加消息来源信息
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.5 // 话题重要性较低
-        });
-      }
-    }
-    
-    // 提取文档/资源实体（从消息中提取的技术文档、链接等资源）
-    if (metadata.entities.documents || metadata.entities.resources) {
-      const documentsList = [...(metadata.entities.documents || []), ...(metadata.entities.resources || [])];
-      for (const doc of documentsList) {
-        entities.push({
-          type: 'Document',
-          name: doc.name || doc.title,
-          properties: {
-            url: doc.url,
-            type: doc.type || 'document',
-            description: doc.description,
-            source: 'message_analysis',
-            teamName: metadata.teamName || '',
-            // 🆕 添加消息来源信息
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.6
-        });
-      }
-    }
-
-    // 提取技术实体（从消息中提到的技术栈、工具等）
-    if (metadata.entities.technologies || metadata.entities.tools) {
-      const techList = [...(metadata.entities.technologies || []), ...(metadata.entities.tools || [])];
-      for (const tech of techList) {
-        entities.push({
-          type: 'Document', // 将Technology类型归类为Document类型
-          name: tech.name,
-          properties: {
-            category: tech.category,
-            version: tech.version,
-            usage_context: tech.usage_context,
-            source: 'message_analysis',
-            teamName: metadata.teamName || '',
-            type: 'technology', // 在properties中标记具体类型
-            // 🆕 添加消息来源信息
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.6
-        });
-      }
-    }
-    
-    // 提取组织实体
-    if (metadata.teamName && metadata.teamName !== 'SM AI') {
-      entities.push({
-        type: 'Organization',
-        name: metadata.teamName,
-        properties: {
-          teamId: metadata.teamId,
-          source: 'message_analysis',
-          type: 'team',
-          // 🆕 添加消息来源信息
-          messageId: messageId,
-          timestamp: metadata.timestamp || Date.now()
-        },
-        importance: 0.6
-      });
-    }
-  }
-  
-  return entities;
-}
+// 🗑️ 已移除：updateEntitiesWithRelatedData 和 extractEntitiesFromMetadata 函数
+// 现在这些功能通过 memorySystem.updateEntitiesWithRelatedData() 调用
