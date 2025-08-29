@@ -4,11 +4,13 @@
  */
 
 import { ChromaClient, Collection, EmbeddingFunction } from 'chromadb';
+import { v4 as uuidv4 } from 'uuid';
 import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig } from '../utils';
 import { QueryResult, VectorSearchOptions, QueryOptions } from '../memory';
+import { memorySystem } from '../memory';
+import { entityIdGenerator } from './EntityIdGenerator';
 
-// 基础实体接口 - CloudStorage 专用，包含所有关联数据
 export interface MemoryEntity {
   id: string;
   type: 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
@@ -47,16 +49,10 @@ export interface MemoryEntity {
       id: string;
       summary: string;
       sender: string;
-      group: string;
+      teamId: string;
+      teamName: string;
       datetime: string;
       relevanceScore: number;
-      context: Array<{
-        id: string;
-        sender: string;
-        content: string;
-        datetime: string;
-        isMainMessage: boolean;
-      }>;
     }>;
     
     // 关联的网页浏览记录
@@ -66,7 +62,7 @@ export interface MemoryEntity {
       title: string;
       url: string;
       domain: string;
-      visitTime: string;
+      datetime: string;
       relevanceScore: number;
     }>;
     
@@ -109,7 +105,7 @@ export interface MemoryEntity {
       relevanceScore: number;
     }>;
     
-    // 🆕 关联的JIRA ticket
+    // 关联的JIRA ticket
     jiraTickets: Array<{
       id: string;
       key: string;
@@ -229,6 +225,15 @@ export class CloudStorage {
       return true;
     } catch (error) {
       return false;
+    }
+  }
+
+  /**
+   * 确保已初始化
+   */
+  private ensureInitialized(): void {
+    if (!this.isInitialized) {
+      throw new Error('云端存储未初始化');
     }
   }
 
@@ -417,7 +422,7 @@ export class CloudStorage {
       const embedding = await getEmbeddingViaOffscreen(naturalDescription);
 
       // 转换关联数据为ChromaDB兼容格式
-      const chromaMetadata = this.convertEntityMetadataForChroma(entity);
+      const chromaMetadata = this.convertMetadataForChroma(entity);
 
       await collection.add({
         ids: [entity.id],
@@ -559,7 +564,7 @@ export class CloudStorage {
       }
 
       // 转换为ChromaDB格式
-      const chromaMetadata = this.convertEntityMetadataForChroma(mergedEntity);
+      const chromaMetadata = this.convertMetadataForChroma(mergedEntity);
 
       // 执行更新
       await collection.update({
@@ -1307,23 +1312,24 @@ export class CloudStorage {
     collectionName: string;
   }): Promise<MemoryEntity | null> {
     try {
-      const { metadata, id, document, distance, relevanceScore, collectionName } = entityData;
+      const { id, document, distance, relevanceScore, collectionName } = entityData;
+      const metadata = this.deserializeEntityFromMetadata(entityData.metadata);
       
       if (collectionName.includes('graph-entities')) {
         return {
           id,
           type: metadata.type || 'Document',
           name: metadata.name || '未知实体',
-          description: metadata.description || metadata.summary || document,
+          description: metadata.description || document,
           properties: typeof metadata.properties === 'string' ? JSON.parse(metadata.properties || '{}') : (metadata.properties || {}),
           created: metadata.created || Date.now(),
           updated: metadata.updated || Date.now(),
           accessCount: metadata.accessCount || 0,
           lastAccessed: metadata.lastAccessed || Date.now(),
           importance: metadata.importance || 0.5,
-          tags: typeof metadata.tags === 'string' ? JSON.parse(metadata.tags || '[]') : (metadata.tags || []),
+          tags: metadata.tags || [],
           status: metadata.status || 'active',
-          statistic: {
+          statistic: metadata.statistic || {
             conversations: 0,
             projects: 0,
             participants: 0,
@@ -1334,7 +1340,7 @@ export class CloudStorage {
             topics: 0,
             jiraTickets: 0
           },
-          relatedData: {
+          relatedData: metadata.relatedData || {
             conversations: [],
             webpages: [],
             resources: [],
@@ -1354,21 +1360,21 @@ export class CloudStorage {
       return {
         id: id || `virtual_${Date.now()}_${Math.random()}`,
         type: 'Document',
-        name: metadata.title || metadata.summary || metadata.name || '相关内容',
-        description: metadata.summary || metadata.description || document || '相关内容',
+        name: metadata.name || '相关内容',
+        description: metadata.description || document || '相关内容',
         properties: {
           ...metadata,
           ...(document && { originalDocument: document }),
           collectionSource: collectionName
         },
-        created: metadata.timestamp || metadata.extractedAt || metadata.created || Date.now(),
-        updated: metadata.timestamp || metadata.extractedAt || metadata.updated || Date.now(),
+        created: metadata.created || Date.now(),
+        updated: metadata.updated || Date.now(),
         accessCount: metadata.accessCount || 1,
         lastAccessed: metadata.lastAccessed || Date.now(),
         importance: metadata.importance || 0.3,
         tags: metadata.tags || [],
         status: metadata.status || 'active',
-        statistic: {
+        statistic: metadata.statistic || {
           conversations: 0,
           projects: 0,
           participants: 0,
@@ -1379,7 +1385,7 @@ export class CloudStorage {
           topics: 0,
           jiraTickets: 0
         },
-        relatedData: {
+        relatedData: metadata.relatedData || {
           conversations: [],
           webpages: [],
           resources: [],
@@ -1779,7 +1785,7 @@ export class CloudStorage {
           title: `${entity.name}相关网页`,
           url: conv.teamUrl || '#',
           type: 'webpage',
-          visitTime: this.formatTimeAgo(new Date(conv.datetime).getTime()),
+          datetime: conv.datetime,
           summary: `与${entity.name}相关的内容`,
           tags: [entity.name, '聊天记录']
         }));
@@ -1797,12 +1803,20 @@ export class CloudStorage {
           resources: relatedResources.length,
           documents: relatedResources.filter(r => r.type === '文档').length,
           webpages: latestWebpages.length,
-          relationships: 0
+          relationships: 0,
+          topics: 0,
+          jiraTickets: 0
         },
-        latestConversations: latestConversations.slice(0, 5), // 只保留前5条
-        latestWebpages: latestWebpages,
-        relatedResources: relatedResources,
-        relatedProjects: relatedProjects,
+        recentDataDetails: {
+          conversations: latestConversations.slice(0, 5), // 只保留前5条
+          webpages: latestWebpages,
+          resources: relatedResources,
+          projects: relatedProjects,
+          people: [],
+          topics: [],
+          jiraTickets: [],
+          cooccurringEntities: []
+        },
         relatedParticipants: [], // 由 LocalStorage 在本地填充
         cachedAt: Date.now()
       };
@@ -1818,34 +1832,24 @@ export class CloudStorage {
           resources: 0,
           documents: 0,
           webpages: 0,
-          relationships: 0
+          relationships: 0,
+          topics: 0,
+          jiraTickets: 0
         },
-        latestConversations: [],
-        latestWebpages: [],
-        relatedResources: [],
-        relatedProjects: [],
+        recentDataDetails: {
+          conversations: [],
+          webpages: [],
+          resources: [],
+          projects: [],
+          people: [],
+          topics: [],
+          jiraTickets: [],
+          cooccurringEntities: []
+        },
         relatedParticipants: [],
         cachedAt: Date.now()
       };
     }
-  }
-
-  /**
-   * 格式化时间为相对时间
-   */
-  private formatTimeAgo(timestamp: number): string {
-    const now = Date.now();
-    const diff = now - timestamp;
-    
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-    const weeks = Math.floor(diff / 604800000);
-    
-    if (hours < 1) return '刚刚';
-    if (hours < 24) return `${hours}小时前`;
-    if (days < 7) return `${days}天前`;
-    if (weeks < 4) return `${weeks}周前`;
-    return new Date(timestamp).toLocaleDateString();
   }
 
   /**
@@ -2467,7 +2471,6 @@ export class CloudStorage {
   async updateEntitiesWithRelatedData(
     messageMetadata: any,
     messageId: string,
-    memorySystemInstance: any // 避免循环依赖，通过参数传入
   ): Promise<void> {
     console.log(`🔗 开始从消息 ${messageId} 更新实体关联数据...`);
     
@@ -2486,7 +2489,7 @@ export class CloudStorage {
       for (const entity of extractedEntities) {
         try {
           // 生成实体ID
-          const entityId = `${entity.type.toLowerCase()}_${entity.name.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`;
+          const entityId = entityIdGenerator.generateId(entity);
           
           // 为当前实体构建关联数据
           const relatedDataForEntity = CloudStorage.buildEntityRelatedDataFromMessage(
@@ -2512,7 +2515,7 @@ export class CloudStorage {
           // 检查实体是否已存在
           let existingEntity;
           try {
-            existingEntity = await memorySystemInstance.getEntityDetails(entityId);
+            existingEntity = await memorySystem.getEntityDetails(entityId);
           } catch (error) {
             // 实体不存在，这是新实体
             console.log(`📝 创建新实体: ${entity.name} (${entity.type})`);
@@ -2529,7 +2532,7 @@ export class CloudStorage {
               accessCount: (existingEntity.accessCount || 0) + 1
             };
             
-            const updateResult = await memorySystemInstance.updateEntity(entityId, updateData);
+            const updateResult = await memorySystem.updateEntity(entityId, updateData);
             console.log(`🔄 实体关联数据更新: ${entity.name}, 成功: ${updateResult.success ? '✅' : '❌'}`);
             
           } else {
@@ -2553,7 +2556,7 @@ export class CloudStorage {
               }
             };
             
-            const storeResult = await memorySystemInstance.storeEntity(newEntity);
+            const storeResult = await memorySystem.storeEntity(newEntity);
             console.log(`🆕 新实体存储: ${entity.name}, 成功: ${storeResult.success ? '✅' : '❌'}`);
           }
           
@@ -2566,12 +2569,6 @@ export class CloudStorage {
       
     } catch (error) {
       console.error('🚨 更新实体关联数据过程中发生错误:', error);
-    }
-  }
-
-  private ensureInitialized(): void {
-    if (!this.isInitialized || !this.client) {
-      throw new Error('云端存储未初始化');
     }
   }
 }

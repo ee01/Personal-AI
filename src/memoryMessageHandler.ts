@@ -6,6 +6,7 @@
 import { memorySystem } from './memory';
 import { CloudStorage, MemoryEntity } from './storage/CloudStorage';
 import { LocalStorage } from './storage/LocalStorage';
+import { entityIdGenerator } from './storage/EntityIdGenerator';
 
 // 创建存储层实例
 const cloudStorage = new CloudStorage();
@@ -305,24 +306,24 @@ async function handleGetTopicDetail(request: any): Promise<any> {
         // 直接使用 CloudStorage 的方法将基础实体扩展为详细缓存实体
         const topicDetail = await cloudStorage.extendEntityToDetailCache(topicEntity);
 
-        // 缓存主题详情数据拆分存储为各个组件
-        if (topicDetail.latestConversations) {
-            for (const conv of topicDetail.latestConversations.slice(0, 3)) {
+        // 缓存主题详情数据到 recentDataDetails
+        if (topicDetail.recentDataDetails?.conversations) {
+            for (const conv of topicDetail.recentDataDetails.conversations.slice(0, 3)) {
                 await localStorage.updateRecentData(topicId, 'conversation', conv);
             }
         }
-        if (topicDetail.relatedResources) {
-            for (const resource of topicDetail.relatedResources.slice(0, 3)) {
+        if (topicDetail.recentDataDetails?.resources) {
+            for (const resource of topicDetail.recentDataDetails.resources.slice(0, 3)) {
                 await localStorage.updateRecentData(topicId, 'resource', resource);
             }
         }
-        if (topicDetail.relatedProjects) {
-            for (const project of topicDetail.relatedProjects.slice(0, 3)) {
+        if (topicDetail.recentDataDetails?.projects) {
+            for (const project of topicDetail.recentDataDetails.projects.slice(0, 3)) {
                 await localStorage.updateRecentData(topicId, 'project', project);
             }
         }
-        if (topicDetail.latestWebpages) {
-            for (const webpage of topicDetail.latestWebpages.slice(0, 3)) {
+        if (topicDetail.recentDataDetails?.webpages) {
+            for (const webpage of topicDetail.recentDataDetails.webpages.slice(0, 3)) {
                 await localStorage.updateRecentData(topicId, 'webpage', webpage);
             }
         }
@@ -411,7 +412,7 @@ async function handleInitializeSampleData(): Promise<any> {
         for (const entity of sampleEntities) {
             try {
                 // 生成实体ID
-                const entityId = `${entity.type.toLowerCase()}_${entity.name.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`;
+                const entityId = entityIdGenerator.generateId(entity);
                 const fullEntity = { ...entity, id: entityId, created: Date.now(), updated: Date.now() };
                 
                 const success = await cloudStorage.storeEntity(fullEntity as any);

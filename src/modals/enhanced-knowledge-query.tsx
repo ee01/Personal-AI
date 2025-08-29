@@ -413,10 +413,11 @@ const EnhancedKnowledgeQuery = () => {
                     return b.relevance - a.relevance;
                 case 'timestamp':
                     return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-                case 'connections':
+                case 'connections': {
                     const aConnections = a.entityInfo?.connections || a.neighbors?.length || 0;
                     const bConnections = b.entityInfo?.connections || b.neighbors?.length || 0;
                     return bConnections - aConnections;
+                }
                 default:
                     return 0;
             }

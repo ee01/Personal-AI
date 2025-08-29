@@ -37,13 +37,13 @@
 
     <div v-else class="entities-grid">
       <!-- Topic类型实体卡片 - 带预览 -->
-      <div 
-        v-if="entityType === 'Topic'"
-        v-for="entity in filteredEntities" 
-        :key="entity.id" 
-        class="content-card topic-card"
-        @click="handleEntityClick(entity)"
-      >
+      <template v-if="entityType === 'Topic'">
+        <div 
+          v-for="entity in filteredEntities" 
+          :key="entity.id" 
+          class="content-card topic-card"
+          @click="handleEntityClick(entity)"
+        >
         <div class="card-header topic-card-header">
           <div class="card-title">
             <span>💡</span>
@@ -59,28 +59,28 @@
         </div>
         
         <!-- 最新讨论预览 -->
-        <div v-if="entity.latestDiscussions && entity.latestDiscussions.length > 0" class="topic-preview-section">
+        <div v-if="entity.recentDataDetails?.conversations && entity.recentDataDetails.conversations.length > 0" class="topic-preview-section">
           <h4 class="preview-section-title">💬 最新讨论</h4>
           <ul class="preview-list">
             <li 
-              v-for="discussion in entity.latestDiscussions.slice(0, 2)" 
+              v-for="discussion in entity.recentDataDetails.conversations.slice(0, 2)" 
               :key="discussion.id"
               class="preview-item discussion-item"
               @click.stop="navigateToTopicDiscussion(entity.id, discussion.id)"
             >
               <span>💭</span>
               <span class="preview-content">{{ discussion.summary }}</span>
-              <span class="preview-time">{{ discussion.time }}</span>
+              <span class="preview-time">{{ discussion.datetime }}</span>
             </li>
           </ul>
         </div>
         
         <!-- 相关资源预览 -->
-        <div v-if="entity.relatedResources && entity.relatedResources.length > 0" class="topic-preview-section">
+        <div v-if="entity.recentDataDetails?.resources && entity.recentDataDetails.resources.length > 0" class="topic-preview-section">
           <h4 class="preview-section-title">📚 相关资源</h4>
           <ul class="preview-list">
             <li 
-              v-for="resource in entity.relatedResources.slice(0, 2)" 
+              v-for="resource in entity.recentDataDetails.resources.slice(0, 2)" 
               :key="resource.id"
               class="preview-item resource-item"
               @click.stop="openResource(resource)"
@@ -92,11 +92,11 @@
         </div>
         
         <!-- 关联项目预览 -->
-        <div v-if="entity.relatedProjects && entity.relatedProjects.length > 0" class="topic-preview-section">
+        <div v-if="entity.recentDataDetails?.projects && entity.recentDataDetails.projects.length > 0" class="topic-preview-section">
           <h4 class="preview-section-title">🚀 关联项目</h4>
           <ul class="preview-list">
             <li 
-              v-for="project in entity.relatedProjects.slice(0, 2)" 
+              v-for="project in entity.recentDataDetails.projects.slice(0, 2)" 
               :key="project.id"
               class="preview-item project-item"
               @click.stop="navigateToProject(project.id)"
@@ -115,14 +115,16 @@
         </div>
       </div>
       
+      </template>
+      
       <!-- Person类型实体卡片 - 带人物预览 -->
-      <div 
-        v-else-if="entityType === 'Person'"
-        v-for="entity in filteredEntities" 
-        :key="entity.id" 
-        class="entity-card person-card"
-        @click="handlePersonClick(entity)"
-      >
+      <template v-else-if="entityType === 'Person'">
+        <div 
+          v-for="entity in filteredEntities" 
+          :key="entity.id" 
+          class="entity-card person-card"
+          @click="handlePersonClick(entity)"
+        >
         <div class="entity-card-header person-card-header">
           <div class="entity-card-title">
             <span>👤</span>
@@ -194,15 +196,16 @@
           </span>
         </div>
       </div>
+      </template>
       
       <!-- Project类型实体卡片 - 带项目操作 -->
-      <div 
-        v-else-if="entityType === 'Project'"
-        v-for="entity in filteredEntities" 
-        :key="entity.id" 
-        class="entity-card project-card"
-        @click="handleEntityClick(entity)"
-      >
+      <template v-else-if="entityType === 'Project'">
+        <div 
+          v-for="entity in filteredEntities" 
+          :key="entity.id" 
+          class="entity-card project-card"
+          @click="handleEntityClick(entity)"
+        >
         <div class="entity-card-header">
           <div class="entity-card-title">
             <span>🚀</span>
@@ -280,15 +283,16 @@
           </span>
         </div>
       </div>
+      </template>
       
       <!-- 其他类型实体卡片 - 原始布局 -->
-      <div 
-        v-else
-        v-for="entity in filteredEntities" 
-        :key="entity.id" 
-        class="entity-card"
-        @click="handleEntityClick(entity)"
-      >
+      <template v-else>
+        <div 
+          v-for="entity in filteredEntities" 
+          :key="entity.id" 
+          class="entity-card"
+          @click="handleEntityClick(entity)"
+        >
         <div class="entity-card-header">
           <div class="entity-card-title">
             <span>{{ getEntityIcon(entity.type) }}</span>
@@ -347,6 +351,7 @@
           </span>
         </div>
       </div>
+      </template>
       
       <div v-if="filteredEntities.length === 0 && !isLoading" class="empty-state">
         <span>{{ getEntityIcon(entityType) }}</span>

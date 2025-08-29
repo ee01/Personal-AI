@@ -4,6 +4,7 @@
  */
 
 import { MemoryEntity } from '../memory';
+import { entityIdGenerator } from './EntityIdGenerator';
 
 export interface SimilarityResult {
   action: 'auto_merge' | 'mark_candidate' | 'create_new';
@@ -29,38 +30,12 @@ export interface ProcessedEntity extends MemoryEntity {
   mergeReason?: string;
 }
 
-/**
- * 实体ID生成器
- */
-export class EntityIdGenerator {
-  private counter = 0;
 
-  generateId(entity: Pick<MemoryEntity, 'type' | 'name'>): string {
-    const timestamp = Date.now();
-    const readable = this.generateReadablePart(entity.name);
-    const shortUuid = this.generateShortUuid();
-    return `${entity.type.toLowerCase()}_${readable}_${timestamp}_${shortUuid}`;
-  }
-
-  private generateReadablePart(name: string): string {
-    return name
-      .toLowerCase()
-      .replace(/[^\w\u4e00-\u9fff]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_|_$/g, '')
-      .substring(0, 10);
-  }
-
-  private generateShortUuid(): string {
-    return Math.random().toString(36).substr(2, 8);
-  }
-}
 
 /**
  * 实体相似性管理器
  */
 export class EntitySimilarityTool {
-  private idGenerator: EntityIdGenerator;
   private pendingMerges: Map<string, EntityMergePair> = new Map();
   private mergeCandidatesCache: Map<string, MemoryEntity[]> = new Map();
   
@@ -72,7 +47,6 @@ export class EntitySimilarityTool {
   };
 
   constructor() {
-    this.idGenerator = new EntityIdGenerator();
     this.loadPendingMerges();
   }
 
@@ -81,7 +55,7 @@ export class EntitySimilarityTool {
    */
   async processEntity(entity: Omit<MemoryEntity, 'id' | 'created' | 'updated'>): Promise<ProcessedEntity> {
     const now = Date.now();
-    const generatedId = this.idGenerator.generateId(entity);
+    const generatedId = entityIdGenerator.generateId(entity);
     
     const fullEntity: MemoryEntity = {
       ...entity,

@@ -4,13 +4,32 @@
  */
 
 import { QueryResult, QueryOptions } from '../memory';
-import { MemoryEntity } from './CloudStorage';
+import { MemoryEntity, RelatedData } from './CloudStorage';
 
-// 🆕 精简的缓存实体详情接口 - 大部分关联数据已迁移到 MemoryEntity.relatedData
+// 统一的缓存实体详情接口 - 包含所有本地缓存数据
 export interface CachedEntityDetail extends MemoryEntity {
   cachedAt: number;
   
-  // 🆕 保留本地快速查询相关的字段，其他已迁移到 MemoryEntity.relatedData
+  // 🆕 使用扩展的关联数据接口，只存储最近5条详细数据
+  recentDataDetails: {
+    conversations: MemoryEntity['relatedData']['conversations'][0] & {
+      originalContent: string; // 完整的消息内容
+      matchedRules: string[]; // 匹配的过滤规则
+      contextMessages: Array<{
+        id: string;
+        sender: string;
+        content: string;
+        datetime: string;
+        isMainMessage: boolean;
+      }>; // 上下文消息
+    }[];
+    webpages: MemoryEntity['relatedData']['webpages'][0];
+    resources: MemoryEntity['relatedData']['resources'][0];
+    projects: MemoryEntity['relatedData']['projects'][0];
+    people: MemoryEntity['relatedData']['people'][0];
+    topics: MemoryEntity['relatedData']['topics'][0];
+    jiraTickets: MemoryEntity['relatedData']['jiraTickets'];
+  };
   
   // 本地特有的参与者关系（通过关系表快速查询）
   relatedParticipants: {
@@ -23,67 +42,6 @@ export interface CachedEntityDetail extends MemoryEntity {
   
   // 额外的 UI 字段（向后兼容）
   lastUpdated?: number;
-  
-  // 🆕 UI 便捷访问：将 MemoryEntity.relatedData 转换为 UI 友好格式（通过辅助函数提供）
-  latestConversations?: {
-    id: string;
-    sender: string;
-    group: string;
-    datetime: string;
-    summary: string;
-    originalContent: string; // 从 context 中提取主消息
-    highlightText: string;
-    teamUrl: string;
-    matchedRules: string[];
-    relevanceScore: number;
-    context: {
-      id: string;
-      sender: string;
-      content: string;
-      datetime: string;
-      isMainMessage: boolean;
-    }[];
-  }[];
-  
-  latestWebpages?: {
-    id: string;
-    title: string;
-    url: string;
-    type: string;
-    visitTime: string;
-    summary: string;
-    tags: string[];
-  }[];
-  
-  relatedResources?: {
-    id: string;
-    name: string;
-    type?: string;
-    url?: string;
-  }[];
-  
-  relatedProjects?: {
-    id: string;
-    name: string;
-    status: string;
-    description?: string;
-  }[];
-  
-  relatedTopics?: {
-    id: string;
-    name: string;
-    summary: string;
-    category: string;
-  }[];
-  
-  relatedJiraTickets?: {
-    id: string;
-    key: string;
-    summary: string;
-    status: string;
-    assignee: string;
-    priority: string;
-  }[];
 }
 
 // 关系类型定义
@@ -453,7 +411,7 @@ export class LocalStorage {
   /**
    * 获取关系网络
    */
-  async getRelationshipNetwork(entityId: string, depth: number = 1): Promise<{
+  async getRelationshipNetwork(entityId: string, depth = 1): Promise<{
     entities: MemoryEntity[];
     relationships: GraphRelationship[];
   }> {
@@ -670,38 +628,56 @@ export class LocalStorage {
             resources: 0,
             documents: 0,
             webpages: 0,
-            relationships: 0
+            relationships: 0,
+            topics: 0,
+            jiraTickets: 0
+          },
+          relatedData: {
+            conversations: [],
+            webpages: [],
+            resources: [],
+            projects: [],
+            people: [],
+            topics: [],
+            jiraTickets: [],
+            cooccurringEntities: []
           },
           cachedAt: Date.now(),
-          latestConversations: [],
-          latestWebpages: [],
-          relatedResources: [],
-          relatedProjects: [],
+          recentDataDetails: {
+            conversations: [],
+            webpages: [],
+            resources: [],
+            projects: [],
+            people: [],
+            topics: [],
+            jiraTickets: [],
+            cooccurringEntities: []
+          },
           relatedParticipants: [],
           lastUpdated: Date.now()
         };
       }
 
-      // 添加新数据到对应数组的开头
+      // 添加新数据到对应数组的开头（只保留最近5条）
       if (type === 'conversation') {
-        entityDetail.latestConversations.unshift(data);
-        if (entityDetail.latestConversations.length > this.config.maxRecentDataPerEntity) {
-          entityDetail.latestConversations = entityDetail.latestConversations.slice(0, this.config.maxRecentDataPerEntity);
+        entityDetail.recentDataDetails.conversations.unshift(data);
+        if (entityDetail.recentDataDetails.conversations.length > 5) {
+          entityDetail.recentDataDetails.conversations = entityDetail.recentDataDetails.conversations.slice(0, 5);
         }
       } else if (type === 'resource') {
-        entityDetail.relatedResources.unshift(data);
-        if (entityDetail.relatedResources.length > this.config.maxRecentDataPerEntity) {
-          entityDetail.relatedResources = entityDetail.relatedResources.slice(0, this.config.maxRecentDataPerEntity);
+        entityDetail.recentDataDetails.resources.unshift(data);
+        if (entityDetail.recentDataDetails.resources.length > 5) {
+          entityDetail.recentDataDetails.resources = entityDetail.recentDataDetails.resources.slice(0, 5);
         }
       } else if (type === 'project') {
-        entityDetail.relatedProjects.unshift(data);
-        if (entityDetail.relatedProjects.length > this.config.maxRecentDataPerEntity) {
-          entityDetail.relatedProjects = entityDetail.relatedProjects.slice(0, this.config.maxRecentDataPerEntity);
+        entityDetail.recentDataDetails.projects.unshift(data);
+        if (entityDetail.recentDataDetails.projects.length > 5) {
+          entityDetail.recentDataDetails.projects = entityDetail.recentDataDetails.projects.slice(0, 5);
         }
       } else { // webpage
-        entityDetail.latestWebpages.unshift(data);
-        if (entityDetail.latestWebpages.length > this.config.maxRecentDataPerEntity) {
-          entityDetail.latestWebpages = entityDetail.latestWebpages.slice(0, this.config.maxRecentDataPerEntity);
+        entityDetail.recentDataDetails.webpages.unshift(data);
+        if (entityDetail.recentDataDetails.webpages.length > 5) {
+          entityDetail.recentDataDetails.webpages = entityDetail.recentDataDetails.webpages.slice(0, 5);
         }
       }
 
@@ -955,20 +931,30 @@ export class LocalStorage {
    * 确保 CachedEntityDetail 包含所有必要字段
    */
   private ensureDetailEntityFields(entity: CachedEntityDetail): void {
-    if (!entity.latestConversations) entity.latestConversations = [];
-    if (!entity.latestWebpages) entity.latestWebpages = [];
-    if (!entity.relatedResources) entity.relatedResources = [];
-    if (!entity.relatedProjects) entity.relatedProjects = [];
+    if (!entity.recentDataDetails) {
+      entity.recentDataDetails = {
+        conversations: [],
+        webpages: [],
+        resources: [],
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      };
+    }
     if (!entity.relatedParticipants) entity.relatedParticipants = [];
     if (!entity.statistic) {
       entity.statistic = {
-        conversations: entity.latestConversations.length,
-        projects: entity.relatedProjects.length,
+        conversations: entity.recentDataDetails.conversations.length,
+        projects: entity.recentDataDetails.projects.length,
         participants: entity.relatedParticipants.length,
-        resources: entity.relatedResources.length,
-        documents: entity.relatedResources.filter(r => r.type === '文档').length,
-        webpages: entity.latestWebpages.length,
-        relationships: 0
+        resources: entity.recentDataDetails.resources.length,
+        documents: entity.recentDataDetails.resources.filter(r => r.type === '文档').length,
+        webpages: entity.recentDataDetails.webpages.length,
+        relationships: 0,
+        topics: entity.recentDataDetails.topics.length,
+        jiraTickets: entity.recentDataDetails.jiraTickets.length
       };
     }
     if (!entity.cachedAt) entity.cachedAt = Date.now();
@@ -994,7 +980,8 @@ export class LocalStorage {
       status: detailEntity.status,
       searchDistance: detailEntity.searchDistance,
       relevanceScore: detailEntity.relevanceScore,
-      statistic: detailEntity.statistic
+      statistic: detailEntity.statistic,
+      relatedData: detailEntity.relatedData
     };
   }
 
@@ -1005,10 +992,16 @@ export class LocalStorage {
     const detailEntity: CachedEntityDetail = {
       ...baseEntity,
       cachedAt: Date.now(),
-      latestConversations: [],
-      latestWebpages: [],
-      relatedResources: [],
-      relatedProjects: [],
+      recentDataDetails: {
+        conversations: [],
+        webpages: [],
+        resources: [],
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      },
       relatedParticipants: [],
       lastUpdated: Date.now()
     };
@@ -1465,11 +1458,27 @@ export class LocalStorage {
       lastUpdated: Date.now(),
       cachedAt: Date.now(),
       
-      // UI字段（已重构后的正确字段）
-      latestConversations: [],
-      latestWebpages: [],
-      relatedResources: [],
-      relatedProjects: [],
+      // 关联数据字段
+      relatedData: {
+        conversations: [],
+        webpages: [],
+        resources: [],
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      },
+      recentDataDetails: {
+        conversations: [],
+        webpages: [],
+        resources: [],
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      },
       expertise: [],
       
       // 统计字段
@@ -1480,7 +1489,9 @@ export class LocalStorage {
         resources: 0,
         documents: 0,
         webpages: 0,
-        relationships: 0
+        relationships: 0,
+        topics: 0,
+        jiraTickets: 0
       }
     };
   }
@@ -1491,8 +1502,7 @@ export class LocalStorage {
   private ensureUIFields(cache: CachedEntityDetail): void {
     // 如果缺少UI字段，重新计算
     if (!cache.statistic || 
-        !cache.latestConversations || 
-        !cache.relatedResources) {
+        !cache.recentDataDetails) {
       this.recalculateUIFields(cache);
     }
   }
@@ -1502,10 +1512,18 @@ export class LocalStorage {
    */
   private recalculateUIFields(cache: CachedEntityDetail): void {
     // 确保缓存字段存在（使用正确的字段名）
-    if (!cache.latestConversations) cache.latestConversations = [];
-    if (!cache.relatedResources) cache.relatedResources = [];
-    if (!cache.relatedProjects) cache.relatedProjects = [];
-    if (!cache.latestWebpages) cache.latestWebpages = [];
+    if (!cache.recentDataDetails) {
+      cache.recentDataDetails = {
+        conversations: [],
+        webpages: [],
+        resources: [],
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      };
+    }
 
     // 更新统计字段到 statistic 对象中
     if (!cache.statistic) {
@@ -1516,15 +1534,19 @@ export class LocalStorage {
         resources: 0,
         documents: 0,
         webpages: 0,
-        relationships: 0
+        relationships: 0,
+        topics: 0,
+        jiraTickets: 0
       };
     }
 
     // 重新计算统计字段
-    cache.statistic.conversations = cache.latestConversations.length;
-    cache.statistic.webpages = cache.latestWebpages.length;
-    cache.statistic.resources = cache.relatedResources.length;
-    cache.statistic.projects = cache.relatedProjects.length;
+    cache.statistic.conversations = cache.recentDataDetails.conversations.length;
+    cache.statistic.webpages = cache.recentDataDetails.webpages.length;
+    cache.statistic.resources = cache.recentDataDetails.resources.length;
+    cache.statistic.projects = cache.recentDataDetails.projects.length;
+    cache.statistic.topics = cache.recentDataDetails.topics.length;
+    cache.statistic.jiraTickets = cache.recentDataDetails.jiraTickets.length;
 
     // 确保必要字段存在
     if (!cache.expertise) cache.expertise = [];
@@ -1569,24 +1591,6 @@ export class LocalStorage {
       console.error('获取所有本地缓存数据失败:', error);
       return [];
     }
-  }
-
-  /**
-   * 格式化时间为相对时间
-   */
-  private formatTimeAgo(timestamp: number): string {
-    const now = Date.now();
-    const diff = now - timestamp;
-    
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-    const weeks = Math.floor(diff / 604800000);
-    
-    if (hours < 1) return '刚刚';
-    if (hours < 24) return `${hours}小时前`;
-    if (days < 7) return `${days}天前`;
-    if (weeks < 4) return `${weeks}周前`;
-    return new Date(timestamp).toLocaleDateString();
   }
 
   private ensureInitialized(): void {

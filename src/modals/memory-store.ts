@@ -95,9 +95,9 @@ export const useMemoryStore = defineStore('memory', () => {
       // 检查是否缺少 recent data（没有讨论、资源、项目）
       const hasRecentData = (
         (entity.statistic?.conversations > 0) ||
-        (entity.latestConversations && entity.latestConversations.length > 0) ||
-        (entity.relatedResources && entity.relatedResources.length > 0) ||
-        (entity.relatedProjects && entity.relatedProjects.length > 0)
+        (entity.recentDataDetails?.conversations && entity.recentDataDetails.conversations.length > 0) ||
+        (entity.recentDataDetails?.resources && entity.recentDataDetails.resources.length > 0) ||
+        (entity.recentDataDetails?.projects && entity.recentDataDetails.projects.length > 0)
       );
       
       if (!hasRecentData) {
@@ -115,9 +115,19 @@ export const useMemoryStore = defineStore('memory', () => {
             if (!entity.statistic) entity.statistic = {};
             entity.statistic.conversations = details.statistic?.conversations || 0;
             entity.statistic.webpages = details.statistic?.webpages || 0;
-            entity.latestConversations = details.latestConversations?.slice(0, 2) || [];
-            entity.relatedResources = details.relatedResources?.slice(0, 2) || [];
-            entity.relatedProjects = details.relatedProjects?.slice(0, 2) || [];
+            if (!entity.recentDataDetails) entity.recentDataDetails = {
+              conversations: [],
+              webpages: [],
+              resources: [],
+              projects: [],
+              people: [],
+              topics: [],
+              jiraTickets: [],
+              cooccurringEntities: []
+            };
+            entity.recentDataDetails.conversations = details.recentDataDetails?.conversations?.slice(0, 2) || [];
+            entity.recentDataDetails.resources = details.recentDataDetails?.resources?.slice(0, 2) || [];
+            entity.recentDataDetails.projects = details.recentDataDetails?.projects?.slice(0, 2) || [];
             entity.cachedAt = details.cachedAt || Date.now();
           }
         } catch (error) {

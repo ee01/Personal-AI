@@ -74,30 +74,30 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 
 	data = data.filter(item => item.type === 'message')
 	// 插入调试数据
-	// data.unshift({
-	//   groupName: 'Recording Test',
-	//   groupId: '123',
-	//   posts: [
-	//     { id: '1231', creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
-	//     { id: '1232', creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
-	//   ]
-	// });
-	// data.unshift({
-	//   groupName: '大群',
-	//   groupId: '2578219014',
-	//   posts: [
-	//     { id: '25782190141', creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
-	//     { id: '25782190142', creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
-	//   ]
-	// });
-	// data.unshift({
-	//   groupName: '小群',
-	//   groupId: '321',
-	//   posts: [
-	//     { id: '3211', creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
-	//   ]
-	// });
-	// data.splice(3);
+	data.unshift({
+	  groupName: 'Recording Test',
+	  groupId: '123',
+	  posts: [
+	    { id: '1231', creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
+	    { id: '1232', creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
+	  ]
+	});
+	data.unshift({
+	  groupName: '大群',
+	  groupId: '2578219014',
+	  posts: [
+	    { id: '25782190141', creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
+	    { id: '25782190142', creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
+	  ]
+	});
+	data.unshift({
+	  groupName: '小群',
+	  groupId: '321',
+	  posts: [
+	    { id: '3211', creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
+	  ]
+	});
+	data.splice(3);
 	console.log(data, concernedItems, username);
 	if (data.length === 0) {
 		console.log('没有消息数据，跳过处理');
@@ -399,9 +399,10 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
 ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
 
 将任务输出的数据进行如下验证：
-1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{error: "No messages matched any rules", data: []}：
+1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{success: false, message: "No messages matched any rules", data: []}：
 {
-	"error": "",
+	"success": true,
+	"message": "消息过滤完成: 共处理 {total} 个群组",
 	"data": [{
 		"message_content": "{message_content}",
 		"sender": "{sender}",
@@ -575,7 +576,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					summary: json.summary || '',
 					teamName: json.team_name,
 					teamId: json.team_id,
-					team_url: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
+					teamUrl: json.teamUrl || `https://app.ringcentral.com/messages/${json.team_id}`,
 					// 消息内容（用于高亮）
 					originalContent: json.message_content, // 原始消息内容
 					highlightText: json.message_content,   // 用于高亮的文本

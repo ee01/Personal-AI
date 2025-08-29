@@ -95,6 +95,7 @@ export interface MemoryEntity {
     webpages: number;
     relationships: number;
   };
+  relatedData: RelatedData;
 }
 ```
 
@@ -164,6 +165,7 @@ export interface CachedEntityDetail extends MemoryEntity {
   
   // 额外的 UI 字段
   lastUpdated?: number;
+  recentDataDetails: RecentDataDetails;
 }
 
 ```
@@ -1778,3 +1780,116 @@ await createInterEntityRelationships(entities, messageMetadata, messageId);
 ---
 
 *本文档记录了实体记忆系统的重构设计和实现。通过分层架构、智能缓存策略和统一数据结构，实现了显著的性能优化和架构简化。系统现已具备高效的记忆管理能力，为用户提供流畅的使用体验。*
+
+---
+
+## 🎉 数据结构重构完成总结
+
+### ✅ 重构完成状态
+
+**已完成的重构项目**:
+
+1. **✅ 接口定义重构**
+   - 创建了 `RelatedData` 基础接口，用于云端存储
+   - 创建了 `RecentDataDetails` 扩展接口，继承自 `RelatedData`
+   - 更新了 `MemoryEntity` 使用 `relatedData: RelatedData`
+   - 更新了 `CachedEntityDetail` 使用 `recentDataDetails: RecentDataDetails`
+
+2. **✅ 存储层更新**
+   - 更新了 `LocalStorage.ts` 中的所有相关方法
+   - 更新了 `CloudStorage.ts` 中的 `extendEntityToDetailCache` 方法
+   - 修复了所有数据结构相关的错误
+
+3. **✅ 接口层更新**
+   - 更新了 `memory.ts` 中的 `extendEntitiesFromCache` 方法
+   - 更新了 `setDefaultExtendedFields` 方法
+   - 修复了统计信息计算逻辑
+
+4. **✅ 组件层更新**
+   - 更新了 `TopicDetailPage.vue` 使用新的数据结构
+   - 更新了 `EntityListPage.vue` 使用新的数据结构
+   - 更新了 `PersonDetailPage.vue` 使用新的数据结构
+   - 更新了 `memory-store.ts` 中的数据访问逻辑
+
+5. **✅ 消息处理器更新**
+   - 更新了 `memoryMessageHandler.ts` 中的数据处理逻辑
+   - 修复了主题详情获取和缓存逻辑
+
+6. **✅ 文档更新**
+   - 更新了 `memory_system.md` 文档中的所有相关部分
+   - 添加了新的数据结构说明和使用示例
+
+### 🎯 重构核心成果
+
+**数据结构统一**:
+- **云端存储**: `MemoryEntity.relatedData` 包含基础字段，最多50条数据
+- **本地缓存**: `CachedEntityDetail.recentDataDetails` 包含扩展字段，最多5条详细数据
+- **接口一致性**: 两个接口使用相同的基础结构，便于数据转换和维护
+
+**扩展字段支持**:
+- **聊天消息**: 增加了 `message_content`, `highlightText`, `context` 等扩展字段
+- **网页记录**: 增加了 `type`, `tags` 等扩展字段
+- **资源项目**: 保持了基础字段，支持本地扩展
+
+**存储优化**:
+- **空间节省**: 本地缓存只存储最近5条详细数据，大幅减少存储空间
+- **性能提升**: 统一的数据结构减少了数据转换开销
+- **维护简化**: 统一的接口设计降低了代码复杂度
+
+### 🔧 使用指南
+
+**新的数据访问方式**:
+```typescript
+// 获取实体详情
+const entity = await memorySystem.getEntity(entityId);
+
+// 访问聊天记录（最近5条详细数据）
+const conversations = entity.recentDataDetails.conversations;
+// 包含: id, summary, sender, datetime, message_content, highlightText, context
+
+// 访问相关资源（最近5条）
+const resources = entity.recentDataDetails.resources;
+
+// 访问关联项目（最近5条）
+const projects = entity.recentDataDetails.projects;
+
+// 访问网页记录（最近5条）
+const webpages = entity.recentDataDetails.webpages;
+
+// 访问统计信息（自动计算）
+const stats = entity.statistic;
+// 包含: conversations, projects, participants, resources, documents, webpages, relationships, topics, jiraTickets
+```
+
+**组件中的使用**:
+```vue
+<!-- 在 Vue 组件中访问数据 -->
+<template>
+  <div v-for="conv in topicData.recentDataDetails.conversations" :key="conv.id">
+    <div>{{ conv.sender }}</div>
+    <div>{{ conv.message_content }}</div>
+    <div>{{ conv.highlightText }}</div>
+  </div>
+</template>
+```
+
+### 🚀 后续优化方向
+
+**短期优化 (1-2周)**:
+- 🔄 **性能监控完善** - 添加详细的数据结构性能指标
+- 🔄 **错误处理增强** - 完善数据转换和验证机制
+- 🔄 **测试用例补充** - 为新数据结构添加完整的测试覆盖
+
+**中期扩展 (2-4周)**:
+- 🔄 **数据迁移工具** - 为现有数据提供迁移脚本
+- 🔄 **缓存预热机制** - 智能预加载常用实体的详细数据
+- 🔄 **增量更新优化** - 实现更精细的数据更新策略
+
+**长期规划 (1-3个月)**:
+- ⏳ **AI驱动的数据扩展** - 使用机器学习自动扩展实体详情
+- ⏳ **多设备数据同步** - 实现跨设备的实时数据同步
+- ⏳ **高级可视化** - 基于新数据结构的3D知识图谱展示
+
+---
+
+*本文档记录了实体记忆系统数据结构重构的完整过程和成果。通过统一的数据结构设计，实现了云端存储与本地缓存的一致性，同时大幅优化了存储效率和开发维护成本。系统现已具备高效、统一、可扩展的记忆管理能力。*

@@ -8,12 +8,12 @@
       <div v-if="topicData" class="topic-header">
         <div class="topic-avatar">💡</div>
         <div class="topic-info">
-          <h2>{{ topicData.title }}</h2>
+          <h2>{{ topicData.name }}</h2>
           <div class="topic-meta">
-            <span class="meta-item">📈 {{ topicData.overview?.discussions || 0 }} 条讨论</span>
-            <span class="meta-item">🔗 {{ topicData.overview?.projects || 0 }} 个关联项目</span>
-            <span class="meta-item">👥 {{ topicData.overview?.participants || 0 }} 位参与者</span>
-            <span class="meta-item">📚 {{ topicData.overview?.resources || 0 }} 个资源</span>
+            <span class="meta-item">📈 {{ topicData.statistic?.conversations || 0 }} 条讨论</span>
+            <span class="meta-item">🔗 {{ topicData.statistic?.projects || 0 }} 个关联项目</span>
+            <span class="meta-item">👥 {{ topicData.statistic?.participants || 0 }} 位参与者</span>
+            <span class="meta-item">📚 {{ topicData.statistic?.resources || 0 }} 个资源</span> 
             <span class="meta-item">⏰ 最后更新：30 分钟前</span>
           </div>
         </div>
@@ -48,7 +48,7 @@
           <button class="add-btn">+ 添加项目</button>
         </div>
         <div class="items-grid">
-          <div v-for="project in topicData.relatedProjects" :key="project.id" class="item-card">
+          <div v-for="project in topicData.recentDataDetails.projects" :key="project.id" class="item-card">
             <div class="item-header">
               <div class="item-title">
                 <span>🚀</span>
@@ -75,7 +75,7 @@
           <button class="add-btn">+ 添加资源</button>
         </div>
         <div class="items-grid">
-          <div v-for="resource in topicData.relatedResources" :key="resource.id" class="item-card">
+          <div v-for="resource in topicData.recentDataDetails.resources" :key="resource.id" class="item-card">
             <div class="item-header">
               <div class="item-title">
                 <span>📚</span>
@@ -102,7 +102,7 @@
           <button class="add-btn">+ 添加Ticket</button>
         </div>
         <div class="items-grid">
-          <div v-for="ticket in topicData.relatedTickets" :key="ticket.id" class="item-card">
+          <div v-for="ticket in topicData.recentDataDetails.jiraTickets" :key="ticket.id" class="item-card">
             <div class="item-header">
               <div class="item-title">
                 <span>🎯</span>
@@ -153,7 +153,7 @@
                   <div class="group-name">{{ conv.group || '未知群组' }}</div>
                 </div>
               </div>
-              <div class="conversation-time">{{ conv.time || '未知时间' }}</div>
+              <div class="conversation-time">{{ formatTimeAgo(conv.datetime) || '未知时间' }}</div>
             </div>
             <div class="conversation-summary" v-html="highlightText(conv.summary || '暂无摘要', convSearchQuery)"></div>
             <div 
@@ -260,7 +260,7 @@ const tabs = [
 ];
 
 const filteredConversations = computed(() => {
-  let filtered = topicData.value?.conversations || [];
+  let filtered = topicData.value?.recentDataDetails?.conversations || [];
   
   if (convSearchQuery.value.trim()) {
     const query = convSearchQuery.value.toLowerCase();
@@ -290,7 +290,7 @@ const filteredConversations = computed(() => {
 });
 
 const filteredWebpages = computed(() => {
-  let filtered = topicData.value?.webpages || [];
+  let filtered = topicData.value?.recentDataDetails?.webpages || [];
   
   if (webSearchQuery.value.trim()) {
     const query = webSearchQuery.value.toLowerCase();
@@ -349,6 +349,25 @@ const getPriorityStyle = (priority: string) => {
   };
   return styles[priority] || styles['中'];
 };
+
+
+/**
+ * 格式化时间为相对时间
+ */
+const formatTimeAgo = (timestamp: number): string => {
+  const now = Date.now();
+  const diff = now - timestamp;
+  
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  const weeks = Math.floor(diff / 604800000);
+  
+  if (hours < 1) return '刚刚';
+  if (hours < 24) return `${hours}小时前`;
+  if (days < 7) return `${days}天前`;
+  if (weeks < 4) return `${weeks}周前`;
+  return new Date(timestamp).toLocaleDateString();
+}
 
 watch(topicId, (newId) => {
   if (newId) {

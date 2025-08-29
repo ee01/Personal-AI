@@ -10,6 +10,7 @@ import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSys
 import { UserProfileManager } from './services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
 import { v4 as uuidv4 } from 'uuid';
+import { entityIdGenerator } from './storage/EntityIdGenerator';
 
 // 重新导出接口供其他模块使用
 export { MemoryEntity } from './storage/CloudStorage';
@@ -146,7 +147,7 @@ export class MemorySystem {
   // 策略配置和性能指标
   private config: StrategyConfig;
   private metrics: PerformanceMetrics;
-  private alarmListenerAdded: boolean = false;
+  private alarmListenerAdded = false;
   private backgroundSyncStarted = false;
   private isSyncing = false;
 
@@ -1244,7 +1245,7 @@ export class MemorySystem {
     messageId: string
   ): Promise<void> {
     this.ensureInitialized();
-    return this.cloudStorage.updateEntitiesWithRelatedData(messageMetadata, messageId, this);
+    return this.cloudStorage.updateEntitiesWithRelatedData(messageMetadata, messageId);
   }
 
   /**
@@ -1333,10 +1334,8 @@ export class MemorySystem {
    * 生成基于实体名称和UUID的实体ID
    */
   private generateEntityId(entityName: string): string {
-    // 清理和转换名称
-    const cleanName = this.sanitizeEntityName(entityName);
-    const uuid = uuidv4().substring(0, 8); // 取UUID的前8位
-    return `${cleanName}_${uuid}`;
+    // 使用统一的实体ID生成器
+    return entityIdGenerator.generateId({ type: 'entity', name: entityName });
   }
 
   /**
@@ -1533,11 +1532,17 @@ export class MemorySystem {
         ...entity,
         cachedAt: Date.now(),
         // 初始化必要的数组字段
-        latestConversations: [],
-        latestWebpages: [],
-        relatedResources: [],
-        relatedProjects: [],
-        relatedParticipants: [] // 🆕 添加缺失的字段
+        recentDataDetails: {
+          conversations: [],
+          webpages: [],
+          resources: [],
+          projects: [],
+          people: [],
+          topics: [],
+          jiraTickets: [],
+          cooccurringEntities: []
+        },
+        relatedParticipants: []
       };
       
       try {
@@ -1568,10 +1573,18 @@ export class MemorySystem {
    */
   private setDefaultExtendedFields(extendedEntity: CachedEntityDetail, entity: MemoryEntity): void {
     // 设置必要的数组字段默认值
-    extendedEntity.latestConversations = [];
-    extendedEntity.latestWebpages = [];
-    extendedEntity.relatedResources = [];
-    extendedEntity.relatedProjects = [];
+    if (!extendedEntity.recentDataDetails) {
+      extendedEntity.recentDataDetails = {
+        conversations: [],
+        webpages: [],
+        resources: [],
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      };
+    }
     
     // 确保统计字段存在
     if (!extendedEntity.statistic) {
@@ -1583,8 +1596,8 @@ export class MemorySystem {
         documents: 0,
         webpages: 0,
         relationships: entity.properties?.relationshipsCount || 0,
-        topics: 0, // 🆕 添加缺失的字段
-        jiraTickets: 0 // 🆕 添加缺失的字段
+        topics: 0,
+        jiraTickets: 0
       };
     }
     

@@ -315,7 +315,7 @@ const PromptConfig: React.FC = () => {
         }, 3000);
     };
 
-    const addToArray = (path: string, value: string = '') => {
+    const addToArray = (path: string, value = '') => {
         const keys = path.split('.');
         setConfigData(prev => {
             const newConfig = { ...prev };

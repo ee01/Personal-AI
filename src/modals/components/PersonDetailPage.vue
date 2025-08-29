@@ -168,7 +168,7 @@
           <button class="add-btn">+ 添加资源</button>
         </div>
         <div class="items-grid">
-          <div v-for="resource in personData.relatedResources" :key="resource.id" class="item-card">
+          <div v-for="resource in personData.recentDataDetails.resources" :key="resource.id" class="item-card">
             <div class="item-header">
               <div class="item-title">
                 <span>📚</span>
