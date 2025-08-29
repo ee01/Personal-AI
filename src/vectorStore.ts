@@ -56,10 +56,11 @@ export async function initChromaClient() {
       envConfig.CHROMA_COLLECTION_NAME = 'messages'
     }
     const collectionName = envConfig.CHROMA_COLLECTION_NAME || username + '-messages';
-    if (!collections.includes(collectionName)) {
+    const collectionNames = collections.map(c => c.name);
+    if (!collectionNames.includes(collectionName)) {
       messageCollection = await chromaClient.createCollection({
         name: collectionName,
-        metadata: { description: "存储与关注项匹配的消息" },
+        metadata: { description: "存储与关注项匹配的消息", "hnsw:space": "cosine" },
         embeddingFunction
       });
     } else {

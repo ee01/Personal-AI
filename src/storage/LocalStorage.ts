@@ -4,7 +4,7 @@
  */
 
 import { QueryResult, QueryOptions } from '../memory';
-import { MemoryEntity, RelatedData } from './CloudStorage';
+import { MemoryEntity } from './CloudStorage';
 
 // 统一的缓存实体详情接口 - 包含所有本地缓存数据
 export interface CachedEntityDetail extends MemoryEntity {
@@ -12,7 +12,7 @@ export interface CachedEntityDetail extends MemoryEntity {
   
   // 🆕 使用扩展的关联数据接口，只存储最近5条详细数据
   recentDataDetails: {
-    conversations: MemoryEntity['relatedData']['conversations'][0] & {
+    conversations: (MemoryEntity['relatedData']['conversations'][0] & {
       originalContent: string; // 完整的消息内容
       matchedRules: string[]; // 匹配的过滤规则
       contextMessages: Array<{
@@ -22,13 +22,14 @@ export interface CachedEntityDetail extends MemoryEntity {
         datetime: string;
         isMainMessage: boolean;
       }>; // 上下文消息
-    }[];
-    webpages: MemoryEntity['relatedData']['webpages'][0];
-    resources: MemoryEntity['relatedData']['resources'][0];
-    projects: MemoryEntity['relatedData']['projects'][0];
-    people: MemoryEntity['relatedData']['people'][0];
-    topics: MemoryEntity['relatedData']['topics'][0];
+    })[];
+    webpages: MemoryEntity['relatedData']['webpages'];
+    resources: MemoryEntity['relatedData']['resources'];
+    projects: MemoryEntity['relatedData']['projects'];
+    people: MemoryEntity['relatedData']['people'];
+    topics: MemoryEntity['relatedData']['topics'];
     jiraTickets: MemoryEntity['relatedData']['jiraTickets'];
+    cooccurringEntities: MemoryEntity['relatedData']['cooccurringEntities'];
   };
   
   // 本地特有的参与者关系（通过关系表快速查询）
@@ -993,14 +994,24 @@ export class LocalStorage {
       ...baseEntity,
       cachedAt: Date.now(),
       recentDataDetails: {
-        conversations: [],
-        webpages: [],
-        resources: [],
-        projects: [],
-        people: [],
-        topics: [],
-        jiraTickets: [],
-        cooccurringEntities: []
+        conversations: [] as (MemoryEntity['relatedData']['conversations'][0] & {
+          originalContent: string;
+          matchedRules: string[];
+          contextMessages: Array<{
+            id: string;
+            sender: string;
+            content: string;
+            datetime: string;
+            isMainMessage: boolean;
+          }>;
+        })[],
+        webpages: [] as MemoryEntity['relatedData']['webpages'],
+        resources: [] as MemoryEntity['relatedData']['resources'],
+        projects: [] as MemoryEntity['relatedData']['projects'],
+        people: [] as MemoryEntity['relatedData']['people'],
+        topics: [] as MemoryEntity['relatedData']['topics'],
+        jiraTickets: [] as MemoryEntity['relatedData']['jiraTickets'],
+        cooccurringEntities: [] as MemoryEntity['relatedData']['cooccurringEntities']
       },
       relatedParticipants: [],
       lastUpdated: Date.now()

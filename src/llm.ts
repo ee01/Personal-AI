@@ -603,7 +603,7 @@ export async function knowledgeQuery(question: string) {
     const formattedResults = results.documents.map((doc, idx) => {
       const metadata = results.metadatas[idx] as Record<string, string | number | boolean>;
       const id = String(results.ids[idx]);
-      const relevance = 1 / (1 + results.distances[idx]); // 余弦距离转换为相关性分数 (0-1)
+      const relevance = Math.max(0, 1 - results.distances[idx]); // 余弦距离：1-distance转换为相关性分数 (0-1)
       
       // 解析标签
       let tags: string[] = [];

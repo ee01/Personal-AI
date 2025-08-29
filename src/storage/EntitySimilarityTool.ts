@@ -55,11 +55,10 @@ export class EntitySimilarityTool {
    */
   async processEntity(entity: Omit<MemoryEntity, 'id' | 'created' | 'updated'>): Promise<ProcessedEntity> {
     const now = Date.now();
-    const generatedId = entityIdGenerator.generateId(entity);
     
     const fullEntity: MemoryEntity = {
       ...entity,
-      id: generatedId,
+      id: entity.type + '_' + entity.name,
       created: now,
       updated: now,
       accessCount: 0,

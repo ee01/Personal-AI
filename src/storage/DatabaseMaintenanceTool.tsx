@@ -370,7 +370,8 @@ export const DatabaseMaintenanceTool = () => {
 
                     // 创建新集合
                     const collection = await client.createCollection({
-                        name: collectionName
+                        name: collectionName,
+                        metadata: { "hnsw:space": "cosine" }
                     });
 
                     // 添加数据（如果有的话）

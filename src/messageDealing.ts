@@ -371,7 +371,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 		};
     } else {
         // 使用普通模式处理
-        console.log('Using normal mode to process messages');
+        console.log('Using filter mode to process messages');
         return await processMessageFilterByConcernedItems(data, concernedItems, username, isScheduledTask);
     }
 }
@@ -485,6 +485,7 @@ ${message}
 			});
 			await new Promise(resolve => setTimeout(resolve, (envConfig.LLM_TYPE === 'local' ? 3 * 60 : 10) * 1000));
 		}
+		return {success: true, message: '消息过滤完成: 共处理 ' + data.length + ' 个群组'};
 	} else {
 		// 合并发送 LLM
 		const messages = data.reduce((acc, item) => `${acc}\n
@@ -506,7 +507,8 @@ ${messages}
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
-		await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt});
+		const dealResponse = await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt});
+		console.log('MessageDealing response:', dealResponse);
 		chrome.storage.local.set({
 			ollamaAnalysisProgress: {
 				total: 1,
@@ -514,6 +516,7 @@ ${messages}
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
+		return dealResponse;
 	}
 }
 // 整合处理请求以及推送 bot 消息
@@ -658,9 +661,3 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 		}
 	}
 }
-
-
-// 函数已移除，使用新的记忆系统 (memorySystem) 替代
-
-// 🗑️ 已移除：updateEntitiesWithRelatedData 和 extractEntitiesFromMetadata 函数
-// 现在这些功能通过 memorySystem.updateEntitiesWithRelatedData() 调用

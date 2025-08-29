@@ -10,7 +10,7 @@ import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSys
 import { UserProfileManager } from './services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
 import { v4 as uuidv4 } from 'uuid';
-import { entityIdGenerator } from './storage/EntityIdGenerator';
+
 
 // 重新导出接口供其他模块使用
 export { MemoryEntity } from './storage/CloudStorage';
@@ -59,6 +59,7 @@ export interface VectorSearchOptions extends Omit<QueryOptions, 'sortBy'> {
   sortBy?: 'relevance' | 'time' | 'importance'; // 向量搜索特定的排序方式
   timeRange?: { start: number; end: number }; // 时间范围过滤
   minRelevanceScore?: number; // 最低相关度阈值
+  where?: Record<string, any>; // 通用过滤条件，支持ChromaDB的where语法
 }
 
 // 实体类型信息接口
@@ -341,10 +342,8 @@ export class MemorySystem {
       }
 
       // 本地没有，从云端获取
-      const vectorOptions: VectorSearchOptions = { limit: 1 };
-      const cloudResult = await this.cloudStorage.searchByVector(`id:${entityId}`, undefined, vectorOptions);
-      if (cloudResult.data.length > 0) {
-        const entity = cloudResult.data[0];
+      const entity = await this.cloudStorage.getEntity(entityId);
+      if (entity) {
         // 缓存到本地
         await this.localStorage.cacheEntity(entity);
         this.metrics.cloudHits++;
@@ -522,11 +521,10 @@ export class MemorySystem {
     this.ensureInitialized();
 
     const startTime = Date.now();
-    const entityId = this.generateEntityId(entity.name);
     
     const result: StoreResult = {
       success: false,
-      entityId,
+      entityId: '',
       cloudStored: false,
       localCached: false,
       relationshipsCreated: 0,
@@ -538,7 +536,7 @@ export class MemorySystem {
       // 构建完整实体
       const fullEntity: MemoryEntity = {
         ...entity,
-        id: entityId,
+        id: '',
         created: Date.now(),
         updated: Date.now(),
         accessCount: 0,
@@ -549,8 +547,10 @@ export class MemorySystem {
       let attempts = 0;
       while (attempts < this.config.retryAttempts) {
         try {
-          const cloudSuccess = await this.cloudStorage.storeEntity(fullEntity as any);
-          if (cloudSuccess) {
+          const entityId = await this.cloudStorage.storeEntity(fullEntity as any);
+          if (entityId) {
+            fullEntity.id = entityId;
+            result.entityId = entityId;
             result.cloudStored = true;
             break;
           }
@@ -581,7 +581,7 @@ export class MemorySystem {
 
       result.processingTime = Date.now() - startTime;
 
-      console.log(`💾 实体存储完成: ${entityId}`, {
+      console.log(`💾 实体存储完成: ${result.entityId || fullEntity.id}`, {
         cloudStored: result.cloudStored,
         localCached: result.localCached,
         success: result.success
@@ -628,15 +628,19 @@ export class MemorySystem {
 
       // 同时更新用户画像
       if (result.success && this.userProfileManager && messageData.metadata?.entities) {
-        await this.updateUserProfileFromEntities(messageData.metadata?.entities, {
-          actionType: 'mention',
-          timestamp: Date.now(),
-          context: 'message_analysis',
-          metadata: {
-            messageId: messageData.id,
-            source: messageData.metadata?.source || 'unknown'
-          }
-        });
+        // 将实体对象转换为数组格式
+        const entitiesArray = this.extractEntitiesFromMetadata(messageData.metadata, messageData.id);
+        if (entitiesArray.length > 0) {
+          await this.updateUserProfileFromEntities(entitiesArray, {
+            actionType: 'mention',
+            timestamp: Date.now(),
+            context: 'message_analysis',
+            metadata: {
+              messageId: messageData.id,
+              source: messageData.metadata?.source || 'unknown'
+            }
+          });
+        }
       }
 
       console.log(`✅ 消息存储完成: ${messageData.id}, 成功: ${result.success ? '✅' : '❌'}`);
@@ -872,6 +876,50 @@ export class MemorySystem {
   async extendEntityToDetailCache(entity: MemoryEntity): Promise<CachedEntityDetail> {
     this.ensureInitialized();
     return this.cloudStorage.extendEntityToDetailCache(entity);
+  }
+
+  /**
+   * 🆕 同步实体类型统计数据到本地缓存
+   */
+  private async syncEntityCountsToCache(entities: MemoryEntity[]): Promise<void> {
+    try {
+      // 统计各类型实体数量
+      const entityCounts: Record<string, number> = {
+        'Person': 0,
+        'Project': 0,
+        'Task': 0,
+        'Organization': 0,
+        'Document': 0,
+        'Technology': 0,
+        'Topic': 0
+      };
+
+      // 遍历实体并统计
+      entities.forEach(entity => {
+        if (entityCounts.hasOwnProperty(entity.type)) {
+          entityCounts[entity.type]++;
+        } else {
+          // 如果有新的类型，也记录下来
+          entityCounts[entity.type] = (entityCounts[entity.type] || 0) + 1;
+        }
+      });
+
+      // 保存到本地缓存
+      const statistics = {
+        entityCounts,
+        lastUpdated: Date.now(),
+        totalEntities: entities.length
+      };
+
+      await chrome.storage.local.set({
+        'cache_statistics': statistics
+      });
+
+      console.log(`📊 实体统计数据已缓存:`, entityCounts);
+      
+    } catch (error) {
+      console.error('📊 同步实体统计数据失败:', error);
+    }
   }
 
   /**
@@ -1331,14 +1379,6 @@ export class MemorySystem {
   }
 
   /**
-   * 生成基于实体名称和UUID的实体ID
-   */
-  private generateEntityId(entityName: string): string {
-    // 使用统一的实体ID生成器
-    return entityIdGenerator.generateId({ type: 'entity', name: entityName });
-  }
-
-  /**
    * 清理实体名称，处理中文和特殊字符
    */
   private sanitizeEntityName(name: string): string {
@@ -1533,14 +1573,24 @@ export class MemorySystem {
         cachedAt: Date.now(),
         // 初始化必要的数组字段
         recentDataDetails: {
-          conversations: [],
-          webpages: [],
-          resources: [],
-          projects: [],
-          people: [],
-          topics: [],
-          jiraTickets: [],
-          cooccurringEntities: []
+          conversations: [] as (MemoryEntity['relatedData']['conversations'][0] & {
+            originalContent: string;
+            matchedRules: string[];
+            contextMessages: Array<{
+              id: string;
+              sender: string;
+              content: string;
+              datetime: string;
+              isMainMessage: boolean;
+            }>;
+          })[],
+          webpages: [] as MemoryEntity['relatedData']['webpages'],
+          resources: [] as MemoryEntity['relatedData']['resources'],
+          projects: [] as MemoryEntity['relatedData']['projects'],
+          people: [] as MemoryEntity['relatedData']['people'],
+          topics: [] as MemoryEntity['relatedData']['topics'],
+          jiraTickets: [] as MemoryEntity['relatedData']['jiraTickets'],
+          cooccurringEntities: [] as MemoryEntity['relatedData']['cooccurringEntities']
         },
         relatedParticipants: []
       };
@@ -1575,14 +1625,24 @@ export class MemorySystem {
     // 设置必要的数组字段默认值
     if (!extendedEntity.recentDataDetails) {
       extendedEntity.recentDataDetails = {
-        conversations: [],
-        webpages: [],
-        resources: [],
-        projects: [],
-        people: [],
-        topics: [],
-        jiraTickets: [],
-        cooccurringEntities: []
+        conversations: [] as (MemoryEntity['relatedData']['conversations'][0] & {
+          originalContent: string;
+          matchedRules: string[];
+          contextMessages: Array<{
+            id: string;
+            sender: string;
+            content: string;
+            datetime: string;
+            isMainMessage: boolean;
+          }>;
+        })[],
+        webpages: [] as MemoryEntity['relatedData']['webpages'],
+        resources: [] as MemoryEntity['relatedData']['resources'],
+        projects: [] as MemoryEntity['relatedData']['projects'],
+        people: [] as MemoryEntity['relatedData']['people'],
+        topics: [] as MemoryEntity['relatedData']['topics'],
+        jiraTickets: [] as MemoryEntity['relatedData']['jiraTickets'],
+        cooccurringEntities: [] as MemoryEntity['relatedData']['cooccurringEntities']
       };
     }
     
@@ -1661,6 +1721,9 @@ export class MemorySystem {
       if (entitiesToUpdate.length > 0) {
         recentDataUpdated = entitiesToUpdate.length;
       }
+
+      // 4. 🆕 统计所有实体类型的数量并缓存到本地
+      await this.syncEntityCountsToCache(cloudEntities);
 
       console.log(`✅ 单向同步完成: 同步了${syncedEntities}个实体，更新了${recentDataUpdated}个实体的最近数据缓存`);
 
@@ -1819,6 +1882,177 @@ export class MemorySystem {
     if (!this.isInitialized) {
       throw new Error('记忆系统未初始化，请先调用 initialize() 方法');
     }
+  }
+
+  /**
+   * 从消息元数据提取实体信息，转换为数组格式
+   */
+  private extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> {
+    const entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> = [];
+    
+    if (!metadata.entities) {
+      return entities;
+    }
+
+    // 提取人员实体
+    if (metadata.entities.people) {
+      for (const person of metadata.entities.people) {
+        entities.push({
+          type: 'Person',
+          name: person.name,
+          description: `人员: ${person.name}`,
+          properties: {
+            role: person.role,
+            mentioned_context: person.mentioned_context,
+            source: 'message_analysis',
+            teamName: metadata.teamName || '',
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
+          },
+          importance: 0.7,
+          accessCount: 1,
+          lastAccessed: Date.now(),
+          tags: [],
+          statistic: {
+            conversations: 0, projects: 0, participants: 0, resources: 0,
+            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+          },
+          relatedData: {
+            conversations: [], webpages: [], resources: [], projects: [], people: [],
+            topics: [], jiraTickets: [], cooccurringEntities: []
+          }
+        });
+      }
+    }
+    
+    // 提取项目实体
+    if (metadata.entities.projects) {
+      for (const project of metadata.entities.projects) {
+        entities.push({
+          type: 'Project',
+          name: project.name,
+          description: `项目: ${project.name}`,
+          properties: {
+            status: project.status,
+            related_people: project.related_people,
+            source: 'message_analysis',
+            teamName: metadata.teamName || '',
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
+          },
+          importance: 0.8,
+          accessCount: 1,
+          lastAccessed: Date.now(),
+          tags: [],
+          statistic: {
+            conversations: 0, projects: 0, participants: 0, resources: 0,
+            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+          },
+          relatedData: {
+            conversations: [], webpages: [], resources: [], projects: [], people: [],
+            topics: [], jiraTickets: [], cooccurringEntities: []
+          }
+        });
+      }
+    }
+    
+    // 提取话题实体
+    if (metadata.entities.topics) {
+      for (const topic of metadata.entities.topics) {
+        entities.push({
+          type: 'Topic',
+          name: topic.name,
+          description: `话题: ${topic.name}`,
+          properties: {
+            related_people: topic.related_people,
+            importance: topic.importance,
+            source: 'message_analysis',
+            teamName: metadata.teamName || '',
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
+          },
+          importance: topic.importance || 0.6,
+          accessCount: 1,
+          lastAccessed: Date.now(),
+          tags: [],
+          statistic: {
+            conversations: 0, projects: 0, participants: 0, resources: 0,
+            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+          },
+          relatedData: {
+            conversations: [], webpages: [], resources: [], projects: [], people: [],
+            topics: [], jiraTickets: [], cooccurringEntities: []
+          }
+        });
+      }
+    }
+    
+    // 提取文档/资源实体
+    if (metadata.entities.documents || metadata.entities.resources) {
+      const documentsList = [...(metadata.entities.documents || []), ...(metadata.entities.resources || [])];
+      for (const doc of documentsList) {
+        entities.push({
+          type: 'Document',
+          name: doc.name,
+          description: `文档: ${doc.name}`,
+          properties: {
+            type: doc.type,
+            url: doc.url,
+            related_people: doc.related_people,
+            source: 'message_analysis',
+            teamName: metadata.teamName || '',
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
+          },
+          importance: 0.5,
+          accessCount: 1,
+          lastAccessed: Date.now(),
+          tags: [],
+          statistic: {
+            conversations: 0, projects: 0, participants: 0, resources: 0,
+            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+          },
+          relatedData: {
+            conversations: [], webpages: [], resources: [], projects: [], people: [],
+            topics: [], jiraTickets: [], cooccurringEntities: []
+          }
+        });
+      }
+    }
+
+    // 提取技术实体
+    if (metadata.entities.technologies || metadata.entities.tools) {
+      const techList = [...(metadata.entities.technologies || []), ...(metadata.entities.tools || [])];
+      for (const tech of techList) {
+        entities.push({
+          type: 'Technology',
+          name: tech.name,
+          description: `技术: ${tech.name}`,
+          properties: {
+            category: tech.category,
+            related_people: tech.related_people,
+            source: 'message_analysis',
+            teamName: metadata.teamName || '',
+            messageId: messageId,
+            timestamp: metadata.timestamp || Date.now()
+          },
+          importance: 0.6,
+          accessCount: 1,
+          lastAccessed: Date.now(),
+          tags: [],
+          statistic: {
+            conversations: 0, projects: 0, participants: 0, resources: 0,
+            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+          },
+          relatedData: {
+            conversations: [], webpages: [], resources: [], projects: [], people: [],
+            topics: [], jiraTickets: [], cooccurringEntities: []
+          }
+        });
+      }
+    }
+
+    return entities;
   }
 }
 

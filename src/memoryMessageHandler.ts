@@ -6,7 +6,6 @@
 import { memorySystem } from './memory';
 import { CloudStorage, MemoryEntity } from './storage/CloudStorage';
 import { LocalStorage } from './storage/LocalStorage';
-import { entityIdGenerator } from './storage/EntityIdGenerator';
 
 // 创建存储层实例
 const cloudStorage = new CloudStorage();
@@ -412,11 +411,10 @@ async function handleInitializeSampleData(): Promise<any> {
         for (const entity of sampleEntities) {
             try {
                 // 生成实体ID
-                const entityId = entityIdGenerator.generateId(entity);
-                const fullEntity = { ...entity, id: entityId, created: Date.now(), updated: Date.now() };
+                const fullEntity = { ...entity, created: Date.now(), updated: Date.now() };
                 
-                const success = await cloudStorage.storeEntity(fullEntity as any);
-                if (success) {
+                const entityId = await cloudStorage.storeEntity(fullEntity as any);
+                if (entityId) {
                     await localStorage.cacheEntity(fullEntity as any);
                     successCount++;
                     results.push({ success: true, entityId, cloudStored: true, localCached: true });
