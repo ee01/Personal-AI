@@ -5,7 +5,18 @@
 
 import { CloudStorage } from './CloudStorage';
 import { LocalStorage } from './LocalStorage';
-import { CacheStrategy } from './CacheStrategy';
+
+// 策略层接口定义（用于与 MemorySystem 交互）
+interface StrategyLayer {
+  getLastSyncTime(): Promise<number>;
+  performInitialSyncIfNeeded(): Promise<{
+    isNewDevice: boolean;
+    syncPerformed: boolean;
+    entitiesDownloaded: number;
+    relationshipsRestored: number;
+  }>;
+  syncCache(): Promise<void>;
+}
 
 export interface SystemHealthStatus {
   timestamp: number;
@@ -49,7 +60,7 @@ export interface MaintenanceResult {
 export class SystemMaintenanceTool {
   private cloudStorage: CloudStorage;
   private localStorage: LocalStorage;
-  private cacheStrategy: CacheStrategy;
+  private strategyLayer: StrategyLayer;
   
   private isMonitoringActive = false;
   private monitoringInterval: NodeJS.Timeout | null = null;
@@ -59,10 +70,10 @@ export class SystemMaintenanceTool {
   private readonly MAINTENANCE_INTERVAL = 6 * 60 * 60 * 1000; // 6小时
   private readonly CACHE_CLEANUP_THRESHOLD = 1000; // 实体数量阈值
 
-  constructor(cloudStorage: CloudStorage, localStorage: LocalStorage, cacheStrategy: CacheStrategy) {
+  constructor(cloudStorage: CloudStorage, localStorage: LocalStorage, strategyLayer: StrategyLayer) {
     this.cloudStorage = cloudStorage;
     this.localStorage = localStorage;
-    this.cacheStrategy = cacheStrategy;
+    this.strategyLayer = strategyLayer;
   }
 
   /**
@@ -183,7 +194,7 @@ export class SystemMaintenanceTool {
 
       if (status.cloudStorage.connected) {
         status.cloudStorage.entityCount = await this.cloudStorage.getEntityCount();
-        status.cloudStorage.lastSync = await this.cacheStrategy.getLastSyncTime();
+        status.cloudStorage.lastSync = await this.strategyLayer.getLastSyncTime();
       } else {
         status.cloudStorage.errors.push('云端存储连接失败');
       }
@@ -326,7 +337,7 @@ export class SystemMaintenanceTool {
 
       // 2. 检查并执行新设备同步
       try {
-        const syncResult = await this.cacheStrategy.performInitialSyncIfNeeded();
+        const syncResult = await this.strategyLayer.performInitialSyncIfNeeded();
         if (syncResult.syncPerformed) {
           result.tasksCompleted.push(`新设备同步: ${syncResult.entitiesDownloaded} 个实体`);
         }
@@ -417,7 +428,7 @@ export class SystemMaintenanceTool {
       // 2. 强制同步（如果请求）
       if (opts.forceSync) {
         try {
-          await this.cacheStrategy.syncCache();
+          await this.strategyLayer.syncCache();
           result.tasksCompleted.push('强制同步缓存');
         } catch (error) {
           result.tasksFailed.push('强制同步失败');
@@ -519,7 +530,7 @@ export class SystemMaintenanceTool {
 export function createSystemMaintenanceTool(
   cloudStorage: CloudStorage,
   localStorage: LocalStorage,
-  cacheStrategy: CacheStrategy
+  strategyLayer: StrategyLayer
 ): SystemMaintenanceTool {
-  return new SystemMaintenanceTool(cloudStorage, localStorage, cacheStrategy);
+  return new SystemMaintenanceTool(cloudStorage, localStorage, strategyLayer);
 }

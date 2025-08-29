@@ -1909,12 +1909,12 @@ export class CloudStorage {
               const currentMetadata = existingEntities.metadatas[j] as any;
               
               // 更新统计信息
-              const updatedMetadata = {
+              const updatedMetadata = this.convertEntityMetadataForChroma({
                 ...currentMetadata,
                 statistic: updateInfo.statistic,
                 lastStatisticUpdate: updateInfo.lastUpdated,
                 updated: Date.now()
-              };
+              } as MemoryEntity);
 
               updateMetadatas.push(updatedMetadata);
               updateIds.push(entityId);

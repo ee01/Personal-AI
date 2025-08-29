@@ -13,8 +13,6 @@
 📱 应用层 (memory.tsx, background.ts)
     ↓
 🧠 接口层 (src/memory.ts - 统一接口)
-    ↓  
-🎯 策略层 (CacheStrategy - 智能路由)
     ↓
 💾 存储层 (CloudStorage + LocalCache)
     ↓
@@ -38,7 +36,7 @@ graph TB
     end
     
     subgraph "策略层"
-        C1 --> D1[CacheStrategy - 缓存策略]
+        C1 --> D1[memory.ts - 缓存策略]
         C2 --> D1
         C3 --> D1
         C4 --> D2[SystemMaintenanceTool - 系统维护]
@@ -188,6 +186,11 @@ export { CachedEntityDetail } from './storage/LocalStorage';
 - ✅ **性能监控** - 内置查询性能监控和优化
 - ✅ **扩展实体支持** - 返回 CachedEntityDetail，支持 UI 层所需的丰富字段
 - ✅ **公共扩展方法** - 提供 extendEntityToDetailCache 方法，统一实体扩展逻辑
+- ✅ **智能查询路由** - 根据查询类型选择最优数据源
+- ✅ **存储优先级策略** - 先云端存储，后本地缓存
+- ✅ **自动缓存更新** - 存储时自动更新相关缓存
+- ✅ **后台同步机制** - 定期同步和清理任务
+- ✅ **真正分页查询** - 默认查询第一页30条数据，支持云端分页
 
 #### 2. ☁️ 云端存储管理 (`src/storage/CloudStorage.ts`)
 **状态**: ✅ **已完成**
@@ -212,18 +215,6 @@ export { CachedEntityDetail } from './storage/LocalStorage';
 - ✅ **智能字段计算** - 自动从 latest* 数组计算统计信息
 - ✅ **关系查询优化** - 通过关系表快速查询相关参与者
 
-#### 4. 🎯 缓存策略管理 (`src/storage/CacheStrategy.ts`)
-**状态**: ✅ **已完成**
-
-**核心功能**:
-- ✅ **智能查询路由** - 根据查询类型选择最优数据源
-- ✅ **存储优先级策略** - 先云端存储，后本地缓存
-- ✅ **自动缓存更新** - 存储时自动更新相关缓存
-- ✅ **性能指标收集** - 缓存命中率、查询时间等指标
-- ✅ **后台同步机制** - 定期同步和清理任务
-- ✅ **实体信息扩展** - 通过 extendEntitiesFromCache 自动合并缓存数据，返回 CachedEntityDetail
-- ✅ **真正分页查询** - 默认查询第一页30条数据，支持云端分页
-
 **查询策略优化**:
 ```typescript
 // 新的查询策略流程
@@ -237,7 +228,7 @@ async queryEntities(type, searchTerm, options): Promise<QueryResult<CachedEntity
   // 3. 缓存结果到本地
   await this.cacheCloudResults(cloudResult.data);
   
-  // 4. 从缓存扩展实体信息：合并 recent data
+  // 4. 扩展实体信息：合并 recent data
   const extendedData = await this.extendEntitiesFromCache(cloudResult.data);
   
   return { ...cloudResult, data: extendedData };
