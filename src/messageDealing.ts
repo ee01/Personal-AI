@@ -35,11 +35,11 @@ export async function analyzeMessages (data: any[], username: string, isSchedule
 			if (response && response.success) {
 				console.log("LLM's response:", response, {data, isScheduledTask});
 				// Todo: Toast 方法在 popup 中无法调用
-				showToast(response.message || 'Analysis complete', 'success');
+				// showToast(response.message || 'Analysis complete', 'success');
 				return response;
 			} else {
 				const error = new Error(response.message || 'Analysis failed');
-				showToast(error.message, 'error');
+				// showToast(error.message, 'error');
 				throw error;
 			}
 		}

@@ -291,7 +291,7 @@ async function handleGetTopicDetail(request: any): Promise<any> {
     
     try {
         // 优先从本地缓存获取主题详情
-        const cachedDetails = await localStorage.getRecentData(topicId);
+        const cachedDetails = await localStorage.getEntity(topicId);
         if (cachedDetails) {
             return { success: true, data: cachedDetails };
         }
@@ -305,27 +305,8 @@ async function handleGetTopicDetail(request: any): Promise<any> {
         // 直接使用 CloudStorage 的方法将基础实体扩展为详细缓存实体
         const topicDetail = await cloudStorage.extendEntityToDetailCache(topicEntity);
 
-        // 缓存主题详情数据到 recentDataDetails
-        if (topicDetail.recentDataDetails?.conversations) {
-            for (const conv of topicDetail.recentDataDetails.conversations.slice(0, 3)) {
-                await localStorage.updateRecentData(topicId, 'conversation', conv);
-            }
-        }
-        if (topicDetail.recentDataDetails?.resources) {
-            for (const resource of topicDetail.recentDataDetails.resources.slice(0, 3)) {
-                await localStorage.updateRecentData(topicId, 'resource', resource);
-            }
-        }
-        if (topicDetail.recentDataDetails?.projects) {
-            for (const project of topicDetail.recentDataDetails.projects.slice(0, 3)) {
-                await localStorage.updateRecentData(topicId, 'project', project);
-            }
-        }
-        if (topicDetail.recentDataDetails?.webpages) {
-            for (const webpage of topicDetail.recentDataDetails.webpages.slice(0, 3)) {
-                await localStorage.updateRecentData(topicId, 'webpage', webpage);
-            }
-        }
+        // 直接缓存整个主题详情实体（包含完整的 recentDataDetails）
+        await localStorage.cacheEntity(topicDetail);
 
         return { success: true, data: topicDetail };
     } catch (error) {

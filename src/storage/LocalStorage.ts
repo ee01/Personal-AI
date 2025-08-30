@@ -589,14 +589,6 @@ export class LocalStorage {
   // ==================== 最近数据缓存 ====================
 
   /**
-   * 获取实体详情（别名方法，保持向后兼容）
-   * @deprecated 推荐使用 getEntity() 替代
-   */
-  async getRecentData(entityId: string): Promise<CachedEntityDetail | null> {
-    return this.getEntity(entityId);
-  }
-
-  /**
    * 更新实体的详细数据（统一存储到ENTITIES）
    */
   async updateRecentData(
@@ -1025,7 +1017,7 @@ export class LocalStorage {
    * 检查实体是否为 CachedEntityDetail 格式
    */
   private isCachedEntityDetail(entity: MemoryEntity | CachedEntityDetail): entity is CachedEntityDetail {
-    return 'latestConversations' in entity && 'cachedAt' in entity;
+    return 'recentDataDetails' in entity && 'cachedAt' in entity;
   }
 
   // ==================== 统计信息缓存 ====================

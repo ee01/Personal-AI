@@ -363,7 +363,7 @@ export class MemorySystem {
    */
   async getRecentData(entityId: string): Promise<CachedEntityDetail | null> {
     this.ensureInitialized();
-    return this.localStorage.getRecentData(entityId);
+    return this.localStorage.getEntity(entityId);
   }
 
   /**
@@ -1597,7 +1597,7 @@ export class MemorySystem {
       
       try {
         // 获取扩展缓存数据
-        const cacheData = await this.localStorage.getRecentData(entity.id);
+        const cacheData = await this.localStorage.getEntity(entity.id);
         
         if (cacheData) {
           // 直接合并缓存数据到实体对象
