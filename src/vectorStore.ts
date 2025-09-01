@@ -87,7 +87,7 @@ export async function storeMessage(
     timestamp: number,             // 时间戳
     matchedRules: string[],        // 匹配到的规则
     summary: string,               // 消息摘要
-    reply_advice: string,          // 回复建议
+    replyAdvice: string,          // 回复建议
     teamName?: string,             // 群组/团队名称
     teamId?: string,               // 群组/团队ID
     entities?: {                   // 实体识别结果

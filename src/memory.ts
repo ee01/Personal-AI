@@ -142,7 +142,7 @@ export class MemorySystem {
   private localStorage: LocalStorage;
   private entitySimilarityTool: EntitySimilarityTool;
   private systemMaintenanceTool: SystemMaintenanceTool;
-  private userProfileManager: UserProfileManager | null = null;
+  public userProfileManager: UserProfileManager | null = null;
   private isInitialized = false;
   
   // 策略配置和性能指标
@@ -598,7 +598,7 @@ export class MemorySystem {
   }
 
   /**
-   * 存储消息（先云端后本地）- 🆕 简化版，不再处理实体关联数据
+   * 存储消息（先云端后本地）- 🆕 统一接口，包含实体关联数据处理
    */
   async storeMessage(messageData: {
     id: string;
@@ -619,31 +619,52 @@ export class MemorySystem {
     };
 
     try {
-      // 存储消息到云端（实体数据已包含在metadata中）
+      // 1. 存储消息到云端（实体数据已包含在metadata中）
       const cloudSuccess = await this.cloudStorage.storeMessage(messageData);
       result.cloudStored = cloudSuccess;
+
+      // 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
+      if (result.cloudStored) {
+        try {
+          await this.cloudStorage.updateEntitiesWithRelatedData(
+            messageData.metadata,
+            messageData.id
+          );
+          console.log(`🔗 实体关联数据更新完成: ${messageData.id}`);
+        } catch (entityError) {
+          console.error('🚨 更新实体关联数据失败:', entityError);
+          result.errors?.push(`Entity update failed: ${entityError.message}`);
+          // 不影响整体存储成功状态，仅记录错误
+        }
+      }
 
       result.success = result.cloudStored;
       result.processingTime = Date.now() - startTime;
 
-      // 同时更新用户画像
+      // 3. 同时更新用户画像
       if (result.success && this.userProfileManager && messageData.metadata?.entities) {
-        // 将实体对象转换为数组格式
-        const entitiesArray = this.extractEntitiesFromMetadata(messageData.metadata, messageData.id);
-        if (entitiesArray.length > 0) {
-          await this.updateUserProfileFromEntities(entitiesArray, {
-            actionType: 'mention',
-            timestamp: Date.now(),
-            context: 'message_analysis',
-            metadata: {
-              messageId: messageData.id,
-              source: messageData.metadata?.source || 'unknown'
-            }
-          });
+        try {
+          // 将实体对象转换为数组格式
+          const entitiesArray = this.extractEntitiesFromMetadata(messageData.metadata, messageData.id);
+          if (entitiesArray.length > 0) {
+            await this.updateUserProfileFromEntities(entitiesArray, {
+              actionType: 'mention',
+              timestamp: Date.now(),
+              context: 'message_analysis',
+              metadata: {
+                messageId: messageData.id,
+                source: messageData.metadata?.source || 'unknown'
+              }
+            });
+          }
+        } catch (profileError) {
+          console.error('⚠️ 更新用户画像失败:', profileError);
+          result.errors?.push(`Profile update failed: ${profileError.message}`);
+          // 不影响整体存储成功状态，仅记录错误
         }
       }
 
-      console.log(`✅ 消息存储完成: ${messageData.id}, 成功: ${result.success ? '✅' : '❌'}`);
+      console.log(`✅ 消息完整存储完成: ${messageData.id}, 成功: ${result.success ? '✅' : '❌'}, 处理时间: ${result.processingTime}ms`);
       return result;
 
     } catch (error) {
@@ -1286,17 +1307,6 @@ export class MemorySystem {
   }
 
   /**
-   * 🆕 更新实体关联数据 - 从消息元数据中提取实体并更新其关联信息
-   */
-  async updateEntitiesWithRelatedData(
-    messageMetadata: any,
-    messageId: string
-  ): Promise<void> {
-    this.ensureInitialized();
-    return this.cloudStorage.updateEntitiesWithRelatedData(messageMetadata, messageId);
-  }
-
-  /**
    * 获取最后同步时间
    */
   async getLastSyncTime(): Promise<number> {
@@ -1804,7 +1814,7 @@ export class MemorySystem {
   /**
    * 从实体列表更新用户画像
    */
-  private async updateUserProfileFromEntities(
+  async updateUserProfileFromEntities(
     entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>,
     baseAction: Omit<UserAction, 'weight'>
   ): Promise<void> {
@@ -1887,7 +1897,7 @@ export class MemorySystem {
   /**
    * 从消息元数据提取实体信息，转换为数组格式
    */
-  private extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> {
+  extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> {
     const entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> = [];
     
     if (!metadata.entities) {

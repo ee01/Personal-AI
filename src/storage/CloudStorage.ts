@@ -704,80 +704,105 @@ export class CloudStorage {
   }
 
   /**
+   * 通用字段处理：自动判断字段类型并进行相应转换
+   */
+  private processField(value: any, fieldName: string, defaultValue?: any): any {
+    // 如果值为空，返回默认值
+    if (value === null || value === undefined || value === '') {
+      return defaultValue;
+    }
+
+    // 如果已经是正确类型，直接返回
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    // 尝试解析为 JSON（数组或对象）
+    if ((value.startsWith('{') && value.endsWith('}')) || 
+        (value.startsWith('[') && value.endsWith(']'))) {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        console.warn(`字段 ${fieldName} JSON解析失败:`, error);
+        return defaultValue;
+      }
+    }
+
+    // 判断是否为时间戳字段，如果是数字字符串且字段名包含时间相关词汇
+    const timeFields = ['created', 'updated', 'lastAccessed', 'lastContact', 'lastDocumentUpdate'];
+    if (timeFields.includes(fieldName) && /^\d+$/.test(value)) {
+      return parseInt(value, 10);
+    }
+
+    // 判断是否为数字字段
+    const numberFields = ['accessCount', 'importance', 'hotness', 'criticalityScore'];
+    if (numberFields.includes(fieldName) && /^-?\d*\.?\d+$/.test(value)) {
+      return parseFloat(value);
+    }
+
+    // 布尔字段处理
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+
+    // 其他情况保持字符串
+    return value;
+  }
+
+  /**
    * 🆕 从ChromaDB metadata反序列化实体
    */
   private deserializeEntityFromMetadata(metadata: any): MemoryEntity {
+    // 默认值定义
+    const defaults:MemoryEntity = {
+      id: '',
+      type: 'Document' as const,
+      name: '',
+      description: '',
+      properties: {} as Record<string, any>,
+      created: Date.now(),
+      updated: Date.now(),
+      accessCount: 0,
+      lastAccessed: Date.now(),
+      importance: 0.5,
+      tags: [] as string[],
+      status: 'active',
+      statistic: {
+        conversations: 0, projects: 0, participants: 0, resources: 0,
+        documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+      },
+      relatedData: {
+        conversations: [],
+        webpages: [],
+        resources: [] as Array<{
+          id: string; summary: string; name: string; type: string;
+          datetime: string; relevanceScore: number;
+        }>,
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      },
+      hotness: 0,
+      criticalityScore: 0,
+      lastDocumentUpdate: Date.now(),
+      expertise: [] as string[]
+    };
+
     try {
-      return {
-        id: metadata.id || '',
-        type: metadata.type || 'Document',
-        name: metadata.name || '',
-        description: metadata.description || '',
-        properties: metadata.properties ? JSON.parse(metadata.properties) : {},
-        created: metadata.created || Date.now(),
-        updated: metadata.updated || Date.now(),
-        accessCount: metadata.accessCount || 0,
-        lastAccessed: metadata.lastAccessed || Date.now(),
-        importance: metadata.importance || 0.5,
-        tags: metadata.tags ? JSON.parse(metadata.tags) : [],
-        status: metadata.status || 'active',
-        statistic: metadata.statistic ? JSON.parse(metadata.statistic) : {
-          conversations: 0, projects: 0, participants: 0, resources: 0,
-          documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-        },
-        relatedData: metadata.relatedData ? JSON.parse(metadata.relatedData) : {
-          conversations: [],
-          webpages: [],
-          resources: [],
-          projects: [],
-          people: [],
-          topics: [],
-          jiraTickets: [],
-          cooccurringEntities: []
-        },
-        hotness: metadata.hotness || 0,
-        criticalityScore: metadata.criticalityScore || 0,
-        lastDocumentUpdate: metadata.lastDocumentUpdate || Date.now(),
-        // Person特有字段
-        ...(metadata.type === 'Person' && {
-          role: metadata.role,
-          team: metadata.team,
-          lastContact: metadata.lastContact,
-          expertise: metadata.expertise ? JSON.parse(metadata.expertise) : []
-        }),
-        // Project特有字段
-        ...(metadata.type === 'Project' && {
-          isHighlighted: metadata.isHighlighted
-        })
-      };
+      // 基础字段处理
+      const entity: any = { ...defaults };
+      for (const key in metadata) {
+        if (metadata[key] !== undefined) {
+          entity[key] = this.processField(metadata[key], key);
+        }
+      }
+
+      return entity as MemoryEntity;
     } catch (error) {
       console.error('反序列化实体失败:', error);
       // 返回基础实体结构
-      return {
-        id: metadata.id || '',
-        type: metadata.type || 'Document',
-        name: metadata.name || '',
-        properties: {},
-        created: Date.now(),
-        updated: Date.now(),
-        accessCount: 0,
-        lastAccessed: Date.now(),
-        importance: 0.5,
-        statistic: {
-          conversations: 0, projects: 0, participants: 0, resources: 0,
-          documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-        },
-        relatedData: {
-          conversations: [],
-          webpages: [],
-          resources: [],
-          projects: [],
-          people: [],
-          topics: [],
-          jiraTickets: [],
-          cooccurringEntities: []
-        }
-      };
+      return defaults;
     }
   }
 

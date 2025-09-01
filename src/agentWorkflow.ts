@@ -483,18 +483,11 @@ export async function processNewMessage(message: any): Promise<MessageProcessRes
       };
 
       // 🆕 使用新的分离式存储系统
-      // 1. 存储消息到 messages collection（实体数据已包含在metadata中）
       const storeResult: StoreResult = await memorySystem.storeMessage({
         id: messageId,
         content: message.message_content,
         metadata: messageMetadata
       });
-
-      // 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
-      await memorySystem.updateEntitiesWithRelatedData(
-        messageMetadata,
-        messageId
-      );
       
       console.log(`✅ 消息和实体关联存储完成 [agentWorkflow新系统]: ${messageId}`, {
         success: storeResult.success,

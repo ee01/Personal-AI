@@ -6,6 +6,7 @@ import { agentCoordinator } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
 import { DatabaseMaintenanceTool } from './storage/DatabaseMaintenanceTool';
+import V6DataMigrationTool from './storage/V6DataMigrationTool';
 
 // 使用从utils.ts导入的类型
 const Options = () => {
@@ -556,6 +557,7 @@ const Options = () => {
             <div className="form-section">
                 <h2>数据库维护</h2>
                 <PlaceholderCleanupTool />
+                <V6DataMigrationTool />
                 <DatabaseMaintenanceTool />
             </div>
 

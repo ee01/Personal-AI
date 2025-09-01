@@ -212,7 +212,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					}).catch(console.error);
 				}
 				
-				// 🆕 处理 shouldStore 标志 - 实现新的实体关联存储
+										// 🆕 处理 shouldStore 标志 - 使用统一存储接口
 				if (result.shouldStore) {
 					try {
 						const originalMessage = result.messageContext || {};
@@ -240,28 +240,22 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							reply_advice: result.replyAdvice || ''
 						};
 
-													// 🆕 使用新的分离式存储系统
-							try {
-								// 确保记忆系统已初始化
-								await memorySystem.initialize();
-								
-								// 1. 存储消息到 messages collection（实体数据已包含在metadata中）
-								const storeResult: StoreResult = await memorySystem.storeMessage({
-									id: messageId,
-									content: originalMessage.messageContent || '',
-									metadata: messageMetadata
-								});
+						// 🆕 使用统一存储接口 - 内部自动处理实体关联数据
+						try {
+							// 确保记忆系统已初始化
+							await memorySystem.initialize();
+							
+							// 统一存储接口 - 包含消息存储和实体关联数据处理
+							const storeResult: StoreResult = await memorySystem.storeMessage({
+								id: messageId,
+								content: originalMessage.messageContent || '',
+								metadata: messageMetadata
+							});
 
-								// 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
-								await memorySystem.updateEntitiesWithRelatedData(
-									messageMetadata,
-									messageId
-								);
-
-								console.log(`✅ 消息和实体关联存储完成: ${messageId}`, {
-									...storeResult,
-									performance: `${storeResult.processingTime}ms`
-								});
+							console.log(`✅ 消息完整存储完成: ${messageId}`, {
+								...storeResult,
+								performance: `${storeResult.processingTime}ms`
+							});
 
 						} catch (unifiedError) {
 							console.error('🚨 统一存储系统失败，回退到原有方式:', unifiedError);
@@ -574,7 +568,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					source: json.sender || 'unknown',
 					timestamp: Date.now(),
 					datetime: json.datetime, // 原始时间
-					post_id: json.post_id,   // 原始消息ID
+					postId: json.post_id,   // 原始消息ID
 					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
 					summary: json.summary || '',
 					teamName: json.team_name,
@@ -596,28 +590,22 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					},
 					relationships: extractedEntities.relationships,
 					actions: extractedEntities.actions,
-					reply_advice: json.reply_advice
+					replyAdvice: json.reply_advice
 				};
 
-				// 🆕 使用新的分离式存储系统（与 agentThinking 方式一致）
+				// 🆕 使用统一存储接口（与 agentThinking 方式一致）
 				try {
 					// 确保记忆系统已初始化
 					await memorySystem.initialize();
 					
-					// 1. 存储消息到 messages collection（实体数据已包含在metadata中）
+					// 统一存储接口 - 包含消息存储和实体关联数据处理
 					const storeResult: StoreResult = await memorySystem.storeMessage({
 						id: messageId,
 						content: json.message_content,
 						metadata: messageMetadata
 					});
 
-					// 2. 🆕 更新实体关联数据（从metadata中提取实体并更新关联信息）
-					await memorySystem.updateEntitiesWithRelatedData(
-						messageMetadata,
-						messageId
-					);
-
-					console.log(`✅ 消息和实体关联存储完成 [新系统]: ${messageId.slice(0,8)}`, {
+					console.log(`✅ 消息完整存储完成 [统一接口]: ${messageId.slice(0,8)}`, {
 						...storeResult,
 						performance: `${storeResult.processingTime}ms`
 					});
