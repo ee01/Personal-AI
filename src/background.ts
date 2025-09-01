@@ -1,7 +1,7 @@
 import { analyzeMessages, analyzeMessagesInBackground } from './messageDealing';
 import { CloudStorage } from './storage/CloudStorage';
 import { knowledgeQuery } from './llm';
-import { createOffscreenDocument, handleEmbeddingResult } from './embeddings';
+import { createOffscreenDocument, getEmbeddingInBackground, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
 import { getAuthToken } from './slide';
@@ -246,6 +246,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 监听来自离屏文档的消息
     handleEmbeddingResult(request);
+    if (request.type === 'EXEC_EMBEDDING_REQUEST') {
+        getEmbeddingInBackground(request.text).then((result: any) => {
+          sendResponse(result);
+        });
+        return true
+    }
 
     // 处理 Jira tickets 获取
     if (request.type === 'FETCH_JIRA_TICKETS') {
