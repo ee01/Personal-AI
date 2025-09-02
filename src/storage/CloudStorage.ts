@@ -374,8 +374,8 @@ export class CloudStorage {
                   id: searchResults.ids?.[0]?.[i] || `result_${i}`,
                   messageId: searchResults.ids?.[0]?.[i],
                   content: searchResults.documents?.[0]?.[i] || '',
-                  source: metadata?.source || 'unknown',
-                  timestamp: metadata?.timestamp || metadata?.extractedAt || Date.now(),
+                  sender: metadata?.sender || metadata?.source || 'unknown',
+                  datetime: metadata?.datetime || metadata?.extractedAt || Date.now(),
                   relevanceScore,
                   distance,
                   collectionType: this.getCollectionType(collectionName),
@@ -907,7 +907,7 @@ export class CloudStorage {
               title: metadata.summary || '消息记录',
               content: document.substring(0, 200) + '...',
               timestamp: metadata.timestamp || Date.now(),
-              source: metadata.source || 'unknown',
+              sender: metadata.sender || metadata.source || 'unknown',
               metadata
             });
           }

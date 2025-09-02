@@ -597,7 +597,7 @@ export class LocalStorage {
           id: entityId,
           type: 'Topic', // 默认类型，后续可以根据需要调整
           name: entityId,
-          description: '',
+          document: '',
           properties: {},
           created: Date.now(),
           updated: Date.now(),

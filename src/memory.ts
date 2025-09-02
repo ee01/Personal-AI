@@ -714,7 +714,7 @@ export class MemorySystem {
               context: 'message_analysis',
               metadata: {
                 messageId: messageData.id,
-                source: messageData.metadata?.source || 'unknown'
+                sender: messageData.metadata?.source || 'unknown'
               }
             });
           }

@@ -185,7 +185,7 @@ const V6DataMigrationTool = () => {
 
                 // 构建新格式的metadata
                 const newMetadata: NewMessageMetadata = {
-                    sender: v6Metadata.source || 'unknown',
+                    sender: v6Metadata.source || v6Metadata.sender || 'unknown',
                     datetime: v6Metadata.timestamp || Date.now(),
                     matchedRules: parseJsonField(v6Metadata.matchedRules),
                     summary: v6Metadata.summary || '',
@@ -209,7 +209,7 @@ const V6DataMigrationTool = () => {
                 console.error('转换V6 metadata失败:', error);
                 // 返回基本结构
                 return {
-                    sender: v6Metadata.source || 'unknown',
+                    sender: v6Metadata.source || v6Metadata.sender || 'unknown',
                     datetime: v6Metadata.timestamp || Date.now(),
                     matchedRules: [],
                     summary: v6Metadata.summary || '',
@@ -679,7 +679,7 @@ const V6DataMigrationTool = () => {
                                         context: 'v6_migration',
                                         metadata: {
                                             messageId: messageId,
-                                            source: v6Metadata.source || 'unknown'
+                                            sender: v6Metadata.source || 'unknown'
                                         }
                                     });
                                 } catch (profileError) {

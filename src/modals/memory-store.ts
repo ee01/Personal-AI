@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, nextTick } from 'vue';
 import { memorySystem } from '../memory';
 
 // 实体类型配置
@@ -52,6 +52,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const initialize = async () => {
     isLoading.value = true;
     try {
+      await memorySystem.initialize();
       const response = await chromeAPI.sendMessage({ type: 'GET_ENTITY_STATISTICS' });
       if (response && (response as any).success) {
         overviewStats.value = (response as any).data;
@@ -66,6 +67,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const loadEntitiesByType = async (entityType: string, offset = 0, limit = 30) => {
     isLoading.value = true;
     try {
+      await memorySystem.initialize();
       const response = await chromeAPI.sendMessage({
         type: 'GET_ENTITIES_BY_TYPE',
         entityType,
@@ -75,11 +77,7 @@ export const useMemoryStore = defineStore('memory', () => {
       
       if (response && (response as any).success) {
         entities.value = (response as any).data || [];
-        
-        // 如果是第一页数据，检查 Topic 类型实体是否需要补充 recent data
-        if (offset === 0 && entityType === 'Topic') {
-          entities.value = await memorySystem.enrichEntitiesWithDetails(entities.value);
-        }
+        await nextTick();
       } else {
         entities.value = generateMockEntities(entityType);
       }
@@ -87,6 +85,11 @@ export const useMemoryStore = defineStore('memory', () => {
       entities.value = generateMockEntities(entityType);
     } finally {
       isLoading.value = false;
+
+      // 如果是第一页数据，检查 Topic 类型实体是否需要补充 recent data
+      if (offset === 0 && entityType === 'Topic') {
+        entities.value = await memorySystem.enrichEntitiesWithDetails(entities.value);
+      }
     }
   };
 
