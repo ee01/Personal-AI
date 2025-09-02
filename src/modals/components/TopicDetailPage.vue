@@ -162,17 +162,17 @@
               @click="toggleConversationExpand(conv.id)"
             >
               <span class="indicator-text">
-                {{ expandedConversations.has(conv.id) ? '🔼 收起上下文' : `🔍 查看上下文 (${conv.context?.length || 0} 条相关消息)` }}
+                {{ expandedConversations.has(conv.id) ? '🔼 收起上下文' : `🔍 查看上下文 (${conv.contextMessages?.length || 0} 条相关消息)` }}
               </span>
             </div>
             <div 
-              v-if="conv.context" 
+              v-if="conv.contextMessages" 
               class="context-content"
               :class="{ expanded: expandedConversations.has(conv.id) }"
             >
               <div class="context-divider"></div>
               <div 
-                v-for="(contextMsg, index) in conv.context" 
+                v-for="(contextMsg, index) in conv.contextMessages" 
                 :key="index" 
                 class="context-item"
                 :class="{ 'main-message': contextMsg.isMainMessage }"

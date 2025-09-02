@@ -618,11 +618,11 @@ export async function knowledgeQuery(question: string) {
         tags = [];
       }
       
-      // 构建团队信息
-      const teamInfo = metadata.teamName || metadata.teamId ? {
-        name: String(metadata.teamName || '未知群组'),
-        id: String(metadata.teamId || ''),
-        url: metadata.teamId ? `https://app.ringcentral.com/messages/${metadata.teamId}` : ''
+      // 构建群组信息
+      const groupInfo = metadata.grName || metadata.groupId ? {
+        name: String(metadata.groupName || '未知群组'),
+        id: String(metadata.groupId || ''),
+        url: metadata.groupId ? `https://app.ringcentral.com/messages/${metadata.groupId}` : ''
       } : undefined;
       
       // 构建 QueryResult 对象
@@ -634,7 +634,7 @@ export async function knowledgeQuery(question: string) {
         source: String(metadata.source),
         relevance: relevance,
         tags: tags,
-        team: teamInfo,
+        team: groupInfo,
         reply_advice: metadata.reply_advice || ''
       };
     });

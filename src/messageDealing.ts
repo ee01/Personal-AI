@@ -3,7 +3,7 @@ import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
 import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
-import { extractEntitiesToStore } from './entityExtraction';
+import { extractEntitiesFromMessage } from './entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
@@ -220,14 +220,14 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						
 						// 构建消息元数据
 						const messageMetadata = {
-							source: originalMessage.sender || 'unknown',
-							timestamp: Date.now(),
-							datetime: originalMessage.datetime || new Date().toISOString(),
+							sender: originalMessage.sender || 'unknown',
+							datetime: new Date(originalMessage.datetime).getTime() || Date.now(),
 							matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
 							summary: result.summary || '',
-							teamName: originalMessage.groupName || '',
-							teamId: originalMessage.groupId || '',
-							contextMessages: [] as any[], // 暂时设为空数组，稍后从其他地方获取
+							groupName: originalMessage.groupName || '',
+							groupId: originalMessage.groupId || '',
+							groupUrl: 'https://app.ringcentral.com/messages/' + originalMessage.groupId,
+							contextMessages: [] as any[], // Todo: 暂时设为空数组，稍后从其他地方获取
 							entities: result.enrichedData?.entities || {},
 							metadata: {
 								sentiment: result.enrichedData?.sentiment || 'neutral',
@@ -235,9 +235,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 								category: result.enrichedData?.category || [],
 								tags: result.enrichedData?.tags || []
 							},
-							relationships: result.enrichedData?.relationships || [],
 							actions: result.enrichedData?.actions || [],
-							reply_advice: result.replyAdvice || ''
+							replyAdvice: result.replyAdvice || ''
 						};
 
 						// 🆕 使用统一存储接口 - 内部自动处理实体关联数据
@@ -554,7 +553,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 
 				// 增强逻辑：使用新的统一存储系统
 				const messageId = uuidv4();
-				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
+				const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
 				
 				// 构建消息元数据（包含上下文信息）
 				const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
@@ -565,32 +564,27 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					isMainMessage: post.id == json.post_id
 				})) : json.contextMessages;
 				const messageMetadata = {
-					source: json.sender || 'unknown',
-					timestamp: Date.now(),
-					datetime: json.datetime, // 原始时间
+					sender: json.sender || 'unknown',
+					datetime: new Date(json.datetime).getTime() || Date.now(),
 					postId: json.post_id,   // 原始消息ID
 					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
 					summary: json.summary || '',
-					teamName: json.team_name,
-					teamId: json.team_id,
-					teamUrl: json.teamUrl || `https://app.ringcentral.com/messages/${json.team_id}`,
-					// 消息内容（用于高亮）
-					originalContent: json.message_content, // 原始消息内容
-					highlightText: json.message_content,   // 用于高亮的文本
+					groupName: json.team_name,
+					groupId: json.team_id,
+					groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
 					// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
 					contextMessages: contextMessages,
 					// 当前消息在上下文中的位置
 					messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
+					actions: extractedEntities.actions,
+					replyAdvice: json.reply_advice,
 					entities: extractedEntities.entities,
 					metadata: {
 						sentiment: extractedEntities.metadata.sentiment,
 						priority: extractedEntities.metadata.priority,
 						category: extractedEntities.metadata.category,
 						tags: extractedEntities.metadata.tags
-					},
-					relationships: extractedEntities.relationships,
-					actions: extractedEntities.actions,
-					replyAdvice: json.reply_advice
+					}
 				};
 
 				// 🆕 使用统一存储接口（与 agentThinking 方式一致）

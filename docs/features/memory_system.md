@@ -1722,7 +1722,6 @@ await memorySystem.rejectEntityMerge(mergeId);
 - **消除重复存储**: 合并 `ENTITIES` 和 `RECENT_DATA` 缓存，统一使用 `CachedEntityDetail` 格式
 - **存储空间节省**: 减少约 50% 的缓存空间占用，消除数据不一致性
 - **查询性能提升**: 一次查询获得全部详细信息，性能提升 100%
-- **接口简化**: `getRecentData()` 现为 `getEntity()` 的别名，保持向后兼容
 
 ### ✅ 数据结构重构
 

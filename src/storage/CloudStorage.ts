@@ -15,7 +15,7 @@ export interface MemoryEntity {
   id: string;
   type: 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
   name: string;
-  description?: string;
+  document?: string;
   properties: Record<string, any>;
   created: number;
   updated: number;
@@ -49,8 +49,9 @@ export interface MemoryEntity {
       id: string;
       summary: string;
       sender: string;
-      teamId: string;
-      teamName: string;
+      groupId: string;
+      groupName: string;
+      groupUrl: string;
       datetime: string;
       relevanceScore: number;
     }>;
@@ -112,6 +113,7 @@ export interface MemoryEntity {
       summary: string;
       status: string;
       assignee: string;
+      dueDate: number;
       priority: string;
       relevanceScore: number;
     }>;
@@ -138,6 +140,28 @@ export interface MemoryEntity {
   hotness?: number; // 0-1，基于最近活动频率
   criticalityScore?: number; // 0-1，基于用户标记和系统判断
   lastDocumentUpdate?: number; // 最后一次documents更新时间
+}
+export interface MemoryMessage {
+  id: string;
+  content: string;
+  metadata: any;
+  summary: string;
+  groupId: string;
+  groupName: string;
+  groupUrl: string;
+  sender: string;
+  matchedRules: string[];
+  replyAdvice: string;
+  datetime: number;
+  contextMessages: Array<{
+    id: string;
+    sender: string;
+    content: string;
+    datetime: string;
+    isMainMessage: boolean;
+  }>;
+  entities?: any;
+  actions?: any[];
 }
 // GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
@@ -417,6 +441,129 @@ export class CloudStorage {
   }
 
   /**
+   * 查找相似实体
+   */
+  async getSimilarEntities(
+    entity: Omit<MemoryEntity, 'id'>,
+    options: {
+      limit?: number;
+      minRelevanceScore?: number;
+    } = {}
+  ): Promise<MemoryEntity[]> {
+    this.ensureInitialized();
+    
+    const { limit = 1, minRelevanceScore = this.entitySimilarityThreshold } = options;
+    
+    try {
+      // 为查询生成与存储时相同的自然语言描述
+      const queryDescription = await this.generateNaturalLanguageDescription(entity);
+      
+      // 使用丰富的描述文本进行向量检索查找相似实体，确保type匹配
+      const similarResults = await this.searchByVector(
+        queryDescription, 
+        entity.type, 
+        { 
+          limit, 
+          minRelevanceScore,
+          collections: ['entities'],
+          returnType: 'entities'
+        }
+      );
+      
+      if (similarResults.data.length > 0) {
+        console.log(`🔍 找到 ${similarResults.data.length} 个相似实体 (阈值: ${minRelevanceScore}):`, 
+          similarResults.data.map(e => `${e.name}(${e.relevanceScore?.toFixed(3)})`).join(', '));
+        return similarResults.data;
+      } else {
+        console.log(`📝 未找到相似实体: ${entity.name} (${entity.type}) - 阈值: ${minRelevanceScore}`);
+        return [];
+      }
+    } catch (error) {
+      console.error(`⚠️ 检查实体相似性时出错: ${entity.name}`, error);
+      return [];
+    }
+  }
+
+  /**
+   * 查找相似消息
+   */
+  async getSimilarMessages(
+    query: string,
+    options: {
+      limit?: number;
+      minRelevanceScore?: number;
+      timeRange?: { start: number; end: number };
+      sortBy?: 'relevance' | 'time';
+      sortOrder?: 'desc' | 'asc';
+    } = {}
+  ): Promise<any[]> {
+    this.ensureInitialized();
+    
+    const { 
+      limit = 10, 
+      minRelevanceScore = 0.3,
+      timeRange,
+      sortBy = 'relevance',
+      sortOrder = 'desc'
+    } = options;
+    
+    try {
+      // 使用向量搜索获取相关消息
+      const searchResults = await this.searchByVector(query, undefined, {
+        collections: ['messages'],
+        returnType: 'raw',
+        limit,
+        minRelevanceScore,
+        timeRange,
+        sortBy,
+        sortOrder
+      });
+
+      if (searchResults.data.length > 0) {
+        console.log(`💬 找到 ${searchResults.data.length} 个相似消息 (阈值: ${minRelevanceScore}):`, 
+          searchResults.data.map(m => `${m.source}(${m.relevanceScore?.toFixed(3)})`).join(', '));
+        
+        // 转换为前端需要的格式，包含完整的contextMessages
+        const formattedMessages = searchResults.data.map((msg: any) => {
+          // 处理上下文消息：从metadata中提取contextMessages
+          let contextMessages: any[] = [];
+          if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
+            contextMessages = msg.metadata.contextMessages.map((ctx: any) => ({
+              id: ctx.id,
+              sender: ctx.sender,
+              content: ctx.content,
+              datetime: ctx.datetime,
+              isMainMessage: ctx.isMainMessage || false
+            }));
+          }
+
+          return {
+            id: msg.messageId,
+            sender: msg.source,
+            groupName: msg.metadata?.groupName || '未知群组',
+            groupUrl: msg.metadata?.groupUrl || msg.metadata?.team_url || '#',
+            datetime: new Date(msg.timestamp).toISOString(),
+            summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
+            content: msg.content,
+            highlightText: msg.metadata?.highlightText || msg.content,
+            matchedRules: msg.metadata?.matchedRules || [],
+            relevanceScore: msg.relevanceScore,
+            contextMessages: contextMessages
+          };
+        });
+        
+        return formattedMessages;
+      } else {
+        console.log(`📭 未找到相似消息: "${query}" - 阈值: ${minRelevanceScore}`);
+        return [];
+      }
+    } catch (error) {
+      console.error(`⚠️ 检查消息相似性时出错: "${query}"`, error);
+      return [];
+    }
+  }
+
+  /**
    * 获取集合类型
    */
   private getCollectionType(collectionName: string): string {
@@ -444,7 +591,7 @@ export class CloudStorage {
       const embedding = await getEmbeddingViaOffscreen(naturalDescription);
 
       // 转换关联数据为ChromaDB兼容格式
-      const chromaMetadata = this.convertMetadataForChroma(entity);
+      const chromaMetadata = this.serializeMetadataForChroma(entity);
 
       await collection.add({
         ids: [entity.id],
@@ -467,7 +614,7 @@ export class CloudStorage {
   async storeMessage(messageData: {
     id: string;
     content: string;
-    metadata: any;
+    metadata: Omit<MemoryMessage, 'id' | 'created' | 'updated'>;
   }): Promise<boolean> {
     this.ensureInitialized();
 
@@ -478,7 +625,7 @@ export class CloudStorage {
       const embedding = await getEmbeddingViaOffscreen(`sender: ${messageData.metadata.sender}\ncontent: ${messageData.content}\nsummary: ${messageData.metadata.summary}`);
 
       // 转换复杂元数据为 ChromaDB 兼容格式
-      const chromaMetadata = this.convertMetadataForChroma(messageData.metadata);
+      const chromaMetadata = this.serializeMetadataForChroma(messageData.metadata);
 
       await collection.add({
         ids: [messageData.id],
@@ -547,10 +694,10 @@ export class CloudStorage {
         include: ['metadatas', 'documents']
       });
 
-      if (!existing.metadatas?.[0]?.[0]) return false;
+      if (!existing.metadatas?.[0]) return false;
 
       // 反序列化现有实体数据
-      const currentMetadata = existing.metadatas[0][0] as any;
+      const currentMetadata = existing.metadatas[0] as any;
       const currentEntity = this.deserializeEntityFromMetadata(currentMetadata);
       
       // 🆕 智能合并更新：特别处理relatedData
@@ -586,7 +733,7 @@ export class CloudStorage {
       }
 
       // 转换为ChromaDB格式
-      const chromaMetadata = this.convertMetadataForChroma(mergedEntity);
+      const chromaMetadata = this.serializeMetadataForChroma(mergedEntity);
 
       // 执行更新
       await collection.update({
@@ -701,109 +848,6 @@ export class CloudStorage {
       jiraTickets: relatedData.jiraTickets?.length || 0,
       relationships: relatedData.cooccurringEntities?.length || 0
     };
-  }
-
-  /**
-   * 通用字段处理：自动判断字段类型并进行相应转换
-   */
-  private processField(value: any, fieldName: string, defaultValue?: any): any {
-    // 如果值为空，返回默认值
-    if (value === null || value === undefined || value === '') {
-      return defaultValue;
-    }
-
-    // 如果已经是正确类型，直接返回
-    if (typeof value !== 'string') {
-      return value;
-    }
-
-    // 尝试解析为 JSON（数组或对象）
-    if ((value.startsWith('{') && value.endsWith('}')) || 
-        (value.startsWith('[') && value.endsWith(']'))) {
-      try {
-        return JSON.parse(value);
-      } catch (error) {
-        console.warn(`字段 ${fieldName} JSON解析失败:`, error);
-        return defaultValue;
-      }
-    }
-
-    // 判断是否为时间戳字段，如果是数字字符串且字段名包含时间相关词汇
-    const timeFields = ['created', 'updated', 'lastAccessed', 'lastContact', 'lastDocumentUpdate'];
-    if (timeFields.includes(fieldName) && /^\d+$/.test(value)) {
-      return parseInt(value, 10);
-    }
-
-    // 判断是否为数字字段
-    const numberFields = ['accessCount', 'importance', 'hotness', 'criticalityScore'];
-    if (numberFields.includes(fieldName) && /^-?\d*\.?\d+$/.test(value)) {
-      return parseFloat(value);
-    }
-
-    // 布尔字段处理
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-
-    // 其他情况保持字符串
-    return value;
-  }
-
-  /**
-   * 🆕 从ChromaDB metadata反序列化实体
-   */
-  private deserializeEntityFromMetadata(metadata: any): MemoryEntity {
-    // 默认值定义
-    const defaults:MemoryEntity = {
-      id: '',
-      type: 'Document' as const,
-      name: '',
-      description: '',
-      properties: {} as Record<string, any>,
-      created: Date.now(),
-      updated: Date.now(),
-      accessCount: 0,
-      lastAccessed: Date.now(),
-      importance: 0.5,
-      tags: [] as string[],
-      status: 'active',
-      statistic: {
-        conversations: 0, projects: 0, participants: 0, resources: 0,
-        documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-      },
-      relatedData: {
-        conversations: [],
-        webpages: [],
-        resources: [] as Array<{
-          id: string; summary: string; name: string; type: string;
-          datetime: string; relevanceScore: number;
-        }>,
-        projects: [],
-        people: [],
-        topics: [],
-        jiraTickets: [],
-        cooccurringEntities: []
-      },
-      hotness: 0,
-      criticalityScore: 0,
-      lastDocumentUpdate: Date.now(),
-      expertise: [] as string[]
-    };
-
-    try {
-      // 基础字段处理
-      const entity: any = { ...defaults };
-      for (const key in metadata) {
-        if (metadata[key] !== undefined) {
-          entity[key] = this.processField(metadata[key], key);
-        }
-      }
-
-      return entity as MemoryEntity;
-    } catch (error) {
-      console.error('反序列化实体失败:', error);
-      // 返回基础实体结构
-      return defaults;
-    }
   }
 
   /**
@@ -1021,6 +1065,52 @@ export class CloudStorage {
       return null;
     } catch (error) {
       console.error(`获取实体 ${entityId} 失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 从消息集合获取单个消息
+   */
+  async getMessage(messageId: string): Promise<MemoryMessage | null> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-messages`);
+      if (!collection) return null;
+
+      const result = await collection.get({
+        ids: [messageId],
+        include: ['metadatas', 'documents']
+      });
+
+      if (result.ids && result.ids.length > 0 && result.metadatas) {
+        const metadata = result.metadatas[0] as any;
+        const document = result.documents?.[0];
+        
+        // 构建消息对象
+        const processedMetadata = this.deserializeMetadata(metadata || {});
+        
+        return {
+          id: result.ids[0],
+          content: document || '',
+          sender: metadata?.sender || 'unknown',
+          datetime: metadata?.datetime || Date.now(),
+          metadata: processedMetadata,
+          // 从 metadata 中提取常用字段
+          groupName: metadata?.groupName || '未知群组',
+          groupUrl: metadata?.groupUrl || metadata?.team_url || '#',
+          groupId: metadata?.groupId || '',
+          summary: metadata?.summary || (document ? document.substring(0, 100) + '...' : ''),
+          matchedRules: metadata?.matchedRules || [],
+          replyAdvice: metadata?.replyAdvice || '',
+          contextMessages: processedMetadata?.contextMessages || []
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`获取消息 ${messageId} 失败:`, error);
       return null;
     }
   }
@@ -1259,29 +1349,6 @@ export class CloudStorage {
   }
 
   /**
-   * 获取消息集合（用于从消息重建关系）
-   */
-  async getMessagesCollection() {
-    try {
-      if (!this.client) return null;
-      
-      const messagesCollectionName = `${this.username}-messages`;
-      const collections = await this.client.listCollections();
-      
-      // ChromaDB 3.x returns Collection objects, not strings
-      const collectionNames = collections.map(c => c.name);
-      if (!collectionNames.includes(messagesCollectionName)) {
-        return null;
-      }
-
-      return this.collections.get(messagesCollectionName) || null;
-    } catch (error) {
-      console.error('获取消息集合失败:', error);
-      return null;
-    }
-  }
-
-  /**
    * 批量操作
    */
   async batchStore(items: Array<{
@@ -1464,7 +1531,7 @@ export class CloudStorage {
           id,
           type: metadata.type || 'Document',
           name: metadata.name || '未知实体',
-          description: metadata.description || document,
+          document,
           properties: typeof metadata.properties === 'string' ? JSON.parse(metadata.properties || '{}') : (metadata.properties || {}),
           created: metadata.created || Date.now(),
           updated: metadata.updated || Date.now(),
@@ -1505,7 +1572,7 @@ export class CloudStorage {
         id: id || `virtual_${Date.now()}_${Math.random()}`,
         type: 'Document',
         name: metadata.name || '相关内容',
-        description: metadata.description || document || '相关内容',
+        document: document || '相关内容',
         properties: {
           ...metadata,
           ...(document && { originalDocument: document }),
@@ -1826,7 +1893,7 @@ export class CloudStorage {
    * 将复杂元数据转换为 ChromaDB 兼容的格式
    * ChromaDB 只支持 string, number, boolean, null 类型
    */
-  private convertMetadataForChroma(metadata: any): Record<string, string | number | boolean | null> {
+  private serializeMetadataForChroma(metadata: any): Record<string, string | number | boolean | null> {
     const converted: Record<string, string | number | boolean | null> = {};
     
     if (!metadata) return converted;
@@ -1834,7 +1901,7 @@ export class CloudStorage {
     // 递归处理函数
     const processValue = (key: string, value: any): void => {
       if (value === null || value === undefined) {
-        converted[key] = null;
+        converted[key] = '';
       } else if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
         converted[key] = value;
       } else if (Array.isArray(value)) {
@@ -1858,112 +1925,328 @@ export class CloudStorage {
   }
 
   /**
+   * 🆕 从ChromaDB metadata反序列化实体
+   */
+  private deserializeEntityFromMetadata(metadata: any): MemoryEntity {
+    // 默认值定义
+    const defaults:MemoryEntity = {
+      id: '',
+      type: 'Document' as const,
+      name: '',
+      document: '',
+      properties: {} as Record<string, any>,
+      created: Date.now(),
+      updated: Date.now(),
+      accessCount: 0,
+      lastAccessed: Date.now(),
+      importance: 0.5,
+      tags: [] as string[],
+      status: 'active',
+      statistic: {
+        conversations: 0, projects: 0, participants: 0, resources: 0,
+        documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+      },
+      relatedData: {
+        conversations: [],
+        webpages: [],
+        resources: [] as Array<{
+          id: string; summary: string; name: string; type: string;
+          datetime: string; relevanceScore: number;
+        }>,
+        projects: [],
+        people: [],
+        topics: [],
+        jiraTickets: [],
+        cooccurringEntities: []
+      },
+      hotness: 0,
+      criticalityScore: 0,
+      lastDocumentUpdate: Date.now(),
+      expertise: [] as string[]
+    };
+
+    // 通用字段处理：自动判断字段类型并进行相应转换
+    const processField = (value: any, fieldName: string, defaultValue?: any): any => {
+      // 如果值为空，返回默认值
+      if (value === null || value === undefined || value === '') {
+        return defaultValue;
+      }
+
+      // 如果已经是正确类型，直接返回
+      if (typeof value !== 'string') {
+        return value;
+      }
+
+      // 尝试解析为 JSON（数组或对象）
+      if ((value.startsWith('{') && value.endsWith('}')) || 
+          (value.startsWith('[') && value.endsWith(']'))) {
+        try {
+          return JSON.parse(value);
+        } catch (error) {
+          console.warn(`字段 ${fieldName} JSON解析失败:`, error);
+          return defaultValue;
+        }
+      }
+
+      // 判断是否为时间戳字段，如果是数字字符串且字段名包含时间相关词汇
+      const timeFields = ['created', 'updated', 'lastAccessed', 'lastContact', 'lastDocumentUpdate'];
+      if (timeFields.includes(fieldName) && /^\d+$/.test(value)) {
+        return parseInt(value, 10);
+      }
+
+      // 判断是否为数字字段
+      const numberFields = ['accessCount', 'importance', 'hotness', 'criticalityScore'];
+      if (numberFields.includes(fieldName) && /^-?\d*\.?\d+$/.test(value)) {
+        return parseFloat(value);
+      }
+
+      // 布尔字段处理
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+
+      // 其他情况保持字符串
+      return value;
+    }
+
+    try {
+      // 基础字段处理
+      const entity: any = { ...defaults };
+      for (const key in metadata) {
+        if (metadata[key] !== undefined) {
+          entity[key] = processField(metadata[key], key);
+        }
+      }
+
+      return entity as MemoryEntity;
+    } catch (error) {
+      console.error('反序列化实体失败:', error);
+      // 返回基础实体结构
+      return defaults;
+    }
+  }
+
+  /**
    * 将基础 MemoryEntity 扩展为包含完整缓存数据的实体
    */
   async extendEntityToDetailCache(entity: MemoryEntity): Promise<any> {
     this.ensureInitialized();
 
     try {
-      // 获取相关项目（查询 Project 类型实体）
-      const projectResults = await this.queryEntities('Project');
-      const relatedProjects = projectResults.data.slice(0, 5).map((project: MemoryEntity) => ({
-        id: project.id,
-        name: project.name || '未知项目',
-        status: project.properties?.status || project.status || '开发中',
-        description: project.description || `项目: ${project.name || '未命名项目'}`
-      }));
-
-      // 获取相关资源（查询 Document 类型实体）
-      const documentResults = await this.queryEntities('Document');
-      const relatedResources = documentResults.data.slice(0, 5).map((doc: MemoryEntity) => ({
-        id: doc.id,
-        name: doc.name || '文档资源',
-        type: '文档',
-        url: doc.properties?.url || '#'
-      }));
-
-      // 使用向量搜索获取相关对话详细信息
-      const conversationResults = await this.searchByVector(entity.name, undefined, {
-        collections: ['messages'],
-        returnType: 'raw',
-        limit: 100,
-        sortBy: 'relevance',
-        sortOrder: 'desc'
-      });
-
-      // 转换为前端需要的格式，包含完整的contextMessages
-      const latestConversations = conversationResults.data.map((msg: any) => {
-        // 处理上下文消息：从metadata中提取contextMessages
-        let context: any[] = [];
-        if (msg.metadata?.contextMessages && Array.isArray(msg.metadata.contextMessages)) {
-          context = msg.metadata.contextMessages.map((ctx: any) => ({
-            id: ctx.id,
-            sender: ctx.sender,
-            content: ctx.content,
-            datetime: ctx.datetime,
-            isMainMessage: ctx.isMainMessage || false
-          }));
-        }
-
-        return {
-          id: msg.messageId,
-          sender: msg.source,
-          teamName: msg.metadata?.teamName || '未知群组',
-          datetime: new Date(msg.timestamp).toISOString(),
-          summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
-          originalContent: msg.content,
-          highlightText: msg.metadata?.highlightText || msg.content,
-          teamUrl: msg.metadata?.team_url || '#',
-          matchedRules: msg.metadata?.matchedRules || [],
-          relevanceScore: msg.relevanceScore,
-          context: context
-        };
-      });
-
-      // 获取相关网页记录
-      const latestWebpages = latestConversations
-        .filter(conv => conv.context && conv.context.length > 0)
-        .slice(0, 3)
-        .map(conv => ({
-          id: `web-${conv.id}`,
-          title: `${entity.name}相关网页`,
-          url: conv.teamUrl || '#',
-          type: 'webpage',
-          datetime: conv.datetime,
-          summary: `与${entity.name}相关的内容`,
-          tags: [entity.name, '聊天记录']
+      // 获取相关项目：优先使用 entity.relatedData.projects，否则向量搜索
+      let relatedProjects: any[] = [];
+      if (entity.relatedData?.projects && entity.relatedData.projects.length > 0) {
+        // 使用现有的相关项目数据
+        relatedProjects = entity.relatedData.projects.map((project: any) => ({
+          id: project.id || `project_${Date.now()}`,
+          name: project.name || project.projectName || '未知项目',
+          status: project.status || '开发中',
+          description: project.document || `项目: ${project.name || project.projectName || '未命名项目'}`
         }));
+        console.log(`📁 使用实体现有的项目数据: ${relatedProjects.length} 个`);
+      } else {
+        // 向量搜索相关项目
+        try {
+          const projectSearchResults = await this.searchByVector(
+            `${entity.name} 项目`, 
+            'Project', 
+            { limit: 5, returnType: 'entities' }
+          );
+          relatedProjects = projectSearchResults.data.map((project: MemoryEntity) => ({
+            id: project.id,
+            name: project.name || '未知项目',
+            status: project.properties?.status || project.status || '开发中',
+            description: project.document || `项目: ${project.name || '未命名项目'}`
+          }));
+          console.log(`🔍 通过向量搜索找到相关项目: ${relatedProjects.length} 个`);
+        } catch (error) {
+          console.warn('搜索相关项目失败:', error);
+          relatedProjects = [];
+        }
+      }
 
-      // 统计参与者
-      const participants = new Set(latestConversations.map(conv => conv.sender)).size;
+      // 获取相关资源：优先使用 entity.relatedData.resources，否则向量搜索
+      let relatedResources: any[] = [];
+      if (entity.relatedData?.resources && entity.relatedData.resources.length > 0) {
+        // 使用现有的相关资源数据
+        relatedResources = entity.relatedData.resources.map((resource: any) => ({
+          id: resource.id || `resource_${Date.now()}`,
+          name: resource.name || resource.title || '文档资源',
+          type: resource.type || '文档',
+          url: resource.url || '#'
+        }));
+        console.log(`📄 使用实体现有的资源数据: ${relatedResources.length} 个`);
+      } else {
+        // 向量搜索相关文档资源
+        try {
+          const resourceSearchResults = await this.searchByVector(
+            `${entity.name} 文档 资源`, 
+            'Document', 
+            { limit: 5, returnType: 'entities' }
+          );
+          relatedResources = resourceSearchResults.data.map((doc: MemoryEntity) => ({
+            id: doc.id,
+            name: doc.name || '文档资源',
+            type: '文档',
+            url: doc.properties?.url || '#'
+          }));
+          console.log(`🔍 通过向量搜索找到相关资源: ${relatedResources.length} 个`);
+        } catch (error) {
+          console.warn('搜索相关资源失败:', error);
+          relatedResources = [];
+        }
+      }
+
+      // 获取相关对话：优先使用 entity.relatedData.conversations，扩展缺失信息，否则使用 getSimilarMessages 搜索
+      let latestConversations: any[] = [];
+      if (entity.relatedData?.conversations && entity.relatedData.conversations.length > 0) {
+        // 使用现有的对话数据，并扩展缺失的详细信息
+        console.log(`💬 处理实体现有的对话数据: ${entity.relatedData.conversations.length} 个`);
+        
+        for (const conv of entity.relatedData.conversations) {
+          let processedConv:any = {...conv};
+
+          // 如果缺少 contextMessages 或 originalContent，尝试通过 getMessage 扩展
+          if ((!processedConv.contextMessages || processedConv.contextMessages.length === 0) || 
+              !processedConv.content) {
+            try {
+              const messageData = await this.getMessage(processedConv.id);
+              if (messageData) {
+                // 从检索到的文档中获取 content
+                if (!processedConv.content && messageData.content) {
+                  processedConv.content = messageData.content;
+                }
+                
+                // 从 metadata 中获取 contextMessages
+                if ((!processedConv.contextMessages || processedConv.contextMessages.length === 0) && 
+                    messageData.contextMessages && messageData.contextMessages.length > 0) {
+                  processedConv.contextMessages = messageData.contextMessages;
+                }
+                
+                // 补充其他缺失字段
+                processedConv.summary = messageData.summary;
+                processedConv.groupName = messageData.groupName;
+                processedConv.groupUrl = messageData.groupUrl;
+                processedConv.groupId = messageData.groupId;
+                processedConv.matchedRules = messageData.matchedRules;
+                processedConv.replyAdvice = messageData.replyAdvice;
+                
+                console.log(`🔍 通过 getMessage 扩展了对话 ${processedConv.id} 的详细信息`);
+              }
+            } catch (error) {
+              console.warn(`扩展对话 ${processedConv.id} 详细信息失败:`, error);
+            }
+          }
+          
+          latestConversations.push(processedConv);
+        }
+        
+        console.log(`💬 完成对话数据处理: ${latestConversations.length} 个，其中扩展了详细信息`);
+      } else {
+        // 使用新的 getSimilarMessages 方法搜索相关对话
+        try {
+          latestConversations = await this.getSimilarMessages(entity.name, {
+            limit: 5,
+            minRelevanceScore: 0.3,
+            sortBy: 'relevance',
+            sortOrder: 'desc'
+          });
+          console.log(`🔍 通过 getSimilarMessages 找到相关对话: ${latestConversations.length} 个`);
+        } catch (error) {
+          console.warn('搜索相关对话失败:', error);
+          latestConversations = [];
+        }
+      }
+
+      // 获取相关网页记录：优先使用 entity.relatedData.webpages，否则从对话中提取
+      let latestWebpages: any[] = [];
+      if (entity.relatedData?.webpages && entity.relatedData.webpages.length > 0) {
+        // 使用现有的网页数据
+        latestWebpages = entity.relatedData.webpages.map((webpage: any) => ({
+          id: webpage.id || `web_${Date.now()}`,
+          title: webpage.title || webpage.name || `${entity.name}相关网页`,
+          url: webpage.url || '#',
+          type: webpage.type || 'webpage',
+          datetime: webpage.datetime || webpage.visitTime || new Date().toISOString(),
+          summary: webpage.summary || webpage.description || `与${entity.name}相关的内容`,
+          tags: webpage.tags || [entity.name, '网页']
+        }));
+        console.log(`🌐 使用实体现有的网页数据: ${latestWebpages.length} 个`);
+      } else {
+        // 向量搜索相关网页记录
+        try {
+          const webpageSearchResults = await this.searchByVector(
+            `${entity.name} 文档 资源`, 
+            'Document', 
+            { limit: 5, returnType: 'entities' }
+          );
+          latestWebpages = webpageSearchResults.data.map((webpage: MemoryEntity) => ({
+            id: webpage.id,
+            name: webpage.name || '网页资源',
+            type: '网页',
+            url: webpage.properties?.url || '#'
+          }));
+          console.log(`🔍 通过向量搜索找到相关资源: ${latestWebpages.length} 个`);
+        } catch (error) {
+          console.warn('搜索相关资源失败:', error);
+          latestWebpages = [];
+        }
+      }
+
+      // 获取相关人员和主题：优先使用现有数据
+      const relatedPeople = entity.relatedData?.people ? entity.relatedData.people.slice(0, 5) : [];
+      const relatedTopics = entity.relatedData?.topics ? entity.relatedData.topics.slice(0, 5) : [];
+      const jiraTickets = entity.relatedData?.jiraTickets ? entity.relatedData.jiraTickets.slice(0, 5) : [];
+      const cooccurringEntities = entity.relatedData?.cooccurringEntities ? entity.relatedData.cooccurringEntities.slice(0, 10) : [];
+
+      // 统计参与者：优先从 people 数据，否则从对话中统计
+      let participantCount = 1;
+      if (relatedPeople.length > 0) {
+        participantCount = relatedPeople.length;
+      } else {
+        participantCount = new Set(latestConversations.map(conv => conv.sender)).size || 1;
+      }
 
       // 构建扩展后的实体详情
-      return {
+      const result = {
         ...entity,
         statistic: {
           conversations: latestConversations.length,
           projects: relatedProjects.length,
-          participants: participants || 1,
+          participants: participantCount,
           resources: relatedResources.length,
           documents: relatedResources.filter(r => r.type === '文档').length,
           webpages: latestWebpages.length,
-          relationships: 0,
-          topics: 0,
-          jiraTickets: 0
+          relationships: entity.properties?.relationshipsCount || 0,
+          topics: relatedTopics.length,
+          jiraTickets: jiraTickets.length
         },
         recentDataDetails: {
-          conversations: latestConversations.slice(0, 5), // 只保留前5条
+          conversations: latestConversations,
           webpages: latestWebpages,
           resources: relatedResources,
           projects: relatedProjects,
-          people: [],
-          topics: [],
-          jiraTickets: [],
-          cooccurringEntities: []
+          people: relatedPeople,
+          topics: relatedTopics,
+          jiraTickets: jiraTickets,
+          cooccurringEntities: cooccurringEntities
         },
-        relatedParticipants: [], // 由 LocalStorage 在本地填充
+        relatedParticipants: [] as any[], // 由 LocalStorage 在本地填充
         cachedAt: Date.now()
       };
+
+      // 输出数据获取总结
+      console.log(`✅ 实体详情扩展完成 [${entity.name}]:`, {
+        conversations: `${latestConversations.length} 个`,
+        projects: `${relatedProjects.length} 个`, 
+        resources: `${relatedResources.length} 个`,
+        webpages: `${latestWebpages.length} 个`,
+        people: `${relatedPeople.length} 个`,
+        topics: `${relatedTopics.length} 个`,
+        jiraTickets: `${jiraTickets.length} 个`,
+        participants: `${participantCount} 人`
+      });
+
+      return result;
     } catch (error) {
       console.error('扩展实体详情失败:', error);
       // 返回基础实体和默认值
@@ -1990,7 +2273,7 @@ export class CloudStorage {
           jiraTickets: [],
           cooccurringEntities: []
         },
-        relatedParticipants: [],
+        relatedParticipants: [] as any[],
         cachedAt: Date.now()
       };
     }
@@ -2057,12 +2340,12 @@ export class CloudStorage {
               const currentMetadata = existingEntities.metadatas[j] as any;
               
               // 更新统计信息
-              const updatedMetadata = this.convertEntityMetadataForChroma({
+              const updatedMetadata = {
                 ...currentMetadata,
-                statistic: updateInfo.statistic,
+                statistic: JSON.stringify(updateInfo.statistic),
                 lastStatisticUpdate: updateInfo.lastUpdated,
                 updated: Date.now()
-              } as MemoryEntity);
+              } as MemoryEntity;
 
               updateMetadatas.push(updatedMetadata);
               updateIds.push(entityId);
@@ -2073,7 +2356,7 @@ export class CloudStorage {
             // 执行批量更新
             await collection.update({
               ids: updateIds,
-              metadatas: updateMetadatas
+              metadatas: updateMetadatas as any
             });
 
             console.log(`📊 批次 ${i / batchSize + 1}: 成功更新 ${updateIds.length} 个实体的统计信息`);
@@ -2100,9 +2383,6 @@ export class CloudStorage {
     
     // 基础信息
     parts.push(`${entity.name}是一个${entity.type}实体。`);
-    if (entity.description) {
-      parts.push(entity.description);
-    }
     
     // 类型特定信息
     switch (entity.type) {
@@ -2129,7 +2409,7 @@ export class CloudStorage {
       const recentConversations = relatedData.conversations.slice(0, 5); // 取最近5条
       parts.push(`最近的相关讨论包括：`);
       recentConversations.forEach(conv => {
-        parts.push(`- ${conv.sender}在${conv.teamName || '聊天'}中提到：${conv.summary}`);
+        parts.push(`- ${conv.sender}在${conv.groupName || '聊天'}中提到：${conv.summary}`);
       });
     }
     
@@ -2197,50 +2477,6 @@ export class CloudStorage {
   }
 
   /**
-   * 🆕 转换实体元数据为ChromaDB兼容格式
-   */
-  private convertEntityMetadataForChroma(entity: MemoryEntity): Record<string, string | number | boolean | null> {
-    const metadata: Record<string, string | number | boolean | null> = {
-      // 基础字段
-      type: entity.type,
-      name: entity.name,
-      created: entity.created,
-      updated: entity.updated,
-      description: entity.description || '',
-      importance: entity.importance || 0.5,
-      accessCount: entity.accessCount || 0,
-      lastAccessed: entity.lastAccessed || Date.now(),
-      status: entity.status || 'active',
-      
-      // 🆕 热度和重要性评分
-      hotness: entity.hotness || 0,
-      criticalityScore: entity.criticalityScore || 0,
-      lastDocumentUpdate: entity.lastDocumentUpdate || Date.now(),
-      
-      // 序列化复杂字段
-      properties: JSON.stringify(entity.properties || {}),
-      tags: JSON.stringify(entity.tags || []),
-      statistic: JSON.stringify(entity.statistic),
-      relatedData: JSON.stringify(entity.relatedData || {}),
-      
-      // Person特有字段
-      ...(entity.type === 'Person' && {
-        role: entity.role || '',
-        team: entity.team || '',
-        lastContact: entity.lastContact || 0,
-        expertise: JSON.stringify(entity.expertise || [])
-      }),
-      
-      // Project特有字段
-      ...(entity.type === 'Project' && {
-        isHighlighted: entity.isHighlighted || false
-      })
-    };
-    
-    return metadata;
-  }
-
-  /**
    * 🆕 计算实体热度评分 (0-1)
    */
   private calculateEntityHotness(entity: Omit<MemoryEntity, 'id'> & {id?: MemoryEntity['id']}): number {
@@ -2303,7 +2539,7 @@ export class CloudStorage {
     entityName: string,
     entityType: string,
     messageMetadata: any,
-    extractedEntities: any[],
+    extractedEntities: Omit<MemoryEntity, 'id' | 'created' | 'updated'>[],
     messageId: string
   ): MemoryEntity['relatedData'] {
     const entityKey = entityType + '_' + entityName;
@@ -2324,8 +2560,9 @@ export class CloudStorage {
         id: messageId,
         summary: messageMetadata.summary || messageMetadata.content?.substring(0, 100) + '...',
         sender: messageMetadata.source || 'unknown',
-        teamId: messageMetadata.teamId || '',
-        teamName: messageMetadata.teamName || '未知群组',
+        groupId: messageMetadata.groupId || '',
+        groupName: messageMetadata.groupName || '未知群组',
+        groupUrl: messageMetadata.groupUrl || '#',
         datetime: messageMetadata.datetime || new Date().toISOString(),
         relevanceScore: 0.9 // 来源消息相关性最高
       });
@@ -2335,8 +2572,11 @@ export class CloudStorage {
     extractedEntities.forEach(otherEntity => {
       const key = otherEntity.type + '_' + otherEntity.name;
       if (key !== entityKey) {
+        // 为没有 id 的实体生成临时 ID
+        const tempId = `temp_${otherEntity.type}_${otherEntity.name}_${Date.now()}`;
+        
         relatedData.cooccurringEntities.push({
-          id: otherEntity.id,
+          id: tempId,
           name: otherEntity.name,
           type: otherEntity.type,
           relevanceScore: 0.8 // 同消息共现的相关性较高
@@ -2346,7 +2586,7 @@ export class CloudStorage {
         switch (otherEntity.type) {
           case 'Person':
             relatedData.people.push({
-              id: otherEntity.id,
+              id: tempId,
               name: otherEntity.name,
               role: otherEntity.properties?.role || '',
               team: otherEntity.properties?.team || '',
@@ -2357,18 +2597,18 @@ export class CloudStorage {
             break;
           case 'Project':
             relatedData.projects.push({
-              id: otherEntity.id,
+              id: tempId,
               name: otherEntity.name,
-              description: otherEntity.description || '',
+              description: otherEntity.document || '',
               status: otherEntity.properties?.status || 'Active',
               relevanceScore: 0.8
             });
             break;
           case 'Topic':
             relatedData.topics.push({
-              id: otherEntity.id,
+              id: tempId,
               name: otherEntity.name,
-              summary: otherEntity.description || `关于${otherEntity.name}的讨论`,
+              summary: otherEntity.document || `关于${otherEntity.name}的讨论`,
               category: otherEntity.properties?.category || '技术讨论',
               relevanceScore: 0.8
             });
@@ -2376,19 +2616,20 @@ export class CloudStorage {
           case 'Task':
             // 假设Task类型是JIRA ticket
             relatedData.jiraTickets.push({
-              id: otherEntity.id,
+              id: tempId,
               key: otherEntity.properties?.key || otherEntity.name,
-              summary: otherEntity.description || otherEntity.name,
+              summary: otherEntity.document || otherEntity.name,
               status: otherEntity.properties?.status || 'In Progress',
               assignee: otherEntity.properties?.assignee || '',
+              dueDate: otherEntity.properties?.dueDate || Date.now(),
               priority: otherEntity.properties?.priority || 'Medium',
               relevanceScore: 0.8
             });
             break;
           case 'Document':
             relatedData.resources.push({
-              id: otherEntity.id,
-              summary: otherEntity.description || `文档：${otherEntity.name}`,
+              id: tempId,
+              summary: otherEntity.document || `文档：${otherEntity.name}`,
               name: otherEntity.name,
               type: 'document',
               url: otherEntity.properties?.url,
@@ -2415,14 +2656,16 @@ export class CloudStorage {
           entities.push({
             type: 'Person',
             name: person.name,
-            description: `人员: ${person.name}`,
+            document: `人员: ${person.name}`,
+            role: person.role,
+            team: person.team,
+            expertise: person.expertise,
             properties: {
-              role: person.role,
               mentioned_context: person.mentioned_context,
               source: 'message_analysis',
-              teamName: metadata.teamName || '',
+              groupName: metadata.groupName || '',
               messageId: messageId,
-              timestamp: metadata.timestamp || Date.now()
+              datetime: metadata.datetime || Date.now()
             },
             importance: 0.7,
             accessCount: 1,
@@ -2446,12 +2689,12 @@ export class CloudStorage {
           entities.push({
             type: 'Project',
             name: project.name,
-            description: `项目: ${project.name}`,
+            document: `项目: ${project.name}`,
             properties: {
               status: project.status,
               related_people: project.related_people,
               source: 'message_analysis',
-              teamName: metadata.teamName || '',
+              groupName: metadata.groupName || '',
               messageId: messageId,
               timestamp: metadata.timestamp || Date.now()
             },
@@ -2477,12 +2720,12 @@ export class CloudStorage {
           entities.push({
             type: 'Topic',
             name: topic.name,
-            description: `话题: ${topic.name}`,
+            document: `话题: ${topic.name}`,
             properties: {
               category: topic.category,
               keywords: topic.keywords,
               source: 'message_analysis',
-              teamName: metadata.teamName || '',
+              groupName: metadata.groupName || '',
               messageId: messageId,
               timestamp: metadata.timestamp || Date.now()
             },
@@ -2509,13 +2752,13 @@ export class CloudStorage {
           entities.push({
             type: 'Document',
             name: doc.name || doc.title,
-            description: `文档: ${doc.name || doc.title}`,
+            document: `文档: ${doc.name || doc.title}`,
             properties: {
               url: doc.url,
               type: doc.type || 'document',
               description: doc.description,
               source: 'message_analysis',
-              teamName: metadata.teamName || '',
+              groupName: metadata.groupName || '',
               messageId: messageId,
               timestamp: metadata.timestamp || Date.now()
             },
@@ -2542,13 +2785,13 @@ export class CloudStorage {
           entities.push({
             type: 'Technology',
             name: tech.name,
-            description: `技术: ${tech.name}`,
+            document: `技术: ${tech.name}`,
             properties: {
               category: tech.category,
               version: tech.version,
               usage_context: tech.usage_context,
               source: 'message_analysis',
-              teamName: metadata.teamName || '',
+              groupName: metadata.groupName || '',
               type: 'technology',
               messageId: messageId,
               timestamp: metadata.timestamp || Date.now()
@@ -2570,13 +2813,13 @@ export class CloudStorage {
       }
       
       // 提取组织实体
-      if (metadata.teamName && metadata.teamName !== 'SM AI') {
+      if (metadata.groupName && metadata.groupName !== 'SM AI') {
         entities.push({
           type: 'Organization',
-          name: metadata.teamName,
-          description: `组织: ${metadata.teamName}`,
+          name: metadata.groupName,
+          document: `组织: ${metadata.groupName}`,
           properties: {
-            teamId: metadata.teamId,
+            groupId: metadata.groupId,
             source: 'message_analysis',
             type: 'team',
             messageId: messageId,
@@ -2645,34 +2888,12 @@ export class CloudStorage {
           entityWithRelatedData.hotness = this.calculateEntityHotness(entityWithRelatedData);
           entityWithRelatedData.criticalityScore = this.calculateEntityCriticality(entityWithRelatedData, 0);
           
-          // 检查是否存在相似的实体（通过向量检索）
-          let existingEntity = null;
-          try {
-            // 为查询生成与存储时相同的自然语言描述
-            const queryDescription = await this.generateNaturalLanguageDescription(entityWithRelatedData);
-            // 使用丰富的描述文本进行向量检索查找相似实体，确保type匹配
-            const similarResults = await this.searchByVector(
-              queryDescription, 
-              entity.type, 
-              { 
-                limit: 1, 
-                minRelevanceScore: this.entitySimilarityThreshold,
-                collections: ['entities'],
-                returnType: 'entities'
-              }
-            );
-            
-            if (similarResults.data.length > 0) {
-              // 找到相似实体（已通过minRelevanceScore过滤）
-              const mostSimilarEntity = similarResults.data[0];
-              existingEntity = mostSimilarEntity;
-              console.log(`🔄 找到相似实体: ${entity.name} -> ${existingEntity.name}, 相似度: ${mostSimilarEntity.relevanceScore.toFixed(3)}`);
-            } else {
-              console.log(`📝 创建新实体: ${entity.name} (${entity.type}) - 无相似实体（阈值: ${this.entitySimilarityThreshold}）`);
-            }
-          } catch (error) {
-            console.error(`⚠️ 检查实体相似性时出错: ${entity.name}`, error);
-            existingEntity = null;
+          // 检查是否存在相似的实体（使用新的 getSimilarEntities 方法）
+          const similarEntities = await this.getSimilarEntities(entityWithRelatedData);
+          const existingEntity = similarEntities.length > 0 ? similarEntities[0] : null;
+          
+          if (existingEntity) {
+            console.log(`🔄 找到相似实体: ${entity.name} -> ${existingEntity.name}, 相似度: ${existingEntity.relevanceScore?.toFixed(3)}`);
           }
           
           if (existingEntity) {

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import { memorySystem } from '../memory';
 
 // 实体类型配置
 export const ENTITY_TYPE_CONFIG = {
@@ -77,7 +78,7 @@ export const useMemoryStore = defineStore('memory', () => {
         
         // 如果是第一页数据，检查 Topic 类型实体是否需要补充 recent data
         if (offset === 0 && entityType === 'Topic') {
-          await enrichTopicEntitiesWithDetails(entities.value);
+          entities.value = await memorySystem.enrichEntitiesWithDetails(entities.value);
         }
       } else {
         entities.value = generateMockEntities(entityType);
@@ -89,53 +90,7 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
-  // 为 Topic 实体补充详细信息
-  const enrichTopicEntitiesWithDetails = async (topicEntities: any[]) => {
-    for (const entity of topicEntities) {
-      // 检查是否缺少 recent data（没有讨论、资源、项目）
-      const hasRecentData = (
-        (entity.statistic?.conversations > 0) ||
-        (entity.recentDataDetails?.conversations && entity.recentDataDetails.conversations.length > 0) ||
-        (entity.recentDataDetails?.resources && entity.recentDataDetails.resources.length > 0) ||
-        (entity.recentDataDetails?.projects && entity.recentDataDetails.projects.length > 0)
-      );
-      
-      if (!hasRecentData) {
-        try {
-          // 调用 handleGetTopicDetail 获取详细信息
-          const detailResponse = await chromeAPI.sendMessage({
-            type: 'GET_TOPIC_DETAIL',
-            topicId: entity.id
-          });
-          
-          if (detailResponse && (detailResponse as any).success && (detailResponse as any).data) {
-            const details = (detailResponse as any).data;
-            
-            // 更新实体信息（使用统一的 CachedEntityDetail 结构）
-            if (!entity.statistic) entity.statistic = {};
-            entity.statistic.conversations = details.statistic?.conversations || 0;
-            entity.statistic.webpages = details.statistic?.webpages || 0;
-            if (!entity.recentDataDetails) entity.recentDataDetails = {
-              conversations: [],
-              webpages: [],
-              resources: [],
-              projects: [],
-              people: [],
-              topics: [],
-              jiraTickets: [],
-              cooccurringEntities: []
-            };
-            entity.recentDataDetails.conversations = details.recentDataDetails?.conversations?.slice(0, 2) || [];
-            entity.recentDataDetails.resources = details.recentDataDetails?.resources?.slice(0, 2) || [];
-            entity.recentDataDetails.projects = details.recentDataDetails?.projects?.slice(0, 2) || [];
-            entity.cachedAt = details.cachedAt || Date.now();
-          }
-        } catch (error) {
-          console.error(`补充 Topic ${entity.id} 详细信息失败:`, error);
-        }
-      }
-    }
-  };
+  // enrichTopicEntitiesWithDetails 方法已移至 memory.ts 中作为 enrichEntitiesWithDetails
 
   const searchEntities = async (query: string) => {
     if (!query.trim()) return;
@@ -222,7 +177,7 @@ export const useMemoryStore = defineStore('memory', () => {
               teamUrl: '#',
               matchedRules: ['AI', '优化'],
               relevanceScore: 0.95,
-              context: [] as any[]
+              contextMessages: [] as any[]
             },
             {
               id: 'msg-2',
@@ -235,7 +190,7 @@ export const useMemoryStore = defineStore('memory', () => {
               teamUrl: '#',
               matchedRules: ['测试', '自动化'],
               relevanceScore: 0.88,
-              context: [] as any[]
+              contextMessages: [] as any[]
             }
           ],
           relatedResources: [
@@ -294,7 +249,7 @@ export const useMemoryStore = defineStore('memory', () => {
               teamUrl: '#',
               matchedRules: ['React', '性能'],
               relevanceScore: 0.92,
-              context: [] as any[]
+              contextMessages: [] as any[]
             },
             {
               id: 'msg-4',
@@ -307,7 +262,7 @@ export const useMemoryStore = defineStore('memory', () => {
               teamUrl: '#',
               matchedRules: ['优化', 'Webpack'],
               relevanceScore: 0.89,
-              context: [] as any[]
+              contextMessages: [] as any[]
             }
           ],
           relatedResources: [
@@ -361,7 +316,7 @@ export const useMemoryStore = defineStore('memory', () => {
               teamUrl: '#',
               matchedRules: ['用户研究', '产品迭代'],
               relevanceScore: 0.87,
-              context: [] as any[]
+              contextMessages: [] as any[]
             },
             {
               id: 'msg-6',
@@ -374,7 +329,7 @@ export const useMemoryStore = defineStore('memory', () => {
               teamUrl: '#',
               matchedRules: ['设计系统', '项目管理'],
               relevanceScore: 0.85,
-              context: [] as any[]
+              contextMessages: [] as any[]
             }
           ],
           relatedResources: [
@@ -852,7 +807,7 @@ export const useMemoryStore = defineStore('memory', () => {
           group: '技术讨论组',
           time: '30分钟前',
           summary: '分享了最新的GPT-4 API集成经验，讨论了Token优化策略',
-          context: [
+          contextMessages: [
             { sender: '李四', content: '最近GPT-4的API调用成本有点高', time: '35分钟前' },
             { sender: '张三', content: '我找到了一些优化Token使用的方法，可以减少30%的成本', time: '30分钟前', isMainMessage: true },
             { sender: '王五', content: '能分享一下具体的优化策略吗？', time: '28分钟前' }
@@ -864,7 +819,7 @@ export const useMemoryStore = defineStore('memory', () => {
           group: '产品团队',
           time: '2小时前',
           summary: '讨论了自动化测试的实现方案，提出了新的测试框架选型建议',
-          context: [
+          contextMessages: [
             { sender: '产品经理', content: '我们需要一个更好的自动化测试方案', time: '2.5小时前' },
             { sender: '李四', content: '建议采用Playwright + Jest的组合，覆盖率会更高', time: '2小时前', isMainMessage: true },
             { sender: '测试负责人', content: '这个方案看起来不错，我们可以试试', time: '1.5小时前' }
@@ -876,7 +831,7 @@ export const useMemoryStore = defineStore('memory', () => {
           group: 'AI研发团队',
           time: '4小时前',
           summary: '探讨了多模态AI模型在产品中的应用场景',
-          context: [
+          contextMessages: [
             { sender: '技术总监', content: '现在多模态AI技术越来越成熟了', time: '4.5小时前' },
             { sender: '王五', content: '我们可以考虑在用户界面中集成图像识别和文本理解', time: '4小时前', isMainMessage: true },
             { sender: '产品经理', content: '这样可以大大提升用户体验', time: '3.5小时前' }

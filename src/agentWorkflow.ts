@@ -1,5 +1,5 @@
 import { callLLMJsonAPI } from './llm';
-import { extractEntitiesToStore } from './entityExtraction';
+import { extractEntitiesFromMessage } from './entityExtraction';
 import { naturalLanguageQuery, getAllKnownPeople, getAllKnownProjects } from './vectorStore';
 import { memorySystem, StoreResult } from './memory';
 import { v4 as uuidv4 } from 'uuid';
@@ -47,7 +47,7 @@ const availableTools: Record<string, AgentTool> = {
     name: '实体提取工具',
     description: '从消息中提取人物、时间、地点、项目等实体信息',
     execute: async (params) => {
-      return await extractEntitiesToStore(params.message_content || params.content, params.metadata);
+      return await extractEntitiesFromMessage(params.message_content || params.content, params.metadata);
     }
   },
   relationshipAnalysis: {
@@ -475,9 +475,10 @@ export async function processNewMessage(message: any): Promise<MessageProcessRes
         datetime: message.datetime || new Date().toISOString(),
         matchedRules: [message.matched_rule],
         summary: message.summary || '',
-        reply_advice: processResult.replyAdvice || message.reply_advice || '',
-        teamName: message.team_name,
-        teamId: message.team_id,
+        replyAdvice: processResult.replyAdvice || message.reply_advice || '',
+        groupName: message.team_name,
+        groupId: message.team_id,
+        groupUrl: message.team_url,
         contextMessages: [], // agentWorkflow 模式下暂无上下文
         ...processResult.enrichedData
       };

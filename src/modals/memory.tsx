@@ -335,12 +335,12 @@ const MemoryInterface = () => {
     for (const topic of topics.slice(0, 10)) { // 限制并发数量
       try {
         // 获取缓存的最近数据
-        const cachedData = await memorySystem.getRecentData(topic.id);
+        const cachedData = await memorySystem.getEntityDetails(topic.id);
         
-        if (cachedData && cachedData.conversations.length > 0) {
+        if (cachedData && cachedData.recentDataDetails?.conversations?.length > 0) {
           // 使用缓存数据，取最新的2条
-          discussions[topic.id] = cachedData.conversations.slice(0, 2);
-          console.log(`📦 主题 ${topic.name} 使用缓存数据 (${cachedData.conversations.length} 条)`);
+          discussions[topic.id] = cachedData.recentDataDetails.conversations.slice(0, 2);
+          console.log(`📦 主题 ${topic.name} 使用缓存数据 (${cachedData.recentDataDetails.conversations.length} 条)`);
         } else {
           // 缓存中没有数据，需要从云端查询
           topicsNeedingCloudQuery.push(topic);
@@ -540,7 +540,7 @@ const MemoryInterface = () => {
     setIsLoading(true);
     try {
       // 1. 先尝试从统一缓存获取完整的主题详情（使用 RECENT_DATA 替代 TOPIC_DETAILS）
-      const cachedTopicDetails = await memorySystem.getRecentData(topicId);
+      const cachedTopicDetails = await memorySystem.getEntityDetails(topicId);
       
       if (cachedTopicDetails) {
         console.log(`📦 主题详情页使用统一缓存数据: ${topicId}`);

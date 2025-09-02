@@ -3,7 +3,7 @@
  * 提供清晰的读取和存储接口，管理本地缓存和云端存储
  */
 
-import { CloudStorage, MemoryEntity } from './storage/CloudStorage';
+import { CloudStorage, MemoryEntity, MemoryMessage } from './storage/CloudStorage';
 import { GraphRelationship, LocalStorage, CachedEntityDetail } from './storage/LocalStorage';
 import { EntitySimilarityTool, ProcessedEntity, EntityMergePair } from './storage/EntitySimilarityTool';
 import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSystemMaintenanceTool } from './storage/SystemMaintenanceTool';
@@ -328,9 +328,9 @@ export class MemorySystem {
   }
 
   /**
-   * 获取实体详情（优先本地）
+   * 获取实体详情（优先本地，包含详细信息补充）
    */
-  async getEntityDetails(entityId: string): Promise<MemoryEntity | null> {
+  async getEntityDetails(entityId: string): Promise<CachedEntityDetail | null> {
     this.ensureInitialized();
 
     try {
@@ -338,16 +338,17 @@ export class MemorySystem {
       const localEntity = await this.localStorage.getEntity(entityId);
       if (localEntity) {
         this.metrics.localHits++;
-        return localEntity;
+        // 检查是否需要补充详细信息
+        return await this.enrichEntityWithDetails(localEntity);
       }
 
       // 本地没有，从云端获取
       const entity = await this.cloudStorage.getEntity(entityId);
       if (entity) {
-        // 缓存到本地
+        // 缓存到本地并补充详细信息
         await this.localStorage.cacheEntity(entity);
         this.metrics.cloudHits++;
-        return entity;
+        return await this.enrichEntityWithDetails(entity);
       }
 
       return null;
@@ -359,11 +360,71 @@ export class MemorySystem {
   }
 
   /**
-   * 获取实体的最近数据缓存
+   * 为实体补充详细信息（特别是 recent data）
    */
-  async getRecentData(entityId: string): Promise<CachedEntityDetail | null> {
+  async enrichEntityWithDetails(entity: MemoryEntity): Promise<CachedEntityDetail> {
     this.ensureInitialized();
-    return this.localStorage.getEntity(entityId);
+    
+    try {
+      // 首先尝试从本地缓存获取详细信息
+      const cachedDetails = await this.localStorage.getEntity(entity.id);
+      
+      // 检查是否缺少 recent data（没有讨论、资源、项目）
+      const hasRecentData = cachedDetails && (
+        (cachedDetails.recentDataDetails?.conversations && cachedDetails.recentDataDetails.conversations.length > 0) ||
+        (cachedDetails.recentDataDetails?.resources && cachedDetails.recentDataDetails.resources.length > 0) ||
+        (cachedDetails.recentDataDetails?.projects && cachedDetails.recentDataDetails.projects.length > 0)
+      );
+      
+      if (hasRecentData && cachedDetails) {
+        return cachedDetails;
+      }
+      
+      // 如果缺少详细信息，从云端扩展实体信息
+      console.log(`🔍 为实体 ${entity.id} 补充详细信息...`);
+      const extendedEntity = await this.cloudStorage.extendEntityToDetailCache(entity);
+      
+      // 更新本地缓存
+      await this.localStorage.cacheEntity(extendedEntity);
+      
+      return extendedEntity;
+      
+    } catch (error) {
+      console.error(`补充实体 ${entity.id} 详细信息失败:`, error);
+      
+      // 失败时返回基础扩展版本
+      return {
+        ...entity,
+        cachedAt: Date.now(),
+        recentDataDetails: {
+          conversations: [],
+          webpages: [],
+          resources: [],
+          projects: [],
+          people: [],
+          topics: [],
+          jiraTickets: [],
+          cooccurringEntities: []
+        },
+        relatedParticipants: []
+      };
+    }
+  }
+
+  /**
+   * 批量为实体补充详细信息
+   */
+  async enrichEntitiesWithDetails(entities: MemoryEntity[]): Promise<CachedEntityDetail[]> {
+    this.ensureInitialized();
+    
+    const enrichedEntities: CachedEntityDetail[] = [];
+    
+    for (const entity of entities) {
+      const enrichedEntity = await this.enrichEntityWithDetails(entity);
+      enrichedEntities.push(enrichedEntity);
+    }
+    
+    return enrichedEntities;
   }
 
   /**
@@ -603,7 +664,7 @@ export class MemorySystem {
   async storeMessage(messageData: {
     id: string;
     content: string;
-    metadata: any;
+    metadata: Omit<MemoryMessage, 'id' | 'created' | 'updated' | 'content'>;
   }): Promise<StoreResult> {
     this.ensureInitialized();
 
@@ -887,16 +948,6 @@ export class MemorySystem {
   async updateRecentData(entityId: string, type: 'conversation' | 'resource' | 'project' | 'webpage', data: any): Promise<void> {
     this.ensureInitialized();
     return this.localStorage.updateRecentData(entityId, type, data);
-  }
-
-  // TOPIC_DETAILS 缓存方法已移除，统一使用 getRecentData() 避免重复存储
-
-  /**
-   * 将基础实体扩展为详细缓存实体
-   */
-  async extendEntityToDetailCache(entity: MemoryEntity): Promise<CachedEntityDetail> {
-    this.ensureInitialized();
-    return this.cloudStorage.extendEntityToDetailCache(entity);
   }
 
   /**
@@ -1910,12 +1961,14 @@ export class MemorySystem {
         entities.push({
           type: 'Person',
           name: person.name,
-          description: `人员: ${person.name}`,
+          role: person.role,
+          document: `人员: ${person.name}`,
+          team: person.team,
+          expertise: person.expertise,
           properties: {
-            role: person.role,
             mentioned_context: person.mentioned_context,
             source: 'message_analysis',
-            teamName: metadata.teamName || '',
+            groupName: metadata.groupName || '',
             messageId: messageId,
             timestamp: metadata.timestamp || Date.now()
           },
@@ -1941,12 +1994,12 @@ export class MemorySystem {
         entities.push({
           type: 'Project',
           name: project.name,
-          description: `项目: ${project.name}`,
+          document: `项目: ${project.name}`,
           properties: {
             status: project.status,
             related_people: project.related_people,
             source: 'message_analysis',
-            teamName: metadata.teamName || '',
+            groupName: metadata.groupName || '',
             messageId: messageId,
             timestamp: metadata.timestamp || Date.now()
           },
@@ -1972,12 +2025,12 @@ export class MemorySystem {
         entities.push({
           type: 'Topic',
           name: topic.name,
-          description: `话题: ${topic.name}`,
+          document: `话题: ${topic.name}`,
           properties: {
             related_people: topic.related_people,
             importance: topic.importance,
             source: 'message_analysis',
-            teamName: metadata.teamName || '',
+            groupName: metadata.groupName || '',
             messageId: messageId,
             timestamp: metadata.timestamp || Date.now()
           },
@@ -2004,13 +2057,13 @@ export class MemorySystem {
         entities.push({
           type: 'Document',
           name: doc.name,
-          description: `文档: ${doc.name}`,
+          document: `文档: ${doc.name}`,
           properties: {
             type: doc.type,
             url: doc.url,
             related_people: doc.related_people,
             source: 'message_analysis',
-            teamName: metadata.teamName || '',
+            groupName: metadata.groupName || '',
             messageId: messageId,
             timestamp: metadata.timestamp || Date.now()
           },
@@ -2037,12 +2090,12 @@ export class MemorySystem {
         entities.push({
           type: 'Technology',
           name: tech.name,
-          description: `技术: ${tech.name}`,
+          document: `技术: ${tech.name}`,
           properties: {
             category: tech.category,
             related_people: tech.related_people,
             source: 'message_analysis',
-            teamName: metadata.teamName || '',
+            groupName: metadata.groupName || '',
             messageId: messageId,
             timestamp: metadata.timestamp || Date.now()
           },

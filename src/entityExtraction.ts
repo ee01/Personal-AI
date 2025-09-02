@@ -2,7 +2,7 @@
 import { callLLMJsonAPI } from './llm';
 
 // 使用LLM提取消息中的实体
-export async function extractEntitiesToStore(content: string, metadata: any = {}) {
+export async function extractEntitiesFromMessage(content: string, metadata: any = {}) {
   try {
     const prompt = `
     请分析以下消息，提取所有相关的实体信息和关系：
@@ -13,76 +13,82 @@ export async function extractEntitiesToStore(content: string, metadata: any = {}
     ${metadata.team_name ? `消息所在群组：${metadata.team_name}` : ''}
     ${metadata.summary ? `根据上下文得到的总结：${metadata.summary}` : ''}
 
-    请严格按照以下 JSON 格式提取实体信息：
+    请严格按照以下 JSON 格式提取实体信息，该格式与MemoryEntity的relatedData结构保持一致：
     {
       "entities": {
         "people": [
           {
             "name": "",
-            "role": "",  // 角色，如"员工"、"客户"等
-            "mentioned_context": ""  // 在消息中提及的上下文
-          }
-        ],
-        "time": [
-          {
-            "raw": "",  // 原始时间表述
-            "normalized": "",  // 标准化时间
-            "type": ""  // deadline/schedule/mentioned
-          }
-        ],
-        "location": [
-          {
-            "name": "",
-            "type": ""  // office/remote/physical
+            "role": "", // 如果不知道可以留空
+            "team": "", // 如果不知道可以留空
+            "expertise": [], // 如果不知道可以留空
+            "lastContact": null,
+            "relevanceScore": 0.8
           }
         ],
         "projects": [
           {
             "name": "",
-            "status": "",  // 进行中/已完成/计划中
-            "related_people": []  // 相关人员
+            "description": "",
+            "status": "", // 如果不知道可以留空
+            "relevanceScore": 0.8
           }
         ],
         "topics": [
           {
             "name": "",
-            "category": "",  // 技术/业务/管理等
-            "keywords": []
+            "summary": "",
+            "category": "",
+            "relevanceScore": 0.8
           }
         ],
-        "resources": [
+        "resources": [ // 如果找到 wiki, docs, slides 等资源对应的 URL, 提取相关资源信息
           {
-            "type": "",  // 文档/链接/工具等
             "name": "",
-            "location": ""
+            "summary": "",
+            "type": "",
+            "url": "wiki|docs|slides|...",
+            "relevanceScore": 0.8
+          }
+        ],
+        "webpages": [ // 如果找到非以上资源的其他网页，提取相关网页信息
+          {
+            "title": "",
+            "summary": "",
+            "url": "",
+            "relevanceScore": 0.8
+          }
+        ],
+        "jiraTickets": [
+          {
+            "key": "",
+            "summary": "",
+            "status": "",
+            "assignee": "",
+            "priority": "",
+            "relevanceScore": 0.8
           }
         ]
       },
       "metadata": {
-        "sentiment": "",  // positive/negative/neutral
-        "priority": "",   // high/medium/low
-        "category": [],   // 消息类别：决策/讨论/公告等
-        "tags": []       // 自动标签
+        "sentiment": "",
+        "priority": "",
+        "category": [],
+        "tags": []
       },
-      "relationships": [
-        {
-          "source": "",      // 实体1
-          "target": "",      // 实体2
-          "relationship": "" // 关系类型
-        }
-      ],
       "actions": [
         {
-          "type": "",        // task/decision/followup
-          "description": "", 
+          "type": "",
+          "description": "",
           "assignee": "",
-          "deadline": null,  // 时间戳
-          "status": ""      // pending/completed
+          "deadline": null,
+          "status": ""
         }
       ]
     }
     
     仅返回JSON，不要有其他内容。如果某类实体不存在，返回空数组。
+    注意：relevanceScore应该在0-1之间，表示与当前消息的相关性。
     `;
     
     const entityData = await callLLMJsonAPI({prompt, type: 'query'});
@@ -92,11 +98,12 @@ export async function extractEntitiesToStore(content: string, metadata: any = {}
       return {
         entities: {
           people: entityData.entities?.people || [],
-          time: entityData.entities?.time || [],
-          location: entityData.entities?.location || [],
           projects: entityData.entities?.projects || [],
           topics: entityData.entities?.topics || [],
-          resources: entityData.entities?.resources || []
+          resources: entityData.entities?.resources || [],
+          webpages: entityData.entities?.webpages || [],
+          jiraTickets: entityData.entities?.jiraTickets || [],
+          conversations: entityData.entities?.conversations || []
         },
         metadata: {
           sentiment: entityData.metadata?.sentiment || "neutral",
@@ -104,7 +111,6 @@ export async function extractEntitiesToStore(content: string, metadata: any = {}
           category: entityData.metadata?.category || [],
           tags: entityData.metadata?.tags || []
         },
-        relationships: entityData.relationships || [],
         actions: entityData.actions || []
       };
     }
@@ -112,11 +118,12 @@ export async function extractEntitiesToStore(content: string, metadata: any = {}
     return {
       entities: {
         people: [],
-        time: [],
-        location: [],
         projects: [],
         topics: [],
-        resources: []
+        resources: [],
+        webpages: [],
+        jiraTickets: [],
+        conversations: []
       },
       metadata: {
         sentiment: "neutral",
@@ -124,19 +131,19 @@ export async function extractEntitiesToStore(content: string, metadata: any = {}
         category: [],
         tags: []
       },
-      relationships: [],
-      actions: []
+      actions: [],
     };
   } catch (error) {
     console.error('实体提取失败:', error);
     return {
       entities: {
         people: [],
-        time: [],
-        location: [],
         projects: [],
         topics: [],
-        resources: []
+        resources: [],
+        webpages: [],
+        jiraTickets: [],
+        conversations: []
       },
       metadata: {
         sentiment: "neutral",
@@ -144,8 +151,7 @@ export async function extractEntitiesToStore(content: string, metadata: any = {}
         category: [],
         tags: []
       },
-      relationships: [],
-      actions: []
+      actions: [],
     };
   }
 }

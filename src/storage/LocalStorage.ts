@@ -4,7 +4,7 @@
  */
 
 import { QueryResult, QueryOptions } from '../memory';
-import { MemoryEntity } from './CloudStorage';
+import { MemoryEntity, MemoryMessage } from './CloudStorage';
 
 // 统一的缓存实体详情接口 - 包含所有本地缓存数据
 export interface CachedEntityDetail extends MemoryEntity {
@@ -12,17 +12,7 @@ export interface CachedEntityDetail extends MemoryEntity {
   
   // 🆕 使用扩展的关联数据接口，只存储最近5条详细数据
   recentDataDetails: {
-    conversations: (MemoryEntity['relatedData']['conversations'][0] & {
-      originalContent: string; // 完整的消息内容
-      matchedRules: string[]; // 匹配的过滤规则
-      contextMessages: Array<{
-        id: string;
-        sender: string;
-        content: string;
-        datetime: string;
-        isMainMessage: boolean;
-      }>; // 上下文消息
-    })[];
+    conversations: MemoryMessage[];
     webpages: MemoryEntity['relatedData']['webpages'];
     resources: MemoryEntity['relatedData']['resources'];
     projects: MemoryEntity['relatedData']['projects'];

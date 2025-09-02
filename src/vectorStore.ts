@@ -83,8 +83,8 @@ export async function storeMessage(
   messageId: string, 
   content: string, 
   metadata: {
-    source: string,                // 消息来源（发送者）
-    timestamp: number,             // 时间戳
+    sender: string,                // 消息来源（发送者）
+    datetime: number,             // 时间戳
     matchedRules: string[],        // 匹配到的规则
     summary: string,               // 消息摘要
     replyAdvice: string,          // 回复建议

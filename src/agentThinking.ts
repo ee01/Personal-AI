@@ -74,7 +74,6 @@ export interface MessageProcessResult {
   groupIndex?: number;
   groupId?: string;
   groupName?: string;
-  originalMessage?: any;
   matchedRule?: string;
   llmCallCount?: number;
   llmCallTokens?: number;

@@ -291,7 +291,7 @@ async function handleGetTopicDetail(request: any): Promise<any> {
     
     try {
         // 优先从本地缓存获取主题详情
-        const cachedDetails = await localStorage.getEntity(topicId);
+        const cachedDetails = await memorySystem.getEntityDetails(topicId);
         if (cachedDetails) {
             return { success: true, data: cachedDetails };
         }
