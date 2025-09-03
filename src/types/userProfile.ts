@@ -39,7 +39,7 @@ export interface UserAction {
 }
 
 /**
- * 用户画像主体
+ * 用户画像主体 - 增强版本，融合显式和隐式数据
  */
 export interface UserProfile {
   userId: string;
@@ -79,6 +79,42 @@ export interface UserProfile {
     averageDailyActivity: number;
     mostActiveDay: string;
     topInteractionTypes: Record<string, number>;
+  };
+
+  // 🆕 显式配置数据（来自用户手动输入）
+  explicitPreferences?: {
+    personalInfo: {
+      title: string;
+      department: string;
+      location: string;
+      timezone: string;
+    };
+    workContext: {
+      teamName: string;
+      teamMission: string;
+      teamMembers: Array<{
+        name: string;
+        position: string;
+        role: string;
+        speciality: string;
+      }>;
+      workingHours: string;
+      primaryConcerns: string[];
+      businessDomains: string[];
+      keyMetrics: string[];
+    };
+    communicationPreferences: {
+      style: string;
+      languagePreference: string;
+    };
+  };
+
+  // 🆕 权重计算配置
+  weightCalculation?: {
+    explicitWeight: number;     // 显式反馈权重 (0-1)
+    implicitWeight: number;     // 隐式反馈权重 (0-1)
+    adaptiveMode: 'cold_start' | 'learning' | 'mature';
+    lastAdaptation: number;     // 上次自适应调整时间
   };
 }
 
@@ -196,6 +232,55 @@ export interface UserProfileAnalysis {
     focusAreas: string[];
     suggestedContent: string[];
   };
+}
+
+/**
+ * 保留的独立配置（不直接影响UserProfile，但系统其他地方使用）
+ */
+export interface IndependentUserConfig {
+  // 自定义Prompt设置
+  customPrompts: {
+    message: {
+      enabled: boolean;
+      content: string;
+      position: string;
+    };
+    project: {
+      enabled: boolean;
+      content: string;
+      position: string;
+    };
+  };
+
+  // 分析偏好设置（用于AI分析逻辑）
+  analysisPreferences: {
+    messageAnalysis: {
+      focusAreas: string[];
+      ignoredTopics: string[];
+      urgencyKeywords: string[];
+    };
+    projectAnalysis: {
+      riskFactors: string[];
+      successCriteria: string[];
+      reviewCycle: string;
+    };
+  };
+
+  // 元数据
+  lastUpdated: number;
+  version: string;
+}
+
+/**
+ * 权重融合计算器接口
+ */
+export interface WeightFusionCalculator {
+  calculateFusedWeight(
+    explicitWeight: number,
+    implicitWeight: number,
+    adaptiveMode: 'cold_start' | 'learning' | 'mature',
+    userActivityLevel: number
+  ): number;
 }
 
 /**

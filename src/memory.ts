@@ -664,7 +664,7 @@ export class MemorySystem {
   async storeMessage(messageData: {
     id: string;
     content: string;
-    metadata: Omit<MemoryMessage, 'id' | 'created' | 'updated' | 'content'>;
+    metadata: Omit<MemoryMessage, 'id' | 'content'>;
   }): Promise<StoreResult> {
     this.ensureInitialized();
 
@@ -714,7 +714,7 @@ export class MemorySystem {
               context: 'message_analysis',
               metadata: {
                 messageId: messageData.id,
-                sender: messageData.metadata?.source || 'unknown'
+                sender: messageData.metadata?.sender || 'unknown'
               }
             });
           }
@@ -1634,17 +1634,7 @@ export class MemorySystem {
         cachedAt: Date.now(),
         // 初始化必要的数组字段
         recentDataDetails: {
-          conversations: [] as (MemoryEntity['relatedData']['conversations'][0] & {
-            originalContent: string;
-            matchedRules: string[];
-            contextMessages: Array<{
-              id: string;
-              sender: string;
-              content: string;
-              datetime: string;
-              isMainMessage: boolean;
-            }>;
-          })[],
+          conversations: [] as MemoryMessage[],
           webpages: [] as MemoryEntity['relatedData']['webpages'],
           resources: [] as MemoryEntity['relatedData']['resources'],
           projects: [] as MemoryEntity['relatedData']['projects'],
@@ -1686,17 +1676,7 @@ export class MemorySystem {
     // 设置必要的数组字段默认值
     if (!extendedEntity.recentDataDetails) {
       extendedEntity.recentDataDetails = {
-        conversations: [] as (MemoryEntity['relatedData']['conversations'][0] & {
-          originalContent: string;
-          matchedRules: string[];
-          contextMessages: Array<{
-            id: string;
-            sender: string;
-            content: string;
-            datetime: string;
-            isMainMessage: boolean;
-          }>;
-        })[],
+        conversations: [] as MemoryMessage[],
         webpages: [] as MemoryEntity['relatedData']['webpages'],
         resources: [] as MemoryEntity['relatedData']['resources'],
         projects: [] as MemoryEntity['relatedData']['projects'],
@@ -1927,7 +1907,7 @@ export class MemorySystem {
             name: entity.name,
             metadata: {
               entityType: entity.type,
-              description: entity.description,
+              document: entity.document,
               importance: entity.importance,
               tags: entity.tags
             }

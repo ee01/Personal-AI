@@ -614,7 +614,7 @@ export class CloudStorage {
   async storeMessage(messageData: {
     id: string;
     content: string;
-    metadata: Omit<MemoryMessage, 'id' | 'created' | 'updated'>;
+    metadata: Omit<MemoryMessage, 'id' | 'content'>;
   }): Promise<boolean> {
     this.ensureInitialized();
 
