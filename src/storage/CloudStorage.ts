@@ -2103,41 +2103,50 @@ export class CloudStorage {
         console.log(`💬 处理实体现有的对话数据: ${entity.relatedData.conversations.length} 个`);
         
         for (const conv of entity.relatedData.conversations) {
-          let processedConv:any = {...conv};
+          const relatedDataConv:any = {...conv};
 
           // 如果缺少 contextMessages 或 originalContent，尝试通过 getMessage 扩展
-          if ((!processedConv.contextMessages || processedConv.contextMessages.length === 0) || 
-              !processedConv.content) {
+          if ((!relatedDataConv.contextMessages || relatedDataConv.contextMessages.length === 0) || 
+              !relatedDataConv.content) {
             try {
-              const messageData = await this.getMessage(processedConv.id);
+              const messageData = await this.getMessage(relatedDataConv.id);
               if (messageData) {
                 // 从检索到的文档中获取 content
-                if (!processedConv.content && messageData.content) {
-                  processedConv.content = messageData.content;
+                if (!relatedDataConv.content && messageData.content) {
+                  relatedDataConv.content = messageData.content;
                 }
                 
                 // 从 metadata 中获取 contextMessages
-                if ((!processedConv.contextMessages || processedConv.contextMessages.length === 0) && 
-                    messageData.contextMessages && messageData.contextMessages.length > 0) {
-                  processedConv.contextMessages = messageData.contextMessages;
+                if (!relatedDataConv.contextMessages || relatedDataConv.contextMessages.length === 0) {
+                  if (messageData.contextMessages && messageData.contextMessages.length > 0) {
+                    relatedDataConv.contextMessages = messageData.contextMessages;
+                  } else {
+                    relatedDataConv.contextMessages = [{
+                      id: messageData.id,
+                      sender: messageData.sender,
+                      content: messageData.content,
+                      datetime: messageData.datetime,
+                      isMainMessage: true
+                    }];
+                  }
                 }
                 
                 // 补充其他缺失字段
-                processedConv.summary = messageData.summary;
-                processedConv.groupName = messageData.groupName;
-                processedConv.groupUrl = messageData.groupUrl;
-                processedConv.groupId = messageData.groupId;
-                processedConv.matchedRules = messageData.matchedRules;
-                processedConv.replyAdvice = messageData.replyAdvice;
+                relatedDataConv.summary = messageData.summary;
+                relatedDataConv.groupName = messageData.groupName;
+                relatedDataConv.groupUrl = messageData.groupUrl;
+                relatedDataConv.groupId = messageData.groupId;
+                relatedDataConv.matchedRules = messageData.matchedRules;
+                relatedDataConv.replyAdvice = messageData.replyAdvice;
                 
-                console.log(`🔍 通过 getMessage 扩展了对话 ${processedConv.id} 的详细信息`);
+                console.log(`🔍 通过 getMessage 扩展了对话 ${relatedDataConv.id} 的详细信息`);
               }
             } catch (error) {
-              console.warn(`扩展对话 ${processedConv.id} 详细信息失败:`, error);
+              console.warn(`扩展对话 ${relatedDataConv.id} 详细信息失败:`, error);
             }
           }
           
-          latestConversations.push(processedConv);
+          latestConversations.push(relatedDataConv);
         }
         
         console.log(`💬 完成对话数据处理: ${latestConversations.length} 个，其中扩展了详细信息`);

@@ -179,7 +179,7 @@
               >
                 <div class="context-header">
                   <div class="context-sender">{{ contextMsg.sender || '未知用户' }}</div>
-                  <div class="context-time">{{ contextMsg.time || '未知时间' }}</div>
+                  <div class="context-time">{{ formatTimeAgo(contextMsg.datetime) || '未知时间' }}</div>
                 </div>
                 <div 
                   class="context-content-text"

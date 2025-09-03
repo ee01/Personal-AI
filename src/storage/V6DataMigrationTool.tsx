@@ -430,7 +430,7 @@ const V6DataMigrationTool = () => {
             ].filter(name => name && name.trim()); // 过滤空值
 
             let v6CollectionName = '';
-            let newCollectionName = `${userinfo.username}-messages`;
+            const newCollectionName = `${userinfo.username}-messages`;
 
             // 查找V6集合
             for (const name of possibleV6Collections) {
@@ -516,7 +516,7 @@ const V6DataMigrationTool = () => {
             });
 
             // 🆕 第一步：确定V6集合和新集合
-            let v6CollectionName = envConfig.CHROMA_COLLECTION_NAME;
+            const v6CollectionName = envConfig.CHROMA_COLLECTION_NAME;
 
             if (!v6CollectionName) {
                 throw new Error('未找到V6消息集合');

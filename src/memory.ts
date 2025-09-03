@@ -968,7 +968,7 @@ export class MemorySystem {
 
       // 遍历实体并统计
       entities.forEach(entity => {
-        if (entityCounts.hasOwnProperty(entity.type)) {
+        if (Object.prototype.hasOwnProperty.call(entityCounts, entity.type)) {
           entityCounts[entity.type]++;
         } else {
           // 如果有新的类型，也记录下来
