@@ -220,9 +220,26 @@ export class IntelligentAgent {
         urgencyKeywords: string[];
       };
     };
+    userProfile?: any;
+    userProfileAnalysis?: any;
   }> {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(['customPrompts', 'userContextConfig'], (result) => {
+    return new Promise(async (resolve) => {
+      // 获取基础配置和用户画像信息
+      const [configResult, profileResult] = await Promise.all([
+        new Promise<any>((resolveConfig) => {
+          chrome.storage.local.get(['customPrompts', 'userContextConfig'], resolveConfig);
+        }),
+        // 尝试获取融合后的用户画像
+        new Promise<any>((resolveProfile) => {
+          chrome.runtime.sendMessage({ type: 'GET_FUSED_USER_PROFILE' }, (response) => {
+            if (response && response.success) {
+              resolveProfile(response.data);
+            } else {
+              resolveProfile({ profile: null, analysis: null });
+            }
+          });
+        })
+      ]);
         const defaultConfig = {
           customPrompts: {
             messageAnalysis: '',
@@ -287,10 +304,11 @@ export class IntelligentAgent {
         };
 
         resolve({
-          customPrompts: result.customPrompts || defaultConfig.customPrompts,
-          userContextConfig: result.userContextConfig || defaultConfig.userContextConfig
+          customPrompts: configResult.customPrompts || defaultConfig.customPrompts,
+          userContextConfig: configResult.userContextConfig || defaultConfig.userContextConfig,
+          userProfile: profileResult.profile,
+          userProfileAnalysis: profileResult.analysis
         });
-      });
     });
   }
 

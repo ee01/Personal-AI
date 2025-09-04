@@ -2544,7 +2544,7 @@ export class CloudStorage {
   /**
    * 🆕 从消息元数据构建实体关联数据
    */
-  static buildEntityRelatedDataFromMessage(
+  private buildEntityRelatedDataFromMessage(
     entityName: string,
     entityType: string,
     messageMetadata: any,
@@ -2655,7 +2655,7 @@ export class CloudStorage {
   /**
    * 🆕 从消息元数据提取实体信息
    */
-  private static extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> {
+  extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> {
     const entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> = [];
     
     if (metadata.entities) {
@@ -2864,7 +2864,7 @@ export class CloudStorage {
     
     try {
       // 1. 从消息元数据提取实体
-      const extractedEntities = CloudStorage.extractEntitiesFromMetadata(messageMetadata, messageId);
+      const extractedEntities = this.extractEntitiesFromMetadata(messageMetadata, messageId);
       
       if (extractedEntities.length === 0) {
         console.log('📭 消息中未发现实体，跳过关联数据更新');
@@ -2877,7 +2877,7 @@ export class CloudStorage {
       for (const entity of extractedEntities) {
         try {
           // 为当前实体构建关联数据
-          const relatedDataForEntity = CloudStorage.buildEntityRelatedDataFromMessage(
+          const relatedDataForEntity = this.buildEntityRelatedDataFromMessage(
             entity.name,
             entity.type,
             messageMetadata,

@@ -706,7 +706,7 @@ export class MemorySystem {
       if (result.success && this.userProfileManager && messageData.metadata?.entities) {
         try {
           // 将实体对象转换为数组格式
-          const entitiesArray = this.extractEntitiesFromMetadata(messageData.metadata, messageData.id);
+          const entitiesArray = this.cloudStorage.extractEntitiesFromMetadata(messageData.metadata, messageData.id);
           if (entitiesArray.length > 0) {
             await this.updateUserProfileFromEntities(entitiesArray, {
               actionType: 'mention',
@@ -1396,6 +1396,33 @@ export class MemorySystem {
   }
 
   /**
+   * 🆕 生成主动推荐内容
+   */
+  async generateProactiveRecommendations(): Promise<Array<{
+    id: string;
+    type: 'content' | 'action' | 'connection' | 'learning';
+    title: string;
+    description: string;
+    confidence: number;
+    reason: string;
+    actionUrl?: string;
+    priority: 'high' | 'medium' | 'low';
+  }>> {
+    this.ensureInitialized();
+    
+    if (!this.userProfileManager) {
+      return [];
+    }
+    
+    try {
+      return await this.userProfileManager.generateProactiveRecommendations();
+    } catch (error) {
+      console.error('生成主动推荐失败:', error);
+      return [];
+    }
+  }
+
+  /**
    * 🆕 获取融合后的用户画像
    * 返回应用了加权融合算法的兴趣列表
    */
@@ -1499,7 +1526,7 @@ export class MemorySystem {
   // ==================== 私有方法 ====================
 
   /**
-   * 启动后台同步
+   * 启动后台同步 - 现在包含用户画像权重衰变逻辑
    */
   startBackgroundSync(): void {
     // 防止重复启动
@@ -1508,16 +1535,33 @@ export class MemorySystem {
       return;
     }
 
-    // 使用 Chrome alarms API 进行后台同步
-    const alarmName = 'memory-system-sync';
+    // 检查是否在background script环境中
+    const isBackground = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest;
+    if (!isBackground) {
+      console.log('⚠️ 非background环境，跳过后台同步启动');
+      return;
+    }
+
+    // 使用 Chrome alarms API 进行后台同步和权重衰变
+    const syncAlarmName = 'memory-system-sync';
+    const decayAlarmName = 'user-profile-decay';
     
-    chrome.alarms.clear(alarmName, () => {
-      // 创建新的 alarm，每5分钟同步一次
-      chrome.alarms.create(alarmName, {
+    chrome.alarms.clear(syncAlarmName, () => {
+      // 创建同步 alarm，每5分钟同步一次
+      chrome.alarms.create(syncAlarmName, {
         periodInMinutes: this.config.syncInterval / (60 * 1000)
       });
       
       console.log(`🔄 后台同步已启动，间隔: ${this.config.syncInterval / (60 * 1000)} 分钟`);
+    });
+    
+    chrome.alarms.clear(decayAlarmName, () => {
+      // 创建权重衰变 alarm，每24小时执行一次
+      chrome.alarms.create(decayAlarmName, {
+        periodInMinutes: 24 * 60 // 24小时
+      });
+      
+      console.log(`🧠 用户画像权重衰变已启动，间隔: 24小时`);
     });
     
     // 标记为已启动
@@ -1527,6 +1571,12 @@ export class MemorySystem {
     console.log('🔄 首次执行定时同步...');
     this.syncCache().catch(error => {
       console.error('后台同步失败:', error);
+    });
+    
+    // 首次执行权重衰变
+    console.log('🧠 首次执行权重衰变...');
+    this.applyUserProfileDecay().catch((error: any) => {
+      console.error('权重衰变失败:', error);
     });
 
     // 监听 alarm 事件
@@ -1544,14 +1594,25 @@ export class MemorySystem {
 
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === 'memory-system-sync') {
+        console.log('🔄 执行定时同步...');
         this.syncCache().catch(error => {
           console.error('后台同步失败:', error);
+        });
+      } else if (alarm.name === 'user-profile-decay') {
+        console.log('🧠 执行定时权重衰变...');
+        this.applyUserProfileDecay().catch((error: any) => {
+          console.error('定时权重衰变失败:', error);
         });
       }
     });
 
     this.alarmListenerAdded = true;
+    console.log('🎯 alarm 监听器已设置（同步 + 权重衰变）');
   }
+
+  /**
+   * 执行用户画像权重衰变
+   */
 
   /**
    * 清理实体名称，处理中文和特殊字符
@@ -2037,179 +2098,6 @@ export class MemorySystem {
     if (!this.isInitialized) {
       throw new Error('记忆系统未初始化，请先调用 initialize() 方法');
     }
-  }
-
-  /**
-   * 从消息元数据提取实体信息，转换为数组格式
-   */
-  extractEntitiesFromMetadata(metadata: any, messageId?: string): Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> {
-    const entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>> = [];
-    
-    if (!metadata.entities) {
-      return entities;
-    }
-
-    // 提取人员实体
-    if (metadata.entities.people) {
-      for (const person of metadata.entities.people) {
-        entities.push({
-          type: 'Person',
-          name: person.name,
-          role: person.role,
-          document: `人员: ${person.name}`,
-          team: person.team,
-          expertise: person.expertise,
-          properties: {
-            mentioned_context: person.mentioned_context,
-            source: 'message_analysis',
-            groupName: metadata.groupName || '',
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.7,
-          accessCount: 1,
-          lastAccessed: Date.now(),
-          tags: [],
-          statistic: {
-            conversations: 0, projects: 0, participants: 0, resources: 0,
-            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-          },
-          relatedData: {
-            conversations: [], webpages: [], resources: [], projects: [], people: [],
-            topics: [], jiraTickets: [], cooccurringEntities: []
-          }
-        });
-      }
-    }
-    
-    // 提取项目实体
-    if (metadata.entities.projects) {
-      for (const project of metadata.entities.projects) {
-        entities.push({
-          type: 'Project',
-          name: project.name,
-          document: `项目: ${project.name}`,
-          properties: {
-            status: project.status,
-            related_people: project.related_people,
-            source: 'message_analysis',
-            groupName: metadata.groupName || '',
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.8,
-          accessCount: 1,
-          lastAccessed: Date.now(),
-          tags: [],
-          statistic: {
-            conversations: 0, projects: 0, participants: 0, resources: 0,
-            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-          },
-          relatedData: {
-            conversations: [], webpages: [], resources: [], projects: [], people: [],
-            topics: [], jiraTickets: [], cooccurringEntities: []
-          }
-        });
-      }
-    }
-    
-    // 提取话题实体
-    if (metadata.entities.topics) {
-      for (const topic of metadata.entities.topics) {
-        entities.push({
-          type: 'Topic',
-          name: topic.name,
-          document: `话题: ${topic.name}`,
-          properties: {
-            related_people: topic.related_people,
-            importance: topic.importance,
-            source: 'message_analysis',
-            groupName: metadata.groupName || '',
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: topic.importance || 0.6,
-          accessCount: 1,
-          lastAccessed: Date.now(),
-          tags: [],
-          statistic: {
-            conversations: 0, projects: 0, participants: 0, resources: 0,
-            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-          },
-          relatedData: {
-            conversations: [], webpages: [], resources: [], projects: [], people: [],
-            topics: [], jiraTickets: [], cooccurringEntities: []
-          }
-        });
-      }
-    }
-    
-    // 提取文档/资源实体
-    if (metadata.entities.documents || metadata.entities.resources) {
-      const documentsList = [...(metadata.entities.documents || []), ...(metadata.entities.resources || [])];
-      for (const doc of documentsList) {
-        entities.push({
-          type: 'Document',
-          name: doc.name,
-          document: `文档: ${doc.name}`,
-          properties: {
-            type: doc.type,
-            url: doc.url,
-            related_people: doc.related_people,
-            source: 'message_analysis',
-            groupName: metadata.groupName || '',
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.5,
-          accessCount: 1,
-          lastAccessed: Date.now(),
-          tags: [],
-          statistic: {
-            conversations: 0, projects: 0, participants: 0, resources: 0,
-            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-          },
-          relatedData: {
-            conversations: [], webpages: [], resources: [], projects: [], people: [],
-            topics: [], jiraTickets: [], cooccurringEntities: []
-          }
-        });
-      }
-    }
-
-    // 提取技术实体
-    if (metadata.entities.technologies || metadata.entities.tools) {
-      const techList = [...(metadata.entities.technologies || []), ...(metadata.entities.tools || [])];
-      for (const tech of techList) {
-        entities.push({
-          type: 'Technology',
-          name: tech.name,
-          document: `技术: ${tech.name}`,
-          properties: {
-            category: tech.category,
-            related_people: tech.related_people,
-            source: 'message_analysis',
-            groupName: metadata.groupName || '',
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.6,
-          accessCount: 1,
-          lastAccessed: Date.now(),
-          tags: [],
-          statistic: {
-            conversations: 0, projects: 0, participants: 0, resources: 0,
-            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-          },
-          relatedData: {
-            conversations: [], webpages: [], resources: [], projects: [], people: [],
-            topics: [], jiraTickets: [], cooccurringEntities: []
-          }
-        });
-      }
-    }
-
-    return entities;
   }
 }
 

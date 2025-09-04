@@ -21,7 +21,6 @@ async function ensureStorageInitialized(): Promise<void> {
     if (!storageInitialized) {
         await cloudStorage.initialize();
         await localStorage.initialize();
-        await memorySystem.initialize();
         storageInitialized = true;
     }
 }
@@ -83,6 +82,7 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
 
             case 'GET_ENTITY_TYPES':
                 try {
+                    await memorySystem.initialize();
                     const entityTypes = await memorySystem.getEntityTypes();
                     return {
                         success: true,
@@ -215,34 +215,36 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
 
             case 'DIAGNOSE_ENTITY_DATA':
                 try {
-            const healthStatus = await memorySystem.performHealthCheck();
-            return {
-                success: true,
-                data: {
-                    status: healthStatus.overall.status,
-                    score: healthStatus.overall.score,
-                    issues: healthStatus.overall.issues,
-                    recommendations: healthStatus.overall.recommendations,
-                    cloudStorage: healthStatus.cloudStorage,
-                    localCache: healthStatus.localCache
-                }
-            };
-        } catch (error) {
-            console.error('诊断实体数据失败:', error);
-            return {
-                success: false,
-                error: error.message,
-                data: {
-                    status: 'error',
-                    score: 0,
-                    issues: ['诊断失败'],
-                    recommendations: ['请检查系统状态']
-                }
-            };
+                    await memorySystem.initialize();
+                    const healthStatus = await memorySystem.performHealthCheck();
+                    return {
+                        success: true,
+                        data: {
+                            status: healthStatus.overall.status,
+                            score: healthStatus.overall.score,
+                            issues: healthStatus.overall.issues,
+                            recommendations: healthStatus.overall.recommendations,
+                            cloudStorage: healthStatus.cloudStorage,
+                            localCache: healthStatus.localCache
+                        }
+                    };
+                } catch (error) {
+                    console.error('诊断实体数据失败:', error);
+                    return {
+                        success: false,
+                        error: error.message,
+                        data: {
+                            status: 'error',
+                            score: 0,
+                            issues: ['诊断失败'],
+                            recommendations: ['请检查系统状态']
+                        }
+                    };
                 }
 
             case 'REBUILD_ENTITY_INDEXES':
                 try {
+                    await memorySystem.initialize();
                     await memorySystem.syncCache();
                     return {
                         success: true,
@@ -291,6 +293,7 @@ async function handleGetTopicDetail(request: any): Promise<any> {
     const { topicId } = request;
     
     try {
+        await memorySystem.initialize();
         // 优先从本地缓存获取主题详情
         const cachedDetails = await memorySystem.getEntityDetails(topicId);
         if (cachedDetails) {

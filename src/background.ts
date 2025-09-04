@@ -18,6 +18,7 @@ import { handleMemoryMessage } from './memoryMessageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
 import { DashboardMessageHandler } from './utils/dashboardIntegration';
+import { taskScheduler } from './services/TaskScheduler';
 
 console.log('Background script loaded');
 
@@ -75,11 +76,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         const config = await getEnvConfig();
         console.log('Global config loaded:', config);
 
-        // 初始化配置
-        const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
-        // 如果之前是激活状态，重新启动定时任务
-        if (scheduleActive) {
-            startScheduledCheck();
+        // 启动统一任务调度器
+        try {
+            console.log('🚀 启动统一任务调度器...');
+            await taskScheduler.startAllTasks();
+            console.log('✅ 统一任务调度器启动成功');
+        } catch (error) {
+            console.error('❌ 统一任务调度器启动失败:', error);
         }
         
         chrome.storage.local.remove('ollamaAnalysisProgress');
@@ -166,14 +169,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
 });
 
-// 监听定时任务
-chrome.alarms.onAlarm.addListener((alarm) => {
-    console.log('alarm', alarm);
-    if (alarm.name === 'scheduledTask') {
-        console.log('Running scheduled message check...');
-        runScheduledTask();
-    }
-});
+// 定时任务现在由 TaskScheduler 统一管理
 
 // 原来的监听器简化为：
 // 初始化仪表盘消息处理器
@@ -219,12 +215,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.type === 'CONTROL_SCHEDULED_CHECK') {
         if (request.action === 'start') {
-            startScheduledCheck();
+            taskScheduler.toggleTask('message_analysis', true);
             sendResponse({ status: 'started' });
         } else if (request.action === 'stop') {
-            stopScheduledCheck();
+            taskScheduler.toggleTask('message_analysis', false);
             sendResponse({ status: 'stopped' });
         }
+        return true;
+    }
+
+    // 新增：获取任务调度状态
+    if (request.type === 'GET_TASK_SCHEDULER_STATUS') {
+        const status = taskScheduler.getTaskStatus();
+        sendResponse({ success: true, tasks: status });
+        return true;
+    }
+
+    // 新增：控制特定任务
+    if (request.type === 'CONTROL_TASK') {
+        const { taskId, action } = request;
+        
+        (async () => {
+            try {
+                if (action === 'toggle') {
+                    const success = await taskScheduler.toggleTask(taskId, request.enabled);
+                    sendResponse({ success, message: success ? '任务状态已更新' : '任务控制失败' });
+                } else if (action === 'run') {
+                    const success = await taskScheduler.runTaskManually(taskId);
+                    sendResponse({ success, message: success ? '任务执行成功' : '任务执行失败' });
+                }
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
         return true;
     }
 
@@ -739,6 +762,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })();
         return true;
     }
+
+    // 🆕 处理主动推荐生成请求
+    if (request.type === 'GENERATE_PROACTIVE_RECOMMENDATIONS') {
+        console.log('处理主动推荐生成请求');
+        
+        (async () => {
+            try {
+                const recommendations = await memorySystem.generateProactiveRecommendations();
+                
+                console.log('主动推荐生成成功');
+                sendResponse({
+                    success: true,
+                    data: recommendations,
+                    message: `生成了 ${recommendations.length} 个个性化推荐`
+                });
+            } catch (error) {
+                console.error('生成主动推荐失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '生成主动推荐失败'
+                });
+            }
+        })();
+        return true;
+    }
     
     // 记忆界面相关消息处理
     const memoryResult = handleMemoryMessage(request);
@@ -1065,70 +1114,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
 });
 
-// 启动定时任务
-let timerFirstRunAlarms: NodeJS.Timeout | null = null;
+// 启动定时任务 - 现在通过 TaskScheduler 管理
 export async function startScheduledCheck() {
+    console.log('⚠️ startScheduledCheck() 已弃用，使用 TaskScheduler 替代');
     chrome.storage.local.set({ scheduleActive: true });
-    
-    // 获取最新配置
-    const config = await getEnvConfig();
-    
-    // 先清除可能存在的旧定时任务
-    chrome.alarms.clear('scheduledTask', () => {
-        console.log('Old alarm cleared');
-        
-        // 创建新的定时任务
-        chrome.alarms.create('scheduledTask', {
-            periodInMinutes: Number(config.SCHEDULED_INTERVAL)
-        });
-        
-        console.log(`Scheduled task set to run every ${config.SCHEDULED_INTERVAL} minutes`);
-    });
-    
-    // 在启动定时任务时直接运行一次
-    timerFirstRunAlarms = setTimeout(() => {
-        runScheduledTask();
-    }, 10000);
+    await taskScheduler.toggleTask('message_analysis', true);
 }
 
-// 停止定时任务
-export function stopScheduledCheck() {
-    clearTimeout(timerFirstRunAlarms);
+// 停止定时任务 - 现在通过 TaskScheduler 管理
+export async function stopScheduledCheck() {
+    console.log('⚠️ stopScheduledCheck() 已弃用，使用 TaskScheduler 替代');
     chrome.storage.local.set({ scheduleActive: false });
     chrome.storage.local.remove('ollamaAnalysisProgress');
-    chrome.alarms.clear('scheduledTask', (wasCleared) => {
-        console.log('Scheduled task stopped:', wasCleared);
-    });
+    await taskScheduler.toggleTask('message_analysis', false);
 }
 
-// 定时抓取分析消息
+// 定时抓取分析消息 - 现在通过 TaskScheduler 管理
 async function runScheduledTask() {
-    console.log('Running scheduled task');
-    try {
-        // 获取最新配置
-        const config = await getEnvConfig();
-        
-        // 查找或创建 RingCentral 标签页
-        let rcTab = await findRingCentralTab();
-        if (!rcTab) {
-            rcTab = await createRingCentralTab();
-            // 等待页面加载完成
-            await waitForTabLoad(rcTab.id);
-        }
-
-        let { userinfo } = await chrome.storage.local.get(['userinfo'])
-        if (!userinfo || userinfo.fullName === '') userinfo = await getUserinfoFromRCpage();
-        const startTime = new Date(Date.now() - (Number(config.SCHEDULED_INTERVAL) + 5) * 60 * 1000);
-
-        // 尝试发送消息，如果失败则重试
-        const response = await sendMessageWithRetry(rcTab.id, {
-            type: 'FETCH_USER_MESSAGES',
-            startTime,
-        });
-        await analyzeMessages(response.data, userinfo.fullName, true);
-    } catch (error) {
-        console.error('Background task error:', error);
-    }
+    console.log('⚠️ runScheduledTask() 已弃用，使用 TaskScheduler 替代');
+    // 直接调用 TaskScheduler 执行消息分析任务
+    await taskScheduler.runTaskManually('message_analysis');
 }
 
 // 查找已打开的 RingCentral 标签页

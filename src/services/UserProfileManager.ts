@@ -19,7 +19,6 @@ import { CloudStorage } from '../storage/CloudStorage';
 export class UserProfileManager {
   private profile: UserProfile | null = null;
   private decayConfig: WeightDecayConfig;
-  private lastDecayUpdate: number = Date.now();
   private updateThrottleMap: Map<string, number> = new Map();
   private cloudStorage: CloudStorage | null = null;
   
@@ -47,12 +46,6 @@ export class UserProfileManager {
       const stored = await this.loadFromStorage();
       if (stored) {
         this.profile = stored;
-        // 延迟应用权重衰变，避免在初始化时造成额外负载
-        setTimeout(() => {
-          this.applyWeightDecay().catch(error => {
-            console.error('权重衰变失败:', error);
-          });
-        }, 5000); // 5秒后执行
       } else {
         // 创建新的用户画像
         this.profile = this.createEmptyProfile();
@@ -398,24 +391,36 @@ export class UserProfileManager {
   }
   
   /**
-   * 应用权重衰变
+   * 应用权重衰变 - 使用持久化存储的lastDecayUpdate
    */
   async applyWeightDecay(): Promise<void> {
     if (!this.profile) return;
     
     const now = Date.now();
-    const daysSinceLastDecay = (now - this.lastDecayUpdate) / 86400000;
+    
+    // 从localStorage获取上次衰变时间
+    const lastDecayKey = `userProfile_lastDecayUpdate_${this.userId}`;
+    const result = await chrome.storage.local.get(lastDecayKey);
+    const lastDecayUpdate = result[lastDecayKey] || now;
+    
+    const daysSinceLastDecay = (now - lastDecayUpdate) / 86400000;
     
     if (daysSinceLastDecay < 1) {
       // 一天内已经衰变过，跳过
+      console.log(`⏭️ 跳过权重衰变 - 距离上次衰变仅 ${(daysSinceLastDecay * 24).toFixed(1)} 小时`);
       return;
     }
     
+    console.log(`🔄 开始权重衰变 - 距离上次衰变 ${daysSinceLastDecay.toFixed(1)} 天`);
+    
     const interests = this.profile.interests;
     let hasChanges = false;
+    let totalItemsProcessed = 0;
+    let totalItemsDecayed = 0;
     
     Object.values(interests).forEach(category => {
       category.forEach(item => {
+        totalItemsProcessed++;
         const oldWeight = item.currentWeight;
         
         // 计算衰变率
@@ -443,21 +448,29 @@ export class UserProfileManager {
         
         if (oldWeight !== item.currentWeight) {
           hasChanges = true;
+          totalItemsDecayed++;
         }
       });
       
       // 移除权重过低的项
       const originalLength = category.length;
-      category = category.filter(item => item.currentWeight > this.decayConfig.minWeight);
-      if (category.length !== originalLength) {
+      const filteredCategory = category.filter(item => item.currentWeight > this.decayConfig.minWeight);
+      if (filteredCategory.length !== originalLength) {
         hasChanges = true;
+        console.log(`🗑️ 移除 ${originalLength - filteredCategory.length} 个权重过低的兴趣项`);
       }
     });
     
     if (hasChanges) {
-      this.lastDecayUpdate = now;
+      // 更新localStorage中的lastDecayUpdate
+      await chrome.storage.local.set({ [lastDecayKey]: now });
       this.profile.lastUpdated = now;
       await this.saveToStorage();
+      console.log(`✅ 权重衰变完成 - 处理了 ${totalItemsProcessed} 项，衰变了 ${totalItemsDecayed} 项`);
+    } else {
+      // 即使没有变化也要更新时间，避免重复计算
+      await chrome.storage.local.set({ [lastDecayKey]: now });
+      console.log(`✅ 权重衰变完成 - 无需更新`);
     }
   }
   
@@ -1001,5 +1014,355 @@ export class UserProfileManager {
 
     const { explicitWeight, implicitWeight } = this.profile.weightCalculation;
     return (explicitValue * explicitWeight) + (implicitValue * implicitWeight);
+  }
+
+  /**
+   * 🆕 生成个性化Prompt
+   * 基于用户画像和显式配置生成个性化的分析提示
+   */
+  generatePersonalizedPrompt(context: string, analysisType: 'message' | 'project' | 'webpage' | 'document' | 'generic' = 'generic'): string {
+    if (!this.profile) {
+      return context;
+    }
+
+    const parts: string[] = [];
+    
+    // 1. 基础上下文信息
+    if (this.profile.explicitPreferences?.personalInfo) {
+      const personalInfo = this.profile.explicitPreferences.personalInfo;
+      if (personalInfo.title || personalInfo.department) {
+        parts.push(`作为${personalInfo.title}${personalInfo.department ? `（${personalInfo.department}）` : ''}`);
+      }
+    }
+
+    // 2. 工作环境和团队信息
+    if (this.profile.explicitPreferences?.workContext) {
+      const workContext = this.profile.explicitPreferences.workContext;
+      if (workContext.teamName) {
+        parts.push(`在${workContext.teamName}团队中工作`);
+      }
+      if (workContext.primaryConcerns && workContext.primaryConcerns.length > 0) {
+        parts.push(`主要关注：${workContext.primaryConcerns.slice(0, 3).join('、')}`);
+      }
+    }
+
+    // 3. 兴趣重点（基于融合权重排序）
+    const topInterests = this.getFusedInterestItems([
+      ...this.profile.interests.projects.map(p => ({ ...p, weight: p.currentWeight })),
+      ...this.profile.interests.topics.map(t => ({ ...t, weight: t.currentWeight })),
+      ...this.profile.interests.technologies.map(tech => ({ ...tech, weight: tech.currentWeight }))
+    ]).slice(0, 5);
+
+    if (topInterests.length > 0) {
+      parts.push(`当前重点关注：${topInterests.map(i => i.name).join('、')}`);
+    }
+
+    // 4. 行为模式和工作风格
+    if (this.profile.behaviorPatterns?.communicationStyle) {
+      const style = this.profile.behaviorPatterns.communicationStyle;
+      if (style.formality !== 'semi-formal') {
+        parts.push(`偏好${style.formality === 'formal' ? '正式' : '轻松'}的沟通风格`);
+      }
+      if (style.detailLevel !== 'medium') {
+        parts.push(`需要${style.detailLevel === 'high' ? '详细' : '简洁'}的信息`);
+      }
+    }
+
+    // 5. 专业领域
+    if (this.profile.derivedPreferences?.expertiseAreas && this.profile.derivedPreferences.expertiseAreas.length > 0) {
+      parts.push(`专业领域：${this.profile.derivedPreferences.expertiseAreas.slice(0, 3).join('、')}`);
+    }
+
+    // 6. 构建个性化前缀
+    let personalizedPrefix = '';
+    if (parts.length > 0) {
+      personalizedPrefix = `\n## 🎯 个人化上下文\n${parts.join('，')}。\n\n请基于以上个人背景和关注重点来分析以下内容：\n\n`;
+    }
+
+    // 7. 根据分析类型添加特定指导
+    let typeSpecificGuidance = '';
+    switch (analysisType) {
+      case 'message':
+        if (this.profile.explicitPreferences?.workContext?.primaryConcerns) {
+          typeSpecificGuidance = `\n重点关注与以下方面相关的信息：${this.profile.explicitPreferences.workContext.primaryConcerns.join('、')}\n`;
+        }
+        break;
+      case 'project':
+        if (this.profile.derivedPreferences?.riskSensitivity) {
+          typeSpecificGuidance = `\n风险敏感度：${this.profile.derivedPreferences.riskSensitivity}，请相应调整分析深度。\n`;
+        }
+        break;
+      case 'webpage':
+        if (topInterests.length > 0) {
+          typeSpecificGuidance = `\n特别关注与以下主题相关的内容：${topInterests.slice(0, 3).map(i => i.name).join('、')}\n`;
+        }
+        break;
+    }
+
+    return personalizedPrefix + context + typeSpecificGuidance;
+  }
+
+  /**
+   * 🆕 生成回复建议
+   * 基于用户画像生成个性化的回复建议
+   */
+  generateReplyAdvice(messageContext: any): string[] {
+    if (!this.profile) {
+      return [];
+    }
+
+    const advice: string[] = [];
+    
+    // 1. 基于沟通风格的建议
+    const communicationStyle = this.profile.behaviorPatterns?.communicationStyle;
+    if (communicationStyle) {
+      if (communicationStyle.formality === 'formal') {
+        advice.push('建议使用正式的语言和称谓，保持专业的沟通风格');
+      } else if (communicationStyle.formality === 'casual') {
+        advice.push('可以使用相对轻松的语调，但仍需保持礼貌和专业');
+      }
+      
+      if (communicationStyle.detailLevel === 'high') {
+        advice.push('提供详细的解释和背景信息，包含必要的数据支撑');
+      } else if (communicationStyle.detailLevel === 'low') {
+        advice.push('保持回复简洁明了，突出重点，避免冗长的说明');
+      }
+    }
+
+    // 2. 基于专业领域的建议
+    const expertiseAreas = this.profile.derivedPreferences?.expertiseAreas;
+    if (expertiseAreas && expertiseAreas.length > 0) {
+      advice.push(`可以引用你在${expertiseAreas.slice(0, 2).join('、')}方面的专业知识`);
+    }
+
+    // 3. 基于当前关注重点的建议
+    const topInterests = this.getFusedInterestItems([
+      ...this.profile.interests.projects.map(p => ({ ...p, weight: p.currentWeight })),
+      ...this.profile.interests.topics.map(t => ({ ...t, weight: t.currentWeight }))
+    ]).slice(0, 3);
+
+    if (topInterests.length > 0 && messageContext) {
+      // 检查消息是否与用户关注的项目/主题相关
+      const relevantInterests = topInterests.filter(interest => 
+        messageContext.toLowerCase().includes(interest.name.toLowerCase())
+      );
+      
+      if (relevantInterests.length > 0) {
+        advice.push(`这涉及到你正在关注的${relevantInterests.map(i => i.name).join('、')}，可以分享相关的见解或进展`);
+      }
+    }
+
+    // 4. 基于工作重点的建议
+    const primaryConcerns = this.profile.explicitPreferences?.workContext?.primaryConcerns;
+    if (primaryConcerns && primaryConcerns.length > 0 && messageContext) {
+      const relevantConcerns = primaryConcerns.filter(concern =>
+        messageContext.toLowerCase().includes(concern.toLowerCase())
+      );
+      
+      if (relevantConcerns.length > 0) {
+        advice.push(`这与你的工作重点${relevantConcerns.join('、')}相关，建议从这个角度进行回应`);
+      }
+    }
+
+    // 5. 基于团队协作的建议
+    const keyCollaborators = this.profile.derivedPreferences?.keyCollaborators;
+    if (keyCollaborators && keyCollaborators.length > 0 && messageContext) {
+      const mentionedCollaborators = keyCollaborators.filter(collab =>
+        messageContext.toLowerCase().includes(collab.toLowerCase())
+      );
+      
+      if (mentionedCollaborators.length > 0) {
+        advice.push(`提到了你的协作伙伴${mentionedCollaborators.join('、')}，可以考虑协调或跟进相关事项`);
+      }
+    }
+
+    return advice.length > 0 ? advice : ['基于上下文和你的工作背景，提供专业和有建设性的回复'];
+  }
+
+  /**
+   * 🆕 生成主动推荐内容
+   * 基于用户画像和行为模式生成个性化推荐
+   */
+  async generateProactiveRecommendations(): Promise<Array<{
+    id: string;
+    type: 'content' | 'action' | 'connection' | 'learning';
+    title: string;
+    description: string;
+    confidence: number;
+    reason: string;
+    actionUrl?: string;
+    priority: 'high' | 'medium' | 'low';
+  }>> {
+    if (!this.profile) {
+      return [];
+    }
+
+    const recommendations: Array<{
+      id: string;
+      type: 'content' | 'action' | 'connection' | 'learning';
+      title: string;
+      description: string;
+      confidence: number;
+      reason: string;
+      actionUrl?: string;
+      priority: 'high' | 'medium' | 'low';
+    }> = [];
+
+    // 1. 基于兴趣预测的内容推荐
+    const predictedInterests = this.predictInterests();
+    predictedInterests.forEach((prediction, index) => {
+      if (prediction.confidence > 0.6) {
+        recommendations.push({
+          id: `content_${prediction.type}_${index}`,
+          type: 'content',
+          title: `探索 ${prediction.item}`,
+          description: `基于你对相关领域的关注，${prediction.item} 可能对你有价值`,
+          confidence: prediction.confidence,
+          reason: prediction.reason,
+          priority: prediction.confidence > 0.8 ? 'high' : 'medium'
+        });
+      }
+    });
+
+    // 2. 基于最近活动的行动建议
+    const recentItems = this.getRecentlyAccessedItems();
+    if (recentItems.length > 0) {
+      const mostActive = recentItems[0];
+      if (Date.now() - mostActive.lastAccessed > 7 * 24 * 60 * 60 * 1000) { // 7天未访问
+        recommendations.push({
+          id: `action_followup_${mostActive.id}`,
+          type: 'action',
+          title: `跟进 ${mostActive.name}`,
+          description: `你已经一周没有关注 ${mostActive.name} 了，建议检查最新进展`,
+          confidence: 0.7,
+          reason: `基于你的关注历史和访问模式`,
+          priority: mostActive.currentWeight > 0.5 ? 'high' : 'medium'
+        });
+      }
+    }
+
+    // 3. 基于工作模式的时间建议
+    const workingPattern = this.analyzeWorkingPattern();
+    const currentHour = new Date().getHours();
+    const isInActiveTime = this.profile.behaviorPatterns.activeTimeZones.some(
+      tz => Math.abs(tz.hour - currentHour) <= 1 && tz.activityLevel > 0.6
+    );
+
+    if (isInActiveTime && this.profile.statistics.averageDailyActivity > 0) {
+      recommendations.push({
+        id: `action_peak_time`,
+        type: 'action',
+        title: '高效时段建议',
+        description: `当前是你的高效时段，建议处理重要的${this.profile.derivedPreferences.expertiseAreas[0] || '工作'}任务`,
+        confidence: 0.8,
+        reason: `基于你的活动模式分析，${workingPattern}`,
+        priority: 'high'
+      });
+    }
+
+    // 4. 基于协作关系的连接建议
+    const keyCollaborators = this.profile.derivedPreferences.keyCollaborators;
+    if (keyCollaborators && keyCollaborators.length > 0) {
+      const collaboratorRecommendation = keyCollaborators.slice(0, 2);
+      recommendations.push({
+        id: `connection_sync`,
+        type: 'connection',
+        title: `与 ${collaboratorRecommendation.join('、')} 同步`,
+        description: `建议主动与关键协作伙伴同步项目进展和工作重点`,
+        confidence: 0.6,
+        reason: `基于你们的协作频率和项目关联度`,
+        priority: 'medium'
+      });
+    }
+
+    // 5. 基于技能缺口的学习建议
+    const topTechnologies = this.profile.interests.technologies
+      .filter(t => t.currentWeight > 0.3)
+      .slice(0, 3);
+    
+    if (topTechnologies.length > 0) {
+      const techName = topTechnologies[0].name;
+      const relatedSkills = this.suggestRelatedSkills(techName);
+      
+      if (relatedSkills.length > 0) {
+        recommendations.push({
+          id: `learning_${techName.toLowerCase()}`,
+          type: 'learning',
+          title: `学习 ${relatedSkills[0]}`,
+          description: `基于你对 ${techName} 的关注，学习 ${relatedSkills[0]} 将有助于技能提升`,
+          confidence: 0.7,
+          reason: `技能栈扩展建议，与你当前关注的技术高度相关`,
+          priority: 'medium'
+        });
+      }
+    }
+
+    // 6. 基于风险敏感度的预警建议
+    if (this.profile.derivedPreferences.riskSensitivity === 'high') {
+      const criticalProjects = this.profile.interests.projects.filter(
+        p => p.metadata?.priority === 'high' || p.metadata?.status === 'at-risk'
+      );
+      
+      if (criticalProjects.length > 0) {
+        recommendations.push({
+          id: `action_risk_review`,
+          type: 'action',
+          title: '风险项目检查',
+          description: `你有 ${criticalProjects.length} 个高风险或高优先级项目需要关注`,
+          confidence: 0.9,
+          reason: `基于你的高风险敏感度设置和项目状态`,
+          priority: 'high'
+        });
+      }
+    }
+
+    // 7. 按优先级和置信度排序
+    return recommendations
+      .sort((a, b) => {
+        // 先按优先级排序
+        const priorityOrder = { high: 3, medium: 2, low: 1 };
+        const priorityDiff = priorityOrder[b.priority] - priorityOrder[a.priority];
+        if (priorityDiff !== 0) return priorityDiff;
+        
+        // 再按置信度排序
+        return b.confidence - a.confidence;
+      })
+      .slice(0, 8); // 最多返回8个推荐
+  }
+
+  /**
+   * 获取最近访问的项目
+   */
+  private getRecentlyAccessedItems(): any[] {
+    if (!this.profile) return [];
+    
+    const allItems = [
+      ...this.profile.interests.projects,
+      ...this.profile.interests.topics,
+      ...this.profile.interests.technologies,
+      ...this.profile.interests.documents
+    ];
+    
+    return allItems
+      .sort((a, b) => b.lastAccessed - a.lastAccessed)
+      .slice(0, 10);
+  }
+
+  /**
+   * 根据技术建议相关技能
+   */
+  private suggestRelatedSkills(technology: string): string[] {
+    const skillMap: Record<string, string[]> = {
+      'React': ['Next.js', 'Redux', 'TypeScript', 'GraphQL'],
+      'Vue': ['Nuxt.js', 'Vuex', 'Vue Router', 'TypeScript'],
+      'Python': ['Django', 'FastAPI', 'Pandas', 'TensorFlow'],
+      'JavaScript': ['Node.js', 'Express', 'React', 'Vue'],
+      'TypeScript': ['React', 'Angular', 'NestJS', 'Express'],
+      'Docker': ['Kubernetes', 'DevOps', 'CI/CD', 'Microservices'],
+      'AWS': ['Azure', 'Google Cloud', 'Terraform', 'Serverless'],
+      'Git': ['GitHub Actions', 'DevOps', 'CI/CD', 'Docker']
+    };
+    
+    return skillMap[technology] || [];
   }
 }
