@@ -384,11 +384,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     // 🆕 处理显式重要性标记请求
-    if (request.type === 'SET_EXPLICIT_IMPORTANCE') {
-        console.log('处理显式重要性标记请求:', request);
-        const { itemId, type, importance } = request;
-        
-        memorySystem.setUserExplicitImportance(itemId, type, importance)
+            if (request.type === 'SET_EXPLICIT_IMPORTANCE') {
+            console.log('处理显式重要性标记请求:', request);
+            const { itemId, itemType, importance } = request;
+            
+            memorySystem.setUserExplicitImportance(itemId, itemType, importance)
             .then(success => {
                 console.log('重要性标记设置结果:', success);
                 sendResponse({
@@ -545,6 +545,198 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 message: '权重衰变配置更新失败'
             });
         }
+        return true;
+    }
+
+    // 🆕 处理用户上下文配置融合请求
+    if (request.type === 'FUSE_USER_CONTEXT_CONFIG') {
+        console.log('处理用户上下文配置融合请求:', request.userContextConfig);
+        
+        // 验证输入数据
+        const userContextConfig = request.userContextConfig;
+        if (!userContextConfig || typeof userContextConfig !== 'object') {
+            sendResponse({
+                success: false,
+                error: '用户上下文配置无效',
+                message: '数据融合失败'
+            });
+            return true;
+        }
+
+        (async () => {
+            try {
+                // 执行数据融合
+                const success = await memorySystem.fuseUserContextConfig(userContextConfig);
+                
+                if (success) {
+                    console.log('用户上下文配置融合成功');
+                    
+                    // 可选：获取融合后的用户画像
+                    const fusedProfile = await memorySystem.getFusedUserProfile();
+                    
+                    sendResponse({
+                        success: true,
+                        message: '用户上下文配置融合成功',
+                        data: {
+                            fusedProfile: fusedProfile.profile,
+                            fusedInterests: fusedProfile.fusedInterests
+                        }
+                    });
+                } else {
+                    sendResponse({
+                        success: false,
+                        error: '融合操作执行失败',
+                        message: '数据融合失败'
+                    });
+                }
+            } catch (error) {
+                console.error('用户上下文配置融合失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '数据融合失败'
+                });
+            }
+        })();
+        return true;
+    }
+
+    // 🆕 处理获取融合用户画像请求
+    if (request.type === 'GET_FUSED_USER_PROFILE') {
+        console.log('处理获取融合用户画像请求');
+        
+        (async () => {
+            try {
+                const result = await memorySystem.getFusedUserProfile();
+                
+                console.log('融合用户画像获取成功');
+                sendResponse({
+                    success: true,
+                    data: result,
+                    message: '融合用户画像获取成功'
+                });
+            } catch (error) {
+                console.error('获取融合用户画像失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '获取融合用户画像失败'
+                });
+            }
+        })();
+        return true;
+    }
+
+    // 🆕 处理权重自适应调整请求
+    if (request.type === 'ADAPTIVE_WEIGHT_ADJUSTMENT') {
+        console.log('处理权重自适应调整请求');
+        
+        (async () => {
+            try {
+                await memorySystem.adaptiveWeightAdjustment();
+                
+                console.log('权重自适应调整完成');
+                sendResponse({
+                    success: true,
+                    message: '权重自适应调整完成'
+                });
+            } catch (error) {
+                console.error('权重自适应调整失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '权重自适应调整失败'
+                });
+            }
+        })();
+        return true;
+    }
+
+    // 🆕 处理独立用户配置存储请求
+    if (request.type === 'STORE_INDEPENDENT_USER_CONFIG') {
+        console.log('处理独立用户配置存储请求:', request.config);
+        
+        // 验证配置数据
+        const config = request.config;
+        if (!config || typeof config !== 'object') {
+            sendResponse({
+                success: false,
+                error: '配置数据无效',
+                message: '独立用户配置存储失败'
+            });
+            return true;
+        }
+
+        (async () => {
+            try {
+                // 添加时间戳和版本信息
+                const configWithMetadata = {
+                    ...config,
+                    lastUpdated: Date.now(),
+                    version: config.version || '1.0'
+                };
+
+                const success = await memorySystem.storeIndependentUserConfig(configWithMetadata);
+                
+                if (success) {
+                    console.log('独立用户配置存储成功');
+                    sendResponse({
+                        success: true,
+                        message: '独立用户配置存储成功',
+                        data: configWithMetadata
+                    });
+                } else {
+                    sendResponse({
+                        success: false,
+                        error: '存储操作失败',
+                        message: '独立用户配置存储失败'
+                    });
+                }
+            } catch (error) {
+                console.error('独立用户配置存储失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '独立用户配置存储失败'
+                });
+            }
+        })();
+        return true;
+    }
+
+    // 🆕 处理独立用户配置获取请求
+    if (request.type === 'GET_INDEPENDENT_USER_CONFIG') {
+        console.log('处理独立用户配置获取请求');
+        
+        (async () => {
+            try {
+                const config = await memorySystem.getIndependentUserConfig();
+                
+                if (config) {
+                    console.log('独立用户配置获取成功');
+                    sendResponse({
+                        success: true,
+                        data: config,
+                        message: '独立用户配置获取成功'
+                    });
+                } else {
+                    // 配置不存在，返回默认配置
+                    console.log('云端配置不存在，返回默认配置');
+                    sendResponse({
+                        success: true,
+                        data: null,
+                        message: '未找到云端配置，可以使用默认配置'
+                    });
+                }
+            } catch (error) {
+                console.error('获取独立用户配置失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '获取独立用户配置失败'
+                });
+            }
+        })();
         return true;
     }
     

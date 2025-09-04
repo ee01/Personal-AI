@@ -802,4 +802,204 @@ export class UserProfileManager {
       await this.saveToStorage();
     }
   }
+
+  /**
+   * 🆕 数据融合：将 UserContextConfig 融合到 UserProfile
+   * 实现显式用户输入与隐式系统学习的加权融合
+   */
+  async fuseUserContextConfig(userContextConfig: any): Promise<boolean> {
+    try {
+      if (!this.profile) {
+        await this.initialize();
+      }
+
+      console.log('开始融合用户上下文配置到用户画像...', userContextConfig);
+
+      // 1. 融合个人信息
+      if (userContextConfig.personalInfo) {
+        if (!this.profile.explicitPreferences) {
+          this.profile.explicitPreferences = {
+            personalInfo: {
+              title: '',
+              department: '',
+              location: '',
+              timezone: 'GMT+8'
+            },
+            workContext: {
+              teamName: '',
+              teamMission: '',
+              teamMembers: [],
+              workingHours: '',
+              primaryConcerns: [],
+              businessDomains: [],
+              keyMetrics: []
+            },
+            communicationPreferences: {
+              style: '',
+              languagePreference: 'zh-CN'
+            }
+          };
+        }
+        
+        this.profile.explicitPreferences.personalInfo = {
+          title: userContextConfig.personalInfo.title || '',
+          department: userContextConfig.personalInfo.department || '',
+          location: userContextConfig.personalInfo.location || '',
+          timezone: userContextConfig.personalInfo.timezone || 'GMT+8'
+        };
+      }
+
+      // 2. 融合工作上下文（团队信息 + 工作重点）
+      if (!this.profile.explicitPreferences) {
+        this.profile.explicitPreferences = {
+          personalInfo: {
+            title: '',
+            department: '',
+            location: '',
+            timezone: 'GMT+8'
+          },
+          workContext: {
+            teamName: '',
+            teamMission: '',
+            teamMembers: [],
+            workingHours: '',
+            primaryConcerns: [],
+            businessDomains: [],
+            keyMetrics: []
+          },
+          communicationPreferences: {
+            style: '',
+            languagePreference: 'zh-CN'
+          }
+        };
+      }
+      
+      this.profile.explicitPreferences.workContext = {
+        teamName: userContextConfig.teamInfo?.teamName || '',
+        teamMission: userContextConfig.teamInfo?.teamMission || '',
+        teamMembers: userContextConfig.teamInfo?.members || [],
+        workingHours: userContextConfig.teamInfo?.workingHours || '',
+        primaryConcerns: userContextConfig.workFocus?.primaryConcerns || [],
+        businessDomains: userContextConfig.workFocus?.businessDomains || [],
+        keyMetrics: userContextConfig.workFocus?.keyMetrics || []
+      };
+
+      // 3. 融合沟通偏好（保留有用部分）
+      this.profile.explicitPreferences.communicationPreferences = {
+        style: userContextConfig.communicationContext?.communicationStyle || '',
+        languagePreference: userContextConfig.communicationContext?.languagePreference || 'zh-CN'
+      };
+
+      // 4. 初始化权重计算配置
+      this.profile.weightCalculation = this.profile.weightCalculation || {
+        explicitWeight: 0.3,    // 初始状态：30%显式，70%隐式
+        implicitWeight: 0.7,
+        adaptiveMode: 'cold_start',
+        lastAdaptation: Date.now()
+      };
+
+      // 5. 保存融合结果
+      await this.saveToStorage();
+
+      console.log('用户上下文配置融合完成', this.profile.explicitPreferences);
+      return true;
+
+    } catch (error) {
+      console.error('融合用户上下文配置失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 🆕 权重自适应调整
+   * 根据用户使用时长和互动频率调整显式/隐式权重比例
+   */
+  async adaptiveWeightAdjustment(): Promise<void> {
+    if (!this.profile || !this.profile.weightCalculation) return;
+
+    const now = Date.now();
+    const profileAge = (now - this.profile.createdAt) / (1000 * 60 * 60 * 24); // 天数
+    const totalInteractions = this.profile.statistics?.totalInteractions || 0;
+    const averageDailyActivity = this.profile.statistics?.averageDailyActivity || 0;
+
+    let newMode = this.profile.weightCalculation.adaptiveMode;
+    let explicitWeight = this.profile.weightCalculation.explicitWeight;
+    let implicitWeight = this.profile.weightCalculation.implicitWeight;
+
+    // 根据使用经验调整模式和权重
+    if (profileAge > 30 && totalInteractions > 200) {
+      // 成熟用户：更信任显式反馈
+      newMode = 'mature';
+      explicitWeight = 0.7;
+      implicitWeight = 0.3;
+    } else if (profileAge > 7 && totalInteractions > 50) {
+      // 学习阶段：平衡权重
+      newMode = 'learning';  
+      explicitWeight = 0.5;
+      implicitWeight = 0.5;
+    } else {
+      // 冷启动：更依赖系统学习
+      newMode = 'cold_start';
+      explicitWeight = 0.3;
+      implicitWeight = 0.7;
+    }
+
+    // 更新权重配置
+    this.profile.weightCalculation = {
+      explicitWeight,
+      implicitWeight,
+      adaptiveMode: newMode,
+      lastAdaptation: now
+    };
+
+    console.log(`权重自适应调整: ${newMode} 模式，显式权重: ${explicitWeight}, 隐式权重: ${implicitWeight}`);
+    await this.saveToStorage();
+  }
+
+  /**
+   * 🆕 加权融合计算兴趣权重
+   * 将显式用户标记与隐式系统学习结合
+   */
+  calculateFusedWeight(implicitWeight: number, explicitImportance?: number): number {
+    if (!this.profile?.weightCalculation) {
+      return implicitWeight; // 降级处理
+    }
+
+    const { explicitWeight, implicitWeight: implicitRatio } = this.profile.weightCalculation;
+
+    if (explicitImportance === undefined || explicitImportance === 0) {
+      // 没有显式标记，使用纯隐式权重
+      return implicitWeight;
+    }
+
+    // 加权融合：融合显式反馈和隐式学习
+    const fusedWeight = (explicitImportance * explicitWeight) + (implicitWeight * implicitRatio);
+    
+    // 确保权重在有效范围内
+    return Math.max(0, Math.min(1, fusedWeight));
+  }
+
+  /**
+   * 🆕 获取融合后的兴趣列表
+   * 应用加权融合算法重新计算所有兴趣权重
+   */
+  getFusedInterestItems<T extends { weight: number; explicitImportance?: number }>(items: T[]): T[] {
+    return items.map(item => ({
+      ...item,
+      weight: this.calculateFusedWeight(item.weight, item.explicitImportance)
+    })).sort((a, b) => b.weight - a.weight);
+  }
+
+  /**
+   * 🆕 处理冲突解决
+   * 当显式和隐式数据冲突时使用加权平均
+   */
+  resolveDataConflict(explicitValue: number, implicitValue: number): number {
+    if (!this.profile?.weightCalculation) {
+      return implicitValue;
+    }
+
+    const { explicitWeight, implicitWeight } = this.profile.weightCalculation;
+    return (explicitValue * explicitWeight) + (implicitValue * implicitWeight);
+  }
 }

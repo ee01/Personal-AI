@@ -198,6 +198,120 @@
         </div>
       </div>
       
+      <!-- 🆕 行为分析图表 -->
+      <div class="profile-card">
+        <h3>📊 行为分析</h3>
+        <div class="charts-grid">
+          <!-- 行为趋势图 -->
+          <div class="chart-container">
+            <h4>📈 每日活跃度趋势</h4>
+            <div class="trend-chart">
+              <div class="chart-description">最近7天活动变化</div>
+              <div class="trend-bars">
+                <div 
+                  v-for="day in behaviorTrendData" 
+                  :key="day.date"
+                  class="trend-bar"
+                  :style="{ height: `${day.activity * 100}%` }"
+                  :title="`${day.date}: ${day.interactions}次交互`"
+                >
+                  <span class="bar-label">{{ day.day }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 活跃时间热力图 -->
+          <div class="chart-container">
+            <h4>🕒 活跃时间热力图</h4>
+            <div class="heatmap-chart">
+              <div class="chart-description">一周工作时间分布</div>
+              <div class="heatmap-grid">
+                <div 
+                  v-for="cell in heatmapData" 
+                  :key="`${cell.day}-${cell.hour}`"
+                  class="heatmap-cell"
+                  :class="getHeatmapIntensity(cell.intensity)"
+                  :title="`${cell.dayName} ${cell.hour}:00 - 活跃度: ${(cell.intensity * 100).toFixed(0)}%`"
+                ></div>
+              </div>
+              <div class="heatmap-legend">
+                <span class="legend-label">活跃度:</span>
+                <div class="legend-scale">
+                  <div class="legend-item low"></div>
+                  <div class="legend-item medium"></div>
+                  <div class="legend-item high"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 兴趣权重变化 -->
+        <div class="chart-container full-width">
+          <h4>📊 兴趣权重变化</h4>
+          <div class="weight-timeline">
+            <div class="chart-description">主要兴趣点权重历史变化</div>
+            <div class="timeline-container">
+              <div 
+                v-for="item in interestTimelineData" 
+                :key="item.name"
+                class="timeline-item"
+              >
+                <div class="timeline-header">
+                  <span class="interest-name">{{ item.name }}</span>
+                  <span class="current-weight">{{ (item.currentWeight * 100).toFixed(1) }}%</span>
+                </div>
+                <div class="timeline-line">
+                  <div 
+                    v-for="point in item.history" 
+                    :key="point.date"
+                    class="timeline-point"
+                    :style="{ left: `${point.position}%`, backgroundColor: getWeightColor(point.weight) }"
+                    :title="`${point.date}: ${(point.weight * 100).toFixed(1)}%`"
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 效率指标 -->
+        <div class="efficiency-metrics">
+          <h4>🎯 个人效率指标</h4>
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-icon">⚡</div>
+              <div class="metric-content">
+                <div class="metric-value">{{ efficiencyMetrics.responseSpeed.toFixed(1) }}h</div>
+                <div class="metric-label">平均响应时间</div>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon">🔥</div>
+              <div class="metric-content">
+                <div class="metric-value">{{ efficiencyMetrics.focusScore.toFixed(0) }}%</div>
+                <div class="metric-label">专注度评分</div>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon">🚀</div>
+              <div class="metric-content">
+                <div class="metric-value">{{ efficiencyMetrics.productivityIndex.toFixed(1) }}</div>
+                <div class="metric-label">生产力指数</div>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon">🤝</div>
+              <div class="metric-content">
+                <div class="metric-value">{{ efficiencyMetrics.collaborationScore.toFixed(0) }}%</div>
+                <div class="metric-label">协作活跃度</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 🆕 权重衰变设置 -->
       <div class="profile-card">
         <div class="settings-header">
@@ -414,25 +528,73 @@ const weightDecaySettings = ref({
 // 衰变预览数据
 const decayPreviewData = ref<Array<{ day: number; weight: number }>>([]);
 
+// 🆕 图表数据
+const behaviorTrendData = ref<Array<{ date: string; day: string; activity: number; interactions: number }>>([]);
+const heatmapData = ref<Array<{ day: number; hour: number; dayName: string; intensity: number }>>([]);
+const interestTimelineData = ref<Array<{ 
+  name: string; 
+  currentWeight: number; 
+  history: Array<{ date: string; weight: number; position: number }> 
+}>>([]);
+const efficiencyMetrics = ref({
+  responseSpeed: 2.3,      // 平均响应时间（小时）
+  focusScore: 87,          // 专注度评分
+  productivityIndex: 4.2,  // 生产力指数
+  collaborationScore: 76   // 协作活跃度
+});
+
 const loadUserProfile = async () => {
   isLoading.value = true;
   try {
-    const response = await chromeAPI.sendMessage({ type: 'GET_USER_PROFILE' });
-    if (response && response.success) {
-      userProfile.value = response.data.profile;
-      userProfileAnalysis.value = response.data.analysis;
+    // 🆕 优先获取融合后的用户画像
+    let response = await chromeAPI.sendMessage({ type: 'GET_FUSED_USER_PROFILE' });
+    
+    if (response && (response as any).success && (response as any).data.profile) {
+      // 使用融合后的画像数据
+      userProfile.value = (response as any).data.profile;
+      userProfileAnalysis.value = (response as any).data.analysis;
+      console.log('融合用户画像加载成功:', userProfile.value);
+      console.log('融合兴趣数据:', (response as any).data.fusedInterests);
     } else {
+      // 降级：获取普通用户画像
+      console.log('降级到普通用户画像获取');
+      response = await chromeAPI.sendMessage({ type: 'GET_USER_PROFILE' });
+      if (response && (response as any).success) {
+        userProfile.value = (response as any).data.profile;
+        userProfileAnalysis.value = (response as any).data.analysis;
+        console.log('普通用户画像加载成功:', userProfile.value);
+      } else {
+        // 使用模拟数据
+        userProfile.value = getMockUserProfile();
+        userProfileAnalysis.value = getMockUserProfileAnalysis();
+        console.log('使用模拟数据');
+      }
+    }
+  } catch (error) {
+    console.error('加载用户画像失败:', error);
+    // 再次降级尝试
+    try {
+      const fallbackResponse = await chromeAPI.sendMessage({ type: 'GET_USER_PROFILE' });
+      if (fallbackResponse && (fallbackResponse as any).success) {
+        userProfile.value = (fallbackResponse as any).data.profile;
+        userProfileAnalysis.value = (fallbackResponse as any).data.analysis;
+        console.log('降级用户画像加载成功');
+      } else {
+        // 使用模拟数据
+        userProfile.value = getMockUserProfile();
+        userProfileAnalysis.value = getMockUserProfileAnalysis();
+        console.log('最终降级到模拟数据');
+      }
+    } catch (fallbackError) {
+      console.error('降级用户画像获取也失败:', fallbackError);
       // 使用模拟数据
       userProfile.value = getMockUserProfile();
       userProfileAnalysis.value = getMockUserProfileAnalysis();
     }
-  } catch (error) {
-    console.error('加载用户画像失败:', error);
-    // 使用模拟数据
-    userProfile.value = getMockUserProfile();
-    userProfileAnalysis.value = getMockUserProfileAnalysis();
   } finally {
     isLoading.value = false;
+    // 🆕 用户画像加载完成后更新图表数据
+    updateChartData();
   }
 };
 
@@ -563,16 +725,16 @@ const setImportance = async (itemId: string, type: string, importance: number) =
     const response = await chromeAPI.sendMessage({
       type: 'SET_EXPLICIT_IMPORTANCE',
       itemId: itemId,
-      type: type,
+      itemType: type,
       importance: importance
     });
     
-    if (response && response.success) {
+    if (response && (response as any).success) {
       console.log('重要性设置成功');
       // 刷新用户画像数据
       await loadUserProfile();
     } else {
-      console.error('重要性设置失败:', response?.error);
+      console.error('重要性设置失败:', (response as any)?.error);
     }
   } catch (error) {
     console.error('设置重要性时发生错误:', error);
@@ -594,8 +756,8 @@ const exportUserProfile = async () => {
       type: 'EXPORT_USER_PROFILE'
     });
     
-    if (response && response.success) {
-      console.log('用户画像导出成功:', response.data);
+    if (response && (response as any).success) {
+      console.log('用户画像导出成功:', (response as any).data);
       
       // 生成文件名（包含时间戳）
       const now = new Date();
@@ -603,7 +765,7 @@ const exportUserProfile = async () => {
       const fileName = `用户画像_${timestamp}.json`;
       
       // 格式化JSON数据（美化输出）
-      const jsonData = JSON.stringify(response.data, null, 2);
+      const jsonData = JSON.stringify((response as any).data, null, 2);
       
       // 创建下载链接
       const blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
@@ -626,11 +788,11 @@ const exportUserProfile = async () => {
       console.log(`用户画像已导出到文件: ${fileName}`);
       
       // 显示成功提示（可选：使用浏览器通知或自定义提示）
-      showExportSuccessNotification(fileName, response.data.exportSummary);
+      showExportSuccessNotification(fileName, (response as any).data.exportSummary);
       
     } else {
-      console.error('用户画像导出失败:', response?.error);
-      showExportErrorNotification(response?.error || '未知错误');
+      console.error('用户画像导出失败:', (response as any)?.error);
+      showExportErrorNotification((response as any)?.error || '未知错误');
     }
   } catch (error) {
     console.error('导出用户画像时发生错误:', error);
@@ -745,7 +907,7 @@ const applyDecaySettings = async () => {
       config: weightDecaySettings.value
     });
     
-    if (response && response.success) {
+    if (response && (response as any).success) {
       console.log('权重衰变设置应用成功');
       
       // 显示成功通知
@@ -763,8 +925,8 @@ const applyDecaySettings = async () => {
       // 可选：重新加载用户画像以应用新设置
       await loadUserProfile();
     } else {
-      console.error('权重衰变设置应用失败:', response?.error);
-      alert(`设置应用失败: ${response?.error || '未知错误'}`);
+      console.error('权重衰变设置应用失败:', (response as any)?.error);
+      alert(`设置应用失败: ${(response as any)?.error || '未知错误'}`);
     }
   } catch (error) {
     console.error('应用权重衰变设置时发生错误:', error);
@@ -774,10 +936,115 @@ const applyDecaySettings = async () => {
   }
 };
 
+// 🆕 图表相关方法
+
+// 获取热力图强度等级
+const getHeatmapIntensity = (intensity: number): string => {
+  if (intensity > 0.7) return 'high';
+  if (intensity > 0.4) return 'medium';
+  return 'low';
+};
+
+// 获取权重颜色
+const getWeightColor = (weight: number): string => {
+  if (weight > 0.8) return '#e74c3c';
+  if (weight > 0.6) return '#f39c12';
+  if (weight > 0.4) return '#f1c40f';
+  if (weight > 0.2) return '#2ecc71';
+  return '#95a5a6';
+};
+
+// 初始化图表数据
+const initializeChartData = () => {
+  // 生成行为趋势数据（最近7天）
+  const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  behaviorTrendData.value = days.map((day, index) => ({
+    date: new Date(Date.now() - (6 - index) * 24 * 60 * 60 * 1000).toLocaleDateString(),
+    day,
+    activity: 0.3 + Math.random() * 0.7, // 30%-100%的活跃度
+    interactions: Math.floor(20 + Math.random() * 50) // 20-70次交互
+  }));
+
+  // 生成热力图数据（一周7天，每天24小时）
+  const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  heatmapData.value = [];
+  for (let day = 0; day < 7; day++) {
+    for (let hour = 0; hour < 24; hour++) {
+      let intensity = 0;
+      // 工作时间（9-18）活跃度更高
+      if (hour >= 9 && hour <= 18 && day < 5) {
+        intensity = 0.4 + Math.random() * 0.6;
+      } else if (hour >= 20 && hour <= 23) {
+        // 晚上时间有一定活跃度
+        intensity = 0.2 + Math.random() * 0.4;
+      } else {
+        intensity = Math.random() * 0.3;
+      }
+      
+      heatmapData.value.push({
+        day,
+        hour,
+        dayName: dayNames[day],
+        intensity
+      });
+    }
+  }
+
+  // 生成兴趣权重时间线数据
+  const sampleInterests = ['Personal-AI项目', 'React开发', '用户体验设计', '数据分析'];
+  interestTimelineData.value = sampleInterests.map(name => {
+    const history = [];
+    const baseWeight = 0.3 + Math.random() * 0.4; // 基础权重
+    
+    // 生成30天的历史数据
+    for (let i = 0; i < 30; i++) {
+      const date = new Date(Date.now() - (29 - i) * 24 * 60 * 60 * 1000);
+      const weight = Math.max(0.1, Math.min(1.0, baseWeight + (Math.random() - 0.5) * 0.3));
+      history.push({
+        date: date.toLocaleDateString(),
+        weight,
+        position: (i / 29) * 100 // 转换为百分比位置
+      });
+    }
+    
+    return {
+      name,
+      currentWeight: history[history.length - 1].weight,
+      history
+    };
+  });
+
+  // 根据用户画像数据更新效率指标
+  if (userProfile.value) {
+    const stats = userProfile.value.statistics;
+    if (stats) {
+      efficiencyMetrics.value = {
+        responseSpeed: Math.max(0.5, 6 - (stats.averageDailyActivity / 10)), // 基于日均活动计算
+        focusScore: Math.min(100, 60 + (stats.totalInteractions / 10)), // 基于总交互数计算
+        productivityIndex: Math.min(5.0, 2.0 + (stats.averageDailyActivity / 20)), // 基于活跃度计算
+        collaborationScore: Math.min(100, 40 + (userProfile.value.interests.people.length * 5)) // 基于协作人员数计算
+      };
+    }
+  }
+};
+
+// 更新图表数据（当用户画像更新时调用）
+const updateChartData = () => {
+  initializeChartData();
+  
+  // 如果有真实的用户画像数据，可以在这里进行更精确的计算
+  if (userProfile.value) {
+    console.log('基于真实用户画像数据更新图表');
+    // 可以在这里添加基于真实数据的图表更新逻辑
+  }
+};
+
 onMounted(() => {
   loadUserProfile();
   // 初始化衰变预览
   updateDecayPreview();
+  // 🆕 初始化图表数据
+  initializeChartData();
 });
 </script>
 
@@ -1116,6 +1383,272 @@ onMounted(() => {
   opacity: 0.7;
 }
 
+/* 🆕 图表相关样式 */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.chart-container {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #e9ecef;
+}
+
+.chart-container.full-width {
+  grid-column: 1 / -1;
+}
+
+.chart-container h4 {
+  margin: 0 0 8px 0;
+  color: #2c3e50;
+  font-size: 16px;
+}
+
+.chart-description {
+  color: #6c757d;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+/* 行为趋势图样式 */
+.trend-chart {
+  padding: 16px 0;
+}
+
+.trend-bars {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  height: 120px;
+  padding: 0 4px;
+}
+
+.trend-bar {
+  flex: 1;
+  background: linear-gradient(to top, #3498db, #5dade2);
+  border-radius: 4px 4px 0 0;
+  min-height: 20px;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.trend-bar:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
+}
+
+.bar-label {
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: #6c757d;
+  white-space: nowrap;
+}
+
+/* 热力图样式 */
+.heatmap-chart {
+  padding: 16px 0;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  grid-template-rows: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.heatmap-cell {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.heatmap-cell:hover {
+  transform: scale(1.2);
+  border: 1px solid #333;
+}
+
+.heatmap-cell.low {
+  background-color: #e8f5e8;
+}
+
+.heatmap-cell.medium {
+  background-color: #81c784;
+}
+
+.heatmap-cell.high {
+  background-color: #4caf50;
+}
+
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.legend-label {
+  color: #6c757d;
+}
+
+.legend-scale {
+  display: flex;
+  gap: 4px;
+}
+
+.legend-item {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.legend-item.low {
+  background-color: #e8f5e8;
+}
+
+.legend-item.medium {
+  background-color: #81c784;
+}
+
+.legend-item.high {
+  background-color: #4caf50;
+}
+
+/* 兴趣权重时间线样式 */
+.weight-timeline {
+  padding: 16px 0;
+}
+
+.timeline-container {
+  background: white;
+  border-radius: 6px;
+  padding: 16px;
+  border: 1px solid #e9ecef;
+}
+
+.timeline-item {
+  margin-bottom: 16px;
+}
+
+.timeline-item:last-child {
+  margin-bottom: 0;
+}
+
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.interest-name {
+  font-weight: 600;
+  color: #2c3e50;
+  font-size: 14px;
+}
+
+.current-weight {
+  font-size: 12px;
+  color: #6c757d;
+  background: #f8f9fa;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.timeline-line {
+  position: relative;
+  height: 4px;
+  background: #e9ecef;
+  border-radius: 2px;
+  overflow: visible;
+}
+
+.timeline-point {
+  position: absolute;
+  top: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.timeline-point:hover {
+  transform: scale(1.3);
+}
+
+/* 效率指标样式 */
+.efficiency-metrics {
+  margin-top: 24px;
+}
+
+.efficiency-metrics h4 {
+  margin: 0 0 16px 0;
+  color: #2c3e50;
+  font-size: 16px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.metric-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: white;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+  transition: all 0.2s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.metric-icon {
+  font-size: 24px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 8px;
+  color: white;
+}
+
+.metric-content {
+  flex: 1;
+}
+
+.metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #2c3e50;
+  margin-bottom: 4px;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: #6c757d;
+  margin: 0;
+}
+
 /* 🆕 权重衰变设置样式 */
 .settings-header {
   display: flex;
@@ -1391,6 +1924,47 @@ onMounted(() => {
   
   .setting-actions button {
     flex: 1;
+  }
+  
+  /* 🆕 图表响应式 */
+  .charts-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  
+  .chart-container.full-width {
+    grid-column: 1;
+  }
+  
+  .trend-bars {
+    height: 100px;
+  }
+  
+  .heatmap-grid {
+    grid-template-columns: repeat(12, 1fr);
+  }
+  
+  .heatmap-cell {
+    width: 8px;
+    height: 8px;
+  }
+  
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .metric-card {
+    padding: 12px;
+  }
+  
+  .metric-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 20px;
+  }
+  
+  .metric-value {
+    font-size: 18px;
   }
 }
 

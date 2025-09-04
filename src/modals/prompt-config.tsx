@@ -200,41 +200,198 @@ const PromptConfig: React.FC = () => {
 
     const loadFromStorage = async () => {
         try {
-            const result = await chrome.storage.local.get(['customPrompts', 'userContextConfig']);
+            // 🆕 优先从云端加载配置
+            console.log('尝试从云端加载独立用户配置...');
             
-            if (result.customPrompts || result.userContextConfig) {
+            const cloudResponse = await chrome.runtime.sendMessage({
+                type: 'GET_INDEPENDENT_USER_CONFIG'
+            });
+            
+            if (cloudResponse && cloudResponse.success && cloudResponse.data) {
+                // 使用云端配置
+                console.log('云端配置加载成功:', cloudResponse.data);
                 setConfigData(prev => ({
-                    customPrompts: { ...prev.customPrompts, ...result.customPrompts },
-                    userContextConfig: { ...prev.userContextConfig, ...result.userContextConfig }
+                    customPrompts: { ...prev.customPrompts, ...cloudResponse.data.customPrompts },
+                    userContextConfig: { ...prev.userContextConfig, ...cloudResponse.data.userContextConfig }
                 }));
-                showStatusMessage('配置已加载', 'success');
+                showStatusMessage('配置已从云端加载', 'success');
+            } else {
+                // 降级：从本地存储加载并迁移到云端
+                console.log('云端配置不存在，尝试从本地加载并迁移...');
+                await migrateFromLocalToCloud();
             }
         } catch (error) {
             console.error('加载配置失败:', error);
             showStatusMessage('加载配置失败: ' + error.message, 'error');
+            
+            // 降级：尝试从本地加载
+            try {
+                const result = await chrome.storage.local.get(['customPrompts', 'userContextConfig']);
+                if (result.customPrompts || result.userContextConfig) {
+                    setConfigData(prev => ({
+                        customPrompts: { ...prev.customPrompts, ...result.customPrompts },
+                        userContextConfig: { ...prev.userContextConfig, ...result.userContextConfig }
+                    }));
+                    showStatusMessage('已从本地缓存加载配置', 'success');
+                }
+            } catch (localError) {
+                console.error('本地配置加载也失败:', localError);
+            }
+        }
+    };
+
+    // 🆕 数据迁移：从本地存储迁移到云端
+    const migrateFromLocalToCloud = async () => {
+        try {
+            const result = await chrome.storage.local.get(['customPrompts', 'userContextConfig']);
+            
+            if (result.customPrompts || result.userContextConfig) {
+                console.log('发现本地配置，开始迁移到云端...');
+                
+                const localConfig = {
+                    customPrompts: result.customPrompts || {},
+                    userContextConfig: result.userContextConfig || {}
+                };
+                
+                // 保存到云端
+                const migrateResponse = await chrome.runtime.sendMessage({
+                    type: 'STORE_INDEPENDENT_USER_CONFIG',
+                    config: localConfig
+                });
+                
+                if (migrateResponse && migrateResponse.success) {
+                    console.log('配置迁移到云端成功');
+                    
+                    // 加载迁移后的配置到界面
+                    setConfigData(prev => ({
+                        customPrompts: { ...prev.customPrompts, ...localConfig.customPrompts },
+                        userContextConfig: { ...prev.userContextConfig, ...localConfig.userContextConfig }
+                    }));
+                    
+                    // 删除本地配置（可选）
+                    try {
+                        await chrome.storage.local.remove(['customPrompts', 'userContextConfig']);
+                        console.log('本地配置已清理');
+                    } catch (cleanupError) {
+                        console.warn('清理本地配置失败:', cleanupError);
+                    }
+                    
+                    showStatusMessage('配置已迁移到云端', 'success');
+                } else {
+                    throw new Error(migrateResponse?.error || '迁移失败');
+                }
+            } else {
+                console.log('未发现本地配置，使用默认配置');
+                showStatusMessage('使用默认配置', 'success');
+            }
+        } catch (error) {
+            console.error('数据迁移失败:', error);
+            showStatusMessage('数据迁移失败: ' + error.message, 'error');
         }
     };
 
     const saveConfiguration = async () => {
         try {
             const updatedConfig = {
-                ...configData,
+                customPrompts: configData.customPrompts,
                 userContextConfig: {
                     ...configData.userContextConfig,
-                    lastUpdated: Date.now()
+                    lastUpdated: Date.now(),
+                    version: '1.0'
                 }
             };
             
-            await chrome.storage.local.set({
-                customPrompts: updatedConfig.customPrompts,
-                userContextConfig: updatedConfig.userContextConfig
+            console.log('保存配置到云端...', updatedConfig);
+            
+            // 🆕 保存到云端
+            const response = await chrome.runtime.sendMessage({
+                type: 'STORE_INDEPENDENT_USER_CONFIG',
+                config: updatedConfig
             });
             
-            setConfigData(updatedConfig);
-            showStatusMessage('配置已保存成功', 'success');
+            if (response && response.success) {
+                console.log('配置保存到云端成功');
+                setConfigData({
+                    customPrompts: updatedConfig.customPrompts,
+                    userContextConfig: updatedConfig.userContextConfig
+                });
+                showStatusMessage('配置已保存到云端', 'success');
+                
+                // 可选：同时保存到本地作为备份
+                try {
+                    await chrome.storage.local.set({
+                        customPrompts: updatedConfig.customPrompts,
+                        userContextConfig: updatedConfig.userContextConfig,
+                        cloudSyncTime: Date.now()
+                    });
+                    console.log('配置也已备份到本地');
+                } catch (localError) {
+                    console.warn('本地备份失败:', localError);
+                }
+            } else {
+                throw new Error(response?.error || '云端保存失败');
+            }
+            
         } catch (error) {
             console.error('保存配置失败:', error);
             showStatusMessage('保存配置失败: ' + error.message, 'error');
+            
+            // 降级：保存到本地
+            try {
+                console.log('降级到本地保存...');
+                await chrome.storage.local.set({
+                    customPrompts: configData.customPrompts,
+                    userContextConfig: {
+                        ...configData.userContextConfig,
+                        lastUpdated: Date.now()
+                    }
+                });
+                showStatusMessage('配置已保存到本地（云端暂不可用）', 'success');
+            } catch (localError) {
+                console.error('本地保存也失败:', localError);
+                showStatusMessage('配置保存完全失败: ' + localError.message, 'error');
+            }
+        }
+    };
+
+    // 🆕 触发数据融合到用户画像
+    const triggerDataFusion = async () => {
+        try {
+            console.log('开始将配置融合到用户画像...');
+            showStatusMessage('正在融合配置到用户画像...', 'success');
+            
+            const response = await chrome.runtime.sendMessage({
+                type: 'FUSE_USER_CONTEXT_CONFIG',
+                userContextConfig: configData.userContextConfig
+            });
+            
+            if (response && response.success) {
+                console.log('配置融合成功:', response.data);
+                showStatusMessage('配置已成功融合到用户画像', 'success');
+                
+                // 显示融合结果
+                if (response.data && response.data.fusedProfile) {
+                    console.log('融合后的用户画像:', response.data.fusedProfile);
+                    
+                    const message = `
+✅ 数据融合完成！
+
+显式偏好已整合到用户画像中：
+• 个人信息已融合
+• 工作上下文已融合
+• 沟通偏好已融合
+
+系统将基于这些显式输入与行为学习进行智能推荐。
+                    `.trim();
+                    
+                    alert(message);
+                }
+            } else {
+                throw new Error(response?.error || '融合失败');
+            }
+        } catch (error) {
+            console.error('数据融合失败:', error);
+            showStatusMessage('数据融合失败: ' + error.message, 'error');
         }
     };
 
@@ -578,6 +735,7 @@ const PromptConfig: React.FC = () => {
                 <div className="config-actions">
                     <button onClick={loadFromStorage} className="reload-btn">重新加载</button>
                     <button onClick={saveConfiguration} className="save-btn">保存配置</button>
+                    <button onClick={triggerDataFusion} className="fusion-btn">🔄 融合到用户画像</button>
                     <button onClick={resetToDefaults} className="reset-btn">重置默认</button>
                 </div>
             </div>
@@ -651,6 +809,20 @@ const PromptConfig: React.FC = () => {
 
                 .save-btn:hover {
                     background: #229954;
+                }
+
+                .fusion-btn {
+                    background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%);
+                    color: white;
+                    font-weight: 600;
+                    transition: all 0.2s ease;
+                    box-shadow: 0 2px 4px rgba(255, 152, 0, 0.3);
+                }
+                
+                .fusion-btn:hover {
+                    background: linear-gradient(135deg, #F57C00 0%, #FF9800 100%);
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 8px rgba(255, 152, 0, 0.4);
                 }
 
                 .reload-btn {

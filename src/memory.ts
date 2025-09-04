@@ -1358,6 +1358,120 @@ export class MemorySystem {
   }
 
   /**
+   * 🆕 融合用户上下文配置到用户画像
+   */
+  async fuseUserContextConfig(userContextConfig: any): Promise<boolean> {
+    this.ensureInitialized();
+    
+    if (!this.userProfileManager) {
+      return false;
+    }
+    
+    try {
+      const success = await this.userProfileManager.fuseUserContextConfig(userContextConfig);
+      if (success) {
+        // 融合成功后执行自适应权重调整
+        await this.userProfileManager.adaptiveWeightAdjustment();
+      }
+      return success;
+    } catch (error) {
+      console.error('融合用户上下文配置失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 🆕 执行权重自适应调整
+   */
+  async adaptiveWeightAdjustment(): Promise<void> {
+    this.ensureInitialized();
+    
+    if (this.userProfileManager) {
+      try {
+        await this.userProfileManager.adaptiveWeightAdjustment();
+      } catch (error) {
+        console.error('权重自适应调整失败:', error);
+      }
+    }
+  }
+
+  /**
+   * 🆕 获取融合后的用户画像
+   * 返回应用了加权融合算法的兴趣列表
+   */
+  async getFusedUserProfile(): Promise<{ 
+    profile: any | null, 
+    analysis: any | null,
+    fusedInterests: any
+  }> {
+    this.ensureInitialized();
+    
+    if (!this.userProfileManager) {
+      return { profile: null, analysis: null, fusedInterests: null };
+    }
+    
+    try {
+      const { profile, analysis } = await this.getUserProfile();
+      
+      if (!profile) {
+        return { profile: null, analysis: null, fusedInterests: null };
+      }
+
+      // 应用加权融合算法到各个兴趣类别
+      const fusedInterests = {
+        projects: this.userProfileManager.getFusedInterestItems(profile.interests.projects || [] as any),
+        people: this.userProfileManager.getFusedInterestItems(profile.interests.people || [] as any),
+        topics: this.userProfileManager.getFusedInterestItems(profile.interests.topics || [] as any),
+        jiraTickets: this.userProfileManager.getFusedInterestItems(profile.interests.jiraTickets || [] as any),
+        technologies: this.userProfileManager.getFusedInterestItems(profile.interests.technologies || [] as any),
+        documents: this.userProfileManager.getFusedInterestItems(profile.interests.documents || [] as any)
+      };
+
+      return {
+        profile: {
+          ...profile,
+          interests: fusedInterests
+        },
+        analysis,
+        fusedInterests
+      };
+    } catch (error) {
+      console.error('获取融合用户画像失败:', error);
+      return { profile: null, analysis: null, fusedInterests: null };
+    }
+  }
+
+  /**
+   * 🆕 存储独立用户配置到云端
+   */
+  async storeIndependentUserConfig(config: any): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      const success = await this.cloudStorage.storeIndependentUserConfig(config);
+      return success;
+    } catch (error) {
+      console.error('存储独立用户配置失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 🆕 获取独立用户配置
+   */
+  async getIndependentUserConfig(): Promise<any | null> {
+    this.ensureInitialized();
+
+    try {
+      const config = await this.cloudStorage.getIndependentUserConfig();
+      return config;
+    } catch (error) {
+      console.error('获取独立用户配置失败:', error);
+      return null;
+    }
+  }
+
+  /**
    * 获取最后同步时间
    */
   async getLastSyncTime(): Promise<number> {

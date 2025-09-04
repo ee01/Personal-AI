@@ -2954,4 +2954,88 @@ export class CloudStorage {
       console.error('🚨 更新实体关联数据过程中发生错误:', error);
     }
   }
+
+  /**
+   * 🆕 存储独立用户配置（自定义Prompt和分析偏好）
+   */
+  async storeIndependentUserConfig(config: any): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-user-config`);
+      if (!collection) {
+        console.warn('用户配置集合不存在，尝试创建...');
+        // 尝试创建集合
+        try {
+          await this.client.createCollection({
+            name: `${this.username}-user-config`,
+            metadata: { type: 'user-config' }
+          });
+          this.collections.set(`${this.username}-user-config`, 
+            await this.client.getCollection({ name: `${this.username}-user-config` }));
+        } catch (createError) {
+          console.error('创建用户配置集合失败:', createError);
+          return false;
+        }
+      }
+
+      const configCollection = this.collections.get(`${this.username}-user-config`);
+      const configId = `config-${this.username}`;
+      const embedding = await getEmbeddingViaOffscreen(`user config: ${JSON.stringify(config).substring(0, 100)}`);
+
+      await configCollection.upsert({
+        ids: [configId],
+        documents: [`User configuration for ${this.username}`],
+        embeddings: [embedding],
+        metadatas: [{
+          userId: this.username,
+          configType: 'independent_user_config',
+          lastUpdated: Date.now(),
+          version: config.version || '1.0',
+          configData: JSON.stringify(config)
+        }]
+      });
+
+      console.log('独立用户配置已存储到云端');
+      return true;
+    } catch (error) {
+      console.error('存储独立用户配置失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 🆕 获取独立用户配置
+   */
+  async getIndependentUserConfig(): Promise<any | null> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-user-config`);
+      if (!collection) {
+        console.log('用户配置集合不存在');
+        return null;
+      }
+
+      const configId = `config-${this.username}`;
+      const result = await collection.get({
+        ids: [configId],
+        include: ['metadatas']
+      });
+
+      if (result.metadatas && result.metadatas.length > 0) {
+        const metadata = result.metadatas[0];
+        if (metadata && metadata.configData) {
+          console.log('从云端获取独立用户配置成功');
+          return JSON.parse(metadata.configData as string);
+        }
+      }
+
+      console.log('云端未找到独立用户配置');
+      return null;
+    } catch (error) {
+      console.error('获取独立用户配置失败:', error);
+      return null;
+    }
+  }
 }
