@@ -223,9 +223,9 @@ export class IntelligentAgent {
     userProfile?: any;
     userProfileAnalysis?: any;
   }> {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve) => {
       // 获取基础配置和用户画像信息
-      const [configResult, profileResult] = await Promise.all([
+      Promise.all([
         new Promise<any>((resolveConfig) => {
           chrome.storage.local.get(['customPrompts', 'userContextConfig'], resolveConfig);
         }),
@@ -239,7 +239,7 @@ export class IntelligentAgent {
             }
           });
         })
-      ]);
+      ]).then(([configResult, profileResult]) => {
         const defaultConfig = {
           customPrompts: {
             messageAnalysis: '',
@@ -309,6 +309,7 @@ export class IntelligentAgent {
           userProfile: profileResult.profile,
           userProfileAnalysis: profileResult.analysis
         });
+      });
     });
   }
 

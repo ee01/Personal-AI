@@ -1,7 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
-import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
+import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig, parseChromaConfig } from './utils';
 import { agentCoordinator } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
@@ -451,14 +451,14 @@ const Options = () => {
                 {config.ENABLE_CHROMA && (
                     <>
                         <div className="form-group">
-                            <label htmlFor="CHROMA_API_URL">Chroma API URL</label>
+                            <label htmlFor="CHROMA_HOST">Chroma 主机地址</label>
                             <input
                                 type="text"
-                                id="CHROMA_API_URL"
-                                name="CHROMA_API_URL"
-                                value={config.CHROMA_API_URL}
+                                id="CHROMA_HOST"
+                                name="CHROMA_HOST"
+                                value={config.CHROMA_HOST}
                                 onChange={handleInputChange}
-                                placeholder="http://localhost:8000"
+                                placeholder="localhost"
                             />
                         </div>
 
@@ -470,7 +470,36 @@ const Options = () => {
                                 name="CHROMA_PORT"
                                 value={config.CHROMA_PORT}
                                 onChange={handleInputChange}
+                                placeholder="8000"
                             />
+                        </div>
+
+                        <div className="form-group">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="CHROMA_SSL"
+                                    checked={config.CHROMA_SSL}
+                                    onChange={handleInputChange}
+                                />
+                                启用 SSL 连接
+                            </label>
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="CHROMA_API_URL">Chroma API URL (兼容旧配置)</label>
+                            <input
+                                type="text"
+                                id="CHROMA_API_URL"
+                                name="CHROMA_API_URL"
+                                value={config.CHROMA_API_URL}
+                                onChange={handleInputChange}
+                                placeholder="http://localhost:8000"
+                                style={{ opacity: 0.7 }}
+                            />
+                            <small style={{ color: '#666', fontSize: '12px' }}>
+                                此字段用于兼容旧配置，推荐使用上方的主机地址和端口配置
+                            </small>
                         </div>
 
                         <div className="form-group">
@@ -990,11 +1019,15 @@ const PlaceholderCleanupTool = () => {
     const [backupEntities, setBackupEntities] = useState<any[]>([]);
     const [showDetails, setShowDetails] = useState(false);
     const [showBackupDetails, setShowBackupDetails] = useState(false);
-    const [chromaUrl, setChromaUrl] = useState('http://10.32.56.212:8000');
+    const [chromaConfig, setChromaConfig] = useState({
+        host: '10.32.56.212',
+        port: 8000,
+        ssl: false
+    });
 
     // 占位符清理器类
     class PlaceholderCleaner {
-        constructor(private chromaUrl: string) {}
+        constructor(private chromaConfig: { host: string; port: number; ssl: boolean }) {}
 
         async getUserInfo() {
             try {
@@ -1095,12 +1128,14 @@ const PlaceholderCleanupTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端，请确保应用正在运行');
             }
 
-            const cleaner = new PlaceholderCleaner(chromaUrl);
+            const cleaner = new PlaceholderCleaner(chromaConfig);
             const userinfo = await cleaner.getUserInfo();
 
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             // 测试连接
@@ -1206,12 +1241,14 @@ const PlaceholderCleanupTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端');
             }
 
-            const cleaner = new PlaceholderCleaner(chromaUrl);
+            const cleaner = new PlaceholderCleaner(chromaConfig);
             const userinfo = await cleaner.getUserInfo();
 
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             // 获取实体集合
@@ -1291,12 +1328,14 @@ const PlaceholderCleanupTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端');
             }
 
-            const cleaner = new PlaceholderCleaner(chromaUrl);
+            const cleaner = new PlaceholderCleaner(chromaConfig);
             const userinfo = await cleaner.getUserInfo();
 
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             // 获取实体集合
@@ -1356,14 +1395,36 @@ const PlaceholderCleanupTool = () => {
     return (
         <div className="placeholder-cleanup-tool">
             <div className="form-group">
-                <label htmlFor="chromaUrl">ChromaDB 地址</label>
+                <label htmlFor="chromaHost">ChromaDB 主机地址</label>
                 <input
                     type="text"
-                    id="chromaUrl"
-                    value={chromaUrl}
-                    onChange={(e) => setChromaUrl(e.target.value)}
-                    placeholder="http://localhost:8000"
+                    id="chromaHost"
+                    value={chromaConfig.host}
+                    onChange={(e) => setChromaConfig(prev => ({...prev, host: e.target.value}))}
+                    placeholder="localhost"
                 />
+            </div>
+
+            <div className="form-group">
+                <label htmlFor="chromaPort">ChromaDB 端口</label>
+                <input
+                    type="number"
+                    id="chromaPort"
+                    value={chromaConfig.port}
+                    onChange={(e) => setChromaConfig(prev => ({...prev, port: parseInt(e.target.value) || 8000}))}
+                    placeholder="8000"
+                />
+            </div>
+
+            <div className="form-group">
+                <label>
+                    <input
+                        type="checkbox"
+                        checked={chromaConfig.ssl}
+                        onChange={(e) => setChromaConfig(prev => ({...prev, ssl: e.target.checked}))}
+                    />
+                    启用 SSL 连接
+                </label>
             </div>
 
             <div className="cleanup-actions">

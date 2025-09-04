@@ -6,7 +6,7 @@
 import { ChromaClient, Collection, EmbeddingFunction } from 'chromadb';
 import { v4 as uuidv4 } from 'uuid';
 import { getEmbeddingViaOffscreen } from '../embeddings';
-import { getEnvConfig } from '../utils';
+import { getEnvConfig, parseChromaConfig } from '../utils';
 import { QueryResult, VectorSearchOptions, QueryOptions } from '../memory';
 import { memorySystem } from '../memory';
 import { randomBytes } from 'crypto';
@@ -165,6 +165,19 @@ export interface MemoryMessage {
 }
 // GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
+import { 
+  VectorizedRecord, 
+  VectorizedQueryOptions, 
+  VectorizedQueryResult,
+  InterestItemRecord,
+  BehaviorPatternRecord,
+  SocialRelationshipRecord,
+  ExpertiseAreaRecord,
+  UserSummaryRecord,
+  UserSimilarityResult,
+  VectorMaintenanceConfig,
+  VectorStorageStats
+} from '../types/vectorizedUserProfile';
 
 export interface CloudStorageConfig {
   chromaUrl: string;
@@ -195,6 +208,25 @@ export class CloudStorage {
   private isInitialized = false;
   // 实体相似度阈值配置
   private entitySimilarityThreshold = 0.85; // 相似度阈值，超过此值认为是同一实体
+  
+  // 向量化用户画像维护配置
+  private vectorMaintenanceConfig: VectorMaintenanceConfig = {
+    cleanup_thresholds: {
+      min_weight: 0.01,
+      max_age_days: 180,
+      min_access_count: 1
+    },
+    aggregation_rules: {
+      enable_auto_summary: true,
+      summary_frequency_days: 7,
+      max_records_per_user: 1000
+    },
+    vector_update: {
+      enable_batch_update: true,
+      batch_size: 50,
+      update_frequency_hours: 24
+    }
+  };
 
   constructor() {
     this.config = {
@@ -223,8 +255,11 @@ export class CloudStorage {
       this.username = userinfo.username;
 
       // 初始化 ChromaDB 客户端
+      const chromaConfig = parseChromaConfig(envConfig);
       this.client = new ChromaClient({
-        path: envConfig.CHROMA_API_URL || this.config.chromaUrl
+        host: chromaConfig.host,
+        port: chromaConfig.port,
+        ssl: chromaConfig.ssl
       });
 
       // 初始化集合
@@ -1699,6 +1734,608 @@ export class CloudStorage {
       return null;
     } catch (error) {
       console.error('从云端获取用户画像失败:', error);
+      return null;
+    }
+  }
+
+  // =====================================
+  // 🆕 向量化用户画像存储方法
+  // =====================================
+
+  /**
+   * 存储向量化用户画像记录
+   */
+  async storeVectorizedRecord(record: VectorizedRecord): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      let collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        collection = await this.client!.getOrCreateCollection({
+          name: collectionName,
+          metadata: { type: 'vectorized_user_profiles', "hnsw:space": "cosine" },
+          embeddingFunction: new NullEmbeddingFunction()
+        });
+        this.collections.set(collectionName, collection);
+      }
+
+      // 生成嵌入向量（如果没有提供）
+      let embedding = record.embedding;
+      if (!embedding) {
+        embedding = await getEmbeddingViaOffscreen(record.document);
+      }
+
+      // 存储记录
+      await collection.upsert({
+        ids: [record.id],
+        documents: [record.document],
+        embeddings: [embedding],
+        metadatas: [record.metadata as any]
+      });
+
+      console.log(`✅ 向量化记录 ${record.id} 已存储`);
+      return true;
+    } catch (error) {
+      console.error('存储向量化记录失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 批量存储向量化记录
+   */
+  async storeVectorizedRecordsBatch(records: VectorizedRecord[]): Promise<number> {
+    this.ensureInitialized();
+
+    let successCount = 0;
+    const batchSize = this.vectorMaintenanceConfig.vector_update.batch_size;
+    
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+      
+      try {
+        const collectionName = `${this.username}-userprofiles`;
+        let collection = this.collections.get(collectionName);
+        
+        if (!collection) {
+          collection = await this.client!.getOrCreateCollection({
+            name: collectionName,
+            metadata: { type: 'vectorized_user_profiles', "hnsw:space": "cosine" },
+            embeddingFunction: new NullEmbeddingFunction()
+          });
+          this.collections.set(collectionName, collection);
+        }
+
+        // 准备批量数据
+        const ids = batch.map(r => r.id);
+        const documents = batch.map(r => r.document);
+        const metadatas = batch.map(r => r.metadata);
+        
+        // 生成嵌入向量
+        const embeddings = await Promise.all(
+          batch.map(r => r.embedding || getEmbeddingViaOffscreen(r.document))
+        );
+
+        // 批量存储
+        await collection.upsert({
+          ids,
+          documents,
+          embeddings,
+          metadatas: metadatas as any[]
+        });
+
+        successCount += batch.length;
+        console.log(`✅ 批量存储 ${batch.length} 条向量化记录`);
+      } catch (error) {
+        console.error(`批量存储失败 (batch ${Math.floor(i / batchSize) + 1}):`, error);
+      }
+    }
+
+    return successCount;
+  }
+
+  /**
+   * 查询向量化记录
+   */
+  async queryVectorizedRecords(
+    query: string, 
+    options: VectorizedQueryOptions = {}
+  ): Promise<VectorizedQueryResult> {
+    this.ensureInitialized();
+
+    const startTime = Date.now();
+    const {
+      record_types,
+      user_id,
+      limit = 20,
+      similarity_threshold = 0.5,
+      time_range,
+      metadata_filters = {},
+      sort_by = 'similarity',
+      sort_order = 'desc'
+    } = options;
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      const collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        return {
+          records: [],
+          total_count: 0,
+          query_metadata: {
+            query_time: Date.now(),
+            processing_time_ms: Date.now() - startTime
+          }
+        };
+      }
+
+      // 构建查询条件
+      const whereCondition: any = { ...metadata_filters };
+      
+      if (user_id) {
+        whereCondition.user_id = user_id;
+      }
+      
+      if (record_types && record_types.length > 0) {
+        whereCondition.record_type = { $in: record_types };
+      }
+      
+      if (time_range) {
+        whereCondition.updated_at = {
+          $gte: time_range.start,
+          $lte: time_range.end
+        };
+      }
+
+      // 生成查询向量
+      const queryEmbedding = await getEmbeddingViaOffscreen(query);
+
+      // 执行向量搜索
+      const searchResult = await collection.query({
+        queryEmbeddings: [queryEmbedding],
+        nResults: limit * 2, // 获取更多结果用于过滤
+        where: Object.keys(whereCondition).length > 0 ? whereCondition : undefined,
+        include: ['documents', 'metadatas', 'distances']
+      });
+
+      // 处理结果
+      const records: VectorizedRecord[] = [];
+      const similarities: number[] = [];
+      
+      if (searchResult.documents && searchResult.metadatas && searchResult.distances) {
+        for (let i = 0; i < searchResult.documents[0].length; i++) {
+          const distance = searchResult.distances[0][i];
+          const similarity = 1 - distance; // 转换距离为相似度
+          
+          if (similarity >= similarity_threshold) {
+            records.push({
+              id: searchResult.ids?.[0][i] as string,
+              document: searchResult.documents[0][i],
+              metadata: searchResult.metadatas[0][i] as any
+            });
+            similarities.push(similarity);
+          }
+        }
+      }
+
+      // 排序
+      if (sort_by === 'similarity') {
+        const combined = records.map((record, index) => ({ record, similarity: similarities[index] }));
+        combined.sort((a, b) => sort_order === 'desc' ? b.similarity - a.similarity : a.similarity - b.similarity);
+        const sortedRecords = combined.map(item => item.record);
+        const sortedSimilarities = combined.map(item => item.similarity);
+        
+        return {
+          records: sortedRecords.slice(0, limit),
+          total_count: sortedRecords.length,
+          query_metadata: {
+            query_time: Date.now(),
+            similarity_scores: sortedSimilarities.slice(0, limit),
+            processing_time_ms: Date.now() - startTime
+          }
+        };
+      }
+
+      return {
+        records: records.slice(0, limit),
+        total_count: records.length,
+        query_metadata: {
+          query_time: Date.now(),
+          similarity_scores: similarities.slice(0, limit),
+          processing_time_ms: Date.now() - startTime
+        }
+      };
+    } catch (error) {
+      console.error('查询向量化记录失败:', error);
+      return {
+        records: [],
+        total_count: 0,
+        query_metadata: {
+          query_time: Date.now(),
+          processing_time_ms: Date.now() - startTime
+        }
+      };
+    }
+  }
+
+  /**
+   * 查找相似用户
+   */
+  async findSimilarUsers(
+    currentUserId: string,
+    query: string,
+    options: { 
+      record_types?: string[];
+      limit?: number;
+      similarity_threshold?: number;
+    } = {}
+  ): Promise<UserSimilarityResult[]> {
+    const { record_types, limit = 10, similarity_threshold = 0.6 } = options;
+
+    const queryResult = await this.queryVectorizedRecords(query, {
+      record_types: record_types as any,
+      limit: 100,
+      similarity_threshold,
+      metadata_filters: {
+        user_id: { $ne: currentUserId }
+      }
+    });
+
+    // 按用户聚合结果
+    const userMatches = new Map<string, {
+      similarity_scores: number[];
+      matching_categories: Set<string>;
+      matching_items: string[];
+    }>();
+
+    queryResult.records.forEach((record, index) => {
+      const userId = record.metadata.user_id;
+      const similarity = queryResult.query_metadata.similarity_scores?.[index] || 0;
+      
+      if (!userMatches.has(userId)) {
+        userMatches.set(userId, {
+          similarity_scores: [],
+          matching_categories: new Set(),
+          matching_items: []
+        });
+      }
+      
+      const userMatch = userMatches.get(userId)!;
+      userMatch.similarity_scores.push(similarity);
+      userMatch.matching_categories.add(record.metadata.record_type);
+      
+      if ('name' in record.metadata) {
+        userMatch.matching_items.push((record.metadata as any).name);
+      }
+    });
+
+    // 计算综合相似度并格式化结果
+    const results: UserSimilarityResult[] = [];
+    
+    for (const [userId, matches] of Array.from(userMatches.entries())) {
+      const avgSimilarity = matches.similarity_scores.reduce((sum: number, score: number) => sum + score, 0) / matches.similarity_scores.length;
+      
+      results.push({
+        user_id: userId,
+        similarity_score: avgSimilarity,
+        matching_categories: Array.from(matches.matching_categories).map(category => ({
+          category: category as string,
+          similarity: avgSimilarity,
+          matching_items: matches.matching_items
+        })),
+        total_matches: matches.similarity_scores.length
+      });
+    }
+
+    return results
+      .sort((a, b) => b.similarity_score - a.similarity_score)
+      .slice(0, limit);
+  }
+
+  /**
+   * 删除用户的向量化记录
+   */
+  async deleteUserVectorizedRecords(userId: string): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      const collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        return true; // 集合不存在，认为删除成功
+      }
+
+      // 查找用户的所有记录
+      const userRecords = await collection.get({
+        where: { user_id: userId },
+        include: ['metadatas']
+      });
+
+      if (userRecords.ids && userRecords.ids.length > 0) {
+        // 批量删除
+        await collection.delete({
+          ids: userRecords.ids
+        });
+        
+        console.log(`🗑️ 删除用户 ${userId} 的 ${userRecords.ids.length} 条向量化记录`);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('删除用户向量化记录失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 获取向量化存储统计信息
+   */
+  async getVectorStorageStats(): Promise<VectorStorageStats> {
+    this.ensureInitialized();
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      const collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        return {
+          total_records: 0,
+          records_by_type: {},
+          records_by_user: {},
+          storage_size_mb: 0,
+          last_maintenance: 0,
+          health_score: 1.0
+        };
+      }
+
+      // 获取所有记录的元数据
+      const allRecords = await collection.get({
+        include: ['metadatas']
+      });
+
+      const stats: VectorStorageStats = {
+        total_records: allRecords.ids?.length || 0,
+        records_by_type: {},
+        records_by_user: {},
+        storage_size_mb: 0,
+        last_maintenance: 0,
+        health_score: 1.0
+      };
+
+      if (allRecords.metadatas) {
+        allRecords.metadatas.forEach(metadata => {
+          const meta = metadata as any;
+          
+          // 按类型统计
+          const recordType = meta.record_type || 'unknown';
+          stats.records_by_type[recordType] = (stats.records_by_type[recordType] || 0) + 1;
+          
+          // 按用户统计
+          const userId = meta.user_id || 'unknown';
+          stats.records_by_user[userId] = (stats.records_by_user[userId] || 0) + 1;
+        });
+      }
+
+      // 估算存储大小（简化计算）
+      stats.storage_size_mb = Math.round(stats.total_records * 0.1); // 假设每条记录约0.1MB
+
+      // 计算健康度（基于记录分布和完整性）
+      const typeCount = Object.keys(stats.records_by_type).length;
+      const userCount = Object.keys(stats.records_by_user).length;
+      stats.health_score = Math.min(1.0, (typeCount * userCount) / (stats.total_records || 1));
+
+      return stats;
+    } catch (error) {
+      console.error('获取向量化存储统计失败:', error);
+      return {
+        total_records: 0,
+        records_by_type: {},
+        records_by_user: {},
+        storage_size_mb: 0,
+        last_maintenance: 0,
+        health_score: 0
+      };
+    }
+  }
+
+  /**
+   * 向量化数据维护
+   */
+  async performVectorMaintenance(): Promise<{
+    cleaned_records: number;
+    updated_records: number;
+    created_summaries: number;
+    errors: string[];
+  }> {
+    this.ensureInitialized();
+
+    const result = {
+      cleaned_records: 0,
+      updated_records: 0,
+      created_summaries: 0,
+      errors: [] as string[]
+    };
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      const collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        return result;
+      }
+
+      console.log('🔧 开始向量化数据维护...');
+
+      // 1. 清理过期/低权重记录
+      try {
+        const cleanupThreshold = Date.now() - (this.vectorMaintenanceConfig.cleanup_thresholds.max_age_days * 24 * 60 * 60 * 1000);
+        
+        const oldRecords = await collection.get({
+          where: {
+            $or: [
+              { updated_at: { $lt: cleanupThreshold } },
+              { current_weight: { $lt: this.vectorMaintenanceConfig.cleanup_thresholds.min_weight } }
+            ]
+          },
+          include: ['metadatas']
+        });
+
+        if (oldRecords.ids && oldRecords.ids.length > 0) {
+          await collection.delete({ ids: oldRecords.ids });
+          result.cleaned_records = oldRecords.ids.length;
+          console.log(`🗑️ 清理了 ${result.cleaned_records} 条过期记录`);
+        }
+      } catch (error) {
+        result.errors.push(`清理记录失败: ${error}`);
+      }
+
+      // 2. 更新向量表示（重新计算embedding）
+      if (this.vectorMaintenanceConfig.vector_update.enable_batch_update) {
+        try {
+          // 找到需要更新的记录（这里简化为随机选择部分记录）
+          const allRecords = await collection.get({
+            limit: this.vectorMaintenanceConfig.vector_update.batch_size,
+            include: ['documents', 'metadatas']
+          });
+
+          if (allRecords.documents && allRecords.metadatas && allRecords.ids) {
+            const updatedEmbeddings = await Promise.all(
+              (allRecords.documents[0] as unknown as string[]).map((doc: string) => getEmbeddingViaOffscreen(doc))
+            );
+
+            await collection.upsert({
+              ids: allRecords.ids as string[],
+              documents: allRecords.documents[0] as unknown as string[],
+              embeddings: updatedEmbeddings,
+              metadatas: allRecords.metadatas[0] as unknown as any[]
+            });
+
+            result.updated_records = allRecords.ids.length;
+            console.log(`🔄 更新了 ${result.updated_records} 条记录的向量表示`);
+          }
+        } catch (error) {
+          result.errors.push(`更新向量失败: ${error}`);
+        }
+      }
+
+      // 3. 生成用户概要记录
+      if (this.vectorMaintenanceConfig.aggregation_rules.enable_auto_summary) {
+        try {
+          const userStats = await this.getVectorStorageStats();
+          
+          for (const userId of Object.keys(userStats.records_by_user)) {
+            // 检查是否需要创建或更新概要
+            const existingSummary = await collection.get({
+              where: {
+                user_id: userId,
+                record_type: 'user_summary'
+              },
+              limit: 1
+            });
+
+            if (!existingSummary.ids || existingSummary.ids.length === 0) {
+              // 创建新的用户概要
+              const summaryRecord = await this.generateUserSummaryRecord(userId);
+              if (summaryRecord) {
+                await this.storeVectorizedRecord(summaryRecord);
+                result.created_summaries++;
+              }
+            }
+          }
+          
+          console.log(`📊 创建了 ${result.created_summaries} 个用户概要记录`);
+        } catch (error) {
+          result.errors.push(`生成概要失败: ${error}`);
+        }
+      }
+
+      console.log('✅ 向量化数据维护完成');
+      return result;
+    } catch (error) {
+      console.error('向量化数据维护失败:', error);
+      result.errors.push(`维护过程失败: ${error}`);
+      return result;
+    }
+  }
+
+  /**
+   * 生成用户概要记录
+   */
+  private async generateUserSummaryRecord(userId: string): Promise<UserSummaryRecord | null> {
+    try {
+      // 获取用户的所有记录
+      const userRecords = await this.queryVectorizedRecords('', {
+        user_id: userId,
+        limit: 1000,
+        record_types: ['interest_item', 'behavior_pattern', 'social_relationship', 'expertise_area']
+      });
+
+      if (userRecords.records.length === 0) {
+        return null;
+      }
+
+      // 统计分析
+      const recordsByType = userRecords.records.reduce((acc, record) => {
+        const type = record.metadata.record_type;
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+      // 计算权重分布
+      const weights = userRecords.records
+        .map(r => (r.metadata as any).current_weight)
+        .filter(w => typeof w === 'number');
+      
+      const weightDistribution = {
+        high_weight_items: weights.filter(w => w > 0.7).length,
+        medium_weight_items: weights.filter(w => w >= 0.3 && w <= 0.7).length,
+        low_weight_items: weights.filter(w => w < 0.3).length
+      };
+
+      // 生成概要文本
+      const summaryText = `用户 ${userId} 的画像概要：
+        总记录数: ${userRecords.records.length}
+        记录类型分布: ${Object.entries(recordsByType).map(([type, count]) => `${type}: ${count}`).join(', ')}
+        权重分布: 高权重${weightDistribution.high_weight_items}项, 中权重${weightDistribution.medium_weight_items}项, 低权重${weightDistribution.low_weight_items}项
+        活跃领域: ${Object.keys(recordsByType).join(', ')}`;
+
+      const summaryRecord: UserSummaryRecord = {
+        id: `${userId}_summary_${Date.now()}`,
+        document: summaryText,
+        metadata: {
+          record_type: 'user_summary',
+          summary_type: 'overall',
+          user_id: userId,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          total_records: userRecords.records.length,
+          summary_period: {
+            start: Math.min(...userRecords.records.map(r => r.metadata.created_at)),
+            end: Date.now()
+          },
+          weight_distribution: weightDistribution,
+          activity_metrics: {
+            daily_average_interactions: weights.length / 30, // 简化计算
+            peak_activity_hours: [],
+            most_active_categories: Object.keys(recordsByType)
+          },
+          growth_trends: {
+            new_interests_per_month: 0,
+            skill_development_rate: 0,
+            social_network_growth: 0
+          },
+          auto_generated: true,
+          generation_algorithm: 'v1.0'
+        }
+      };
+
+      return summaryRecord;
+    } catch (error) {
+      console.error('生成用户概要记录失败:', error);
       return null;
     }
   }

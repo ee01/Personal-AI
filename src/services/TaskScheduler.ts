@@ -7,6 +7,7 @@ import { memorySystem } from '../memory';
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../background';
 import { analyzeMessages } from '../messageDealing';
 import { getEnvConfig } from '../utils';
+import { CloudStorage } from '../storage/CloudStorage';
 
 // 任务类型定义
 export interface ScheduledTask {
@@ -53,6 +54,30 @@ const TASK_DEFINITIONS: ScheduledTask[] = [
     intervalMinutes: 1440, // 24小时间隔
     description: '执行用户画像权重的自然衰变',
     enabled: true
+  },
+  {
+    id: 'vectorized_data_maintenance',
+    name: '向量化数据维护',
+    category: 'user_profile',
+    intervalMinutes: 720, // 12小时间隔
+    description: '清理过期向量记录，更新嵌入向量，生成用户概要',
+    enabled: true
+  },
+  {
+    id: 'user_summary_generation',
+    name: '用户概要生成',
+    category: 'user_profile',
+    intervalMinutes: 10080, // 7天间隔
+    description: '定期生成和更新用户行为概要记录',
+    enabled: true
+  },
+  {
+    id: 'vector_quality_check',
+    name: '向量质量检查',
+    category: 'system_maintenance',
+    intervalMinutes: 4320, // 3天间隔
+    description: '检查向量数据质量，修复异常记录',
+    enabled: true
   }
 ];
 
@@ -61,9 +86,11 @@ export class TaskScheduler {
   private tasks: Map<string, ScheduledTask> = new Map();
   private alarmListeners: Set<string> = new Set();
   private isInitialized = false;
+  private cloudStorage: CloudStorage | null = null;
 
   private constructor() {
     this.initializeTasks();
+    this.cloudStorage = new CloudStorage();
   }
 
   /**
@@ -222,6 +249,15 @@ export class TaskScheduler {
         case 'user_profile_decay':
           await this.executeUserProfileDecay();
           break;
+        case 'vectorized_data_maintenance':
+          await this.executeVectorizedDataMaintenance();
+          break;
+        case 'user_summary_generation':
+          await this.executeUserSummaryGeneration();
+          break;
+        case 'vector_quality_check':
+          await this.executeVectorQualityCheck();
+          break;
         default:
           console.warn(`⚠️ 未知任务类型: ${task.id}`);
       }
@@ -256,7 +292,7 @@ export class TaskScheduler {
       }
 
       // 获取用户信息
-      let { userinfo } = await chrome.storage.local.get(['userinfo']);
+      const { userinfo } = await chrome.storage.local.get(['userinfo']);
       if (!userinfo || userinfo.fullName === '') {
         // 如果没有用户信息，跳过此次分析
         console.log('📝 用户信息不完整，跳过消息分析');
@@ -326,6 +362,165 @@ export class TaskScheduler {
       console.log('🧠 用户画像权重衰变任务执行完成');
     } catch (error) {
       console.error('❌ 用户画像权重衰变任务失败:', error);
+    }
+  }
+
+  /**
+   * 执行向量化数据维护任务
+   */
+  private async executeVectorizedDataMaintenance(): Promise<void> {
+    try {
+      if (!this.cloudStorage) {
+        console.log('⚠️ CloudStorage 未初始化，跳过向量化数据维护');
+        return;
+      }
+
+      // 确保CloudStorage已连接
+      const isConnected = await this.cloudStorage.isConnected();
+      if (!isConnected) {
+        console.log('⚠️ CloudStorage 未连接，跳过向量化数据维护');
+        return;
+      }
+
+      console.log('🔧 开始向量化数据维护...');
+      
+      // 执行维护操作
+      const result = await this.cloudStorage.performVectorMaintenance();
+      
+      console.log('✅ 向量化数据维护完成:', {
+        cleaned_records: result.cleaned_records,
+        updated_records: result.updated_records,
+        created_summaries: result.created_summaries,
+        errors: result.errors.length
+      });
+
+      if (result.errors.length > 0) {
+        console.warn('⚠️ 维护过程中出现错误:', result.errors);
+      }
+    } catch (error) {
+      console.error('❌ 向量化数据维护任务失败:', error);
+    }
+  }
+
+  /**
+   * 执行用户概要生成任务
+   */
+  private async executeUserSummaryGeneration(): Promise<void> {
+    try {
+      if (!this.cloudStorage) {
+        console.log('⚠️ CloudStorage 未初始化，跳过用户概要生成');
+        return;
+      }
+
+      const isConnected = await this.cloudStorage.isConnected();
+      if (!isConnected) {
+        console.log('⚠️ CloudStorage 未连接，跳过用户概要生成');
+        return;
+      }
+
+      console.log('📊 开始用户概要生成...');
+      
+      // 获取存储统计信息
+      const stats = await this.cloudStorage.getVectorStorageStats();
+      
+      console.log('📈 当前向量存储统计:', {
+        total_records: stats.total_records,
+        users: Object.keys(stats.records_by_user).length,
+        types: Object.keys(stats.records_by_type).length,
+        health_score: stats.health_score
+      });
+
+      // 检查是否需要进行概要更新（这里通过维护任务触发）
+      if (stats.total_records > 0) {
+        const maintenanceResult = await this.cloudStorage.performVectorMaintenance();
+        console.log(`📊 概要生成完成，创建了 ${maintenanceResult.created_summaries} 个新概要`);
+      }
+    } catch (error) {
+      console.error('❌ 用户概要生成任务失败:', error);
+    }
+  }
+
+  /**
+   * 执行向量质量检查任务
+   */
+  private async executeVectorQualityCheck(): Promise<void> {
+    try {
+      if (!this.cloudStorage) {
+        console.log('⚠️ CloudStorage 未初始化，跳过向量质量检查');
+        return;
+      }
+
+      const isConnected = await this.cloudStorage.isConnected();
+      if (!isConnected) {
+        console.log('⚠️ CloudStorage 未连接，跳过向量质量检查');
+        return;
+      }
+
+      console.log('🔍 开始向量质量检查...');
+      
+      // 获取存储统计信息
+      const stats = await this.cloudStorage.getVectorStorageStats();
+      
+      // 质量检查指标
+      const qualityChecks = {
+        total_records: stats.total_records,
+        health_score: stats.health_score,
+        type_distribution: stats.records_by_type,
+        user_distribution: stats.records_by_user,
+        storage_size: stats.storage_size_mb,
+        issues: [] as string[]
+      };
+
+      // 检查1: 记录数量是否合理
+      if (stats.total_records === 0) {
+        qualityChecks.issues.push('向量存储中无记录');
+      } else if (stats.total_records > 100000) {
+        qualityChecks.issues.push('向量存储记录数量过多，可能需要清理');
+      }
+
+      // 检查2: 健康度评估
+      if (stats.health_score < 0.5) {
+        qualityChecks.issues.push(`存储健康度较低: ${stats.health_score.toFixed(2)}`);
+      }
+
+      // 检查3: 用户数据分布
+      const userCounts = Object.values(stats.records_by_user);
+      const maxUserRecords = Math.max(...userCounts);
+      const minUserRecords = Math.min(...userCounts);
+      
+      if (maxUserRecords > 1000) {
+        qualityChecks.issues.push(`某些用户记录数量过多: ${maxUserRecords}`);
+      }
+      
+      if (minUserRecords === 0) {
+        qualityChecks.issues.push('存在无记录的用户');
+      }
+
+      // 检查4: 记录类型分布
+      const expectedTypes = ['interest_item', 'behavior_pattern', 'social_relationship', 'expertise_area'];
+      const missingTypes = expectedTypes.filter(type => !stats.records_by_type[type]);
+      
+      if (missingTypes.length > 0) {
+        qualityChecks.issues.push(`缺少记录类型: ${missingTypes.join(', ')}`);
+      }
+
+      // 输出检查结果
+      console.log('📊 向量质量检查结果:', qualityChecks);
+
+      // 如果发现问题，可以触发自动修复
+      if (qualityChecks.issues.length > 0) {
+        console.warn('⚠️ 发现质量问题，建议执行维护操作:', qualityChecks.issues);
+        
+        // 可选：自动触发维护
+        if (qualityChecks.issues.some(issue => issue.includes('记录数量过多') || issue.includes('健康度较低'))) {
+          console.log('🔧 自动触发维护操作...');
+          await this.cloudStorage.performVectorMaintenance();
+        }
+      } else {
+        console.log('✅ 向量数据质量良好');
+      }
+    } catch (error) {
+      console.error('❌ 向量质量检查任务失败:', error);
     }
   }
 

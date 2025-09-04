@@ -1,6 +1,6 @@
 import { ChromaClient, Collection } from 'chromadb';
 import { getEmbeddingViaOffscreen } from './embeddings';
-import { getEnvConfig } from './utils';
+import { getEnvConfig, parseChromaConfig } from './utils';
 
 let chromaClient: ChromaClient | null = null;
 let messageCollection: Collection | null = null;
@@ -31,8 +31,11 @@ export async function initChromaClient() {
   }
   
   try {
+    const chromaConfig = parseChromaConfig(envConfig);
     chromaClient = new ChromaClient({
-      path: envConfig.CHROMA_API_URL || 'http://localhost:8000'
+      host: chromaConfig.host,
+      port: chromaConfig.port,
+      ssl: chromaConfig.ssl
     });
     
     console.log('正在连接向量数据库...');

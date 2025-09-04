@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useState } from 'react';
+import { parseChromaConfig, getEnvConfig } from '../utils';
 
 // 数据库维护工具组件
 export const DatabaseMaintenanceTool = () => {
@@ -8,7 +9,11 @@ export const DatabaseMaintenanceTool = () => {
         message: '',
         type: 'info'
     });
-    const [chromaUrl, setChromaUrl] = useState('http://10.32.56.212:8000');
+    const [chromaConfig, setChromaConfig] = useState({
+        host: '10.32.56.212',
+        port: 8000,
+        ssl: false
+    });
     const [userStats, setUserStats] = useState<any>(null);
     const [clearMode, setClearMode] = useState<'all' | 'timeRange'>('all');
     const [timeRange, setTimeRange] = useState({
@@ -18,7 +23,7 @@ export const DatabaseMaintenanceTool = () => {
 
     // 数据库管理器类
     class DatabaseManager {
-        constructor(private chromaUrl: string) {}
+        constructor(private chromaConfig: { host: string; port: number; ssl: boolean }) {}
 
         async getUserInfo() {
             try {
@@ -120,12 +125,14 @@ export const DatabaseMaintenanceTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端，请确保应用正在运行');
             }
 
-            const manager = new DatabaseManager(chromaUrl);
+            const manager = new DatabaseManager(chromaConfig);
             const userinfo = await manager.getUserInfo();
 
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             // 测试连接
@@ -198,12 +205,14 @@ export const DatabaseMaintenanceTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端');
             }
 
-            const manager = new DatabaseManager(chromaUrl);
+            const manager = new DatabaseManager(chromaConfig);
             const userinfo = await manager.getUserInfo();
 
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             const backupData: {
@@ -336,11 +345,13 @@ export const DatabaseMaintenanceTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端');
             }
 
-            const manager = new DatabaseManager(chromaUrl);
+            const manager = new DatabaseManager(chromaConfig);
             
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             let restoredCollections = 0;
@@ -481,11 +492,13 @@ export const DatabaseMaintenanceTool = () => {
                 throw new Error('无法加载 ChromaDB 客户端');
             }
 
-            const manager = new DatabaseManager(chromaUrl);
+            const manager = new DatabaseManager(chromaConfig);
 
             // 初始化 ChromaDB 客户端
             const client = new ChromaClient({
-                path: chromaUrl
+                host: chromaConfig.host,
+                port: chromaConfig.port,
+                ssl: chromaConfig.ssl
             });
 
             let deletedCollections = 0;
@@ -597,7 +610,7 @@ export const DatabaseMaintenanceTool = () => {
         }
     };
 
-    const manager = new DatabaseManager(chromaUrl);
+    const manager = new DatabaseManager(chromaConfig);
 
     return (
         <div className="database-maintenance-tool" style={{ marginTop: '30px' }}>
@@ -605,14 +618,36 @@ export const DatabaseMaintenanceTool = () => {
             <h3>数据库管理工具</h3>
             
             <div className="form-group">
-                <label htmlFor="chromaUrlMaintenance">ChromaDB 地址</label>
+                <label htmlFor="chromaHostMaintenance">ChromaDB 主机地址</label>
                 <input
                     type="text"
-                    id="chromaUrlMaintenance"
-                    value={chromaUrl}
-                    onChange={(e) => setChromaUrl(e.target.value)}
-                    placeholder="http://localhost:8000"
+                    id="chromaHostMaintenance"
+                    value={chromaConfig.host}
+                    onChange={(e) => setChromaConfig(prev => ({...prev, host: e.target.value}))}
+                    placeholder="localhost"
                 />
+            </div>
+
+            <div className="form-group">
+                <label htmlFor="chromaPortMaintenance">ChromaDB 端口</label>
+                <input
+                    type="number"
+                    id="chromaPortMaintenance"
+                    value={chromaConfig.port}
+                    onChange={(e) => setChromaConfig(prev => ({...prev, port: parseInt(e.target.value) || 8000}))}
+                    placeholder="8000"
+                />
+            </div>
+
+            <div className="form-group">
+                <label>
+                    <input
+                        type="checkbox"
+                        checked={chromaConfig.ssl}
+                        onChange={(e) => setChromaConfig(prev => ({...prev, ssl: e.target.checked}))}
+                    />
+                    启用 SSL 连接
+                </label>
             </div>
 
             <div className="maintenance-actions" style={{ marginBottom: '20px' }}>

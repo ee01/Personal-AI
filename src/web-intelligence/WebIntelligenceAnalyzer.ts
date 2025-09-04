@@ -4,7 +4,7 @@
  */
 
 import { ChromeBuiltInAIAnalyzer, ChromeAIAnalysisResult } from './ChromeBuiltInAI';
-import { UserProfileManager } from '../services/UserProfileManager';
+import { VectorizedUserProfileManager } from '../services/VectorizedUserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserInterestItem } from '../types/userProfile';
 
 export interface PageContent {
@@ -76,7 +76,7 @@ export class WebIntelligenceAnalyzer {
   private analysisContext: AnalysisContext | null = null;
   private modelCache: Map<string, any> = new Map();
   private chromeAI: ChromeBuiltInAIAnalyzer;
-  private userProfileManager: UserProfileManager | null = null;
+  private userProfileManager: VectorizedUserProfileManager | null = null;
   private userProfile: UserProfile | null = null;
   private userProfileAnalysis: UserProfileAnalysis | null = null;
 
@@ -94,9 +94,10 @@ export class WebIntelligenceAnalyzer {
       const result = await chrome.storage.local.get(['userinfo']);
       const userId = result?.userinfo?.username || 'default_user';
       
-      this.userProfileManager = new UserProfileManager(userId);
-      this.userProfile = await this.userProfileManager.initialize();
-      this.userProfileAnalysis = await this.userProfileManager.analyzeProfile();
+      this.userProfileManager = new VectorizedUserProfileManager(userId);
+      await this.userProfileManager.initialize();
+      this.userProfile = await this.userProfileManager.getProfile();
+      this.userProfileAnalysis = await this.userProfileManager.generateAnalysis();
       
       console.log('✅ 用户画像初始化成功');
     } catch (error) {
@@ -730,7 +731,7 @@ export class WebIntelligenceAnalyzer {
       if (extractedInfo.projects) {
         for (const project of extractedInfo.projects) {
           await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager['userId'],
+            userId: this.userProfileManager.userId,
             action: {
               actionType: 'view',
               timestamp: Date.now(),
@@ -759,7 +760,7 @@ export class WebIntelligenceAnalyzer {
       if (extractedInfo.people) {
         for (const person of extractedInfo.people) {
           await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager['userId'],
+            userId: this.userProfileManager.userId,
             action: {
               actionType: 'view',
               timestamp: Date.now(),
@@ -786,7 +787,7 @@ export class WebIntelligenceAnalyzer {
       if (extractedInfo.technologies) {
         for (const tech of extractedInfo.technologies) {
           await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager['userId'],
+            userId: this.userProfileManager.userId,
             action: {
               actionType: 'view',
               timestamp: Date.now(),
@@ -813,7 +814,7 @@ export class WebIntelligenceAnalyzer {
       if (extractedInfo.topics) {
         for (const topic of extractedInfo.topics) {
           await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager['userId'],
+            userId: this.userProfileManager.userId,
             action: {
               actionType: 'view',
               timestamp: Date.now(),
