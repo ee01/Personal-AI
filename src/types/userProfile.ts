@@ -307,3 +307,224 @@ export const DEFAULT_WEIGHT_DECAY_CONFIG: WeightDecayConfig = {
     consistentEngagement: 0.4    // 持续互动减缓40%衰变
   }
 };
+
+// ========================================
+// 向量化用户画像存储类型定义
+// 用于支持分散式向量存储和相似性查询
+// ========================================
+
+/**
+ * 用户画像记录的基础接口（向量化存储）
+ */
+export interface UserProfileRecord {
+  id: string;                    // 唯一标识符
+  document: string;              // 可搜索的文本内容
+  embedding?: number[];          // 向量表示（由系统生成）
+  metadata: UserProfileRecordMetadata;
+}
+
+/**
+ * 用户画像记录的元数据基础接口
+ */
+export interface UserProfileRecordMetadata {
+  record_type: 'interest_item' | 'behavior_pattern' | 'social_relationship' | 'expertise_area' | 'user_summary';
+  user_id: string;
+  created_at: number;
+  updated_at: number;
+  last_accessed?: number;
+  confidence_score?: number;     // 数据置信度 (0-1)
+}
+
+/**
+ * 兴趣项记录
+ */
+export interface InterestItemRecord extends UserProfileRecord {
+  metadata: InterestItemMetadata;
+}
+
+export interface InterestItemMetadata extends UserProfileRecordMetadata {
+  record_type: 'interest_item';
+  interest_category: 'project' | 'person' | 'topic' | 'technology' | 'document' | 'jira';
+  
+  // 核心兴趣数据
+  name: string;
+  current_weight: number;        // 当前权重 (0-1)
+  access_count: number;          // 访问次数
+  first_seen: number;            // 首次发现时间
+  total_engagement_time?: number; // 总参与时间（毫秒）
+  explicit_importance?: number;   // 用户明确标记的重要性 (0-1)
+  
+  // 分类特定数据
+  project_type?: string;         // 项目类型
+  person_role?: string;          // 人员角色
+  technology_stack?: string[];   // 技术栈
+  topic_keywords?: string[];     // 话题关键词
+  
+  // 行为数据简化版本
+  recent_action_types: string[]; // 最近的行为类型
+  interaction_patterns: {
+    view_frequency: number;      // 查看频率
+    edit_frequency: number;      // 编辑频率  
+    share_frequency: number;     // 分享频率
+  };
+  
+  // 趋势数据
+  trend?: 'increasing' | 'decreasing' | 'stable';
+}
+
+/**
+ * 行为模式记录
+ */
+export interface BehaviorPatternRecord extends UserProfileRecord {
+  metadata: BehaviorPatternMetadata;
+}
+
+export interface BehaviorPatternMetadata extends UserProfileRecordMetadata {
+  record_type: 'behavior_pattern';
+  pattern_type: 'time_preference' | 'communication_style' | 'tool_usage' | 'work_pattern';
+  
+  // 时间偏好数据
+  active_hours?: number[];       // 活跃时间段
+  preferred_days?: number[];     // 偏好工作日
+  timezone?: string;             // 时区
+  
+  // 沟通风格数据
+  formality_level?: 'casual' | 'semi-formal' | 'formal';
+  response_speed?: 'immediate' | 'quick' | 'normal' | 'slow';
+  communication_channels?: string[]; // 偏好的沟通渠道
+  
+  // 工具使用数据
+  primary_tools?: Array<{
+    name: string;
+    frequency: number;
+    last_used: number;
+  }>;
+  
+  // 工作模式数据
+  focus_periods?: Array<{
+    start_hour: number;
+    end_hour: number;
+    productivity_score: number;
+  }>;
+}
+
+/**
+ * 社交关系记录
+ */
+export interface SocialRelationshipRecord extends UserProfileRecord {
+  metadata: SocialRelationshipMetadata;
+}
+
+export interface SocialRelationshipMetadata extends UserProfileRecordMetadata {
+  record_type: 'social_relationship';
+  
+  target_person: string;         // 关系目标人员
+  relationship_type: 'colleague' | 'manager' | 'subordinate' | 'collaborator' | 'mentor' | 'mentee';
+  interaction_strength: number;  // 互动强度 (0-1)
+  communication_frequency: number; // 沟通频率
+  collaboration_contexts: string[]; // 合作场景
+  
+  last_interaction: number;      // 最后互动时间
+  interaction_quality_score: number; // 互动质量评分 (0-1)
+}
+
+/**
+ * 专业领域记录
+ */
+export interface ExpertiseAreaRecord extends UserProfileRecord {
+  metadata: ExpertiseAreaMetadata;
+}
+
+export interface ExpertiseAreaMetadata extends UserProfileRecordMetadata {
+  record_type: 'expertise_area';
+  
+  expertise_domain: string;      // 专业领域
+  proficiency_level: number;     // 熟练程度 (0-1)
+  evidence_sources: string[];    // 证据来源
+  
+  skill_keywords: string[];      // 技能关键词
+  learning_trajectory: Array<{   // 学习轨迹
+    timestamp: number;
+    skill: string;
+    level_change: number;
+  }>;
+  
+  teaching_ability: number;      // 教学能力评分 (0-1)
+  mentoring_history: string[];   // 指导历史
+}
+
+/**
+ * 用户摘要记录
+ */
+export interface UserSummaryRecord extends UserProfileRecord {
+  metadata: UserSummaryMetadata;
+}
+
+export interface UserSummaryMetadata extends UserProfileRecordMetadata {
+  record_type: 'user_summary';
+  summary_type: 'derived_preferences' | 'statistics' | 'user_context_config';
+  
+  // 统计数据
+  total_interactions?: number;
+  daily_activity_average?: number;
+  most_active_day?: string;
+  top_interaction_types?: Record<string, number>;
+  last_activity?: number;
+  
+  // 衍生偏好
+  preferred_project_types?: string[];
+  expertise_areas?: string[];
+  key_collaborators?: string[];
+  risk_sensitivity?: 'low' | 'medium' | 'high';
+  update_frequency?: 'daily' | 'weekly' | 'monthly';
+  
+  // 用户上下文配置
+  user_context_config?: any;
+}
+
+/**
+ * 向量化查询选项
+ */
+export interface UserProfileQueryOptions {
+  user_id?: string;
+  record_types?: string[];
+  metadata_filters?: Record<string, any>;
+  limit?: number;
+  similarity_threshold?: number;
+  include_embeddings?: boolean;
+}
+
+/**
+ * 向量化查询结果
+ */
+export interface UserProfileQueryResult {
+  records: UserProfileRecord[];
+  total_count: number;
+  query_time_ms: number;
+  similarity_scores?: number[];
+}
+
+/**
+ * 用户相似度结果
+ */
+export interface UserSimilarityResult {
+  user_id: string;
+  similarity_score: number;
+  matching_categories: Array<{
+    category: string;
+    similarity: number;
+    matching_items: string[];
+  }>;
+}
+
+/**
+ * 向量存储统计信息
+ */
+export interface VectorStorageStats {
+  total_records: number;
+  records_by_user: Record<string, number>;
+  records_by_type: Record<string, number>;
+  storage_size_mb: number;
+  last_maintenance: number;
+  health_score: number;
+};

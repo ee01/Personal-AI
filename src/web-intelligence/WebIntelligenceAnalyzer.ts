@@ -4,7 +4,7 @@
  */
 
 import { ChromeBuiltInAIAnalyzer, ChromeAIAnalysisResult } from './ChromeBuiltInAI';
-import { VectorizedUserProfileManager } from '../services/VectorizedUserProfileManager';
+import { UserProfileManager } from '../services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserInterestItem } from '../types/userProfile';
 
 export interface PageContent {
@@ -76,7 +76,7 @@ export class WebIntelligenceAnalyzer {
   private analysisContext: AnalysisContext | null = null;
   private modelCache: Map<string, any> = new Map();
   private chromeAI: ChromeBuiltInAIAnalyzer;
-  private userProfileManager: VectorizedUserProfileManager | null = null;
+  private userProfileManager: UserProfileManager | null = null;
   private userProfile: UserProfile | null = null;
   private userProfileAnalysis: UserProfileAnalysis | null = null;
 
@@ -94,7 +94,7 @@ export class WebIntelligenceAnalyzer {
       const result = await chrome.storage.local.get(['userinfo']);
       const userId = result?.userinfo?.username || 'default_user';
       
-      this.userProfileManager = new VectorizedUserProfileManager(userId);
+      this.userProfileManager = new UserProfileManager(userId);
       await this.userProfileManager.initialize();
       this.userProfile = await this.userProfileManager.getProfile();
       this.userProfileAnalysis = await this.userProfileManager.generateAnalysis();

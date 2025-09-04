@@ -3,7 +3,7 @@
  * 用于验证用户画像的创建、更新和查询功能
  */
 
-import { VectorizedUserProfileManager } from '../services/VectorizedUserProfileManager';
+import { UserProfileManager } from '../services/UserProfileManager';
 import { UserAction } from '../types/userProfile';
 
 async function testUserProfileSystem() {
@@ -11,7 +11,7 @@ async function testUserProfileSystem() {
   
   // 1. 初始化测试
   console.log('1️⃣ 测试初始化...');
-  const profileManager = new VectorizedUserProfileManager('test_user@example.com');
+  const profileManager = new UserProfileManager('test_user@example.com');
   await profileManager.initialize();
   const profile = await profileManager.getProfile();
   console.log('✅ 用户画像初始化成功');

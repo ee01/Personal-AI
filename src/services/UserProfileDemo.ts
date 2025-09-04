@@ -1,27 +1,27 @@
 /**
- * 向量化用户画像演示和测试
+ * 用户画像演示和测试
  * 展示新的分散式向量存储功能
  */
 
 import { CloudStorage } from '../storage/CloudStorage';
-import { VectorizedUserProfileManager } from './VectorizedUserProfileManager';
-import { VectorizedUserProfileQueryService } from './VectorizedUserProfileQueryService';
+import { UserProfileManager } from './UserProfileManager';
+import { UserProfileQueryService } from './UserProfileQueryService';
 import { UserProfile, UserInterestItem, UserAction } from '../types/userProfile';
 
-export class VectorizedUserProfileDemo {
+export class UserProfileDemo {
   private cloudStorage: CloudStorage;
-  private queryService: VectorizedUserProfileQueryService;
+  private queryService: UserProfileQueryService;
 
   constructor() {
     this.cloudStorage = new CloudStorage();
-    this.queryService = new VectorizedUserProfileQueryService(this.cloudStorage);
+    this.queryService = new UserProfileQueryService(this.cloudStorage);
   }
 
   /**
    * 运行完整的演示
    */
   async runFullDemo(): Promise<void> {
-    console.log('🚀 开始向量化用户画像演示...\n');
+    console.log('🚀 开始用户画像演示...\n');
 
     try {
       // 1. 初始化
@@ -36,7 +36,7 @@ export class VectorizedUserProfileDemo {
       // 4. 演示维护功能
       await this.demonstrateMaintenanceFeatures();
 
-      console.log('\n✅ 向量化用户画像演示完成！');
+      console.log('\n✅ 用户画像演示完成！');
     } catch (error) {
       console.error('❌ 演示过程中出现错误:', error);
     }
@@ -87,20 +87,35 @@ export class VectorizedUserProfileDemo {
     // 直接使用新接口存储
     let totalRecords = 0;
     for (const userProfile of demoUsers) {
-      const manager = new VectorizedUserProfileManager(userProfile.userId, this.cloudStorage);
+      const manager = new UserProfileManager(userProfile.userId, this.cloudStorage);
       await manager.initialize();
       
       try {
-        // 逐个添加兴趣项
-        for (const item of userProfile.interestItems || []) {
+        // 逐个添加兴趣项 - 从 interests 对象中提取
+        const allInterests = [
+          ...(userProfile.interests?.projects || []),
+          ...(userProfile.interests?.people || []),
+          ...(userProfile.interests?.topics || []),
+          ...(userProfile.interests?.technologies || []),
+          ...(userProfile.interests?.documents || []),
+          ...(userProfile.interests?.jiraTickets || [])
+        ];
+        
+        for (const item of allInterests) {
           await manager.updateInterestItem({
             userId: userProfile.userId,
-            itemId: item.id,
-            type: item.type,
-            name: item.name,
-            action: 'view', // 默认操作
-            actionData: {},
-            timestamp: Date.now()
+            targetItem: {
+              id: item.id,
+              type: item.type,
+              name: item.name,
+              metadata: item.metadata || {}
+            },
+            action: {
+              actionType: 'view' as const, // 默认操作
+              timestamp: Date.now(),
+              weight: 0.1,
+              context: 'demo data creation'
+            }
           });
           totalRecords++;
         }
@@ -244,7 +259,7 @@ export class VectorizedUserProfileDemo {
 
     // 演示实时更新
     console.log('\n🔄 演示实时更新功能...');
-    const manager = new VectorizedUserProfileManager('user001', this.cloudStorage);
+    const manager = new UserProfileManager('user001', this.cloudStorage);
     await manager.initialize();
 
     // 模拟用户行为更新
@@ -259,8 +274,8 @@ export class VectorizedUserProfileDemo {
       action: {
         actionType: 'view' as const,
         timestamp: Date.now(),
-        context: 'learning new framework',
-        weight: 0.2
+        weight: 0.2,
+        context: 'learning new framework'
       }
     };
 
@@ -633,17 +648,17 @@ export class VectorizedUserProfileDemo {
 }
 
 // 导出演示函数，便于在其他地方调用
-export async function runVectorizedUserProfileDemo(): Promise<void> {
-  const demo = new VectorizedUserProfileDemo();
+export async function runUserProfileDemo(): Promise<void> {
+  const demo = new UserProfileDemo();
   await demo.runFullDemo();
 }
 
-export async function runVectorizedUserProfilePerformanceTest(): Promise<void> {
-  const demo = new VectorizedUserProfileDemo();
+export async function runUserProfilePerformanceTest(): Promise<void> {
+  const demo = new UserProfileDemo();
   await demo.runPerformanceTest();
 }
 
-export async function runVectorizedUserProfileErrorTest(): Promise<void> {
-  const demo = new VectorizedUserProfileDemo();
+export async function runUserProfileErrorTest(): Promise<void> {
+  const demo = new UserProfileDemo();
   await demo.runErrorHandlingTest();
 }

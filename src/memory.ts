@@ -7,7 +7,7 @@ import { CloudStorage, MemoryEntity, MemoryMessage } from './storage/CloudStorag
 import { GraphRelationship, LocalStorage, CachedEntityDetail } from './storage/LocalStorage';
 import { EntitySimilarityTool, ProcessedEntity, EntityMergePair } from './storage/EntitySimilarityTool';
 import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSystemMaintenanceTool } from './storage/SystemMaintenanceTool';
-import { VectorizedUserProfileManager } from './services/VectorizedUserProfileManager';
+import { UserProfileManager } from './services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -142,7 +142,7 @@ export class MemorySystem {
   private localStorage: LocalStorage;
   private entitySimilarityTool: EntitySimilarityTool;
   private systemMaintenanceTool: SystemMaintenanceTool;
-  public userProfileManager: VectorizedUserProfileManager | null = null;
+  public userProfileManager: UserProfileManager | null = null;
   private isInitialized = false;
   
   // 策略配置和性能指标
@@ -2007,7 +2007,7 @@ export class MemorySystem {
       const userId = userinfo?.userinfo?.email || 'default_user';
       
       // 重用现有的 CloudStorage 实例，避免重复初始化
-      this.userProfileManager = new VectorizedUserProfileManager(userId, this.cloudStorage);
+      this.userProfileManager = new UserProfileManager(userId, this.cloudStorage);
       await this.userProfileManager.initialize();
       
       console.log('✅ 用户画像管理器初始化成功');
