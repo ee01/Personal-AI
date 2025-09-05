@@ -27,12 +27,13 @@ import { CloudStorage } from '../storage/CloudStorage';
 export class UserProfileManager {
   private cloudStorage: CloudStorage;
   public userId: string;
+  public displayName: string = '';
   private recordsCache: Map<string, UserProfileRecord> = new Map();
   private lastCacheUpdate = 0;
   private cacheExpiryTime = 5 * 60 * 1000; // 5分钟缓存过期
 
-  constructor(userId: string, cloudStorage?: CloudStorage) {
-    this.userId = userId;
+  constructor(userId?: string, cloudStorage?: CloudStorage) {
+    this.userId = userId || 'default_user'; // 临时默认值，将在initialize中更新
     this.cloudStorage = cloudStorage || new CloudStorage();
   }
 
@@ -41,6 +42,9 @@ export class UserProfileManager {
    */
   async initialize(): Promise<boolean> {
     try {
+      // 获取真实的用户信息
+      await this.loadUserInfo();
+      
       // 确保CloudStorage已连接
       if (!await this.cloudStorage.isConnected()) {
         await this.cloudStorage.initialize();
@@ -49,11 +53,38 @@ export class UserProfileManager {
       // 初始化缓存
       await this.refreshCache();
       
-      console.log(`✅ 用户画像管理器初始化成功: ${this.userId}`);
+      console.log(`✅ 用户画像管理器初始化成功: ${this.userId} (${this.displayName})`);
       return true;
     } catch (error) {
       console.error('用户画像管理器初始化失败:', error);
       return false;
+    }
+  }
+
+  /**
+   * 从localStorage加载用户信息
+   */
+  private async loadUserInfo(): Promise<void> {
+    try {
+      const result = await chrome.storage.local.get(['userinfo']);
+      const userinfo = result.userinfo;
+      
+      if (userinfo) {
+        // 使用username作为userId，fullName作为显示名
+        this.userId = userinfo.username || userinfo.extensionId || 'default_user';
+        this.displayName = userinfo.fullName || userinfo.username || 'Unknown User';
+        
+        console.log(`📝 用户信息加载成功: ${this.userId} (${this.displayName})`);
+      } else {
+        console.warn('⚠️ 未找到用户信息，使用默认值');
+        this.userId = 'default_user';
+        this.displayName = 'Default User';
+      }
+    } catch (error) {
+      console.error('获取用户信息失败:', error);
+      // 保持默认值
+      this.userId = 'default_user';
+      this.displayName = 'Default User';
     }
   }
 
@@ -458,26 +489,31 @@ export class UserProfileManager {
       const behaviorRecords = Array.from(this.recordsCache.values())
         .filter(record => record.metadata.record_type === 'behavior_pattern') as BehaviorPatternRecord[];
 
+      const topItemsByCategory = this.getTopItemsByCategory(interestRecords);
+      const behaviorAnalysis = this.analyzeBehaviorPatterns(behaviorRecords);
+      
       return {
         userId: this.userId,
-        generatedAt: Date.now(),
+        timestamp: Date.now(),
         
-        // 兴趣分析
-        topInterestsByCategory: this.getTopItemsByCategory(interestRecords),
-        interestDistribution: this.calculateInterestDistribution(interestRecords),
+        // 当前最关注的内容
+        topInterests: {
+          projects: topItemsByCategory.project?.map(item => item.name) || [],
+          people: topItemsByCategory.person?.map(item => item.name) || [],
+          topics: topItemsByCategory.topic?.map(item => item.name) || []
+        },
         
-        // 行为分析
-        behaviorPatterns: this.analyzeBehaviorPatterns(behaviorRecords),
-        
-        // 预测和建议
+        // 预测的兴趣
         predictedInterests: this.predictInterests(interestRecords),
-        contentSuggestions: this.generateContentSuggestions(interestRecords),
         
-        // 统计信息
-        totalItems: interestRecords.length,
-        lastUpdated: Math.max(...interestRecords.map(r => r.metadata.updated_at), 0),
-        
-        confidence: this.calculateAnalysisConfidence(interestRecords)
+        // 行为洞察
+        insights: {
+          workingPattern: behaviorAnalysis.activeHours?.length > 0 ? 
+            `主要活跃时间：${behaviorAnalysis.activeHours.join('、')}点` : '暂无数据',
+          collaborationStyle: behaviorAnalysis.communicationStyle || 'semi-formal',
+          focusAreas: topItemsByCategory.technology?.map(item => item.name) || [],
+          suggestedContent: this.generateContentSuggestions(interestRecords)
+        }
       };
     } catch (error) {
       console.error('生成用户画像分析失败:', error);
@@ -541,7 +577,7 @@ export class UserProfileManager {
       });
 
       this.recordsCache.clear();
-      result.records.forEach(record => {
+      result.records.forEach((record: UserProfileRecord) => {
         this.recordsCache.set(record.id, record);
       });
 
@@ -712,17 +748,30 @@ export class UserProfileManager {
    * 生成主动推荐
    */
   async generateProactiveRecommendations(): Promise<Array<{
-    type: 'project' | 'person' | 'topic' | 'technology';
-    item: string;
-    reason: string;
+    id: string;
+    type: 'content' | 'action' | 'connection' | 'learning';
+    title: string;
+    description: string;
     confidence: number;
+    reason: string;
+    actionUrl?: string;
+    priority: 'high' | 'medium' | 'low';
   }>> {
     try {
       const interestRecords = Array.from(this.recordsCache.values())
         .filter(record => record.metadata.record_type === 'interest_item') as InterestItemRecord[];
       
       // 简化的推荐算法
-      const recommendations = [];
+      const recommendations: Array<{
+        id: string;
+        type: 'content' | 'action' | 'connection' | 'learning';
+        title: string;
+        description: string;
+        confidence: number;
+        reason: string;
+        actionUrl?: string;
+        priority: 'high' | 'medium' | 'low';
+      }> = [];
       
       // 基于技术栈推荐相关技术
       const techItems = interestRecords.filter(r => r.metadata.interest_category === 'technology');
@@ -730,10 +779,13 @@ export class UserProfileManager {
       
       if (topTech) {
         recommendations.push({
-          type: 'technology' as const,
-          item: `${topTech.metadata.name} 高级特性`,
+          id: `tech_learning_${topTech.metadata.name}`,
+          type: 'learning',
+          title: `${topTech.metadata.name} 高级特性`,
+          description: `学习更多关于 ${topTech.metadata.name} 的高级用法和最佳实践`,
           reason: `基于您对 ${topTech.metadata.name} 的高度关注`,
-          confidence: 0.8
+          confidence: 0.8,
+          priority: 'medium'
         });
       }
       
@@ -1008,13 +1060,23 @@ export class UserProfileManager {
   /**
    * 预测兴趣
    */
-  private predictInterests(records: InterestItemRecord[]): string[] {
+  private predictInterests(records: InterestItemRecord[]): Array<{
+    item: string;
+    type: 'project' | 'person' | 'topic' | 'technology' | 'document' | 'jira';
+    confidence: number;
+    reason: string;
+  }> {
     // 基于现有兴趣的简单预测
     const techRecords = records.filter(r => r.metadata.interest_category === 'technology');
     const topTech = techRecords.sort((a, b) => b.metadata.current_weight - a.metadata.current_weight)[0];
     
     if (topTech) {
-      return [`${topTech.metadata.name} 进阶应用`];
+      return [{
+        item: `${topTech.metadata.name} 进阶应用`,
+        type: 'technology',
+        confidence: 0.8,
+        reason: `基于您对 ${topTech.metadata.name} 的高度关注`
+      }];
     }
     
     return [];
@@ -1024,7 +1086,7 @@ export class UserProfileManager {
    * 生成内容建议
    */
   private generateContentSuggestions(records: InterestItemRecord[]): string[] {
-    const suggestions = [];
+    const suggestions: string[] = [];
     const topRecords = records
       .sort((a, b) => b.metadata.current_weight - a.metadata.current_weight)
       .slice(0, 3);

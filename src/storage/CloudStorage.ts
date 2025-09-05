@@ -1766,13 +1766,14 @@ export class CloudStorage {
       if (!embedding) {
         embedding = await getEmbeddingViaOffscreen(record.document);
       }
+      const metadata = this.serializeMetadataForChroma(record.metadata)
 
       // 存储记录
       await collection.upsert({
         ids: [record.id],
         documents: [record.document],
         embeddings: [embedding],
-        metadatas: [record.metadata as any]
+        metadatas: [metadata]
       });
 
       console.log(`✅ 向量化记录 ${record.id} 已存储`);

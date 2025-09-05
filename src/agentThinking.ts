@@ -101,6 +101,7 @@ interface ThoughtResult {
   reasonsToStore?: string[];
   notificationPriority?: 'high' | 'medium' | 'low';
   replyAdvice?: string;
+  user_relation_type?: string;
   extractedEntities?: any;
   // 新增项目分析相关字段
   riskLevel?: 'low' | 'normal' | 'high' | 'critical';
@@ -1072,6 +1073,7 @@ export class IntelligentAgent {
             shouldNotify: false,
             shouldStore: false,
             reasonsToStore: [],
+            user_relation_type: 'general_interest',
             confidence: 1.0, // 高确信度，这是噪音消息
             summary: analysis.summary || "噪音消息",
             thoughtProcess: [{
@@ -1104,6 +1106,7 @@ export class IntelligentAgent {
           shouldNotify: false,
           confidence: 0,
           summary: analysis.summary || "",
+          user_relation_type: analysis.user_relation_type || 'general_interest',
           enrichedData: {
             entities: analysis.entities || {},
             relationships: analysis.relationships || [],
@@ -1422,6 +1425,11 @@ export class IntelligentAgent {
       if (thoughtResult.replyAdvice) {
         result.replyAdvice = thoughtResult.replyAdvice;
         state.currentDecision.replyAdvice = thoughtResult.replyAdvice;
+      }
+      
+      if (thoughtResult.user_relation_type) {
+        result.user_relation_type = thoughtResult.user_relation_type;
+        state.currentDecision.user_relation_type = thoughtResult.user_relation_type;
       }
     }
     // 更新项目分析结果
@@ -2336,6 +2344,7 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     "reasonsToStore": ["存储/忽略的理由1", "理由2"],
     "notificationPriority": "low|medium|high",
     "replyAdvice": "",
+    "user_relation_type": "mention_me|mention_team|project_related|policy_related|person_tracking|general_interest",
     
     // 实体提取结果
     "entities": {
@@ -2369,6 +2378,8 @@ ${promptPrefix}
 ${messages.length > 1 ? `群组信息:\n${contextInfo}` : `上下文信息:\n${contextInfo}`}
 
 ${messages.length > 1 ? `消息列表:\n${messagesContent}` : `消息内容:\n${messagesContent}`}
+
+如果群组名称是单个人名，则视为私聊，如果是多个人名，则是临时会话，否则视为群聊。
 
 ${filterRulesInfo}
 

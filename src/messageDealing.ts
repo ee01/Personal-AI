@@ -227,6 +227,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							groupName: originalMessage.groupName || '',
 							groupId: originalMessage.groupId || '',
 							groupUrl: 'https://app.ringcentral.com/messages/' + originalMessage.groupId,
+							// 基于智能分析结果推断用户关系类型
+							user_relation_type: result.user_relation_type || 'general_interest',
 							contextMessages: [] as any[], // Todo: 暂时设为空数组，稍后从其他地方获取
 							entities: result.enrichedData?.entities || {},
 							metadata: {
@@ -373,7 +375,8 @@ async function processMessageFilterByConcernedItems(data: any[], concernedItems:
 
 	const system_prompt = `
 你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
-${envConfig.ANALYZE_BY_GROUP ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}	
+${envConfig.ANALYZE_BY_GROUP ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}
+<message_group> 的 property 有 team_name，如果team_name是单个人名，则视为私聊，如果是多个人名，则是临时会话，否则视为群聊。
 
 ---- 以下是我的需求和你需要返回的内容定义 ----
 ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
@@ -383,12 +386,13 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
 2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
 	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
 	- <message_content> properties 中的发送者sender和发送时间datetime, 还有 <message_group> properties 中的 team_name, team_id, post_id
-3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这 4 个新字段：
+3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这几个新字段：
 	- matched_rule: 上面第一步的符合到的规则x的原文内容
 	- filter_reason: 选择这条消息过滤出来的原因，可以用中文表达
 	- summary: 对这条消息所在的 message_group 的其他消息的上下文做出总结并适当的推理为什么sender会发出这个消息。请不要留空，这里可以用中文
 	- reply_advice: 针对这条消息的上下文，给出回复建议，回复用的语言跟随上下文聊天语言。如果觉得这条消息不需要回复，请回复空字符串
 	- entities: 提取消息中的实体信息，包括人物、项目、话题、行动项、情感和类别
+	- user_relation_type: 基于智能分析结果推断本消息与我的关系，先检查是否有明确提及我的名字或者是在私聊(群组名是单个人名)直接对我说的话，如果有则返回 mention_me，提及团队或Team则返回 mention_team，如果没有则检查是否有明确提及项目、政策、人员等，如果有则返回 project_related、policy_related、person_tracking，如果没有则返回 general_interest
 ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
 
 将任务输出的数据进行如下验证：
@@ -401,6 +405,7 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 		"sender": "{sender}",
 		"matched_rule": "所符合的规则的内容",
 		"filter_reason": "",
+		"user_relation_type": "消息与用户的关系类型：mention_me(直接提到我)|mention_team(@Team)|project_related(项目相关关注)|policy_related(政策规定关注)|person_tracking(特定人员追踪)|general_interest(一般关注)",
 		"post_id": "{post_id}",
 		"team_name": "{team_name}",
 		"team_id": "{team_id}",
@@ -572,6 +577,8 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					groupName: json.team_name,
 					groupId: json.team_id,
 					groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
+					// 用户关系类型（用于更精确的用户画像更新）
+					user_relation_type: json.user_relation_type || 'general_interest',
 					// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
 					contextMessages: contextMessages,
 					// 当前消息在上下文中的位置

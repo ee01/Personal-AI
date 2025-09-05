@@ -708,13 +708,18 @@ export class MemorySystem {
           // 将实体对象转换为数组格式
           const entitiesArray = this.cloudStorage.extractEntitiesFromMetadata(messageData.metadata, messageData.id);
           if (entitiesArray.length > 0) {
+            // 根据消息匹配规则智能推断actionType
+            const actionType = this.inferActionTypeFromMessageData(messageData);
+            
             await this.updateUserProfileFromEntities(entitiesArray, {
-              actionType: 'mention',
+              actionType,
               timestamp: Date.now(),
               context: 'message_analysis',
               metadata: {
                 messageId: messageData.id,
-                sender: messageData.metadata?.sender || 'unknown'
+                sender: messageData.metadata?.sender || 'unknown',
+                matchedRules: messageData.metadata?.matchedRules,
+                groupName: messageData.metadata?.groupName
               }
             });
           }
@@ -2002,12 +2007,9 @@ export class MemorySystem {
    */
   private async initializeUserProfile(): Promise<void> {
     try {
-      // 获取当前用户信息
-      const userinfo = await chrome.storage.local.get(['userinfo']);
-      const userId = userinfo?.userinfo?.email || 'default_user';
-      
       // 重用现有的 CloudStorage 实例，避免重复初始化
-      this.userProfileManager = new UserProfileManager(userId, this.cloudStorage);
+      // UserProfileManager 现在会在 initialize() 时自动获取用户信息
+      this.userProfileManager = new UserProfileManager(undefined, this.cloudStorage);
       await this.userProfileManager.initialize();
       
       console.log('✅ 用户画像管理器初始化成功');
@@ -2015,6 +2017,79 @@ export class MemorySystem {
       console.error('❌ 用户画像管理器初始化失败:', error);
       // 不要抛出异常，允许记忆系统继续运行
     }
+  }
+
+  /**
+   * 根据消息数据智能推断用户行为类型
+   */
+  private inferActionTypeFromMessageData(messageData: any): 'view' | 'edit' | 'create' | 'link' | 'mention' | 'search' | 'favorite' {
+    // 优先使用LLM分析提供的用户关系类型
+    const userRelationType = messageData.metadata?.user_relation_type;
+    if (userRelationType) {
+      return this.mapUserRelationTypeToActionType(userRelationType);
+    }
+    
+    const matchedRules = messageData.metadata?.matchedRules || [];
+    const sender = messageData.metadata?.sender || '';
+    const messageContent = messageData.content || '';
+    
+    // 检查是否明确提到用户
+    const mentionKeywords = ['@我', '@你', '提到我', '需要你', '你来', '你的'];
+    const hasMention = mentionKeywords.some(keyword => messageContent.includes(keyword));
+    
+    if (hasMention) {
+      return 'mention';
+    }
+    
+    // 根据匹配规则推断行为类型
+    for (const rule of matchedRules) {
+      const lowerRule = rule.toLowerCase();
+      
+      // 项目相关消息 - 通常是查看项目进展
+      if (lowerRule.includes('recording') || lowerRule.includes('project') || lowerRule.includes('dependencies')) {
+        return 'view';
+      }
+      
+      // 政策消息 - 通常需要关注/查看
+      if (lowerRule.includes('政策') || lowerRule.includes('policy') || lowerRule.includes('规定')) {
+        return 'view';
+      }
+      
+      // 特定人员消息 - 算作查看行为
+      if (lowerRule.includes('sophia') || lowerRule.includes('jinmei') || lowerRule.includes('发送的所有消息')) {
+        return 'view';
+      }
+      
+      // 明确@我的消息
+      if (lowerRule.includes('@我') || lowerRule.includes('mention')) {
+        return 'mention';
+      }
+    }
+    
+    // 默认返回view（浏览/关注）
+    return 'view';
+  }
+
+  /**
+   * 将LLM分析的用户关系类型映射到actionType
+   */
+  private mapUserRelationTypeToActionType(userRelationType: string): 'view' | 'edit' | 'create' | 'link' | 'mention' | 'search' | 'favorite' {
+    const lowerType = userRelationType.toLowerCase();
+    
+    if (lowerType.includes('mention')) {
+      return 'mention';
+    } else if (lowerType.includes('project_related')) {
+      return 'view';
+    } else if (lowerType.includes('policy_related')) {
+      return 'view';
+    } else if (lowerType.includes('person_tracking')) {
+      return 'view'; // 改为view而不是social
+    } else if (lowerType.includes('general_interest')) {
+      return 'view';
+    }
+    
+    // 默认返回view
+    return 'view';
   }
 
   /**
