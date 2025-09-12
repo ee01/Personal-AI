@@ -3,9 +3,9 @@
  * 专门处理来自前端的记忆系统相关请求
  */
 
-import { memorySystem } from './memory';
-import { CloudStorage, MemoryEntity } from './storage/CloudStorage';
-import { LocalStorage } from './storage/LocalStorage';
+import { memorySystem } from '../memory';
+import { CloudStorage, MemoryEntity } from '../storage/CloudStorage';
+import { LocalStorage } from '../storage/LocalStorage';
 
 // 创建存储层实例
 const cloudStorage = new CloudStorage();

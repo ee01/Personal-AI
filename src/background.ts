@@ -1,4 +1,4 @@
-import { analyzeMessages, analyzeMessagesInBackground } from './messageDealing';
+import { analyzeMessagesInBackground } from './messageDealing';
 import { CloudStorage } from './storage/CloudStorage';
 import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, getEmbeddingInBackground, handleEmbeddingResult } from './embeddings';
@@ -14,28 +14,15 @@ import {
     backupGraphData 
 } from './enhancedKnowledgeQuery';
 import { memorySystem } from './memory';
-import { handleMemoryMessage } from './memoryMessageHandler';
+import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
 import { DashboardMessageHandler } from './utils/dashboardIntegration';
 import { taskScheduler } from './services/TaskScheduler';
+import { UserProfileMessageHandler } from './services/UserProfileMessageHandler';
 
 console.log('Background script loaded');
 
-// 辅助函数：格式化时间为相对时间
-function formatTimeAgo(timestamp: number): string {
-    const now = Date.now();
-    const diff = now - timestamp;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-    
-    if (minutes < 1) return '刚刚';
-    if (minutes < 60) return `${minutes}分钟前`;
-    if (hours < 24) return `${hours}小时前`;
-    if (days < 30) return `${days}天前`;
-    return new Date(timestamp).toLocaleDateString();
-}
 
 // 监听扩展命令
 chrome.commands.onCommand.addListener(async (command) => {
@@ -67,7 +54,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
 });
 
-// 扩展安装或更新时，立即创建定时任务
+// 扩展安装或更新时，立即创建定时任务，处理一些 Storage 的初始化
 chrome.runtime.onInstalled.addListener(async () => {
     try {
         console.log('Extension installed/updated');
@@ -132,55 +119,12 @@ chrome.runtime.onInstalled.addListener(async () => {
             console.error('Error refreshing RingCentral tab:', error);
         }
 
-        // 安全地初始化Chroma - 使用新的CloudStorage系统
-        try {
-            const cloudStorage = new CloudStorage();
-            if (await cloudStorage.initialize()) {
-                console.log('ChromaDB cloud storage initialized');
-            }
-        } catch (error) {
-            console.error('Failed to initialize ChromaDB cloud storage:', error);
-        }
-
         // 预先创建离屏文档
         await createOffscreenDocument();
-
-        // 初始化混合图存储和健康监控
-        try {
-            console.log('🔄 初始化记忆系统...');
-            
-            // 初始化记忆系统
-            const initResult = await memorySystem.initialize();
-            if (initResult) {
-                const systemStatus = await memorySystem.getSystemStatus();
-                console.log('📊 记忆系统状态:', systemStatus);
-            } else {
-                console.error('❌ 记忆系统初始化失败');
-            }
-            
-            // 记忆系统已包含自动健康监控
-            console.log('🎯 记忆系统监控已启动（内置于系统中）');
-            
-        } catch (error) {
-            console.error('❌ 混合图存储系统初始化失败:', error);
-        }
     } catch (error) {
         console.error('Error in onInstalled listener:', error);
     }
 });
-
-// 定时任务现在由 TaskScheduler 统一管理
-
-// 原来的监听器简化为：
-// 初始化仪表盘消息处理器
-console.log('🚀 初始化仪表盘消息处理器...');
-let dashboardHandler: DashboardMessageHandler;
-try {
-  dashboardHandler = new DashboardMessageHandler();
-  console.log('✅ 仪表盘消息处理器初始化成功');
-} catch (error) {
-  console.error('❌ 仪表盘消息处理器初始化失败:', error);
-}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background received message:', request);
@@ -357,435 +301,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 处理存储健康检查请求
     if (request.type === 'GET_STORAGE_HEALTH') {
-        memorySystem.performHealthCheck()
-            .then(healthStatus => sendResponse({
-                success: true,
-                healthMetrics: healthStatus
-            }))
-            .catch(error => sendResponse({
-                success: false,
-                error: error.message
-            }));
+        memorySystem.initialize().then(() => {
+            memorySystem.performHealthCheck()
+                .then(healthStatus => sendResponse({
+                    success: true,
+                    healthMetrics: healthStatus
+                }))
+                .catch(error => sendResponse({
+                    success: false,
+                    error: error.message
+                }));
+        });
         return true;
     }
 
     // 处理维护任务执行请求
     if (request.type === 'RUN_MAINTENANCE_TASK') {
         const { taskId } = request;
-        memorySystem.performSystemMaintenance()
-            .then(maintenanceResult => sendResponse({
-                success: maintenanceResult.success,
-                data: maintenanceResult,
-                message: maintenanceResult.success ? '维护任务执行成功' : '维护任务执行失败'
-            }))
-            .catch(error => sendResponse({
-                success: false,
-                error: error.message
-            }));
+        memorySystem.initialize().then(() => {
+            memorySystem.performSystemMaintenance()
+                .then(maintenanceResult => sendResponse({
+                    success: maintenanceResult.success,
+                    data: maintenanceResult,
+                    message: maintenanceResult.success ? '维护任务执行成功' : '维护任务执行失败'
+                }))
+                .catch(error => sendResponse({
+                    success: false,
+                        error: error.message
+                    }));
+        });
         return true;
     }
 
     // 🆕 处理用户画像相关请求
-    if (request.type === 'GET_USER_PROFILE') {
-        console.log('处理用户画像获取请求');
-        memorySystem.getUserProfile()
-            .then(result => {
-                console.log('用户画像获取成功:', result);
-                sendResponse({
-                    success: true,
-                    data: result
-                });
-            })
-            .catch(error => {
-                console.error('用户画像获取失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message
-                });
-            });
-        return true;
-    }
-
-    // 🆕 处理显式重要性标记请求
-            if (request.type === 'SET_EXPLICIT_IMPORTANCE') {
-            console.log('处理显式重要性标记请求:', request);
-            const { itemId, itemType, importance } = request;
-            
-            memorySystem.setUserExplicitImportance(itemId, itemType, importance)
-            .then(success => {
-                console.log('重要性标记设置结果:', success);
-                sendResponse({
-                    success: success,
-                    message: success ? '重要性标记设置成功' : '重要性标记设置失败'
-                });
-            })
-            .catch(error => {
-                console.error('重要性标记设置失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message
-                });
-            });
-        return true;
-    }
-
-    // 🆕 处理用户画像导出请求
-    if (request.type === 'EXPORT_USER_PROFILE') {
-        console.log('处理用户画像导出请求');
-        
-        Promise.all([
-            memorySystem.getUserProfile(),
-            memorySystem.getSystemStatus(),
-            memorySystem.getEntityStatistics()
-        ])
-            .then(([profileResult, systemStatus, entityStats]) => {
-                console.log('用户画像导出数据准备完成');
-                
-                // 构建导出数据结构
-                const exportData = {
-                    // 基本信息
-                    exportInfo: {
-                        exportTime: new Date().toISOString(),
-                        exportTimestamp: Date.now(),
-                        version: '1.0',
-                        exportType: 'complete_user_profile'
-                    },
-                    
-                    // 用户画像核心数据
-                    userProfile: profileResult.profile,
-                    userProfileAnalysis: profileResult.analysis,
-                    
-                    // 系统状态信息
-                    systemStatus: {
-                        isInitialized: systemStatus.isInitialized,
-                        cloudConnected: systemStatus.cloudConnected,
-                        lastSyncTime: systemStatus.lastSyncTime,
-                        performance: systemStatus.performance
-                    },
-                    
-                    // 实体统计信息
-                    entityStatistics: {
-                        entityCounts: entityStats.entityCounts,
-                        totalEntities: entityStats.totalEntities,
-                        totalRelationships: entityStats.totalRelationships,
-                        entitiesCreatedToday: entityStats.entitiesCreatedToday,
-                        entitiesCreatedThisWeek: entityStats.entitiesCreatedThisWeek,
-                        entitiesCreatedThisMonth: entityStats.entitiesCreatedThisMonth
-                    },
-                    
-                    // 生成用户友好的总结
-                    exportSummary: {
-                        profileCompleteness: profileResult.profile ? '完整' : '部分',
-                        totalInteractions: profileResult.profile?.statistics?.totalInteractions || 0,
-                        averageDailyActivity: profileResult.profile?.statistics?.averageDailyActivity || 0,
-                        topInterestCategories: profileResult.analysis?.topInterests ? Object.keys(profileResult.analysis.topInterests) : [],
-                        dataQuality: systemStatus.cloudConnected ? '良好' : '离线模式'
-                    }
-                };
-                
-                sendResponse({
-                    success: true,
-                    data: exportData,
-                    message: '用户画像导出数据准备成功'
-                });
-            })
-            .catch(error => {
-                console.error('用户画像导出失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '用户画像导出失败'
-                });
-            });
-        return true;
-    }
-
-    // 🆕 处理权重衰变配置更新请求
-    if (request.type === 'UPDATE_WEIGHT_DECAY_CONFIG') {
-        console.log('处理权重衰变配置更新请求:', request.config);
-        
-        // 验证配置参数
-        const config = request.config;
-        if (!config || typeof config !== 'object') {
-            sendResponse({
-                success: false,
-                error: '配置参数无效',
-                message: '权重衰变配置更新失败'
-            });
-            return true;
-        }
-        
-        // 参数范围验证
-        const validation = {
-            baseDecayRate: config.baseDecayRate >= 0.01 && config.baseDecayRate <= 0.2,
-            maxWeight: config.maxWeight >= 0.5 && config.maxWeight <= 2.0,
-            minWeight: config.minWeight >= 0.001 && config.minWeight <= 0.1,
-            actionWeights: config.actionWeights && typeof config.actionWeights === 'object'
-        };
-        
-        if (!validation.baseDecayRate || !validation.maxWeight || !validation.minWeight || !validation.actionWeights) {
-            sendResponse({
-                success: false,
-                error: '配置参数超出有效范围',
-                message: '权重衰变配置更新失败'
-            });
-            return true;
-        }
-        
-        try {
-            // 构建完整的权重衰变配置
-            const weightDecayConfig = {
-                baseDecayRate: config.baseDecayRate,
-                maxWeight: config.maxWeight,
-                minWeight: config.minWeight,
-                actionWeights: config.actionWeights,
-                decayModifiers: {
-                    explicitImportance: 0.5,
-                    recentActivity: 0.3,
-                    consistentEngagement: 0.4
-                }
-            };
-            
-            // 保存配置到存储
-            chrome.storage.local.set({
-                weightDecayConfig: weightDecayConfig,
-                weightDecayConfigUpdated: Date.now()
-            }, () => {
-                console.log('权重衰变配置已保存:', weightDecayConfig);
-                
-                sendResponse({
-                    success: true,
-                    data: weightDecayConfig,
-                    message: '权重衰变配置更新成功'
-                });
-            });
-            
-        } catch (error) {
-            console.error('权重衰变配置更新失败:', error);
-            sendResponse({
-                success: false,
-                error: error.message,
-                message: '权重衰变配置更新失败'
-            });
-        }
-        return true;
-    }
-
-    // 🆕 处理用户上下文配置融合请求
-    if (request.type === 'FUSE_USER_CONTEXT_CONFIG') {
-        console.log('处理用户上下文配置融合请求:', request.userContextConfig);
-        
-        // 验证输入数据
-        const userContextConfig = request.userContextConfig;
-        if (!userContextConfig || typeof userContextConfig !== 'object') {
-            sendResponse({
-                success: false,
-                error: '用户上下文配置无效',
-                message: '数据融合失败'
-            });
-            return true;
-        }
-
-        (async () => {
-            try {
-                // 执行数据融合
-                const success = await memorySystem.fuseUserContextConfig(userContextConfig);
-                
-                if (success) {
-                    console.log('用户上下文配置融合成功');
-                    
-                    // 可选：获取融合后的用户画像
-                    const fusedProfile = await memorySystem.getFusedUserProfile();
-                    
-                    sendResponse({
-                        success: true,
-                        message: '用户上下文配置融合成功',
-                        data: {
-                            fusedProfile: fusedProfile.profile,
-                            fusedInterests: fusedProfile.fusedInterests
-                        }
-                    });
-                } else {
-                    sendResponse({
-                        success: false,
-                        error: '融合操作执行失败',
-                        message: '数据融合失败'
-                    });
-                }
-            } catch (error) {
-                console.error('用户上下文配置融合失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '数据融合失败'
-                });
-            }
-        })();
-        return true;
-    }
-
-    // 🆕 处理获取融合用户画像请求
-    if (request.type === 'GET_FUSED_USER_PROFILE') {
-        console.log('处理获取融合用户画像请求');
-        
-        (async () => {
-            try {
-                const result = await memorySystem.getFusedUserProfile();
-                
-                console.log('融合用户画像获取成功');
-                sendResponse({
-                    success: true,
-                    data: result,
-                    message: '融合用户画像获取成功'
-                });
-            } catch (error) {
-                console.error('获取融合用户画像失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '获取融合用户画像失败'
-                });
-            }
-        })();
-        return true;
-    }
-
-    // 🆕 处理权重自适应调整请求
-    if (request.type === 'ADAPTIVE_WEIGHT_ADJUSTMENT') {
-        console.log('处理权重自适应调整请求');
-        
-        (async () => {
-            try {
-                await memorySystem.adaptiveWeightAdjustment();
-                
-                console.log('权重自适应调整完成');
-                sendResponse({
-                    success: true,
-                    message: '权重自适应调整完成'
-                });
-            } catch (error) {
-                console.error('权重自适应调整失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '权重自适应调整失败'
-                });
-            }
-        })();
-        return true;
-    }
-
-    // 🆕 处理独立用户配置存储请求
-    if (request.type === 'STORE_INDEPENDENT_USER_CONFIG') {
-        console.log('处理独立用户配置存储请求:', request.config);
-        
-        // 验证配置数据
-        const config = request.config;
-        if (!config || typeof config !== 'object') {
-            sendResponse({
-                success: false,
-                error: '配置数据无效',
-                message: '独立用户配置存储失败'
-            });
-            return true;
-        }
-
-        (async () => {
-            try {
-                // 添加时间戳和版本信息
-                const configWithMetadata = {
-                    ...config,
-                    lastUpdated: Date.now(),
-                    version: config.version || '1.0'
-                };
-
-                const success = await memorySystem.storeIndependentUserConfig(configWithMetadata);
-                
-                if (success) {
-                    console.log('独立用户配置存储成功');
-                    sendResponse({
-                        success: true,
-                        message: '独立用户配置存储成功',
-                        data: configWithMetadata
-                    });
-                } else {
-                    sendResponse({
-                        success: false,
-                        error: '存储操作失败',
-                        message: '独立用户配置存储失败'
-                    });
-                }
-            } catch (error) {
-                console.error('独立用户配置存储失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '独立用户配置存储失败'
-                });
-            }
-        })();
-        return true;
-    }
-
-    // 🆕 处理独立用户配置获取请求
-    if (request.type === 'GET_INDEPENDENT_USER_CONFIG') {
-        console.log('处理独立用户配置获取请求');
-        
-        (async () => {
-            try {
-                const config = await memorySystem.getIndependentUserConfig();
-                
-                if (config) {
-                    console.log('独立用户配置获取成功');
-                    sendResponse({
-                        success: true,
-                        data: config,
-                        message: '独立用户配置获取成功'
-                    });
-                } else {
-                    // 配置不存在，返回默认配置
-                    console.log('云端配置不存在，返回默认配置');
-                    sendResponse({
-                        success: true,
-                        data: null,
-                        message: '未找到云端配置，可以使用默认配置'
-                    });
-                }
-            } catch (error) {
-                console.error('获取独立用户配置失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '获取独立用户配置失败'
-                });
-            }
-        })();
-        return true;
-    }
-
-    // 🆕 处理主动推荐生成请求
-    if (request.type === 'GENERATE_PROACTIVE_RECOMMENDATIONS') {
-        console.log('处理主动推荐生成请求');
-        
-        (async () => {
-            try {
-                const recommendations = await memorySystem.generateProactiveRecommendations();
-                
-                console.log('主动推荐生成成功');
-                sendResponse({
-                    success: true,
-                    data: recommendations,
-                    message: `生成了 ${recommendations.length} 个个性化推荐`
-                });
-            } catch (error) {
-                console.error('生成主动推荐失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '生成主动推荐失败'
-                });
-            }
-        })();
+    const userProfileHandled = UserProfileMessageHandler.handleMessage(request, sender, sendResponse);
+    if (userProfileHandled) {
         return true;
     }
     
@@ -914,21 +464,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             request: request
         });
         
-        // 检查仪表盘处理器是否已初始化
-        if (!dashboardHandler) {
-            console.error('❌ 仪表盘处理器未初始化，尝试重新创建...');
-            try {
-                dashboardHandler = new DashboardMessageHandler();
-                console.log('✅ 仪表盘处理器重新创建成功');
-            } catch (error) {
-                console.error('❌ 无法创建仪表盘处理器:', error);
-                sendResponse({ success: false, error: '仪表盘处理器初始化失败' });
-                return true;
-            }
-        }
-        
         (async () => {
             try {
+                const dashboardHandler = new DashboardMessageHandler();
                 await dashboardHandler.handleMessage(request, sendResponse);
                 console.log('✅ 仪表盘消息处理完成:', request.type);
             } catch (error) {
@@ -1236,7 +774,7 @@ async function findJiraTab() {
 // 创建新的 JIRA 标签页
 async function createJiraTab() {
     return await chrome.tabs.create({
-        url: "https://jira.ringcentral.com/browse/MTR-1",
+        url: "https://jira.ringcentral.com/browse/MTR-620",
         active: false
     });
 }
