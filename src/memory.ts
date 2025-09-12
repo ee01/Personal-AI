@@ -151,6 +151,7 @@ export class MemorySystem {
   private alarmListenerAdded = false;
   private backgroundSyncStarted = false;
   private isSyncing = false;
+  private initializationPromise: Promise<boolean> | null = null; // 添加初始化Promise
 
   constructor() {
     this.cloudStorage = new CloudStorage();
@@ -185,15 +186,9 @@ export class MemorySystem {
   }
 
   /**
-   * 初始化记忆系统
+   * 初始化记忆系统（纯粹的初始化逻辑）
    */
-  async initialize(): Promise<boolean> {
-    // 防止重复初始化
-    if (this.isInitialized) {
-      console.log('⚠️ 记忆系统已初始化，跳过重复初始化');
-      return true;
-    }
-
+  private async performInitialization(): Promise<boolean> {
     try {
       console.log('🧠 初始化记忆系统...');
       
@@ -238,6 +233,31 @@ export class MemorySystem {
     }
   }
 
+  /**
+   * 初始化记忆系统（公共接口）
+   */
+  async initialize(): Promise<boolean> {
+    // 如果已经在初始化中，返回现有的Promise
+    if (this.initializationPromise) {
+      console.log('⚠️ 记忆系统正在初始化中，等待完成...');
+      return this.initializationPromise;
+    }
+
+    // 防止重复初始化
+    if (this.isInitialized) {
+      console.log('⚠️ 记忆系统已初始化，跳过重复初始化');
+      return true;
+    }
+
+    // 创建并缓存初始化Promise
+    this.initializationPromise = this.performInitialization().finally(() => {
+      // 无论成功失败，都清除Promise缓存
+      this.initializationPromise = null;
+    });
+
+    return this.initializationPromise;
+  }
+
   // ==================== 读取接口 ====================
 
   /**
@@ -248,7 +268,10 @@ export class MemorySystem {
     searchTerm?: string,
     options: QueryOptions = {}
   ): Promise<QueryResult<CachedEntityDetail>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     const startTime = Date.now();
     this.metrics.totalQueries++;
@@ -323,7 +346,10 @@ export class MemorySystem {
     type?: string,
     options: VectorSearchOptions = {}
   ): Promise<QueryResult<MemoryEntity>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.cloudStorage.searchByVector(query, type, options);
   }
 
@@ -331,7 +357,10 @@ export class MemorySystem {
    * 获取实体详情（优先本地，包含详细信息补充）
    */
   async getEntityDetails(entityId: string): Promise<CachedEntityDetail | null> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     try {
       // 先从本地获取
@@ -363,7 +392,10 @@ export class MemorySystem {
    * 为实体补充详细信息（特别是 recent data）
    */
   async enrichEntityWithDetails(entity: MemoryEntity): Promise<CachedEntityDetail> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     try {
       // 首先尝试从本地缓存获取详细信息
@@ -415,7 +447,10 @@ export class MemorySystem {
    * 批量为实体补充详细信息
    */
   async enrichEntitiesWithDetails(entities: MemoryEntity[]): Promise<CachedEntityDetail[]> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     const enrichedEntities: CachedEntityDetail[] = [];
     
@@ -439,7 +474,10 @@ export class MemorySystem {
     entitiesCreatedThisMonth: number;
     topEntitiesByType: Record<string, MemoryEntity[]>;
   }> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.localStorage.getEntityStatistics();
   }
 
@@ -497,7 +535,10 @@ export class MemorySystem {
     entityType?: string,
     options: QueryOptions = {}
   ): Promise<QueryResult<MemoryEntity>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (query.length > 2) {
       // 使用向量搜索 - 确保返回实体格式
@@ -520,7 +561,10 @@ export class MemorySystem {
     entities: MemoryEntity[];
     relationships: GraphRelationship[];
   }> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.localStorage.getRelationshipNetwork(entityId, depth);
   }
 
@@ -536,7 +580,10 @@ export class MemorySystem {
     source?: string;
     metadata?: any;
   }>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.cloudStorage.getTimeline(limit);
   }
 
@@ -557,7 +604,10 @@ export class MemorySystem {
     relevanceScore: number;
     metadata?: any;
   }>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     // 使用增强的 searchByVector 方法，专门搜索消息并返回原始数据格式
     const result = await this.cloudStorage.searchByVector(entityName, undefined, {
@@ -579,7 +629,10 @@ export class MemorySystem {
    * 存储实体（先云端后本地）
    */
   async storeEntity(entity: Omit<MemoryEntity, 'id' | 'created' | 'updated'>): Promise<StoreResult> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     const startTime = Date.now();
     
@@ -666,7 +719,10 @@ export class MemorySystem {
     content: string;
     metadata: Omit<MemoryMessage, 'id' | 'content'>;
   }): Promise<StoreResult> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     const startTime = Date.now();
     const result: StoreResult = {
@@ -752,7 +808,10 @@ export class MemorySystem {
     metadata: any;
     entities?: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>;
   }): Promise<StoreResult> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     const startTime = Date.now();
     const result: StoreResult = {
@@ -826,7 +885,10 @@ export class MemorySystem {
    * 更新实体（同步更新本地和云端）
    */
   async updateEntity(entityId: string, updates: Partial<MemoryEntity>): Promise<StoreResult> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     const startTime = Date.now();
     const result: StoreResult = {
@@ -875,7 +937,10 @@ export class MemorySystem {
    * 删除实体（同步删除本地和云端）
    */
   async deleteEntity(entityId: string): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     try {
       // 并行删除云端和本地
@@ -901,7 +966,10 @@ export class MemorySystem {
     failed: number;
     results: StoreResult[];
   }> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     const results: StoreResult[] = [];
     let successCount = 0;
@@ -951,7 +1019,10 @@ export class MemorySystem {
    * 更新实体的最近数据缓存
    */
   async updateRecentData(entityId: string, type: 'conversation' | 'resource' | 'project' | 'webpage', data: any): Promise<void> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.localStorage.updateRecentData(entityId, type, data);
   }
 
@@ -1003,7 +1074,10 @@ export class MemorySystem {
    * 清理过期缓存
    */
   async clearExpiredCache(): Promise<void> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.localStorage.clearExpiredCache();
   }
 
@@ -1017,7 +1091,10 @@ export class MemorySystem {
     }
     this.isSyncing = true;
     console.log('🔄 执行定时同步...');
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     try {
       console.log('🔄 开始同步缓存...');
@@ -1105,7 +1182,10 @@ export class MemorySystem {
    * 备份关系数据到云端
    */
   async backupRelationships(): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     try {
       // 获取本地关系数据
@@ -1133,7 +1213,10 @@ export class MemorySystem {
     properties?: Record<string, any>;
     strength?: number;
   }): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     try {
       const fullRelationship = {
@@ -1170,7 +1253,10 @@ export class MemorySystem {
     source?: string;
     metadata?: any;
   }>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     // 这里可以根据需要实现时间轴逻辑
     // 目前返回空数组，可以根据实际需求扩展
@@ -1205,7 +1291,10 @@ export class MemorySystem {
    * 处理实体相似性检测
    */
   async processEntitySimilarity(entity: Omit<MemoryEntity, 'id' | 'created' | 'updated'>): Promise<ProcessedEntity> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.entitySimilarityTool.processEntity(entity);
   }
 
@@ -1213,7 +1302,10 @@ export class MemorySystem {
    * 批量处理实体相似性
    */
   async processEntitiesSimilarity(entities: Array<Omit<MemoryEntity, 'id' | 'created' | 'updated'>>): Promise<ProcessedEntity[]> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.entitySimilarityTool.processEntities(entities);
   }
 
@@ -1221,7 +1313,10 @@ export class MemorySystem {
    * 获取待处理的实体合并候选
    */
   async getPendingEntityMerges(): Promise<EntityMergePair[]> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.entitySimilarityTool.getPendingMerges();
   }
 
@@ -1229,7 +1324,10 @@ export class MemorySystem {
    * 确认实体合并
    */
   async confirmEntityMerge(mergeId: string): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.entitySimilarityTool.confirmMerge(mergeId);
   }
 
@@ -1237,7 +1335,10 @@ export class MemorySystem {
    * 拒绝实体合并
    */
   async rejectEntityMerge(mergeId: string): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.entitySimilarityTool.rejectMerge(mergeId);
   }
 
@@ -1257,7 +1358,10 @@ export class MemorySystem {
    * 执行系统健康检查
    */
   async performHealthCheck(): Promise<SystemHealthStatus> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.systemMaintenanceTool.performHealthCheck();
   }
 
@@ -1270,7 +1374,10 @@ export class MemorySystem {
     forceSync?: boolean;
     backupData?: boolean;
   }): Promise<MaintenanceResult> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     return this.systemMaintenanceTool.performFullMaintenance(options);
   }
 
@@ -1292,7 +1399,10 @@ export class MemorySystem {
    * 获取用户画像
    */
   async getUserProfile(): Promise<{ profile: UserProfile | null; analysis: UserProfileAnalysis | null }> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (!this.userProfileManager) {
       return { profile: null, analysis: null };
@@ -1312,7 +1422,10 @@ export class MemorySystem {
    * 更新用户画像
    */
   async updateUserProfile(update: UserProfileUpdate): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (!this.userProfileManager) {
       console.warn('用户画像管理器未初始化');
@@ -1336,7 +1449,10 @@ export class MemorySystem {
     type: 'project' | 'person' | 'topic' | 'jira' | 'technology' | 'document',
     importance: number
   ): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (!this.userProfileManager) {
       return false;
@@ -1355,7 +1471,10 @@ export class MemorySystem {
    * 应用用户画像权重衰变
    */
   async applyUserProfileDecay(): Promise<void> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (this.userProfileManager) {
       await this.userProfileManager.applyWeightDecay();
@@ -1366,7 +1485,10 @@ export class MemorySystem {
    * 🆕 融合用户上下文配置到用户画像
    */
   async fuseUserContextConfig(userContextConfig: any): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (!this.userProfileManager) {
       return false;
@@ -1389,7 +1511,10 @@ export class MemorySystem {
    * 🆕 执行权重自适应调整
    */
   async adaptiveWeightAdjustment(): Promise<void> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (this.userProfileManager) {
       try {
@@ -1413,7 +1538,10 @@ export class MemorySystem {
     actionUrl?: string;
     priority: 'high' | 'medium' | 'low';
   }>> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (!this.userProfileManager) {
       return [];
@@ -1436,7 +1564,10 @@ export class MemorySystem {
     analysis: any | null,
     fusedInterests: any
   }> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
     
     if (!this.userProfileManager) {
       return { profile: null, analysis: null, fusedInterests: null };
@@ -1477,7 +1608,10 @@ export class MemorySystem {
    * 🆕 存储独立用户配置到云端
    */
   async storeIndependentUserConfig(config: any): Promise<boolean> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     try {
       const success = await this.cloudStorage.storeIndependentUserConfig(config);
@@ -1492,7 +1626,10 @@ export class MemorySystem {
    * 🆕 获取独立用户配置
    */
   async getIndependentUserConfig(): Promise<any | null> {
-    this.ensureInitialized();
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
 
     try {
       const config = await this.cloudStorage.getIndependentUserConfig();
@@ -2169,11 +2306,6 @@ export class MemorySystem {
     }
   }
 
-  private ensureInitialized(): void {
-    if (!this.isInitialized) {
-      throw new Error('记忆系统未初始化，请先调用 initialize() 方法');
-    }
-  }
 }
 
 // 导出单例实例

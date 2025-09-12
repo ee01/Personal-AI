@@ -110,6 +110,7 @@ const clearSearch = () => {
 };
 
 onMounted(() => {
+  // 直接初始化 store，MemorySystem 会自动初始化
   store.initialize();
 });
 </script>
