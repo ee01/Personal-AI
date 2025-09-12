@@ -132,31 +132,17 @@ chrome.runtime.onInstalled.addListener(async () => {
             console.error('Error refreshing RingCentral tab:', error);
         }
 
-        // 安全地初始化Chroma - 使用新的CloudStorage系统
-        try {
-            const cloudStorage = new CloudStorage();
-            if (await cloudStorage.initialize()) {
-                console.log('ChromaDB cloud storage initialized');
-            }
-        } catch (error) {
-            console.error('Failed to initialize ChromaDB cloud storage:', error);
-        }
-
         // 预先创建离屏文档
         await createOffscreenDocument();
 
         // 初始化混合图存储和健康监控
         try {
-            console.log('🔄 初始化记忆系统...');
+            console.log('🔄 onInstalled: 确保记忆系统已初始化...');
             
-            // 初始化记忆系统
-            const initResult = await memorySystem.initialize();
-            if (initResult) {
-                const systemStatus = await memorySystem.getSystemStatus();
-                console.log('📊 记忆系统状态:', systemStatus);
-            } else {
-                console.error('❌ 记忆系统初始化失败');
-            }
+            // 确保记忆系统已初始化
+            await memorySystem.initialize();
+            const systemStatus = await memorySystem.getSystemStatus();
+            console.log('📊 记忆系统状态:', systemStatus);
             
             // 记忆系统已包含自动健康监控
             console.log('🎯 记忆系统监控已启动（内置于系统中）');

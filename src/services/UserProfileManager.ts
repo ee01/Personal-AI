@@ -27,7 +27,7 @@ import { CloudStorage } from '../storage/CloudStorage';
 export class UserProfileManager {
   private cloudStorage: CloudStorage;
   public userId: string;
-  public displayName: string = '';
+  public displayName = '';
   private recordsCache: Map<string, UserProfileRecord> = new Map();
   private lastCacheUpdate = 0;
   private cacheExpiryTime = 5 * 60 * 1000; // 5分钟缓存过期

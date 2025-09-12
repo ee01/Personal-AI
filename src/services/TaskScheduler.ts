@@ -322,7 +322,7 @@ export class TaskScheduler {
   private async executeMemorySync(): Promise<void> {
     try {
       // 确保记忆系统已初始化
-      if (!memorySystem.isInitialized()) {
+      if (!memorySystem.initialize()) {
         console.log('🧠 记忆系统未初始化，跳过同步');
         return;
       }
