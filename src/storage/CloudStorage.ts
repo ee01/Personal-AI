@@ -3254,7 +3254,7 @@ export class CloudStorage {
       relatedData.conversations.push({
         id: messageId,
         summary: messageMetadata.summary || messageMetadata.content?.substring(0, 100) + '...',
-        sender: messageMetadata.source || 'unknown',
+        sender: messageMetadata.sender || messageMetadata.source || 'unknown',
         groupId: messageMetadata.groupId || '',
         groupName: messageMetadata.groupName || '未知群组',
         groupUrl: messageMetadata.groupUrl || '#',
@@ -3589,9 +3589,6 @@ export class CloudStorage {
           
           if (existingEntity) {
             console.log(`🔄 找到相似实体: ${entity.name} -> ${existingEntity.name}, 相似度: ${existingEntity.relevanceScore?.toFixed(3)}`);
-          }
-          
-          if (existingEntity) {
             // 更新现有实体的关联数据
             const updateData: Partial<MemoryEntity> = {
               relatedData: relatedDataForEntity,
@@ -3605,6 +3602,7 @@ export class CloudStorage {
             console.log(`🔄 实体关联数据更新: ${entity.name} -> ${existingEntity.name}, 成功: ${updateResult.success ? '✅' : '❌'}`);
             
           } else {
+            await this.getSimilarEntities(entityWithRelatedData);
             // 存储新实体（包含完整关联数据）
             const newEntity = {
               ...entityWithRelatedData,

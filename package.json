@@ -6,6 +6,7 @@
     "start": "webpack --watch --config webpack.dev.cjs",
     "build": "webpack --config webpack.prod.cjs && npm run zip",
     "zip": "cd dist && zip -r ../personal-ai.zip .",
+    "backup": "tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data",
     "clean": "rm -rf dist/*"
   },
   "type": "module",

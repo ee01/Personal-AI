@@ -2,10 +2,10 @@ version: '3.8'
 
 services:
   chroma:
-    image: chromadb/chroma:1.0.0
+    image: chromadb/chroma:latest
     container_name: chroma-server
     volumes:
-      - ./chroma-data:/chroma/chroma
+      - ./chroma-data:/data
     ports:
       - "8000:8000"
     environment:
@@ -17,7 +17,7 @@ services:
       - CHROMA_SERVER_CORS_ALLOW_ORIGINS=*
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
       interval: 10s
       timeout: 5s
       retries: 5
