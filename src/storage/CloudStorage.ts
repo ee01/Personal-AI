@@ -180,7 +180,6 @@ import {
 } from '../types/userProfile';
 
 export interface CloudStorageConfig {
-  chromaUrl: string;
   collections: string[];
   batchSize: number;
   timeout: number;
@@ -236,7 +235,6 @@ export class CloudStorage {
 
   constructor() {
     this.config = {
-      chromaUrl: 'http://localhost:8000',
       collections: ['messages', 'webpages', 'projects', 'documents', 'graph-entities', 'userprofiles'],
       batchSize: 100,
       timeout: 10000

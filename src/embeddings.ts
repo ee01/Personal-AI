@@ -10,7 +10,7 @@ export async function createOffscreenDocument() {
     });
     
     if (existingContexts.length > 0) {
-      console.log('离屏文档已存在');
+      // console.log('离屏文档已存在');
       return;
     }
     

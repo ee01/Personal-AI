@@ -2,6 +2,14 @@ import * as React from 'react';
 import { useState } from 'react';
 import { CloudStorage, MemoryEntity } from './CloudStorage';
 
+// 自定义空嵌入函数 - 解决 ChromaDB v3 默认嵌入函数依赖问题
+class NullEmbeddingFunction {
+    async generate(texts: string[]): Promise<number[][]> {
+        // 不实际计算嵌入向量，因为我们使用现有的嵌入数据
+        throw new Error('嵌入计算应通过现有数据完成，不应调用此函数');
+    }
+}
+
 // ====== 数据结构定义 ======
 
 // V6版本的messages metadata数据结构
@@ -417,6 +425,9 @@ const V6DataMigrationTool = () => {
             // 测试连接
             await client.heartbeat();
 
+            // 创建空嵌入函数实例
+            const nullEmbeddingFunction = new NullEmbeddingFunction();
+
             // 🆕 检查多个可能的V6 messages集合名称
             const collections = await client.listCollections();
             const collectionNames = collections.map(c => c.name);
@@ -454,7 +465,7 @@ const V6DataMigrationTool = () => {
             // 获取V6 messages集合
             const v6Collection = await client.getCollection({ 
                 name: v6CollectionName,
-                embeddingFunction: undefined
+                embeddingFunction: nullEmbeddingFunction
             });
 
             // 获取所有消息
@@ -522,13 +533,16 @@ const V6DataMigrationTool = () => {
                 throw new Error('未找到V6消息集合');
             }
 
+            // 创建空嵌入函数实例
+            const nullEmbeddingFunction = new NullEmbeddingFunction();
+
             const newCollectionName = `${userinfo.username}-messages`;
             const isSameCollection = v6CollectionName === newCollectionName;
 
             // 获取V6集合数据
             const v6Collection = await client.getCollection({ 
                 name: v6CollectionName,
-                embeddingFunction: undefined
+                embeddingFunction: nullEmbeddingFunction
             });
 
             const result = await v6Collection.get({
@@ -554,13 +568,13 @@ const V6DataMigrationTool = () => {
                 try {
                     newCollection = await client.getCollection({ 
                         name: newCollectionName,
-                        embeddingFunction: undefined
+                        embeddingFunction: nullEmbeddingFunction
                     });
                 } catch {
                     // 集合不存在，创建新集合
                     newCollection = await client.createCollection({ 
                         name: newCollectionName,
-                        embeddingFunction: undefined
+                        embeddingFunction: nullEmbeddingFunction
                     });
                     console.log(`✅ 创建新集合: ${newCollectionName}`);
                 }
