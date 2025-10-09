@@ -4,6 +4,8 @@ const fs = require('fs');
 
 const ESLintPlugin = require('eslint-webpack-plugin');
 const CopyPlugin = require('copy-webpack-plugin');
+const { VueLoaderPlugin } = require('vue-loader');
+const NodeProtocolResolverPlugin = require('./node-protocol-resolver.cjs');
 
 // 处理 manifest 模板
 const processManifestTemplate = (env) => {
@@ -24,19 +26,24 @@ module.exports = (env) => {
       contentScriptGoogleSlide: './src/contentScriptGoogleSlide.tsx',
       contentScriptJira: './src/contentScriptJira.ts',
       contentScriptJiraAutomation: './src/contentScriptJiraAutomation.ts',
+      contentScriptWebIntelligence: './src/contentScriptWebIntelligence.ts',
       popup: './src/popup.tsx',
       options: './src/options.tsx',
       offscreen: './src/offscreen.ts',
-      entityExtraction: './src/entityExtraction.ts',
       agentThinking: './src/agentThinking.ts',
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/modals/topic-modal.tsx',
       'knowledge-query': './src/modals/knowledge-query.tsx',
       'slides-analysis': './src/modals/slides-analysis.tsx',
+      'project-dashboard': './src/modals/project-dashboard.tsx',
+      'enhanced-knowledge-query': './src/modals/enhanced-knowledge-query.tsx',
+      'prompt-config': './src/modals/prompt-config.tsx',
       'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
       'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
-      'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts'
+      'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts',
+      'memory': './src/modals/memory.tsx',
+      'memory-exploring': './src/modals/memory-exploring-entry.ts',
     },
     module: {
       rules: [
@@ -45,17 +52,38 @@ module.exports = (env) => {
           use: ['babel-loader'],
           exclude: /node_modules/,
         },
+        {
+          test: /\.vue$/,
+          loader: 'vue-loader'
+        },
+        {
+          test: /\.css$/,
+          use: ['vue-style-loader', 'css-loader']
+        },
       ],
     },
     resolve: {
-      extensions: ['.ts', '.js', '.tsx', '.jsx'],
+      extensions: ['.ts', '.js', '.tsx', '.jsx', '.vue'],
       fallback: {
         "fs": false,
         "path": require.resolve("path-browserify"),
         "crypto": require.resolve("crypto-browserify"),
         "stream": require.resolve("stream-browserify"),
-        "buffer": require.resolve("buffer/")
-      }
+        "buffer": require.resolve("buffer/"),
+        "process": require.resolve("process/browser.js"),
+        "process/browser": require.resolve("process/browser.js"),
+        "node:process": require.resolve("process/browser.js"),
+        "node:path": require.resolve("path-browserify"),
+        "node:crypto": require.resolve("crypto-browserify"),
+        "node:stream": require.resolve("stream-browserify"),
+        "node:buffer": require.resolve("buffer/"),
+        "node:fs": false,
+        "node:util": require.resolve("util/"),
+        "node:url": require.resolve("url/")
+      },
+      plugins: [
+        new NodeProtocolResolverPlugin()
+      ]
     },
     output: {
       filename: '[name].js',
@@ -64,8 +92,13 @@ module.exports = (env) => {
       publicPath: '/'
     },
     plugins: [
+      new VueLoaderPlugin(),
+      // 处理 node: 协议导入的插件
+      new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
+        resource.request = resource.request.replace(/^node:/, '');
+      }),
       new ESLintPlugin({
-        extensions: ['js', 'ts', 'jsx', 'tsx'],
+        extensions: ['js', 'ts', 'jsx', 'tsx', 'vue'],
         overrideConfigFile: path.resolve(__dirname, '.eslintrc'),
       }),
       new CopyPlugin({
@@ -73,10 +106,17 @@ module.exports = (env) => {
       }),
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],
+        process: 'process/browser.js',
       }),
       new webpack.ProvidePlugin({
         SlideAnalyzerFactoryImpl: ['./src/analyzers/analyzerFactory', 'SlideAnalyzerFactoryImpl'],
         LLMContentAnalyzer: ['./src/analyzers/llmAnalyzer', 'LLMContentAnalyzer']
+      }),
+      // 定义 Vue 特性标志
+      new webpack.DefinePlugin({
+        __VUE_OPTIONS_API__: JSON.stringify(true),
+        __VUE_PROD_DEVTOOLS__: JSON.stringify(false),
+        __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: JSON.stringify(false)
       })
     ],
     optimization: {

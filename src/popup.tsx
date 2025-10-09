@@ -84,6 +84,23 @@ const Popup = () => {
         });
     };
     
+    const openProjectDashboard = () => {
+        chrome.windows.create({
+            url: 'project-dashboard.html',
+            type: 'popup',
+            width: 1200,
+            height: 900,
+            focused: true
+        });
+    };
+    
+    const openMemoryInterface = () => {
+        chrome.tabs.create({
+            url: chrome.runtime.getURL('memory-exploring.html'),
+            active: true
+        });
+    };
+    
     const openPromptConfigWindow = () => {
         chrome.windows.create({
             url: 'prompt-config.html',
@@ -279,6 +296,14 @@ const Popup = () => {
                 </div>
             )}
 
+            <button onClick={openProjectDashboard} className="dashboard-button">
+                📊 项目进度仪表盘
+            </button>
+
+            <button onClick={openMemoryInterface} className="memory-button">
+                🧠 实体记忆查询
+            </button>
+
             <button onClick={openKnowledgeQueryWindow} className="message-button">
                 知识库查询
             </button>
@@ -393,6 +418,32 @@ const Popup = () => {
                 .expand-button:hover {
                      background-color: #31b0d5;
                 }
+
+                 .dashboard-button {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    font-weight: 600;
+                    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+                    transition: all 0.3s ease;
+                 }
+                 
+                 .dashboard-button:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+                 }
+                 
+                 .memory-button {
+                    background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+                    color: white;
+                    font-weight: 600;
+                    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+                    transition: all 0.3s ease;
+                 }
+                 
+                 .memory-button:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+                 }
 
                  .message-button { /* Example specific style if needed */
                     background-color: #ff9900; /* Example orange */

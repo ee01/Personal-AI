@@ -3,16 +3,17 @@ import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
 import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
-import { extractEntitiesToStore } from './entityExtraction';
+import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
+import { memorySystem, StoreResult } from './memory';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
 	try {
 		// 检查是否在 background script 环境中
-		const isBackground = typeof window === 'undefined';
+		const isBackground = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
 		if (isBackground) {
 			// 在 background script 中直接调用处理函数
 			const response = await analyzeMessagesInBackground(data, username, isScheduledTask);
@@ -30,15 +31,15 @@ export async function analyzeMessages (data: any[], username: string, isSchedule
 				}
 			});
 			
-			if (response.data) {
-				console.log("LLM's response:", response.data, {data, isScheduledTask});
+			// 检查响应格式 - 支持新的统一响应格式
+			if (response && response.success) {
+				console.log("LLM's response:", response, {data, isScheduledTask});
 				// Todo: Toast 方法在 popup 中无法调用
-				showToast('Analysis complete, please check the console', 'success');
-				return response.data;
+				// showToast(response.message || 'Analysis complete', 'success');
+				return response;
 			} else {
-				const error = new Error('Received invalid response format from LLM');
-				console.error("Unexpected response format:", response);
-				showToast(error.message, 'error');
+				const error = new Error(response.message || 'Analysis failed');
+				// showToast(error.message, 'error');
 				throw error;
 			}
 		}
@@ -57,7 +58,11 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
 	if (!scheduleActive && isScheduledTask) {
 		console.log('定时分析任务已被终止，跳过处理');
-		return;
+		return { 
+			success: false, 
+			message: '定时分析任务已被终止', 
+			data: [] as any[]
+		};
 	}
 
 	const concernedItems: {text: string, pushToGlip?: boolean, mentionMe?: boolean}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
@@ -73,30 +78,34 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	//   groupName: 'Recording Test',
 	//   groupId: '123',
 	//   posts: [
-	//     { creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
-	//     { creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
+	//     { id: '1231', creator: 'Ada', time: '2025-02-13 00:00:00', text: 'Share recording 的 backend 完成怎么样了？' },
+	//     { id: '1232', creator: 'Sophia (Jinmei) Lin', time: '2025-02-13 00:00:00', text: 'Recording project BE dependencies completed' }
 	//   ]
 	// });
 	// data.unshift({
 	//   groupName: '大群',
 	//   groupId: '2578219014',
 	//   posts: [
-	//     { creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
-	//     { creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
+	//     { id: '25782190141', creator: 'Colin Liu', time: '2025-02-14 00:00:00', text: '@Team 应要求，大家注意一下到公司时候的上下班时间，至少保持8个小时在公司的时间，无特殊情况不要中场离开，谢谢各位 。详细信息大家请翻看我之前发的消息' },
+	//     { id: '25782190142', creator: 'Ruphi', time: '2025-02-14 00:01:00', text: '详细信息可以查看：MTR-128732' }
 	//   ]
 	// });
 	// data.unshift({
 	//   groupName: '小群',
 	//   groupId: '321',
 	//   posts: [
-	//     { creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
+	//     { id: '3211', creator: 'Fred', time: '2025-02-14 00:00:00', text: '没事' }
 	//   ]
 	// });
-	// data.splice(2);
+	// data.splice(3);
 	console.log(data, concernedItems, username);
 	if (data.length === 0) {
 		console.log('没有消息数据，跳过处理');
-		return;
+		return { 
+			success: true, 
+			message: '没有消息数据需要处理', 
+			data: [] as any[]
+		};
 	}
     
     // 根据配置选择处理方式
@@ -203,49 +212,92 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					}).catch(console.error);
 				}
 				
-				// 处理 shouldStore 标志
+										// 🆕 处理 shouldStore 标志 - 使用统一存储接口
 				if (result.shouldStore) {
 					try {
 						const originalMessage = result.messageContext || {};
 						const messageId = uuidv4();
 						
-						// 提取实体信息，可以直接使用 result.enrichedData 中的实体信息
-						const entities = result.enrichedData?.entities || {};
-						const relationships = result.enrichedData?.relationships || [];
-						const actions = result.enrichedData?.actions || [];
+						// 构建消息元数据
+						const messageMetadata = {
+							sender: originalMessage.sender || 'unknown',
+							datetime: new Date(originalMessage.datetime).getTime() || Date.now(),
+							matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
+							summary: result.summary || '',
+							groupName: originalMessage.groupName || '',
+							groupId: originalMessage.groupId || '',
+							groupUrl: 'https://app.ringcentral.com/messages/' + originalMessage.groupId,
+							// 基于智能分析结果推断用户关系类型
+							user_relation_type: result.user_relation_type || 'general_interest',
+							contextMessages: [] as any[], // Todo: 暂时设为空数组，稍后从其他地方获取
+							entities: result.enrichedData?.entities || {},
+							metadata: {
+								sentiment: result.enrichedData?.sentiment || 'neutral',
+								priority: result.notificationPriority || 'low',
+								category: result.enrichedData?.category || [],
+								tags: result.enrichedData?.tags || []
+							},
+							actions: result.enrichedData?.actions || [],
+							replyAdvice: result.replyAdvice || ''
+						};
+
+						// 🆕 使用统一存储接口 - 内部自动处理实体关联数据
+						try {
+							// 确保记忆系统已初始化
+							await memorySystem.initialize();
+							
+							// 统一存储接口 - 包含消息存储和实体关联数据处理
+							const storeResult: StoreResult = await memorySystem.storeMessage({
+								id: messageId,
+								content: originalMessage.messageContent || '',
+								metadata: messageMetadata
+							});
+
+							console.log(`✅ 消息完整存储完成: ${messageId}`, {
+								...storeResult,
+								performance: `${storeResult.processingTime}ms`
+							});
+
+						} catch (unifiedError) {
+							console.error('🚨 统一存储系统失败，回退到原有方式:', unifiedError);
+							
+							// 回退到原有的存储方式
+							await storeMessage(
+								messageId,
+								originalMessage.messageContent || '',
+								messageMetadata
+							);
+							
+							console.log(`📦 消息存储完成 [回退系统]: ${messageId}`);
+						}
 						
-						// 存储消息
-						await storeMessage(
-							messageId,
-							originalMessage.messageContent || '',
-							{
-								source: originalMessage.sender || 'unknown',
-								timestamp: Date.now(),
-								matchedRules: result.matchedRule ? [result.matchedRule] : result.reasonsToStore || [],
-								summary: result.summary || '',
-								teamName: originalMessage.groupName || '',
-								teamId: originalMessage.groupId || '',
-								entities: entities,
-								metadata: {
-									sentiment: result.enrichedData?.sentiment || 'neutral',
-									priority: result.notificationPriority || 'low',
-									category: result.enrichedData?.category || [],
-									tags: result.enrichedData?.tags || []
-								},
-								relationships: relationships,
-								actions: actions,
-								reply_advice: result.replyAdvice || ''
-							}
-						);
-						
-						console.log(`已存储消息: ${messageId}`);
 					} catch (error) {
 						console.error('存储消息失败:', error);
 					}
 				}
 			}
+
+			// 返回处理结果
+			return {
+				success: true,
+				message: `agentThinking处理完成: ${resultsArray.length} 条消息, ${storedCount} 条已存储, ${notifiedCount} 条已通知`,
+				data: resultsArray,
+				stats: {
+					total: resultsArray.length,
+					important: importantCount,
+					stored: storedCount,
+					notified: notifiedCount,
+					filtered: noisyCount
+				}
+			};
 		} catch (error) {
 			console.error('批量处理消息失败:', error);
+			return {
+				success: false,
+				message: `agentThinking处理失败: ${error.message}`,
+				data: [] as any[],
+				error: error.message
+			};
 		}
     } else if (envConfig.ANALYSIS_TYPE === 'agentWorkflow') {
         // 使用智能 Agent 系统处理
@@ -266,6 +318,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			// 处理该群组的每条消息
 			for (const post of item.posts) {
 				const messageData = {
+					post_id: post.id,
 					team_id: item.groupId,
 					team_name: item.groupName,
 					message_content: post.text,
@@ -300,9 +353,20 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				}
 			}
 		}
+		
+		// agentWorkflow 处理完成
+		return {
+			success: true,
+			message: `agentWorkflow处理完成: 共处理 ${data.length} 个群组`,
+			data: [] as any[],
+			stats: {
+				total: data.length,
+				processed: data.length
+			}
+		};
     } else {
         // 使用普通模式处理
-        console.log('Using normal mode to process messages');
+        console.log('Using filter mode to process messages');
         return await processMessageFilterByConcernedItems(data, concernedItems, username, isScheduledTask);
     }
 }
@@ -311,7 +375,8 @@ async function processMessageFilterByConcernedItems(data: any[], concernedItems:
 
 	const system_prompt = `
 你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
-${envConfig.ANALYZE_BY_GROUP ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}	
+${envConfig.ANALYZE_BY_GROUP ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}
+<message_group> 的 property 有 team_name，如果team_name是单个人名，则视为私聊，如果是多个人名，则是临时会话，否则视为群聊。
 
 ---- 以下是我的需求和你需要返回的内容定义 ----
 ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
@@ -321,23 +386,26 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
 2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
 	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
 	- <message_content> properties 中的发送者sender和发送时间datetime, 还有 <message_group> properties 中的 team_name, team_id, post_id
-3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这 4 个新字段：
+3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这几个新字段：
 	- matched_rule: 上面第一步的符合到的规则x的原文内容
 	- filter_reason: 选择这条消息过滤出来的原因，可以用中文表达
 	- summary: 对这条消息所在的 message_group 的其他消息的上下文做出总结并适当的推理为什么sender会发出这个消息。请不要留空，这里可以用中文
 	- reply_advice: 针对这条消息的上下文，给出回复建议，回复用的语言跟随上下文聊天语言。如果觉得这条消息不需要回复，请回复空字符串
 	- entities: 提取消息中的实体信息，包括人物、项目、话题、行动项、情感和类别
+	- user_relation_type: 基于智能分析结果推断本消息与我的关系，先检查是否有明确提及我的名字或者是在私聊(群组名是单个人名)直接对我说的话，如果有则返回 mention_me，提及团队或Team则返回 mention_team，如果没有则检查是否有明确提及项目、政策、人员等，如果有则返回 project_related、policy_related、person_tracking，如果没有则返回 general_interest
 ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
 
 将任务输出的数据进行如下验证：
-1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{error: "No messages matched any rules", data: []}：
+1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{success: false, message: "No messages matched any rules", data: []}：
 {
-	"error": "",
+	"success": true,
+	"message": "消息过滤完成: 共处理 {total} 个群组",
 	"data": [{
 		"message_content": "{message_content}",
 		"sender": "{sender}",
 		"matched_rule": "所符合的规则的内容",
 		"filter_reason": "",
+		"user_relation_type": "消息与用户的关系类型：mention_me(直接提到我)|mention_team(@Team)|project_related(项目相关关注)|policy_related(政策规定关注)|person_tracking(特定人员追踪)|general_interest(一般关注)",
 		"post_id": "{post_id}",
 		"team_name": "{team_name}",
 		"team_id": "{team_id}",
@@ -346,13 +414,22 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 		"reply_advice": "建议的回复填入此",
 		"datetime": "{datetime}",
 		"entities": {
-		"people": ["消息中提到的人物"],
-		"projects": ["消息中提到的项目"],
-		"topics": ["消息中提到的话题"],
-		"actions": ["消息中需要执行的动作"]
-		"sentiment": "整体情感(positive/negative/neutral)",
-		"category": [消息类别，如"决策"、"讨论"、"公告"等]
-		}
+			"people": ["消息中提到的人物"],
+			"projects": ["消息中提到的项目"],
+			"topics": ["消息中提到的话题"],
+			"actions": ["消息中需要执行的动作"],
+			"documents": [{"name": "文档名称", "url": "链接", "type": "文档类型"}],
+			"technologies": [{"name": "技术名称", "category": "技术分类", "version": "版本号"}],
+			"sentiment": "整体情感(positive/negative/neutral)",
+			"category": [消息类别，如"决策"、"讨论"、"公告"等]
+		},
+		"contextMessages": [{
+			"id": "message_group内所有相关消息的post_id",
+			"sender": "message_group内所有相关消息的发送者",
+			"content": "message_group内所有相关消息原文",
+			"datetime": "message_group内所有相关消息的发送时间",
+			"isMainMessage": false // 是否是符合条件过滤出来的关键消息
+		}]
 	}]
 }
 2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
@@ -406,6 +483,7 @@ ${message}
 			});
 			await new Promise(resolve => setTimeout(resolve, (envConfig.LLM_TYPE === 'local' ? 3 * 60 : 10) * 1000));
 		}
+		return {success: true, message: '消息过滤完成: 共处理 ' + data.length + ' 个群组'};
 	} else {
 		// 合并发送 LLM
 		const messages = data.reduce((acc, item) => `${acc}\n
@@ -427,7 +505,8 @@ ${messages}
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
-		await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt});
+		const dealResponse = await reviewMessageByLLMAndSendToBot({user_prompt, system_prompt});
+		console.log('MessageDealing response:', dealResponse);
 		chrome.storage.local.set({
 			ollamaAnalysisProgress: {
 				total: 1,
@@ -435,6 +514,7 @@ ${messages}
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
+		return dealResponse;
 	}
 }
 // 整合处理请求以及推送 bot 消息
@@ -476,31 +556,68 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
 
-				// 原有逻辑：将匹配的消息存储到向量数据库
+				// 增强逻辑：使用新的统一存储系统
 				const messageId = uuidv4();
-				const extractedEntities = await extractEntitiesToStore(json.message_content, json);
-				await storeMessage(
-					messageId,
-					json.message_content,
-					{
-						source: json.sender || 'unknown',
-						timestamp: Date.now(),
-						matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-						summary: json.summary || '',
-						teamName: json.team_name,
-						teamId: json.team_id,
-						entities: extractedEntities.entities,
-						metadata: {
-							sentiment: extractedEntities.metadata.sentiment,
-							priority: extractedEntities.metadata.priority,
-							category: extractedEntities.metadata.category,
-							tags: extractedEntities.metadata.tags
-						},
-						relationships: extractedEntities.relationships,
-						actions: extractedEntities.actions,
-						reply_advice: json.reply_advice
+				const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
+				
+				// 构建消息元数据（包含上下文信息）
+				const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
+					id: post.id,
+					sender: post.creator,
+					content: post.text,
+					datetime: post.time,
+					isMainMessage: post.id == json.post_id
+				})) : json.contextMessages;
+				const messageMetadata = {
+					sender: json.sender || 'unknown',
+					datetime: new Date(json.datetime).getTime() || Date.now(),
+					postId: json.post_id,   // 原始消息ID
+					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+					summary: json.summary || '',
+					groupName: json.team_name,
+					groupId: json.team_id,
+					groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
+					// 用户关系类型（用于更精确的用户画像更新）
+					user_relation_type: json.user_relation_type || 'general_interest',
+					// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
+					contextMessages: contextMessages,
+					// 当前消息在上下文中的位置
+					messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
+					actions: extractedEntities.actions,
+					replyAdvice: json.reply_advice,
+					entities: extractedEntities.entities,
+					metadata: {
+						sentiment: extractedEntities.metadata.sentiment,
+						priority: extractedEntities.metadata.priority,
+						category: extractedEntities.metadata.category,
+						tags: extractedEntities.metadata.tags
 					}
-				);
+				};
+
+				// 🆕 使用统一存储接口（与 agentThinking 方式一致）
+				try {
+					// 确保记忆系统已初始化
+					await memorySystem.initialize();
+					
+					// 统一存储接口 - 包含消息存储和实体关联数据处理
+					const storeResult: StoreResult = await memorySystem.storeMessage({
+						id: messageId,
+						content: json.message_content,
+						metadata: messageMetadata
+					});
+
+					console.log(`✅ 消息完整存储完成 [统一接口]: ${messageId.slice(0,8)}`, {
+						...storeResult,
+						performance: `${storeResult.processingTime}ms`
+					});
+
+				} catch (memoryError) {
+					console.error('🚨 统一存储系统失败，回退到原有方式:', memoryError);
+					
+					// 回退到基础存储
+					await storeMessage(messageId, json.message_content, messageMetadata);
+					console.log(`📦 消息存储完成 [回退系统]: ${messageId.slice(0,8)}`);
+				}
 
 				// 如果审核通过，则推送 Glip 消息
 				if (isPassReview && envConfig.ENABLE_BOT) {

@@ -172,7 +172,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
   };
   
   // 检查是否在 background script 环境中
-  const isBackground = typeof window === 'undefined';
+  const isBackground = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
   
   // 准备批量处理项目数据
   const projectAnalysisRequests = [];

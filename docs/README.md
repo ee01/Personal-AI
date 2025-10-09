@@ -6,14 +6,15 @@
 
 - `features/` - 功能详细设计文档
   - 每个功能有独立的`.md`文件描述其设计和实现
-  - 对应的`_prompt.md`文件记录开发过程中的关键AI对话
+- `prompts/` - 对应的`_prompt.md`文件记录开发过程中的关键AI对话
 
 ## 功能文档索引
 
 ### 核心分析系统
 - [`agent_thinking.md`](features/agent_thinking.md) - 智能Agent思考系统
-- [`agent_workflow.md`](features/agent_workflow.md) - Agent工作流系统 **(最新)**
-- [`message_analysis_filter.md`](features/message_analysis_filter.md) - AI智能消息分析过滤功能 **(已更新)**
+- [`agent_workflow.md`](features/agent_workflow.md) - Agent工作流系统 
+- [`message_analysis_filter.md`](features/message_analysis_filter.md) - AI智能消息分析过滤功能
+- [`memory_system.md`](features/memory_system.md) - 实体记忆系统综合设计文档 **(完整实现)**
 
 ### 专项功能
 - [`custom_prompts.md`](features/custom_prompts.md) - 自定义提示词功能
@@ -22,13 +23,6 @@
 ### 集成功能
 - [`jira_automation_import.md`](features/jira_automation_import.md) - Jira自动化导入
 - [`jira_design_links.md`](features/jira_design_links.md) - Jira设计链接功能
-
-## 最新更新
-
-**2024-12-20**
-- ✨ 新增 Agent工作流系统文档
-- 🔄 更新 消息分析过滤功能文档，添加@我功能说明
-- 📝 完善关注项管理和智能通知系统说明
 
 ## 文档维护指南
 

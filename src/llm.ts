@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import Groq from 'groq-sdk';
 import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics, fuzzyMatchEntityName } from './vectorStore';
 import { getEnvConfig } from './utils';
-import { extractEntitiesForQuery } from './entityExtraction';
+import { extractEntitiesForQuery } from './services/entityExtraction';
 
 // 根据不同 LLM 服务处理 LLM 请求，并提取 JSON 数据
 export async function handleLLMRequest(body: any): Promise<string> {
@@ -603,7 +603,7 @@ export async function knowledgeQuery(question: string) {
     const formattedResults = results.documents.map((doc, idx) => {
       const metadata = results.metadatas[idx] as Record<string, string | number | boolean>;
       const id = String(results.ids[idx]);
-      const relevance = 1 - results.distances[idx]; // 转换距离为相关性分数
+      const relevance = Math.max(0, 1 - results.distances[idx]); // 余弦距离：1-distance转换为相关性分数 (0-1)
       
       // 解析标签
       let tags: string[] = [];
@@ -618,11 +618,11 @@ export async function knowledgeQuery(question: string) {
         tags = [];
       }
       
-      // 构建团队信息
-      const teamInfo = metadata.teamName || metadata.teamId ? {
-        name: String(metadata.teamName || '未知群组'),
-        id: String(metadata.teamId || ''),
-        url: metadata.teamId ? `https://app.ringcentral.com/messages/${metadata.teamId}` : ''
+      // 构建群组信息
+      const groupInfo = metadata.grName || metadata.groupId ? {
+        name: String(metadata.groupName || '未知群组'),
+        id: String(metadata.groupId || ''),
+        url: metadata.groupId ? `https://app.ringcentral.com/messages/${metadata.groupId}` : ''
       } : undefined;
       
       // 构建 QueryResult 对象
@@ -634,7 +634,7 @@ export async function knowledgeQuery(question: string) {
         source: String(metadata.source),
         relevance: relevance,
         tags: tags,
-        team: teamInfo,
+        team: groupInfo,
         reply_advice: metadata.reply_advice || ''
       };
     });

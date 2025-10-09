@@ -609,4 +609,58 @@ document.addEventListener('DOMContentLoaded', () => {
 // 在页面重新渲染时也执行
 window.addEventListener('load', () => {
   setTimeout(main, 2000); // 延迟更长时间执行
-}); 
+});
+
+// 监听来自background的消息
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'GET_USER_INFO') {
+    getUserInfoFromJiraAPI()
+      .then(userInfo => {
+        sendResponse({ data: userInfo });
+      })
+      .catch(error => {
+        console.error('Failed to get user info from JIRA API:', error);
+        sendResponse({ data: null, error: error.message });
+      });
+    return true; // 保持消息通道开放
+  }
+});
+
+// 从 JIRA API 获取用户信息
+async function getUserInfoFromJiraAPI(): Promise<any> {
+  try {
+    console.log('Getting user info from JIRA API...');
+    const response = await fetch(window.location.origin + '/rest/api/2/myself', {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`JIRA API request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const userInfo = await response.json();
+    console.log('Got user info from JIRA API:', userInfo);
+    
+    // 将 JIRA 用户信息转换为扩展所需的格式
+    const formattedUserInfo = {
+      fullName: userInfo.displayName || "",
+      username: userInfo.name || "",
+      ownerId: userInfo.key || "",
+      userEmail: userInfo.emailAddress || "",
+      extensionId: "", // JIRA API 没有提供 extensionId，保持为空
+      jiraKey: userInfo.key || "", // 保存 JIRA 的 key 字段
+      jiraTimezone: userInfo.timeZone || "",
+      jiraLocale: userInfo.locale || ""
+    };
+    
+    console.log('Formatted user info:', formattedUserInfo);
+    return formattedUserInfo;
+  } catch (error) {
+    console.error('Error getting user info from JIRA API:', error);
+    throw error;
+  }
+} 

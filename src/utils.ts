@@ -1,5 +1,3 @@
-import { getCurrentUserInfo, getLocalStorageItem } from "./storage";
-
 // 环境配置类型定义
 export interface EnvConfigType {
   SCHEDULED_INTERVAL: number;
@@ -28,8 +26,10 @@ export interface EnvConfigType {
   ENABLE_BOT: boolean;
   LLM_REVIEW_BEFORE_SEND: boolean;
   ENABLE_CHROMA: boolean;
-  CHROMA_API_URL: string;
+  CHROMA_API_URL: string;  // 保留用于兼容旧配置
+  CHROMA_HOST: string;     // 新增：Chroma 主机地址
   CHROMA_PORT: number;
+  CHROMA_SSL: boolean;     // 新增：是否使用 SSL
   CHROMA_COLLECTION_NAME: string;
   // JIRA相关配置
   JIRA_BASE_URL?: string;
@@ -151,8 +151,10 @@ export const defaultEnvConfig: EnvConfigType = {
   ENABLE_BOT: process.env.ENABLE_BOT === "true",
   LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
   ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
-  CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",
+  CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",  // 保留用于兼容
+  CHROMA_HOST: process.env.CHROMA_HOST || "localhost",
   CHROMA_PORT: Number(process.env.CHROMA_PORT) || 8000,
+  CHROMA_SSL: process.env.CHROMA_SSL === "true",
   CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || "",
   JIRA_BASE_URL: process.env.JIRA_BASE_URL || "https://jira.ringcentral.com",
   JIRA_USERNAME: process.env.JIRA_USERNAME || "",
@@ -179,25 +181,48 @@ export function getDefaultEnvConfig(): EnvConfigType {
   return defaultEnvConfig;
 }
 
-export function getUserInfo() {
-  const accountUD = getLocalStorageItem('global.account.UD', '');
-  const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
-
-  const accountInfo = accountUD ? accountInfoList[accountUD] : accountInfoList.find((item:any) => item.displayName != '');
-  console.log('accountInfoList', accountInfoList, accountInfo);
-  if (accountInfo) return {
-    extensionId: accountInfo.extensionId,
-    email: accountInfo.email,
-    fullName: accountInfo.displayName,
-    username: accountInfo.email ? accountInfo.email.trim().split('@')[0] : accountInfo.displayName.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
-  }
-
-  const userInfo = getCurrentUserInfo();
-  return {
-    extensionId: userInfo.extensionId,
-    fullName: userInfo.username,
-    username: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
-    email: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, '') + '@ringcentral.com'
-  };
+export async function getUserInfo() {
+  const { userinfo } = await chrome.storage.local.get(['userinfo'])
+  return userinfo;
 }
 
+/**
+ * 解析 ChromaDB 连接参数，支持新旧配置格式的兼容
+ */
+export function parseChromaConfig(config: EnvConfigType) {
+  // 如果有新的 host 配置，直接使用
+  if (config.CHROMA_HOST && config.CHROMA_HOST !== 'localhost') {
+    return {
+      host: config.CHROMA_HOST,
+      port: config.CHROMA_PORT,
+      ssl: config.CHROMA_SSL
+    };
+  }
+
+  // 如果没有配置新的 host，尝试从旧的 CHROMA_API_URL 解析
+  if (config.CHROMA_API_URL) {
+    try {
+      const url = new URL(config.CHROMA_API_URL);
+      return {
+        host: url.hostname,
+        port: url.port ? parseInt(url.port) : (url.protocol === 'https:' ? 443 : 8000),
+        ssl: url.protocol === 'https:'
+      };
+    } catch (error) {
+      console.warn('解析 CHROMA_API_URL 失败:', error);
+      // 回退到默认值
+      return {
+        host: 'localhost',
+        port: config.CHROMA_PORT || 8000,
+        ssl: false
+      };
+    }
+  }
+
+  // 都没有配置，使用默认值
+  return {
+    host: config.CHROMA_HOST || 'localhost',
+    port: config.CHROMA_PORT || 8000,
+    ssl: config.CHROMA_SSL || false
+  };
+}

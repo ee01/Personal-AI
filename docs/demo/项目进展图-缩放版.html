@@ -1,0 +1,1526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>项目进展 · 缩放版</title>
+  <!-- GSAP CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/Draggable.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --primary: #3b82f6;
+      --primary-light: #dbeafe;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --info: #06b6d4;
+      --purple: #8b5cf6;
+      --dep-color: #ef4444;
+      --epic-color: #1f2937;
+      --design-color: #10b981;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    }
+
+    * { box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 0;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+      padding: 40px 0;
+      background: var(--card);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+    }
+
+    .header h1 {
+      font-size: 32px;
+      font-weight: 700;
+      margin: 0 0 10px;
+      color: var(--text);
+    }
+
+    .header p {
+      color: var(--text-muted);
+      font-size: 16px;
+      margin: 0;
+    }
+
+    .project-list {
+      display: flex;
+      flex-direction: column;
+      gap: 30px;
+    }
+
+    .project-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 30px;
+      box-shadow: var(--shadow);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .project-card:hover {
+      box-shadow: var(--shadow-lg);
+      transform: translateY(-2px);
+    }
+
+    .project-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 25px;
+    }
+
+    .project-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin: 0;
+      color: var(--text);
+    }
+
+    .project-meta {
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+
+    /* 鱼骨图容器 */
+    .fishbone-container {
+      position: relative;
+      height: 260px; /* 增加高度以适应新的卡片位置 */
+      margin: 20px 0;
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      border-radius: 12px;
+      padding: 20px;
+      border: 2px solid var(--border);
+      cursor: default;
+    }
+
+    /* 主时间线 */
+    .timeline-spine {
+      position: absolute;
+      left: 40px;
+      right: 40px;
+      top: 50%;
+      height: 4px;
+      background: linear-gradient(90deg, var(--design-color), var(--primary), var(--dep-color));
+      border-radius: 2px;
+      transform: translateY(-50%);
+    }
+
+    /* 箭头 */
+    .timeline-arrow {
+      position: absolute;
+      right: 35px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-left: 12px solid var(--dep-color);
+      border-top: 8px solid transparent;
+      border-bottom: 8px solid transparent;
+    }
+
+    /* 里程碑点 */
+    .milestone {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: bold;
+      color: white;
+      z-index: 10;
+    }
+
+    .milestone.beta {
+      background: var(--success);
+      box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);
+    }
+
+    .milestone.ga {
+      background: var(--primary);
+      box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+    }
+
+    .milestone:hover {
+      transform: translate(-50%, -50%) scale(1.3);
+      box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.3);
+    }
+
+    .milestone-label {
+      position: absolute;
+      top: -35px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .milestone-date {
+      position: absolute;
+      bottom: -35px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    /* 任务分支（鱼骨） */
+    .task-bone {
+      position: absolute;
+      background: var(--card);
+      border: 2px solid;
+      border-radius: 12px;
+      padding: 12px 16px;
+      min-width: 180px;
+      cursor: grab;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: var(--shadow);
+      z-index: 5;
+      user-select: none;
+    }
+
+    .task-bone:hover {
+      transform: scale(1.05);
+      box-shadow: var(--shadow-lg);
+      z-index: 15;
+    }
+
+    .task-bone.dragging {
+      cursor: grabbing;
+      transform: scale(1.08);
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15), 0 5px 15px rgba(0, 0, 0, 0.1);
+      z-index: 20;
+      transition: none;
+      filter: brightness(1.05);
+    }
+
+    /* 弹窗激活时降低拖拽卡片的z-index */
+    body.modal-open .task-bone {
+      z-index: 1 !important;
+    }
+    
+    body.modal-open .task-bone.dragging {
+      z-index: 2 !important;
+    }
+
+    .task-bone::before {
+      content: '';
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      right: -4px;
+      bottom: -4px;
+      background: linear-gradient(135deg, var(--primary), var(--success), var(--warning));
+      border-radius: 16px;
+      opacity: 0;
+      z-index: -1;
+      transition: opacity 0.3s ease;
+    }
+
+    .task-bone:hover::before {
+      opacity: 0.1;
+    }
+
+    .task-bone.dragging::before {
+      opacity: 0.2;
+    }
+
+    /* 任务分支类型样式 */
+    .task-bone.dep {
+      border-color: var(--dep-color);
+      top: 16px; /* 距离主线40px */
+    }
+
+    .task-bone.epic {
+      border-color: var(--epic-color);
+      bottom: 2px; /* 距离主线40px */
+    }
+
+    .task-bone.design {
+      border-color: var(--design-color);
+      top: 16px; /* 距离主线40px */
+      left: 60px;
+    }
+
+    /* 连接线 */
+    .bone-connector {
+      position: absolute;
+      background: currentColor;
+      z-index: 1;
+      pointer-events: none; /* 避免影响卡片交互 */
+    }
+
+    .bone-connector.dep {
+      width: 112px;
+      height: 2px;
+      color: var(--dep-color);
+      bottom: -40px; /* 向下延伸到时间线 */
+      right: -28px;
+      transform: rotate(75deg);
+      transform-origin: right center;
+    }
+
+    .bone-connector.epic {
+      width: 120px;
+      height: 2px;
+      color: var(--epic-color);
+      top: -40px; /* 向上延伸到时间线 */
+      right: -32px;
+      transform: rotate(-75deg);
+      transform-origin: right center;
+    }
+
+    .bone-connector.design {
+      width: 112px;
+      height: 2px;
+      color: var(--design-color);
+      bottom: -40px; /* 向下延伸到时间线 */
+      right: -28px;
+      transform: rotate(75deg);
+      transform-origin: right center;
+    }
+
+    .task-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0 0 6px;
+      color: var(--text);
+    }
+
+    .task-meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .status-tag {
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 600;
+      color: white;
+    }
+
+    .status-progress { background: var(--info); }
+    .status-review { background: var(--purple); }
+    .status-done { background: var(--success); }
+    .status-blocked { background: var(--danger); }
+    .status-pending { background: var(--warning); }
+
+    .eta-tag {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .platforms {
+      display: flex;
+      gap: 3px;
+      margin-top: 6px;
+    }
+
+    .platform-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .platform-dot.done { background: var(--success); }
+    .platform-dot.progress { background: var(--info); }
+    .platform-dot.pending { background: var(--text-muted); }
+
+    /* 缩放模式 */
+    .zoom-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      display: none;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+    }
+
+    .zoom-overlay.active {
+      display: flex;
+      opacity: 1;
+    }
+
+    .zoom-content {
+      position: relative;
+      margin: auto;
+      background: var(--card);
+      border-radius: 20px;
+      max-width: 95vw;
+      width: 1000px;
+      max-height: 90vh;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      transform: scale(0.9);
+      transition: transform 0.4s ease;
+    }
+
+    .zoom-overlay.active .zoom-content {
+      transform: scale(1);
+    }
+
+    .zoom-header {
+      padding: 24px 30px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .zoom-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin: 0;
+      color: var(--text);
+    }
+
+    .close-btn {
+      width: 36px;
+      height: 36px;
+      border: none;
+      background: var(--border);
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      color: var(--text-muted);
+      transition: all 0.2s ease;
+    }
+
+    .close-btn:hover {
+      background: var(--danger);
+      color: white;
+    }
+
+    .zoom-body {
+      padding: 30px;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
+    .detail-section {
+      margin-bottom: 24px;
+      padding: 20px;
+      background: var(--bg);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 16px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: white;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .info-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .info-value {
+      font-size: 14px;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .jira-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .jira-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.2s ease;
+    }
+
+    .jira-item:hover {
+      border-color: var(--primary);
+      background: var(--primary-light);
+    }
+
+    .jira-icon {
+      width: 24px;
+      height: 24px;
+      background: var(--primary);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .chat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .chat-item {
+      padding: 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      border-left: 4px solid var(--primary);
+    }
+
+    .chat-author {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 4px;
+    }
+
+    .chat-message {
+      font-size: 14px;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+
+    .chat-time {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .platform-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .platform-item {
+      padding: 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .platform-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .platform-status {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      color: white;
+    }
+
+    /* 编辑功能样式 */
+    .editable-field {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+    }
+
+    .edit-btn, .add-jira-btn, .delete-jira-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s ease;
+      color: var(--text-muted);
+    }
+
+    .edit-btn:hover, .add-jira-btn:hover {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .delete-jira-btn:hover {
+      background: var(--danger);
+      color: white;
+      border-color: var(--danger);
+    }
+
+    .jira-item-editable {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .jira-item-editable .jira-item {
+      flex: 1;
+    }
+
+    .edit-input, .edit-select, .edit-textarea {
+      padding: 8px 12px;
+      border: 2px solid var(--primary);
+      border-radius: 6px;
+      font-size: 14px;
+      background: var(--card);
+      color: var(--text);
+      min-width: 150px;
+    }
+
+    .edit-textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    .edit-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .save-btn, .cancel-btn {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .save-btn {
+      background: var(--success);
+      color: white;
+    }
+
+    .cancel-btn {
+      background: var(--text-muted);
+      color: white;
+    }
+
+    .add-jira-btn {
+      margin-left: auto;
+      background: var(--success);
+      color: white;
+      border-color: var(--success);
+    }
+
+    /* 响应式设计 */
+    @media (max-width: 768px) {
+      .container {
+        padding: 15px;
+      }
+      
+      .project-card {
+        padding: 20px;
+      }
+      
+      .fishbone-container {
+        height: 200px; /* 移动端适配新高度 */
+        padding: 15px;
+      }
+      
+      .task-bone {
+        min-width: 140px;
+        padding: 8px 12px;
+      }
+      
+      .zoom-content {
+        margin: 20px;
+        max-width: calc(100vw - 40px);
+        max-height: calc(100vh - 40px);
+      }
+    }
+
+    /* 滚动条样式 */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>项目进展报告</h1>
+      <p>点击鱼骨图上的任务分支查看详细信息 | 拖拽卡片可调整时间线位置</p>
+    </div>
+
+    <div class="project-list" id="projectList">
+      <!-- 项目将在这里动态生成 -->
+    </div>
+  </div>
+
+  <!-- 缩放详情弹窗 -->
+  <div class="zoom-overlay" id="zoomOverlay">
+    <div class="zoom-content">
+      <div class="zoom-header">
+        <h2 class="zoom-title" id="zoomTitle">任务详情</h2>
+        <button class="close-btn" id="closeBtn">×</button>
+      </div>
+      <div class="zoom-body" id="zoomBody">
+        <!-- 详情内容将在这里动态生成 -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 项目数据
+    const projects = [
+      {
+        id: 'p1',
+        name: 'Project 1',
+        description: '核心功能开发项目',
+        milestones: {
+          beta: { percent: 25, date: '2025-05-05' },
+          ga: { percent: 80, date: '2025-06-10' }
+        },
+        tasks: [
+          {
+            id: 't1',
+            type: 'dep',
+            title: 'BE dependency',
+            percent: 22,
+            status: 'progress',
+            eta: '2025-05-02',
+            desc: 'RCV-xxxx BUG FOR XXX - 后端依赖修复',
+            jira: [
+              { key: 'PROJ-1234', title: '修复登录接口bug' },
+              { key: 'PROJ-1235', title: '优化数据库查询性能' }
+            ],
+            chats: [
+              { author: 'Alice', message: '后端API已经准备好了，需要前端配合测试', time: '10:30' },
+              { author: 'Bob', message: '数据格式确认完毕，可以开始集成', time: '10:45' },
+              { author: 'Charlie', message: '发现一个边界情况，正在修复', time: '11:20' }
+            ]
+          },
+          {
+            id: 't2',
+            type: 'design',
+            title: 'Design',
+            percent: 15,
+            status: 'progress',
+            eta: '2025-04-20',
+            desc: 'UI/UX设计方案制定',
+            jira: [
+              { key: 'DESIGN-101', title: '用户界面设计评审' }
+            ],
+            chats: [
+              { author: 'Designer', message: '原型图已更新，请查看最新版本', time: '14:20' },
+              { author: 'PM', message: '设计方案看起来不错，建议微调颜色', time: '14:35' }
+            ]
+          },
+          {
+            id: 't3',
+            type: 'epic',
+            title: 'Epic 1',
+            percent: 45,
+            status: 'review',
+            eta: '2025-04-24',
+            desc: '用户认证系统重构',
+            jira: [
+              { key: 'E1-1234', title: 'Epic: 用户认证系统' },
+              { key: 'E1-1235', title: 'Story: 单点登录集成' }
+            ],
+            chats: [
+              { author: 'Dev1', message: 'iOS版本已完成开发，正在进行内测', time: '16:30' },
+              { author: 'QA', message: '测试中发现几个小bug，已记录到JIRA', time: '17:00' },
+              { author: 'Dev2', message: 'Android版本预计明天完成', time: '17:15' }
+            ],
+            platforms: { 
+              sdk: { status: 'done', assignee: 'Alice Wang', jira: 'SDK-123' }, 
+              ios: { status: 'done', assignee: 'Bob Chen', jira: 'IOS-456' }, 
+              android: { status: 'progress', assignee: 'Carol Li', jira: 'AND-789' }, 
+              qa: { status: 'progress', assignee: 'David Zhang', jira: 'QA-101' } 
+            }
+          },
+          {
+            id: 't4',
+            type: 'epic',
+            title: 'Epic 2',
+            percent: 75,
+            status: 'done',
+            eta: '2025-04-30',
+            desc: '数据分析模块',
+            jira: [
+              { key: 'E2-5678', title: 'Epic: 数据分析功能' }
+            ],
+            chats: [
+              { author: 'PM', message: '功能已发布到生产环境，运行稳定', time: '18:00' },
+              { author: 'Analytics', message: '用户反馈很好，使用率超预期', time: '18:30' }
+            ],
+            platforms: { 
+              sdk: { status: 'done', assignee: 'Alice Wang', jira: 'SDK-124' }, 
+              ios: { status: 'done', assignee: 'Bob Chen', jira: 'IOS-457' }, 
+              android: { status: 'done', assignee: 'Carol Li', jira: 'AND-790' }, 
+              qa: { status: 'done', assignee: 'David Zhang', jira: 'QA-102' } 
+            }
+          }
+        ]
+      },
+      {
+        id: 'p2',
+        name: 'Project 2',
+        description: '性能优化项目',
+        milestones: {
+          beta: { percent: 30, date: '2025-04-15' },
+          ga: { percent: 85, date: '2025-06-30' }
+        },
+        tasks: [
+          {
+            id: 't5',
+            type: 'epic',
+            title: 'Epic A',
+            percent: 35,
+            status: 'progress',
+            eta: '2025-04-20',
+            desc: 'Frontend性能优化',
+            jira: [
+              { key: 'EA-100', title: 'Epic: 前端性能优化' }
+            ],
+            chats: [
+              { author: 'Frontend', message: '新的打包方案已经测试完成', time: '09:15' },
+              { author: 'DevOps', message: 'CDN配置已优化，加载速度提升30%', time: '09:45' }
+            ],
+            platforms: { 
+              sdk: { status: 'progress', assignee: 'Eve Liu', jira: 'SDK-125' }, 
+              ios: { status: 'pending', assignee: 'Frank Wu', jira: 'IOS-458' }, 
+              android: { status: 'pending', assignee: 'Grace Zhou', jira: 'AND-791' }, 
+              qa: { status: 'pending', assignee: 'Henry Xu', jira: 'QA-103' } 
+            }
+          },
+          {
+            id: 't6',
+            type: 'dep',
+            title: 'BE API v2',
+            percent: 55,
+            status: 'blocked',
+            eta: '2025-05-01',
+            desc: '等待网关升级完成',
+            jira: [
+              { key: 'API-200', title: 'API v2 开发计划' }
+            ],
+            chats: [
+              { author: 'Backend', message: '网关团队说升级延期了，影响我们的进度', time: '11:30' },
+              { author: 'PM', message: '已经escalate到管理层，争取加快进度', time: '12:00' }
+            ]
+          }
+        ]
+      },
+      {
+        id: 'p3',
+        name: 'Project 3',
+        description: '移动端适配项目',
+        milestones: {
+          beta: { percent: 20, date: '2025-04-08' },
+          ga: { percent: 90, date: '2025-05-28' }
+        },
+        tasks: [
+          {
+            id: 't7',
+            type: 'design',
+            title: 'Mobile Design',
+            percent: 18,
+            status: 'review',
+            eta: '2025-04-10',
+            desc: '移动端UI适配设计',
+            jira: [
+              { key: 'MOB-001', title: '移动端设计规范' }
+            ],
+            chats: [
+              { author: 'UXDesigner', message: '移动端适配方案已完成，等待评审', time: '15:20' }
+            ]
+          },
+          {
+            id: 't8',
+            type: 'epic',
+            title: 'Mobile Epic',
+            percent: 50,
+            status: 'progress',
+            eta: '2025-05-02',
+            desc: '移动端功能开发',
+            jira: [
+              { key: 'ME-001', title: 'Epic: 移动端功能' }
+            ],
+            chats: [
+              { author: 'MobileDev', message: 'iOS版本进度良好，Android稍有延迟', time: '16:10' }
+            ],
+            platforms: { 
+              sdk: { status: 'done', assignee: 'Iris Chen', jira: 'SDK-126' }, 
+              ios: { status: 'progress', assignee: 'Jack Wang', jira: 'IOS-459' }, 
+              android: { status: 'progress', assignee: 'Kate Li', jira: 'AND-792' }, 
+              qa: { status: 'pending', assignee: 'Leo Zhang', jira: 'QA-104' } 
+            }
+          }
+        ]
+      }
+    ];
+
+    // 渲染项目列表
+    function renderProjects() {
+      const container = document.getElementById('projectList');
+      container.innerHTML = '';
+
+      projects.forEach(project => {
+        const projectElement = createProjectCard(project);
+        container.appendChild(projectElement);
+      });
+    }
+
+    // 创建项目卡片
+    function createProjectCard(project) {
+      const card = document.createElement('div');
+      card.className = 'project-card';
+      
+      card.innerHTML = `
+        <div class="project-header">
+          <div>
+            <h2 class="project-title">${project.name}</h2>
+            <p style="margin: 5px 0 0; color: var(--text-muted);">${project.description}</p>
+          </div>
+          <div class="project-meta">
+            <span class="badge">Beta: ${project.milestones.beta.date}</span>
+            <span class="badge">GA: ${project.milestones.ga.date}</span>
+          </div>
+        </div>
+        <div class="fishbone-container">
+          ${createFishbone(project)}
+        </div>
+      `;
+
+      return card;
+    }
+
+    // 创建鱼骨图
+    function createFishbone(project) {
+      let html = `
+        <div class="timeline-spine"></div>
+        <div class="timeline-arrow"></div>
+        <div class="milestone beta" style="left: ${project.milestones.beta.percent}%">
+          <div class="milestone-label">Beta</div>
+          <div class="milestone-date">${project.milestones.beta.date}</div>
+          β
+        </div>
+        <div class="milestone ga" style="left: ${project.milestones.ga.percent}%">
+          <div class="milestone-label">GA</div>
+          <div class="milestone-date">${project.milestones.ga.date}</div>
+          GA
+        </div>
+      `;
+
+      // 添加任务分支
+      project.tasks.forEach(task => {
+        const platformsHtml = task.platforms ? 
+          `<div class="platforms">
+            ${Object.entries(task.platforms).map(([name, platform]) => 
+              `<div class="platform-dot ${platform.status}" title="${name.toUpperCase()}: ${platform.status} - ${platform.assignee} (${platform.jira})"></div>`
+            ).join('')}
+          </div>` : '';
+
+        html += `
+          <div class="task-bone ${task.type}" style="left: ${task.percent}%" data-task="${task.id}" data-project="${project.id}">
+            <div class="bone-connector ${task.type}" data-connector="${task.id}"></div>
+            <div class="task-title">${task.title}</div>
+            <div class="task-meta">
+              <span class="status-tag status-${task.status}">${task.status}</span>
+              <span class="eta-tag">ETA: ${task.eta}</span>
+            </div>
+            ${platformsHtml}
+          </div>
+        `;
+      });
+
+      return html;
+    }
+
+    // 显示任务详情
+    function showTaskDetail(taskId) {
+      const task = findTaskById(taskId);
+      if (!task) return;
+
+      document.getElementById('zoomTitle').textContent = task.title;
+      
+      let platformsSection = '';
+      if (task.platforms) {
+        platformsSection = `
+          <div class="detail-section">
+            <h3 class="section-title">
+              <span class="section-icon" style="background: var(--info);">📱</span>
+              平台开发进展
+            </h3>
+            <div class="platform-grid">
+              ${Object.entries(task.platforms).map(([name, platform]) => `
+                <div class="platform-item">
+                  <div class="platform-name">${name.toUpperCase()}</div>
+                  <span class="platform-status status-${platform.status}">${platform.status}</span>
+                  <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+                    <div><strong>负责人:</strong> ${platform.assignee}</div>
+                    <div><strong>JIRA:</strong> <a href="#" style="color: var(--primary);" onclick="alert('打开JIRA: ${platform.jira}')">${platform.jira}</a></div>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      const content = `
+        <div class="detail-section">
+          <h3 class="section-title">
+            <span class="section-icon" style="background: var(--primary);">ℹ️</span>
+            基本信息
+          </h3>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="info-label">状态</span>
+              <div class="editable-field" data-field="status">
+                <span class="editable-content">
+                  <span class="status-tag status-${task.status}">${task.status}</span>
+                </span>
+                <button class="edit-btn" onclick="editField(this, 'select')" title="编辑">✏️</button>
+              </div>
+            </div>
+            <div class="info-item">
+              <span class="info-label">预计完成时间</span>
+              <div class="editable-field" data-field="eta">
+                <span class="editable-content">${task.eta}</span>
+                <button class="edit-btn" onclick="editField(this, 'date')" title="编辑">✏️</button>
+              </div>
+            </div>
+
+            <div class="info-item">
+              <span class="info-label">任务类型</span>
+              <span class="info-value">${task.type === 'dep' ? '依赖任务' : task.type === 'epic' ? 'Epic任务' : '设计任务'}</span>
+            </div>
+          </div>
+          <div style="margin-top: 16px;">
+            <span class="info-label">备注</span>
+            <div class="editable-field" data-field="desc" style="margin-top: 8px; line-height: 1.6;">
+              <span class="editable-content">${task.desc}</span>
+              <button class="edit-btn" onclick="editField(this, 'text')" title="编辑">✏️</button>
+            </div>
+          </div>
+        </div>
+
+        ${platformsSection}
+
+        <div class="detail-section">
+          <h3 class="section-title">
+            <span class="section-icon" style="background: var(--success);">🎯</span>
+            关联 JIRA
+            <button class="add-jira-btn" onclick="addJiraItem()" title="新增JIRA">➕</button>
+          </h3>
+          <div class="jira-list" data-field="jira">
+            ${task.jira.map((jira, index) => `
+              <div class="jira-item-editable">
+                <a href="#" class="jira-item" onclick="alert('打开JIRA: ${jira.key}')">
+                  <span class="jira-icon">J</span>
+                  <div>
+                    <div style="font-weight: 600;">${jira.key}</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">${jira.title}</div>
+                  </div>
+                </a>
+                <button class="delete-jira-btn" onclick="deleteJiraItem(${index})" title="删除">🗑️</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h3 class="section-title">
+            <span class="section-icon" style="background: var(--warning);">💬</span>
+            团队讨论
+          </h3>
+          <div class="chat-list">
+            ${task.chats.map(chat => `
+              <div class="chat-item">
+                <div class="chat-author">${chat.author}</div>
+                <div class="chat-message">${chat.message}</div>
+                <div class="chat-time">${chat.time}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+      document.getElementById('zoomBody').innerHTML = content;
+      document.getElementById('zoomOverlay').classList.add('active');
+      document.body.classList.add('modal-open');
+    }
+
+    // 查找任务
+    function findTaskById(taskId) {
+      for (const project of projects) {
+        const task = project.tasks.find(t => t.id === taskId);
+        if (task) return task;
+      }
+      return null;
+    }
+
+    // 关闭详情
+    function closeDetail() {
+      document.getElementById('zoomOverlay').classList.remove('active');
+      document.body.classList.remove('modal-open');
+    }
+
+    // 事件监听
+    function setupEventListeners() {
+      // 任务点击事件（只在非拖拽时触发）
+      document.addEventListener('click', (e) => {
+        const taskBone = e.target.closest('.task-bone');
+        if (taskBone && !taskBone.classList.contains('was-dragging')) {
+          const taskId = taskBone.dataset.task;
+          showTaskDetail(taskId);
+        }
+        // 清除拖拽标记
+        setTimeout(() => {
+          document.querySelectorAll('.task-bone').forEach(bone => {
+            bone.classList.remove('was-dragging');
+          });
+        }, 100);
+      });
+
+      // 关闭按钮
+      document.getElementById('closeBtn').addEventListener('click', closeDetail);
+      
+      // 点击遮罩关闭
+      document.getElementById('zoomOverlay').addEventListener('click', (e) => {
+        if (e.target.id === 'zoomOverlay') {
+          closeDetail();
+        }
+      });
+
+      // 键盘ESC关闭
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          closeDetail();
+        }
+      });
+    }
+
+    // 存储拖拽实例
+    let dragInstances = [];
+
+    // 初始化拖拽功能
+    function initDragFunctionality() {
+      // 先销毁现有的拖拽实例
+      dragInstances.forEach(instance => {
+        if (instance && instance.kill) {
+          instance.kill();
+        }
+      });
+      dragInstances = [];
+
+      // 等待DOM渲染完成
+      setTimeout(() => {
+        document.querySelectorAll('.task-bone').forEach((taskBone, index) => {
+          const taskId = taskBone.dataset.task;
+          const projectId = taskBone.dataset.project;
+          const fishboneContainer = taskBone.closest('.fishbone-container');
+          
+          if (!fishboneContainer) return;
+          
+          // 获取当前任务的百分比位置
+          const project = projects.find(p => p.id === projectId);
+          const task = project?.tasks.find(t => t.id === taskId);
+          if (!task) return;
+          
+          const containerRect = fishboneContainer.getBoundingClientRect();
+          const containerPadding = 40; // 左右padding
+          const availableWidth = containerRect.width - (containerPadding * 2) - taskBone.offsetWidth;
+          
+          // 将百分比转换为像素位置（考虑卡片宽度）
+          const currentPercent = task.percent;
+          const pixelPosition = containerPadding + (currentPercent - 10) / 80 * availableWidth;
+          
+          // 设置初始位置
+          gsap.set(taskBone, { x: pixelPosition });
+          
+          // 移除CSS的left定位，避免与GSAP冲突
+          taskBone.style.left = 'auto';
+          
+          // 连接线现在在卡片内部，会自动跟随移动
+          
+          // 调试信息（可选）
+          console.log(`Task ${taskId}: ${currentPercent}% = ${pixelPosition}px`);
+          
+          const minLeft = containerPadding;
+          const maxLeft = containerPadding + availableWidth;
+          
+          // 创建GSAP拖拽实例
+          const dragInstance = Draggable.create(taskBone, {
+            type: "x", // 只允许水平拖拽
+            bounds: {
+              minX: minLeft,
+              maxX: maxLeft
+            },
+            inertia: true, // 添加惯性
+            edgeResistance: 0.8, // 边缘阻力
+            onDragStart: function() {
+              taskBone.classList.add('dragging');
+            },
+            onDrag: function() {
+              // 计算新的百分比位置
+              const currentLeft = this.x;
+              const percentage = ((currentLeft - containerPadding) / availableWidth) * 80 + 10; // 10%-90%范围
+              
+              // 更新数据
+              updateTaskPosition(taskId, projectId, percentage);
+            },
+            onDragEnd: function() {
+              taskBone.classList.remove('dragging');
+              taskBone.classList.add('was-dragging'); // 标记已拖拽，避免触发点击事件
+              
+              // 添加一个轻微的弹性动画
+              gsap.to(taskBone, {
+                scale: 1,
+                duration: 0.2,
+                ease: "back.out(1.2)"
+              });
+            },
+            snap: {
+              x: function(endValue) {
+                // 可选：添加吸附到里程碑的功能
+                const milestones = [25, 80]; // Beta和GA的位置百分比
+                const tolerance = 5; // 容差范围
+                const currentPercent = ((endValue - containerPadding) / availableWidth) * 80 + 10;
+                
+                for (let milestone of milestones) {
+                  if (Math.abs(currentPercent - milestone) < tolerance) {
+                    const snapX = containerPadding + ((milestone - 10) / 80) * availableWidth;
+                    return snapX;
+                  }
+                }
+                return endValue;
+              }
+            }
+          });
+          
+          // 存储拖拽实例
+          if (dragInstance && dragInstance.length > 0) {
+            dragInstances.push(dragInstance[0]);
+          }
+        });
+      }, 200);
+    }
+
+    // 更新任务位置数据
+    function updateTaskPosition(taskId, projectId, percentage) {
+      const project = projects.find(p => p.id === projectId);
+      if (project) {
+        const task = project.tasks.find(t => t.id === taskId);
+        if (task) {
+          task.percent = percentage;
+        }
+      }
+    }
+
+    // 响应窗口大小变化
+    function handleResize() {
+      // 延迟重新初始化拖拽功能，避免频繁调用
+      clearTimeout(window.resizeTimeout);
+      window.resizeTimeout = setTimeout(() => {
+        // 重新计算所有卡片的位置
+        document.querySelectorAll('.task-bone').forEach(taskBone => {
+          const taskId = taskBone.dataset.task;
+          const projectId = taskBone.dataset.project;
+          const project = projects.find(p => p.id === projectId);
+          const task = project?.tasks.find(t => t.id === taskId);
+          
+          if (task) {
+            const fishboneContainer = taskBone.closest('.fishbone-container');
+            if (fishboneContainer) {
+              const containerRect = fishboneContainer.getBoundingClientRect();
+              const containerPadding = 40;
+              const availableWidth = containerRect.width - (containerPadding * 2) - taskBone.offsetWidth;
+              const pixelPosition = containerPadding + (task.percent - 10) / 80 * availableWidth;
+              
+              // 重置位置
+              gsap.set(taskBone, { x: pixelPosition });
+            }
+          }
+        });
+        
+        // 重新初始化拖拽功能
+        initDragFunctionality();
+      }, 300);
+    }
+
+    // 初始化
+    function init() {
+      renderProjects();
+      setupEventListeners();
+      initDragFunctionality();
+      
+      // 监听窗口大小变化
+      window.addEventListener('resize', handleResize);
+    }
+
+    // 当前编辑的任务ID
+    let currentTaskId = null;
+
+    // 编辑字段功能
+    function editField(button, fieldType) {
+      const field = button.closest('.editable-field');
+      const content = field.querySelector('.editable-content');
+      const currentValue = content.textContent.trim();
+      
+      let inputElement;
+      
+      if (fieldType === 'select') {
+        inputElement = document.createElement('select');
+        inputElement.className = 'edit-select';
+        ['pending', 'progress', 'review', 'done', 'blocked'].forEach(status => {
+          const option = document.createElement('option');
+          option.value = status;
+          option.textContent = status;
+          if (currentValue.includes(status)) option.selected = true;
+          inputElement.appendChild(option);
+        });
+      } else if (fieldType === 'date') {
+        inputElement = document.createElement('input');
+        inputElement.type = 'date';
+        inputElement.className = 'edit-input';
+        inputElement.value = currentValue;
+      } else if (fieldType === 'text') {
+        inputElement = document.createElement('textarea');
+        inputElement.className = 'edit-textarea';
+        inputElement.value = currentValue;
+      } else {
+        inputElement = document.createElement('input');
+        inputElement.className = 'edit-input';
+        inputElement.value = currentValue;
+      }
+      
+      const actions = document.createElement('div');
+      actions.className = 'edit-actions';
+      actions.innerHTML = `
+        <button class="save-btn" onclick="saveField(this, '${fieldType}')">保存</button>
+        <button class="cancel-btn" onclick="cancelEdit(this)">取消</button>
+      `;
+      
+      field.innerHTML = '';
+      field.appendChild(inputElement);
+      field.appendChild(actions);
+      inputElement.focus();
+    }
+
+    // 保存编辑
+    function saveField(button, fieldType) {
+      const field = button.closest('.editable-field');
+      const input = field.querySelector('input, select, textarea');
+      const newValue = input.value;
+      const fieldName = field.dataset.field;
+      
+      // 这里可以添加保存到服务器的逻辑
+      console.log(`保存字段 ${fieldName}: ${newValue}`);
+      
+      // 更新显示
+      let displayValue = newValue;
+      if (fieldType === 'select') {
+        displayValue = `<span class="status-tag status-${newValue}">${newValue}</span>`;
+      }
+      
+      field.innerHTML = `
+        <span class="editable-content">${displayValue}</span>
+        <button class="edit-btn" onclick="editField(this, '${fieldType}')" title="编辑">✏️</button>
+      `;
+      
+      // 更新数据
+      updateTaskData(fieldName, newValue);
+    }
+
+    // 取消编辑
+    function cancelEdit(button) {
+      const field = button.closest('.editable-field');
+      const fieldName = field.dataset.field;
+      const task = findTaskById(currentTaskId);
+      
+      let originalValue = task[fieldName];
+      let displayValue = originalValue;
+      let fieldType = 'text';
+      
+      if (fieldName === 'status') {
+        displayValue = `<span class="status-tag status-${originalValue}">${originalValue}</span>`;
+        fieldType = 'select';
+      } else if (fieldName === 'eta') {
+        fieldType = 'date';
+      }
+      
+      field.innerHTML = `
+        <span class="editable-content">${displayValue}</span>
+        <button class="edit-btn" onclick="editField(this, '${fieldType}')" title="编辑">✏️</button>
+      `;
+    }
+
+    // 更新任务数据
+    function updateTaskData(fieldName, newValue) {
+      const task = findTaskById(currentTaskId);
+      if (task) {
+        task[fieldName] = newValue;
+        console.log('任务数据已更新:', task);
+      }
+    }
+
+    // 添加JIRA项目
+    function addJiraItem() {
+      const key = prompt('请输入JIRA Key (例如: PROJ-123):');
+      const title = prompt('请输入JIRA标题:');
+      
+      if (key && title) {
+        const task = findTaskById(currentTaskId);
+        if (task) {
+          task.jira.push({ key, title });
+          // 重新渲染JIRA列表
+          refreshJiraList(task);
+        }
+      }
+    }
+
+    // 删除JIRA项目
+    function deleteJiraItem(index) {
+      if (confirm('确定要删除这个JIRA项目吗？')) {
+        const task = findTaskById(currentTaskId);
+        if (task) {
+          task.jira.splice(index, 1);
+          // 重新渲染JIRA列表
+          refreshJiraList(task);
+        }
+      }
+    }
+
+    // 刷新JIRA列表
+    function refreshJiraList(task) {
+      const jiraList = document.querySelector('.jira-list[data-field="jira"]');
+      jiraList.innerHTML = task.jira.map((jira, index) => `
+        <div class="jira-item-editable">
+          <a href="#" class="jira-item" onclick="alert('打开JIRA: ${jira.key}')">
+            <span class="jira-icon">J</span>
+            <div>
+              <div style="font-weight: 600;">${jira.key}</div>
+              <div style="font-size: 12px; color: var(--text-muted);">${jira.title}</div>
+            </div>
+          </a>
+          <button class="delete-jira-btn" onclick="deleteJiraItem(${index})" title="删除">🗑️</button>
+        </div>
+      `).join('');
+    }
+
+    // 修改showTaskDetail函数以设置当前任务ID
+    const originalShowTaskDetail = showTaskDetail;
+    showTaskDetail = function(taskId) {
+      currentTaskId = taskId;
+      originalShowTaskDetail(taskId);
+    };
+
+    // 启动应用
+    init();
+  </script>
+</body>
+</html>

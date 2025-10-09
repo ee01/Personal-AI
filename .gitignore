@@ -1,9 +1,11 @@
 coverage
 node_modules
+venv
 .DS_Store
 .env
 .env.development
 .vscode/symbols.json
 chroma-data/
+chroma-backup/
 static/manifest.json
 dist/

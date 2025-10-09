@@ -10,7 +10,7 @@ export async function createOffscreenDocument() {
     });
     
     if (existingContexts.length > 0) {
-      console.log('离屏文档已存在');
+      // console.log('离屏文档已存在');
       return;
     }
     
@@ -28,6 +28,18 @@ export async function createOffscreenDocument() {
 
 // 通过离屏文档获取嵌入向量
 export async function getEmbeddingViaOffscreen(text: string): Promise<number[]> {
+  const isBackground = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
+  if (isBackground) {
+    return await getEmbeddingInBackground(text);
+  } else {
+    const result = await chrome.runtime.sendMessage({
+      type: 'EXEC_EMBEDDING_REQUEST',
+      text
+    });
+    return result;
+  }
+}
+export async function getEmbeddingInBackground(text: string): Promise<number[]> {
   try {
     await createOffscreenDocument();
     
@@ -72,4 +84,4 @@ export function handleEmbeddingResult(message: any) {
       pendingRequest.resolve(message.embedding);
     }
   }
-} 
+}

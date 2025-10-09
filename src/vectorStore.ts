@@ -1,6 +1,6 @@
 import { ChromaClient, Collection } from 'chromadb';
 import { getEmbeddingViaOffscreen } from './embeddings';
-import { getEnvConfig } from './utils';
+import { getEnvConfig, parseChromaConfig } from './utils';
 
 let chromaClient: ChromaClient | null = null;
 let messageCollection: Collection | null = null;
@@ -31,8 +31,11 @@ export async function initChromaClient() {
   }
   
   try {
+    const chromaConfig = parseChromaConfig(envConfig);
     chromaClient = new ChromaClient({
-      path: envConfig.CHROMA_API_URL || 'http://localhost:8000'
+      host: chromaConfig.host,
+      port: chromaConfig.port,
+      ssl: chromaConfig.ssl
     });
     
     console.log('正在连接向量数据库...');
@@ -56,10 +59,11 @@ export async function initChromaClient() {
       envConfig.CHROMA_COLLECTION_NAME = 'messages'
     }
     const collectionName = envConfig.CHROMA_COLLECTION_NAME || username + '-messages';
-    if (!collections.includes(collectionName)) {
+    const collectionNames = collections.map(c => c.name);
+    if (!collectionNames.includes(collectionName)) {
       messageCollection = await chromaClient.createCollection({
         name: collectionName,
-        metadata: { description: "存储与关注项匹配的消息" },
+        metadata: { description: "存储与关注项匹配的消息", "hnsw:space": "cosine" },
         embeddingFunction
       });
     } else {
@@ -82,11 +86,11 @@ export async function storeMessage(
   messageId: string, 
   content: string, 
   metadata: {
-    source: string,                // 消息来源（发送者）
-    timestamp: number,             // 时间戳
+    sender: string,                // 消息来源（发送者）
+    datetime: number,             // 时间戳
     matchedRules: string[],        // 匹配到的规则
     summary: string,               // 消息摘要
-    reply_advice: string,          // 回复建议
+    replyAdvice: string,          // 回复建议
     teamName?: string,             // 群组/团队名称
     teamId?: string,               // 群组/团队ID
     entities?: {                   // 实体识别结果
@@ -521,7 +525,7 @@ export async function naturalLanguageQuery(
     }
     
     // 执行查询
-    console.log('naturalLanguageQuery queryParams', queryParams);
+    console.log(userQuestion, ' - queryParams', queryParams);
     let results = await messageCollection.query(queryParams);
     
     // 记录结果

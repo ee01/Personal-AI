@@ -17,6 +17,7 @@ module.exports = (env) => {
       static: './dist',
     },
     plugins: [
+      // 似乎不生效
       new Dotenv({
         path: '.env.development'
       })

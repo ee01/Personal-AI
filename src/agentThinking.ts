@@ -13,6 +13,8 @@ import {
   MessageAnalysisResult,
   ProjectAnalysisResult,
   MeetingAnalysisResult,
+  WebpageAnalysisResult,
+  WebpageAnalysisInput,
   GenericAnalysisResult,
   ProjectInput
 } from './interfaces/analysisInterfaces';
@@ -72,7 +74,6 @@ export interface MessageProcessResult {
   groupIndex?: number;
   groupId?: string;
   groupName?: string;
-  originalMessage?: any;
   matchedRule?: string;
   llmCallCount?: number;
   llmCallTokens?: number;
@@ -100,6 +101,7 @@ interface ThoughtResult {
   reasonsToStore?: string[];
   notificationPriority?: 'high' | 'medium' | 'low';
   replyAdvice?: string;
+  user_relation_type?: string;
   extractedEntities?: any;
   // 新增项目分析相关字段
   riskLevel?: 'low' | 'normal' | 'high' | 'critical';
@@ -219,9 +221,26 @@ export class IntelligentAgent {
         urgencyKeywords: string[];
       };
     };
+    userProfile?: any;
+    userProfileAnalysis?: any;
   }> {
     return new Promise((resolve) => {
-      chrome.storage.local.get(['customPrompts', 'userContextConfig'], (result) => {
+      // 获取基础配置和用户画像信息
+      Promise.all([
+        new Promise<any>((resolveConfig) => {
+          chrome.storage.local.get(['customPrompts', 'userContextConfig'], resolveConfig);
+        }),
+        // 尝试获取融合后的用户画像
+        new Promise<any>((resolveProfile) => {
+          chrome.runtime.sendMessage({ type: 'GET_FUSED_USER_PROFILE' }, (response) => {
+            if (response && response.success) {
+              resolveProfile(response.data);
+            } else {
+              resolveProfile({ profile: null, analysis: null });
+            }
+          });
+        })
+      ]).then(([configResult, profileResult]) => {
         const defaultConfig = {
           customPrompts: {
             messageAnalysis: '',
@@ -286,8 +305,10 @@ export class IntelligentAgent {
         };
 
         resolve({
-          customPrompts: result.customPrompts || defaultConfig.customPrompts,
-          userContextConfig: result.userContextConfig || defaultConfig.userContextConfig
+          customPrompts: configResult.customPrompts || defaultConfig.customPrompts,
+          userContextConfig: configResult.userContextConfig || defaultConfig.userContextConfig,
+          userProfile: profileResult.profile,
+          userProfileAnalysis: profileResult.analysis
         });
       });
     });
@@ -825,6 +846,8 @@ export class IntelligentAgent {
         return this.analyzeMeeting(input, config, context);
       case 'document':
         return this.analyzeDocument(input, config, context);
+      case 'webpage':
+        return this.analyzeWebpage(input, config, context);
       default:
         return this.analyzeGeneric(input, config, context);
     }
@@ -1050,6 +1073,7 @@ export class IntelligentAgent {
             shouldNotify: false,
             shouldStore: false,
             reasonsToStore: [],
+            user_relation_type: 'general_interest',
             confidence: 1.0, // 高确信度，这是噪音消息
             summary: analysis.summary || "噪音消息",
             thoughtProcess: [{
@@ -1082,6 +1106,7 @@ export class IntelligentAgent {
           shouldNotify: false,
           confidence: 0,
           summary: analysis.summary || "",
+          user_relation_type: analysis.user_relation_type || 'general_interest',
           enrichedData: {
             entities: analysis.entities || {},
             relationships: analysis.relationships || [],
@@ -1312,12 +1337,9 @@ export class IntelligentAgent {
         if (thoughtResult.tools.some(tool => tool.id === 'jiraQuery') && currentState.memory['jiraQuery']) {
           const latestJiraResult = currentState.memory['jiraQuery'][currentState.memory['jiraQuery'].length - 1];
           if (latestJiraResult && latestJiraResult.result && latestJiraResult.result.result) {
+            if (!result.jiraIssues) result.jiraIssues = {};
             // 如果是多个Jira issues，添加到jiraIssues
             if (latestJiraResult.result.type === 'multiple' && Array.isArray(latestJiraResult.result.result)) {
-              if (!result.jiraIssues) {
-                result.jiraIssues = {};
-              }
-              
               latestJiraResult.result.result.forEach((issue: any) => {
                 if (issue.key) {
                   result.jiraIssues[issue.key] = issue;
@@ -1403,6 +1425,11 @@ export class IntelligentAgent {
       if (thoughtResult.replyAdvice) {
         result.replyAdvice = thoughtResult.replyAdvice;
         state.currentDecision.replyAdvice = thoughtResult.replyAdvice;
+      }
+      
+      if (thoughtResult.user_relation_type) {
+        result.user_relation_type = thoughtResult.user_relation_type;
+        state.currentDecision.user_relation_type = thoughtResult.user_relation_type;
       }
     }
     // 更新项目分析结果
@@ -1498,6 +1525,420 @@ export class IntelligentAgent {
         },
         suggestions: {}
       };
+    }
+  }
+
+  /**
+   * 网页内容分析
+   * 分析网页内容并提取项目管理相关信息
+   */
+  private async analyzeWebpage(
+    input: WebpageAnalysisInput,
+    config: AnalysisConfig,
+    context?: AnalysisContext
+  ): Promise<WebpageAnalysisResult> {
+    // 初始化思考过程记录
+    this.thoughtProcess = [];
+    
+    // 初始化统计
+    let llmCallCount = 0;
+    let llmCallTokens = 0;
+    const usedTools = new Set<string>();
+    
+    try {
+      console.log('🌐 开始分析网页内容:', input.title);
+      
+      // 提取基本页面信息
+      const pageInfo = {
+        title: input.title,
+        url: input.url,
+        domain: input.domain || new URL(input.url).hostname,
+        extractedAt: Date.now()
+      };
+      
+      // 构建分析上下文
+      const analysisContext = `
+网页标题: ${input.title}
+网页URL: ${input.url}
+网页域名: ${pageInfo.domain}
+主要内容: ${input.mainContent.substring(0, 2000)}...
+
+${input.chromeAIResult ? `
+Chrome AI 预分析结果:
+- 相关性评分: ${input.chromeAIResult.relevance}
+- 建议存储: ${input.chromeAIResult.shouldStore}
+- 分析理由: ${input.chromeAIResult.reasoning}
+- 关键洞察: ${input.chromeAIResult.keyInsights?.join(', ') || '无'}
+- 可执行项: ${input.chromeAIResult.actionableItems?.join(', ') || '无'}
+` : ''}
+
+用户上下文:
+- 当前项目: ${input.userContext?.currentProjects?.join(', ') || '未知'}
+- 关注话题: ${input.userContext?.concernedTopics?.join(', ') || '未知'}
+- 团队成员: ${input.userContext?.teamMembers?.join(', ') || '未知'}
+      `;
+      
+      // 初始LLM分析
+      const initialAnalysis = await this.performWebpageInitialAnalysis(analysisContext, config);
+      llmCallCount += 1;
+      llmCallTokens += this.estimateTokens(analysisContext, JSON.stringify(initialAnalysis));
+      
+      // 创建初始结果对象
+      const result: WebpageAnalysisResult = {
+        type: 'webpage',
+        confidence: initialAnalysis.confidence || 0,
+        summary: initialAnalysis.summary || '',
+        
+        pageInfo,
+        
+        chromeAIAnalysis: input.chromeAIResult ? {
+          relevance: input.chromeAIResult.relevance,
+          reasoning: input.chromeAIResult.reasoning,
+          initialEntities: input.chromeAIResult.entities || {}
+        } : undefined,
+        
+        contentRelevance: initialAnalysis.contentRelevance || input.chromeAIResult?.relevance || 0,
+        shouldStore: initialAnalysis.shouldStore !== undefined ? initialAnalysis.shouldStore : (input.chromeAIResult?.shouldStore || false),
+        shouldNotify: initialAnalysis.shouldNotify || false,
+        
+        extractedEntities: initialAnalysis.extractedEntities || {},
+        relatedProjects: [],
+        relatedMemories: [],
+        
+        contentCategory: initialAnalysis.contentCategory || 'general',
+        tags: initialAnalysis.tags || [],
+        
+        storageRecommendation: initialAnalysis.storageRecommendation || {
+          priority: 'low',
+          importanceScore: 0.3
+        },
+        
+        actionSuggestions: initialAnalysis.actionSuggestions || [],
+        
+        thoughtProcess: [],
+        metaData: {
+          llmCallCount,
+          llmCallTokens,
+          usedTools: Array.from(usedTools),
+          timestamp: Date.now()
+        }
+      };
+      
+      // 执行思考-行动循环进行深度分析
+      await this.loopWebpageThinking(result, input, initialAnalysis, config, context, usedTools);
+      
+      // 更新最终统计
+      result.metaData.llmCallCount = llmCallCount;
+      result.metaData.llmCallTokens = llmCallTokens;
+      result.metaData.usedTools = Array.from(usedTools);
+      
+      console.log(`✅ 网页分析完成: ${result.summary}`);
+      return result;
+      
+    } catch (error) {
+      console.error('❌ 网页分析失败:', error);
+      
+      return {
+        type: 'webpage',
+        confidence: 0,
+        summary: `网页分析失败: ${error.message}`,
+        
+        pageInfo: {
+          title: input.title,
+          url: input.url,
+          domain: input.domain || '',
+          extractedAt: Date.now()
+        },
+        
+        contentRelevance: 0,
+        shouldStore: false,
+        shouldNotify: false,
+        
+        extractedEntities: {},
+        
+        contentCategory: 'general',
+        tags: [],
+        
+        storageRecommendation: {
+          priority: 'low',
+          importanceScore: 0
+        },
+        
+        thoughtProcess: [],
+        metaData: {
+          llmCallCount,
+          llmCallTokens,
+          usedTools: Array.from(usedTools),
+          timestamp: Date.now()
+        }
+      };
+    }
+  }
+
+  /**
+   * 网页内容初始分析
+   */
+  private async performWebpageInitialAnalysis(context: string, config: AnalysisConfig): Promise<any> {
+    const prompt = `你是一个专业的项目管理智能助手。请分析以下网页内容，判断其与项目管理的相关性，并提取关键信息。
+
+${context}
+
+请分析并返回JSON格式的结果，包含以下字段：
+{
+  "confidence": 0.85, // 分析可信度 0-1
+  "summary": "网页内容的简要总结",
+  "contentRelevance": 0.7, // 与项目管理的相关性 0-1
+  "shouldStore": true, // 是否建议存储到知识库
+  "shouldNotify": false, // 是否需要通知用户
+  
+  "extractedEntities": {
+    "projects": ["项目A", "模块B"], // 识别的项目
+    "people": ["张三", "李四"], // 识别的人员
+    "deadlines": ["2024-12-31"], // 截止日期（ISO格式）
+    "actionItems": ["完成需求评审", "更新设计文档"], // 行动项
+    "technologies": ["React", "Node.js"], // 技术栈
+    "organizations": ["前端团队", "产品组"], // 组织/团队
+    "topics": ["性能优化", "用户体验"] // 主要话题
+  },
+  
+  "contentCategory": "project_update", // project_update|technical_doc|meeting_notes|planning|announcement|general
+  "tags": ["前端", "性能", "紧急"], // 标签
+  
+  "storageRecommendation": {
+    "priority": "high", // high|medium|low
+    "importanceScore": 0.8, // 重要性评分 0-1
+    "retentionReason": "包含重要的项目进度信息",
+    "expiryDate": "2025-01-31" // 可选的过期日期
+  },
+  
+  "actionSuggestions": [
+    {
+      "type": "notify_team", // notify_team|update_project|schedule_follow_up|create_task
+      "description": "通知团队最新进度",
+      "priority": "important", // urgent|important|normal
+      "suggestedDate": "2024-12-21" // 建议执行日期
+    }
+  ]
+}
+
+请确保返回有效的JSON格式。`;
+
+    try {
+      const response = await callLLMJsonAPI(prompt, false);
+      return response;
+    } catch (error) {
+      console.error('网页初始分析失败:', error);
+      return {
+        confidence: 0.3,
+        summary: '分析失败，使用默认结果',
+        contentRelevance: 0.2,
+        shouldStore: false,
+        shouldNotify: false,
+        extractedEntities: {},
+        contentCategory: 'general',
+        tags: [],
+        storageRecommendation: { priority: 'low', importanceScore: 0.2 },
+        actionSuggestions: []
+      };
+    }
+  }
+
+  /**
+   * 网页分析的思考-行动循环
+   */
+  private async loopWebpageThinking(
+    result: WebpageAnalysisResult,
+    input: WebpageAnalysisInput,
+    initialAnalysis: any,
+    config: AnalysisConfig,
+    context?: AnalysisContext,
+    usedTools?: Set<string>
+  ): Promise<void> {
+    const maxActions = config.maxActions || 3;
+    let actionCount = 0;
+    
+    while (actionCount < maxActions) {
+      try {
+        // 构建思考上下文
+        const thinkingContext = this.buildWebpageThinkingContext(result, input, initialAnalysis);
+        
+        // LLM思考下一步行动
+        const thoughtResult = await this.webpageThinkAndDecide(thinkingContext, config);
+        
+        // 记录思考过程
+        this.thoughtProcess.push({
+          stepNumber: actionCount + 1,
+          thought: thoughtResult.thought,
+          action: thoughtResult.nextAction,
+          tools: thoughtResult.tools,
+          result: thoughtResult.reasoning || ''
+        });
+        
+        // 如果决定不需要更多行动，退出循环
+        if (thoughtResult.nextAction === 'finish' || !thoughtResult.tools || thoughtResult.tools.length === 0) {
+          console.log('🎯 网页分析决策完成');
+          break;
+        }
+        
+        // 执行工具
+        for (const toolCall of thoughtResult.tools) {
+          if (usedTools) {
+            usedTools.add(toolCall.id);
+          }
+          
+          try {
+            const toolResult = await this.executeTool(toolCall.id, toolCall.params, result);
+            console.log(`🔧 工具 ${toolCall.id} 执行结果:`, toolResult.message);
+            
+            // 根据工具结果更新分析结果
+            this.updateWebpageResultFromTool(result, toolCall.id, toolResult);
+            
+          } catch (toolError) {
+            console.error(`工具 ${toolCall.id} 执行失败:`, toolError);
+          }
+        }
+        
+        actionCount++;
+        
+      } catch (error) {
+        console.error(`思考循环第 ${actionCount + 1} 步失败:`, error);
+        break;
+      }
+    }
+    
+    // 将思考过程添加到结果中
+    result.thoughtProcess = this.thoughtProcess;
+  }
+
+  /**
+   * 构建网页分析思考上下文
+   */
+  private buildWebpageThinkingContext(
+    result: WebpageAnalysisResult,
+    input: WebpageAnalysisInput,
+    initialAnalysis: any
+  ): string {
+    return `当前网页分析状态:
+网页: ${result.pageInfo.title} (${result.pageInfo.url})
+相关性: ${result.contentRelevance}
+建议存储: ${result.shouldStore}
+内容分类: ${result.contentCategory}
+
+已提取实体:
+- 项目: ${result.extractedEntities.projects?.join(', ') || '无'}
+- 人员: ${result.extractedEntities.people?.join(', ') || '无'}
+- 截止日期: ${result.extractedEntities.deadlines?.map(d => d.toISOString().split('T')[0]).join(', ') || '无'}
+- 行动项: ${result.extractedEntities.actionItems?.join(', ') || '无'}
+
+Chrome AI预分析: ${input.chromeAIResult ? '已完成，相关性' + input.chromeAIResult.relevance : '未进行'}
+
+当前分析总结: ${result.summary}
+
+可用工具: entityExtraction, historySearch, storeMessage, messageNotification, jiraQuery, orgChart, releaseQuery, sprintQuery`;
+  }
+
+  /**
+   * 网页分析思考和决策
+   */
+  private async webpageThinkAndDecide(context: string, config: AnalysisConfig): Promise<any> {
+    const prompt = `你是一个智能网页分析助手。基于当前分析状态，决定下一步行动。
+
+${context}
+
+请思考并决定下一步行动，返回JSON格式：
+{
+  "thought": "你的思考过程",
+  "nextAction": "continue|finish", // continue继续分析，finish完成分析
+  "reasoning": "决策理由",
+  "tools": [
+    {
+      "id": "工具名称",
+      "params": {
+        "参数名": "参数值"
+      }
+    }
+  ]
+}
+
+可选工具及其用途：
+- entityExtraction: 进一步提取实体信息
+- historySearch: 搜索相关历史记忆
+- storeMessage: 存储重要内容到知识库
+- messageNotification: 发送重要通知
+- jiraQuery: 查询相关JIRA信息
+- orgChart: 查询组织架构信息
+
+请确保返回有效的JSON。`;
+
+    try {
+      return await callLLMJsonAPI(prompt, false);
+    } catch (error) {
+      console.error('网页思考决策失败:', error);
+      return {
+        thought: '分析遇到错误，结束处理',
+        nextAction: 'finish',
+        reasoning: '由于错误而结束',
+        tools: []
+      };
+    }
+  }
+
+  /**
+   * 根据工具结果更新网页分析结果
+   */
+  private updateWebpageResultFromTool(
+    result: WebpageAnalysisResult,
+    toolId: string,
+    toolResult: any
+  ): void {
+    switch (toolId) {
+      case 'entityExtraction':
+        if (toolResult.result?.entities) {
+          // 合并提取的实体
+          const entities = toolResult.result.entities;
+          Object.keys(entities).forEach(key => {
+            if (entities[key] && Array.isArray(entities[key])) {
+              if (!result.extractedEntities[key]) {
+                result.extractedEntities[key] = [];
+              }
+              result.extractedEntities[key] = [
+                ...new Set([...result.extractedEntities[key], ...entities[key]])
+              ];
+            }
+          });
+        }
+        break;
+        
+      case 'historySearch':
+        if (toolResult.result?.memories) {
+          result.relatedMemories = toolResult.result.memories.map(memory => ({
+            memoryId: memory.id,
+            summary: memory.summary || memory.content?.substring(0, 100) || '',
+            relevanceScore: memory.score || 0.5,
+            type: memory.type || 'webpage'
+          }));
+        }
+        break;
+        
+      case 'storeMessage':
+        result.shouldStore = true;
+        result.storageRecommendation.priority = 'high';
+        break;
+        
+      case 'messageNotification':
+        result.shouldNotify = true;
+        break;
+        
+      case 'jiraQuery':
+        if (toolResult.result?.projects) {
+          result.relatedProjects = toolResult.result.projects.map(project => ({
+            projectId: project.id,
+            projectName: project.name,
+            relevanceScore: 0.8,
+            relationshipType: 'reference' as const
+          }));
+        }
+        break;
     }
   }
   
@@ -1903,6 +2344,7 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     "reasonsToStore": ["存储/忽略的理由1", "理由2"],
     "notificationPriority": "low|medium|high",
     "replyAdvice": "",
+    "user_relation_type": "mention_me|mention_team|project_related|policy_related|person_tracking|general_interest",
     
     // 实体提取结果
     "entities": {
@@ -1936,6 +2378,8 @@ ${promptPrefix}
 ${messages.length > 1 ? `群组信息:\n${contextInfo}` : `上下文信息:\n${contextInfo}`}
 
 ${messages.length > 1 ? `消息列表:\n${messagesContent}` : `消息内容:\n${messagesContent}`}
+
+如果群组名称是单个人名，则视为私聊，如果是多个人名，则是临时会话，否则视为群聊。
 
 ${filterRulesInfo}
 
