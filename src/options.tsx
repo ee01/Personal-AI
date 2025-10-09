@@ -16,7 +16,6 @@ const Options = () => {
         message: '',
         type: ''
     });
-    const [enableCustomCollection, setEnableCustomCollection] = useState(false);
 
     // 页面加载时从 Chrome 存储中获取配置
     useEffect(() => {
@@ -24,7 +23,6 @@ const Options = () => {
             console.log('result', result);
             if (result.envConfig) {
                 setConfig(result.envConfig);
-                if (result.envConfig.CHROMA_COLLECTION_NAME) setEnableCustomCollection(true);
             } else {
                 // 如果没有保存过配置，则尝试从 .env 加载
                 loadEnvDefaults();
@@ -53,9 +51,6 @@ const Options = () => {
     // 保存配置到 Chrome 存储
     const saveConfig = async () => {
         try {
-            if (!enableCustomCollection) {
-                config.CHROMA_COLLECTION_NAME = '';
-            }
             await chrome.storage.local.set({ envConfig: config });
             // 通知background脚本更新配置
             await chrome.runtime.sendMessage({
@@ -486,47 +481,6 @@ const Options = () => {
                                 启用 SSL 连接
                             </label>
                         </div>
-
-                        <div className="form-group">
-                            <label htmlFor="CHROMA_API_URL">Chroma API URL (兼容旧配置)</label>
-                            <input
-                                type="text"
-                                id="CHROMA_API_URL"
-                                name="CHROMA_API_URL"
-                                value={config.CHROMA_API_URL}
-                                onChange={handleInputChange}
-                                placeholder="http://localhost:8000"
-                                style={{ opacity: 0.7 }}
-                            />
-                            <small style={{ color: '#666', fontSize: '12px' }}>
-                                此字段用于兼容旧配置，推荐使用上方的主机地址和端口配置
-                            </small>
-                        </div>
-
-                        <div className="form-group">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={enableCustomCollection}
-                                    onChange={(e) => setEnableCustomCollection(e.target.checked)}
-                                />
-                                自定义集合名称
-                            </label>
-                        </div>
-
-                        {enableCustomCollection && (
-                            <div className="form-group">
-                                <label htmlFor="CHROMA_COLLECTION_NAME">集合名称</label>
-                                <input
-                                    type="text"
-                                    id="CHROMA_COLLECTION_NAME"
-                                    name="CHROMA_COLLECTION_NAME"
-                                    value={config.CHROMA_COLLECTION_NAME}
-                                    onChange={handleInputChange}
-                                    placeholder="默认为 <username>-messages"
-                                />
-                            </div>
-                        )}
                     </>
                 )}
             </div>
@@ -587,6 +541,17 @@ const Options = () => {
             <div className="form-section">
                 <h2>数据库维护</h2>
                 <PlaceholderCleanupTool />
+                <div className="form-group">
+                    <label htmlFor="CHROMA_COLLECTION_NAME">集合名称</label>
+                    <input
+                        type="text"
+                        id="CHROMA_COLLECTION_NAME"
+                        name="CHROMA_COLLECTION_NAME"
+                        value={config.CHROMA_COLLECTION_NAME}
+                        onChange={handleInputChange}
+                        placeholder="默认为 <username>-messages"
+                    />
+                </div>
                 <V6DataMigrationTool />
                 <DatabaseMaintenanceTool />
                 <UserProfileDemoTool />

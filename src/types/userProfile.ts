@@ -309,24 +309,24 @@ export const DEFAULT_WEIGHT_DECAY_CONFIG: WeightDecayConfig = {
 };
 
 // ========================================
-// 向量化用户画像存储类型定义
+// 用户档案向量存储类型定义
 // 用于支持分散式向量存储和相似性查询
 // ========================================
 
 /**
- * 用户画像记录的基础接口（向量化存储）
+ * 用户档案记录的基础接口（向量化存储）
  */
-export interface UserProfileRecord {
+export interface UserprofilesRecord {
   id: string;                    // 唯一标识符
   document: string;              // 可搜索的文本内容
   embedding?: number[];          // 向量表示（由系统生成）
-  metadata: UserProfileRecordMetadata;
+  metadata: UserprofilesRecordMetadata;
 }
 
 /**
- * 用户画像记录的元数据基础接口
+ * 用户档案记录的元数据基础接口
  */
-export interface UserProfileRecordMetadata {
+export interface UserprofilesRecordMetadata {
   record_type: 'interest_item' | 'behavior_pattern' | 'social_relationship' | 'expertise_area' | 'user_summary';
   user_id: string;
   created_at: number;
@@ -338,11 +338,11 @@ export interface UserProfileRecordMetadata {
 /**
  * 兴趣项记录
  */
-export interface InterestItemRecord extends UserProfileRecord {
+export interface InterestItemRecord extends UserprofilesRecord {
   metadata: InterestItemMetadata;
 }
 
-export interface InterestItemMetadata extends UserProfileRecordMetadata {
+export interface InterestItemMetadata extends UserprofilesRecordMetadata {
   record_type: 'interest_item';
   interest_category: 'project' | 'person' | 'topic' | 'technology' | 'document' | 'jira';
   
@@ -375,11 +375,11 @@ export interface InterestItemMetadata extends UserProfileRecordMetadata {
 /**
  * 行为模式记录
  */
-export interface BehaviorPatternRecord extends UserProfileRecord {
+export interface BehaviorPatternRecord extends UserprofilesRecord {
   metadata: BehaviorPatternMetadata;
 }
 
-export interface BehaviorPatternMetadata extends UserProfileRecordMetadata {
+export interface BehaviorPatternMetadata extends UserprofilesRecordMetadata {
   record_type: 'behavior_pattern';
   pattern_type: 'time_preference' | 'communication_style' | 'tool_usage' | 'work_pattern';
   
@@ -411,11 +411,11 @@ export interface BehaviorPatternMetadata extends UserProfileRecordMetadata {
 /**
  * 社交关系记录
  */
-export interface SocialRelationshipRecord extends UserProfileRecord {
+export interface SocialRelationshipRecord extends UserprofilesRecord {
   metadata: SocialRelationshipMetadata;
 }
 
-export interface SocialRelationshipMetadata extends UserProfileRecordMetadata {
+export interface SocialRelationshipMetadata extends UserprofilesRecordMetadata {
   record_type: 'social_relationship';
   
   target_person: string;         // 关系目标人员
@@ -431,11 +431,11 @@ export interface SocialRelationshipMetadata extends UserProfileRecordMetadata {
 /**
  * 专业领域记录
  */
-export interface ExpertiseAreaRecord extends UserProfileRecord {
+export interface ExpertiseAreaRecord extends UserprofilesRecord {
   metadata: ExpertiseAreaMetadata;
 }
 
-export interface ExpertiseAreaMetadata extends UserProfileRecordMetadata {
+export interface ExpertiseAreaMetadata extends UserprofilesRecordMetadata {
   record_type: 'expertise_area';
   
   expertise_domain: string;      // 专业领域
@@ -456,18 +456,40 @@ export interface ExpertiseAreaMetadata extends UserProfileRecordMetadata {
 /**
  * 用户摘要记录
  */
-export interface UserSummaryRecord extends UserProfileRecord {
+export interface UserSummaryRecord extends UserprofilesRecord {
   metadata: UserSummaryMetadata;
 }
 
-export interface UserSummaryMetadata extends UserProfileRecordMetadata {
+export interface UserSummaryMetadata extends UserprofilesRecordMetadata {
   record_type: 'user_summary';
-  summary_type: 'derived_preferences' | 'statistics' | 'user_context_config';
+  summary_type: 'derived_preferences' | 'statistics' | 'user_context_config' | 'overall';
   
   // 统计数据
   total_interactions?: number;
+  total_records?: number;
   daily_activity_average?: number;
   most_active_day?: string;
+  summary_period?: {
+    start: number;
+    end: number;
+  };
+  weight_distribution?: {
+    high_weight_items: number;
+    medium_weight_items: number;
+    low_weight_items: number;
+  };
+  activity_metrics?: {
+    avg_daily_interactions: number;
+    peak_activity_hour: number;
+    active_days_count: number;
+  };
+  growth_trends?: {
+    new_interests_per_month: number;
+    skill_development_rate: number;
+    social_network_growth: number;
+  };
+  auto_generated?: boolean;
+  generation_algorithm?: string;
   top_interaction_types?: Record<string, number>;
   last_activity?: number;
   
@@ -483,25 +505,31 @@ export interface UserSummaryMetadata extends UserProfileRecordMetadata {
 }
 
 /**
- * 向量化查询选项
+ * 用户档案查询选项
  */
-export interface UserProfileQueryOptions {
+export interface UserprofilesQueryOptions {
   user_id?: string;
   record_types?: string[];
   metadata_filters?: Record<string, any>;
   limit?: number;
   similarity_threshold?: number;
   include_embeddings?: boolean;
+  time_range?: { start: number; end: number };
+  sort_by?: 'similarity' | 'time';
+  sort_order?: 'asc' | 'desc';
 }
 
 /**
- * 向量化查询结果
+ * 用户档案查询结果
  */
-export interface UserProfileQueryResult {
-  records: UserProfileRecord[];
+export interface UserprofilesQueryResult {
+  records: UserprofilesRecord[];
   total_count: number;
-  query_time_ms: number;
-  similarity_scores?: number[];
+  query_metadata: {
+    query_time: number;
+    processing_time_ms: number;
+    similarity_scores?: number[];
+  };
 }
 
 /**
@@ -510,6 +538,7 @@ export interface UserProfileQueryResult {
 export interface UserSimilarityResult {
   user_id: string;
   similarity_score: number;
+  total_matches: number;
   matching_categories: Array<{
     category: string;
     similarity: number;
@@ -518,9 +547,37 @@ export interface UserSimilarityResult {
 }
 
 /**
- * 向量存储统计信息
+ * 用户档案维护配置
  */
-export interface VectorStorageStats {
+export interface UserprofilesMaintenanceConfig {
+  cleanup_thresholds: {
+    min_weight: number;
+    max_age_days: number;
+    min_access_count: number;
+  };
+  aggregation_rules: {
+    combine_threshold: number;
+    max_records_per_category: number;
+    enable_auto_summary: boolean;
+    summary_frequency_days: number;
+    max_records_per_user: number;
+  };
+  update_frequency: {
+    full_analysis_days: number;
+    incremental_hours: number;
+  };
+  vector_update: {
+    enable_batch_update: boolean;
+    batch_size: number;
+    delay_ms?: number;
+    update_frequency_hours: number;
+  };
+}
+
+/**
+ * 用户档案存储统计信息
+ */
+export interface UserprofilesStorageStats {
   total_records: number;
   records_by_user: Record<string, number>;
   records_by_type: Record<string, number>;

@@ -3,7 +3,7 @@ import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
 import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
-import { extractEntitiesFromMessage } from './entityExtraction';
+import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
@@ -13,7 +13,7 @@ import { memorySystem, StoreResult } from './memory';
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
 	try {
 		// 检查是否在 background script 环境中
-		const isBackground = typeof window === 'undefined';
+		const isBackground = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
 		if (isBackground) {
 			// 在 background script 中直接调用处理函数
 			const response = await analyzeMessagesInBackground(data, username, isScheduledTask);

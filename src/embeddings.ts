@@ -28,7 +28,7 @@ export async function createOffscreenDocument() {
 
 // 通过离屏文档获取嵌入向量
 export async function getEmbeddingViaOffscreen(text: string): Promise<number[]> {
-  const isBackground = typeof window === 'undefined';
+  const isBackground = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
   if (isBackground) {
     return await getEmbeddingInBackground(text);
   } else {

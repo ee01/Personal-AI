@@ -12,13 +12,13 @@ import {
   UserProfileAnalysis
 } from '../types/userProfile';
 import { 
-  UserProfileRecord,
+  UserprofilesRecord,
   InterestItemRecord,
   BehaviorPatternRecord,
   SocialRelationshipRecord,
   ExpertiseAreaRecord,
-  UserProfileQueryOptions,
-  UserProfileQueryResult,
+  UserprofilesQueryOptions,
+  UserprofilesQueryResult,
   UserSimilarityResult,
   UserSummaryRecord
 } from '../types/userProfile';
@@ -28,7 +28,7 @@ export class UserProfileManager {
   private cloudStorage: CloudStorage;
   public userId: string;
   public displayName = '';
-  private recordsCache: Map<string, UserProfileRecord> = new Map();
+  private recordsCache: Map<string, UserprofilesRecord> = new Map();
   private lastCacheUpdate = 0;
   private cacheExpiryTime = 5 * 60 * 1000; // 5分钟缓存过期
 
@@ -135,14 +135,19 @@ export class UserProfileManager {
       
       if (!existingStats) {
         // 尝试从云端获取
-        const queryResult = await this.cloudStorage.queryVectorizedRecords('user statistics', {
-          user_id: this.userId,
-          record_types: ['user_summary'],
-          metadata_filters: { summary_type: 'statistics' }
+        const queryResult = await this.cloudStorage.searchByVector('user statistics', undefined, {
+          collections: ['userprofiles'],
+          returnType: 'userprofiles',
+          where: { 
+            user_id: this.userId, 
+            record_type: { $in: ['user_summary'] }, 
+            summary_type: 'statistics' 
+          },
+          limit: 1
         });
         
-        if (queryResult.records.length > 0) {
-          existingStats = queryResult.records[0] as UserSummaryRecord;
+        if (queryResult.data.length > 0) {
+          existingStats = queryResult.data[0] as UserSummaryRecord;
           this.recordsCache.set(statsRecordId, existingStats);
         }
       }
@@ -186,7 +191,7 @@ export class UserProfileManager {
       }
 
       // 存储更新后的统计记录
-      await this.cloudStorage.storeVectorizedRecord(existingStats);
+      await this.cloudStorage.storeUserprofilesRecord(existingStats);
       this.recordsCache.set(statsRecordId, existingStats);
       
     } catch (error) {
@@ -268,7 +273,7 @@ export class UserProfileManager {
       };
 
       // 存储偏好记录
-      await this.cloudStorage.storeVectorizedRecord(preferencesRecord);
+      await this.cloudStorage.storeUserprofilesRecord(preferencesRecord);
       this.recordsCache.set(preferencesRecordId, preferencesRecord);
       
     } catch (error) {
@@ -315,7 +320,7 @@ export class UserProfileManager {
 
       if (!existingRecord) {
         // 尝试从云端获取
-        const queryResult = await this.cloudStorage.queryVectorizedRecords('', {
+        const queryResult = await this.cloudStorage.queryUserprofiles({
           user_id: this.userId,
           record_types: ['interest_item'],
           metadata_filters: { name: targetItem.name, interest_category: targetItem.type }
@@ -372,7 +377,7 @@ export class UserProfileManager {
       };
 
       // 存储记录
-      await this.cloudStorage.storeVectorizedRecord(behaviorRecord);
+      await this.cloudStorage.storeUserprofilesRecord(behaviorRecord);
       this.recordsCache.set(recordId, behaviorRecord);
 
       return true;
@@ -395,7 +400,7 @@ export class UserProfileManager {
       const { category, searchQuery = '', limit = 20, sortBy = 'weight' } = options;
       
       // 构建查询选项
-      const queryOptions: UserProfileQueryOptions = {
+      const queryOptions: UserprofilesQueryOptions = {
         user_id: this.userId,
         record_types: ['interest_item'],
         limit
@@ -406,10 +411,15 @@ export class UserProfileManager {
       }
 
       // 执行查询
-      const result = await this.cloudStorage.queryVectorizedRecords(searchQuery, queryOptions);
+      const result = await this.cloudStorage.searchByVector(searchQuery, undefined, {
+        collections: ['userprofiles'],
+        returnType: 'userprofiles',
+        where: queryOptions.metadata_filters || {},
+        limit: queryOptions.limit || 20
+      });
       
       // 类型转换和排序
-      const interestRecords = result.records as InterestItemRecord[];
+      const interestRecords = result.data as InterestItemRecord[];
       
       return this.sortInterestItems(interestRecords, sortBy);
     } catch (error) {
@@ -463,13 +473,17 @@ export class UserProfileManager {
     try {
       const { limit = 10 } = options;
       
-      const result = await this.cloudStorage.queryVectorizedRecords(topic, {
-        user_id: this.userId,
-        record_types: ['interest_item'],
+      const result = await this.cloudStorage.searchByVector(topic, undefined, {
+        collections: ['userprofiles'],
+        returnType: 'userprofiles',
+        where: { 
+          user_id: this.userId,
+          record_type: { $in: ['interest_item'] }
+        },
         limit
       });
       
-      return result.records as InterestItemRecord[];
+      return result.data as InterestItemRecord[];
     } catch (error) {
       console.error('查找话题相关兴趣失败:', error);
       return [];
@@ -571,13 +585,13 @@ export class UserProfileManager {
    */
   async refreshCache(): Promise<void> {
     try {
-      const result = await this.cloudStorage.queryVectorizedRecords('', {
+      const result = await this.cloudStorage.queryUserprofiles({
         user_id: this.userId,
         limit: 1000 // 获取用户的所有记录
       });
 
       this.recordsCache.clear();
-      result.records.forEach((record: UserProfileRecord) => {
+      result.records.forEach((record: UserprofilesRecord) => {
         this.recordsCache.set(record.id, record);
       });
 
@@ -648,7 +662,7 @@ export class UserProfileManager {
         record.metadata.explicit_importance = importance;
         record.metadata.updated_at = Date.now();
         
-        await this.cloudStorage.storeVectorizedRecord(record);
+        await this.cloudStorage.storeUserprofilesRecord(record);
         return true;
       }
       
@@ -678,7 +692,7 @@ export class UserProfileManager {
         record.metadata.current_weight *= decayFactor;
         record.metadata.updated_at = now;
         
-        await this.cloudStorage.storeVectorizedRecord(record);
+        await this.cloudStorage.storeUserprofilesRecord(record);
       }
       
       console.log(`权重衰减应用完成，更新了 ${interestRecords.length} 条记录`);
@@ -707,7 +721,7 @@ export class UserProfileManager {
         }
       };
 
-      await this.cloudStorage.storeVectorizedRecord(configRecord);
+      await this.cloudStorage.storeUserprofilesRecord(configRecord);
       this.recordsCache.set(configRecordId, configRecord);
       
       return true;
@@ -737,7 +751,7 @@ export class UserProfileManager {
         }
         
         record.metadata.updated_at = Date.now();
-        await this.cloudStorage.storeVectorizedRecord(record);
+        await this.cloudStorage.storeUserprofilesRecord(record);
       }
     } catch (error) {
       console.error('自适应权重调整失败:', error);
@@ -850,7 +864,7 @@ export class UserProfileManager {
     record.document = this.generateInterestItemDocument(metadata);
     
     // 存储更新
-    await this.cloudStorage.storeVectorizedRecord(record);
+    await this.cloudStorage.storeUserprofilesRecord(record);
     this.recordsCache.set(record.id, record);
   }
 
@@ -897,7 +911,7 @@ export class UserProfileManager {
     newRecord.document = this.generateInterestItemDocument(newRecord.metadata);
     
     // 存储记录
-    await this.cloudStorage.storeVectorizedRecord(newRecord);
+    await this.cloudStorage.storeUserprofilesRecord(newRecord);
     this.recordsCache.set(recordId, newRecord);
   }
 

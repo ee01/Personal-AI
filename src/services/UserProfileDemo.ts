@@ -325,7 +325,7 @@ export class UserProfileDemo {
     const storeStartTime = Date.now();
     
     const testRecords = this.generateTestRecords('perf_test_user', 20);
-    const storeCount = await this.cloudStorage.storeVectorizedRecordsBatch(testRecords);
+    const storeCount = await this.cloudStorage.storeUserprofilesRecordsBatch(testRecords);
     
     const storeTotalTime = Date.now() - storeStartTime;
     console.log(`  - 批量存储时间: ${storeTotalTime}ms`);
@@ -350,7 +350,7 @@ export class UserProfileDemo {
 
     // 测试空查询
     console.log('测试空查询...');
-    const emptyQueryResult = await this.cloudStorage.queryVectorizedRecords('', {
+    const emptyQueryResult = await this.cloudStorage.queryUserprofiles({
       user_id: 'user001',
       limit: 1
     });

@@ -150,7 +150,7 @@
                 <div class="sender-avatar">{{ (conv.sender || '?').charAt(0) }}</div>
                 <div class="sender-info">
                   <div class="sender-name">{{ conv.sender || '未知用户' }}</div>
-                  <div class="group-name">{{ conv.group || '未知群组' }}</div>
+                  <div class="group-name">{{ conv.groupName || '未知群组' }}</div>
                 </div>
               </div>
               <div class="conversation-time">{{ formatTimeAgo(conv.datetime) || '未知时间' }}</div>
@@ -267,7 +267,7 @@ const filteredConversations = computed(() => {
     filtered = filtered.filter(conv => 
       conv.summary.toLowerCase().includes(query) ||
       conv.sender.toLowerCase().includes(query) ||
-      conv.group.toLowerCase().includes(query)
+      conv.groupName.toLowerCase().includes(query)
     );
   }
   
@@ -275,11 +275,11 @@ const filteredConversations = computed(() => {
     filtered = filtered.filter(conv => {
       switch (convFilter.value) {
         case 'team':
-          return conv.group.includes('团队') || conv.group.includes('Team');
+          return conv.groupName.includes('团队') || conv.groupName.includes('Team');
         case 'project':
-          return conv.group.includes('项目') || conv.group.includes('Project');
+          return conv.groupName.includes('项目') || conv.groupName.includes('Project');
         case 'tech':
-          return conv.group.includes('技术') || conv.group.includes('Tech') || conv.group.includes('开发');
+          return conv.groupName.includes('技术') || conv.groupName.includes('Tech') || conv.groupName.includes('开发');
         default:
           return true;
       }

@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import Groq from 'groq-sdk';
 import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics, fuzzyMatchEntityName } from './vectorStore';
 import { getEnvConfig } from './utils';
-import { extractEntitiesForQuery } from './entityExtraction';
+import { extractEntitiesForQuery } from './services/entityExtraction';
 
 // 根据不同 LLM 服务处理 LLM 请求，并提取 JSON 数据
 export async function handleLLMRequest(body: any): Promise<string> {

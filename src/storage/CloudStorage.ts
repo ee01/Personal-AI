@@ -166,18 +166,18 @@ export interface MemoryMessage {
 // GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
 import { 
-  VectorizedRecord, 
-  VectorizedQueryOptions, 
-  VectorizedQueryResult,
+  UserprofilesRecord, 
+  UserprofilesQueryOptions, 
+  UserprofilesQueryResult,
   InterestItemRecord,
   BehaviorPatternRecord,
   SocialRelationshipRecord,
   ExpertiseAreaRecord,
   UserSummaryRecord,
   UserSimilarityResult,
-  VectorMaintenanceConfig,
-  VectorStorageStats
-} from '../types/vectorizedUserProfile';
+  UserprofilesMaintenanceConfig,
+  UserprofilesStorageStats
+} from '../types/userProfile';
 
 export interface CloudStorageConfig {
   chromaUrl: string;
@@ -209,17 +209,23 @@ export class CloudStorage {
   // 实体相似度阈值配置
   private entitySimilarityThreshold = 0.85; // 相似度阈值，超过此值认为是同一实体
   
-  // 向量化用户画像维护配置
-  private vectorMaintenanceConfig: VectorMaintenanceConfig = {
+  // 用户档案维护配置
+  private userprofilesMaintenanceConfig: UserprofilesMaintenanceConfig = {
     cleanup_thresholds: {
       min_weight: 0.01,
       max_age_days: 180,
       min_access_count: 1
     },
     aggregation_rules: {
+      combine_threshold: 0.8,
+      max_records_per_category: 100,
       enable_auto_summary: true,
       summary_frequency_days: 7,
       max_records_per_user: 1000
+    },
+    update_frequency: {
+      full_analysis_days: 7,
+      incremental_hours: 24
     },
     vector_update: {
       enable_batch_update: true,
@@ -231,7 +237,7 @@ export class CloudStorage {
   constructor() {
     this.config = {
       chromaUrl: 'http://localhost:8000',
-      collections: ['messages', 'webpages', 'projects', 'documents', 'graph-entities'],
+      collections: ['messages', 'webpages', 'projects', 'documents', 'graph-entities', 'userprofiles'],
       batchSize: 100,
       timeout: 10000
     };
@@ -329,7 +335,8 @@ export class CloudStorage {
       const collectionMap = {
         'entities': `${this.username}-graph-entities`,
         'messages': `${this.username}-messages`, 
-        'webpages': `${this.username}-webpages`
+        'webpages': `${this.username}-webpages`,
+        'userprofiles': `${this.username}-userprofiles`
       };
       
       const collectionsToSearch = type ? [`${this.username}-graph-entities`] : 
@@ -350,31 +357,44 @@ export class CloudStorage {
             include: ['metadatas', 'documents', 'distances']
           };
 
-          // 构建where条件
-          const whereConditions: Record<string, any> = {};
+          // 构建where条件 - 使用 $and 操作符组合多个条件
+          const conditions: any[] = [];
           
           // 1. 添加type过滤（对entities集合有效）
           if (type && collectionName.includes('graph-entities')) {
-            whereConditions.type = type;
+            conditions.push({ type: type });
           }
           
-          // 2. 添加时间范围过滤（仅对 messages 和 webpages 有效）
-          if (timeRange && (collectionName.includes('messages') || collectionName.includes('webpages'))) {
-            const timeField = collectionName.includes('messages') ? 'timestamp' : 'extractedAt';
-            whereConditions[timeField] = {
-              $gte: timeRange.start,
-              $lte: timeRange.end
-            };
+          // 2. 添加时间范围过滤（对 messages、webpages 和 userprofiles 有效）
+          if (timeRange && (collectionName.includes('messages') || collectionName.includes('webpages') || collectionName.includes('userprofiles'))) {
+            let timeField = 'extractedAt';
+            if (collectionName.includes('messages')) {
+              timeField = 'timestamp';
+            } else if (collectionName.includes('userprofiles')) {
+              timeField = 'updated_at';
+            }
+            conditions.push({
+              [timeField]: {
+                $gte: timeRange.start,
+                $lte: timeRange.end
+              }
+            });
           }
           
           // 3. 添加自定义过滤条件
           if (customWhere && typeof customWhere === 'object') {
-            Object.assign(whereConditions, customWhere);
+            Object.entries(customWhere).forEach(([key, value]) => {
+              conditions.push({ [key]: value });
+            });
           }
           
           // 4. 应用where条件（只有当有条件时才添加）
-          if (Object.keys(whereConditions).length > 0) {
-            queryParams.where = whereConditions;
+          if (conditions.length > 0) {
+            if (conditions.length === 1) {
+              queryParams.where = conditions[0];
+            } else {
+              queryParams.where = { $and: conditions };
+            }
           }
           
           const searchResults = await collection.query(queryParams);
@@ -402,9 +422,9 @@ export class CloudStorage {
                 if (entity) {
                   allResults.push(entity);
                 }
-              } else {
-                // 返回原始数据格式（用于消息查询）
-                const processedMetadata = this.deserializeMetadata(metadata || {});
+              } else if (returnType === 'messages' || collectionName.includes('messages')) {
+                // 返回消息格式
+                const processedMetadata = this.deserializeChromaMetadata(metadata || {});
                 allResults.push({
                   id: searchResults.ids?.[0]?.[i] || `result_${i}`,
                   messageId: searchResults.ids?.[0]?.[i],
@@ -415,6 +435,16 @@ export class CloudStorage {
                   distance,
                   collectionType: this.getCollectionType(collectionName),
                   metadata: processedMetadata
+                });
+              } else {
+                // 返回原始数据格式（用于用户档案查询等）
+                allResults.push({
+                  id: searchResults.ids?.[0]?.[i] as string,
+                  document: searchResults.documents?.[0]?.[i] || '',
+                  metadata: metadata as any,
+                  relevanceScore,
+                  distance,
+                  collectionType: this.getCollectionType(collectionName)
                 });
               }
             }
@@ -471,6 +501,360 @@ export class CloudStorage {
         source: 'cloud',
         cached: false,
         queryTime: Date.now() - startTime
+      };
+    }
+  }
+
+  /**
+   * 获取单个实体
+   */
+  async getEntity(entityId: string): Promise<MemoryEntity | null> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) return null;
+
+      const result = await collection.get({
+        ids: [entityId],
+        include: ['metadatas', 'documents']
+      });
+
+      if (result.ids && result.ids.length > 0 && result.metadatas) {
+        const metadata = result.metadatas[0] as any;
+        
+        // 跳过备份数据
+        if (metadata.type === 'graph_backup') return null;
+        
+        const entity = await this.buildEntity({
+          metadata,
+          id: result.ids[0],
+          document: result.documents?.[0],
+          collectionName: 'graph-entities'
+        });
+        return entity;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`获取实体 ${entityId} 失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 从消息集合获取单个消息
+   */
+  async getMessage(messageId: string): Promise<MemoryMessage | null> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-messages`);
+      if (!collection) return null;
+
+      const result = await collection.get({
+        ids: [messageId],
+        include: ['metadatas', 'documents']
+      });
+
+      if (result.ids && result.ids.length > 0 && result.metadatas) {
+        const metadata = result.metadatas[0] as any;
+        const document = result.documents?.[0];
+        
+        // 构建消息对象
+        const processedMetadata = this.deserializeChromaMetadata(metadata || {});
+        
+        return {
+          id: result.ids[0],
+          content: document || '',
+          sender: metadata?.sender || 'unknown',
+          datetime: metadata?.datetime || Date.now(),
+          metadata: processedMetadata,
+          // 从 metadata 中提取常用字段
+          groupName: metadata?.groupName || '未知群组',
+          groupUrl: metadata?.groupUrl || metadata?.team_url || '#',
+          groupId: metadata?.groupId || '',
+          summary: metadata?.summary || (document ? document.substring(0, 100) + '...' : ''),
+          matchedRules: metadata?.matchedRules || [],
+          replyAdvice: metadata?.replyAdvice || '',
+          contextMessages: processedMetadata?.contextMessages || []
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`获取消息 ${messageId} 失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 查询云端实体（支持按type过滤和真正的分页）
+   */
+  async queryEntities(
+    type?: string,
+    searchTerm?: string,
+    options: QueryOptions = {}
+  ): Promise<QueryResult<MemoryEntity>> {
+    this.ensureInitialized();
+
+    const startTime = Date.now();
+    const limit = options.limit || 30; // 默认30条
+    const offset = options.offset || 0;
+
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) {
+        return {
+          data: [],
+          total: 0,
+          source: 'cloud',
+          cached: false,
+          queryTime: Date.now() - startTime
+        };
+      }
+
+      // 如果有搜索词，使用向量搜索
+      if (searchTerm && searchTerm.length > 2) {
+        // 转换 sortBy 参数为向量搜索支持的类型
+        let vectorSortBy: 'relevance' | 'time' | 'importance' = 'relevance';
+        if (options.sortBy === 'importance') {
+          vectorSortBy = 'importance';
+        } else if (options.sortBy === 'created' || options.sortBy === 'updated') {
+          vectorSortBy = 'time';
+        }
+        
+        return await this.searchByVector(searchTerm, type, {
+          limit,
+          nResults: limit * 2, // 获取更多结果以应对过滤
+          collections: ['entities'],
+          returnType: 'entities',
+          sortBy: vectorSortBy,
+          sortOrder: options.sortOrder
+        });
+      }
+
+      // 构建 where 查询条件
+      const conditions: any[] = [];
+      
+      // 排除备份数据
+      conditions.push({ type: { $ne: 'graph_backup' } });
+      
+      // 如果指定了实体类型，添加类型过滤
+      if (type) {
+        conditions.push({ type: type });
+      }
+      
+      // 构建最终的 where 条件
+      const whereCondition = conditions.length === 1 ? conditions[0] : { $and: conditions };
+
+      // 直接使用 where 查询，真正的分页
+      const result = await collection.get({
+        where: whereCondition,
+        include: ['metadatas', 'documents'],
+        limit,
+        offset
+      });
+
+      if (!result.ids || result.ids.length === 0) {
+        return {
+          data: [],
+          total: 0,
+          source: 'cloud',
+          cached: false,
+          queryTime: Date.now() - startTime
+        };
+      }
+
+      // 构建实体列表
+      const entities: MemoryEntity[] = [];
+      for (let i = 0; i < result.ids.length; i++) {
+        const metadata = result.metadatas![i] as any;
+        
+        const entity = await this.buildEntity({
+          metadata,
+          id: result.ids[i],
+          document: result.documents?.[i],
+          collectionName: 'graph-entities'
+        });
+        
+        if (entity) {
+          entities.push(entity);
+        }
+      }
+
+      // 应用排序
+      if (options.sortBy && entities.length > 0) {
+        entities.sort((a, b) => {
+          const order = options.sortOrder === 'desc' ? -1 : 1;
+          switch (options.sortBy) {
+            case 'name':
+              return order * a.name.localeCompare(b.name);
+            case 'created':
+              return order * (a.created - b.created);
+            case 'updated':
+              return order * (a.updated - b.updated);
+            case 'importance':
+              return order * (a.importance - b.importance);
+            default:
+              return 0;
+          }
+        });
+      }
+
+      // 🆕 从本地缓存获取总数，避免实时查询
+      let total = entities.length; // 当前查询到的数量作为默认值
+      try {
+        const cachedStats = await chrome.storage.local.get('cache_statistics');
+        if (cachedStats.cache_statistics?.entityCounts) {
+          if (type) {
+            total = cachedStats.cache_statistics.entityCounts[type] || 0;
+          } else {
+            total = Object.values(cachedStats.cache_statistics.entityCounts as Record<string, number>)
+              .reduce((sum, count) => sum + count, 0);
+          }
+        }
+      } catch (error) {
+        console.warn('获取缓存统计数据失败，使用查询结果数量:', error);
+      }
+
+      console.log(`📥 从云端分页查询了 ${entities.length} 个实体 (offset: ${offset}, limit: ${limit}, type: ${type || '全部'})`);
+      
+      return {
+        data: entities,
+        total: total,
+        source: 'cloud',
+        cached: false,
+        queryTime: Date.now() - startTime
+      };
+    } catch (error) {
+      console.error('查询云端实体失败:', error);
+      return {
+        data: [],
+        total: 0,
+        source: 'cloud',
+        cached: false,
+        queryTime: Date.now() - startTime
+      };
+    }
+  }
+
+  /**
+   * 查询用户档案记录（非向量搜索）
+   * 用于根据元数据条件查询用户档案，不进行向量相似度计算
+   */
+  async queryUserprofiles(
+    options: UserprofilesQueryOptions = {}
+  ): Promise<UserprofilesQueryResult> {
+    this.ensureInitialized();
+
+    const startTime = Date.now();
+    const {
+      record_types,
+      user_id,
+      limit = 20,
+      time_range,
+      metadata_filters = {},
+      sort_by = 'time',
+      sort_order = 'desc'
+    } = options;
+
+    try {
+      const collectionName = `${this.username}-userprofiles`;
+      const collection = this.collections.get(collectionName);
+      
+      if (!collection) {
+        return {
+          records: [],
+          total_count: 0,
+          query_metadata: {
+            query_time: Date.now(),
+            processing_time_ms: Date.now() - startTime
+          }
+        };
+      }
+
+      // 构建查询条件 - 使用 $and 操作符组合多个条件
+      const conditions: any[] = [];
+      
+      // 添加 metadata_filters 中的条件
+      Object.entries(metadata_filters).forEach(([key, value]) => {
+        conditions.push({ [key]: value });
+      });
+      
+      if (user_id) {
+        conditions.push({ user_id: user_id });
+      }
+      
+      if (record_types && record_types.length > 0) {
+        conditions.push({ record_type: { $in: record_types } });
+      }
+      
+      if (time_range) {
+        conditions.push({ 
+          updated_at: {
+            $gte: time_range.start,
+            $lte: time_range.end
+          }
+        });
+      }
+
+      // 构建最终的 where 条件
+      let whereCondition: any = undefined;
+      if (conditions.length > 0) {
+        if (conditions.length === 1) {
+          whereCondition = conditions[0];
+        } else {
+          whereCondition = { $and: conditions };
+        }
+      }
+
+      // 执行查询（不使用向量搜索）
+      const searchResult = await collection.get({
+        where: whereCondition,
+        limit: limit,
+        include: ['documents', 'metadatas']
+      });
+
+      // 处理结果
+      const records: UserprofilesRecord[] = [];
+      
+      if (searchResult.documents && searchResult.metadatas) {
+        for (let i = 0; i < searchResult.documents.length; i++) {
+          records.push({
+            id: searchResult.ids[i] as string,
+            document: searchResult.documents[i],
+            metadata: this.deserializeChromaMetadata(searchResult.metadatas[i])
+          });
+        }
+      }
+
+      // 排序
+      if (sort_by === 'time') {
+        records.sort((a, b) => {
+          const timeA = a.metadata?.updated_at || a.metadata?.created_at || 0;
+          const timeB = b.metadata?.updated_at || b.metadata?.created_at || 0;
+          return sort_order === 'desc' ? timeB - timeA : timeA - timeB;
+        });
+      }
+
+      return {
+        records: records,
+        total_count: records.length,
+        query_metadata: {
+          query_time: Date.now(),
+          processing_time_ms: Date.now() - startTime
+        }
+      };
+    } catch (error) {
+      console.error('查询用户档案记录失败:', error);
+      return {
+        records: [],
+        total_count: 0,
+        query_metadata: {
+          query_time: Date.now(),
+          processing_time_ms: Date.now() - startTime
+        }
       };
     }
   }
@@ -546,7 +930,7 @@ export class CloudStorage {
       // 使用向量搜索获取相关消息
       const searchResults = await this.searchByVector(query, undefined, {
         collections: ['messages'],
-        returnType: 'raw',
+        returnType: 'messages',
         limit,
         minRelevanceScore,
         timeRange,
@@ -626,7 +1010,7 @@ export class CloudStorage {
       const embedding = await getEmbeddingViaOffscreen(naturalDescription);
 
       // 转换关联数据为ChromaDB兼容格式
-      const chromaMetadata = this.serializeMetadataForChroma(entity);
+      const chromaMetadata = this.serializeChromaMetadata(entity);
 
       await collection.add({
         ids: [entity.id],
@@ -660,7 +1044,7 @@ export class CloudStorage {
       const embedding = await getEmbeddingViaOffscreen(`sender: ${messageData.metadata.sender}\ncontent: ${messageData.content}\nsummary: ${messageData.metadata.summary}`);
 
       // 转换复杂元数据为 ChromaDB 兼容格式
-      const chromaMetadata = this.serializeMetadataForChroma(messageData.metadata);
+      const chromaMetadata = this.serializeChromaMetadata(messageData.metadata);
 
       await collection.add({
         ids: [messageData.id],
@@ -695,15 +1079,17 @@ export class CloudStorage {
       const content = `${webpageData.title} ${webpageData.content}`;
       const embedding = await getEmbeddingViaOffscreen(content);
 
+      const chromaMetadata = this.serializeChromaMetadata({
+        ...webpageData.metadata,
+        title: webpageData.title,
+        url: webpageData.url
+      });
+
       await collection.add({
         ids: [webpageData.id],
         documents: [content],
         embeddings: [embedding],
-        metadatas: [{
-          ...webpageData.metadata,
-          title: webpageData.title,
-          url: webpageData.url
-        }]
+        metadatas: [chromaMetadata]
       });
 
       return true;
@@ -768,7 +1154,7 @@ export class CloudStorage {
       }
 
       // 转换为ChromaDB格式
-      const chromaMetadata = this.serializeMetadataForChroma(mergedEntity);
+      const chromaMetadata = this.serializeChromaMetadata(mergedEntity);
 
       // 执行更新
       await collection.update({
@@ -782,6 +1168,27 @@ export class CloudStorage {
       return true;
     } catch (error) {
       console.error('更新实体失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 删除实体
+   */
+  async deleteEntity(entityId: string): Promise<boolean> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) return false;
+
+      await collection.delete({
+        ids: [entityId]
+      });
+
+      return true;
+    } catch (error) {
+      console.error('删除实体失败:', error);
       return false;
     }
   }
@@ -883,27 +1290,6 @@ export class CloudStorage {
       jiraTickets: relatedData.jiraTickets?.length || 0,
       relationships: relatedData.cooccurringEntities?.length || 0
     };
-  }
-
-  /**
-   * 删除实体
-   */
-  async deleteEntity(entityId: string): Promise<boolean> {
-    this.ensureInitialized();
-
-    try {
-      const collection = this.collections.get(`${this.username}-graph-entities`);
-      if (!collection) return false;
-
-      await collection.delete({
-        ids: [entityId]
-      });
-
-      return true;
-    } catch (error) {
-      console.error('删除实体失败:', error);
-      return false;
-    }
   }
 
   /**
@@ -1068,236 +1454,6 @@ export class CloudStorage {
   }
 
   /**
-   * 获取单个实体
-   */
-  async getEntity(entityId: string): Promise<MemoryEntity | null> {
-    this.ensureInitialized();
-
-    try {
-      const collection = this.collections.get(`${this.username}-graph-entities`);
-      if (!collection) return null;
-
-      const result = await collection.get({
-        ids: [entityId],
-        include: ['metadatas', 'documents']
-      });
-
-      if (result.ids && result.ids.length > 0 && result.metadatas) {
-        const metadata = result.metadatas[0] as any;
-        
-        // 跳过备份数据
-        if (metadata.type === 'graph_backup') return null;
-        
-        const entity = await this.buildEntity({
-          metadata,
-          id: result.ids[0],
-          document: result.documents?.[0],
-          collectionName: 'graph-entities'
-        });
-        return entity;
-      }
-
-      return null;
-    } catch (error) {
-      console.error(`获取实体 ${entityId} 失败:`, error);
-      return null;
-    }
-  }
-
-  /**
-   * 从消息集合获取单个消息
-   */
-  async getMessage(messageId: string): Promise<MemoryMessage | null> {
-    this.ensureInitialized();
-
-    try {
-      const collection = this.collections.get(`${this.username}-messages`);
-      if (!collection) return null;
-
-      const result = await collection.get({
-        ids: [messageId],
-        include: ['metadatas', 'documents']
-      });
-
-      if (result.ids && result.ids.length > 0 && result.metadatas) {
-        const metadata = result.metadatas[0] as any;
-        const document = result.documents?.[0];
-        
-        // 构建消息对象
-        const processedMetadata = this.deserializeMetadata(metadata || {});
-        
-        return {
-          id: result.ids[0],
-          content: document || '',
-          sender: metadata?.sender || 'unknown',
-          datetime: metadata?.datetime || Date.now(),
-          metadata: processedMetadata,
-          // 从 metadata 中提取常用字段
-          groupName: metadata?.groupName || '未知群组',
-          groupUrl: metadata?.groupUrl || metadata?.team_url || '#',
-          groupId: metadata?.groupId || '',
-          summary: metadata?.summary || (document ? document.substring(0, 100) + '...' : ''),
-          matchedRules: metadata?.matchedRules || [],
-          replyAdvice: metadata?.replyAdvice || '',
-          contextMessages: processedMetadata?.contextMessages || []
-        };
-      }
-
-      return null;
-    } catch (error) {
-      console.error(`获取消息 ${messageId} 失败:`, error);
-      return null;
-    }
-  }
-
-  /**
-   * 查询云端实体（支持按type过滤和真正的分页）
-   */
-  async queryEntities(
-    type?: string,
-    searchTerm?: string,
-    options: QueryOptions = {}
-  ): Promise<QueryResult<MemoryEntity>> {
-    this.ensureInitialized();
-
-    const startTime = Date.now();
-    const limit = options.limit || 30; // 默认30条
-    const offset = options.offset || 0;
-
-    try {
-      const collection = this.collections.get(`${this.username}-graph-entities`);
-      if (!collection) {
-        return {
-          data: [],
-          total: 0,
-          source: 'cloud',
-          cached: false,
-          queryTime: Date.now() - startTime
-        };
-      }
-
-      // 如果有搜索词，使用向量搜索
-      if (searchTerm && searchTerm.length > 2) {
-        // 转换 sortBy 参数为向量搜索支持的类型
-        let vectorSortBy: 'relevance' | 'time' | 'importance' = 'relevance';
-        if (options.sortBy === 'importance') {
-          vectorSortBy = 'importance';
-        } else if (options.sortBy === 'created' || options.sortBy === 'updated') {
-          vectorSortBy = 'time';
-        }
-        
-        return await this.searchByVector(searchTerm, type, {
-          limit,
-          nResults: limit * 2, // 获取更多结果以应对过滤
-          collections: ['entities'],
-          returnType: 'entities',
-          sortBy: vectorSortBy,
-          sortOrder: options.sortOrder
-        });
-      }
-
-      // 构建 where 查询条件
-      const whereCondition: any = {
-        type: { $ne: 'graph_backup' } // 排除备份数据
-      };
-      
-      // 如果指定了实体类型，添加类型过滤
-      if (type) {
-        whereCondition.type = type;
-      }
-
-      // 直接使用 where 查询，真正的分页
-      const result = await collection.get({
-        where: whereCondition,
-        include: ['metadatas', 'documents'],
-        limit,
-        offset
-      });
-
-      if (!result.ids || result.ids.length === 0) {
-        return {
-          data: [],
-          total: 0,
-          source: 'cloud',
-          cached: false,
-          queryTime: Date.now() - startTime
-        };
-      }
-
-      // 构建实体列表
-      const entities: MemoryEntity[] = [];
-      for (let i = 0; i < result.ids.length; i++) {
-        const metadata = result.metadatas![i] as any;
-        
-        const entity = await this.buildEntity({
-          metadata,
-          id: result.ids[i],
-          document: result.documents?.[i],
-          collectionName: 'graph-entities'
-        });
-        
-        if (entity) {
-          entities.push(entity);
-        }
-      }
-
-      // 应用排序
-      if (options.sortBy && entities.length > 0) {
-        entities.sort((a, b) => {
-          const order = options.sortOrder === 'desc' ? -1 : 1;
-          switch (options.sortBy) {
-            case 'name':
-              return order * a.name.localeCompare(b.name);
-            case 'created':
-              return order * (a.created - b.created);
-            case 'updated':
-              return order * (a.updated - b.updated);
-            case 'importance':
-              return order * (a.importance - b.importance);
-            default:
-              return 0;
-          }
-        });
-      }
-
-      // 🆕 从本地缓存获取总数，避免实时查询
-      let total = entities.length; // 当前查询到的数量作为默认值
-      try {
-        const cachedStats = await chrome.storage.local.get('cache_statistics');
-        if (cachedStats.cache_statistics?.entityCounts) {
-          if (type) {
-            total = cachedStats.cache_statistics.entityCounts[type] || 0;
-          } else {
-            total = Object.values(cachedStats.cache_statistics.entityCounts as Record<string, number>)
-              .reduce((sum, count) => sum + count, 0);
-          }
-        }
-      } catch (error) {
-        console.warn('获取缓存统计数据失败，使用查询结果数量:', error);
-      }
-
-      console.log(`📥 从云端分页查询了 ${entities.length} 个实体 (offset: ${offset}, limit: ${limit}, type: ${type || '全部'})`);
-      
-      return {
-        data: entities,
-        total: total,
-        source: 'cloud',
-        cached: false,
-        queryTime: Date.now() - startTime
-      };
-    } catch (error) {
-      console.error('查询云端实体失败:', error);
-      return {
-        data: [],
-        total: 0,
-        source: 'cloud',
-        cached: false,
-        queryTime: Date.now() - startTime
-      };
-    }
-  }
-
-  /**
    * 备份关系数据到云端
    */
   async backupRelationships(relationshipData: {
@@ -1319,15 +1475,17 @@ export class CloudStorage {
       
       const embedding = await getEmbeddingViaOffscreen(backupContent);
 
+      const chromaMetadata = this.serializeChromaMetadata({
+        type: 'graph_backup',
+        backupTime: Date.now(),
+        relationshipCount: relationshipData.relationships.length
+      });
+
       await collection.add({
         ids: [backupId],
         documents: [backupContent],
         embeddings: [embedding],
-        metadatas: [{
-          type: 'graph_backup',
-          backupTime: Date.now(),
-          relationshipCount: relationshipData.relationships.length
-        }]
+        metadatas: [chromaMetadata]
       });
 
       console.log(`☁️ 关系数据已备份: ${backupId}`);
@@ -1684,17 +1842,19 @@ export class CloudStorage {
       const embedding = await getEmbeddingViaOffscreen(profileText);
 
       // 存储用户画像
+      const chromaMetadata = this.serializeChromaMetadata({
+        userId: userId,
+        lastUpdated: profile.lastUpdated,
+        createdAt: profile.createdAt,
+        totalInteractions: profile.statistics.totalInteractions,
+        profileData: JSON.stringify(profile)
+      });
+
       await collection.upsert({
         ids: [userId],
         documents: [profileText],
         embeddings: [embedding],
-        metadatas: [{
-          userId: userId,
-          lastUpdated: profile.lastUpdated,
-          createdAt: profile.createdAt,
-          totalInteractions: profile.statistics.totalInteractions,
-          profileData: JSON.stringify(profile)
-        }]
+        metadatas: [chromaMetadata]
       });
 
       console.log(`✅ 用户画像 ${userId} 已存储到云端`);
@@ -1725,7 +1885,7 @@ export class CloudStorage {
       });
 
       if (result.metadatas && result.metadatas.length > 0) {
-        const metadata = result.metadatas[0] as any;
+        const metadata = this.deserializeChromaMetadata(result.metadatas[0]);
         if (metadata.profileData) {
           return JSON.parse(metadata.profileData) as UserProfile;
         }
@@ -1739,13 +1899,13 @@ export class CloudStorage {
   }
 
   // =====================================
-  // 🆕 向量化用户画像存储方法
+  // 🆕 用户档案存储方法
   // =====================================
 
   /**
-   * 存储向量化用户画像记录
+   * 存储用户档案记录
    */
-  async storeVectorizedRecord(record: VectorizedRecord): Promise<boolean> {
+  async storeUserprofilesRecord(record: UserprofilesRecord): Promise<boolean> {
     this.ensureInitialized();
 
     try {
@@ -1766,7 +1926,7 @@ export class CloudStorage {
       if (!embedding) {
         embedding = await getEmbeddingViaOffscreen(record.document);
       }
-      const metadata = this.serializeMetadataForChroma(record.metadata)
+      const metadata = this.serializeChromaMetadata(record.metadata)
 
       // 存储记录
       await collection.upsert({
@@ -1776,22 +1936,22 @@ export class CloudStorage {
         metadatas: [metadata]
       });
 
-      console.log(`✅ 向量化记录 ${record.id} 已存储`);
+      console.log(`✅ 用户档案记录 ${record.id} 已存储`);
       return true;
     } catch (error) {
-      console.error('存储向量化记录失败:', error);
+      console.error('存储用户档案记录失败:', error);
       return false;
     }
   }
 
   /**
-   * 批量存储向量化记录
+   * 批量存储用户档案记录
    */
-  async storeVectorizedRecordsBatch(records: VectorizedRecord[]): Promise<number> {
+  async storeUserprofilesRecordsBatch(records: UserprofilesRecord[]): Promise<number> {
     this.ensureInitialized();
 
     let successCount = 0;
-    const batchSize = this.vectorMaintenanceConfig.vector_update.batch_size;
+    const batchSize = this.userprofilesMaintenanceConfig.vector_update.batch_size;
     
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
@@ -1812,7 +1972,7 @@ export class CloudStorage {
         // 准备批量数据
         const ids = batch.map(r => r.id);
         const documents = batch.map(r => r.document);
-        const metadatas = batch.map(r => r.metadata);
+        const metadatas = batch.map(r => this.serializeChromaMetadata(r.metadata));
         
         // 生成嵌入向量
         const embeddings = await Promise.all(
@@ -1828,138 +1988,13 @@ export class CloudStorage {
         });
 
         successCount += batch.length;
-        console.log(`✅ 批量存储 ${batch.length} 条向量化记录`);
+        console.log(`✅ 批量存储 ${batch.length} 条用户档案记录`);
       } catch (error) {
         console.error(`批量存储失败 (batch ${Math.floor(i / batchSize) + 1}):`, error);
       }
     }
 
     return successCount;
-  }
-
-  /**
-   * 查询向量化记录
-   */
-  async queryVectorizedRecords(
-    query: string, 
-    options: VectorizedQueryOptions = {}
-  ): Promise<VectorizedQueryResult> {
-    this.ensureInitialized();
-
-    const startTime = Date.now();
-    const {
-      record_types,
-      user_id,
-      limit = 20,
-      similarity_threshold = 0.5,
-      time_range,
-      metadata_filters = {},
-      sort_by = 'similarity',
-      sort_order = 'desc'
-    } = options;
-
-    try {
-      const collectionName = `${this.username}-userprofiles`;
-      const collection = this.collections.get(collectionName);
-      
-      if (!collection) {
-        return {
-          records: [],
-          total_count: 0,
-          query_metadata: {
-            query_time: Date.now(),
-            processing_time_ms: Date.now() - startTime
-          }
-        };
-      }
-
-      // 构建查询条件
-      const whereCondition: any = { ...metadata_filters };
-      
-      if (user_id) {
-        whereCondition.user_id = user_id;
-      }
-      
-      if (record_types && record_types.length > 0) {
-        whereCondition.record_type = { $in: record_types };
-      }
-      
-      if (time_range) {
-        whereCondition.updated_at = {
-          $gte: time_range.start,
-          $lte: time_range.end
-        };
-      }
-
-      // 生成查询向量
-      const queryEmbedding = await getEmbeddingViaOffscreen(query);
-
-      // 执行向量搜索
-      const searchResult = await collection.query({
-        queryEmbeddings: [queryEmbedding],
-        nResults: limit * 2, // 获取更多结果用于过滤
-        where: Object.keys(whereCondition).length > 0 ? whereCondition : undefined,
-        include: ['documents', 'metadatas', 'distances']
-      });
-
-      // 处理结果
-      const records: VectorizedRecord[] = [];
-      const similarities: number[] = [];
-      
-      if (searchResult.documents && searchResult.metadatas && searchResult.distances) {
-        for (let i = 0; i < searchResult.documents[0].length; i++) {
-          const distance = searchResult.distances[0][i];
-          const similarity = 1 - distance; // 转换距离为相似度
-          
-          if (similarity >= similarity_threshold) {
-            records.push({
-              id: searchResult.ids?.[0][i] as string,
-              document: searchResult.documents[0][i],
-              metadata: searchResult.metadatas[0][i] as any
-            });
-            similarities.push(similarity);
-          }
-        }
-      }
-
-      // 排序
-      if (sort_by === 'similarity') {
-        const combined = records.map((record, index) => ({ record, similarity: similarities[index] }));
-        combined.sort((a, b) => sort_order === 'desc' ? b.similarity - a.similarity : a.similarity - b.similarity);
-        const sortedRecords = combined.map(item => item.record);
-        const sortedSimilarities = combined.map(item => item.similarity);
-        
-        return {
-          records: sortedRecords.slice(0, limit),
-          total_count: sortedRecords.length,
-          query_metadata: {
-            query_time: Date.now(),
-            similarity_scores: sortedSimilarities.slice(0, limit),
-            processing_time_ms: Date.now() - startTime
-          }
-        };
-      }
-
-      return {
-        records: records.slice(0, limit),
-        total_count: records.length,
-        query_metadata: {
-          query_time: Date.now(),
-          similarity_scores: similarities.slice(0, limit),
-          processing_time_ms: Date.now() - startTime
-        }
-      };
-    } catch (error) {
-      console.error('查询向量化记录失败:', error);
-      return {
-        records: [],
-        total_count: 0,
-        query_metadata: {
-          query_time: Date.now(),
-          processing_time_ms: Date.now() - startTime
-        }
-      };
-    }
   }
 
   /**
@@ -1976,13 +2011,15 @@ export class CloudStorage {
   ): Promise<UserSimilarityResult[]> {
     const { record_types, limit = 10, similarity_threshold = 0.6 } = options;
 
-    const queryResult = await this.queryVectorizedRecords(query, {
-      record_types: record_types as any,
-      limit: 100,
-      similarity_threshold,
-      metadata_filters: {
+    const queryResult = await this.searchByVector(query, undefined, {
+      collections: ['userprofiles'],
+      returnType: 'userprofiles',
+      where: {
+        record_type: { $in: record_types },
         user_id: { $ne: currentUserId }
-      }
+      },
+      minRelevanceScore: similarity_threshold,
+      limit: 100
     });
 
     // 按用户聚合结果
@@ -1992,9 +2029,9 @@ export class CloudStorage {
       matching_items: string[];
     }>();
 
-    queryResult.records.forEach((record, index) => {
+    queryResult.data.forEach((record, index) => {
       const userId = record.metadata.user_id;
-      const similarity = queryResult.query_metadata.similarity_scores?.[index] || 0;
+      const similarity = record.relevanceScore || 0;
       
       if (!userMatches.has(userId)) {
         userMatches.set(userId, {
@@ -2037,9 +2074,9 @@ export class CloudStorage {
   }
 
   /**
-   * 删除用户的向量化记录
+   * 删除用户的档案记录
    */
-  async deleteUserVectorizedRecords(userId: string): Promise<boolean> {
+  async deleteUserProfilesRecords(userId: string): Promise<boolean> {
     this.ensureInitialized();
 
     try {
@@ -2062,20 +2099,20 @@ export class CloudStorage {
           ids: userRecords.ids
         });
         
-        console.log(`🗑️ 删除用户 ${userId} 的 ${userRecords.ids.length} 条向量化记录`);
+        console.log(`🗑️ 删除用户 ${userId} 的 ${userRecords.ids.length} 条用户档案记录`);
       }
 
       return true;
     } catch (error) {
-      console.error('删除用户向量化记录失败:', error);
+      console.error('删除用户档案记录失败:', error);
       return false;
     }
   }
 
   /**
-   * 获取向量化存储统计信息
+   * 获取用户档案存储统计信息
    */
-  async getVectorStorageStats(): Promise<VectorStorageStats> {
+  async getUserprofilesStorageStats(): Promise<UserprofilesStorageStats> {
     this.ensureInitialized();
 
     try {
@@ -2098,7 +2135,7 @@ export class CloudStorage {
         include: ['metadatas']
       });
 
-      const stats: VectorStorageStats = {
+      const stats: UserprofilesStorageStats = {
         total_records: allRecords.ids?.length || 0,
         records_by_type: {},
         records_by_user: {},
@@ -2131,7 +2168,7 @@ export class CloudStorage {
 
       return stats;
     } catch (error) {
-      console.error('获取向量化存储统计失败:', error);
+      console.error('获取用户档案存储统计失败:', error);
       return {
         total_records: 0,
         records_by_type: {},
@@ -2144,9 +2181,9 @@ export class CloudStorage {
   }
 
   /**
-   * 向量化数据维护
+   * 用户档案数据维护
    */
-  async performVectorMaintenance(): Promise<{
+  async performUserprofilesMaintenance(): Promise<{
     cleaned_records: number;
     updated_records: number;
     created_summaries: number;
@@ -2169,17 +2206,17 @@ export class CloudStorage {
         return result;
       }
 
-      console.log('🔧 开始向量化数据维护...');
+      console.log('🔧 开始用户档案数据维护...');
 
       // 1. 清理过期/低权重记录
       try {
-        const cleanupThreshold = Date.now() - (this.vectorMaintenanceConfig.cleanup_thresholds.max_age_days * 24 * 60 * 60 * 1000);
+        const cleanupThreshold = Date.now() - (this.userprofilesMaintenanceConfig.cleanup_thresholds.max_age_days * 24 * 60 * 60 * 1000);
         
         const oldRecords = await collection.get({
           where: {
             $or: [
               { updated_at: { $lt: cleanupThreshold } },
-              { current_weight: { $lt: this.vectorMaintenanceConfig.cleanup_thresholds.min_weight } }
+              { current_weight: { $lt: this.userprofilesMaintenanceConfig.cleanup_thresholds.min_weight } }
             ]
           },
           include: ['metadatas']
@@ -2195,11 +2232,11 @@ export class CloudStorage {
       }
 
       // 2. 更新向量表示（重新计算embedding）
-      if (this.vectorMaintenanceConfig.vector_update.enable_batch_update) {
+      if (this.userprofilesMaintenanceConfig.vector_update.enable_batch_update) {
         try {
           // 找到需要更新的记录（这里简化为随机选择部分记录）
           const allRecords = await collection.get({
-            limit: this.vectorMaintenanceConfig.vector_update.batch_size,
+            limit: this.userprofilesMaintenanceConfig.vector_update.batch_size,
             include: ['documents', 'metadatas']
           });
 
@@ -2224,9 +2261,9 @@ export class CloudStorage {
       }
 
       // 3. 生成用户概要记录
-      if (this.vectorMaintenanceConfig.aggregation_rules.enable_auto_summary) {
+      if (this.userprofilesMaintenanceConfig.aggregation_rules.enable_auto_summary) {
         try {
-          const userStats = await this.getVectorStorageStats();
+          const userStats = await this.getUserprofilesStorageStats();
           
           for (const userId of Object.keys(userStats.records_by_user)) {
             // 检查是否需要创建或更新概要
@@ -2242,7 +2279,7 @@ export class CloudStorage {
               // 创建新的用户概要
               const summaryRecord = await this.generateUserSummaryRecord(userId);
               if (summaryRecord) {
-                await this.storeVectorizedRecord(summaryRecord);
+                await this.storeUserprofilesRecord(summaryRecord);
                 result.created_summaries++;
               }
             }
@@ -2254,10 +2291,10 @@ export class CloudStorage {
         }
       }
 
-      console.log('✅ 向量化数据维护完成');
+      console.log('✅ 用户档案数据维护完成');
       return result;
     } catch (error) {
-      console.error('向量化数据维护失败:', error);
+      console.error('用户档案数据维护失败:', error);
       result.errors.push(`维护过程失败: ${error}`);
       return result;
     }
@@ -2269,7 +2306,7 @@ export class CloudStorage {
   private async generateUserSummaryRecord(userId: string): Promise<UserSummaryRecord | null> {
     try {
       // 获取用户的所有记录
-      const userRecords = await this.queryVectorizedRecords('', {
+      const userRecords = await this.queryUserprofiles({
         user_id: userId,
         limit: 1000,
         record_types: ['interest_item', 'behavior_pattern', 'social_relationship', 'expertise_area']
@@ -2320,9 +2357,9 @@ export class CloudStorage {
           },
           weight_distribution: weightDistribution,
           activity_metrics: {
-            daily_average_interactions: weights.length / 30, // 简化计算
-            peak_activity_hours: [],
-            most_active_categories: Object.keys(recordsByType)
+            avg_daily_interactions: weights.length / 30, // 简化计算
+            peak_activity_hour: 9, // 简化为固定值
+            active_days_count: Math.min(30, weights.length)
           },
           growth_trends: {
             new_interests_per_month: 0,
@@ -2531,7 +2568,7 @@ export class CloudStorage {
    * 将复杂元数据转换为 ChromaDB 兼容的格式
    * ChromaDB 只支持 string, number, boolean, null 类型
    */
-  private serializeMetadataForChroma(metadata: any): Record<string, string | number | boolean | null> {
+  private serializeChromaMetadata(metadata: any): Record<string, string | number | boolean | null> {
     const converted: Record<string, string | number | boolean | null> = {};
     
     if (!metadata) return converted;
@@ -2563,11 +2600,79 @@ export class CloudStorage {
   }
 
   /**
-   * 🆕 从ChromaDB metadata反序列化实体
+   * 🆕 通用的ChromaDB metadata反序列化函数
+   * 可以处理任意类型的metadata，自动判断字段类型并进行相应转换
+   */
+  private deserializeChromaMetadata(metadata: any, defaultValues?: any): any {
+    if (!metadata) return defaultValues || {};
+
+    // 通用字段处理：自动判断字段类型并进行相应转换
+    const processField = (value: any, fieldName: string, defaultValue?: any): any => {
+      // 如果值为空，返回默认值
+      if (value === null || value === undefined || value === '') {
+        return defaultValue;
+      }
+
+      // 如果已经是正确类型，直接返回
+      if (typeof value !== 'string') {
+        return value;
+      }
+
+      // 尝试解析为 JSON（数组或对象）
+      if ((value.startsWith('{') && value.endsWith('}')) || 
+          (value.startsWith('[') && value.endsWith(']'))) {
+        try {
+          return JSON.parse(value);
+        } catch (error) {
+          console.warn(`字段 ${fieldName} JSON解析失败:`, error);
+          return defaultValue;
+        }
+      }
+
+      // 判断是否为时间戳字段，如果是数字字符串且字段名包含时间相关词汇
+      const timeFields = ['created', 'updated', 'lastAccessed', 'lastContact', 'lastDocumentUpdate', 'created_at', 'updated_at', 'timestamp', 'datetime', 'extractedAt'];
+      if (timeFields.includes(fieldName) && /^\d+$/.test(value)) {
+        return parseInt(value, 10);
+      }
+
+      // 判断是否为数字字段
+      const numberFields = ['accessCount', 'importance', 'hotness', 'criticalityScore', 'current_weight', 'relevanceScore', 'total_interactions', 'total_records'];
+      if (numberFields.includes(fieldName) && /^-?\d*\.?\d+$/.test(value)) {
+        return parseFloat(value);
+      }
+
+      // 布尔字段处理
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+
+      // 其他情况保持字符串
+      return value;
+    };
+
+    try {
+      // 从默认值开始或创建新对象
+      const result: any = defaultValues ? { ...defaultValues } : {};
+      
+      // 处理metadata中的所有字段
+      for (const key in metadata) {
+        if (metadata[key] !== undefined) {
+          result[key] = processField(metadata[key], key, result[key]);
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error('反序列化ChromaDB metadata失败:', error);
+      return defaultValues || {};
+    }
+  }
+
+  /**
+   * 🆕 从ChromaDB metadata反序列化实体（使用通用反序列化函数）
    */
   private deserializeEntityFromMetadata(metadata: any): MemoryEntity {
     // 默认值定义
-    const defaults:MemoryEntity = {
+    const defaults: MemoryEntity = {
       id: '',
       type: 'Document' as const,
       name: '',
@@ -2603,64 +2708,7 @@ export class CloudStorage {
       expertise: [] as string[]
     };
 
-    // 通用字段处理：自动判断字段类型并进行相应转换
-    const processField = (value: any, fieldName: string, defaultValue?: any): any => {
-      // 如果值为空，返回默认值
-      if (value === null || value === undefined || value === '') {
-        return defaultValue;
-      }
-
-      // 如果已经是正确类型，直接返回
-      if (typeof value !== 'string') {
-        return value;
-      }
-
-      // 尝试解析为 JSON（数组或对象）
-      if ((value.startsWith('{') && value.endsWith('}')) || 
-          (value.startsWith('[') && value.endsWith(']'))) {
-        try {
-          return JSON.parse(value);
-        } catch (error) {
-          console.warn(`字段 ${fieldName} JSON解析失败:`, error);
-          return defaultValue;
-        }
-      }
-
-      // 判断是否为时间戳字段，如果是数字字符串且字段名包含时间相关词汇
-      const timeFields = ['created', 'updated', 'lastAccessed', 'lastContact', 'lastDocumentUpdate'];
-      if (timeFields.includes(fieldName) && /^\d+$/.test(value)) {
-        return parseInt(value, 10);
-      }
-
-      // 判断是否为数字字段
-      const numberFields = ['accessCount', 'importance', 'hotness', 'criticalityScore'];
-      if (numberFields.includes(fieldName) && /^-?\d*\.?\d+$/.test(value)) {
-        return parseFloat(value);
-      }
-
-      // 布尔字段处理
-      if (value === 'true') return true;
-      if (value === 'false') return false;
-
-      // 其他情况保持字符串
-      return value;
-    }
-
-    try {
-      // 基础字段处理
-      const entity: any = { ...defaults };
-      for (const key in metadata) {
-        if (metadata[key] !== undefined) {
-          entity[key] = processField(metadata[key], key);
-        }
-      }
-
-      return entity as MemoryEntity;
-    } catch (error) {
-      console.error('反序列化实体失败:', error);
-      // 返回基础实体结构
-      return defaults;
-    }
+    return this.deserializeChromaMetadata(metadata, defaults) as MemoryEntity;
   }
 
   /**
@@ -2992,9 +3040,9 @@ export class CloudStorage {
                 statistic: JSON.stringify(updateInfo.statistic),
                 lastStatisticUpdate: updateInfo.lastUpdated,
                 updated: Date.now()
-              } as MemoryEntity;
+              };
 
-              updateMetadatas.push(updatedMetadata);
+              updateMetadatas.push(this.serializeChromaMetadata(updatedMetadata));
               updateIds.push(entityId);
             }
           }
@@ -3675,5 +3723,100 @@ export class CloudStorage {
       console.error('获取独立用户配置失败:', error);
       return null;
     }
+  }
+
+  // ==================== ChromaDB 包装方法(暂不启用) ====================
+  
+  /**
+   * 包装 collection.get 方法，自动反序列化 metadata
+   */
+  private async wrappedCollectionGet(collection: Collection, params: any): Promise<any> {
+    const result = await collection.get(params);
+    
+    // 自动反序列化 metadata（创建新对象以避免只读属性错误）
+    if (result.metadatas) {
+      return {
+        ...result,
+        metadatas: result.metadatas.map((metadata: any) => 
+          this.deserializeChromaMetadata(metadata)
+        )
+      };
+    }
+    
+    return result;
+  }
+
+  /**
+   * 包装 collection.query 方法，自动反序列化 metadata
+   */
+  private async wrappedCollectionQuery(collection: Collection, params: any): Promise<any> {
+    const result = await collection.query(params);
+    
+    // 自动反序列化 metadata（创建新对象以避免只读属性错误）
+    if (result.metadatas) {
+      return {
+        ...result,
+        metadatas: result.metadatas.map((metadataArray: any[]) =>
+          metadataArray.map((metadata: any) => this.deserializeChromaMetadata(metadata))
+        )
+      };
+    }
+    
+    return result;
+  }
+
+  /**
+   * 包装 collection.add 方法，自动序列化 metadata
+   */
+  private async wrappedCollectionAdd(collection: Collection, params: any): Promise<any> {
+    const wrappedParams = { ...params };
+    
+    // 自动序列化 metadata
+    if (wrappedParams.metadatas) {
+      wrappedParams.metadatas = wrappedParams.metadatas.map((metadata: any) =>
+        this.serializeChromaMetadata(metadata)
+      );
+    }
+    
+    return await collection.add(wrappedParams);
+  }
+
+  /**
+   * 包装 collection.update 方法，自动序列化 metadata
+   */
+  private async wrappedCollectionUpdate(collection: Collection, params: any): Promise<any> {
+    const wrappedParams = { ...params };
+    
+    // 自动序列化 metadata
+    if (wrappedParams.metadatas) {
+      wrappedParams.metadatas = wrappedParams.metadatas.map((metadata: any) =>
+        this.serializeChromaMetadata(metadata)
+      );
+    }
+    
+    return await collection.update(wrappedParams);
+  }
+
+  /**
+   * 包装 collection.upsert 方法，自动序列化 metadata
+   */
+  private async wrappedCollectionUpsert(collection: Collection, params: any): Promise<any> {
+    const wrappedParams = { ...params };
+    
+    // 自动序列化 metadata
+    if (wrappedParams.metadatas) {
+      wrappedParams.metadatas = wrappedParams.metadatas.map((metadata: any) =>
+        this.serializeChromaMetadata(metadata)
+      );
+    }
+    
+    return await collection.upsert(wrappedParams);
+  }
+
+  /**
+   * 包装 collection.delete 方法（不需要序列化/反序列化）
+   */
+  private async wrappedCollectionDelete(collection: Collection, params: any): Promise<any> {
+    return await collection.delete(params);
   }
 }

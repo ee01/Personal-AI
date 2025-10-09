@@ -5,12 +5,12 @@
 
 import { CloudStorage } from '../storage/CloudStorage';
 import { 
-  UserProfileRecord,
+  UserprofilesRecord,
   InterestItemRecord,
   BehaviorPatternRecord,
   SocialRelationshipRecord,
   ExpertiseAreaRecord,
-  UserProfileQueryOptions,
+  UserprofilesQueryOptions,
   UserSimilarityResult
 } from '../types/userProfile';
 
@@ -76,7 +76,7 @@ export class UserProfileQueryService {
     
     try {
       // 获取目标用户的兴趣项
-      const userInterests = await this.cloudStorage.queryVectorizedRecords('', {
+      const userInterests = await this.cloudStorage.queryUserprofiles({
         user_id: userId,
         record_types: ['interest_item'],
         limit: 100
@@ -127,16 +127,18 @@ export class UserProfileQueryService {
       // 构建八卦相关的查询
       const gossipQuery = '八卦 闲聊 社交 非正式交流 团队文化 聊天 趣事 传闻';
       
-      const results = await this.cloudStorage.queryVectorizedRecords(gossipQuery, {
-        record_types: ['interest_item', 'behavior_pattern'],
-        limit: limit * 3,
-        similarity_threshold: 0.4
+      const results = await this.cloudStorage.searchByVector(gossipQuery, undefined, {
+        collections: ['userprofiles'],
+        returnType: 'userprofiles',
+        where: { record_type: { $in: ['interest_item', 'behavior_pattern'] } },
+        minRelevanceScore: 0.4,
+        limit: limit * 3
       });
 
       // 按用户分组并计算八卦倾向分数
       const userGossipScores = new Map<string, number>();
       
-      results.records.forEach(record => {
+      results.data.forEach(record => {
         const userId = record.metadata.user_id;
         if (excludeUserId && userId === excludeUserId) return;
         
@@ -177,6 +179,7 @@ export class UserProfileQueryService {
         .map(([user_id, score]) => ({
           user_id,
           similarity_score: Math.min(score / 2, 1), // 标准化到0-1
+          total_matches: 1,
           matching_categories: [{
             category: 'social_interaction',
             similarity: score,
@@ -203,15 +206,19 @@ export class UserProfileQueryService {
     
     try {
       // 查询与话题相关的兴趣项
-      const topicResults = await this.cloudStorage.queryVectorizedRecords(topic, {
-        user_id: userId,
-        record_types: ['interest_item'],
-        limit: limit * 2,
-        similarity_threshold: 0.2
+      const topicResults = await this.cloudStorage.searchByVector(topic, undefined, {
+        collections: ['userprofiles'],
+        returnType: 'userprofiles',
+        where: { 
+          user_id: userId,
+          record_type: { $in: ['interest_item'] }
+        },
+        minRelevanceScore: 0.2,
+        limit: limit * 2
       });
 
       // 计算相关性和频率分数
-      const relevanceResults: InterestRelevanceResult[] = topicResults.records
+      const relevanceResults: InterestRelevanceResult[] = topicResults.data
         .map(record => {
           const interestRecord = record as InterestItemRecord;
           const metadata = interestRecord.metadata;
@@ -270,7 +277,7 @@ export class UserProfileQueryService {
       const results: UserCompatibilityResult[] = [];
       
       // 获取源用户的所有记录
-      const sourceRecords = await this.cloudStorage.queryVectorizedRecords('', {
+      const sourceRecords = await this.cloudStorage.queryUserprofiles({
         user_id: userId,
         record_types: ['interest_item', 'behavior_pattern', 'expertise_area'],
         limit: 200
@@ -278,7 +285,7 @@ export class UserProfileQueryService {
 
       for (const targetUserId of targetUserIds) {
         // 获取目标用户的记录
-        const targetRecords = await this.cloudStorage.queryVectorizedRecords('', {
+        const targetRecords = await this.cloudStorage.queryUserprofiles({
           user_id: targetUserId,
           record_types: ['interest_item', 'behavior_pattern', 'expertise_area'],
           limit: 200
@@ -316,7 +323,7 @@ export class UserProfileQueryService {
       const cutoffTime = Date.now() - (timeWindow * 24 * 60 * 60 * 1000);
       
       // 获取最近的兴趣项记录
-      const recentRecords = await this.cloudStorage.queryVectorizedRecords('', {
+      const recentRecords = await this.cloudStorage.queryUserprofiles({
         record_types: ['interest_item'],
         limit: 1000 // 获取大量记录用于分析
       });
@@ -400,17 +407,17 @@ export class UserProfileQueryService {
   ): Promise<SkillGapAnalysisResult> {
     try {
       // 获取用户的专业技能记录
-      const userSkills = await this.cloudStorage.queryVectorizedRecords('', {
+      const userSkills = await this.cloudStorage.queryUserprofiles({
         user_id: userId,
         record_types: ['expertise_area', 'interest_item'],
         limit: 100
       });
 
       // 获取比较用户的技能
-      const comparisonSkills: UserProfileRecord[] = [];
+      const comparisonSkills: UserprofilesRecord[] = [];
       if (options.comparisonUserIds && options.comparisonUserIds.length > 0) {
         for (const compUserId of options.comparisonUserIds) {
-          const skills = await this.cloudStorage.queryVectorizedRecords('', {
+          const skills = await this.cloudStorage.queryUserprofiles({
             user_id: compUserId,
             record_types: ['expertise_area', 'interest_item'],
             limit: 100
@@ -469,8 +476,8 @@ export class UserProfileQueryService {
    * 计算用户间兼容性
    */
   private calculateCompatibility(
-    sourceRecords: UserProfileRecord[],
-    targetRecords: UserProfileRecord[]
+    sourceRecords: UserprofilesRecord[],
+    targetRecords: UserprofilesRecord[]
   ): Omit<UserCompatibilityResult, 'user_id'> {
     // 简化的兼容性计算
     let totalScore = 0;
@@ -550,8 +557,8 @@ export class UserProfileQueryService {
    * 执行技能缺口分析
    */
   private performSkillGapAnalysis(
-    userRecords: UserProfileRecord[],
-    comparisonRecords: UserProfileRecord[]
+    userRecords: UserprofilesRecord[],
+    comparisonRecords: UserprofilesRecord[]
   ): Omit<SkillGapAnalysisResult, 'user_id'> {
     // 提取用户技能
     const userSkills = new Map<string, number>();

@@ -385,7 +385,7 @@ export class TaskScheduler {
       console.log('🔧 开始向量化数据维护...');
       
       // 执行维护操作
-      const result = await this.cloudStorage.performVectorMaintenance();
+      const result = await this.cloudStorage.performUserprofilesMaintenance();
       
       console.log('✅ 向量化数据维护完成:', {
         cleaned_records: result.cleaned_records,
@@ -421,7 +421,7 @@ export class TaskScheduler {
       console.log('📊 开始用户概要生成...');
       
       // 获取存储统计信息
-      const stats = await this.cloudStorage.getVectorStorageStats();
+      const stats = await this.cloudStorage.getUserprofilesStorageStats();
       
       console.log('📈 当前向量存储统计:', {
         total_records: stats.total_records,
@@ -432,7 +432,7 @@ export class TaskScheduler {
 
       // 检查是否需要进行概要更新（这里通过维护任务触发）
       if (stats.total_records > 0) {
-        const maintenanceResult = await this.cloudStorage.performVectorMaintenance();
+        const maintenanceResult = await this.cloudStorage.performUserprofilesMaintenance();
         console.log(`📊 概要生成完成，创建了 ${maintenanceResult.created_summaries} 个新概要`);
       }
     } catch (error) {
@@ -459,7 +459,7 @@ export class TaskScheduler {
       console.log('🔍 开始向量质量检查...');
       
       // 获取存储统计信息
-      const stats = await this.cloudStorage.getVectorStorageStats();
+      const stats = await this.cloudStorage.getUserprofilesStorageStats();
       
       // 质量检查指标
       const qualityChecks = {
@@ -514,7 +514,7 @@ export class TaskScheduler {
         // 可选：自动触发维护
         if (qualityChecks.issues.some(issue => issue.includes('记录数量过多') || issue.includes('健康度较低'))) {
           console.log('🔧 自动触发维护操作...');
-          await this.cloudStorage.performVectorMaintenance();
+          await this.cloudStorage.performUserprofilesMaintenance();
         }
       } else {
         console.log('✅ 向量数据质量良好');

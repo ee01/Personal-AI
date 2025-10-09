@@ -54,8 +54,8 @@ export interface QueryOptions {
 export interface VectorSearchOptions extends Omit<QueryOptions, 'sortBy'> {
   includeMetadata?: boolean;
   nResults?: number;
-  collections?: ('entities' | 'messages' | 'webpages')[]; // 指定搜索的集合
-  returnType?: 'entities' | 'raw';  // 返回类型：实体对象或原始数据
+  collections?: ('entities' | 'messages' | 'webpages' | 'userprofiles')[]; // 指定搜索的集合
+  returnType?: 'entities' | 'messages' | 'userprofiles' | 'raw';  // 返回类型：实体对象、原始数据或用户档案
   sortBy?: 'relevance' | 'time' | 'importance'; // 向量搜索特定的排序方式
   timeRange?: { start: number; end: number }; // 时间范围过滤
   minRelevanceScore?: number; // 最低相关度阈值
@@ -612,7 +612,7 @@ export class MemorySystem {
     // 使用增强的 searchByVector 方法，专门搜索消息并返回原始数据格式
     const result = await this.cloudStorage.searchByVector(entityName, undefined, {
       collections: ['messages'], // 只搜索消息集合
-      returnType: 'raw',         // 返回原始数据格式
+      returnType: 'messages',         // 返回原始数据格式
       limit: options?.limit,
       sortBy: options?.sortBy,
       sortOrder: options?.sortOrder,
@@ -1678,7 +1678,7 @@ export class MemorySystem {
     }
 
     // 检查是否在background script环境中
-    const isBackground = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest;
+    const isBackground = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
     if (!isBackground) {
       console.log('⚠️ 非background环境，跳过后台同步启动');
       return;

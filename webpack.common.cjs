@@ -30,7 +30,6 @@ module.exports = (env) => {
       popup: './src/popup.tsx',
       options: './src/options.tsx',
       offscreen: './src/offscreen.ts',
-      entityExtraction: './src/entityExtraction.ts',
       agentThinking: './src/agentThinking.ts',
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/modals/topic-modal.tsx',

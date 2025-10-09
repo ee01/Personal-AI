@@ -1,5 +1,5 @@
 import { callLLMJsonAPI } from './llm';
-import { extractEntitiesFromMessage } from './entityExtraction';
+import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { naturalLanguageQuery, getAllKnownPeople, getAllKnownProjects } from './vectorStore';
 import { memorySystem, StoreResult } from './memory';
 import { v4 as uuidv4 } from 'uuid';

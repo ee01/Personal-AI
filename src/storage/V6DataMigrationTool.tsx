@@ -679,7 +679,7 @@ const V6DataMigrationTool = () => {
                                         context: 'v6_migration',
                                         metadata: {
                                             messageId: messageId,
-                                            sender: v6Metadata.source || 'unknown'
+                                            sender: v6Metadata.source || v6Metadata.sender || 'unknown'
                                         }
                                     });
                                 } catch (profileError) {

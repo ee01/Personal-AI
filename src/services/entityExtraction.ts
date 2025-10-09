@@ -1,7 +1,8 @@
 // 新文件：实体识别和提取
-import { callLLMJsonAPI } from './llm';
+import { callLLMJsonAPI } from '../llm';
 
 // 使用LLM提取消息中的实体
+// 该格式与MemoryEntity的relatedData结构保持一致
 export async function extractEntitiesFromMessage(content: string, metadata: any = {}) {
   try {
     const prompt = `
@@ -13,7 +14,7 @@ export async function extractEntitiesFromMessage(content: string, metadata: any 
     ${metadata.team_name ? `消息所在群组：${metadata.team_name}` : ''}
     ${metadata.summary ? `根据上下文得到的总结：${metadata.summary}` : ''}
 
-    请严格按照以下 JSON 格式提取实体信息，该格式与MemoryEntity的relatedData结构保持一致：
+    请严格按照以下 JSON 格式提取实体信息：
     {
       "entities": {
         "people": [
