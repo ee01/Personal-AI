@@ -964,7 +964,8 @@ export class LocalStorage {
       searchDistance: detailEntity.searchDistance,
       relevanceScore: detailEntity.relevanceScore,
       statistic: detailEntity.statistic,
-      relatedData: detailEntity.relatedData
+      relatedData: detailEntity.relatedData,
+      readStatus: detailEntity.readStatus
     };
   }
 
@@ -976,17 +977,7 @@ export class LocalStorage {
       ...baseEntity,
       cachedAt: Date.now(),
       recentDataDetails: {
-        conversations: [] as (MemoryEntity['relatedData']['conversations'][0] & {
-          originalContent: string;
-          matchedRules: string[];
-          contextMessages: Array<{
-            id: string;
-            sender: string;
-            content: string;
-            datetime: string;
-            isMainMessage: boolean;
-          }>;
-        })[],
+        conversations: [] as MemoryMessage[],
         webpages: [] as MemoryEntity['relatedData']['webpages'],
         resources: [] as MemoryEntity['relatedData']['resources'],
         projects: [] as MemoryEntity['relatedData']['projects'],

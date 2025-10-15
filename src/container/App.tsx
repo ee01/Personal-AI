@@ -52,27 +52,6 @@ export const App = observer((props: IAppProps) => {
                     <div className="radar-poc-header-right">
                         <button className="radar-poc-result-button" onClick={() => handleSetConfigConfig(!showConfig)}>{showConfig ? 'Open Panel' : 'Open Config'}</button>
                         {(hasResult && !showConfig) && <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClear}>Clear Panel</button>}
-                        <button 
-                            className="radar-poc-result-button" 
-                            onClick={() => window.open(chrome.runtime.getURL('static/graph-integration-demo.html'), '_blank')}
-                            style={{ backgroundColor: '#667eea', color: 'white' }}
-                        >
-                            🧠 演示
-                        </button>
-                        <button 
-                            className="radar-poc-result-button" 
-                            onClick={() => window.open(chrome.runtime.getURL('enhanced-knowledge-query.html'), '_blank')}
-                            style={{ backgroundColor: '#2ecc71', color: 'white' }}
-                        >
-                            🔍 增强查询
-                        </button>
-                        <button 
-                            className="radar-poc-result-button" 
-                            onClick={() => window.open(chrome.runtime.getURL('static/web-intelligence-demo.html'), '_blank')}
-                            style={{ backgroundColor: '#e74c3c', color: 'white' }}
-                        >
-                            🧠 智能分析
-                        </button>
                         <button className="radar-poc-result-close radar-poc-result-button" onClick={handleClose}>X</button>
                     </div>
                 </div>

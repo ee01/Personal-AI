@@ -72,6 +72,7 @@
     "cohere-ai": "^7.16.0",
     "crypto-browserify": "^3.12.1",
     "groq-sdk": "^0.15.0",
+    "gsap": "^3.13.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.1",
     "mobx": "^6.13.7",

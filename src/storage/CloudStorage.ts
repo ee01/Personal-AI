@@ -15,6 +15,7 @@ export interface MemoryEntity {
   id: string;
   type: 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
   name: string;
+  description?: string;
   document?: string;
   properties: Record<string, any>;
   created: number;
@@ -54,6 +55,8 @@ export interface MemoryEntity {
       groupUrl: string;
       datetime: string;
       relevanceScore: number;
+      isRead?: boolean;        // 🆕 消息已读状态
+      readTimestamp?: number;  // 🆕 消息阅读时间戳
     }>;
     
     // 关联的网页浏览记录
@@ -140,6 +143,14 @@ export interface MemoryEntity {
   hotness?: number; // 0-1，基于最近活动频率
   criticalityScore?: number; // 0-1，基于用户标记和系统判断
   lastDocumentUpdate?: number; // 最后一次documents更新时间
+  
+  // 🆕 阅读状态（主要用于Topic类型）
+  readStatus?: {
+    unreadCount: number;           // 未读消息数量（核心字段）
+    lastReadTime: number | null;   // 最后阅读时间
+    lastUpdateTime: number;        // 最后更新时间
+    // 注：isRead 可通过 unreadCount === 0 动态计算，无需存储
+  };
 }
 export interface MemoryMessage {
   id: string;
@@ -1239,11 +1250,33 @@ export class CloudStorage {
         newItems.forEach((newItem: any) => {
           const existingIndex = allItems.findIndex((item: any) => item.id === newItem.id);
           if (existingIndex >= 0) {
-            // 更新现有项目
-            allItems[existingIndex] = { ...allItems[existingIndex], ...newItem };
+            // 更新现有项目，但保护特定字段不被覆盖
+            const existingItem = allItems[existingIndex];
+            
+            // 🆕 对于conversations类型，保护已读状态
+            if (type === 'conversations') {
+              allItems[existingIndex] = { 
+                ...existingItem, 
+                ...newItem,
+                // 保护已读状态：如果已存在的是已读，则保持已读
+                isRead: existingItem.isRead !== undefined ? existingItem.isRead : (newItem.isRead || false),
+                readTimestamp: existingItem.readTimestamp !== undefined ? existingItem.readTimestamp : newItem.readTimestamp
+              };
+            } else {
+              allItems[existingIndex] = { ...existingItem, ...newItem };
+            }
           } else {
             // 添加新项目
-            allItems.push(newItem);
+            // 🆕 对于conversations类型，确保新消息有isRead字段
+            if (type === 'conversations') {
+              allItems.push({ 
+                ...newItem, 
+                isRead: newItem.isRead !== undefined ? newItem.isRead : false,
+                readTimestamp: newItem.readTimestamp
+              });
+            } else {
+              allItems.push(newItem);
+            }
           }
         });
         
@@ -3069,6 +3102,97 @@ export class CloudStorage {
   }
 
   /**
+   * 批量更新实体的已读状态
+   */
+  async batchUpdateEntityReadStatus(updates: Array<{
+    entityId: string;
+    readStatus: {
+      unreadCount: number;
+      lastReadTime: number | null;
+      lastUpdateTime: number;
+    };
+  }>): Promise<void> {
+    this.ensureInitialized();
+
+    if (!updates || updates.length === 0) {
+      console.log('📖 没有已读状态需要更新');
+      return;
+    }
+
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) {
+        throw new Error('graph-entities 集合未找到');
+      }
+
+      console.log(`📖 开始批量更新 ${updates.length} 个实体的已读状态...`);
+
+      // 分批处理，避免一次性操作过多
+      const batchSize = 50;
+      for (let i = 0; i < updates.length; i += batchSize) {
+        const batch = updates.slice(i, i + batchSize);
+        
+        try {
+          // 获取当前批次的实体
+          const entityIds = batch.map(u => u.entityId);
+          const existingEntities = await collection.get({
+            ids: entityIds,
+            include: ['metadatas']
+          });
+
+          if (!existingEntities.ids || existingEntities.ids.length === 0) {
+            console.log(`📖 批次 ${i / batchSize + 1}: 没有找到对应的实体`);
+            continue;
+          }
+
+          // 准备更新的元数据
+          const updateMetadatas = [];
+          const updateIds = [];
+
+          for (let j = 0; j < existingEntities.ids.length; j++) {
+            const entityId = existingEntities.ids[j];
+            const updateInfo = batch.find(u => u.entityId === entityId);
+            
+            if (updateInfo && existingEntities.metadatas) {
+              const currentMetadata = existingEntities.metadatas[j] as any;
+              
+              // 更新已读状态
+              const updatedMetadata = {
+                ...currentMetadata,
+                readStatus: JSON.stringify(updateInfo.readStatus),
+                lastReadStatusUpdate: Date.now(),
+                updated: Date.now()
+              };
+
+              updateMetadatas.push(this.serializeChromaMetadata(updatedMetadata));
+              updateIds.push(entityId);
+            }
+          }
+
+          if (updateIds.length > 0) {
+            // 执行批量更新
+            await collection.update({
+              ids: updateIds,
+              metadatas: updateMetadatas as any
+            });
+
+            console.log(`📖 批次 ${i / batchSize + 1}: 成功更新 ${updateIds.length} 个实体的已读状态`);
+          }
+
+        } catch (batchError) {
+          console.error(`📖 批次 ${i / batchSize + 1} 更新失败:`, batchError);
+        }
+      }
+
+      console.log(`📖 批量已读状态更新完成`);
+
+    } catch (error) {
+      console.error('📖 批量更新实体已读状态失败:', error);
+      throw error;
+    }
+  }
+
+  /**
    * 🆕 生成自然语言描述 - 用于向量搜索的丰富上下文
    */
   private async generateNaturalLanguageDescription(entity: Omit<MemoryEntity, 'id'> & {id?: MemoryEntity['id']}): Promise<string> {
@@ -3257,7 +3381,9 @@ export class CloudStorage {
         groupName: messageMetadata.groupName || '未知群组',
         groupUrl: messageMetadata.groupUrl || '#',
         datetime: messageMetadata.datetime || new Date().toISOString(),
-        relevanceScore: 0.9 // 来源消息相关性最高
+        relevanceScore: 0.9, // 来源消息相关性最高
+        isRead: false,       // 🆕 新消息默认未读
+        readTimestamp: undefined  // 🆕 未阅读时为undefined
       });
     }
 
@@ -3587,20 +3713,34 @@ export class CloudStorage {
           
           if (existingEntity) {
             console.log(`🔄 找到相似实体: ${entity.name} -> ${existingEntity.name}, 相似度: ${existingEntity.relevanceScore?.toFixed(3)}`);
+            
+            // 🆕 简化未读消息数量计算（每次新增的消息都是未读的）
+            const newUnreadCount = relatedDataForEntity.conversations?.filter((c: any) => !c.isRead).length || 0;
+            const currentUnreadCount = existingEntity.readStatus?.unreadCount || 0;
+            const unreadCount = currentUnreadCount + newUnreadCount;
+            
             // 更新现有实体的关联数据
             const updateData: Partial<MemoryEntity> = {
               relatedData: relatedDataForEntity,
               hotness: entityWithRelatedData.hotness,
               criticalityScore: entityWithRelatedData.criticalityScore,
               lastAccessed: Date.now(),
-              accessCount: (existingEntity.accessCount || 0) + 1
+              accessCount: (existingEntity.accessCount || 0) + 1,
+              // 🆕 同步更新readStatus
+              readStatus: {
+                unreadCount: unreadCount,
+                lastReadTime: existingEntity.readStatus?.lastReadTime || null,
+                lastUpdateTime: Date.now()
+              }
             };
             
             const updateResult = await memorySystem.updateEntity(existingEntity.id, updateData);
-            console.log(`🔄 实体关联数据更新: ${entity.name} -> ${existingEntity.name}, 成功: ${updateResult.success ? '✅' : '❌'}`);
+            console.log(`🔄 实体关联数据更新: ${entity.name} -> ${existingEntity.name}, 成功: ${updateResult.success ? '✅' : '❌'}, 未读: ${unreadCount}`);
             
           } else {
-            await this.getSimilarEntities(entityWithRelatedData);
+            // 🆕 计算新实体的未读消息数
+            const unreadCount = relatedDataForEntity.conversations?.filter((c: any) => !c.isRead).length || 0;
+            
             // 存储新实体（包含完整关联数据）
             const newEntity = {
               ...entityWithRelatedData,
@@ -3618,11 +3758,17 @@ export class CloudStorage {
                 topics: relatedDataForEntity.topics?.length || 0,
                 jiraTickets: relatedDataForEntity.jiraTickets?.length || 0,
                 relationships: relatedDataForEntity.cooccurringEntities?.length || 0
+              },
+              // 🆕 初始化readStatus
+              readStatus: {
+                unreadCount: unreadCount,
+                lastReadTime: null as number | null,
+                lastUpdateTime: Date.now()
               }
             };
             
             const storeResult = await memorySystem.storeEntity(newEntity);
-            console.log(`🆕 新实体存储: ${entity.name}, 成功: ${storeResult.success ? '✅' : '❌'}`);
+            console.log(`🆕 新实体存储: ${entity.name}, 成功: ${storeResult.success ? '✅' : '❌'}, 未读: ${unreadCount}`);
           }
           
         } catch (entityError) {
@@ -3634,6 +3780,131 @@ export class CloudStorage {
       
     } catch (error) {
       console.error('🚨 更新实体关联数据过程中发生错误:', error);
+    }
+  }
+
+  /**
+   * 🆕 清理实体的过期消息
+   * 清理策略：只保留1个月内的消息（不区分已读未读）
+   */
+  async cleanExpiredReadConversations(entityId?: string): Promise<{
+    entitiesProcessed: number;
+    conversationsRemoved: number;
+    spaceSaved: number;
+  }> {
+    this.ensureInitialized();
+
+    const result = {
+      entitiesProcessed: 0,
+      conversationsRemoved: 0,
+      spaceSaved: 0
+    };
+
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) {
+        console.warn('graph-entities 集合不存在');
+        return result;
+      }
+
+      const oneMonthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30天前
+
+      // 如果指定了entityId，只清理该实体
+      const entityIds = entityId ? [entityId] : [];
+      
+      // 如果没有指定，获取所有实体
+      if (!entityId) {
+        const allEntities = await collection.get({
+          include: ['metadatas']
+        });
+        if (allEntities.ids) {
+          entityIds.push(...allEntities.ids);
+        }
+      }
+
+      console.log(`🧹 开始清理 ${entityIds.length} 个实体的过期消息...`);
+
+      // 批量处理实体
+      const batchSize = 50;
+      for (let i = 0; i < entityIds.length; i += batchSize) {
+        const batch = entityIds.slice(i, i + batchSize);
+        
+        const entities = await collection.get({
+          ids: batch,
+          include: ['metadatas', 'documents']
+        });
+
+        if (!entities.metadatas || entities.metadatas.length === 0) continue;
+
+        const updateIds: string[] = [];
+        const updateMetadatas: any[] = [];
+
+        for (let j = 0; j < entities.ids!.length; j++) {
+          const entityId = entities.ids![j];
+          const metadata = entities.metadatas[j] as any;
+          
+          // 反序列化实体
+          const entity = this.deserializeEntityFromMetadata(metadata);
+          
+          if (!entity.relatedData?.conversations || entity.relatedData.conversations.length === 0) {
+            continue;
+          }
+
+          const originalCount = entity.relatedData.conversations.length;
+          
+          // 🆕 简化策略：只保留1个月内的消息（不区分已读未读）
+          entity.relatedData.conversations = entity.relatedData.conversations.filter((conv: any) => {
+            const convTime = new Date(conv.datetime).getTime();
+            return convTime > oneMonthAgo; // 保留1个月内的所有消息
+          });
+
+          const newCount = entity.relatedData.conversations.length;
+          const removed = originalCount - newCount;
+
+          if (removed > 0) {
+            // 更新统计信息
+            entity.statistic.conversations = entity.relatedData.conversations.length;
+            
+            // 🆕 重新计算 unreadCount（清理后可能有变化）
+            if (entity.readStatus) {
+              const unreadInRemaining = entity.relatedData.conversations.filter((c: any) => !c.isRead).length;
+              entity.readStatus.unreadCount = unreadInRemaining;
+              entity.readStatus.lastUpdateTime = Date.now();
+            }
+            
+            // 重新序列化
+            const updatedMetadata = {
+              ...metadata,
+              relatedData: JSON.stringify(entity.relatedData),
+              statistic: JSON.stringify(entity.statistic),
+              readStatus: entity.readStatus ? JSON.stringify(entity.readStatus) : undefined,
+              updated: Date.now()
+            };
+
+            updateIds.push(entityId);
+            updateMetadatas.push(this.serializeChromaMetadata(updatedMetadata));
+            
+            result.conversationsRemoved += removed;
+            result.spaceSaved += removed * 500; // 估算每条消息约500字节
+          }
+        }
+
+        // 批量更新
+        if (updateIds.length > 0) {
+          await collection.update({
+            ids: updateIds,
+            metadatas: updateMetadatas as any
+          });
+          result.entitiesProcessed += updateIds.length;
+        }
+      }
+
+      console.log(`✅ 清理完成: 处理${result.entitiesProcessed}个实体, 移除${result.conversationsRemoved}条过期消息, 节省${(result.spaceSaved / 1024).toFixed(2)}KB空间`);
+      return result;
+
+    } catch (error) {
+      console.error('🚨 清理过期消息失败:', error);
+      throw error;
     }
   }
 

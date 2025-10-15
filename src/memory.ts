@@ -916,6 +916,30 @@ export class MemorySystem {
       const localEntity = await this.localStorage.getEntity(entityId);
       if (localEntity) {
         const updatedEntity = { ...localEntity, ...updatedData };
+        
+        // 🆕 同步更新 recentDataDetails.conversations
+        // 保留策略：所有未读消息 + 最新5条已读消息
+        if (updatedData.relatedData?.conversations) {
+          const mergedConversations = this.mergeAndSortConversations(
+            localEntity.recentDataDetails?.conversations || [],
+            updatedData.relatedData.conversations
+          );
+          
+          updatedEntity.recentDataDetails = {
+            ...(updatedEntity.recentDataDetails || {
+              conversations: [],
+              webpages: [],
+              resources: [],
+              projects: [],
+              people: [],
+              topics: [],
+              jiraTickets: [],
+              cooccurringEntities: []
+            }),
+            conversations: mergedConversations  // 已在 mergeAndSortConversations 中应用保留策略
+          };
+        }
+        
         await this.localStorage.cacheEntity(updatedEntity);
         result.localCached = true;
       }
@@ -1104,6 +1128,9 @@ export class MemorySystem {
 
       // 上传本地统计信息到云端
       await this.uploadLocalStatisticsToCloud();
+
+      // 上传本地已读状态到云端
+      await this.uploadLocalReadStatusToCloud();
 
       // 清理过期缓存
       await this.localStorage.clearExpiredCache();
@@ -1373,12 +1400,30 @@ export class MemorySystem {
     cleanupRelationships?: boolean;
     forceSync?: boolean;
     backupData?: boolean;
+    cleanupExpiredConversations?: boolean;  // 🆕 清理过期已读消息
   }): Promise<MaintenanceResult> {
     const success = await this.initialize();
     if (!success) {
       throw new Error('记忆系统初始化失败');
     }
+
     return this.systemMaintenanceTool.performFullMaintenance(options);
+  }
+
+  /**
+   * 🆕 单独清理实体的过期已读消息
+   * @param entityId 可选，指定实体ID；不指定则清理所有实体
+   */
+  async cleanExpiredConversations(entityId?: string): Promise<{
+    entitiesProcessed: number;
+    conversationsRemoved: number;
+    spaceSaved: number;
+  }> {
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
+    return this.cloudStorage.cleanExpiredReadConversations(entityId);
   }
 
   /**
@@ -2140,6 +2185,53 @@ export class MemorySystem {
   }
 
   /**
+   * 上传本地已读状态到云端
+   */
+  private async uploadLocalReadStatusToCloud(): Promise<void> {
+    try {
+      console.log('📖 开始上传本地已读状态到云端...');
+
+      // 获取所有本地缓存的实体
+      const recentDataEntries = await this.localStorage.getAllRecentDataEntries();
+      
+      if (!recentDataEntries || recentDataEntries.length === 0) {
+        console.log('📖 没有本地已读状态需要上传');
+        return;
+      }
+
+      // 收集需要更新的已读状态（只处理有 readStatus 的实体）
+      const readStatusUpdates = [];
+      
+      for (const entry of recentDataEntries) {
+        try {
+          // 只上传有 readStatus 的实体（通常是 Topic 类型）
+          if (entry.readStatus) {
+            readStatusUpdates.push({
+              entityId: entry.id,
+              readStatus: entry.readStatus
+            });
+          }
+        } catch (error) {
+          console.error(`处理实体 ${entry.id} 已读状态失败:`, error);
+        }
+      }
+
+      if (readStatusUpdates.length === 0) {
+        console.log('📖 没有有效的已读状态需要上传');
+        return;
+      }
+
+      // 批量更新云端实体的已读状态
+      await this.cloudStorage.batchUpdateEntityReadStatus(readStatusUpdates);
+      
+      console.log(`📖 成功上传 ${readStatusUpdates.length} 个实体的已读状态`);
+
+    } catch (error) {
+      console.error('📖 上传已读状态失败:', error);
+    }
+  }
+
+  /**
    * 初始化用户画像管理器
    */
   private async initializeUserProfile(): Promise<void> {
@@ -2227,6 +2319,61 @@ export class MemorySystem {
     
     // 默认返回view
     return 'view';
+  }
+
+  /**
+   * 🆕 合并并排序conversations，保持isRead状态
+   * 保留策略：所有未读消息 + 最新5条已读消息
+   */
+  private mergeAndSortConversations(
+    existingConversations: any[],
+    newConversations: any[]
+  ): any[] {
+    const conversationsMap = new Map();
+    
+    // 先添加已存在的conversations（保持isRead状态）
+    existingConversations.forEach((conv: any) => {
+      conversationsMap.set(conv.id, conv);
+    });
+    
+    // 合并新的conversations
+    newConversations.forEach((conv: any) => {
+      if (conversationsMap.has(conv.id)) {
+        // 已存在的conversation，保持其isRead状态
+        const existing = conversationsMap.get(conv.id);
+        conversationsMap.set(conv.id, {
+          ...conv,
+          isRead: existing.isRead !== undefined ? existing.isRead : (conv.isRead || false),
+          readTimestamp: existing.readTimestamp
+        });
+      } else {
+        // 新conversation
+        conversationsMap.set(conv.id, {
+          ...conv,
+          isRead: conv.isRead !== undefined ? conv.isRead : false
+        });
+      }
+    });
+    
+    // 🆕 智能保留策略：保留所有未读 + 最新5条已读
+    const unreadConversations = Array.from(conversationsMap.values()).filter((c: any) => !c.isRead);
+    const readConversations = Array.from(conversationsMap.values()).filter((c: any) => c.isRead);
+    
+    // 保留所有未读 + 补充已读到5条
+    const needReadCount = Math.max(0, 5 - unreadConversations.length);
+    const finalConversations = [
+      ...unreadConversations,
+      ...readConversations.slice(0, needReadCount)
+    ];
+    
+    // 按时间排序（最新的在前）
+    finalConversations.sort((a: any, b: any) => {
+      const timeA = new Date(a.datetime || 0).getTime();
+      const timeB = new Date(b.datetime || 0).getTime();
+      return timeB - timeA;
+    });
+    
+    return finalConversations;
   }
 
   /**

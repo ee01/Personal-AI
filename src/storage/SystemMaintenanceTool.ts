@@ -391,6 +391,7 @@ export class SystemMaintenanceTool {
     cleanupRelationships?: boolean;
     forceSync?: boolean;
     backupData?: boolean;
+    cleanupExpiredConversations?: boolean;  // 🆕 清理过期消息
   }): Promise<MaintenanceResult> {
     const startTime = Date.now();
     const opts = {
@@ -398,6 +399,7 @@ export class SystemMaintenanceTool {
       cleanupRelationships: true,
       forceSync: false,
       backupData: true,
+      cleanupExpiredConversations: true,  // 🆕 默认启用
       ...options
     };
 
@@ -425,7 +427,21 @@ export class SystemMaintenanceTool {
         result.tasksFailed.push('清理过期缓存失败');
       }
 
-      // 2. 强制同步（如果请求）
+      // 2. 🆕 清理过期已读消息
+      if (opts.cleanupExpiredConversations) {
+        try {
+          console.log('🧹 开始清理过期消息...');
+          const cleanupResult = await this.cloudStorage.cleanExpiredReadConversations();
+          result.tasksCompleted.push(`清理过期消息: ${cleanupResult.conversationsRemoved}条`);
+          result.freedSpace += cleanupResult.spaceSaved;
+          console.log(`✅ 清理完成: ${cleanupResult.conversationsRemoved}条消息, 节省${(cleanupResult.spaceSaved / 1024).toFixed(2)}KB`);
+        } catch (error) {
+          console.error('清理过期消息失败:', error);
+          result.tasksFailed.push('清理过期消息失败');
+        }
+      }
+
+      // 3. 强制同步（如果请求）
       if (opts.forceSync) {
         try {
           await this.strategyLayer.syncCache();
@@ -435,7 +451,7 @@ export class SystemMaintenanceTool {
         }
       }
 
-      // 3. 备份数据（如果请求）
+      // 4. 备份数据（如果请求）
       if (opts.backupData) {
         try {
           const relationshipData = await this.localStorage.getRelationshipBackupData();
@@ -452,9 +468,9 @@ export class SystemMaintenanceTool {
         }
       }
 
-      // 4. 计算释放的空间
+      // 5. 计算释放的空间
       const finalCacheSize = await this.localStorage.getCacheSize();
-      result.freedSpace = initialCacheSize - finalCacheSize;
+      result.freedSpace += initialCacheSize - finalCacheSize;
 
       result.success = result.tasksFailed.length === 0;
       result.totalTime = Date.now() - startTime;

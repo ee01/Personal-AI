@@ -13,11 +13,34 @@
 
     <!-- 过滤控件 -->
     <div v-if="!isLoading && entities.length > 0" class="filter-controls">
-      <div v-if="entityType === 'Topic' || entityType === 'Person' || entityType === 'Project'" class="filter-select-wrapper">
+      <!-- 主题视图切换 -->
+      <div v-if="entityType === 'Topic'" class="view-control">
+        <button 
+          :class="['view-toggle-btn', { active: topicViewMode === 'unread' }]"
+          @click="topicViewMode = 'unread'"
+        >
+          🔴 仅未读
+        </button>
+        <button 
+          :class="['view-toggle-btn', { active: topicViewMode === 'all' }]"
+          @click="topicViewMode = 'all'"
+        >
+          📋 全部主题
+        </button>
+      </div>
+      
+      <!-- 排序选择 -->
+      <div v-if="entityType === 'Topic'" class="filter-select-wrapper">
+        <select class="filter-select" v-model="topicSortMode">
+          <option value="time">最新消息排序</option>
+          <option value="importance">热度排序</option>
+          <option value="unread-count">未读数量排序</option>
+        </select>
+      </div>
+      
+      <div v-if="entityType === 'Person' || entityType === 'Project'" class="filter-select-wrapper">
         <select class="filter-select" v-model="selectedFilter">
           <option value="all">全部{{ getEntityTypeName(entityType) }}</option>
-          <option v-if="entityType === 'Topic'" value="high_activity">高活跃度</option>
-          <option v-if="entityType === 'Topic'" value="recent_discussion">最近讨论</option>
           <option v-if="entityType === 'Person'" value="recent_contact">最近联系</option>
           <option v-if="entityType === 'Person'" value="frequent_collaboration">频繁协作</option>
           <option v-if="entityType === 'Project'" value="highlighted">重点项目</option>
@@ -42,15 +65,29 @@
           v-for="entity in filteredEntities" 
           :key="entity.id" 
           class="content-card topic-card"
+          :class="{ unread: !entity.readStatus?.isRead }"
+          :data-topic-id="entity.id"
+          style="position: relative;"
           @click="handleEntityClick(entity)"
         >
+        <!-- "阅"按钮 - 仅未读主题显示 -->
+        <button 
+          v-if="!entity.readStatus?.isRead" 
+          class="mark-read-btn" 
+          @click.stop="handleMarkTopicAsRead(entity.id)"
+        >
+          阅
+        </button>
         <div class="card-header topic-card-header">
           <div class="card-title">
             <span>💡</span>
             <span>{{ entity.name }}</span>
+            <span v-if="entity.readStatus && !entity.readStatus.isRead" class="unread-badge">
+              {{ entity.readStatus.unreadCount }}条未读
+            </span>
           </div>
           <div class="card-badge topic-card-badge">
-            {{ entity.discussionsCount || 0 }} 讨论
+            {{ entity.statistic?.conversations || 0 }} 讨论
           </div>
         </div>
         
@@ -58,21 +95,30 @@
           {{ entity.description }}
         </div>
         
-        <!-- 最新讨论预览 -->
-        <div v-if="entity.recentDataDetails?.conversations && entity.recentDataDetails.conversations.length > 0" class="topic-preview-section">
-          <h4 class="preview-section-title">💬 最新讨论</h4>
-          <ul class="preview-list">
-            <li 
-              v-for="discussion in entity.recentDataDetails.conversations.slice(0, 2)" 
-              :key="discussion.id"
-              class="preview-item discussion-item"
-              @click.stop="navigateToTopicDiscussion(entity.id, discussion.id)"
-            >
-              <span>💭</span>
-              <span class="preview-content">{{ discussion.summary }}</span>
-              <span class="preview-time">{{ discussion.datetime }}</span>
-            </li>
-          </ul>
+        <div class="card-content" style="font-size: 0.875rem; color: #94a3b8;">
+          {{ entity.importance >= 0.8 ? '🔥 热度' + Math.round(entity.importance * 5) + '/5' : '' }}
+          {{ entity.statistic?.conversations || 0 }}条讨论 • {{ formatTime(entity.updated || Date.now()) }}
+        </div>
+        
+        <!-- 未读讨论预览 -->
+        <div v-if="entity.unreadDiscussions && entity.unreadDiscussions.length > 0" class="unread-discussions">
+          <div class="unread-discussions-title">
+            💬 未读讨论 ({{ entity.unreadDiscussions.length }}条)
+          </div>
+          <div 
+            v-for="(discussion, idx) in entity.unreadDiscussions.slice(0, 3)" 
+            :key="idx"
+            class="discussion-item"
+          >
+            <span class="discussion-icon">▪</span>
+            <div class="discussion-text">{{ discussion.text }}</div>
+          </div>
+          <div 
+            v-if="entity.unreadDiscussions.length > 3" 
+            style="text-align: center; color: #60a5fa; font-size: 0.75rem; margin-top: 0.5rem;"
+          >
+            还有 {{ entity.unreadDiscussions.length - 3 }} 条讨论...
+          </div>
         </div>
         
         <!-- 相关资源预览 -->
@@ -356,6 +402,13 @@
       <div v-if="filteredEntities.length === 0 && !isLoading" class="empty-state">
         <span>{{ getEntityIcon(entityType) }}</span>
         <p v-if="entities.length === 0">暂无{{ getEntityTypeName(entityType) }}数据</p>
+        <p v-else-if="entityType === 'Topic' && topicViewMode === 'unread'">
+          ✅ 太棒了！所有主题都已阅读完毕
+          <br><br>
+          <button class="view-toggle-btn" @click="topicViewMode = 'all'" style="margin-top: 1rem;">
+            查看所有主题
+          </button>
+        </p>
         <p v-else>没有找到匹配的{{ getEntityTypeName(entityType) }}</p>
       </div>
     </div>
@@ -363,7 +416,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref } from 'vue';
+import { computed, watch, ref, toRaw } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore, ENTITY_TYPE_CONFIG, chromeAPI } from '../memory-store';
 
@@ -378,10 +431,19 @@ const searchQuery = computed(() => store.searchQuery);
 
 // 本地过滤状态
 const selectedFilter = ref('all');
+const topicViewMode = ref('unread'); // 'unread' | 'all'
+const topicSortMode = ref('time'); // 'time' | 'importance' | 'unread-count'
 
 // 过滤后的实体列表
 const filteredEntities = computed(() => {
   let filtered = [...entities.value];
+  
+  // 主题未读过滤
+  if (entityType.value === 'Topic' && topicViewMode.value === 'unread') {
+    filtered = filtered.filter(entity => 
+      !entity.readStatus?.isRead || entity.readStatus?.unreadCount > 0
+    );
+  }
   
   // 文本搜索过滤（使用顶部搜索框的搜索词）
   if (searchQuery.value.trim()) {
@@ -393,23 +455,40 @@ const filteredEntities = computed(() => {
     );
   }
   
-  // 分类过滤
+  // 主题排序
+  if (entityType.value === 'Topic') {
+    switch(topicSortMode.value) {
+      case 'time':
+        // 按最新消息时间排序
+        filtered.sort((a, b) => {
+          const timeA = a.readStatus?.lastUpdateTime || a.updated || 0;
+          const timeB = b.readStatus?.lastUpdateTime || b.updated || 0;
+          return timeB - timeA;
+        });
+        break;
+      case 'importance':
+        // 按热度排序
+        filtered.sort((a, b) => {
+          const scoreA = (a.importance || 0.5) + ((a.statistic?.conversations || 0) / 20);
+          const scoreB = (b.importance || 0.5) + ((b.statistic?.conversations || 0) / 20);
+          return scoreB - scoreA;
+        });
+        break;
+      case 'unread-count':
+        // 按未读数量排序
+        filtered.sort((a, b) => {
+          const countA = a.readStatus?.unreadCount || 0;
+          const countB = b.readStatus?.unreadCount || 0;
+          return countB - countA;
+        });
+        break;
+    }
+    return filtered;
+  }
+  
+  // 其他类型的分类过滤
   if (selectedFilter.value !== 'all') {
     switch (selectedFilter.value) {
-      case 'high_activity':
-        // Topic: 高活跃度（讨论数多或最近更新）
-        filtered = filtered.filter(entity => 
-          entity.discussionsCount > 5 || 
-          (entity.updated && Date.now() - entity.updated < 86400000) // 24小时内
-        );
-        break;
-        
-      case 'recent_discussion':
-        // Topic: 最近讨论
-        filtered = filtered.filter(entity => 
-          entity.latestDiscussions && entity.latestDiscussions.length > 0
-        );
-        break;
         
       case 'recent_contact':
         // Person: 最近联系
@@ -505,13 +584,15 @@ const handleMarkAsHighlightProject = async (entity: any) => {
       console.log(`已移除重点项目标记: ${entity.name}`);
     } else {
       // 添加重点标记
+      // 使用 toRaw 确保传递的是原始对象
+      const rawEntity = toRaw(entity);
       await chromeAPI.sendMessage({
         type: 'ADD_HIGHLIGHT_PROJECT',
         project: {
-          id: entity.id,
-          name: entity.name,
-          type: entity.type,
-          description: entity.description,
+          id: rawEntity.id,
+          name: rawEntity.name,
+          type: rawEntity.type,
+          description: rawEntity.description,
           addedAt: Date.now()
         }
       });
@@ -566,9 +647,188 @@ const formatTime = (timestamp: number) => {
   return new Date(timestamp).toLocaleDateString();
 };
 
+const handleMarkTopicAsRead = async (topicId: string) => {
+  // 找到对应的DOM元素
+  const cardElement = document.querySelector(`[data-topic-id="${topicId}"]`) as HTMLElement;
+  
+  if (cardElement) {
+    // 添加淡出动画class
+    cardElement.classList.add('fade-out');
+    
+    // 等待动画完成(300ms)后再标记已读
+    await new Promise(resolve => setTimeout(resolve, 300));
+    
+    // 标记已读(这会触发Vue的响应式更新)
+    await store.markTopicAsRead(topicId);
+  } else {
+    // 如果找不到元素,直接标记已读
+    await store.markTopicAsRead(topicId);
+  }
+};
+
 watch(entityType, (newType) => {
   if (newType) {
     store.loadEntitiesByType(newType);
   }
 }, { immediate: true });
 </script>
+
+<style scoped>
+/* "阅"字按钮样式 */
+.mark-read-btn {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2));
+  border: 2px solid rgba(34, 197, 94, 0.4);
+  color: #22c55e;
+  font-weight: 700;
+  font-size: 0.875rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  opacity: 0;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  z-index: 10;
+}
+
+.content-card:hover .mark-read-btn,
+.topic-card:hover .mark-read-btn {
+  opacity: 1;
+}
+
+.mark-read-btn:hover {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(16, 185, 129, 0.3));
+  border-color: #22c55e;
+  transform: scale(1.1);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.2);
+}
+
+.mark-read-btn:active {
+  transform: scale(0.95);
+}
+
+/* 未读徽章 */
+.unread-badge {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #ffffff;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+  animation: pulse 2s infinite;
+  margin-left: 0.5rem;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.6); }
+}
+
+/* 主题卡片未读状态 */
+.content-card.unread,
+.topic-card.unread {
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+/* 未读讨论列表样式 */
+.unread-discussions {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.unread-discussions-title {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.discussion-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  margin: 0.25rem 0;
+  background: rgba(59, 130, 246, 0.05);
+  border-left: 2px solid rgba(59, 130, 246, 0.3);
+  border-radius: 0.25rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #cbd5e1;
+  transition: all 0.2s ease;
+}
+
+.discussion-item:hover {
+  background: rgba(59, 130, 246, 0.1);
+  border-left-color: #60a5fa;
+}
+
+.discussion-icon {
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.discussion-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 视图切换控制 */
+.view-control {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.view-toggle-btn {
+  padding: 0.5rem 1rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.5rem;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.875rem;
+}
+
+.view-toggle-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.view-toggle-btn:hover:not(.active) {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* 淡出动画 */
+.fade-out {
+  animation: fadeOutCard 0.3s ease forwards;
+}
+
+@keyframes fadeOutCard {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.95);
+  }
+}
+</style>

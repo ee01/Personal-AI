@@ -137,5 +137,5 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-python migrate_chroma_via_http.py
+python tools/migrate_chroma_via_http.py
 ```

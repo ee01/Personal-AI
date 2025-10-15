@@ -459,7 +459,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, toRaw } from 'vue';
 import { chromeAPI } from '../memory-store';
 
 // 类型定义（基于memory.tsx中的接口）
@@ -900,11 +900,13 @@ const applyDecaySettings = async () => {
   isApplyingSettings.value = true;
   
   try {
-    console.log('应用权重衰变设置:', weightDecaySettings.value);
+    // 使用 toRaw 确保传递的是原始对象
+    const rawConfig = toRaw(weightDecaySettings.value);
+    console.log('应用权重衰变设置:', rawConfig);
     
     const response = await chromeAPI.sendMessage({
       type: 'UPDATE_WEIGHT_DECAY_CONFIG',
-      config: weightDecaySettings.value
+      config: rawConfig
     });
     
     if (response && (response as any).success) {

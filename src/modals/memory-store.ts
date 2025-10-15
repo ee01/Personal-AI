@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, nextTick } from 'vue';
+import { ref, nextTick, toRaw } from 'vue';
 import { memorySystem } from '../memory';
 
 // 实体类型配置
@@ -26,6 +26,20 @@ export const chromeAPI = {
   }
 };
 
+// 阅读状态接口
+interface ReadStatus {
+  isRead: boolean;
+  lastReadTime: number | null;
+  unreadCount: number;
+  lastUpdateTime: number;
+}
+
+interface ConversationMessage {
+  id: string;
+  isRead?: boolean;
+  [key: string]: any;
+}
+
 // Pinia Store
 export const useMemoryStore = defineStore('memory', () => {
   const isLoading = ref(false);
@@ -48,11 +62,16 @@ export const useMemoryStore = defineStore('memory', () => {
   });
   const topicDetailData = ref(null);
   const personDetailData = ref(null);
+  const closedTodayCards = ref(new Set<string>()); // 今日已关闭的卡片
 
   const initialize = async () => {
     isLoading.value = true;
     try {
       await memorySystem.initialize();
+      
+      // 恢复已关闭的今日卡片
+      loadClosedCardsFromLocalStorage();
+      
       const response = await chromeAPI.sendMessage({ type: 'GET_ENTITY_STATISTICS' });
       if (response && (response as any).success) {
         overviewStats.value = (response as any).data;
@@ -88,7 +107,13 @@ export const useMemoryStore = defineStore('memory', () => {
 
       // 如果是第一页数据，检查 Topic 类型实体是否需要补充 recent data
       if (offset === 0 && entityType === 'Topic') {
-        entities.value = await memorySystem.enrichEntitiesWithDetails(entities.value);
+        // 使用 toRaw 获取原始数组，避免将 Proxy 对象传递给 enrichEntitiesWithDetails
+        const rawEntities = toRaw(entities.value);
+        entities.value = await memorySystem.enrichEntitiesWithDetails(rawEntities);
+        
+        // 恢复已读状态
+        loadReadStatusFromLocalStorage();
+        updateTopicUnreadCount();
       }
     }
   };
@@ -168,58 +193,82 @@ export const useMemoryStore = defineStore('memory', () => {
           description: '讨论AI在工作流程中的应用和自动化实践',
           importance: 0.9,
           updated: Date.now() - 1800000, // 30分钟前
-          latestConversations: [
-            {
-              id: 'msg-1',
-              sender: '张三',
-              group: '技术讨论组',
-              datetime: new Date(Date.now() - 1800000).toISOString(),
-              summary: '分享了最新的GPT-4 API集成经验，讨论了Token优化策略',
-              originalContent: '我找到了一些优化Token使用的方法，可以减少30%的成本',
-              highlightText: 'GPT-4 API Token优化策略',
-              teamUrl: '#',
-              matchedRules: ['AI', '优化'],
-              relevanceScore: 0.95,
-              contextMessages: [] as any[]
-            },
-            {
-              id: 'msg-2',
-              sender: '李四',
-              group: '产品团队',
-              datetime: new Date(Date.now() - 7200000).toISOString(),
-              summary: '讨论了自动化测试的实现方案，提出了新的测试框架选型建议',
-              originalContent: '建议采用Playwright + Jest的组合，覆盖率会更高',
-              highlightText: '自动化测试实现方案',
-              teamUrl: '#',
-              matchedRules: ['测试', '自动化'],
-              relevanceScore: 0.88,
-              contextMessages: [] as any[]
-            }
+          readStatus: {
+            isRead: false,
+            lastReadTime: null as number | null,
+            unreadCount: 7,
+            lastUpdateTime: Date.now() - 1800000
+          },
+          unreadDiscussions: [
+            { text: '张三分享了GPT-4 API的Token优化策略,可以减少30%成本', time: '30分钟前' },
+            { text: '李四提出了自动化测试框架的新方案', time: '1小时前' },
+            { text: 'AI工作流中异常处理的最佳实践讨论', time: '2小时前' }
           ],
-          relatedResources: [
-            {
-              id: 'resource-1',
-              name: 'GPT-4 API 官方文档',
-              url: 'https://platform.openai.com/docs'
-            },
-            {
-              id: 'resource-2',
-              name: '自动化实践指南',
-              url: '#'
-            }
-          ],
-          relatedProjects: [
-            {
-              id: 'project-1',
-              name: 'Personal-AI',
-              status: '开发中'
-            },
-            {
-              id: 'project-2',
-              name: 'Automation Tools',
-              status: '规划中'
-            }
-          ],
+          recentDataDetails: {
+            conversations: [
+              {
+                id: 'msg-1',
+                sender: '张三',
+                groupName: '技术讨论组',
+                datetime: Date.now() - 1800000,
+                summary: '分享了最新的GPT-4 API集成经验，讨论了Token优化策略',
+                originalContent: '我找到了一些优化Token使用的方法，可以减少30%的成本',
+                highlightText: 'GPT-4 API Token优化策略',
+                teamUrl: '#',
+                matchedRules: ['AI', '优化'],
+                relevanceScore: 0.95,
+                contextMessages: [] as any[],
+                isRead: false
+              },
+              {
+                id: 'msg-2',
+                sender: '李四',
+                groupName: '产品团队',
+                datetime: Date.now() - 7200000,
+                summary: '讨论了自动化测试的实现方案，提出了新的测试框架选型建议',
+                originalContent: '建议采用Playwright + Jest的组合，覆盖率会更高',
+                highlightText: '自动化测试实现方案',
+                teamUrl: '#',
+                matchedRules: ['测试', '自动化'],
+                relevanceScore: 0.88,
+                contextMessages: [] as any[],
+                isRead: false
+              }
+            ],
+            resources: [
+              {
+                id: 'resource-1',
+                name: 'GPT-4 API 官方文档',
+                url: 'https://platform.openai.com/docs',
+                type: 'docs'
+              },
+              {
+                id: 'resource-2',
+                name: '自动化实践指南',
+                url: '#',
+                type: 'docs'
+              }
+            ],
+            projects: [
+              {
+                id: 'project-1',
+                name: 'Personal-AI',
+                status: '开发中',
+                description: 'Chrome扩展智能助手'
+              },
+              {
+                id: 'project-2',
+                name: 'Automation Tools',
+                status: '规划中',
+                description: 'CI/CD自动化工具链'
+              }
+            ],
+            webpages: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          },
           tags: ['AI', '自动化', '工作流'],
           status: 'active',
           cachedAt: Date.now(),
@@ -240,53 +289,76 @@ export const useMemoryStore = defineStore('memory', () => {
           description: '前端应用性能优化的技术讨论和最佳实践分享',
           importance: 0.8,
           updated: Date.now() - 7200000, // 2小时前
-          latestConversations: [
-            {
-              id: 'msg-3',
-              sender: '王五',
-              group: '前端团队',
-              datetime: new Date(Date.now() - 7200000).toISOString(),
-              summary: '分析了React 18的并发特性对性能的影响',
-              originalContent: 'React 18的并发特性可以显著提升用户体验',
-              highlightText: 'React 18并发特性',
-              teamUrl: '#',
-              matchedRules: ['React', '性能'],
-              relevanceScore: 0.92,
-              contextMessages: [] as any[]
-            },
-            {
-              id: 'msg-4',
-              sender: '张三',
-              group: '技术讨论组',
-              datetime: new Date(Date.now() - 14400000).toISOString(),
-              summary: 'Bundle体积优化技巧分享，减少30%的包大小',
-              originalContent: '通过Webpack配置优化，我们成功减少了30%的Bundle大小',
-              highlightText: 'Bundle体积优化',
-              teamUrl: '#',
-              matchedRules: ['优化', 'Webpack'],
-              relevanceScore: 0.89,
-              contextMessages: [] as any[]
-            }
+          readStatus: {
+            isRead: false,
+            lastReadTime: null,
+            unreadCount: 4,
+            lastUpdateTime: Date.now() - 7200000
+          },
+          unreadDiscussions: [
+            { text: 'React 18并发模式实战经验分享', time: '2小时前' },
+            { text: 'Webpack Bundle分析工具对比', time: '3小时前' },
+            { text: '图片懒加载优化方案讨论', time: '4小时前' }
           ],
-          relatedResources: [
-            {
-              id: 'resource-3',
-              name: 'React 18 性能指南',
-              url: '#'
-            },
-            {
-              id: 'resource-4',
-              name: 'Webpack 优化手册',
-              url: '#'
-            }
-          ],
-          relatedProjects: [
-            {
-              id: 'project-3',
-              name: 'Web Platform',
-              status: '优化中'
-            }
-          ],
+          recentDataDetails: {
+            conversations: [
+              {
+                id: 'msg-3',
+                sender: '王五',
+                groupName: '前端团队',
+                datetime: Date.now() - 7200000,
+                summary: '分析了React 18的并发特性对性能的影响',
+                originalContent: 'React 18的并发特性可以显著提升用户体验',
+                highlightText: 'React 18并发特性',
+                teamUrl: '#',
+                matchedRules: ['React', '性能'],
+                relevanceScore: 0.92,
+                contextMessages: [] as any[],
+                isRead: false
+              },
+              {
+                id: 'msg-4',
+                sender: '张三',
+                groupName: '技术讨论组',
+                datetime: Date.now() - 14400000,
+                summary: 'Bundle体积优化技巧分享，减少30%的包大小',
+                originalContent: '通过Webpack配置优化，我们成功减少了30%的Bundle大小',
+                highlightText: 'Bundle体积优化',
+                teamUrl: '#',
+                matchedRules: ['优化', 'Webpack'],
+                relevanceScore: 0.89,
+                contextMessages: [] as any[],
+                isRead: false
+              }
+            ],
+            resources: [
+              {
+                id: 'resource-3',
+                name: 'React 18 性能指南',
+                url: '#',
+                type: 'docs'
+              },
+              {
+                id: 'resource-4',
+                name: 'Webpack 优化手册',
+                url: '#',
+                type: 'docs'
+              }
+            ],
+            projects: [
+              {
+                id: 'project-3',
+                name: 'Web Platform',
+                status: '优化中',
+                description: '前端Web平台'
+              }
+            ],
+            webpages: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          },
           tags: ['前端', '性能', 'React'],
           status: 'active',
           cachedAt: Date.now(),
@@ -307,53 +379,72 @@ export const useMemoryStore = defineStore('memory', () => {
           description: '产品设计流程、用户体验设计方法论的探讨',
           importance: 0.7,
           updated: Date.now() - 14400000, // 4小时前
-          latestConversations: [
-            {
-              id: 'msg-5',
-              sender: '李四',
-              group: '设计团队',
-              datetime: new Date(Date.now() - 14400000).toISOString(),
-              summary: '用户研究方法在产品迭代中的应用案例分析',
-              originalContent: '通过用户访谈和行为分析，我们发现了几个重要的改进点',
-              highlightText: '用户研究方法应用',
-              teamUrl: '#',
-              matchedRules: ['用户研究', '产品迭代'],
-              relevanceScore: 0.87,
-              contextMessages: [] as any[]
-            },
-            {
-              id: 'msg-6',
-              sender: '产品经理',
-              group: '产品团队',
-              datetime: new Date(Date.now() - 21600000).toISOString(),
-              summary: '设计系统在大型项目中的管理经验分享',
-              originalContent: '建立统一的设计系统对大型项目的协作效率有显著提升',
-              highlightText: '设计系统管理经验',
-              teamUrl: '#',
-              matchedRules: ['设计系统', '项目管理'],
-              relevanceScore: 0.85,
-              contextMessages: [] as any[]
-            }
-          ],
-          relatedResources: [
-            {
-              id: 'resource-5',
-              name: '设计思维实践手册',
-              url: '#'
-            }
-          ],
-          relatedProjects: [
-            {
-              id: 'project-4',
-              name: 'Design System',
-              status: '进行中'
-            },
-            {
-              id: 'project-5',
-              name: 'Mobile App',
-              status: '设计中'
-            }
-          ],
+          readStatus: {
+            isRead: true,
+            lastReadTime: Date.now() - 43200000,
+            unreadCount: 0,
+            lastUpdateTime: Date.now() - 14400000
+          },
+          unreadDiscussions: [],
+          recentDataDetails: {
+            conversations: [
+              {
+                id: 'msg-5',
+                sender: '李四',
+                groupName: '设计团队',
+                datetime: Date.now() - 14400000,
+                summary: '用户研究方法在产品迭代中的应用案例分析',
+                originalContent: '通过用户访谈和行为分析，我们发现了几个重要的改进点',
+                highlightText: '用户研究方法应用',
+                teamUrl: '#',
+                matchedRules: ['用户研究', '产品迭代'],
+                relevanceScore: 0.87,
+                contextMessages: [] as any[],
+                isRead: true  // 这个主题已经全部已读
+              },
+              {
+                id: 'msg-6',
+                sender: '产品经理',
+                groupName: '产品团队',
+                datetime: Date.now() - 21600000,
+                summary: '设计系统在大型项目中的管理经验分享',
+                originalContent: '建立统一的设计系统对大型项目的协作效率有显著提升',
+                highlightText: '设计系统管理经验',
+                teamUrl: '#',
+                matchedRules: ['设计系统', '项目管理'],
+                relevanceScore: 0.85,
+                contextMessages: [] as any[],
+                isRead: true  // 这个主题已经全部已读
+              }
+            ],
+            resources: [
+              {
+                id: 'resource-5',
+                name: '设计思维实践手册',
+                url: '#',
+                type: 'docs'
+              }
+            ],
+            projects: [
+              {
+                id: 'project-4',
+                name: 'Design System',
+                status: '进行中',
+                description: '设计系统组件库'
+              },
+              {
+                id: 'project-5',
+                name: 'Mobile App',
+                status: '设计中',
+                description: '移动应用产品'
+              }
+            ],
+            webpages: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          },
           tags: ['设计', 'UX', '产品'],
           status: 'active',
           cachedAt: Date.now(),
@@ -393,10 +484,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 34,
             relationships: 23
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[],
-          relatedResources: [] as any[],
-          relatedProjects: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         },
         {
           id: 'project-data-pipeline',
@@ -419,10 +516,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 18,
             relationships: 15
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[],
-          relatedResources: [] as any[],
-          relatedProjects: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         },
         {
           id: 'project-web-platform',
@@ -445,10 +548,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 45,
             relationships: 28
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[],
-          relatedResources: [] as any[],
-          relatedProjects: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         },
         {
           id: 'project-design-system',
@@ -471,10 +580,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 16,
             relationships: 12
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[],
-          relatedResources: [] as any[],
-          relatedProjects: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         },
         {
           id: 'project-automation-tools',
@@ -497,10 +612,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 22,
             relationships: 18
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[],
-          relatedResources: [] as any[],
-          relatedProjects: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         }
       ];
     }
@@ -554,8 +675,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 8,
             relationships: 12
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         },
         {
           id: 'person-lisi',
@@ -604,8 +733,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 12,
             relationships: 8
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         },
         {
           id: 'person-wangwu',
@@ -654,8 +791,16 @@ export const useMemoryStore = defineStore('memory', () => {
             webpages: 6,
             relationships: 15
           },
-          latestConversations: [] as any[],
-          latestWebpages: [] as any[]
+          recentDataDetails: {
+            conversations: [] as any[],
+            webpages: [] as any[],
+            resources: [] as any[],
+            projects: [] as any[],
+            people: [] as any[],
+            topics: [] as any[],
+            jiraTickets: [] as any[],
+            cooccurringEntities: [] as any[]
+          }
         }
       ];
     }
@@ -681,10 +826,16 @@ export const useMemoryStore = defineStore('memory', () => {
         webpages: Math.floor(Math.random() * 30),
         relationships: Math.floor(Math.random() * 20)
       },
-      latestConversations: [] as any[],
-      latestWebpages: [] as any[],
-      relatedResources: [] as any[],
-      relatedProjects: [] as any[]
+      recentDataDetails: {
+        conversations: [] as any[],
+        webpages: [] as any[],
+        resources: [] as any[],
+        projects: [] as any[],
+        people: [] as any[],
+        topics: [] as any[],
+        jiraTickets: [] as any[],
+        cooccurringEntities: [] as any[]
+      }
     }));
   };
 
@@ -876,8 +1027,274 @@ export const useMemoryStore = defineStore('memory', () => {
     };
   };
 
+  /**
+   * ==========================================
+   * LocalStorage 持久化函数
+   * ==========================================
+   */
+  
+  /**
+   * 保存已读状态到本地缓存 (通过后台脚本)
+   * 这会将 readStatus 保存到 chrome.storage.local，并在同步时上传到云端
+   */
+  const saveReadStatusToLocalStorage = async () => {
+    try {
+      let savedCount = 0;
+      const savePromises = [];
+      
+      // 使用 toRaw 获取原始数组
+      const rawEntities = toRaw(entities.value);
+      for (const entity of rawEntities) {
+        if (entity.type === 'Topic' && entity.readStatus) {
+          // 通过后台脚本缓存实体（包括 readStatus）
+          // 使用 toRaw 确保实体对象也是原始对象
+          const promise = chromeAPI.sendMessage({
+            type: 'CACHE_ENTITY',
+            entity: toRaw(entity)
+          });
+          savePromises.push(promise);
+          savedCount++;
+        }
+      }
+      
+      // 并行保存所有实体
+      await Promise.allSettled(savePromises);
+      console.log('[LocalStorage] 已读状态已保存到本地缓存,共', savedCount, '个主题');
+    } catch (error) {
+      console.error('[LocalStorage] 保存已读状态失败:', error);
+    }
+  };
+
+  /**
+   * 从LocalStorage恢复已读状态
+   * 注意：现在 readStatus 已经包含在实体中，从 chrome.storage.local 加载实体时会自动恢复
+   * 此函数保留用于处理实体加载后的 UI 同步
+   */
+  const loadReadStatusFromLocalStorage = () => {
+    try {
+      let restoredCount = 0;
+      
+      entities.value.forEach((entity: any) => {
+        if (entity.type === 'Topic' && entity.readStatus) {
+          // 如果已读,清空未读讨论
+          if (entity.readStatus.isRead) {
+            entity.unreadDiscussions = [];
+            
+            // 标记所有聊天消息为已读
+            if (entity.latestConversations) {
+              entity.latestConversations.forEach((conv: any) => {
+                conv.isRead = true;
+              });
+            }
+          }
+          
+          restoredCount++;
+        }
+      });
+      
+      console.log('[LocalStorage] 已读状态已恢复,共', restoredCount, '个主题');
+    } catch (error) {
+      console.error('[LocalStorage] 恢复已读状态失败:', error);
+    }
+  };
+
+  /**
+   * 保存已关闭的今日卡片
+   */
+  const saveClosedCardsToLocalStorage = () => {
+    try {
+      const today = new Date().toDateString();
+      localStorage.setItem('closed-cards-date', today);
+      // 使用 toRaw 确保存储的是原始 Set 对象
+      const rawClosedCards = toRaw(closedTodayCards.value);
+      localStorage.setItem('closed-cards', JSON.stringify(Array.from(rawClosedCards)));
+      console.log('[LocalStorage] 已关闭卡片已保存,共', rawClosedCards.size, '张');
+    } catch (error) {
+      console.error('[LocalStorage] 保存关闭卡片失败:', error);
+    }
+  };
+
+  /**
+   * 恢复已关闭的今日卡片
+   */
+  const loadClosedCardsFromLocalStorage = () => {
+    try {
+      const savedDate = localStorage.getItem('closed-cards-date');
+      const today = new Date().toDateString();
+      
+      // 如果是新的一天,清空
+      if (savedDate !== today) {
+        localStorage.removeItem('closed-cards');
+        localStorage.removeItem('closed-cards-date');
+        console.log('[LocalStorage] 新的一天,清空已关闭卡片');
+        closedTodayCards.value = new Set();
+        return;
+      }
+      
+      const saved = localStorage.getItem('closed-cards');
+      if (saved) {
+        closedTodayCards.value = new Set(JSON.parse(saved));
+        console.log('[LocalStorage] 已关闭卡片已恢复,共', closedTodayCards.value.size, '张');
+      }
+    } catch (error) {
+      console.error('[LocalStorage] 恢复关闭卡片失败:', error);
+    }
+  };
+
+  /**
+   * 标记主题已读并清空所有未读消息
+   */
+  const markTopicAsRead = async (topicId: string) => {
+    const entity = entities.value.find((e: any) => e.id === topicId);
+    if (!entity) return;
+    
+    // 标记为已读
+    entity.readStatus = {
+      lastReadTime: Date.now(),
+      unreadCount: 0,
+      lastUpdateTime: entity.readStatus?.lastUpdateTime || Date.now()
+    };
+    
+    // 清空未读讨论
+    if (entity.unreadDiscussions) {
+      entity.unreadDiscussions = [];
+    }
+    
+    // 标记所有聊天消息为已读
+    if (entity.relatedData?.conversations) {
+      entity.relatedData?.conversations?.forEach((conv: any) => {
+        conv.isRead = true;
+      });
+    }
+    
+    // 持久化到LocalStorage，使用 toRaw 确保存储原始对象
+    const promise = chromeAPI.sendMessage({
+      type: 'CACHE_ENTITY',
+      entity: toRaw(entity)
+    });
+    
+    // 更新侧边栏计数
+    updateTopicUnreadCount();
+    
+    console.log(`[主题阅读] "${entity.name}" 已标记为已读`);
+  };
+  
+  /**
+   * 标记单条消息已读
+   */
+  const markConversationAsRead = async (topicId: string, conversationId: string) => {
+    const topic = topicDetailData.value;
+    if (!topic || topic.id !== topicId) return;
+    
+    const conversations = topic.recentDataDetails?.conversations;
+    if (!Array.isArray(conversations)) return;
+    
+    const conversation = conversations.find((c: any) => c.id === conversationId);
+    if (conversation) {
+      conversation.isRead = true;
+      
+      // 持久化到LocalStorage，使用 toRaw 确保存储原始对象
+      const promise = chromeAPI.sendMessage({
+        type: 'CACHE_ENTITY',
+        entity: toRaw(topic)
+      });
+      
+      // 检查是否所有消息都已读，如果是则标记整个主题为已读
+      const allRead = conversations.every((c: any) => c.isRead === true);
+      if (allRead) {
+        await markTopicAsRead(topicId);
+      } else {
+        // 更新主题未读计数
+        updateTopicUnreadCountAfterMessageRead(topicId);
+      }
+      
+      console.log(`[消息阅读] 消息 "${conversationId}" 已标记为已读`);
+    }
+  };
+  
+  /**
+   * 关闭今日卡片
+   */
+  const closeTodayCard = (cardId: string) => {
+    closedTodayCards.value.add(cardId);
+    saveClosedCardsToLocalStorage();
+    console.log(`[今日卡片] "${cardId}" 已关闭`);
+  };
+  
+  /**
+   * 获取未读主题列表
+   */
+  const getUnreadTopics = () => {
+    return entities.value.filter((e: any) => 
+      e.type === 'Topic' && 
+      (!e.readStatus?.isRead || e.readStatus?.unreadCount > 0)
+    );
+  };
+  
+  /**
+   * 获取未读主题(按热度排序)
+   */
+  const getUnreadTopicsByImportance = () => {
+    const unreadTopics = getUnreadTopics();
+    return unreadTopics.sort((a: any, b: any) => {
+      const scoreA = (a.importance || 0.5) + ((a.statistic?.conversations || 0) / 20);
+      const scoreB = (b.importance || 0.5) + ((b.statistic?.conversations || 0) / 20);
+      return scoreB - scoreA;
+    });
+  };
+  
+  /**
+   * 获取未读主题(按最新讨论时间排序)
+   */
+  const getUnreadTopicsByLatestMessage = () => {
+    const unreadTopics = getUnreadTopics();
+    return unreadTopics.sort((a: any, b: any) => {
+      const timeA = a.readStatus?.lastUpdateTime || a.updated || 0;
+      const timeB = b.readStatus?.lastUpdateTime || b.updated || 0;
+      return timeB - timeA;
+    });
+  };
+  
+  /**
+   * 更新主题未读计数(在侧边栏显示)
+   */
+  const updateTopicUnreadCount = () => {
+    const unreadCount = getUnreadTopics().length;
+    const topicType = entityTypes.value.find(t => t.type === 'Topic');
+    if (topicType) {
+      topicType.count = unreadCount;
+    }
+  };
+  
+  /**
+   * 更新主题未读计数(单条消息已读后)
+   */
+  const updateTopicUnreadCountAfterMessageRead = (topicId: string) => {
+    const topic = topicDetailData.value;
+    if (!topic || topic.id !== topicId) return;
+    
+    const conversations = topic.recentDataDetails?.conversations;
+    const unreadCount = Array.isArray(conversations) 
+      ? conversations.filter((c: any) => !c.isRead).length 
+      : 0;
+    
+    // 更新实体列表中的主题状态
+    const entity = entities.value.find((e: any) => e.id === topicId);
+    if (entity && entity.readStatus) {
+      entity.readStatus.unreadCount = unreadCount;
+      entity.readStatus.isRead = unreadCount === 0;
+      if (unreadCount === 0) {
+        entity.readStatus.lastReadTime = Date.now();
+      }
+    }
+    
+    updateTopicUnreadCount();
+  };
+
   return {
-    isLoading, searchQuery, entities, entityTypes, overviewStats, topicDetailData, personDetailData,
-    initialize, loadEntitiesByType, searchEntities, vectorSearchEntities, loadTopicDetail
+    isLoading, searchQuery, entities, entityTypes, overviewStats, topicDetailData, personDetailData, closedTodayCards,
+    initialize, loadEntitiesByType, searchEntities, vectorSearchEntities, loadTopicDetail,
+    markTopicAsRead, markConversationAsRead, closeTodayCard,
+    getUnreadTopics, getUnreadTopicsByImportance, getUnreadTopicsByLatestMessage, updateTopicUnreadCount
   };
 });

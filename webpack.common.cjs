@@ -36,13 +36,11 @@ module.exports = (env) => {
       'knowledge-query': './src/modals/knowledge-query.tsx',
       'slides-analysis': './src/modals/slides-analysis.tsx',
       'project-dashboard': './src/modals/project-dashboard.tsx',
-      'enhanced-knowledge-query': './src/modals/enhanced-knowledge-query.tsx',
       'prompt-config': './src/modals/prompt-config.tsx',
       'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
       'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
       'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts',
-      'memory': './src/modals/memory.tsx',
       'memory-exploring': './src/modals/memory-exploring-entry.ts',
     },
     module: {
@@ -102,7 +100,10 @@ module.exports = (env) => {
         overrideConfigFile: path.resolve(__dirname, '.eslintrc'),
       }),
       new CopyPlugin({
-        patterns: [{ from: 'static' }],
+        patterns: [
+          { from: 'static' },
+          { from: 'docs/demo', to: 'demo' }
+        ],
       }),
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],

@@ -1080,6 +1080,291 @@
         ::-webkit-scrollbar-thumb:hover {
             background: rgba(59, 130, 246, 0.5);
         }
+
+        /* ==========================================
+         * 主题阅读模式新增样式
+         * ========================================== */
+        
+        /* 未读徽章 */
+        .unread-badge {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: #ffffff;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+            animation: pulse 2s infinite;
+            margin-left: 0.5rem;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+            50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.6); }
+        }
+
+        /* 主题卡片未读状态 */
+        .content-card.unread {
+            border-left: 3px solid #ef4444;
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        /* "阅"字按钮 - 标记已读 */
+        .mark-read-btn {
+            position: absolute;
+            bottom: 1rem;
+            right: 1rem;
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2));
+            border: 2px solid rgba(34, 197, 94, 0.4);
+            color: #22c55e;
+            font-weight: 700;
+            font-size: 0.875rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            opacity: 0;
+            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+        }
+
+        .content-card:hover .mark-read-btn,
+        .topic-list-item:hover .mark-read-btn,
+        .waterfall-item:hover .mark-read-btn {
+            opacity: 1;
+        }
+
+        .mark-read-btn:hover {
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(16, 185, 129, 0.3));
+            border-color: #22c55e;
+            transform: scale(1.1);
+            box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.2);
+        }
+
+        .mark-read-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* 未读讨论列表样式 */
+        .unread-discussions {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .unread-discussions-title {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .discussion-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+            background: rgba(59, 130, 246, 0.05);
+            border-left: 2px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.25rem;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            color: #cbd5e1;
+            transition: all 0.2s ease;
+        }
+
+        .discussion-item:hover {
+            background: rgba(59, 130, 246, 0.1);
+            border-left-color: #60a5fa;
+        }
+
+        .discussion-icon {
+            color: #60a5fa;
+            flex-shrink: 0;
+        }
+
+        .discussion-text {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        /* 视图切换控制 */
+        .view-control {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            align-items: center;
+        }
+
+        .view-toggle-btn {
+            padding: 0.5rem 1rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 0.5rem;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.875rem;
+        }
+
+        .view-toggle-btn.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+        }
+
+        .view-toggle-btn:hover:not(.active) {
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .sort-select {
+            margin-left: auto;
+            padding: 0.5rem 1rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 0.5rem;
+            color: #cbd5e1;
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        /* 主题列表视图 */
+        .topic-list-view {
+            display: none;
+        }
+
+        .topic-list-view.active {
+            display: block;
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .topic-list-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .topic-list-item {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .topic-list-item.unread {
+            border-left: 3px solid #ef4444;
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .topic-list-item:hover {
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+        }
+
+        .topic-list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .topic-list-title {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .topic-list-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin-bottom: 0.75rem;
+        }
+
+        .topic-list-preview {
+            color: #cbd5e1;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* 瀑布流布局 */
+        .waterfall-container {
+            column-count: 2;
+            column-gap: 1.5rem;
+        }
+
+        @media (max-width: 1400px) {
+            .waterfall-container {
+                column-count: 1;
+            }
+        }
+
+        .waterfall-item {
+            break-inside: avoid;
+            margin-bottom: 1.5rem;
+        }
+
+        /* 加载更多按钮 */
+        .load-more-btn {
+            display: block;
+            width: 100%;
+            padding: 1rem;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.75rem;
+            color: #60a5fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 2rem;
+        }
+
+        .load-more-btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        /* 空状态 */
+        .empty-state-container {
+            text-align: center;
+            padding: 4rem 2rem;
+        }
+
+        .empty-state-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .empty-state-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #cbd5e1;
+            margin-bottom: 0.5rem;
+        }
+
+        .empty-state-desc {
+            color: #94a3b8;
+            line-height: 1.6;
+        }
     </style>
 </head>
 <body>
@@ -1184,9 +1469,10 @@
                     </div>
                 </div>
 
-                <div class="content-grid">
+                <div class="content-grid" id="today-cards-grid">
                     <!-- 今日重点项目 -->
-                    <div class="content-card">
+                    <div class="content-card" data-card-id="today-projects">
+                        <button class="mark-read-btn" onclick="closeTodayCard('today-projects')">阅</button>
                         <div class="card-header">
                             <div class="card-title">
                                 <span>🚀</span>
@@ -1221,7 +1507,8 @@
                     </div>
 
                     <!-- 热门主题讨论 -->
-                    <div class="content-card">
+                    <div class="content-card" data-card-id="today-topics">
+                        <button class="mark-read-btn" onclick="closeTodayCard('today-topics')">阅</button>
                         <div class="card-header">
                             <div class="card-title">
                                 <span>💡</span>
@@ -1256,7 +1543,8 @@
                     </div>
 
                     <!-- 重要联系人动态 -->
-                    <div class="content-card">
+                    <div class="content-card" data-card-id="today-people">
+                        <button class="mark-read-btn" onclick="closeTodayCard('today-people')">阅</button>
                         <div class="card-header">
                             <div class="card-title">
                                 <span>👥</span>
@@ -1291,7 +1579,8 @@
                     </div>
 
                     <!-- AI 推荐内容 -->
-                    <div class="content-card">
+                    <div class="content-card" data-card-id="today-ai-recommend">
+                        <button class="mark-read-btn" onclick="closeTodayCard('today-ai-recommend')">阅</button>
                         <div class="card-header">
                             <div class="card-title">
                                 <span>🎯</span>
@@ -1326,7 +1615,8 @@
                     </div>
 
                     <!-- 今日提醒事项 -->
-                    <div class="content-card">
+                    <div class="content-card" data-card-id="today-reminders">
+                        <button class="mark-read-btn" onclick="closeTodayCard('today-reminders')">阅</button>
                         <div class="card-header">
                             <div class="card-title">
                                 <span>⏰</span>
@@ -1361,7 +1651,8 @@
                     </div>
 
                     <!-- 最近浏览网站 -->
-                    <div class="content-card">
+                    <div class="content-card" data-card-id="today-browsing">
+                        <button class="mark-read-btn" onclick="closeTodayCard('today-browsing')">阅</button>
                         <div class="card-header">
                             <div class="card-title">
                                 <span>🌐</span>
@@ -1394,6 +1685,17 @@
                             <span>→</span>
                         </div>
                     </div>
+                </div>
+                
+                <!-- 未读主题瀑布流推送 -->
+                <div id="unread-topics-waterfall">
+                    <h2 style="margin: 2rem 0 1rem; font-size: 1.5rem; font-weight: 600;">📬 未读主题推送</h2>
+                    <div class="waterfall-container" id="waterfall-topics-container">
+                        <!-- 通过JS动态生成瀑布流内容 -->
+                    </div>
+                    <button class="load-more-btn" id="load-more-topics" style="display: none;">
+                        加载更多主题
+                    </button>
                 </div>
             </div>
 
@@ -1469,6 +1771,31 @@
 
                 <div class="content-grid" id="entity-content">
                     <!-- 动态内容将在这里加载 -->
+                </div>
+            </div>
+
+            <!-- 主题列表视图 -->
+            <div class="topic-list-view" id="topic-list-view">
+                <h2 style="margin-bottom: 1.5rem; font-size: 1.5rem; font-weight: 600;">💡 主题列表</h2>
+                
+                <!-- 视图切换控制 -->
+                <div class="view-control">
+                    <button class="view-toggle-btn active" data-view="unread">
+                        🔴 仅未读
+                    </button>
+                    <button class="view-toggle-btn" data-view="all">
+                        📋 全部主题
+                    </button>
+                    <select class="sort-select" id="topic-sort-select">
+                        <option value="time">最新消息排序</option>
+                        <option value="importance">热度排序</option>
+                        <option value="unread-count">未读数量排序</option>
+                    </select>
+                </div>
+                
+                <!-- 主题列表容器 -->
+                <div class="topic-list-container" id="topic-list-container">
+                    <!-- 通过JS动态生成主题列表 -->
                 </div>
             </div>
 
@@ -1598,6 +1925,53 @@
     </div>
 
     <script>
+        /* ==========================================
+         * 数据模型设计 - 主题阅读模式
+         * ==========================================
+         * 
+         * 业务逻辑说明：
+         * 1. 每个主题包含readStatus对象跟踪已读状态
+         * 2. readStatus字段:
+         *    - isRead: 主题是否已读
+         *    - lastReadTime: 最后阅读时间戳
+         *    - unreadCount: 未读信息数量
+         *    - lastUpdateTime: 最后更新时间
+         * 
+         * 3. 已读状态触发条件:
+         *    - 用户点击主题进入详情页
+         *    - 用户滚动查看完所有未读内容
+         * 
+         * 4. 未读状态触发条件:
+         *    - 新的聊天记录加入该主题
+         *    - 新的网页记录关联到该主题
+         *    - 新的资源或Ticket被添加
+         *    - 关联项目有重大更新
+         * 
+         * 5. 首页今日卡片关闭逻辑:
+         *    - 用户点击关闭按钮,卡片今日内不再显示
+         *    - 关闭后未读主题会向上填充空白位置
+         *    - 第二天重新显示所有今日卡片
+         */
+        
+        // 全局配置
+        const CONFIG = {
+            VIEW_MODE: {
+                UNREAD: 'unread',
+                ALL: 'all'
+            },
+            SORT_MODE: {
+                TIME: 'time',              // 按最新消息排序
+                IMPORTANCE: 'importance',  // 按热度(重要性)排序
+                UNREAD_COUNT: 'unread-count'
+            }
+        };
+        
+        // 当前状态
+        let currentTopicViewMode = CONFIG.VIEW_MODE.UNREAD;
+        let currentTopicSortMode = CONFIG.SORT_MODE.TIME;
+        let closedTodayCards = new Set(); // 今日已关闭的卡片
+        let waterfallDisplayCount = 6;    // 瀑布流已显示数量
+        
         // 示例数据
         const entityData = {
             project: {
@@ -1633,7 +2007,19 @@
                         lastUpdate: '30 分钟前',
                         messages: ['分享了最新的 GPT-4 API 集成经验', '讨论了自动化测试的实现方案'],
                         resources: ['《AI 自动化实践指南》', 'OpenAI API 文档'],
-                        relatedProjects: ['Personal-AI', 'Automation-Tools']
+                        relatedProjects: ['Personal-AI', 'Automation-Tools'],
+                        readStatus: {
+                            isRead: false,
+                            lastReadTime: null,
+                            unreadCount: 7,
+                            lastUpdateTime: Date.now() - 30 * 60 * 1000
+                        },
+                        importance: 5,  // 热度评分1-5
+                        unreadDiscussions: [
+                            { text: '张三分享了GPT-4 API的Token优化策略,可以减少30%成本', time: '30分钟前' },
+                            { text: '李四提出了自动化测试框架的新方案', time: '1小时前' },
+                            { text: 'AI工作流中异常处理的最佳实践讨论', time: '2小时前' }
+                        ]
                     },
                     {
                         name: '前端性能优化',
@@ -1642,7 +2028,101 @@
                         lastUpdate: '2 小时前',
                         messages: ['分析了 React 18 的并发特性', 'Bundle 体积优化技巧分享'],
                         resources: ['React 官方文档', 'Webpack 性能指南'],
-                        relatedProjects: ['Personal-AI', 'Web-Platform']
+                        relatedProjects: ['Personal-AI', 'Web-Platform'],
+                        readStatus: {
+                            isRead: false,
+                            lastReadTime: null,
+                            unreadCount: 4,
+                            lastUpdateTime: Date.now() - 2 * 60 * 60 * 1000
+                        },
+                        importance: 4,
+                        unreadDiscussions: [
+                            { text: 'React 18并发模式实战经验分享', time: '2小时前' },
+                            { text: 'Webpack Bundle分析工具对比', time: '3小时前' },
+                            { text: '图片懒加载优化方案讨论', time: '4小时前' },
+                            { text: '前端监控指标如何设定', time: '5小时前' }
+                        ]
+                    },
+                    {
+                        name: 'DevOps最佳实践',
+                        category: '技术',
+                        discussions: 15,
+                        lastUpdate: '1 小时前',
+                        messages: ['CI/CD流水线优化', 'K8s集群管理经验'],
+                        resources: ['《持续交付》', 'Docker官方文档'],
+                        relatedProjects: ['Infrastructure'],
+                        readStatus: {
+                            isRead: false,
+                            lastReadTime: null,
+                            unreadCount: 5,
+                            lastUpdateTime: Date.now() - 1 * 60 * 60 * 1000
+                        },
+                        importance: 5,
+                        unreadDiscussions: [
+                            { text: 'Jenkins Pipeline优化技巧', time: '1小时前' },
+                            { text: 'K8s集群成本优化经验分享', time: '1.5小时前' },
+                            { text: 'Docker镜像体积压缩最佳实践', time: '2小时前' },
+                            { text: 'GitOps工作流实施心得', time: '3小时前' },
+                            { text: '监控告警策略优化讨论', time: '4小时前' }
+                        ]
+                    },
+                    {
+                        name: '产品设计思维',
+                        category: '产品',
+                        discussions: 5,
+                        lastUpdate: '3 小时前',
+                        messages: ['用户研究方法论', '设计冲刺总结'],
+                        resources: ['《用户体验要素》'],
+                        relatedProjects: ['Design System'],
+                        readStatus: {
+                            isRead: true,
+                            lastReadTime: Date.now() - 12 * 60 * 60 * 1000,
+                            unreadCount: 0,
+                            lastUpdateTime: Date.now() - 3 * 60 * 60 * 1000
+                        },
+                        importance: 3,
+                        unreadDiscussions: [] // 已读,无未读讨论
+                    },
+                    {
+                        name: '团队协作方法',
+                        category: '管理',
+                        discussions: 6,
+                        lastUpdate: '5 小时前',
+                        messages: ['敏捷开发实践', '远程办公心得'],
+                        resources: ['《敏捷软件开发》'],
+                        relatedProjects: [],
+                        readStatus: {
+                            isRead: false,
+                            lastReadTime: null,
+                            unreadCount: 2,
+                            lastUpdateTime: Date.now() - 5 * 60 * 60 * 1000
+                        },
+                        importance: 3,
+                        unreadDiscussions: [
+                            { text: 'Scrum实践中遇到的挑战和解决方案', time: '5小时前' },
+                            { text: '远程团队的有效沟通技巧', time: '6小时前' }
+                        ]
+                    },
+                    {
+                        name: '微服务架构实践',
+                        category: '技术',
+                        discussions: 10,
+                        lastUpdate: '4 小时前',
+                        messages: ['服务拆分策略', '分布式事务处理'],
+                        resources: ['《微服务设计》'],
+                        relatedProjects: ['Backend-Services'],
+                        readStatus: {
+                            isRead: false,
+                            lastReadTime: null,
+                            unreadCount: 3,
+                            lastUpdateTime: Date.now() - 4 * 60 * 60 * 1000
+                        },
+                        importance: 4,
+                        unreadDiscussions: [
+                            { text: '微服务网关的选型和实践', time: '4小时前' },
+                            { text: '分布式事务Saga模式实战', time: '5小时前' },
+                            { text: '服务间通信的性能优化', time: '6小时前' }
+                        ]
                     }
                 ]
             },
@@ -1694,6 +2174,338 @@
             }
         };
 
+        /* ==========================================
+         * 核心业务逻辑函数
+         * ========================================== */
+        
+        /**
+         * 关闭今日卡片
+         * 业务逻辑: 点击关闭后,卡片今日内不再显示,第二天重新显示
+         */
+        function closeTodayCard(cardId) {
+            closedTodayCards.add(cardId);
+            const card = document.querySelector(`[data-card-id="${cardId}"]`);
+            if (card) {
+                card.style.transition = 'all 0.3s ease';
+                card.style.opacity = '0';
+                card.style.transform = 'scale(0.9)';
+                setTimeout(() => {
+                    card.style.display = 'none';
+                    // 重新渲染瀑布流,填充空白
+                    renderWaterfallTopics();
+                }, 300);
+            }
+            console.log(`[今日卡片] "${cardId}" 已关闭,今日不再显示`);
+        }
+        
+        /**
+         * 过滤和排序主题列表
+         */
+        function getFilteredAndSortedTopics(viewMode, sortMode) {
+            let topics = [...entityData.topic.items];
+            
+            // 过滤
+            if (viewMode === CONFIG.VIEW_MODE.UNREAD) {
+                topics = topics.filter(t => !t.readStatus.isRead || t.readStatus.unreadCount > 0);
+            }
+            
+            // 排序
+            switch(sortMode) {
+                case CONFIG.SORT_MODE.TIME:
+                    // 按最新消息排序
+                    topics.sort((a, b) => b.readStatus.lastUpdateTime - a.readStatus.lastUpdateTime);
+                    break;
+                case CONFIG.SORT_MODE.IMPORTANCE:
+                    // 按热度排序 (重要性 + 讨论数)
+                    topics.sort((a, b) => {
+                        const scoreA = a.importance + (a.discussions / 20);
+                        const scoreB = b.importance + (b.discussions / 20);
+                        return scoreB - scoreA;
+                    });
+                    break;
+                case CONFIG.SORT_MODE.UNREAD_COUNT:
+                    // 按未读数量排序
+                    topics.sort((a, b) => b.readStatus.unreadCount - a.readStatus.unreadCount);
+                    break;
+            }
+            
+            return topics;
+        }
+        
+        /**
+         * 渲染主题列表视图
+         */
+        function renderTopicListView() {
+            const container = document.getElementById('topic-list-container');
+            const topics = getFilteredAndSortedTopics(currentTopicViewMode, currentTopicSortMode);
+            
+            if (topics.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state-container">
+                        <div class="empty-state-icon">✅</div>
+                        <div class="empty-state-title">太棒了!</div>
+                        <div class="empty-state-desc">
+                            ${currentTopicViewMode === CONFIG.VIEW_MODE.UNREAD ? 
+                                '所有主题都已阅读完毕' : '暂无主题'}
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = topics.map(topic => `
+                <div class="topic-list-item ${!topic.readStatus.isRead ? 'unread' : ''}" 
+                     onclick="event.target.classList.contains('mark-read-btn') ? null : openTopicDetail('${topic.name}')">
+                    ${!topic.readStatus.isRead ? 
+                        `<button class="mark-read-btn" onclick="event.stopPropagation(); markTopicAsReadAndClose('${topic.name}')">阅</button>` : ''}
+                    <div class="topic-list-header">
+                        <div class="topic-list-title">
+                            <span>💡</span>
+                            <span>${topic.name}</span>
+                            ${!topic.readStatus.isRead ? 
+                                `<span class="unread-badge">${topic.readStatus.unreadCount}条未读</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="topic-list-meta">
+                        <span>📁 ${topic.category}</span>
+                        <span>💬 ${topic.discussions}条讨论</span>
+                        <span>🔥 热度${topic.importance}/5</span>
+                        <span>⏰ ${topic.lastUpdate}</span>
+                    </div>
+                    <div class="topic-list-preview">
+                        ${topic.messages.slice(0, 2).join(' • ')}
+                    </div>
+                    ${topic.unreadDiscussions && topic.unreadDiscussions.length > 0 ? `
+                        <div class="unread-discussions">
+                            <div class="unread-discussions-title">
+                                💬 未读讨论 (${topic.unreadDiscussions.length}条)
+                            </div>
+                            ${topic.unreadDiscussions.slice(0, 3).map(discussion => `
+                                <div class="discussion-item">
+                                    <span class="discussion-icon">▪</span>
+                                    <div class="discussion-text">${discussion.text}</div>
+                                </div>
+                            `).join('')}
+                            ${topic.unreadDiscussions.length > 3 ? 
+                                `<div style="text-align: center; color: #60a5fa; font-size: 0.75rem; margin-top: 0.5rem;">
+                                    还有 ${topic.unreadDiscussions.length - 3} 条讨论...
+                                </div>` : ''}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+            
+            console.log(`[主题列表] 已渲染 ${topics.length} 个主题`);
+        }
+        
+        /**
+         * 渲染首页瀑布流未读主题推送
+         */
+        function renderWaterfallTopics() {
+            const container = document.getElementById('waterfall-topics-container');
+            const loadMoreBtn = document.getElementById('load-more-topics');
+            
+            // 获取未读主题,按热度排序
+            const unreadTopics = getFilteredAndSortedTopics(
+                CONFIG.VIEW_MODE.UNREAD, 
+                CONFIG.SORT_MODE.IMPORTANCE
+            );
+            
+            if (unreadTopics.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state-container">
+                        <div class="empty-state-icon">✅</div>
+                        <div class="empty-state-title">所有主题都已阅读</div>
+                        <div class="empty-state-desc">太棒了!你已经查看完所有未读主题</div>
+                    </div>
+                `;
+                loadMoreBtn.style.display = 'none';
+                return;
+            }
+            
+            // 显示前N个主题
+            const displayTopics = unreadTopics.slice(0, waterfallDisplayCount);
+            
+            container.innerHTML = displayTopics.map(topic => `
+                <div class="waterfall-item">
+                    <div class="content-card unread" onclick="event.target.classList.contains('mark-read-btn') ? null : openTopicDetail('${topic.name}')">
+                        <button class="mark-read-btn" onclick="event.stopPropagation(); markTopicAsReadAndClose('${topic.name}')">阅</button>
+                        <div class="card-header">
+                            <div class="card-title">
+                                <span>💡</span>
+                                <span>${topic.name}</span>
+                            </div>
+                            <span class="unread-badge">${topic.readStatus.unreadCount}</span>
+                        </div>
+                        <div class="card-content" style="margin-bottom: 0.75rem;">
+                            ${topic.category} • ${topic.discussions}条讨论 • ${topic.lastUpdate}
+                        </div>
+                        <div class="card-content" style="font-size: 0.875rem; line-height: 1.5;">
+                            ${topic.messages[0]}
+                        </div>
+                        ${topic.unreadDiscussions && topic.unreadDiscussions.length > 0 ? `
+                            <div class="unread-discussions">
+                                <div class="unread-discussions-title">
+                                    💬 未读讨论 (${topic.unreadDiscussions.length}条)
+                                </div>
+                                ${topic.unreadDiscussions.slice(0, 2).map(discussion => `
+                                    <div class="discussion-item">
+                                        <span class="discussion-icon">▪</span>
+                                        <div class="discussion-text">${discussion.text}</div>
+                                    </div>
+                                `).join('')}
+                                ${topic.unreadDiscussions.length > 2 ? 
+                                    `<div style="text-align: center; color: #60a5fa; font-size: 0.75rem; margin-top: 0.5rem;">
+                                        还有 ${topic.unreadDiscussions.length - 2} 条...
+                                    </div>` : ''}
+                            </div>
+                        ` : ''}
+                        <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            ${topic.relatedProjects.map(p => 
+                                `<span style="padding: 0.25rem 0.5rem; background: rgba(59,130,246,0.1); 
+                                       color: #60a5fa; border-radius: 0.25rem; font-size: 0.75rem;">
+                                    ${p}
+                                </span>`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            
+            // 显示/隐藏加载更多按钮
+            if (displayTopics.length < unreadTopics.length) {
+                loadMoreBtn.style.display = 'block';
+            } else {
+                loadMoreBtn.style.display = 'none';
+            }
+            
+            console.log(`[瀑布流] 已显示 ${displayTopics.length}/${unreadTopics.length} 个未读主题`);
+        }
+        
+        /**
+         * 点击"阅"按钮,标记主题已读并关闭卡片
+         * 
+         * 业务逻辑:
+         * 1. 标记主题为已读
+         * 2. 清空所有未读计数
+         * 3. 清空未读讨论列表
+         * 4. 卡片带动画消失
+         * 5. 刷新所有视图
+         */
+        function markTopicAsReadAndClose(topicName) {
+            const topic = entityData.topic.items.find(t => t.name === topicName);
+            if (topic) {
+                // 标记为已读
+                topic.readStatus.isRead = true;
+                topic.readStatus.lastReadTime = Date.now();
+                topic.readStatus.unreadCount = 0;
+                topic.unreadDiscussions = []; // 清空未读讨论
+                
+                console.log(`[点击阅] "${topicName}" 已标记为已读,所有讨论已读`);
+                
+                // 找到对应的DOM元素并添加消失动画
+                const allTopicCards = document.querySelectorAll('.topic-list-item, .waterfall-item .content-card');
+                allTopicCards.forEach(card => {
+                    if (card.textContent.includes(topicName)) {
+                        card.style.transition = 'all 0.3s ease';
+                        card.style.opacity = '0';
+                        card.style.transform = 'scale(0.9)';
+                    }
+                });
+                
+                // 延迟刷新视图,等待动画完成
+                setTimeout(() => {
+                    refreshAllViews();
+                }, 300);
+            }
+        }
+        
+        /**
+         * 打开主题详情并标记为已读
+         */
+        function openTopicDetail(topicName) {
+            const topic = entityData.topic.items.find(t => t.name === topicName);
+            if (topic) {
+                // 标记为已读
+                topic.readStatus.isRead = true;
+                topic.readStatus.lastReadTime = Date.now();
+                topic.readStatus.unreadCount = 0;
+                topic.unreadDiscussions = []; // 清空未读讨论
+                
+                console.log(`[主题阅读] "${topicName}" 已标记为已读`);
+                
+                // 刷新所有相关视图
+                refreshAllViews();
+                
+                // 显示主题详情页
+                showTopicDetail(topicName);
+            }
+        }
+        
+        /**
+         * 模拟新消息到达,将主题标记为未读
+         */
+        function onNewContentReceived(topicName, newCount = 1) {
+            const topic = entityData.topic.items.find(t => t.name === topicName);
+            if (topic) {
+                const wasRead = topic.readStatus.isRead;
+                topic.readStatus.isRead = false;
+                topic.readStatus.unreadCount += newCount;
+                topic.readStatus.lastUpdateTime = Date.now();
+                
+                // 添加新的未读讨论
+                if (!topic.unreadDiscussions) {
+                    topic.unreadDiscussions = [];
+                }
+                const newDiscussions = [
+                    { text: `新讨论: 关于${topicName}的最新观点分享`, time: '刚刚' },
+                    { text: `团队成员提出了新的想法和建议`, time: '刚刚' }
+                ];
+                topic.unreadDiscussions = [...newDiscussions, ...topic.unreadDiscussions];
+                
+                console.log(`[新消息] "${topicName}" 收到${newCount}条新消息,新增${newDiscussions.length}条未读讨论` + 
+                           (wasRead ? ',已从已读变为未读' : ''));
+                
+                // 刷新所有相关视图
+                refreshAllViews();
+            }
+        }
+        
+        /**
+         * 刷新所有视图
+         */
+        function refreshAllViews() {
+            // 刷新主题列表视图
+            if (document.getElementById('topic-list-view').classList.contains('active')) {
+                renderTopicListView();
+            }
+            
+            // 刷新首页瀑布流
+            if (document.getElementById('overview').style.display !== 'none') {
+                renderWaterfallTopics();
+            }
+            
+            // 更新侧边栏计数
+            updateSidebarCounts();
+        }
+        
+        /**
+         * 更新侧边栏未读计数
+         */
+        function updateSidebarCounts() {
+            const unreadCount = entityData.topic.items.filter(
+                t => !t.readStatus.isRead || t.readStatus.unreadCount > 0
+            ).length;
+            
+            const topicLink = document.querySelector('[data-type="topic"] .entity-count');
+            if (topicLink) {
+                topicLink.textContent = unreadCount;
+                if (unreadCount > 0) {
+                    topicLink.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+                }
+            }
+        }
+
         // DOM 元素
         const entityTypes = document.querySelectorAll('.entity-type');
         const entityTitle = document.getElementById('entity-title');
@@ -1715,12 +2527,18 @@
                 overviewSection.style.display = 'none';
                 timelineView.classList.remove('active');
                 entityDetail.classList.remove('active');
+                document.getElementById('topic-list-view').classList.remove('active');
+                topicDetail.classList.remove('active');
                 
                 // 显示对应视图
                 if (dataType === 'overview') {
                     overviewSection.style.display = 'block';
                 } else if (dataType === 'timeline') {
                     timelineView.classList.add('active');
+                } else if (dataType === 'topic') {
+                    // 显示主题列表视图
+                    document.getElementById('topic-list-view').classList.add('active');
+                    renderTopicListView();
                 } else {
                     showEntityDetail(dataType);
                 }
@@ -2396,12 +3214,40 @@
 
         // 初始化动画
         document.addEventListener('DOMContentLoaded', function() {
-            // 初始化主题详情功能
+            console.log('[系统启动] 实体记忆查询系统初始化中...');
+            
+            // 1. 初始化主题列表视图控制
+            initTopicListViewControls();
+            
+            // 2. 初始化首页瀑布流
+            renderWaterfallTopics();
+            
+            // 3. 初始化加载更多按钮
+            document.getElementById('load-more-topics').addEventListener('click', () => {
+                waterfallDisplayCount += 6;
+                renderWaterfallTopics();
+            });
+            
+            // 4. 初始化主题详情功能
             initTopicDetailTabs();
             initBackButton();
             initContextExpansion();
             
-            // 原有的初始化动画
+            // 5. 更新侧边栏计数
+            updateSidebarCounts();
+            
+            // 6. 模拟新消息接收(用于演示)
+            setTimeout(() => {
+                console.log('[模拟] 5秒后: "产品设计思维" 收到新消息');
+                onNewContentReceived('产品设计思维', 2);
+            }, 5000);
+            
+            setTimeout(() => {
+                console.log('[模拟] 10秒后: "团队协作方法" 收到新消息');
+                onNewContentReceived('团队协作方法', 1);
+            }, 10000);
+            
+            // 7. 原有的初始化动画
             setTimeout(() => {
                 document.querySelectorAll('.content-card').forEach((card, index) => {
                     setTimeout(() => {
@@ -2416,7 +3262,52 @@
                     }, index * 100);
                 });
             }, 100);
+            
+            console.log('[系统启动] ✅ 系统启动完成');
+            const unreadCount = entityData.topic.items.filter(
+                t => !t.readStatus.isRead || t.readStatus.unreadCount > 0
+            ).length;
+            console.log(`[系统状态] 当前有 ${unreadCount} 个未读主题`);
         });
+        
+        /**
+         * 初始化主题列表视图控制
+         */
+        function initTopicListViewControls() {
+            // 视图切换按钮
+            const viewToggleBtns = document.querySelectorAll('#topic-list-view .view-toggle-btn');
+            viewToggleBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const viewMode = btn.getAttribute('data-view');
+                    currentTopicViewMode = viewMode;
+                    
+                    // 更新按钮状态
+                    viewToggleBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    // 刷新列表
+                    renderTopicListView();
+                    
+                    console.log(`[主题列表] 切换到 ${viewMode === 'unread' ? '仅未读' : '全部主题'} 模式`);
+                });
+            });
+            
+            // 排序选择器
+            const sortSelect = document.getElementById('topic-sort-select');
+            sortSelect.addEventListener('change', (e) => {
+                currentTopicSortMode = e.target.value;
+                renderTopicListView();
+                
+                const sortNames = {
+                    'time': '最新消息排序',
+                    'importance': '热度排序',
+                    'unread-count': '未读数量排序'
+                };
+                console.log(`[主题列表] 切换到 ${sortNames[currentTopicSortMode]}`);
+            });
+            
+            console.log('[系统启动] 主题列表视图控制已初始化');
+        }
     </script>
 </body>
 </html>

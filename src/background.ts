@@ -7,12 +7,6 @@ import { FETCH_JIRA_TICKETS } from './jira';
 import { getAuthToken } from './slide';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
-import { 
-    executeEnhancedKnowledgeQuery, 
-    getGraphStatistics, 
-    syncGraphData, 
-    backupGraphData 
-} from './enhancedKnowledgeQuery';
 import { memorySystem } from './memory';
 import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
@@ -241,54 +235,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    // 处理增强知识查询请求
-    if (request.type === 'ENHANCED_KNOWLEDGE_QUERY') {
-        const { query, options } = request;
-        executeEnhancedKnowledgeQuery(query, options)
-            .then(response => sendResponse(response))
-            .catch(error => sendResponse({
-                success: false,
-                error: error.message,
-                query,
-                options,
-                data: { graphConnections: 0, totalResults: 0 },
-                queryTime: 0
-            }));
-        return true; // 保持消息通道开放
-    }
-
-    // 处理图存储统计请求
-    if (request.type === 'GET_GRAPH_STATISTICS') {
-        getGraphStatistics()
-            .then(response => sendResponse(response))
-            .catch(error => sendResponse({
-                success: false,
-                error: error.message
-            }));
-        return true;
-    }
-
-    // 处理图数据同步请求
-    if (request.type === 'SYNC_GRAPH_DATA') {
-        syncGraphData()
-            .then(response => sendResponse(response))
-            .catch(error => sendResponse({
-                success: false,
-                error: error.message
-            }));
-        return true;
-    }
-
-    // 处理图数据备份请求
-    if (request.type === 'BACKUP_GRAPH_DATA') {
-        backupGraphData()
-            .then(response => sendResponse(response))
-            .catch(error => sendResponse({
-                success: false,
-                error: error.message
-            }));
-        return true;
-    }
 
     // 数据迁移功能已移除，使用新的记忆系统
     if (request.type === 'MIGRATE_DATA_TO_GRAPH') {
@@ -651,28 +597,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     return false;
 });
-
-// 启动定时任务 - 现在通过 TaskScheduler 管理
-export async function startScheduledCheck() {
-    console.log('⚠️ startScheduledCheck() 已弃用，使用 TaskScheduler 替代');
-    chrome.storage.local.set({ scheduleActive: true });
-    await taskScheduler.toggleTask('message_analysis', true);
-}
-
-// 停止定时任务 - 现在通过 TaskScheduler 管理
-export async function stopScheduledCheck() {
-    console.log('⚠️ stopScheduledCheck() 已弃用，使用 TaskScheduler 替代');
-    chrome.storage.local.set({ scheduleActive: false });
-    chrome.storage.local.remove('ollamaAnalysisProgress');
-    await taskScheduler.toggleTask('message_analysis', false);
-}
-
-// 定时抓取分析消息 - 现在通过 TaskScheduler 管理
-async function runScheduledTask() {
-    console.log('⚠️ runScheduledTask() 已弃用，使用 TaskScheduler 替代');
-    // 直接调用 TaskScheduler 执行消息分析任务
-    await taskScheduler.runTaskManually('message_analysis');
-}
 
 // 查找已打开的 RingCentral 标签页
 export async function findRingCentralTab() {

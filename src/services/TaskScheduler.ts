@@ -577,16 +577,17 @@ export class TaskScheduler {
       console.error(`❌ 任务不存在: ${taskId}`);
       return false;
     }
+    if (!this.isInitialized) {
+      console.error(`❌ 任务调度器未初始化，跳过启用/禁用任务: ${taskId}`);
+      return false;
+    }
 
     task.enabled = enabled;
-    
-    if (this.isInitialized) {
-      if (enabled) {
-        await this.createTaskAlarm(task);
-      } else {
-        const alarmName = `scheduled_task_${taskId}`;
-        chrome.alarms.clear(alarmName);
-      }
+    if (enabled) {
+      await this.createTaskAlarm(task);
+    } else {
+      const alarmName = `scheduled_task_${taskId}`;
+      chrome.alarms.clear(alarmName);
     }
 
     console.log(`${enabled ? '✅' : '❌'} 任务 ${task.name} ${enabled ? '已启用' : '已禁用'}`);

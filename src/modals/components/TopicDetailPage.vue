@@ -136,6 +136,9 @@
               <option value="project">项目群</option>
               <option value="tech">技术讨论</option>
             </select>
+            <button class="mark-all-read-btn" @click="handleMarkAllAsRead" title="标记所有消息为已读">
+              ✓ 全部已阅
+            </button>
           </div>
         </div>
         <div class="conversations-list">
@@ -143,13 +146,19 @@
             v-for="conv in filteredConversations" 
             :key="conv.id" 
             class="conversation-item"
-            :class="{ expanded: expandedConversations.has(conv.id) }"
+            :class="{ 
+              expanded: expandedConversations.has(conv.id),
+              unread: !conv.isRead
+            }"
           >
             <div class="conversation-header">
               <div class="conversation-meta">
                 <div class="sender-avatar">{{ (conv.sender || '?').charAt(0) }}</div>
                 <div class="sender-info">
-                  <div class="sender-name">{{ conv.sender || '未知用户' }}</div>
+                  <div class="sender-name">
+                    {{ conv.sender || '未知用户' }}
+                    <span v-if="conv.isRead !== true" class="unread-indicator">●</span>
+                  </div>
                   <div class="group-name">{{ conv.groupName || '未知群组' }}</div>
                 </div>
               </div>
@@ -319,8 +328,16 @@ const toggleConversationExpand = (conversationId: string) => {
   } else {
     newExpanded.clear();
     newExpanded.add(conversationId);
+    // 展开时标记为已读
+    store.markConversationAsRead(topicId.value, conversationId);
   }
   expandedConversations.value = newExpanded;
+};
+
+const handleMarkAllAsRead = async () => {
+  if (topicId.value) {
+    await store.markTopicAsRead(topicId.value);
+  }
 };
 
 const highlightText = (text: string, searchQuery: string) => {
@@ -382,3 +399,48 @@ watch(() => route.query, (newQuery) => {
   }
 });
 </script>
+
+<style scoped>
+/* 全部已阅按钮 */
+.mark-all-read-btn {
+  padding: 0.75rem 1.5rem;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 0.5rem;
+  color: #22c55e;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mark-all-read-btn:hover {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+/* 未读指示器 */
+.unread-indicator {
+  color: #ef4444;
+  font-size: 0.5rem;
+  margin-left: 0.25rem;
+  animation: blink 1.5s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* 未读消息样式 */
+.conversation-item.unread {
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.03);
+}
+
+.conversation-item.unread .sender-name {
+  color: #60a5fa;
+  font-weight: 600;
+}
+</style>

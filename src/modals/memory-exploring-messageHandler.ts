@@ -281,6 +281,16 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
             case 'INITIALIZE_SAMPLE_DATA':
                 return handleInitializeSampleData();
 
+            case 'CACHE_ENTITY':
+                try {
+                    const { entity } = request;
+                    await localStorage.cacheEntity(entity);
+                    return { success: true, message: '实体已缓存到本地' };
+                } catch (error) {
+                    console.error('缓存实体失败:', error);
+                    return { success: false, error: error.message };
+                }
+
             default:
                 return null; // 不是记忆系统相关的消息
         }

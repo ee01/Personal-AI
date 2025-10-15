@@ -139,6 +139,47 @@ const Options = () => {
     return (
         <div>
             <div className="form-section">
+                <h2>功能 Demo</h2>
+                <div className="quick-access-buttons" style={{ 
+                    display: 'flex', 
+                    gap: '10px', 
+                    flexWrap: 'wrap',
+                    marginBottom: '15px' 
+                }}>
+                    <button 
+                        onClick={() => window.open('http://eexx.me/Personal-AI/demo/%E5%AE%9E%E4%BD%93%E8%AE%B0%E5%BF%86%E6%9F%A5%E8%AF%A2%E7%95%8C%E9%9D%A2.html', '_blank')}
+                        style={{ 
+                            backgroundColor: '#667eea', 
+                            color: 'white',
+                            padding: '10px 20px',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            fontWeight: 'bold'
+                        }}
+                    >
+                        🧠 实体记忆查询
+                    </button>
+                    <button 
+                        onClick={() => window.open('http://eexx.me/Personal-AI/demo/项目进展图-缩放版.html', '_blank')}
+                        style={{ 
+                            backgroundColor: '#2ecc71', 
+                            color: 'white',
+                            padding: '10px 20px',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            fontWeight: 'bold'
+                        }}
+                    >
+                        📊 项目进展图
+                    </button>
+                </div>
+            </div>
+
+            <div className="form-section">
                 <h2>常规设置</h2>
                 <div className="form-group">
                     <label htmlFor="SCHEDULED_INTERVAL">

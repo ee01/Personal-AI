@@ -674,10 +674,14 @@ interface GraphEntityDocument {
 #### 存储规则
 
 1. **统一实体缓存**: 内存中最多1000个基础实体，持久化存储 CachedEntityDetail 格式
-2. **最近数据存储**: 每个实体的 latest* 数组最多保存5条最新数据（conversations/webpages/resources/projects）
+2. **🆕 最近数据存储**: 每个实体的 `recentDataDetails.conversations` 保留策略：
+   - **保留所有未读消息**（无数量限制，确保用户不会错过任何重要信息）
+   - **保留最新5条已读消息**（用于快速回顾最近阅读内容）
+   - 示例：如果有10条未读+20条已读，则保留 10条未读 + 5条最新已读 = 15条
 3. **统计信息缓存**: 缓存30分钟，包含实体数量、类型分布等
 4. **关系索引**: 实体间关系的快速查找索引
 5. **自动过期清理**: 根据 recentDataCacheDuration 配置自动清理过期的详细缓存
+6. **🆕 云端数据清理**: `relatedData.conversations` 最多保留50条，定期清理1个月前的已读消息
 
 #### Storage Keys 结构
 
@@ -1183,7 +1187,108 @@ interface EntityStatisticsCache {
 }
 ```
 
+## 📖 未读消息管理系统
+
+### 核心设计
+
+**readStatus 接口优化** (2024-12-25):
+```typescript
+readStatus?: {
+  unreadCount: number;           // 未读消息数量（核心字段）
+  lastReadTime: number | null;   // 最后阅读时间
+  lastUpdateTime: number;        // 最后更新时间
+  // 注：isRead 可通过 unreadCount === 0 动态计算，无需存储
+}
+```
+
+**关键优化**:
+- ✅ **移除冗余字段**: 删除 `isRead` 字段，通过 `unreadCount === 0` 动态计算
+- ✅ **简化计算逻辑**: 新消息存储时，直接增量更新 `unreadCount`
+- ✅ **智能保留策略**: 本地缓存保留所有未读 + 最新5条已读消息
+- ✅ **自动清理机制**: 云端定期清理1个月前的已读消息
+
+### 数据流动
+
+```
+新消息到达
+  ↓
+buildEntityRelatedDataFromMessage()
+  └─ isRead: false  // 新消息默认未读
+  ↓
+updateEntitiesWithRelatedData()
+  └─ unreadCount += 1  // 简单增量更新
+  ↓
+updateEntity()
+  └─ 同步到本地缓存 (recentDataDetails.conversations)
+     └─ 保留所有未读 + 最新5条已读
+```
+
+### 未读状态管理
+
+**标记已读流程**:
+```typescript
+// 1. 用户阅读主题
+markTopicAsRead(topicId) 
+  ↓
+// 2. 更新所有conversations的isRead状态
+conversations.forEach(c => c.isRead = true)
+  ↓
+// 3. 更新readStatus
+entity.readStatus.unreadCount = 0
+entity.readStatus.lastReadTime = Date.now()
+  ↓
+// 4. 同步到云端和本地缓存
+```
+
+**标记单条消息已读**:
+```typescript
+// 1. 标记特定消息
+conversation.isRead = true
+conversation.readTimestamp = Date.now()
+  ↓
+// 2. 重新计算unreadCount
+entity.readStatus.unreadCount -= 1
+  ↓
+// 3. 同步更新
+```
+
 ## 🧹 记忆遗忘机制
+
+### 两级清理策略
+
+#### 第一级：relatedData 清理（防止膨胀）
+
+**触发方式**: 定期任务（每周执行）或手动触发
+
+**清理规则**:
+```typescript
+// 清理1个月前的已读消息
+await memorySystem.cleanExpiredConversations();
+
+// 或在系统维护时自动清理
+await memorySystem.performSystemMaintenance({
+  cleanupExpiredConversations: true
+});
+```
+
+**清理策略**:
+- ✅ **保留1个月内的所有消息**（不区分已读未读）
+- ❌ **删除1个月前的所有消息**
+- 📊 **更新统计信息** (`statistic.conversations`)
+- 📊 **重新计算未读数** (`readStatus.unreadCount`)
+
+**效果**:
+- 防止 `relatedData.conversations` 无限膨胀
+- 保持最近1个月的完整上下文
+- 自动维护数据的时效性
+
+#### 第二级：实体遗忘（整体清理）
+
+**管理器**: `MemoryLifecycleManager`
+
+**触发方式**: 定期任务（每24小时）或系统维护
+
+**清理对象**: 长期未访问的实体本身
 
 ### 遗忘触发方式
 
