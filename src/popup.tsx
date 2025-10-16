@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
 import { getAuthToken } from './slide';
+import { getTaskEnabled } from './services/TaskScheduler';
 
 const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
     <div className="toggle-container">
@@ -26,9 +27,9 @@ const Popup = () => {
 
     useEffect(() => {
         (async () => {
-            // 获取定时任务状态
-            const { scheduleActive } = await chrome.storage.local.get('scheduleActive');
-            setIsScheduleActive(scheduleActive === true);
+            // 获取定时任务状态 - 使用辅助函数
+            const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
+            setIsScheduleActive(messageAnalysisEnabled);
 
             // 检查当前标签页是否是 Google Sheets 或 Google Slides
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -55,8 +56,10 @@ const Popup = () => {
         const newState = !isScheduleActive;
         setIsScheduleActive(newState);
         chrome.runtime.sendMessage({
-            type: 'CONTROL_SCHEDULED_CHECK',
-            action: newState ? 'start' : 'stop'
+            type: 'CONTROL_TASK',
+            taskId: 'message_analysis',
+            action: 'toggle',
+            enabled: newState
         });
     };
 

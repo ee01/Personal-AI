@@ -8,6 +8,7 @@ import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
 import { memorySystem, StoreResult } from './memory';
+import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
@@ -54,9 +55,9 @@ export async function analyzeMessagesInBackground (data: any[], username: string
     // 获取环境配置
     const envConfig = await getEnvConfig();
 		
-	// 检查是否定时任务被终止
-	const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
-	if (!scheduleActive && isScheduledTask) {
+	// 检查是否定时任务被终止 - 使用辅助函数
+	const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
+	if (!messageAnalysisEnabled && isScheduledTask) {
 		console.log('定时分析任务已被终止，跳过处理');
 		return { 
 			success: false, 
@@ -142,12 +143,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			
 			// 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
 			const agent = new IntelligentAgent();
-			chrome.storage.onChanged.addListener((changes, namespace) => {
-			  if (namespace === 'local' && changes.scheduleActive) {
-				const scheduleActive = changes.scheduleActive.newValue;
-				if (!scheduleActive && isScheduledTask) agent.stop();
-			  }
-			});
+			// 监听任务状态变化，如果任务被禁用则停止分析 - 使用辅助函数
+			if (isScheduledTask) {
+				onTaskEnabledChanged('message_analysis', (enabled) => {
+					if (!enabled) agent.stop();
+				});
+			}
 			const allResults = await agent.analyze(messageGroups, {type: 'message'}, {concernedRules: concernedItems}, results => {
 				console.log('已分析', results[0].groupIndex+1, '/' ,data.length ,'，当前群组 [', results[0].messageContext?.groupName, '] 处理结果:', results);
 				chrome.storage.local.set({
@@ -308,9 +309,9 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			const item = data[index];
 			console.log(`--开始使用 Agent Workflow 分析第 ${index+1}/${data.length} 个群组的消息--`);
 			
-			// 检查是否需要继续分析
-			const scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive || false;
-			if (!scheduleActive && isScheduledTask) {
+			// 检查是否需要继续分析 - 使用辅助函数
+			const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
+			if (!messageAnalysisEnabled && isScheduledTask) {
 				console.log('分析任务已被终止');
 				break;
 			}
@@ -447,18 +448,21 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 				lastAnalyzedTime: new Date().toISOString()
 			}
 		});
-		let scheduleActive = false;
-		scheduleActive = (await chrome.storage.local.get('scheduleActive')).scheduleActive;
-		chrome.storage.onChanged.addListener((changes, namespace) => {
-			if (namespace === 'local' && changes.scheduleActive) {
-				scheduleActive = changes.scheduleActive.newValue;
-			}
-		});
+		// 获取初始任务状态 - 使用辅助函数
+		let messageAnalysisEnabled = await getTaskEnabled('message_analysis');
+		
+		// 监听任务状态变化 - 使用辅助函数
+		if (isScheduledTask) {
+			onTaskEnabledChanged('message_analysis', (enabled) => {
+				messageAnalysisEnabled = enabled;
+			});
+		}
+		
 		for (let index = 0; index < data.length; index++) {
 			const item = data[index];
 			console.log(`--开始分析第 ${index+1}/${data.length} 个群组的消息--`);
 			// 检查是否需要继续分析
-			if (!scheduleActive && isScheduledTask) {
+			if (!messageAnalysisEnabled && isScheduledTask) {
 				console.log('分析任务已被终止');
 				break;
 			}

@@ -14,6 +14,7 @@ import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligence
 import { DashboardMessageHandler } from './utils/dashboardIntegration';
 import { taskScheduler } from './services/TaskScheduler';
 import { UserProfileMessageHandler } from './services/UserProfileMessageHandler';
+import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWithRetry } from './utils/tabHelpers';
 
 console.log('Background script loaded');
 
@@ -48,6 +49,30 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
 });
 
+// 统一的任务调度器启动函数
+async function initializeTaskScheduler() {
+    try {
+        console.log('🚀 启动统一任务调度器...');
+        await taskScheduler.startAllTasks();
+        console.log('✅ 统一任务调度器启动成功');
+    } catch (error) {
+        console.error('❌ 统一任务调度器启动失败:', error);
+    }
+}
+
+// 浏览器启动时恢复任务调度器
+chrome.runtime.onStartup.addListener(async () => {
+    try {
+        setTimeout(async () => {
+            console.log('🔄 浏览器启动，恢复任务调度器...');
+            chrome.alarms.getAll().then(console.log)
+            await initializeTaskScheduler();
+        }, 10000);
+    } catch (error) {
+        console.error('❌ onStartup 监听器错误:', error);
+    }
+});
+
 // 扩展安装或更新时，立即创建定时任务，处理一些 Storage 的初始化
 chrome.runtime.onInstalled.addListener(async () => {
     try {
@@ -58,13 +83,7 @@ chrome.runtime.onInstalled.addListener(async () => {
         console.log('Global config loaded:', config);
 
         // 启动统一任务调度器
-        try {
-            console.log('🚀 启动统一任务调度器...');
-            await taskScheduler.startAllTasks();
-            console.log('✅ 统一任务调度器启动成功');
-        } catch (error) {
-            console.error('❌ 统一任务调度器启动失败:', error);
-        }
+        await initializeTaskScheduler();
         
         chrome.storage.local.remove('ollamaAnalysisProgress');
         
@@ -121,8 +140,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    console.log('Background received message:', request);
-
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
     if (request.type === 'MESSAGE_DEALING') {
         const { body } = request.data;
@@ -151,25 +168,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    if (request.type === 'CONTROL_SCHEDULED_CHECK') {
-        if (request.action === 'start') {
-            taskScheduler.toggleTask('message_analysis', true);
-            sendResponse({ status: 'started' });
-        } else if (request.action === 'stop') {
-            taskScheduler.toggleTask('message_analysis', false);
-            sendResponse({ status: 'stopped' });
-        }
-        return true;
-    }
-
-    // 新增：获取任务调度状态
+    // 获取任务调度状态
     if (request.type === 'GET_TASK_SCHEDULER_STATUS') {
         const status = taskScheduler.getTaskStatus();
         sendResponse({ success: true, tasks: status });
         return true;
     }
 
-    // 新增：控制特定任务
+    // 控制特定任务
     if (request.type === 'CONTROL_TASK') {
         const { taskId, action } = request;
         
@@ -597,68 +603,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     return false;
 });
-
-// 查找已打开的 RingCentral 标签页
-export async function findRingCentralTab() {
-    const tabs = await chrome.tabs.query({
-        url: "*://app.ringcentral.com/*"
-    });
-    return tabs[0];
-}
-
-// 创建新的 RingCentral 标签页
-export async function createRingCentralTab() {
-    return await chrome.tabs.create({
-        url: "https://app.ringcentral.com/messages",
-        active: false
-    });
-}
-
-// 等待标签页加载完成
-export function waitForTabLoad(tabId: number): Promise<void> {
-    return new Promise((resolve) => {
-        chrome.tabs.onUpdated.addListener(function listener(updatedTabId, info) {
-            if (updatedTabId === tabId && info.status === 'complete') {
-                chrome.tabs.onUpdated.removeListener(listener);
-                // 给页面一些额外时间来初始化 content script
-                setTimeout(resolve, 1000);
-            }
-        });
-    });
-}
-
-// 带重试机制的消息发送函数
-function sendMessageWithRetry(tabId: number, message: any, maxRetries = 3, retryInterval = 10000): Promise<any> {
-    return new Promise((resolve, reject) => {
-        let attempts = 0;
-
-        const trySendMessage = () => {
-            attempts++;
-            chrome.tabs.sendMessage(tabId, message, async response => {
-                if (chrome.runtime.lastError) {
-                    console.log(`Attempt ${attempts} failed:`, chrome.runtime.lastError);
-                    if (attempts < maxRetries) {
-                        if (chrome.runtime.lastError.message?.includes('Could not establish connection')) {
-                            await chrome.tabs.reload(tabId);
-                        }
-                        setTimeout(trySendMessage, retryInterval); // 10秒后重试
-                    } else {
-                        reject(new Error('Failed to send message after multiple attempts'));
-                    }
-                } else {
-                    if (response && !response.error) {
-                        resolve(response);
-                    } else {
-                        // 30秒后再尝试一次
-                        setTimeout(trySendMessage, retryInterval * 3);
-                    }
-                }
-            });
-        };
-
-        trySendMessage();
-    });
-}
 
 async function getUserinfoFromRCpage() {
     let rcTab = await findRingCentralTab();

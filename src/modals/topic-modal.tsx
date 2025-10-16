@@ -3,7 +3,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { analyzeMessages } from '../messageDealing';
-import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../background';
+import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../utils/tabHelpers';
 import { getEnvConfig } from '../utils';
 
 interface TopicItem {

@@ -4,7 +4,7 @@
  */
 
 import { memorySystem } from '../memory';
-import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../background';
+import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../utils/tabHelpers';
 import { analyzeMessages } from '../messageDealing';
 import { getEnvConfig } from '../utils';
 import { CloudStorage } from '../storage/CloudStorage';
@@ -124,23 +124,33 @@ export class TaskScheduler {
 
     console.log('🚀 启动任务调度器...');
 
-    // 清理可能存在的旧 alarms
-    await this.clearAllAlarms();
+    // 从 storage 恢复任务状态
+    await this.restoreTaskStates();
 
-    // 为每个启用的任务创建 alarm
-    for (const [taskId, task] of this.tasks) {
-      if (task.enabled) {
-        await this.createTaskAlarm(task);
-      }
-    }
+    // 检查是否是首次启动（没有保存的状态）
+    const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
+    const isFirstRun = !taskSchedulerStates;
 
-    // 设置 alarm 监听器
+    // 确保所有启用的任务都有对应的 alarm
+    // Chrome 官方推荐：不依赖 alarms 持久化，而是基于 Storage 状态重建
+    await this.ensureAlarmsCreated();
+
+    // 设置 alarm 监听器（每次都需要重新设置，因为监听器不会持久化）
     this.setupAlarmListeners();
 
-    // 执行首次运行
-    this.performInitialRun();
+    // 只在首次安装时执行首次运行
+    if (isFirstRun) {
+      console.log('🎯 首次安装，将执行首次任务运行');
+      this.performInitialRun();
+    } else {
+      console.log('🔄 恢复已有配置，跳过首次运行');
+    }
 
     this.isInitialized = true;
+    
+    // 保存初始化状态
+    await this.saveTaskStates();
+    
     console.log('✅ 任务调度器启动完成');
   }
 
@@ -150,11 +160,77 @@ export class TaskScheduler {
   public async stopAllTasks(): Promise<void> {
     console.log('🛑 停止任务调度器...');
     
-    await this.clearAllAlarms();
+    // 只清除我们创建的 alarms，不影响其他扩展功能的 alarms
+    const existingAlarms = await this.getExistingAlarms();
+    for (const alarm of existingAlarms) {
+      await new Promise(resolve => chrome.alarms.clear(alarm.name, resolve));
+    }
+    console.log(`🧹 已清除 ${existingAlarms.length} 个任务定时器`);
+    
     this.alarmListeners.clear();
     this.isInitialized = false;
     
+    // 禁用所有任务
+    for (const [taskId, task] of Array.from(this.tasks.entries())) {
+      task.enabled = false;
+    }
+    
+    // 保存停止状态
+    await this.saveTaskStates();
+    
     console.log('✅ 任务调度器已停止');
+  }
+
+  /**
+   * 从 Chrome Storage 恢复任务状态
+   */
+  private async restoreTaskStates(): Promise<void> {
+    try {
+      const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
+      
+      if (taskSchedulerStates) {
+        console.log('🔄 恢复任务状态:', taskSchedulerStates);
+        
+        // 恢复每个任务的状态
+        for (const [taskId, savedState] of Object.entries(taskSchedulerStates)) {
+          const task = this.tasks.get(taskId);
+          if (task && savedState) {
+            const state = savedState as Partial<ScheduledTask>;
+            task.enabled = state.enabled ?? task.enabled;
+            task.lastRun = state.lastRun;
+            task.nextRun = state.nextRun;
+          }
+        }
+        
+        console.log('✅ 任务状态恢复完成');
+      } else {
+        console.log('📝 未找到已保存的任务状态，使用默认配置');
+      }
+    } catch (error) {
+      console.error('❌ 恢复任务状态失败:', error);
+    }
+  }
+
+  /**
+   * 保存任务状态到 Chrome Storage
+   */
+  private async saveTaskStates(): Promise<void> {
+    try {
+      const taskStates: Record<string, Partial<ScheduledTask>> = {};
+      
+      for (const [taskId, task] of Array.from(this.tasks.entries())) {
+        taskStates[taskId] = {
+          enabled: task.enabled,
+          lastRun: task.lastRun,
+          nextRun: task.nextRun
+        };
+      }
+      
+      await chrome.storage.local.set({ taskSchedulerStates: taskStates });
+      console.log('💾 任务状态已保存');
+    } catch (error) {
+      console.error('❌ 保存任务状态失败:', error);
+    }
   }
 
   /**
@@ -170,6 +246,82 @@ export class TaskScheduler {
       
       console.log(`⏰ 创建定时任务: ${task.name} (${task.intervalMinutes}分钟间隔)`);
       resolve();
+    });
+  }
+
+  /**
+   * 确保所有启用的任务都有对应的 alarm
+   * 采用 Chrome 官方推荐的方式：基于 Storage 状态检查并创建 alarms
+   */
+  private async ensureAlarmsCreated(): Promise<void> {
+    console.log('🔍 检查并确保所有任务的定时器已创建...');
+    
+    for (const [taskId, task] of Array.from(this.tasks.entries())) {
+      const alarmName = `scheduled_task_${taskId}`;
+      
+      if (task.enabled) {
+        // 检查 alarm 是否存在
+        const existingAlarm = await this.getAlarm(alarmName);
+        
+        if (!existingAlarm) {
+          // alarm 不存在，创建新的
+          await this.createTaskAlarm(task);
+        } else if (existingAlarm.periodInMinutes !== task.intervalMinutes) {
+          // alarm 存在但配置不一致，重新创建
+          console.log(`🔄 更新定时器配置: ${task.name} (${existingAlarm.periodInMinutes}min -> ${task.intervalMinutes}min)`);
+          await this.clearAlarm(alarmName);
+          await this.createTaskAlarm(task);
+        } else {
+          // alarm 存在且配置正确
+          console.log(`✅ 定时器已存在: ${task.name}`);
+        }
+      } else {
+        // 任务已禁用，确保 alarm 被清除
+        const existingAlarm = await this.getAlarm(alarmName);
+        if (existingAlarm) {
+          console.log(`🗑️ 清除已禁用任务的定时器: ${task.name}`);
+          await this.clearAlarm(alarmName);
+        }
+      }
+    }
+    
+    console.log('✅ 定时器检查完成');
+  }
+
+  /**
+   * 获取单个 alarm
+   */
+  private async getAlarm(name: string): Promise<chrome.alarms.Alarm | undefined> {
+    return new Promise((resolve) => {
+      chrome.alarms.get(name, (alarm) => {
+        resolve(alarm);
+      });
+    });
+  }
+
+  /**
+   * 清除单个 alarm
+   */
+  private async clearAlarm(name: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      chrome.alarms.clear(name, (wasCleared) => {
+        resolve(wasCleared);
+      });
+    });
+  }
+
+  /**
+   * 获取所有现有的任务相关 alarms（用于调试和监控）
+   */
+  private async getExistingAlarms(): Promise<chrome.alarms.Alarm[]> {
+    return new Promise((resolve) => {
+      chrome.alarms.getAll((alarms) => {
+        // 只返回我们的任务调度器创建的 alarms
+        const taskAlarms = alarms.filter(alarm => 
+          alarm.name.startsWith('scheduled_task_')
+        );
+        resolve(taskAlarms);
+      });
     });
   }
 
@@ -215,7 +367,7 @@ export class TaskScheduler {
     setTimeout(async () => {
       console.log('🎯 执行首次定时任务运行...');
       
-      for (const [taskId, task] of this.tasks) {
+      for (const [taskId, task] of Array.from(this.tasks.entries())) {
         if (task.enabled) {
           try {
             await this.executeTask(task);
@@ -277,12 +429,7 @@ export class TaskScheduler {
       // 获取配置
       const config = await getEnvConfig();
       
-      // 检查是否启用了定时分析
-      const { scheduleActive } = await chrome.storage.local.get(['scheduleActive']);
-      if (!scheduleActive) {
-        console.log('📝 定时消息分析已禁用，跳过执行');
-        return;
-      }
+      // 该任务已经通过 enabled 状态控制，无需额外检查
 
       // 查找或创建 RingCentral 标签页
       let rcTab = await findRingCentralTab();
@@ -585,10 +732,14 @@ export class TaskScheduler {
     task.enabled = enabled;
     if (enabled) {
       await this.createTaskAlarm(task);
+      this.runTaskManually(taskId);
     } else {
       const alarmName = `scheduled_task_${taskId}`;
       chrome.alarms.clear(alarmName);
     }
+
+    // 保存任务状态变更
+    await this.saveTaskStates();
 
     console.log(`${enabled ? '✅' : '❌'} 任务 ${task.name} ${enabled ? '已启用' : '已禁用'}`);
     return true;
@@ -612,3 +763,46 @@ export class TaskScheduler {
 
 // 导出单例实例
 export const taskScheduler = TaskScheduler.getInstance();
+
+/**
+ * 辅助函数: 获取指定任务的启用状态
+ * 用于替代旧的 scheduleActive 存储
+ */
+export async function getTaskEnabled(taskId: string): Promise<boolean> {
+  try {
+    const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
+    if (taskSchedulerStates && taskSchedulerStates[taskId]) {
+      return taskSchedulerStates[taskId].enabled ?? false;
+    }
+    // 如果没有保存的状态,返回默认值(根据任务定义)
+    const defaultTask = TASK_DEFINITIONS.find(t => t.id === taskId);
+    return defaultTask?.enabled ?? false;
+  } catch (error) {
+    console.error(`获取任务 ${taskId} 状态失败:`, error);
+    return false;
+  }
+}
+
+/**
+ * 辅助函数: 监听指定任务的启用状态变化
+ */
+export function onTaskEnabledChanged(
+  taskId: string, 
+  callback: (enabled: boolean) => void
+): () => void {
+  const listener = (changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => {
+    if (namespace === 'local' && changes.taskSchedulerStates) {
+      const newStates = changes.taskSchedulerStates.newValue;
+      if (newStates && newStates[taskId]) {
+        callback(newStates[taskId].enabled ?? false);
+      }
+    }
+  };
+  
+  chrome.storage.onChanged.addListener(listener);
+  
+  // 返回清理函数
+  return () => {
+    chrome.storage.onChanged.removeListener(listener);
+  };
+}
