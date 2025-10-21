@@ -1,8 +1,113 @@
 import OpenAI from 'openai';
 import Groq from 'groq-sdk';
-import { naturalLanguageQuery, getAllKnownPeople, fuzzyMatchPerson, getAllKnownProjects, getAllKnownTopics, fuzzyMatchEntityName } from './vectorStore';
 import { getEnvConfig } from './utils';
 import { extractEntitiesForQuery } from './services/entityExtraction';
+import { memorySystem } from './memory';
+
+// ==================== 辅助函数：模糊匹配（从 vectorStore.ts 迁移）====================
+
+/**
+ * 模糊匹配人名
+ * @param partialName 部分人名
+ * @param knownPeople 已知人名列表
+ * @returns 匹配的完整人名，如果没有匹配返回 null
+ */
+function fuzzyMatchPerson(partialName: string, knownPeople: string[]): string | null {
+  if (!partialName || !knownPeople || knownPeople.length === 0) {
+    return null;
+  }
+  
+  // 转换为小写进行比较
+  const lowerPartialName = partialName.toLowerCase();
+  
+  // 1. 精确匹配（忽略大小写）
+  const exactMatch = knownPeople.find(person => 
+    person.toLowerCase() === lowerPartialName
+  );
+  if (exactMatch) return exactMatch;
+  
+  // 2. 开头匹配（例如 "Nelson" 匹配 "Nelson Wu"）
+  const startsWithMatch = knownPeople.find(person => 
+    person.toLowerCase().startsWith(lowerPartialName)
+  );
+  if (startsWithMatch) return startsWithMatch;
+  
+  // 3. 包含匹配（例如 "Wu" 匹配 "Nelson Wu"）
+  const containsMatch = knownPeople.find(person => 
+    person.toLowerCase().includes(lowerPartialName)
+  );
+  if (containsMatch) return containsMatch;
+  
+  // 4. 分词匹配（例如 "nelson" 匹配 "Nelson Wu"）
+  const wordMatch = knownPeople.find(person => {
+    const words = person.toLowerCase().split(/\s+/);
+    return words.some(word => word === lowerPartialName);
+  });
+  if (wordMatch) return wordMatch;
+  
+  // 5. 首字母匹配（例如 "NW" 匹配 "Nelson Wu"）
+  if (lowerPartialName.length >= 2) {
+    const initialsMatch = knownPeople.find(person => {
+      const initials = person.split(/\s+/).map(word => word[0]?.toLowerCase()).join('');
+      return initials === lowerPartialName;
+    });
+    if (initialsMatch) return initialsMatch;
+  }
+  
+  // 没有找到匹配
+  return null;
+}
+
+/**
+ * 模糊匹配实体名称（项目或主题）
+ * @param partialName 部分实体名称
+ * @param knownNames 已知实体名称列表
+ * @returns 匹配的实体名称数组
+ */
+function fuzzyMatchEntityName(partialName: string, knownNames: string[]): string[] {
+  if (!partialName || !knownNames || knownNames.length === 0) {
+    return [];
+  }
+  
+  // 转换为小写进行比较
+  const lowerPartialName = partialName.toLowerCase();
+  const matches: string[] = [];
+  
+  // 1. 精确匹配（忽略大小写）
+  const exactMatches = knownNames.filter(name => 
+    name.toLowerCase() === lowerPartialName
+  );
+  matches.push(...exactMatches);
+  
+  // 如果找到精确匹配，直接返回
+  if (matches.length > 0) return matches;
+  
+  // 2. 开头匹配（例如 "AI note" 匹配 "AI note 相关的规划进度"）
+  const startsWithMatches = knownNames.filter(name => 
+    name.toLowerCase().startsWith(lowerPartialName)
+  );
+  matches.push(...startsWithMatches);
+  
+  // 3. 包含匹配（例如 "note" 匹配 "AI note 相关的规划进度"）
+  const containsMatches = knownNames.filter(name => 
+    name.toLowerCase().includes(lowerPartialName) && 
+    !matches.includes(name)  // 避免重复
+  );
+  matches.push(...containsMatches);
+  
+  // 4. 词语匹配（例如 "AI" 和 "note" 都匹配 "AI note 相关的规划进度"）
+  const words = lowerPartialName.split(/\s+/);
+  if (words.length > 1) {
+    const wordMatches = knownNames.filter(name => {
+      const nameWords = name.toLowerCase().split(/\s+/);
+      return words.every(word => nameWords.some(nameWord => nameWord.includes(word))) &&
+        !matches.includes(name);  // 避免重复
+    });
+    matches.push(...wordMatches);
+  }
+  
+  return matches;
+}
 
 // 根据不同 LLM 服务处理 LLM 请求，并提取 JSON 数据
 export async function handleLLMRequest(body: any): Promise<string> {
@@ -164,8 +269,49 @@ function extractJsonFromResponse(response: string): any[] {
     return jsonData;
 }
 
-// 用通用查询函数替代原来的项目进展查询函数
+/**
+ * 知识查询 - 兼容层
+ * 
+ * 🔄 重构说明：此函数现在是一个兼容层，实际查询逻辑已移至 memorySystem.knowledgeQuery
+ * 新的架构中，memorySystem 作为统一的记忆查询路由，负责：
+ * 1. 智能决策：选择本地缓存还是云端查询
+ * 2. 查询策略：实体搜索 + 消息搜索 + 关系扩展
+ * 3. 结果融合：优先使用实体信息，消息作为补充
+ * 4. LLM 生成：基于融合后的上下文生成答案
+ * 
+ * @param question 用户的自然语言问题
+ * @returns 查询结果
+ */
 export async function knowledgeQuery(question: string) {
+  console.log('🔄 knowledgeQuery [兼容层] ->', question);
+  try {
+    // 🆕 直接调用 memorySystem 的智能查询接口
+    const { memorySystem } = await import('./memory');
+    return await memorySystem.knowledgeQuery(question);
+  } catch (error) {
+    console.error('💥 知识查询失败:', error);
+    return {
+      success: false,
+      message: '查询时发生错误，请稍后再试。'
+    };
+  }
+}
+
+/**
+ * @deprecated 旧的 knowledgeQuery 实现，已废弃
+ * 新实现在 memorySystem.knowledgeQuery
+ * 
+ * 🔄 重构说明：
+ * - 此函数的逻辑已完整移植到 memorySystem.knowledgeQuery
+ * - 新实现增强了实体直接检索和关系扩展查询
+ * - 不再需要直接访问 cloudStorage，所有查询通过 memorySystem 路由
+ * 
+ * 此函数已不再使用，保留仅供参考
+ */
+export async function knowledgeQueryOld_DEPRECATED(question: string) {
+  throw new Error('此函数已废弃，请使用 memorySystem.knowledgeQuery 代替');
+  
+  /* 旧实现已注释，请参考 memorySystem.knowledgeQuery
   console.log('knowledgeQuery', question, new Date().getTime());
   try {
     // 1. 从问题中识别查询意图和关键实体
@@ -258,8 +404,9 @@ export async function knowledgeQuery(question: string) {
     // 1.5 获取所有已知人名、项目和主题进行模糊匹配
     // 1.5.1 人名模糊匹配
     if (queryIntent?.query?.filters?.entities?.people?.length > 0) {
-      // 获取所有已知人名
-      const knownPeople = await getAllKnownPeople();
+      // 🔄 使用新的 memorySystem API 获取所有已知人名
+      await memorySystem.initialize();
+      const knownPeople = await memorySystem.cloudStorage.getAllKnownPeople();
       console.log('已知人名列表:', knownPeople);
       
       // 对每个识别出的人名进行模糊匹配
@@ -285,9 +432,10 @@ export async function knowledgeQuery(question: string) {
     }
     
     // 1.5.2 项目和主题的模糊匹配
-    // 获取所有已知项目和主题
-    const knownProjects = await getAllKnownProjects();
-    const knownTopics = await getAllKnownTopics();
+    // 🔄 使用新的 memorySystem API 获取所有已知项目和主题
+    await memorySystem.initialize();
+    const knownProjects = await memorySystem.cloudStorage.getAllKnownProjects();
+    const knownTopics = await memorySystem.cloudStorage.getAllKnownTopics();
     console.log('已知项目列表:', knownProjects);
     console.log('已知主题列表:', knownTopics);
     
@@ -457,10 +605,50 @@ export async function knowledgeQuery(question: string) {
       }
     };
     
-    // 4. 查询向量数据库
+    // 4. 🔄 使用新的 memorySystem API 查询消息
     let queryResults;
     try {
-      queryResults = await naturalLanguageQuery(question, filters, output);
+      await memorySystem.initialize();
+      
+      // 转换时间范围格式
+      const timeRange = filters.time_range && filters.time_range.start && filters.time_range.end
+        ? { start: filters.time_range.start, end: filters.time_range.end }
+        : undefined;
+      
+      // 使用 getSimilarMessages 替代 naturalLanguageQuery
+      const messages = await memorySystem.cloudStorage.getSimilarMessages(question, {
+        limit: output.limit || 20,
+        minRelevanceScore: 0.3,
+        timeRange,
+        sortBy: output.sort?.field === 'timestamp' ? 'time' : 'relevance',
+        sortOrder: output.sort?.order || 'desc',
+        filters: {
+          source: filters.source,
+          teamName: filters.teamName,
+          entities: filters.entities,
+          metadata: filters.metadata
+        }
+      });
+      
+      // 转换为兼容的格式
+      queryResults = {
+        question: question,
+        results: {
+          ids: messages.map(m => m.id),
+          documents: messages.map(m => m.content),
+          metadatas: messages.map(m => ({
+            sender: m.sender,
+            source: m.sender,
+            groupName: m.groupName,
+            groupUrl: m.groupUrl,
+            datetime: m.datetime,
+            summary: m.summary,
+            matchedRules: m.matchedRules,
+            contextMessages: m.contextMessages
+          })),
+          distances: messages.map(m => 1 - (m.relevanceScore || 0))
+        }
+      };
       console.log('queryResults', queryResults, new Date().getTime());
     } catch (error) {
       console.error('向量数据库查询失败:', error);
@@ -653,6 +841,7 @@ export async function knowledgeQuery(question: string) {
       message: '查询时发生错误,请稍后再试。'
     };
   }
+  */
 }
 
 // 实现 callLLMJsonAPI 函数

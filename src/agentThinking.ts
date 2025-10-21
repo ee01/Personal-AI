@@ -4,7 +4,7 @@
  */
 
 import { callLLMJsonAPI } from './llm';
-import { naturalLanguageQuery } from './vectorStore';
+import { memorySystem } from './memory';
 import { getEnvConfig } from './utils';
 import { 
   AnalysisConfig, 
@@ -446,20 +446,30 @@ export class IntelligentAgent {
           filters.timeRange = params.timeRange;
         }
         
-        const result = await naturalLanguageQuery(query, filters, {
+        // 🔄 使用新的 memorySystem API
+        await memorySystem.initialize();
+        
+        const timeRange = filters.timeRange && filters.timeRange.start && filters.timeRange.end
+          ? { start: filters.timeRange.start, end: filters.timeRange.end }
+          : undefined;
+        
+        const messages = await memorySystem.cloudStorage.getSimilarMessages(query, {
           limit: params.limit || 5,
-          sort: {
-            field: 'timestamp',
-            order: 'desc'
+          minRelevanceScore: 0.3,
+          timeRange,
+          sortBy: 'time',
+          sortOrder: 'desc',
+          filters: {
+            entities: filters.entities
           }
         });
 
-        console.log('历史消息搜索结果:', result);
+        console.log('历史消息搜索结果:', messages);
         return {
-          message: `「${params.content.substring(0, 100)}...」相关历史消息：\n  - ${result.results.documents.map((doc: string, index: number ) => `${result.results.metadatas[index].summary}——${result.results.metadatas[index].source}`).join('\n  - ')}`,
-          result: result.results.documents.map((doc: string, index: number ) => ({
-            summary: result.results.metadatas[index].summary,
-            sender: result.results.metadatas[index].source,
+          message: `「${params.content.substring(0, 100)}...」相关历史消息：\n  - ${messages.map(m => `${m.summary}——${m.sender}`).join('\n  - ')}`,
+          result: messages.map(m => ({
+            summary: m.summary,
+            sender: m.sender,
           }))
         };
       }

@@ -138,7 +138,7 @@ interface PerformanceMetrics {
  * 统一记忆系统管理器 - 现在直接充当策略层
  */
 export class MemorySystem {
-  private cloudStorage: CloudStorage;
+  public cloudStorage: CloudStorage;  // 🔓 改为 public，供 llm.ts 等模块访问
   private localStorage: LocalStorage;
   private entitySimilarityTool: EntitySimilarityTool;
   private systemMaintenanceTool: SystemMaintenanceTool;
@@ -621,6 +621,599 @@ export class MemorySystem {
     });
     
     return result.data || [];
+  }
+
+  // ==================== 🆕 高级查询接口 ====================
+
+  /**
+   * 🆕 通过关系查找相关实体
+   * 例如：查找所有与 "alex" 相关的 Topic
+   * 
+   * @param targetName 目标实体名称，例如: "alex", "厦门"
+   * @param targetType 目标实体类型
+   * @param relatedType 要查找的相关实体类型
+   * @param options 查询选项
+   * @returns 相关实体列表，按相关度排序
+   */
+  async findRelatedEntitiesByName(
+    targetName: string,
+    targetType: 'Person' | 'Project' | 'Topic' | 'Organization',
+    relatedType: 'Topic' | 'Project' | 'Person',
+    options: {
+      minRelevanceScore?: number;
+      timeRange?: {start: number, end: number};
+      limit?: number;
+    } = {}
+  ): Promise<MemoryEntity[]> {
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
+    
+    const { minRelevanceScore = 0.5, timeRange, limit = 20 } = options;
+    
+    console.log(`🔗 查找与 "${targetName}" (${targetType}) 相关的所有 ${relatedType}`);
+    
+    try {
+      // Step 1: 获取所有目标类型的实体（使用分批查询避免内存问题）
+      const batchSize = 50;
+      let offset = 0;
+      const relatedEntities: MemoryEntity[] = [];
+      let hasMore = true;
+      
+      while (hasMore && relatedEntities.length < limit * 2) { // 查询足够多以应对过滤
+        const batch = await this.cloudStorage.queryEntities(relatedType, undefined, {
+          limit: batchSize,
+          offset: offset
+        });
+        
+        if (batch.data.length === 0) {
+          hasMore = false;
+          break;
+        }
+        
+        // Step 2: 过滤出包含目标实体的实体
+        for (const entity of batch.data) {
+          let isRelated = false;
+          let relationScore = 0;
+          
+          // 检查 relatedData 中是否包含目标实体
+          if (targetType === 'Person' && entity.relatedData?.people) {
+            const match = entity.relatedData.people.find(
+              p => p.name.toLowerCase().includes(targetName.toLowerCase())
+            );
+            if (match) {
+              isRelated = true;
+              relationScore = match.relevanceScore || 0.5;
+            }
+          } else if (targetType === 'Project' && entity.relatedData?.projects) {
+            const match = entity.relatedData.projects.find(
+              p => p.name.toLowerCase().includes(targetName.toLowerCase())
+            );
+            if (match) {
+              isRelated = true;
+              relationScore = match.relevanceScore || 0.5;
+            }
+          } else if (targetType === 'Topic' && entity.relatedData?.topics) {
+            const match = entity.relatedData.topics.find(
+              t => t.name.toLowerCase().includes(targetName.toLowerCase())
+            );
+            if (match) {
+              isRelated = true;
+              relationScore = match.relevanceScore || 0.5;
+            }
+          }
+          
+          // 检查共现实体
+          if (!isRelated && entity.relatedData?.cooccurringEntities) {
+            const match = entity.relatedData.cooccurringEntities.find(
+              e => e.name.toLowerCase().includes(targetName.toLowerCase())
+            );
+            if (match) {
+              isRelated = true;
+              relationScore = match.relevanceScore || 0.3;
+            }
+          }
+          
+          // 如果相关且满足条件，加入结果
+          if (isRelated && relationScore >= minRelevanceScore) {
+            // 时间过滤
+            if (timeRange) {
+              const entityTime = entity.updated || entity.created;
+              if (entityTime < timeRange.start || entityTime > timeRange.end) {
+                continue;
+              }
+            }
+            
+            // 添加关系分数
+            entity.relevanceScore = relationScore;
+            relatedEntities.push(entity);
+          }
+        }
+        
+        offset += batchSize;
+      }
+      
+      // Step 3: 按相关度排序
+      relatedEntities.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+      
+      // Step 4: 限制结果数量
+      const results = limit ? relatedEntities.slice(0, limit) : relatedEntities;
+      
+      console.log(`✅ 找到 ${results.length} 个相关 ${relatedType}`);
+      
+      return results;
+    } catch (error) {
+      console.error(`🚨 关系查询失败:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * 🆕 知识查询 - 智能路由的高级查询接口
+   * 
+   * 这个方法是记忆系统的智能查询入口，它会：
+   * 1. 使用 LLM 分析用户问题，提取查询意图和实体
+   * 2. 执行实体模糊匹配，找到数据库中的准确实体
+   * 3. 并行搜索：实体 + 消息 + 关系扩展
+   * 4. 智能融合结果，优先使用实体信息
+   * 5. 使用 LLM 生成最终答案
+   * 
+   * @param question 用户的自然语言问题
+   * @returns 查询结果，包含分析答案和相关上下文
+   */
+  async knowledgeQuery(question: string): Promise<{
+    success: boolean;
+    analysis?: string;
+    relatedMessages?: number;
+    queryIntent?: any;
+    results?: any[];
+    message?: string;
+  }> {
+    const success = await this.initialize();
+    if (!success) {
+      throw new Error('记忆系统初始化失败');
+    }
+
+    console.log('🔍 MemorySystem.knowledgeQuery:', question, Date.now());
+    
+    try {
+      // 导入必要的函数
+      const { extractEntitiesForQuery } = await import('./services/entityExtraction');
+      const { handleLLMRequest } = await import('./llm');
+      
+      // Step 1: 使用 LLM 分析查询意图
+      const queryIntent = await extractEntitiesForQuery(question);
+      console.log('📊 查询意图:', queryIntent, Date.now());
+      
+      // Step 2: 时间范围处理（与原来的 knowledgeQuery 逻辑相同）
+      this.processTimeRange(queryIntent);
+      
+      // Step 3: 实体模糊匹配
+      await this.fuzzyMatchEntities(queryIntent);
+      
+      console.log('✅ 最终查询意图:', queryIntent);
+      
+      // Step 4: 🆕 并行搜索：实体 + 消息
+      let entityResults: MemoryEntity[] = [];
+      let messageResults: any = null;
+      
+      const hasEntities = queryIntent?.query?.filters?.entities && (
+        queryIntent.query.filters.entities.people?.length > 0 ||
+        queryIntent.query.filters.entities.projects?.length > 0 ||
+        queryIntent.query.filters.entities.topics?.length > 0
+      );
+      
+      if (hasEntities) {
+        console.log('🔍 尝试直接搜索 Topic 实体...');
+        
+        // 🆕 方式A: 向量搜索 Topic 实体
+        const topicSearchResult = await this.searchByVector(
+          question,
+          'Topic',
+          {
+            collections: ['entities'],
+            limit: 5,
+            minRelevanceScore: 0.6,
+            returnType: 'entities'
+          }
+        );
+        
+        // 🆕 方式B: 关系扩展查询
+        const relationResults: MemoryEntity[] = [];
+        
+        // 如果查询中包含人物，通过关系查找相关Topic
+        if (queryIntent.query.filters.entities.people?.length > 0) {
+          const personName = queryIntent.query.filters.entities.people[0].name;
+          console.log(`🔗 通过关系查找 ${personName} 相关的 Topic...`);
+          
+          const timeRange = queryIntent.query.filters.time_range && 
+                          queryIntent.query.filters.time_range.start && 
+                          queryIntent.query.filters.time_range.end
+            ? {
+                start: queryIntent.query.filters.time_range.start,
+                end: queryIntent.query.filters.time_range.end
+              }
+            : undefined;
+          
+          const relatedTopics = await this.findRelatedEntitiesByName(
+            personName,
+            'Person',
+            'Topic',
+            {
+              timeRange,
+              minRelevanceScore: 0.5,
+              limit: 5
+            }
+          );
+          
+          console.log(`  找到 ${relatedTopics.length} 个通过关系找到的Topic`);
+          relationResults.push(...relatedTopics);
+        }
+        
+        // 🆕 合并向量搜索和关系查询的结果
+        const allTopics = [...topicSearchResult.data];
+        
+        // 去重合并（基于ID）
+        const topicIds = new Set(allTopics.map(t => t.id));
+        for (const topic of relationResults) {
+          if (!topicIds.has(topic.id)) {
+            allTopics.push(topic);
+            topicIds.add(topic.id);
+          }
+        }
+        
+        // 按相关度重新排序
+        allTopics.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+        
+        entityResults = allTopics.slice(0, 5); // 取前5个
+        console.log(`✅ 最终找到 ${entityResults.length} 个Topic实体`);
+      }
+      
+      // Step 5: 搜索相关消息
+      const filters: any = {};
+      if (queryIntent?.query?.filters) {
+        if (queryIntent.query.filters.entities) {
+          filters.entities = queryIntent.query.filters.entities;
+        }
+        if (queryIntent.query.filters.time_range) {
+          filters.time_range = queryIntent.query.filters.time_range;
+        }
+      }
+      
+      const output = queryIntent?.query?.output || {
+        format: "list",
+        limit: 20,
+        sort: { field: "timestamp", order: "desc" as const }
+      };
+      
+      try {
+        const timeRange = filters.time_range && filters.time_range.start && filters.time_range.end
+          ? { start: filters.time_range.start, end: filters.time_range.end }
+          : undefined;
+        
+        const messages = await this.cloudStorage.getSimilarMessages(question, {
+          limit: output.limit || 20,
+          minRelevanceScore: 0.3,
+          timeRange,
+          sortBy: output.sort?.field === 'timestamp' ? 'time' : 'relevance',
+          sortOrder: output.sort?.order || 'desc',
+          filters: {
+            entities: filters.entities
+          }
+        });
+        
+        messageResults = {
+          question: question,
+          results: {
+            ids: messages.map(m => m.id),
+            documents: messages.map(m => m.content),
+            metadatas: messages.map(m => ({
+              sender: m.sender,
+              source: m.sender,
+              groupName: m.groupName,
+              groupUrl: m.groupUrl,
+              datetime: m.datetime,
+              summary: m.summary,
+              matchedRules: m.matchedRules,
+              contextMessages: m.contextMessages
+            })),
+            distances: messages.map(m => 1 - (m.relevanceScore || 0))
+          }
+        };
+      } catch (error) {
+        console.error('💥 消息查询失败:', error);
+        messageResults = {
+          question: question,
+          results: { ids: [], documents: [], metadatas: [], distances: [] }
+        };
+      }
+      
+      // Step 6: 🆕 智能融合结果
+      const contextSources = await this.buildContextFromResults(entityResults, messageResults);
+      
+      if (contextSources.length === 0) {
+        return {
+          success: false,
+          message: `没有找到关于"${question}"的相关信息。`
+        };
+      }
+      
+      // Step 7: 构建 LLM prompt 并生成答案
+      const prompt = this.buildLLMPrompt(question, contextSources, queryIntent);
+      const llmResponse = await handleLLMRequest({ prompt });
+      
+      // Step 8: 返回结果
+      return {
+        success: true,
+        analysis: llmResponse,
+        relatedMessages: messageResults?.results?.documents?.length || 0,
+        queryIntent: queryIntent,
+        results: this.formatResults(messageResults?.results)
+      };
+      
+    } catch (error) {
+      console.error('💥 知识查询失败:', error);
+      return {
+        success: false,
+        message: '查询时发生错误，请稍后再试。'
+      };
+    }
+  }
+
+  // ==================== 私有辅助方法 ====================
+
+  /**
+   * 处理时间范围
+   */
+  private processTimeRange(queryIntent: any): void {
+    if (!queryIntent?.query?.filters?.time_range) return;
+    
+    const timeRange = queryIntent.query.filters.time_range;
+    
+    // 处理时间疑问词
+    if (timeRange.type === 'specific' && typeof timeRange.start === 'string') {
+      const timeQuestionWords = ["什么时候", "何时", "几点", "哪天", "什么日期", "什么时间", "几号", "什么时段", "几月", "哪一天", "什么季节"];
+      
+      if (timeQuestionWords.some(word => timeRange.start.includes(word))) {
+        console.log(`检测到时间疑问词: "${timeRange.start}"，将time_range.type设为"all"`);
+        timeRange.type = "all";
+        timeRange.start = null;
+        timeRange.end = null;
+        return;
+      }
+    }
+    
+    // 根据时间描述设置具体的时间范围
+    if (timeRange.type === 'range' && timeRange.description) {
+      const now = new Date();
+      const thisYear = now.getFullYear();
+      const thisMonth = now.getMonth();
+      
+      if (/今年|本年|今年度|本年度/.test(timeRange.description)) {
+        const startOfYear = new Date(thisYear, 0, 1).getTime();
+        timeRange.start = startOfYear;
+        timeRange.end = now.getTime();
+      } else if (/这个月|本月|当月/.test(timeRange.description)) {
+        const startOfMonth = new Date(thisYear, thisMonth, 1).getTime();
+        timeRange.start = startOfMonth;
+        timeRange.end = now.getTime();
+      } else if (/过去(\d+)天|最近(\d+)天/.test(timeRange.description)) {
+        const matches = timeRange.description.match(/过去(\d+)天|最近(\d+)天/);
+        if (matches) {
+          const days = parseInt(matches[1] || matches[2]);
+          if (!isNaN(days)) {
+            timeRange.start = now.getTime() - (days * 24 * 60 * 60 * 1000);
+            timeRange.end = now.getTime();
+          }
+        }
+      }
+    }
+    
+    // 如果是recent类型，设置默认为过去7天
+    if (timeRange.type === 'recent') {
+      const now = new Date();
+      timeRange.start = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+      timeRange.end = now.getTime();
+    }
+  }
+
+  /**
+   * 实体模糊匹配
+   */
+  private async fuzzyMatchEntities(queryIntent: any): Promise<void> {
+    const { fuzzyMatchPerson, fuzzyMatchEntityName } = await import('./llm');
+    
+    // 获取所有已知实体
+    const [knownPeople, knownProjects, knownTopics] = await Promise.all([
+      this.cloudStorage.getAllKnownPeople(),
+      this.cloudStorage.getAllKnownProjects(),
+      this.cloudStorage.getAllKnownTopics()
+    ]);
+    
+    console.log('📋 已知实体:', {
+      people: knownPeople.length,
+      projects: knownProjects.length,
+      topics: knownTopics.length
+    });
+    
+    // 人名模糊匹配
+    if (queryIntent?.query?.filters?.entities?.people?.length > 0) {
+      const matchedPeople = [];
+      for (const person of queryIntent.query.filters.entities.people) {
+        const matchedPerson = fuzzyMatchPerson(person.name, knownPeople);
+        if (matchedPerson) {
+          console.log(`人名匹配: "${person.name}" => "${matchedPerson}"`);
+          matchedPeople.push({ ...person, name: matchedPerson });
+        } else {
+          matchedPeople.push(person);
+        }
+      }
+      queryIntent.query.filters.entities.people = matchedPeople;
+    }
+    
+    // 项目和主题模糊匹配
+    if (queryIntent?.query?.filters?.entities?.projects?.length > 0) {
+      const matchedProjects = [];
+      for (const project of queryIntent.query.filters.entities.projects) {
+        const matchedNames = fuzzyMatchEntityName(project.name, knownProjects);
+        if (matchedNames.length > 0) {
+          matchedNames.forEach(name => matchedProjects.push({ ...project, name }));
+        } else {
+          matchedProjects.push(project);
+        }
+      }
+      queryIntent.query.filters.entities.projects = matchedProjects;
+    }
+    
+    if (queryIntent?.query?.filters?.entities?.topics?.length > 0) {
+      const matchedTopics = [];
+      for (const topic of queryIntent.query.filters.entities.topics) {
+        const matchedNames = fuzzyMatchEntityName(topic.name, knownTopics);
+        if (matchedNames.length > 0) {
+          matchedNames.forEach(name => matchedTopics.push({ ...topic, name }));
+        } else {
+          matchedTopics.push(topic);
+        }
+      }
+      queryIntent.query.filters.entities.topics = matchedTopics;
+    }
+  }
+
+  /**
+   * 从实体和消息结果构建上下文
+   */
+  private async buildContextFromResults(
+    entityResults: MemoryEntity[],
+    messageResults: any
+  ): Promise<Array<{type: string, priority: number, content: string, relevanceScore: number}>> {
+    const contextSources: Array<{type: string, priority: number, content: string, relevanceScore: number}> = [];
+    
+    // 🆕 优先使用 Topic 实体信息
+    if (entityResults && entityResults.length > 0) {
+      console.log('🎯 使用 Topic 实体作为主要上下文');
+      
+      for (const entity of entityResults) {
+        let entityContext = `### Topic: ${entity.name}\n`;
+        
+        if (entity.description) {
+          entityContext += `描述: ${entity.description}\n`;
+        }
+        
+        // 🔑 从 relatedData 中提取信息
+        if (entity.relatedData) {
+          if (entity.relatedData.people && entity.relatedData.people.length > 0) {
+            const peopleNames = entity.relatedData.people.map(p => p.name).join(', ');
+            entityContext += `相关人员: ${peopleNames}\n`;
+          }
+          
+          if (entity.relatedData.projects && entity.relatedData.projects.length > 0) {
+            const projectNames = entity.relatedData.projects.map(p => p.name).join(', ');
+            entityContext += `相关项目: ${projectNames}\n`;
+          }
+          
+          // 🔑 最近的对话记录（前3条）
+          if (entity.relatedData.conversations && entity.relatedData.conversations.length > 0) {
+            entityContext += `\n最近讨论:\n`;
+            entity.relatedData.conversations.slice(0, 3).forEach((conv, idx) => {
+              entityContext += `  ${idx + 1}. [${conv.sender}] ${conv.summary}\n`;
+              entityContext += `     时间: ${conv.datetime}\n`;
+            });
+          }
+        }
+        
+        contextSources.push({
+          type: 'topic_entity',
+          priority: 1,
+          content: entityContext,
+          relevanceScore: entity.relevanceScore || 0
+        });
+      }
+    }
+    
+    // 添加消息上下文
+    if (messageResults?.results?.documents && messageResults.results.documents.length > 0) {
+      for (let i = 0; i < messageResults.results.documents.length; i++) {
+        const doc = messageResults.results.documents[i];
+        const metadata = messageResults.results.metadatas[i];
+        const distance = messageResults.results.distances[i] || 0;
+        const relevanceScore = Math.max(0, 1 - distance);
+        
+        contextSources.push({
+          type: 'message',
+          priority: 2,
+          content: `### 消息记录\n${doc}\n时间: ${metadata?.datetime || '未知'}\n发送者: ${metadata?.source || '未知'}`,
+          relevanceScore
+        });
+      }
+    }
+    
+    // 按优先级和相关度排序
+    contextSources.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return b.relevanceScore - a.relevanceScore;
+    });
+    
+    return contextSources;
+  }
+
+  /**
+   * 构建 LLM prompt
+   */
+  private buildLLMPrompt(
+    question: string,
+    contextSources: Array<{type: string, priority: number, content: string, relevanceScore: number}>,
+    queryIntent: any
+  ): string {
+    // 构建上下文（限制总长度）
+    const MAX_CONTEXT_LENGTH = 4000;
+    let messagesContext = '';
+    let currentLength = 0;
+    
+    for (const source of contextSources) {
+      if (currentLength + source.content.length <= MAX_CONTEXT_LENGTH) {
+        messagesContext += source.content + '\n\n---\n\n';
+        currentLength += source.content.length;
+      } else {
+        break;
+      }
+    }
+    
+    console.log(`📊 上下文统计: 共${contextSources.length}个来源，使用了${messagesContext.length}字符`);
+    
+    // 根据查询类型选择模板
+    let promptTemplate = `
+以下是与问题"${question}"相关的信息:
+{{context}}
+
+请基于以上信息提供详细回答。仅使用提供的信息,不要添加额外知识。
+如果信息不足,请明确指出。
+    `;
+    
+    return promptTemplate.replace('{{context}}', messagesContext);
+  }
+
+  /**
+   * 格式化结果
+   */
+  private formatResults(results: any): any[] {
+    if (!results || !results.documents) return [];
+    
+    return results.documents.map((doc: string, idx: number) => {
+      const metadata = results.metadatas[idx] as Record<string, any>;
+      const id = String(results.ids[idx]);
+      const relevance = Math.max(0, 1 - results.distances[idx]);
+      
+      return {
+        id: id,
+        summary: String(metadata.summary) || doc.substring(0, 100) + '...',
+        details: String(metadata.details || doc),
+        timestamp: metadata.datetime || new Date().toISOString(),
+        source: String(metadata.source),
+        relevance: relevance,
+        tags: metadata.tags || []
+      };
+    });
   }
 
   // ==================== 存储接口 ====================

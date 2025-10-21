@@ -694,29 +694,22 @@ export class DashboardDataManager {
     }
   }
 
-  /** 使用向量数据库为项目名提供建议 */
+  /** 🔄 使用向量数据库为项目名提供建议 */
   async suggestProjects(question: string): Promise<{ success: boolean; suggestions: string[]; error?: string }> {
     try {
-      const { naturalLanguageQuery } = await import('../vectorStore');
-      const result: any = await naturalLanguageQuery(question, undefined, { limit: 10 });
-      const metadatas: any[] = result?.results?.metadatas || [];
+      const { memorySystem } = await import('../memory');
+      await memorySystem.initialize();
+      
+      const messages = await memorySystem.cloudStorage.getSimilarMessages(question, {
+        limit: 10,
+        minRelevanceScore: 0.3
+      });
+      
       const names = new Set<string>();
-      for (const m of metadatas) {
-        try {
-          if (m.projects) {
-            const arr = JSON.parse(m.projects as string);
-            arr.forEach((n: string) => n && names.add(String(n)));
-          }
-          if (m.searchTags) {
-            const tags = JSON.parse(m.searchTags as string);
-            tags.forEach((t: string) => {
-              if (typeof t === 'string' && /project|项目|计划|epic/i.test(t)) names.add(t);
-            });
-          }
-        } catch (_) {
-          // 忽略 JSON 解析错误
-        }
-      }
+      // 直接从已知项目列表获取建议
+      const allProjects = await memorySystem.cloudStorage.getAllKnownProjects();
+      allProjects.forEach(p => names.add(p));
+      
       const suggestions = Array.from(names).slice(0, 8);
       return { success: true, suggestions };
     } catch (e: any) {

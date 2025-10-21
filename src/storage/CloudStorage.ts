@@ -913,7 +913,7 @@ export class CloudStorage {
   }
 
   /**
-   * 查找相似消息
+   * 查找相似消息（支持复杂过滤条件，替代 vectorStore.naturalLanguageQuery）
    */
   async getSimilarMessages(
     query: string,
@@ -923,6 +923,23 @@ export class CloudStorage {
       timeRange?: { start: number; end: number };
       sortBy?: 'relevance' | 'time';
       sortOrder?: 'desc' | 'asc';
+      // 🆕 新增：复杂过滤条件（与 naturalLanguageQuery 兼容）
+      filters?: {
+        source?: string;              // 按发送者过滤
+        teamName?: string;            // 按团队名称过滤
+        entities?: {                  // 按实体过滤
+          people?: Array<{ name: string; role?: string; required?: boolean }>;
+          projects?: Array<{ name: string; status?: string; required?: boolean }>;
+          topics?: Array<{ name: string; category?: string; required?: boolean }>;
+          location?: Array<{ name: string; type?: string; required?: boolean }>;
+        };
+        metadata?: {
+          sentiment?: string;         // positive/negative/neutral
+          priority?: string;          // high/medium/low
+          category?: string[];        // 消息类别
+          tags?: string[];           // 标签
+        };
+      };
     } = {}
   ): Promise<any[]> {
     this.ensureInitialized();
@@ -932,10 +949,79 @@ export class CloudStorage {
       minRelevanceScore = 0.3,
       timeRange,
       sortBy = 'relevance',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
+      filters
     } = options;
     
     try {
+      // 构建 where 条件（如果有 filters）
+      let whereCondition: any = undefined;
+      
+      if (filters) {
+        const conditions: any[] = [];
+        
+        // 基础过滤
+        if (filters.source) {
+          conditions.push({ source: filters.source });
+        }
+        if (filters.teamName) {
+          conditions.push({ teamName: filters.teamName });
+        }
+        
+        // 实体过滤
+        if (filters.entities) {
+          if (filters.entities.people?.length) {
+            const peopleNames = filters.entities.people.map(p => p.name);
+            // 检查 source 字段（发送者）或 people 字段
+            conditions.push({
+              $or: [
+                { source: { $in: peopleNames } },
+                ...peopleNames.map(name => ({ people: { $contains: name } }))
+              ]
+            });
+          }
+          
+          if (filters.entities.projects?.length) {
+            const projectNames = filters.entities.projects.map(p => p.name);
+            conditions.push({
+              $or: projectNames.map(name => ({ projects: { $contains: name } }))
+            });
+          }
+          
+          if (filters.entities.topics?.length) {
+            const topicNames = filters.entities.topics.map(t => t.name);
+            conditions.push({
+              $or: topicNames.map(name => ({ topics: { $contains: name } }))
+            });
+          }
+        }
+        
+        // 元数据过滤
+        if (filters.metadata) {
+          if (filters.metadata.sentiment) {
+            conditions.push({ sentiment: filters.metadata.sentiment });
+          }
+          if (filters.metadata.priority) {
+            conditions.push({ priority: filters.metadata.priority });
+          }
+          if (filters.metadata.category?.length) {
+            conditions.push({
+              $or: filters.metadata.category.map(cat => ({ category: { $contains: cat } }))
+            });
+          }
+          if (filters.metadata.tags?.length) {
+            conditions.push({
+              $or: filters.metadata.tags.map(tag => ({ searchTags: { $contains: tag } }))
+            });
+          }
+        }
+        
+        // 合并所有条件
+        if (conditions.length > 0) {
+          whereCondition = conditions.length === 1 ? conditions[0] : { $and: conditions };
+        }
+      }
+      
       // 使用向量搜索获取相关消息
       const searchResults = await this.searchByVector(query, undefined, {
         collections: ['messages'],
@@ -944,7 +1030,8 @@ export class CloudStorage {
         minRelevanceScore,
         timeRange,
         sortBy,
-        sortOrder
+        sortOrder,
+        where: whereCondition
       });
 
       if (searchResults.data.length > 0) {
@@ -987,6 +1074,75 @@ export class CloudStorage {
       }
     } catch (error) {
       console.error(`⚠️ 检查消息相似性时出错: "${query}"`, error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取所有已知人员（从 graph-entities 查询 Person 类型）
+   * 替代 vectorStore.getAllKnownPeople()
+   */
+  async getAllKnownPeople(): Promise<string[]> {
+    this.ensureInitialized();
+    
+    try {
+      const result = await this.queryEntities('Person', undefined, {
+        limit: 1000,  // 获取所有人员
+        sortBy: 'name',
+        sortOrder: 'asc'
+      });
+      
+      const peopleNames = result.data.map(entity => entity.name);
+      console.log(`📋 获取到 ${peopleNames.length} 个已知人员`);
+      return peopleNames;
+    } catch (error) {
+      console.error('获取已知人员失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取所有已知项目（从 graph-entities 查询 Project 类型）
+   * 替代 vectorStore.getAllKnownProjects()
+   */
+  async getAllKnownProjects(): Promise<string[]> {
+    this.ensureInitialized();
+    
+    try {
+      const result = await this.queryEntities('Project', undefined, {
+        limit: 1000,  // 获取所有项目
+        sortBy: 'name',
+        sortOrder: 'asc'
+      });
+      
+      const projectNames = result.data.map(entity => entity.name);
+      console.log(`📋 获取到 ${projectNames.length} 个已知项目`);
+      return projectNames;
+    } catch (error) {
+      console.error('获取已知项目失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取所有已知话题（从 graph-entities 查询 Topic 类型）
+   * 替代 vectorStore.getAllKnownTopics()
+   */
+  async getAllKnownTopics(): Promise<string[]> {
+    this.ensureInitialized();
+    
+    try {
+      const result = await this.queryEntities('Topic', undefined, {
+        limit: 1000,  // 获取所有话题
+        sortBy: 'name',
+        sortOrder: 'asc'
+      });
+      
+      const topicNames = result.data.map(entity => entity.name);
+      console.log(`📋 获取到 ${topicNames.length} 个已知话题`);
+      return topicNames;
+    } catch (error) {
+      console.error('获取已知话题失败:', error);
       return [];
     }
   }
@@ -1967,7 +2123,7 @@ export class CloudStorage {
         metadatas: [metadata]
       });
 
-      console.log(`✅ 用户档案记录 ${record.id} 已存储`);
+      // console.log(`✅ 用户档案记录 ${record.id} 已存储`);
       return true;
     } catch (error) {
       console.error('存储用户档案记录失败:', error);

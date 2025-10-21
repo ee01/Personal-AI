@@ -1,6 +1,5 @@
 import { callLLMJsonAPI } from './llm';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
-import { naturalLanguageQuery, getAllKnownPeople, getAllKnownProjects } from './vectorStore';
 import { memorySystem, StoreResult } from './memory';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -102,22 +101,49 @@ const availableTools: Record<string, AgentTool> = {
         };
       }
       
-      return await naturalLanguageQuery(searchQuery, filters, {
+      // 🔄 使用新的 memorySystem API
+      await memorySystem.initialize();
+      
+      const timeRange = filters.time_range && filters.time_range.start && filters.time_range.end
+        ? { start: filters.time_range.start, end: filters.time_range.end }
+        : undefined;
+      
+      const messages = await memorySystem.cloudStorage.getSimilarMessages(searchQuery, {
         limit: 5,
-        sort: {
-          field: 'timestamp',
-          order: 'desc'
+        minRelevanceScore: 0.3,
+        timeRange,
+        sortBy: 'time',
+        sortOrder: 'desc',
+        filters: {
+          entities: filters.entities
         }
       });
+      
+      // 转换为兼容格式
+      return {
+        question: searchQuery,
+        results: {
+          ids: messages.map(m => m.id),
+          documents: messages.map(m => m.content),
+          metadatas: messages.map(m => ({
+            sender: m.sender,
+            groupName: m.groupName,
+            datetime: m.datetime,
+            summary: m.summary
+          })),
+          distances: messages.map(m => 1 - (m.relevanceScore || 0))
+        }
+      };
     }
   },
   relevanceJudgment: {
     name: '重要性判断工具',
     description: '判断消息的重要性及是否需要存储',
     execute: async (params) => {
-      // 获取相关的人物及项目信息
-      const knownPeople = await getAllKnownPeople();
-      const knownProjects = await getAllKnownProjects();
+      // 🔄 使用新的 memorySystem API 获取相关的人物及项目信息
+      await memorySystem.initialize();
+      const knownPeople = await memorySystem.cloudStorage.getAllKnownPeople();
+      const knownProjects = await memorySystem.cloudStorage.getAllKnownProjects();
       
       // 构建重要性判断提示
       const relevancePrompt = `

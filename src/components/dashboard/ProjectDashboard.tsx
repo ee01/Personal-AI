@@ -148,9 +148,10 @@ const ProjectDashboard: React.FC = () => {
   const handleSuggest = async () => {
     setSuggesting(true);
     try {
-      // 改用 getAllKnownProjects 获取项目建议
-      const { getAllKnownProjects } = await import('../../vectorStore');
-      const allProjects = await getAllKnownProjects();
+      // 🔄 改用新的 memorySystem API 获取项目建议
+      const { memorySystem } = await import('../../memory');
+      await memorySystem.initialize();
+      const allProjects = await memorySystem.cloudStorage.getAllKnownProjects();
       
       // 按项目名称长度倒序排列（可能代表信息量）
       const sortedProjects = allProjects

@@ -1,6 +1,4 @@
 import { analyzeMessagesInBackground } from './messageDealing';
-import { CloudStorage } from './storage/CloudStorage';
-import { knowledgeQuery } from './llm';
 import { createOffscreenDocument, getEmbeddingInBackground, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
@@ -18,54 +16,36 @@ import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWi
 
 console.log('Background script loaded');
 
-
-// 监听扩展命令
-chrome.commands.onCommand.addListener(async (command) => {
-    console.log('Command received:', command);
-    
-    if (command === 'open-memory-interface') {
-        try {
-            // 获取当前活跃的标签页
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            
-            if (activeTab?.id) {
-                // 打开记忆查询界面
-                const memoryUrl = chrome.runtime.getURL('memory.html');
-                
-                // 使用弹窗方式打开记忆界面
-                await chrome.windows.create({
-                    url: memoryUrl,
-                    type: 'popup',
-                    width: 1400,
-                    height: 900,
-                    focused: true
-                });
-                
-                console.log('Memory interface opened via command shortcut');
-            }
-        } catch (error) {
-            console.error('Failed to open memory interface:', error);
-        }
-    }
-});
-
-// 统一的任务调度器启动函数
-async function initializeTaskScheduler() {
+// Background script 加载时检查并初始化任务调度器
+// 
+// 根据 Chrome Extension 官方文档:
+// - chrome.management.onEnabled/onDisabled 只能监听其他扩展，无法监听自身
+// - chrome.runtime.onInstalled 不会在扩展重新启用时触发
+// - chrome.runtime.onStartup 只在浏览器启动时触发
+// 
+// 因此，当扩展被禁用后重新启用时，background script 会重新加载，
+// 但不会触发任何生命周期事件。唯一可靠的方法是在 script 加载时主动检查。
+// 
+// 这会处理以下场景:
+// 1. 扩展被禁用后重新启用 (重新加载 background script)
+// 2. Chrome 浏览器重启 (配合 onStartup 的延迟)
+// 3. 扩展被手动重新加载 (开发者工具中)
+(async () => {
     try {
-        console.log('🚀 启动统一任务调度器...');
-        await taskScheduler.startAllTasks();
-        console.log('✅ 统一任务调度器启动成功');
+        // 延迟初始化，避免与 onInstalled 冲突
+        setTimeout(async () => {
+            await initializeTaskScheduler();
+        }, 5000); // 3秒延迟，确保扩展环境完全就绪
     } catch (error) {
-        console.error('❌ 统一任务调度器启动失败:', error);
+        console.error('❌ Background script 初始化检查失败:', error);
     }
-}
+})();
 
 // 浏览器启动时恢复任务调度器
 chrome.runtime.onStartup.addListener(async () => {
     try {
         setTimeout(async () => {
             console.log('🔄 浏览器启动，恢复任务调度器...');
-            chrome.alarms.getAll().then(console.log)
             await initializeTaskScheduler();
         }, 10000);
     } catch (error) {
@@ -73,10 +53,10 @@ chrome.runtime.onStartup.addListener(async () => {
     }
 });
 
-// 扩展安装或更新时，立即创建定时任务，处理一些 Storage 的初始化
-chrome.runtime.onInstalled.addListener(async () => {
+// 扩展安装、更新或重新启用时，立即创建定时任务，处理一些 Storage 的初始化
+chrome.runtime.onInstalled.addListener(async (details) => {
     try {
-        console.log('Extension installed/updated');
+        console.log('Extension event:', details.reason); // 可能的值: install, update, chrome_update, shared_module_update
         
         // 加载配置
         const config = await getEnvConfig();
@@ -139,6 +119,17 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
 });
 
+// 统一的任务调度器启动函数
+async function initializeTaskScheduler() {
+    try {
+        console.log('🚀 启动统一任务调度器...');
+        await taskScheduler.startAllTasks();
+        console.log('✅ 统一任务调度器启动成功');
+    } catch (error) {
+        console.error('❌ 统一任务调度器启动失败:', error);
+    }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
     if (request.type === 'MESSAGE_DEALING') {
@@ -196,7 +187,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.type === 'KNOWLEDGE_QUERY') {
-        knowledgeQuery(request.question).then(result => {
+        memorySystem.knowledgeQuery(request.question).then(result => {
             console.log('General query result:', result);
             sendResponse(result);
         });
@@ -602,6 +593,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     
     return false;
+});
+
+
+// 监听扩展命令
+chrome.commands.onCommand.addListener(async (command) => {
+    console.log('Command received:', command);
+    
+    if (command === 'open-memory-interface') {
+        try {
+            // 获取当前活跃的标签页
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            
+            if (activeTab?.id) {
+                // 打开记忆查询界面
+                const memoryUrl = chrome.runtime.getURL('memory.html');
+                
+                // 使用弹窗方式打开记忆界面
+                await chrome.windows.create({
+                    url: memoryUrl,
+                    type: 'popup',
+                    width: 1400,
+                    height: 900,
+                    focused: true
+                });
+                
+                console.log('Memory interface opened via command shortcut');
+            }
+        } catch (error) {
+            console.error('Failed to open memory interface:', error);
+        }
+    }
 });
 
 async function getUserinfoFromRCpage() {

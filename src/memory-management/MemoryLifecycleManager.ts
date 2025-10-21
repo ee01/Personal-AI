@@ -3,8 +3,6 @@
  * 负责智能记忆遗忘、记忆巩固和生命周期维护
  */
 
-import { naturalLanguageQuery } from '../vectorStore';
-
 export interface MemoryItem {
   id: string;
   content: string;

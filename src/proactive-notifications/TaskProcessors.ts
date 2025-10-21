@@ -4,7 +4,7 @@
  */
 
 import { NotificationItem } from './NotificationManager';
-import { naturalLanguageQuery } from '../vectorStore';
+import { memorySystem } from '../memory';
 import { IntelligentAgent } from '../agentThinking';
 
 // 基础任务处理器接口
@@ -156,13 +156,29 @@ export class DependencyMonitorProcessor implements TaskProcessor {
 
   private async extractProjectsFromMemory(): Promise<ProjectData[]> {
     try {
-      // 使用向量搜索查找项目相关信息
+      // 🔄 使用向量搜索查找项目相关信息
       const projectQuery = '项目 进度 任务 依赖 团队';
-      const memoryResults = await naturalLanguageQuery(projectQuery, 20);
+      await memorySystem.initialize();
+      const messages = await memorySystem.cloudStorage.getSimilarMessages(projectQuery, {
+        limit: 20,
+        minRelevanceScore: 0.3
+      });
       
-      if (!memoryResults || memoryResults.length === 0) {
+      if (!messages || messages.length === 0) {
         return [];
       }
+      
+      // 转换为兼容格式
+      const memoryResults = messages.map(m => ({
+        id: m.id,
+        content: m.content,
+        metadata: {
+          sender: m.sender,
+          groupName: m.groupName,
+          datetime: m.datetime,
+          summary: m.summary
+        }
+      }));
 
       // 使用智能代理分析记忆内容，提取项目信息
       const analysisResult = await this.agent.analyze({
@@ -228,13 +244,29 @@ export class DependencyMonitorProcessor implements TaskProcessor {
 
   private async extractDependenciesFromMemory(projectId: string): Promise<Dependency[]> {
     try {
-      // 查询项目相关的依赖信息
+      // 🔄 查询项目相关的依赖信息
       const dependencyQuery = `项目 ${projectId} 依赖 设计 后端 外部 团队 阻塞`;
-      const memoryResults = await naturalLanguageQuery(dependencyQuery, 10);
+      await memorySystem.initialize();
+      const messages = await memorySystem.cloudStorage.getSimilarMessages(dependencyQuery, {
+        limit: 10,
+        minRelevanceScore: 0.3
+      });
       
-      if (!memoryResults || memoryResults.length === 0) {
+      if (!messages || messages.length === 0) {
         return [];
       }
+      
+      // 转换为兼容格式
+      const memoryResults = messages.map(m => ({
+        id: m.id,
+        content: m.content,
+        metadata: {
+          sender: m.sender,
+          groupName: m.groupName,
+          datetime: m.datetime,
+          summary: m.summary
+        }
+      }));
 
       // 使用智能代理分析依赖关系
       const analysisResult = await this.agent.analyze({
@@ -744,8 +776,12 @@ export class TeamCollaborationProcessor implements TaskProcessor {
     const issues: CollaborationIssue[] = [];
     
     try {
-      // 查询最近的团队消息
-      const recentMessages = await naturalLanguageQuery('团队 协作 讨论 决策 问题', 30);
+      // 🔄 查询最近的团队消息
+      await memorySystem.initialize();
+      const recentMessages = await memorySystem.cloudStorage.getSimilarMessages('团队 协作 讨论 决策 问题', {
+        limit: 30,
+        minRelevanceScore: 0.3
+      });
       
       if (recentMessages && recentMessages.length > 0) {
         // 使用智能代理分析协作模式
@@ -861,9 +897,13 @@ export class DailySummaryProcessor implements TaskProcessor {
     };
 
     try {
-      // 查询今日相关的活动和更新
+      // 🔄 查询今日相关的活动和更新
       const todayQuery = '今天 完成 任务 进展 更新 截止';
-      const todayResults = await naturalLanguageQuery(todayQuery, 20);
+      await memorySystem.initialize();
+      const todayResults = await memorySystem.cloudStorage.getSimilarMessages(todayQuery, {
+        limit: 20,
+        minRelevanceScore: 0.3
+      });
       
       if (todayResults && todayResults.length > 0) {
         // 使用智能代理生成摘要

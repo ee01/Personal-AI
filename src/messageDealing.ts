@@ -1,7 +1,6 @@
 import { sendBotMessage } from './bot';
 import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
-import { storeMessage } from './vectorStore';
 import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
@@ -59,6 +58,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 	const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
 	if (!messageAnalysisEnabled && isScheduledTask) {
 		console.log('定时分析任务已被终止，跳过处理');
+		chrome.storage.local.remove('ollamaAnalysisProgress');
 		return { 
 			success: false, 
 			message: '定时分析任务已被终止', 
@@ -147,6 +147,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			if (isScheduledTask) {
 				onTaskEnabledChanged('message_analysis', (enabled) => {
 					if (!enabled) agent.stop();
+					chrome.storage.local.remove('ollamaAnalysisProgress');
 				});
 			}
 			const allResults = await agent.analyze(messageGroups, {type: 'message'}, {concernedRules: concernedItems}, results => {
@@ -260,16 +261,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							});
 
 						} catch (unifiedError) {
-							console.error('🚨 统一存储系统失败，回退到原有方式:', unifiedError);
-							
-							// 回退到原有的存储方式
-							await storeMessage(
-								messageId,
-								originalMessage.messageContent || '',
-								messageMetadata
-							);
-							
-							console.log(`📦 消息存储完成 [回退系统]: ${messageId}`);
+							console.error('🚨 统一存储系统失败', unifiedError);
 						}
 						
 					} catch (error) {
@@ -313,6 +305,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
 			if (!messageAnalysisEnabled && isScheduledTask) {
 				console.log('分析任务已被终止');
+				chrome.storage.local.remove('ollamaAnalysisProgress');
 				break;
 			}
 			
@@ -464,6 +457,7 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 			// 检查是否需要继续分析
 			if (!messageAnalysisEnabled && isScheduledTask) {
 				console.log('分析任务已被终止');
+				chrome.storage.local.remove('ollamaAnalysisProgress');
 				break;
 			}
 			const message = `<message_group team_name="${item.groupName}" team_id="${item.groupId}">${item.posts.map((post:any) => `
@@ -616,11 +610,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					});
 
 				} catch (memoryError) {
-					console.error('🚨 统一存储系统失败，回退到原有方式:', memoryError);
-					
-					// 回退到基础存储
-					await storeMessage(messageId, json.message_content, messageMetadata);
-					console.log(`📦 消息存储完成 [回退系统]: ${messageId.slice(0,8)}`);
+					console.error('🚨 统一存储系统失败', memoryError);
 				}
 
 				// 如果审核通过，则推送 Glip 消息
