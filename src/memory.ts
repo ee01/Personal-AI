@@ -9,6 +9,7 @@ import { EntitySimilarityTool, ProcessedEntity, EntityMergePair } from './storag
 import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSystemMaintenanceTool } from './storage/SystemMaintenanceTool';
 import { UserProfileManager } from './services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
+import { extractEntitiesForQuery } from './services/entityExtraction';
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -152,6 +153,16 @@ export class MemorySystem {
   private backgroundSyncStarted = false;
   private isSyncing = false;
   private initializationPromise: Promise<boolean> | null = null; // 添加初始化Promise
+  
+  // 🆕 智能检索配置（ask() 方法专用）
+  private readonly ASK_CONFIG = {
+    MIN_RELEVANCE_SCORE: 0.5,           // 实体相关度阈值（可调整）
+    MAX_CONTEXT_LENGTH: 100000,         // 最大上下文长度（~25K tokens）
+    ENABLE_2HOP_THRESHOLD: 5,           // 当 1-hop 结果少于此值时触发 2-hop
+    MIN_2HOP_RELEVANCE: 0.4,            // 2-hop 实体的最低相关度
+    ENTITY_LIMIT_PER_TYPE: 20,          // 每种类型最多返回实体数
+    CONTEXT_COMPRESSION_RATIO: 0.7,     // 上下文压缩比例
+  }
 
   constructor() {
     this.cloudStorage = new CloudStorage();
@@ -762,6 +773,239 @@ export class MemorySystem {
    * @param question 用户的自然语言问题
    * @returns 查询结果，包含分析答案和相关上下文
    */
+  async ask(question: string): Promise<{
+    success: boolean;
+    answer?: string;
+    entitiesByType?: {
+      topics: MemoryEntity[];
+      people: MemoryEntity[];
+      projects: MemoryEntity[];
+      jiraTickets: MemoryEntity[];
+      organizations: MemoryEntity[];
+      documents: MemoryEntity[];
+      technologies: MemoryEntity[];
+    };
+    metadata?: {
+      totalEntities: number;
+      expandDepth: number;
+      processingTime: number;
+      queryIntent?: any;
+    };
+    message?: string;
+  }> {
+    const startTime = Date.now();
+    
+    const success = await this.initialize();
+    if (!success) {
+      return {
+        success: false,
+        message: '记忆系统初始化失败'
+      };
+    }
+
+    console.log('🌟 MemorySystem.ask:', question, Date.now());
+    
+    try {
+      // Step 1: 使用 LLM 分析查询意图
+      const queryIntent = await extractEntitiesForQuery(question);
+      console.log('📊 查询意图:', queryIntent, Date.now());
+      
+      // Step 2: 时间范围处理和实体模糊匹配
+      this.processTimeRange(queryIntent);
+      await this.fuzzyMatchEntities(queryIntent);
+      console.log('✅ 最终查询意图:', queryIntent);
+      
+      // Step 3: 🆕 混合检索策略 - 向量搜索实体
+      let initialEntities: MemoryEntity[] = [];
+      
+      const hasEntities = queryIntent?.query?.filters?.entities && (
+        queryIntent.query.filters.entities.people?.length > 0 ||
+        queryIntent.query.filters.entities.projects?.length > 0 ||
+        queryIntent.query.filters.entities.topics?.length > 0
+      );
+      
+      if (hasEntities) {
+        console.log('🔍 执行混合检索（向量 + 关系）...');
+        
+        // 方式A: 向量搜索各类实体
+        const searchPromises: Promise<any>[] = [];
+        
+        if (queryIntent.query.filters.entities.topics?.length > 0) {
+          searchPromises.push(
+            this.searchByVector(question, 'Topic', {
+              collections: ['entities'],
+              limit: 10,
+              minRelevanceScore: this.ASK_CONFIG.MIN_RELEVANCE_SCORE,
+              returnType: 'entities'
+            })
+          );
+        }
+        
+        if (queryIntent.query.filters.entities.people?.length > 0) {
+          searchPromises.push(
+            this.searchByVector(question, 'Person', {
+              collections: ['entities'],
+              limit: 5,
+              minRelevanceScore: this.ASK_CONFIG.MIN_RELEVANCE_SCORE,
+              returnType: 'entities'
+            })
+          );
+        }
+        
+        if (queryIntent.query.filters.entities.projects?.length > 0) {
+          searchPromises.push(
+            this.searchByVector(question, 'Project', {
+              collections: ['entities'],
+              limit: 5,
+              minRelevanceScore: this.ASK_CONFIG.MIN_RELEVANCE_SCORE,
+              returnType: 'entities'
+            })
+          );
+        }
+        
+        // 并行执行所有搜索
+        const searchResults = await Promise.all(searchPromises);
+        
+        // 合并所有搜索结果
+        for (const result of searchResults) {
+          initialEntities.push(...result.data);
+        }
+        
+        console.log(`✅ 混合检索完成: 找到 ${initialEntities.length} 个初始实体`);
+      } else {
+        // 如果没有提取到实体，直接进行向量搜索
+        console.log('🔍 执行通用向量搜索...');
+        const result = await this.searchByVector(question, undefined, {
+          collections: ['entities'],
+          limit: 15,
+          minRelevanceScore: this.ASK_CONFIG.MIN_RELEVANCE_SCORE - 0.1,
+          returnType: 'entities'
+        });
+        initialEntities = result.data;
+        console.log(`✅ 通用搜索完成: 找到 ${initialEntities.length} 个实体`);
+      }
+      
+      // Step 4: 🆕 动态多跳扩展
+      console.log('🔄 开始多跳实体扩展...');
+      const entityMap = await this.expandEntitiesMultiHop(initialEntities, queryIntent);
+      const expandDepth = entityMap.size > initialEntities.length + 10 ? 2 : 1;
+      console.log(`✅ 实体扩展完成: ${entityMap.size} 个实体 (${expandDepth}-hop)`);
+      
+      // Step 5: 构建增强上下文
+      const context = await this.buildAskContext(entityMap, queryIntent);
+      console.log(`📄 上下文构建完成: ${context.length} 字符`);
+      
+      // Step 6: LLM 推理 - 返回结构化 JSON
+      const { handleLLMRequest } = await import('./llm');
+      const prompt = this.buildAskPrompt(question, context);
+      const llmResponse = await handleLLMRequest({ prompt });
+      
+      // Step 7: 解析 LLM 返回的 JSON
+      let parsedResponse: any;
+      try {
+        // 尝试提取 JSON（可能被包裹在代码块中）
+        const jsonMatch = llmResponse.match(/```json\s*([\s\S]*?)\s*```/);
+        const jsonStr = jsonMatch ? jsonMatch[1] : llmResponse;
+        parsedResponse = JSON.parse(jsonStr.trim());
+      } catch (error) {
+        console.warn('⚠️  LLM 返回格式解析失败，使用默认格式:', error);
+        parsedResponse = {
+          answer: llmResponse,
+          relatedEntityIds: {
+            topics: [],
+            people: [],
+            projects: [],
+            jiraTickets: [],
+            organizations: [],
+            documents: [],
+            technologies: []
+          }
+        };
+      }
+      
+      // Step 8: 根据 LLM 返回的 ID 匹配完整实体
+      const entitiesByType: any = {
+        topics: [],
+        people: [],
+        projects: [],
+        jiraTickets: [],
+        organizations: [],
+        documents: [],
+        technologies: []
+      };
+      
+      // 构建ID到实体的映射
+      const idToEntity = new Map<string, MemoryEntity>();
+      for (const entity of Array.from(entityMap.values())) {
+        idToEntity.set(entity.id, entity);
+      }
+      
+      // 匹配实体
+      if (parsedResponse.relatedEntityIds) {
+        for (const [typeKey, ids] of Object.entries(parsedResponse.relatedEntityIds)) {
+          if (Array.isArray(ids)) {
+            for (const id of ids) {
+              const entity = idToEntity.get(id);
+              if (entity) {
+                entitiesByType[typeKey].push(entity);
+              } else {
+                console.warn(`⚠️  未找到实体 ID: ${id}`);
+              }
+            }
+          }
+        }
+      }
+      
+      // Step 9: 按相关度排序并限制数量
+      for (const typeKey of Object.keys(entitiesByType)) {
+        entitiesByType[typeKey].sort((a: MemoryEntity, b: MemoryEntity) => 
+          (b.relevanceScore || 0) - (a.relevanceScore || 0)
+        );
+        entitiesByType[typeKey] = entitiesByType[typeKey].slice(0, this.ASK_CONFIG.ENTITY_LIMIT_PER_TYPE);
+      }
+      
+      const totalEntities = Object.values(entitiesByType)
+        .reduce((sum: number, arr: any) => sum + arr.length, 0);
+      
+      const processingTime = Date.now() - startTime;
+      console.log(`✅ ask() 完成: ${totalEntities} 个相关实体, 耗时 ${processingTime}ms`);
+      
+      return {
+        success: true,
+        answer: parsedResponse.answer,
+        entitiesByType,
+        metadata: {
+          totalEntities: totalEntities as number,
+          expandDepth,
+          processingTime,
+          queryIntent
+        }
+      };
+      
+    } catch (error) {
+      console.error('💥 智能查询失败:', error);
+      return {
+        success: false,
+        message: '查询时发生错误，请稍后再试。'
+      };
+    }
+  }
+
+  /**
+   * @deprecated 请使用 ask() 方法代替
+   * 
+   * 🆕 高级知识查询接口（兼容旧接口）
+   * 
+   * 这个方法是记忆系统的智能查询入口，它会：
+   * 1. 使用 LLM 分析用户问题，提取查询意图和实体
+   * 2. 执行实体模糊匹配，找到数据库中的准确实体
+   * 3. 并行搜索：实体 + 消息 + 关系扩展
+   * 4. 智能融合结果，优先使用实体信息
+   * 5. 使用 LLM 生成最终答案
+   * 
+   * @param question 用户的自然语言问题
+   * @returns 查询结果，包含分析答案和相关上下文
+   */
   async knowledgeQuery(question: string): Promise<{
     success: boolean;
     analysis?: string;
@@ -1022,7 +1266,21 @@ export class MemorySystem {
    * 实体模糊匹配
    */
   private async fuzzyMatchEntities(queryIntent: any): Promise<void> {
-    const { fuzzyMatchPerson, fuzzyMatchEntityName } = await import('./llm');
+    // 导入模糊匹配函数
+    const fuzzyMatchPerson = (name: string, knownPeople: string[]): string | null => {
+      const normalizedName = name.toLowerCase().trim();
+      for (const knownName of knownPeople) {
+        if (knownName.toLowerCase().includes(normalizedName) || 
+            normalizedName.includes(knownName.toLowerCase())) {
+          return knownName;
+        }
+      }
+      return null;
+    };
+    
+    const fuzzyMatchEntityName = (name: string, knownNames: string[]): string | null => {
+      return fuzzyMatchPerson(name, knownNames);
+    };
     
     // 获取所有已知实体
     const [knownPeople, knownProjects, knownTopics] = await Promise.all([
@@ -1056,9 +1314,10 @@ export class MemorySystem {
     if (queryIntent?.query?.filters?.entities?.projects?.length > 0) {
       const matchedProjects = [];
       for (const project of queryIntent.query.filters.entities.projects) {
-        const matchedNames = fuzzyMatchEntityName(project.name, knownProjects);
-        if (matchedNames.length > 0) {
-          matchedNames.forEach(name => matchedProjects.push({ ...project, name }));
+        const matchedName = fuzzyMatchEntityName(project.name, knownProjects);
+        if (matchedName) {
+          console.log(`项目匹配: "${project.name}" => "${matchedName}"`);
+          matchedProjects.push({ ...project, name: matchedName });
         } else {
           matchedProjects.push(project);
         }
@@ -1069,9 +1328,10 @@ export class MemorySystem {
     if (queryIntent?.query?.filters?.entities?.topics?.length > 0) {
       const matchedTopics = [];
       for (const topic of queryIntent.query.filters.entities.topics) {
-        const matchedNames = fuzzyMatchEntityName(topic.name, knownTopics);
-        if (matchedNames.length > 0) {
-          matchedNames.forEach(name => matchedTopics.push({ ...topic, name }));
+        const matchedName = fuzzyMatchEntityName(topic.name, knownTopics);
+        if (matchedName) {
+          console.log(`主题匹配: "${topic.name}" => "${matchedName}"`);
+          matchedTopics.push({ ...topic, name: matchedName });
         } else {
           matchedTopics.push(topic);
         }
@@ -1182,7 +1442,7 @@ export class MemorySystem {
     console.log(`📊 上下文统计: 共${contextSources.length}个来源，使用了${messagesContext.length}字符`);
     
     // 根据查询类型选择模板
-    let promptTemplate = `
+    const promptTemplate = `
 以下是与问题"${question}"相关的信息:
 {{context}}
 
@@ -1214,6 +1474,353 @@ export class MemorySystem {
         tags: metadata.tags || []
       };
     });
+  }
+
+  // ==================== ask() 专用辅助方法 ====================
+
+  /**
+   * 从 relatedData 中提取关联实体的 ID
+   */
+  private extractRelatedEntityIds(relatedData: any, minScore: number): Set<string> {
+    const ids = new Set<string>();
+    
+    if (!relatedData) return ids;
+    
+    // 提取 people
+    if (relatedData.people && Array.isArray(relatedData.people)) {
+      for (const item of relatedData.people) {
+        if (item.id && (item.relevanceScore || 0) >= minScore) {
+          ids.add(item.id);
+        }
+      }
+    }
+    
+    // 提取 projects
+    if (relatedData.projects && Array.isArray(relatedData.projects)) {
+      for (const item of relatedData.projects) {
+        if (item.id && (item.relevanceScore || 0) >= minScore) {
+          ids.add(item.id);
+        }
+      }
+    }
+    
+    // 提取 topics
+    if (relatedData.topics && Array.isArray(relatedData.topics)) {
+      for (const item of relatedData.topics) {
+        if (item.id && (item.relevanceScore || 0) >= minScore) {
+          ids.add(item.id);
+        }
+      }
+    }
+    
+    // 提取 jiraTickets
+    if (relatedData.jiraTickets && Array.isArray(relatedData.jiraTickets)) {
+      for (const item of relatedData.jiraTickets) {
+        if (item.id && (item.relevanceScore || 0) >= minScore) {
+          ids.add(item.id);
+        }
+      }
+    }
+    
+    // 提取 cooccurringEntities
+    if (relatedData.cooccurringEntities && Array.isArray(relatedData.cooccurringEntities)) {
+      for (const item of relatedData.cooccurringEntities) {
+        if (item.id && (item.relevanceScore || 0) >= minScore) {
+          ids.add(item.id);
+        }
+      }
+    }
+    
+    return ids;
+  }
+
+  /**
+   * 从实体的 relatedData 中提取并加载关联实体
+   */
+  private async expandRelatedData(
+    entities: MemoryEntity[],
+    entityMap: Map<string, MemoryEntity>,
+    is2Hop = false
+  ): Promise<Set<string>> {
+    const newEntityIds = new Set<string>();
+    const minScore = is2Hop ? this.ASK_CONFIG.MIN_2HOP_RELEVANCE : this.ASK_CONFIG.MIN_RELEVANCE_SCORE;
+    
+    for (const entity of entities) {
+      if (!entity.relatedData) continue;
+      
+      // 提取所有关联实体 ID
+      const relatedIds = this.extractRelatedEntityIds(entity.relatedData, minScore);
+      
+      for (const id of Array.from(relatedIds)) {
+        if (!entityMap.has(id)) {
+          newEntityIds.add(id);
+        }
+      }
+    }
+    
+    // 批量加载新实体
+    if (newEntityIds.size > 0) {
+      console.log(`  🔍 发现 ${newEntityIds.size} 个新的关联实体`);
+      const newEntities = await this.cloudStorage.getEntitiesByIds(Array.from(newEntityIds));
+      for (const entity of newEntities) {
+        entityMap.set(entity.id, entity);
+      }
+    }
+    
+    return newEntityIds;
+  }
+
+  /**
+   * 判断是否需要进行 2-hop 扩展
+   */
+  private shouldPerform2Hop(currentSize: number, initialEntities: MemoryEntity[]): boolean {
+    // 如果初始实体数量就很多，不需要 2-hop
+    if (initialEntities.length >= 10) {
+      console.log('  ℹ️  初始实体充足，跳过 2-hop');
+      return false;
+    }
+    
+    // 如果 1-hop 后实体数量少于阈值，触发 2-hop
+    if (currentSize < this.ASK_CONFIG.ENABLE_2HOP_THRESHOLD) {
+      console.log('  ⚠️  1-hop 结果不足，触发 2-hop 扩展');
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * 多跳实体扩展
+   * 从初始实体集合出发，动态决定是否进行 2-hop 扩展
+   */
+  private async expandEntitiesMultiHop(
+    initialEntities: MemoryEntity[],
+    queryIntent: any
+  ): Promise<Map<string, MemoryEntity>> {
+    const entityMap = new Map<string, MemoryEntity>();
+    
+    // 1-hop: 添加初始实体
+    console.log(`🌱 初始实体: ${initialEntities.length} 个`);
+    for (const entity of initialEntities) {
+      entityMap.set(entity.id, entity);
+    }
+    
+    // 1-hop: 扩展 relatedData 中的关联实体
+    await this.expandRelatedData(initialEntities, entityMap);
+    console.log(`✅ 1-hop 扩展完成: ${entityMap.size} 个实体`);
+    
+    // 🔍 动态决策：是否需要 2-hop
+    const need2Hop = this.shouldPerform2Hop(entityMap.size, initialEntities);
+    
+    if (need2Hop) {
+      console.log('🔄 触发 2-hop 扩展...');
+      await this.expandRelatedData(Array.from(entityMap.values()), entityMap, true);
+      console.log(`✅ 2-hop 扩展完成: ${entityMap.size} 个实体`);
+    }
+    
+    return entityMap;
+  }
+
+  /**
+   * 按类型分组实体
+   */
+  private groupEntitiesByType(entities: MemoryEntity[]): Record<string, MemoryEntity[]> {
+    const grouped: Record<string, MemoryEntity[]> = {
+      Topic: [],
+      Person: [],
+      Project: [],
+      Task: [],
+      Organization: [],
+      Document: [],
+      Technology: []
+    };
+    
+    for (const entity of entities) {
+      if (grouped[entity.type]) {
+        grouped[entity.type].push(entity);
+      }
+    }
+    
+    return grouped;
+  }
+
+  /**
+   * 构建实体上下文字符串
+   */
+  private buildEntityContext(entitiesByType: Record<string, MemoryEntity[]>): string {
+    let context = '# 知识库实体信息\n\n';
+    
+    // 按类型构建上下文
+    const typeNames: Record<string, string> = {
+      Topic: '主题',
+      Person: '人员',
+      Project: '项目',
+      Task: 'Jira任务',
+      Organization: '组织',
+      Document: '文档',
+      Technology: '技术'
+    };
+    
+    for (const [type, entities] of Object.entries(entitiesByType)) {
+      if (entities.length === 0) continue;
+      
+      context += `## ${typeNames[type] || type} (${entities.length}个)\n\n`;
+      
+      for (const entity of entities) {
+        context += `### [${entity.type}] ${entity.name} (ID: ${entity.id})\n`;
+        
+        if (entity.description) {
+          context += `**描述**: ${entity.description}\n`;
+        }
+        
+        // 添加重要性和相关度
+        if (entity.importance) {
+          context += `**重要性**: ${(entity.importance * 100).toFixed(0)}%\n`;
+        }
+        if (entity.relevanceScore) {
+          context += `**相关度**: ${(entity.relevanceScore * 100).toFixed(0)}%\n`;
+        }
+        
+        // 添加关联信息摘要
+        if (entity.relatedData) {
+          const summaryParts = [];
+          if (entity.relatedData.people?.length > 0) {
+            summaryParts.push(`${entity.relatedData.people.length}个相关人员`);
+          }
+          if (entity.relatedData.projects?.length > 0) {
+            summaryParts.push(`${entity.relatedData.projects.length}个相关项目`);
+          }
+          if (entity.relatedData.conversations?.length > 0) {
+            summaryParts.push(`${entity.relatedData.conversations.length}条相关对话`);
+          }
+          if (summaryParts.length > 0) {
+            context += `**关联**: ${summaryParts.join(', ')}\n`;
+          }
+          
+          // 添加最近的对话摘要（最多3条）
+          if (entity.relatedData.conversations && entity.relatedData.conversations.length > 0) {
+            context += `**最近讨论**:\n`;
+            entity.relatedData.conversations.slice(0, 3).forEach((conv, idx) => {
+              context += `  ${idx + 1}. [${conv.sender}] ${conv.summary} (${conv.datetime})\n`;
+            });
+          }
+        }
+        
+        context += '\n';
+      }
+    }
+    
+    return context;
+  }
+
+  /**
+   * 智能压缩上下文
+   * 当上下文超出限制时，优先保留高相关度实体
+   */
+  private compressContext(context: string, entitiesByType: Record<string, MemoryEntity[]>): string {
+    console.log(`⚠️  上下文过长 (${context.length} 字符)，进行压缩...`);
+    
+    // 按相关度重新排序所有实体
+    const allEntities: MemoryEntity[] = [];
+    for (const entities of Object.values(entitiesByType)) {
+      allEntities.push(...entities);
+    }
+    allEntities.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+    
+    // 只保留最相关的实体，直到达到长度限制
+    const targetLength = Math.floor(this.ASK_CONFIG.MAX_CONTEXT_LENGTH * this.ASK_CONFIG.CONTEXT_COMPRESSION_RATIO);
+    const compressedEntitiesByType = this.groupEntitiesByType([]);
+    
+    let currentLength = 0;
+    for (const entity of allEntities) {
+      const entityText = this.buildEntityContext({[entity.type]: [entity]});
+      if (currentLength + entityText.length <= targetLength) {
+        compressedEntitiesByType[entity.type].push(entity);
+        currentLength += entityText.length;
+      } else {
+        break;
+      }
+    }
+    
+    const compressedContext = this.buildEntityContext(compressedEntitiesByType);
+    console.log(`✂️  压缩完成: ${context.length} → ${compressedContext.length} 字符`);
+    
+    return compressedContext;
+  }
+
+  /**
+   * 构建增强型上下文
+   * 包含实体摘要、关系网络、对话记录等
+   */
+  private async buildAskContext(
+    entities: Map<string, MemoryEntity>,
+    queryIntent: any
+  ): Promise<string> {
+    // 1. 按相关度排序所有实体
+    const sortedEntities = Array.from(entities.values())
+      .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+    
+    console.log(`📝 构建上下文: ${sortedEntities.length} 个实体`);
+    
+    // 2. 按类型分组
+    const entitiesByType = this.groupEntitiesByType(sortedEntities);
+    
+    // 3. 构建分层上下文
+    let context = this.buildEntityContext(entitiesByType);
+    
+    // 4. 如果超出限制，进行智能压缩
+    if (context.length > this.ASK_CONFIG.MAX_CONTEXT_LENGTH) {
+      context = this.compressContext(context, entitiesByType);
+    }
+    
+    return context;
+  }
+
+  /**
+   * 构建 ask() 的 LLM prompt
+   * 要求 LLM 返回结构化 JSON 格式
+   */
+  private buildAskPrompt(question: string, context: string): string {
+    return `你是一个智能知识助手，基于提供的知识库信息回答用户问题。
+
+# 知识库上下文
+
+${context}
+
+# 用户问题
+
+${question}
+
+# 任务要求
+
+1. 基于上述知识库信息，准确回答用户的问题
+2. 如果信息不足以完整回答，请明确说明
+3. 列出与问题最相关的实体 ID（从上述知识库中提取）
+
+# 返回格式
+
+请以 JSON 格式返回，包含以下字段：
+
+\`\`\`json
+{
+  "answer": "详细的答案文本",
+  "relatedEntityIds": {
+    "topics": ["topic_id_1", "topic_id_2"],
+    "people": ["person_id_1"],
+    "projects": ["project_id_1"],
+    "jiraTickets": [],
+    "organizations": [],
+    "documents": [],
+    "technologies": []
+  }
+}
+\`\`\`
+
+注意：
+- answer 必须是完整、连贯的回答
+- relatedEntityIds 只包含与答案直接相关的实体 ID（必须是上述知识库中存在的ID）
+- 如果某个类型没有相关实体，使用空数组 []
+- 请确保返回的是有效的 JSON 格式`;
   }
 
   // ==================== 存储接口 ====================

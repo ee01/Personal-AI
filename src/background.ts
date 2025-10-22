@@ -187,7 +187,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.type === 'KNOWLEDGE_QUERY') {
-        memorySystem.knowledgeQuery(request.question).then(result => {
+        memorySystem.ask(request.question).then(result => {
             console.log('General query result:', result);
             sendResponse(result);
         });

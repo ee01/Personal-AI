@@ -749,6 +749,59 @@ export class CloudStorage {
   }
 
   /**
+   * 🆕 批量获取实体（根据ID列表）
+   * 用于实体扩展时批量加载关联实体
+   */
+  async getEntitiesByIds(ids: string[]): Promise<MemoryEntity[]> {
+    this.ensureInitialized();
+    
+    if (!ids || ids.length === 0) {
+      return [];
+    }
+    
+    try {
+      const collection = this.collections.get(`${this.username}-graph-entities`);
+      if (!collection) {
+        console.warn('graph-entities collection 未找到');
+        return [];
+      }
+      
+      // 使用 where 条件批量查询
+      const result = await collection.get({
+        ids: ids,
+        include: ['metadatas', 'documents']
+      });
+      
+      if (!result.ids || result.ids.length === 0) {
+        return [];
+      }
+      
+      // 构建实体列表
+      const entities: MemoryEntity[] = [];
+      for (let i = 0; i < result.ids.length; i++) {
+        const metadata = result.metadatas![i] as any;
+        
+        const entity = await this.buildEntity({
+          metadata,
+          id: result.ids[i],
+          document: result.documents?.[i],
+          collectionName: 'graph-entities'
+        });
+        
+        if (entity) {
+          entities.push(entity);
+        }
+      }
+      
+      console.log(`📥 批量获取了 ${entities.length}/${ids.length} 个实体`);
+      return entities;
+    } catch (error) {
+      console.error('批量获取实体失败:', error);
+      return [];
+    }
+  }
+
+  /**
    * 查询用户档案记录（非向量搜索）
    * 用于根据元数据条件查询用户档案，不进行向量相似度计算
    */

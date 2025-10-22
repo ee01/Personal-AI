@@ -285,9 +285,33 @@ function extractJsonFromResponse(response: string): any[] {
 export async function knowledgeQuery(question: string) {
   console.log('🔄 knowledgeQuery [兼容层] ->', question);
   try {
-    // 🆕 直接调用 memorySystem 的智能查询接口
+    // 🆕 调用新的 ask() 接口
     const { memorySystem } = await import('./memory');
-    return await memorySystem.knowledgeQuery(question);
+    const result = await memorySystem.ask(question);
+    
+    // 🔄 转换新格式到旧格式（向后兼容）
+    if (!result.success) {
+      return {
+        success: false,
+        message: result.message || '查询时发生错误'
+      };
+    }
+    
+    // 将 entitiesByType 展平为单一数组
+    const flatEntities: any[] = [];
+    if (result.entitiesByType) {
+      for (const entities of Object.values(result.entitiesByType)) {
+        flatEntities.push(...entities);
+      }
+    }
+    
+    return {
+      success: true,
+      analysis: result.answer,
+      relatedMessages: result.metadata?.totalEntities || 0,
+      queryIntent: result.metadata?.queryIntent,
+      results: flatEntities
+    };
   } catch (error) {
     console.error('💥 知识查询失败:', error);
     return {

@@ -113,28 +113,28 @@ const KnowledgeQuery = () => {
             
             // 构建提示信息
             const hintMessages = [];
-            let answer = response.analysis || '未找到相关信息';
+            let answer = response.answer || '未找到相关信息';
             
             // 检查是否有人名模糊匹配
-            if (response.queryIntent && response.queryIntent.entities) {
-                const { entities } = response.queryIntent;
+            if (response.entitiesByType && response.entitiesByType.topics) {
+                const { topics, people, projects } = response.entitiesByType;
                 
                 // 添加人名提示
-                if (entities.people && entities.people.length > 0) {
-                    const people = entities.people.join('、');
-                    hintMessages.push(`相关人员: ${people}`);
+                if (people && people.length > 0) {
+                    const peopleNames = people.map(p => p.name).join('、');
+                    hintMessages.push(`相关人员: ${peopleNames}`);
                 }
                 
                 // 添加项目提示
-                if (entities.projects && entities.projects.length > 0) {
-                    const projects = entities.projects.join('、');
-                    hintMessages.push(`相关项目: ${projects}`);
+                if (projects && projects.length > 0) {
+                    const projectsNames = projects.map(p => p.name).join('、');
+                    hintMessages.push(`相关项目: ${projectsNames}`);
                 }
                 
                 // 添加主题提示
-                if (entities.topics && entities.topics.length > 0) {
-                    const topics = entities.topics.join('、');
-                    hintMessages.push(`相关主题: ${topics}`);
+                if (topics && topics.length > 0) {
+                    const topicsNames = topics.map(t => t.name).join('、');
+                    hintMessages.push(`相关主题: ${topicsNames}`);
                 }
             }
             
@@ -149,8 +149,23 @@ const KnowledgeQuery = () => {
             setConversationHistory(updatedHistory);
             
             // 更新结果
-            if (response.results && response.results.length > 0) {
-                setResults(response.results);
+            if (response.entitiesByType && response.entitiesByType.topics) {
+                const { topics, people, projects } = response.entitiesByType;
+                setResults(topics.map(t => ({
+                    id: t.id,
+                    summary: t.name,
+                    details: t.description,
+                    reply_advice: '',
+                    timestamp: t.createdAt,
+                    source: 'topic',
+                    relevance: t.relevanceScore,
+                    tags: t.tags,
+                    team: {
+                        name: t.name,
+                        id: t.id,
+                        url: t.url
+                    }
+                })));
             } else {
                 setResults([]);
             }
