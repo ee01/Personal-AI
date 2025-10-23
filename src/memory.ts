@@ -776,6 +776,12 @@ export class MemorySystem {
   async ask(question: string): Promise<{
     success: boolean;
     answer?: string;
+    structuredAnswer?: {
+      summary?: string;
+      keyFindings?: string[];
+      timeline?: Array<{ date: string; event: string }>;
+      insights?: string[];
+    };
     entitiesByType?: {
       topics: MemoryEntity[];
       people: MemoryEntity[];
@@ -973,6 +979,7 @@ export class MemorySystem {
       return {
         success: true,
         answer: parsedResponse.answer,
+        structuredAnswer: parsedResponse.structuredAnswer,
         entitiesByType,
         metadata: {
           totalEntities: totalEntities as number,
@@ -1796,6 +1803,7 @@ ${question}
 1. 基于上述知识库信息，准确回答用户的问题
 2. 如果信息不足以完整回答，请明确说明
 3. 列出与问题最相关的实体 ID（从上述知识库中提取）
+4. 提供结构化的分析结果，包括关键发现、时间线和深度洞察
 
 # 返回格式
 
@@ -1803,7 +1811,22 @@ ${question}
 
 \`\`\`json
 {
-  "answer": "详细的答案文本",
+  "answer": "详细的主要答案文本（必填，至少100字的完整回答）",
+  "structuredAnswer": {
+    "summary": "简要总结（1-2句话概括核心要点）",
+    "keyFindings": [
+      "关键发现1：具体的发现或结论",
+      "关键发现2：重要的信息点"
+    ],
+    "timeline": [
+      {"date": "相对时间描述（如：2小时前、昨天）", "event": "发生的事件描述"},
+      {"date": "时间", "event": "事件"}
+    ],
+    "insights": [
+      "深度洞察1：基于数据的分析和见解",
+      "深度洞察2：趋势、模式或建议"
+    ]
+  },
   "relatedEntityIds": {
     "topics": ["topic_id_1", "topic_id_2"],
     "people": ["person_id_1"],
@@ -1817,7 +1840,12 @@ ${question}
 \`\`\`
 
 注意：
-- answer 必须是完整、连贯的回答
+- answer 必须是完整、连贯的主要回答（这是用户最先看到的内容）
+- structuredAnswer 是可选的增强信息，只在有足够信息时提供
+  - summary: 用一两句话概括核心要点
+  - keyFindings: 提炼2-5个关键发现，每个发现要具体明确
+  - timeline: 如果问题涉及时间相关的事件，提供时间线（可选）
+  - insights: 提供2-4个深度洞察，包括趋势分析、模式识别或可行建议
 - relatedEntityIds 只包含与答案直接相关的实体 ID（必须是上述知识库中存在的ID）
 - 如果某个类型没有相关实体，使用空数组 []
 - 请确保返回的是有效的 JSON 格式`;

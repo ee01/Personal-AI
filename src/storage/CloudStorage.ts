@@ -1223,21 +1223,27 @@ export class CloudStorage {
       // 生成实体ID
       if (!entity.id) entity.id = this.generateEntityId(entity.type, entity.name);
 
-      // 🆕 生成丰富的自然语言描述文本
-      const naturalDescription = await this.generateNaturalLanguageDescription(entity);
-      const embedding = await getEmbeddingViaOffscreen(naturalDescription);
+      // 🆕 方案E: 用精简文本生成embedding（仅name+tags）
+      const simpleDocument = this.generateSimpleDocument(entity);
+      const embedding = await getEmbeddingViaOffscreen(simpleDocument);
 
-      // 转换关联数据为ChromaDB兼容格式
-      const chromaMetadata = this.serializeChromaMetadata(entity);
+      // 🆕 生成完整的自然语言描述，存入metadata.description
+      const naturalDescription = await this.generateNaturalLanguageDescription(entity);
+
+      // 转换关联数据为ChromaDB兼容格式，并添加description
+      const chromaMetadata = this.serializeChromaMetadata({
+        ...entity,
+        description: naturalDescription  // 完整描述存储在metadata中
+      });
 
       await collection.add({
         ids: [entity.id],
-        documents: [naturalDescription],
+        documents: [simpleDocument],  // 精简文本用于向量搜索
         embeddings: [embedding],
         metadatas: [chromaMetadata]
       });
 
-      console.log(`✅ 实体存储完成: ${entity.name} (${entity.type}), documents长度: ${naturalDescription.length}字符`);
+      console.log(`✅ 实体存储完成: ${entity.name} (${entity.type}), document长度: ${simpleDocument.length}字符, description长度: ${naturalDescription.length}字符`);
       return entity.id;
     } catch (error) {
       console.error('存储实体到云端失败:', error);
@@ -1350,16 +1356,22 @@ export class CloudStorage {
         statistic: this.recalculateStatistics(currentEntity, updates)
       };
 
-      // 🆕 判断是否需要立即更新documents
-      const shouldUpdateDocuments = this.shouldUpdateDocuments(mergedEntity, updates);
+      // 🆕 判断是否需要立即更新documents和embedding
+      // 特别处理：name改变时必须更新embedding
+      const nameChanged = updates.name && updates.name !== currentEntity.name;
+      const shouldUpdateDocuments = nameChanged || this.shouldUpdateDocuments(mergedEntity, updates);
       
       let documents = existing.documents?.[0] || '';
       let embedding: number[] = [];
+      let naturalDescription = '';
       
       if (shouldUpdateDocuments) {
-        console.log(`📝 重要实体${mergedEntity.name}立即更新documents...`);
-        documents = await this.generateNaturalLanguageDescription(mergedEntity);
+        console.log(`📝 重要实体${mergedEntity.name}立即更新documents和embedding...`);
+        // 🆕 方案E: 用精简文本生成embedding
+        documents = this.generateSimpleDocument(mergedEntity);
         embedding = await getEmbeddingViaOffscreen(documents);
+        // 🆕 生成完整描述
+        naturalDescription = await this.generateNaturalLanguageDescription(mergedEntity);
         mergedEntity.lastDocumentUpdate = Date.now();
       } else {
         console.log(`⏳ 普通实体${mergedEntity.name}延迟更新documents`);
@@ -1369,10 +1381,15 @@ export class CloudStorage {
           include: ['embeddings']
         });
         embedding = existingResult.embeddings?.[0] || [];
+        // 保持原有description
+        naturalDescription = currentEntity.description || '';
       }
 
-      // 转换为ChromaDB格式
-      const chromaMetadata = this.serializeChromaMetadata(mergedEntity);
+      // 转换为ChromaDB格式，包含description
+      const chromaMetadata = this.serializeChromaMetadata({
+        ...mergedEntity,
+        description: naturalDescription  // 完整描述存储在metadata中
+      });
 
       // 执行更新
       await collection.update({
@@ -3404,6 +3421,31 @@ export class CloudStorage {
   /**
    * 🆕 生成自然语言描述 - 用于向量搜索的丰富上下文
    */
+  /**
+   * 🆕 方案E: 生成精简的document用于向量搜索
+   * 策略：name + 关键tags（限制总长度不超过100字符）
+   */
+  private generateSimpleDocument(entity: Omit<MemoryEntity, 'id'> & {id?: MemoryEntity['id']}): string {
+    // 基础：实体名称
+    let doc = entity.name;
+    
+    // 增强：添加关键标签（最多3个，提升语义匹配能力）
+    if (entity.tags && entity.tags.length > 0) {
+      const tagText = entity.tags.slice(0, 3).join(' ');
+      doc += ' ' + tagText;
+    }
+    
+    // 限制总长度不超过100字符（避免过长影响匹配精度）
+    if (doc.length > 100) {
+      doc = doc.substring(0, 100);
+    }
+    
+    return doc.trim();
+  }
+
+  /**
+   * 生成完整的自然语言描述（用于存储在metadata.description中供LLM理解）
+   */
   private async generateNaturalLanguageDescription(entity: Omit<MemoryEntity, 'id'> & {id?: MemoryEntity['id']}): Promise<string> {
     const parts: string[] = [];
     
@@ -3560,14 +3602,16 @@ export class CloudStorage {
 
   /**
    * 🆕 从消息元数据构建实体关联数据
+   * 🔧 修复：使用实体ID映射表，避免重复查询数据库
    */
-  private buildEntityRelatedDataFromMessage(
+  private async buildEntityRelatedDataFromMessage(
     entityName: string,
     entityType: string,
     messageMetadata: any,
     extractedEntities: Omit<MemoryEntity, 'id' | 'created' | 'updated'>[],
-    messageId: string
-  ): MemoryEntity['relatedData'] {
+    messageId: string,
+    entityIdMap: Map<string, string> // 🔧 新增参数：实体ID映射表
+  ): Promise<MemoryEntity['relatedData']> {
     const entityKey = entityType + '_' + entityName;
     const relatedData: MemoryEntity['relatedData'] = {
       conversations: [],
@@ -3597,14 +3641,21 @@ export class CloudStorage {
     }
 
     // 2. 添加同消息中的其他实体作为共现实体
-    extractedEntities.forEach(otherEntity => {
+    // 🔧 优化：直接从映射表获取实体ID，避免重复查询数据库
+    for (const otherEntity of extractedEntities) {
       const key = otherEntity.type + '_' + otherEntity.name;
       if (key !== entityKey) {
-        // 为没有 id 的实体生成临时 ID
-        const tempId = `temp_${otherEntity.type}_${otherEntity.name}_${Date.now()}`;
+        // 🔧 从映射表中获取实体ID（阶段1已经确保所有实体都存在）
+        const entityId = entityIdMap.get(key);
+        
+        if (!entityId) {
+          // 理论上不应该发生，因为阶段1已经处理了所有实体
+          console.warn(`⚠️ 映射表中未找到实体ID: ${otherEntity.name}(${otherEntity.type})`);
+          continue;
+        }
         
         relatedData.cooccurringEntities.push({
-          id: tempId,
+          id: entityId,
           name: otherEntity.name,
           type: otherEntity.type,
           relevanceScore: 0.8 // 同消息共现的相关性较高
@@ -3614,7 +3665,7 @@ export class CloudStorage {
         switch (otherEntity.type) {
           case 'Person':
             relatedData.people.push({
-              id: tempId,
+              id: entityId,
               name: otherEntity.name,
               role: otherEntity.properties?.role || '',
               team: otherEntity.properties?.team || '',
@@ -3625,7 +3676,7 @@ export class CloudStorage {
             break;
           case 'Project':
             relatedData.projects.push({
-              id: tempId,
+              id: entityId,
               name: otherEntity.name,
               description: otherEntity.document || '',
               status: otherEntity.properties?.status || 'Active',
@@ -3634,7 +3685,7 @@ export class CloudStorage {
             break;
           case 'Topic':
             relatedData.topics.push({
-              id: tempId,
+              id: entityId,
               name: otherEntity.name,
               summary: otherEntity.document || `关于${otherEntity.name}的讨论`,
               category: otherEntity.properties?.category || '技术讨论',
@@ -3644,7 +3695,7 @@ export class CloudStorage {
           case 'Task':
             // 假设Task类型是JIRA ticket
             relatedData.jiraTickets.push({
-              id: tempId,
+              id: entityId,
               key: otherEntity.properties?.key || otherEntity.name,
               summary: otherEntity.document || otherEntity.name,
               status: otherEntity.properties?.status || 'In Progress',
@@ -3656,7 +3707,7 @@ export class CloudStorage {
             break;
           case 'Document':
             relatedData.resources.push({
-              id: tempId,
+              id: entityId,
               summary: otherEntity.document || `文档：${otherEntity.name}`,
               name: otherEntity.name,
               type: 'document',
@@ -3666,7 +3717,7 @@ export class CloudStorage {
             break;
         }
       }
-    });
+    }
 
     return relatedData;
   }
@@ -3874,6 +3925,7 @@ export class CloudStorage {
 
   /**
    * 🆕 更新实体关联数据 - 从消息分析中提取实体并更新其关联信息
+   * 🔧 修复：采用两阶段处理，先创建所有实体，再建立关联关系
    */
   async updateEntitiesWithRelatedData(
     messageMetadata: any,
@@ -3892,22 +3944,81 @@ export class CloudStorage {
 
       console.log(`📝 从消息中提取到 ${extractedEntities.length} 个实体: ${extractedEntities.map(e => `${e.name}(${e.type})`).join(', ')}`);
       
-      // 2. 为每个实体构建和更新关联数据
+      // 🔧 阶段1：确保所有实体都存在于数据库中（不包含相互引用）
+      const entityIdMap = new Map<string, string>(); // key: type_name, value: entityId
+      
       for (const entity of extractedEntities) {
         try {
-          // 为当前实体构建关联数据
-          const relatedDataForEntity = this.buildEntityRelatedDataFromMessage(
+          const entityKey = `${entity.type}_${entity.name}`;
+          
+          // 检查实体是否已存在
+          const similarEntities = await this.getSimilarEntities({
+            ...entity,
+            created: Date.now(),
+            updated: Date.now()
+          });
+          const existingEntity = similarEntities.length > 0 ? similarEntities[0] : null;
+          
+          if (existingEntity) {
+            console.log(`✅ 实体已存在: ${entity.name}(${entity.type}) -> ${existingEntity.id}`);
+            entityIdMap.set(entityKey, existingEntity.id);
+          } else {
+            // 创建新实体（暂不包含关联数据）
+            const newEntity = {
+              ...entity,
+              created: Date.now(),
+              updated: Date.now(),
+              accessCount: 1,
+              lastAccessed: Date.now(),
+              hotness: 0.5,
+              criticalityScore: entity.importance || 0.5,
+              readStatus: {
+                unreadCount: 1, // 初始有1条未读消息
+                lastReadTime: null as number | null,
+                lastUpdateTime: Date.now()
+              }
+            };
+            
+            const storeResult = await memorySystem.storeEntity(newEntity);
+            if (storeResult.success && storeResult.entityId) {
+              console.log(`🆕 新实体创建: ${entity.name}(${entity.type}) -> ${storeResult.entityId}`);
+              entityIdMap.set(entityKey, storeResult.entityId);
+            } else {
+              console.error(`❌ 创建实体失败: ${entity.name}(${entity.type})`);
+            }
+          }
+        } catch (error) {
+          console.error(`❌ 处理实体 ${entity.name} 失败:`, error);
+        }
+      }
+      
+      console.log(`📊 实体ID映射表创建完成，共 ${entityIdMap.size} 个实体`);
+      
+      // 🔧 阶段2：为每个实体构建和更新关联数据（使用真实的实体ID）
+      for (const entity of extractedEntities) {
+        try {
+          const entityKey = `${entity.type}_${entity.name}`;
+          const currentEntityId = entityIdMap.get(entityKey);
+          
+          if (!currentEntityId) {
+            console.warn(`⚠️ 未找到实体ID: ${entity.name}(${entity.type})`);
+            continue;
+          }
+          
+          // 构建关联数据（传入映射表，避免重复查询数据库）
+          const relatedDataForEntity = await this.buildEntityRelatedDataFromMessage(
             entity.name,
             entity.type,
             messageMetadata,
             extractedEntities,
-            messageId
+            messageId,
+            entityIdMap // 🔧 传入映射表
           );
 
           // 计算实体热度和重要性
           const entityWithRelatedData: Omit<MemoryEntity, 'id'> = {
             ...entity,
-            created: Date.now(), // 确保有created属性
+            created: Date.now(),
             updated: Date.now(),
             relatedData: relatedDataForEntity
           };
@@ -3916,69 +4027,45 @@ export class CloudStorage {
           entityWithRelatedData.hotness = this.calculateEntityHotness(entityWithRelatedData);
           entityWithRelatedData.criticalityScore = this.calculateEntityCriticality(entityWithRelatedData, 0);
           
-          // 检查是否存在相似的实体（使用新的 getSimilarEntities 方法）
-          const similarEntities = await this.getSimilarEntities(entityWithRelatedData);
-          const existingEntity = similarEntities.length > 0 ? similarEntities[0] : null;
-          
-          if (existingEntity) {
-            console.log(`🔄 找到相似实体: ${entity.name} -> ${existingEntity.name}, 相似度: ${existingEntity.relevanceScore?.toFixed(3)}`);
-            
-            // 🆕 简化未读消息数量计算（每次新增的消息都是未读的）
-            const newUnreadCount = relatedDataForEntity.conversations?.filter((c: any) => !c.isRead).length || 0;
-            const currentUnreadCount = existingEntity.readStatus?.unreadCount || 0;
-            const unreadCount = currentUnreadCount + newUnreadCount;
-            
-            // 更新现有实体的关联数据
-            const updateData: Partial<MemoryEntity> = {
-              relatedData: relatedDataForEntity,
-              hotness: entityWithRelatedData.hotness,
-              criticalityScore: entityWithRelatedData.criticalityScore,
-              lastAccessed: Date.now(),
-              accessCount: (existingEntity.accessCount || 0) + 1,
-              // 🆕 同步更新readStatus
-              readStatus: {
-                unreadCount: unreadCount,
-                lastReadTime: existingEntity.readStatus?.lastReadTime || null,
-                lastUpdateTime: Date.now()
-              }
-            };
-            
-            const updateResult = await memorySystem.updateEntity(existingEntity.id, updateData);
-            console.log(`🔄 实体关联数据更新: ${entity.name} -> ${existingEntity.name}, 成功: ${updateResult.success ? '✅' : '❌'}, 未读: ${unreadCount}`);
-            
-          } else {
-            // 🆕 计算新实体的未读消息数
-            const unreadCount = relatedDataForEntity.conversations?.filter((c: any) => !c.isRead).length || 0;
-            
-            // 存储新实体（包含完整关联数据）
-            const newEntity = {
-              ...entityWithRelatedData,
-              created: Date.now(),
-              updated: Date.now(),
-              accessCount: 1,
-              lastAccessed: Date.now(),
-              statistic: {
-                conversations: relatedDataForEntity.conversations?.length || 0,
-                projects: relatedDataForEntity.projects?.length || 0,
-                participants: relatedDataForEntity.people?.length || 0,
-                resources: relatedDataForEntity.resources?.length || 0,
-                documents: relatedDataForEntity.resources?.filter((r: any) => r.type === 'document')?.length || 0,
-                webpages: relatedDataForEntity.webpages?.length || 0,
-                topics: relatedDataForEntity.topics?.length || 0,
-                jiraTickets: relatedDataForEntity.jiraTickets?.length || 0,
-                relationships: relatedDataForEntity.cooccurringEntities?.length || 0
-              },
-              // 🆕 初始化readStatus
-              readStatus: {
-                unreadCount: unreadCount,
-                lastReadTime: null as number | null,
-                lastUpdateTime: Date.now()
-              }
-            };
-            
-            const storeResult = await memorySystem.storeEntity(newEntity);
-            console.log(`🆕 新实体存储: ${entity.name}, 成功: ${storeResult.success ? '✅' : '❌'}, 未读: ${unreadCount}`);
+          // 获取现有实体
+          const existingEntity = await this.getEntity(currentEntityId);
+          if (!existingEntity) {
+            console.error(`❌ 无法获取实体: ${currentEntityId}`);
+            continue;
           }
+          
+          // 计算未读消息数
+          const newUnreadCount = relatedDataForEntity.conversations?.filter((c: any) => !c.isRead).length || 0;
+          const currentUnreadCount = existingEntity.readStatus?.unreadCount || 0;
+          const unreadCount = currentUnreadCount + newUnreadCount;
+          
+          // 更新实体的关联数据
+          const updateData: Partial<MemoryEntity> = {
+            relatedData: relatedDataForEntity,
+            hotness: entityWithRelatedData.hotness,
+            criticalityScore: entityWithRelatedData.criticalityScore,
+            lastAccessed: Date.now(),
+            accessCount: (existingEntity.accessCount || 0) + 1,
+            statistic: {
+              conversations: relatedDataForEntity.conversations?.length || 0,
+              projects: relatedDataForEntity.projects?.length || 0,
+              participants: relatedDataForEntity.people?.length || 0,
+              resources: relatedDataForEntity.resources?.length || 0,
+              documents: relatedDataForEntity.resources?.filter((r: any) => r.type === 'document')?.length || 0,
+              webpages: relatedDataForEntity.webpages?.length || 0,
+              topics: relatedDataForEntity.topics?.length || 0,
+              jiraTickets: relatedDataForEntity.jiraTickets?.length || 0,
+              relationships: relatedDataForEntity.cooccurringEntities?.length || 0
+            },
+            readStatus: {
+              unreadCount: unreadCount,
+              lastReadTime: existingEntity.readStatus?.lastReadTime || null,
+              lastUpdateTime: Date.now()
+            }
+          };
+          
+          const updateResult = await memorySystem.updateEntity(currentEntityId, updateData);
+          console.log(`🔄 实体关联数据更新: ${entity.name}, 成功: ${updateResult.success ? '✅' : '❌'}, 未读: ${unreadCount}`);
           
         } catch (entityError) {
           console.error(`❌ 更新实体 ${entity.name} 关联数据失败:`, entityError);

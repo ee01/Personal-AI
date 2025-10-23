@@ -48,7 +48,7 @@
             <input 
               type="text" 
               class="search-input" 
-              placeholder="搜索任何内容、实体或关键词..."
+              placeholder="搜索任何内容、实体或关键词（按 Enter 搜索）..."
               v-model="searchQuery"
               @input="handleSearchInput"
               @keypress.enter="handleSearch"
@@ -71,19 +71,19 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useMemoryStore } from './memory-store';
 
 // 应用初始化逻辑
 const store = useMemoryStore();
 const router = useRouter();
+const route = useRoute();
 const entityTypes = computed(() => store.entityTypes);
 const searchQuery = ref('');
 
 const handleSearchInput = () => {
-  if (searchQuery.value.length > 2) {
-    performSearch();
-  }
+  // 首页概览搜索：不在输入时触发搜索，避免频繁调用 ask()
+  // 用户需要按 Enter 或点击搜索按钮才触发
 };
 
 const handleSearch = () => {
@@ -93,19 +93,36 @@ const handleSearch = () => {
 };
 
 const performSearch = () => {
-  if (searchQuery.value.trim().length >= 2) {
-    // 使用云端向量检索进行搜索
-    store.vectorSearchEntities(searchQuery.value);
-    router.push({ 
-      path: '/search', 
-      query: { q: searchQuery.value } 
-    });
+  if (searchQuery.value.trim().length < 2) return;
+  
+  const path = router.currentRoute.value.path;
+  
+  // 判断搜索模式
+  if (path === '/' || path === '/user-profile' || path === '/timeline') {
+    // 首页概览、用户画像、时间轴 - 使用 ask() 智能搜索
+    console.log('[搜索] 执行智能 AI 搜索:', searchQuery.value);
+    store.performAskSearch(searchQuery.value);
+  } else if (path.startsWith('/entity/')) {
+    // 分栏搜索 - 使用向量匹配
+    const entityType = route.params.type as string;
+    console.log('[搜索] 执行实体向量搜索:', searchQuery.value, entityType);
+    store.performEntityVectorSearch(searchQuery.value, entityType);
+  } else {
+    // 其他情况 - 通用向量搜索
+    console.log('[搜索] 执行通用向量搜索:', searchQuery.value);
+    store.performEntityVectorSearch(searchQuery.value);
   }
+  
+  // 跳转到搜索结果页
+  router.push({ 
+    path: '/search', 
+    query: { q: searchQuery.value } 
+  });
 };
 
 const clearSearch = () => {
   searchQuery.value = '';
-  store.searchQuery = '';
+  store.clearSearchContext();
   router.push('/');
 };
 

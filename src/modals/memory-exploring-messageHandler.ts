@@ -106,7 +106,23 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
                     const result = await cloudStorage.queryEntities(entityType, undefined, {
                         limit, offset, sortBy, sortOrder
                     });
-                    return { success: true, data: result.data };
+                    
+                    // 将 relatedData 映射到 recentDataDetails，供前端 UI 使用
+                    const entitiesWithDetails = result.data.map(entity => ({
+                        ...entity,
+                        recentDataDetails: entity.relatedData || {
+                            conversations: [],
+                            webpages: [],
+                            resources: [],
+                            projects: [],
+                            people: [],
+                            topics: [],
+                            jiraTickets: [],
+                            cooccurringEntities: []
+                        }
+                    }));
+                    
+                    return { success: true, data: entitiesWithDetails };
                 } catch (error) {
                     console.error('获取实体列表失败:', error);
                     return { success: false, error: error.message, data: [] };
@@ -116,9 +132,25 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
                 try {
                     const { query, entityType, limit = 30 } = request;
                     const searchResults = await cloudStorage.searchByVector(query, entityType, { limit });
+                    
+                    // 将 relatedData 映射到 recentDataDetails，供前端 UI 使用
+                    const entitiesWithDetails = searchResults.data.map(entity => ({
+                        ...entity,
+                        recentDataDetails: entity.relatedData || {
+                            conversations: [],
+                            webpages: [],
+                            resources: [],
+                            projects: [],
+                            people: [],
+                            topics: [],
+                            jiraTickets: [],
+                            cooccurringEntities: []
+                        }
+                    }));
+                    
                     return {
                         success: true,
-                        data: searchResults.data,
+                        data: entitiesWithDetails,
                         total: searchResults.total,
                         source: searchResults.source
                     };
@@ -150,8 +182,24 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
             case 'GET_ENTITY_DETAILS':
                 try {
                     const { entityId } = request;
-                    const entityDetails = await cloudStorage.getEntity(entityId);
-                    return { success: true, data: entityDetails };
+                    const entity = await cloudStorage.getEntity(entityId);
+                    
+                    // 将 relatedData 映射到 recentDataDetails，供前端 UI 使用
+                    const entityWithDetails = entity ? {
+                        ...entity,
+                        recentDataDetails: entity.relatedData || {
+                            conversations: [],
+                            webpages: [],
+                            resources: [],
+                            projects: [],
+                            people: [],
+                            topics: [],
+                            jiraTickets: [],
+                            cooccurringEntities: []
+                        }
+                    } : null;
+                    
+                    return { success: true, data: entityWithDetails };
                 } catch (error) {
                     console.error('获取实体详情失败:', error);
                     return { success: false, error: error.message, data: null };
@@ -316,10 +364,23 @@ async function handleGetTopicDetail(request: any): Promise<any> {
             throw new Error('主题不存在');
         }
 
-        // 直接使用 CloudStorage 的方法将基础实体扩展为详细缓存实体
-        const topicDetail = await cloudStorage.extendEntityToDetailCache(topicEntity);
+        // 直接使用 relatedData 映射为 recentDataDetails，不需要额外抓取
+        const topicDetail = {
+            ...topicEntity,
+            recentDataDetails: topicEntity.relatedData || {
+                conversations: [],
+                webpages: [],
+                resources: [],
+                projects: [],
+                people: [],
+                topics: [],
+                jiraTickets: [],
+                cooccurringEntities: []
+            },
+            cachedAt: Date.now()
+        };
 
-        // 直接缓存整个主题详情实体（包含完整的 recentDataDetails）
+        // 缓存主题详情
         await localStorage.cacheEntity(topicDetail);
 
         return { success: true, data: topicDetail };

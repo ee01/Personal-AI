@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { parseChromaConfig, getEnvConfig } from '../utils';
 
 // 数据库维护工具组件
@@ -10,10 +10,20 @@ export const DatabaseMaintenanceTool = () => {
         type: 'info'
     });
     const [chromaConfig, setChromaConfig] = useState({
-        host: '10.32.56.212',
+        host: 'localhost',
         port: 8000,
         ssl: false
     });
+
+    // 初始化时从环境配置加载 ChromaDB 配置
+    useEffect(() => {
+        const loadChromaConfig = async () => {
+            const envConfig = await getEnvConfig();
+            const parsedConfig = parseChromaConfig(envConfig);
+            setChromaConfig(parsedConfig);
+        };
+        loadChromaConfig();
+    }, []);
     const [userStats, setUserStats] = useState<any>(null);
     const [clearMode, setClearMode] = useState<'all' | 'timeRange'>('all');
     const [timeRange, setTimeRange] = useState({
@@ -617,37 +627,19 @@ export const DatabaseMaintenanceTool = () => {
             <hr style={{ margin: '20px 0', borderColor: '#ddd' }} />
             <h3>数据库管理工具</h3>
             
-            <div className="form-group">
-                <label htmlFor="chromaHostMaintenance">ChromaDB 主机地址</label>
-                <input
-                    type="text"
-                    id="chromaHostMaintenance"
-                    value={chromaConfig.host}
-                    onChange={(e) => setChromaConfig(prev => ({...prev, host: e.target.value}))}
-                    placeholder="localhost"
-                />
-            </div>
-
-            <div className="form-group">
-                <label htmlFor="chromaPortMaintenance">ChromaDB 端口</label>
-                <input
-                    type="number"
-                    id="chromaPortMaintenance"
-                    value={chromaConfig.port}
-                    onChange={(e) => setChromaConfig(prev => ({...prev, port: parseInt(e.target.value) || 8000}))}
-                    placeholder="8000"
-                />
-            </div>
-
-            <div className="form-group">
-                <label>
-                    <input
-                        type="checkbox"
-                        checked={chromaConfig.ssl}
-                        onChange={(e) => setChromaConfig(prev => ({...prev, ssl: e.target.checked}))}
-                    />
-                    启用 SSL 连接
-                </label>
+            <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#f0f8ff', 
+                border: '1px solid #b3d9ff',
+                borderRadius: '4px',
+                marginBottom: '15px',
+                fontSize: '13px'
+            }}>
+                <strong>当前连接配置：</strong> {chromaConfig.host}:{chromaConfig.port} 
+                {chromaConfig.ssl && ' (SSL)'}
+                <div style={{ marginTop: '5px', color: '#666' }}>
+                    💡 如需修改连接配置，请到上方"向量数据库设置"部分进行配置
+                </div>
             </div>
 
             <div className="maintenance-actions" style={{ marginBottom: '20px' }}>

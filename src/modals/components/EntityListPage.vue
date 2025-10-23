@@ -47,9 +47,82 @@
           <option v-if="entityType === 'Project'" value="active">活跃项目</option>
         </select>
       </div>
+      
+      <!-- 新增：AI 分析按钮（仅在向量搜索模式显示） -->
+      <button 
+        v-if="searchContext.mode === 'entity' && !searchContext.askResult"
+        class="ai-analyze-btn"
+        @click="handleAskAnalyze"
+        :disabled="isAnalyzing"
+      >
+        <span class="ai-icon">🤖</span>
+        <span>{{ isAnalyzing ? '正在分析...' : '整理分析后的结果' }}</span>
+      </button>
+      
       <div class="results-count">
         <span v-if="searchQuery">搜索结果：</span>
         显示 {{ filteredEntities.length }} / {{ entities.length }} 项
+      </div>
+    </div>
+
+    <!-- AI 分析结果区域（折叠展开） -->
+    <div v-if="searchContext.askResult && searchContext.mode === 'entity'" class="ai-analysis-panel">
+      <div class="panel-header" @click="toggleAnalysisPanel">
+        <div class="header-left">
+          <span class="ai-icon">🤖</span>
+          <h4>AI 分析结果</h4>
+        </div>
+        <button class="toggle-btn">
+          {{ isAnalysisPanelExpanded ? '收起 ▲' : '展开 ▼' }}
+        </button>
+      </div>
+      
+      <div v-show="isAnalysisPanelExpanded" class="panel-content">
+        <!-- 主要回答 -->
+        <div class="answer-main">
+          <p>{{ searchContext.askResult.answer }}</p>
+        </div>
+        
+        <!-- 结构化信息（如果有） -->
+        <div v-if="searchContext.askResult.structuredAnswer" class="answer-structured">
+          <!-- 关键发现 -->
+          <div v-if="searchContext.askResult.structuredAnswer.keyFindings?.length" class="findings-section">
+            <h4>🔍 关键发现</h4>
+            <ul>
+              <li v-for="(finding, idx) in searchContext.askResult.structuredAnswer.keyFindings" :key="idx">
+                {{ finding }}
+              </li>
+            </ul>
+          </div>
+          
+          <!-- 时间线 -->
+          <div v-if="searchContext.askResult.structuredAnswer.timeline?.length" class="timeline-section">
+            <h4>⏰ 时间线</h4>
+            <div class="timeline-items">
+              <div v-for="(item, idx) in searchContext.askResult.structuredAnswer.timeline" :key="idx" class="timeline-item">
+                <span class="timeline-date">{{ item.date }}</span>
+                <span class="timeline-event">{{ item.event }}</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 深度洞察 -->
+          <div v-if="searchContext.askResult.structuredAnswer.insights?.length" class="insights-section">
+            <h4>💡 深度洞察</h4>
+            <ul>
+              <li v-for="(insight, idx) in searchContext.askResult.structuredAnswer.insights" :key="idx">
+                {{ insight }}
+              </li>
+            </ul>
+          </div>
+        </div>
+        
+        <!-- 元数据 -->
+        <div v-if="searchContext.askResult.metadata" class="answer-metadata">
+          <span>共分析 {{ searchContext.askResult.metadata.totalEntities }} 个实体</span>
+          <span>•</span>
+          <span>耗时 {{ searchContext.askResult.metadata.processingTime }}ms</span>
+        </div>
       </div>
     </div>
 
@@ -428,11 +501,39 @@ const entityType = computed(() => route.params.type as string);
 const entities = computed(() => store.entities);
 const isLoading = computed(() => store.isLoading);
 const searchQuery = computed(() => store.searchQuery);
+const searchContext = computed(() => store.searchContext);
 
 // 本地过滤状态
 const selectedFilter = ref('all');
 const topicViewMode = ref('unread'); // 'unread' | 'all'
 const topicSortMode = ref('time'); // 'time' | 'importance' | 'unread-count'
+
+// AI 分析状态
+const isAnalyzing = ref(false);
+const isAnalysisPanelExpanded = ref(true);
+
+const handleAskAnalyze = async () => {
+  if (!searchQuery.value.trim()) {
+    alert('请先进行搜索');
+    return;
+  }
+  
+  isAnalyzing.value = true;
+  try {
+    await store.performAskSearch(searchQuery.value);
+    // 分析完成后自动展开面板
+    isAnalysisPanelExpanded.value = true;
+  } catch (error) {
+    console.error('AI 分析失败:', error);
+    alert('AI 分析失败，请稍后重试');
+  } finally {
+    isAnalyzing.value = false;
+  }
+};
+
+const toggleAnalysisPanel = () => {
+  isAnalysisPanelExpanded.value = !isAnalysisPanelExpanded.value;
+};
 
 // 过滤后的实体列表
 const filteredEntities = computed(() => {
@@ -674,6 +775,190 @@ watch(entityType, (newType) => {
 </script>
 
 <style scoped>
+/* AI 分析按钮 */
+.ai-analyze-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.1), rgba(59, 130, 246, 0.1));
+  border: 1px solid rgba(147, 51, 234, 0.3);
+  border-radius: 0.5rem;
+  color: #a78bfa;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ai-analyze-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(59, 130, 246, 0.2));
+  border-color: rgba(147, 51, 234, 0.5);
+  transform: translateY(-1px);
+}
+
+.ai-analyze-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ai-analyze-btn .ai-icon {
+  font-size: 1rem;
+}
+
+/* AI 分析结果面板 */
+.ai-analysis-panel {
+  margin-bottom: 2rem;
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.08), rgba(59, 130, 246, 0.08));
+  border: 1px solid rgba(147, 51, 234, 0.2);
+  border-radius: 1rem;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  cursor: pointer;
+  transition: background 0.3s ease;
+  border-bottom: 1px solid rgba(147, 51, 234, 0.1);
+}
+
+.panel-header:hover {
+  background: rgba(147, 51, 234, 0.05);
+}
+
+.panel-header .header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.panel-header .ai-icon {
+  font-size: 1.5rem;
+}
+
+.panel-header h4 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #a78bfa;
+  margin: 0;
+}
+
+.panel-header .toggle-btn {
+  padding: 0.5rem 1rem;
+  background: rgba(147, 51, 234, 0.1);
+  border: 1px solid rgba(147, 51, 234, 0.3);
+  border-radius: 0.5rem;
+  color: #a78bfa;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.panel-header .toggle-btn:hover {
+  background: rgba(147, 51, 234, 0.2);
+}
+
+.panel-content {
+  padding: 1.5rem;
+}
+
+.panel-content .answer-main {
+  margin-bottom: 1.5rem;
+}
+
+.panel-content .answer-main p {
+  color: #e2e8f0;
+  font-size: 1rem;
+  line-height: 1.8;
+  margin: 0;
+}
+
+.panel-content .answer-structured {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.panel-content .findings-section h4,
+.panel-content .timeline-section h4,
+.panel-content .insights-section h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #a78bfa;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.panel-content .findings-section ul,
+.panel-content .insights-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.panel-content .findings-section li,
+.panel-content .insights-section li {
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: rgba(30, 41, 59, 0.4);
+  border-left: 3px solid #a78bfa;
+  border-radius: 0.25rem;
+  color: #cbd5e1;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.panel-content .timeline-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.panel-content .timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  background: rgba(30, 41, 59, 0.4);
+  border-radius: 0.5rem;
+}
+
+.panel-content .timeline-date {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #a78bfa;
+  min-width: 100px;
+}
+
+.panel-content .timeline-event {
+  flex: 1;
+  color: #cbd5e1;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.panel-content .answer-metadata {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
 /* "阅"字按钮样式 */
 .mark-read-btn {
   position: absolute;

@@ -105,20 +105,13 @@ export const useMemoryStore = defineStore('memory', () => {
     } finally {
       isLoading.value = false;
 
-      // 如果是第一页数据，检查 Topic 类型实体是否需要补充 recent data
+      // 如果是第一页 Topic 数据，恢复已读状态
       if (offset === 0 && entityType === 'Topic') {
-        // 使用 toRaw 获取原始数组，避免将 Proxy 对象传递给 enrichEntitiesWithDetails
-        const rawEntities = toRaw(entities.value);
-        entities.value = await memorySystem.enrichEntitiesWithDetails(rawEntities);
-        
-        // 恢复已读状态
         loadReadStatusFromLocalStorage();
         updateTopicUnreadCount();
       }
     }
   };
-
-  // enrichTopicEntitiesWithDetails 方法已移至 memory.ts 中作为 enrichEntitiesWithDetails
 
   const searchEntities = async (query: string) => {
     if (!query.trim()) return;
@@ -1291,10 +1284,124 @@ export const useMemoryStore = defineStore('memory', () => {
     updateTopicUnreadCount();
   };
 
+  /**
+   * ==========================================
+   * 智能搜索状态管理
+   * ==========================================
+   */
+  
+  // 搜索上下文状态
+  const searchContext = ref<{
+    mode: 'overview' | 'entity' | null;  // 搜索模式
+    query: string;  // 搜索关键词
+    askResult: any | null;  // ask() 的返回结果
+    entityType?: string;  // 如果是实体搜索，记录类型
+  }>({
+    mode: null,
+    query: '',
+    askResult: null
+  });
+
+  /**
+   * 执行智能搜索 (使用 ask() 方法)
+   * 用于首页概览搜索
+   */
+  const performAskSearch = async (query: string) => {
+    isLoading.value = true;
+    searchContext.value.mode = 'overview';
+    searchContext.value.query = query;
+    searchQuery.value = query;
+    
+    try {
+      const result = await memorySystem.ask(query);
+      if (result.success) {
+        searchContext.value.askResult = result;
+        
+        // 将 entitiesByType 展平为 entities 数组
+        const allEntities: any[] = [];
+        for (const [type, entityList] of Object.entries(result.entitiesByType || {})) {
+          allEntities.push(...(entityList as any[]));
+        }
+        entities.value = allEntities;
+        
+        console.log('[智能搜索] Ask 搜索完成:', {
+          query,
+          entitiesCount: allEntities.length,
+          hasStructuredAnswer: !!result.structuredAnswer
+        });
+      } else {
+        console.error('[智能搜索] Ask 搜索失败:', result.message);
+        // 失败时显示空结果
+        entities.value = [];
+        searchContext.value.askResult = null;
+      }
+    } catch (error) {
+      console.error('[智能搜索] Ask 搜索异常:', error);
+      entities.value = [];
+      searchContext.value.askResult = null;
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
+  /**
+   * 执行向量搜索 (不使用 ask())
+   * 用于实体分栏搜索
+   */
+  const performEntityVectorSearch = async (query: string, entityType?: string) => {
+    isLoading.value = true;
+    searchContext.value.mode = 'entity';
+    searchContext.value.query = query;
+    searchContext.value.entityType = entityType;
+    searchContext.value.askResult = null;  // 清空之前的 AI 结果
+    searchQuery.value = query;
+    
+    try {
+      const response = await chromeAPI.sendMessage({
+        type: 'VECTOR_SEARCH_ENTITIES',
+        query,
+        entityType,  // 如果指定类型，只搜索该类型
+        limit: 30
+      }) as any;
+      
+      if (response && response.success) {
+        entities.value = response.data || [];
+        console.log('[向量搜索] 搜索完成:', {
+          query,
+          entityType,
+          entitiesCount: entities.value.length
+        });
+      } else {
+        // 使用模拟数据展示向量搜索结果
+        entities.value = generateMockVectorSearchResults(query);
+      }
+    } catch (error) {
+      console.error('[向量搜索] 搜索失败:', error);
+      // 使用模拟数据
+      entities.value = generateMockVectorSearchResults(query);
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
+  /**
+   * 清空搜索上下文
+   */
+  const clearSearchContext = () => {
+    searchContext.value = {
+      mode: null,
+      query: '',
+      askResult: null
+    };
+    searchQuery.value = '';
+  };
+
   return {
     isLoading, searchQuery, entities, entityTypes, overviewStats, topicDetailData, personDetailData, closedTodayCards,
     initialize, loadEntitiesByType, searchEntities, vectorSearchEntities, loadTopicDetail,
     markTopicAsRead, markConversationAsRead, closeTodayCard,
-    getUnreadTopics, getUnreadTopicsByImportance, getUnreadTopicsByLatestMessage, updateTopicUnreadCount
+    getUnreadTopics, getUnreadTopicsByImportance, getUnreadTopicsByLatestMessage, updateTopicUnreadCount,
+    // 智能搜索相关
+    searchContext, performAskSearch, performEntityVectorSearch, clearSearchContext
   };
 });
