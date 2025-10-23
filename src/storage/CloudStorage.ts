@@ -412,7 +412,7 @@ export class CloudStorage {
           if (searchResults.metadatas?.[0]) {
             for (let i = 0; i < searchResults.metadatas[0].length; i++) {
               const metadata = searchResults.metadatas[0][i];
-              const distance = searchResults.distances?.[0]?.[i] || 1;
+              const distance = searchResults.distances?.[0]?.[i] !== undefined ? Number(searchResults.distances?.[0]?.[i]) : 1;
               const relevanceScore = Math.max(0, 1 - distance); // 余弦距离：1-distance转换为0-1的相关度评分
               
               // 过滤低相关性结果
@@ -424,7 +424,7 @@ export class CloudStorage {
                   metadata,
                   id: searchResults.ids?.[0]?.[i],
                   document: searchResults.documents?.[0]?.[i],
-                  distance,
+                  distance: Number(distance),
                   relevanceScore,
                   collectionName
                 });
@@ -937,11 +937,11 @@ export class CloudStorage {
     
     try {
       // 为查询生成与存储时相同的自然语言描述
-      const queryDescription = await this.generateNaturalLanguageDescription(entity);
+      const queryDocument = await this.generateSimpleDocument(entity);
       
       // 使用丰富的描述文本进行向量检索查找相似实体，确保type匹配
       const similarResults = await this.searchByVector(
-        queryDescription, 
+        queryDocument, 
         entity.type, 
         { 
           limit, 
