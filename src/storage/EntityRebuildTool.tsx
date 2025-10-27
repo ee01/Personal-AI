@@ -130,7 +130,7 @@ const EntityRebuildTool = () => {
                 
                 for (let j = i; j < endIndex; j++) {
                     const messageId = messagesResult.ids[j];
-                    const metadata = messagesResult.metadatas[j] as any;
+                    const metadata = (cloudStorage as any).deserializeEntityFromMetadata(messagesResult.metadatas[j]);
 
                     try {
                         setProgress({

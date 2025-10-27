@@ -181,7 +181,8 @@ class WebIntelligenceContentScript {
 
                 // 显示用户提示
                 if (analysisResult.confidence > 0.8) {
-                    this.showNotification(analysisResult);
+                    // 暂时禁用弹窗提示
+                    // this.showNotification(analysisResult);
                 }
             } else {
                 console.log('⏭️ 跳过后台处理:', {

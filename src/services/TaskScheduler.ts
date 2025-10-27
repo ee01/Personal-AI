@@ -1,6 +1,11 @@
 /**
  * 统一任务调度管理器
  * 集中管理所有定时任务，避免重复执行和遗漏
+ * 
+ * 特性：
+ * - message_analysis 任务的间隔时间从 envConfig.SCHEDULED_INTERVAL 动态读取
+ * - 自动监听配置变化，当 SCHEDULED_INTERVAL 更新时自动重新加载任务间隔
+ * - 无需手动干预，配置更改后立即生效
  */
 
 import { memorySystem } from '../memory';
@@ -27,9 +32,9 @@ const TASK_DEFINITIONS: ScheduledTask[] = [
     id: 'message_analysis',
     name: '静默消息分析',
     category: 'message_analysis',
-    intervalMinutes: 30, // 30分钟间隔
+    intervalMinutes: 30, // 默认30分钟间隔（实际值从 envConfig.SCHEDULED_INTERVAL 读取）
     description: '自动分析RingCentral消息，提取关键信息',
-    enabled: true
+    enabled: false
   },
   {
     id: 'memory_sync',
@@ -87,9 +92,10 @@ export class TaskScheduler {
   private alarmListeners: Set<string> = new Set();
   private isInitialized = false;
   private cloudStorage: CloudStorage | null = null;
+  private storageChangeListener: ((changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => void) | null = null;
 
   private constructor() {
-    this.initializeTasks();
+    // initializeTasks 现在是异步的，将在 startAllTasks 中调用
     this.cloudStorage = new CloudStorage();
   }
 
@@ -106,10 +112,23 @@ export class TaskScheduler {
   /**
    * 初始化任务定义
    */
-  private initializeTasks(): void {
+  private async initializeTasks(): Promise<void> {
+    // 获取环境配置
+    const config = await getEnvConfig();
+    
+    // 初始化所有任务
     TASK_DEFINITIONS.forEach(task => {
-      this.tasks.set(task.id, { ...task });
+      const taskCopy = { ...task };
+      
+      // message_analysis 任务的间隔时间使用用户配置
+      if (task.id === 'message_analysis') {
+        taskCopy.intervalMinutes = Number(config.SCHEDULED_INTERVAL) || 30;
+        console.log(`⚙️ message_analysis 任务间隔已设置为: ${taskCopy.intervalMinutes} 分钟`);
+      }
+      
+      this.tasks.set(taskCopy.id, taskCopy);
     });
+    
     console.log('📋 任务调度器初始化完成，注册任务:', Array.from(this.tasks.keys()));
   }
 
@@ -124,6 +143,9 @@ export class TaskScheduler {
 
     console.log('🚀 启动任务调度器...');
 
+    // 初始化任务定义（包括从配置中读取 message_analysis 的间隔）
+    await this.initializeTasks();
+
     // 从 storage 恢复任务状态
     await this.restoreTaskStates();
 
@@ -137,6 +159,9 @@ export class TaskScheduler {
 
     // 设置 alarm 监听器（每次都需要重新设置，因为监听器不会持久化）
     this.setupAlarmListeners();
+
+    // 设置配置变化监听器
+    this.setupConfigChangeListener();
 
     // 只在首次安装时执行首次运行
     if (isFirstRun) {
@@ -168,6 +193,14 @@ export class TaskScheduler {
     console.log(`🧹 已清除 ${existingAlarms.length} 个任务定时器`);
     
     this.alarmListeners.clear();
+    
+    // 移除配置变化监听器
+    if (this.storageChangeListener) {
+      chrome.storage.onChanged.removeListener(this.storageChangeListener);
+      this.storageChangeListener = null;
+      console.log('🗑️ 已移除配置变化监听器');
+    }
+    
     this.isInitialized = false;
     
     // 禁用所有任务
@@ -357,6 +390,48 @@ export class TaskScheduler {
 
     this.alarmListeners.add('main');
     console.log('👂 定时任务监听器已设置');
+  }
+
+  /**
+   * 设置配置变化监听器
+   * 自动监听 envConfig.SCHEDULED_INTERVAL 的变化并更新 message_analysis 任务
+   */
+  private setupConfigChangeListener(): void {
+    if (this.storageChangeListener) {
+      // 已存在监听器，先移除
+      chrome.storage.onChanged.removeListener(this.storageChangeListener);
+    }
+
+    this.storageChangeListener = async (changes, namespace) => {
+      // 只处理 local storage 的变化
+      if (namespace !== 'local') {
+        return;
+      }
+
+      // 检查是否是 envConfig 的变化
+      if (changes.envConfig) {
+        const oldConfig = changes.envConfig.oldValue;
+        const newConfig = changes.envConfig.newValue;
+
+        // 检查 SCHEDULED_INTERVAL 是否变化
+        if (oldConfig?.SCHEDULED_INTERVAL !== newConfig?.SCHEDULED_INTERVAL) {
+          const oldInterval = oldConfig?.SCHEDULED_INTERVAL;
+          const newInterval = newConfig?.SCHEDULED_INTERVAL;
+          
+          console.log(`🔄 检测到 SCHEDULED_INTERVAL 配置变化: ${oldInterval} -> ${newInterval} 分钟`);
+          
+          // 自动重新加载 message_analysis 任务的间隔配置
+          const updated = await this.reloadMessageAnalysisInterval();
+          
+          if (updated) {
+            console.log('✅ message_analysis 任务间隔已自动更新');
+          }
+        }
+      }
+    };
+
+    chrome.storage.onChanged.addListener(this.storageChangeListener);
+    console.log('👂 配置变化监听器已设置（自动监听 SCHEDULED_INTERVAL）');
   }
 
   /**
@@ -757,6 +832,47 @@ export class TaskScheduler {
 
     console.log(`🔧 手动执行任务: ${task.name}`);
     await this.executeTask(task);
+    return true;
+  }
+
+  /**
+   * 重新加载 message_analysis 任务的间隔配置
+   * 注意：通常不需要手动调用此方法，因为任务调度器会自动监听配置变化
+   * 此方法主要用于测试或特殊场景下的手动触发
+   */
+  public async reloadMessageAnalysisInterval(): Promise<boolean> {
+    const task = this.tasks.get('message_analysis');
+    if (!task) {
+      console.error('❌ message_analysis 任务不存在');
+      return false;
+    }
+
+    // 读取最新配置
+    const config = await getEnvConfig();
+    const newInterval = Number(config.SCHEDULED_INTERVAL) || 30;
+
+    // 如果间隔没有变化，不需要更新
+    if (task.intervalMinutes === newInterval) {
+      console.log(`⚙️ message_analysis 任务间隔未变化: ${newInterval} 分钟`);
+      return false;
+    }
+
+    // 更新间隔时间
+    const oldInterval = task.intervalMinutes;
+    task.intervalMinutes = newInterval;
+    console.log(`⚙️ message_analysis 任务间隔已更新: ${oldInterval} -> ${newInterval} 分钟`);
+
+    // 如果任务已启用，需要重新创建 alarm
+    if (task.enabled && this.isInitialized) {
+      const alarmName = `scheduled_task_message_analysis`;
+      await this.clearAlarm(alarmName);
+      await this.createTaskAlarm(task);
+      console.log('✅ 定时器已更新');
+    }
+
+    // 保存状态
+    await this.saveTaskStates();
+
     return true;
   }
 }

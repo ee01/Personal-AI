@@ -3891,32 +3891,73 @@ export class CloudStorage {
         }
       }
       
-      // 提取组织实体
+      // 提取组织实体或个人实体（根据 groupName 格式判断）
       if (metadata.groupName && metadata.groupName !== 'SM AI') {
-        entities.push({
-          type: 'Organization',
-          name: metadata.groupName,
-          document: `组织: ${metadata.groupName}`,
-          properties: {
-            groupId: metadata.groupId,
-            source: 'message_analysis',
-            type: 'team',
-            messageId: messageId,
-            timestamp: metadata.timestamp || Date.now()
-          },
-          importance: 0.6,
-          accessCount: 1,
-          lastAccessed: Date.now(),
-          tags: [],
-          statistic: {
-            conversations: 0, projects: 0, participants: 0, resources: 0,
-            documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
-          },
-          relatedData: {
-            conversations: [], webpages: [], resources: [], projects: [], people: [],
-            topics: [], jiraTickets: [], cooccurringEntities: []
+        // 检查是否是 firstName.lastName 组合形式的聊天（用 + 分隔）
+        const participants = metadata.groupName.split('+').map((p: string) => p.trim());
+        const isPersonalChat = participants.every((p: string) => /^[a-zA-Z]+\.[a-zA-Z]+$/.test(p));
+        
+        if (isPersonalChat && participants.length >= 2) {
+          // 这是一个个人或多人聊天，提取除了 esone.qiu 之外的参与者
+          const otherParticipants = participants.filter((p: string) => p.toLowerCase() !== 'esone.qiu');
+          
+          for (const participant of otherParticipants) {
+            // 将 firstName.lastName 转换为 Firstname Lastname
+            const [firstName, lastName] = participant.split('.');
+            const displayName = `${firstName.charAt(0).toUpperCase() + firstName.slice(1)} ${lastName.charAt(0).toUpperCase() + lastName.slice(1)}`;
+            
+            entities.push({
+              type: 'Person',
+              name: displayName,
+              document: `人物: ${displayName}`,
+              properties: {
+                email: `${participant}@ringcentral.com`, // 可能的邮箱格式
+                username: participant,
+                source: 'message_analysis',
+                messageId: messageId,
+                timestamp: metadata.timestamp || Date.now()
+              },
+              importance: 0.7,
+              accessCount: 1,
+              lastAccessed: Date.now(),
+              tags: [],
+              statistic: {
+                conversations: 0, projects: 0, participants: 0, resources: 0,
+                documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+              },
+              relatedData: {
+                conversations: [], webpages: [], resources: [], projects: [], people: [],
+                topics: [], jiraTickets: [], cooccurringEntities: []
+              }
+            });
           }
-        });
+        } else {
+          // 这是一个正常的组织/团队聊天组
+          entities.push({
+            type: 'Organization',
+            name: metadata.groupName,
+            document: `组织: ${metadata.groupName}`,
+            properties: {
+              groupId: metadata.groupId,
+              source: 'message_analysis',
+              type: 'team',
+              messageId: messageId,
+              timestamp: metadata.timestamp || Date.now()
+            },
+            importance: 0.6,
+            accessCount: 1,
+            lastAccessed: Date.now(),
+            tags: [],
+            statistic: {
+              conversations: 0, projects: 0, participants: 0, resources: 0,
+              documents: 0, webpages: 0, relationships: 0, topics: 0, jiraTickets: 0
+            },
+            relatedData: {
+              conversations: [], webpages: [], resources: [], projects: [], people: [],
+              topics: [], jiraTickets: [], cooccurringEntities: []
+            }
+          });
+        }
       }
     }
     
@@ -3928,7 +3969,7 @@ export class CloudStorage {
    * 🔧 修复：采用两阶段处理，先创建所有实体，再建立关联关系
    */
   async updateEntitiesWithRelatedData(
-    messageMetadata: any,
+    messageMetadata: Omit<MemoryMessage, 'id' | 'content'>,
     messageId: string,
   ): Promise<void> {
     console.log(`🔗 开始从消息 ${messageId} 更新实体关联数据...`);
