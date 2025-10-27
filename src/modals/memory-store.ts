@@ -43,6 +43,7 @@ interface ConversationMessage {
 // Pinia Store
 export const useMemoryStore = defineStore('memory', () => {
   const isLoading = ref(false);
+  const isAISearching = ref(false); // AI 搜索动画状态
   const searchQuery = ref('');
   const entities = ref([]);
   const entityTypes = ref([
@@ -132,26 +133,29 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
-  const vectorSearchEntities = async (query: string) => {
+  const vectorSearchEntities = async (query: string, entityType?: string) => {
     if (!query.trim()) return;
     isLoading.value = true;
     searchQuery.value = query;
     try {
       const response = await chromeAPI.sendMessage({
-        type: 'VECTOR_SEARCH_ENTITIES',
+        type: 'SEARCH_ENTITIES',
         query,
+        entityType,
         limit: 20
       });
       if (response && (response as any).success) {
         entities.value = (response as any).data || [];
+        console.log('[向量搜索] 成功获取实际数据:', entities.value.length, '个实体');
       } else {
         // 使用模拟数据展示向量搜索结果
-        entities.value = generateMockVectorSearchResults(query);
+        console.log('[向量搜索] API返回失败，使用mock数据');
+        entities.value = generateMockVectorSearchResults(query, entityType);
       }
     } catch (error) {
-      console.error('向量搜索失败:', error);
+      console.error('[向量搜索] 搜索失败:', error);
       // 使用模拟数据
-      entities.value = generateMockVectorSearchResults(query);
+      entities.value = generateMockVectorSearchResults(query, entityType);
     } finally {
       isLoading.value = false;
     }
@@ -832,13 +836,51 @@ export const useMemoryStore = defineStore('memory', () => {
     }));
   };
 
-  const generateMockVectorSearchResults = (query: string) => {
+  const generateMockVectorSearchResults = (query: string, entityType?: string) => {
     // 基于查询生成模拟的向量搜索结果，包含多种类型的实体
     const searchTerms = query.toLowerCase();
     const results = [];
     
-    // AI相关搜索
-    if (searchTerms.includes('ai') || searchTerms.includes('人工智能') || searchTerms.includes('智能')) {
+    // 如果指定了实体类型，优先返回该类型的结果
+    if (entityType === 'Person') {
+      // 返回人物相关的 mock 数据
+      results.push(
+        {
+          id: 'person-zhangsan',
+          name: '张三',
+          type: 'Person',
+          description: '前端开发工程师，擅长React和TypeScript开发，团队中的技术专家',
+          role: '前端工程师',
+          team: '技术团队',
+          relevanceScore: 0.92,
+          tags: ['前端', '技术专家', 'React'],
+          lastContact: Date.now() - 3600000
+        },
+        {
+          id: 'person-lisi',
+          name: '李四',
+          type: 'Person',
+          description: 'UI/UX设计师，专注用户体验设计和交互原型，设计团队核心成员',
+          role: 'UI/UX设计师',
+          team: '设计团队',
+          relevanceScore: 0.88,
+          tags: ['设计', 'UX', '原型'],
+          lastContact: Date.now() - 10800000
+        },
+        {
+          id: 'person-wangwu',
+          name: '王五',
+          type: 'Person',
+          description: '后端开发工程师，负责系统架构设计和API开发，技术栈涵盖多种语言',
+          role: '后端工程师',
+          team: '技术团队',
+          relevanceScore: 0.85,
+          tags: ['后端', '架构师', 'API'],
+          lastContact: Date.now() - 21600000
+        }
+      );
+    } else if (entityType === 'Topic') {
+      // 返回主题相关的 mock 数据
       results.push(
         {
           id: 'topic-ai-workflow',
@@ -849,80 +891,140 @@ export const useMemoryStore = defineStore('memory', () => {
           tags: ['AI', '自动化', '工作流']
         },
         {
-          id: 'project-personal-ai',
-          name: 'Personal-AI',
-          type: 'Project',
-          description: 'Chrome扩展智能助手，帮助用户管理知识图谱',
-          relevanceScore: 0.88,
-          tags: ['Chrome扩展', 'AI', '智能助手']
-        }
-      );
-    }
-    
-    // 前端相关搜索
-    if (searchTerms.includes('前端') || searchTerms.includes('react') || searchTerms.includes('web')) {
-      results.push(
-        {
           id: 'topic-frontend-optimization',
           name: '前端性能优化策略',
           type: 'Topic',
           description: '前端应用性能优化的技术讨论和最佳实践分享',
-          relevanceScore: 0.82,
+          relevanceScore: 0.88,
           tags: ['前端', '性能', 'React']
         },
-        {
-          id: 'person-zhangsan',
-          name: '张三',
-          type: 'Person',
-          description: '前端开发工程师，擅长React和TypeScript开发',
-          relevanceScore: 0.75,
-          tags: ['前端', '技术专家', 'React']
-        }
-      );
-    }
-    
-    // 设计相关搜索
-    if (searchTerms.includes('设计') || searchTerms.includes('ui') || searchTerms.includes('ux')) {
-      results.push(
         {
           id: 'topic-design-thinking',
           name: '产品设计思维方法',
           type: 'Topic',
           description: '产品设计流程、用户体验设计方法论的探讨',
-          relevanceScore: 0.78,
+          relevanceScore: 0.82,
           tags: ['设计', 'UX', '产品']
-        },
-        {
-          id: 'person-lisi',
-          name: '李四',
-          type: 'Person',
-          description: 'UI/UX设计师，专注用户体验设计和交互原型',
-          relevanceScore: 0.73,
-          tags: ['设计', 'UX', '原型']
         }
       );
-    }
-    
-    // 默认结果（通用搜索）
-    if (results.length === 0) {
+    } else if (entityType === 'Project') {
+      // 返回项目相关的 mock 数据
       results.push(
         {
-          id: 'topic-ai-workflow',
-          name: 'AI 工作流自动化',
-          type: 'Topic',
-          description: '讨论AI在工作流程中的应用和自动化实践',
-          relevanceScore: 0.65,
-          tags: ['AI', '自动化', '工作流']
+          id: 'project-personal-ai',
+          name: 'Personal-AI',
+          type: 'Project',
+          description: 'Chrome扩展智能助手，帮助用户管理知识图谱',
+          relevanceScore: 0.93,
+          tags: ['Chrome扩展', 'AI', '智能助手']
         },
         {
           id: 'project-web-platform',
           name: 'Web Platform',
           type: 'Project',
           description: '前端Web平台，提供统一的用户界面和交互体验',
-          relevanceScore: 0.58,
+          relevanceScore: 0.87,
           tags: ['前端', 'Web', '用户体验']
         }
       );
+    } else {
+      // 没有指定类型，返回混合结果
+      
+      // AI相关搜索
+      if (searchTerms.includes('ai') || searchTerms.includes('人工智能') || searchTerms.includes('智能')) {
+        results.push(
+          {
+            id: 'topic-ai-workflow',
+            name: 'AI 工作流自动化',
+            type: 'Topic',
+            description: '讨论AI在工作流程中的应用和自动化实践',
+            relevanceScore: 0.95,
+            tags: ['AI', '自动化', '工作流']
+          },
+          {
+            id: 'project-personal-ai',
+            name: 'Personal-AI',
+            type: 'Project',
+            description: 'Chrome扩展智能助手，帮助用户管理知识图谱',
+            relevanceScore: 0.88,
+            tags: ['Chrome扩展', 'AI', '智能助手']
+          }
+        );
+      }
+      
+      // 前端相关搜索
+      if (searchTerms.includes('前端') || searchTerms.includes('react') || searchTerms.includes('web')) {
+        results.push(
+          {
+            id: 'topic-frontend-optimization',
+            name: '前端性能优化策略',
+            type: 'Topic',
+            description: '前端应用性能优化的技术讨论和最佳实践分享',
+            relevanceScore: 0.82,
+            tags: ['前端', '性能', 'React']
+          },
+          {
+            id: 'person-zhangsan',
+            name: '张三',
+            type: 'Person',
+            description: '前端开发工程师，擅长React和TypeScript开发',
+            relevanceScore: 0.75,
+            tags: ['前端', '技术专家', 'React']
+          }
+        );
+      }
+      
+      // 设计相关搜索
+      if (searchTerms.includes('设计') || searchTerms.includes('ui') || searchTerms.includes('ux')) {
+        results.push(
+          {
+            id: 'topic-design-thinking',
+            name: '产品设计思维方法',
+            type: 'Topic',
+            description: '产品设计流程、用户体验设计方法论的探讨',
+            relevanceScore: 0.78,
+            tags: ['设计', 'UX', '产品']
+          },
+          {
+            id: 'person-lisi',
+            name: '李四',
+            type: 'Person',
+            description: 'UI/UX设计师，专注用户体验设计和交互原型',
+            relevanceScore: 0.73,
+            tags: ['设计', 'UX', '原型']
+          }
+        );
+      }
+      
+      // 默认结果（通用搜索）
+      if (results.length === 0) {
+        results.push(
+          {
+            id: 'topic-ai-workflow',
+            name: 'AI 工作流自动化',
+            type: 'Topic',
+            description: '讨论AI在工作流程中的应用和自动化实践',
+            relevanceScore: 0.65,
+            tags: ['AI', '自动化', '工作流']
+          },
+          {
+            id: 'project-web-platform',
+            name: 'Web Platform',
+            type: 'Project',
+            description: '前端Web平台，提供统一的用户界面和交互体验',
+            relevanceScore: 0.58,
+            tags: ['前端', 'Web', '用户体验']
+          },
+          {
+            id: 'person-zhangsan',
+            name: '张三',
+            type: 'Person',
+            description: '前端开发工程师，擅长React和TypeScript开发',
+            relevanceScore: 0.55,
+            tags: ['前端', '技术专家', 'React']
+          }
+        );
+      }
     }
     
     // 按相关性分数排序
@@ -1069,8 +1171,11 @@ export const useMemoryStore = defineStore('memory', () => {
       
       entities.value.forEach((entity: any) => {
         if (entity.type === 'Topic' && entity.readStatus) {
+          // 使用 unreadCount 判断是否已读（而不是 isRead 字段）
+          const isRead = entity.readStatus.unreadCount === 0;
+          
           // 如果已读,清空未读讨论
-          if (entity.readStatus.isRead) {
+          if (isRead) {
             entity.unreadDiscussions = [];
             
             // 标记所有聊天消息为已读
@@ -1218,10 +1323,15 @@ export const useMemoryStore = defineStore('memory', () => {
    * 获取未读主题列表
    */
   const getUnreadTopics = () => {
-    return entities.value.filter((e: any) => 
-      e.type === 'Topic' && 
-      (!e.readStatus?.isRead || e.readStatus?.unreadCount > 0)
-    );
+    return entities.value.filter((e: any) => {
+      if (e.type !== 'Topic') return false;
+      // 如果有 readStatus，只根据 unreadCount 判断
+      if (e.readStatus) {
+        return e.readStatus.unreadCount > 0;
+      }
+      // 如果没有 readStatus，视为未读
+      return true;
+    });
   };
   
   /**
@@ -1275,7 +1385,6 @@ export const useMemoryStore = defineStore('memory', () => {
     const entity = entities.value.find((e: any) => e.id === topicId);
     if (entity && entity.readStatus) {
       entity.readStatus.unreadCount = unreadCount;
-      entity.readStatus.isRead = unreadCount === 0;
       if (unreadCount === 0) {
         entity.readStatus.lastReadTime = Date.now();
       }
@@ -1308,6 +1417,7 @@ export const useMemoryStore = defineStore('memory', () => {
    */
   const performAskSearch = async (query: string) => {
     isLoading.value = true;
+    isAISearching.value = true; // 显示 AI 搜索动画
     searchContext.value.mode = 'overview';
     searchContext.value.query = query;
     searchQuery.value = query;
@@ -1341,6 +1451,7 @@ export const useMemoryStore = defineStore('memory', () => {
       searchContext.value.askResult = null;
     } finally {
       isLoading.value = false;
+      isAISearching.value = false; // 隐藏 AI 搜索动画
     }
   };
 
@@ -1358,7 +1469,7 @@ export const useMemoryStore = defineStore('memory', () => {
     
     try {
       const response = await chromeAPI.sendMessage({
-        type: 'VECTOR_SEARCH_ENTITIES',
+        type: 'SEARCH_ENTITIES',
         query,
         entityType,  // 如果指定类型，只搜索该类型
         limit: 30
@@ -1366,19 +1477,21 @@ export const useMemoryStore = defineStore('memory', () => {
       
       if (response && response.success) {
         entities.value = response.data || [];
-        console.log('[向量搜索] 搜索完成:', {
+        console.log('[向量搜索] 搜索完成，获取实际数据:', {
           query,
           entityType,
-          entitiesCount: entities.value.length
+          entitiesCount: entities.value.length,
+          source: response.source
         });
       } else {
         // 使用模拟数据展示向量搜索结果
-        entities.value = generateMockVectorSearchResults(query);
+        console.log('[向量搜索] API返回失败，使用mock数据');
+        entities.value = generateMockVectorSearchResults(query, entityType);
       }
     } catch (error) {
-      console.error('[向量搜索] 搜索失败:', error);
+      console.error('[向量搜索] 搜索异常:', error);
       // 使用模拟数据
-      entities.value = generateMockVectorSearchResults(query);
+      entities.value = generateMockVectorSearchResults(query, entityType);
     } finally {
       isLoading.value = false;
     }
@@ -1397,7 +1510,7 @@ export const useMemoryStore = defineStore('memory', () => {
   };
 
   return {
-    isLoading, searchQuery, entities, entityTypes, overviewStats, topicDetailData, personDetailData, closedTodayCards,
+    isLoading, isAISearching, searchQuery, entities, entityTypes, overviewStats, topicDetailData, personDetailData, closedTodayCards,
     initialize, loadEntitiesByType, searchEntities, vectorSearchEntities, loadTopicDetail,
     markTopicAsRead, markConversationAsRead, closeTodayCard,
     getUnreadTopics, getUnreadTopicsByImportance, getUnreadTopicsByLatestMessage, updateTopicUnreadCount,

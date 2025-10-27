@@ -78,17 +78,26 @@ class SemanticSearcher:
             print("请确保 ChromaDB 服务正在运行：docker-compose up -d")
             return False
     
-    def list_collections(self, collection_type: Optional[str] = None) -> List[str]:
+    def list_collections(
+        self, 
+        collection_type: Optional[str] = None,
+        username: Optional[str] = None
+    ) -> List[str]:
         """
         列出所有可用的集合
         
         Args:
             collection_type: 集合类型过滤 ('messages', 'entities', 'webpages', 'all')
+            username: 用户名过滤 (例如 'esone.qiu')
         """
         if not self.client:
             return []
         
         all_collections = [c.name for c in self.collections]
+        
+        # 根据用户名过滤
+        if username:
+            all_collections = [c for c in all_collections if c.startswith(f"{username}-")]
         
         if not collection_type or collection_type == 'all':
             return all_collections
@@ -111,8 +120,8 @@ class SemanticSearcher:
     def search(
         self,
         query: str,
-        collection_names: Optional[List[str]] = None,
         collection_type: Optional[str] = None,
+        username: Optional[str] = None,
         n_results: int = 10,
         filter_metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, List[Dict[str, Any]]]:
@@ -121,8 +130,8 @@ class SemanticSearcher:
         
         Args:
             query: 自然语言查询
-            collection_names: 指定要搜索的集合名称列表
             collection_type: 集合类型 ('messages', 'entities', 'webpages')
+            username: 用户名 (例如 'esone.qiu')
             n_results: 返回结果数量
             filter_metadata: 元数据过滤条件
             
@@ -133,10 +142,9 @@ class SemanticSearcher:
             raise Exception("未连接到 ChromaDB，请先调用 connect()")
         
         # 确定要搜索的集合
-        if collection_names:
-            target_collections = collection_names
-        elif collection_type:
-            target_collections = self.list_collections(collection_type)
+        if username or collection_type:
+            # 根据用户名和类型过滤
+            target_collections = self.list_collections(collection_type, username)
         else:
             # 默认搜索所有 messages、entities 和 webpages 集合
             target_collections = (
@@ -478,11 +486,23 @@ def main():
   # 搜索特定类型
   %(prog)s "张三" --type entities
   
-  # 搜索指定集合
-  %(prog)s "前端开发" --collections esone.qiu-messages esone.qiu-entities
+  # 搜索特定用户的数据
+  %(prog)s "前端开发" --user esone.qiu
+  
+  # 搜索特定用户的特定类型数据
+  %(prog)s "API 接口" --user esone.qiu --type messages
   
   # 指定返回数量
   %(prog)s "API 接口" --limit 20
+  
+  # 元数据过滤 - 搜索特定发送者的消息
+  %(prog)s "项目讨论" --type messages --where '{"sender": "张三"}'
+  
+  # 元数据过滤 - 搜索特定用户和团队的消息
+  %(prog)s "技术方案" --user esone.qiu --where '{"teamName": "研发部"}'
+  
+  # 元数据过滤 - 搜索特定类型的实体
+  %(prog)s "项目" --type entities --where '{"type": "Project"}'
   
   # 保存结果到文件
   %(prog)s "数据库设计" --output results.json
@@ -499,7 +519,7 @@ def main():
     parser.add_argument('query', nargs='?', help='自然语言查询')
     parser.add_argument('-t', '--type', choices=['messages', 'entities', 'webpages', 'all'],
                         help='数据类型 (messages/entities/webpages/all)')
-    parser.add_argument('-c', '--collections', nargs='+', help='指定要搜索的集合名称')
+    parser.add_argument('-u', '--user', help='用户名 (例如: esone.qiu)，可结合 --type 使用')
     parser.add_argument('-n', '--limit', type=int, default=10, help='每个集合返回结果数量 (默认: 10)')
     
     # 输出参数
@@ -513,6 +533,9 @@ def main():
     
     # 工具参数
     parser.add_argument('--list-collections', action='store_true', help='列出所有可用集合')
+    
+    # 过滤参数
+    parser.add_argument('-w', '--where', type=str, help='元数据过滤条件 (JSON格式), 例如: \'{"sender": "张三"}\'')
     
     args = parser.parse_args()
     
@@ -558,11 +581,23 @@ def main():
         sys.exit(1)
     
     try:
+        # 解析 where 过滤条件
+        filter_metadata = None
+        if args.where:
+            try:
+                filter_metadata = json.loads(args.where)
+                print(f"🔧 使用元数据过滤: {json.dumps(filter_metadata, ensure_ascii=False)}")
+            except json.JSONDecodeError as e:
+                print(f"❌ where 参数 JSON 格式错误: {e}")
+                print(f"   提供的参数: {args.where}")
+                sys.exit(1)
+        
         results = searcher.search(
             query=args.query,
-            collection_names=args.collections,
             collection_type=args.type,
-            n_results=args.limit
+            username=args.user,
+            n_results=args.limit,
+            filter_metadata=filter_metadata
         )
         
         # 展示结果

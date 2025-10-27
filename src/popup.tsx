@@ -77,16 +77,6 @@ const Popup = () => {
         });
     };
     
-    const openKnowledgeQueryWindow = () => {
-        chrome.windows.create({
-            url: 'knowledge-query.html',
-            type: 'popup',
-            width: 800,
-            height: 700,
-            focused: true
-        });
-    };
-    
     const openProjectDashboard = () => {
         chrome.windows.create({
             url: 'project-dashboard.html',
@@ -110,6 +100,16 @@ const Popup = () => {
             type: 'popup',
             width: 900,
             height: 800,
+            focused: true
+        });
+    };
+    
+    const openScheduledMessagesManager = () => {
+        chrome.windows.create({
+            url: 'scheduled-messages.html',
+            type: 'popup',
+            width: 1000,
+            height: 700,
             focused: true
         });
     };
@@ -299,16 +299,16 @@ const Popup = () => {
                 </div>
             )}
 
-            <button onClick={openProjectDashboard} className="dashboard-button">
-                📊 项目进度仪表盘
-            </button>
-
             <button onClick={openMemoryInterface} className="memory-button">
                 🧠 实体记忆查询
             </button>
 
-            <button onClick={openKnowledgeQueryWindow} className="message-button">
-                知识库查询
+            {/* <button onClick={openProjectDashboard} className="dashboard-button">
+                📊 项目进度仪表盘
+            </button> */}
+            
+            <button onClick={openScheduledMessagesManager} className="scheduled-button">
+                ⏰ 定时消息管理
             </button>
             
             <button onClick={openTopicWindow} className="message-button">
@@ -454,6 +454,19 @@ const Popup = () => {
                  }
                  .message-button:hover {
                     background-color: #e68a00;
+                 }
+                 
+                 .scheduled-button {
+                    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                    color: white;
+                    font-weight: 600;
+                    box-shadow: 0 2px 8px rgba(245, 87, 108, 0.3);
+                    transition: all 0.3s ease;
+                 }
+                 
+                 .scheduled-button:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
                  }
                  
                  .slides-button-group {

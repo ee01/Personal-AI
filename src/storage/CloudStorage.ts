@@ -173,6 +173,12 @@ export interface MemoryMessage {
   }>;
   entities?: any;
   actions?: any[];
+  
+  // 搜索相关字段（可选）
+  source?: string;
+  relevanceScore?: number;
+  distance?: number;
+  collectionType?: string;
 }
 // GraphEntity 替换为 MemoryEntity，类型兼容
 import { UserProfile } from '../types/userProfile';
@@ -316,11 +322,31 @@ export class CloudStorage {
   /**
    * 增强向量搜索 - 支持多种搜索模式和返回格式
    */
+  // 函数重载：根据 returnType 返回不同类型
+  async searchByVector(
+    query: string,
+    type?: string,
+    options?: VectorSearchOptions & { returnType: 'messages' }
+  ): Promise<QueryResult<MemoryMessage>>;
+  
+  async searchByVector(
+    query: string,
+    type?: string,
+    options?: VectorSearchOptions & { returnType: 'entities' }
+  ): Promise<QueryResult<MemoryEntity>>;
+  
+  async searchByVector(
+    query: string,
+    type?: string,
+    options?: VectorSearchOptions & { returnType?: 'raw' | string }
+  ): Promise<QueryResult<any>>;
+  
+  // 实现
   async searchByVector(
     query: string,
     type?: string,
     options: VectorSearchOptions = {}
-  ): Promise<QueryResult<any>> {
+  ): Promise<QueryResult<MemoryEntity | MemoryMessage | any>> {
     this.ensureInitialized();
     
     const startTime = Date.now();
@@ -1982,6 +2008,7 @@ export class CloudStorage {
           type: metadata.type || 'Document',
           name: metadata.name || '未知实体',
           document,
+          description: metadata.description || '',
           properties: typeof metadata.properties === 'string' ? JSON.parse(metadata.properties || '{}') : (metadata.properties || {}),
           created: metadata.created || Date.now(),
           updated: metadata.updated || Date.now(),

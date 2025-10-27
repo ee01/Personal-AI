@@ -147,7 +147,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore, ENTITY_TYPE_CONFIG } from '../memory-store';
 
@@ -161,6 +161,15 @@ const isLoading = computed(() => store.isLoading);
 const searchContext = computed(() => store.searchContext);
 const selectedTypeFilter = ref('all');
 const isAiAnswerExpanded = ref(true);
+
+// 自动设置筛选器：如果是从实体列表页搜索过来的，自动选中该实体类型
+watch(() => searchContext.value.entityType, (entityType) => {
+  if (entityType && searchContext.value.mode === 'entity') {
+    selectedTypeFilter.value = entityType;
+  } else {
+    selectedTypeFilter.value = 'all';
+  }
+}, { immediate: true });
 
 const toggleAiAnswer = () => {
   isAiAnswerExpanded.value = !isAiAnswerExpanded.value;

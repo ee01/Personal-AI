@@ -138,14 +138,14 @@
           v-for="entity in filteredEntities" 
           :key="entity.id" 
           class="content-card topic-card"
-          :class="{ unread: !entity.readStatus?.isRead }"
+          :class="{ unread: entity.readStatus?.unreadCount > 0 }"
           :data-topic-id="entity.id"
           style="position: relative;"
           @click="handleEntityClick(entity)"
         >
         <!-- "阅"按钮 - 仅未读主题显示 -->
         <button 
-          v-if="!entity.readStatus?.isRead" 
+          v-if="entity.readStatus?.unreadCount > 0" 
           class="mark-read-btn" 
           @click.stop="handleMarkTopicAsRead(entity.id)"
         >
@@ -155,7 +155,7 @@
           <div class="card-title">
             <span>💡</span>
             <span>{{ entity.name }}</span>
-            <span v-if="entity.readStatus && !entity.readStatus.isRead" class="unread-badge">
+            <span v-if="entity.readStatus && entity.readStatus.unreadCount > 0" class="unread-badge">
               {{ entity.readStatus.unreadCount }}条未读
             </span>
           </div>
@@ -541,9 +541,15 @@ const filteredEntities = computed(() => {
   
   // 主题未读过滤
   if (entityType.value === 'Topic' && topicViewMode.value === 'unread') {
-    filtered = filtered.filter(entity => 
-      !entity.readStatus?.isRead || entity.readStatus?.unreadCount > 0
-    );
+    filtered = filtered.filter(entity => {
+      // 优先使用 unreadCount 判断，如果存在 readStatus 但 unreadCount > 0 则显示
+      // 如果没有 readStatus 或者 readStatus.isRead === false，也显示
+      if (entity.readStatus) {
+        return entity.readStatus.unreadCount > 0;
+      }
+      // 如果没有 readStatus，说明从未标记过，也应该显示
+      return true;
+    });
   }
   
   // 文本搜索过滤（使用顶部搜索框的搜索词）
@@ -769,6 +775,8 @@ const handleMarkTopicAsRead = async (topicId: string) => {
 
 watch(entityType, (newType) => {
   if (newType) {
+    // 清空搜索上下文，确保加载的是该类型的实体而不是搜索结果
+    store.clearSearchContext();
     store.loadEntitiesByType(newType);
   }
 }, { immediate: true });

@@ -20,43 +20,7 @@
 
 ### 2. 需要重构的模块
 
-#### 2.1 知识查询界面重构 (knowledge-query.tsx)
-
-**现有问题**：
-- 查询结果展示单一（只有文本摘要）
-- 缺乏可视化元素
-- 用户交互体验不佳
-
-**重构方案**：
-```typescript
-// 新增结果展示类型
-interface EnhancedQueryResult extends QueryResult {
-  visualizationType: 'timeline' | 'graph' | 'card' | 'table';
-  relationships: EntityRelationship[];
-  timeline: TimelineEvent[];
-  relevanceScore: number;
-  confidenceLevel: number;
-}
-
-// 重构查询界面组件
-const EnhancedKnowledgeQuery: React.FC = () => {
-  const [viewMode, setViewMode] = useState<'list' | 'timeline' | 'graph'>('list');
-  const [results, setResults] = useState<EnhancedQueryResult[]>([]);
-  
-  return (
-    <div className="enhanced-knowledge-query">
-      <SmartSearchInput onQuery={handleEnhancedQuery} />
-      <ViewModeSelector current={viewMode} onChange={setViewMode} />
-      
-      {viewMode === 'list' && <ResultCardView results={results} />}
-      {viewMode === 'timeline' && <TimelineView results={results} />}
-      {viewMode === 'graph' && <KnowledgeGraphView results={results} />}
-    </div>
-  );
-};
-```
-
-#### 2.2 Agent系统扩展
+#### 2.1 Agent系统扩展
 
 **增强思考过程可视化**：
 ```typescript
@@ -486,7 +450,6 @@ const MainApp: React.FC = () => {
       
       <AppContent>
         {currentView === 'dashboard' && <ProjectDashboard />}
-        {currentView === 'knowledge' && <EnhancedKnowledgeQuery />}
         {currentView === 'memory' && <MemoryManagerInterface />}
         {currentView === 'analysis' && <AgentAnalysisInterface />}
       </AppContent>
@@ -601,12 +564,7 @@ class BackgroundService {
 #### 第三阶段 (第6-7周)：界面优化和用户体验
 **目标**：提升用户交互体验
 
-1. **知识查询界面重构**
-   - [ ] 重构knowledge-query.tsx
-   - [ ] 添加多维度展示视图
-   - [ ] 实现知识图谱可视化
-
-2. **Agent可视化增强**
+1. **Agent可视化增强**
    - [ ] 扩展agent-visualizer.tsx
    - [ ] 添加思考过程详细展示
    - [ ] 实现交互式工具调用
@@ -659,7 +617,6 @@ const config = {
     contentScript: './src/contentScript.tsx',
     universalContentScript: './src/web-intelligence/UniversalContentScript.ts',
     projectDashboard: './src/components/dashboard/ProjectDashboard.tsx',
-    enhancedKnowledgeQuery: './src/modals/enhanced-knowledge-query.tsx',
     memoryManager: './src/memory-management/MemoryManagerInterface.tsx'
   },
   // ... 其他配置
@@ -748,10 +705,6 @@ const config = {
 ### 🧠 记忆系统功能扩展
 
 #### 高级查询功能（高优先级）
-- **🔍 多维度查询界面**：时间线、关系图、卡片视图
-  - 相关文档：`memory_system.md`, `query_interfaces_optimization.md`
-  - 状态：设计完成，待实现
-
 - **📊 智能数据可视化**：实体关系图谱展示
   - 相关文档：`memory_system.md`
   - 状态：概念设计阶段
@@ -843,9 +796,8 @@ const config = {
 3. **🔄 配置导入导出功能** (`custom_prompts.md`) - 完善用户配置管理
 
 ### 🎯 高优先级（2-4周）
-4. **🔍 多维度查询界面** (`memory_system.md`, `query_interfaces_optimization.md`) - 时间线、关系图、卡片视图
-5. **👥 团队画像聚合** - 基于个人画像构建团队整体兴趣
-6. **📈 趋势预测功能** (`project_dashboard_usage_guide.md`) - 基于历史数据预测完成时间
+4. **👥 团队画像聚合** - 基于个人画像构建团队整体兴趣
+5. **📈 趋势预测功能** (`project_dashboard_usage_guide.md`) - 基于历史数据预测完成时间
 
 ### 🔧 中优先级（1-3个月）
 7. **🔔 智能提醒系统** - 基于画像生成个性化提醒策略

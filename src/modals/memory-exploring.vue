@@ -1,5 +1,8 @@
 <template>
   <div id="memory-app">
+    <!-- AI 搜索动画 -->
+    <AISearchAnimation :show="store.isAISearching" />
+    
     <div class="memory-container">
       <!-- 侧边栏 -->
       <div class="sidebar">
@@ -73,6 +76,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useMemoryStore } from './memory-store';
+import AISearchAnimation from './components/AISearchAnimation.vue';
 
 // 应用初始化逻辑
 const store = useMemoryStore();
@@ -98,7 +102,19 @@ const performSearch = () => {
   const path = router.currentRoute.value.path;
   
   // 判断搜索模式
-  if (path === '/' || path === '/user-profile' || path === '/timeline') {
+  // 1. 如果在搜索结果页再次搜索，保留原来的搜索模式
+  if (path === '/search' && store.searchContext.mode) {
+    if (store.searchContext.mode === 'overview') {
+      // 原来是 AI 搜索，继续用 AI 搜索
+      console.log('[搜索] 保持智能 AI 搜索模式:', searchQuery.value);
+      store.performAskSearch(searchQuery.value);
+    } else if (store.searchContext.mode === 'entity') {
+      // 原来是实体向量搜索，继续用实体向量搜索
+      const entityType = store.searchContext.entityType;
+      console.log('[搜索] 保持实体向量搜索模式:', searchQuery.value, entityType);
+      store.performEntityVectorSearch(searchQuery.value, entityType);
+    }
+  } else if (path === '/' || path === '/user-profile' || path === '/timeline') {
     // 首页概览、用户画像、时间轴 - 使用 ask() 智能搜索
     console.log('[搜索] 执行智能 AI 搜索:', searchQuery.value);
     store.performAskSearch(searchQuery.value);
@@ -412,6 +428,11 @@ body {
   color: #cbd5e1;
   line-height: 1.5;
   margin-bottom: 1rem;
+  font-size: 0.875rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .info-list {

@@ -2,6 +2,8 @@
 
 *最后更新: 2024-12-21 (缓存架构重构)*
 
+> 📌 **命名规范说明**: 本文档中的实体类型（如 `'Person'`, `'Project'`）和集合字段名（如 `people`, `projects`）遵循特定的命名规范。详见 [命名规范文档](../NAMING_CONVENTIONS.md)。
+
 ## 🧠 系统概述
 
 实体记忆系统是类人脑项目分析系统的核心组件，采用**分层架构设计**，将云端存储与本地缓存有机结合，实现高性能的记忆管理和查询。系统通过统一的接口层，为用户提供直观的记忆查询和管理体验，同时大幅优化了性能和用户体验。
@@ -72,6 +74,7 @@ graph TB
 export interface MemoryEntity {
   id: string;
   type: 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
+  // 📌 注意：type 使用单数形式（如 'Person' 而非 'People'），详见命名规范文档
   name: string;
   description?: string;
   properties: Record<string, any>;
@@ -96,6 +99,7 @@ export interface MemoryEntity {
     relationships: number;
   };
   relatedData: RelatedData;
+  // 📌 注意：relatedData.people 使用复数形式，表示"多个人员的集合"
 }
 ```
 
