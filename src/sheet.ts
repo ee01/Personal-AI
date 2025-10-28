@@ -1,21 +1,39 @@
 export class Sheet {
   private token: string;
   private sheetId: string;
-  private gid: string;
+  private gid: string | null;
   private sheetName: string;
 
-  constructor(url: string, token: string) {
+  constructor(token: string, sheetId: string, sheetName: string) {
     this.token = token;
-    this.sheetId = this.extractSheetId(url);
-    this.gid = this.extractGid(url);
-  }
-    
-  async init() {
-    if (!this.token) this.token = await this.getToken();
-    this.sheetName = await this.getSheetNameByGid(this.token, this.sheetId, this.gid);
+    this.sheetId = sheetId;
+    this.sheetName = sheetName;
+    this.gid = null;
   }
 
-  async getToken(): Promise<string> {
+  /**
+   * 从 Google Sheets URL 创建 Sheet 实例（静态工厂方法）
+   * @param url Google Sheets URL
+   * @param token 认证 token
+   * @returns Sheet 实例
+   */
+  static async fromUrl(url: string, token: string): Promise<Sheet> {
+    const sheetId = Sheet.extractSheetId(url);
+    const gid = Sheet.extractGid(url);
+    
+    if (!sheetId) {
+      throw new Error('无法从 URL 中提取 Sheet ID');
+    }
+
+    // 获取 sheetName
+    const sheetName = await Sheet.getSheetNameByGid(token, sheetId, gid);
+    
+    const sheet = new Sheet(token, sheetId, sheetName);
+    sheet.gid = gid;
+    return sheet;
+  }
+
+  static async getToken(): Promise<string> {
     return new Promise((resolve, reject) => {
         chrome.identity.getAuthToken({ interactive: true }, (token) => {
             if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
@@ -24,17 +42,17 @@ export class Sheet {
     });
   }
 
-  extractSheetId(url: string): string | null {
+  static extractSheetId(url: string): string | null {
     const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
     return match ? match[1] : null;
   }
 
-  extractGid(url: string): string | null {
+  static extractGid(url: string): string | null {
     const match = url.match(/[#&]gid=([0-9]+)/);
     return match ? match[1] : null;
   }
 
-  async getSheetNames(token: string, sheetId: string): Promise<any> {
+  static async getSheetNames(token: string, sheetId: string): Promise<any> {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}`;
     const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` }
@@ -43,10 +61,14 @@ export class Sheet {
     return json.sheets;
   }
 
-  async getSheetNameByGid(token: string, sheetId: string, gid: string): Promise<string> {
-    const sheets = await this.getSheetNames(token, sheetId);
-    const sheet = sheets.find((s: any) => s.properties.sheetId.toString() === gid);
-    return sheet ? sheet.properties.title : sheets[0].properties.title; // 如果找不到对应的gid,返回第一个sheet的名称
+  static async getSheetNameByGid(token: string, sheetId: string, gid: string | null): Promise<string> {
+    const sheets = await Sheet.getSheetNames(token, sheetId);
+    if (gid) {
+      const sheet = sheets.find((s: any) => s.properties.sheetId.toString() === gid);
+      if (sheet) return sheet.properties.title;
+    }
+    // 如果找不到对应的gid或gid为null，返回第一个sheet的名称
+    return sheets[0].properties.title;
   }
 
   async readSheet(valueRenderOption: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA' = 'FORMATTED_VALUE'): Promise<string[][]> {
@@ -54,6 +76,12 @@ export class Sheet {
     const res = await fetch(sheetUrl, {
         headers: { Authorization: `Bearer ${this.token}` }
     });
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`读取 Sheet 失败 (${res.status}): ${errorText}`);
+    }
+    
     const json = await res.json();
     return json.values;
   }
@@ -72,13 +100,17 @@ export class Sheet {
   }
 
   // 插入行或列
-  async insertDimension(dimension: 'ROWS' | 'COLUMNS', startIndex: number, endIndex: number): Promise<void> {
+  async insertDimension(dimension: 'ROWS' | 'COLUMNS', startIndex: number, endIndex: number, sheetId?: number): Promise<void> {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}:batchUpdate`;
+    
+    // 使用传入的 sheetId 或 this.gid，如果都没有则使用 0（第一个 sheet）
+    const targetSheetId = sheetId ?? (this.gid ? parseInt(this.gid) : 0);
+    
     const request = {
       requests: [{
         insertDimension: {
           range: {
-            sheetId: parseInt(this.gid),
+            sheetId: targetSheetId,
             dimension,
             startIndex,
             endIndex
@@ -89,7 +121,7 @@ export class Sheet {
       {
         addDimensionGroup: {
           range: {
-            sheetId: parseInt(this.gid),
+            sheetId: targetSheetId,
             dimension,
             startIndex,
             endIndex

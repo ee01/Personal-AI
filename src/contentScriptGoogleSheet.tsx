@@ -103,8 +103,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
         try {
             showToast('正在读取表格数据...');
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
-            const sheet = new Sheet(url, sheetToken);
-            await sheet.init();
+            const sheet = await Sheet.fromUrl(url, sheetToken);
             const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
             const sheetHeaders = await findValidJiraHeaders(sheet);
 
@@ -572,9 +571,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             throw new Error("缺少表格 URL");
         }
 
-        const sheet = new Sheet(sheetUrl, sheetToken);
+        const sheet = await Sheet.fromUrl(sheetUrl, sheetToken);
         try {
-            await sheet.init();
             const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
             console.log('values', values);
             const sheetHeaders = await findValidJiraHeaders(sheet);
@@ -733,10 +731,9 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
 async function handleExpandEpicTickets(sheetUrl: string, token: string) {
     showToast('开始查找 Epic 并获取子任务...');
     const envConfig = await getEnvConfig();
-    const sheet = new Sheet(sheetUrl, token);
+    const sheet = await Sheet.fromUrl(sheetUrl, token);
     
     try {
-        await sheet.init();
         const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
         if (!values || values.length === 0) {
             showToast('表格为空或无法读取', 'error');

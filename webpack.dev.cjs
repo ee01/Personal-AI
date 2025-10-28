@@ -9,7 +9,8 @@ module.exports = (env) => {
   
   return merge(common({
     ...env,
-    GOOGLE_CLIENT_ID: dotenv.parsed.GOOGLE_CLIENT_ID
+    GOOGLE_CLIENT_ID: dotenv.parsed.GOOGLE_CLIENT_ID,
+    ICON_NAME: dotenv.parsed.ICON_NAME
   }), {
     mode: 'development',
     devtool: 'inline-source-map',

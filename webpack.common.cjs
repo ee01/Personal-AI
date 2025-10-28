@@ -10,7 +10,7 @@ const NodeProtocolResolverPlugin = require('./node-protocol-resolver.cjs');
 // 处理 manifest 模板
 const processManifestTemplate = (env) => {
   const manifestTemplate = fs.readFileSync(path.resolve(__dirname, 'src/manifest.json'), 'utf8');
-  const manifestContent = manifestTemplate.replace('{{GOOGLE_CLIENT_ID}}', env.GOOGLE_CLIENT_ID);
+  const manifestContent = manifestTemplate.replace('{{GOOGLE_CLIENT_ID}}', env.GOOGLE_CLIENT_ID).replaceAll('{{ICON_NAME}}', env.ICON_NAME || 'icon');
   fs.writeFileSync(path.resolve(__dirname, 'static/manifest.json'), manifestContent);
 };
 
@@ -33,7 +33,6 @@ module.exports = (env) => {
       agentThinking: './src/agentThinking.ts',
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/modals/topic-modal.tsx',
-      'knowledge-query': './src/modals/knowledge-query.tsx',
       'slides-analysis': './src/modals/slides-analysis.tsx',
       'project-dashboard': './src/modals/project-dashboard.tsx',
       'prompt-config': './src/modals/prompt-config.tsx',
@@ -42,6 +41,7 @@ module.exports = (env) => {
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
       'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts',
       'memory-exploring': './src/modals/memory-exploring-entry.ts',
+      'scheduled-messages': './src/scheduled-messages/ScheduledMessagesManager.tsx',
     },
     module: {
       rules: [
@@ -102,7 +102,8 @@ module.exports = (env) => {
       new CopyPlugin({
         patterns: [
           { from: 'static' },
-          { from: 'docs/demo', to: 'demo' }
+          { from: 'docs/demo', to: 'demo' },
+          { from: 'appscripts', to: '.' }
         ],
       }),
       new webpack.ProvidePlugin({
