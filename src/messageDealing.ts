@@ -527,6 +527,20 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 		
 		if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
 			for (const json of dealResponse.data) {
+				// 🆕 检查消息是否已存在（通过 postId 去重）
+				if (json.post_id) {
+					try {
+						const existingMessage = await memorySystem.cloudStorage.getMessageByPostId(json.post_id);
+						if (existingMessage) {
+							console.log(`⏭️ 消息已存在，跳过处理: postId=${json.post_id}, messageId=${existingMessage.id}`);
+							continue;
+						}
+					} catch (error) {
+						console.warn(`检查消息是否存在时出错: postId=${json.post_id}`, error);
+						// 继续处理，防止因为查询错误而丢失消息
+					}
+				}
+			
 				// 如果需要推送 Glip 消息，则进行审核
 				if (body.messageData && (body.messageData.groupName.includes('4700372020') || body.messageData.groupName == 'SM AI')) continue;	// 排除 SM AI 的私人消息
 				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') continue;	// 排除 SM AI 的私人消息

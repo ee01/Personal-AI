@@ -624,6 +624,56 @@ export class CloudStorage {
   }
 
   /**
+   * 通过 postId 查询消息是否已存在
+   * @param postId 原始消息的 postId
+   * @returns 如果存在返回消息对象，否则返回 null
+   */
+  async getMessageByPostId(postId: string): Promise<MemoryMessage | null> {
+    this.ensureInitialized();
+
+    try {
+      const collection = this.collections.get(`${this.username}-messages`);
+      if (!collection) return null;
+
+      // 使用 where 条件查询 metadata.postId
+      const result = await collection.get({
+        where: { postId: postId },
+        include: ['metadatas', 'documents'],
+        limit: 1 // 只需要第一条匹配的记录
+      });
+
+      if (result.ids && result.ids.length > 0 && result.metadatas) {
+        const metadata = result.metadatas[0] as any;
+        const document = result.documents?.[0];
+        
+        // 构建消息对象
+        const processedMetadata = this.deserializeChromaMetadata(metadata || {});
+        
+        return {
+          id: result.ids[0],
+          content: document || '',
+          sender: metadata?.sender || 'unknown',
+          datetime: metadata?.datetime || Date.now(),
+          metadata: processedMetadata,
+          // 从 metadata 中提取常用字段
+          groupName: metadata?.groupName || '未知群组',
+          groupUrl: metadata?.groupUrl || metadata?.team_url || '#',
+          groupId: metadata?.groupId || '',
+          summary: metadata?.summary || (document ? document.substring(0, 100) + '...' : ''),
+          matchedRules: metadata?.matchedRules || [],
+          replyAdvice: metadata?.replyAdvice || '',
+          contextMessages: processedMetadata?.contextMessages || []
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`通过 postId ${postId} 查询消息失败:`, error);
+      return null;
+    }
+  }
+
+  /**
    * 查询云端实体（支持按type过滤和真正的分页）
    */
   async queryEntities(

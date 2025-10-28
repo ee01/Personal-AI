@@ -1,6 +1,8 @@
 // 环境配置类型定义
 export interface EnvConfigType {
-  SCHEDULED_INTERVAL: number;
+  MESSAGE_ANALYSIS_INTERVAL: number; // 分析消息的频度（分钟）
+  MESSAGE_CONTEXT_WINDOW: number;    // 每次分析获取的上下文时间窗口（分钟）
+  SCHEDULED_INTERVAL: number;        // 已废弃，保留用于向后兼容
   ANALYSIS_TYPE: string;
   ANALYZE_BY_GROUP: boolean;
   LLM_TYPE: string;
@@ -125,7 +127,9 @@ export function transformPostLinks(inputString: string) {
 
 // 默认环境配置
 export const defaultEnvConfig: EnvConfigType = {
-  SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120,
+  MESSAGE_ANALYSIS_INTERVAL: Number(process.env.MESSAGE_ANALYSIS_INTERVAL) || Number(process.env.SCHEDULED_INTERVAL) || 120,
+  MESSAGE_CONTEXT_WINDOW: Number(process.env.MESSAGE_CONTEXT_WINDOW) || 5,
+  SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120, // 保留用于向后兼容
   ANALYSIS_TYPE: process.env.ANALYSIS_TYPE || "filter",
   LLM_TYPE: process.env.LLM_TYPE || "dify",
   ANALYZE_BY_GROUP: process.env.ANALYZE_BY_GROUP === "true",

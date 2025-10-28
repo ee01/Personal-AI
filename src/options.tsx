@@ -94,7 +94,7 @@ const Options = () => {
             ...prev,
             [name]: type === 'checkbox' 
                 ? (e.target as HTMLInputElement).checked 
-                : name === 'SCHEDULED_INTERVAL' || name === 'CHROMA_PORT'
+                : name === 'SCHEDULED_INTERVAL' || name === 'MESSAGE_ANALYSIS_INTERVAL' || name === 'MESSAGE_CONTEXT_WINDOW' || name === 'CHROMA_PORT'
                     ? Number(value)
                     : value
         }));
@@ -185,22 +185,49 @@ const Options = () => {
             <div className="form-section">
                 <h2>常规设置</h2>
                 <div className="form-group">
-                    <label htmlFor="SCHEDULED_INTERVAL">
-                        定时分析消息间隔（分钟）
+                    <label htmlFor="MESSAGE_ANALYSIS_INTERVAL">
+                        消息分析频度（分钟）
                     </label>
                     <input
                         type="number"
-                        id="SCHEDULED_INTERVAL"
-                        name="SCHEDULED_INTERVAL"
-                        value={config.SCHEDULED_INTERVAL}
+                        id="MESSAGE_ANALYSIS_INTERVAL"
+                        name="MESSAGE_ANALYSIS_INTERVAL"
+                        value={config.MESSAGE_ANALYSIS_INTERVAL}
                         onChange={(e) => {
                             const numValue = Number(e.target.value);
                             setConfig(prev => ({
                                 ...prev,
-                                SCHEDULED_INTERVAL: numValue
+                                MESSAGE_ANALYSIS_INTERVAL: numValue
                             }));
                         }}
+                        min="1"
                     />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        每隔多久执行一次消息分析（默认: 120分钟）
+                    </small>
+                </div>
+                
+                <div className="form-group">
+                    <label htmlFor="MESSAGE_CONTEXT_WINDOW">
+                        消息上下文窗口（分钟）
+                    </label>
+                    <input
+                        type="number"
+                        id="MESSAGE_CONTEXT_WINDOW"
+                        name="MESSAGE_CONTEXT_WINDOW"
+                        value={config.MESSAGE_CONTEXT_WINDOW}
+                        onChange={(e) => {
+                            const numValue = Number(e.target.value);
+                            setConfig(prev => ({
+                                ...prev,
+                                MESSAGE_CONTEXT_WINDOW: numValue
+                            }));
+                        }}
+                        min="1"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        每次分析时额外获取的历史消息时间范围（默认: 5分钟）
+                    </small>
                 </div>
                 
                 <div className="form-group">

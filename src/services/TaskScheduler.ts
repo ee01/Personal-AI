@@ -3,8 +3,9 @@
  * 集中管理所有定时任务，避免重复执行和遗漏
  * 
  * 特性：
- * - message_analysis 任务的间隔时间从 envConfig.SCHEDULED_INTERVAL 动态读取
- * - 自动监听配置变化，当 SCHEDULED_INTERVAL 更新时自动重新加载任务间隔
+ * - message_analysis 任务的间隔时间从 envConfig.MESSAGE_ANALYSIS_INTERVAL 动态读取
+ * - 消息上下文获取窗口从 envConfig.MESSAGE_CONTEXT_WINDOW 动态读取
+ * - 自动监听配置变化，当配置更新时自动重新加载任务间隔
  * - 无需手动干预，配置更改后立即生效
  */
 
@@ -32,7 +33,7 @@ const TASK_DEFINITIONS: ScheduledTask[] = [
     id: 'message_analysis',
     name: '静默消息分析',
     category: 'message_analysis',
-    intervalMinutes: 30, // 默认30分钟间隔（实际值从 envConfig.SCHEDULED_INTERVAL 读取）
+    intervalMinutes: 30, // 默认30分钟间隔（实际值从 envConfig.MESSAGE_ANALYSIS_INTERVAL 读取）
     description: '自动分析RingCentral消息，提取关键信息',
     enabled: false
   },
@@ -122,8 +123,10 @@ export class TaskScheduler {
       
       // message_analysis 任务的间隔时间使用用户配置
       if (task.id === 'message_analysis') {
-        taskCopy.intervalMinutes = Number(config.SCHEDULED_INTERVAL) || 30;
+        // 优先使用新配置，如果不存在则使用旧配置作为回退
+        taskCopy.intervalMinutes = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
         console.log(`⚙️ message_analysis 任务间隔已设置为: ${taskCopy.intervalMinutes} 分钟`);
+        console.log(`⚙️ 消息上下文窗口已设置为: ${config.MESSAGE_CONTEXT_WINDOW || 5} 分钟`);
       }
       
       this.tasks.set(taskCopy.id, taskCopy);
@@ -394,7 +397,7 @@ export class TaskScheduler {
 
   /**
    * 设置配置变化监听器
-   * 自动监听 envConfig.SCHEDULED_INTERVAL 的变化并更新 message_analysis 任务
+   * 自动监听 envConfig.MESSAGE_ANALYSIS_INTERVAL 的变化并更新 message_analysis 任务
    */
   private setupConfigChangeListener(): void {
     if (this.storageChangeListener) {
@@ -413,12 +416,14 @@ export class TaskScheduler {
         const oldConfig = changes.envConfig.oldValue;
         const newConfig = changes.envConfig.newValue;
 
-        // 检查 SCHEDULED_INTERVAL 是否变化
-        if (oldConfig?.SCHEDULED_INTERVAL !== newConfig?.SCHEDULED_INTERVAL) {
-          const oldInterval = oldConfig?.SCHEDULED_INTERVAL;
-          const newInterval = newConfig?.SCHEDULED_INTERVAL;
-          
-          console.log(`🔄 检测到 SCHEDULED_INTERVAL 配置变化: ${oldInterval} -> ${newInterval} 分钟`);
+        // 检查 MESSAGE_ANALYSIS_INTERVAL 是否变化
+        const oldInterval = oldConfig?.MESSAGE_ANALYSIS_INTERVAL || oldConfig?.SCHEDULED_INTERVAL;
+        const newInterval = newConfig?.MESSAGE_ANALYSIS_INTERVAL || newConfig?.SCHEDULED_INTERVAL;
+        const oldContextWindow = oldConfig?.MESSAGE_CONTEXT_WINDOW;
+        const newContextWindow = newConfig?.MESSAGE_CONTEXT_WINDOW;
+        
+        if (oldInterval !== newInterval) {
+          console.log(`🔄 检测到 MESSAGE_ANALYSIS_INTERVAL 配置变化: ${oldInterval} -> ${newInterval} 分钟`);
           
           // 自动重新加载 message_analysis 任务的间隔配置
           const updated = await this.reloadMessageAnalysisInterval();
@@ -427,11 +432,15 @@ export class TaskScheduler {
             console.log('✅ message_analysis 任务间隔已自动更新');
           }
         }
+        
+        if (oldContextWindow !== newContextWindow) {
+          console.log(`🔄 检测到 MESSAGE_CONTEXT_WINDOW 配置变化: ${oldContextWindow} -> ${newContextWindow} 分钟`);
+        }
       }
     };
 
     chrome.storage.onChanged.addListener(this.storageChangeListener);
-    console.log('👂 配置变化监听器已设置（自动监听 SCHEDULED_INTERVAL）');
+    console.log('👂 配置变化监听器已设置（自动监听 MESSAGE_ANALYSIS_INTERVAL 和 MESSAGE_CONTEXT_WINDOW）');
   }
 
   /**
@@ -522,7 +531,12 @@ export class TaskScheduler {
       }
 
       // 计算分析时间范围
-      const startTime = new Date(Date.now() - (Number(config.SCHEDULED_INTERVAL) + 5) * 60 * 1000);
+      // 使用新配置：MESSAGE_ANALYSIS_INTERVAL（分析间隔）+ MESSAGE_CONTEXT_WINDOW（上下文窗口）
+      const analysisInterval = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
+      const contextWindow = Number(config.MESSAGE_CONTEXT_WINDOW) || 5;
+      const startTime = new Date(Date.now() - (analysisInterval + contextWindow) * 60 * 1000);
+      
+      console.log(`📝 开始消息分析，时间范围: ${analysisInterval + contextWindow} 分钟（分析间隔: ${analysisInterval} 分钟 + 上下文窗口: ${contextWindow} 分钟）`);
 
       // 发送消息获取请求
       const response = await this.sendMessageWithRetry(rcTab.id, {
@@ -849,7 +863,7 @@ export class TaskScheduler {
 
     // 读取最新配置
     const config = await getEnvConfig();
-    const newInterval = Number(config.SCHEDULED_INTERVAL) || 30;
+    const newInterval = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
 
     // 如果间隔没有变化，不需要更新
     if (task.intervalMinutes === newInterval) {
