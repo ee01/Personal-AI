@@ -16,12 +16,12 @@
 ### 2. 统一数据模型
 - 用户友好的表格格式（无 JSON）
 - 支持三种消息类型：Daily（按日期）、Hourly（按时间）、Periodic（周期性）
-- 支持两种推送方式：Email（假装用户）、Bot_API（机器人身份）
+- 支持两种推送方式：AsMe（以我的身份）、Bot（机器人身份）
 - 支持灵活的周期配置：日/周/月/年
 
 ### 3. 多种执行引擎
-- **AppScript 引擎**：处理 Email 推送，24/7 可靠运行
-- **Jira Automation 引擎**：处理 Bot API 推送，解决内网访问限制
+- **AppScript 引擎**：处理 AsMe 推送（通过 Email），24/7 可靠运行
+- **Jira Automation 引擎**：处理 Bot 推送（通过 Bot API），解决内网访问限制
 - **Chrome Extension 备用**：浏览器开启时可直接执行
 
 ### 4. 智能调度
@@ -29,6 +29,12 @@
 - 支持重复次数限制
 - 自动标记已完成任务
 - 记录执行日志
+
+### 5. 灵活的表格结构 ✨
+- **动态列位置识别**：通过 header 行自动识别列的位置
+- **支持自由调整列顺序**：用户可以在 Google Sheet 中随意调整列的顺序
+- **自动适配读写**：系统自动根据 header 确定数据的读取和写入位置
+- **向后兼容**：自动适配旧版本和新版本的表格结构
 
 ## 使用方法
 
@@ -48,15 +54,22 @@
 2. 在 Messages 表中添加新行
 3. 填写必要字段：
    - **ID**: 唯一标识（如 msg_001）
-   - **Type**: 消息类型（Daily/Hourly/Periodic）
    - **Topic**: 消息主题
    - **Content**: 消息内容
-   - **Schedule_Date**: 执行日期
-   - **Schedule_Time**: 执行时间（Hourly 类型必填）
-   - **Push_Method**: 推送方式（Email/Bot_API/Both）
-   - **Glip_User_Name**: 接收人用户名（如"Esone Qiu"）
+   - **Schedule_Date**: 执行日期（YYYY-MM-DD）
+   - **Schedule_Time**: 执行时间（HH:mm，可选）
+   - **Push_Method**: 推送方式（AsMe/Bot）
    - **Owner**: 创建者
    - **Status**: 状态（Active/Paused/Completed）
+   
+   **AsMe 推送额外字段**：
+   - **Glip_User_Name**: 接收人用户名（如"Esone Qiu"）
+   
+   **Bot 推送额外字段**：
+   - **Target_Type**: private（私聊）或 group（群组）
+   - **Bot_Endpoint**: Bot API 内网地址
+   - **Glip_User_Name**: 私聊时的用户名
+   - **Glip_Team_ID**: 群组推送时的群组 ID
 
 #### 方式二：通过管理界面（未来版本）
 
@@ -84,21 +97,25 @@
 
 ### 推送方式说明
 
-#### Email（假装用户身份）
+#### AsMe（以我的身份发送）
 - 通过 Google Mail 发送邮件到 Glip 邮箱
 - 在 Glip 中显示为用户本人发送的消息
 - 自动生成邮箱地址：
   - `Esone Qiu` → `esone.qiu@reply.ringcentral.glip.com`
   - 或直接使用群组 ID：`{teamId}@reply.ringcentral.glip.com`
+- 由 **AppScript 引擎**执行，24/7 可靠运行
 
-#### Bot_API（机器人身份）
-- 通过 Jira Automation 调用 Bot API
+#### Bot（机器人身份发送）
+- 通过 Jira Automation 调用内网 Bot API
 - 在 Glip 中显示为机器人发送的消息
-- 需要配置 Bot_Endpoint 字段
+- 需要配置 Bot_Endpoint 字段（内网地址）
+- 由 **Jira Automation 引擎**执行，解决内网访问限制
 
-#### Both（两者都用）
-- Email 和 Bot API 同时发送
-- 适用于需要双重保障的场景
+**执行策略**（v2 优化）：
+- 🎯 **单条消息推送**：每分钟执行一条，避免批量失败
+- 📊 **三级优先级**：当前分钟 > 过去30分钟 > 未指定时间（8点后）
+- 🛡️ **智能过滤**：自动跳过今日已成功/已失败的消息
+- 🔄 **自动重试**：失败消息第二天自动重试
 
 ## 技术架构
 
@@ -111,11 +128,11 @@ Chrome Extension 管理界面
     ↓
 Google Sheets（统一数据源）
     ↓
-    ├─→ AppScript Trigger（Email 推送）
+    ├─→ AppScript Trigger（AsMe 推送）
     │   ├─→ minuteTrigger（每分钟）
     │   └─→ dailyTrigger（每日）
     │
-    └─→ Jira Automation（Bot API 推送）
+    └─→ Jira Automation（Bot 推送）
         └─→ 每分钟读取 Sheet，调用 Bot API
 ```
 
@@ -131,16 +148,25 @@ Google Sheets（统一数据源）
 - 封装 Google Sheets API 操作
 - 提供 CRUD 接口
 - 计算下次执行时间
+- **动态列映射**：
+  - 读取时：通过 header 动态解析每行数据
+  - 写入时：根据 header 顺序动态生成行数据
+  - 缓存机制：header 结构缓存，提升性能
+  - 自动同步：同步数据时清除缓存，确保获取最新列结构
 
 #### 3. AppScript 执行引擎
 - `minuteTrigger()`: 每分钟执行，处理 Hourly 类型
 - `dailyTrigger()`: 每日执行，处理 Daily 和 Periodic 类型
 - `doGet()`: Web App 端点，供 Jira Automation 调用
 
-#### 4. Jira Automation 执行器
-- 每分钟调用 AppScript Web App
-- 获取需要执行的 Bot API 消息
-- 调用 Bot API 发送消息
+#### 4. Jira Automation 执行器（v2 架构）
+- 每分钟触发一次 Webhook 调用 AppScript
+- AppScript 执行完整流程：
+  1. 按优先级选择单条消息（当前分钟 > 过去30分钟 > 未指定时间）
+  2. 过滤今日已成功/已失败的消息
+  3. 调用内网 Bot API 发送
+  4. 更新执行日志到 Sheet
+- **优势**：失败消息不阻塞队列，全天分散推送未指定时间的消息
 
 ## 配置说明
 
@@ -158,10 +184,11 @@ Google Sheets（统一数据源）
 | Repeat_Every | Number | ❌ | 重复间隔 |
 | Repeat_Unit | Enum | ❌ | Day/Week/Month/Year |
 | Repeat_Count | Number | ❌ | 重复次数 |
-| Push_Method | Enum | ✅ | Email/Bot_API/Both |
-| Glip_User_Name | String | ❌ | 接收人用户名 |
-| Glip_Team_ID | String | ❌ | 群组 ID |
-| Bot_Endpoint | String | ❌ | Bot API 端点 |
+| Push_Method | Enum | ✅ | AsMe/Bot |
+| Target_Type | Enum | ❌ | private/group（Bot推送时使用） |
+| Glip_User_Name | String | ❌ | 接收人用户名（AsMe或Bot私聊） |
+| Glip_Team_ID | String | ❌ | 群组 ID（Bot群组推送） |
+| Bot_Endpoint | String | ❌ | Bot API 端点（Bot推送必填） |
 | Attachment | String | ❌ | 附件文件名 |
 | Owner | String | ✅ | 创建者 |
 | Status | Enum | ✅ | Active/Paused/Completed |
@@ -214,10 +241,54 @@ A:
 1. 打开 Google Sheet
 2. 删除对应的消息行即可
 
+### Q: 可以调整 Sheet 中列的顺序吗？
+A: 
+✅ **完全支持！** 系统会自动识别列的位置：
+1. 可以随意调整列的顺序（如把 Topic 移到第一列）
+2. 可以隐藏不需要的列
+3. 可以在中间插入新的列
+4. 系统通过 header 行（第一行）自动识别每列的含义
+5. 读取和写入数据时都会自动适配当前的列顺序
+
+**注意事项**：
+- ⚠️ 不要修改 header 行的列名（如 "ID"、"Topic" 等）
+- ⚠️ 不要删除必要的列（如 ID、Status 等）
+- ✅ 调整顺序后建议点击"同步"按钮刷新数据
+
+### Q: Bot 消息推送失败怎么办？
+A:
+1. **自动处理**：失败的消息今天不会重试（避免阻塞队列），第二天自动重试
+2. **手动重试**：打开 Sheet，清空失败消息的 `Last_Exec` 或修改 `Exec_Log`（移除 ❌）
+3. **查看原因**：检查 `Exec_Log` 列的错误信息
+4. **常见问题**：
+   - Bot Token 过期：重新配置 Jira Automation Rule
+   - Bot_Endpoint 错误：检查内网地址是否正确
+   - 权限不足：确认 Bot 有权限访问目标群组/用户
+
+### Q: 看到错误 "Cannot read properties of undefined (reading '0')"？
+A: 
+这个错误已在最新版本修复。如果仍然遇到：
+1. **原因**：Apps Script 的 `markBotMessageExecuted` API 接收到不完整的参数
+2. **解决方案**：
+   - 确保 Google Sheet 中的消息有唯一的 `ID` 字段
+   - 更新 AppScript 代码到最新版本（支持通过 messageId 自动查找）
+   - 如果是从 Jira Automation 调用，确保 webhook 包含 `messageId` 参数
+3. **技术细节**：最新版本的 `markBotMessageExecuted` 可以自动通过 `messageId` 查找对应的行，即使缺少 `rowIndex` 参数也能正常工作
+
+### Q: Bot 消息为什么没有立即推送？
+A: 
+Bot 消息采用**单条消息推送策略**，每分钟执行一条：
+- ✅ **正常情况**：当前分钟的消息会立即推送
+- ✅ **同时多条**：按优先级排队，5-10 分钟内全部推送完
+- ✅ **未指定时间**：8 点后全天分散推送
+- ⚠️ **超大量**：同时超过 30 条可能部分延迟或遗漏
+
 ## 未来规划
 
-### Phase 2: Bot API 支持
-- [ ] Jira Automation 统一执行器
+### Phase 2: Bot API 支持 ✅
+- [x] Jira Automation 统一执行器（v2 单条消息推送）
+- [x] 优先级调度系统（当前分钟 > 过去30分钟 > 未指定时间）
+- [x] 失败消息智能过滤（避免阻塞队列）
 - [ ] 从 Jira Automation 导入规则
 - [ ] 批量导入 Scheduled 规则
 - [ ] 每日同步 Jira rules 到 Sheet
@@ -236,5 +307,9 @@ A:
 - [Google Apps Script 文档](https://developers.google.com/apps-script)
 - [Apps Script API 文档](https://developers.google.com/apps-script/api)
 - [Jira Automation 文档](https://support.atlassian.com/cloud-automation/docs/jira-automation/)
+
+**实现细节文档**：
+- `BOT_SINGLE_MESSAGE_IMPLEMENTATION.md` - Bot 单条消息推送完整实现
+- `JIRA_GROOVY_FIX.md` - Jira Automation 架构演进
 
 

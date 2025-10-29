@@ -1181,12 +1181,28 @@ export class CloudStorage {
             }));
           }
 
+          // 安全地处理时间戳，避免 Invalid Date 错误
+          let datetime: string;
+          try {
+            const date = new Date(msg.timestamp);
+            if (isNaN(date.getTime())) {
+              // 如果时间戳无效，使用当前时间或metadata中的时间
+              console.warn(`⚠️ 消息 ${msg.messageId} 的时间戳无效: ${msg.timestamp}`);
+              datetime = msg.metadata?.datetime || new Date().toISOString();
+            } else {
+              datetime = date.toISOString();
+            }
+          } catch (e) {
+            console.warn(`⚠️ 消息 ${msg.messageId} 的时间戳转换失败:`, e);
+            datetime = msg.metadata?.datetime || new Date().toISOString();
+          }
+
           return {
             id: msg.messageId,
             sender: msg.source,
             groupName: msg.metadata?.groupName || '未知群组',
             groupUrl: msg.metadata?.groupUrl || msg.metadata?.team_url || '#',
-            datetime: new Date(msg.timestamp).toISOString(),
+            datetime,
             summary: msg.metadata?.summary || msg.content.substring(0, 100) + '...',
             content: msg.content,
             highlightText: msg.metadata?.highlightText || msg.content,

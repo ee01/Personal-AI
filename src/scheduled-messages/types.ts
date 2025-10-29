@@ -2,22 +2,25 @@
  * 定时消息类型定义
  */
 
-// 消息类型
+// 消息类型（用于内部判断，不在 Sheet 中存储）
 export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 
 // 推送方式
-export type PushMethod = 'Email' | 'Bot_API' | 'Both';
+export type PushMethod = 'AsMe' | 'Bot';
 
 // 消息状态
-export type MessageStatus = 'Active' | 'Paused' | 'Completed';
+export type MessageStatus = 'Active' | 'Paused' | 'Completed' | 'Done';
 
 // 重复周期单位
 export type RepeatUnit = 'Day' | 'Week' | 'Month' | 'Year';
 
+// 推送目标类型
+export type TargetType = 'private' | 'group';
+
 // 定时消息接口
 export interface ScheduledMessage {
   ID: string;
-  Type: MessageType;
+  Type?: MessageType;  // 可选，由程序自动计算
   Topic: string;
   Content: string;
   Schedule_Date: string;  // YYYY-MM-DD
@@ -29,9 +32,8 @@ export interface ScheduledMessage {
   Push_Method: PushMethod;
   Glip_User_Name?: string;
   Glip_Team_ID?: string;
-  Bot_Endpoint?: string;
   Attachment?: string;
-  Owner: string;
+  Target_Type?: TargetType;
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -41,19 +43,18 @@ export interface ScheduledMessage {
 
 // 创建消息的表单数据
 export interface CreateMessageFormData {
-  Type: MessageType;
   Topic: string;
   Content: string;
   Schedule_Date: string;
-  Schedule_Time: string;
+  Schedule_Time?: string;  // 可选：留空则每日早上9点执行
   End_Date?: string;
   Repeat_Every?: number;
   Repeat_Unit?: RepeatUnit;
   Repeat_Count?: number;
   Push_Method: PushMethod;
-  Glip_User_Name?: string;
+  Target_Type: TargetType;  // 私发或群组
+  Glip_User_Name?: string;  // 支持多个人名，用逗号分隔
   Glip_Team_ID?: string;
-  Bot_Endpoint?: string;
   Attachment?: string;
 }
 
@@ -70,6 +71,15 @@ export interface SheetConfig {
   created_by: string;
   created_at: string;
   last_sync_time?: string;
+  // Bot Executor 配置（Jira Automation Rule）
+  botExecutor?: {
+    ruleId: string;
+    ruleName: string;
+    webhookUrl: string;
+    projectKey: string;
+    jiraUrl: string;
+    createdAt: string;
+  };
 }
 
 // 初始化结果
@@ -98,6 +108,7 @@ export interface Statistics {
   active: number;
   paused: number;
   completed: number;
+  done: number;
   executedToday: number;
 }
 

@@ -1,0 +1,115 @@
+{
+  "name": "{{RULE_NAME}}",
+  "state": "ENABLED",
+  "canOtherRuleTrigger": false,
+  "notifyOnError": "FIRSTERROR",
+  "authorAccountId": "{{USER_KEY}}",
+  "actorAccountId": "{{USER_KEY}}",
+  "trigger": {
+    "component": "TRIGGER",
+    "schemaVersion": 1,
+    "type": "jira.scheduled.trigger",
+    "value": {
+      "scheduleConfig": {
+        "expression": "0 * * * * ?"
+      }
+    },
+    "children": [],
+    "conditions": [],
+    "optimisedIds": [],
+    "newComponent": false
+  },
+  "components": [
+    {
+      "component": "ACTION",
+      "schemaVersion": 2,
+      "type": "jira.issue.outgoing.webhook",
+      "value": {
+        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime",
+        "headers": [],
+        "sendIssue": false,
+        "contentType": "empty",
+        "method": "GET",
+        "responseEnabled": true,
+        "usedSecretsKeys": []
+      },
+      "children": [
+        {
+          "component": "CONDITION",
+          "schemaVersion": 1,
+          "type": "jira.comparator.condition",
+          "value": {
+            "first": "{{webhookResponse.body.executed}}",
+            "second": "true",
+            "operator": "EQUALS"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{BOT_API_URL}}",
+                "headers": [
+                  {
+                    "name": "accept",
+                    "value": {
+                      "keyOrValue": "*/*",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "Bearer {{BOT_TOKEN}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "name": "bot",
+                    "value": {
+                      "keyOrValue": "{{BOT_ID}}",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "__CUSTOM_BODY_PLACEHOLDER__",
+                "method": "POST",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [],
+          "optimisedIds": [],
+          "newComponent": false
+        }
+      ],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    }
+  ],
+  "projects": [
+    {
+      "projectId": "{{PROJECT_ID}}",
+      "projectTypeKey": "software"
+    }
+  ],
+  "labels": [],
+  "tags": []
+}
+

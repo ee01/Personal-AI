@@ -13,7 +13,8 @@
     "offscreen",
     "scripting",
     "identity",
-    "clipboardWrite"
+    "clipboardWrite",
+    "cookies"
   ],
   "content_scripts": [
     {

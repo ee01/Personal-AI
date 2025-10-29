@@ -83,7 +83,7 @@ export class SheetInitializer {
         },
         body: JSON.stringify({
           properties: {
-            title: `Personal AI - 定时消息管理})`
+            title: `Personal AI - 定时消息管理`
           },
           sheets: [
             { properties: { title: 'Messages', gridProperties: { frozenRowCount: 1 } } },
@@ -199,15 +199,24 @@ export class SheetInitializer {
   
   /**
    * 设置工作表结构（表头和格式）
+   * 
+   * 重要说明：
+   * - header 的列名必须与 ScheduledMessage 接口的字段名完全一致
+   * - 用户可以在 Google Sheet 中自由调整列的顺序，系统会自动适配
+   * - ScheduledMessageService 使用动态列映射机制：
+   *   1. 读取时：通过 header 解析每列数据到对应字段
+   *   2. 写入时：根据 header 顺序动态生成行数据
+   * - 不要修改 header 的列名，但可以随意调整顺序、隐藏列、插入新列
    */
   private async setupWorksheets(spreadsheetId: string): Promise<void> {
-    // Messages 表头
+    // Messages 表头（移除 Type，由程序自动判断）
+    // 注意：这里定义的是初始顺序，用户可以在 Sheet 中随意调整
     const messagesHeaders = [
-      'ID', 'Type', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
+      'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
       'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
-      'Push_Method', 'Glip_User_Name', 'Glip_Team_ID', 'Bot_Endpoint',
-      'Attachment', 'Owner', 'Status', 'Last_Exec', 'Next_Exec',
-      'Exec_Count', 'Exec_Log'
+      'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
+      'Attachment', 'Status', 'Last_Exec', 'Next_Exec',
+      'Exec_Count', 'Exec_Log', 'Target_Type'
     ];
     
     // Config 表头
@@ -298,30 +307,28 @@ export class SheetInitializer {
     
     const sampleMessage = [
       `msg_welcome_${Date.now()}`,  // ID
-      'Hourly',                       // Type
       'Personal AI 欢迎消息',        // Topic
       '🎉 恭喜！您的定时消息系统已成功初始化！\n\n这是一条测试消息，证明系统运行正常。\n\n您现在可以在管理界面添加更多定时消息。', // Content
       this.formatDate(now),           // Schedule_Date
-      this.formatTime(oneMinuteLater), // Schedule_Time
+      this.formatTime(oneMinuteLater), // Schedule_Time（填写时间，自动判断为 Hourly 类型）
       '',                             // End_Date
       '',                             // Repeat_Every
       '',                             // Repeat_Unit
       '',                             // Repeat_Count
-      'Email',                        // Push_Method
-      'Esone Qiu',                    // Glip_User_Name
+      'AsMe',                         // Push_Method
+      'sync.service',                 // Glip_User_Name
       '',                             // Glip_Team_ID
-      '',                             // Bot_Endpoint
       '',                             // Attachment
-      'Personal AI',                  // Owner
       'Active',                       // Status
       '',                             // Last_Exec
       this.formatDateTime(oneMinuteLater), // Next_Exec
       0,                              // Exec_Count
-      '待执行'                         // Exec_Log
+      '待执行',                       // Exec_Log
+      'private'                       // Target_Type
     ];
     
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:U2?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:S2?valueInputOption=USER_ENTERED`,
       {
         method: 'PUT',
         headers: {

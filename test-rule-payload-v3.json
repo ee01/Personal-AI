@@ -1,0 +1,115 @@
+{
+  "name": "[Personal AI] Scheduled Messages Bot Executor",
+  "state": "ENABLED",
+  "canOtherRuleTrigger": false,
+  "notifyOnError": "FIRSTERROR",
+  "authorAccountId": "esone.qiu",
+  "actorAccountId": "esone.qiu",
+  "trigger": {
+    "component": "TRIGGER",
+    "schemaVersion": 1,
+    "type": "jira.scheduled.trigger",
+    "value": {
+      "scheduleConfig": {
+        "expression": "0 * * * * ?"
+      }
+    },
+    "children": [],
+    "conditions": [],
+    "optimisedIds": [],
+    "newComponent": false
+  },
+  "components": [
+    {
+      "component": "ACTION",
+      "schemaVersion": 2,
+      "type": "jira.issue.outgoing.webhook",
+      "value": {
+        "url": "YOUR_WEB_APP_URL?action=getBotMessageCurrentTime",
+        "headers": [],
+        "sendIssue": false,
+        "contentType": "empty",
+        "method": "GET",
+        "responseEnabled": true,
+        "usedSecretsKeys": []
+      },
+      "children": [
+        {
+          "component": "CONDITION",
+          "schemaVersion": 1,
+          "type": "jira.comparator.condition",
+          "value": {
+            "first": "{{webhookResponse.body.executed}}",
+            "second": "true",
+            "operator": "EQUALS"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "YOUR_BOT_API_URL",
+                "headers": [
+                  {
+                    "name": "accept",
+                    "value": {
+                      "keyOrValue": "*/*",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "Bearer YOUR_BOT_TOKEN",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "name": "bot",
+                    "value": {
+                      "keyOrValue": "YOUR_BOT_ID",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\"mention\":false,\"email\":\"esone.qiu@ringcentral.com\",\"emailAutoCorrect\":true,\"message\":{{webhookResponse.body.content.asJsonString}}}",
+                "method": "POST",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [],
+          "optimisedIds": [],
+          "newComponent": false
+        }
+      ],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    }
+  ],
+  "projects": [
+    {
+      "projectId": "16552",
+      "projectTypeKey": "software"
+    }
+  ],
+  "labels": [],
+  "tags": []
+}
+

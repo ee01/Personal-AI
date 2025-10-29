@@ -1,0 +1,51 @@
+{
+  "name": "{{RULE_NAME}}",
+  "state": "ENABLED",
+  "canOtherRuleTrigger": false,
+  "notifyOnError": "FIRSTERROR",
+  "authorAccountId": "{{USER_KEY}}",
+  "actorAccountId": "{{USER_KEY}}",
+  "trigger": {
+    "component": "TRIGGER",
+    "schemaVersion": 1,
+    "type": "jira.scheduled.trigger",
+    "value": {
+      "scheduleConfig": {
+        "expression": "0 * * * * ?"
+      }
+    },
+    "children": [],
+    "conditions": [],
+    "optimisedIds": [],
+    "newComponent": false
+  },
+  "components": [
+    {
+      "component": "ACTION",
+      "schemaVersion": 2,
+      "type": "jira.issue.outgoing.webhook",
+      "value": {
+        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&botToken={{BOT_TOKEN}}",
+        "headers": [],
+        "sendIssue": false,
+        "contentType": "empty",
+        "method": "GET",
+        "responseEnabled": false,
+        "usedSecretsKeys": []
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    }
+  ],
+  "projects": [
+    {
+      "projectId": "{{PROJECT_ID}}",
+      "projectTypeKey": "software"
+    }
+  ],
+  "labels": [],
+  "tags": []
+}
+

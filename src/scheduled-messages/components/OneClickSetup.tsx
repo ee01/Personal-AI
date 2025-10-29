@@ -180,69 +180,79 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         {needsAuth ? (
           // 授权界面
           <>
-          {error && (
-            <div style={error.includes('尚未完成授权') ? styles.authError : styles.error}>
-              {error}
-            </div>
-          )}
-
-            <div style={styles.authSection}>
-              <h2 style={styles.authTitle}>🔐 需要授权</h2>
-              <p style={styles.authDescription}>
-                系统已成功创建 Sheet 和 AppScript（完成步骤 1-5/8）
-              </p>
-              <p style={styles.authDescription}>
-                现在需要您授权 Apps Script 访问 Google 服务，之后将继续完成剩余步骤。
-              </p>
-              
-              <div style={styles.authSteps}>
-                <p style={styles.stepTitle}>请按照以下步骤操作：</p>
-                <ol style={styles.stepList}>
-                  <li>点击下方"打开授权页面"按钮</li>
-                  <li>在新打开的页面中，点击 "REVIEW PERMISSIONS" 按钮</li>
-                  <li>选择您的 Google 账号并授权应用</li>
-                  <li>授权完成后，回到此页面点击"完成初始化"按钮</li>
-                </ol>
-              </div>
-              
-              <button 
-                style={styles.primaryButton}
-                onClick={() => window.open(authUrl, '_blank')}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
-                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}
-              >
-                🔓 打开授权页面
-              </button>
-              
-              <p style={styles.authNote}>
-                💡 提示：如果授权窗口已关闭，您可以随时重新点击上方按钮打开。
-              </p>
-              
-              <p style={styles.authHint}>
-                授权完成后，点击下方按钮继续：
-              </p>
-              
-              <button 
-                style={styles.completeButton}
-                onClick={handleCompleteAuth}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#218838'}
-                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
-              >
-                ✅ 我已完成授权，继续初始化
-              </button>
-              
-              {tempResult && (
-                <div style={styles.infoBox}>
-                  <p style={styles.infoTitle}>📋 系统信息：</p>
-                  <p style={styles.infoItem}>Sheet ID: {tempResult.sheetId}</p>
-                  <p style={styles.infoItem}>
-                    <a href={tempResult.sheetUrl} target="_blank" rel="noopener noreferrer">
-                      📊 查看 Sheet
-                    </a>
-                  </p>
+          {!isInitializing ? (
+            <>
+              {error && (
+                <div style={error.includes('尚未完成授权') ? styles.authError : styles.error}>
+                  {error}
                 </div>
               )}
+
+              <div style={styles.authSection}>
+                <h2 style={styles.authTitle}>🔐 需要授权</h2>
+                <p style={styles.authDescription}>
+                  系统已成功创建 Sheet 和 AppScript（完成步骤 1-5/8）
+                </p>
+                <p style={styles.authDescription}>
+                  现在需要您授权 Apps Script 访问 Google 服务，之后将继续完成剩余步骤。
+                </p>
+                
+                <div style={styles.authSteps}>
+                  <p style={styles.stepTitle}>请按照以下步骤操作：</p>
+                  <ol style={styles.stepList}>
+                    <li>点击下方"打开授权页面"按钮</li>
+                    <li>在新打开的页面中，点击 "REVIEW PERMISSIONS" 按钮</li>
+                    <li>选择您的 Google 账号并授权应用</li>
+                    <li>授权完成后，回到此页面点击"完成初始化"按钮</li>
+                  </ol>
+                </div>
+                
+                <button 
+                  style={styles.primaryButton}
+                  onClick={() => window.open(authUrl, '_blank')}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}
+                >
+                  🔓 打开授权页面
+                </button>
+                
+                <p style={styles.authNote}>
+                  💡 提示：如果授权窗口已关闭，您可以随时重新点击上方按钮打开。
+                </p>
+                
+                <p style={styles.authHint}>
+                  授权完成后，点击下方按钮继续：
+                </p>
+                
+                <button 
+                  style={styles.completeButton}
+                  onClick={handleCompleteAuth}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#218838'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
+                >
+                  ✅ 我已完成授权，继续初始化
+                </button>
+                
+                {tempResult && (
+                  <div style={styles.infoBox}>
+                    <p style={styles.infoTitle}>📋 系统信息：</p>
+                    <p style={styles.infoItem}>Sheet ID: {tempResult.sheetId}</p>
+                    <p style={styles.infoItem}>
+                      <a href={tempResult.sheetUrl} target="_blank" rel="noopener noreferrer">
+                        📊 查看 Sheet
+                      </a>
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div style={styles.loading}>
+              <div style={styles.spinner}></div>
+              <p style={styles.loadingText}>{currentStep}</p>
+              <p style={styles.loadingHint}>这可能需要 10-15 秒，请稍候...</p>
             </div>
+          )}
           </>
         ) : !isInitializing ? (
           <>
