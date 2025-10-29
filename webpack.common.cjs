@@ -103,7 +103,8 @@ module.exports = (env) => {
         patterns: [
           { from: 'static' },
           { from: 'docs/demo', to: 'demo' },
-          { from: 'appscripts', to: '.' }
+          { from: 'appscripts', to: '.' },
+          { from: 'src/scheduled-messages/app-script-template.gs', to: 'app-script-template.gs' }
         ],
       }),
       new webpack.ProvidePlugin({

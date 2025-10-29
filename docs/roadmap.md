@@ -1,814 +1,846 @@
-# 类人脑项目分析系统 - 实施路线图
+# Personal AI - 功能路线图
 
-*最后更新: 2024-12-20*
-
-## 现有代码分析与重构方案
-
-### 1. 现有优势资源
-
-#### 已完善的核心模块
-- ✅ **智能代理系统** (`agentThinking.ts`) - 2768行完整实现
-- ✅ **向量存储系统** (`vectorStore.ts`) - ChromaDB集成
-- ✅ **消息分析过滤** (`messageDealing.ts`) - 智能消息处理
-- ✅ **多平台内容脚本** - Jira、Google Docs、聊天平台
-- ✅ **基础React界面** - 组件化架构
-
-#### 可复用的接口定义
-- ✅ **分析接口** (`interfaces/analysisInterfaces.ts`) - 454行完整类型定义
-- ✅ **工具系统** - 可扩展的工具注册机制
-- ✅ **思考过程** - 完整的Agent思考链记录
-
-### 2. 需要重构的模块
-
-#### 2.1 Agent系统扩展
-
-**增强思考过程可视化**：
-```typescript
-// 扩展现有的 agent-visualizer.tsx
-interface EnhancedThoughtStep extends ThoughtStep {
-  reasoning: string;           // 推理过程
-  confidence: number;          // 置信度
-  alternatives: string[];      // 备选方案
-  dataSource: string[];        // 数据来源
-  impact: 'high' | 'medium' | 'low'; // 影响程度
-}
-
-// 新增项目分析专用的Agent工具
-const projectAnalysisTools = {
-  'jira-dependency-analyzer': {
-    description: '分析Jira任务依赖关系',
-    execute: async (params: {projectKey: string}) => {
-      // 调用Jira API获取依赖数据
-      // 分析关键路径和风险点
-      return dependencyAnalysisResult;
-    }
-  },
-  
-  'team-workload-analyzer': {
-    description: '分析团队工作负载分布',
-    execute: async (params: {teamId: string, timeRange: string}) => {
-      // 分析团队成员工作量
-      // 识别资源瓶颈
-      return workloadAnalysisResult;
-    }
-  }
-};
-```
-
-### 3. 全新模块开发
-
-#### 3.1 项目进度可视化仪表盘
-
-**核心组件结构**：
-```
-src/components/dashboard/
-├── ProjectDashboard.tsx              # 主仪表盘组件
-├── charts/
-│   ├── GanttChart.tsx               # 甘特图组件
-│   ├── BurndownChart.tsx            # 燃尽图组件
-│   ├── DependencyGraph.tsx          # 依赖关系图
-│   └── TeamWorkloadChart.tsx        # 团队负载图
-├── panels/
-│   ├── RiskPanel.tsx                # 风险提示面板
-│   ├── MilestonePanel.tsx           # 里程碑面板
-│   ├── TeamMetricsPanel.tsx         # 团队指标面板
-│   └── QuickActionsPanel.tsx        # 快速操作面板
-└── interactions/
-    ├── EditableOverlay.tsx          # 可编辑覆盖层
-    ├── QuickEditModal.tsx           # 快速编辑弹窗
-    └── ChangeConfirmDialog.tsx      # 变更确认对话框
-```
-
-**主要实现**：
-```typescript
-// ProjectDashboard.tsx
-const ProjectDashboard: React.FC = () => {
-  const [projects, setProjects] = useState<ProjectData[]>([]);
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  
-  // 数据获取和实时更新
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      await refreshProjectData();
-    }, 30000); // 30秒更新一次
-    
-    return () => clearInterval(interval);
-  }, [selectedProject]);
-  
-  // 轻量编辑处理
-  const handleQuickEdit = async (item: EditableItem, newValue: any) => {
-    // 更新本地状态
-    updateLocalState(item, newValue);
-    
-    // 异步更新后端和记忆系统
-    await updateMemorySystem(item, newValue);
-    
-    // 发送变更通知
-    notifyChange(item, newValue);
-  };
-  
-  return (
-    <DashboardLayout>
-      <ProjectSelector 
-        projects={projects}
-        selected={selectedProject}
-        onSelect={setSelectedProject}
-      />
-      
-      <div className="dashboard-grid">
-        <div className="chart-area">
-          <TabsContainer>
-            <Tab title="甘特图">
-              <GanttChart 
-                projectId={selectedProject}
-                editable={editMode}
-                onEdit={handleQuickEdit}
-              />
-            </Tab>
-            <Tab title="燃尽图">
-              <BurndownChart projectId={selectedProject} />
-            </Tab>
-            <Tab title="依赖图">
-              <DependencyGraph 
-                projectId={selectedProject}
-                onDependencyEdit={handleDependencyEdit}
-              />
-            </Tab>
-          </TabsContainer>
-        </div>
-        
-        <div className="side-panels">
-          <RiskPanel projectId={selectedProject} />
-          <TeamMetricsPanel projectId={selectedProject} />
-          <QuickActionsPanel onQuickAction={handleQuickAction} />
-        </div>
-      </div>
-      
-      {editMode && (
-        <EditableOverlay
-          onSave={handleSaveChanges}
-          onCancel={() => setEditMode(false)}
-        />
-      )}
-    </DashboardLayout>
-  );
-};
-```
-
-#### 3.2 智能网页分析系统
-
-**文件结构**：
-```
-src/web-intelligence/
-├── UniversalContentScript.ts        # 通用内容脚本
-├── WebIntelligenceAnalyzer.ts       # 网页智能分析器
-├── LocalLLMService.ts               # 本地LLM服务
-├── RelevanceDetector.ts             # 相关性检测器
-└── UserNotificationService.ts       # 用户通知服务
-```
-
-**核心实现**：
-```typescript
-// UniversalContentScript.ts
-class UniversalContentScript {
-  private analyzer: WebIntelligenceAnalyzer;
-  private relevanceThreshold = 0.7;
-  private analysisDebounceTime = 2000; // 2秒防抖
-  
-  async initialize() {
-    // 延迟分析，避免影响页面加载性能
-    setTimeout(() => {
-      this.performInitialAnalysis();
-    }, 1000);
-    
-    // 监听页面变化
-    this.setupContentObserver();
-    
-    // 添加用户交互元素
-    this.setupUserInterface();
-  }
-  
-  private async performInitialAnalysis() {
-    try {
-      const pageContent = this.extractPageContent();
-      const analysisResult = await this.analyzer.quickAnalyze(pageContent);
-      
-      if (analysisResult.isRelevant && analysisResult.confidence > this.relevanceThreshold) {
-        this.showRelevanceIndicator(analysisResult);
-      }
-    } catch (error) {
-      console.warn('页面分析失败:', error);
-    }
-  }
-  
-  private extractPageContent(): PageContent {
-    return {
-      title: document.title,
-      url: window.location.href,
-      mainContent: this.getMainTextContent(),
-      metadata: this.extractMetadata(),
-      timestamp: Date.now()
-    };
-  }
-  
-  private showRelevanceIndicator(result: WebAnalysisResult) {
-    // 创建浮动指示器
-    const indicator = document.createElement('div');
-    indicator.className = 'brain-system-relevance-indicator';
-    indicator.innerHTML = `
-      <div class="indicator-content">
-        <span class="icon">🧠</span>
-        <span class="text">发现相关信息 (${Math.round(result.confidence * 100)}%)</span>
-        <button class="analyze-btn">分析并保存</button>
-        <button class="dismiss-btn">忽略</button>
-      </div>
-    `;
-    
-    // 添加事件监听器
-    indicator.querySelector('.analyze-btn')?.addEventListener('click', () => {
-      this.handleUserConfirmAnalysis(result);
-    });
-    
-    indicator.querySelector('.dismiss-btn')?.addEventListener('click', () => {
-      indicator.remove();
-    });
-    
-    document.body.appendChild(indicator);
-    
-    // 3秒后自动消失
-    setTimeout(() => {
-      if (indicator.parentNode) {
-        indicator.remove();
-      }
-    }, 30000);
-  }
-  
-  private async handleUserConfirmAnalysis(quickResult: WebAnalysisResult) {
-    // 显示分析进度
-    this.showAnalysisProgress();
-    
-    try {
-      // 调用深度分析
-      const detailedResult = await this.analyzer.deepAnalyze(quickResult.relevantContent);
-      
-      // 发送到记忆系统
-      await chrome.runtime.sendMessage({
-        type: 'STORE_WEB_ANALYSIS',
-        data: detailedResult
-      });
-      
-      // 显示成功提示
-      this.showSuccessNotification('信息已保存到知识库');
-      
-    } catch (error) {
-      this.showErrorNotification('分析失败，请稍后重试');
-    }
-  }
-}
-
-// WebIntelligenceAnalyzer.ts
-class WebIntelligenceAnalyzer {
-  async quickAnalyze(content: PageContent): Promise<WebAnalysisResult> {
-    // 使用轻量级本地分析
-    const relevanceScore = await this.calculateRelevanceScore(content);
-    const entities = await this.extractBasicEntities(content);
-    
-    return {
-      isRelevant: relevanceScore > 0.5,
-      confidence: relevanceScore,
-      extractedInfo: entities,
-      suggestedStorage: relevanceScore > 0.7,
-      relevantContent: this.extractRelevantParts(content, entities)
-    };
-  }
-  
-  async deepAnalyze(content: string): Promise<DetailedAnalysisResult> {
-    // 调用云端LLM进行深度分析
-    const response = await chrome.runtime.sendMessage({
-      type: 'DEEP_ANALYZE_CONTENT',
-      content: content
-    });
-    
-    return this.processAnalysisResponse(response);
-  }
-  
-  private async calculateRelevanceScore(content: PageContent): Promise<number> {
-    // 基于关键词匹配、URL模式、内容特征等计算相关性
-    const keywordMatches = this.matchProjectKeywords(content);
-    const urlRelevance = this.analyzeUrlPattern(content.url);
-    const contentFeatures = this.extractContentFeatures(content);
-    
-    // 权重计算
-    return (keywordMatches * 0.5 + urlRelevance * 0.3 + contentFeatures * 0.2);
-  }
-}
-```
-
-#### 3.3 记忆管理优化系统
-
-**新增模块**：
-```
-src/memory-management/
-├── MemoryManager.ts                 # 主记忆管理器
-├── MemoryLifecycle.ts              # 记忆生命周期管理
-├── RelationshipDetector.ts         # 关系发现引擎
-├── ForgettingAlgorithm.ts          # 遗忘算法
-└── MemoryConsolidation.ts          # 记忆巩固机制
-```
-
-**实现示例**：
-```typescript
-// MemoryManager.ts
-class MemoryManager {
-  private vectorStore: ChromaDBClient;
-  private lifecycleManager: MemoryLifecycle;
-  private relationDetector: RelationshipDetector;
-  
-  async updateMemoryFromUserEdit(
-    memoryId: string, 
-    changes: MemoryChanges,
-    userContext: UserContext
-  ): Promise<void> {
-    // 1. 验证变更的合理性
-    const validation = await this.validateChanges(memoryId, changes);
-    if (!validation.isValid) {
-      throw new Error(validation.reason);
-    }
-    
-    // 2. 应用变更
-    const updatedMemory = await this.applyChanges(memoryId, changes);
-    
-    // 3. 重新生成向量
-    const newVector = await this.generateVector(updatedMemory.content);
-    
-    // 4. 更新向量数据库
-    await this.vectorStore.update(memoryId, {
-      content: updatedMemory.content,
-      vector: newVector,
-      metadata: {
-        ...updatedMemory.metadata,
-        lastModified: Date.now(),
-        modifiedBy: 'user',
-        userConfidence: changes.userConfidence || 1.0
-      }
-    });
-    
-    // 5. 发现新的关系
-    await this.relationDetector.analyzeNewRelations(updatedMemory);
-    
-    // 6. 通知相关组件
-    await this.notifyMemoryUpdate(memoryId, changes);
-  }
-  
-  async smartForget(): Promise<ForgettingResult> {
-    // 基于多因素的智能遗忘
-    const forgettingCandidates = await this.identifyForgettingCandidates();
-    const forgottenItems: string[] = [];
-    
-    for (const candidate of forgettingCandidates) {
-      const shouldForget = await this.evaluateForgetting(candidate);
-      if (shouldForget) {
-        await this.forgetMemory(candidate.id);
-        forgottenItems.push(candidate.id);
-      }
-    }
-    
-    return {
-      forgottenCount: forgottenItems.length,
-      forgottenItems,
-      memorySpaceSaved: this.calculateSpaceSaved(forgottenItems)
-    };
-  }
-  
-  private async identifyForgettingCandidates(): Promise<MemoryCandidate[]> {
-    // 多维度评估遗忘候选
-    const candidates = await this.vectorStore.queryAll();
-    
-    return candidates.map(memory => ({
-      id: memory.id,
-      lastAccessed: memory.metadata.lastAccessed,
-      accessCount: memory.metadata.accessCount,
-      userImportance: memory.metadata.userImportance || 0,
-      age: Date.now() - memory.metadata.created,
-      relationCount: memory.metadata.relationCount || 0,
-      forgettingScore: this.calculateForgettingScore(memory)
-    })).filter(candidate => candidate.forgettingScore > 0.7);
-  }
-}
-
-// ForgettingAlgorithm.ts
-class ForgettingAlgorithm {
-  // 基于埃宾浩斯遗忘曲线的算法
-  calculateForgettingScore(memory: MemoryItem): number {
-    const {
-      created,
-      lastAccessed,
-      accessCount,
-      userImportance,
-      relationCount
-    } = memory.metadata;
-    
-    const ageInDays = (Date.now() - created) / (1000 * 60 * 60 * 24);
-    const daysSinceLastAccess = (Date.now() - lastAccessed) / (1000 * 60 * 60 * 24);
-    
-    // 基础遗忘曲线
-    const forgettingRate = Math.exp(-daysSinceLastAccess / 7); // 7天半衰期
-    
-    // 访问频率影响
-    const accessFactor = Math.max(0.1, 1 - (accessCount / 10));
-    
-    // 用户重要性影响
-    const importanceFactor = Math.max(0.1, 1 - userImportance);
-    
-    // 关系数量影响
-    const relationFactor = Math.max(0.1, 1 - (relationCount / 5));
-    
-    return forgettingRate * accessFactor * importanceFactor * relationFactor;
-  }
-}
-```
-
-### 4. 集成方案
-
-#### 4.1 主界面集成
-
-**重构popup.tsx为多功能界面**：
-```typescript
-// 新的主界面入口
-const MainApp: React.FC = () => {
-  const [currentView, setCurrentView] = useState<AppView>('dashboard');
-  const [isExpanded, setIsExpanded] = useState(false);
-  
-  return (
-    <div className={`brain-system-app ${isExpanded ? 'expanded' : 'compact'}`}>
-      <AppHeader 
-        currentView={currentView}
-        onViewChange={setCurrentView}
-        onToggleExpand={() => setIsExpanded(!isExpanded)}
-      />
-      
-      <AppContent>
-        {currentView === 'dashboard' && <ProjectDashboard />}
-        {currentView === 'memory' && <MemoryManagerInterface />}
-        {currentView === 'analysis' && <AgentAnalysisInterface />}
-      </AppContent>
-      
-      <FloatingAssistant />
-    </div>
-  );
-};
-```
-
-#### 4.2 后台服务集成
-
-**增强background.ts**：
-```typescript
-// background.ts 增强版本
-class BackgroundService {
-  private memoryManager: MemoryManager;
-  private dataIntegrator: MultiSourceDataIntegrator;
-  private aiService: HybridAIService;
-  
-  async initialize() {
-    // 初始化各个服务
-    await this.initializeMemorySystem();
-    await this.initializeDataSources();
-    await this.setupPeriodicTasks();
-    
-    // 监听来自内容脚本的消息
-    chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
-  }
-  
-  private async handleMessage(
-    message: any, 
-    sender: chrome.runtime.MessageSender, 
-    sendResponse: Function
-  ) {
-    switch (message.type) {
-      case 'STORE_WEB_ANALYSIS':
-        await this.handleWebAnalysisStorage(message.data);
-        break;
-        
-      case 'DEEP_ANALYZE_CONTENT':
-        const result = await this.aiService.deepAnalyze(message.content);
-        sendResponse(result);
-        break;
-        
-      case 'UPDATE_PROJECT_STATUS':
-        await this.handleProjectStatusUpdate(message.data);
-        break;
-        
-      case 'QUERY_ENHANCED_KNOWLEDGE':
-        const queryResult = await this.handleEnhancedQuery(message.query);
-        sendResponse(queryResult);
-        break;
-    }
-  }
-  
-  private async setupPeriodicTasks() {
-    // 每小时执行一次数据同步
-    chrome.alarms.create('dataSync', { periodInMinutes: 60 });
-    
-    // 每天执行一次记忆整理
-    chrome.alarms.create('memoryMaintenance', { periodInMinutes: 1440 });
-    
-    chrome.alarms.onAlarm.addListener(async (alarm) => {
-      switch (alarm.name) {
-        case 'dataSync':
-          await this.dataIntegrator.performIncrementalSync();
-          break;
-        case 'memoryMaintenance':
-          await this.memoryManager.performMaintenance();
-          break;
-      }
-    });
-  }
-}
-```
-
-### 5. 开发优先级和时间安排
-
-#### 第一阶段 (第1-2周)：基础设施增强
-**目标**：建立新功能的基础架构
-
-1. **网页智能分析系统**
-   - [ ] 实现UniversalContentScript.ts
-   - [ ] 开发WebIntelligenceAnalyzer.ts
-   - [ ] 集成本地快速分析能力
-   - [ ] 添加用户交互提示
-
-2. **记忆管理系统优化**
-   - [ ] 实现MemoryManager.ts增强版本
-   - [ ] 开发智能遗忘算法
-   - [ ] 添加记忆更新机制
-
-#### 第二阶段 (第3-5周)：核心功能开发
-**目标**：实现项目进度可视化仪表盘
-
-1. **项目仪表盘框架**
-   - [ ] 开发ProjectDashboard.tsx主组件
-   - [ ] 实现数据获取和同步机制
-   - [ ] 创建基础图表组件
-
-2. **可视化图表组件**
-   - [ ] 实现GanttChart.tsx（甘特图）
-   - [ ] 开发DependencyGraph.tsx（依赖关系图）
-   - [ ] 创建BurndownChart.tsx（燃尽图）
-
-3. **交互编辑功能**
-   - [ ] 实现EditableOverlay.tsx
-   - [ ] 开发QuickEditModal.tsx
-   - [ ] 添加变更同步机制
-
-#### 第三阶段 (第6-7周)：界面优化和用户体验
-**目标**：提升用户交互体验
-
-1. **Agent可视化增强**
-   - [ ] 扩展agent-visualizer.tsx
-   - [ ] 添加思考过程详细展示
-   - [ ] 实现交互式工具调用
-
-#### 第四阶段 (第8周)：集成测试和性能优化
-**目标**：系统整合和性能调优
-
-1. **系统集成**
-   - [ ] 整合所有新功能模块
-   - [ ] 完善组件间通信
-   - [ ] 添加错误处理和恢复机制
-
-2. **性能优化**
-   - [ ] 优化向量检索性能
-   - [ ] 实现数据预加载和缓存
-   - [ ] 减少内存占用和提升响应速度
-
-### 6. 开发环境和工具链建议
-
-#### 前端开发工具
-```json
-{
-  "dependencies": {
-    "react": "^18.2.0",
-    "typescript": "^5.0.0",
-    "zustand": "^4.4.0",
-    "antd": "^5.10.0",
-    "d3": "^7.8.0",
-    "recharts": "^2.8.0",
-    "@ant-design/charts": "^2.0.0"
-  },
-  "devDependencies": {
-    "@types/chrome": "^0.0.246",
-    "@types/d3": "^7.4.0",
-    "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.0",
-    "babel-loader": "^9.1.0",
-    "typescript-loader": "^1.0.0"
-  }
-}
-```
-
-#### 构建脚本增强
-```typescript
-// webpack.common.cjs 增强配置
-const config = {
-  entry: {
-    background: './src/background.ts',
-    popup: './src/popup.tsx',
-    contentScript: './src/contentScript.tsx',
-    universalContentScript: './src/web-intelligence/UniversalContentScript.ts',
-    projectDashboard: './src/components/dashboard/ProjectDashboard.tsx',
-    memoryManager: './src/memory-management/MemoryManagerInterface.tsx'
-  },
-  // ... 其他配置
-};
-```
-
-### 7. 测试策略
-
-#### 单元测试重点
-1. **MemoryManager核心逻辑**
-2. **WebIntelligenceAnalyzer分析准确性**
-3. **项目数据处理算法**
-4. **Agent工具执行结果**
-
-#### 集成测试方案
-1. **端到端用户流程测试**
-2. **数据同步一致性测试**
-3. **性能压力测试**
-4. **跨浏览器兼容性测试**
+*最后更新: 2025-10-29*
 
 ---
 
-## 🎯 2024-12-20 更新
+## 📋 目录
 
-### 已完成功能
+1. [已完成功能](#已完成功能)
+2. [进行中的功能](#进行中的功能)
+3. [短期规划 (1-2个月)](#短期规划-1-2个月)
+4. [中期规划 (2-4个月)](#中期规划-2-4个月)
+5. [长期规划 (6个月以上)](#长期规划-6个月以上)
+6. [技术架构演进](#技术架构演进)
 
-#### 用户画像系统
-- ✅ **设计并实现用户画像数据结构** (`src/types/userProfile.ts`)
-  - 多维度兴趣建模（项目、人员、主题、技术等）
+---
+
+## ✅ 已完成功能
+
+### 🧠 核心系统
+
+#### 智能代理系统
+- ✅ **Agent思考引擎** (`agentThinking.ts`) - 2768行完整实现
+  - 多工具协同调用
+  - 思考过程可视化
+  - 完整的思考链记录
+- ✅ **向量存储系统** (`vectorStore.ts`) - ChromaDB 集成
+- ✅ **消息分析过滤** (`messageDealing.ts`) - 智能消息处理
+
+#### 内容脚本集成
+- ✅ **多平台支持** - Jira、Google Docs、聊天平台
+- ✅ **Web Intelligence** - 网页智能分析和相关性检测
+- ✅ **实时数据捕获** - 自动识别和保存项目信息
+
+#### 用户界面
+- ✅ **React 组件化架构** - 模块化、可复用
+- ✅ **记忆探索界面** (`memory-exploring.vue`) - 实体查询和可视化
+- ✅ **Agent 可视化器** (`agent-visualizer.tsx`) - 思考过程展示
+
+### 👤 用户画像系统 (2024-12-20)
+
+- ✅ **多维度兴趣建模** (`src/types/userProfile.ts`)
+  - 项目、人员、主题、技术等维度
   - 用户行为追踪记录
-  - 智能权重衰变机制
+  - 智能权重衰变机制（基于埃宾浩斯遗忘曲线）
 
-- ✅ **实现UserProfileManager** (`src/services/UserProfileManager.ts`)
+- ✅ **UserProfileManager** (`src/services/UserProfileManager.ts`)
   - 用户画像初始化和加载
   - 实时行为更新
-  - 基于埃宾浩斯遗忘曲线的权重衰变
   - 智能兴趣预测
 
-- ✅ **集成到memory.tsx**
-  - 添加用户画像可视化界面
-  - 实现用户行为自动记录
-  - 提供全局API接口
+- ✅ **界面集成** (`memory.tsx`)
+  - 用户画像可视化界面
+  - 用户行为自动记录
+  - 全局 API 接口
 
-- ✅ **Web Intelligence深度集成**
+- ✅ **Web Intelligence 深度集成**
   - 根据用户画像权重调整分析相关性
   - 自动更新用户兴趣
   - 个性化内容识别
 
-### 技术亮点
-1. **智能权重算法**：综合考虑访问频率、用户标记、持续互动等多维因素
-2. **实时更新机制**：在用户浏览和交互时自动更新画像
-3. **预测性推荐**：基于协作关系和技术栈预测用户兴趣
-4. **性能优化**：节流控制避免频繁更新，缓存机制提升响应速度
+### 🧠 记忆系统
 
-## 📋 当前未完成功能汇总
-
-### 🎯 用户画像系统扩展
-
-#### 高优先级（1-2周）
-1. **📊 图表数据生成逻辑完善**：为可视化图表实现真实数据生成
-   - 相关文档：`user_profile_system.md`
-   - 状态：界面框架已完成，需完善数据算法
-   - 细节：行为趋势、热力图、兴趣权重变化的数据计算逻辑
-
-2. **🤖 主动推荐系统完善**：基于用户画像生成个性化推荐
-   - 相关文档：`user_profile_system.md`
-   - 状态：基础API已实现，需集成到UI界面
-   - 细节：`generateProactiveRecommendations()` 已实现，需要前端展示
-
-3. **🔄 prompt-config导入导出功能**：完善配置管理功能
-   - 相关文档：`custom_prompts.md`
-   - 状态：云端迁移已完成，缺少导入/导出UI
-
-#### 中优先级（2-4周）
-1. **👥 团队画像聚合**：基于个人画像构建团队整体兴趣
-2. **📈 时序分析功能**：分析兴趣变化趋势，预测未来关注点
-3. **🔔 智能提醒系统**：基于画像生成个性化的提醒策略
-4. **📱 移动端优化**：更好的移动设备适配
-
-#### 低优先级（1-3个月）
-1. **🤝 协同过滤**：基于相似用户推荐内容
-2. **🌐 知识图谱**：构建个人知识网络图
-3. **☁️ 多设备同步**：跨设备同步用户画像
-4. **🤖 AI助手增强**：基于画像的智能对话助手
-
-### 🧠 记忆系统功能扩展
-
-#### 高级查询功能（高优先级）
-- **📊 智能数据可视化**：实体关系图谱展示
-  - 相关文档：`memory_system.md`
-  - 状态：概念设计阶段
-
-#### AI驱动优化（中优先级）
-- **🤖 AI驱动的缓存策略**：使用机器学习优化缓存
-- **🔄 多设备数据同步**：实现跨设备的实时数据同步
-- **📈 AI驱动的数据扩展**：使用机器学习自动扩展实体详情
+- ✅ **实体记忆存储** - 基于 ChromaDB 的向量存储
+- ✅ **ask() 智能检索 API** (2025-10-21)
+  - 向量相似度检索
+  - 2-hop 实体关系扩展
+  - 智能去重和排序
+- ✅ **实体关系管理** - 自动发现和维护实体关系
 
 ### 📊 项目仪表盘系统
 
-#### 短期目标（1-2个月）
-- **📈 趋势预测功能**：基于历史数据预测完成时间
-  - 相关文档：`project_dashboard_usage_guide.md`
-  - 状态：数据收集完成，算法待实现
+- ✅ **基础项目进度展示**
+- ✅ **Jira 数据集成**
+- ✅ **多项目切换**
+- ✅ **实时数据更新**
 
-- **🔔 智能提醒系统**：基于规则的智能提醒
-  - 相关文档：`project_dashboard_usage_guide.md`
-  - 状态：基础框架完成，规则引擎待优化
+### ⏰ 定时消息管理系统 (2025-10-29)
 
-- **📊 里程碑对比分析**：计划vs实际进度对比
-  - 相关文档：`project_dashboard_usage_guide.md`
-  - 状态：界面设计完成，数据分析逻辑待实现
+#### Phase 1: 核心功能 (Email 推送) - 已完成 ✅
 
-### 🌐 Web智能分析增强
+- ✅ **统一数据模型** - Google Sheet 作为统一存储
+- ✅ **一键初始化系统**
+  - 自动创建 Google Sheet 和 Apps Script 项目
+  - 自动配置触发器和 Web App
+  - 添加示例数据
+- ✅ **AppScript 执行引擎**
+  - 每分钟触发器（Hourly 类型消息）
+  - 每日触发器（Daily 和 Periodic 类型）
+  - 自动判断消息类型
+  - Email 推送到 Glip
+- ✅ **Chrome Extension 管理界面**
+  - 独立弹出窗口
+  - 消息列表展示
+  - 筛选和搜索
+  - 状态管理
 
-#### Chrome本地AI集成（中期规划）
-- **🧠 本地AI分析器**：集成Chrome实验性AI功能
-  - 相关文档：`web_intelligence_detailed_explanation.md`
-  - 状态：技术调研阶段，等待Chrome API稳定
+#### Phase 2: Bot API 支持 - 部分完成 🚧
 
-- **📊 分析准确率提升**：从当前80%提升到95%
-  - 相关文档：`web_intelligence_detailed_explanation.md`
-  - 状态：算法优化进行中
-
-### 🔧 消息分析系统
-
-#### 功能增强（中优先级）
-- **🎯 智能过滤升级**：更精准的相关性判断
-  - 相关文档：`message_analysis_filter.md`
-  - 状态：基础功能完成，精度需提升
-
-### 🎨 Jira集成优化
-
-#### 未来增强（低优先级）
-- **⚡ 缓存机制优化**：提升API调用性能
-  - 相关文档：`jira_design_links.md`
-  - 状态：性能分析完成，缓存策略设计中
-
-- **🔗 更多设计工具链接识别**：支持Figma、Sketch等
-  - 相关文档：`jira_design_links.md`
-  - 状态：需求调研阶段
-
-### 📊 存储架构升级
-
-#### 长期规划（1-3个月）
-- **🗄️ 图数据库迁移**：可选升级为Neo4j或ArangoDB
-  - 相关文档：`storage_architecture_recommendations.md`
-  - 状态：架构评估阶段
-
-- **📈 时序数据库集成**：可选InfluxDB或TimescaleDB
-  - 相关文档：`storage_architecture_recommendations.md`
-  - 状态：暂缓，现有方案够用
-
-## 🎯 算法和架构长期规划
-
-### 算法层面
-- **🤖 机器学习模型**：引入更sophisticated的个性化算法
-- **📊 预测分析**：项目风险和机会的智能预测
-- **🧠 自然语言理解**：更精准的内容分析和分类
-
-### 架构层面
-- **🔧 微服务化**：画像服务独立部署
-- **⚡ 实时计算**：流式处理用户行为数据
-- **🌐 边缘计算**：本地AI推理减少延迟
-
-### 生态层面
-- **🔌 API开放**：第三方应用集成用户画像
-- **🏢 企业版本**：支持团队和组织级别的画像分析
-- **🔒 隐私保护**：联邦学习、差分隐私等技术
+- ✅ **AppScript Web App 端点**
+  - `getMessagesToExecute()` - 获取待执行的 Bot 消息
+  - 支持 `timeScope` 参数（minute/day）
+  - 自动时间过滤
+  
+- ✅ **JiraAutomationService**
+  - 测试 Jira 连接
+  - 创建 Bot 执行器规则
+  - 规则管理（获取、删除、检查）
+  - 使用模板化配置
+  
+- ✅ **Bot 配置对话框**
+  - 用户友好的配置界面
+  - 三步配置流程（输入 → 测试 → 创建）
+  - 实时状态显示
 
 ---
 
-## 🎯 简明开发优先级总结
+## 🚧 进行中的功能
+
+### ⏰ 定时消息管理系统 - 未完成部分
+
+#### Phase 2 剩余功能
+
+##### 1. Jira Automation 规则导入 (高优先级) 🎯
+**目标**：允许用户导入现有的 Jira Automation 规则到 Personal AI 管理
+
+**实现计划**：
+- [ ] **Content Script 集成** (`src/contentScriptJiraAutomation.ts`)
+  - 在 Jira Automation 列表页添加"导入到 Personal AI"按钮
+  - 识别页面上的 automation 规则
+  - 提取规则信息（名称、触发器、动作等）
+  
+- [ ] **规则导入逻辑** (`src/scheduled-messages/JiraRuleImporter.ts`)
+  ```typescript
+  interface JiraRuleImportResult {
+    imported: number;
+    skipped: number;
+    errors: string[];
+  }
+  
+  class JiraRuleImporter {
+    // 批量导入 Scheduled 类型的规则
+    async batchImportScheduledRules(rules: JiraRule[]): Promise<JiraRuleImportResult>
+    
+    // 单个规则导入
+    async importSingleRule(rule: JiraRule): Promise<void>
+    
+    // 规则转换（Jira Rule → ScheduledMessage）
+    private convertJiraRuleToMessage(rule: JiraRule): ScheduledMessage
+  }
+  ```
+
+- [ ] **UI 集成**
+  - 在管理界面添加"从 Jira 导入"按钮
+  - 显示导入进度和结果
+  - 支持选择性导入（勾选需要导入的规则）
+
+**技术要点**：
+- 解析 Jira Automation 规则的 cron 表达式
+- 提取 Groovy Script 中的消息内容
+- 映射 Jira 规则字段到 ScheduledMessage 格式
+
+**预期完成时间**: 1-2 周
+
+---
+
+##### 2. 每日同步功能 (高优先级) 🎯
+**目标**：自动同步 Jira Automation 规则的变更到 Google Sheet
+
+**实现计划**：
+- [ ] **Background Service 扩展** (`src/background.ts`)
+  ```typescript
+  class ScheduledMessageSyncService {
+    // 每日同步任务
+    async performDailySync(): Promise<SyncResult>
+    
+    // 检测规则变更
+    private async detectChanges(
+      localMessages: ScheduledMessage[], 
+      jiraRules: JiraRule[]
+    ): Promise<ChangeSet>
+    
+    // 应用变更到 Sheet
+    private async applyChanges(changes: ChangeSet): Promise<void>
+    
+    // 冲突解决策略
+    private resolveConflicts(conflicts: Conflict[]): Resolution[]
+  }
+  ```
+
+- [ ] **Chrome Alarms 配置**
+  ```typescript
+  // 每天凌晨 2 点执行同步
+  chrome.alarms.create('scheduledMessageSync', {
+    when: Date.now() + getMillisecondsUntil2AM(),
+    periodInMinutes: 24 * 60
+  });
+  ```
+
+- [ ] **同步策略**
+  - **单向同步**：Jira → Sheet（Jira 为主）
+  - **变更检测**：
+    - 触发时间变更
+    - 消息内容变更
+    - 状态变更（启用/禁用）
+  - **冲突处理**：
+    - 记录冲突到日志
+    - 用户手动选择保留哪个版本
+
+- [ ] **同步状态展示**
+  - 在管理界面显示上次同步时间
+  - 显示同步结果（新增/更新/删除数量）
+  - 提供手动触发同步的按钮
+
+**预期完成时间**: 1-2 周
+
+---
+
+##### 3. 批量导入 Scheduled 规则 (中优先级) 🔧
+**目标**：在 Jira Automation 列表页识别并批量导入 Scheduled 类型的规则
+
+**实现计划**：
+- [ ] **规则识别逻辑**
+  ```typescript
+  interface RuleClassifier {
+    // 判断规则是否为 Scheduled 类型
+    isScheduledRule(rule: JiraRule): boolean
+    
+    // 识别规则的触发方式（cron/date/recurring）
+    identifyTriggerType(rule: JiraRule): 'Hourly' | 'Daily' | 'Periodic'
+    
+    // 提取触发时间信息
+    extractScheduleInfo(rule: JiraRule): ScheduleInfo
+  }
+  ```
+
+- [ ] **Content Script 增强**
+  - 在 Jira Automation 列表页添加"批量导入"按钮
+  - 自动勾选所有 Scheduled 类型的规则
+  - 显示预览信息（规则数量、类型分布）
+
+- [ ] **批量导入对话框**
+  - 显示待导入规则列表
+  - 支持取消勾选不需要的规则
+  - 显示每个规则的详细信息（名称、触发时间、动作）
+  - 确认导入
+
+**预期完成时间**: 1 周
+
+---
+
+#### Phase 3: 高级功能
+
+##### 4. RingCentral 聊天集成 (低优先级) 📱
+**目标**：在 RingCentral 聊天界面中添加一键定时回复功能
+
+**实现计划**：
+- [ ] **Content Script 注入** (`src/contentScriptRingCentral.ts`)
+  - 在消息输入框旁边添加"⏰ 定时回复"按钮
+  - 获取当前聊天上下文（对话人、群组 ID、消息内容）
+
+- [ ] **一键回复对话框**
+  ```typescript
+  interface QuickReplyDialog {
+    // 预填充消息内容（当前输入框内容 或 引用的消息）
+    prefillContent: string
+    
+    // 自动识别推送目标
+    autoDetectTarget: {
+      type: 'private' | 'group'
+      id: string
+      name: string
+    }
+    
+    // 快速时间选择
+    quickTimeOptions: [
+      '5分钟后', '30分钟后', '1小时后', 
+      '明天上午9点', '明天下午2点'
+    ]
+  }
+  ```
+
+- [ ] **智能上下文理解**
+  - 识别当前对话主题
+  - 提取关键信息（项目名、任务 ID 等）
+  - 自动填充消息主题
+
+**预期完成时间**: 2-3 周
+
+---
+
+##### 5. AI 建议回复时间 (低优先级) 🤖
+**目标**：基于消息内容和上下文，智能建议最佳回复时间
+
+**实现计划**：
+- [ ] **AI 分析服务** (`src/scheduled-messages/AIScheduleSuggestion.ts`)
+```typescript
+  interface AIScheduleSuggestion {
+    // 分析消息内容和上下文
+    analyzeContext(context: MessageContext): Promise<ScheduleSuggestion>
+    
+    // 建议时间和理由
+    suggestSchedule(message: string): Promise<{
+      suggestedTime: Date
+      reason: string
+      confidence: number
+      alternatives: Date[]
+    }>
+  }
+  ```
+
+- [ ] **考虑因素**
+  - **消息紧急程度**：根据关键词识别（urgent、ASAP、今天等）
+  - **对方工作时间**：避免非工作时间打扰
+  - **历史互动模式**：分析与该用户的历史消息时间
+  - **消息类型**：
+    - 提醒类：提前 5-10 分钟
+    - 报告类：工作日上午 9-10 点
+    - 问题类：立即或工作时间内
+    - 祝福类：节日当天早上
+
+- [ ] **UI 集成**
+  - 在创建消息时显示 AI 建议
+  - 显示建议理由
+  - 一键采用建议时间
+  - 显示置信度
+
+**预期完成时间**: 2-3 周
+
+---
+
+##### 6. 完整的 CRUD 操作界面 (中优先级) 🔧
+**目标**：在管理界面实现完整的消息创建、编辑、删除功能
+
+**当前状态**：
+- ✅ 创建功能已实现
+- ✅ 删除功能已实现
+- ✅ 状态切换已实现
+
+**待实现**：
+- [ ] **编辑功能**
+  - 点击消息行或编辑按钮打开编辑对话框
+  - 预填充现有数据
+  - 支持修改所有字段
+  - 保存后更新 Sheet
+
+- [ ] **批量操作**
+  - 多选消息
+  - 批量删除
+  - 批量暂停/启用
+  - 批量导出
+
+- [ ] **高级筛选和搜索**
+  - 按推送方式筛选（AsMe/Bot）
+  - 按消息类型筛选（Daily/Hourly/Periodic）
+  - 按状态筛选（Active/Paused/Completed/Error）
+  - 按时间范围筛选（今天/本周/本月）
+  - 全文搜索（主题、内容）
+
+- [ ] **排序功能**
+  - 按创建时间排序
+  - 按下次执行时间排序
+  - 按执行次数排序
+  - 按状态排序
+
+**预期完成时间**: 1-2 周
+
+---
+
+##### 7. Bot 推送失败重试机制 (中优先级) 🔧
+**目标**：当 Bot API 调用失败时，自动重试并记录错误
+
+**实现计划**：
+- [ ] **Groovy Script 增强** (在 Jira Automation 中)
+  ```groovy
+  def maxRetries = 3
+  def retryDelayMs = 5000 // 5 秒
+  
+  def sendWithRetry(msg, retries = 0) {
+    try {
+      // 发送消息
+      def response = callBotAPI(msg)
+      if (response.success) {
+        logger.info("消息发送成功: ${msg.id}")
+        return true
+      }
+    } catch (Exception e) {
+      if (retries < maxRetries) {
+        logger.warn("发送失败，${retryDelayMs/1000}秒后重试 (${retries+1}/${maxRetries})")
+        Thread.sleep(retryDelayMs)
+        return sendWithRetry(msg, retries + 1)
+      } else {
+        logger.error("消息发送失败，已达最大重试次数: ${msg.id}")
+        return false
+      }
+    }
+  }
+  ```
+
+- [ ] **失败记录**
+  - 在 Sheet 中添加"Retry_Count"列
+  - 记录失败原因
+  - 标记为"Error"状态
+
+- [ ] **失败消息面板**
+  - 在管理界面显示失败的消息
+  - 提供手动重试按钮
+  - 显示失败原因和重试历史
+
+**预期完成时间**: 1 周
+
+---
+
+##### 8. 测试 Bot API 连接功能 (低优先级) 🔧
+**目标**：在配置 Bot 时测试 Bot API 是否可访问
+
+**实现计划**：
+- [ ] **测试接口**
+  ```typescript
+  class BotAPITester {
+    // 测试 Bot API 连接
+    async testConnection(
+      endpoint: string, 
+      token: string
+    ): Promise<TestResult>
+    
+    // 发送测试消息
+    async sendTestMessage(
+      endpoint: string,
+      token: string,
+      targetId: string
+    ): Promise<boolean>
+  }
+  ```
+
+- [ ] **UI 集成**
+  - 在 Bot 配置对话框添加"测试连接"按钮
+  - 显示测试结果（成功/失败）
+  - 显示响应时间
+  - 提供发送测试消息功能
+
+**预期完成时间**: 3-5 天
+
+---
+
+### 🧠 记忆系统优化
+
+#### ask() 智能检索系统优化 (高优先级) 🎯
+
+**短期优化（1-2周）**：
+
+1. **🧪 实际测试验证**
+   - [ ] 使用真实查询测试 ask() 接口
+   - [ ] 验证准确率（目标90-95%）和召回率（目标85-90%）
+   - [ ] 收集性能数据和用户反馈
+   - 状态：核心功能已完成，需要实际验证
+
+2. **🎨 UI 集成**
+   - [ ] 在 memory-exploring.vue 中集成 ask() 接口
+   - [ ] 实现搜索结果展示（分类显示实体）
+   - [ ] 添加实体详情跳转功能
+   - [ ] 展示实体相关度和扩展深度
+   - 状态：API 已就绪，等待前端集成
+
+**中期优化（2-4周）**：
+
+1. **💾 缓存优化**
+   - [ ] 缓存热门查询结果（LRU策略）
+   - [ ] 缓存实体扩展结果
+   - [ ] 实现查询建议（基于历史查询）
+
+2. **🔄 重排序机制**
+   - [ ] 添加 Cross-Encoder 重排序
+   - [ ] 优化实体相关度计算算法
+   - [ ] 支持用户反馈学习
+
+**长期优化（1-3个月）**：
+
+1. **🔍 BM25 集成**
+   - [ ] 添加关键词精确匹配能力
+   - [ ] 混合向量 + BM25 检索
+   - [ ] 动态调整混合权重
+
+2. **📊 查询分析系统**
+   - [ ] 收集用户查询模式
+   - [ ] 优化扩展策略（动态调整2-hop阈值）
+   - [ ] 个性化推荐和查询建议
+
+---
+
+## 📅 短期规划 (1-2个月)
+
+### 🎯 用户画像系统扩展
+
+#### 1. 📊 图表数据生成逻辑完善 (高优先级) 🎯
+**目标**：为可视化图表实现真实数据生成
+
+**待实现**：
+- [ ] 行为趋势图数据计算
+  - 按天/周/月聚合行为数据
+  - 计算活跃度趋势
+  - 识别行为模式变化
+
+- [ ] 兴趣热力图生成
+  - 按项目、人员、主题维度生成热力数据
+  - 计算权重分布
+  - 可视化配置
+
+- [ ] 兴趣权重变化曲线
+  - 跟踪关键兴趣点的权重变化
+  - 预测未来趋势
+  - 标注重要事件
+
+**相关文档**: `docs/features/user_profile_system.md`  
+**预期完成时间**: 1-2 周
+
+---
+
+#### 2. 🤖 主动推荐系统完善 (高优先级) 🎯
+**目标**：基于用户画像生成个性化推荐
+
+**当前状态**：
+- ✅ `generateProactiveRecommendations()` API 已实现
+- 🚧 前端展示待开发
+
+**待实现**：
+- [ ] 推荐卡片组件
+  - 显示推荐内容（文档、任务、人员）
+  - 显示推荐理由和相关度
+  - 一键操作（查看、保存、忽略）
+
+- [ ] 推荐面板集成
+  - 在主界面添加推荐区域
+  - 支持刷新推荐
+  - 显示推荐历史
+
+- [ ] 用户反馈机制
+  - 记录用户点击行为
+  - 采集"喜欢/不喜欢"反馈
+  - 根据反馈优化推荐算法
+
+**预期完成时间**: 1-2 周
+
+---
+
+#### 3. 🔄 prompt-config 导入导出功能 (中优先级) 🔧
+**目标**：完善配置管理功能
+
+**待实现**：
+- [ ] 导出功能
+  - 导出为 JSON 文件
+  - 支持选择性导出（勾选需要的配置）
+  - 包含元数据（导出时间、版本等）
+
+- [ ] 导入功能
+  - 从 JSON 文件导入
+  - 冲突检测和解决
+  - 导入预览
+
+- [ ] 模板市场
+  - 分享配置模板
+  - 浏览和下载社区模板
+  - 评分和评论
+
+**相关文档**: `docs/features/custom_prompts.md`  
+**预期完成时间**: 1 周
+
+---
+
+### 📊 项目仪表盘系统
+
+#### 1. 📈 趋势预测功能 (高优先级) 🎯
+**目标**：基于历史数据预测项目完成时间
+
+**待实现**：
+- [ ] 数据收集和预处理
+  - 收集历史任务完成数据
+  - 计算速度趋势（Velocity）
+  - 识别影响因素（节假日、团队变动等）
+
+- [ ] 预测算法
+  - 线性回归预测
+  - 考虑周期性因素
+  - 置信区间计算
+
+- [ ] UI 展示
+  - 预测完成时间范围
+  - 显示置信度
+  - 趋势曲线可视化
+
+**相关文档**: `docs/features/project_dashboard_usage_guide.md`  
+**预期完成时间**: 2-3 周
+
+---
+
+#### 2. 🔔 智能提醒系统 (中优先级) 🔧
+**目标**：基于规则生成智能提醒
+
+**待实现**：
+- [ ] 规则引擎
+  - 里程碑临近提醒
+  - 任务延期提醒
+  - 依赖阻塞提醒
+  - 资源瓶颈提醒
+
+- [ ] 提醒配置
+  - 自定义提醒规则
+  - 设置提醒渠道（浏览器通知、邮件、聊天）
+  - 提醒频率控制
+
+- [ ] 提醒面板
+  - 显示所有提醒
+  - 标记已读/未读
+  - 快速操作
+
+**预期完成时间**: 2 周
+
+---
+
+## 🗓️ 中期规划 (2-4个月)
+
+### 👥 团队画像聚合
+**目标**：基于个人画像构建团队整体兴趣
+
+**实现计划**：
+- [ ] 团队兴趣聚合算法
+- [ ] 团队技能图谱
+- [ ] 团队协作模式分析
+- [ ] 团队推荐引擎
+
+---
+
+### 📈 时序分析功能
+**目标**：分析兴趣变化趋势，预测未来关注点
+
+**实现计划**：
+- [ ] 时间序列数据存储
+- [ ] 趋势识别算法
+- [ ] 预测模型训练
+- [ ] 可视化展示
+
+---
+
+### 🌐 Web智能分析增强
+
+#### Chrome 本地 AI 集成
+**目标**：集成 Chrome 实验性 AI 功能
+
+**技术依赖**：等待 Chrome AI API 稳定
+
+**实现计划**：
+- [ ] 集成 Chrome Prompt API
+- [ ] 本地 LLM 推理
+- [ ] 减少云端 API 调用
+- [ ] 提升分析速度和隐私性
+
+**相关文档**: `docs/features/web_intelligence_detailed_explanation.md`
+
+---
+
+### 🎯 消息过滤精度提升
+**目标**：将相关性判断准确率从 80% 提升到 95%
+
+**实现计划**：
+- [ ] 收集标注数据
+- [ ] 训练优化模型
+- [ ] A/B 测试验证
+- [ ] 用户反馈闭环
+
+**相关文档**: `docs/features/message_analysis_filter.md`
+
+---
+
+### 🤖 AI 驱动的缓存策略
+**目标**：使用机器学习优化缓存命中率
+
+**实现计划**：
+- [ ] 收集缓存访问模式
+- [ ] 训练预测模型
+- [ ] 动态调整缓存策略
+- [ ] 性能评估
+
+**相关文档**: `docs/features/memory_system.md`
+
+---
+
+## 🚀 长期规划 (6个月以上)
+
+### 🗄️ 存储架构升级
+
+#### 图数据库迁移（可选）
+**目标**：升级为 Neo4j 或 ArangoDB
+
+**优势**：
+- 原生图查询能力
+- 更高效的关系遍历
+- 复杂关系模式支持
+
+**评估标准**：
+- 数据规模超过 100 万条实体
+- 关系查询成为性能瓶颈
+- 需要复杂的图算法（PageRank、社区发现等）
+
+**相关文档**: `docs/features/storage_architecture_recommendations.md`
+
+---
+
+### 🤝 协同过滤推荐
+**目标**：基于相似用户推荐内容
+
+**实现计划**：
+- [ ] 用户相似度计算
+- [ ] 协同过滤算法
+- [ ] 冷启动问题解决
+- [ ] 推荐解释生成
+
+---
+
+### 🌐 知识图谱构建
+**目标**：构建个人知识网络图
+
+**实现计划**：
+- [ ] 知识提取算法
+- [ ] 知识融合和消歧
+- [ ] 图谱可视化
+- [ ] 知识推理能力
+
+---
+
+### 🔌 API 开放生态
+**目标**：第三方应用集成
+
+**实现计划**：
+- [ ] RESTful API 设计
+- [ ] API 文档和 SDK
+- [ ] 开发者平台
+- [ ] 应用市场
+
+---
+
+## 🏗️ 技术架构演进
+
+### 算法层面
+
+- **🤖 机器学习模型**
+  - 引入更 sophisticated 的个性化算法
+  - 用户行为预测
+  - 内容推荐优化
+
+- **📊 预测分析**
+  - 项目风险预测
+  - 机会识别
+  - 资源优化建议
+
+- **🧠 自然语言理解**
+  - 更精准的内容分析
+  - 多语言支持
+  - 上下文理解增强
+
+---
+
+### 架构层面
+
+- **🔧 微服务化**
+  - 画像服务独立部署
+  - 分析服务拆分
+  - 提升可扩展性
+
+- **⚡ 实时计算**
+  - 流式处理用户行为数据
+  - 实时推荐更新
+  - 降低延迟
+
+- **🌐 边缘计算**
+  - 本地 AI 推理
+  - 减少网络依赖
+  - 提升隐私保护
+
+---
+
+### 生态层面
+
+- **🏢 企业版本**
+  - 团队和组织级别的画像分析
+  - 数据隔离和权限管理
+  - 企业级 SLA
+
+- **🔒 隐私保护**
+  - 联邦学习
+  - 差分隐私
+  - 数据加密存储
+
+---
+
+## 📊 优先级总结
 
 ### 🚀 即时优先级（1-2周）
-1. **📊 用户画像图表数据生成** (`user_profile_system.md`) - 完善可视化效果
-2. **🤖 主动推荐UI集成** (`user_profile_system.md`) - 将API集成到界面
-3. **🔄 配置导入导出功能** (`custom_prompts.md`) - 完善用户配置管理
+
+1. **⏰ Jira Automation 规则导入** - 完善定时消息管理
+2. **⏰ 每日同步功能** - 确保数据一致性
+3. **📊 用户画像图表数据生成** - 完善可视化效果
+4. **🤖 主动推荐 UI 集成** - 将 API 集成到界面
 
 ### 🎯 高优先级（2-4周）
-4. **👥 团队画像聚合** - 基于个人画像构建团队整体兴趣
-5. **📈 趋势预测功能** (`project_dashboard_usage_guide.md`) - 基于历史数据预测完成时间
+
+5. **⏰ 完整的 CRUD 操作界面** - 完善消息管理功能
+6. **🧠 ask() UI 集成** - 提升检索体验
+7. **📈 趋势预测功能** - 增强项目仪表盘
+8. **👥 团队画像聚合** - 团队协作分析
 
 ### 🔧 中优先级（1-3个月）
-7. **🔔 智能提醒系统** - 基于画像生成个性化提醒策略
-8. **🤖 AI驱动的缓存策略** (`memory_system.md`) - 使用机器学习优化缓存
-9. **🧠 Chrome本地AI集成** (`web_intelligence_detailed_explanation.md`) - 等待Chrome API稳定
-10. **🎯 消息过滤精度提升** (`message_analysis_filter.md`) - 更精准的相关性判断
 
-### 📈 长期规划（3-6个月）
-11. **🗄️ 图数据库升级考虑** (`storage_architecture_recommendations.md`) - Neo4j或ArangoDB
-12. **🤝 协同过滤推荐** - 基于相似用户推荐内容
-13. **🌐 知识图谱构建** - 个人知识网络图
-14. **🔌 API开放生态** - 第三方应用集成
+9. **⏰ Bot 推送失败重试** - 提升可靠性
+10. **⏰ 批量导入 Scheduled 规则** - 简化导入流程
+11. **🔔 智能提醒系统** - 主动通知
+12. **🎯 消息过滤精度提升** - 优化相关性判断
+13. **🤖 AI 驱动的缓存策略** - 性能优化
 
-*本路线图整合了所有功能模块的未来规划，按优先级和时间线统一管理。*
+### 📈 长期规划（6个月以上）
+
+14. **⏰ RingCentral 聊天集成** - 一键定时回复
+15. **⏰ AI 建议回复时间** - 智能调度
+16. **🗄️ 图数据库升级** - 架构优化
+17. **🤝 协同过滤推荐** - 社交化推荐
+18. **🌐 知识图谱构建** - 知识网络
+19. **🔌 API 开放生态** - 第三方集成
+
+---
+
+## 📝 文档说明
+
+### 相关文档索引
+
+- **定时消息管理**: `docs/features/scheduled_messages_manager.md`
+- **用户画像系统**: `docs/features/user_profile_system.md`
+- **记忆系统**: `docs/features/memory_system.md`
+- **项目仪表盘**: `docs/features/project_dashboard_usage_guide.md`
+- **Web 智能分析**: `docs/features/web_intelligence_detailed_explanation.md`
+- **消息分析过滤**: `docs/features/message_analysis_filter.md`
+- **Jira 集成**: `docs/features/jira_design_links.md`
+- **存储架构**: `docs/features/storage_architecture_recommendations.md`
+- **自定义 Prompts**: `docs/features/custom_prompts.md`
+
+---
+
+*本路线图持续更新，反映项目的最新进展和规划。*

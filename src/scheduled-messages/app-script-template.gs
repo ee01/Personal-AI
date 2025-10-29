@@ -417,7 +417,6 @@ function calculateNextExecution(rowData, currentTime) {
  */
 function doGet(e) {
   const action = e.parameter.action;
-  const timeScope = e.parameter.timeScope || 'minute'; // 'minute' 或 'day'
   
   // 授权成功页面
   if (action === 'authSuccess') {
@@ -494,13 +493,6 @@ function doGet(e) {
     `);
   }
   
-  // 获取待执行的 Bot 消息（供 Jira Automation 调用）- 返回多条
-  if (action === 'getActiveBotMessages') {
-    return ContentService.createTextOutput(
-      JSON.stringify(getMessagesToExecute(timeScope))
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
-  
   // 获取当前时间点需要执行的单条 Bot 消息（供 Jira Automation 调用）
   // 只返回消息数据，不调用 Bot API（Bot API 由 Jira 调用，因为在内网）
   if (action === 'getBotMessageCurrentTime') {
@@ -568,110 +560,6 @@ function setupTriggersInternal() {
   
   Logger.log('触发器创建成功');
   return 'Triggers created successfully: minuteTrigger (every 1 minute), dailyTrigger (daily at 9:00 AM)';
-}
-
-/**
- * 获取需要通过 Bot API 执行的消息
- * @param {string} timeScope - 时间范围：'minute' 表示当前时间点（精确到分钟），'day' 表示当前日期
- * @returns {object} 包含待执行消息列表的对象
- */
-function getMessagesToExecute(timeScope) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
-  if (!sheet) {
-    return { messages: [], error: 'Messages sheet not found', timestamp: new Date().toISOString() };
-  }
-  
-  // 使用 getDisplayValues() 强制以文本格式读取所有数据
-  const data = sheet.getDataRange().getDisplayValues();
-  if (data.length <= 1) {
-    return { messages: [], timestamp: new Date().toISOString(), count: 0 };
-  }
-  
-  const headers = data[0];
-  const now = new Date();
-  const messages = [];
-  const scope = timeScope || 'minute';
-  
-  Logger.log(`获取 Bot 消息，时间范围: ${scope}，当前时间: ${Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
-  
-  for (let i = 1; i < data.length; i++) {
-    const row = parseRow(data[i], headers);
-    
-    // 只处理 Active 状态的 Bot 消息
-    if (row.Status !== 'Active' || row.Push_Method !== 'Bot') {
-      continue;
-    }
-    
-    // 自动判断消息类型
-    const messageType = determineMessageType(row);
-    
-    // 根据 timeScope 判断是否应该执行
-    let shouldExecute = false;
-    
-    if (scope === 'minute') {
-      // 精确到分钟：只返回当前时间点需要执行的消息
-      shouldExecute = shouldExecuteNow(row, now, messageType);
-    } else if (scope === 'day') {
-      // 只返回今天需要执行的消息（不考虑具体时间）
-      shouldExecute = shouldExecuteToday(row, now, messageType);
-    }
-    
-    if (shouldExecute) {
-      Logger.log(`找到待执行的 Bot 消息: ${row.ID} - ${row.Topic} (类型: ${messageType})`);
-      
-      messages.push({
-        id: row.ID,
-        topic: row.Topic,
-        content: row.Content,
-        glipTeamId: row.Glip_Team_ID ? row.Glip_Team_ID.toString() : '',
-        glipUserName: row.Glip_User_Name ? row.Glip_User_Name.toString() : '',
-        botEndpoint: row.Bot_Endpoint ? row.Bot_Endpoint.toString() : '',
-        messageType: messageType,
-        scheduleDate: row.Schedule_Date,
-        scheduleTime: row.Schedule_Time || ''
-      });
-      
-      // 更新执行记录（只在 minute 模式下更新，避免 day 模式重复更新）
-      if (scope === 'minute') {
-        try {
-          updateExecutionLog(sheet, i + 1, row, true, headers);
-        } catch (error) {
-          Logger.log(`更新执行日志失败: ${error}`);
-        }
-      }
-    }
-  }
-  
-  Logger.log(`共找到 ${messages.length} 条待执行的 Bot 消息`);
-  
-  return { 
-    messages, 
-    timestamp: now.toISOString(),
-    timeScope: scope,
-    count: messages.length
-  };
-}
-
-/**
- * 判断消息是否应该在今天执行（不考虑具体时间）
- */
-function shouldExecuteToday(rowData, now, messageType) {
-  const type = messageType || determineMessageType(rowData);
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  if (type === 'Hourly' || type === 'Daily') {
-    // 检查 Schedule_Date 是否是今天
-    if (!rowData.Schedule_Date) return false;
-    const scheduleDate = new Date(rowData.Schedule_Date);
-    const scheduleDateOnly = new Date(scheduleDate.getFullYear(), scheduleDate.getMonth(), scheduleDate.getDate());
-    return scheduleDateOnly.getTime() === today.getTime();
-    
-  } else if (type === 'Periodic') {
-    // 周期性消息：检查今天是否在周期内
-    return checkPeriodicSchedule(rowData, now);
-  }
-  
-  return false;
 }
 
 /**
@@ -893,6 +781,7 @@ function shouldMarkAsDone(rowData) {
 
 /**
  * 获取当前时间点需要执行的单条 Bot 消息
+ * 方案 A：逐级查找，找到即返回（节省资源）
  * 优先级：当前分钟 > 过去 30 分钟 > 未指定时间（8 点后）
  * 过滤：只返回今日未推送 且 今日未失败 的消息
  * @returns {object|null} 消息对象或 null
@@ -918,9 +807,47 @@ function getBotMessageCurrentTime() {
   
   Logger.log(`[Bot 单条消息] 当前时间: ${currentDate} ${currentMinute}`);
   
-  // 收集所有候选消息
-  const candidates = [];
+  // 优先级 1：查找当前分钟需要执行的消息
+  Logger.log('[Bot 单条消息] 优先级 1：查找当前分钟的消息...');
+  const currentMinuteMessage = findMessageByPriority(data, headers, now, currentDate, 1, currentHour);
+  if (currentMinuteMessage) {
+    Logger.log(`[Bot 单条消息] ✅ 找到优先级 1 消息: ${currentMinuteMessage.ID} - ${currentMinuteMessage.Topic}`);
+    return currentMinuteMessage;
+  }
   
+  // 优先级 2：查找过去 30 分钟内应该执行但未执行的消息
+  Logger.log('[Bot 单条消息] 优先级 2：查找过去 30 分钟的消息...');
+  const past30MinMessage = findMessageByPriority(data, headers, now, currentDate, 2, currentHour);
+  if (past30MinMessage) {
+    Logger.log(`[Bot 单条消息] ✅ 找到优先级 2 消息: ${past30MinMessage.ID} - ${past30MinMessage.Topic}`);
+    return past30MinMessage;
+  }
+  
+  // 优先级 3：查找未指定时间的消息（仅限 8 点后）
+  if (currentHour >= 8) {
+    Logger.log('[Bot 单条消息] 优先级 3：查找未指定时间的消息（8点后）...');
+    const noTimeMessage = findMessageByPriority(data, headers, now, currentDate, 3, currentHour);
+    if (noTimeMessage) {
+      Logger.log(`[Bot 单条消息] ✅ 找到优先级 3 消息: ${noTimeMessage.ID} - ${noTimeMessage.Topic}`);
+      return noTimeMessage;
+    }
+  }
+  
+  Logger.log('[Bot 单条消息] ❌ 没有符合条件的消息');
+  return null;
+}
+
+/**
+ * 按优先级查找消息（找到第一条符合条件的即返回）
+ * @param {array} data - 表格数据
+ * @param {array} headers - 表头
+ * @param {Date} now - 当前时间
+ * @param {string} currentDate - 当前日期（yyyy-MM-dd）
+ * @param {number} priority - 优先级（1=当前分钟，2=过去30分钟，3=未指定时间）
+ * @param {number} currentHour - 当前小时
+ * @returns {object|null} 消息对象或 null
+ */
+function findMessageByPriority(data, headers, now, currentDate, priority, currentHour) {
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const rowData = parseRow(row, headers);
@@ -937,86 +864,49 @@ function getBotMessageCurrentTime() {
     
     // 过滤：今日已推送失败的消息（避免阻塞队列）
     if (isPushedFailedToday(rowData, currentDate)) {
-      Logger.log(`跳过今日已失败的消息: ${rowData.ID} - ${rowData.Topic}`);
       continue;
     }
     
     const messageType = determineMessageType(rowData);
     
-    // 分类消息并设置优先级
-    const candidate = {
-      ID: rowData.ID,
-      Topic: rowData.Topic,
-      Content: rowData.Content,
-      Glip_Team_ID: rowData.Glip_Team_ID,
-      Glip_User_Name: rowData.Glip_User_Name,
-      Bot_Endpoint: rowData.Bot_Endpoint,
-      Target_Type: rowData.Glip_User_Name ? 'private' : 'group',
-      Schedule_Date: rowData.Schedule_Date,
-      Schedule_Time: rowData.Schedule_Time,
-      Created_At: rowData.Created_At || '',
-      messageType: messageType,
-      rowIndex: i + 1,
-      rowData: rowData,
-      headers: headers,
-      priority: 9 // 默认最低优先级
-    };
+    // 根据优先级判断是否符合条件
+    let matches = false;
     
-    // 1. 当前分钟的消息（最高优先级）
-    if (shouldExecuteNow(rowData, now, messageType)) {
-      candidate.priority = 1;
-      candidates.push(candidate);
-      Logger.log(`[优先级 1] 当前分钟消息: ${rowData.ID}`);
-      continue;
+    if (priority === 1) {
+      // 当前分钟的消息
+      matches = shouldExecuteNow(rowData, now, messageType);
+    } else if (priority === 2) {
+      // 过去 30 分钟内应该执行但未执行的
+      matches = shouldExecuteInPast30Minutes(rowData, now, messageType, currentDate);
+    } else if (priority === 3) {
+      // 未指定时间的消息（8 点后）
+      matches = shouldExecuteTodayWithoutTime(rowData, now, messageType, currentDate);
     }
     
-    // 2. 过去 30 分钟内应该执行但未执行的（次优先级）
-    if (shouldExecuteInPast30Minutes(rowData, now, messageType, currentDate)) {
-      candidate.priority = 2;
-      candidates.push(candidate);
-      Logger.log(`[优先级 2] 过去 30 分钟消息: ${rowData.ID}`);
-      continue;
-    }
-    
-    // 3. 未指定时间的消息（8 点后，最低优先级）
-    if (currentHour >= 8 && shouldExecuteTodayWithoutTime(rowData, now, messageType, currentDate)) {
-      candidate.priority = 3;
-      candidates.push(candidate);
-      Logger.log(`[优先级 3] 未指定时间消息: ${rowData.ID}`);
-      continue;
+    if (matches) {
+      // 找到符合条件的消息，立即返回
+      return {
+        ID: rowData.ID,
+        Topic: rowData.Topic,
+        Content: rowData.Content,
+        Glip_Team_ID: rowData.Glip_Team_ID,
+        Glip_User_Name: rowData.Glip_User_Name,
+        Bot_Endpoint: rowData.Bot_Endpoint,
+        Target_Type: rowData.Glip_User_Name ? 'private' : 'group',
+        Schedule_Date: rowData.Schedule_Date,
+        Schedule_Time: rowData.Schedule_Time,
+        Created_At: rowData.Created_At || '',
+        messageType: messageType,
+        rowIndex: i + 1,
+        rowData: rowData,
+        headers: headers,
+        priority: priority
+      };
     }
   }
   
-  if (candidates.length === 0) {
-    Logger.log('[Bot 单条消息] 没有符合条件的消息');
-    return null;
-  }
-  
-  Logger.log(`[Bot 单条消息] 找到 ${candidates.length} 条候选消息`);
-  
-  // 排序：优先级 > 指定时间 > 创建时间
-  candidates.sort((a, b) => {
-    // 1. 按优先级
-    if (a.priority !== b.priority) {
-      return a.priority - b.priority;
-    }
-    
-    // 2. 有指定时间的优先
-    const aHasTime = a.Schedule_Time && a.Schedule_Time.toString().trim();
-    const bHasTime = b.Schedule_Time && b.Schedule_Time.toString().trim();
-    if (aHasTime && !bHasTime) return -1;
-    if (!aHasTime && bHasTime) return 1;
-    
-    // 3. 按创建时间（早的优先）
-    const aCreated = a.Created_At ? new Date(a.Created_At).getTime() : 0;
-    const bCreated = b.Created_At ? new Date(b.Created_At).getTime() : 0;
-    return aCreated - bCreated;
-  });
-  
-  const selected = candidates[0];
-  Logger.log(`[Bot 单条消息] 选中消息: ${selected.ID} - ${selected.Topic} (优先级: ${selected.priority})`);
-  
-  return selected;
+  // 未找到符合条件的消息
+  return null;
 }
 
 /**

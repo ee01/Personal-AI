@@ -427,7 +427,7 @@ export class SheetInitializer {
    * 加载 AppScript 模板代码
    */
   private async loadAppScriptTemplate(): Promise<string> {
-    // 从 appscripts/scheduled_messages_template.gs 读取
+    // 从 src/scheduled-messages/app-script-template.gs 读取
     // 注意：在 Chrome Extension 中，我们需要将这个文件打包进来
     // 这里我们直接返回代码字符串
     const templateCode = `
@@ -459,7 +459,7 @@ function dailyTrigger() {
     // 这里应该返回完整的 AppScript 代码
     // 暂时使用 fetch 从扩展资源中读取
     try {
-      const response = await fetch(chrome.runtime.getURL('scheduled_messages_template.gs'));
+      const response = await fetch(chrome.runtime.getURL('app-script-template.gs'));
       return await response.text();
     } catch (error) {
       console.warn('无法加载模板文件，使用内联代码');

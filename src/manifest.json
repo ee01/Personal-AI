@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "7.2.1",
+  "version": "7.3.0",
   "permissions": [
     "tabs",
     "storage",
@@ -89,7 +89,7 @@
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "demo/实体记忆查询界面.html", "demo/项目进展图-缩放版.html", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "scheduled_messages_template.gs"],
+    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "demo/实体记忆查询界面.html", "demo/项目进展图-缩放版.html", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "app-script-template.gs"],
     "matches": ["<all_urls>"]
   }],
   "icons": {
