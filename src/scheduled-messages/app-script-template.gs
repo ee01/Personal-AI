@@ -891,7 +891,6 @@ function findMessageByPriority(data, headers, now, currentDate, priority, curren
         Content: rowData.Content,
         Glip_Team_ID: rowData.Glip_Team_ID,
         Glip_User_Name: rowData.Glip_User_Name,
-        Bot_Endpoint: rowData.Bot_Endpoint,
         Target_Type: rowData.Glip_User_Name ? 'private' : 'group',
         Schedule_Date: rowData.Schedule_Date,
         Schedule_Time: rowData.Schedule_Time,

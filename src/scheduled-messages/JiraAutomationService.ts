@@ -3,7 +3,7 @@
  * 负责创建和管理 Bot 推送的 Jira Automation 规则
  */
 
-import ruleTemplate from './jira-rule-template-v3-working.json';
+import ruleTemplate from './jira-rule-template.json';
 import { getEnvConfig } from '../utils';
 
 export interface JiraAutomationConfig {

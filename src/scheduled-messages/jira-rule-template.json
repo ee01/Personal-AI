@@ -8,11 +8,18 @@
   "trigger": {
     "component": "TRIGGER",
     "schemaVersion": 1,
-    "type": "jira.scheduled.trigger",
+    "type": "jira.jql.scheduled",
     "value": {
-      "scheduleConfig": {
-        "expression": "0 * * * * ?"
-      }
+      "schedule": {
+        "cronExpression": "0 * * * * ?",
+        "method": "CRON",
+        "rate": 0,
+        "rateInterval": 60
+      },
+      "jql": "project = {{PROJECT_KEY}}",
+      "executionMode": "nosearch",
+      "onlyUpdatedIssues": false,
+      "processIssuesInBulk": false
     },
     "children": [],
     "conditions": [],
@@ -25,15 +32,210 @@
       "schemaVersion": 2,
       "type": "jira.issue.outgoing.webhook",
       "value": {
-        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&botToken={{BOT_TOKEN}}",
+        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime",
         "headers": [],
         "sendIssue": false,
         "contentType": "empty",
         "method": "GET",
-        "responseEnabled": false,
+        "responseEnabled": true,
         "usedSecretsKeys": []
       },
       "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_messageId",
+        "name": {
+          "type": "FREE",
+          "value": "messageId"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body.messageId}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "CONDITION",
+      "schemaVersion": 1,
+      "type": "jira.comparator.condition",
+      "value": {
+        "first": "{{webhookResponse.body.executed}}",
+        "second": "true",
+        "operator": "EQUALS"
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "CONDITION",
+      "schemaVersion": 1,
+      "type": "jira.condition.container.block",
+      "children": [
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{BOT_API_BASE_URL}}/user/message",
+                "headers": [
+                  {
+                    "id": "_header_auth",
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "Bearer {{BOT_TOKEN}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_bot",
+                    "name": "bot",
+                    "value": {
+                      "keyOrValue": "{{BOT_ID}}",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"email\": \"{{USER_EMAIL}}\",\n  \"message\": {{webhookResponse.body.content.asJsonString}},\n  \"mentionAutoCorrect\": true,\n  \"mention\": true\n}",
+                "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.targetType}}",
+                "second": "private",
+                "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{BOT_API_BASE_URL}}/team/message",
+                "headers": [
+                  {
+                    "id": "_header_auth",
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "Bearer {{BOT_TOKEN}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_bot",
+                    "name": "bot",
+                    "value": {
+                      "keyOrValue": "{{BOT_ID}}",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"mentionList\": [],\n  \"isTeamMention\": false,\n  \"teamId\": \"{{webhookResponse.body.teamId}}\",\n  \"message\": {{webhookResponse.body.content.asJsonString}},\n  \"skipMentionCheck\": true\n}",
+                "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [],
+          "optimisedIds": [],
+          "newComponent": false
+        }
+      ],
       "conditions": [],
       "optimisedIds": [],
       "newComponent": false
