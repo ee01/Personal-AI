@@ -673,7 +673,8 @@ function getMessageCurrentTime() {
       const bodyStr = replaceAIBodyVariables(
         message.AI_Body || '',
         message.Topic || '',
-        message.Content || ''
+        message.Content || '',
+        message.Glip_Team_ID || ''
       );
       
       Logger.log(`AI URL 解析结果: host=${endpointInfo.host}, uri=${endpointInfo.uri}, method=${endpointInfo.method}`);
@@ -1160,13 +1161,14 @@ function parseAIHeaders(headersStr) {
 }
 
 /**
- * 替换 AI Body 中的变量（{Topic} 和 {Content}），并进行 JSON 转义
+ * 替换 AI Body 中的变量（{Topic}、{Content} 和 {TeamID}），并进行 JSON 转义
  * @param {string} bodyStr - Body 模板字符串
  * @param {string} topic - Topic 值
  * @param {string} content - Content 值
+ * @param {string} teamId - Team ID 值（来自 Glip_Team_ID）
  * @returns {string} 替换后的字符串
  */
-function replaceAIBodyVariables(bodyStr, topic, content) {
+function replaceAIBodyVariables(bodyStr, topic, content, teamId) {
   if (!bodyStr || !bodyStr.toString()) {
     return '';
   }
@@ -1180,9 +1182,10 @@ function replaceAIBodyVariables(bodyStr, topic, content) {
   
   let result = bodyStr.toString();
   
-  // 替换 {Topic} 和 {Content}，并进行 JSON 转义
+  // 替换 {Topic}、{Content} 和 {TeamID}，并进行 JSON 转义
   result = result.replace(/\{Topic\}/g, escapeJsonString(topic || ''));
   result = result.replace(/\{Content\}/g, escapeJsonString(content || ''));
+  result = result.replace(/\{TeamID\}/g, escapeJsonString(teamId || ''));
   
   return result;
 }

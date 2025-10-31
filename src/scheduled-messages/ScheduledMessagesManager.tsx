@@ -28,9 +28,12 @@ const ScheduledMessagesManager: React.FC = () => {
   const [showBotConfigDialog, setShowBotConfigDialog] = useState(false);
   const [botConfigured, setBotConfigured] = useState(false);
   const [showBotConfigWarning, setShowBotConfigWarning] = useState(false);
+  const [filterSelfOnly, setFilterSelfOnly] = useState(false);
+  const [currentUsername, setCurrentUsername] = useState<string>('');
   
   useEffect(() => {
     initializeApp();
+    getCurrentUserName();
   }, []);
   
   const initializeApp = async () => {
@@ -238,6 +241,144 @@ const ScheduledMessagesManager: React.FC = () => {
     });
   };
   
+  const getCurrentUserName = async () => {
+    try {
+      const token = await getAuthToken();
+      const response = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const userInfo = await response.json();
+        // userInfo.email 格式如：esone.qiu@ringcentral.com
+        const email = userInfo.email || '';
+        const username = email.split('@')[0]; // 提取 esone.qiu
+        setCurrentUsername(username);
+      }
+    } catch (error) {
+      console.error('获取用户信息失败:', error);
+    }
+  };
+  
+  // 频率格式化函数
+  const formatFrequency = (message: ScheduledMessage): string => {
+    // 判断是否有重复规则
+    if (!message.Repeat_Every || !message.Repeat_Unit) {
+      // 一次性任务
+      return '推送一次';
+    }
+    
+    const every = message.Repeat_Every;
+    const unit = message.Repeat_Unit;
+    const scheduleDate = message.Schedule_Date;
+    const scheduleTime = message.Schedule_Time;
+    
+    // 根据单位构建频率描述
+    let freq = '';
+    
+    if (unit === 'Day') {
+      if (every === 1) {
+        freq = '每天';
+      } else {
+        freq = `每 ${every} 天`;
+      }
+    } else if (unit === 'Week') {
+      if (every === 1) {
+        // 解析 Schedule_Date 获取星期几
+        const date = new Date(scheduleDate);
+        const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+        const weekday = weekdays[date.getDay()];
+        freq = `每周${weekday}`;
+      } else {
+        freq = `每 ${every} 周`;
+      }
+    } else if (unit === 'Month') {
+      // 从 Schedule_Date 提取日期
+      const day = new Date(scheduleDate).getDate();
+      if (every === 1) {
+        freq = `每月 ${day} 号`;
+      } else {
+        freq = `每 ${every} 月的 ${day} 号`;
+      }
+    } else if (unit === 'Year') {
+      if (every === 1) {
+        const date = new Date(scheduleDate);
+        const month = date.getMonth() + 1;
+        const day = date.getDate();
+        freq = `每年 ${month}/${day}`;
+      } else {
+        freq = `每 ${every} 年`;
+      }
+    }
+    
+    // 添加时间
+    if (scheduleTime) {
+      freq += ` ${scheduleTime}`;
+    } else {
+      freq += ' 早上';
+    }
+    
+    return freq;
+  };
+  
+  // 判断消息是否只发给自己
+  const isSelfOnlyMessage = (message: ScheduledMessage): boolean => {
+    if (!message.Glip_User_Name || !currentUsername) {
+      return false;
+    }
+    
+    // Glip_User_Name 格式：esone.qiu 或 esone.qiu+john.doe
+    const usernames = message.Glip_User_Name.split('+');
+    
+    // 只有一个人且是自己
+    return usernames.length === 1 && usernames[0] === currentUsername;
+  };
+  
+  // 根据 Push_Method 显示类型
+  const getMessageTypeDisplay = (message: ScheduledMessage): string => {
+    // 特殊逻辑：sync.service 显示为系统消息
+    if (message.Glip_User_Name === 'sync.service') {
+      return '系统消息';
+    }
+    
+    switch (message.Push_Method) {
+      case 'AI':
+        return 'AI Report';
+      case 'AsMe':
+        return '假装我发的';
+      case 'Bot':
+        return 'Bot 定时';
+      default:
+        return message.Push_Method;
+    }
+  };
+  
+  // 格式化"发给"列的显示
+  const formatRecipient = (message: ScheduledMessage): string => {
+    // 优先显示用户名
+    if (message.Glip_User_Name && message.Glip_User_Name.trim()) {
+      const usernames = message.Glip_User_Name.split('+');
+      const formattedNames = usernames.map(name => {
+        // esone.qiu -> Esone
+        const parts = name.split('.');
+        if (parts.length > 0) {
+          return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+        }
+        return name;
+      });
+      return formattedNames.join(', ');
+    }
+    
+    // 否则显示群组 ID
+    if (message.Glip_Team_ID && message.Glip_Team_ID.trim()) {
+      return message.Glip_Team_ID;
+    }
+    
+    return '-';
+  };
+  
   if (isLoading) {
     return (
       <div style={styles.loadingContainer}>
@@ -310,24 +451,43 @@ const ScheduledMessagesManager: React.FC = () => {
             今日已执行: <strong style={{ color: '#007bff' }}>{statistics.executedToday}</strong>
           </span>
         </div>
-        {statistics.done > 0 && (
-          <button
-            onClick={handleCleanupCompleted}
-            style={{
-              padding: '6px 12px',
-              backgroundColor: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              fontWeight: 500
-            }}
-            title={`清理 ${statistics.done} 条已完成的消息`}
-          >
-            🗑️ 清理已完成 ({statistics.done})
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          {statistics.done > 0 && (
+            <button
+              onClick={handleCleanupCompleted}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+              title={`清理 ${statistics.done} 条已完成的消息`}
+            >
+              🗑️ 清理已完成 ({statistics.done})
+            </button>
+          )}
+          <label style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            cursor: 'pointer',
+            fontSize: '13px',
+            fontWeight: 500,
+            color: '#666',
+            userSelect: 'none'
+          }}>
+            <input 
+              type="checkbox"
+              checked={filterSelfOnly}
+              onChange={(e) => setFilterSelfOnly(e.target.checked)}
+              style={{ marginRight: '6px', cursor: 'pointer' }}
+            />
+            过滤掉仅发我的
+          </label>
+        </div>
       </div>
       
       <div style={styles.content}>
@@ -345,48 +505,60 @@ const ScheduledMessagesManager: React.FC = () => {
                 <tr>
                   <th style={styles.th}>类型</th>
                   <th style={styles.th}>主题</th>
+                  <th style={styles.th}>发给</th>
+                  <th style={styles.th}>频率</th>
                   <th style={styles.th}>下次执行</th>
+                  <th style={styles.th}>已发</th>
                   <th style={styles.th}>状态</th>
-                  <th style={styles.th}>推送方式</th>
-                  <th style={styles.th}>执行次数</th>
                   <th style={styles.th}>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {messages.map((message) => {
-                  const displayTitle = message.Topic || (message.Content.length > 30 ? message.Content.substring(0, 30) + '...' : message.Content);
-                  return (
-                    <tr key={message.ID} style={styles.tr}>
-                      <td style={styles.td}>
-                        <span style={getTypeStyle(message.Type)}>{message.Type}</span>
-                      </td>
-                      <td style={styles.td} title={message.Content}>
-                        <span style={styles.topicText}>{displayTitle}</span>
-                      </td>
-                      <td style={styles.td}>{message.Next_Exec || '-'}</td>
-                      <td style={styles.td}>
-                        <span 
-                          style={{...getStatusStyle(message.Status), cursor: 'pointer'}} 
-                          onClick={() => handleToggleStatus(message)}
-                          title={`点击切换为${message.Status === 'Active' ? '禁用' : '启用'}`}
-                        >
-                          {message.Status}
-                        </span>
-                      </td>
-                      <td style={styles.td}>{message.Push_Method}</td>
-                      <td style={styles.td}>{message.Exec_Count || 0}</td>
-                      <td style={styles.td}>
-                        <button 
-                          style={styles.deleteButton}
-                          onClick={() => handleDeleteMessage(message.ID, displayTitle)}
-                          title="删除消息"
-                        >
-                          🗑️
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {messages
+                  .filter(message => {
+                    // 应用过滤条件
+                    if (filterSelfOnly && isSelfOnlyMessage(message)) {
+                      return false;
+                    }
+                    return true;
+                  })
+                  .map((message) => {
+                    const displayTitle = message.Topic || (message.Content.length > 30 ? message.Content.substring(0, 30) + '...' : message.Content);
+                    return (
+                      <tr key={message.ID} style={styles.tr}>
+                        <td style={styles.td}>
+                          <span style={getTypeStyle(message.Push_Method)}>
+                            {getMessageTypeDisplay(message)}
+                          </span>
+                        </td>
+                        <td style={styles.td} title={message.Content}>
+                          <span style={styles.topicText}>{displayTitle}</span>
+                        </td>
+                        <td style={styles.td}>{formatRecipient(message)}</td>
+                        <td style={styles.td}>{formatFrequency(message)}</td>
+                        <td style={styles.td}>{message.Next_Exec || '-'}</td>
+                        <td style={styles.td}>{message.Exec_Count || 0} 次</td>
+                        <td style={styles.td}>
+                          <span 
+                            style={{...getStatusStyle(message.Status), cursor: 'pointer'}} 
+                            onClick={() => handleToggleStatus(message)}
+                            title={`点击切换为${message.Status === 'Active' ? '禁用' : '启用'}`}
+                          >
+                            {message.Status}
+                          </span>
+                        </td>
+                        <td style={styles.td}>
+                          <button 
+                            style={styles.deleteButton}
+                            onClick={() => handleDeleteMessage(message.ID, displayTitle)}
+                            title="删除消息"
+                          >
+                            🗑️
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -478,12 +650,21 @@ const formatUserName = {
   },
   
   /**
-   * 将多个用户名转换为存储格式（用+连接）
+   * 将多个用户名转换为存储格式（用+连接，用于 Glip_User_Name）
    */
   joinForStorage: (displayNames: string[]): string => {
     return displayNames
       .map(name => formatUserName.toStorageFormat(name))
       .join('+');
+  },
+  
+  /**
+   * 将多个用户名转换为 mentionList 格式（用,连接，用于 AI Report）
+   */
+  joinForMentionList: (displayNames: string[]): string => {
+    return displayNames
+      .map(name => formatUserName.toStorageFormat(name))
+      .join(',');
   }
 };
 
@@ -651,6 +832,17 @@ const AddMessageDialog: React.FC<{
   const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'custom'>('ai-report');
   const [aiHeaders, setAiHeaders] = useState<AIHeader[]>([]);
   
+  // AI Report 可视化字段
+  const [aiReportJql, setAiReportJql] = useState('');
+  const [aiReportOutputs, setAiReportOutputs] = useState({
+    noduedate: true,
+    overdue: true,
+    toTest: true
+  });
+  const [aiReportTeamId, setAiReportTeamId] = useState('');
+  const [aiReportMentionList, setAiReportMentionList] = useState<string[]>([]);
+  const [aiReportExtraText, setAiReportExtraText] = useState('');
+  
   // 三个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
     'ai-report': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
@@ -676,7 +868,7 @@ const AddMessageDialog: React.FC<{
           outputs: 'noduedate, overdue, toTest',
           jql: '{Content}',
           extraText: '',
-          teamId: '',
+          teamId: '{TeamID}',
           mentionList: ''
         }
       }, null, 2)
@@ -688,7 +880,7 @@ const AddMessageDialog: React.FC<{
         jira_query_id: 111,
         sheet_id: '',
         sheet_name: '',
-        team_id: '',
+        team_id: '{TeamID}',
         mention_list: [],
         overallFilterId: '',
         bugFilterid: '',
@@ -720,11 +912,20 @@ const AddMessageDialog: React.FC<{
   // 处理模板切换
   const handleTemplateChange = (newTemplate: 'ai-report' | 'pep-report' | 'custom') => {
     // 保存当前模板的数据到缓存
-    templateCacheRef.current[aiReportTemplate] = {
-      AI_Endpoint: formData.AI_Endpoint || '',
-      AI_Headers: formData.AI_Headers || '',
-      AI_Body: formData.AI_Body || ''
-    };
+    if (aiReportTemplate === 'ai-report') {
+      // ai-report 使用可视化字段，不需要保存 Body
+      templateCacheRef.current[aiReportTemplate] = {
+        AI_Endpoint: formData.AI_Endpoint || '',
+        AI_Headers: formData.AI_Headers || '',
+        AI_Body: '' // ai-report 的 Body 会动态生成
+      };
+    } else {
+      templateCacheRef.current[aiReportTemplate] = {
+        AI_Endpoint: formData.AI_Endpoint || '',
+        AI_Headers: formData.AI_Headers || '',
+        AI_Body: formData.AI_Body || ''
+      };
+    }
     
     // 切换到新模板
     setAiReportTemplate(newTemplate);
@@ -734,7 +935,7 @@ const AddMessageDialog: React.FC<{
       const headersStr = aiReportPresets['ai-report'].AI_Headers;
       handleChange('AI_Endpoint', aiReportPresets['ai-report'].AI_Endpoint);
       handleChange('AI_Headers', headersStr);
-      handleChange('AI_Body', aiReportPresets['ai-report'].AI_Body);
+      // ai-report 的 Body 会通过可视化字段自动生成，不需要手动设置
       setAiHeaders(parseHeadersString(headersStr));
     } else if (newTemplate === 'pep-report' && !templateCacheRef.current['pep-report'].AI_Endpoint) {
       const headersStr = aiReportPresets['pep-report'].AI_Headers;
@@ -747,11 +948,35 @@ const AddMessageDialog: React.FC<{
       const cached = templateCacheRef.current[newTemplate];
       handleChange('AI_Endpoint', cached.AI_Endpoint);
       handleChange('AI_Headers', cached.AI_Headers);
-      handleChange('AI_Body', cached.AI_Body);
+      if (newTemplate !== 'ai-report') {
+        handleChange('AI_Body', cached.AI_Body);
+      }
       if (newTemplate === 'custom') {
         setAiHeaders(parseHeadersString(cached.AI_Headers));
       }
     }
+  };
+  
+  // 构建 AI Report Body JSON
+  const buildAiReportBody = (): string => {
+    const outputs = Object.entries(aiReportOutputs)
+      .filter(([, enabled]) => enabled)
+      .map(([key]) => key)
+      .join(', ');
+    
+    return JSON.stringify({
+      response_mode: 'blocking',
+      user: 'default-user',
+      query: '{Topic}',
+      inputs: {
+        title: '{Topic}',
+        outputs: outputs,
+        jql: '{Content}',
+        extraText: aiReportExtraText,
+        teamId: '{TeamID}',
+        mentionList: formatUserName.joinForMentionList(aiReportMentionList)
+      }
+    }, null, 2);
   };
   
   // 解析 headers 字符串为数组
@@ -793,10 +1018,20 @@ const AddMessageDialog: React.FC<{
       const headersStr = aiReportPresets['ai-report'].AI_Headers;
       handleChange('AI_Endpoint', aiReportPresets['ai-report'].AI_Endpoint);
       handleChange('AI_Headers', headersStr);
-      handleChange('AI_Body', aiReportPresets['ai-report'].AI_Body);
+      // ai-report 模板不需要初始化 AI_Body，会通过可视化字段动态生成
       setAiHeaders(parseHeadersString(headersStr));
     }
   }, [formData.Push_Method]);
+  
+  // 当 ai-report 的可视化字段变化时，自动更新 Content 和 AI_Body
+  React.useEffect(() => {
+    if (formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report') {
+      // 同步 JQL 到 Content
+      handleChange('Content', aiReportJql);
+      // 动态构建 AI_Body
+      handleChange('AI_Body', buildAiReportBody());
+    }
+  }, [aiReportJql, aiReportOutputs, aiReportTeamId, aiReportMentionList, aiReportExtraText]);
   
   // Header 管理函数
   const addAIHeader = () => {
@@ -827,7 +1062,7 @@ const AddMessageDialog: React.FC<{
     e.preventDefault();
     
     // 验证必填字段
-    if (!formData.Topic || !formData.Content || !formData.Schedule_Date) {
+    if (!formData.Topic || !formData.Schedule_Date) {
       alert('请填写所有必填字段');
       return;
     }
@@ -835,12 +1070,30 @@ const AddMessageDialog: React.FC<{
     // 验证推送目标
     if (formData.Push_Method === 'AI') {
       // AI 消息验证
-      if (!formData.AI_Endpoint || !formData.AI_Body) {
-        alert('请填写 AI Endpoint 和 Body');
-        return;
+      if (aiReportTemplate === 'ai-report') {
+        // ai-report 模板验证 JQL
+        if (!aiReportJql.trim()) {
+          alert('请填写 JQL 查询');
+          return;
+        }
+      } else {
+        // 其他模板验证 Content 和 Body
+        if (!formData.Content) {
+          alert('请填写消息内容');
+          return;
+        }
+        if (!formData.AI_Endpoint || !formData.AI_Body) {
+          alert('请填写 AI Endpoint 和 Body');
+          return;
+        }
       }
     } else {
       // Bot/AsMe 消息验证
+      if (!formData.Content) {
+        alert('请填写消息内容');
+        return;
+      }
+      
       if (formData.Target_Type === 'private' && userTags.length === 0) {
         alert('请至少添加一个接收人');
         return;
@@ -862,9 +1115,32 @@ const AddMessageDialog: React.FC<{
     
     // 合并 userTags 到 Glip_User_Name（转换为存储格式：esone.qiu+john.doe）
     // 注意：不传递 Target_Type，由 AppScript 动态判断
+    
+    // 处理 AI Report 的 Glip_Team_ID
+    let glipTeamId = formData.Glip_Team_ID;
+    if (formData.Push_Method === 'AI') {
+      if (aiReportTemplate === 'ai-report') {
+        // ai-report 模板：使用可视化输入框的值
+        glipTeamId = aiReportTeamId;
+      } else if (aiReportTemplate === 'pep-report') {
+        // pep-report 模板：解析 JSON 提取 team_id
+        try {
+          const bodyJson = JSON.parse(formData.AI_Body || '{}');
+          if (bodyJson.team_id && typeof bodyJson.team_id === 'string' && !bodyJson.team_id.includes('{')) {
+            // 如果 team_id 不是变量（不包含 {}），则使用它
+            glipTeamId = bodyJson.team_id;
+          }
+        } catch (e) {
+          console.warn('解析 PEP report JSON 失败:', e);
+        }
+      }
+      // custom 模板：不处理，用户自己负责
+    }
+    
     const finalFormData: CreateMessageFormData = {
       ...formData,
       Glip_User_Name: formData.Push_Method === 'AI' ? undefined : formatUserName.joinForStorage(userTags),
+      Glip_Team_ID: glipTeamId,
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
       Repeat_Count: isRepeating ? formData.Repeat_Count : undefined,
@@ -903,17 +1179,19 @@ const AddMessageDialog: React.FC<{
             />
           </div>
           
-          {/* 消息内容 */}
-          <div style={dialogStyles.formGroup}>
-            <label style={dialogStyles.label}>消息内容 *</label>
-            <textarea 
-              style={dialogStyles.textarea}
-              value={formData.Content}
-              onChange={(e) => handleChange('Content', e.target.value)}
-              placeholder="输入消息内容"
-              rows={4}
-            />
-          </div>
+          {/* 消息内容（AI Report 的 ai-report 模板时隐藏，由 JQL 自动填充） */}
+          {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report') && (
+            <div style={dialogStyles.formGroup}>
+              <label style={dialogStyles.label}>消息内容 *</label>
+              <textarea 
+                style={dialogStyles.textarea}
+                value={formData.Content}
+                onChange={(e) => handleChange('Content', e.target.value)}
+                placeholder="输入消息内容"
+                rows={4}
+              />
+            </div>
+          )}
           
           {/* 执行时间 */}
           <div style={dialogStyles.formRow}>
@@ -1219,17 +1497,112 @@ const AddMessageDialog: React.FC<{
               )}
               
               {/* AI Body */}
-              <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>Body *</label>
-                <textarea 
-                  style={dialogStyles.textarea}
-                  value={formData.AI_Body || ''}
-                  onChange={(e) => handleChange('AI_Body', e.target.value)}
-                  placeholder='{"key": "value"}'
-                  rows={8}
-                />
-                <small style={dialogStyles.hint}>可以使用 {"{Topic}"} 和 {"{Content}"} 变量</small>
-              </div>
+              {aiReportTemplate === 'ai-report' ? (
+                /* AI Report 可视化配置 */
+                <div style={{...dialogStyles.section, backgroundColor: '#f8f9fa', padding: '16px', borderRadius: '8px'}}>
+                  <h3 style={{margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#333'}}>
+                    📊 AI Report 配置
+                  </h3>
+                  
+                  {/* JQL 输入框 */}
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>JQL 查询 *</label>
+                    <textarea 
+                      style={dialogStyles.textarea}
+                      value={aiReportJql}
+                      onChange={(e) => setAiReportJql(e.target.value)}
+                      placeholder='例如：project = MTR AND status = "In Progress"'
+                      rows={3}
+                    />
+                    <small style={dialogStyles.hint}>此内容会自动同步到上方的"消息内容"字段</small>
+                  </div>
+                  
+                  {/* 版块自定义 */}
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>版块自定义</label>
+                    <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                      <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '14px'}}>
+                        <input 
+                          type="checkbox"
+                          checked={aiReportOutputs.noduedate}
+                          onChange={(e) => setAiReportOutputs({...aiReportOutputs, noduedate: e.target.checked})}
+                          style={{marginRight: '8px'}}
+                        />
+                        展示没填 Duedate 的 tickets
+                      </label>
+                      <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '14px'}}>
+                        <input 
+                          type="checkbox"
+                          checked={aiReportOutputs.overdue}
+                          onChange={(e) => setAiReportOutputs({...aiReportOutputs, overdue: e.target.checked})}
+                          style={{marginRight: '8px'}}
+                        />
+                        展示 Duedate 超时的 tickets
+                      </label>
+                      <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '14px'}}>
+                        <input 
+                          type="checkbox"
+                          checked={aiReportOutputs.toTest}
+                          onChange={(e) => setAiReportOutputs({...aiReportOutputs, toTest: e.target.checked})}
+                          style={{marginRight: '8px'}}
+                        />
+                        展示待 QA 验证的 tickets
+                      </label>
+                    </div>
+                  </div>
+                  
+                  {/* Team ID */}
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>Team ID</label>
+                    <input 
+                      style={dialogStyles.input}
+                      type="text"
+                      value={aiReportTeamId}
+                      onChange={(e) => setAiReportTeamId(e.target.value)}
+                      placeholder="例如：148192141318"
+                    />
+                    <small style={dialogStyles.hint}>可选，填入后会将报告发送到指定群组</small>
+                  </div>
+                  
+                  {/* @ 成员 */}
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>@ 成员</label>
+                    <TagsInput
+                      tags={aiReportMentionList}
+                      onChange={setAiReportMentionList}
+                      placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
+                    />
+                    <small style={dialogStyles.hint}>
+                      支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 添加
+                    </small>
+                  </div>
+                  
+                  {/* 尾部添加文本 */}
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>尾部添加文本</label>
+                    <textarea 
+                      style={dialogStyles.textarea}
+                      value={aiReportExtraText}
+                      onChange={(e) => setAiReportExtraText(e.target.value)}
+                      placeholder="可选，在报告末尾添加自定义文本"
+                      rows={2}
+                    />
+                  </div>
+                </div>
+              ) : (
+                /* PEP Report 和自定义模板：显示 JSON 输入框 */
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>Body *</label>
+                  <textarea 
+                    style={dialogStyles.textarea}
+                    value={formData.AI_Body || ''}
+                    onChange={(e) => handleChange('AI_Body', e.target.value)}
+                    placeholder='{"key": "value"}'
+                    rows={8}
+                  />
+                  <small style={dialogStyles.hint}>可以使用 {"{Topic}"} 和 {"{Content}"} 变量</small>
+                </div>
+              )}
             </>
           )}
           
@@ -1329,7 +1702,7 @@ const getButtonStyle = (isSelected: boolean): React.CSSProperties => ({
   transition: 'all 0.2s',
 });
 
-const getTypeStyle = (type: string): React.CSSProperties => {
+const getTypeStyle = (pushMethod: string): React.CSSProperties => {
   const baseStyle: React.CSSProperties = {
     padding: '4px 8px',
     borderRadius: '4px',
@@ -1337,13 +1710,13 @@ const getTypeStyle = (type: string): React.CSSProperties => {
     fontWeight: 'bold',
   };
   
-  switch (type) {
-    case 'Daily':
-      return { ...baseStyle, backgroundColor: '#e3f2fd', color: '#1976d2' };
-    case 'Hourly':
-      return { ...baseStyle, backgroundColor: '#f3e5f5', color: '#7b1fa2' };
-    case 'Periodic':
-      return { ...baseStyle, backgroundColor: '#fff3e0', color: '#f57c00' };
+  switch (pushMethod) {
+    case 'AI':
+      return { ...baseStyle, backgroundColor: '#e3f2fd', color: '#1976d2' }; // 蓝色 - AI Report
+    case 'AsMe':
+      return { ...baseStyle, backgroundColor: '#f3e5f5', color: '#7b1fa2' }; // 紫色 - 假装我发的
+    case 'Bot':
+      return { ...baseStyle, backgroundColor: '#fff3e0', color: '#f57c00' }; // 橙色 - Bot 定时
     default:
       return { ...baseStyle, backgroundColor: '#f5f5f5', color: '#666' };
   }

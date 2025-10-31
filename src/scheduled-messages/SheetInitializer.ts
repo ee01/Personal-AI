@@ -674,6 +674,7 @@ function dailyTrigger() {
     const config: SheetConfig = {
       sheetId: spreadsheetId,
       sheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+      messagesSheetId: this.messagesSheetId,  // 保存 Messages Sheet ID
       scriptId,
       webAppUrl,
       minute_trigger_id: triggers.minuteTriggerId,

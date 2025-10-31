@@ -505,12 +505,60 @@ export class ScheduledMessageService {
   }
   
   /**
+   * 获取 Messages Sheet 的 sheetId
+   */
+  private async getMessagesSheetId(): Promise<number> {
+    // 如果配置中有 messagesSheetId，直接使用
+    if (this.config?.messagesSheetId !== undefined) {
+      return this.config.messagesSheetId;
+    }
+    
+    // 否则动态获取
+    if (!this.config) {
+      throw new Error('未找到配置');
+    }
+    
+    return await this.withTokenRetry(async () => {
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}?fields=sheets.properties`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.token}`
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`获取 Sheet 信息失败: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const messagesSheet = data.sheets.find((s: any) => s.properties.title === 'Messages');
+      
+      if (!messagesSheet) {
+        throw new Error('未找到 Messages 工作表');
+      }
+      
+      const sheetId = messagesSheet.properties.sheetId;
+      
+      // 缓存到配置中
+      this.config.messagesSheetId = sheetId;
+      await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+      
+      return sheetId;
+    });
+  }
+  
+  /**
    * 删除行
    */
   private async deleteRow(rowIndex: number): Promise<void> {
     if (!this.config) {
       throw new Error('未找到配置');
     }
+    
+    // 获取正确的 sheetId
+    const messagesSheetId = await this.getMessagesSheetId();
     
     await this.withTokenRetry(async () => {
       // 使用 batchUpdate 删除行
@@ -526,7 +574,7 @@ export class ScheduledMessageService {
             requests: [{
               deleteDimension: {
                 range: {
-                  sheetId: 0, // Messages 工作表
+                  sheetId: messagesSheetId,  // 使用正确的 sheetId
                   dimension: 'ROWS',
                   startIndex: rowIndex - 1,
                   endIndex: rowIndex

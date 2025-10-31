@@ -70,6 +70,7 @@ export interface CreateMessageFormData {
 export interface SheetConfig {
   sheetId: string;
   sheetUrl: string;
+  messagesSheetId?: number;  // Messages 工作表的 Sheet ID
   scriptId?: string;
   webAppUrl?: string;
   minute_trigger_id?: string;
