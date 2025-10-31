@@ -180,7 +180,6 @@ export class JiraAutomationService {
     config: JiraAutomationConfig,
     webAppUrl: string
   ): Promise<BotExecutorRule> {
-    const ruleName = '[Personal AI] Scheduled Messages Bot Executor';
     
     // 获取当前用户 Key
     console.log('正在获取当前用户信息...');
@@ -196,6 +195,7 @@ export class JiraAutomationService {
     console.log('正在读取 Bot 配置...');
     const envConfig = await getEnvConfig();
     const { userinfo } = await chrome.storage.local.get('userinfo');
+    const ruleName = `[${userinfo.fullName.split(' ')[0]}] Scheduled Messages Bot Executor`;
     console.log(`Bot Type: ${envConfig.BOT_TYPE}`);
     console.log(`用户邮箱: ${userinfo.userEmail}`);
     

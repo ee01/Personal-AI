@@ -6,7 +6,7 @@
 export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 
 // 推送方式
-export type PushMethod = 'AsMe' | 'Bot';
+export type PushMethod = 'AsMe' | 'Bot' | 'AI';
 
 // 消息状态
 export type MessageStatus = 'Active' | 'Paused' | 'Completed' | 'Done';
@@ -15,7 +15,7 @@ export type MessageStatus = 'Active' | 'Paused' | 'Completed' | 'Done';
 export type RepeatUnit = 'Day' | 'Week' | 'Month' | 'Year';
 
 // 推送目标类型
-export type TargetType = 'private' | 'group';
+export type TargetType = 'private' | 'group' | 'api';
 
 // 定时消息接口
 export interface ScheduledMessage {
@@ -34,6 +34,10 @@ export interface ScheduledMessage {
   Glip_Team_ID?: string;
   Attachment?: string;
   Target_Type?: TargetType;
+  // AI Report 字段
+  AI_Endpoint?: string;    // "POST url" 或 "GET url" 或 "url"
+  AI_Headers?: string;     // "key: value\nkey2: value2"
+  AI_Body?: string;        // JSON 字符串，支持 {Topic} 和 {Content} 变量
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -56,6 +60,10 @@ export interface CreateMessageFormData {
   Glip_User_Name?: string;  // 支持多个人名，用逗号分隔
   Glip_Team_ID?: string;
   Attachment?: string;
+  // AI Report 字段
+  AI_Endpoint?: string;
+  AI_Headers?: string;
+  AI_Body?: string;
 }
 
 // Sheet 配置接口

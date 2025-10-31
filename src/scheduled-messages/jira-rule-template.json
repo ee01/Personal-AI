@@ -16,8 +16,8 @@
         "rate": 0,
         "rateInterval": 60
       },
-      "jql": "project = {{PROJECT_KEY}}",
-      "executionMode": "nosearch",
+      "jql": "key = {{PROJECT_KEY}}-1",
+      "executionMode": "jql",
       "onlyUpdatedIssues": false,
       "processIssuesInBulk": false
     },
@@ -27,6 +27,28 @@
     "newComponent": false
   },
   "components": [
+    {
+      "component": "CONDITION",
+      "schemaVersion": 3,
+      "type": "jira.issue.condition",
+      "value": {
+        "selectedField": {
+          "type": "ID",
+          "value": "customfield_10050"
+        },
+        "selectedFieldType": "com.atlassian.jira.plugin.system.customfieldtypes:url",
+        "comparison": "NOT_CONTAIN",
+        "compareValue": {
+          "type": "VALUE",
+          "value": "https://jira-",
+          "multiValue": false
+        }
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
     {
       "component": "ACTION",
       "schemaVersion": 2,
@@ -222,6 +244,213 @@
                 "sendIssue": false,
                 "contentType": "empty",
                 "method": "GET",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.targetType}}",
+                "second": "group",
+                "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "https://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}",
+                "headers": [
+                  {
+                    "id": "_header_authorization",
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.Authorization}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.ContentType}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_accept",
+                    "name": "Accept",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.Accept}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_x_api_key",
+                    "name": "X-API-Key",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.XAPIKey}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_user_agent",
+                    "name": "User-Agent",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.UserAgent}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_x_request_id",
+                    "name": "X-Request-ID",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.XRequestID}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_x_custom",
+                    "name": "X-Custom-Header",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.XCustomHeader}}",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.aiMethod}}",
+                "second": "GET",
+                "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "https://{{webhookResponse.body.aiHost}}/{{webhookResponse.body.aiUri}}",
+                "headers": [
+                  {
+                    "id": "_header_authorization",
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.Authorization}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.ContentType}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_accept",
+                    "name": "Accept",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.Accept}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_x_api_key",
+                    "name": "X-API-Key",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.XAPIKey}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_user_agent",
+                    "name": "User-Agent",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.UserAgent}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_x_request_id",
+                    "name": "X-Request-ID",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.XRequestID}}",
+                      "secret": false
+                    }
+                  },
+                  {
+                    "id": "_header_x_custom",
+                    "name": "X-Custom-Header",
+                    "value": {
+                      "keyOrValue": "{{webhookResponse.body.aiHeaders.XCustomHeader}}",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{{webhookResponse.body.aiBody}}",
+                "method": "POST",
                 "responseEnabled": false,
                 "usedSecretsKeys": []
               },
@@ -250,4 +479,3 @@
   "labels": [],
   "tags": []
 }
-

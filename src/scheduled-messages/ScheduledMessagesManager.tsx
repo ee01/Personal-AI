@@ -611,6 +611,23 @@ const TagsInput: React.FC<{
   );
 };
 
+// AI Header 选项
+const AVAILABLE_AI_HEADERS = [
+  { value: 'Authorization', label: 'Authorization (认证)', placeholder: 'Bearer token 或 Basic xxx' },
+  { value: 'Content-Type', label: 'Content-Type (内容类型)', placeholder: 'application/json' },
+  { value: 'Accept', label: 'Accept (接受类型)', placeholder: 'application/json' },
+  { value: 'X-API-Key', label: 'X-API-Key (API密钥)', placeholder: 'sk-xxxxxxx' },
+  { value: 'User-Agent', label: 'User-Agent (用户代理)', placeholder: 'MyApp/1.0' },
+  { value: 'X-Request-ID', label: 'X-Request-ID (请求ID)', placeholder: 'req-12345' },
+  { value: 'X-Custom-Header', label: 'X-Custom-Header (自定义)', placeholder: '自定义值' }
+];
+
+// AI Header 类型
+interface AIHeader {
+  name: string;
+  value: string;
+}
+
 // 新增消息对话框组件
 const AddMessageDialog: React.FC<{
   onSubmit: (data: CreateMessageFormData) => void;
@@ -631,6 +648,180 @@ const AddMessageDialog: React.FC<{
   });
   const [userTags, setUserTags] = useState<string[]>([]);
   const [isRepeating, setIsRepeating] = useState(false);
+  const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'custom'>('ai-report');
+  const [aiHeaders, setAiHeaders] = useState<AIHeader[]>([]);
+  
+  // 三个模板的数据缓存（内存中，关闭页面后失效）
+  const templateCacheRef = React.useRef<{
+    'ai-report': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
+    'pep-report': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
+    'custom': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
+  }>({
+    'ai-report': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' },
+    'pep-report': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' },
+    'custom': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' }
+  });
+  
+  // AI Report 预设值
+  const aiReportPresets = {
+    'ai-report': {
+      AI_Endpoint: 'POST https://dify.int.rclabenv.com/v1/chat-messages',
+      AI_Headers: 'Authorization: Bearer app-hTAaR1jaLnYDITixXRP5qi4Y\nContent-Type: application/json',
+      AI_Body: JSON.stringify({
+        response_mode: 'blocking',
+        user: 'default-user',
+        query: '{Topic}',
+        inputs: {
+          title: '{Topic}',
+          outputs: 'noduedate, overdue, toTest',
+          jql: '{Content}',
+          extraText: '',
+          teamId: '',
+          mentionList: ''
+        }
+      }, null, 2)
+    },
+    'pep-report': {
+      AI_Endpoint: 'POST https://gitlab-reviewer.int.rclabenv.com/pep_daily_report',
+      AI_Headers: 'Content-Type: application/json',
+      AI_Body: JSON.stringify({
+        jira_query_id: 111,
+        sheet_id: '',
+        sheet_name: '',
+        team_id: '',
+        mention_list: [],
+        overallFilterId: '',
+        bugFilterid: '',
+        ignore_due_soon: true,
+        force_running: true,
+        missing_due_check_scope: 'all',
+        language: '',
+        milestones: [
+          {
+            abbreviation: 'MR',
+            full_name: 'Code Merge',
+            goal: '提测所有功能及安排在本Release的Production Bug'
+          },
+          {
+            abbreviation: 'FF',
+            full_name: 'Feature Freeze',
+            goal: '1）完成所有功能测试；2）完成安排在本Release的所有Production和Release Bug (接近FF 2天内的P2 bug可以Regression阶段修复）'
+          },
+          {
+            abbreviation: 'CF',
+            full_name: 'Code Freeze',
+            goal: '完成所有本Release的功能开发、测试和Bug修复。完成Sign off。提供Dogfooding Build'
+          }
+        ]
+      }, null, 2)
+    }
+  };
+  
+  // 处理模板切换
+  const handleTemplateChange = (newTemplate: 'ai-report' | 'pep-report' | 'custom') => {
+    // 保存当前模板的数据到缓存
+    templateCacheRef.current[aiReportTemplate] = {
+      AI_Endpoint: formData.AI_Endpoint || '',
+      AI_Headers: formData.AI_Headers || '',
+      AI_Body: formData.AI_Body || ''
+    };
+    
+    // 切换到新模板
+    setAiReportTemplate(newTemplate);
+    
+    // 如果新模板有预设值且缓存为空，使用预设值
+    if (newTemplate === 'ai-report' && !templateCacheRef.current['ai-report'].AI_Endpoint) {
+      const headersStr = aiReportPresets['ai-report'].AI_Headers;
+      handleChange('AI_Endpoint', aiReportPresets['ai-report'].AI_Endpoint);
+      handleChange('AI_Headers', headersStr);
+      handleChange('AI_Body', aiReportPresets['ai-report'].AI_Body);
+      setAiHeaders(parseHeadersString(headersStr));
+    } else if (newTemplate === 'pep-report' && !templateCacheRef.current['pep-report'].AI_Endpoint) {
+      const headersStr = aiReportPresets['pep-report'].AI_Headers;
+      handleChange('AI_Endpoint', aiReportPresets['pep-report'].AI_Endpoint);
+      handleChange('AI_Headers', headersStr);
+      handleChange('AI_Body', aiReportPresets['pep-report'].AI_Body);
+      setAiHeaders(parseHeadersString(headersStr));
+    } else {
+      // 从缓存恢复数据
+      const cached = templateCacheRef.current[newTemplate];
+      handleChange('AI_Endpoint', cached.AI_Endpoint);
+      handleChange('AI_Headers', cached.AI_Headers);
+      handleChange('AI_Body', cached.AI_Body);
+      if (newTemplate === 'custom') {
+        setAiHeaders(parseHeadersString(cached.AI_Headers));
+      }
+    }
+  };
+  
+  // 解析 headers 字符串为数组
+  const parseHeadersString = (headersStr: string): AIHeader[] => {
+    if (!headersStr) return [];
+    const lines = headersStr.split('\n');
+    const headers: AIHeader[] = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      
+      const colonIndex = trimmed.indexOf(':');
+      if (colonIndex === -1) continue;
+      
+      const name = trimmed.substring(0, colonIndex).trim();
+      const value = trimmed.substring(colonIndex + 1).trim();
+      
+      if (name && value) {
+        headers.push({ name, value });
+      }
+    }
+    
+    return headers;
+  };
+  
+  // 将 headers 数组转换为字符串
+  const formatHeadersToString = (headers: AIHeader[]): string => {
+    return headers
+      .filter(h => h.name && h.value)
+      .map(h => `${h.name}: ${h.value}`)
+      .join('\n');
+  };
+  
+  // 当 Push_Method 切换到 AI 时，初始化模板
+  React.useEffect(() => {
+    if (formData.Push_Method === 'AI' && !formData.AI_Endpoint) {
+      setAiReportTemplate('ai-report');
+      const headersStr = aiReportPresets['ai-report'].AI_Headers;
+      handleChange('AI_Endpoint', aiReportPresets['ai-report'].AI_Endpoint);
+      handleChange('AI_Headers', headersStr);
+      handleChange('AI_Body', aiReportPresets['ai-report'].AI_Body);
+      setAiHeaders(parseHeadersString(headersStr));
+    }
+  }, [formData.Push_Method]);
+  
+  // Header 管理函数
+  const addAIHeader = () => {
+    setAiHeaders([...aiHeaders, { name: '', value: '' }]);
+  };
+  
+  const updateAIHeaderName = (index: number, name: string) => {
+    const newHeaders = [...aiHeaders];
+    newHeaders[index].name = name;
+    setAiHeaders(newHeaders);
+    handleChange('AI_Headers', formatHeadersToString(newHeaders));
+  };
+  
+  const updateAIHeaderValue = (index: number, value: string) => {
+    const newHeaders = [...aiHeaders];
+    newHeaders[index].value = value;
+    setAiHeaders(newHeaders);
+    handleChange('AI_Headers', formatHeadersToString(newHeaders));
+  };
+  
+  const removeAIHeader = (index: number) => {
+    const newHeaders = aiHeaders.filter((_, i) => i !== index);
+    setAiHeaders(newHeaders);
+    handleChange('AI_Headers', formatHeadersToString(newHeaders));
+  };
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -642,14 +833,23 @@ const AddMessageDialog: React.FC<{
     }
     
     // 验证推送目标
-    if (formData.Target_Type === 'private' && userTags.length === 0) {
-      alert('请至少添加一个接收人');
-      return;
-    }
-    
-    if (formData.Target_Type === 'group' && !formData.Glip_Team_ID) {
-      alert('请填写群组 ID');
-      return;
+    if (formData.Push_Method === 'AI') {
+      // AI 消息验证
+      if (!formData.AI_Endpoint || !formData.AI_Body) {
+        alert('请填写 AI Endpoint 和 Body');
+        return;
+      }
+    } else {
+      // Bot/AsMe 消息验证
+      if (formData.Target_Type === 'private' && userTags.length === 0) {
+        alert('请至少添加一个接收人');
+        return;
+      }
+      
+      if (formData.Target_Type === 'group' && !formData.Glip_Team_ID) {
+        alert('请填写群组 ID');
+        return;
+      }
     }
     
     // 验证周期性消息
@@ -661,9 +861,10 @@ const AddMessageDialog: React.FC<{
     }
     
     // 合并 userTags 到 Glip_User_Name（转换为存储格式：esone.qiu+john.doe）
+    // 注意：不传递 Target_Type，由 AppScript 动态判断
     const finalFormData: CreateMessageFormData = {
       ...formData,
-      Glip_User_Name: formatUserName.joinForStorage(userTags),
+      Glip_User_Name: formData.Push_Method === 'AI' ? undefined : formatUserName.joinForStorage(userTags),
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
       Repeat_Count: isRepeating ? formData.Repeat_Count : undefined,
@@ -834,6 +1035,13 @@ const AddMessageDialog: React.FC<{
                >
                  🤖 Bot（机器人）
                </button>
+               <button
+                 type="button"
+                 style={getButtonStyle(formData.Push_Method === 'AI')}
+                 onClick={() => handleChange('Push_Method', 'AI')}
+               >
+                 🤖 AI Report
+               </button>
              </div>
              {formData.Push_Method === 'Bot' && !botConfigured && (
                <div style={{
@@ -866,60 +1074,221 @@ const AddMessageDialog: React.FC<{
                  </button>
                </div>
              )}
+             {formData.Push_Method === 'AI' && !botConfigured && (
+               <div style={{
+                 marginTop: '12px',
+                 padding: '12px',
+                 backgroundColor: '#fff3cd',
+                 borderRadius: '6px',
+                 border: '1px solid #ffc107',
+               }}>
+                 <p style={{ margin: '0 0 10px 0', color: '#856404', fontSize: '14px' }}>
+                   ⚠️ AI Report 功能需要配置 Bot 推送功能才能使用。
+                 </p>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     onConfigureBot();
+                   }}
+                   style={{
+                     padding: '8px 16px',
+                     backgroundColor: '#ffc107',
+                     color: '#000',
+                     border: 'none',
+                     borderRadius: '4px',
+                     cursor: 'pointer',
+                     fontSize: '14px',
+                     fontWeight: 'bold',
+                   }}
+                 >
+                   🔧 配置 Bot 后启用
+                 </button>
+               </div>
+             )}
            </div>
           
-          {/* 推送目标 */}
-          <div style={dialogStyles.formGroup}>
-            <label style={dialogStyles.label}>推送目标 *</label>
-            <div style={dialogStyles.buttonGroup}>
-              <button
-                type="button"
-                style={getButtonStyle(formData.Target_Type === 'private')}
-                onClick={() => handleChange('Target_Type', 'private')}
-              >
-                💬 私发消息
-              </button>
-              <button
-                type="button"
-                style={getButtonStyle(formData.Target_Type === 'group')}
-                onClick={() => handleChange('Target_Type', 'group')}
-              >
-                👥 群组消息
-              </button>
-            </div>
-          </div>
-          
-          {/* 私发消息 - 用户名 */}
-          {formData.Target_Type === 'private' && (
-            <div style={dialogStyles.formGroup}>
-              <label style={dialogStyles.label}>
-                接收人 * 
-                {formData.Push_Method === 'Bot' && <span style={{color: '#dc3545', marginLeft: '8px'}}>（Bot 模式只能填一个人名）</span>}
-              </label>
-              <TagsInput
-                tags={userTags}
-                onChange={handleUserTagsChange}
-                placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
-                maxTags={formData.Push_Method === 'Bot' ? 1 : undefined}
-              />
-              <small style={dialogStyles.hint}>
-                支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 添加
-              </small>
-            </div>
+          {/* AI Report 配置 */}
+          {formData.Push_Method === 'AI' && (
+            <>
+              {/* 模板选择 */}
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>报告模板 *</label>
+                <select
+                  style={dialogStyles.select}
+                  value={aiReportTemplate}
+                  onChange={(e) => handleTemplateChange(e.target.value as 'ai-report' | 'pep-report' | 'custom')}
+                >
+                  <option value="ai-report">AI report</option>
+                  <option value="pep-report">PEP report</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+              
+              {/* AI Endpoint */}
+              {(aiReportTemplate === 'custom') && (
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>API Endpoint *</label>
+                  <input 
+                    style={dialogStyles.input}
+                    type="text"
+                    value={formData.AI_Endpoint || ''}
+                    onChange={(e) => handleChange('AI_Endpoint', e.target.value)}
+                    placeholder="POST https://example.com/api 或 GET https://example.com/api 或 https://example.com/api"
+                  />
+                  <small style={dialogStyles.hint}>格式：POST/GET URL 或仅 URL（默认为 GET）</small>
+                </div>
+              )}
+              
+              {/* AI Headers */}
+              {(aiReportTemplate === 'custom') && (
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>Headers</label>
+                  <div style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', backgroundColor: '#f9f9f9' }}>
+                    {aiHeaders.map((header, index) => (
+                      <div key={index} style={{ display: 'flex', gap: '8px', marginBottom: '12px', alignItems: 'flex-start' }}>
+                        <select
+                          value={header.name}
+                          onChange={(e) => updateAIHeaderName(index, e.target.value)}
+                          style={{
+                            ...dialogStyles.select,
+                            flex: '0 0 200px',
+                            marginBottom: 0
+                          }}
+                        >
+                          <option value="">选择 Header</option>
+                          {AVAILABLE_AI_HEADERS.map(h => (
+                            <option key={h.value} value={h.value}>{h.label}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={header.value}
+                          onChange={(e) => updateAIHeaderValue(index, e.target.value)}
+                          placeholder={
+                            header.name
+                              ? AVAILABLE_AI_HEADERS.find(h => h.value === header.name)?.placeholder || 'Header 值'
+                              : 'Header 值'
+                          }
+                          style={{
+                            ...dialogStyles.input,
+                            flex: 1,
+                            marginBottom: 0
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeAIHeader(index)}
+                          style={{
+                            padding: '8px 12px',
+                            backgroundColor: '#dc3545',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            whiteSpace: 'nowrap'
+                          }}
+                          title="删除此 Header"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={addAIHeader}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: '#28a745',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        width: '100%',
+                        marginTop: aiHeaders.length > 0 ? '4px' : '0'
+                      }}
+                    >
+                      ➕ 添加 Header
+                    </button>
+                  </div>
+                  <small style={dialogStyles.hint}>
+                    💡 提示：只支持预定义的 7 个 header 名称，选择后填写对应的值即可
+                  </small>
+                </div>
+              )}
+              
+              {/* AI Body */}
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>Body *</label>
+                <textarea 
+                  style={dialogStyles.textarea}
+                  value={formData.AI_Body || ''}
+                  onChange={(e) => handleChange('AI_Body', e.target.value)}
+                  placeholder='{"key": "value"}'
+                  rows={8}
+                />
+                <small style={dialogStyles.hint}>可以使用 {"{Topic}"} 和 {"{Content}"} 变量</small>
+              </div>
+            </>
           )}
           
-          {/* 群组消息 - 群组 ID */}
-          {formData.Target_Type === 'group' && (
-            <div style={dialogStyles.formGroup}>
-              <label style={dialogStyles.label}>群组 ID *</label>
-              <input 
-                style={dialogStyles.input}
-                type="text"
-                value={formData.Glip_Team_ID || ''}
-                onChange={(e) => handleChange('Glip_Team_ID', e.target.value)}
-                placeholder="例如：148192141318"
-              />
-            </div>
+          {/* 推送目标（仅 Bot/AsMe 时显示） */}
+          {formData.Push_Method !== 'AI' && (
+            <>
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>推送目标 *</label>
+                <div style={dialogStyles.buttonGroup}>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Target_Type === 'private')}
+                    onClick={() => handleChange('Target_Type', 'private')}
+                  >
+                    💬 私发消息
+                  </button>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Target_Type === 'group')}
+                    onClick={() => handleChange('Target_Type', 'group')}
+                  >
+                    👥 群组消息
+                  </button>
+                </div>
+              </div>
+              
+              {/* 私发消息 - 用户名 */}
+              {formData.Target_Type === 'private' && (
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>
+                    接收人 * 
+                    {formData.Push_Method === 'Bot' && <span style={{color: '#dc3545', marginLeft: '8px'}}>（Bot 模式只能填一个人名）</span>}
+                  </label>
+                  <TagsInput
+                    tags={userTags}
+                    onChange={handleUserTagsChange}
+                    placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
+                    maxTags={formData.Push_Method === 'Bot' ? 1 : undefined}
+                  />
+                  <small style={dialogStyles.hint}>
+                    支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 添加
+                  </small>
+                </div>
+              )}
+              
+              {/* 群组消息 - 群组 ID */}
+              {formData.Target_Type === 'group' && (
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>群组 ID *</label>
+                  <input 
+                    style={dialogStyles.input}
+                    type="text"
+                    value={formData.Glip_Team_ID || ''}
+                    onChange={(e) => handleChange('Glip_Team_ID', e.target.value)}
+                    placeholder="例如：148192141318"
+                  />
+                </div>
+              )}
+            </>
           )}
           
           {/* 提交按钮 */}

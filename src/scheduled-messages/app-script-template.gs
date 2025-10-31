@@ -88,7 +88,7 @@ function executeScheduledMessages(types) {
     // 检查是否需要执行
     if (!types.includes(messageType)) continue;
     if (rowData.Status !== 'Active') continue;
-    if (rowData.Push_Method === 'Bot') continue; // Bot 由 Jira 处理
+    if (rowData.Push_Method !== 'AsMe') continue; // Bot 由 Jira 处理, AI 由 Jira 处理
     
     try {
       if (shouldExecuteNow(rowData, now, messageType)) {
@@ -417,6 +417,7 @@ function calculateNextExecution(rowData, currentTime) {
  */
 function doGet(e) {
   const action = e.parameter.action;
+  Logger.log(`action: ${action}`);
   
   // 授权成功页面
   if (action === 'authSuccess') {
@@ -497,7 +498,7 @@ function doGet(e) {
   // 只返回消息数据，不调用 Bot API（Bot API 由 Jira 调用，因为在内网）
   if (action === 'getBotMessageCurrentTime') {
     return ContentService.createTextOutput(
-      JSON.stringify(getBotMessageDataCurrentTime())
+      JSON.stringify(getMessageCurrentTime())
     ).setMimeType(ContentService.MimeType.JSON);
   }
   
@@ -569,22 +570,76 @@ function setupTriggersInternal() {
  */
 
 /**
- * 获取当前时间点需要执行的单条 Bot 消息数据（只返回数据，不发送）
+ * 获取当前时间点需要执行的消息并返回消息数据（合并了原来的两个方法）
  * 供 Jira Automation 调用，Jira 负责调用内网 Bot API
- * @returns {object} 消息数据或空对象
+ * @returns {object|null} 消息数据对象或 null
  */
-function getBotMessageDataCurrentTime() {
+function getMessageCurrentTime() {
   try {
-    // 获取单条消息
-    const message = getBotMessageCurrentTime();
+    // === 第一部分：从 Sheet 查找消息 ===
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+    if (!sheet) {
+      Logger.log('错误：未找到 Messages 工作表');
+      return {
+        executed: false,
+        message: '未找到 Messages 工作表',
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    const data = sheet.getDataRange().getDisplayValues();
+    if (data.length <= 1) {
+      Logger.log('没有消息数据');
+      return {
+        executed: false,
+        message: '没有消息数据',
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    const headers = data[0];
+    const now = new Date();
+    const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const currentMinute = Utilities.formatDate(now, Session.getScriptTimeZone(), 'HH:mm');
+    const currentHour = now.getHours();
+    
+    Logger.log(`[Bot 单条消息] 当前时间: ${currentDate} ${currentMinute}`);
+    
+    // 优先级 1：查找当前分钟需要执行的消息
+    Logger.log('[Bot 单条消息] 优先级 1：查找当前分钟的消息...');
+    let message = findMessageByPriority(data, headers, now, currentDate, 1, currentHour);
+    if (message) {
+      Logger.log(`[Bot 单条消息] ✅ 找到优先级 1 消息: ${message.ID} - ${message.Topic}`);
+    }
+    
+    // 优先级 2：查找过去 30 分钟内应该执行但未执行的消息
+    if (!message) {
+      Logger.log('[Bot 单条消息] 优先级 2：查找过去 30 分钟的消息...');
+      message = findMessageByPriority(data, headers, now, currentDate, 2, currentHour);
+      if (message) {
+        Logger.log(`[Bot 单条消息] ✅ 找到优先级 2 消息: ${message.ID} - ${message.Topic}`);
+      }
+    }
+    
+    // 优先级 3：查找未指定时间的消息（仅限 8 点后）
+    if (!message && currentHour >= 8) {
+      Logger.log('[Bot 单条消息] 优先级 3：查找未指定时间的消息（8点后）...');
+      message = findMessageByPriority(data, headers, now, currentDate, 3, currentHour);
+      if (message) {
+        Logger.log(`[Bot 单条消息] ✅ 找到优先级 3 消息: ${message.ID} - ${message.Topic}`);
+      }
+    }
     
     if (!message) {
+      Logger.log('[Bot 单条消息] ❌ 没有符合条件的消息');
       return {
         executed: false,
         message: '当前时间点没有需要执行的 Bot 消息',
         timestamp: new Date().toISOString()
       };
     }
+    
+    // === 第二部分：处理消息数据 ===
     
     // 确保消息有 ID，如果没有则生成一个
     let messageId = message.ID;
@@ -594,7 +649,6 @@ function getBotMessageDataCurrentTime() {
       
       // 更新 Sheet 中的 ID
       try {
-        const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
         if (sheet && message.rowIndex) {
           const idColIndex = message.headers.indexOf('ID') + 1;
           if (idColIndex > 0) {
@@ -609,16 +663,54 @@ function getBotMessageDataCurrentTime() {
     
     Logger.log(`返回待发送 Bot 消息数据: ${messageId} - ${message.Topic}`);
     
+    // 检查是否是 AI 消息
+    if (message.Push_Method === 'AI') {
+      Logger.log(`处理 AI 消息: ${messageId}`);
+      
+      // 解析 AI 相关字段
+      const endpointInfo = parseAIEndpoint(message.AI_Endpoint || '');
+      const headersObj = parseAIHeaders(message.AI_Headers || '');
+      const bodyStr = replaceAIBodyVariables(
+        message.AI_Body || '',
+        message.Topic || '',
+        message.Content || ''
+      );
+      
+      Logger.log(`AI URL 解析结果: host=${endpointInfo.host}, uri=${endpointInfo.uri}, method=${endpointInfo.method}`);
+      
+      // 立即标记为成功（避免超时重复）
+      try {
+        markBotMessageExecuted(messageId, message.rowIndex, true, '');
+        Logger.log(`AI 消息已标记为成功: ${messageId}`);
+      } catch (markError) {
+        Logger.log(`标记 AI 消息失败: ${markError}`);
+      }
+      
+      // 返回 AI 消息数据（host 和 uri 分开）
+      return {
+        executed: true,
+        messageId: messageId,
+        targetType: 'api',
+        aiEndpoint: endpointInfo.url,
+        aiHost: endpointInfo.host,
+        aiUri: endpointInfo.uri,
+        aiMethod: endpointInfo.method,
+        aiHeaders: headersObj,
+        aiBody: bodyStr,
+        rowIndex: message.rowIndex,
+        timestamp: new Date().toISOString()
+      };
+    }
+    
     // 返回消息数据，供 Jira 调用 Bot API
-    // 支持两种类型：private（私聊）和 group（群组）
-    const targetType = message.Target_Type || 'private';
+    // 支持两种类型：private（私聊）、group（群组）和 api（AI Report）
     
     return {
       executed: true,
       messageId: messageId,
       topic: message.Topic,
       content: message.Content,
-      targetType: targetType,
+      targetType: message.targetType,
       // Private 消息字段
       userName: message.Glip_User_Name || '',
       // Group 消息字段
@@ -629,7 +721,7 @@ function getBotMessageDataCurrentTime() {
     };
     
   } catch (error) {
-    Logger.log(`getBotMessageDataCurrentTime 执行失败: ${error}`);
+    Logger.log(`getMessageCurrentTime 执行失败: ${error}`);
     return {
       executed: false,
       error: error.toString(),
@@ -641,7 +733,7 @@ function getBotMessageDataCurrentTime() {
 /**
  * 标记消息执行完成（由 Jira Automation 在发送后调用）
  * @param {string} messageId - 消息 ID
- * @param {number} rowIndex - 行索引（从 getBotMessageCurrentTime 返回，可选）
+ * @param {number} rowIndex - 行索引（从 getMessageCurrentTime 返回，可选）
  * @param {boolean} success - 是否成功
  * @param {string} errorMsg - 错误消息（可选）
  * @returns {object} 更新结果
@@ -779,63 +871,6 @@ function shouldMarkAsDone(rowData) {
   return false;
 }
 
-/**
- * 获取当前时间点需要执行的单条 Bot 消息
- * 方案 A：逐级查找，找到即返回（节省资源）
- * 优先级：当前分钟 > 过去 30 分钟 > 未指定时间（8 点后）
- * 过滤：只返回今日未推送 且 今日未失败 的消息
- * @returns {object|null} 消息对象或 null
- */
-function getBotMessageCurrentTime() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
-  if (!sheet) {
-    Logger.log('错误：未找到 Messages 工作表');
-    return null;
-  }
-  
-  const data = sheet.getDataRange().getDisplayValues();
-  if (data.length <= 1) {
-    Logger.log('没有消息数据');
-    return null;
-  }
-  
-  const headers = data[0];
-  const now = new Date();
-  const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  const currentMinute = Utilities.formatDate(now, Session.getScriptTimeZone(), 'HH:mm');
-  const currentHour = now.getHours();
-  
-  Logger.log(`[Bot 单条消息] 当前时间: ${currentDate} ${currentMinute}`);
-  
-  // 优先级 1：查找当前分钟需要执行的消息
-  Logger.log('[Bot 单条消息] 优先级 1：查找当前分钟的消息...');
-  const currentMinuteMessage = findMessageByPriority(data, headers, now, currentDate, 1, currentHour);
-  if (currentMinuteMessage) {
-    Logger.log(`[Bot 单条消息] ✅ 找到优先级 1 消息: ${currentMinuteMessage.ID} - ${currentMinuteMessage.Topic}`);
-    return currentMinuteMessage;
-  }
-  
-  // 优先级 2：查找过去 30 分钟内应该执行但未执行的消息
-  Logger.log('[Bot 单条消息] 优先级 2：查找过去 30 分钟的消息...');
-  const past30MinMessage = findMessageByPriority(data, headers, now, currentDate, 2, currentHour);
-  if (past30MinMessage) {
-    Logger.log(`[Bot 单条消息] ✅ 找到优先级 2 消息: ${past30MinMessage.ID} - ${past30MinMessage.Topic}`);
-    return past30MinMessage;
-  }
-  
-  // 优先级 3：查找未指定时间的消息（仅限 8 点后）
-  if (currentHour >= 8) {
-    Logger.log('[Bot 单条消息] 优先级 3：查找未指定时间的消息（8点后）...');
-    const noTimeMessage = findMessageByPriority(data, headers, now, currentDate, 3, currentHour);
-    if (noTimeMessage) {
-      Logger.log(`[Bot 单条消息] ✅ 找到优先级 3 消息: ${noTimeMessage.ID} - ${noTimeMessage.Topic}`);
-      return noTimeMessage;
-    }
-  }
-  
-  Logger.log('[Bot 单条消息] ❌ 没有符合条件的消息');
-  return null;
-}
 
 /**
  * 按优先级查找消息（找到第一条符合条件的即返回）
@@ -852,8 +887,8 @@ function findMessageByPriority(data, headers, now, currentDate, priority, curren
     const row = data[i];
     const rowData = parseRow(row, headers);
     
-    // 基本过滤：必须是 Active + Bot
-    if (rowData.Status !== 'Active' || rowData.Push_Method !== 'Bot') {
+    // 基本过滤：必须是 Active + Bot 或 AI
+    if (rowData.Status !== 'Active' || (rowData.Push_Method !== 'Bot' && rowData.Push_Method !== 'AI')) {
       continue;
     }
     
@@ -889,9 +924,14 @@ function findMessageByPriority(data, headers, now, currentDate, priority, curren
         ID: rowData.ID,
         Topic: rowData.Topic,
         Content: rowData.Content,
+        Push_Method: rowData.Push_Method,
         Glip_Team_ID: rowData.Glip_Team_ID,
         Glip_User_Name: rowData.Glip_User_Name,
-        Target_Type: rowData.Glip_User_Name ? 'private' : 'group',
+        Bot_Endpoint: rowData.Bot_Endpoint,
+        AI_Endpoint: rowData.AI_Endpoint,
+        AI_Headers: rowData.AI_Headers,
+        AI_Body: rowData.AI_Body,
+        targetType: rowData.Push_Method === 'AI' ? 'api' : (rowData.Glip_User_Name ? 'private' : 'group'),
         Schedule_Date: rowData.Schedule_Date,
         Schedule_Time: rowData.Schedule_Time,
         Created_At: rowData.Created_At || '',
@@ -995,11 +1035,155 @@ function isPushedFailedToday(rowData, currentDate) {
  */
 function parseTimeToMinutes(timeStr) {
   const parts = timeStr.split(':');
-  if (parts.length !== 2) return 0;
+  if (parts.length < 2) return 0;
   
   const hours = parseInt(parts[0]) || 0;
   const minutes = parseInt(parts[1]) || 0;
   
   return hours * 60 + minutes;
+}
+
+/**
+ * 解析 AI_Endpoint：提取 method、host 和 URI 路径
+ * 格式：\"POST https://example.com/api\" 或 \"GET https://example.com/api\" 或 \"https://example.com/api\"
+ * @param {string} endpointStr - 原始 endpoint 字符串
+ * @returns {object} {method: 'GET'|'POST', host: string, endpoint: string (URI路径), url: string}
+ */
+function parseAIEndpoint(endpointStr) {
+  if (!endpointStr || !endpointStr.toString().trim()) {
+    return { method: 'GET', host: '', endpoint: '', url: '' };
+  }
+  
+  const str = endpointStr.toString().trim();
+  const upperStr = str.toUpperCase();
+  
+  let method = 'GET';
+  let url = str;
+  
+  // 提取 method
+  if (upperStr.startsWith('POST ')) {
+    method = 'POST';
+    url = str.substring(5).trim();
+  } else if (upperStr.startsWith('GET ')) {
+    method = 'GET';
+    url = str.substring(4).trim();
+  }
+  
+  // 解析 URL：分离 host 和 URI 路径
+  let host = '';
+  let uri = '';
+  
+  try {
+    // 移除协议部分（http:// 或 https://）
+    const protocolMatch = url.match(/^(https?:\/\/)?(.+)/i);
+    if (protocolMatch) {
+      const withoutProtocol = protocolMatch[2];
+      
+      // 找到第一个 / 的位置
+      const slashIndex = withoutProtocol.indexOf('/');
+      
+      if (slashIndex === -1) {
+        // 没有路径，整个是 host
+        host = withoutProtocol;
+        uri = '';
+      } else {
+        // 分离 host 和 URI 路径（去掉前导 /）
+        host = withoutProtocol.substring(0, slashIndex);
+        uri = withoutProtocol.substring(slashIndex + 1);
+      }
+    }
+  } catch (parseError) {
+    Logger.log('解析 AI Endpoint 失败: ' + parseError);
+    host = '';
+    uri = url;
+  }
+  
+  return { method: method, host: host, uri: uri, url: url };
+}
+
+/**
+ * 解析 AI_Headers：将字符串格式解析为固定字段对象
+ * 格式：\"Authorization: Bearer token\\nContent-Type: application/json\"
+ * 返回：{Authorization: '...', ContentType: '...', Accept: '...', ...}
+ * @param {string} headersStr - 原始 headers 字符串
+ * @returns {object} 固定字段对象
+ */
+function parseAIHeaders(headersStr) {
+  // 固定的 header 字段，带默认值
+  const result = {
+    Authorization: '',
+    ContentType: 'application/json',  // 默认 JSON，避免某些 API 报错
+    Accept: '*/*',                     // 默认接受所有类型
+    XAPIKey: '',
+    UserAgent: 'PersonalAI-ScheduledMessages/1.0',  // 默认 User-Agent
+    XRequestID: '',
+    XCustomHeader: ''
+  };
+  
+  if (!headersStr || !headersStr.toString().trim()) {
+    return result;
+  }
+  
+  const lines = headersStr.toString().split('\n');
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const colonIndex = line.indexOf(':');
+    if (colonIndex === -1) continue;
+    
+    const name = line.substring(0, colonIndex).trim();
+    const value = line.substring(colonIndex + 1).trim();
+    
+    if (!value) continue; // 跳过空值
+    
+    // 映射到固定字段（覆盖默认值）
+    if (name === 'Authorization') {
+      result.Authorization = value;
+    } else if (name === 'Content-Type') {
+      result.ContentType = value;
+    } else if (name === 'Accept') {
+      result.Accept = value;
+    } else if (name === 'X-API-Key') {
+      result.XAPIKey = value;
+    } else if (name === 'User-Agent') {
+      result.UserAgent = value;
+    } else if (name === 'X-Request-ID') {
+      result.XRequestID = value;
+    } else if (name === 'X-Custom-Header') {
+      result.XCustomHeader = value;
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * 替换 AI Body 中的变量（{Topic} 和 {Content}），并进行 JSON 转义
+ * @param {string} bodyStr - Body 模板字符串
+ * @param {string} topic - Topic 值
+ * @param {string} content - Content 值
+ * @returns {string} 替换后的字符串
+ */
+function replaceAIBodyVariables(bodyStr, topic, content) {
+  if (!bodyStr || !bodyStr.toString()) {
+    return '';
+  }
+  
+  // JSON 转义函数：转义双引号、反斜杠、换行符等特殊字符
+  function escapeJsonString(str) {
+    if (!str) return '';
+    return str.toString()
+      .replace(/"/g, '\\"')     // 双引号
+  }
+  
+  let result = bodyStr.toString();
+  
+  // 替换 {Topic} 和 {Content}，并进行 JSON 转义
+  result = result.replace(/\{Topic\}/g, escapeJsonString(topic || ''));
+  result = result.replace(/\{Content\}/g, escapeJsonString(content || ''));
+  
+  return result;
 }
 

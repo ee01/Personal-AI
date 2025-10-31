@@ -209,14 +209,15 @@ export class SheetInitializer {
    * - 不要修改 header 的列名，但可以随意调整顺序、隐藏列、插入新列
    */
   private async setupWorksheets(spreadsheetId: string): Promise<void> {
-    // Messages 表头（移除 Type，由程序自动判断）
+    // Messages 表头（移除 Type 和 Target_Type，由程序自动判断）
     // 注意：这里定义的是初始顺序，用户可以在 Sheet 中随意调整
     const messagesHeaders = [
       'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
       'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
       'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
-      'Attachment', 'Status', 'Last_Exec', 'Next_Exec',
-      'Exec_Count', 'Exec_Log', 'Target_Type'
+      'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
+      'Status', 'Last_Exec', 'Next_Exec',
+      'Exec_Count', 'Exec_Log'
     ];
     
     // Config 表头
@@ -319,16 +320,18 @@ export class SheetInitializer {
       'sync.service',                 // Glip_User_Name
       '',                             // Glip_Team_ID
       '',                             // Attachment
+      '',                             // AI_Endpoint
+      '',                             // AI_Headers
+      '',                             // AI_Body
       'Active',                       // Status
       '',                             // Last_Exec
       this.formatDateTime(oneMinuteLater), // Next_Exec
       0,                              // Exec_Count
-      '待执行',                       // Exec_Log
-      'private'                       // Target_Type
+      '待执行'                        // Exec_Log
     ];
     
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:S2?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:U2?valueInputOption=USER_ENTERED`,
       {
         method: 'PUT',
         headers: {
@@ -453,154 +456,19 @@ function dailyTrigger() {
   
   /**
    * 获取完整的 AppScript 代码
-   * TODO: 实际应该从模板文件读取
+   * 从扩展资源中读取模板文件
    */
   private async getFullAppScriptCode(): Promise<string> {
-    // 这里应该返回完整的 AppScript 代码
-    // 暂时使用 fetch 从扩展资源中读取
     try {
       const response = await fetch(chrome.runtime.getURL('app-script-template.gs'));
+      if (!response.ok) {
+        throw new Error(`无法加载模板文件: HTTP ${response.status}`);
+      }
       return await response.text();
     } catch (error) {
-      console.warn('无法加载模板文件，使用内联代码');
-      // 如果无法加载，返回基本代码
-      return this.getInlineAppScriptCode();
+      console.error('加载 AppScript 模板文件失败:', error);
+      throw new Error(`加载 AppScript 模板文件失败: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-  
-  /**
-   * 获取内联的 AppScript 代码（备用）
-   */
-  private getInlineAppScriptCode(): string {
-    // 返回一个基本版本的代码
-    // 在实际使用中，这应该是完整的模板代码
-    return `
-function minuteTrigger() {
-  Logger.log('Minute trigger executed');
-}
-
-function dailyTrigger() {
-  Logger.log('Daily trigger executed');
-}
-
-function doGet(e) {
-  const action = e.parameter.action;
-  
-  // 授权成功页面
-  if (action === 'authSuccess') {
-    return HtmlService.createHtmlOutput(\`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>授权成功</title>
-          <style>
-            body {
-              font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              height: 100vh;
-              margin: 0;
-            }
-            .container {
-              background: white;
-              padding: 50px;
-              border-radius: 20px;
-              box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-              text-align: center;
-              max-width: 500px;
-            }
-            .success-icon {
-              font-size: 80px;
-              margin-bottom: 20px;
-            }
-            h1 {
-              color: #28a745;
-              font-size: 32px;
-              margin-bottom: 20px;
-            }
-            p {
-              color: #666;
-              font-size: 16px;
-              line-height: 1.6;
-              margin-bottom: 15px;
-            }
-            .highlight {
-              color: #667eea;
-              font-weight: bold;
-            }
-            .btn {
-              display: inline-block;
-              padding: 12px 30px;
-              background: #28a745;
-              color: white;
-              text-decoration: none;
-              border-radius: 8px;
-              font-weight: bold;
-              margin-top: 20px;
-              transition: background 0.3s;
-            }
-            .btn:hover {
-              background: #218838;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="success-icon">🎉</div>
-            <h1>授权成功！</h1>
-            <p>您已成功授权 <span class="highlight">Personal AI - Scheduled Messages</span></p>
-            <p>现在可以关闭此页面，返回扩展页面点击 <span class="highlight">"我已完成授权，继续初始化"</span> 按钮完成剩余步骤。</p>
-            <p style="font-size: 14px; color: #999; margin-top: 30px;">
-              💡 提示：请保持此标签页打开，直到完成所有初始化步骤
-            </p>
-          </div>
-        </body>
-      </html>
-    \`);
-  }
-  
-  // 创建触发器
-  if (action === 'setupTriggers') {
-    try {
-      const result = setupTriggersInternal();
-      return ContentService.createTextOutput(
-        JSON.stringify({ success: true, message: result })
-      ).setMimeType(ContentService.MimeType.JSON);
-    } catch (error) {
-      return ContentService.createTextOutput(
-        JSON.stringify({ success: false, error: error.toString() })
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
-  }
-  
-  // 默认返回状态
-  return ContentService.createTextOutput(JSON.stringify({ status: 'OK' }))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function setupTriggersInternal() {
-  var existingTriggers = ScriptApp.getProjectTriggers();
-  for (var i = 0; i < existingTriggers.length; i++) {
-    ScriptApp.deleteTrigger(existingTriggers[i]);
-  }
-  
-  ScriptApp.newTrigger('minuteTrigger')
-    .timeBased()
-    .everyMinutes(1)
-    .create();
-  
-  ScriptApp.newTrigger('dailyTrigger')
-    .timeBased()
-    .atHour(9)
-    .everyDays(1)
-    .create();
-  
-  Logger.log('Triggers created successfully');
-  return 'Triggers created successfully';
-}
-`;
   }
   
   /**

@@ -58,7 +58,7 @@
    - **Content**: 消息内容
    - **Schedule_Date**: 执行日期（YYYY-MM-DD）
    - **Schedule_Time**: 执行时间（HH:mm，可选）
-   - **Push_Method**: 推送方式（AsMe/Bot）
+   - **Push_Method**: 推送方式（AsMe/Bot/AI）
    - **Owner**: 创建者
    - **Status**: 状态（Active/Paused/Completed）
    
@@ -66,14 +66,26 @@
    - **Glip_User_Name**: 接收人用户名（如"Esone Qiu"）
    
    **Bot 推送额外字段**：
-   - **Target_Type**: private（私聊）或 group（群组）
-   - **Bot_Endpoint**: Bot API 内网地址
-   - **Glip_User_Name**: 私聊时的用户名
-   - **Glip_Team_ID**: 群组推送时的群组 ID
+   - **Glip_User_Name**: 私聊时的用户名（填写则为私聊）
+   - **Glip_Team_ID**: 群组推送时的群组 ID（填写则为群组推送）
+   - 💡 **推送类型自动判断**：系统根据 Glip_User_Name 和 Glip_Team_ID 自动识别私聊还是群组
 
-#### 方式二：通过管理界面（未来版本）
+   **AI 推送额外字段**：
+   - **AI_Endpoint**: API 端点（必填），格式：`POST https://example.com/api`、`GET https://example.com/api` 或仅 URL（默认 GET）
+   - **AI_Headers**: HTTP 请求头（可选），每行一个，格式：`name: value`
+   - **AI_Body**: 请求体（必填），JSON 格式，支持使用 `{Topic}`、`{Content}` 变量
 
-目前版本需要在 Google Sheet 中操作，未来版本将支持在管理界面直接创建和编辑。
+#### 方式二：通过管理界面创建
+
+1. 点击管理页面右上角的“➕ 新增”按钮
+2. 填写消息主题、内容以及执行时间
+3. 选择推送方式：AsMe / Bot / AI Report
+4. 按提示填写对应字段：
+   - **AsMe**：按接收人添加人名标签
+   - **Bot**：选择私聊或群组，并填写 Glip 用户名或群组 ID
+   - **AI Report**：选择模板（AI report / PEP report / 自定义），系统会为每个模板分别记住 Endpoint / Headers / Body
+5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
+6. 点击“✅ 创建消息”完成创建
 
 ### 消息类型说明
 
@@ -109,10 +121,78 @@
 - 通过 Jira Automation 调用内网 Bot API
 - 在 Glip 中显示为机器人发送的消息
 - 需要配置 Bot_Endpoint 字段（内网地址）
-- 由 **Jira Automation 引擎**执行，解决内网访问限制
+- 由 **Jira Automation 引擎**执行（同时负责 AI 推送），解决内网访问限制
 
-**执行策略**（v2 优化）：
-- 🎯 **单条消息推送**：每分钟执行一条，避免批量失败
+#### AI Report（AI 报告推送）
+- 通过 Jira Automation 调用外部 API，发送结构化报告
+- 提供 **AI report / PEP report / 自定义** 三种模板，并为每种模板保留独立配置
+- `AI_Endpoint` 与 `AI_Headers` 会根据模板自动填充，可随时切换；`AI_Body` 可直接编辑并支持 `{Topic}`、`{Content}` 变量
+- 自定义模板支持完全自由填写 Endpoint / Headers / Body，切换模板时系统会记住各自的输入
+
+**预设模板默认值**：
+
+- **AI report（Dify）**
+  - Endpoint：`POST https://dify.int.rclabenv.com/v1/chat-messages`
+  - Headers：
+    - `Authorization: Bearer app-hTAaR1jaLnYDITixXRP5qi4Y`
+    - `Content-Type: application/json`
+  - Body：
+    ```json
+    {
+      "response_mode": "blocking",
+      "user": "default-user",
+      "query": "{Topic}",
+      "inputs": {
+        "title": "{Topic}",
+        "outputs": "noduedate, overdue, toTest",
+        "jql": "{Content}",
+        "extraText": "",
+        "teamId": "",
+        "mentionList": ""
+      }
+    }
+    ```
+
+- **PEP report（GitLab Reviewer）**
+  - Endpoint：`POST https://gitlab-reviewer.int.rclabenv.com/pep_daily_report`
+  - Headers：`Content-Type: application/json`
+  - Body：
+    ```json
+    {
+      "jira_query_id": 111,
+      "sheet_id": "",
+      "sheet_name": "",
+      "team_id": "",
+      "mention_list": [],
+      "overallFilterId": "",
+      "bugFilterid": "",
+      "ignore_due_soon": true,
+      "force_running": true,
+      "missing_due_check_scope": "all",
+      "language": "",
+      "milestones": [
+        {
+          "abbreviation": "MR",
+          "full_name": "Code Merge",
+          "goal": "提测所有功能及安排在本Release的Production Bug"
+        },
+        {
+          "abbreviation": "FF",
+          "full_name": "Feature Freeze",
+          "goal": "1）完成所有功能测试；2）完成安排在本Release的所有Production和Release Bug (接近FF 2天内的P2 bug可以Regression阶段修复）"
+        },
+        {
+          "abbreviation": "CF",
+          "full_name": "Code Freeze",
+          "goal": "完成所有本Release的功能开发、测试和Bug修复。完成Sign off。提供Dogfooding Build"
+        }
+      ]
+    }
+    ```
+
+- **自定义**：Endpoint / Headers / Body 均由用户填写，模板切换后仍会保留已输入内容
+
+- 🎯 **单条消息推送**：每分钟执行一条（覆盖 Bot / AI），避免批量失败
 - 📊 **三级优先级**：当前分钟 > 过去30分钟 > 未指定时间（8点后）
 - 🛡️ **智能过滤**：自动跳过今日已成功/已失败的消息
 - 🔄 **自动重试**：失败消息第二天自动重试
@@ -132,8 +212,8 @@ Google Sheets（统一数据源）
     │   ├─→ minuteTrigger（每分钟）
     │   └─→ dailyTrigger（每日）
     │
-    └─→ Jira Automation（Bot 推送）
-        └─→ 每分钟读取 Sheet，调用 Bot API
+    └─→ Jira Automation（Bot/AI 推送）
+        └─→ 每分钟读取 Sheet，调用 Bot/AI API
 ```
 
 ### 核心组件
@@ -164,7 +244,7 @@ Google Sheets（统一数据源）
 - AppScript 执行完整流程：
   1. 按优先级选择单条消息（当前分钟 > 过去30分钟 > 未指定时间）
   2. 过滤今日已成功/已失败的消息
-  3. 调用内网 Bot API 发送
+  3. 调用内网 Bot API 或外部 AI API 发送
   4. 更新执行日志到 Sheet
 - **优势**：失败消息不阻塞队列，全天分散推送未指定时间的消息
 
@@ -184,12 +264,14 @@ Google Sheets（统一数据源）
 | Repeat_Every | Number | ❌ | 重复间隔 |
 | Repeat_Unit | Enum | ❌ | Day/Week/Month/Year |
 | Repeat_Count | Number | ❌ | 重复次数 |
-| Push_Method | Enum | ✅ | AsMe/Bot |
-| Target_Type | Enum | ❌ | private/group（Bot推送时使用） |
-| Glip_User_Name | String | ❌ | 接收人用户名（AsMe或Bot私聊） |
-| Glip_Team_ID | String | ❌ | 群组 ID（Bot群组推送） |
+| Push_Method | Enum | ✅ | AsMe/Bot/AI |
+| Glip_User_Name | String | ❌ | 接收人用户名（AsMe或Bot私聊；有值时系统自动识别为私聊） |
+| Glip_Team_ID | String | ❌ | 群组 ID（Bot群组推送；有值时系统自动识别为群组） |
 | Bot_Endpoint | String | ❌ | Bot API 端点（Bot推送必填） |
 | Attachment | String | ❌ | 附件文件名 |
+| AI_Endpoint | String | ❌ | AI API 端点（AI 推送必填） |
+| AI_Headers | String | ❌ | AI API 请求头（多行文本，每行一个 header） |
+| AI_Body | String | ❌ | AI API 请求体（JSON，支持 {Topic}/{Content} 变量） |
 | Owner | String | ✅ | 创建者 |
 | Status | Enum | ✅ | Active/Paused/Completed |
 | Last_Exec | DateTime | ❌ | 最后执行时间（自动） |
