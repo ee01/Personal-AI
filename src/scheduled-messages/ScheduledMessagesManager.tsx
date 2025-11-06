@@ -30,6 +30,9 @@ const ScheduledMessagesManager: React.FC = () => {
   const [showBotConfigWarning, setShowBotConfigWarning] = useState(false);
   const [filterSelfOnly, setFilterSelfOnly] = useState(false);
   const [currentUsername, setCurrentUsername] = useState<string>('');
+  const [hoveredMessage, setHoveredMessage] = useState<ScheduledMessage | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
+  const [isReminderMode, setIsReminderMode] = useState(false);
   
   useEffect(() => {
     initializeApp();
@@ -157,6 +160,12 @@ const ScheduledMessagesManager: React.FC = () => {
   };
   
   const handleAddMessage = () => {
+    setIsReminderMode(false);
+    setShowAddDialog(true);
+  };
+  
+  const handleAddReminder = () => {
+    setIsReminderMode(true);
     setShowAddDialog(true);
   };
   
@@ -397,6 +406,9 @@ const ScheduledMessagesManager: React.FC = () => {
       <header style={styles.header}>
         <h1 style={styles.title}>⏰ 定时消息管理</h1>
         <div style={styles.headerActions}>
+          <button style={styles.reminderButton} onClick={handleAddReminder} title="快速创建个人提醒">
+            ⏰ 提醒我
+          </button>
           <button style={styles.addButton} onClick={handleAddMessage} title="新增消息">
             ➕ 新增
           </button>
@@ -525,13 +537,23 @@ const ScheduledMessagesManager: React.FC = () => {
                   .map((message) => {
                     const displayTitle = message.Topic || (message.Content.length > 30 ? message.Content.substring(0, 30) + '...' : message.Content);
                     return (
-                      <tr key={message.ID} style={styles.tr}>
+                      <tr 
+                        key={message.ID} 
+                        style={styles.tr}
+                        onMouseMove={(e) => {
+                          setHoveredMessage(message);
+                          setTooltipPosition({ x: e.clientX, y: e.clientY });
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredMessage(null);
+                        }}
+                      >
                         <td style={styles.td}>
                           <span style={getTypeStyle(message.Push_Method)}>
                             {getMessageTypeDisplay(message)}
                           </span>
                         </td>
-                        <td style={styles.td} title={message.Content}>
+                        <td style={styles.td}>
                           <span style={styles.topicText}>{displayTitle}</span>
                         </td>
                         <td style={styles.td}>{formatRecipient(message)}</td>
@@ -578,6 +600,8 @@ const ScheduledMessagesManager: React.FC = () => {
            isSubmitting={isSubmitting}
            botConfigured={botConfigured}
            onConfigureBot={() => setShowBotConfigDialog(true)}
+           isReminderMode={isReminderMode}
+           currentUsername={currentUsername}
          />
        )}
        
@@ -593,6 +617,75 @@ const ScheduledMessagesManager: React.FC = () => {
            }}
          />
        )}
+       
+       {/* 浮动 Tooltip */}
+       {hoveredMessage && (
+         <div style={{
+           ...styles.tooltip,
+           left: `${tooltipPosition.x + 15}px`,
+           top: `${tooltipPosition.y + 15}px`,
+         }}>
+           <div style={styles.tooltipHeader}>消息内容</div>
+           <div style={styles.tooltipContent}>{hoveredMessage.Content}</div>
+         </div>
+       )}
+    </div>
+  );
+};
+
+// 变量选择器组件
+const VariableSelector: React.FC<{
+  onInsert: (variable: string) => void;
+  excludeVariables?: string[];
+}> = ({ onInsert, excludeVariables = [] }) => {
+  const variables = [
+    { key: '{Topic}', label: '消息主题' },
+    { key: '{Content}', label: '消息内容' },
+    { key: '{TeamID}', label: '群组 ID' }
+  ].filter(v => !excludeVariables.includes(v.key));
+
+  if (variables.length === 0) return null;
+
+  return (
+    <div style={{
+      marginTop: '8px',
+      padding: '8px 10px',
+      backgroundColor: '#f8f9fa',
+      borderRadius: '4px',
+      border: '1px solid #e0e0e0',
+      fontSize: '12px',
+      color: '#666',
+    }}>
+      <span style={{ marginRight: '8px' }}>💡 插入变量：</span>
+      {variables.map((variable, index) => (
+        <React.Fragment key={variable.key}>
+          {index > 0 && <span style={{ margin: '0 4px', color: '#ccc' }}>|</span>}
+          <button
+            type="button"
+            onClick={() => onInsert(variable.key)}
+            style={{
+              padding: '2px 8px',
+              backgroundColor: '#e0e0e0',
+              color: '#555',
+              border: 'none',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '500',
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#d0d0d0';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#e0e0e0';
+            }}
+            title={`插入 ${variable.key}`}
+          >
+            {variable.label}
+          </button>
+        </React.Fragment>
+      ))}
     </div>
   );
 };
@@ -816,7 +909,9 @@ const AddMessageDialog: React.FC<{
   isSubmitting: boolean;
   botConfigured: boolean;
   onConfigureBot: () => void;
-}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot }) => {
+  isReminderMode?: boolean;
+  currentUsername?: string;
+}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '' }) => {
   const [formData, setFormData] = useState<CreateMessageFormData>({
     Topic: '',
     Content: '',
@@ -842,6 +937,27 @@ const AddMessageDialog: React.FC<{
   const [aiReportTeamId, setAiReportTeamId] = useState('');
   const [aiReportMentionList, setAiReportMentionList] = useState<string[]>([]);
   const [aiReportExtraText, setAiReportExtraText] = useState('');
+  const [pepReportTeamId, setPepReportTeamId] = useState('');
+  
+  // Body 输入框的 ref，用于插入变量
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  // 提醒模式初始化
+  React.useEffect(() => {
+    if (isReminderMode) {
+      // 自动填充提醒模式的数据
+      handleChange('Topic', '个人提醒事项');
+      handleChange('Push_Method', 'Bot');
+      handleChange('Target_Type', 'private');
+      
+      // 填充当前用户名
+      if (currentUsername) {
+        const displayName = formatUserName.toDisplayFormat(currentUsername);
+        setUserTags([displayName]);
+      }
+    }
+  }, [isReminderMode]);
   
   // 三个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
@@ -877,6 +993,7 @@ const AddMessageDialog: React.FC<{
       AI_Endpoint: 'POST https://gitlab-reviewer.int.rclabenv.com/pep_daily_report',
       AI_Headers: 'Content-Type: application/json',
       AI_Body: JSON.stringify({
+        jql: '',
         jira_query_id: 111,
         sheet_id: '',
         sheet_name: '',
@@ -1058,8 +1175,52 @@ const AddMessageDialog: React.FC<{
     handleChange('AI_Headers', formatHeadersToString(newHeaders));
   };
   
+  // 插入变量到 Body 输入框
+  const insertVariableToBody = (variable: string) => {
+    const textarea = bodyTextareaRef.current;
+    if (!textarea) return;
+    
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = formData.AI_Body || '';
+    const newText = text.substring(0, start) + variable + text.substring(end);
+    
+    handleChange('AI_Body', newText);
+    
+    // 设置光标位置到插入变量之后
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + variable.length, start + variable.length);
+    }, 0);
+  };
+  
+  // 插入变量到消息内容输入框
+  const insertVariableToContent = (variable: string) => {
+    const textarea = contentTextareaRef.current;
+    if (!textarea) return;
+    
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = formData.Content || '';
+    const newText = text.substring(0, start) + variable + text.substring(end);
+    
+    handleChange('Content', newText);
+    
+    // 设置光标位置到插入变量之后
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + variable.length, start + variable.length);
+    }, 0);
+  };
+  
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // 提醒模式：检查 Bot 是否已配置
+    if (isReminderMode && !botConfigured) {
+      alert('请先配置 Bot 推送功能才能创建个人提醒');
+      return;
+    }
     
     // 验证必填字段
     if (!formData.Topic || !formData.Schedule_Date) {
@@ -1094,14 +1255,17 @@ const AddMessageDialog: React.FC<{
         return;
       }
       
-      if (formData.Target_Type === 'private' && userTags.length === 0) {
-        alert('请至少添加一个接收人');
-        return;
-      }
-      
-      if (formData.Target_Type === 'group' && !formData.Glip_Team_ID) {
-        alert('请填写群组 ID');
-        return;
+      // 非提醒模式才需要验证推送目标（提醒模式已自动配置）
+      if (!isReminderMode) {
+        if (formData.Target_Type === 'private' && userTags.length === 0) {
+          alert('请至少添加一个接收人');
+          return;
+        }
+        
+        if (formData.Target_Type === 'group' && !formData.Glip_Team_ID) {
+          alert('请填写群组 ID');
+          return;
+        }
       }
     }
     
@@ -1123,16 +1287,8 @@ const AddMessageDialog: React.FC<{
         // ai-report 模板：使用可视化输入框的值
         glipTeamId = aiReportTeamId;
       } else if (aiReportTemplate === 'pep-report') {
-        // pep-report 模板：解析 JSON 提取 team_id
-        try {
-          const bodyJson = JSON.parse(formData.AI_Body || '{}');
-          if (bodyJson.team_id && typeof bodyJson.team_id === 'string' && !bodyJson.team_id.includes('{')) {
-            // 如果 team_id 不是变量（不包含 {}），则使用它
-            glipTeamId = bodyJson.team_id;
-          }
-        } catch (e) {
-          console.warn('解析 PEP report JSON 失败:', e);
-        }
+        // pep-report 模板：使用专用的输入框值
+        glipTeamId = pepReportTeamId;
       }
       // custom 模板：不处理，用户自己负责
     }
@@ -1162,11 +1318,31 @@ const AddMessageDialog: React.FC<{
     <div style={dialogStyles.overlay}>
       <div style={dialogStyles.dialog}>
         <div style={dialogStyles.header}>
-          <h2 style={dialogStyles.title}>➕ 新增定时消息</h2>
+          <h2 style={dialogStyles.title}>
+            {isReminderMode ? '⏰ 新增个人提醒' : '➕ 新增定时消息'}
+          </h2>
           <button style={dialogStyles.closeButton} onClick={onCancel}>✕</button>
         </div>
         
         <form onSubmit={handleSubmit} style={dialogStyles.form}>
+          {/* 提醒模式说明 */}
+          {isReminderMode && (
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: '#e7f3ff',
+              borderRadius: '8px',
+              marginBottom: '16px',
+              border: '1px solid #b3d7ff',
+            }}>
+              <div style={{ fontSize: '14px', color: '#0066cc', lineHeight: '1.6' }}>
+                <strong>💡 个人提醒模式</strong>
+                <p style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
+                  此模式会通过 Bot 向您发送私信提醒，无需配置推送方式和接收人。
+                </p>
+              </div>
+            </div>
+          )}
+          
           {/* 消息主题 */}
           <div style={dialogStyles.formGroup}>
             <label style={dialogStyles.label}>消息主题 *</label>
@@ -1179,16 +1355,21 @@ const AddMessageDialog: React.FC<{
             />
           </div>
           
-          {/* 消息内容（AI Report 的 ai-report 模板时隐藏，由 JQL 自动填充） */}
-          {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report') && (
+          {/* 消息内容 */}
+          {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
             <div style={dialogStyles.formGroup}>
               <label style={dialogStyles.label}>消息内容 *</label>
               <textarea 
+                ref={contentTextareaRef}
                 style={dialogStyles.textarea}
                 value={formData.Content}
                 onChange={(e) => handleChange('Content', e.target.value)}
                 placeholder="输入消息内容"
                 rows={4}
+              />
+              <VariableSelector 
+                onInsert={insertVariableToContent}
+                excludeVariables={['{Content}']}
               />
             </div>
           )}
@@ -1295,6 +1476,45 @@ const AddMessageDialog: React.FC<{
             </div>
           )}
           
+          {/* 提醒模式：Bot 配置检查 */}
+          {isReminderMode && !botConfigured && (
+            <div style={{
+              padding: '16px',
+              backgroundColor: '#fff3cd',
+              borderRadius: '8px',
+              border: '1px solid #ffc107',
+              marginBottom: '16px',
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#856404', fontSize: '15px' }}>
+                ⚠️ Bot 推送功能未配置
+              </div>
+              <p style={{ margin: '0 0 12px 0', color: '#856404', fontSize: '14px', lineHeight: '1.6' }}>
+                个人提醒功能需要通过 Bot 发送消息。请先配置 Bot 推送功能才能使用。
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  onConfigureBot();
+                }}
+                style={{
+                  padding: '10px 20px',
+                  backgroundColor: '#ffc107',
+                  color: '#000',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                }}
+              >
+                🔧 立即配置 Bot
+              </button>
+            </div>
+          )}
+          
+          {/* 非提醒模式：显示完整的推送配置 */}
+          {!isReminderMode && (
+            <>
            {/* 推送方式 */}
            <div style={dialogStyles.formGroup}>
              <label style={dialogStyles.label}>推送方式 *</label>
@@ -1591,17 +1811,37 @@ const AddMessageDialog: React.FC<{
                 </div>
               ) : (
                 /* PEP Report 和自定义模板：显示 JSON 输入框 */
-                <div style={dialogStyles.formGroup}>
-                  <label style={dialogStyles.label}>Body *</label>
-                  <textarea 
-                    style={dialogStyles.textarea}
-                    value={formData.AI_Body || ''}
-                    onChange={(e) => handleChange('AI_Body', e.target.value)}
-                    placeholder='{"key": "value"}'
-                    rows={8}
-                  />
-                  <small style={dialogStyles.hint}>可以使用 {"{Topic}"} 和 {"{Content}"} 变量</small>
-                </div>
+                  <>
+                   {/* PEP Report 专用：群组 ID 输入框 */}
+                   {aiReportTemplate === 'pep-report' && (
+                     <div style={dialogStyles.formGroup}>
+                       <label style={dialogStyles.label}>群组 ID</label>
+                       <input 
+                         style={dialogStyles.input}
+                         type="text"
+                         value={pepReportTeamId}
+                         onChange={(e) => setPepReportTeamId(e.target.value)}
+                         placeholder="例如：148192141318"
+                       />
+                       <small style={dialogStyles.hint}>可选，填入后会将报告发送到指定群组</small>
+                     </div>
+                   )}
+ 
+                    <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>Body *</label>
+                    <textarea 
+                      ref={bodyTextareaRef}
+                      style={dialogStyles.textarea}
+                      value={formData.AI_Body || ''}
+                      onChange={(e) => handleChange('AI_Body', e.target.value)}
+                      placeholder='{"key": "value"}'
+                      rows={8}
+                    />
+                    <VariableSelector 
+                      onInsert={insertVariableToBody}
+                    />
+                  </div>
+                </>
               )}
             </>
           )}
@@ -1662,6 +1902,8 @@ const AddMessageDialog: React.FC<{
                 </div>
               )}
             </>
+          )}
+          </>
           )}
           
           {/* 提交按钮 */}
@@ -1786,6 +2028,16 @@ const styles: { [key: string]: React.CSSProperties } = {
   headerActions: {
     display: 'flex',
     gap: '10px',
+  },
+  reminderButton: {
+    padding: '8px 16px',
+    backgroundColor: '#ffc107',
+    color: '#000',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 'bold',
   },
   addButton: {
     padding: '8px 16px',
@@ -1926,6 +2178,28 @@ const styles: { [key: string]: React.CSSProperties } = {
   footerText: {
     fontSize: '12px',
     color: '#999',
+  },
+  tooltip: {
+    position: 'fixed',
+    backgroundColor: '#333',
+    color: '#fff',
+    padding: '8px 12px',
+    borderRadius: '6px',
+    fontSize: '13px',
+    maxWidth: '400px',
+    zIndex: 10000,
+    pointerEvents: 'none',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+  },
+  tooltipHeader: {
+    fontWeight: 'bold',
+    marginBottom: '4px',
+    fontSize: '12px',
+    color: '#ffc107',
+  },
+  tooltipContent: {
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
 };
 

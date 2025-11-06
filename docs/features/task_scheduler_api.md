@@ -2,7 +2,31 @@
 
 ## 概述
 
-统一任务调度器提供了一套完整的消息 API，用于控制和监控所有定时任务。
+统一任务调度器（TaskScheduler）是扩展中**唯一的定时任务管理器**，提供了一套完整的消息 API，用于控制和监控所有定时任务。
+
+### 核心特性
+
+- ✅ **统一管理**: 所有定时任务由 TaskScheduler 统一创建和管理
+- ✅ **避免重复**: 消除了任务重复执行的问题
+- ✅ **集中配置**: 所有任务配置在 `TaskScheduler.ts` 的 `TASK_DEFINITIONS` 中
+- ✅ **状态持久化**: 任务状态自动保存到 Chrome Storage
+- ✅ **统一监控**: 提供统一的状态查询和监控接口
+
+### 架构说明
+
+```
+TaskScheduler (唯一的 alarm 管理者)
+├─ scheduled_task_message_analysis        -> analyzeMessages()
+├─ scheduled_task_memory_sync            -> memorySystem.syncCache()
+├─ scheduled_task_system_monitoring      -> memorySystem.performHealthCheck()
+├─ scheduled_task_user_profile_decay     -> memorySystem.applyUserProfileDecay()
+├─ scheduled_task_vectorized_data_maintenance
+├─ scheduled_task_user_summary_generation
+└─ scheduled_task_vector_quality_check
+```
+
+> **重要**: 各个模块（如 MemorySystem）**不再**独立创建 alarm，所有定时任务必须通过 TaskScheduler 管理。
+> 详见：[定时任务统一管理重构](../progressing/task-scheduler-consolidation.md)
 
 ## 消息 API
 
@@ -193,15 +217,37 @@ useEffect(() => {
 
 ## 可用的任务 ID
 
-| 任务ID | 任务名称 | 描述 |
-|--------|----------|------|
-| `message_analysis` | 静默消息分析 | 自动分析RingCentral消息 |
-| `memory_sync` | 记忆系统同步 | 同步本地和云端记忆数据 |
-| `system_monitoring` | 系统健康监控 | 执行系统健康检查和维护 |
-| `user_profile_decay` | 用户画像权重衰变 | 执行用户画像权重衰变 |
-| `vectorized_data_maintenance` | 向量化数据维护 | 清理过期向量记录 |
-| `user_summary_generation` | 用户概要生成 | 生成用户行为概要记录 |
-| `vector_quality_check` | 向量质量检查 | 检查向量数据质量 |
+| 任务ID | 任务名称 | 执行间隔 | 描述 | 执行方法 |
+|--------|----------|---------|------|---------|
+| `message_analysis` | 静默消息分析 | 30分钟* | 自动分析RingCentral消息 | `analyzeMessages()` |
+| `memory_sync` | 记忆系统同步 | 5分钟 | 同步本地和云端记忆数据 | `memorySystem.syncCache()` |
+| `system_monitoring` | 系统健康监控 | 60分钟 | 执行系统健康检查和维护 | `memorySystem.performHealthCheck()` |
+| `user_profile_decay` | 用户画像权重衰变 | 24小时 | 执行用户画像权重衰变 | `memorySystem.applyUserProfileDecay()` |
+| `vectorized_data_maintenance` | 向量化数据维护 | 12小时 | 清理过期向量记录 | `cloudStorage.performMaintenance()` |
+| `user_summary_generation` | 用户概要生成 | 7天 | 生成用户行为概要记录 | `cloudStorage.generateSummary()` |
+| `vector_quality_check` | 向量质量检查 | 3天 | 检查向量数据质量 | `cloudStorage.checkQuality()` |
+
+\* `message_analysis` 的间隔时间从 `envConfig.MESSAGE_ANALYSIS_INTERVAL` 动态读取
+
+### 任务状态管理
+
+所有任务的状态存储在 `chrome.storage.local.taskSchedulerStates`:
+
+```typescript
+{
+  "message_analysis": {
+    "enabled": false,      // 默认禁用
+    "lastRun": 1699999999999,
+    "nextRun": 1700001799999
+  },
+  "memory_sync": {
+    "enabled": true,       // 默认启用
+    "lastRun": 1699999999999,
+    "nextRun": 1700000299999
+  },
+  // ... 其他任务
+}
+```
 
 ## 已废弃的 API
 
@@ -395,6 +441,49 @@ chrome.runtime.sendMessage({
 4. **执行时机**: 手动执行任务会立即运行，不会影响原有的定时调度
 5. **状态持久化**: 任务的启用/禁用状态会在 Chrome Storage 中持久化保存，在扩展重新加载或浏览器重启后自动恢复
 
+### ⚠️ 重要约束
+
+**禁止独立创建 Alarm**
+
+各个模块（如 MemorySystem、ProactiveNotificationService 等）**禁止**独立创建 `chrome.alarms`。所有定时任务必须：
+
+1. ✅ 在 `TaskScheduler.ts` 的 `TASK_DEFINITIONS` 中定义
+2. ✅ 在 `TaskScheduler.executeTask()` 中实现执行逻辑
+3. ✅ 通过 TaskScheduler 的统一接口管理
+
+**违反约束的后果**:
+- ❌ 任务重复执行（同一任务被多个 alarm 触发）
+- ❌ 状态管理混乱（无法统一查询和控制）
+- ❌ 难以调试和监控
+
+**正确的做法**:
+
+```typescript
+// ❌ 错误：在模块中独立创建 alarm
+class MyFeature {
+  initialize() {
+    chrome.alarms.create('my-task', {
+      periodInMinutes: 30
+    });
+  }
+}
+
+// ✅ 正确：通过 TaskScheduler 管理
+// 1. 在 TaskScheduler.ts 的 TASK_DEFINITIONS 添加
+{
+  id: 'my_task',
+  name: '我的任务',
+  category: 'data_sync',
+  intervalMinutes: 30,
+  enabled: true
+}
+
+// 2. 在 TaskScheduler.executeTask() 添加
+case 'my_task':
+  await myFeature.executeTask();
+  break;
+```
+
 ## 浏览器重启后的行为
 
 ### 问题背景
@@ -437,12 +526,14 @@ if (alarmEnabled) {
 - ✅ **逐个检查创建**: 使用 `chrome.alarms.get(name)` 检查单个 alarm 是否存在
 - ✅ **幂等性保证**: 多次调用 `startAllTasks()` 不会重复创建定时器
 - ✅ **配置同步**: 自动检测并更新配置变更
+- ✅ **统一管理**: TaskScheduler 是唯一的 alarm 创建者，避免重复
 
 **好处**:
 1. **可靠性**: 不依赖 alarms 的持久化,避免浏览器重启后定时器丢失
 2. **兼容性**: 兼容 `onStartup` 事件中 Alarms API 未就绪的情况
 3. **准确性**: 基于明确的 Storage 状态,而不是猜测
 4. **灵活性**: 自动处理配置更新和任务启用/禁用
+5. **无重复**: 消除了任务重复执行的问题（详见 [统一管理重构](../progressing/task-scheduler-consolidation.md)）
 
 ### 解决方案
 
@@ -623,6 +714,51 @@ chrome.runtime.sendMessage({
 
 ## 相关文档
 
-- [任务调度器验证指南](./task_scheduler_verification.md)
-- [任务调度器架构设计](./task_scheduler.md)
+### 核心文档
+- [任务调度器架构设计](./task_scheduler.md) - 整体架构和设计原理
+- [任务调度器验证指南](./task_scheduler_verification.md) - 测试和验证方法
+
+### 重构文档
+- [定时任务统一管理重构](../progressing/task-scheduler-consolidation.md) - 消除任务重复执行的重构
+- [Background Script Alarm 修复](../progressing/background-script-alarm-fix.md) - Manifest V3 Service Worker 修复
+- [Background Alarm 处理重构](../progressing/background-alarm-refactoring.md) - 责任链模式重构
+
+### 更新日志
+
+#### v7.4.0 (2025-11-06)
+
+**重大改进：定时任务统一管理**
+
+- ✅ **消除任务重复**: 修复了 `memory_sync` 和 `user_profile_decay` 重复执行2次的问题
+- ✅ **统一架构**: 所有定时任务现在由 TaskScheduler 统一管理
+- ✅ **简化代码**: MemorySystem 不再独立创建 alarm，减少了代码复杂度
+- ✅ **责任链模式**: background.ts 使用责任链模式分发 alarm 事件
+- ✅ **Manifest V3 兼容**: 监听器在顶层同步设置，确保 Service Worker 重启时不丢失事件
+
+**破坏性变更**:
+- ⚠️ `MemorySystem.tryHandleAlarm()` 已废弃，不再处理独立的 alarm
+- ⚠️ MemorySystem 不再创建 `memory-system-sync` 和 `user-profile-decay` alarm
+- ⚠️ 所有定时任务必须通过 TaskScheduler 管理
+
+**迁移指南**:
+
+如果你的代码依赖于旧的 alarm 名称，请更新：
+
+```typescript
+// ❌ 旧代码（已不再使用）
+chrome.alarms.get('memory-system-sync', callback);
+chrome.alarms.get('user-profile-decay', callback);
+
+// ✅ 新代码
+chrome.alarms.get('scheduled_task_memory_sync', callback);
+chrome.alarms.get('scheduled_task_user_profile_decay', callback);
+
+// 或者使用 TaskScheduler API
+chrome.runtime.sendMessage({
+  type: 'GET_TASK_SCHEDULER_STATUS'
+}, response => {
+  const memorySync = response.tasks.find(t => t.id === 'memory_sync');
+  console.log(memorySync);
+});
+```
 

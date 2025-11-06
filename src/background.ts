@@ -10,7 +10,7 @@ import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
 import { DashboardMessageHandler } from './utils/dashboardIntegration';
-import { taskScheduler } from './services/TaskScheduler';
+import { taskScheduler, TaskScheduler } from './services/TaskScheduler';
 import { UserProfileMessageHandler } from './services/UserProfileMessageHandler';
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWithRetry } from './utils/tabHelpers';
 
@@ -34,8 +34,8 @@ console.log('Background script loaded');
     try {
         // 延迟初始化，避免与 onInstalled 冲突
         setTimeout(async () => {
-            await initializeTaskScheduler();
-        }, 5000); // 3秒延迟，确保扩展环境完全就绪
+            await taskScheduler.startAllTasks();
+        }, 5000); // 5秒延迟，确保扩展环境完全就绪
     } catch (error) {
         console.error('❌ Background script 初始化检查失败:', error);
     }
@@ -46,7 +46,7 @@ chrome.runtime.onStartup.addListener(async () => {
     try {
         setTimeout(async () => {
             console.log('🔄 浏览器启动，恢复任务调度器...');
-            await initializeTaskScheduler();
+            await taskScheduler.startAllTasks();
         }, 10000);
     } catch (error) {
         console.error('❌ onStartup 监听器错误:', error);
@@ -63,7 +63,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         console.log('Global config loaded:', config);
 
         // 启动统一任务调度器
-        await initializeTaskScheduler();
+        await taskScheduler.startAllTasks();
         
         chrome.storage.local.remove('ollamaAnalysisProgress');
         
@@ -119,16 +119,36 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     }
 });
 
-// 统一的任务调度器启动函数
-async function initializeTaskScheduler() {
+// ========================================
+// 🔥 关键修复：立即设置 alarm 监听器
+// ========================================
+// Manifest V3 Service Worker 会在不活动时被终止。
+// 当 chrome.alarms 触发时会唤醒 Service Worker，
+// 但必须确保监听器在 Service Worker 启动时立即设置，
+// 否则 alarm 事件会丢失！
+//
+// 监听器必须在顶层同步设置，不能延迟或等待异步初始化。
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    console.log('🔔 收到 alarm 事件:', alarm.name);
+    
     try {
-        console.log('🚀 启动统一任务调度器...');
-        await taskScheduler.startAllTasks();
-        console.log('✅ 统一任务调度器启动成功');
+        // 所有定时任务统一由 TaskScheduler 管理
+        if (await TaskScheduler.tryHandleAlarm(alarm)) {
+            return;
+        }
+        
+        // 如果有其他模块需要处理 alarm，在这里添加
+        // if (await OtherModule.tryHandleAlarm(alarm)) {
+        //     return;
+        // }
+        
+        // 处理未知 alarm
+        console.log(`⚡ 未处理的 alarm 事件: ${alarm.name}`);
     } catch (error) {
-        console.error('❌ 统一任务调度器启动失败:', error);
+        console.error('❌ 处理 alarm 事件失败:', error);
     }
-}
+});
+console.log('✅ Alarm 监听器已设置（顶层同步）');
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 如果不是 background 定时程序，会从页面发送请求到这里执行

@@ -91,7 +91,7 @@ export class TaskScheduler {
   private static instance: TaskScheduler | null = null;
   private tasks: Map<string, ScheduledTask> = new Map();
   private alarmListeners: Set<string> = new Set();
-  private isInitialized = false;
+  public isInitialized = false; // 改为 public，方便 background.ts 检查状态
   private cloudStorage: CloudStorage | null = null;
   private storageChangeListener: ((changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => void) | null = null;
 
@@ -375,24 +375,59 @@ export class TaskScheduler {
 
   /**
    * 设置 alarm 监听器
+   * 注意：在 Manifest V3 中，监听器应该在顶层设置，而不是在这里
+   * 这个方法保留用于兼容性，但实际监听器已经在 background.ts 顶层设置
    */
   private setupAlarmListeners(): void {
     if (this.alarmListeners.has('main')) {
       return;
     }
 
-    chrome.alarms.onAlarm.addListener(async (alarm) => {
-      const taskId = alarm.name.replace('scheduled_task_', '');
-      const task = this.tasks.get(taskId);
-
-      if (task) {
-        console.log(`⚡ 执行定时任务: ${task.name}`);
-        await this.executeTask(task);
-      }
-    });
+    // 🔥 不再在这里设置监听器，改为在 background.ts 顶层设置
+    // 原因：Service Worker 重启时，如果监听器设置延迟，alarm 事件会丢失
 
     this.alarmListeners.add('main');
-    console.log('👂 定时任务监听器已设置');
+    console.log('✅ TaskScheduler 监听器标记已设置（实际监听器在 background.ts 顶层）');
+  }
+
+  /**
+   * 处理 alarm 事件
+   * 由 background.ts 的顶层监听器调用
+   */
+  public async handleAlarmEvent(alarm: chrome.alarms.Alarm): Promise<void> {
+    const taskId = alarm.name.replace('scheduled_task_', '');
+    const task = this.tasks.get(taskId);
+
+    if (task) {
+      console.log(`⚡ 执行定时任务: ${task.name}`);
+      await this.executeTask(task);
+    } else {
+      console.warn(`⚠️ 未找到任务: ${taskId}`);
+    }
+  }
+
+  /**
+   * 静态方法：尝试处理 alarm 事件
+   * 返回 true 表示已处理，false 表示不是 TaskScheduler 的 alarm
+   */
+  public static async tryHandleAlarm(alarm: chrome.alarms.Alarm): Promise<boolean> {
+    if (!alarm.name.startsWith('scheduled_task_')) {
+      return false;
+    }
+
+    const instance = TaskScheduler.getInstance();
+    
+    // 确保已初始化
+    if (!instance.isInitialized) {
+      console.log('⚠️ TaskScheduler 未初始化，开始初始化...');
+      await instance.startAllTasks();
+    }
+    
+    const taskId = alarm.name.replace('scheduled_task_', '');
+    console.log(`⚡ 执行定时任务: ${taskId}`);
+    await instance.handleAlarmEvent(alarm);
+    
+    return true;
   }
 
   /**

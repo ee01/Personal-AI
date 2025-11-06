@@ -2957,72 +2957,47 @@ ${question}
       return;
     }
 
-    // 使用 Chrome alarms API 进行后台同步和权重衰变
-    const syncAlarmName = 'memory-system-sync';
-    const decayAlarmName = 'user-profile-decay';
-    
-    chrome.alarms.clear(syncAlarmName, () => {
-      // 创建同步 alarm，每5分钟同步一次
-      chrome.alarms.create(syncAlarmName, {
-        periodInMinutes: this.config.syncInterval / (60 * 1000)
-      });
-      
-      console.log(`🔄 后台同步已启动，间隔: ${this.config.syncInterval / (60 * 1000)} 分钟`);
-    });
-    
-    chrome.alarms.clear(decayAlarmName, () => {
-      // 创建权重衰变 alarm，每24小时执行一次
-      chrome.alarms.create(decayAlarmName, {
-        periodInMinutes: 24 * 60 // 24小时
-      });
-      
-      console.log(`🧠 用户画像权重衰变已启动，间隔: 24小时`);
-    });
+    // ✅ 定时任务已统一由 TaskScheduler 管理
+    // 不再在这里创建独立的 alarm，避免重复执行
+    // 
+    // TaskScheduler 中已包含以下任务：
+    // - 'memory_sync' (scheduled_task_memory_sync) -> 调用 memorySystem.syncCache()
+    // - 'user_profile_decay' (scheduled_task_user_profile_decay) -> 调用 memorySystem.applyUserProfileDecay()
+    // 
+    // 如需调整间隔时间，请在 TaskScheduler.ts 的 TASK_DEFINITIONS 中修改
     
     // 标记为已启动
     this.backgroundSyncStarted = true;
     
-    // 在启动定时任务时直接运行一次，但添加防抖
-    console.log('🔄 首次执行定时同步...');
-    this.syncCache().catch(error => {
-      console.error('后台同步失败:', error);
-    });
+    console.log('✅ 记忆系统定时任务由 TaskScheduler 统一管理');
+    console.log('   - memory_sync: 每5分钟执行一次');
+    console.log('   - user_profile_decay: 每24小时执行一次');
     
-    // 首次执行权重衰变
-    console.log('🧠 首次执行权重衰变...');
-    this.applyUserProfileDecay().catch((error: any) => {
-      console.error('权重衰变失败:', error);
-    });
+    // 注意：首次执行由 TaskScheduler 的 performInitialRun() 处理
+    // 不再在这里手动执行首次同步和衰变
 
-    // 监听 alarm 事件
+    // 保留 setupAlarmListener 以兼容旧代码，但实际不再创建 alarm
     this.setupAlarmListener();
   }
 
   /**
    * 设置 alarm 监听器
+   * 
+   * ⚠️ 已废弃：此方法保留仅用于向后兼容
+   * 
+   * 所有定时任务现在由 TaskScheduler 统一管理：
+   * - 'memory_sync' -> memorySystem.syncCache()
+   * - 'user_profile_decay' -> memorySystem.applyUserProfileDecay()
+   * 
+   * 不再需要独立的 alarm 监听器
    */
   private setupAlarmListener(): void {
-    // 避免重复添加监听器
     if (this.alarmListenerAdded) {
       return;
     }
 
-    chrome.alarms.onAlarm.addListener((alarm) => {
-      if (alarm.name === 'memory-system-sync') {
-        console.log('🔄 执行定时同步...');
-        this.syncCache().catch(error => {
-          console.error('后台同步失败:', error);
-        });
-      } else if (alarm.name === 'user-profile-decay') {
-        console.log('🧠 执行定时权重衰变...');
-        this.applyUserProfileDecay().catch((error: any) => {
-          console.error('定时权重衰变失败:', error);
-        });
-      }
-    });
-
     this.alarmListenerAdded = true;
-    console.log('🎯 alarm 监听器已设置（同步 + 权重衰变）');
+    console.log('✅ 记忆系统定时任务已交由 TaskScheduler 统一管理');
   }
 
   /**
