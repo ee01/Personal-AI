@@ -21,6 +21,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const [needsAuth, setNeedsAuth] = useState(false);
   const [authUrl, setAuthUrl] = useState('');
   const [tempResult, setTempResult] = useState<InitializationResult | null>(null);
+  const [needsAppScriptAPI, setNeedsAppScriptAPI] = useState(false);
+  const [appScriptAPIUrl, setAppScriptAPIUrl] = useState('');
   
   const handleOneClickSetup = async () => {
     setIsInitializing(true);
@@ -52,6 +54,12 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       } else if (result.success) {
         setCurrentStep('初始化成功！');
         onComplete(result);
+      } else if (result.needsAppScriptAPI) {
+        // 需要开启 AppScript API
+        setNeedsAppScriptAPI(true);
+        setAppScriptAPIUrl(result.appScriptAPIUrl || 'https://script.google.com/home/usersettings');
+        setCurrentStep('');
+        setIsInitializing(false);
       } else {
         throw new Error(result.error || '初始化失败');
       }
@@ -110,6 +118,10 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       return;
     }
     
+    setIsInitializing(true);
+    setError('');
+    setCurrentStep('正在从 Sheet 读取配置...');
+    
     try {
       // 从 URL 提取 Sheet ID
       const sheetId = extractSheetId(manualSheetUrl);
@@ -117,22 +129,46 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         throw new Error('无效的 Sheet URL');
       }
       
-      // 保存配置
-      await chrome.storage.local.set({
-        scheduledMessagesConfig: {
-          sheetId,
-          sheetUrl: manualSheetUrl,
-          sheet_version: '2.0',
-          created_by: 'Manual',
-          created_at: new Date().toISOString()
-        }
-      });
+      // 获取授权
+      const token = await getAuthToken();
+      if (!token) {
+        throw new Error('无法获取 Google 授权');
+      }
+      
+      // 使用 ConfigSyncService 从 Sheet 读取完整配置
+      const { ConfigSyncService } = await import('../ConfigSyncService');
+      const syncService = new ConfigSyncService(token);
+      
+      const sheetConfig = await syncService.readConfigFromSheet(sheetId);
+      
+      // 如果 Sheet 中没有配置，创建最小配置
+      if (!sheetConfig.sheet_version) {
+        console.warn('Sheet Config 表为空，创建最小配置');
+        await chrome.storage.local.set({
+          scheduledMessagesConfig: {
+            sheetId,
+            sheetUrl: manualSheetUrl,
+            sheet_version: '2.0',
+            created_by: 'Manual',
+            created_at: new Date().toISOString()
+          }
+        });
+      } else {
+        // 保存从 Sheet 读取的完整配置到 Chrome Storage
+        await syncService.saveConfigToStorage(sheetConfig as any);
+        console.log('✅ 从 Sheet 读取并绑定配置:', sheetConfig);
+      }
       
       // 刷新页面
-      window.location.reload();
+      setCurrentStep('配置绑定成功，正在刷新...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
       
     } catch (err: any) {
-      setError(err.message || '绑定失败');
+      console.error('绑定 Sheet 失败:', err);
+      setError(err.message || '绑定失败，请检查 Sheet 是否存在 Config 工作表');
+      setIsInitializing(false);
     }
   };
   
@@ -177,7 +213,61 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       </div>
       
       <div style={styles.content}>
-        {needsAuth ? (
+        {needsAppScriptAPI ? (
+          // AppScript API 开启界面
+          <div style={styles.apiSection}>
+            <h2 style={styles.authTitle}>⚙️ 需要开启 AppScript API</h2>
+            <p style={styles.authDescription}>
+              在创建 Apps Script 项目之前，您需要先开启 Google Apps Script API。
+            </p>
+            
+            <div style={styles.authSteps}>
+              <p style={styles.stepTitle}>请按照以下步骤操作：</p>
+              <ol style={styles.stepList}>
+                <li>点击下方"打开 AppScript 设置页面"按钮</li>
+                <li>在新打开的页面中，找到 "Google Apps Script API" 设置</li>
+                <li>将开关切换到 "ON" 状态</li>
+                <li>返回此页面，点击"重新初始化"按钮继续</li>
+              </ol>
+            </div>
+            
+            <button 
+              style={styles.primaryButton}
+              onClick={() => window.open(appScriptAPIUrl, '_blank')}
+              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
+              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}
+            >
+              ⚙️ 打开 AppScript 设置页面
+            </button>
+            
+            <p style={styles.authNote}>
+              💡 提示：开启 API 后，可能需要等待几秒钟让设置生效。
+            </p>
+            
+            <p style={styles.authHint}>
+              开启 API 后，点击下方按钮继续：
+            </p>
+            
+            <button 
+              style={styles.completeButton}
+              onClick={() => {
+                setNeedsAppScriptAPI(false);
+                setError('');
+                handleOneClickSetup();
+              }}
+              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#218838'}
+              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
+            >
+              ✅ 我已开启 API，重新初始化
+            </button>
+            
+            {error && (
+              <div style={styles.error}>
+                ❌ {error}
+              </div>
+            )}
+          </div>
+        ) : needsAuth ? (
           // 授权界面
           <>
           {!isInitializing ? (
@@ -470,6 +560,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#999',
   },
   authSection: {
+    padding: '20px 0',
+  },
+  apiSection: {
     padding: '20px 0',
   },
   authTitle: {

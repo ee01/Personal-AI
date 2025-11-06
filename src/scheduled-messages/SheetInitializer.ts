@@ -58,6 +58,21 @@ export class SheetInitializer {
       
     } catch (error) {
       console.error('创建定时消息系统失败:', error);
+      
+      // 检查是否是 AppScript API 未开启的错误
+      if (error.message === 'APPSCRIPT_API_NOT_ENABLED') {
+        return {
+          success: false,
+          sheetId: '',
+          sheetUrl: '',
+          scriptId: '',
+          webAppUrl: '',
+          needsAppScriptAPI: true,
+          appScriptAPIUrl: 'https://script.google.com/home/usersettings',
+          error: 'AppScript API 未开启'
+        };
+      }
+      
       return {
         success: false,
         sheetId: '',
@@ -375,6 +390,12 @@ export class SheetInitializer {
     
     if (!createResponse.ok) {
       const error = await createResponse.text();
+      
+      // 检查是否是因为 AppScript API 未开启（403 错误）
+      if (createResponse.status === 403 && error.includes('script.google.com/home/usersettings')) {
+        throw new Error('APPSCRIPT_API_NOT_ENABLED');
+      }
+      
       throw new Error(`创建 AppScript 项目失败: ${error}`);
     }
     
@@ -641,36 +662,8 @@ function dailyTrigger() {
     triggers: { minuteTriggerId: string; dailyTriggerId: string }
   ): Promise<void> {
     const now = new Date();
-    const configData = [
-      ['minute_trigger_id', triggers.minuteTriggerId],
-      ['daily_trigger_id', triggers.dailyTriggerId],
-      ['web_app_url', webAppUrl],
-      ['sheet_version', '2.0'],
-      ['created_by', 'Personal AI Extension'],
-      ['created_at', this.formatDateTime(now)],
-      ['last_sync_time', this.formatDateTime(now)]
-    ];
     
-    // 保存到 Config 工作表
-    const sheetResponse = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Config!A2:B8?valueInputOption=USER_ENTERED`,
-      {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${this.token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          values: configData
-        })
-      }
-    );
-    
-    if (!sheetResponse.ok) {
-      console.warn('保存配置到 Sheet 失败');
-    }
-    
-    // 保存到 Chrome Storage
+    // 构建配置对象
     const config: SheetConfig = {
       sheetId: spreadsheetId,
       sheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
@@ -685,7 +678,10 @@ function dailyTrigger() {
       last_sync_time: this.formatDateTime(now)
     };
     
-    await chrome.storage.local.set({ scheduledMessagesConfig: config });
+    // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
+    const { ConfigSyncService } = await import('./ConfigSyncService');
+    const syncService = new ConfigSyncService(this.token);
+    await syncService.syncConfig(config);
   }
   
   // 辅助方法

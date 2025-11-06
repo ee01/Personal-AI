@@ -1522,7 +1522,7 @@ const AddMessageDialog: React.FC<{
                     <option value="Jupiter web">Jupiter web</option>
                   </select>
                   <small style={dialogStyles.hint}>
-                    新增项目联系项目组所在 SDET 完善 <a href="https://heimdall-xmn02.int.rclabenv.com/api/swagger/#/bot/bot_get_release_info_retrieve" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>API</a>
+                    新增请联系项目组所在 SDET 完善 <a href="https://heimdall-xmn02.int.rclabenv.com/api/swagger/#/bot/bot_get_release_info_retrieve" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>API</a>
                   </small>
                 </div>
                 
@@ -2560,6 +2560,19 @@ const BotConfigDialog: React.FC<{
     };
   }, []);
   
+  // 获取授权 token
+  const getAuthToken = (): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      chrome.identity.getAuthToken({ interactive: false }, (token) => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve(token || '');
+        }
+      });
+    });
+  };
+  
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -2606,9 +2619,11 @@ const BotConfigDialog: React.FC<{
         }
       };
       
-      await chrome.storage.local.set({
-        scheduledMessagesConfig: updatedConfig
-      });
+      // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
+      const token = await getAuthToken();
+      const { ConfigSyncService } = await import('./ConfigSyncService');
+      const syncService = new ConfigSyncService(token);
+      await syncService.syncConfig(updatedConfig);
       
       onSuccess();
       

@@ -115,6 +115,8 @@ export interface InitializationResult {
   error?: string;
   needsAuthorization?: boolean;  // 是否需要用户授权
   authUrl?: string;              // 授权 URL
+  needsAppScriptAPI?: boolean;   // 是否需要开启 AppScript API
+  appScriptAPIUrl?: string;      // AppScript API 设置页面 URL
 }
 
 // 筛选选项

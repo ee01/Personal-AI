@@ -16,8 +16,8 @@
         "rate": 0,
         "rateInterval": 60
       },
-      "jql": "key = {{PROJECT_KEY}}-1",
-      "executionMode": "jql",
+      "jql": "",
+      "executionMode": "nosearch",
       "onlyUpdatedIssues": false,
       "processIssuesInBulk": false
     },
@@ -29,20 +29,12 @@
   "components": [
     {
       "component": "CONDITION",
-      "schemaVersion": 3,
-      "type": "jira.issue.condition",
+      "schemaVersion": 1,
+      "type": "jira.comparator.condition",
       "value": {
-        "selectedField": {
-          "type": "ID",
-          "value": "customfield_10050"
-        },
-        "selectedFieldType": "com.atlassian.jira.plugin.system.customfieldtypes:url",
-        "comparison": "NOT_CONTAIN",
-        "compareValue": {
-          "type": "VALUE",
-          "value": "https://jira-",
-          "multiValue": false
-        }
+        "first": "{{baseUrl}}",
+        "second": "https://jira-",
+        "operator": "NOT_CONTAIN"
       },
       "children": [],
       "conditions": [],
