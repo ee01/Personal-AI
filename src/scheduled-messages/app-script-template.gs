@@ -25,6 +25,137 @@
  *    - 所有列访问都通过 headers 数组动态映射
  */
 
+// 接口缓存（在一次执行周期内有效）
+var releaseInfoCache = {};
+
+/**
+ * 获取项目进度信息
+ * @param {string} project - 项目名称（mThor / Jupiter desktop / Jupiter web）
+ * @returns {object} 项目进度信息
+ */
+function getReleaseInfo(project) {
+  // 检查缓存
+  if (releaseInfoCache[project]) {
+    Logger.log(`使用缓存的 ${project} 项目进度信息`);
+    return releaseInfoCache[project];
+  }
+  
+  try {
+    const url = `https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=${encodeURIComponent(project)}`;
+    Logger.log(`获取项目进度信息: ${url}`);
+    const response = UrlFetchApp.fetch(url);
+    const data = JSON.parse(response.getContentText());
+    
+    // 缓存结果
+    releaseInfoCache[project] = data;
+    Logger.log(`成功获取 ${project} 项目进度信息`);
+    
+    return data;
+  } catch (error) {
+    Logger.log(`获取项目进度信息失败: ${error}`);
+    return null;
+  }
+}
+
+/**
+ * 检查今天是否匹配 Timeline 触发条件
+ * @param {object} rowData - 消息行数据
+ * @param {Date} now - 当前时间
+ * @returns {boolean} 是否匹配
+ */
+function isTimelineTriggerMatch(rowData, now) {
+  // 检查是否为 Timeline 触发（Schedule_Date 为空且有 Timeline 字段）
+  if (rowData.Schedule_Date || !rowData.Timeline_Milestone) {
+    return false;
+  }
+  
+  const project = rowData.Timeline_Project || 'mThor';
+  const milestone = rowData.Timeline_Milestone;
+  const offset = parseInt(rowData.Timeline_Offset || '0');
+  
+  Logger.log(`检查 Timeline 触发: ${project} - ${milestone} 偏移 ${offset} 天`);
+  
+  // 获取项目进度信息
+  const releaseData = getReleaseInfo(project);
+  if (!releaseData || !releaseData.releaseInfo) {
+    Logger.log(`无法获取项目进度信息，跳过`);
+    return false;
+  }
+  
+  // 获取 milestone 日期
+  const milestoneDate = releaseData.releaseInfo[milestone];
+  if (!milestoneDate) {
+    Logger.log(`未找到 Milestone: ${milestone}`);
+    return false;
+  }
+  
+  // 解析日期（格式：MM/DD/YYYY）
+  const dateParts = milestoneDate.split('/');
+  if (dateParts.length !== 3) {
+    Logger.log(`Milestone 日期格式错误: ${milestoneDate}`);
+    return false;
+  }
+  
+  const targetDate = new Date(
+    parseInt(dateParts[2]), // year
+    parseInt(dateParts[0]) - 1, // month (0-based)
+    parseInt(dateParts[1]) // day
+  );
+  
+  // 应用偏移
+  targetDate.setDate(targetDate.getDate() + offset);
+  
+  // 比较日期（只比较年月日）
+  const today = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const target = Utilities.formatDate(targetDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  
+  Logger.log(`今天: ${today}, 目标日期: ${target}`);
+  
+  return today === target;
+}
+
+/**
+ * 替换消息中的项目进度变量
+ * @param {string} text - 原始文本
+ * @param {string} project - 项目名称
+ * @returns {string} 替换后的文本
+ */
+function replaceProjectVariables(text, project) {
+  if (!text) return text;
+  
+  // 检查是否包含项目进度变量
+  const hasVariables = text.includes('{currentRelease}') || 
+                       text.includes('{currentPhase}') ||
+                       text.includes('{currentPhaseStartDate}') ||
+                       text.includes('{currentPhaseStartedWorkdays}') ||
+                       text.includes('{nextPhase}') ||
+                       text.includes('{nextPhaseStartDate}') ||
+                       text.includes('{nextPhaseCountdownWorkdays}');
+  
+  if (!hasVariables) {
+    return text;
+  }
+  
+  // 获取项目进度信息
+  const releaseData = getReleaseInfo(project || 'mThor');
+  if (!releaseData) {
+    Logger.log('无法获取项目进度信息，跳过变量替换');
+    return text;
+  }
+  
+  // 替换变量
+  let result = text;
+  result = result.replace(/{currentRelease}/g, releaseData.currentRelease || '');
+  result = result.replace(/{currentPhase}/g, releaseData.currentPhase || '');
+  result = result.replace(/{currentPhaseStartDate}/g, releaseData.currentPhaseStartDate || '');
+  result = result.replace(/{currentPhaseStartedWorkdays}/g, releaseData.currentPhaseStartedWorkdays || '0');
+  result = result.replace(/{nextPhase}/g, releaseData.nextPhase || '');
+  result = result.replace(/{nextPhaseStartDate}/g, releaseData.nextPhaseStartDate || '');
+  result = result.replace(/{nextPhaseCountdownWorkdays}/g, releaseData.nextPhaseCountdownWorkdays || '0');
+  
+  return result;
+}
+
 // 每分钟执行（处理 Hourly 类型）
 function minuteTrigger() {
   executeScheduledMessages(['Hourly']);
@@ -157,6 +288,29 @@ function getColumnIndex(headers, columnName) {
  * 判断是否应该在当前时间执行
  */
 function shouldExecuteNow(rowData, now, messageType) {
+  // 优先检查 Timeline 触发
+  if (!rowData.Schedule_Date && rowData.Timeline_Milestone) {
+    // Timeline 触发：检查日期是否匹配
+    if (!isTimelineTriggerMatch(rowData, now)) {
+      return false;
+    }
+    
+    // 日期匹配后，检查时间
+    if (rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()) {
+      // 有指定时间，检查时间是否匹配
+      const timeStr = rowData.Schedule_Time.toString().trim();
+      const timeParts = timeStr.split(':');
+      const scheduleHour = parseInt(timeParts[0]);
+      const scheduleMinute = parseInt(timeParts[1]);
+      
+      return now.getHours() == scheduleHour && now.getMinutes() == scheduleMinute;
+    } else {
+      // 没有指定时间，在早上 9 点左右执行（Daily 触发器）
+      return true; // 由 dailyTrigger 触发
+    }
+  }
+  
+  // 时间触发
   const type = messageType || determineMessageType(rowData);
   
   if (type === 'Hourly') {
@@ -288,11 +442,19 @@ function sendEmailToGlip(rowData) {
       }
     }
     
-    const htmlContent = rowData.Content.toString().replaceAll("\n", '<br />');
+    // 替换项目进度变量
+    const project = rowData.Timeline_Project || 'mThor';
+    let topic = rowData.Topic.toString();
+    let content = rowData.Content.toString();
+    
+    topic = replaceProjectVariables(topic, project);
+    content = replaceProjectVariables(content, project);
+    
+    const htmlContent = content.replaceAll("\n", '<br />');
     
     MailApp.sendEmail({
       to: toEmail,
-      subject: `定时推送 - ${rowData.Topic}`,
+      subject: `定时推送 - ${topic}`,
       htmlBody: htmlContent,
       attachments: attachments
     });
@@ -920,18 +1082,24 @@ function findMessageByPriority(data, headers, now, currentDate, priority, curren
     }
     
     if (matches) {
+      // 替换项目进度变量
+      const project = rowData.Timeline_Project || 'mThor';
+      const topic = replaceProjectVariables(rowData.Topic, project);
+      const content = replaceProjectVariables(rowData.Content, project);
+      const aiBody = replaceProjectVariables(rowData.AI_Body || '', project);
+      
       // 找到符合条件的消息，立即返回
       return {
         ID: rowData.ID,
-        Topic: rowData.Topic,
-        Content: rowData.Content,
+        Topic: topic,
+        Content: content,
         Push_Method: rowData.Push_Method,
         Glip_Team_ID: rowData.Glip_Team_ID,
         Glip_User_Name: rowData.Glip_User_Name,
         Bot_Endpoint: rowData.Bot_Endpoint,
         AI_Endpoint: rowData.AI_Endpoint,
         AI_Headers: rowData.AI_Headers,
-        AI_Body: rowData.AI_Body,
+        AI_Body: aiBody,
         targetType: rowData.Push_Method === 'AI' ? 'api' : (rowData.Glip_User_Name ? 'private' : 'group'),
         Schedule_Date: rowData.Schedule_Date,
         Schedule_Time: rowData.Schedule_Time,

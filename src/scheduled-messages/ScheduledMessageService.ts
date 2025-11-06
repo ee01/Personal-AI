@@ -596,9 +596,31 @@ export class ScheduledMessageService {
    * 计算下次执行时间
    */
   private calculateNextExecution(message: ScheduledMessage): string {
+    // 检查是否为 Timeline 触发
+    if (!message.Schedule_Date && message.Timeline_Milestone) {
+      // Timeline 触发：返回描述性文本，不计算具体日期
+      const milestone = message.Timeline_Milestone;
+      const offset = message.Timeline_Offset ?? 0;
+      let offsetText = '';
+      
+      if (offset === 0) {
+        offsetText = '当天';
+      } else if (offset === 1) {
+        offsetText = '后一天';
+      } else if (offset === -1) {
+        offsetText = '前一天';
+      } else if (offset > 1) {
+        offsetText = `后${offset}天`;
+      } else if (offset < -1) {
+        offsetText = `前${Math.abs(offset)}天`;
+      }
+      
+      return `${milestone} ${offsetText}`;
+    }
+    
     if (message.Type === 'Daily') {
       // Daily 类型只执行一次
-      return message.Schedule_Date;
+      return message.Schedule_Date || '';
     } else if (message.Type === 'Hourly') {
       // Hourly 类型只执行一次
       return `${message.Schedule_Date} ${message.Schedule_Time}`;

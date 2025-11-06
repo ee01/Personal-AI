@@ -271,8 +271,57 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
+  // 格式化下次执行时间
+  const formatNextExec = (message: ScheduledMessage): string => {
+    // 检查是否为 Timeline 触发
+    if (!message.Schedule_Date && message.Timeline_Milestone) {
+      const milestone = message.Timeline_Milestone;
+      const offset = message.Timeline_Offset ?? 0;
+      let offsetText = '';
+      
+      if (offset === 0) {
+        offsetText = '当天';
+      } else if (offset === 1) {
+        offsetText = '后一天';
+      } else if (offset === -1) {
+        offsetText = '前一天';
+      } else if (offset > 1) {
+        offsetText = `后${offset}天`;
+      } else if (offset < -1) {
+        offsetText = `前${Math.abs(offset)}天`;
+      }
+      
+      return `下次 ${milestone} ${offsetText}`;
+    }
+    
+    // 时间触发：返回原有的 Next_Exec 值
+    return message.Next_Exec || '-';
+  };
+  
   // 频率格式化函数
   const formatFrequency = (message: ScheduledMessage): string => {
+    // 检查是否为 Timeline 触发
+    if (!message.Schedule_Date && message.Timeline_Milestone) {
+      const milestone = message.Timeline_Milestone;
+      const offset = message.Timeline_Offset ?? 0;
+      let offsetText = '';
+      
+      if (offset === 0) {
+        offsetText = '当天';
+      } else if (offset === 1) {
+        offsetText = '后一天';
+      } else if (offset === -1) {
+        offsetText = '前一天';
+      } else if (offset > 1) {
+        offsetText = `后${offset}天`;
+      } else if (offset < -1) {
+        offsetText = `前${Math.abs(offset)}天`;
+      }
+      
+      const timeText = message.Schedule_Time ? ` ${message.Schedule_Time}` : ' 早上';
+      return `${milestone} ${offsetText}${timeText}`;
+    }
+    
     // 判断是否有重复规则
     if (!message.Repeat_Every || !message.Repeat_Unit) {
       // 一次性任务
@@ -558,7 +607,7 @@ const ScheduledMessagesManager: React.FC = () => {
                         </td>
                         <td style={styles.td}>{formatRecipient(message)}</td>
                         <td style={styles.td}>{formatFrequency(message)}</td>
-                        <td style={styles.td}>{message.Next_Exec || '-'}</td>
+                        <td style={styles.td}>{formatNextExec(message)}</td>
                         <td style={styles.td}>{message.Exec_Count || 0} 次</td>
                         <td style={styles.td}>
                           <span 
@@ -641,7 +690,14 @@ const VariableSelector: React.FC<{
   const variables = [
     { key: '{Topic}', label: '消息主题' },
     { key: '{Content}', label: '消息内容' },
-    { key: '{TeamID}', label: '群组 ID' }
+    { key: '{TeamID}', label: '群组 ID' },
+    { key: '{currentRelease}', label: '当前 Release' },
+    { key: '{currentPhase}', label: '当前 Phase' },
+    { key: '{currentPhaseStartDate}', label: '当前 Phase 日期' },
+    { key: '{currentPhaseStartedWorkdays}', label: '已过天数' },
+    { key: '{nextPhase}', label: '下个 Phase' },
+    { key: '{nextPhaseStartDate}', label: '下个 Phase 日期' },
+    { key: '{nextPhaseCountdownWorkdays}', label: '距离天数' }
   ].filter(v => !excludeVariables.includes(v.key));
 
   if (variables.length === 0) return null;
@@ -926,6 +982,7 @@ const AddMessageDialog: React.FC<{
   const [isRepeating, setIsRepeating] = useState(false);
   const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'custom'>('ai-report');
   const [aiHeaders, setAiHeaders] = useState<AIHeader[]>([]);
+  const [isTimelineTrigger, setIsTimelineTrigger] = useState(false);
   
   // AI Report 可视化字段
   const [aiReportJql, setAiReportJql] = useState('');
@@ -1223,9 +1280,24 @@ const AddMessageDialog: React.FC<{
     }
     
     // 验证必填字段
-    if (!formData.Topic || !formData.Schedule_Date) {
-      alert('请填写所有必填字段');
+    if (!formData.Topic) {
+      alert('请填写消息主题');
       return;
+    }
+    
+    // 验证触发方式
+    if (isTimelineTrigger) {
+      // Timeline 触发验证
+      if (!formData.Timeline_Project || !formData.Timeline_Milestone || formData.Timeline_Offset === undefined) {
+        alert('请完整填写 Timeline 触发配置');
+        return;
+      }
+    } else {
+      // 时间触发验证
+      if (!formData.Schedule_Date) {
+        alert('请填写执行日期');
+        return;
+      }
     }
     
     // 验证推送目标
@@ -1374,52 +1446,157 @@ const AddMessageDialog: React.FC<{
             </div>
           )}
           
-          {/* 执行时间 */}
-          <div style={dialogStyles.formRow}>
-            <div style={dialogStyles.formGroup}>
-              <label style={dialogStyles.label}>执行日期 *</label>
-              <input 
-                style={dialogStyles.input}
-                type="date"
-                value={formData.Schedule_Date}
-                onChange={(e) => handleChange('Schedule_Date', e.target.value)}
-              />
-            </div>
-            
-            <div style={dialogStyles.formGroup}>
-              <label style={dialogStyles.label}>执行时间</label>
-              <input 
-                style={dialogStyles.input}
-                type="time"
-                value={formData.Schedule_Time || ''}
-                onChange={(e) => handleChange('Schedule_Time', e.target.value)}
-                placeholder="09:00"
-              />
-              <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
-            </div>
-          </div>
-          
-          {/* 是否重复 Toggle */}
+          {/* 触发类型选择 */}
           <div style={dialogStyles.formGroup}>
-            <label style={{...dialogStyles.label, display: 'flex', alignItems: 'center', cursor: 'pointer'}}>
-              <input 
-                type="checkbox"
-                checked={isRepeating}
-                onChange={(e) => {
-                  setIsRepeating(e.target.checked);
-                  if (e.target.checked) {
-                    handleChange('Repeat_Every', 1);
-                    handleChange('Repeat_Unit', 'Week');
-                  }
+            <label style={dialogStyles.label}>触发方式 *</label>
+            <div style={dialogStyles.buttonGroup}>
+              <button
+                type="button"
+                style={getButtonStyle(!isTimelineTrigger)}
+                onClick={() => {
+                  setIsTimelineTrigger(false);
+                  handleChange('Schedule_Date', new Date().toISOString().split('T')[0]);
+                  handleChange('Timeline_Project', undefined);
+                  handleChange('Timeline_Milestone', undefined);
+                  handleChange('Timeline_Offset', undefined);
                 }}
-                style={{marginRight: '8px'}}
-              />
-              是否重复推送
-            </label>
+              >
+                ⏰ 时间触发
+              </button>
+              <button
+                type="button"
+                style={getButtonStyle(isTimelineTrigger)}
+                onClick={() => {
+                  setIsTimelineTrigger(true);
+                  handleChange('Schedule_Date', '');
+                  handleChange('Timeline_Project', 'mThor');
+                  handleChange('Timeline_Milestone', 'FF');
+                  handleChange('Timeline_Offset', 0);
+                }}
+              >
+                📅 Timeline 触发
+              </button>
+            </div>
           </div>
           
-          {/* 重复设置 */}
-          {isRepeating && (
+          {/* 时间触发：执行日期 */}
+          {!isTimelineTrigger && (
+            <div style={dialogStyles.formRow}>
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>执行日期 *</label>
+                <input 
+                  style={dialogStyles.input}
+                  type="date"
+                  value={formData.Schedule_Date || ''}
+                  onChange={(e) => handleChange('Schedule_Date', e.target.value)}
+                />
+              </div>
+              
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>执行时间</label>
+                <input 
+                  style={dialogStyles.input}
+                  type="time"
+                  value={formData.Schedule_Time || ''}
+                  onChange={(e) => handleChange('Schedule_Time', e.target.value)}
+                  placeholder="09:00"
+                />
+                <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
+              </div>
+            </div>
+          )}
+          
+          {/* Timeline 触发：项目和 Milestone 配置 */}
+          {isTimelineTrigger && (
+            <div style={{...dialogStyles.section, backgroundColor: '#f0f7ff', padding: '16px', borderRadius: '8px', marginBottom: '16px'}}>
+              <div style={dialogStyles.formRow}>
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>项目 *</label>
+                  <select
+                    style={dialogStyles.select}
+                    value={formData.Timeline_Project || 'mThor'}
+                    onChange={(e) => handleChange('Timeline_Project', e.target.value)}
+                  >
+                    <option value="mThor">mThor</option>
+                    <option value="Jupiter desktop">Jupiter desktop</option>
+                    <option value="Jupiter web">Jupiter web</option>
+                  </select>
+                  <small style={dialogStyles.hint}>
+                    新增项目联系项目组所在 SDET 完善 <a href="https://heimdall-xmn02.int.rclabenv.com/api/swagger/#/bot/bot_get_release_info_retrieve" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>API</a>
+                  </small>
+                </div>
+                
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>Milestone *</label>
+                  <select
+                    style={dialogStyles.select}
+                    value={formData.Timeline_Milestone || 'FF'}
+                    onChange={(e) => handleChange('Timeline_Milestone', e.target.value)}
+                  >
+                    <option value="DoR">DoR</option>
+                    <option value="Embedded">Embedded</option>
+                    <option value="FF">FF</option>
+                    <option value="Regression">Regression</option>
+                    <option value="CF">CF</option>
+                    <option value="Release">Release</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div style={dialogStyles.formRow}>
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>偏移天数 *</label>
+                  <input 
+                    style={dialogStyles.input}
+                    type="number"
+                    min="-30"
+                    max="30"
+                    value={formData.Timeline_Offset ?? 0}
+                    onChange={(e) => handleChange('Timeline_Offset', parseInt(e.target.value))}
+                  />
+                  <small style={dialogStyles.hint}>
+                    负数=之前，0=当天，正数=之后。例如：-1 表示 Milestone 前一天，1 表示后一天
+                  </small>
+                </div>
+                
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>执行时间</label>
+                  <input 
+                    style={dialogStyles.input}
+                    type="time"
+                    value={formData.Schedule_Time || ''}
+                    onChange={(e) => handleChange('Schedule_Time', e.target.value)}
+                    placeholder="09:00"
+                  />
+                  <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* 是否重复 Toggle（仅时间触发模式显示） */}
+          {!isTimelineTrigger && (
+            <div style={dialogStyles.formGroup}>
+              <label style={{...dialogStyles.label, display: 'flex', alignItems: 'center', cursor: 'pointer'}}>
+                <input 
+                  type="checkbox"
+                  checked={isRepeating}
+                  onChange={(e) => {
+                    setIsRepeating(e.target.checked);
+                    if (e.target.checked) {
+                      handleChange('Repeat_Every', 1);
+                      handleChange('Repeat_Unit', 'Week');
+                    }
+                  }}
+                  style={{marginRight: '8px'}}
+                />
+                是否重复推送
+              </label>
+            </div>
+          )}
+          
+          {/* 重复设置（仅时间触发模式显示） */}
+          {!isTimelineTrigger && isRepeating && (
             <div style={{...dialogStyles.section, backgroundColor: '#f8f9fa', padding: '16px', borderRadius: '8px'}}>
               <div style={dialogStyles.formRow}>
                 <div style={dialogStyles.formGroup}>

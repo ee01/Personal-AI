@@ -17,14 +17,20 @@ export type RepeatUnit = 'Day' | 'Week' | 'Month' | 'Year';
 // 推送目标类型
 export type TargetType = 'private' | 'group' | 'api';
 
+// Timeline 项目类型
+export type TimelineProject = 'mThor' | 'Jupiter desktop' | 'Jupiter web';
+
+// Timeline Milestone 类型
+export type TimelineMilestone = 'DoR' | 'Embedded' | 'FF' | 'Regression' | 'CF' | 'Release';
+
 // 定时消息接口
 export interface ScheduledMessage {
   ID: string;
   Type?: MessageType;  // 可选，由程序自动计算
   Topic: string;
   Content: string;
-  Schedule_Date: string;  // YYYY-MM-DD
-  Schedule_Time: string;  // HH:mm
+  Schedule_Date?: string;  // YYYY-MM-DD，Timeline 触发时可为空
+  Schedule_Time?: string;  // HH:mm
   End_Date?: string;      // YYYY-MM-DD
   Repeat_Every?: number;  // 重复间隔数字
   Repeat_Unit?: RepeatUnit; // 重复单位
@@ -38,6 +44,10 @@ export interface ScheduledMessage {
   AI_Endpoint?: string;    // "POST url" 或 "GET url" 或 "url"
   AI_Headers?: string;     // "key: value\nkey2: value2"
   AI_Body?: string;        // JSON 字符串，支持 {Topic} 和 {Content} 变量
+  // Timeline 触发字段
+  Timeline_Project?: TimelineProject;  // 项目名称
+  Timeline_Milestone?: TimelineMilestone;  // Milestone 名称
+  Timeline_Offset?: number;  // 偏移天数（负数=之前，0=当天，正数=之后）
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -49,7 +59,7 @@ export interface ScheduledMessage {
 export interface CreateMessageFormData {
   Topic: string;
   Content: string;
-  Schedule_Date: string;
+  Schedule_Date?: string;  // Timeline 触发时可为空
   Schedule_Time?: string;  // 可选：留空则每日早上9点执行
   End_Date?: string;
   Repeat_Every?: number;
@@ -64,6 +74,10 @@ export interface CreateMessageFormData {
   AI_Endpoint?: string;
   AI_Headers?: string;
   AI_Body?: string;
+  // Timeline 触发字段
+  Timeline_Project?: TimelineProject;
+  Timeline_Milestone?: TimelineMilestone;
+  Timeline_Offset?: number;
 }
 
 // Sheet 配置接口
