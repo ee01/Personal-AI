@@ -1,5 +1,19 @@
 // 处理嵌入请求
-import { pipeline } from '@xenova/transformers';
+import { pipeline, env } from '@xenova/transformers';
+
+// 配置 transformers.js 使用本地文件，禁用远程加载
+// 这是为了符合 Chrome Extension Manifest V3 的要求，不允许加载远程托管代码
+env.allowRemoteModels = false;
+env.allowLocalModels = true;
+env.useBrowserCache = false;
+
+// 设置本地模型路径
+env.localModelPath = '/models/';
+
+// 强制使用打包在扩展内的 WASM 文件
+if (env.backends?.onnx?.wasm) {
+  env.backends.onnx.wasm.wasmPaths = '/';
+}
 
 let embeddingModel: any = null;
 
@@ -8,7 +22,10 @@ async function initModel() {
   if (!embeddingModel) {
     console.log('正在初始化嵌入模型...');
     try {
-      embeddingModel = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+      embeddingModel = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        // 强制本地加载
+        local_files_only: true,
+      });
       console.log('嵌入模型初始化成功');
     } catch (error) {
       console.error('嵌入模型初始化失败:', error);
