@@ -1000,6 +1000,9 @@ const AddMessageDialog: React.FC<{
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
   
+  // 提醒模式：展开高级选项的状态
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  
   // 提醒模式初始化
   React.useEffect(() => {
     if (isReminderMode) {
@@ -1420,19 +1423,7 @@ const AddMessageDialog: React.FC<{
             </div>
           )}
           
-          {/* 消息主题 */}
-          <div style={dialogStyles.formGroup}>
-            <label style={dialogStyles.label}>消息主题 *</label>
-            <input 
-              style={dialogStyles.input}
-              type="text"
-              value={formData.Topic}
-              onChange={(e) => handleChange('Topic', e.target.value)}
-              placeholder="输入消息主题"
-            />
-          </div>
-          
-          {/* 消息内容 */}
+          {/* 消息内容（提醒模式始终显示） */}
           {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
             <div style={dialogStyles.formGroup}>
               <label style={dialogStyles.label}>消息内容 *</label>
@@ -1441,48 +1432,156 @@ const AddMessageDialog: React.FC<{
                 style={dialogStyles.textarea}
                 value={formData.Content}
                 onChange={(e) => handleChange('Content', e.target.value)}
-                placeholder="输入消息内容"
+                placeholder={isReminderMode ? "输入提醒内容" : "输入消息内容"}
                 rows={4}
               />
-              <VariableSelector 
-                onInsert={insertVariableToContent}
-                excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
-              />
+              {/* 提醒模式下隐藏变量选择器 */}
+              {!isReminderMode && (
+                <VariableSelector 
+                  onInsert={insertVariableToContent}
+                  excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
+                />
+              )}
             </div>
           )}
           
-          {/* 触发类型选择 */}
-          <div style={dialogStyles.formGroup}>
-            <label style={dialogStyles.label}>触发方式 *</label>
-            <div style={dialogStyles.buttonGroup}>
-              <button
-                type="button"
-                style={getButtonStyle(!isTimelineTrigger)}
-                onClick={() => {
-                  setIsTimelineTrigger(false);
-                  handleChange('Schedule_Date', new Date().toISOString().split('T')[0]);
-                  handleChange('Timeline_Project', undefined);
-                  handleChange('Timeline_Milestone', undefined);
-                  handleChange('Timeline_Offset', undefined);
-                }}
-              >
-                ⏰ 时间触发
-              </button>
-              <button
-                type="button"
-                style={getButtonStyle(isTimelineTrigger)}
-                onClick={() => {
-                  setIsTimelineTrigger(true);
-                  handleChange('Schedule_Date', '');
-                  handleChange('Timeline_Project', 'mThor');
-                  handleChange('Timeline_Milestone', 'FF');
-                  handleChange('Timeline_Offset', 0);
-                }}
-              >
-                📅 Timeline 触发
-              </button>
+          {/* 提醒模式：高级选项折叠容器 */}
+          {isReminderMode && (
+            <div 
+              style={{
+                overflow: 'hidden',
+                transition: 'max-height 0.3s ease-in-out, opacity 0.3s ease-in-out',
+                maxHeight: showAdvancedOptions ? '2000px' : '0px',
+                opacity: showAdvancedOptions ? 1 : 0,
+              }}
+            >
+              {/* 变量选择器 */}
+              {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report') && (
+                <div style={dialogStyles.formGroup}>
+                  <VariableSelector 
+                    onInsert={insertVariableToContent}
+                    excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
+                  />
+                </div>
+              )}
+              
+              {/* 消息主题 */}
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>消息主题（可选）</label>
+                <input 
+                  style={dialogStyles.input}
+                  type="text"
+                  value={formData.Topic}
+                  onChange={(e) => handleChange('Topic', e.target.value)}
+                  placeholder="输入消息主题"
+                />
+              </div>
+              
+              {/* 触发类型选择 */}
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>触发方式 *</label>
+                <div style={dialogStyles.buttonGroup}>
+                  <button
+                    type="button"
+                    style={getButtonStyle(!isTimelineTrigger)}
+                    onClick={() => {
+                      setIsTimelineTrigger(false);
+                      handleChange('Schedule_Date', new Date().toISOString().split('T')[0]);
+                      handleChange('Timeline_Project', undefined);
+                      handleChange('Timeline_Milestone', undefined);
+                      handleChange('Timeline_Offset', undefined);
+                    }}
+                  >
+                    ⏰ 时间触发
+                  </button>
+                  <button
+                    type="button"
+                    style={getButtonStyle(isTimelineTrigger)}
+                    onClick={() => {
+                      setIsTimelineTrigger(true);
+                      handleChange('Schedule_Date', '');
+                      handleChange('Timeline_Project', 'mThor');
+                      handleChange('Timeline_Milestone', 'FF');
+                      handleChange('Timeline_Offset', 0);
+                    }}
+                  >
+                    📅 Timeline 触发
+                  </button>
+                </div>
+              </div>
+              
+              {/* 是否重复推送（仅时间触发） */}
+              {!isTimelineTrigger && (
+                <div style={dialogStyles.formGroup}>
+                  <label style={{...dialogStyles.label, display: 'flex', alignItems: 'center', cursor: 'pointer'}}>
+                    <input 
+                      type="checkbox"
+                      checked={isRepeating}
+                      onChange={(e) => {
+                        setIsRepeating(e.target.checked);
+                        if (e.target.checked) {
+                          handleChange('Repeat_Every', 1);
+                          handleChange('Repeat_Unit', 'Week');
+                        }
+                      }}
+                      style={{marginRight: '8px'}}
+                    />
+                    是否重复推送
+                  </label>
+                </div>
+              )}
             </div>
-          </div>
+          )}
+          
+          {/* 非提醒模式：正常显示消息主题和触发方式 */}
+          {!isReminderMode && (
+            <>
+              {/* 消息主题 */}
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>消息主题 *</label>
+                <input 
+                  style={dialogStyles.input}
+                  type="text"
+                  value={formData.Topic}
+                  onChange={(e) => handleChange('Topic', e.target.value)}
+                  placeholder="输入消息主题"
+                />
+              </div>
+              
+              {/* 触发类型选择 */}
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>触发方式 *</label>
+                <div style={dialogStyles.buttonGroup}>
+                  <button
+                    type="button"
+                    style={getButtonStyle(!isTimelineTrigger)}
+                    onClick={() => {
+                      setIsTimelineTrigger(false);
+                      handleChange('Schedule_Date', new Date().toISOString().split('T')[0]);
+                      handleChange('Timeline_Project', undefined);
+                      handleChange('Timeline_Milestone', undefined);
+                      handleChange('Timeline_Offset', undefined);
+                    }}
+                  >
+                    ⏰ 时间触发
+                  </button>
+                  <button
+                    type="button"
+                    style={getButtonStyle(isTimelineTrigger)}
+                    onClick={() => {
+                      setIsTimelineTrigger(true);
+                      handleChange('Schedule_Date', '');
+                      handleChange('Timeline_Project', 'mThor');
+                      handleChange('Timeline_Milestone', 'FF');
+                      handleChange('Timeline_Offset', 0);
+                    }}
+                  >
+                    📅 Timeline 触发
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
           
           {/* 时间触发：执行日期 */}
           {!isTimelineTrigger && (
@@ -1616,8 +1715,8 @@ const AddMessageDialog: React.FC<{
             </div>
           )}
           
-          {/* 是否重复 Toggle（仅时间触发模式显示） */}
-          {!isTimelineTrigger && (
+          {/* 是否重复 Toggle（仅非提醒模式显示，提醒模式已在高级选项中） */}
+          {!isReminderMode && !isTimelineTrigger && (
             <div style={dialogStyles.formGroup}>
               <label style={{...dialogStyles.label, display: 'flex', alignItems: 'center', cursor: 'pointer'}}>
                 <input 
@@ -1692,6 +1791,55 @@ const AddMessageDialog: React.FC<{
                   />
                 </div>
               </div>
+            </div>
+          )}
+          
+          {/* 提醒模式：展开更多选项按钮 */}
+          {isReminderMode && (
+            <div style={{
+              marginBottom: '16px',
+              textAlign: 'center',
+            }}>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                style={{
+                  padding: '10px 20px',
+                  backgroundColor: 'transparent',
+                  color: '#007bff',
+                  border: '1px dashed #007bff',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  margin: '0 auto',
+                  transition: 'all 0.2s ease-in-out',
+                  width: '100%',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f0f7ff';
+                  e.currentTarget.style.borderColor = '#0056b3';
+                  e.currentTarget.style.color = '#0056b3';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.borderColor = '#007bff';
+                  e.currentTarget.style.color = '#007bff';
+                }}
+              >
+                <span style={{
+                  display: 'inline-block',
+                  transition: 'transform 0.3s ease-in-out',
+                  transform: showAdvancedOptions ? 'rotate(180deg)' : 'rotate(0deg)',
+                }}>
+                  ▼
+                </span>
+                {showAdvancedOptions ? '收起高级选项' : '展开更多选项'}
+              </button>
             </div>
           )}
           
