@@ -25,136 +25,6 @@
  *    - 所有列访问都通过 headers 数组动态映射
  */
 
-// 接口缓存（在一次执行周期内有效）
-var releaseInfoCache = {};
-
-/**
- * 获取项目进度信息
- * @param {string} project - 项目名称（mThor / Jupiter desktop / Jupiter web）
- * @returns {object} 项目进度信息
- */
-function getReleaseInfo(project) {
-  // 检查缓存
-  if (releaseInfoCache[project]) {
-    Logger.log(`使用缓存的 ${project} 项目进度信息`);
-    return releaseInfoCache[project];
-  }
-  
-  try {
-    const url = `https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=${encodeURIComponent(project)}`;
-    Logger.log(`获取项目进度信息: ${url}`);
-    const response = UrlFetchApp.fetch(url);
-    const data = JSON.parse(response.getContentText());
-    
-    // 缓存结果
-    releaseInfoCache[project] = data;
-    Logger.log(`成功获取 ${project} 项目进度信息`);
-    
-    return data;
-  } catch (error) {
-    Logger.log(`获取项目进度信息失败: ${error}`);
-    return null;
-  }
-}
-
-/**
- * 检查今天是否匹配 Timeline 触发条件
- * @param {object} rowData - 消息行数据
- * @param {Date} now - 当前时间
- * @returns {boolean} 是否匹配
- */
-function isTimelineTriggerMatch(rowData, now) {
-  // 检查是否为 Timeline 触发（Schedule_Date 为空且有 Timeline 字段）
-  if (rowData.Schedule_Date || !rowData.Timeline_Milestone) {
-    return false;
-  }
-  
-  const project = rowData.Timeline_Project || 'mThor';
-  const milestone = rowData.Timeline_Milestone;
-  const offset = parseInt(rowData.Timeline_Offset || '0');
-  
-  Logger.log(`检查 Timeline 触发: ${project} - ${milestone} 偏移 ${offset} 天`);
-  
-  // 获取项目进度信息
-  const releaseData = getReleaseInfo(project);
-  if (!releaseData || !releaseData.releaseInfo) {
-    Logger.log(`无法获取项目进度信息，跳过`);
-    return false;
-  }
-  
-  // 获取 milestone 日期
-  const milestoneDate = releaseData.releaseInfo[milestone];
-  if (!milestoneDate) {
-    Logger.log(`未找到 Milestone: ${milestone}`);
-    return false;
-  }
-  
-  // 解析日期（格式：MM/DD/YYYY）
-  const dateParts = milestoneDate.split('/');
-  if (dateParts.length !== 3) {
-    Logger.log(`Milestone 日期格式错误: ${milestoneDate}`);
-    return false;
-  }
-  
-  const targetDate = new Date(
-    parseInt(dateParts[2]), // year
-    parseInt(dateParts[0]) - 1, // month (0-based)
-    parseInt(dateParts[1]) // day
-  );
-  
-  // 应用偏移
-  targetDate.setDate(targetDate.getDate() + offset);
-  
-  // 比较日期（只比较年月日）
-  const today = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  const target = Utilities.formatDate(targetDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  
-  Logger.log(`今天: ${today}, 目标日期: ${target}`);
-  
-  return today === target;
-}
-
-/**
- * 替换消息中的项目进度变量
- * @param {string} text - 原始文本
- * @param {string} project - 项目名称
- * @returns {string} 替换后的文本
- */
-function replaceProjectVariables(text, project) {
-  if (!text) return text;
-  
-  // 检查是否包含项目进度变量
-  const hasVariables = text.includes('{currentRelease}') || 
-                       text.includes('{currentPhase}') ||
-                       text.includes('{currentPhaseStartDate}') ||
-                       text.includes('{currentPhaseStartedWorkdays}') ||
-                       text.includes('{nextPhase}') ||
-                       text.includes('{nextPhaseStartDate}') ||
-                       text.includes('{nextPhaseCountdownWorkdays}');
-  
-  if (!hasVariables) {
-    return text;
-  }
-  
-  // 获取项目进度信息
-  const releaseData = getReleaseInfo(project || 'mThor');
-  if (!releaseData) {
-    Logger.log('无法获取项目进度信息，跳过变量替换');
-    return text;
-  }
-  
-  // 替换变量
-  let result = text;
-  result = result.replace(/{currentRelease}/g, releaseData.currentRelease || '');
-  result = result.replace(/{currentPhase}/g, releaseData.currentPhase || '');
-  result = result.replace(/{currentPhaseStartDate}/g, releaseData.currentPhaseStartDate || '');
-  result = result.replace(/{currentPhaseStartedWorkdays}/g, releaseData.currentPhaseStartedWorkdays || '0');
-  result = result.replace(/{nextPhase}/g, releaseData.nextPhase || '');
-  result = result.replace(/{nextPhaseStartDate}/g, releaseData.nextPhaseStartDate || '');
-  result = result.replace(/{nextPhaseCountdownWorkdays}/g, releaseData.nextPhaseCountdownWorkdays || '0');
-  
-  return result;
-}
 
 // 每分钟执行（处理 Hourly 类型）
 function minuteTrigger() {
@@ -212,6 +82,12 @@ function executeScheduledMessages(types) {
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const rowData = parseRow(row, headers);
+    
+    // 跳过 Timeline 消息（需要通过 Jira 获取内网 release info）
+    if (!rowData.Schedule_Date && rowData.Timeline_Milestone) {
+      Logger.log(`跳过 Timeline 消息（需要通过 Jira 获取内网 release info）: ${rowData.ID}`);
+      continue;
+    }
     
     // 自动判断消息类型
     const messageType = determineMessageType(rowData);
@@ -285,58 +161,38 @@ function getColumnIndex(headers, columnName) {
 }
 
 /**
- * 判断是否应该在当前时间执行
+ * 判断消息是否应该在当前时间执行（只判断时间条件，日期匹配已在调用前完成）
+ * @param {object} rowData - 消息行数据
+ * @param {Date} now - 当前时间
+ * @param {string} messageType - 消息类型
+ * @returns {boolean} 是否匹配
  */
 function shouldExecuteNow(rowData, now, messageType) {
-  // 优先检查 Timeline 触发
-  if (!rowData.Schedule_Date && rowData.Timeline_Milestone) {
-    // Timeline 触发：检查日期是否匹配
-    if (!isTimelineTriggerMatch(rowData, now)) {
-      return false;
+  // 注意：日期匹配已在调用前完成，此方法只判断时间条件
+  
+  // 检查是否有指定时间
+  const hasScheduleTime = rowData.Schedule_Time && rowData.Schedule_Time.toString().trim();
+  
+  if (hasScheduleTime) {
+    // 有指定时间，检查时间是否匹配当前分钟
+    const scheduleMinutes = parseTimeToMinutes(rowData.Schedule_Time.toString());
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    return Math.abs(nowMinutes - scheduleMinutes) <= 1;
+  } else {
+    // 没有指定时间
+    // Timeline 消息：在早上 9 点执行
+    // Time-based 消息：Daily 类型在早上 9 点执行
+    const type = messageType || determineMessageType(rowData);
+    const isTimeline = !rowData.Schedule_Date && rowData.Timeline_Milestone;
+    
+    if (isTimeline || type === 'Daily') {
+      return now.getHours() === 9;
     }
     
-    // 日期匹配后，检查时间
-    if (rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()) {
-      // 有指定时间，检查时间是否匹配
-      const timeStr = rowData.Schedule_Time.toString().trim();
-      const timeParts = timeStr.split(':');
-      const scheduleHour = parseInt(timeParts[0]);
-      const scheduleMinute = parseInt(timeParts[1]);
-      
-      return now.getHours() == scheduleHour && now.getMinutes() == scheduleMinute;
-    } else {
-      // 没有指定时间，在早上 9 点左右执行（Daily 触发器）
-      return true; // 由 dailyTrigger 触发
+    // 周期性消息
+    if (type === 'Periodic') {
+      return checkPeriodicSchedule(rowData, now);
     }
-  }
-  
-  // 时间触发
-  const type = messageType || determineMessageType(rowData);
-  
-  if (type === 'Hourly') {
-    // 检查 Schedule_Date 和 Schedule_Time
-    if (!rowData.Schedule_Date || !rowData.Schedule_Time) return false;
-    
-    const scheduleDate = new Date(rowData.Schedule_Date);
-    if (!isSameDate(scheduleDate, now)) return false;
-    
-    // 解析 Schedule_Time（文本格式，如 "17:16"）
-    const timeStr = rowData.Schedule_Time.toString().trim();
-    const timeParts = timeStr.split(':');
-    const scheduleHour = parseInt(timeParts[0]);
-    const scheduleMinute = parseInt(timeParts[1]);
-    
-    return now.getHours() == scheduleHour && now.getMinutes() == scheduleMinute;
-    
-  } else if (type === 'Daily') {
-    // 检查 Schedule_Date
-    if (!rowData.Schedule_Date) return false;
-    const scheduleDate = new Date(rowData.Schedule_Date);
-    return isSameDate(scheduleDate, now);
-    
-  } else if (type === 'Periodic') {
-    // 周期性逻辑
-    return checkPeriodicSchedule(rowData, now);
   }
   
   return false;
@@ -442,13 +298,10 @@ function sendEmailToGlip(rowData) {
       }
     }
     
-    // 替换项目进度变量
-    const project = rowData.Timeline_Project || 'mThor';
+    // AsMe 推送不处理 Timeline 消息（Timeline 需要通过 Jira 获取内网 release info）
+    // 所以这里不需要替换项目进度变量
     let topic = rowData.Topic.toString();
     let content = rowData.Content.toString();
-    
-    topic = replaceProjectVariables(topic, project);
-    content = replaceProjectVariables(content, project);
     
     const htmlContent = content.replaceAll("\n", '<br />');
     
@@ -658,9 +511,46 @@ function doGet(e) {
   
   // 获取当前时间点需要执行的单条 Bot 消息（供 Jira Automation 调用）
   // 只返回消息数据，不调用 Bot API（Bot API 由 Jira 调用，因为在内网）
+  // 支持两种模式：
+  // 1. 带 releaseInfo 参数：用于 Timeline 消息匹配
+  // 2. 不带 releaseInfo：只匹配普通时间触发的消息
   if (action === 'getBotMessageCurrentTime') {
+    const currentTimeStr = e.parameter.currentTime || '';
+    
+    // 从 URL 参数接收 releaseInfo（可选）
+    const mThor = e.parameter.mThor || '';
+    const jupiterDesktop = e.parameter.jupiterDesktop || '';
+    const jupiterWeb = e.parameter.jupiterWeb || '';
+    
+    let releaseInfo = null;
+    
+    // 如果提供了 releaseInfo 参数，则解析
+    if (mThor || jupiterDesktop || jupiterWeb) {
+      try {
+        releaseInfo = {};
+        if (mThor) releaseInfo['mThor'] = parseJiraJson(mThor);
+        if (jupiterDesktop) releaseInfo['Jupiter desktop'] = parseJiraJson(jupiterDesktop);
+        if (jupiterWeb) releaseInfo['Jupiter web'] = parseJiraJson(jupiterWeb);
+        
+        Logger.log(`[GET] 接收到 releaseInfo 参数，项目: ${Object.keys(releaseInfo).join(', ')}`);
+      } catch (parseError) {
+        Logger.log(`[GET] 解析 releaseInfo 失败: ${parseError.toString()}`);
+        releaseInfo = null; // 解析失败，使用原方案
+      }
+    } else {
+      Logger.log(`[GET] 未提供 releaseInfo，使用原方案（不匹配 Timeline 消息）`);
+    }
+    
+    // 构建 postData 格式，复用现有函数
+    const postData = {
+      releaseInfo: releaseInfo || {},
+      currentTime: currentTimeStr || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+    };
+    
+    const result = getMessageCurrentTimeWithReleaseInfo(postData);
+    
     return ContentService.createTextOutput(
-      JSON.stringify(getMessageCurrentTime())
+      JSON.stringify(result)
     ).setMimeType(ContentService.MimeType.JSON);
   }
   
@@ -697,6 +587,45 @@ function doGet(e) {
 }
 
 /**
+ * Web App POST 请求处理
+ * 支持 Jira 传递 release info 数据
+ */
+function doPost(e) {
+  try {
+    const action = e.parameter.action;
+    Logger.log(`POST action: ${action}`);
+    Logger.log(`POST 请求来源: ${JSON.stringify(e.parameter)}`);
+    
+    if (action === 'getBotMessageCurrentTime') {
+      // 解析 POST 数据
+      const postData = JSON.parse(e.postData.contents);
+      Logger.log(`接收到 releaseInfo 数据: ${JSON.stringify(postData).substring(0, 200)}...`);
+      
+      // 调用新的处理函数
+      const result = getMessageCurrentTimeWithReleaseInfo(postData);
+      
+      // 返回响应，添加 CORS 和 Cache 控制头
+      const output = ContentService.createTextOutput(JSON.stringify(result))
+        .setMimeType(ContentService.MimeType.JSON);
+      
+      return output;
+    }
+    
+    // 默认响应
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: 'ERROR', message: 'Unknown action' })
+    ).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log(`doPost 错误: ${error.toString()}`);
+    Logger.log(`错误堆栈: ${error.stack || '无堆栈信息'}`);
+    return ContentService.createTextOutput(
+      JSON.stringify({ status: 'ERROR', message: error.toString() })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
  * 内部函数：设置触发器
  * 由 Web App 的 doGet 调用，因为 ScriptApp.newTrigger 只能在 Apps Script 环境内执行
  */
@@ -726,177 +655,9 @@ function setupTriggersInternal() {
 }
 
 /**
- * ==============================================
- * Bot 单条消息执行逻辑（新版本 - 供 Jira Automation 调用）
- * ==============================================
- */
-
-/**
- * 获取当前时间点需要执行的消息并返回消息数据（合并了原来的两个方法）
- * 供 Jira Automation 调用，Jira 负责调用内网 Bot API
- * @returns {object|null} 消息数据对象或 null
- */
-function getMessageCurrentTime() {
-  try {
-    // === 第一部分：从 Sheet 查找消息 ===
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
-    if (!sheet) {
-      Logger.log('错误：未找到 Messages 工作表');
-      return {
-        executed: false,
-        message: '未找到 Messages 工作表',
-        timestamp: new Date().toISOString()
-      };
-    }
-    
-    const data = sheet.getDataRange().getDisplayValues();
-    if (data.length <= 1) {
-      Logger.log('没有消息数据');
-      return {
-        executed: false,
-        message: '没有消息数据',
-        timestamp: new Date().toISOString()
-      };
-    }
-    
-    const headers = data[0];
-    const now = new Date();
-    const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    const currentMinute = Utilities.formatDate(now, Session.getScriptTimeZone(), 'HH:mm');
-    const currentHour = now.getHours();
-    
-    Logger.log(`[Bot 单条消息] 当前时间: ${currentDate} ${currentMinute}`);
-    
-    // 优先级 1：查找当前分钟需要执行的消息
-    Logger.log('[Bot 单条消息] 优先级 1：查找当前分钟的消息...');
-    let message = findMessageByPriority(data, headers, now, currentDate, 1, currentHour);
-    if (message) {
-      Logger.log(`[Bot 单条消息] ✅ 找到优先级 1 消息: ${message.ID} - ${message.Topic}`);
-    }
-    
-    // 优先级 2：查找过去 30 分钟内应该执行但未执行的消息
-    if (!message) {
-      Logger.log('[Bot 单条消息] 优先级 2：查找过去 30 分钟的消息...');
-      message = findMessageByPriority(data, headers, now, currentDate, 2, currentHour);
-      if (message) {
-        Logger.log(`[Bot 单条消息] ✅ 找到优先级 2 消息: ${message.ID} - ${message.Topic}`);
-      }
-    }
-    
-    // 优先级 3：查找未指定时间的消息（仅限 8 点后）
-    if (!message && currentHour >= 8) {
-      Logger.log('[Bot 单条消息] 优先级 3：查找未指定时间的消息（8点后）...');
-      message = findMessageByPriority(data, headers, now, currentDate, 3, currentHour);
-      if (message) {
-        Logger.log(`[Bot 单条消息] ✅ 找到优先级 3 消息: ${message.ID} - ${message.Topic}`);
-      }
-    }
-    
-    if (!message) {
-      Logger.log('[Bot 单条消息] ❌ 没有符合条件的消息');
-      return {
-        executed: false,
-        message: '当前时间点没有需要执行的 Bot 消息',
-        timestamp: new Date().toISOString()
-      };
-    }
-    
-    // === 第二部分：处理消息数据 ===
-    
-    // 确保消息有 ID，如果没有则生成一个
-    let messageId = message.ID;
-    if (!messageId || messageId.toString().trim() === '') {
-      messageId = `MSG_${new Date().getTime()}_${Math.random().toString(36).substr(2, 9)}`;
-      Logger.log(`消息没有 ID，生成新 ID: ${messageId}`);
-      
-      // 更新 Sheet 中的 ID
-      try {
-        if (sheet && message.rowIndex) {
-          const idColIndex = message.headers.indexOf('ID') + 1;
-          if (idColIndex > 0) {
-            sheet.getRange(message.rowIndex, idColIndex).setValue(messageId);
-            Logger.log(`已将生成的 ID 写入 Sheet: 行 ${message.rowIndex}`);
-          }
-        }
-      } catch (updateError) {
-        Logger.log(`更新 Sheet ID 失败: ${updateError}`);
-      }
-    }
-    
-    Logger.log(`返回待发送 Bot 消息数据: ${messageId} - ${message.Topic}`);
-    
-    // 检查是否是 AI 消息
-    if (message.Push_Method === 'AI') {
-      Logger.log(`处理 AI 消息: ${messageId}`);
-      
-      // 解析 AI 相关字段
-      const endpointInfo = parseAIEndpoint(message.AI_Endpoint || '');
-      const headersObj = parseAIHeaders(message.AI_Headers || '');
-      const bodyStr = replaceAIBodyVariables(
-        message.AI_Body || '',
-        message.Topic || '',
-        message.Content || '',
-        message.Glip_Team_ID || ''
-      );
-      
-      Logger.log(`AI URL 解析结果: host=${endpointInfo.host}, uri=${endpointInfo.uri}, method=${endpointInfo.method}`);
-      
-      // 立即标记为成功（避免超时重复）
-      try {
-        markBotMessageExecuted(messageId, message.rowIndex, true, '');
-        Logger.log(`AI 消息已标记为成功: ${messageId}`);
-      } catch (markError) {
-        Logger.log(`标记 AI 消息失败: ${markError}`);
-      }
-      
-      // 返回 AI 消息数据（host 和 uri 分开）
-      return {
-        executed: true,
-        messageId: messageId,
-        targetType: 'api',
-        aiEndpoint: endpointInfo.url,
-        aiHost: endpointInfo.host,
-        aiUri: endpointInfo.uri,
-        aiMethod: endpointInfo.method,
-        aiHeaders: headersObj,
-        aiBody: bodyStr,
-        rowIndex: message.rowIndex,
-        timestamp: new Date().toISOString()
-      };
-    }
-    
-    // 返回消息数据，供 Jira 调用 Bot API
-    // 支持两种类型：private（私聊）、group（群组）和 api（AI Report）
-    
-    return {
-      executed: true,
-      messageId: messageId,
-      topic: message.Topic,
-      content: message.Content,
-      targetType: message.targetType,
-      // Private 消息字段
-      userName: message.Glip_User_Name || '',
-      // Group 消息字段
-      teamId: message.Glip_Team_ID || '',
-      teamName: message.Glip_Team_ID || 'Team', // 使用 teamId 作为 teamName 或默认值
-      rowIndex: message.rowIndex,
-      timestamp: new Date().toISOString()
-    };
-    
-  } catch (error) {
-    Logger.log(`getMessageCurrentTime 执行失败: ${error}`);
-    return {
-      executed: false,
-      error: error.toString(),
-      timestamp: new Date().toISOString()
-    };
-  }
-}
-
-/**
  * 标记消息执行完成（由 Jira Automation 在发送后调用）
  * @param {string} messageId - 消息 ID
- * @param {number} rowIndex - 行索引（从 getMessageCurrentTime 返回，可选）
+ * @param {number} rowIndex - 行索引（从 getMessageCurrentTimeWithReleaseInfo 返回，可选）
  * @param {boolean} success - 是否成功
  * @param {string} errorMsg - 错误消息（可选）
  * @returns {object} 更新结果
@@ -1036,16 +797,25 @@ function shouldMarkAsDone(rowData) {
 
 
 /**
- * 按优先级查找消息（找到第一条符合条件的即返回）
+ * 按匹配模式查找消息（三种匹配模式 + Timeline 支持 + 自动去重）
+ * 
+ * 功能说明：
+ * 1. 支持三种匹配模式：当前分钟、过去30分钟、未指定时间
+ * 2. 支持 Timeline 触发和时间触发两种类型
+ * 3. 自动去重：跳过今日已推送成功或失败的消息
+ * 4. 按表格顺序查找，返回第一个匹配的消息
+ * 
  * @param {array} data - 表格数据
  * @param {array} headers - 表头
  * @param {Date} now - 当前时间
+ * @param {object} releaseInfo - 项目进度信息（用于 Timeline 触发）
+ * @param {string} matchMode - 匹配模式：'CURRENT_MINUTE' | 'PAST_30_MINUTES' | 'NO_TIME_SPECIFIED'
  * @param {string} currentDate - 当前日期（yyyy-MM-dd）
- * @param {number} priority - 优先级（1=当前分钟，2=过去30分钟，3=未指定时间）
  * @param {number} currentHour - 当前小时
  * @returns {object|null} 消息对象或 null
  */
-function findMessageByPriority(data, headers, now, currentDate, priority, currentHour) {
+function findMatchingMessage(data, headers, now, releaseInfo, matchMode, currentDate, currentHour) {
+  // 遍历所有消息，找到第一个符合匹配模式的消息（按表格顺序）
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const rowData = parseRow(row, headers);
@@ -1066,49 +836,104 @@ function findMessageByPriority(data, headers, now, currentDate, priority, curren
     }
     
     const messageType = determineMessageType(rowData);
+    const isTimeline = !rowData.Schedule_Date && rowData.Timeline_Milestone;
     
-    // 根据优先级判断是否符合条件
+    // 先统一判断日期是否匹配（Timeline 和 Time-based 消息）
+    let dateMatches = false;
+    if (isTimeline) {
+      // Timeline 消息：需要 releaseInfo
+      const hasReleaseInfo = releaseInfo && Object.keys(releaseInfo).length > 0;
+      if (!hasReleaseInfo) {
+        continue; // 没有 releaseInfo，跳过
+      }
+      
+      // 获取 Timeline 目标日期
+      const targetDate = getTimelineTargetDate(rowData, releaseInfo);
+      dateMatches = targetDate && isSameDate(now, targetDate);
+    } else {
+      // Time-based 消息：检查 Schedule_Date
+      dateMatches = rowData.Schedule_Date && rowData.Schedule_Date === currentDate;
+    }
+    
+    // 日期不匹配，跳过
+    if (!dateMatches) {
+      continue;
+    }
+    
+    // 日期匹配后，再根据匹配模式判断时间条件
     let matches = false;
     
-    if (priority === 1) {
-      // 当前分钟的消息
+    if (matchMode === 'CURRENT_MINUTE') {
+      // 匹配模式 1：当前分钟的消息
       matches = shouldExecuteNow(rowData, now, messageType);
-    } else if (priority === 2) {
-      // 过去 30 分钟内应该执行但未执行的
-      matches = shouldExecuteInPast30Minutes(rowData, now, messageType, currentDate);
-    } else if (priority === 3) {
-      // 未指定时间的消息（8 点后）
-      matches = shouldExecuteTodayWithoutTime(rowData, now, messageType, currentDate);
+    } else if (matchMode === 'PAST_30_MINUTES') {
+      // 匹配模式 2：过去 30 分钟内应该执行但未执行的
+      matches = shouldExecuteInPast30Minutes(rowData, now, messageType);
+    } else if (matchMode === 'NO_TIME_SPECIFIED') {
+      // 匹配模式 3：未指定时间的消息（8 点后）
+      matches = shouldExecuteTodayWithoutTime(rowData, now, messageType);
     }
     
     if (matches) {
-      // 替换项目进度变量
-      const project = rowData.Timeline_Project || 'mThor';
-      const topic = replaceProjectVariables(rowData.Topic, project);
-      const content = replaceProjectVariables(rowData.Content, project);
-      const aiBody = replaceProjectVariables(rowData.AI_Body || '', project);
+      // 找到匹配的消息
+      Logger.log(`[${matchMode}] 匹配消息: ${rowData.ID} - ${rowData.Topic} (行: ${i + 1})`);
       
-      // 找到符合条件的消息，立即返回
+      // 替换项目进度变量（仅 Timeline 消息）
+      let topic = rowData.Topic;
+      let content = rowData.Content;
+      let aiBody = rowData.AI_Body || '';
+      
+      if (isTimeline && rowData.Timeline_Project) {
+        const projectInfo = releaseInfo[rowData.Timeline_Project];
+        if (projectInfo) {
+          topic = replaceProjectVariablesInText(topic, projectInfo);
+          content = replaceProjectVariablesInText(content, projectInfo);
+          aiBody = replaceProjectVariablesInText(aiBody, projectInfo);
+        }
+      }
+      
+      // 生成 glipEmailAddress（用于 email targetType）
+      let glipEmailAddress = '';
+      if (rowData.Glip_User_Name) {
+        glipEmailAddress = rowData.Glip_User_Name + '@reply.ringcentral.glip.com';
+      } else if (rowData.Glip_Team_ID) {
+        glipEmailAddress = rowData.Glip_Team_ID + '@reply.ringcentral.glip.com';
+      }
+      
+      // 确定 targetType
+      let targetType = 'private'; // 默认
+      if (rowData.Push_Method === 'AI') {
+        targetType = 'api';
+      } else if (rowData.Glip_Team_ID && rowData.Glip_Team_ID.trim()) {
+        targetType = 'group';
+      } else if (rowData.Glip_User_Name && rowData.Glip_User_Name.trim()) {
+        // 检查是否包含 '@reply.ringcentral.glip.com' 后缀
+        if (rowData.Glip_User_Name.includes('@')) {
+          targetType = 'email';
+        } else {
+          targetType = 'private';
+        }
+      }
+      
+      // 返回完整的消息对象
       return {
         ID: rowData.ID,
         Topic: topic,
         Content: content,
+        Glip_User_Name: rowData.Glip_User_Name || '',
+        Glip_Team_ID: rowData.Glip_Team_ID || '',
+        glipEmailAddress: glipEmailAddress,
         Push_Method: rowData.Push_Method,
-        Glip_Team_ID: rowData.Glip_Team_ID,
-        Glip_User_Name: rowData.Glip_User_Name,
-        Bot_Endpoint: rowData.Bot_Endpoint,
-        AI_Endpoint: rowData.AI_Endpoint,
-        AI_Headers: rowData.AI_Headers,
+        AI_Endpoint: rowData.AI_Endpoint || '',
+        AI_Headers: rowData.AI_Headers || '',
         AI_Body: aiBody,
-        targetType: rowData.Push_Method === 'AI' ? 'api' : (rowData.Glip_User_Name ? 'private' : 'group'),
+        targetType: targetType,
+        rowIndex: i + 1,
         Schedule_Date: rowData.Schedule_Date,
         Schedule_Time: rowData.Schedule_Time,
         Created_At: rowData.Created_At || '',
         messageType: messageType,
-        rowIndex: i + 1,
-        rowData: rowData,
-        headers: headers,
-        priority: priority
+        matchMode: matchMode
       };
     }
   }
@@ -1118,43 +943,45 @@ function findMessageByPriority(data, headers, now, currentDate, priority, curren
 }
 
 /**
- * 判断消息是否在过去 30 分钟内应该执行但未执行
+ * 判断消息是否在过去 30 分钟内应该执行但未执行（只判断时间条件，日期匹配已在调用前完成）
+ * @param {object} rowData - 消息行数据
+ * @param {Date} now - 当前时间
+ * @param {string} messageType - 消息类型
+ * @returns {boolean} 是否匹配
  */
-function shouldExecuteInPast30Minutes(rowData, now, messageType, currentDate) {
-  // 只检查今天的消息
-  if (!rowData.Schedule_Date || rowData.Schedule_Date !== currentDate) {
-    return false;
-  }
+function shouldExecuteInPast30Minutes(rowData, now, messageType) {
+  // 注意：日期匹配已在调用前完成，此方法只判断时间条件
   
-  // 只处理有指定时间的消息
+  // 只处理有指定时间的消息（补偿机制）
   if (!rowData.Schedule_Time || !rowData.Schedule_Time.toString().trim()) {
     return false;
   }
   
-  const scheduleTime = rowData.Schedule_Time.toString().trim();
+  const scheduleMinutes = parseTimeToMinutes(rowData.Schedule_Time.toString());
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const scheduleMinutes = parseTimeToMinutes(scheduleTime);
-  
-  // 在过去 30 分钟窗口内
   const diff = nowMinutes - scheduleMinutes;
-  return diff > 0 && diff <= 30;
+  
+  // 在过去 30 分钟窗口内（但不包括当前分钟，因为已经在 CURRENT_MINUTE 模式处理过了）
+  return diff > 1 && diff <= 30;
 }
 
 /**
- * 判断消息是否是今天未指定时间的
+ * 判断消息是否是未指定时间的（只判断时间条件，日期匹配已在调用前完成）
+ * @param {object} rowData - 消息行数据
+ * @param {Date} now - 当前时间
+ * @param {string} messageType - 消息类型
+ * @returns {boolean} 是否匹配
  */
-function shouldExecuteTodayWithoutTime(rowData, now, messageType, currentDate) {
-  // 必须是今天
-  if (!rowData.Schedule_Date || rowData.Schedule_Date !== currentDate) {
-    return false;
-  }
+function shouldExecuteTodayWithoutTime(rowData, now, messageType) {
+  // 注意：日期匹配已在调用前完成，此方法只判断时间条件
   
   // 必须没有指定时间
   if (rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()) {
     return false;
   }
   
-  return true;
+  // 未指定时间的消息在 8 点后执行（作为兜底逻辑）
+  return now.getHours() >= 8;
 }
 
 /**
@@ -1356,5 +1183,419 @@ function replaceAIBodyVariables(bodyStr, topic, content, teamId) {
   result = result.replace(/\{TeamID\}/g, escapeJsonString(teamId || ''));
   
   return result;
+}
+
+/**
+ * 获取当前时间点需要执行的消息（三匹配模式 + Timeline 支持 + ID 生成 + AI 消息处理）
+ * 接收 Jira 传递的 releaseInfo 数据，用于判断 Timeline 消息
+ * @param {object} postData - POST 数据 {releaseInfo: {...}, currentTime: "yyyy-MM-dd HH:mm"}
+ * @returns {object} 消息数据对象或 null
+ */
+function getMessageCurrentTimeWithReleaseInfo(postData) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+    if (!sheet) {
+      Logger.log('错误：未找到 Messages 工作表');
+      return {
+        executed: false,
+        error: 'Messages sheet not found',
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    // 提取参数
+    const releaseInfo = postData.releaseInfo || {};
+    const currentTimeStr = postData.currentTime; // "yyyy-MM-dd HH:mm"
+    
+    // 解析当前时间（如果没有传入，使用当前时间）
+    let now;
+    if (currentTimeStr) {
+      const [datePart, timePart] = currentTimeStr.split(' ');
+      const [year, month, day] = datePart.split('-').map(Number);
+      const [hour, minute] = timePart.split(':').map(Number);
+      now = new Date(year, month - 1, day, hour, minute);
+      Logger.log(`使用传入的时间: ${currentTimeStr}`);
+    } else {
+      now = new Date();
+      Logger.log(`使用当前时间: ${Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
+    }
+    
+    Logger.log(`接收到的 releaseInfo 项目: ${Object.keys(releaseInfo).join(', ')}`);
+    
+    // 获取表格数据
+    const data = sheet.getDataRange().getDisplayValues();
+    if (data.length <= 1) {
+      return {
+        executed: false,
+        message: 'No message data in sheet',
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    const headers = data[0];
+    const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const currentHour = now.getHours();
+    
+    Logger.log(`[三匹配模式查找] 开始查找消息，当前时间: ${currentDate} ${currentHour}:${now.getMinutes()}`);
+    
+    // 匹配模式 1: 查找当前分钟需要执行的消息
+    Logger.log('[匹配模式 1] 查找当前分钟的消息...');
+    let message = findMatchingMessage(data, headers, now, releaseInfo, 'CURRENT_MINUTE', currentDate, currentHour);
+    
+    // 匹配模式 2: 查找过去 30 分钟内应该执行但未执行的消息
+    if (!message) {
+      Logger.log('[匹配模式 2] 查找过去 30 分钟的消息...');
+      message = findMatchingMessage(data, headers, now, releaseInfo, 'PAST_30_MINUTES', currentDate, currentHour);
+      if (message) {
+        Logger.log(`[匹配模式 2] ✅ 找到消息: ${message.ID} - ${message.Topic} (补偿执行)`);
+      }
+    }
+    
+    // 匹配模式 3: 查找未指定时间的消息（仅限 8 点后）
+    if (!message && currentHour >= 8) {
+      Logger.log('[匹配模式 3] 查找未指定时间的消息（8点后）...');
+      message = findMatchingMessage(data, headers, now, releaseInfo, 'NO_TIME_SPECIFIED', currentDate, currentHour);
+      if (message) {
+        Logger.log(`[匹配模式 3] ✅ 找到消息: ${message.ID} - ${message.Topic}`);
+      }
+    }
+    
+    if (!message) {
+      Logger.log('[三匹配模式查找] ❌ 未找到符合条件的消息');
+      return {
+        executed: false,
+        message: 'No message found for current time',
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    // === 确保消息有 ID，如果没有则生成一个 ===
+    let messageId = message.ID;
+    if (!messageId || messageId.toString().trim() === '') {
+      messageId = `MSG_${new Date().getTime()}_${Math.random().toString(36).substr(2, 9)}`;
+      Logger.log(`消息没有 ID，生成新 ID: ${messageId}`);
+      
+      // 更新 Sheet 中的 ID
+      try {
+        const idColIndex = headers.indexOf('ID') + 1;
+        if (idColIndex > 0) {
+          sheet.getRange(message.rowIndex, idColIndex).setValue(messageId);
+          Logger.log(`已将生成的 ID 写入 Sheet: 行 ${message.rowIndex}`);
+        }
+      } catch (updateError) {
+        Logger.log(`更新 Sheet ID 失败: ${updateError}`);
+      }
+      
+      // 更新消息对象中的 ID
+      message.ID = messageId;
+    }
+    
+    Logger.log(`返回待发送消息数据: ${messageId} - ${message.Topic}`);
+    
+    // === 检查是否是 AI 消息 ===
+    if (message.Push_Method === 'AI') {
+      Logger.log(`处理 AI 消息: ${messageId}`);
+      
+      // 解析 AI 相关字段
+      const endpointInfo = parseAIEndpoint(message.AI_Endpoint || '');
+      const headersObj = parseAIHeaders(message.AI_Headers || '');
+      const bodyStr = replaceAIBodyVariables(
+        message.AI_Body || '',
+        message.Topic || '',
+        message.Content || '',
+        message.Glip_Team_ID || ''
+      );
+      
+      Logger.log(`AI URL 解析结果: host=${endpointInfo.host}, uri=${endpointInfo.uri}, method=${endpointInfo.method}`);
+      
+      // 立即标记为成功（避免超时重复）
+      try {
+        markBotMessageExecuted(messageId, message.rowIndex, true, '');
+        Logger.log(`AI 消息已标记为成功: ${messageId}`);
+      } catch (markError) {
+        Logger.log(`标记 AI 消息失败: ${markError}`);
+      }
+      
+      // 返回 AI 消息数据（host 和 uri 分开）
+      return {
+        executed: true,
+        messageId: messageId,
+        targetType: 'api',
+        aiEndpoint: endpointInfo.url,
+        aiHost: endpointInfo.host,
+        aiUri: endpointInfo.uri,
+        aiMethod: endpointInfo.method,
+        aiHeaders: headersObj,
+        aiBody: bodyStr,
+        rowIndex: message.rowIndex,
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    // === 返回 Bot 消息数据（供 Jira 调用 Bot API）===
+    return {
+      executed: true,
+      messageId: messageId,
+      topic: message.Topic,
+      content: message.Content,
+      targetType: message.targetType,
+      // Private 消息字段
+      userName: message.Glip_User_Name || '',
+      // Group 消息字段
+      teamId: message.Glip_Team_ID || '',
+      teamName: message.Glip_Team_ID || 'Team', // 使用 teamId 作为 teamName 或默认值
+      // Email 消息字段
+      glipEmailAddress: message.glipEmailAddress || '',
+      rowIndex: message.rowIndex,
+      timestamp: new Date().toISOString()
+    };
+    
+  } catch (error) {
+    Logger.log(`getMessageCurrentTimeWithReleaseInfo 错误: ${error.toString()}`);
+    return {
+      executed: false,
+      error: error.toString(),
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+
+/**
+ * 获取 Timeline 消息的目标日期（辅助函数）
+ * @param {object} rowData - 消息行数据
+ * @param {object} releaseInfo - 项目进度信息
+ * @returns {Date|null} 目标日期或 null
+ */
+function getTimelineTargetDate(rowData, releaseInfo) {
+  const project = rowData.Timeline_Project;
+  const milestone = rowData.Timeline_Milestone;
+  const offset = parseInt(rowData.Timeline_Offset || '0');
+  
+  if (!project || !milestone) {
+    return null;
+  }
+  
+  // 获取项目的 releaseInfo
+  const projectInfo = releaseInfo[project];
+  if (!projectInfo || !projectInfo.releaseInfo) {
+    Logger.log(`未找到项目 ${project} 的 releaseInfo`);
+    return null;
+  }
+  
+  // 获取 milestone 日期
+  const milestoneDate = projectInfo.releaseInfo[milestone];
+  if (!milestoneDate) {
+    Logger.log(`未找到 Milestone: ${milestone}`);
+    return null;
+  }
+  
+  // 解析日期（格式：MM/DD/YYYY）
+  const dateParts = milestoneDate.split('/');
+  if (dateParts.length !== 3) {
+    Logger.log(`Milestone 日期格式错误: ${milestoneDate}`);
+    return null;
+  }
+  
+  const baseDate = new Date(
+    parseInt(dateParts[2]), // year
+    parseInt(dateParts[0]) - 1, // month (0-based)
+    parseInt(dateParts[1]) // day
+  );
+  
+  // 应用工作日偏移
+  const targetDate = addWorkingDays(baseDate, offset);
+  
+  return targetDate;
+}
+
+/**
+ * 计算工作日偏移后的日期（跳过周六、周日）
+ * @param {Date} startDate - 起始日期
+ * @param {number} workingDays - 工作日偏移量（正数向后，负数向前）
+ * @returns {Date} 偏移后的日期
+ */
+function addWorkingDays(startDate, workingDays) {
+  if (workingDays === 0) {
+    return new Date(startDate);
+  }
+  
+  const result = new Date(startDate);
+  const direction = workingDays > 0 ? 1 : -1; // 方向：1=向后，-1=向前
+  let remainingDays = Math.abs(workingDays);
+  
+  while (remainingDays > 0) {
+    // 移动一天
+    result.setDate(result.getDate() + direction);
+    
+    // 检查是否是工作日（周一到周五）
+    const dayOfWeek = result.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // 0=周日, 6=周六
+      remainingDays--;
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * 替换项目进度变量
+ * @param {string} text - 原始文本
+ * @param {object} projectInfo - 项目进度信息
+ * @returns {string} 替换后的文本
+ */
+function replaceProjectVariablesInText(text, projectInfo) {
+  if (!text || !projectInfo) return text;
+  
+  let result = text;
+  result = result.replaceAll('{currentRelease}', projectInfo.currentRelease || '');
+  result = result.replaceAll('{currentPhase}', projectInfo.currentPhase || '');
+  result = result.replaceAll('{currentPhaseStartDate}', projectInfo.currentPhaseStartDate || '');
+  result = result.replaceAll('{currentPhaseStartedWorkdays}', projectInfo.currentPhaseStartedWorkdays || '0');
+  result = result.replaceAll('{nextPhase}', projectInfo.nextPhase || '');
+  result = result.replaceAll('{nextPhaseStartDate}', projectInfo.nextPhaseStartDate || '');
+  result = result.replaceAll('{nextPhaseCountdownWorkdays}', projectInfo.nextPhaseCountdownWorkdays || '0');
+  
+  return result;
+}
+
+/**
+ * 解析 Jira Automation 返回的 JSON/Groovy Map 格式
+ * 
+ * Jira 的 {{webhookResponse.body.asJsonString}} 返回的是 Groovy Map 格式：
+ * {currentRelease=25.4.20, currentPhase=Dev}
+ * 
+ * 而不是标准 JSON 格式：
+ * {"currentRelease":"25.4.20","currentPhase":"Dev"}
+ * 
+ * 此函数尝试多种解析方式，兼容两种格式
+ * 
+ * @param {string} jsonStr - JSON 字符串或 Groovy Map 字符串
+ * @returns {object} 解析后的对象
+ */
+function parseJiraJson(jsonStr) {
+  if (!jsonStr || jsonStr.trim() === '') {
+    return {};
+  }
+  
+  const str = jsonStr.trim();
+  
+  // 尝试 1: 标准 JSON 解析
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    Logger.log(`标准 JSON 解析失败，尝试 Groovy Map 格式: ${e.toString()}`);
+  }
+  
+  // 尝试 2: 处理 Groovy Map 格式 {key=value, key2=value2}
+  try {
+    // 移除外层的大括号
+    let content = str;
+    if (content.startsWith('{') && content.endsWith('}')) {
+      content = content.substring(1, content.length - 1);
+    }
+    
+    // 如果是空对象
+    if (content.trim() === '') {
+      return {};
+    }
+    
+    const result = {};
+    
+    // 分割键值对（处理嵌套对象的情况）
+    const pairs = splitGroovyMapPairs(content);
+    
+    for (const pair of pairs) {
+      const trimmedPair = pair.trim();
+      if (!trimmedPair) continue;
+      
+      // 查找第一个 = 号的位置
+      const equalIndex = trimmedPair.indexOf('=');
+      if (equalIndex === -1) continue;
+      
+      const key = trimmedPair.substring(0, equalIndex).trim();
+      let value = trimmedPair.substring(equalIndex + 1).trim();
+      
+      // 处理嵌套对象 {key=value}
+      if (value.startsWith('{') && value.endsWith('}')) {
+        result[key] = parseJiraJson(value); // 递归解析
+      } 
+      // 处理数组 [item1, item2]
+      else if (value.startsWith('[') && value.endsWith(']')) {
+        const arrayContent = value.substring(1, value.length - 1);
+        result[key] = arrayContent.split(',').map(item => item.trim());
+      }
+      // 处理 null
+      else if (value === 'null') {
+        result[key] = null;
+      }
+      // 处理布尔值
+      else if (value === 'true') {
+        result[key] = true;
+      } else if (value === 'false') {
+        result[key] = false;
+      }
+      // 处理数字
+      else if (/^-?\d+\.?\d*$/.test(value)) {
+        result[key] = parseFloat(value);
+      }
+      // 其他情况作为字符串
+      else {
+        result[key] = value;
+      }
+    }
+    
+    Logger.log(`Groovy Map 解析成功: ${JSON.stringify(result)}`);
+    return result;
+    
+  } catch (e) {
+    Logger.log(`Groovy Map 解析失败: ${e.toString()}`);
+    Logger.log(`原始字符串: ${str}`);
+    return {};
+  }
+}
+
+/**
+ * 分割 Groovy Map 的键值对（处理嵌套情况）
+ * 例如：key1=value1, key2={nested=value}, key3=value3
+ * @param {string} content - Map 内容（不含外层大括号）
+ * @returns {array} 键值对数组
+ */
+function splitGroovyMapPairs(content) {
+  const pairs = [];
+  let currentPair = '';
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    
+    if (char === '{') {
+      braceDepth++;
+      currentPair += char;
+    } else if (char === '}') {
+      braceDepth--;
+      currentPair += char;
+    } else if (char === '[') {
+      bracketDepth++;
+      currentPair += char;
+    } else if (char === ']') {
+      bracketDepth--;
+      currentPair += char;
+    } else if (char === ',' && braceDepth === 0 && bracketDepth === 0) {
+      // 只有在不在嵌套结构内时，逗号才是分隔符
+      pairs.push(currentPair);
+      currentPair = '';
+    } else {
+      currentPair += char;
+    }
+  }
+  
+  // 添加最后一个键值对
+  if (currentPair.trim()) {
+    pairs.push(currentPair);
+  }
+  
+  return pairs;
 }
 

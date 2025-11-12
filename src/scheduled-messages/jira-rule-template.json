@@ -34,7 +34,7 @@
       "value": {
         "first": "{{baseUrl}}",
         "second": "https://jira-",
-        "operator": "NOT_CONTAIN"
+        "operator": "NOT_CONTAINS"
       },
       "children": [],
       "conditions": [],
@@ -46,7 +46,154 @@
       "schemaVersion": 2,
       "type": "jira.issue.outgoing.webhook",
       "value": {
-        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime",
+        "url": "https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=mThor",
+        "headers": [
+          {
+            "id": "_header_1762762404581",
+            "name": "",
+            "value": {
+              "keyOrValue": "",
+              "secret": false
+            }
+          }
+        ],
+        "sendIssue": false,
+        "contentType": "empty",
+        "method": "GET",
+        "responseEnabled": true,
+        "usedSecretsKeys": []
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_id_1762762418303",
+        "name": {
+          "type": "FREE",
+          "value": "mThorReleaseInfo"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 2,
+      "type": "jira.issue.outgoing.webhook",
+      "value": {
+        "url": "https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=Jupiter%20desktop",
+        "headers": [
+          {
+            "id": "_header_jupiter_desktop",
+            "name": "",
+            "value": {
+              "keyOrValue": "",
+              "secret": false
+            }
+          }
+        ],
+        "sendIssue": false,
+        "contentType": "empty",
+        "method": "GET",
+        "responseEnabled": true,
+        "usedSecretsKeys": []
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_id_jupiter_desktop",
+        "name": {
+          "type": "FREE",
+          "value": "jupiterDesktopReleaseInfo"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 2,
+      "type": "jira.issue.outgoing.webhook",
+      "value": {
+        "url": "https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=Jupiter%20web",
+        "headers": [
+          {
+            "id": "_header_jupiter_web",
+            "name": "",
+            "value": {
+              "keyOrValue": "",
+              "secret": false
+            }
+          }
+        ],
+        "sendIssue": false,
+        "contentType": "empty",
+        "method": "GET",
+        "responseEnabled": true,
+        "usedSecretsKeys": []
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_id_jupiter_web",
+        "name": {
+          "type": "FREE",
+          "value": "jupiterWebReleaseInfo"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 2,
+      "type": "jira.issue.outgoing.webhook",
+      "value": {
+        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&mThor={{mThorReleaseInfo.urlEncode}}&jupiterDesktop={{jupiterDesktopReleaseInfo.urlEncode}}&jupiterWeb={{jupiterWebReleaseInfo.urlEncode}}",
         "headers": [],
         "sendIssue": false,
         "contentType": "empty",
@@ -134,7 +281,7 @@
                 ],
                 "sendIssue": false,
                 "contentType": "custom",
-                "customBody": "{\n  \"email\": \"{{USER_EMAIL}}\",\n  \"message\": {{webhookResponse.body.content.asJsonString}},\n  \"mentionAutoCorrect\": true,\n  \"mention\": true\n}",
+                "customBody": "{\n  \"email\": \"{{initiator.emailAddress}}\",\n  \"message\": {{webhookResponse.body.content.asJsonString}},\n  \"mentionAutoCorrect\": true,\n  \"mention\": true\n}",
                 "method": "POST",
                 "responseEnabled": true,
                 "usedSecretsKeys": []
@@ -236,7 +383,7 @@
                 "sendIssue": false,
                 "contentType": "empty",
                 "method": "GET",
-                "responseEnabled": true,
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -253,6 +400,87 @@
               "value": {
                 "first": "{{webhookResponse.body.targetType}}",
                 "second": "group",
+                "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 3,
+              "type": "jira.issue.outgoing.email",
+              "value": {
+                "from": "{{userEmailAddress}}",
+                "fromName": "Personal AI",
+                "replyTo": "",
+                "to": [
+                  {
+                    "type": "SMART",
+                    "value": "{{webhookResponse.body.glipEmailAddress}}"
+                  }
+                ],
+                "cc": [],
+                "bcc": [],
+                "subject": "{{webhookResponse.body.topic}}",
+                "body": "{{webhookResponse.body.content}}",
+                "mimeType": "text/html",
+                "convertLineBreaks": false
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true",
+                "headers": [
+                  {
+                    "id": "_header_1762763239434",
+                    "name": "",
+                    "value": {
+                      "keyOrValue": "",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.targetType}}",
+                "second": "email",
                 "operator": "EQUALS"
               },
               "children": [],

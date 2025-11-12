@@ -1287,7 +1287,12 @@ const AddMessageDialog: React.FC<{
     
     // 验证触发方式
     if (isTimelineTrigger) {
-      // Timeline 触发验证
+      // Timeline 触发验证：必须先配置 Bot
+      if (!botConfigured) {
+        alert('Timeline 触发功能需要先配置 Bot 推送（需要通过 Jira Automation 规则访问 Release 信息）');
+        return;
+      }
+      
       if (!formData.Timeline_Project || !formData.Timeline_Milestone || formData.Timeline_Offset === undefined) {
         alert('请完整填写 Timeline 触发配置');
         return;
@@ -1441,7 +1446,7 @@ const AddMessageDialog: React.FC<{
               />
               <VariableSelector 
                 onInsert={insertVariableToContent}
-                excludeVariables={['{Content}']}
+                excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
               />
             </div>
           )}
@@ -1509,6 +1514,39 @@ const AddMessageDialog: React.FC<{
           {/* Timeline 触发：项目和 Milestone 配置 */}
           {isTimelineTrigger && (
             <div style={{...dialogStyles.section, backgroundColor: '#f0f7ff', padding: '16px', borderRadius: '8px', marginBottom: '16px'}}>
+              {/* Timeline 模式 Bot 配置检查 */}
+              {!botConfigured && (
+                <div style={{
+                  padding: '12px',
+                  backgroundColor: '#fff3cd',
+                  borderRadius: '6px',
+                  border: '1px solid #ffc107',
+                  marginBottom: '16px',
+                }}>
+                  <p style={{ margin: '0 0 10px 0', color: '#856404', fontSize: '14px' }}>
+                    ⚠️ Timeline 触发功能需要配置 Bot 推送才能使用（需要通过 Jira Automation 规则访问 Release 信息）
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onConfigureBot();
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#ffc107',
+                      color: '#000',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    🔧 配置 Bot 后启用
+                  </button>
+                </div>
+              )}
+              
               <div style={dialogStyles.formRow}>
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>项目 *</label>
@@ -1516,6 +1554,7 @@ const AddMessageDialog: React.FC<{
                     style={dialogStyles.select}
                     value={formData.Timeline_Project || 'mThor'}
                     onChange={(e) => handleChange('Timeline_Project', e.target.value)}
+                    disabled={!botConfigured}
                   >
                     <option value="mThor">mThor</option>
                     <option value="Jupiter desktop">Jupiter desktop</option>
@@ -1532,6 +1571,7 @@ const AddMessageDialog: React.FC<{
                     style={dialogStyles.select}
                     value={formData.Timeline_Milestone || 'FF'}
                     onChange={(e) => handleChange('Timeline_Milestone', e.target.value)}
+                    disabled={!botConfigured}
                   >
                     <option value="DoR">DoR</option>
                     <option value="Embedded">Embedded</option>
@@ -1553,6 +1593,7 @@ const AddMessageDialog: React.FC<{
                     max="30"
                     value={formData.Timeline_Offset ?? 0}
                     onChange={(e) => handleChange('Timeline_Offset', parseInt(e.target.value))}
+                    disabled={!botConfigured}
                   />
                   <small style={dialogStyles.hint}>
                     负数=之前，0=当天，正数=之后。例如：-1 表示 Milestone 前一天，1 表示后一天
@@ -1567,6 +1608,7 @@ const AddMessageDialog: React.FC<{
                     value={formData.Schedule_Time || ''}
                     onChange={(e) => handleChange('Schedule_Time', e.target.value)}
                     placeholder="09:00"
+                    disabled={!botConfigured}
                   />
                   <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
                 </div>

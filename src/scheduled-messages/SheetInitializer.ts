@@ -229,6 +229,7 @@ export class SheetInitializer {
     const messagesHeaders = [
       'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
       'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
+      'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
       'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
       'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
       'Status', 'Last_Exec', 'Next_Exec',
@@ -331,6 +332,9 @@ export class SheetInitializer {
       '',                             // Repeat_Every
       '',                             // Repeat_Unit
       '',                             // Repeat_Count
+      '',                             // Timeline_Project
+      '',                             // Timeline_Milestone
+      '',                             // Timeline_Offset
       'AsMe',                         // Push_Method
       'sync.service',                 // Glip_User_Name
       '',                             // Glip_Team_ID
@@ -346,7 +350,7 @@ export class SheetInitializer {
     ];
     
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:U2?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:X2?valueInputOption=USER_ENTERED`,
       {
         method: 'PUT',
         headers: {
