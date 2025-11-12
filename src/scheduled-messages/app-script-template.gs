@@ -344,6 +344,59 @@ function generateEmailFromName(name) {
 }
 
 /**
+ * 插入推送记录到 Logs 表
+ * 新记录插入到第2行（表头下方），旧记录自动下移（倒序）
+ * @param {string} messageId - 消息 ID
+ * @param {string} topic - 消息主题
+ * @param {string} content - 消息内容
+ * @param {string} pushMethod - 推送方法（AsMe/Bot/AI）
+ * @param {string} target - 目标（用户名/团队ID/API地址）
+ * @param {boolean} success - 是否成功
+ * @param {string} errorMsg - 错误信息（可选）
+ * @param {number} execCount - 执行次数
+ */
+function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount) {
+  try {
+    const logsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Logs');
+    if (!logsSheet) {
+      Logger.log('警告：未找到 Logs 工作表，跳过记录推送日志');
+      return;
+    }
+    
+    const now = new Date();
+    const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    const status = success ? 'Success' : 'Failed';
+    const error = errorMsg || '';
+    
+    // 构建日志记录（按 Logs 表头顺序）
+    // Timestamp, Message_ID, Topic, Content, Push_Method, Target, Status, Error, Exec_Count
+    const logRow = [
+      timestamp,
+      messageId,
+      topic,
+      content,
+      pushMethod,
+      target,
+      status,
+      error,
+      execCount
+    ];
+    
+    // 在第2行插入新行（表头是第1行）
+    logsSheet.insertRowAfter(1);
+    
+    // 写入数据到新插入的第2行
+    logsSheet.getRange(2, 1, 1, logRow.length).setValues([logRow]);
+    
+    Logger.log(`推送记录已插入: ${messageId} - ${status}`);
+    
+  } catch (error) {
+    Logger.log(`插入推送记录失败: ${error}`);
+    // 不抛出错误，避免影响主流程
+  }
+}
+
+/**
  * 更新执行日志
  */
 function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg) {
@@ -386,6 +439,26 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
       sheet.getRange(rowIndex, statusCol).setValue('Completed');
     }
   }
+  
+  // 插入推送记录到 Logs 表
+  // 确定目标：优先使用 Glip_User_Name，其次使用 Glip_Team_ID
+  let target = '';
+  if (rowData.Glip_User_Name && rowData.Glip_User_Name.toString().trim()) {
+    target = rowData.Glip_User_Name.toString().trim();
+  } else if (rowData.Glip_Team_ID && rowData.Glip_Team_ID.toString().trim()) {
+    target = rowData.Glip_Team_ID.toString().trim();
+  }
+  
+  insertPushLog(
+    rowData.ID,
+    rowData.Topic || '',
+    rowData.Content || '',
+    rowData.Push_Method || 'AsMe',
+    target,
+    success,
+    errorMsg || '',
+    execCount
+  );
 }
 
 /**
@@ -699,7 +772,7 @@ function markBotMessageExecuted(messageId, rowIndex, success, errorMsg) {
     
     const rowData = parseRow(row, headers);
     
-    // 更新执行日志
+    // 更新执行日志（已包含 insertPushLog 调用）
     updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg);
     
     // 检查是否应该标记为 Done

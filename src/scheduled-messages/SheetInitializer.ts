@@ -9,6 +9,7 @@ export class SheetInitializer {
   private token: string;
   private messagesSheetId = 0;
   private configSheetId = 0;
+  private logsSheetId = 0;
   
   constructor(token: string) {
     this.token = token;
@@ -102,7 +103,8 @@ export class SheetInitializer {
           },
           sheets: [
             { properties: { title: 'Messages', gridProperties: { frozenRowCount: 1 } } },
-            { properties: { title: 'Config', gridProperties: { frozenRowCount: 1 } } }
+            { properties: { title: 'Config', gridProperties: { frozenRowCount: 1 } } },
+            { properties: { title: 'Logs', gridProperties: { frozenRowCount: 1 } } }
           ]
         })
       }
@@ -116,10 +118,11 @@ export class SheetInitializer {
     const data = await response.json();
     
     // 保存工作表 ID
-    if (data.sheets && data.sheets.length >= 2) {
+    if (data.sheets && data.sheets.length >= 3) {
       this.messagesSheetId = data.sheets[0].properties.sheetId;
       this.configSheetId = data.sheets[1].properties.sheetId;
-      console.log(`Messages Sheet ID: ${this.messagesSheetId}, Config Sheet ID: ${this.configSheetId}`);
+      this.logsSheetId = data.sheets[2].properties.sheetId;
+      console.log(`Messages Sheet ID: ${this.messagesSheetId}, Config Sheet ID: ${this.configSheetId}, Logs Sheet ID: ${this.logsSheetId}`);
     }
     
     return {
@@ -239,6 +242,12 @@ export class SheetInitializer {
     // Config 表头
     const configHeaders = ['Key', 'Value'];
     
+    // Logs 表头
+    const logsHeaders = [
+      'Timestamp', 'Message_ID', 'Topic', 'Content', 'Push_Method',
+      'Target', 'Status', 'Error', 'Exec_Count'
+    ];
+    
     const requests = [
       // 设置 Messages 表头
       {
@@ -257,6 +266,24 @@ export class SheetInitializer {
                 backgroundColor: { red: 0.2, green: 0.5, blue: 0.8 },
                 textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } }
               }
+            }))
+          }],
+          fields: 'userEnteredValue,userEnteredFormat'
+        }
+      },
+      // 设置 Logs 表头
+      {
+        updateCells: {
+          range: {
+            sheetId: this.logsSheetId,
+            startRowIndex: 0,
+            endRowIndex: 1,
+            startColumnIndex: 0,
+            endColumnIndex: logsHeaders.length
+          },
+          rows: [{
+            values: logsHeaders.map(header => ({
+              userEnteredValue: { stringValue: header }
             }))
           }],
           fields: 'userEnteredValue,userEnteredFormat'
@@ -292,6 +319,17 @@ export class SheetInitializer {
             dimension: 'COLUMNS',
             startIndex: 0,
             endIndex: messagesHeaders.length
+          }
+        }
+      },
+      // 自动调整 Logs 列宽
+      {
+        autoResizeDimensions: {
+          dimensions: {
+            sheetId: this.logsSheetId,
+            dimension: 'COLUMNS',
+            startIndex: 0,
+            endIndex: logsHeaders.length
           }
         }
       }
@@ -672,6 +710,7 @@ function dailyTrigger() {
       sheetId: spreadsheetId,
       sheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
       messagesSheetId: this.messagesSheetId,  // 保存 Messages Sheet ID
+      logsSheetId: this.logsSheetId,          // 保存 Logs Sheet ID
       scriptId,
       webAppUrl,
       minute_trigger_id: triggers.minuteTriggerId,

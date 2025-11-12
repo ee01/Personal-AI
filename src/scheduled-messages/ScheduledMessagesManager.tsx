@@ -155,7 +155,11 @@ const ScheduledMessagesManager: React.FC = () => {
   
   const handleOpenSheet = () => {
     if (config && config.sheetUrl) {
-      window.open(config.sheetUrl, '_blank');
+      // 如果有 logsSheetId，直接打开 Logs 表
+      const url = config.logsSheetId 
+        ? `${config.sheetUrl.replace('/edit', '')}#gid=${config.logsSheetId}`
+        : config.sheetUrl;
+      window.open(url, '_blank');
     }
   };
   
@@ -464,8 +468,8 @@ const ScheduledMessagesManager: React.FC = () => {
           <button style={styles.syncButton} onClick={handleSync} title="同步数据">
             🔄 同步
           </button>
-          <button style={styles.configButton} onClick={handleOpenSheet} title="打开 Sheet">
-            📊 打开 Sheet
+          <button style={styles.configButton} onClick={handleOpenSheet} title="查看推送记录">
+            📊 推送记录
           </button>
         </div>
       </header>

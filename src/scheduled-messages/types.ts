@@ -23,6 +23,22 @@ export type TimelineProject = 'mThor' | 'Jupiter desktop' | 'Jupiter web';
 // Timeline Milestone 类型
 export type TimelineMilestone = 'DoR' | 'Embedded' | 'FF' | 'Regression' | 'CF' | 'Release';
 
+// 推送日志状态
+export type PushLogStatus = 'Success' | 'Failed';
+
+// 推送日志接口
+export interface PushLog {
+  Timestamp: string;      // YYYY-MM-DD HH:mm:ss
+  Message_ID: string;
+  Topic: string;
+  Content: string;
+  Push_Method: PushMethod;
+  Target: string;         // 目标用户/团队/API
+  Status: PushLogStatus;
+  Error: string;          // 错误信息（如果有）
+  Exec_Count: number;     // 第几次执行
+}
+
 // 定时消息接口
 export interface ScheduledMessage {
   ID: string;
@@ -85,6 +101,7 @@ export interface SheetConfig {
   sheetId: string;
   sheetUrl: string;
   messagesSheetId?: number;  // Messages 工作表的 Sheet ID
+  logsSheetId?: number;      // Logs 工作表的 Sheet ID
   scriptId?: string;
   webAppUrl?: string;
   minute_trigger_id?: string;
