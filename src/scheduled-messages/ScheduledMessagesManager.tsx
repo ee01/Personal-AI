@@ -88,11 +88,6 @@ const ScheduledMessagesManager: React.FC = () => {
   
   const checkBotConfigValidity = async (savedConfig: SheetConfig, messageService: ScheduledMessageService) => {
     try {
-      // 如果没有配置 Bot，跳过检查
-      if (!savedConfig.botExecutor || !savedConfig.botExecutor.ruleId) {
-        return;
-      }
-      
       // 获取所有消息
       const msgs = await messageService.getAllMessages();
       
@@ -106,6 +101,15 @@ const ScheduledMessagesManager: React.FC = () => {
         setShowBotConfigWarning(false);
         return;
       }
+
+      // 如果没有配置 Bot，跳过检查
+      if (!savedConfig.botExecutor || !savedConfig.botExecutor.ruleId) {
+        console.warn('没有配置 Bot 推送规则，但有待推送的 Bot 消息');
+        setShowBotConfigWarning(true);
+        setBotConfigured(false);
+        return;
+      }
+      
       
       // 检查 Jira 规则是否还存在
       const { JiraAutomationService } = await import('./JiraAutomationService');

@@ -26,39 +26,54 @@
  */
 
 
-// 每分钟执行（处理 Hourly 类型）
+/**
+ * 每分钟触发器（统一处理所有类型的消息）
+ * 
+ * 执行逻辑：
+ * 1. 判断日期是否匹配（OneTime/Periodic 检查日期，Timeline 检查里程碑）
+ * 2. 判断时间是否匹配（有 Schedule_Time 则匹配分钟，无则在 9:00 执行）
+ * 3. 发送消息
+ */
 function minuteTrigger() {
-  executeScheduledMessages(['Hourly']);
-}
-
-// 每日执行（处理 Daily 和 Periodic）
-function dailyTrigger() {
-  executeScheduledMessages(['Daily', 'Periodic']);
+  executeScheduledMessages();
 }
 
 /**
- * 自动判断消息类型（与前端逻辑一致）
+ * 自动判断消息类型
+ * 
+ * 类型说明：
+ * - Timeline: 基于项目进度的消息（没有 Schedule_Date，有 Timeline_Milestone）
+ * - Periodic: 周期性重复消息（有 Repeat_Every 和 Repeat_Unit）
+ * - OneTime: 一次性消息（有 Schedule_Date，没有周期字段）
+ * 
+ * 注意：所有类型都可能有或没有 Schedule_Time
+ * - 有 Schedule_Time: 在指定时间执行
+ * - 无 Schedule_Time: 默认在早上 9:00 执行
  */
 function determineMessageType(rowData) {
-  // 如果填写了 Repeat_Every 和 Repeat_Unit，判断为 Periodic
+  // Timeline 消息：基于项目进度（没有 Schedule_Date，有 Timeline_Milestone）
+  if (!rowData.Schedule_Date && rowData.Timeline_Milestone) {
+    return 'Timeline';
+  }
+  
+  // Periodic 消息：周期性重复（有 Repeat_Every 和 Repeat_Unit）
   if (rowData.Repeat_Every && rowData.Repeat_Unit) {
     return 'Periodic';
   }
   
-  // 如果填写了 Schedule_Time，判断为 Hourly
-  if (rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()) {
-    return 'Hourly';
-  }
-  
-  // 否则为 Daily（每日早上9点执行）
-  return 'Daily';
+  // OneTime 消息：一次性消息（有 Schedule_Date，没有周期字段）
+  return 'OneTime';
 }
 
 /**
- * 执行定时消息
- * @param {string[]} types - 要处理的消息类型
+ * 执行定时消息（统一处理所有类型）
+ * 
+ * 支持的消息类型：
+ * - Timeline: 基于项目进度的消息（由 Jira 处理，AsMe 方式跳过）
+ * - Periodic: 周期性重复消息
+ * - OneTime: 一次性消息
  */
-function executeScheduledMessages(types) {
+function executeScheduledMessages() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
   if (!sheet) {
     Logger.log('错误：未找到 Messages 工作表');
@@ -74,31 +89,46 @@ function executeScheduledMessages(types) {
   
   const headers = data[0];
   const now = new Date();
+  const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   
   Logger.log(`开始执行定时任务，当前时间: ${Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
-  Logger.log(`处理消息类型: ${types.join(', ')}`);
   
   // 遍历每一行（跳过表头）
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const rowData = parseRow(row, headers);
     
-    // 跳过 Timeline 消息（需要通过 Jira 获取内网 release info）
-    if (!rowData.Schedule_Date && rowData.Timeline_Milestone) {
-      Logger.log(`跳过 Timeline 消息（需要通过 Jira 获取内网 release info）: ${rowData.ID}`);
-      continue;
-    }
-    
     // 自动判断消息类型
     const messageType = determineMessageType(rowData);
     
-    // 检查是否需要执行
-    if (!types.includes(messageType)) continue;
+    // 跳过 Timeline 消息（需要通过 Jira 获取内网 release info）
+    if (messageType === 'Timeline') {
+      continue;
+    }
+    
+    // 基本过滤条件
     if (rowData.Status !== 'Active') continue;
-    if (rowData.Push_Method !== 'AsMe') continue; // Bot 由 Jira 处理, AI 由 Jira 处理
+    if (rowData.Push_Method !== 'AsMe') continue; // Bot 和 AI 由 Jira 处理
     
     try {
-      if (shouldExecuteNow(rowData, now, messageType)) {
+      // 步骤 1: 先判断日期是否匹配
+      let dateMatches = false;
+      
+      if (messageType === 'Periodic') {
+        // Periodic 消息：使用周期性日期判断逻辑
+        dateMatches = checkPeriodicSchedule(rowData, now);
+      } else {
+        // OneTime 消息：检查 Schedule_Date 是否匹配今天
+        dateMatches = rowData.Schedule_Date && rowData.Schedule_Date === currentDate;
+      }
+      
+      // 日期不匹配，跳过
+      if (!dateMatches) {
+        continue;
+      }
+      
+      // 步骤 2: 日期匹配后，判断时间是否匹配
+      if (matchesCurrentMinuteTime(rowData, now, messageType)) {
         Logger.log(`准备执行消息: ${rowData.ID} - ${rowData.Topic} (类型: ${messageType})`);
         
         // 发送 Email
@@ -161,41 +191,32 @@ function getColumnIndex(headers, columnName) {
 }
 
 /**
- * 判断消息是否应该在当前时间执行（只判断时间条件，日期匹配已在调用前完成）
+ * 判断消息的时间是否匹配当前分钟（只判断时间条件，日期匹配需在调用前完成）
+ * 
+ * 时间匹配规则：
+ * - 有 Schedule_Time: 匹配当前分钟 (±1分钟容差)
+ * - 无 Schedule_Time: 在早上 9:00 执行（所有类型默认）
+ * 
  * @param {object} rowData - 消息行数据
  * @param {Date} now - 当前时间
- * @param {string} messageType - 消息类型
- * @returns {boolean} 是否匹配
+ * @param {string} messageType - 消息类型 (Timeline/Periodic/OneTime)
+ * @returns {boolean} 时间是否匹配
  */
-function shouldExecuteNow(rowData, now, messageType) {
-  // 注意：日期匹配已在调用前完成，此方法只判断时间条件
+function matchesCurrentMinuteTime(rowData, now, messageType) {
+  // 注意：日期匹配需在调用前完成，此方法只判断时间条件
   
   // 检查是否有指定时间
   const hasScheduleTime = rowData.Schedule_Time && rowData.Schedule_Time.toString().trim();
   
   if (hasScheduleTime) {
-    // 有指定时间，检查时间是否匹配当前分钟
+    // 有指定时间，检查时间是否匹配当前分钟（±1分钟容差）
     const scheduleMinutes = parseTimeToMinutes(rowData.Schedule_Time.toString());
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
     return Math.abs(nowMinutes - scheduleMinutes) <= 1;
   } else {
-    // 没有指定时间
-    // Timeline 消息：在早上 9 点执行
-    // Time-based 消息：Daily 类型在早上 9 点执行
-    const type = messageType || determineMessageType(rowData);
-    const isTimeline = !rowData.Schedule_Date && rowData.Timeline_Milestone;
-    
-    if (isTimeline || type === 'Daily') {
-      return now.getHours() === 9;
-    }
-    
-    // 周期性消息
-    if (type === 'Periodic') {
-      return checkPeriodicSchedule(rowData, now);
-    }
+    // 没有指定时间，默认在早上 9:00 执行（所有类型统一）
+    return now.getHours() === 9 && now.getMinutes() === 0;
   }
-  
-  return false;
 }
 
 /**
@@ -463,19 +484,28 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
 
 /**
  * 计算下次执行时间
+ * 
+ * 规则：
+ * - Timeline: 不计算固定时间（基于项目里程碑，下次执行时间由 releaseInfo 动态决定）
+ * - OneTime: 执行一次，不计算下次时间
+ * - Periodic: 根据周期规则计算下次执行日期
+ * 
+ * @param {object} rowData - 消息行数据
+ * @param {Date} currentTime - 当前时间
+ * @returns {string} 下次执行日期（yyyy-MM-dd）或空字符串
  */
 function calculateNextExecution(rowData, currentTime) {
-  const type = rowData.Type;
+  const messageType = determineMessageType(rowData);
   
-  if (type === 'Daily') {
-    // Daily 类型只执行一次
+  if (messageType === 'Timeline') {
+    // Timeline 消息：下次执行时间由项目里程碑决定，不是固定周期
     return '';
     
-  } else if (type === 'Hourly') {
-    // Hourly 类型也只执行一次（除非是 Periodic）
+  } else if (messageType === 'OneTime') {
+    // OneTime 消息：只执行一次
     return '';
     
-  } else if (type === 'Periodic') {
+  } else if (messageType === 'Periodic') {
     const startDate = new Date(rowData.Schedule_Date);
     const every = parseInt(rowData.Repeat_Every) || 1;
     const repeatUnit = rowData.Repeat_Unit || 'Day';
@@ -701,6 +731,12 @@ function doPost(e) {
 /**
  * 内部函数：设置触发器
  * 由 Web App 的 doGet 调用，因为 ScriptApp.newTrigger 只能在 Apps Script 环境内执行
+ * 
+ * 触发器说明：
+ * - minuteTrigger: 每分钟执行一次，统一处理所有类型的消息
+ *   - Timeline: 基于项目进度（由 Jira 处理）
+ *   - Periodic: 周期性重复消息
+ *   - OneTime: 一次性消息
  */
 function setupTriggersInternal() {
   // 删除现有的所有触发器，避免重复创建
@@ -709,22 +745,14 @@ function setupTriggersInternal() {
     ScriptApp.deleteTrigger(existingTriggers[i]);
   }
   
-  // 创建新的触发器
-  // 每分钟触发器（处理 Hourly 类型消息）
+  // 创建新的触发器：每分钟触发器（统一处理所有类型消息）
   ScriptApp.newTrigger('minuteTrigger')
     .timeBased()
     .everyMinutes(1)
     .create();
   
-  // 每日触发器（每天早上 9 点，处理 Daily 和 Periodic 类型消息）
-  ScriptApp.newTrigger('dailyTrigger')
-    .timeBased()
-    .atHour(9)
-    .everyDays(1)
-    .create();
-  
   Logger.log('触发器创建成功');
-  return 'Triggers created successfully: minuteTrigger (every 1 minute), dailyTrigger (daily at 9:00 AM)';
+  return 'Trigger created successfully: minuteTrigger (every 1 minute, handles all message types)';
 }
 
 /**
@@ -829,14 +857,25 @@ function findRowIndexByMessageId(data, headers, messageId) {
 
 /**
  * 判断任务是否应该标记为 Done
+ * 
+ * 标记规则：
+ * - Timeline: 不标记为 Done（每次新的 release 都会触发，是周期性的）
+ * - OneTime: 执行一次后标记为 Done
+ * - Periodic: 根据结束条件判断（结束日期或重复次数）
+ * 
  * @param {object} rowData - 行数据对象
  * @returns {boolean} 是否应该标记为 Done
  */
 function shouldMarkAsDone(rowData) {
   const messageType = determineMessageType(rowData);
   
-  // 非周期性消息（Daily 或 Hourly）：执行一次后就标记为 Done
-  if (messageType === 'Daily' || messageType === 'Hourly') {
+  // Timeline 消息：不标记为 Done（基于发布周期，每次 release 都会触发）
+  if (messageType === 'Timeline') {
+    return false;
+  }
+  
+  // OneTime 消息：执行一次后就标记为 Done
+  if (messageType === 'OneTime') {
     return true;
   }
   
@@ -909,11 +948,11 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     }
     
     const messageType = determineMessageType(rowData);
-    const isTimeline = !rowData.Schedule_Date && rowData.Timeline_Milestone;
     
-    // 先统一判断日期是否匹配（Timeline 和 Time-based 消息）
+    // 先统一判断日期是否匹配
     let dateMatches = false;
-    if (isTimeline) {
+    
+    if (messageType === 'Timeline') {
       // Timeline 消息：需要 releaseInfo
       const hasReleaseInfo = releaseInfo && Object.keys(releaseInfo).length > 0;
       if (!hasReleaseInfo) {
@@ -923,8 +962,13 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       // 获取 Timeline 目标日期
       const targetDate = getTimelineTargetDate(rowData, releaseInfo);
       dateMatches = targetDate && isSameDate(now, targetDate);
+      
+    } else if (messageType === 'Periodic') {
+      // Periodic 消息：使用周期性日期判断逻辑
+      dateMatches = checkPeriodicSchedule(rowData, now);
+      
     } else {
-      // Time-based 消息：检查 Schedule_Date
+      // OneTime 消息：检查 Schedule_Date 是否匹配今天
       dateMatches = rowData.Schedule_Date && rowData.Schedule_Date === currentDate;
     }
     
@@ -938,13 +982,13 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     
     if (matchMode === 'CURRENT_MINUTE') {
       // 匹配模式 1：当前分钟的消息
-      matches = shouldExecuteNow(rowData, now, messageType);
+      matches = matchesCurrentMinuteTime(rowData, now, messageType);
     } else if (matchMode === 'PAST_30_MINUTES') {
       // 匹配模式 2：过去 30 分钟内应该执行但未执行的
-      matches = shouldExecuteInPast30Minutes(rowData, now, messageType);
+      matches = matchesPast30MinutesTime(rowData, now, messageType);
     } else if (matchMode === 'NO_TIME_SPECIFIED') {
       // 匹配模式 3：未指定时间的消息（8 点后）
-      matches = shouldExecuteTodayWithoutTime(rowData, now, messageType);
+      matches = matchesNoSpecifiedTime(rowData, now, messageType);
     }
     
     if (matches) {
@@ -956,7 +1000,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       let content = rowData.Content;
       let aiBody = rowData.AI_Body || '';
       
-      if (isTimeline && rowData.Timeline_Project) {
+      if (messageType === 'Timeline' && rowData.Timeline_Project) {
         const projectInfo = releaseInfo[rowData.Timeline_Project];
         if (projectInfo) {
           topic = replaceProjectVariablesInText(topic, projectInfo);
@@ -1016,14 +1060,19 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
 }
 
 /**
- * 判断消息是否在过去 30 分钟内应该执行但未执行（只判断时间条件，日期匹配已在调用前完成）
+ * 判断消息的时间是否在过去 30 分钟窗口内（只判断时间条件，日期匹配需在调用前完成）
+ * 
+ * 补偿机制：处理因系统问题错过的消息
+ * - 只处理有指定 Schedule_Time 的消息
+ * - 时间窗口：过去 2-30 分钟（不包括当前分钟，已在 CURRENT_MINUTE 处理）
+ * 
  * @param {object} rowData - 消息行数据
  * @param {Date} now - 当前时间
- * @param {string} messageType - 消息类型
- * @returns {boolean} 是否匹配
+ * @param {string} messageType - 消息类型 (Timeline/Periodic/OneTime)
+ * @returns {boolean} 时间是否匹配
  */
-function shouldExecuteInPast30Minutes(rowData, now, messageType) {
-  // 注意：日期匹配已在调用前完成，此方法只判断时间条件
+function matchesPast30MinutesTime(rowData, now, messageType) {
+  // 注意：日期匹配需在调用前完成，此方法只判断时间条件
   
   // 只处理有指定时间的消息（补偿机制）
   if (!rowData.Schedule_Time || !rowData.Schedule_Time.toString().trim()) {
@@ -1039,14 +1088,19 @@ function shouldExecuteInPast30Minutes(rowData, now, messageType) {
 }
 
 /**
- * 判断消息是否是未指定时间的（只判断时间条件，日期匹配已在调用前完成）
+ * 判断消息是否未指定时间且当前时间满足执行条件（只判断时间条件，日期匹配需在调用前完成）
+ * 
+ * 兜底逻辑：处理没有指定 Schedule_Time 但错过了 9:00 执行窗口的消息
+ * - 只处理未指定 Schedule_Time 的消息
+ * - 时间窗口：8:00 之后（包括 9:00）
+ * 
  * @param {object} rowData - 消息行数据
  * @param {Date} now - 当前时间
- * @param {string} messageType - 消息类型
- * @returns {boolean} 是否匹配
+ * @param {string} messageType - 消息类型 (Timeline/Periodic/OneTime)
+ * @returns {boolean} 时间是否匹配
  */
-function shouldExecuteTodayWithoutTime(rowData, now, messageType) {
-  // 注意：日期匹配已在调用前完成，此方法只判断时间条件
+function matchesNoSpecifiedTime(rowData, now, messageType) {
+  // 注意：日期匹配需在调用前完成，此方法只判断时间条件
   
   // 必须没有指定时间
   if (rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()) {
