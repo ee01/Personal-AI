@@ -149,6 +149,14 @@ class AIAvatarV1 {
     }
 }
 
+// 自动初始化
+document.addEventListener('DOMContentLoaded', () => {
+    const avatarCanvas = document.getElementById('ai-avatar');
+    if (avatarCanvas) {
+        new AIAvatarV1('ai-avatar');
+    }
+});
+
 class ParticleV1 {
     constructor(canvasWidth, canvasHeight, target, centerX, centerY) {
         this.x = Math.random() * canvasWidth;

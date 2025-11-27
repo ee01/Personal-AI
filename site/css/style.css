@@ -976,82 +976,6 @@ body.menu-open {
     font-size: 0.9rem;
 }
 
-/* ===== AI头像版本切换器 ===== */
-.avatar-version-switcher {
-    position: absolute;
-    bottom: -60px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    background: rgba(10, 10, 15, 0.8);
-    backdrop-filter: blur(20px);
-    border: 1px solid var(--color-border);
-    border-radius: 50px;
-    padding: 0.75rem 1.5rem;
-}
-
-.version-label {
-    color: var(--color-text-secondary);
-    font-size: 0.85rem;
-    font-weight: 600;
-}
-
-.version-buttons {
-    display: flex;
-    gap: 0.5rem;
-}
-
-.version-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-width: 50px;
-    padding: 0.5rem 0.75rem;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    transition: var(--transition);
-}
-
-.version-btn span {
-    font-weight: 700;
-    font-size: 0.9rem;
-}
-
-.version-btn small {
-    font-size: 0.7rem;
-    opacity: 0.7;
-    margin-top: 2px;
-}
-
-.version-btn:hover {
-    background: rgba(0, 212, 255, 0.1);
-    border-color: rgba(0, 212, 255, 0.3);
-    color: var(--color-primary);
-    transform: translateY(-2px);
-}
-
-.version-btn.active {
-    background: var(--gradient-primary);
-    border-color: transparent;
-    color: white;
-    box-shadow: var(--shadow-glow);
-}
-
-.version-btn.active small {
-    opacity: 1;
-}
-
-.ai-avatar-container {
-    position: relative;
-    padding-bottom: 80px;
-}
-
 /* ===== 返回顶部按钮 ===== */
 .back-to-top {
     position: fixed;
@@ -1181,17 +1105,6 @@ body.menu-open {
     .feature-detail-header {
         flex-direction: column;
         align-items: flex-start;
-    }
-    
-    .avatar-version-switcher {
-        bottom: -70px;
-        flex-direction: column;
-        gap: 0.5rem;
-        padding: 1rem;
-    }
-    
-    .ai-avatar-container {
-        padding-bottom: 100px;
     }
 }
 
