@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI Installation Guide - Quick Start">
+    <title>Installation Guide - Personal AI</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/lang-switch.css">
+</head>
+<body>
+    <!-- Particles Background -->
+    <canvas id="particles-canvas"></canvas>
+
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index-en.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index-en.html">Home</a></li>
+                <li><a href="features-en.html">Features</a></li>
+                <li><a href="install-en.html" class="active">Install</a></li>
+                <li><a href="privacy-en.html">Privacy</a></li>
+                <li><a href="install.html" class="lang-switch">中文</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">Install Now</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Page Header -->
+    <section class="page-header">
+        <div class="container">
+            <h1 class="gradient-text">Installation Guide</h1>
+            <p>Two Ways to Start Using Personal AI</p>
+        </div>
+    </section>
+
+    <!-- Installation Methods -->
+    <section class="install-section">
+        <div class="container">
+            
+            <!-- Method 1: Chrome Web Store -->
+            <div class="install-method">
+                <div class="install-method-header">
+                    <div class="install-number">1</div>
+                    <div>
+                        <h2>Install from Chrome Web Store</h2>
+                        <p class="install-badge">Recommended</p>
+                    </div>
+                </div>
+                <div class="install-method-content">
+                    <p class="install-description">
+                        Install the official version from Chrome Web Store - automatic updates, secure and reliable.
+                    </p>
+                    
+                    <div class="install-steps">
+                        <div class="install-step">
+                            <div class="step-number">Step 1</div>
+                            <div class="step-content">
+                                <h3>Visit Chrome Web Store</h3>
+                                <p>Click the button below or search for "Personal AI" in Chrome Web Store</p>
+                                <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-install" target="_blank">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <path d="M12 14l9-5-9-5-9 5 9 5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14zm-4 6v-7.5l4-2.222" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <span>Go to Chrome Web Store</span>
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 2</div>
+                            <div class="step-content">
+                                <h3>Click "Add to Chrome"</h3>
+                                <p>On the extension page, click the blue "Add to Chrome" button</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 3</div>
+                            <div class="step-content">
+                                <h3>Confirm Installation</h3>
+                                <p>In the popup, click "Add extension" to complete the installation</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 4</div>
+                            <div class="step-content">
+                                <h3>Start Using</h3>
+                                <p>Click the extension icon in the toolbar, complete the initial setup, and start using</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="install-video">
+                        <h3>Video Tutorial</h3>
+                        <p>Watch the complete installation and setup process:</p>
+                        <div class="video-container">
+                            <iframe src="https://drive.google.com/file/d/1ZqrFSCkqDCYCeqqGgRJQUh0PEbrzBd7P/preview" allowfullscreen></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Method 2: Manual Installation -->
+            <div class="install-method">
+                <div class="install-method-header">
+                    <div class="install-number">2</div>
+                    <div>
+                        <h2>Manual Installation (Developer Mode)</h2>
+                        <p class="install-badge">Advanced</p>
+                    </div>
+                </div>
+                <div class="install-method-content">
+                    <p class="install-description">
+                        For development, testing, or when the extension is not yet available in the store.
+                    </p>
+                    
+                    <div class="install-steps">
+                        <div class="install-step">
+                            <div class="step-number">Step 1</div>
+                            <div class="step-content">
+                                <h3>Download Source Code</h3>
+                                <p>Download from GitHub or receive from the project administrator:</p>
+                                <a href="https://github.com/your-repo/personal-ai/releases" class="btn-secondary" target="_blank">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M12 16v-4m0-4h.01" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <span>Download Latest Version</span>
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 2</div>
+                            <div class="step-content">
+                                <h3>Extract Files</h3>
+                                <p>Extract the downloaded .zip file to a local folder (remember this path)</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 3</div>
+                            <div class="step-content">
+                                <h3>Open Extensions Page</h3>
+                                <p>Enter in Chrome address bar: <code>chrome://extensions/</code></p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 4</div>
+                            <div class="step-content">
+                                <h3>Enable Developer Mode</h3>
+                                <p>Toggle the "Developer mode" switch in the top right corner</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 5</div>
+                            <div class="step-content">
+                                <h3>Load Extension</h3>
+                                <p>Click "Load unpacked" button, select the extracted folder</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 6</div>
+                            <div class="step-content">
+                                <h3>Start Using</h3>
+                                <p>The extension will appear in the list, click the icon in the toolbar to start using</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="install-notes">
+                        <h3>⚠️ Important Notes</h3>
+                        <ul>
+                            <li>Developer mode installed extensions do not auto-update, need manual update</li>
+                            <li>Chrome may show "Disable developer mode extensions" warning, this is normal</li>
+                            <li>Keep the extension folder, do not delete, or it will become unavailable</li>
+                            <li>Recommended for Chrome version 90 and above</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Post-installation Setup -->
+            <div class="install-method">
+                <div class="install-method-header">
+                    <div class="install-number">3</div>
+                    <div>
+                        <h2>Initial Setup</h2>
+                        <p class="install-badge">Required</p>
+                    </div>
+                </div>
+                <div class="install-method-content">
+                    <p class="install-description">
+                        Complete these setup steps after installation to unlock all features.
+                    </p>
+                    
+                    <div class="install-steps">
+                        <div class="install-step">
+                            <div class="step-number">Step 1</div>
+                            <div class="step-content">
+                                <h3>Configure API Keys</h3>
+                                <p>In the settings page, add necessary AI service API Keys (such as OpenAI, Claude, etc.)</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 2</div>
+                            <div class="step-content">
+                                <h3>Grant Permissions</h3>
+                                <p>As prompted, grant necessary permissions (such as accessing Google Sheets, Jira, etc.)</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 3</div>
+                            <div class="step-content">
+                                <h3>Initialize Memory System</h3>
+                                <p>Wait for the memory system to complete initialization (first time may take a few minutes)</p>
+                            </div>
+                        </div>
+
+                        <div class="install-step">
+                            <div class="step-number">Step 4</div>
+                            <div class="step-content">
+                                <h3>Test Features</h3>
+                                <p>Try using core features to ensure everything is working properly</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="install-video">
+                        <h3>Setup Video Tutorial</h3>
+                        <p>Watch the complete setup process:</p>
+                        <div class="video-container">
+                            <iframe src="https://drive.google.com/file/d/1ZqrFSCkqDCYCeqqGgRJQUh0PEbrzBd7P/preview" allowfullscreen></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section class="faq-section">
+        <div class="container">
+            <h2 class="section-title">Frequently Asked Questions</h2>
+            
+            <div class="faq-grid">
+                <div class="faq-item">
+                    <h3>Q: Is Personal AI free?</h3>
+                    <p>A: Yes, Personal AI is completely free. However, some features require your own AI service API keys (such as OpenAI API).</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Q: Which browsers are supported?</h3>
+                    <p>A: Currently supports Chrome and Chromium-based browsers (such as Edge, Brave, etc.). Recommended Chrome version 90+.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Q: Will my data be leaked?</h3>
+                    <p>A: Personal AI processes all data locally, and does not upload your chat records, memory data, etc. to any external servers. Please refer to our <a href="privacy-en.html">Privacy Policy</a>.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Q: How to update the extension?</h3>
+                    <p>A: Extensions installed from Chrome Web Store update automatically. Manual installations require re-downloading and loading the new version.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Q: Extension doesn't work?</h3>
+                    <p>A: Please check: 1) Extension is enabled 2) Necessary permissions are granted 3) Chrome version is supported 4) Try restarting browser.</p>
+                </div>
+                
+                <div class="faq-item">
+                    <h3>Q: Where to get help?</h3>
+                    <p>A: View <a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">full documentation</a> or submit issues on <a href="https://github.com/your-repo/personal-ai/issues" target="_blank">GitHub</a>.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>Ready to Start?</h2>
+            <p>Install Personal AI now and start your intelligent assistant journey</p>
+            <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">
+                <span>Install to Chrome for Free</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M14 5l7 7m0 0l-7 7m7-7H3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>Your Personal AI Assistant</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>Product</h4>
+                        <ul>
+                            <li><a href="features-en.html">Features</a></li>
+                            <li><a href="install-en.html">Installation Guide</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome Store</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>Resources</h4>
+                        <ul>
+                            <li><a href="https://github.com/your-repo/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">Documentation</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>Legal</h4>
+                        <ul>
+                            <li><a href="privacy-en.html">Privacy Policy</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Back to Top Button -->
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>
+

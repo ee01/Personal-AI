@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI - 你的私人智能助理，具有类人脑的记忆设计，记住你的一切重要信息">
+    <title>Personal AI - 你的私人智能助理</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 粒子背景 -->
+    <canvas id="particles-canvas"></canvas>
+
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html" class="active">首页</a></li>
+                <li><a href="features.html">功能</a></li>
+                <li><a href="install.html">安装</a></li>
+                <li><a href="privacy.html">隐私</a></li>
+                <li><a href="index-en.html" class="lang-switch">EN</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">立即安装</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- 英雄区 -->
+    <section class="hero">
+        <div class="hero-container">
+            <!-- AI 助理头像 -->
+            <div class="ai-avatar-container">
+                <canvas id="ai-avatar"></canvas>
+            </div>
+            
+            <div class="hero-content">
+                <h1 class="hero-title">
+                    <span class="gradient-text">Personal AI</span>
+                    <br>你的私人智能助理
+                </h1>
+                <p class="hero-subtitle">
+                    类人脑的记忆设计 · 智能理解你的需求
+                </p>
+                <div class="hero-features">
+                    <div class="hero-feature">
+                        <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>记住你看过的消息</span>
+                    </div>
+                    <div class="hero-feature">
+                        <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>记住你访问的网页</span>
+                    </div>
+                    <div class="hero-feature">
+                        <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>学习你回复的内容</span>
+                    </div>
+                    <div class="hero-feature">
+                        <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>了解你专注的话题</span>
+                    </div>
+                </div>
+                <div class="hero-cta">
+                    <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">
+                        <span>免费安装到 Chrome</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M14 5l7 7m0 0l-7 7m7-7H3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </a>
+                    <a href="features.html" class="btn-secondary">
+                        <span>了解更多功能</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 核心功能区 -->
+    <section class="features-section">
+        <div class="container">
+            <h2 class="section-title">核心功能</h2>
+            <p class="section-subtitle">强大的智能助理能力，让工作更高效</p>
+            
+            <div class="features-grid">
+                <!-- 功能1: 智能记忆系统 -->
+                <div class="feature-card">
+                    <div class="feature-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>智能记忆系统</h3>
+                    <p>类人脑的记忆存储，智能关联和主动遗忘机制，让重要信息永不丢失</p>
+                    <a href="demo/实体记忆查询界面.html" class="btn-preview" target="_blank">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>预览演示</span>
+                    </a>
+                </div>
+
+                <!-- 功能2: AI 消息过滤 -->
+                <div class="feature-card">
+                    <div class="feature-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>AI 消息过滤</h3>
+                    <p>智能分析聊天消息，自动过滤重要信息，让你专注于最重要的对话</p>
+                </div>
+
+                <!-- 功能3: 定时消息管理 -->
+                <div class="feature-card">
+                    <div class="feature-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>定时消息管理</h3>
+                    <p>定时发送消息，自动化工作流程，让重要提醒永不错过</p>
+                </div>
+
+                <!-- 功能4: Jira->Sheet 数据同步 -->
+                <div class="feature-card">
+                    <div class="feature-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>Jira→Sheet 数据同步</h3>
+                    <p>自动同步Jira数据到Google Sheet，实时掌握项目进展</p>
+                </div>
+
+                <!-- 功能5: Google Slides 分析 -->
+                <div class="feature-card">
+                    <div class="feature-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>Google Slides 分析</h3>
+                    <p>AI驱动的幻灯片内容分析和总结，快速提取关键信息</p>
+                </div>
+
+                <!-- 功能6: 项目仪表盘 -->
+                <div class="feature-card">
+                    <div class="feature-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>项目仪表盘</h3>
+                    <p>多维度项目进展可视化和管理，一目了然掌握项目状态</p>
+                    <a href="demo/项目进展图-新版.html" class="btn-preview" target="_blank">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>预览演示</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 底部 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>你的私人智能助理</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>产品</h4>
+                        <ul>
+                            <li><a href="features.html">功能介绍</a></li>
+                            <li><a href="install.html">安装指南</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome 商店</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>资源</h4>
+                        <ul>
+                            <li><a href="https://github.com/your-repo/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">文档</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>法律</h4>
+                        <ul>
+                            <li><a href="privacy.html">隐私政策</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- 返回顶部按钮 -->
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/ai-avatar-v1-optimized.js"></script>
+    <script src="js/ai-avatar-v2-sphere.js"></script>
+    <script src="js/ai-avatar-v5-chat-bubble.js"></script>
+    <script src="js/ai-avatar-switcher.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>
+

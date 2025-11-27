@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI 安装指南 - 快速开始使用">
+    <title>安装指南 - Personal AI</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 粒子背景 -->
+    <canvas id="particles-canvas"></canvas>
+
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html">首页</a></li>
+                <li><a href="features.html">功能</a></li>
+                <li><a href="install.html" class="active">安装</a></li>
+                <li><a href="privacy.html">隐私</a></li>
+                <li><a href="install-en.html" class="lang-switch">EN</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">立即安装</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- 页面标题 -->
+    <section class="page-header">
+        <div class="container">
+            <h1 class="gradient-text">安装指南</h1>
+            <p>两种方式开始使用 Personal AI</p>
+        </div>
+    </section>
+
+    <!-- 安装方式 -->
+    <section class="install-section">
+        <div class="container">
+            
+            <!-- 方式一：Chrome 商店安装 -->
+            <div class="install-method">
+                <div class="install-method-header">
+                    <div class="install-number">1</div>
+                    <div>
+                        <h2>从 Chrome 商店安装</h2>
+                        <p class="install-badge recommended">推荐</p>
+                    </div>
+                </div>
+                <div class="install-content">
+                    <p class="install-description">
+                        最简单的安装方式，一键安装，自动更新。
+                    </p>
+                    <div class="install-steps">
+                        <div class="step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h3>访问 Chrome 商店</h3>
+                                <p>点击下方按钮或访问链接打开扩展页面</p>
+                                <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-install" target="_blank">
+                                    打开 Chrome 商店
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </a>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h3>点击"添加至 Chrome"</h3>
+                                <p>在扩展页面点击蓝色的安装按钮</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h3>确认安装</h3>
+                                <p>在弹出的对话框中点击"添加扩展程序"</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">4</div>
+                            <div class="step-content">
+                                <h3>开始使用</h3>
+                                <p>安装完成后，点击浏览器右上角的扩展图标即可使用</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 方式二：从源码构建 -->
+            <div class="install-method">
+                <div class="install-method-header">
+                    <div class="install-number">2</div>
+                    <div>
+                        <h2>从源码构建安装</h2>
+                        <p class="install-badge">开发者</p>
+                    </div>
+                </div>
+                <div class="install-content">
+                    <p class="install-description">
+                        适合开发者或想要使用最新功能的用户。
+                    </p>
+                    
+                    <h3 class="subsection-title">前置要求</h3>
+                    <ul class="requirements-list">
+                        <li>Node.js 16+ 和 Yarn</li>
+                        <li>Docker（用于 ChromaDB 向量数据库）</li>
+                        <li>Git</li>
+                    </ul>
+
+                    <h3 class="subsection-title">安装步骤</h3>
+                    <div class="install-steps">
+                        <div class="step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h3>克隆仓库</h3>
+                                <div class="code-block">
+                                    <code>git clone https://github.com/your-repo/personal-ai.git
+cd personal-ai</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h3>安装依赖</h3>
+                                <div class="code-block">
+                                    <code>yarn install</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h3>配置环境变量</h3>
+                                <p>从 .env.example 创建 .env.development 文件</p>
+                                <div class="code-block">
+                                    <code>cp .env.example .env.development</code>
+                                </div>
+                                <p class="step-note">编辑 .env.development 文件，填入必要的 API 密钥和配置</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">4</div>
+                            <div class="step-content">
+                                <h3>启动 ChromaDB 向量数据库</h3>
+                                <p>使用便捷脚本启动（推荐）：</p>
+                                <div class="code-block">
+                                    <code>chmod +x chroma.sh
+./chroma.sh start</code>
+                                </div>
+                                <p class="step-note">或使用 Docker Compose：</p>
+                                <div class="code-block">
+                                    <code>docker-compose up -d</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">5</div>
+                            <div class="step-content">
+                                <h3>构建扩展</h3>
+                                <p>开发模式（自动重新编译）：</p>
+                                <div class="code-block">
+                                    <code>yarn start</code>
+                                </div>
+                                <p class="step-note">或生产构建：</p>
+                                <div class="code-block">
+                                    <code>yarn build</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">6</div>
+                            <div class="step-content">
+                                <h3>加载到 Chrome</h3>
+                                <ol class="numbered-list">
+                                    <li>打开 Chrome，访问 <code>chrome://extensions/</code></li>
+                                    <li>开启右上角的"开发者模式"</li>
+                                    <li>点击"加载已解压的扩展程序"</li>
+                                    <li>选择项目中的 <code>dist</code> 文件夹</li>
+                                    <li>扩展已加载，可以开始使用了</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3 class="subsection-title">数据备份</h3>
+                    <p>定期备份 ChromaDB 数据：</p>
+                    <div class="code-block">
+                        <code>tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data</code>
+                    </div>
+
+                    <h3 class="subsection-title">数据迁移</h3>
+                    <p>从备份恢复数据：</p>
+                    <div class="code-block">
+                        <code>python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python tools/migrate_chroma_via_http.py</code>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 视频教程 -->
+            <div class="video-tutorials">
+                <h2>视频教程</h2>
+                <div class="video-grid">
+                    <div class="video-card">
+                        <h3>消息分析功能演示</h3>
+                        <div class="video-container">
+                            <iframe src="https://drive.google.com/file/d/1bs95yu-Vu3kMs61-FMMSYFjB_aGdKJMd/preview" allowfullscreen></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 常见问题 -->
+            <div class="faq-section">
+                <h2>常见问题</h2>
+                <div class="faq-list">
+                    <div class="faq-item">
+                        <h3>为什么需要安装 ChromaDB？</h3>
+                        <p>ChromaDB 是 Personal AI 的核心组件，用于存储和检索记忆数据。它提供了强大的向量搜索能力，让 AI 能够快速找到相关信息。</p>
+                    </div>
+                    <div class="faq-item">
+                        <h3>扩展需要哪些权限？</h3>
+                        <p>Personal AI 需要访问特定网站（如 Jira、Google Slides）的权限，以及存储权限来保存您的数据。所有权限都仅用于提供功能，不会收集或泄露您的隐私信息。</p>
+                    </div>
+                    <div class="faq-item">
+                        <h3>数据存储在哪里？</h3>
+                        <p>所有数据都存储在您的本地设备上。ChromaDB 数据库运行在您的计算机上，我们不会将您的数据上传到任何服务器。</p>
+                    </div>
+                    <div class="faq-item">
+                        <h3>如何更新扩展？</h3>
+                        <p>从 Chrome 商店安装的扩展会自动更新。如果是从源码安装，需要手动拉取最新代码并重新构建。</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- CTA区域 -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>准备好开始了吗？</h2>
+            <p>选择适合你的安装方式，立即体验 Personal AI</p>
+            <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">
+                <span>从 Chrome 商店安装</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M14 5l7 7m0 0l-7 7m7-7H3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </a>
+        </div>
+    </section>
+
+    <!-- 底部 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>你的私人智能助理</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>产品</h4>
+                        <ul>
+                            <li><a href="features.html">功能介绍</a></li>
+                            <li><a href="install.html">安装指南</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome 商店</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>资源</h4>
+                        <ul>
+                            <li><a href="https://github.com/your-repo/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">文档</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>法律</h4>
+                        <ul>
+                            <li><a href="privacy.html">隐私政策</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- 返回顶部按钮 -->
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>
+

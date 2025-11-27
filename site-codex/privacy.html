@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal AI Privacy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="glow glow-one"></div>
+  <div class="glow glow-two"></div>
+  <header class="site-header">
+    <div class="brand">
+      <div class="brand-mark">PAI</div>
+      <div>
+        <div class="brand-name">Personal AI</div>
+        <div class="brand-tagline">Privacy & Trust</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="index.html">Home</a>
+      <a href="../Personal%20AI%20PRIVACY%20NOTICE.md" target="_blank" rel="noreferrer" class="pill">Full notice (md)</a>
+    </nav>
+    <button class="menu-toggle" aria-label="Open navigation">
+      <span></span><span></span><span></span>
+    </button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-text">
+        <p class="eyebrow">Privacy notice</p>
+        <h1>We protect the signals you trust us with.</h1>
+        <p class="lede">This page summarizes the Personal AI Privacy Notice (latest update May 2025) and Terms refresh (March 11, 2024). It explains how data flows through the chrome extension, how storage works, and how you control it.</p>
+        <div class="hero-actions">
+          <a class="btn primary" target="_blank" rel="noreferrer" href="../Personal%20AI%20PRIVACY%20NOTICE.md">Download full notice</a>
+          <a class="btn ghost" target="_blank" rel="noreferrer" href="https://www.ringcentral.com/legal/last-update-march-11-2024/eulatos.html">Terms of Service</a>
+        </div>
+        <div class="stats">
+          <div><span class="stat">May 2025</span><span class="label">Latest privacy update</span></div>
+          <div><span class="stat">No</span><span class="label">Google Workspace APIs used for model training</span></div>
+          <div><span class="stat">Opt-in</span><span class="label">Silent scans, notifications, storage</span></div>
+        </div>
+      </div>
+      <div class="hero-card">
+        <div class="card-title">At a glance</div>
+        <ul>
+          <li><span>Data sources</span><strong>Messages, Jira, Slides, webpages</strong></li>
+          <li><span>Processing</span><strong>On-device extension + configured LLM</strong></li>
+          <li><span>Storage</span><strong>ChromaDB (cloud) + Chrome cache</strong></li>
+          <li><span>Training</span><strong>Not used to train generalized AI</strong></li>
+          <li><span>Control</span><strong>Export, delete, disable modules</strong></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <p class="eyebrow">What we collect</p>
+        <h2>Only what is needed to deliver the features you enable</h2>
+        <p class="lede">Drawn from the extension and the PRIVACY NOTICE: the service is intended for business use and processes data you explicitly allow.</p>
+      </div>
+      <div class="memory-grid">
+        <div class="memory-card">
+          <h3>Operational data</h3>
+          <ul>
+            <li>Messages and thread context for analysis, @me detection, and summaries.</li>
+            <li>Entities and metadata (people, projects, topics, timestamps, links).</li>
+            <li>Webpages and Slides content you open when analysis is triggered.</li>
+            <li>Notification targets you configure (Glip, @me flags).</li>
+          </ul>
+        </div>
+        <div class="memory-card">
+          <h3>Storage choices</h3>
+          <ul>
+            <li>Cloud: Chroma vector collections for messages/webpages/entities.</li>
+            <li>Local: Chrome storage cache for fast UI (recent conversations, pages).</li>
+            <li>Backups: optional tar backups of <code>chroma-data</code> you run locally.</li>
+            <li>Healthy by design: scheduled cleanup, similarity merges, health checks.</li>
+          </ul>
+        </div>
+        <div class="memory-card">
+          <h3>Not used for generalized AI</h3>
+          <p style="color: var(--text); font-weight: 600;">From the May 2025 update: Google Workspace APIs are not used to develop, improve, or train generalized AI/ML models.</p>
+          <ul>
+            <li>LLM calls are limited to the provider you configure.</li>
+            <li>Data stays within the configured stores; no resale of data.</li>
+            <li>You may disable storage or notifications at any time.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section split">
+      <div>
+        <p class="eyebrow">How it is used</p>
+        <h2>Purpose-bound processing</h2>
+        <ul class="feature-list">
+          <li><strong>Message analysis:</strong> determine relevance, entities, actions, and whether to notify or store.</li>
+          <li><strong>Memory & recall:</strong> save important items to ChromaDB + cache for fast retrieval and dashboards.</li>
+          <li><strong>Notifications:</strong> deliver Glip bot messages or @mentions only when rules match.</li>
+          <li><strong>User profile:</strong> maintain interest weights to personalize results; exportable on request.</li>
+          <li><strong>Slides/Jira helpers:</strong> read and optionally write updates you approve (Slides API updates, Jira automation import).</li>
+        </ul>
+      </div>
+      <div class="install-card">
+        <h3>User controls</h3>
+        <ol>
+          <li>Disable silent analysis or notifications from Options at any time.</li>
+          <li>Edit or remove concerned items; export/import XML configs.</li>
+          <li>Export user profile JSON and Chroma data backups you own.</li>
+          <li>Clear local cache; run maintenance to purge expired items.</li>
+          <li>Choose LLM provider and enable/disable send-before-review gates.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <p class="eyebrow">Security</p>
+        <h2>Designed with operational safeguards</h2>
+        <p class="lede">Grounded in the notice and system design: least-privilege APIs, health monitoring, and clear termination paths.</p>
+      </div>
+      <div class="memory-grid">
+        <div class="memory-card">
+          <h3>Safeguards</h3>
+          <ul>
+            <li>Health checks for cloud and cache connectivity with scored status.</li>
+            <li>Automatic cleanup of expired cache entries and relationship data.</li>
+            <li>Error isolation per agent/tool; graceful degradation to avoid over-notifying.</li>
+            <li>Manual maintenance hooks for cleanup, sync, and backups.</li>
+          </ul>
+        </div>
+        <div class="memory-card">
+          <h3>Terms & scope</h3>
+          <ul>
+            <li>Terms of Service updated March 11, 2024 (effective April 11, 2024 for prior customers).</li>
+            <li>Services intended for business use; orders become binding on acceptance.</li>
+            <li>Service descriptions for telephony offerings are part of the referenced agreement.</li>
+          </ul>
+        </div>
+        <div class="memory-card">
+          <h3>Need the exact language?</h3>
+          <p>Refer to the full <em>Personal AI PRIVACY NOTICE</em> for definitions, ordering terms, and detailed commitments.</p>
+          <div class="hero-actions" style="margin-top: 8px;">
+            <a class="btn ghost" target="_blank" rel="noreferrer" href="../Personal%20AI%20PRIVACY%20NOTICE.md">Open notice (md)</a>
+            <a class="btn text" target="_blank" rel="noreferrer" href="https://www.ringcentral.com/legal/last-update-march-11-2024/eulatos.html">View Terms</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div>
+      <div class="brand-name">Personal AI</div>
+      <p>Privacy-first automation.</p>
+    </div>
+    <div class="footer-links">
+      <a href="index.html">Home</a>
+      <a target="_blank" rel="noreferrer" href="../Personal%20AI%20PRIVACY%20NOTICE.md">Full notice</a>
+      <a target="_blank" rel="noreferrer" href="../readme.md">Repo README</a>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
