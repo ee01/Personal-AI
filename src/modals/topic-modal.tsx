@@ -283,7 +283,7 @@ const TopicModal = () => {
                 throw new Error('Failed to get page config');
             }
             
-            const scheduledInterval = envConfig ? Number(envConfig.MESSAGE_ANALYSIS_INTERVAL) : 120;
+            const scheduledInterval = envConfig ? Number(envConfig.MESSAGE_CONTEXT_WINDOW) : 120;
             const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
             
             // 获取用户数据
@@ -306,7 +306,7 @@ const TopicModal = () => {
 
     const getIntervalHours = () => {
         if (envConfig) {
-            return (Number(envConfig.MESSAGE_ANALYSIS_INTERVAL) / 60).toFixed(1);
+            return (Number(envConfig.MESSAGE_CONTEXT_WINDOW) / 60).toFixed(1);
         }
         return '2.0'; // 默认值
     };

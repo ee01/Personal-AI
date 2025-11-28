@@ -419,6 +419,16 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
 
 /**
  * 更新执行日志
+ * 
+ * 功能：
+ * 1. 更新 Last_Exec、Exec_Count、Next_Exec、Exec_Log
+ * 2. 如果成功且满足完成条件（通过 shouldMarkAsDone 判断），标记为 Done
+ * 3. 插入推送记录到 Logs 表
+ * 
+ * 完成条件（由 shouldMarkAsDone 统一判断）：
+ * - Timeline: 不标记为 Done（基于发布周期，会重复触发）
+ * - OneTime: 执行一次后标记为 Done
+ * - Periodic: 达到结束日期或重复次数后标记为 Done
  */
 function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg) {
   const now = new Date();
@@ -454,10 +464,11 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     sheet.getRange(rowIndex, execLogCol).setValue(logMessage);
   }
   
-  // 如果达到 Repeat_Count，标记为 Completed
-  if (rowData.Repeat_Count && execCount >= parseInt(rowData.Repeat_Count)) {
+  // 检查是否应该标记为 Done（统一使用 shouldMarkAsDone 逻辑）
+  if (success && shouldMarkAsDone(rowData)) {
     if (statusCol > 0) {
-      sheet.getRange(rowIndex, statusCol).setValue('Completed');
+      sheet.getRange(rowIndex, statusCol).setValue('Done');
+      Logger.log(`任务已完成所有推送，标记为 Done: ${rowData.ID}`);
     }
   }
   
@@ -800,17 +811,8 @@ function markBotMessageExecuted(messageId, rowIndex, success, errorMsg) {
     
     const rowData = parseRow(row, headers);
     
-    // 更新执行日志（已包含 insertPushLog 调用）
+    // 更新执行日志（已包含 shouldMarkAsDone 判断和 insertPushLog 调用）
     updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg);
-    
-    // 检查是否应该标记为 Done
-    if (success && shouldMarkAsDone(rowData)) {
-      const statusColIndex = getColumnIndex(headers, 'Status');
-      if (statusColIndex > 0) {
-        sheet.getRange(actualRowIndex, statusColIndex).setValue('Done');
-        Logger.log(`任务已完成所有推送，标记为 Done: ${messageId}`);
-      }
-    }
     
     Logger.log(`标记消息执行完成: ${messageId}, 成功: ${success}`);
     
