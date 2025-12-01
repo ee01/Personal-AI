@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI 功能详解 - 完整的智能助理功能列表">
+    <title>功能介绍 - Personal AI</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 粒子背景 -->
+    <canvas id="particles-canvas"></canvas>
+
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html">首页</a></li>
+                <li><a href="features.html" class="active">功能</a></li>
+                <li><a href="install.html">安装</a></li>
+                <li><a href="privacy.html">隐私</a></li>
+                <li><a href="terms.html">服务条款</a></li>
+                <li><a href="features-en.html" class="lang-switch">EN</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">立即安装</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- 页面标题 -->
+    <section class="page-header">
+        <div class="container">
+            <h1 class="gradient-text">完整功能列表</h1>
+            <p>探索 Personal AI 的强大能力</p>
+        </div>
+    </section>
+
+    <!-- 功能详情 -->
+    <section class="features-detail">
+        <div class="container">
+            
+            <!-- AI 智能消息分析过滤 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>AI 智能消息分析过滤</h2>
+                        <p class="feature-badge">核心功能</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        智能分析聊天消息，自动过滤重要信息，支持多种分析模式。
+                    </p>
+                    <ul class="feature-list">
+                        <li>智能Agent模式：使用AI代理系统进行消息分析</li>
+                        <li>Agent工作流模式：多Agent协调器模式</li>
+                        <li>上下文理解：智能分析消息的上下文关系</li>
+                        <li>实体信息提取：自动提取人物、项目、话题、行动项</li>
+                        <li>情感分析：识别消息的情感倾向</li>
+                        <li>智能通知：根据消息重要性自动推送</li>
+                    </ul>
+                    <div class="feature-video">
+                        <iframe src="https://drive.google.com/file/d/1bs95yu-Vu3kMs61-FMMSYFjB_aGdKJMd/preview" allowfullscreen></iframe>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 智能记忆系统 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>智能记忆系统</h2>
+                        <p class="feature-badge">核心功能</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        类人脑的记忆设计，智能存储和检索你关心的一切信息。
+                    </p>
+                    <ul class="feature-list">
+                        <li>实体记忆存储：基于ChromaDB的向量存储</li>
+                        <li>智能检索API：向量相似度检索和2-hop关系扩展</li>
+                        <li>实体关系管理：自动发现和维护实体关系</li>
+                        <li>智能遗忘机制：类人脑的记忆巩固和淘汰</li>
+                        <li>多维度实体展示：人员、项目、任务、组织、文档</li>
+                        <li>时间轴视图：按时间维度展示所有活动</li>
+                    </ul>
+                    <a href="demo/实体记忆查询界面.html" class="btn-demo" target="_blank">
+                        查看实时演示 →
+                    </a>
+                </div>
+            </div>
+
+            <!-- 项目仪表盘系统 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>项目仪表盘系统</h2>
+                        <p class="feature-badge">数据可视化</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        直观的项目进展可视化和交互式管理，一目了然掌握项目状态。
+                    </p>
+                    <ul class="feature-list">
+                        <li>多维度进度展示：甘特图、燃尽图、里程碑视图</li>
+                        <li>依赖关系可视化：设计依赖、后端依赖、团队依赖</li>
+                        <li>实时状态更新：集成Jira、聊天记录等多数据源</li>
+                        <li>交互式编辑：支持点击修改、状态更新、时间线调整</li>
+                        <li>趋势预测：基于历史数据预测项目完成时间</li>
+                    </ul>
+                    <div class="demo-links">
+                        <a href="demo/项目进展图-新版.html" class="btn-demo" target="_blank">标准版演示</a>
+                        <a href="demo/项目进展图-空间版.html" class="btn-demo" target="_blank">空间版演示</a>
+                        <a href="demo/项目进展图-缩放版.html" class="btn-demo" target="_blank">缩放版演示</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 定时消息管理系统 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>定时消息管理系统</h2>
+                        <p class="feature-badge">自动化</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        定时发送消息，自动化工作流程，让重要提醒永不错过。
+                    </p>
+                    <ul class="feature-list">
+                        <li>统一数据模型：Google Sheet作为统一存储</li>
+                        <li>一键初始化：自动创建Sheet和Apps Script项目</li>
+                        <li>AppScript执行引擎：定时触发和自动推送</li>
+                        <li>Chrome Extension管理界面：可视化消息管理</li>
+                        <li>Bot API支持：集成Jira Automation</li>
+                        <li>失败重试机制：确保消息可靠送达</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Jira 设计链接显示 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Jira 设计链接显示</h2>
+                        <p class="feature-badge">Jira集成</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        在Jira ticket页面自动检测并显示相关设计链接。
+                    </p>
+                    <ul class="feature-list">
+                        <li>多渠道设计链接检测：description、linked issues、Epic关联</li>
+                        <li>智能UX ticket识别：自动识别并提取UX相关tickets</li>
+                        <li>层级关联分析：支持Epic、Parent ticket等多层级分析</li>
+                        <li>统一展示界面：以一致的格式展示多个设计链接</li>
+                        <li>来源标识：清晰标识每个设计链接的来源渠道</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Jira 自动化规则导入 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Jira 自动化规则导入</h2>
+                        <p class="feature-badge">Jira集成</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        在Jira自动化管理页面添加导入功能，支持批量导入规则。
+                    </p>
+                    <ul class="feature-list">
+                        <li>一键导入：直接从JSON文件导入自动化规则</li>
+                        <li>自动格式转换：智能转换规则格式</li>
+                        <li>批量处理：支持同时导入多个规则</li>
+                        <li>错误处理：详细的导入结果反馈</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Google Slides 分析器 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Google Slides 项目分析器</h2>
+                        <p class="feature-badge">AI分析</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        AI驱动的幻灯片内容分析和总结，快速提取关键信息。
+                    </p>
+                    <ul class="feature-list">
+                        <li>智能格式识别：自动识别不同格式的幻灯片内容</li>
+                        <li>多级结构分析：支持Sprint、Epic、单个工单等结构</li>
+                        <li>Jira工单识别：自动识别并提取Jira工单ID</li>
+                        <li>LLM辅助分析：对复杂格式进行深度分析</li>
+                        <li>项目更新支持：支持将更新写回到原始幻灯片</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Agent 思维可视化 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Agent 思维可视化</h2>
+                        <p class="feature-badge">AI分析</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        显示AI代理的思考过程，让AI决策透明可见。
+                    </p>
+                    <ul class="feature-list">
+                        <li>思考过程展示：完整的思考链可视化</li>
+                        <li>交互式流程图：可展开/折叠的思维导图</li>
+                        <li>多工具协同：展示不同工具的调用过程</li>
+                        <li>实时更新：思考过程实时显示</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 用户画像系统 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>用户画像系统</h2>
+                        <p class="feature-badge">个性化</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        多维度兴趣建模，提供个性化的智能分析和推荐。
+                    </p>
+                    <ul class="feature-list">
+                        <li>多维度兴趣建模：项目、人员、主题、技术等维度</li>
+                        <li>用户行为追踪：自动记录用户操作行为</li>
+                        <li>智能权重衰变：基于埃宾浩斯遗忘曲线</li>
+                        <li>Web Intelligence集成：根据画像调整分析相关性</li>
+                        <li>主动推荐：基于用户画像生成个性化推荐</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Web 智能分析 -->
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Web 智能分析</h2>
+                        <p class="feature-badge">智能感知</p>
+                    </div>
+                </div>
+                <div class="feature-detail-content">
+                    <p class="feature-description">
+                        在用户浏览任何网页时，智能分析页面内容，识别相关信息。
+                    </p>
+                    <ul class="feature-list">
+                        <li>自动识别：识别网页中与项目相关的信息</li>
+                        <li>关键信息提取：提取人员、任务、截止日期等</li>
+                        <li>非侵入式建议：智能提供信息保存建议</li>
+                        <li>本地快速分析：支持本地AI模型快速预分析</li>
+                        <li>云端深度分析：复杂内容使用云端AI深度理解</li>
+                    </ul>
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- CTA区域 -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>准备好体验了吗？</h2>
+            <p>立即安装 Personal AI，开始你的智能助理之旅</p>
+            <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">
+                <span>免费安装到 Chrome</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M14 5l7 7m0 0l-7 7m7-7H3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </a>
+        </div>
+    </section>
+
+    <!-- 底部 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>你的私人智能助理</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>产品</h4>
+                        <ul>
+                            <li><a href="features.html">功能介绍</a></li>
+                            <li><a href="install.html">安装指南</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome 商店</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>资源</h4>
+                        <ul>
+                            <li><a href="https://github.com/your-repo/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">文档</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>法律</h4>
+                        <ul>
+                            <li><a href="privacy.html">隐私政策</a></li>
+                            <li><a href="terms.html">服务条款</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- 返回顶部按钮 -->
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>
+

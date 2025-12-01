@@ -1,0 +1,83 @@
+Core Features
+Powerful AI assistant capabilities to boost your productivity
+
+AI Message Analyzer & Filter
+Intelligently analyze chat messages and auto-filter important information, supporting multiple analysis modes.
+- Smart Agent Mode: AI agent system for message analysis
+- Agent Workflow Mode: Multi-agent coordinator mode
+- Context Understanding: Intelligent context relationship analysis
+- Entity Extraction: Auto-extract people, projects, topics, and action items
+- Sentiment Analysis: Identify message emotional tone
+- Smart Notifications: Auto push based on message importance
+
+Smart Memory System
+Brain-like memory design, intelligently stores and retrieves all information you care about.
+- Entity Memory Storage: Vector storage based on ChromaDB
+- Smart Retrieval API: Vector similarity retrieval and 2-hop relationship expansion
+- Entity Relationship Management: Auto-discover and maintain entity relationships
+- Intelligent Forgetting: Brain-like memory consolidation and elimination
+- Multi-dimensional Entity Display: People, projects, tasks, organizations, documents
+- Timeline View: Display all activities by time dimension
+
+Project Dashboard System
+Intuitive project progress visualization and interactive management, track project status at a glance.
+- Multi-dimensional Progress Display: Gantt chart, burndown chart, milestone view
+- Dependency Visualization: Design dependencies, backend dependencies, team dependencies
+- Real-time Status Update: Integrate Jira, chat logs and other data sources
+- Interactive Editing: Support click to modify, status update, timeline adjustment
+- Trend Prediction: Predict project completion time based on historical data
+
+Scheduled Message System
+Schedule messages and automate workflows, never miss important reminders.
+- Unified Data Model: Google Sheet as unified storage
+- One-click Initialization: Auto-create Sheet and Apps Script project
+- AppScript Execution Engine: Scheduled trigger and auto-push
+- Chrome Extension Management Interface: Visual message management
+- Bot API Support: Integrate Jira Automation
+- Failure Retry Mechanism: Ensure reliable message delivery
+
+Jira Design Link Display
+Auto-detect and display related design links on Jira ticket pages.
+- Multi-channel Design Link Detection: description, linked issues, Epic association
+- Smart UX Ticket Recognition: Auto-identify and extract UX-related tickets
+- Hierarchy Correlation Analysis: Support Epic, Parent ticket and other multi-level analysis
+- Unified Display Interface: Display multiple design links in consistent format
+- Source Identification: Clearly identify the source channel of each design link
+
+Jira Automation Rule Import
+Add import functionality on Jira automation management page, support batch import rules.
+- One-click Import: Import automation rules directly from JSON files
+- Auto-format Conversion: Intelligently convert rule formats
+- Batch Processing: Support importing multiple rules at once
+- Error Handling: Detailed import result feedback
+
+Google Slides Analyzer
+AI-powered slide analysis and summarization, quickly extract key information.
+- Smart Format Recognition: Auto-recognize different slide content formats
+- Multi-level Structure Analysis: Support Sprint, Epic, individual ticket structures
+- Jira Ticket Recognition: Auto-identify and extract Jira ticket IDs
+- LLM-assisted Analysis: Deep analysis for complex formats
+- Project Update Support: Support writing updates back to original slides
+
+Agent Thinking Visualization
+Display AI agent thinking process, making AI decisions transparent and visible.
+- Thinking Process Display: Complete thinking chain visualization
+- Interactive Flowchart: Expandable/collapsible mind map
+- Multi-tool Collaboration: Display different tool invocation processes
+- Real-time Update: Thinking process displayed in real-time
+
+User Profile System
+Multi-dimensional interest modeling, providing personalized intelligent analysis and recommendations.
+- Multi-dimensional Interest Modeling: Projects, people, topics, technologies and other dimensions
+- User Behavior Tracking: Auto-record user operations
+- Smart Weight Decay: Based on Ebbinghaus forgetting curve
+- Web Intelligence Integration: Adjust analysis relevance based on profile
+- Proactive Recommendations: Generate personalized recommendations based on user profile
+
+Web Intelligence Analysis
+Intelligently analyze page content when users browse any webpage, identify relevant information.
+- Auto-recognition: Identify project-related information in webpages
+- Key Information Extraction: Extract people, tasks, deadlines, etc.
+- Non-intrusive Suggestions: Intelligently provide information saving suggestions
+- Local Quick Analysis: Support local AI model for quick pre-analysis
+- Cloud Deep Analysis: Use cloud AI for deep understanding of complex content
