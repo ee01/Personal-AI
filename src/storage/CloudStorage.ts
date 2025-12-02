@@ -2039,7 +2039,7 @@ export class CloudStorage {
           metadata: { "hnsw:space": "cosine" } // 明确指定使用余弦距离
         });
         this.collections.set(collectionName, collection);
-        console.log(`✅ 集合已初始化: ${collectionName}`);
+        // console.log(`✅ 集合已初始化: ${collectionName}`);
       } catch (error) {
         console.error(`❌ 初始化集合失败: ${collectionName}`, error);
       }
