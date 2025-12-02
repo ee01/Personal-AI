@@ -13,8 +13,88 @@ import { DashboardMessageHandler } from './utils/dashboardIntegration';
 import { taskScheduler, TaskScheduler } from './services/TaskScheduler';
 import { UserProfileMessageHandler } from './services/UserProfileMessageHandler';
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWithRetry } from './utils/tabHelpers';
+import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 
 console.log('Background script loaded');
+
+/**
+ * 检查并自动更新 App Script
+ * 在扩展更新时调用
+ */
+async function checkAndUpdateAppScript(): Promise<void> {
+    try {
+        // 延迟 3 秒执行，避免与其他初始化冲突
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // 从 Chrome Storage 读取配置
+        const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
+        const config = result.scheduledMessagesConfig;
+        
+        if (!config || !config.scriptId || !config.webAppUrl) {
+            console.log('⏭️ 未找到 Scheduled Messages 配置，跳过 App Script 更新检查');
+            return;
+        }
+        
+        console.log('✅ 找到 Scheduled Messages 配置，检查 App Script 版本...');
+        
+        // 获取 Google OAuth token
+        const token = await getAuthToken();
+        if (!token) {
+            console.warn('⚠️ 无法获取 Google 授权，跳过 App Script 更新');
+            return;
+        }
+        
+        // 使用静态导入的 AppScriptUpdater（避免 service worker 中的动态导入问题）
+        const updater = new AppScriptUpdater(token, config);
+        
+        // 检查是否需要更新
+        const checkResult = await updater.checkForUpdates();
+        
+        if (!checkResult.needsUpdate) {
+            console.log(`✅ App Script 已是最新版本 (${checkResult.currentVersion})`);
+            return;
+        }
+        
+        console.log(`🔄 发现新版本: ${checkResult.latestVersion}，当前版本: ${checkResult.currentVersion}`);
+        console.log('🚀 开始自动更新 App Script...');
+        
+        // 执行更新
+        const updateResult = await updater.updateAppScript();
+        
+        if (updateResult.success) {
+            console.log(`✅ ${updateResult.message}`);
+            
+            // 发送通知给用户
+            chrome.notifications.create(
+                `appscript-update-success-${Date.now()}`,
+                {
+                    type: 'basic',
+                    iconUrl: 'icons/icon128.png',
+                    title: 'Personal AI - App Script 已更新',
+                    message: `定时消息系统已自动更新到最新版本 ${updateResult.newVersion}`,
+                    priority: 1
+                }
+            );
+        } else {
+            console.error(`❌ App Script 更新失败: ${updateResult.error}`);
+            
+            // 发送失败通知
+            chrome.notifications.create(
+                `appscript-update-failed-${Date.now()}`,
+                {
+                    type: 'basic',
+                    iconUrl: 'icons/icon128.png',
+                    title: 'Personal AI - App Script 更新失败',
+                    message: '定时消息系统更新失败，请手动更新或联系管理员',
+                    priority: 2
+                }
+            );
+        }
+        
+    } catch (error) {
+        console.error('❌ checkAndUpdateAppScript 执行失败:', error);
+    }
+}
 
 // Background script 加载时检查并初始化任务调度器
 // 
@@ -64,6 +144,14 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
         // 启动统一任务调度器
         await taskScheduler.startAllTasks();
+        
+        // 如果是扩展更新，检查并更新 App Script
+        if (details.reason === 'update') {
+            console.log('🔄 检测到扩展更新，检查 App Script 是否需要更新...');
+            checkAndUpdateAppScript().catch(error => {
+                console.error('❌ App Script 自动更新失败:', error);
+            });
+        }
         
         chrome.storage.local.remove('ollamaAnalysisProgress');
         

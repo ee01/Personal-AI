@@ -8,6 +8,7 @@ import { useState, useEffect, useRef } from 'react';
 import { OneClickSetup } from './components/OneClickSetup';
 import { ScheduledMessageService } from './ScheduledMessageService';
 import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData } from './types';
+import { AppScriptUpdater } from './AppScriptUpdater';
 
 const ScheduledMessagesManager: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
@@ -33,6 +34,9 @@ const ScheduledMessagesManager: React.FC = () => {
   const [hoveredMessage, setHoveredMessage] = useState<ScheduledMessage | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const [isReminderMode, setIsReminderMode] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [appScriptVersion, setAppScriptVersion] = useState<string>('');
   
   useEffect(() => {
     initializeApp();
@@ -156,6 +160,77 @@ const ScheduledMessagesManager: React.FC = () => {
       setIsLoading(false);
     }
   };
+  
+  // 检查 App Script 更新
+  const checkForUpdates = async () => {
+    try {
+      if (!config || !config.webAppUrl) {
+        return;
+      }
+      
+      const token = await getAuthToken();
+      if (!token) {
+        return;
+      }
+      
+      const updater = new AppScriptUpdater(token, config);
+      const result = await updater.checkForUpdates();
+      
+      if (result.needsUpdate) {
+        setUpdateAvailable(true);
+        setAppScriptVersion(result.currentVersion);
+        console.log(`发现新版本: ${result.latestVersion}`);
+      } else {
+        setUpdateAvailable(false);
+        setAppScriptVersion(result.currentVersion);
+      }
+    } catch (error) {
+      console.error('检查更新失败:', error);
+    }
+  };
+  
+  // 执行 App Script 更新
+  const handleUpdateAppScript = async () => {
+    if (!config) return;
+    
+    if (!confirm('确定要更新 App Script 到最新版本吗？\n\n更新过程中不会影响 Web App URL，但可能需要几分钟时间。')) {
+      return;
+    }
+    
+    setIsUpdating(true);
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        throw new Error('无法获取 Google 授权');
+      }
+      
+      const updater = new AppScriptUpdater(token, config);
+      const result = await updater.updateAppScript();
+      
+      if (result.success) {
+        alert(`✅ ${result.message}\n\n更新后的 App Script 已自动部署，Web App URL 保持不变。`);
+        setUpdateAvailable(false);
+        setAppScriptVersion(result.newVersion || '');
+        
+        // 重新加载配置
+        await initializeApp();
+      } else {
+        throw new Error(result.error || '更新失败');
+      }
+    } catch (error) {
+      console.error('更新 App Script 失败:', error);
+      alert(`❌ 更新失败: ${error.message}\n\n请稍后重试或联系管理员。`);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+  
+  // 组件加载时检查更新
+  useEffect(() => {
+    if (isInitialized && config) {
+      checkForUpdates();
+    }
+  }, [isInitialized, config]);
   
   const handleOpenSheet = () => {
     if (config && config.sheetUrl) {
@@ -472,6 +547,16 @@ const ScheduledMessagesManager: React.FC = () => {
           <button style={styles.syncButton} onClick={handleSync} title="同步数据">
             🔄 同步
           </button>
+          {updateAvailable && (
+            <button 
+              style={styles.updateButton} 
+              onClick={handleUpdateAppScript} 
+              disabled={isUpdating}
+              title={`当前版本: ${appScriptVersion}，点击更新到最新版本`}
+            >
+              {isUpdating ? '⏳ 更新中...' : '🔄 更新脚本'}
+            </button>
+          )}
           <button style={styles.configButton} onClick={handleOpenSheet} title="查看推送记录">
             📊 推送记录
           </button>
@@ -2431,6 +2516,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '6px',
     cursor: 'pointer',
     fontSize: '14px',
+  },
+  updateButton: {
+    padding: '8px 16px',
+    backgroundColor: '#ff5722',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    animation: 'pulse 2s infinite',
   },
   configButton: {
     padding: '8px 16px',

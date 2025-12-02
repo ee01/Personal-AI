@@ -2,6 +2,9 @@
  * Personal AI - 定时消息执行引擎
  * 统一处理 Email 推送的定时消息
  * 
+ * @version 1.0.0
+ * @lastUpdated 2025-12-01
+ * 
  * ===== 动态列映射支持 =====
  * 本脚本支持动态识别 Google Sheet 的列位置，用户可以自由调整列的顺序：
  * 
@@ -24,6 +27,10 @@
  *    - 列名必须与 TypeScript 接口 ScheduledMessage 的字段名一致
  *    - 所有列访问都通过 headers 数组动态映射
  */
+
+// App Script 版本号（用于检测更新）
+var APP_SCRIPT_VERSION = '1.0.0';
+var APP_SCRIPT_LAST_UPDATED = '2025-12-01';
 
 
 /**
@@ -693,6 +700,16 @@ function doGet(e) {
         JSON.stringify({ success: false, error: error.toString() })
       ).setMimeType(ContentService.MimeType.JSON);
     }
+  }
+  
+  // 获取 App Script 版本信息
+  if (action === 'getVersion') {
+    return ContentService.createTextOutput(
+      JSON.stringify({ 
+        version: APP_SCRIPT_VERSION,
+        lastUpdated: APP_SCRIPT_LAST_UPDATED
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
   }
   
   return ContentService.createTextOutput(

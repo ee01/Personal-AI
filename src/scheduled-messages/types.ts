@@ -104,10 +104,13 @@ export interface SheetConfig {
   logsSheetId?: number;      // Logs 工作表的 Sheet ID
   scriptId?: string;
   webAppUrl?: string;
+  deploymentId?: string;     // Web App deployment ID（用于更新部署）
   minute_trigger_id?: string;
   daily_trigger_id?: string;
   jira_executor_rule_id?: string;
   sheet_version: string;
+  appScriptVersion?: string; // App Script 版本号
+  appScriptLastUpdated?: string; // App Script 最后更新时间
   created_by: string;
   created_at: string;
   last_sync_time?: string;
