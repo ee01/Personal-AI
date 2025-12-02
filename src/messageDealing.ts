@@ -568,63 +568,66 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
 				}
 
-				// 增强逻辑：使用新的统一存储系统
-				const messageId = uuidv4();
-				const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
-				
-				// 构建消息元数据（包含上下文信息）
-				const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
-					id: post.id,
-					sender: post.creator,
-					content: post.text,
-					datetime: post.time,
-					isMainMessage: post.id == json.post_id
-				})) : json.contextMessages;
-				const messageMetadata = {
-					sender: json.sender || 'unknown',
-					datetime: new Date(json.datetime).getTime() || Date.now(),
-					postId: json.post_id,   // 原始消息ID
-					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-					summary: json.summary || '',
-					groupName: json.team_name,
-					groupId: json.team_id,
-					groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
-					// 用户关系类型（用于更精确的用户画像更新）
-					user_relation_type: json.user_relation_type || 'general_interest',
-					// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
-					contextMessages: contextMessages,
-					// 当前消息在上下文中的位置
-					messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
-					actions: extractedEntities.actions,
-					replyAdvice: json.reply_advice,
-					entities: extractedEntities.entities,
-					metadata: {
-						sentiment: extractedEntities.metadata.sentiment,
-						priority: extractedEntities.metadata.priority,
-						category: extractedEntities.metadata.category,
-						tags: extractedEntities.metadata.tags
-					}
-				};
-
-				// 🆕 使用统一存储接口（与 agentThinking 方式一致）
-				try {
-					// 确保记忆系统已初始化
-					await memorySystem.initialize();
+				// 如果审核通过，则存储消息
+				if (isPassReview) {
+					// 增强逻辑：使用新的统一存储系统
+					const messageId = uuidv4();
+					const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
 					
-					// 统一存储接口 - 包含消息存储和实体关联数据处理
-					const storeResult: StoreResult = await memorySystem.storeMessage({
-						id: messageId,
-						content: json.message_content,
-						metadata: messageMetadata
-					});
+					// 构建消息元数据（包含上下文信息）
+					const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
+						id: post.id,
+						sender: post.creator,
+						content: post.text,
+						datetime: post.time,
+						isMainMessage: post.id == json.post_id
+					})) : json.contextMessages;
+					const messageMetadata = {
+						sender: json.sender || 'unknown',
+						datetime: new Date(json.datetime).getTime() || Date.now(),
+						postId: json.post_id,   // 原始消息ID
+						matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+						summary: json.summary || '',
+						groupName: json.team_name,
+						groupId: json.team_id,
+						groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
+						// 用户关系类型（用于更精确的用户画像更新）
+						user_relation_type: json.user_relation_type || 'general_interest',
+						// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
+						contextMessages: contextMessages,
+						// 当前消息在上下文中的位置
+						messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
+						actions: extractedEntities.actions,
+						replyAdvice: json.reply_advice,
+						entities: extractedEntities.entities,
+						metadata: {
+							sentiment: extractedEntities.metadata.sentiment,
+							priority: extractedEntities.metadata.priority,
+							category: extractedEntities.metadata.category,
+							tags: extractedEntities.metadata.tags
+						}
+					};
 
-					console.log(`✅ 消息完整存储完成 [统一接口]: ${messageId.slice(0,8)}`, {
-						...storeResult,
-						performance: `${storeResult.processingTime}ms`
-					});
+					// 🆕 使用统一存储接口（与 agentThinking 方式一致）
+					try {
+						// 确保记忆系统已初始化
+						await memorySystem.initialize();
+						
+						// 统一存储接口 - 包含消息存储和实体关联数据处理
+						const storeResult: StoreResult = await memorySystem.storeMessage({
+							id: messageId,
+							content: json.message_content,
+							metadata: messageMetadata
+						});
 
-				} catch (memoryError) {
-					console.error('🚨 统一存储系统失败', memoryError);
+						console.log(`✅ 消息完整存储完成 [统一接口]: ${messageId.slice(0,8)}`, {
+							...storeResult,
+							performance: `${storeResult.processingTime}ms`
+						});
+
+					} catch (memoryError) {
+						console.error('🚨 统一存储系统失败', memoryError);
+					}
 				}
 
 				// 如果审核通过，则推送 Glip 消息

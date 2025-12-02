@@ -7,7 +7,6 @@ import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
 import { DatabaseMaintenanceTool } from './storage/DatabaseMaintenanceTool';
 import { EntityEmbeddingRebuildTool } from './storage/EntityEmbeddingRebuildTool';
-import { TempEntityCleanupTool } from './storage/TempEntityCleanupTool';
 import V6DataMigrationTool from './storage/V6DataMigrationTool';
 import EntityRebuildTool from './storage/EntityRebuildTool';
 import { runUserProfileDemo, runUserProfilePerformanceTest } from './services/UserProfileDemo';
@@ -614,7 +613,6 @@ const Options = () => {
                 <DatabaseMaintenanceTool />
                 <EntityRebuildTool />
                 <EntityEmbeddingRebuildTool />
-                <TempEntityCleanupTool />
                 <div className="form-group">
                     <label htmlFor="CHROMA_COLLECTION_NAME">集合名称</label>
                     <input

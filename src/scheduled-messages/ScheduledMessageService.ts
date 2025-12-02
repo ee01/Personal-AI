@@ -507,9 +507,10 @@ export class ScheduledMessageService {
   /**
    * 获取 Messages Sheet 的 sheetId
    */
-  private async getMessagesSheetId(): Promise<number> {
-    // 如果配置中有 messagesSheetId，直接使用
-    if (this.config?.messagesSheetId !== undefined) {
+  private async getMessagesSheetId(forceRefresh: boolean = false): Promise<number> {
+    // 如果配置中有 messagesSheetId 且不强制刷新，直接使用
+    // 注意：sheetId 可以是 0，这是有效值，所以只检查 undefined
+    if (!forceRefresh && this.config?.messagesSheetId !== undefined && this.config.messagesSheetId !== null) {
       return this.config.messagesSheetId;
     }
     
@@ -557,39 +558,68 @@ export class ScheduledMessageService {
       throw new Error('未找到配置');
     }
     
-    // 获取正确的 sheetId
-    const messagesSheetId = await this.getMessagesSheetId();
+    // 尝试删除行，如果失败且是 sheetId 问题，则重新获取 sheetId 并重试
+    let retryCount = 0;
+    const maxRetries = 2;
     
-    await this.withTokenRetry(async () => {
-      // 使用 batchUpdate 删除行
-      const response = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}:batchUpdate`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${this.token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            requests: [{
-              deleteDimension: {
-                range: {
-                  sheetId: messagesSheetId,  // 使用正确的 sheetId
-                  dimension: 'ROWS',
-                  startIndex: rowIndex - 1,
-                  endIndex: rowIndex
-                }
+    while (retryCount < maxRetries) {
+      try {
+        // 第一次使用缓存的 sheetId，重试时强制刷新
+        const forceRefresh = retryCount > 0;
+        const messagesSheetId = await this.getMessagesSheetId(forceRefresh);
+        
+        await this.withTokenRetry(async () => {
+          // 使用 batchUpdate 删除行
+          const response = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}:batchUpdate`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${this.token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                requests: [{
+                  deleteDimension: {
+                    range: {
+                      sheetId: messagesSheetId,  // 使用正确的 sheetId
+                      dimension: 'ROWS',
+                      startIndex: rowIndex - 1,
+                      endIndex: rowIndex
+                    }
+                  }
+                }]
+              })
+            }
+          );
+          
+          if (!response.ok) {
+            const error = await response.text();
+            
+            // 检查是否是 sheetId 无效的错误
+            if (error.includes('No grid with id') && retryCount === 0) {
+              // 清除缓存的 sheetId，下次循环会重新获取
+              if (this.config) {
+                this.config.messagesSheetId = undefined;
+                await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
               }
-            }]
-          })
+              throw new Error('RETRY_WITH_REFRESH');
+            }
+            
+            throw new Error(`删除行失败 (${response.status}): ${error}`);
+          }
+        });
+        
+        // 成功则跳出循环
+        break;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'RETRY_WITH_REFRESH' && retryCount < maxRetries - 1) {
+          retryCount++;
+          continue;
         }
-      );
-      
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`删除行失败 (${response.status}): ${error}`);
+        throw error;
       }
-    });
+    }
   }
   
   /**

@@ -108,7 +108,8 @@ async function openJqlDialog(url: string, sheetToken: string) {
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
             const sheet = await Sheet.fromUrl(url, sheetToken);
             const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
-            const sheetHeaders = await findValidJiraHeaders(sheet);
+            const metadata = await findValidJiraHeaders(sheet);
+            const sheetHeaders = metadata.columnMapping;
 
             if (!values || values.length <= 1) {
                 showToast('表格为空或只有表头', 'warning');
@@ -218,6 +219,11 @@ interface JiraHeaders {
     [key: string]: string | undefined;
 }
 
+interface JiraFieldMetadata {
+    columnMapping: JiraHeaders;
+    fieldTypes: { [jiraField: string]: string };
+}
+
 interface UpdateData {
     rowIndex: number;
     columnUpdates: { [columnIndex: number]: string };
@@ -230,10 +236,11 @@ interface TicketOperation {
 }
 
 // 查找有效的Jira字段表头
-async function findValidJiraHeaders(sheet: Sheet): Promise<JiraHeaders> {
+async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
     try {
         let headerMapping: { [key: string]: string } = {};
         const customFieldMapping: { [key: string]: string } = {};
+        const fieldTypes: { [jiraField: string]: string } = {};
         
         try {
             const configData = await sheet.readConfigSheet();
@@ -241,6 +248,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraHeaders> {
             if (configData && configData.length >= 2) {
                 const sheetHeaderIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('sheet column'));
                 const jiraFieldIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('jira field'));
+                const fieldTypeIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('field type'));
 
                 if (sheetHeaderIndex === -1 || jiraFieldIndex === -1) {
                     console.warn('配置表中未找到 "Sheet Header" 或 "Jira Field" 列，将使用默认别名');
@@ -252,12 +260,16 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraHeaders> {
                     if (row.length > Math.max(sheetHeaderIndex, jiraFieldIndex)) {
                         const sheetHeader = row[sheetHeaderIndex]?.trim().toLowerCase();
                         let jiraField = row[jiraFieldIndex]?.trim();
+                        const fieldType = fieldTypeIndex !== -1 ? row[fieldTypeIndex]?.trim().toLowerCase() : '';
 
                         if (sheetHeader && jiraField) {
                             if (jiraField.toLowerCase() === 'jira key' || jiraField.toLowerCase() === 'key') {
                                 jiraField = 'key';
                             }
                             headerMapping[sheetHeader] = jiraField;
+                            if (fieldType) {
+                                fieldTypes[jiraField] = fieldType;
+                            }
                             if (jiraField.toLowerCase().startsWith('customfield_')) {
                                 customFieldMapping[sheetHeader] = jiraField;
                             }
@@ -265,6 +277,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraHeaders> {
                     }
                 }
                  console.log('从配置表加载的映射:', headerMapping);
+                 console.log('从配置表加载的字段类型:', fieldTypes);
             } else {
                  console.warn('配置表数据为空或格式不正确，将使用默认别名');
                  throw new Error('配置表数据为空或格式不正确');
@@ -364,7 +377,8 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraHeaders> {
         }
 
         console.log('最终有效表头映射:', validHeaders);
-        return validHeaders;
+        console.log('字段类型映射:', fieldTypes);
+        return { columnMapping: validHeaders, fieldTypes };
     } catch (error) {
         console.error('查找有效 Jira 标题时出错:', error);
         showToast('查找表头映射时出错: ' + (error instanceof Error ? error.message : error), 'error')
@@ -625,7 +639,9 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
         try {
             const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
             console.log('values', values);
-            const sheetHeaders = await findValidJiraHeaders(sheet);
+            const metadata = await findValidJiraHeaders(sheet);
+            const sheetHeaders = metadata.columnMapping;
+            const fieldTypes = metadata.fieldTypes;
             const displayHeaders = ['key', 'summary', 'status', 'assignee', 'reporter']; 
 
             const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
@@ -688,10 +704,21 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                         if (columnLetter && typeof columnLetter === 'string') {
                             try {
                                 const colIndex = getColumnIndex(columnLetter);
-                                if (ticketKey === 'key') {
+                                const fieldValue = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                                
+                                // 检查字段类型，如果是 issuekey 类型，格式化为 HYPERLINK
+                                if (fieldTypes[ticketKey] === 'issuekey' && fieldValue) {
+                                    // 提取 issue key（可能包含链接或纯文本）
+                                    let issueKey = fieldValue;
+                                    const match = fieldValue.match(/([A-Z0-9]+-[0-9]+)/i);
+                                    if (match && match[1]) {
+                                        issueKey = match[1];
+                                    }
+                                    columnUpdates[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${issueKey}", "${issueKey}")`;
+                                } else if (ticketKey === 'key') {
                                     columnUpdates[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
                                 } else {
-                                    columnUpdates[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                                    columnUpdates[colIndex] = fieldValue;
                                 }
                             } catch (error) {
                                 console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
@@ -711,10 +738,21 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                         if (columnLetter && typeof columnLetter === 'string') {
                             try {
                                 const colIndex = getColumnIndex(columnLetter);
-                                if (ticketKey === 'key') {
+                                const fieldValue = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                                
+                                // 检查字段类型，如果是 issuekey 类型，格式化为 HYPERLINK
+                                if (fieldTypes[ticketKey] === 'issuekey' && fieldValue) {
+                                    // 提取 issue key（可能包含链接或纯文本）
+                                    let issueKey = fieldValue;
+                                    const match = fieldValue.match(/([A-Z0-9]+-[0-9]+)/i);
+                                    if (match && match[1]) {
+                                        issueKey = match[1];
+                                    }
+                                    row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${issueKey}", "${issueKey}")`;
+                                } else if (ticketKey === 'key') {
                                     row[colIndex] = `=HYPERLINK("${envConfig.JIRA_BASE_URL}/browse/${operation.ticket.key}", "${operation.ticket.key}")`;
                                 } else {
-                                    row[colIndex] = (operation.ticket as Record<string, any>)[ticketKey] || '';
+                                    row[colIndex] = fieldValue;
                                 }
                             } catch (error) {
                                 console.error(`处理列 ${columnLetter} (字段 ${ticketKey}) 时出错:`, error);
@@ -792,7 +830,8 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
             showToast('表格为空或无法读取', 'error');
             return;
         }
-        const sheetHeaders = await findValidJiraHeaders(sheet);
+        const metadata = await findValidJiraHeaders(sheet);
+        const sheetHeaders = metadata.columnMapping;
 
         // 找到 key 列的索引
         const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
@@ -1098,6 +1137,7 @@ async function createConfigSheet(token: string, sheetId: string, configSheetName
         ["Affect customers", "customfield_13250", "2-ways", "text"],
         ["DEA", "customfield_26055", "2-ways", "list", "No"],
         ["UX Ticket", "depends on", "2-ways", "link"],
+        ["INIT", "customfield_15751", "Back", "issuekey"],
         ["Status", "status", "Back", "text"]
     ];
     
