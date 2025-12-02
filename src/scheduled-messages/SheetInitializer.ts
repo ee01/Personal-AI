@@ -10,6 +10,7 @@ export class SheetInitializer {
   private messagesSheetId = 0;
   private configSheetId = 0;
   private logsSheetId = 0;
+  private deploymentId = '';
   
   constructor(token: string) {
     this.token = token;
@@ -685,11 +686,15 @@ function dailyTrigger() {
     const deployment = await deploymentResponse.json();
     console.log('部署创建成功:', deployment);
     
-    // 获取 Web App URL
+    // 获取 Web App URL 和 Deployment ID
     const webAppUrl = deployment.entryPoints?.[0]?.webApp?.url || '';
     if (!webAppUrl) {
       throw new Error('无法获取 Web App URL，请检查部署配置');
     }
+    
+    // 保存 deploymentId（用于后续更新）
+    this.deploymentId = deployment.deploymentId;
+    console.log(`Deployment ID: ${this.deploymentId}`);
     
     return webAppUrl;
   }
@@ -713,9 +718,12 @@ function dailyTrigger() {
       logsSheetId: this.logsSheetId,          // 保存 Logs Sheet ID
       scriptId,
       webAppUrl,
+      deploymentId: this.deploymentId,        // 保存 Deployment ID（用于更新部署）
       minute_trigger_id: triggers.minuteTriggerId,
       daily_trigger_id: triggers.dailyTriggerId,
       sheet_version: '2.0',
+      appScriptVersion: '1.0.0',              // 初始 App Script 版本
+      appScriptLastUpdated: this.formatDateTime(now),
       created_by: 'Personal AI Extension',
       created_at: this.formatDateTime(now),
       last_sync_time: this.formatDateTime(now)

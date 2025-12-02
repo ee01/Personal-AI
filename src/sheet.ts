@@ -99,6 +99,39 @@ export class Sheet {
     return res.json();
   }
 
+  /**
+   * 批量更新多个范围的数据
+   * @param updates 更新数据数组，每个元素包含 range 和 values
+   * @returns API 响应
+   */
+  async batchUpdateValues(updates: Array<{ range: string; values: string[][] }>): Promise<any> {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}/values:batchUpdate`;
+    
+    const data = updates.map(update => ({
+      range: `${this.sheetName}!${update.range}`,
+      values: update.values
+    }));
+    
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        valueInputOption: 'USER_ENTERED',
+        data: data
+      })
+    });
+    
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(`批量更新失败: ${error.error?.message || '未知错误'}`);
+    }
+    
+    return res.json();
+  }
+
   // 插入行或列
   async insertDimension(dimension: 'ROWS' | 'COLUMNS', startIndex: number, endIndex: number, sheetId?: number): Promise<void> {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}:batchUpdate`;

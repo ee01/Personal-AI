@@ -14,7 +14,8 @@
     "scripting",
     "identity",
     "clipboardWrite",
-    "cookies"
+    "cookies",
+    "notifications"
   ],
   "content_scripts": [
     {

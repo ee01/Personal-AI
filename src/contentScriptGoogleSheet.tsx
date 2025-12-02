@@ -57,24 +57,27 @@ async function openJqlDialog(url: string, sheetToken: string) {
     `;
 
     dialog.innerHTML = `
-        <h3 style="margin-top: 0;">输入 JQL 查询</h3>
+        <div style="position: relative;">
+            <button id="closeDialog" style="position: absolute; top: -10px; right: -10px; background: transparent; color: grey; border: none; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1; padding: 0;">&times;</button>
+            <h3 style="margin-top: 0;">输入 JQL 添加 JIRA 数据到表格</h3>
+        </div>
         <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="filter=xxxx"></textarea>
         <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-            <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">刷新 Sheet 上 tickets 数据</button>
-            <div>
-                <button id="cancel" style="margin-right: 10px;">取消</button>
-                <button id="submit">查询</button>
+            <button id="configMapping" style="background: #6c757d; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">配置表头JIRA映射</button>
+            <div style="display: flex; gap: 10px;">
+                <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">刷新表数据</button>
+                <button id="submit" style="background: #007bff; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">查询</button>
             </div>
         </div>
     `;
 
     document.body.appendChild(dialog);
 
-    // 添加事件监听器
-    document.getElementById('cancel')?.addEventListener('click', () => {
+    // 添加关闭对话框事件监听器
+    document.getElementById('closeDialog')?.addEventListener('click', () => {
         if (document.body.contains(dialog)) {
-        document.body.removeChild(dialog);
+            document.body.removeChild(dialog);
         }
     });
 
@@ -144,6 +147,53 @@ async function openJqlDialog(url: string, sheetToken: string) {
             console.error('更新现有 tickets 失败:', error);
             showToast('更新失败: ' + (error instanceof Error ? error.message : error), 'error');
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
+        }
+    });
+
+    // 添加配置表头JIRA映射的事件监听器
+    document.getElementById('configMapping')?.addEventListener('click', async () => {
+        if (!sheetToken || !url) {
+            showToast('缺少表格 URL 或 token', 'error');
+            return;
+        }
+
+        try {
+            showToast('正在检查配置表...');
+            if (document.body.contains(dialog)) document.body.removeChild(dialog);
+            const sheet = await Sheet.fromUrl(url, sheetToken);
+            const sheetName = sheet.getSheetName();
+            const configSheetName = `${sheetName}_config`;
+            
+            // 检查配置表是否存在
+            const sheetId = Sheet.extractSheetId(url);
+            if (!sheetId) {
+                showToast('无法提取 Sheet ID', 'error');
+                return;
+            }
+            
+            const sheets = await Sheet.getSheetNames(sheetToken, sheetId);
+            const configSheet = sheets.find((s: any) => s.properties.title === configSheetName);
+            
+            if (configSheet) {
+                // 配置表存在，切换到该表
+                const configGid = configSheet.properties.sheetId;
+                const newUrl = url.replace(/gid=\d+/, `gid=${configGid}`);
+                window.location.href = newUrl;
+                showToast('正在切换到配置表...', 'success');
+            } else {
+                // 配置表不存在，创建新表
+                showToast('配置表不存在，正在创建...');
+                const newSheetGid = await createConfigSheet(sheetToken, sheetId, configSheetName);
+                showToast('配置表创建成功，正在切换...', 'success');
+                
+                // 切换到新创建的配置表
+                const baseUrl = url.split('#')[0].split('?')[0];
+                const newUrl = `${baseUrl}#gid=${newSheetGid}`;
+                window.location.href = newUrl;
+            }
+        } catch (error) {
+            console.error('配置表头JIRA映射失败:', error);
+            showToast('操作失败: ' + (error instanceof Error ? error.message : error), 'error');
         }
     });
 }
@@ -682,11 +732,12 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             let appendedCount = 0;
 
             if (updatesData.length > 0) {
-                for (const update of updatesData) {
+                // 使用批量更新，避免超出 rate limit
+                const batchUpdates = updatesData.map(update => {
                     // 将需要更新的列按连续范围分组
                     const columnRanges = groupConsecutiveColumns(Object.keys(update.columnUpdates).map(Number));
                     
-                    for (const range of columnRanges) {
+                    return columnRanges.map(range => {
                         const startColumn = String.fromCharCode(65 + range.start);
                         const endColumn = String.fromCharCode(65 + range.end);
                         const rangeName = range.start === range.end 
@@ -699,11 +750,13 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                             rangeData.push(update.columnUpdates[col] || '');
                         }
                         
-                        console.log(`Updating range: ${rangeName}`, rangeData);
-                        await sheet.writeSheet([rangeData], rangeName);
-                    }
-                    updatedCount++;
-                }
+                        return { range: rangeName, values: [rangeData] };
+                    });
+                }).flat();
+                
+                console.log(`批量更新 ${batchUpdates.length} 个范围，涉及 ${updatesData.length} 行数据`);
+                await sheet.batchUpdateValues(batchUpdates);
+                updatedCount = updatesData.length;
             }
 
             if (appendData.length > 0) {
@@ -981,4 +1034,123 @@ async function insertSubTickets(
         await sheet.writeSheet(subTicketRows, startPosition);
         console.log(`已在行 ${insertRowIndex} 写入 ${subTicketRows.length} 个子任务`);
     }
+}
+
+// 创建配置表
+async function createConfigSheet(token: string, sheetId: string, configSheetName: string): Promise<number> {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`;
+    
+    // 首先创建新的 sheet
+    const addSheetRequest = {
+        requests: [{
+            addSheet: {
+                properties: {
+                    title: configSheetName
+                }
+            }
+        }]
+    };
+    
+    const addSheetResponse = await fetch(url, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(addSheetRequest)
+    });
+    
+    if (!addSheetResponse.ok) {
+        const error = await addSheetResponse.json();
+        throw new Error(`创建配置表失败: ${error.error?.message || '未知错误'}`);
+    }
+    
+    // 获取新创建的 sheet 的 gid
+    const addSheetResult = await addSheetResponse.json();
+    const newSheetId = addSheetResult.replies[0].addSheet.properties.sheetId;
+    
+    // 准备配置数据，参考 Code.js 中的示例
+    const configData = [
+        ["Sheet Column", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Sheet Column - link ticket", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format"],
+        ["JIRA", "JIRA key", "", "", "", "", "", "", "", "", "UX Ticket", "link key"],
+        ["Title", "summary", "Back", "text"],
+        ["Type", "issuetype", "Back", "text"],
+        ["Label", "labels", "To", "list", "Yes"],
+        ["Component", "components", "2-ways", "list", "No"],
+        ["Release", "fixVersions", "2-ways", "list", "No", "", "", "{value}=='Video Wishlist'?{value}:'mThor '+{value}", '{value}.split(",").map(re => re.replace(/[^\\d]*/, "").replace(/.*\\W(\\d+\\.\\d+\\.\\d+)/, "$1")).reduce((aggr, cur) => aggr>cur?aggr:cur, -Infinity)'],
+        ["Affect versions", "versions", "2-ways", "list", "No", "mThor "],
+        ["Due date", "duedate", "2-ways", "date"],
+        ["BV", "customfield_10423", "2-ways", "text"],
+        ["Priority", "Priority", "2-ways", "text"],
+        ["Sprint", "customfield_10652", "2-ways", "list", "No"],
+        ["Team", "customfield_17553", "2-ways", "list", "No"],
+        ["Story Point", "customfield_10422", "2-ways", "text"],
+        ["SDK Story Point", "customfield_24666", "2-ways", "text"],
+        ["Vertical Track", "customfield_24174", "2-ways", "list"],
+        ["Assignee", "assignee", "2-ways", "list", "", "", "", "{value}.toLowerCase().replace(' ', '.')"],
+        ["Reporter", "reporter", "2-ways", "list", "", "", "", "{value}.toLowerCase().replace(' ', '.')"],
+        ["Local PM", "customfield_24893", "2-ways", "list", "", "", "", "{value}.toLowerCase().replace(' ', '.')"],
+        ["Dev estimate", "customfield_25757", "2-ways", "text"],
+        ["QA estimate", "customfield_25958", "2-ways", "text"],
+        ["Target start", "customfield_18350", "2-ways", "date"],
+        ["Target end", "customfield_18351", "2-ways", "date"],
+        ["Exist on Production", "customfield_10570", "2-ways", "text"],
+        ["Affect customers", "customfield_13250", "2-ways", "text"],
+        ["DEA", "customfield_26055", "2-ways", "list", "No"],
+        ["UX Ticket", "depends on", "2-ways", "link"],
+        ["Status", "status", "Back", "text"]
+    ];
+    
+    // 写入配置数据到新创建的 sheet
+    const writeUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${configSheetName}!A1?valueInputOption=USER_ENTERED`;
+    const writeResponse = await fetch(writeUrl, {
+        method: 'PUT',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: configData })
+    });
+    
+    if (!writeResponse.ok) {
+        const error = await writeResponse.json();
+        throw new Error(`写入配置数据失败: ${error.error?.message || '未知错误'}`);
+    }
+    
+    // 设置第一行为粗体
+    const formatRequest = {
+        requests: [{
+            repeatCell: {
+                range: {
+                    sheetId: newSheetId,
+                    startRowIndex: 0,
+                    endRowIndex: 1
+                },
+                cell: {
+                    userEnteredFormat: {
+                        textFormat: {
+                            bold: true
+                        }
+                    }
+                },
+                fields: 'userEnteredFormat.textFormat.bold'
+            }
+        }]
+    };
+    
+    const formatResponse = await fetch(url, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formatRequest)
+    });
+    
+    if (!formatResponse.ok) {
+        console.warn('设置格式失败，但配置表已创建');
+    }
+    
+    // 返回新创建的 sheet 的 gid
+    return newSheetId;
 }
