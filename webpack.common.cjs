@@ -6,7 +6,6 @@ const ESLintPlugin = require('eslint-webpack-plugin');
 const CopyPlugin = require('copy-webpack-plugin');
 const { VueLoaderPlugin } = require('vue-loader');
 const NodeProtocolResolverPlugin = require('./node-protocol-resolver.cjs');
-const RemoveNewFunctionPlugin = require('./RemoveNewFunctionPlugin.cjs');
 
 // 处理 manifest 模板
 const processManifestTemplate = (env) => {
@@ -20,7 +19,6 @@ module.exports = (env) => {
   processManifestTemplate(env);
 
   return {
-    target: ['web', 'es2020'],
     entry: {
       background: './src/background.ts',
       contentScript: './src/contentScript.tsx',
@@ -89,15 +87,7 @@ module.exports = (env) => {
       filename: '[name].js',
       path: path.resolve(__dirname, 'dist'),
       clean: true,
-      publicPath: '/',
-      // 避免 Webpack 使用 new Function() 来获取全局对象
-      // 这是为了符合 Manifest V3 的要求
-      globalObject: 'globalThis',
-      chunkFormat: 'array-push',
-      environment: {
-        dynamicImport: false,
-        module: false,
-      },
+      publicPath: '/'
     },
     plugins: [
       new VueLoaderPlugin(),
@@ -135,9 +125,7 @@ module.exports = (env) => {
         __VUE_OPTIONS_API__: JSON.stringify(true),
         __VUE_PROD_DEVTOOLS__: JSON.stringify(false),
         __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: JSON.stringify(false)
-      }),
-      // 移除 new Function() 调用，符合 Manifest V3 要求
-      new RemoveNewFunctionPlugin()
+      })
     ],
     optimization: {
       splitChunks: false,
