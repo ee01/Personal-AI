@@ -122,6 +122,8 @@ export interface SheetConfig {
     projectKey: string;
     jiraUrl: string;
     createdAt: string;
+    ruleVersion?: string;        // Jira Rule 版本号
+    ruleLastUpdated?: string;    // Jira Rule 最后更新时间
   };
 }
 

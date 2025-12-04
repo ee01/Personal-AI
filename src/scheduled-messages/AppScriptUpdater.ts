@@ -24,8 +24,8 @@ export class AppScriptUpdater {
   private token: string;
   private config: SheetConfig | null = null;
   
-  // 当前扩展中的 App Script 版本（从模板文件中提取）
-  private static readonly LATEST_APP_SCRIPT_VERSION = '1.0.0';
+  // 缓存版本信息，避免重复读取文件
+  private static cachedVersionInfo: { version: string; lastUpdated: string } | null = null;
   
   constructor(token: string, config?: SheetConfig) {
     this.token = token;
@@ -33,15 +33,75 @@ export class AppScriptUpdater {
   }
   
   /**
+   * 从 App Script 模板文件中解析版本信息
+   */
+  private static async parseVersionFromTemplate(): Promise<{ version: string; lastUpdated: string }> {
+    // 如果已经缓存，直接返回
+    if (AppScriptUpdater.cachedVersionInfo) {
+      return AppScriptUpdater.cachedVersionInfo;
+    }
+    
+    try {
+      const response = await fetch(chrome.runtime.getURL('app-script-template.gs'));
+      if (!response.ok) {
+        throw new Error(`无法加载模板文件: HTTP ${response.status}`);
+      }
+      
+      const content = await response.text();
+      
+      // 解析版本号：var APP_SCRIPT_VERSION = '2.1.0';
+      const versionMatch = content.match(/var\s+APP_SCRIPT_VERSION\s*=\s*['"`]([^'"`]+)['"`];/);
+      if (!versionMatch) {
+        throw new Error('无法找到 APP_SCRIPT_VERSION 定义');
+      }
+      
+      // 解析更新日期：var APP_SCRIPT_LAST_UPDATED = '2025-12-04';
+      const lastUpdatedMatch = content.match(/var\s+APP_SCRIPT_LAST_UPDATED\s*=\s*['"`]([^'"`]+)['"`];/);
+      if (!lastUpdatedMatch) {
+        throw new Error('无法找到 APP_SCRIPT_LAST_UPDATED 定义');
+      }
+      
+      const versionInfo = {
+        version: versionMatch[1],
+        lastUpdated: lastUpdatedMatch[1]
+      };
+      
+      // 缓存结果
+      AppScriptUpdater.cachedVersionInfo = versionInfo;
+      
+      console.log(`📦 从模板文件解析到版本信息: ${versionInfo.version} (${versionInfo.lastUpdated})`);
+      return versionInfo;
+      
+    } catch (error) {
+      console.error('解析模板文件版本信息失败:', error);
+      // 回退到默认版本
+      const fallbackVersion = { version: '1.0.0', lastUpdated: new Date().toISOString().split('T')[0] };
+      AppScriptUpdater.cachedVersionInfo = fallbackVersion;
+      return fallbackVersion;
+    }
+  }
+  
+  /**
+   * 获取最新的 App Script 版本号
+   */
+  static async getLatestVersion(): Promise<string> {
+    const versionInfo = await AppScriptUpdater.parseVersionFromTemplate();
+    return versionInfo.version;
+  }
+  
+  /**
    * 检查是否需要更新
    */
   async checkForUpdates(): Promise<UpdateCheckResult> {
     try {
+      // 获取最新版本号
+      const latestVersion = await AppScriptUpdater.getLatestVersion();
+      
       if (!this.config?.webAppUrl) {
         return {
           needsUpdate: false,
           currentVersion: 'unknown',
-          latestVersion: AppScriptUpdater.LATEST_APP_SCRIPT_VERSION,
+          latestVersion,
           error: '未找到 Web App 配置'
         };
       }
@@ -50,23 +110,22 @@ export class AppScriptUpdater {
       const currentVersion = await this.getDeployedVersion();
       
       // 比较版本
-      const needsUpdate = this.compareVersions(
-        currentVersion,
-        AppScriptUpdater.LATEST_APP_SCRIPT_VERSION
-      ) < 0;
+      const needsUpdate = this.compareVersions(currentVersion, latestVersion) < 0;
       
       return {
         needsUpdate,
         currentVersion,
-        latestVersion: AppScriptUpdater.LATEST_APP_SCRIPT_VERSION
+        latestVersion
       };
       
     } catch (error) {
       console.error('检查更新失败:', error);
+      // 发生错误时也需要获取最新版本号
+      const latestVersion = await AppScriptUpdater.getLatestVersion().catch(() => '1.0.0');
       return {
         needsUpdate: false,
         currentVersion: 'unknown',
-        latestVersion: AppScriptUpdater.LATEST_APP_SCRIPT_VERSION,
+        latestVersion,
         error: error instanceof Error ? error.message : String(error)
       };
     }
@@ -118,6 +177,9 @@ export class AppScriptUpdater {
       
       console.log('开始更新 App Script...');
       
+      // 0. 获取最新版本号
+      const latestVersion = await AppScriptUpdater.getLatestVersion();
+      
       // 1. 加载最新的 App Script 模板代码
       const scriptCode = await this.loadAppScriptTemplate();
       
@@ -125,23 +187,23 @@ export class AppScriptUpdater {
       await this.updateProjectContent(this.config.scriptId, scriptCode);
       
       // 3. 创建新版本
-      const versionNumber = await this.createVersion(this.config.scriptId);
+      const versionNumber = await this.createVersion(this.config.scriptId, latestVersion);
       
       // 4. 获取现有的 deployment ID（必须是有 versionNumber 的正式部署，不是 @HEAD）
       const deploymentId = await this.getOrCreateDeploymentId();
       
       // 5. 更新部署到新版本（保持 URL 不变）
-      await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber);
+      await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber, latestVersion);
       
       // 6. 更新配置中的版本信息
-      await this.updateConfigVersion();
+      await this.updateConfigVersion(latestVersion);
       
       console.log('App Script 更新成功！');
       
       return {
         success: true,
-        message: `App Script 已更新到版本 ${AppScriptUpdater.LATEST_APP_SCRIPT_VERSION}`,
-        newVersion: AppScriptUpdater.LATEST_APP_SCRIPT_VERSION
+        message: `App Script 已更新到版本 ${latestVersion}`,
+        newVersion: latestVersion
       };
       
     } catch (error) {
@@ -221,7 +283,7 @@ export class AppScriptUpdater {
   /**
    * 创建新版本
    */
-  private async createVersion(scriptId: string): Promise<number> {
+  private async createVersion(scriptId: string, version: string): Promise<number> {
     const response = await fetch(
       `https://script.googleapis.com/v1/projects/${scriptId}/versions`,
       {
@@ -231,7 +293,7 @@ export class AppScriptUpdater {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          description: `Auto update to version ${AppScriptUpdater.LATEST_APP_SCRIPT_VERSION}`
+          description: `Auto update to version ${version}`
         })
       }
     );
@@ -241,9 +303,9 @@ export class AppScriptUpdater {
       throw new Error(`创建版本失败: ${error}`);
     }
     
-    const version = await response.json();
-    console.log(`✅ 版本创建成功: ${version.versionNumber}`);
-    return version.versionNumber;
+    const versionResult = await response.json();
+    console.log(`✅ 版本创建成功: ${versionResult.versionNumber}`);
+    return versionResult.versionNumber;
   }
   
   /**
@@ -374,7 +436,8 @@ export class AppScriptUpdater {
   private async updateDeployment(
     scriptId: string,
     deploymentId: string,
-    versionNumber: number
+    versionNumber: number,
+    version: string
   ): Promise<void> {
     const response = await fetch(
       `https://script.googleapis.com/v1/projects/${scriptId}/deployments/${deploymentId}`,
@@ -388,7 +451,7 @@ export class AppScriptUpdater {
           deploymentConfig: {
             versionNumber: versionNumber,
             manifestFileName: 'appsscript',
-            description: `Personal AI Scheduled Messages v${AppScriptUpdater.LATEST_APP_SCRIPT_VERSION}`
+            description: `Personal AI Scheduled Messages v${version}`
           }
         })
       }
@@ -405,12 +468,12 @@ export class AppScriptUpdater {
   /**
    * 更新配置中的版本信息
    */
-  private async updateConfigVersion(): Promise<void> {
+  private async updateConfigVersion(version: string): Promise<void> {
     if (!this.config) {
       return;
     }
     
-    this.config.appScriptVersion = AppScriptUpdater.LATEST_APP_SCRIPT_VERSION;
+    this.config.appScriptVersion = version;
     this.config.appScriptLastUpdated = new Date().toISOString();
     
     // 保存到 Chrome Storage
@@ -462,6 +525,104 @@ export class AppScriptUpdater {
     }
     
     return 0;
+  }
+  
+  /**
+   * 静态方法：检查并自动更新 App Script
+   * 用于 background script 在扩展启动/更新时调用
+   * 
+   * @param getToken - 获取 Google OAuth token 的函数
+   * @param options - 可选配置
+   * @param options.delay - 执行前的延迟时间（毫秒），默认 3000ms
+   * @param options.showNotification - 是否显示 Chrome 通知，默认 true
+   */
+  static async checkAndAutoUpdate(
+    getToken: () => Promise<string | null>,
+    options: {
+      delay?: number;
+      showNotification?: boolean;
+    } = {}
+  ): Promise<void> {
+    const { delay = 3000, showNotification = true } = options;
+    
+    try {
+      // 延迟执行，避免与其他初始化冲突
+      if (delay > 0) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      
+      // 从 Chrome Storage 读取配置
+      const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
+      const config = result.scheduledMessagesConfig as SheetConfig | undefined;
+      
+      if (!config || !config.scriptId || !config.webAppUrl) {
+        console.log('⏭️ 未找到 Scheduled Messages 配置，跳过 App Script 更新检查');
+        return;
+      }
+      
+      console.log('✅ 找到 Scheduled Messages 配置，检查 App Script 版本...');
+      
+      // 获取 Google OAuth token
+      const token = await getToken();
+      if (!token) {
+        console.warn('⚠️ 无法获取 Google 授权，跳过 App Script 更新');
+        return;
+      }
+      
+      // 创建更新器实例
+      const updater = new AppScriptUpdater(token, config);
+      
+      // 检查是否需要更新
+      const checkResult = await updater.checkForUpdates();
+      
+      if (!checkResult.needsUpdate) {
+        console.log(`✅ App Script 已是最新版本 (${checkResult.currentVersion})`);
+        return;
+      }
+      
+      console.log(`🔄 发现新版本: ${checkResult.latestVersion}，当前版本: ${checkResult.currentVersion}`);
+      console.log('🚀 开始自动更新 App Script...');
+      
+      // 执行更新
+      const updateResult = await updater.updateAppScript();
+      
+      if (updateResult.success) {
+        console.log(`✅ ${updateResult.message}`);
+        
+        // 发送成功通知
+        if (showNotification) {
+          chrome.notifications.create(
+            `appscript-update-success-${Date.now()}`,
+            {
+              type: 'basic',
+              iconUrl: 'icons/icon128.png',
+              title: 'Personal AI - App Script 已更新',
+              message: `定时消息系统已自动更新到最新版本 ${updateResult.newVersion}`,
+              priority: 1
+            }
+          );
+        }
+      } else {
+        console.error(`❌ App Script 更新失败: ${updateResult.error}`);
+        
+        // 发送失败通知
+        if (showNotification) {
+          chrome.notifications.create(
+            `appscript-update-failed-${Date.now()}`,
+            {
+              type: 'basic',
+              iconUrl: 'icons/icon128.png',
+              title: 'Personal AI - App Script 更新失败',
+              message: '定时消息系统更新失败，请手动更新或联系管理员',
+              priority: 2
+            }
+          );
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ checkAndAutoUpdate 执行失败:', error);
+    }
   }
 }
 

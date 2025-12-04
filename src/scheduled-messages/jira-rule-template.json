@@ -1,6 +1,12 @@
 {
-  "name": "{{RULE_NAME}}",
+  "_metadata": {
+    "version": "1.0.0",
+    "lastUpdated": "2025-12-04",
+    "description": "Personal AI Scheduled Messages Bot Executor Rule Template"
+  },
+  "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
   "state": "ENABLED",
+  "description": "Personal AI Bot Executor v{{RULE_VERSION}}",
   "canOtherRuleTrigger": false,
   "notifyOnError": "FIRSTERROR",
   "authorAccountId": "{{USER_KEY}}",
@@ -229,6 +235,50 @@
       "newComponent": false
     },
     {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_replacedTopic",
+        "name": {
+          "type": "FREE",
+          "value": "replacedTopic"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body.topic}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_replacedContent",
+        "name": {
+          "type": "FREE",
+          "value": "replacedContent"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body.content}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
       "component": "CONDITION",
       "schemaVersion": 1,
       "type": "jira.comparator.condition",
@@ -296,7 +346,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true&topic={{replacedTopic.urlEncode}}&content={{replacedContent.urlEncode}}",
                 "headers": [],
                 "sendIssue": false,
                 "contentType": "empty",
@@ -378,7 +428,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true&topic={{replacedTopic.urlEncode}}&content={{replacedContent.urlEncode}}",
                 "headers": [],
                 "sendIssue": false,
                 "contentType": "empty",
@@ -450,7 +500,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true&topic={{replacedTopic.urlEncode}}&content={{replacedContent.urlEncode}}",
                 "headers": [
                   {
                     "id": "_header_1762763239434",

@@ -507,7 +507,7 @@ export class ScheduledMessageService {
   /**
    * 获取 Messages Sheet 的 sheetId
    */
-  private async getMessagesSheetId(forceRefresh: boolean = false): Promise<number> {
+  private async getMessagesSheetId(forceRefresh = false): Promise<number> {
     // 如果配置中有 messagesSheetId 且不强制刷新，直接使用
     // 注意：sheetId 可以是 0，这是有效值，所以只检查 undefined
     if (!forceRefresh && this.config?.messagesSheetId !== undefined && this.config.messagesSheetId !== null) {

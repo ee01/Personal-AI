@@ -2,9 +2,6 @@
  * Personal AI - 定时消息执行引擎
  * 统一处理 Email 推送的定时消息
  * 
- * @version 1.0.0
- * @lastUpdated 2025-12-01
- * 
  * ===== 动态列映射支持 =====
  * 本脚本支持动态识别 Google Sheet 的列位置，用户可以自由调整列的顺序：
  * 
@@ -29,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '1.0.0';
-var APP_SCRIPT_LAST_UPDATED = '2025-12-01';
+var APP_SCRIPT_VERSION = '2.1.1';
+var APP_SCRIPT_LAST_UPDATED = '2025-12-04';
 
 
 /**
@@ -139,12 +136,16 @@ function executeScheduledMessages() {
         Logger.log(`准备执行消息: ${rowData.ID} - ${rowData.Topic} (类型: ${messageType})`);
         
         // 发送 Email
-        const success = sendEmailToGlip(rowData);
+        const emailResult = sendEmailToGlip(rowData);
         
-        // 更新执行记录
-        updateExecutionLog(sheet, i + 1, rowData, success, headers);
+        // 更新执行记录（传递实际发送的内容，即使 AsMe 不支持变量替换）
+        const sentContent = emailResult.success ? {
+          topic: emailResult.sentTopic,
+          content: emailResult.sentContent
+        } : null;
+        updateExecutionLog(sheet, i + 1, rowData, emailResult.success, headers, emailResult.error, sentContent);
         
-        Logger.log(`消息执行${success ? '成功' : '失败'}: ${rowData.ID}`);
+        Logger.log(`消息执行${emailResult.success ? '成功' : '失败'}: ${rowData.ID}`);
       }
     } catch (error) {
       Logger.log(`处理消息时出错 ${rowData.ID}: ${error}`);
@@ -297,6 +298,7 @@ function checkPeriodicSchedule(rowData, now) {
 
 /**
  * 发送邮件到 Glip
+ * @returns {object} { success: boolean, sentTopic?: string, sentContent?: string, error?: string }
  */
 function sendEmailToGlip(rowData) {
   try {
@@ -312,7 +314,7 @@ function sendEmailToGlip(rowData) {
       toEmail = rowData.Glip_Team_ID.toString().trim() + '@reply.ringcentral.glip.com';
     } else {
       Logger.log('错误：未指定收件人');
-      return false;
+      return { success: false, error: '未指定收件人' };
     }
     
     const attachments = [];
@@ -327,9 +329,15 @@ function sendEmailToGlip(rowData) {
     }
     
     // AsMe 推送不处理 Timeline 消息（Timeline 需要通过 Jira 获取内网 release info）
-    // 所以这里不需要替换项目进度变量
+    // 所以这里不需要替换项目进度变量，但记录实际发送的内容到日志
     let topic = rowData.Topic.toString();
     let content = rowData.Content.toString();
+    
+    // 检查是否包含项目变量（用于日志记录）
+    const hasProjectVars = content.includes('{current') || content.includes('{next') || topic.includes('{current') || topic.includes('{next');
+    if (hasProjectVars) {
+      Logger.log(`警告：AsMe 消息包含项目变量但无法替换: ${rowData.ID}`);
+    }
     
     const htmlContent = content.replaceAll("\n", '<br />');
     
@@ -341,11 +349,18 @@ function sendEmailToGlip(rowData) {
     });
     
     Logger.log(`邮件发送成功至: ${toEmail}`);
-    return true;
+    return { 
+      success: true, 
+      sentTopic: topic,
+      sentContent: content 
+    };
     
   } catch (error) {
     Logger.log('发送邮件失败: ' + error);
-    return false;
+    return { 
+      success: false, 
+      error: error.toString()
+    };
   }
 }
 
@@ -436,8 +451,10 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
  * - Timeline: 不标记为 Done（基于发布周期，会重复触发）
  * - OneTime: 执行一次后标记为 Done
  * - Periodic: 达到结束日期或重复次数后标记为 Done
+ * 
+ * @param {object} replacedContent - 可选，替换变量后的内容 { topic, content }
  */
-function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg) {
+function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg, replacedContent) {
   const now = new Date();
   const execCount = (parseInt(rowData.Exec_Count) || 0) + 1;
   const nextExec = calculateNextExecution(rowData, now);
@@ -488,10 +505,14 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     target = rowData.Glip_Team_ID.toString().trim();
   }
   
+  // 使用替换后的内容（如果提供），否则使用原始内容
+  const logTopic = (replacedContent && replacedContent.topic) ? replacedContent.topic : (rowData.Topic || '');
+  const logContent = (replacedContent && replacedContent.content) ? replacedContent.content : (rowData.Content || '');
+  
   insertPushLog(
     rowData.ID,
-    rowData.Topic || '',
-    rowData.Content || '',
+    logTopic,
+    logContent,
     rowData.Push_Method || 'AsMe',
     target,
     success,
@@ -681,9 +702,12 @@ function doGet(e) {
     const rowIndex = parseInt(e.parameter.rowIndex) || 0;
     const success = e.parameter.success === 'true';
     const error = e.parameter.error || '';
+    // 接收替换后的内容（用于日志记录）
+    const replacedTopic = e.parameter.topic ? decodeURIComponent(e.parameter.topic) : '';
+    const replacedContent = e.parameter.content ? decodeURIComponent(e.parameter.content) : '';
     
     return ContentService.createTextOutput(
-      JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error))
+      JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent))
     ).setMimeType(ContentService.MimeType.JSON);
   }
   
@@ -789,9 +813,11 @@ function setupTriggersInternal() {
  * @param {number} rowIndex - 行索引（从 getMessageCurrentTimeWithReleaseInfo 返回，可选）
  * @param {boolean} success - 是否成功
  * @param {string} errorMsg - 错误消息（可选）
+ * @param {string} replacedTopic - 替换变量后的主题（可选，用于日志记录）
+ * @param {string} replacedContent - 替换变量后的内容（可选，用于日志记录）
  * @returns {object} 更新结果
  */
-function markBotMessageExecuted(messageId, rowIndex, success, errorMsg) {
+function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent) {
   try {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
     if (!sheet) {
@@ -828,8 +854,14 @@ function markBotMessageExecuted(messageId, rowIndex, success, errorMsg) {
     
     const rowData = parseRow(row, headers);
     
+    // 构建替换后的内容对象（用于日志记录）
+    const replacedContentObj = (replacedTopic || replacedContent) ? {
+      topic: replacedTopic || '',
+      content: replacedContent || ''
+    } : null;
+    
     // 更新执行日志（已包含 shouldMarkAsDone 判断和 insertPushLog 调用）
-    updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg);
+    updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg, replacedContentObj);
     
     Logger.log(`标记消息执行完成: ${messageId}, 成功: ${success}`);
     
@@ -1014,18 +1046,17 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       // 找到匹配的消息
       Logger.log(`[${matchMode}] 匹配消息: ${rowData.ID} - ${rowData.Topic} (行: ${i + 1})`);
       
-      // 替换项目进度变量（仅 Timeline 消息）
+      // 替换项目进度变量（Bot/AI 所有场景都支持）
       let topic = rowData.Topic;
       let content = rowData.Content;
       let aiBody = rowData.AI_Body || '';
       
-      if (messageType === 'Timeline' && rowData.Timeline_Project) {
+      // 如果有 releaseInfo 且设置了 Timeline_Project，则替换变量
+      if (rowData.Timeline_Project && releaseInfo && releaseInfo[rowData.Timeline_Project]) {
         const projectInfo = releaseInfo[rowData.Timeline_Project];
-        if (projectInfo) {
-          topic = replaceProjectVariablesInText(topic, projectInfo);
-          content = replaceProjectVariablesInText(content, projectInfo);
-          aiBody = replaceProjectVariablesInText(aiBody, projectInfo);
-        }
+        topic = replaceProjectVariablesInText(topic, projectInfo);
+        content = replaceProjectVariablesInText(content, projectInfo);
+        aiBody = replaceProjectVariablesInText(aiBody, projectInfo);
       }
       
       // 生成 glipEmailAddress（用于 email targetType）
@@ -1454,9 +1485,9 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       
       Logger.log(`AI URL 解析结果: host=${endpointInfo.host}, uri=${endpointInfo.uri}, method=${endpointInfo.method}`);
       
-      // 立即标记为成功（避免超时重复）
+      // 立即标记为成功（避免超时重复），传递替换后的内容用于日志记录
       try {
-        markBotMessageExecuted(messageId, message.rowIndex, true, '');
+        markBotMessageExecuted(messageId, message.rowIndex, true, '', message.Topic, message.Content);
         Logger.log(`AI 消息已标记为成功: ${messageId}`);
       } catch (markError) {
         Logger.log(`标记 AI 消息失败: ${markError}`);
