@@ -96,6 +96,14 @@ export class ConfigSyncService {
             if (!config.botExecutor) config.botExecutor = {} as any;
             config.botExecutor.createdAt = value;
             break;
+          case 'bot_executor_rule_version':
+            if (!config.botExecutor) config.botExecutor = {} as any;
+            config.botExecutor.ruleVersion = value;
+            break;
+          case 'bot_executor_rule_last_updated':
+            if (!config.botExecutor) config.botExecutor = {} as any;
+            config.botExecutor.ruleLastUpdated = value;
+            break;
         }
       }
       
@@ -150,6 +158,12 @@ export class ConfigSyncService {
         configData.push(['bot_executor_project_key', config.botExecutor.projectKey]);
         configData.push(['bot_executor_jira_url', config.botExecutor.jiraUrl]);
         configData.push(['bot_executor_created_at', config.botExecutor.createdAt]);
+        if (config.botExecutor.ruleVersion) {
+          configData.push(['bot_executor_rule_version', config.botExecutor.ruleVersion]);
+        }
+        if (config.botExecutor.ruleLastUpdated) {
+          configData.push(['bot_executor_rule_last_updated', config.botExecutor.ruleLastUpdated]);
+        }
       }
       
       // 更新 Sheet Config 表

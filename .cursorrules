@@ -5,3 +5,4 @@
 docs: If code contains a lot of docstrings, surface them to the user.
 doc-update: When discussing features described in docs/, Claude should check if discussion contains updates that should be reflected in documentation and offer to update relevant .mdc files.
 slides-analyzer: If discussing changes to google_slides_analyzer feature, check if docs/features/google_slides_analyzer.mdc needs to be updated.
+app-script-version: When modifying src/scheduled-messages/app-script-template.gs, MUST update APP_SCRIPT_VERSION and APP_SCRIPT_LAST_UPDATED at the top of the file. For bug fixes or minor changes, increment patch version (e.g., 2.0.0 -> 2.0.1). For new features, increment minor version (e.g., 2.0.1 -> 2.1.0). For breaking changes, increment major version (e.g., 2.1.0 -> 3.0.0).

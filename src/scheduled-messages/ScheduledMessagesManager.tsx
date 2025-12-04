@@ -780,17 +780,28 @@ const VariableSelector: React.FC<{
   onInsert: (variable: string) => void;
   excludeVariables?: string[];
 }> = ({ onInsert, excludeVariables = [] }) => {
+  // 项目变量列表（用于检测是否插入了项目变量）
+  const projectVariables = [
+    '{currentRelease}',
+    '{currentPhase}',
+    '{currentPhaseStartDate}',
+    '{currentPhaseStartedWorkdays}',
+    '{nextPhase}',
+    '{nextPhaseStartDate}',
+    '{nextPhaseCountdownWorkdays}'
+  ];
+  
   const variables = [
     { key: '{Topic}', label: '消息主题' },
     { key: '{Content}', label: '消息内容' },
     { key: '{TeamID}', label: '群组 ID' },
-    { key: '{currentRelease}', label: '当前 Release' },
-    { key: '{currentPhase}', label: '当前 Phase' },
-    { key: '{currentPhaseStartDate}', label: '当前 Phase 日期' },
-    { key: '{currentPhaseStartedWorkdays}', label: '已过天数' },
-    { key: '{nextPhase}', label: '下个 Phase' },
-    { key: '{nextPhaseStartDate}', label: '下个 Phase 日期' },
-    { key: '{nextPhaseCountdownWorkdays}', label: '距离天数' }
+    { key: '{currentRelease}', label: '当前 Release', isProjectVar: true },
+    { key: '{currentPhase}', label: '当前 Phase', isProjectVar: true },
+    { key: '{currentPhaseStartDate}', label: '当前 Phase 日期', isProjectVar: true },
+    { key: '{currentPhaseStartedWorkdays}', label: '已过天数', isProjectVar: true },
+    { key: '{nextPhase}', label: '下个 Phase', isProjectVar: true },
+    { key: '{nextPhaseStartDate}', label: '下个 Phase 日期', isProjectVar: true },
+    { key: '{nextPhaseCountdownWorkdays}', label: '距离天数', isProjectVar: true }
   ].filter(v => !excludeVariables.includes(v.key));
 
   if (variables.length === 0) return null;
@@ -1080,10 +1091,17 @@ const AddMessageDialog: React.FC<{
   // AI Report 可视化字段
   const [aiReportJql, setAiReportJql] = useState('');
   const [aiReportOutputs, setAiReportOutputs] = useState({
-    noduedate: true,
+    noduedate: false,
     overdue: true,
-    toTest: true
+    toTest: false,
+    tickets: true
   });
+  const [ticketIncludes, setTicketIncludes] = useState<string[]>(['summary', 'status', 'assignee', 'reporter']);
+  const [customOutputs, setCustomOutputs] = useState<{name: string; prompt: string}[]>([]);
+  const [showCustomOutputDialog, setShowCustomOutputDialog] = useState(false);
+  const [editingCustomOutputIndex, setEditingCustomOutputIndex] = useState<number | null>(null);
+  const [customOutputName, setCustomOutputName] = useState('');
+  const [customOutputPrompt, setCustomOutputPrompt] = useState('');
   const [aiReportTeamId, setAiReportTeamId] = useState('');
   const [aiReportMentionList, setAiReportMentionList] = useState<string[]>([]);
   const [aiReportExtraText, setAiReportExtraText] = useState('');
@@ -1092,6 +1110,7 @@ const AddMessageDialog: React.FC<{
   // Body 输入框的 ref，用于插入变量
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const jqlTextareaRef = useRef<HTMLTextAreaElement>(null);
   
   // 提醒模式：展开高级选项的状态
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
@@ -1234,18 +1253,30 @@ const AddMessageDialog: React.FC<{
       .map(([key]) => key)
       .join(', ');
     
+    const inputs: any = {
+      title: '{Topic}',
+      outputs: outputs,
+      jql: '{Content}',
+      extraText: aiReportExtraText,
+      teamId: '{TeamID}',
+      mentionList: formatUserName.joinForMentionList(aiReportMentionList)
+    };
+    
+    // 如果选择了列出JQL查询结果，添加 ticketIncludes
+    if (aiReportOutputs.tickets) {
+      inputs.ticketIncludes = ticketIncludes;
+    }
+    
+    // 如果有自定义版块，添加 customOutputs
+    if (customOutputs.length > 0) {
+      inputs.customOutputs = customOutputs;
+    }
+    
     return JSON.stringify({
       response_mode: 'blocking',
       user: 'default-user',
       query: '{Topic}',
-      inputs: {
-        title: '{Topic}',
-        outputs: outputs,
-        jql: '{Content}',
-        extraText: aiReportExtraText,
-        teamId: '{TeamID}',
-        mentionList: formatUserName.joinForMentionList(aiReportMentionList)
-      }
+      inputs: inputs
     }, null, 2);
   };
   
@@ -1301,7 +1332,7 @@ const AddMessageDialog: React.FC<{
       // 动态构建 AI_Body
       handleChange('AI_Body', buildAiReportBody());
     }
-  }, [aiReportJql, aiReportOutputs, aiReportTeamId, aiReportMentionList, aiReportExtraText]);
+  }, [aiReportJql, aiReportOutputs, aiReportTeamId, aiReportMentionList, aiReportExtraText, ticketIncludes, customOutputs]);
   
   // Header 管理函数
   const addAIHeader = () => {
@@ -1328,6 +1359,40 @@ const AddMessageDialog: React.FC<{
     handleChange('AI_Headers', formatHeadersToString(newHeaders));
   };
   
+  // 检查是否是项目变量
+  const isProjectVariable = (variable: string) => {
+    const projectVariables = [
+      '{currentRelease}',
+      '{currentPhase}',
+      '{currentPhaseStartDate}',
+      '{currentPhaseStartedWorkdays}',
+      '{nextPhase}',
+      '{nextPhaseStartDate}',
+      '{nextPhaseCountdownWorkdays}'
+    ];
+    return projectVariables.includes(variable);
+  };
+  
+  // 检查内容中是否包含项目变量
+  const hasProjectVariables = () => {
+    const content = formData.Content || '';
+    const aiBody = formData.AI_Body || '';
+    const topic = formData.Topic || '';
+    const combinedText = content + aiBody + topic;
+    
+    const projectVariables = [
+      '{currentRelease}',
+      '{currentPhase}',
+      '{currentPhaseStartDate}',
+      '{currentPhaseStartedWorkdays}',
+      '{nextPhase}',
+      '{nextPhaseStartDate}',
+      '{nextPhaseCountdownWorkdays}'
+    ];
+    
+    return projectVariables.some(v => combinedText.includes(v));
+  };
+  
   // 插入变量到 Body 输入框
   const insertVariableToBody = (variable: string) => {
     const textarea = bodyTextareaRef.current;
@@ -1339,6 +1404,11 @@ const AddMessageDialog: React.FC<{
     const newText = text.substring(0, start) + variable + text.substring(end);
     
     handleChange('AI_Body', newText);
+    
+    // 如果插入的是项目变量，自动设置默认项目（如果还没设置）
+    if (isProjectVariable(variable) && !formData.Timeline_Project) {
+      handleChange('Timeline_Project', 'mThor');
+    }
     
     // 设置光标位置到插入变量之后
     setTimeout(() => {
@@ -1358,6 +1428,35 @@ const AddMessageDialog: React.FC<{
     const newText = text.substring(0, start) + variable + text.substring(end);
     
     handleChange('Content', newText);
+    
+    // 如果插入的是项目变量，自动设置默认项目（如果还没设置）
+    if (isProjectVariable(variable) && !formData.Timeline_Project) {
+      handleChange('Timeline_Project', 'mThor');
+    }
+    
+    // 设置光标位置到插入变量之后
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + variable.length, start + variable.length);
+    }, 0);
+  };
+  
+  // 插入变量到 JQL 输入框
+  const insertVariableToJql = (variable: string) => {
+    const textarea = jqlTextareaRef.current;
+    if (!textarea) return;
+    
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = aiReportJql || '';
+    const newText = text.substring(0, start) + variable + text.substring(end);
+    
+    setAiReportJql(newText);
+    
+    // 如果插入的是项目变量，自动设置默认项目（如果还没设置）
+    if (isProjectVariable(variable) && !formData.Timeline_Project) {
+      handleChange('Timeline_Project', 'mThor');
+    }
     
     // 设置光标位置到插入变量之后
     setTimeout(() => {
@@ -1528,8 +1627,8 @@ const AddMessageDialog: React.FC<{
                 placeholder={isReminderMode ? "输入提醒内容" : "输入消息内容"}
                 rows={4}
               />
-              {/* 提醒模式下隐藏变量选择器 */}
-              {!isReminderMode && (
+              {/* 提醒模式下隐藏变量选择器，AsMe 模式也隐藏（无法获取 releaseInfo）*/}
+              {!isReminderMode && formData.Push_Method !== 'AsMe' && (
                 <VariableSelector 
                   onInsert={insertVariableToContent}
                   excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
@@ -1548,8 +1647,8 @@ const AddMessageDialog: React.FC<{
                 opacity: showAdvancedOptions ? 1 : 0,
               }}
             >
-              {/* 变量选择器 */}
-              {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report') && (
+              {/* 变量选择器（AsMe 模式隐藏，无法获取 releaseInfo）*/}
+              {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report') && formData.Push_Method !== 'AsMe' && (
                 <div style={dialogStyles.formGroup}>
                   <VariableSelector 
                     onInsert={insertVariableToContent}
@@ -1804,6 +1903,30 @@ const AddMessageDialog: React.FC<{
                   />
                   <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
                 </div>
+              </div>
+            </div>
+          )}
+          
+          {/* 项目选择器（非 Timeline 模式下，检测到项目变量时显示）*/}
+          {!isTimelineTrigger && hasProjectVariables() && formData.Push_Method !== 'AsMe' && (
+            <div style={{...dialogStyles.section, backgroundColor: '#fff8e1', padding: '12px', borderRadius: '8px', marginBottom: '16px'}}>
+              <div style={{marginBottom: '8px', color: '#856404', fontSize: '13px', fontWeight: '500'}}>
+                💡 检测到项目变量，请选择项目
+              </div>
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>项目 *</label>
+                <select
+                  style={dialogStyles.select}
+                  value={formData.Timeline_Project || 'mThor'}
+                  onChange={(e) => handleChange('Timeline_Project', e.target.value)}
+                >
+                  <option value="mThor">mThor</option>
+                  <option value="Jupiter desktop">Jupiter desktop</option>
+                  <option value="Jupiter web">Jupiter web</option>
+                </select>
+                <small style={dialogStyles.hint}>
+                  选择项目以替换消息中的变量（如 {'{currentRelease}'}、{'{nextPhase}'} 等）
+                </small>
               </div>
             </div>
           )}
@@ -2188,19 +2311,122 @@ const AddMessageDialog: React.FC<{
                   <div style={dialogStyles.formGroup}>
                     <label style={dialogStyles.label}>JQL 查询 *</label>
                     <textarea 
+                      ref={jqlTextareaRef}
                       style={dialogStyles.textarea}
                       value={aiReportJql}
                       onChange={(e) => setAiReportJql(e.target.value)}
                       placeholder='例如：project = MTR AND status = "In Progress"'
                       rows={3}
                     />
-                    <small style={dialogStyles.hint}>此内容会自动同步到上方的"消息内容"字段</small>
+                    {/* JQL 变量选择器 - 只显示当前 Release */}
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '8px 10px',
+                      backgroundColor: '#f8f9fa',
+                      borderRadius: '4px',
+                      border: '1px solid #e0e0e0',
+                      fontSize: '12px',
+                      color: '#666',
+                    }}>
+                      <span style={{ marginRight: '8px' }}>💡 插入变量：</span>
+                      <button
+                        type="button"
+                        onClick={() => insertVariableToJql('{currentRelease}')}
+                        style={{
+                          padding: '2px 8px',
+                          backgroundColor: '#e0e0e0',
+                          color: '#555',
+                          border: 'none',
+                          borderRadius: '12px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          transition: 'background-color 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#d0d0d0';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = '#e0e0e0';
+                        }}
+                        title="插入 {currentRelease}"
+                      >
+                        当前 Release
+                      </button>
+                    </div>
                   </div>
                   
                   {/* 版块自定义 */}
                   <div style={dialogStyles.formGroup}>
                     <label style={dialogStyles.label}>版块自定义</label>
                     <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                      
+                      {/* 列出JQL查询结果 */}
+                      <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '14px'}}>
+                        <input 
+                          type="checkbox"
+                          checked={aiReportOutputs.tickets}
+                          onChange={(e) => setAiReportOutputs({...aiReportOutputs, tickets: e.target.checked})}
+                          style={{marginRight: '8px'}}
+                        />
+                        列出JQL查询结果
+                      </label>
+                      {/* ticket 字段多选 */}
+                      {aiReportOutputs.tickets && (
+                        <div style={{
+                          marginLeft: '24px',
+                          padding: '12px',
+                          backgroundColor: '#f8f9fa',
+                          borderRadius: '6px',
+                          border: '1px solid #e0e0e0',
+                        }}>
+                          <div style={{fontSize: '13px', color: '#666', marginBottom: '8px'}}>
+                            选择要展示的 ticket 字段：
+                          </div>
+                          <div style={{display: 'flex', flexWrap: 'wrap', gap: '8px'}}>
+                            {[
+                              { key: 'summary', label: 'Summary' },
+                              { key: 'status', label: 'Status' },
+                              { key: 'assignee', label: 'Assignee' },
+                              { key: 'reporter', label: 'Reporter' },
+                              { key: 'priority', label: 'Priority' },
+                              { key: 'duedate', label: 'Due Date' },
+                              { key: 'created', label: 'Created' },
+                              { key: 'updated', label: 'Updated' },
+                              { key: 'labels', label: 'Labels' },
+                              { key: 'components', label: 'Components' },
+                            ].map(field => (
+                              <label 
+                                key={field.key}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  cursor: 'pointer',
+                                  fontSize: '13px',
+                                  padding: '4px 8px',
+                                  backgroundColor: ticketIncludes.includes(field.key) ? '#e3f2fd' : '#fff',
+                                  border: `1px solid ${ticketIncludes.includes(field.key) ? '#1976d2' : '#ddd'}`,
+                                  borderRadius: '4px',
+                                }}
+                              >
+                                <input 
+                                  type="checkbox"
+                                  checked={ticketIncludes.includes(field.key)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setTicketIncludes([...ticketIncludes, field.key]);
+                                    } else {
+                                      setTicketIncludes(ticketIncludes.filter(f => f !== field.key));
+                                    }
+                                  }}
+                                  style={{marginRight: '4px'}}
+                                />
+                                {field.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '14px'}}>
                         <input 
                           type="checkbox"
@@ -2228,8 +2454,233 @@ const AddMessageDialog: React.FC<{
                         />
                         展示待 QA 验证的 tickets
                       </label>
+                      
+                      {/* 已添加的自定义版块列表 */}
+                      {customOutputs.map((output, index) => (
+                        <div 
+                          key={index}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '8px 12px',
+                            backgroundColor: '#e8f5e9',
+                            borderRadius: '6px',
+                            border: '1px solid #a5d6a7',
+                          }}
+                        >
+                          <div style={{flex: 1}}>
+                            <span style={{fontWeight: 'bold', color: '#2e7d32', fontSize: '14px'}}>
+                              📋 {output.name}
+                            </span>
+                            <span style={{color: '#666', fontSize: '12px', marginLeft: '8px'}}>
+                              (自定义版块)
+                            </span>
+                          </div>
+                          <div style={{display: 'flex', gap: '8px'}}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCustomOutputIndex(index);
+                                setCustomOutputName(output.name);
+                                setCustomOutputPrompt(output.prompt);
+                                setShowCustomOutputDialog(true);
+                              }}
+                              style={{
+                                padding: '4px 10px',
+                                backgroundColor: '#fff',
+                                color: '#1976d2',
+                                border: '1px solid #1976d2',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                              }}
+                            >
+                              编辑
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomOutputs(customOutputs.filter((_, i) => i !== index));
+                              }}
+                              style={{
+                                padding: '4px 10px',
+                                backgroundColor: '#fff',
+                                color: '#dc3545',
+                                border: '1px solid #dc3545',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {/* 添加自定义版块按钮 */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCustomOutputIndex(null);
+                          setCustomOutputName('');
+                          setCustomOutputPrompt('');
+                          setShowCustomOutputDialog(true);
+                        }}
+                        style={{
+                          padding: '8px 16px',
+                          backgroundColor: '#fff',
+                          color: '#28a745',
+                          border: '1px dashed #28a745',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          marginTop: '4px',
+                        }}
+                      >
+                        ➕ 添加自定义版块
+                      </button>
                     </div>
                   </div>
+                  
+                  {/* 自定义版块对话框 */}
+                  {showCustomOutputDialog && (
+                    <div style={{
+                      position: 'fixed',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      zIndex: 2000,
+                    }}>
+                      <div style={{
+                        backgroundColor: '#fff',
+                        borderRadius: '12px',
+                        padding: '20px',
+                        maxWidth: '500px',
+                        width: '90%',
+                        boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)',
+                      }}>
+                        <h3 style={{margin: '0 0 16px 0', fontSize: '18px', color: '#333'}}>
+                          {editingCustomOutputIndex !== null ? '📝 编辑自定义版块' : '➕ 添加自定义版块'}
+                        </h3>
+                        
+                        <div style={{marginBottom: '16px'}}>
+                          <label style={{display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 'bold', color: '#333'}}>
+                            版块名称 *
+                          </label>
+                          <input 
+                            type="text"
+                            value={customOutputName}
+                            onChange={(e) => setCustomOutputName(e.target.value)}
+                            placeholder="例如：风险分析"
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                        </div>
+                        
+                        <div style={{marginBottom: '16px'}}>
+                          <label style={{display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 'bold', color: '#333'}}>
+                            Prompt *
+                          </label>
+                          <textarea 
+                            value={customOutputPrompt}
+                            onChange={(e) => setCustomOutputPrompt(e.target.value)}
+                            placeholder="例如：分析这些 tickets 中可能存在的风险点，并给出建议"
+                            rows={4}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                              resize: 'vertical',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                          <small style={{display: 'block', marginTop: '4px', fontSize: '12px', color: '#999'}}>
+                            描述 AI 应该如何处理这个版块的内容
+                          </small>
+                        </div>
+                        
+                        <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px'}}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowCustomOutputDialog(false);
+                              setEditingCustomOutputIndex(null);
+                              setCustomOutputName('');
+                              setCustomOutputPrompt('');
+                            }}
+                            style={{
+                              padding: '10px 20px',
+                              backgroundColor: '#6c757d',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: '14px',
+                            }}
+                          >
+                            取消
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!customOutputName.trim() || !customOutputPrompt.trim()) {
+                                alert('请填写版块名称和 Prompt');
+                                return;
+                              }
+                              
+                              const newOutput = { name: customOutputName.trim(), prompt: customOutputPrompt.trim() };
+                              
+                              if (editingCustomOutputIndex !== null) {
+                                // 编辑模式
+                                const newOutputs = [...customOutputs];
+                                newOutputs[editingCustomOutputIndex] = newOutput;
+                                setCustomOutputs(newOutputs);
+                              } else {
+                                // 添加模式
+                                setCustomOutputs([...customOutputs, newOutput]);
+                              }
+                              
+                              setShowCustomOutputDialog(false);
+                              setEditingCustomOutputIndex(null);
+                              setCustomOutputName('');
+                              setCustomOutputPrompt('');
+                            }}
+                            style={{
+                              padding: '10px 20px',
+                              backgroundColor: '#28a745',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: '14px',
+                            }}
+                          >
+                            {editingCustomOutputIndex !== null ? '保存修改' : '添加版块'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Team ID */}
                   <div style={dialogStyles.formGroup}>
@@ -2297,6 +2748,7 @@ const AddMessageDialog: React.FC<{
                       placeholder='{"key": "value"}'
                       rows={8}
                     />
+                    {/* AI 模式支持变量插入 */}
                     <VariableSelector 
                       onInsert={insertVariableToBody}
                     />

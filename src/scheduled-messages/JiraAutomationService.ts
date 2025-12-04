@@ -6,6 +6,10 @@
 import ruleTemplate from './jira-rule-template.json';
 import { getEnvConfig } from '../utils';
 
+// Jira Rule 版本信息（从模板的 _metadata 字段读取）
+export const JIRA_RULE_VERSION = (ruleTemplate as any)._metadata?.version || '1.0.0';
+export const JIRA_RULE_LAST_UPDATED = (ruleTemplate as any)._metadata?.lastUpdated || '2025-12-04';
+
 export interface JiraAutomationConfig {
   jiraUrl: string;  // Jira 实例 URL，如 https://jira.ringcentral.com
   projectKey: string;  // 项目 Key，如 MTR
@@ -18,6 +22,27 @@ export interface BotExecutorRule {
   webhookUrl: string;
   projectKey: string;
   createdAt: string;
+  ruleVersion?: string;  // 规则版本号
+}
+
+// Jira 规则完整对象（从 API 返回）
+export interface JiraRule {
+  id: number;
+  clientKey?: string;
+  name: string;
+  state: string;
+  description?: string;
+  canOtherRuleTrigger: boolean;
+  notifyOnError: string;
+  authorAccountId: string;
+  actorAccountId: string;
+  created?: number;
+  updated?: number;
+  trigger: any;
+  components: any[];
+  projects: any[];
+  labels: any[];
+  tags: any[];
 }
 
 export class JiraAutomationService {
@@ -195,7 +220,7 @@ export class JiraAutomationService {
     console.log('正在读取 Bot 配置...');
     const envConfig = await getEnvConfig();
     const { userinfo } = await chrome.storage.local.get('userinfo');
-    const ruleName = `[${userinfo.fullName.split(' ')[0]}] Scheduled Messages Bot Executor`;
+    const ruleName = `[${userinfo.fullName.split(' ')[0]}] Scheduled Messages`;
     console.log(`Bot Type: ${envConfig.BOT_TYPE}`);
     console.log(`用户邮箱: ${userinfo.userEmail}`);
     
@@ -203,6 +228,7 @@ export class JiraAutomationService {
     const templateString = JSON.stringify(ruleTemplate);
     const rulePayloadString = templateString
       .replace(/{{RULE_NAME}}/g, ruleName)
+      .replace(/{{RULE_VERSION}}/g, JIRA_RULE_VERSION)
       .replace(/{{WEB_APP_URL}}/g, webAppUrl)
       .replace(/{{BOT_API_BASE_URL}}/g, envConfig.BOT_API_BASE_URL)
       .replace(/{{BOT_TOKEN}}/g, envConfig.BOT_TOKEN)
@@ -213,6 +239,9 @@ export class JiraAutomationService {
       .replace(/{{USER_KEY}}/g, userKey);
     
     const rulePayload = JSON.parse(rulePayloadString);
+    
+    // 移除 _metadata 字段（这是模板内部使用的，不应发送到 Jira）
+    delete rulePayload._metadata;
     
     console.log('创建 Jira Automation 规则:', ruleName);
     console.log('用户 Key:', userKey);
@@ -244,11 +273,12 @@ export class JiraAutomationService {
     console.log('创建规则成功:', result);
     
     return {
-      ruleId: result.id,
-      ruleName,
+      ruleId: String(result.id),
+      ruleName: `${ruleName} v${JIRA_RULE_VERSION}`,
       webhookUrl: webAppUrl,
       projectKey: config.projectKey,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      ruleVersion: JIRA_RULE_VERSION
     };
   }
   
@@ -256,7 +286,7 @@ export class JiraAutomationService {
    * 获取项目的所有规则
    */
   async getRules(config: JiraAutomationConfig): Promise<any[]> {
-    // 获取项目 ID
+    // 获取项目 ID 
     const projectId = await this.getProjectId(config);
     const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
     
@@ -318,6 +348,128 @@ export class JiraAutomationService {
     if (!response.ok) {
       throw new Error(`删除规则失败 (${response.status})`);
     }
+  }
+  
+  /**
+   * 通过 ID 获取指定规则的完整信息
+   * 注意：Jira Automation API 不支持直接通过 rule ID 获取单个规则
+   * 需要获取项目的所有规则列表，然后查找指定的 rule ID
+   */
+  async getRuleById(config: JiraAutomationConfig, ruleId: string): Promise<JiraRule | null> {
+    try {
+      console.log(`获取规则详情: ${ruleId}`);
+      
+      // 获取项目的所有规则
+      const rules = await this.getRules(config);
+      
+      // 在规则列表中查找指定的 rule ID
+      const rule = rules.find((r: any) => r.id === parseInt(ruleId, 10));
+      
+      if (rule) {
+        console.log(`✅ 找到规则 ${ruleId}: ${rule.name}`);
+        return rule as JiraRule;
+      } else {
+        console.log(`❌ 未找到规则 ${ruleId}`);
+        return null;
+      }
+    } catch (error) {
+      console.error('获取规则详情时出错:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * 更新规则
+   * 使用 PUT API 直接更新规则，保持 Rule ID 不变
+   * 
+   * @param config Jira 配置
+   * @param ruleId 规则 ID
+   * @param rulePayload 新的规则内容（不含服务器生成的字段如 id, created, updated）
+   * @returns 更新后的规则对象
+   */
+  async updateRule(
+    config: JiraAutomationConfig,
+    ruleId: string,
+    rulePayload: Partial<JiraRule>
+  ): Promise<JiraRule> {
+    // 获取项目 ID
+    const projectId = await this.getProjectId(config);
+    
+    // 获取现有规则以保留服务器字段
+    const existingRule = await this.getRuleById(config, ruleId);
+    if (!existingRule) {
+      throw new Error(`规则 ${ruleId} 不存在`);
+    }
+    
+    // 合并现有规则和新 payload
+    // 保留服务器生成的字段：id, clientKey, authorAccountId, actorAccountId, created, updated
+    const mergedPayload: JiraRule = {
+      ...existingRule,
+      ...rulePayload,
+      // 确保保留这些服务器字段
+      id: existingRule.id,
+      clientKey: existingRule.clientKey,
+      authorAccountId: existingRule.authorAccountId,
+      actorAccountId: existingRule.actorAccountId,
+      created: existingRule.created,
+      updated: existingRule.updated,
+    };
+    
+    console.log(`📝 更新规则 ${ruleId}...`);
+    console.log('Rule Payload:', JSON.stringify(mergedPayload, null, 2));
+    
+    const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`;
+    
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Atlassian-Token': 'no-check',
+        'Cache-Control': 'no-cache',
+        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
+      },
+      credentials: 'include',
+      body: JSON.stringify(mergedPayload)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('更新规则失败，响应:', errorText);
+      throw new Error(`更新 Jira Automation 规则失败 (${response.status}): ${errorText}`);
+    }
+    
+    const result = await response.json();
+    console.log('✅ 规则更新成功:', result.name);
+    
+    return result as JiraRule;
+  }
+  
+  /**
+   * 从规则名称中解析版本号
+   * 规则名称格式：`[用户名] Scheduled Messages v1.0.0`
+   * 
+   * @param ruleName 规则名称
+   * @returns 版本号，如果无法解析则返回 null
+   */
+  static parseVersionFromRuleName(ruleName: string): string | null {
+    // 匹配 v 后面的版本号，如 v1.0.0, v2.1.0 等
+    const match = ruleName.match(/v(\d+\.\d+\.\d+)/i);
+    return match ? match[1] : null;
+  }
+  
+  /**
+   * 获取最新的规则版本号（从模板中读取）
+   */
+  static getLatestVersion(): string {
+    return JIRA_RULE_VERSION;
+  }
+  
+  /**
+   * 获取规则最后更新日期（从模板中读取）
+   */
+  static getLatestUpdateDate(): string {
+    return JIRA_RULE_LAST_UPDATED;
   }
 }
 
