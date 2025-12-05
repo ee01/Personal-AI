@@ -15,6 +15,7 @@ import { UserProfileMessageHandler } from './services/UserProfileMessageHandler'
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWithRetry } from './utils/tabHelpers';
 import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
+import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 
 console.log('Background script loaded');
 
@@ -67,18 +68,27 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         // 启动统一任务调度器
         await taskScheduler.startAllTasks();
         
-        // 如果是扩展更新，检查并更新 App Script 和 Jira Rule
+        // 如果是扩展更新，检查并更新 Sheet Schema、App Script 和 Jira Rule
         if (details.reason === 'update') {
-            console.log('🔄 检测到扩展更新，检查 App Script 和 Jira Rule 是否需要更新...');
+            console.log('🔄 检测到扩展更新，检查 Sheet Schema、App Script 和 Jira Rule 是否需要更新...');
             
-            // 检查并更新 App Script
-            AppScriptUpdater.checkAndAutoUpdate(getAuthToken).catch(error => {
-                console.error('❌ App Script 自动更新失败:', error);
+            // 1. 检查并更新 Sheet Schema（先更新表结构，再更新脚本）
+            SheetSchemaUpdater.checkAndAutoUpdate(getAuthToken, {
+                showNotification: true
+            }).catch(error => {
+                console.error('❌ Sheet Schema 自动更新失败:', error);
             });
             
-            // 检查并更新 Jira Automation Rule（延迟 5 秒，避免与 App Script 更新冲突）
+            // 2. 检查并更新 App Script（延迟 3 秒，等待 Schema 更新完成）
+            setTimeout(() => {
+                AppScriptUpdater.checkAndAutoUpdate(getAuthToken).catch(error => {
+                    console.error('❌ App Script 自动更新失败:', error);
+                });
+            }, 3000);
+            
+            // 3. 检查并更新 Jira Automation Rule（延迟 8 秒，避免与上面的更新冲突）
             JiraRuleUpdater.checkAndAutoUpdate(getAuthToken, {
-                delay: 5000,
+                delay: 8000,
                 showNotification: true
             }).catch(error => {
                 console.error('❌ Jira Rule 自动更新失败:', error);

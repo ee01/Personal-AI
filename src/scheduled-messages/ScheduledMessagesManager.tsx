@@ -4,11 +4,103 @@
 
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { OneClickSetup } from './components/OneClickSetup';
 import { ScheduledMessageService } from './ScheduledMessageService';
 import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
+import { SheetSchemaUpdater } from './SheetSchemaUpdater';
+import { JiraRuleUpdater } from './JiraRuleUpdater';
+import Select, { StylesConfig, MultiValue, SingleValue } from 'react-select';
+import CreatableSelect from 'react-select/creatable';
+
+// react-select 选项类型
+interface SelectOption {
+  value: string;
+  label: string;
+}
+
+// react-select 自定义样式
+const selectStyles: StylesConfig<SelectOption, true> = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: '38px',
+    borderColor: state.isFocused ? '#007bff' : '#ddd',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(0, 123, 255, 0.25)' : 'none',
+    '&:hover': {
+      borderColor: '#007bff',
+    },
+  }),
+  option: (base, state) => ({
+    ...base,
+    backgroundColor: state.isSelected ? '#007bff' : state.isFocused ? '#e7f3ff' : 'white',
+    color: state.isSelected ? 'white' : '#333',
+    cursor: 'pointer',
+    '&:active': {
+      backgroundColor: '#0056b3',
+    },
+  }),
+  multiValue: (base) => ({
+    ...base,
+    backgroundColor: '#e7f3ff',
+    borderRadius: '4px',
+  }),
+  multiValueLabel: (base) => ({
+    ...base,
+    color: '#007bff',
+    fontWeight: 500,
+  }),
+  multiValueRemove: (base) => ({
+    ...base,
+    color: '#007bff',
+    '&:hover': {
+      backgroundColor: '#007bff',
+      color: 'white',
+    },
+  }),
+  placeholder: (base) => ({
+    ...base,
+    color: '#999',
+  }),
+  menu: (base) => ({
+    ...base,
+    zIndex: 9999,
+  }),
+};
+
+// 单选样式
+const singleSelectStyles: StylesConfig<SelectOption, false> = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: '38px',
+    borderColor: state.isFocused ? '#007bff' : '#ddd',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(0, 123, 255, 0.25)' : 'none',
+    '&:hover': {
+      borderColor: '#007bff',
+    },
+  }),
+  option: (base, state) => ({
+    ...base,
+    backgroundColor: state.isSelected ? '#007bff' : state.isFocused ? '#e7f3ff' : 'white',
+    color: state.isSelected ? 'white' : '#333',
+    cursor: 'pointer',
+    '&:active': {
+      backgroundColor: '#0056b3',
+    },
+  }),
+  singleValue: (base) => ({
+    ...base,
+    color: '#333',
+  }),
+  placeholder: (base) => ({
+    ...base,
+    color: '#999',
+  }),
+  menu: (base) => ({
+    ...base,
+    zIndex: 9999,
+  }),
+};
 
 const ScheduledMessagesManager: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
@@ -30,6 +122,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [botConfigured, setBotConfigured] = useState(false);
   const [showBotConfigWarning, setShowBotConfigWarning] = useState(false);
   const [filterSelfOnly, setFilterSelfOnly] = useState(false);
+  const [selectedCategories, setSelectedCategories] = useState<SelectOption[]>([]);
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const [hoveredMessage, setHoveredMessage] = useState<ScheduledMessage | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
@@ -42,6 +135,23 @@ const ScheduledMessagesManager: React.FC = () => {
     initializeApp();
     getCurrentUserName();
   }, []);
+  
+  // 从所有消息中提取 category 选项
+  const availableCategories = useMemo(() => {
+    const categorySet = new Set<string>();
+    messages.forEach(msg => {
+      if (msg.Category) {
+        msg.Category.split(',').forEach(cat => {
+          const trimmed = cat.trim();
+          if (trimmed) categorySet.add(trimmed);
+        });
+      }
+    });
+    return Array.from(categorySet).sort().map(cat => ({
+      value: cat,
+      label: cat
+    }));
+  }, [messages]);
   
   const initializeApp = async () => {
     try {
@@ -189,37 +299,89 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
-  // 执行 App Script 更新
-  const handleUpdateAppScript = async () => {
+  // 执行升级版本（包含 Sheet Schema、App Script、Jira Rule 三项更新）
+  const handleUpgradeVersion = async () => {
     if (!config) return;
     
-    if (!confirm('确定要更新 App Script 到最新版本吗？\n\n更新过程中不会影响 Web App URL，但可能需要几分钟时间。')) {
+    if (!confirm('确定要升级到最新版本吗？\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script 代码升级\n3. Jira Automation 规则升级\n\n整个过程可能需要几分钟时间。')) {
       return;
     }
     
     setIsUpdating(true);
+    const updateResults: string[] = [];
+    
     try {
       const token = await getAuthToken();
       if (!token) {
         throw new Error('无法获取 Google 授权');
       }
       
-      const updater = new AppScriptUpdater(token, config);
-      const result = await updater.updateAppScript();
-      
-      if (result.success) {
-        alert(`✅ ${result.message}\n\n更新后的 App Script 已自动部署，Web App URL 保持不变。`);
-        setUpdateAvailable(false);
-        setAppScriptVersion(result.newVersion || '');
+      // 1. 升级 Sheet Schema
+      console.log('🔄 开始升级 Sheet Schema...');
+      try {
+        const schemaUpdater = new SheetSchemaUpdater(token, config);
+        const schemaResult = await schemaUpdater.checkAndUpdate();
         
-        // 重新加载配置
-        await initializeApp();
-      } else {
-        throw new Error(result.error || '更新失败');
+        if (schemaResult.updated) {
+          updateResults.push(`✅ Sheet 表结构已升级\n   新增列: ${schemaResult.addedColumns.join(', ')}`);
+        } else {
+          updateResults.push('✓ Sheet 表结构已是最新');
+        }
+      } catch (error) {
+        console.error('Sheet Schema 升级失败:', error);
+        updateResults.push(`⚠️ Sheet 表结构升级失败: ${error.message}`);
       }
+      
+      // 2. 升级 App Script（延迟 3 秒，等待 Schema 更新完成）
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log('🔄 开始升级 App Script...');
+      try {
+        const appScriptUpdater = new AppScriptUpdater(token, config);
+        const appScriptResult = await appScriptUpdater.updateAppScript();
+        
+        if (appScriptResult.success) {
+          updateResults.push(`✅ App Script 已升级到 ${appScriptResult.newVersion}`);
+          setUpdateAvailable(false);
+          setAppScriptVersion(appScriptResult.newVersion || '');
+        } else {
+          throw new Error(appScriptResult.error || '更新失败');
+        }
+      } catch (error) {
+        console.error('App Script 升级失败:', error);
+        updateResults.push(`⚠️ App Script 升级失败: ${error.message}`);
+      }
+      
+      // 3. 升级 Jira Automation Rule（延迟 5 秒，避免与上面的更新冲突）
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      console.log('🔄 开始升级 Jira Automation Rule...');
+      try {
+        const jiraUpdater = new JiraRuleUpdater(config);
+        const checkResult = await jiraUpdater.checkForUpdates();
+        
+        if (checkResult.needsUpdate) {
+          const jiraResult = await jiraUpdater.updateJiraRule();
+          if (jiraResult.success) {
+            updateResults.push(`✅ Jira Automation 规则已升级到 ${jiraResult.newVersion}`);
+          } else {
+            throw new Error(jiraResult.error || '更新失败');
+          }
+        } else {
+          updateResults.push('✓ Jira Automation 规则已是最新');
+        }
+      } catch (error) {
+        console.error('Jira Rule 升级失败:', error);
+        updateResults.push(`⚠️ Jira Automation 规则升级失败: ${error.message}`);
+      }
+      
+      // 显示升级结果
+      alert(`🎉 版本升级完成！\n\n${updateResults.join('\n\n')}\n\n页面将重新加载以应用更新...`);
+      
+      // 重新加载配置
+      await initializeApp();
+      
     } catch (error) {
-      console.error('更新 App Script 失败:', error);
-      alert(`❌ 更新失败: ${error.message}\n\n请稍后重试或联系管理员。`);
+      console.error('版本升级失败:', error);
+      alert(`❌ 升级失败: ${error.message}\n\n请稍后重试或联系管理员。`);
     } finally {
       setIsUpdating(false);
     }
@@ -550,11 +712,11 @@ const ScheduledMessagesManager: React.FC = () => {
           {updateAvailable && (
             <button 
               style={styles.updateButton} 
-              onClick={handleUpdateAppScript} 
+              onClick={handleUpgradeVersion} 
               disabled={isUpdating}
-              title={`当前版本: ${appScriptVersion}，点击更新到最新版本`}
+              title={`当前版本: ${appScriptVersion}，点击升级到最新版本（包含 Sheet、Script、Jira Rule）`}
             >
-              {isUpdating ? '⏳ 更新中...' : '🔄 更新脚本'}
+              {isUpdating ? '⏳ 升级中...' : '🚀 升级版本'}
             </button>
           )}
           <button style={styles.configButton} onClick={handleOpenSheet} title="查看推送记录">
@@ -624,6 +786,19 @@ const ScheduledMessagesManager: React.FC = () => {
               🗑️ 清理已完成 ({statistics.done})
             </button>
           )}
+          {/* Category 筛选框 */}
+          <div style={{ minWidth: '200px' }}>
+            <Select<SelectOption, true>
+              isMulti
+              options={availableCategories}
+              value={selectedCategories}
+              onChange={(newValue: MultiValue<SelectOption>) => setSelectedCategories([...newValue])}
+              placeholder="🏷️ 筛选类别..."
+              styles={selectStyles}
+              noOptionsMessage={() => '暂无类别'}
+              isClearable
+            />
+          </div>
           <label style={{ 
             display: 'flex', 
             alignItems: 'center', 
@@ -659,6 +834,7 @@ const ScheduledMessagesManager: React.FC = () => {
                 <tr>
                   <th style={styles.th}>类型</th>
                   <th style={styles.th}>主题</th>
+                  <th style={styles.th}>类别</th>
                   <th style={styles.th}>发给</th>
                   <th style={styles.th}>频率</th>
                   <th style={styles.th}>下次执行</th>
@@ -673,6 +849,18 @@ const ScheduledMessagesManager: React.FC = () => {
                     // 应用过滤条件
                     if (filterSelfOnly && isSelfOnlyMessage(message)) {
                       return false;
+                    }
+                    // Category 筛选（并集逻辑）
+                    if (selectedCategories.length > 0) {
+                      const messageCategories = message.Category 
+                        ? message.Category.split(',').map(c => c.trim())
+                        : [];
+                      const hasMatchingCategory = selectedCategories.some(
+                        selected => messageCategories.includes(selected.value)
+                      );
+                      if (!hasMatchingCategory) {
+                        return false;
+                      }
                     }
                     return true;
                   })
@@ -697,6 +885,17 @@ const ScheduledMessagesManager: React.FC = () => {
                         </td>
                         <td style={styles.td}>
                           <span style={styles.topicText}>{displayTitle}</span>
+                        </td>
+                        <td style={styles.td}>
+                          {message.Category ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {message.Category.split(',').map((cat, idx) => (
+                                <span key={idx} style={styles.categoryTag}>
+                                  {cat.trim()}
+                                </span>
+                              ))}
+                            </div>
+                          ) : '-'}
                         </td>
                         <td style={styles.td}>{formatRecipient(message)}</td>
                         <td style={styles.td}>{formatFrequency(message)}</td>
@@ -744,6 +943,7 @@ const ScheduledMessagesManager: React.FC = () => {
            onConfigureBot={() => setShowBotConfigDialog(true)}
            isReminderMode={isReminderMode}
            currentUsername={currentUsername}
+           availableCategories={availableCategories}
          />
        )}
        
@@ -1071,7 +1271,8 @@ const AddMessageDialog: React.FC<{
   onConfigureBot: () => void;
   isReminderMode?: boolean;
   currentUsername?: string;
-}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '' }) => {
+  availableCategories: SelectOption[];
+}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '', availableCategories }) => {
   const [formData, setFormData] = useState<CreateMessageFormData>({
     Topic: '',
     Content: '',
@@ -1106,6 +1307,7 @@ const AddMessageDialog: React.FC<{
   const [aiReportMentionList, setAiReportMentionList] = useState<string[]>([]);
   const [aiReportExtraText, setAiReportExtraText] = useState('');
   const [pepReportTeamId, setPepReportTeamId] = useState('');
+  const [categoryTags, setCategoryTags] = useState<SelectOption[]>([]);
   
   // Body 输入框的 ref，用于插入变量
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1573,6 +1775,7 @@ const AddMessageDialog: React.FC<{
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
       Repeat_Count: isRepeating ? formData.Repeat_Count : undefined,
       End_Date: isRepeating ? formData.End_Date : undefined,
+      Category: categoryTags.length > 0 ? categoryTags.map(t => t.value).join(',') : undefined,
     };
     
     onSubmit(finalFormData);
@@ -1841,16 +2044,22 @@ const AddMessageDialog: React.FC<{
               <div style={dialogStyles.formRow}>
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>项目 *</label>
-                  <select
-                    style={dialogStyles.select}
-                    value={formData.Timeline_Project || 'mThor'}
-                    onChange={(e) => handleChange('Timeline_Project', e.target.value)}
-                    disabled={!botConfigured}
-                  >
-                    <option value="mThor">mThor</option>
-                    <option value="Jupiter desktop">Jupiter desktop</option>
-                    <option value="Jupiter web">Jupiter web</option>
-                  </select>
+                  <Select<SelectOption, false>
+                    options={[
+                      { value: 'mThor', label: '🚀 mThor' },
+                      { value: 'Jupiter desktop', label: '🖥️ Jupiter Desktop' },
+                      { value: 'Jupiter web', label: '🌐 Jupiter Web' }
+                    ]}
+                    value={{ 
+                      value: formData.Timeline_Project || 'mThor', 
+                      label: formData.Timeline_Project === 'Jupiter desktop' ? '🖥️ Jupiter Desktop' : 
+                             formData.Timeline_Project === 'Jupiter web' ? '🌐 Jupiter Web' : '🚀 mThor' 
+                    }}
+                    onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Project', option.value)}
+                    styles={singleSelectStyles}
+                    isDisabled={!botConfigured}
+                    isSearchable={false}
+                  />
                   <small style={dialogStyles.hint}>
                     新增请联系项目组所在 SDET 完善 <a href="https://heimdall-xmn02.int.rclabenv.com/api/swagger/#/bot/bot_get_release_info_retrieve" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>API</a>
                   </small>
@@ -1858,19 +2067,28 @@ const AddMessageDialog: React.FC<{
                 
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>Milestone *</label>
-                  <select
-                    style={dialogStyles.select}
-                    value={formData.Timeline_Milestone || 'FF'}
-                    onChange={(e) => handleChange('Timeline_Milestone', e.target.value)}
-                    disabled={!botConfigured}
-                  >
-                    <option value="DoR">DoR</option>
-                    <option value="Embedded">Embedded</option>
-                    <option value="FF">FF</option>
-                    <option value="Regression">Regression</option>
-                    <option value="CF">CF</option>
-                    <option value="Release">Release</option>
-                  </select>
+                  <Select<SelectOption, false>
+                    options={[
+                      { value: 'DoR', label: '📋 DoR' },
+                      { value: 'Embedded', label: '🔧 Embedded' },
+                      { value: 'FF', label: '🎯 FF' },
+                      { value: 'Regression', label: '🔄 Regression' },
+                      { value: 'CF', label: '❄️ CF' },
+                      { value: 'Release', label: '🚀 Release' }
+                    ]}
+                    value={{ 
+                      value: formData.Timeline_Milestone || 'FF',
+                      label: formData.Timeline_Milestone === 'DoR' ? '📋 DoR' :
+                             formData.Timeline_Milestone === 'Embedded' ? '🔧 Embedded' :
+                             formData.Timeline_Milestone === 'Regression' ? '🔄 Regression' :
+                             formData.Timeline_Milestone === 'CF' ? '❄️ CF' :
+                             formData.Timeline_Milestone === 'Release' ? '🚀 Release' : '🎯 FF'
+                    }}
+                    onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Milestone', option.value)}
+                    styles={singleSelectStyles}
+                    isDisabled={!botConfigured}
+                    isSearchable={false}
+                  />
                 </div>
               </div>
               
@@ -1915,15 +2133,21 @@ const AddMessageDialog: React.FC<{
               </div>
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>项目 *</label>
-                <select
-                  style={dialogStyles.select}
-                  value={formData.Timeline_Project || 'mThor'}
-                  onChange={(e) => handleChange('Timeline_Project', e.target.value)}
-                >
-                  <option value="mThor">mThor</option>
-                  <option value="Jupiter desktop">Jupiter desktop</option>
-                  <option value="Jupiter web">Jupiter web</option>
-                </select>
+                <Select<SelectOption, false>
+                  options={[
+                    { value: 'mThor', label: '🚀 mThor' },
+                    { value: 'Jupiter desktop', label: '🖥️ Jupiter Desktop' },
+                    { value: 'Jupiter web', label: '🌐 Jupiter Web' }
+                  ]}
+                  value={{ 
+                    value: formData.Timeline_Project || 'mThor', 
+                    label: formData.Timeline_Project === 'Jupiter desktop' ? '🖥️ Jupiter Desktop' : 
+                           formData.Timeline_Project === 'Jupiter web' ? '🌐 Jupiter Web' : '🚀 mThor' 
+                  }}
+                  onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Project', option.value)}
+                  styles={singleSelectStyles}
+                  isSearchable={false}
+                />
                 <small style={dialogStyles.hint}>
                   选择项目以替换消息中的变量（如 {'{currentRelease}'}、{'{nextPhase}'} 等）
                 </small>
@@ -2194,15 +2418,17 @@ const AddMessageDialog: React.FC<{
               {/* 模板选择 */}
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>报告模板 *</label>
-                <select
-                  style={dialogStyles.select}
-                  value={aiReportTemplate}
-                  onChange={(e) => handleTemplateChange(e.target.value as 'ai-report' | 'pep-report' | 'custom')}
-                >
-                  <option value="ai-report">AI report</option>
-                  <option value="pep-report">PEP report</option>
-                  <option value="custom">自定义</option>
-                </select>
+                <Select<SelectOption, false>
+                  options={[
+                    { value: 'ai-report', label: '🤖 AI Report' },
+                    { value: 'pep-report', label: '📊 PEP Report' },
+                    { value: 'custom', label: '⚙️ 自定义' }
+                  ]}
+                  value={{ value: aiReportTemplate, label: aiReportTemplate === 'ai-report' ? '🤖 AI Report' : aiReportTemplate === 'pep-report' ? '📊 PEP Report' : '⚙️ 自定义' }}
+                  onChange={(option: SingleValue<SelectOption>) => option && handleTemplateChange(option.value as 'ai-report' | 'pep-report' | 'custom')}
+                  styles={singleSelectStyles}
+                  isSearchable={false}
+                />
               </div>
               
               {/* AI Endpoint */}
@@ -2227,20 +2453,16 @@ const AddMessageDialog: React.FC<{
                   <div style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', backgroundColor: '#f9f9f9' }}>
                     {aiHeaders.map((header, index) => (
                       <div key={index} style={{ display: 'flex', gap: '8px', marginBottom: '12px', alignItems: 'flex-start' }}>
-                        <select
-                          value={header.name}
-                          onChange={(e) => updateAIHeaderName(index, e.target.value)}
-                          style={{
-                            ...dialogStyles.select,
-                            flex: '0 0 200px',
-                            marginBottom: 0
-                          }}
-                        >
-                          <option value="">选择 Header</option>
-                          {AVAILABLE_AI_HEADERS.map(h => (
-                            <option key={h.value} value={h.value}>{h.label}</option>
-                          ))}
-                        </select>
+                        <div style={{ flex: '0 0 200px' }}>
+                          <Select<SelectOption, false>
+                            options={AVAILABLE_AI_HEADERS.map(h => ({ value: h.value, label: h.label }))}
+                            value={header.name ? { value: header.name, label: AVAILABLE_AI_HEADERS.find(h => h.value === header.name)?.label || header.name } : null}
+                            onChange={(option: SingleValue<SelectOption>) => updateAIHeaderName(index, option?.value || '')}
+                            placeholder="选择 Header"
+                            styles={singleSelectStyles}
+                            isClearable
+                          />
+                        </div>
                         <input
                           type="text"
                           value={header.value}
@@ -2818,6 +3040,25 @@ const AddMessageDialog: React.FC<{
           </>
           )}
           
+          {/* 分类标签 */}
+          <div style={dialogStyles.formGroup}>
+            <label style={dialogStyles.label}>类别（可选）</label>
+            <CreatableSelect<SelectOption, true>
+              isMulti
+              options={availableCategories}
+              value={categoryTags}
+              onChange={(newValue: MultiValue<SelectOption>) => setCategoryTags([...newValue])}
+              placeholder="选择或输入类别，按 Enter 添加..."
+              styles={selectStyles}
+              noOptionsMessage={() => '输入新类别并按 Enter 添加'}
+              formatCreateLabel={(inputValue: string) => `创建 "${inputValue}"`}
+              isClearable
+            />
+            <small style={dialogStyles.hint}>
+              可选择已有类别，或输入新类别按 Enter 创建
+            </small>
+          </div>
+          
           {/* 提交按钮 */}
           <div style={dialogStyles.actions}>
             <button 
@@ -2922,6 +3163,15 @@ const styles: { [key: string]: React.CSSProperties } = {
     whiteSpace: 'nowrap',
     maxWidth: '300px',
     display: 'inline-block',
+  },
+  categoryTag: {
+    display: 'inline-block',
+    padding: '2px 8px',
+    backgroundColor: '#e7f3ff',
+    color: '#007bff',
+    borderRadius: '12px',
+    fontSize: '12px',
+    fontWeight: 500,
   },
   header: {
     backgroundColor: '#fff',

@@ -13,9 +13,9 @@ import { extractEntitiesForQuery } from './services/entityExtraction';
 import { v4 as uuidv4 } from 'uuid';
 
 
-// 重新导出接口供其他模块使用
-export { MemoryEntity } from './storage/CloudStorage';
-export { CachedEntityDetail } from './storage/LocalStorage';
+// 重新导出接口供其他模块使用（使用 export type 避免循环依赖）
+export type { MemoryEntity } from './storage/CloudStorage';
+export type { CachedEntityDetail } from './storage/LocalStorage';
 
 
 

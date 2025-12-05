@@ -69,6 +69,7 @@ export interface ScheduledMessage {
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
   Exec_Count?: number;
   Exec_Log?: string;
+  Category?: string;      // 逗号分隔的标签，如 "工作,提醒,日常"
 }
 
 // 创建消息的表单数据
@@ -94,6 +95,8 @@ export interface CreateMessageFormData {
   Timeline_Project?: TimelineProject;
   Timeline_Milestone?: TimelineMilestone;
   Timeline_Offset?: number;
+  // 分类标签
+  Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
 }
 
 // Sheet 配置接口

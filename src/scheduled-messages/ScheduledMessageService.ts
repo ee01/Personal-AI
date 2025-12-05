@@ -558,67 +558,73 @@ export class ScheduledMessageService {
       throw new Error('未找到配置');
     }
     
-    // 尝试删除行，如果失败且是 sheetId 问题，则重新获取 sheetId 并重试
-    let retryCount = 0;
-    const maxRetries = 2;
-    
-    while (retryCount < maxRetries) {
+    // 尝试删除行的内部函数
+    const tryDelete = async (forceRefreshSheetId: boolean): Promise<{ success: boolean; needsRetry: boolean; error?: string }> => {
       try {
-        // 第一次使用缓存的 sheetId，重试时强制刷新
-        const forceRefresh = retryCount > 0;
-        const messagesSheetId = await this.getMessagesSheetId(forceRefresh);
+        const messagesSheetId = await this.getMessagesSheetId(forceRefreshSheetId);
         
-        await this.withTokenRetry(async () => {
-          // 使用 batchUpdate 删除行
-          const response = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}:batchUpdate`,
-            {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${this.token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                requests: [{
-                  deleteDimension: {
-                    range: {
-                      sheetId: messagesSheetId,  // 使用正确的 sheetId
-                      dimension: 'ROWS',
-                      startIndex: rowIndex - 1,
-                      endIndex: rowIndex
-                    }
+        const response = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${this.config!.sheetId}:batchUpdate`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${this.token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              requests: [{
+                deleteDimension: {
+                  range: {
+                    sheetId: messagesSheetId,
+                    dimension: 'ROWS',
+                    startIndex: rowIndex - 1,
+                    endIndex: rowIndex
                   }
-                }]
-              })
-            }
-          );
-          
-          if (!response.ok) {
-            const error = await response.text();
-            
-            // 检查是否是 sheetId 无效的错误
-            if (error.includes('No grid with id') && retryCount === 0) {
-              // 清除缓存的 sheetId，下次循环会重新获取
-              if (this.config) {
-                this.config.messagesSheetId = undefined;
-                await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
-              }
-              throw new Error('RETRY_WITH_REFRESH');
-            }
-            
-            throw new Error(`删除行失败 (${response.status}): ${error}`);
+                }
+              }]
+            })
           }
-        });
+        );
         
-        // 成功则跳出循环
-        break;
-      } catch (error) {
-        if (error instanceof Error && error.message === 'RETRY_WITH_REFRESH' && retryCount < maxRetries - 1) {
-          retryCount++;
-          continue;
+        if (!response.ok) {
+          const errorText = await response.text();
+          
+          // 检查是否是 sheetId 无效的错误
+          if (errorText.includes('No grid with id')) {
+            // 清除缓存的 sheetId
+            if (this.config) {
+              console.log(`🔄 检测到 sheetId 无效 (当前值: ${messagesSheetId})，将强制刷新...`);
+              this.config.messagesSheetId = undefined;
+              await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+            }
+            return { success: false, needsRetry: true, error: errorText };
+          }
+          
+          return { success: false, needsRetry: false, error: `删除行失败 (${response.status}): ${errorText}` };
         }
-        throw error;
+        
+        return { success: true, needsRetry: false };
+      } catch (error: any) {
+        // 处理 401 错误
+        if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
+          throw error; // 让外层的 withTokenRetry 处理
+        }
+        return { success: false, needsRetry: false, error: error.message };
       }
+    };
+    
+    // 第一次尝试（使用缓存的 sheetId）
+    let result = await this.withTokenRetry(() => tryDelete(false));
+    
+    // 如果需要重试（sheetId 无效）
+    if (!result.success && result.needsRetry) {
+      console.log('🔄 重试删除操作（强制刷新 sheetId）...');
+      result = await this.withTokenRetry(() => tryDelete(true));
+    }
+    
+    // 如果仍然失败
+    if (!result.success) {
+      throw new Error(result.error || '删除行失败');
     }
   }
   
