@@ -102,14 +102,8 @@ module.exports = (env) => {
       new CopyPlugin({
         patterns: [
           { from: 'static' },
-          // { from: 'docs/demo', to: 'demo' },
-          { from: 'src/scheduled-messages/app-script-template.gs', to: 'app-script-template.gs' },
-          // 复制 WASM 文件以符合 Manifest V3 要求（禁止远程托管代码）
-          { 
-            from: 'node_modules/@xenova/transformers/dist/*.wasm', 
-            to: '[name][ext]',
-            noErrorOnMissing: true 
-          }
+          { from: 'docs/demo', to: 'demo' },
+          { from: 'src/scheduled-messages/app-script-template.gs', to: 'app-script-template.gs' }
         ],
       }),
       new webpack.ProvidePlugin({
