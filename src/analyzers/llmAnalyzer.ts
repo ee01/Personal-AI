@@ -6,13 +6,10 @@ import { GoogleSlide } from '../interfaces/googleSlides';
 import { 
   SlideContentType, 
   SlideContentAnalyzer, 
-  SlideAnalysisResult,
-  ProjectStructureType,
-  ElementReference
+  SlideAnalysisResult
 } from '../interfaces/slideAnalyzer';
 import { BaseSlideAnalyzer } from './baseAnalyzer';
-import { ProjectData } from '../slide';
-import { callLLMJsonAPI } from '../llm'; // 导入callLLMJsonAPI函数
+import { callLLMJsonAPI } from '../llm';
 
 /**
  * LLM辅助分析器类
@@ -27,7 +24,7 @@ export class LLMContentAnalyzer extends BaseSlideAnalyzer implements SlideConten
    * @param slide 幻灯片对象
    * @returns 是否可以处理
    */
-  public canHandle(slide: GoogleSlide): boolean {
+  public canHandle(_slide: GoogleSlide): boolean {
     // 这是后备分析器，可以处理任何幻灯片，但优先级较低
     return true;
   }
@@ -40,7 +37,7 @@ export class LLMContentAnalyzer extends BaseSlideAnalyzer implements SlideConten
    */
   protected async analyzeContent(
     slide: GoogleSlide, 
-    contentType: SlideContentType
+    _contentType: SlideContentType
   ): Promise<Partial<SlideAnalysisResult>> {
     try {
       // 生成分析提示

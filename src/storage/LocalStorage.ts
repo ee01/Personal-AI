@@ -1437,7 +1437,7 @@ export class LocalStorage {
   /**
    * 创建空的扩展缓存对象
    */
-  private createEmptyExtendedCache(entityId: string): Partial<CachedEntityDetail> {
+  private createEmptyExtendedCache(_entityId: string): Partial<CachedEntityDetail> {
     return {
       lastUpdated: Date.now(),
       cachedAt: Date.now(),

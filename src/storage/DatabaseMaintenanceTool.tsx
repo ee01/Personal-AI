@@ -420,7 +420,7 @@ export const DatabaseMaintenanceTool = () => {
             }
 
             const totalCollections = Object.keys(backupData.collections).length;
-            const successRate = restoredCollections / totalCollections;
+            const _successRate = restoredCollections / totalCollections;
             
             if (restoredCollections > 0) {
                 let statusType: 'success' | 'warning' = 'success';

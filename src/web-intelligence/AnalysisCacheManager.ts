@@ -370,7 +370,7 @@ export class AnalysisCacheManager {
     findByTags(tags: string[]): WebAnalysisResult[] {
         const results = [];
         
-        for (const [key, entry] of this.cache) {
+        for (const [_key, entry] of this.cache) {
             const hasAllTags = tags.every(tag => entry.tags.includes(tag));
             if (hasAllTags) {
                 results.push(entry.result);

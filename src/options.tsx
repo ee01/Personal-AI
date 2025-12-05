@@ -1,7 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
-import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig, parseChromaConfig } from './utils';
+import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
 import { agentCoordinator } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';

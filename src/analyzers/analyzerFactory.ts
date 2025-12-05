@@ -5,10 +5,8 @@
 import { GoogleSlide } from '../interfaces/googleSlides';
 import { 
   SlideAnalyzerFactory, 
-  SlideContentAnalyzer, 
-  SlideContentType
+  SlideContentAnalyzer
 } from '../interfaces/slideAnalyzer';
-import { BaseSlideAnalyzer } from './baseAnalyzer';
 import { TableContentAnalyzerImpl } from './tableAnalyzer';
 import { TextContentAnalyzerImpl } from './textAnalyzer';
 import { LLMContentAnalyzer } from './llmAnalyzer';

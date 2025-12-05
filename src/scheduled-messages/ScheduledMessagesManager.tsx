@@ -980,8 +980,8 @@ const VariableSelector: React.FC<{
   onInsert: (variable: string) => void;
   excludeVariables?: string[];
 }> = ({ onInsert, excludeVariables = [] }) => {
-  // 项目变量列表（用于检测是否插入了项目变量）
-  const projectVariables = [
+  // 项目变量列表（用于检测是否插入了项目变量）- 预留扩展用
+  const _projectVariables = [
     '{currentRelease}',
     '{currentPhase}',
     '{currentPhaseStartDate}',

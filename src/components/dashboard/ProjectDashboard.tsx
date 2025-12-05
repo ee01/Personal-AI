@@ -317,7 +317,7 @@ const ProjectDashboard: React.FC = () => {
   };
 
   // 任务拖拽完成处理（旧版本，保留兼容性）
-  const handleTaskDragEnd = async (task: FishboneTask, projectId: string, e: React.DragEvent) => {
+  const _handleTaskDragEnd = async (task: FishboneTask, projectId: string, e: React.DragEvent) => {
     const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
     const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
     
@@ -448,8 +448,8 @@ const ProjectDashboard: React.FC = () => {
     });
   };
   
-  // 获取不同类型任务的锚点偏移量（相对于卡片左边）
-  const getConnectorAnchorOffset = (taskType: 'dep' | 'task' | 'design') => {
+  // 获取不同类型任务的锚点偏移量（相对于卡片左边）- 预留扩展用
+  const _getConnectorAnchorOffset = (taskType: 'dep' | 'task' | 'design') => {
     // 基础卡片宽度估算（padding 12px+16px + 内容）+ connector的right偏移
     const baseCardWidth = 180; // 这是CSS中设置的min-width
     switch (taskType) {
@@ -573,7 +573,7 @@ const ProjectDashboard: React.FC = () => {
           
           // 为每个项目重新计算任务锚点位置
           projects.forEach(project => {
-            project.tasks.forEach((task, index) => {
+            project.tasks.forEach((task, _index) => {
               if (prev[task.id]) {
                 // 如果已有自定义锚点位置，保持不变
                 newPositions[task.id] = prev[task.id];
@@ -697,7 +697,7 @@ const ProjectDashboard: React.FC = () => {
         </div>
                   ))}
 
-                  {tasks.map((t, i) => {
+                  {tasks.map((t, _i) => {
                     const taskPosition = getTaskPosition(t.id, project.id);
                     const verticalPosition = getTaskVerticalPosition(t.id, project.id);
                     return (

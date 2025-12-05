@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { useState } from 'react';
-import { CloudStorage } from './CloudStorage';
 import { memorySystem } from '../memory';
 
 /**
@@ -86,7 +85,7 @@ const EntityRebuildTool = () => {
 
             // 创建空嵌入函数实例
             class NullEmbeddingFunction {
-                async generate(texts: string[]): Promise<number[][]> {
+                async generate(_texts: string[]): Promise<number[][]> {
                     throw new Error('不应调用嵌入函数');
                 }
             }

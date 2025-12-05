@@ -91,6 +91,10 @@ module.exports = (env) => {
     },
     plugins: [
       new VueLoaderPlugin(),
+      // 忽略 chromadb 的可选嵌入模块（我们使用自己的嵌入方案）
+      new webpack.IgnorePlugin({
+        resourceRegExp: /^@chroma-core\/default-embed$/
+      }),
       // 处理 node: 协议导入的插件
       new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
         resource.request = resource.request.replace(/^node:/, '');

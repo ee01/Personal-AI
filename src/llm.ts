@@ -1,10 +1,9 @@
 import OpenAI from 'openai';
 import Groq from 'groq-sdk';
 import { getEnvConfig } from './utils';
-import { extractEntitiesForQuery } from './services/entityExtraction';
-import { memorySystem } from './memory';
 
 // ==================== 辅助函数：模糊匹配（从 vectorStore.ts 迁移）====================
+// 注意: 以下函数暂未使用，保留供将来扩展
 
 /**
  * 模糊匹配人名
@@ -12,7 +11,7 @@ import { memorySystem } from './memory';
  * @param knownPeople 已知人名列表
  * @returns 匹配的完整人名，如果没有匹配返回 null
  */
-function fuzzyMatchPerson(partialName: string, knownPeople: string[]): string | null {
+function _fuzzyMatchPerson(partialName: string, knownPeople: string[]): string | null {
   if (!partialName || !knownPeople || knownPeople.length === 0) {
     return null;
   }
@@ -64,7 +63,7 @@ function fuzzyMatchPerson(partialName: string, knownPeople: string[]): string | 
  * @param knownNames 已知实体名称列表
  * @returns 匹配的实体名称数组
  */
-function fuzzyMatchEntityName(partialName: string, knownNames: string[]): string[] {
+function _fuzzyMatchEntityName(partialName: string, knownNames: string[]): string[] {
   if (!partialName || !knownNames || knownNames.length === 0) {
     return [];
   }
@@ -332,7 +331,7 @@ export async function knowledgeQuery(question: string) {
  * 
  * 此函数已不再使用，保留仅供参考
  */
-export async function knowledgeQueryOld_DEPRECATED(question: string) {
+export async function knowledgeQueryOld_DEPRECATED(_question: string) {
   throw new Error('此函数已废弃，请使用 memorySystem.knowledgeQuery 代替');
   
   /* 旧实现已注释，请参考 memorySystem.knowledgeQuery

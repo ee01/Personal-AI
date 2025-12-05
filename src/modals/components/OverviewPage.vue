@@ -256,7 +256,7 @@ const navigateToEntityType = (entityType: string) => {
   router.push(`/entity/${entityType}`);
 };
 
-const navigateToTopic = (topicId: string) => {
+const _navigateToTopic = (topicId: string) => {
   router.push(`/topic/${topicId}`);
 };
 

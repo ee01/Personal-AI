@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // 创建 JQL 查询对话框
 async function openJqlDialog(url: string, sheetToken: string) {
-    const envConfig = await getEnvConfig();
+    const _envConfig = await getEnvConfig();
     const dialog = document.createElement('div');
     dialog.style.cssText = `
         position: fixed;

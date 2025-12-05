@@ -9,7 +9,6 @@ import { getEmbeddingViaOffscreen } from '../embeddings';
 import { getEnvConfig, parseChromaConfig } from '../utils';
 import { QueryResult, VectorSearchOptions, QueryOptions } from '../memory';
 import { memorySystem } from '../memory';
-import { randomBytes } from 'crypto';
 
 export interface MemoryEntity {
   id: string;
@@ -186,10 +185,6 @@ import {
   UserprofilesRecord, 
   UserprofilesQueryOptions, 
   UserprofilesQueryResult,
-  InterestItemRecord,
-  BehaviorPatternRecord,
-  SocialRelationshipRecord,
-  ExpertiseAreaRecord,
   UserSummaryRecord,
   UserSimilarityResult,
   UserprofilesMaintenanceConfig,
@@ -207,7 +202,7 @@ export interface CloudStorageConfig {
  * 实际嵌入计算通过离屏文档完成
  */
 class NullEmbeddingFunction implements EmbeddingFunction {
-  async generate(texts: string[]): Promise<number[][]> {
+  async generate(_texts: string[]): Promise<number[][]> {
     // 不实际计算嵌入向量，因为我们使用离屏文档方案
     throw new Error('嵌入计算应通过离屏文档完成，不应调用此函数');
   }
@@ -2379,7 +2374,7 @@ export class CloudStorage {
       matching_items: string[];
     }>();
 
-    queryResult.data.forEach((record, index) => {
+    queryResult.data.forEach((record, _index) => {
       const userId = record.metadata.user_id;
       const similarity = record.relevanceScore || 0;
       

@@ -8,9 +8,6 @@ import {
   UserprofilesRecord,
   InterestItemRecord,
   BehaviorPatternRecord,
-  SocialRelationshipRecord,
-  ExpertiseAreaRecord,
-  UserprofilesQueryOptions,
   UserSimilarityResult
 } from '../types/userProfile';
 

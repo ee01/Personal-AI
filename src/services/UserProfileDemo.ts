@@ -6,7 +6,7 @@
 import { CloudStorage } from '../storage/CloudStorage';
 import { UserProfileManager } from './UserProfileManager';
 import { UserProfileQueryService } from './UserProfileQueryService';
-import { UserProfile, UserInterestItem, UserAction } from '../types/userProfile';
+import { UserProfile, UserInterestItem } from '../types/userProfile';
 
 export class UserProfileDemo {
   private cloudStorage: CloudStorage;

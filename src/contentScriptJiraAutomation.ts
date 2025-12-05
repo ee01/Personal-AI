@@ -231,8 +231,8 @@ function getProjectKey(): string {
   return 'MTR'; // 默认值
 }
 
-// 等待元素出现
-function waitForElement(selector: string, timeout = 10000): Promise<Element> {
+// 等待元素出现（预留功能）
+function _waitForElement(selector: string, timeout = 10000): Promise<Element> {
   return new Promise((resolve, reject) => {
     const element = document.querySelector(selector);
     if (element) {
@@ -561,7 +561,7 @@ function appendImportButtonNearElement(referenceElement: HTMLElement, projectId:
   }
 }
 
-function appendImportButton(container: HTMLElement, projectId: string, iframeDoc: Document): void {
+function _appendImportButton(container: HTMLElement, projectId: string, iframeDoc: Document): void {
   const importButton = createImportButtonElement(projectId, iframeDoc);
   container.appendChild(importButton);
 }

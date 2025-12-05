@@ -655,7 +655,7 @@ const navigateToPersonMessage = (personId: string, messageId: string) => {
   router.push(`/person/${personId}?messageId=${messageId}`);
 };
 
-const navigateToTopicDiscussion = (topicId: string, messageId: string) => {
+const _navigateToTopicDiscussion = (topicId: string, messageId: string) => {
   router.push(`/topic/${topicId}?messageId=${messageId}`);
 };
 

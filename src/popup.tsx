@@ -77,7 +77,7 @@ const Popup = () => {
         });
     };
     
-    const openProjectDashboard = () => {
+    const _openProjectDashboard = () => {
         chrome.windows.create({
             url: 'project-dashboard.html',
             type: 'popup',
@@ -133,7 +133,7 @@ const Popup = () => {
                     chrome.tabs.sendMessage(activeTab.id, { 
                         type: 'ANALYZE_SLIDES_PROJECTS',
                         token
-                    }, (response) => {
+                    }, (_response) => {
                         // 当收到响应时关闭loading状态
                         setIsAnalyzingSlides(false);
                     });
@@ -201,7 +201,7 @@ const Popup = () => {
                             type: 'EXPAND_EPIC_TICKETS',
                             url: activeTab.url,
                             sheetToken: token
-                        }, (response) => {
+                        }, (_response) => {
                             // 当收到响应时（无论成功失败）都关闭 loading
                             setIsExpandingEpic(false);
                         });
@@ -219,7 +219,7 @@ const Popup = () => {
 
     // 监听内容脚本发来的请求
     useEffect(() => {
-        const handleMessage = async (message: any, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
+        const handleMessage = async (message: any, _sender: chrome.runtime.MessageSender, _sendResponse: (response?: any) => void) => {
             if (message.type === 'REQUEST_SLIDES_ANALYSIS') {
                 // 获取当前标签页
                 const tabs = await chrome.tabs.query({ active: true, currentWindow: true });

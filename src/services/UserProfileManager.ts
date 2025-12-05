@@ -7,7 +7,6 @@ import {
   UserProfile, 
   UserInterestItem, 
   UserAction, 
-  UserProfileQuery, 
   UserProfileUpdate,
   UserProfileAnalysis
 } from '../types/userProfile';
@@ -15,10 +14,7 @@ import {
   UserprofilesRecord,
   InterestItemRecord,
   BehaviorPatternRecord,
-  SocialRelationshipRecord,
-  ExpertiseAreaRecord,
   UserprofilesQueryOptions,
-  UserprofilesQueryResult,
   UserSimilarityResult,
   UserSummaryRecord
 } from '../types/userProfile';
@@ -461,7 +457,7 @@ export class UserProfileManager {
   /**
    * 根据行为模式查找用户
    */
-  async findUsersByBehaviorPattern(patternType: string, options: { limit?: number } = {}): Promise<UserSimilarityResult[]> {
+  async findUsersByBehaviorPattern(patternType: string, _options: { limit?: number } = {}): Promise<UserSimilarityResult[]> {
     // 占位符实现，后续可扩展
     return [];
   }
@@ -1061,7 +1057,7 @@ export class UserProfileManager {
   private analyzeBehaviorPatterns(records: BehaviorPatternRecord[]): any {
     // 简化的行为分析
     const timeData = records.filter(r => r.metadata.pattern_type === 'time_preference');
-    const now = Date.now();
+    const _now = Date.now();
     const socialRecords = records.filter(r => r.metadata.pattern_type === 'communication_style');
     
     return {
@@ -1180,7 +1176,7 @@ export class UserProfileManager {
   /**
    * 重构行为模式（用于向后兼容）
    */
-  private reconstructBehaviorPatterns(records: BehaviorPatternRecord[]): any {
+  private reconstructBehaviorPatterns(_records: BehaviorPatternRecord[]): any {
     return {
       activeTimeZones: [],
       primaryWorkAreas: [],
