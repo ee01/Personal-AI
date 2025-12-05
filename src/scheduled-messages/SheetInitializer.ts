@@ -5,6 +5,27 @@
 
 import { InitializationResult, SheetConfig } from './types';
 
+/**
+ * Messages 表的 Schema 定义
+ * 当新增字段时，在 columns 中添加列名，并增加 version
+ * 
+ * 版本历史：
+ * - v2.0: 初始版本
+ * - v2.1: 添加 Category 列
+ */
+export const MESSAGES_SCHEMA = {
+  version: '2.1',
+  columns: [
+    'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
+    'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
+    'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
+    'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
+    'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
+    'Category', 'Status', 'Last_Exec', 'Next_Exec',
+    'Exec_Count', 'Exec_Log'
+  ]
+};
+
 export class SheetInitializer {
   private token: string;
   private messagesSheetId = 0;
@@ -228,17 +249,9 @@ export class SheetInitializer {
    * - 不要修改 header 的列名，但可以随意调整顺序、隐藏列、插入新列
    */
   private async setupWorksheets(spreadsheetId: string): Promise<void> {
-    // Messages 表头（移除 Type 和 Target_Type，由程序自动判断）
-    // 注意：这里定义的是初始顺序，用户可以在 Sheet 中随意调整
-    const messagesHeaders = [
-      'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
-      'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
-      'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
-      'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
-      'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
-      'Status', 'Last_Exec', 'Next_Exec',
-      'Exec_Count', 'Exec_Log'
-    ];
+    // Messages 表头（使用 MESSAGES_SCHEMA 中的定义）
+    // 注意：用户可以在 Sheet 中随意调整列顺序
+    const messagesHeaders = MESSAGES_SCHEMA.columns;
     
     // Config 表头
     const configHeaders = ['Key', 'Value'];
@@ -381,6 +394,7 @@ export class SheetInitializer {
       '',                             // AI_Endpoint
       '',                             // AI_Headers
       '',                             // AI_Body
+      '',                             // Category
       'Active',                       // Status
       '',                             // Last_Exec
       this.formatDateTime(oneMinuteLater), // Next_Exec
@@ -721,7 +735,7 @@ function dailyTrigger() {
       deploymentId: this.deploymentId,        // 保存 Deployment ID（用于更新部署）
       minute_trigger_id: triggers.minuteTriggerId,
       daily_trigger_id: triggers.dailyTriggerId,
-      sheet_version: '2.0',
+      sheet_version: MESSAGES_SCHEMA.version,
       appScriptVersion: '1.0.0',              // 初始 App Script 版本
       appScriptLastUpdated: this.formatDateTime(now),
       created_by: 'Personal AI Extension',
