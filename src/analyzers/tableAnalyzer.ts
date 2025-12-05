@@ -2,14 +2,13 @@
  * 表格内容分析器实现
  */
 
-import { GoogleSlide, GooglePageElement, GoogleTableCell, GoogleTableRow, GoogleTextElement } from '../interfaces/googleSlides';
+import { GoogleSlide, GooglePageElement, GoogleTableCell } from '../interfaces/googleSlides';
 import { 
   SlideContentType, 
   TableContentAnalyzer, 
   SlideAnalysisResult 
 } from '../interfaces/slideAnalyzer';
 import { BaseSlideAnalyzer } from './baseAnalyzer';
-import { ProjectData } from '../slide';
 
 /**
  * 表格分析器类
@@ -56,7 +55,7 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
    */
   protected async analyzeContent(
     slide: GoogleSlide, 
-    contentType: SlideContentType
+    _contentType: SlideContentType
   ): Promise<Partial<SlideAnalysisResult>> {
     if (!slide.pageElements) {
       return { projects: [], confidence: 0 };

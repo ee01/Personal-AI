@@ -7,9 +7,6 @@
 import {
   GooglePresentation,
   GoogleSlide,
-  GoogleTableRow,
-  GoogleTableCell,
-  GoogleTextElement,
   SlidesBatchUpdateResponse
 } from './interfaces/googleSlides';
 

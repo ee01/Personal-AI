@@ -2,14 +2,13 @@
  * 幻灯片内容分析器基类
  */
 
-import { GoogleSlide, GooglePageElement, GoogleTextElement } from '../interfaces/googleSlides';
+import { GoogleSlide } from '../interfaces/googleSlides';
 import { 
   SlideContentAnalyzer, 
   SlideContentType, 
   ProjectStructureType, 
   SlideAnalysisResult 
 } from '../interfaces/slideAnalyzer';
-import { ProjectData } from '../slide';
 
 /**
  * 基础分析器抽象类

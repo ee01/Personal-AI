@@ -3,9 +3,9 @@
  * 负责分析网页内容，识别与用户项目相关的信息
  */
 
-import { ChromeBuiltInAIAnalyzer, ChromeAIAnalysisResult } from './ChromeBuiltInAI';
+import { ChromeBuiltInAIAnalyzer } from './ChromeBuiltInAI';
 import { UserProfileManager } from '../services/UserProfileManager';
-import { UserProfile, UserProfileAnalysis, UserInterestItem } from '../types/userProfile';
+import { UserProfile, UserProfileAnalysis } from '../types/userProfile';
 
 export interface PageContent {
   title: string;

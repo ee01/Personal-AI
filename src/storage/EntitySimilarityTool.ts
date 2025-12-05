@@ -4,7 +4,6 @@
  */
 
 import { MemoryEntity } from '../memory';
-import { entityIdGenerator } from './EntityIdGenerator';
 
 export interface SimilarityResult {
   action: 'auto_merge' | 'mark_candidate' | 'create_new';
@@ -206,7 +205,8 @@ export class EntitySimilarityTool {
     if (!str1 || !str2) return 0;
 
     const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
+    // shorter 变量保留供将来使用
+    const _shorter = str1.length > str2.length ? str2 : str1;
 
     if (longer.length === 0) return 1;
 

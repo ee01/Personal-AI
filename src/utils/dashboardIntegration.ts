@@ -627,7 +627,7 @@ export class DashboardDataManager {
   /**
    * 同步项目数据
    */
-  async syncProjectData(projectId: string): Promise<{ success: boolean; syncResults?: any; error?: string }> {
+  async syncProjectData(_projectId: string): Promise<{ success: boolean; syncResults?: any; error?: string }> {
     try {
       // 模拟同步过程
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -700,7 +700,7 @@ export class DashboardDataManager {
       const { memorySystem } = await import('../memory');
       await memorySystem.initialize();
       
-      const messages = await memorySystem.cloudStorage.getSimilarMessages(question, {
+      const _messages = await memorySystem.cloudStorage.getSimilarMessages(question, {
         limit: 10,
         minRelevanceScore: 0.3
       });

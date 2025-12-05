@@ -18,7 +18,7 @@ import {
   GenericAnalysisResult,
   ProjectInput
 } from './interfaces/analysisInterfaces';
-import { v4 as uuidv4 } from 'uuid';
+// uuid 已移除，如需要请重新导入
 
 /**
  * 工具接口定义
@@ -1047,17 +1047,11 @@ export class IntelligentAgent {
       }
       
       // 初始化统计
-      let llmCallCount = 0;
-      let llmCallTokens = 0;
       let groupIndex = 0;
       const usedTools = new Set<string>();
       
       // 调用LLM分析
       const analysisResult = await this.initialAnalysis(messages, config, context);
-      
-      // 记录初始LLM调用
-      llmCallCount += 1;
-      llmCallTokens += this.estimateTokens(messages, analysisResult);
       
       // 准备最终结果数组
       const finalResults: MessageAnalysisResult[] = [];
@@ -1688,7 +1682,7 @@ Chrome AI 预分析结果:
   /**
    * 网页内容初始分析
    */
-  private async performWebpageInitialAnalysis(context: string, config: AnalysisConfig): Promise<any> {
+  private async performWebpageInitialAnalysis(context: string, _config: AnalysisConfig): Promise<any> {
     const prompt = `你是一个专业的项目管理智能助手。请分析以下网页内容，判断其与项目管理的相关性，并提取关键信息。
 
 ${context}
@@ -1826,7 +1820,7 @@ ${context}
   private buildWebpageThinkingContext(
     result: WebpageAnalysisResult,
     input: WebpageAnalysisInput,
-    initialAnalysis: any
+    _initialAnalysis: any
   ): string {
     return `当前网页分析状态:
 网页: ${result.pageInfo.title} (${result.pageInfo.url})
@@ -1850,7 +1844,7 @@ Chrome AI预分析: ${input.chromeAIResult ? '已完成，相关性' + input.chr
   /**
    * 网页分析思考和决策
    */
-  private async webpageThinkAndDecide(context: string, config: AnalysisConfig): Promise<any> {
+  private async webpageThinkAndDecide(context: string, _config: AnalysisConfig): Promise<any> {
     const prompt = `你是一个智能网页分析助手。基于当前分析状态，决定下一步行动。
 
 ${context}
@@ -2068,9 +2062,9 @@ ${context}
    * 分析会议
    */
   private async analyzeMeeting(
-    input: any,
-    config: AnalysisConfig,
-    context?: AnalysisContext
+    _input: any,
+    _config: AnalysisConfig,
+    _context?: AnalysisContext
   ): Promise<MeetingAnalysisResult> {
     // 会议分析的具体实现
     // 实际类似于analyzeMessage，但返回MeetingAnalysisResult
@@ -2098,8 +2092,8 @@ ${context}
    */
   private async analyzeDocument(
     input: any,
-    config: AnalysisConfig,
-    context?: AnalysisContext
+    _config: AnalysisConfig,
+    _context?: AnalysisContext
   ): Promise<any> {
     // 文档分析的具体实现
     // 未来需要完善
@@ -2108,8 +2102,8 @@ ${context}
       type: 'document',
       confidence: 0.8,
       summary: "文档分析结果",
-      title: input.title || "未知文档",
-      documentType: input.type || "other",
+      title: input?.title || "未知文档",
+      documentType: input?.type || "other",
       sections: [],
       keyPoints: [],
       metaData: {
@@ -2125,9 +2119,9 @@ ${context}
    * 通用分析（当未指定具体类型时）
    */
   private async analyzeGeneric(
-    input: any,
-    config: AnalysisConfig,
-    context?: AnalysisContext
+    _input: any,
+    _config: AnalysisConfig,
+    _context?: AnalysisContext
   ): Promise<GenericAnalysisResult> {
     // 通用分析的具体实现
     return {
@@ -3008,9 +3002,10 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     const thinkPrompt = this.buildThinkingPrompt(state);
     
     // 如果存在自定义思考提示，则使用自定义提示
-    if (state.config.customPrompts?.thinking) {
-      const customThinkPrompt = state.config.customPrompts.thinking;
-    }
+    // TODO: 实现自定义思考提示逻辑
+    // if (state.config.customPrompts?.thinking) {
+    //   thinkPrompt = state.config.customPrompts.thinking;
+    // }
     
     try {
       // 调用LLM API进行思考

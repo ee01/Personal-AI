@@ -5,7 +5,7 @@
 
 import { WebIntelligenceAnalyzer, PageContent, WebAnalysisResult } from './WebIntelligenceAnalyzer';
 import { ChromeBuiltInAIAnalyzer, ChromeAIAnalysisResult } from './ChromeBuiltInAI';
-import { WebWorkerAnalyzer, WorkerAnalysisResult } from './WebWorkerAnalyzer';
+import { WebWorkerAnalyzer } from './WebWorkerAnalyzer';
 import { AnalysisCacheManager, BatchAnalysisManager } from './AnalysisCacheManager';
 
 interface IntegratorConfig {
@@ -598,7 +598,7 @@ export class WebIntelligenceIntegrator {
     /**
      * 更新统计信息
      */
-    private updateStats(processingTime: number, cacheHit: boolean): void {
+    private updateStats(processingTime: number, _cacheHit: boolean): void {
         // 更新平均处理时间
         const totalTime = this.stats.averageProcessingTime * (this.stats.totalAnalyses - 1) + processingTime;
         this.stats.averageProcessingTime = totalTime / this.stats.totalAnalyses;

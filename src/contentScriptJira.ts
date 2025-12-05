@@ -259,7 +259,7 @@ function displayDesignLinks(designData: {
   designLinksContainer.className = 'design-links-container';
   
   let linksHtml = '';
-  designData.forEach((design, index) => {
+  designData.forEach((design, _index) => {
     if (design.type === 'figma') {
       linksHtml += `
         <div class="design-link-item">

@@ -10,7 +10,6 @@ import { SystemMaintenanceTool, SystemHealthStatus, MaintenanceResult, createSys
 import { UserProfileManager } from './services/UserProfileManager';
 import { UserProfile, UserProfileAnalysis, UserAction, UserProfileUpdate } from './types/userProfile';
 import { extractEntitiesForQuery } from './services/entityExtraction';
-import { v4 as uuidv4 } from 'uuid';
 
 
 // 重新导出接口供其他模块使用（使用 export type 避免循环依赖）
@@ -1430,7 +1429,7 @@ export class MemorySystem {
   private buildLLMPrompt(
     question: string,
     contextSources: Array<{type: string, priority: number, content: string, relevanceScore: number}>,
-    queryIntent: any
+    _queryIntent: any
   ): string {
     // 构建上下文（限制总长度）
     const MAX_CONTEXT_LENGTH = 4000;
@@ -1602,7 +1601,7 @@ export class MemorySystem {
    */
   private async expandEntitiesMultiHop(
     initialEntities: MemoryEntity[],
-    queryIntent: any
+    _queryIntent: any
   ): Promise<Map<string, MemoryEntity>> {
     const entityMap = new Map<string, MemoryEntity>();
     
@@ -1761,7 +1760,7 @@ export class MemorySystem {
    */
   private async buildAskContext(
     entities: Map<string, MemoryEntity>,
-    queryIntent: any
+    _queryIntent: any
   ): Promise<string> {
     // 1. 按相关度排序所有实体
     const sortedEntities = Array.from(entities.values())
@@ -2494,9 +2493,9 @@ ${question}
   }
 
   /**
-   * 实体时间轴
+   * 实体时间轴（预留功能，待实现）
    */
-  async getEntityTimeline(entityId: string, options?: {
+  async getEntityTimeline(_entityId: string, _options?: {
     limit?: number;
     timeRange?: { start: number; end: number };
   }): Promise<Array<{
@@ -3462,7 +3461,7 @@ ${question}
     }
     
     const matchedRules = messageData.metadata?.matchedRules || [];
-    const sender = messageData.metadata?.sender || '';
+    const _sender = messageData.metadata?.sender || '';
     const messageContent = messageData.content || '';
     
     // 检查是否明确提到用户

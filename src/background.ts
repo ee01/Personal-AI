@@ -310,7 +310,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 处理维护任务执行请求
     if (request.type === 'RUN_MAINTENANCE_TASK') {
-        const { taskId } = request;
+        const { taskId: _taskId } = request;
         memorySystem.initialize().then(() => {
             memorySystem.performSystemMaintenance()
                 .then(maintenanceResult => sendResponse({
@@ -350,7 +350,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 处理智能网页分析请求
     if (request.type === 'WEB_INTELLIGENCE_ANALYSIS') {
-        const { pageContent, analysisResult, timestamp } = request;
+        const { pageContent, analysisResult, timestamp: _timestamp } = request;
         
         try {
             console.log('🧠 收到智能网页分析结果:', {
@@ -925,8 +925,8 @@ async function generateProjectData(projectId?: string) {
     return mockProjects;
 }
 
-// 同步项目数据
-async function syncProjectData(projectId: string) {
+// 同步项目数据（预留功能）
+async function _syncProjectData(projectId: string) {
     console.log('🔄 同步项目数据:', projectId);
     
     try {
@@ -965,8 +965,8 @@ async function syncProjectData(projectId: string) {
     }
 }
 
-// 导出项目报告
-async function exportProjectReport(projectId: string) {
+// 导出项目报告（预留功能）
+async function _exportProjectReport(projectId: string) {
     console.log('📊 导出项目报告:', projectId);
     
     try {
@@ -1027,8 +1027,8 @@ async function exportProjectReport(projectId: string) {
     }
 }
 
-// 创建项目项目
-async function createProjectItem(actionType: string, data: any) {
+// 创建项目项目（预留功能）
+async function _createProjectItem(actionType: string, data: any) {
     console.log('✅ 创建项目项目:', actionType, data);
     
     try {

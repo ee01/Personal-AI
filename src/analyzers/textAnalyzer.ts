@@ -2,14 +2,13 @@
  * 文本内容分析器实现
  */
 
-import { GoogleSlide, GooglePageElement, GoogleTextElement, GoogleShape } from '../interfaces/googleSlides';
+import { GoogleSlide, GooglePageElement, GoogleShape } from '../interfaces/googleSlides';
 import { 
   SlideContentType, 
   TextContentAnalyzer, 
   SlideAnalysisResult 
 } from '../interfaces/slideAnalyzer';
 import { BaseSlideAnalyzer } from './baseAnalyzer';
-import { ProjectData } from '../slide';
 
 /**
  * 文本结构类型
@@ -94,7 +93,7 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
    */
   protected async analyzeContent(
     slide: GoogleSlide, 
-    contentType: SlideContentType
+    _contentType: SlideContentType
   ): Promise<Partial<SlideAnalysisResult>> {
     if (!slide.pageElements) {
       return { projects: [], confidence: 0 };

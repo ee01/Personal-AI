@@ -26,15 +26,15 @@ export const chromeAPI = {
   }
 };
 
-// 阅读状态接口
-interface ReadStatus {
+// 阅读状态接口（预留扩展用）
+interface _ReadStatus {
   isRead: boolean;
   lastReadTime: number | null;
   unreadCount: number;
   lastUpdateTime: number;
 }
 
-interface ConversationMessage {
+interface _ConversationMessage {
   id: string;
   isRead?: boolean;
   [key: string]: any;
@@ -1132,7 +1132,7 @@ export const useMemoryStore = defineStore('memory', () => {
    * 保存已读状态到本地缓存 (通过后台脚本)
    * 这会将 readStatus 保存到 chrome.storage.local，并在同步时上传到云端
    */
-  const saveReadStatusToLocalStorage = async () => {
+  const _saveReadStatusToLocalStorage = async () => {
     try {
       let savedCount = 0;
       const savePromises = [];
@@ -1266,7 +1266,7 @@ export const useMemoryStore = defineStore('memory', () => {
     }
     
     // 持久化到LocalStorage，使用 toRaw 确保存储原始对象
-    const promise = chromeAPI.sendMessage({
+    chromeAPI.sendMessage({
       type: 'CACHE_ENTITY',
       entity: toRaw(entity)
     });
@@ -1292,7 +1292,7 @@ export const useMemoryStore = defineStore('memory', () => {
       conversation.isRead = true;
       
       // 持久化到LocalStorage，使用 toRaw 确保存储原始对象
-      const promise = chromeAPI.sendMessage({
+      chromeAPI.sendMessage({
         type: 'CACHE_ENTITY',
         entity: toRaw(topic)
       });
@@ -1429,7 +1429,7 @@ export const useMemoryStore = defineStore('memory', () => {
         
         // 将 entitiesByType 展平为 entities 数组
         const allEntities: any[] = [];
-        for (const [type, entityList] of Object.entries(result.entitiesByType || {})) {
+        for (const [_type, entityList] of Object.entries(result.entitiesByType || {})) {
           allEntities.push(...(entityList as any[]));
         }
         entities.value = allEntities;

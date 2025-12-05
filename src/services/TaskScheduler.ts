@@ -207,7 +207,7 @@ export class TaskScheduler {
     this.isInitialized = false;
     
     // 禁用所有任务
-    for (const [taskId, task] of Array.from(this.tasks.entries())) {
+    for (const [_taskId, task] of Array.from(this.tasks.entries())) {
       task.enabled = false;
     }
     
@@ -486,7 +486,7 @@ export class TaskScheduler {
     setTimeout(async () => {
       console.log('🎯 执行首次定时任务运行...');
       
-      for (const [taskId, task] of Array.from(this.tasks.entries())) {
+      for (const [_taskId, task] of Array.from(this.tasks.entries())) {
         if (task.enabled) {
           try {
             await this.executeTask(task);

@@ -511,7 +511,7 @@ export class SheetInitializer {
     // 从 src/scheduled-messages/app-script-template.gs 读取
     // 注意：在 Chrome Extension 中，我们需要将这个文件打包进来
     // 这里我们直接返回代码字符串
-    const templateCode = `
+    const _templateCode = `
 // 注意：这里会被实际的模板代码替换
 // 在实际构建时，我们会通过 webpack 或其他方式将 .gs 文件内容注入
 function minuteTrigger() {

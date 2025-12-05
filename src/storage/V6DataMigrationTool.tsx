@@ -1,10 +1,10 @@
 import * as React from 'react';
 import { useState } from 'react';
-import { CloudStorage, MemoryEntity } from './CloudStorage';
+import { CloudStorage } from './CloudStorage';
 
 // 自定义空嵌入函数 - 解决 ChromaDB v3 默认嵌入函数依赖问题
 class NullEmbeddingFunction {
-    async generate(texts: string[]): Promise<number[][]> {
+    async generate(_texts: string[]): Promise<number[][]> {
         // 不实际计算嵌入向量，因为我们使用现有的嵌入数据
         throw new Error('嵌入计算应通过现有数据完成，不应调用此函数');
     }

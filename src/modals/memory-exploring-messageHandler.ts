@@ -4,7 +4,7 @@
  */
 
 import { memorySystem } from '../memory';
-import { CloudStorage, MemoryEntity } from '../storage/CloudStorage';
+import { CloudStorage } from '../storage/CloudStorage';
 import { LocalStorage } from '../storage/LocalStorage';
 
 // 创建存储层实例
@@ -26,9 +26,9 @@ async function ensureStorageInitialized(): Promise<void> {
 }
 
 /**
- * 格式化时间为相对时间
+ * 格式化时间为相对时间（预留功能）
  */
-function formatTimeAgo(timestamp: number): string {
+function _formatTimeAgo(timestamp: number): string {
     const now = Date.now();
     const diff = now - timestamp;
     
@@ -207,7 +207,7 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
 
             case 'GET_ENTITY_TIMELINE':
                 try {
-                    const { entityId, limit = 50 } = request;
+                    const { entityId: _entityId, limit: _limit = 50 } = request;
                     // 简化：直接返回空数组，因为实体时间轴功能暂未完全实现
                     return { success: true, data: [] };
         } catch (error) {
@@ -217,7 +217,7 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
 
             case 'GET_ENTITY_MESSAGES':
                 try {
-                    const { entityId, limit = 20 } = request;
+                    const { entityId: _entityId2, limit: _limit2 = 20 } = request;
                     // 简化：直接返回空数组
                     return { success: true, data: [] };
         } catch (error) {
@@ -227,7 +227,7 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
 
             case 'GET_ENTITY_WEBPAGES':
                 try {
-                    const { entityId, limit = 10 } = request;
+                    const { entityId: _entityId3, limit: _limit3 = 10 } = request;
                     // 简化：直接返回空数组
                     return { success: true, data: [] };
         } catch (error) {
