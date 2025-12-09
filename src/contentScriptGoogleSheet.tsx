@@ -110,8 +110,14 @@ async function openJqlDialog(url: string, sheetToken: string) {
             const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
             const metadata = await findValidJiraHeaders(sheet);
             const sheetHeaders = metadata.columnMapping;
+            const globalSettings = metadata.globalSettings;
 
-            if (!values || values.length <= 1) {
+            // 使用全局设置中的 headerRow（1-based）
+            const headerRowIndex = globalSettings.headerRow - 1; // 转为 0-based 索引
+            const dataStartRowIndex = headerRowIndex + 1; // 数据从表头下一行开始
+            console.log(`使用配置: 表头行=${globalSettings.headerRow}, 数据起始行=${dataStartRowIndex + 1}`);
+
+            if (!values || values.length <= dataStartRowIndex) {
                 showToast('表格为空或只有表头', 'warning');
                 return;
             }
@@ -124,7 +130,8 @@ async function openJqlDialog(url: string, sheetToken: string) {
             }
 
             const existingKeys: string[] = [];
-            values.slice(1).forEach((row: string[]) => {
+            // 从数据起始行开始遍历（跳过表头之前的行和表头行）
+            values.slice(dataStartRowIndex).forEach((row: string[]) => {
                 const keyCell = row[keyColumnIndex];
                 if (keyCell) {
                     const match = keyCell.match(/browse\/([A-Z0-9]+-[0-9]+)/i);
@@ -184,7 +191,13 @@ async function openJqlDialog(url: string, sheetToken: string) {
             } else {
                 // 配置表不存在，创建新表
                 showToast('配置表不存在，正在创建...');
-                const newSheetGid = await createConfigSheet(sheetToken, sheetId, configSheetName);
+                
+                // 获取当前表的索引，以便在其右边创建配置表
+                const currentGid = Sheet.extractGid(url);
+                const currentSheet = sheets.find((s: any) => s.properties.sheetId.toString() === currentGid);
+                const currentSheetIndex = currentSheet ? currentSheet.properties.index : undefined;
+                
+                const newSheetGid = await createConfigSheet(sheetToken, sheetId, configSheetName, currentSheetIndex);
                 showToast('配置表创建成功，正在切换...', 'success');
                 
                 // 切换到新创建的配置表
@@ -219,9 +232,14 @@ interface JiraHeaders {
     [key: string]: string | undefined;
 }
 
+interface GlobalSettings {
+    headerRow: number;  // 表头所在行号（1-based），默认为 1
+}
+
 interface JiraFieldMetadata {
     columnMapping: JiraHeaders;
     fieldTypes: { [jiraField: string]: string };
+    globalSettings: GlobalSettings;
 }
 
 interface UpdateData {
@@ -235,16 +253,67 @@ interface TicketOperation {
     rowIndex?: number;
 }
 
+// 从配置表解析全局设置
+function parseGlobalSettings(configData: string[][]): GlobalSettings {
+    const defaultSettings: GlobalSettings = {
+        headerRow: 1
+    };
+    
+    if (!configData || configData.length < 1) {
+        return defaultSettings;
+    }
+    
+    // 查找 "Global Settings" 列的索引
+    const headerRow = configData[0];
+    const globalSettingsIndex = headerRow.findIndex((h: string) => 
+        h && h.toLowerCase().includes('global settings')
+    );
+    
+    if (globalSettingsIndex === -1) {
+        console.log('配置表中未找到 Global Settings 区域，使用默认值');
+        return defaultSettings;
+    }
+    
+    const valueIndex = globalSettingsIndex + 1; // Value 列在 Global Settings 列的右边
+    
+    // 遍历配置表行，解析全局设置
+    for (let i = 1; i < configData.length; i++) {
+        const row = configData[i];
+        if (!row || row.length <= globalSettingsIndex) continue;
+        
+        const settingName = row[globalSettingsIndex]?.trim().toLowerCase();
+        const settingValue = row[valueIndex]?.trim();
+        
+        if (!settingName || !settingValue) continue;
+        
+        if (settingName === 'header row') {
+            const rowNum = parseInt(settingValue, 10);
+            if (!isNaN(rowNum) && rowNum >= 1) {
+                defaultSettings.headerRow = rowNum;
+                console.log(`全局设置: Header Row = ${rowNum}`);
+            }
+        }
+    }
+    
+    return defaultSettings;
+}
+
 // 查找有效的Jira字段表头
 async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
     try {
         let headerMapping: { [key: string]: string } = {};
         const customFieldMapping: { [key: string]: string } = {};
         const fieldTypes: { [jiraField: string]: string } = {};
+        let globalSettings: GlobalSettings = { headerRow: 1 };
         
         try {
             const configData = await sheet.readConfigSheet();
             console.log('configData', configData);
+            
+            // 解析全局设置
+            globalSettings = parseGlobalSettings(configData);
+            console.log('全局设置:', globalSettings);
+            
             if (configData && configData.length >= 2) {
                 const sheetHeaderIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('sheet column'));
                 const jiraFieldIndex = configData[0].findIndex((h: string) => h.toLowerCase().includes('jira field'));
@@ -332,8 +401,17 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
             };
         }
 
-        const headers = await sheet.getHeaders();
-        console.log('Sheet Headers:', headers);
+        // 使用全局设置中的 headerRow 来读取表头
+        const values = await sheet.readSheet();
+        const headerRowIndex = globalSettings.headerRow - 1; // 转为 0-based 索引
+        
+        if (!values || values.length <= headerRowIndex) {
+            throw new Error(`表格数据不足，无法读取第 ${globalSettings.headerRow} 行的表头`);
+        }
+        
+        const headers = values[headerRowIndex] as string[];
+        console.log(`Sheet Headers (第 ${globalSettings.headerRow} 行):`, headers);
+        
         const validHeaders: JiraHeaders = {};
 
         const knownFields = [
@@ -346,7 +424,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
         headers.forEach((header: string, index: number) => {
             if (!header) return;
             const headerLower = header.trim().toLowerCase();
-            const columnLetter = String.fromCharCode(65 + index);
+            const columnLetter = indexToColumnLetter(index);
             
             if (headerMapping[headerLower]) {
                  const jiraField = headerMapping[headerLower];
@@ -378,12 +456,23 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
 
         console.log('最终有效表头映射:', validHeaders);
         console.log('字段类型映射:', fieldTypes);
-        return { columnMapping: validHeaders, fieldTypes };
+        return { columnMapping: validHeaders, fieldTypes, globalSettings };
     } catch (error) {
         console.error('查找有效 Jira 标题时出错:', error);
         showToast('查找表头映射时出错: ' + (error instanceof Error ? error.message : error), 'error')
         throw error;
     }
+}
+
+// 将列索引转换为列字母（支持多字母，如 AA, AB 等）
+function indexToColumnLetter(index: number): string {
+    let letter = '';
+    let temp = index;
+    while (temp >= 0) {
+        letter = String.fromCharCode((temp % 26) + 65) + letter;
+        temp = Math.floor(temp / 26) - 1;
+    }
+    return letter;
 }
 
 function getColumnIndex(column: string): number {
@@ -642,13 +731,20 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             const metadata = await findValidJiraHeaders(sheet);
             const sheetHeaders = metadata.columnMapping;
             const fieldTypes = metadata.fieldTypes;
+            const globalSettings = metadata.globalSettings;
             const displayHeaders = ['key', 'summary', 'status', 'assignee', 'reporter']; 
+
+            // 使用全局设置中的 headerRow（1-based）
+            const headerRowIndex = globalSettings.headerRow - 1; // 转为 0-based 索引
+            const dataStartRowIndex = headerRowIndex + 1; // 数据从表头下一行开始
+            console.log(`使用配置: 表头行=${globalSettings.headerRow}, 数据起始行=${dataStartRowIndex + 1}`);
 
             const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
             if (keyColumnIndex === -1) {
-                const inferredKeyIndex = values[0]?.findIndex((header: string) => header.toLowerCase().includes('key') || header.toLowerCase().includes('jira'));
+                const headerRow = values[headerRowIndex];
+                const inferredKeyIndex = headerRow?.findIndex((header: string) => header.toLowerCase().includes('key') || header.toLowerCase().includes('jira'));
                 if (inferredKeyIndex !== -1 && inferredKeyIndex !== undefined) {
-                    sheetHeaders.key = String.fromCharCode(65 + inferredKeyIndex);
+                    sheetHeaders.key = indexToColumnLetter(inferredKeyIndex);
                     console.warn(`未在配置中找到 Key 列，已推断为列 ${sheetHeaders.key}`);
                 } else {
                     throw new Error('未找到或无法推断 Jira Key 列，请检查表头或配置');
@@ -656,8 +752,9 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             }
 
             const keyToRowMap = new Map<string, number>();
-            values.slice(1).forEach((row: string[], index: number) => { 
-                const keyCell = row[getColumnIndex(sheetHeaders.key!)];
+            // 从数据起始行开始遍历（跳过表头之前的行和表头行）
+            values.slice(dataStartRowIndex).forEach((row: string[], index: number) => { 
+                const keyCell = row[keyColumnIndex];
                     let key = '';
                     if (keyCell) {
                         const match = keyCell.match(/browse\/([A-Z0-9]+-[0-9]+)/i);
@@ -668,7 +765,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                         }
                     }
                 if (key) {
-                    keyToRowMap.set(key, index + 1);
+                    // 行索引 = 数据起始行索引 + 当前遍历索引（0-based）
+                    keyToRowMap.set(key, dataStartRowIndex + index);
                 }
             });
 
@@ -832,6 +930,12 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
         }
         const metadata = await findValidJiraHeaders(sheet);
         const sheetHeaders = metadata.columnMapping;
+        const globalSettings = metadata.globalSettings;
+
+        // 使用全局设置中的 headerRow（1-based）
+        const headerRowIndex = globalSettings.headerRow - 1; // 转为 0-based 索引
+        const dataStartRowIndex = headerRowIndex + 1; // 数据从表头下一行开始
+        console.log(`使用配置: 表头行=${globalSettings.headerRow}, 数据起始行=${dataStartRowIndex + 1}`);
 
         // 找到 key 列的索引
         const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
@@ -843,8 +947,8 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
         const epicsToExpand: { epicKey: string; epicSummary: string; rowIndex: number; subTickets: JiraTicket[] }[] = [];
 
         // 遍历表格查找 Epic Key 并查询子任务
-        // 从第二行开始，跳过表头
-        for (let i = 1; i < values.length; i++) {
+        // 从数据起始行开始遍历（跳过表头之前的行和表头行）
+        for (let i = dataStartRowIndex; i < values.length; i++) {
             const row = values[i];
             const keyCellContent = row[keyColumnIndex];
             
@@ -1076,16 +1180,24 @@ async function insertSubTickets(
 }
 
 // 创建配置表
-async function createConfigSheet(token: string, sheetId: string, configSheetName: string): Promise<number> {
+async function createConfigSheet(token: string, sheetId: string, configSheetName: string, currentSheetIndex?: number): Promise<number> {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`;
+    
+    // 构建 addSheet 请求的 properties
+    const sheetProperties: { title: string; index?: number } = {
+        title: configSheetName
+    };
+    
+    // 如果提供了当前表的索引，则在其右边（index + 1）创建配置表
+    if (currentSheetIndex !== undefined) {
+        sheetProperties.index = currentSheetIndex + 1;
+    }
     
     // 首先创建新的 sheet
     const addSheetRequest = {
         requests: [{
             addSheet: {
-                properties: {
-                    title: configSheetName
-                }
+                properties: sheetProperties
             }
         }]
     };
@@ -1109,9 +1221,10 @@ async function createConfigSheet(token: string, sheetId: string, configSheetName
     const newSheetId = addSheetResult.replies[0].addSheet.properties.sheetId;
     
     // 准备配置数据，参考 Code.js 中的示例
+    // 列布局：A-I 为主配置，J 为空分隔，K-S 为链接配置，T 为空分隔，U-V 为全局设置
     const configData = [
-        ["Sheet Column", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Sheet Column - link ticket", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format"],
-        ["JIRA", "JIRA key", "", "", "", "", "", "", "", "", "UX Ticket", "link key"],
+        ["Sheet Column", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Sheet Column - link ticket", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Global Settings", "Value"],
+        ["JIRA", "JIRA key", "", "", "", "", "", "", "", "", "UX Ticket", "link key", "", "", "", "", "", "", "", "", "Header Row", "1"],
         ["Title", "summary", "Back", "text"],
         ["Type", "issuetype", "Back", "text"],
         ["Label", "labels", "To", "list", "Yes"],
@@ -1120,7 +1233,7 @@ async function createConfigSheet(token: string, sheetId: string, configSheetName
         ["Affect versions", "versions", "Back", "list", "No", "mThor "],
         ["Due date", "duedate", "Back", "date"],
         ["BV", "customfield_10423", "Back", "text"],
-        ["Priority", "Priority", "Back", "text"],
+        ["Priority", "priority", "Back", "text"],
         ["Sprint", "customfield_10652", "Back", "list", "No"],
         ["Team", "customfield_17553", "Back", "list", "No"],
         ["Story Point", "customfield_10422", "Back", "text"],

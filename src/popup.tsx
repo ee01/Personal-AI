@@ -175,6 +175,9 @@ const Popup = () => {
                         type: 'OPEN_JIRA_QUERY_DIALOG',
                         url: activeTab.url, // Pass the URL
                         sheetToken: token
+                    }, (_response) => {
+                        // close the popup window
+                        window.close();
                     });
                 });
             } else {
