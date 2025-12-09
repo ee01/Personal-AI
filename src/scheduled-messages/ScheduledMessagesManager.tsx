@@ -1355,11 +1355,12 @@ const AddMessageDialog: React.FC<{
         query: '{Topic}',
         inputs: {
           title: '{Topic}',
-          outputs: 'noduedate, overdue, toTest',
+          outputs: 'noduedate, overdue, toTest, tickets',
           jql: '{Content}',
           extraText: '',
           teamId: '{TeamID}',
-          mentionList: ''
+          mentionList: '',
+          ticketIncludes: 'summary, status, assignee, reporter'
         }
       }, null, 2)
     },
@@ -1464,14 +1465,16 @@ const AddMessageDialog: React.FC<{
       mentionList: formatUserName.joinForMentionList(aiReportMentionList)
     };
     
-    // 如果选择了列出JQL查询结果，添加 ticketIncludes
+    // 如果选择了列出JQL查询结果，添加 ticketIncludes（逗号分隔字符串）
     if (aiReportOutputs.tickets) {
-      inputs.ticketIncludes = ticketIncludes;
+      inputs.ticketIncludes = ticketIncludes.join(', ');
     }
     
-    // 如果有自定义版块，添加 customOutputs
+    // 如果有自定义版块，添加 customOutputs（格式：name1:prompt1 | prompt2）
     if (customOutputs.length > 0) {
-      inputs.customOutputs = customOutputs;
+      inputs.customOutputs = customOutputs
+        .map(output => output.name ? `${output.name}:${output.prompt}` : output.prompt)
+        .join(' | ');
     }
     
     return JSON.stringify({
@@ -2617,6 +2620,9 @@ const AddMessageDialog: React.FC<{
                               { key: 'updated', label: 'Updated' },
                               { key: 'labels', label: 'Labels' },
                               { key: 'components', label: 'Components' },
+                              { key: 'fixVersions', label: 'Fix Versions' },
+                              { key: 'sprint', label: 'Sprint' },
+                              { key: 'team', label: 'Team' },
                             ].map(field => (
                               <label 
                                 key={field.key}
@@ -2691,13 +2697,20 @@ const AddMessageDialog: React.FC<{
                             border: '1px solid #a5d6a7',
                           }}
                         >
-                          <div style={{flex: 1}}>
-                            <span style={{fontWeight: 'bold', color: '#2e7d32', fontSize: '14px'}}>
-                              📋 {output.name}
-                            </span>
-                            <span style={{color: '#666', fontSize: '12px', marginLeft: '8px'}}>
-                              (自定义版块)
-                            </span>
+                          <div style={{flex: 1, overflow: 'hidden'}}>
+                            <div style={{fontWeight: 'bold', color: '#2e7d32', fontSize: '14px'}}>
+                              {output.name ? `📋 ${output.name}` : '📋 自定义版块'}
+                            </div>
+                            <div style={{
+                              color: '#666', 
+                              fontSize: '12px', 
+                              marginTop: '4px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {output.prompt}
+                            </div>
                           </div>
                           <div style={{display: 'flex', gap: '8px'}}>
                             <button
@@ -2799,13 +2812,13 @@ const AddMessageDialog: React.FC<{
                         
                         <div style={{marginBottom: '16px'}}>
                           <label style={{display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 'bold', color: '#333'}}>
-                            版块名称 *
+                            版块名称（可选）
                           </label>
                           <input 
                             type="text"
                             value={customOutputName}
                             onChange={(e) => setCustomOutputName(e.target.value)}
-                            placeholder="例如：风险分析"
+                            placeholder="例如：风险分析（可留空）"
                             style={{
                               width: '100%',
                               padding: '8px 12px',
@@ -2815,6 +2828,9 @@ const AddMessageDialog: React.FC<{
                               boxSizing: 'border-box',
                             }}
                           />
+                          <small style={{display: 'block', marginTop: '4px', fontSize: '12px', color: '#999'}}>
+                            留空时不会显示标题，直接输出分析结果
+                          </small>
                         </div>
                         
                         <div style={{marginBottom: '16px'}}>
@@ -2865,12 +2881,15 @@ const AddMessageDialog: React.FC<{
                           <button
                             type="button"
                             onClick={() => {
-                              if (!customOutputName.trim() || !customOutputPrompt.trim()) {
-                                alert('请填写版块名称和 Prompt');
+                              if (!customOutputPrompt.trim()) {
+                                alert('请填写 Prompt');
                                 return;
                               }
                               
-                              const newOutput = { name: customOutputName.trim(), prompt: customOutputPrompt.trim() };
+                              const newOutput = { 
+                                name: customOutputName.trim(), 
+                                prompt: customOutputPrompt.trim() 
+                              };
                               
                               if (editingCustomOutputIndex !== null) {
                                 // 编辑模式

@@ -178,6 +178,41 @@ export class Sheet {
     }
   }
 
+  // 删除行或列
+  async deleteDimension(dimension: 'ROWS' | 'COLUMNS', startIndex: number, endIndex: number, sheetId?: number): Promise<void> {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}:batchUpdate`;
+    
+    // 使用传入的 sheetId 或 this.gid，如果都没有则使用 0（第一个 sheet）
+    const targetSheetId = sheetId ?? (this.gid ? parseInt(this.gid) : 0);
+    
+    const request = {
+      requests: [{
+        deleteDimension: {
+          range: {
+            sheetId: targetSheetId,
+            dimension,
+            startIndex,
+            endIndex
+          }
+        }
+      }]
+    };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(request)
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(`删除维度失败: ${error.error?.message || '未知错误'}`);
+    }
+  }
+
   /**
    * 读取配置表数据
    * @param sheetName 配置表名称

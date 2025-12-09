@@ -42,6 +42,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // 创建 JQL 查询对话框
 async function openJqlDialog(url: string, sheetToken: string) {
     const _envConfig = await getEnvConfig();
+    
+    // 先创建对话框并显示（使用默认值）
     const dialog = document.createElement('div');
     dialog.style.cssText = `
         position: fixed;
@@ -63,6 +65,15 @@ async function openJqlDialog(url: string, sheetToken: string) {
         </div>
         <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="filter=xxxx"></textarea>
         <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
+        <div id="syncContainer" style="margin-bottom: 10px; padding: 10px; background: #fff3cd; border-radius: 4px; display: none;">
+            <label style="display: flex; align-items: flex-start; cursor: pointer;">
+                <input type="checkbox" id="syncWithJql" style="margin-right: 8px; margin-top: 3px;">
+                <span style="font-size: 13px;">
+                    <strong>保持数据同步</strong><br>
+                    <span style="color: #856404; font-size: 12px;">⚠️ 启用后，表格中不在 JQL 查询结果中的数据行将被移除</span>
+                </span>
+            </label>
+        </div>
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
             <button id="configMapping" style="background: #6c757d; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">配置表头JIRA映射</button>
             <div style="display: flex; gap: 10px;">
@@ -73,6 +84,46 @@ async function openJqlDialog(url: string, sheetToken: string) {
     `;
 
     document.body.appendChild(dialog);
+    
+    // 聚焦到 JQL 输入框
+    const jqlTextarea = document.getElementById('jql') as HTMLTextAreaElement;
+    if (jqlTextarea) {
+        jqlTextarea.focus();
+    }
+    
+    // 异步加载配置并更新对话框内容
+    if (sheetToken && url) {
+        (async () => {
+            try {
+                const sheet = await Sheet.fromUrl(url, sheetToken);
+                const configData = await sheet.readConfigSheet();
+                const globalSettings = parseGlobalSettings(configData);
+                console.log('加载的全局设置:', globalSettings);
+                
+                // 更新 JQL 输入框
+                if (globalSettings.defaultJql) {
+                    const jqlTextarea = document.getElementById('jql') as HTMLTextAreaElement;
+                    if (jqlTextarea && !jqlTextarea.value) {
+                        jqlTextarea.value = globalSettings.defaultJql;
+                        // 将光标移到文本末尾
+                        jqlTextarea.setSelectionRange(globalSettings.defaultJql.length, globalSettings.defaultJql.length);
+                    }
+                }
+                
+                // 更新同步选项显示状态
+                if (globalSettings.syncWithJql) {
+                    const syncContainer = document.getElementById('syncContainer');
+                    const syncCheckbox = document.getElementById('syncWithJql') as HTMLInputElement;
+                    if (syncContainer && syncCheckbox) {
+                        syncContainer.style.display = '';
+                        syncCheckbox.checked = true;
+                    }
+                }
+            } catch (error) {
+                console.warn('读取配置表失败，使用默认设置:', error);
+            }
+        })();
+    }
 
     // 添加关闭对话框事件监听器
     document.getElementById('closeDialog')?.addEventListener('click', () => {
@@ -83,9 +134,11 @@ async function openJqlDialog(url: string, sheetToken: string) {
 
     document.getElementById('submit')?.addEventListener('click', async () => {
         const jql = (document.getElementById('jql') as HTMLTextAreaElement).value;
+        const syncCheckbox = document.getElementById('syncWithJql') as HTMLInputElement;
+        const syncWithJql = syncCheckbox?.checked || false;
         if (jql) {
             try {
-                handleFetchJiraTicketsToSheet(jql, url, sheetToken);
+                handleFetchJiraTicketsToSheet(jql, url, sheetToken, syncWithJql);
             } catch (error) {
                 console.error('查询或处理失败: ', error);
                 showToast('查询或处理失败: ' + (error instanceof Error ? error.message : error), 'error');
@@ -234,6 +287,8 @@ interface JiraHeaders {
 
 interface GlobalSettings {
     headerRow: number;  // 表头所在行号（1-based），默认为 1
+    defaultJql: string; // 默认 JQL 查询语句
+    syncWithJql: boolean; // 是否保持表内容与 JQL 查询结果一致
 }
 
 interface JiraFieldMetadata {
@@ -249,14 +304,16 @@ interface UpdateData {
 
 interface TicketOperation {
     ticket: JiraTicket;
-    type: 'update' | 'append';
+    type: 'update' | 'append' | 'remove';
     rowIndex?: number;
 }
 
 // 从配置表解析全局设置
 function parseGlobalSettings(configData: string[][]): GlobalSettings {
     const defaultSettings: GlobalSettings = {
-        headerRow: 1
+        headerRow: 1,
+        defaultJql: '',
+        syncWithJql: false
     };
     
     if (!configData || configData.length < 1) {
@@ -284,7 +341,7 @@ function parseGlobalSettings(configData: string[][]): GlobalSettings {
         const settingName = row[globalSettingsIndex]?.trim().toLowerCase();
         const settingValue = row[valueIndex]?.trim();
         
-        if (!settingName || !settingValue) continue;
+        if (!settingName) continue;
         
         if (settingName === 'header row') {
             const rowNum = parseInt(settingValue, 10);
@@ -292,6 +349,12 @@ function parseGlobalSettings(configData: string[][]): GlobalSettings {
                 defaultSettings.headerRow = rowNum;
                 console.log(`全局设置: Header Row = ${rowNum}`);
             }
+        } else if (settingName === 'default jql' || settingName === 'jql') {
+            defaultSettings.defaultJql = settingValue || '';
+            console.log(`全局设置: Default JQL = ${settingValue}`);
+        } else if (settingName === 'sync with jql' || settingName === 'sync mode') {
+            defaultSettings.syncWithJql = settingValue?.toLowerCase() === 'true' || settingValue === '1' || settingValue?.toLowerCase() === 'yes';
+            console.log(`全局设置: Sync with JQL = ${defaultSettings.syncWithJql}`);
         }
     }
     
@@ -304,7 +367,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
         let headerMapping: { [key: string]: string } = {};
         const customFieldMapping: { [key: string]: string } = {};
         const fieldTypes: { [jiraField: string]: string } = {};
-        let globalSettings: GlobalSettings = { headerRow: 1 };
+        let globalSettings: GlobalSettings = { headerRow: 1, defaultJql: '', syncWithJql: false };
         
         try {
             const configData = await sheet.readConfigSheet();
@@ -528,6 +591,26 @@ function groupConsecutiveColumns(columnIndices: number[]): { start: number; end:
     return ranges;
 }
 
+// 获取操作类型对应的颜色
+function getOperationColor(type: 'update' | 'append' | 'remove'): string {
+    switch (type) {
+        case 'update': return '#f0ad4e';
+        case 'append': return '#5cb85c';
+        case 'remove': return '#dc3545';
+        default: return '#666';
+    }
+}
+
+// 获取操作类型对应的文本
+function getOperationText(type: 'update' | 'append' | 'remove'): string {
+    switch (type) {
+        case 'update': return '更新';
+        case 'append': return '新增';
+        case 'remove': return '移除';
+        default: return '未知';
+    }
+}
+
 // 显示确认弹窗
 async function showConfirmationDialog(
     operations: TicketOperation[],
@@ -560,6 +643,7 @@ async function showConfirmationDialog(
 
         const updateCount = operations.filter(op => op.type === 'update').length;
         const appendCount = operations.filter(op => op.type === 'append').length;
+        const removeCount = operations.filter(op => op.type === 'remove').length;
 
         dialog.innerHTML = `
             <h3 style="margin-top: 0; flex-shrink: 0;">确认数据操作</h3>
@@ -569,8 +653,9 @@ async function showConfirmationDialog(
                     <span style="color: #666;">${columnsToUpdate.join(', ')}</span>
                 </div>
                 <div style="color: #666;">
-                    <div>更新现有数据：${updateCount} 条</div>
-                    <div>新增数据：${appendCount} 条</div>
+                    <div>更新现有数据：<span style="color: #f0ad4e; font-weight: bold;">${updateCount}</span> 条</div>
+                    <div>新增数据：<span style="color: #5cb85c; font-weight: bold;">${appendCount}</span> 条</div>
+                    ${removeCount > 0 ? `<div>移除数据：<span style="color: #dc3545; font-weight: bold;">${removeCount}</span> 条 <span style="color: #dc3545; font-size: 12px;">⚠️ 这些行将从表格中删除</span></div>` : ''}
                 </div>
             </div>
             <div style="margin-bottom: 10px; flex-shrink: 0;">
@@ -590,19 +675,19 @@ async function showConfirmationDialog(
                     </thead>
                     <tbody>
                         ${operations.map((op, index) => `
-                            <tr style="border-bottom: 1px solid #eee;">
+                            <tr style="border-bottom: 1px solid #eee; ${op.type === 'remove' ? 'background: #fff5f5;' : ''}">
                                 <td style="padding: 8px;">
                                     <input type="checkbox" class="ticket-checkbox" data-index="${index}" checked>
                                 </td>
                                 <td style="padding: 8px;">
-                                    <span style="color: ${op.type === 'update' ? '#f0ad4e' : '#5cb85c'}; font-weight: bold;">
-                                        ${op.type === 'update' ? '更新' : '新增'}
+                                    <span style="color: ${getOperationColor(op.type)}; font-weight: bold;">
+                                        ${getOperationText(op.type)}
                                     </span>
                                 </td>
                                 ${displayHeaders.map(field => {
                                     let value = op.ticket[field as keyof JiraTicket] || '';
                                     if (value.length > 100) value = value.substring(0, 97) + '...'; 
-                                    return `<td style="padding: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;" title="${op.ticket[field as keyof JiraTicket] || ''}">${value}</td>`;
+                                    return `<td style="padding: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; ${op.type === 'remove' ? 'text-decoration: line-through; color: #999;' : ''}" title="${op.ticket[field as keyof JiraTicket] || ''}">${value}</td>`;
                                 }).join('')}
                             </tr>
                         `).join('')}
@@ -699,12 +784,12 @@ function showToast(message: string, type = 'info') {
 }
 
 // 从 Jira 查询 tickets 并更新到 Google Sheet
-async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, sheetToken: string) {
+async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, sheetToken: string, syncWithJql = false) {
     showToast('正在查询 Jira...');
     const envConfig = await getEnvConfig();
     const tickets = await fetchJiraTickets(jql);
     console.log('tickets', tickets);
-    if (!tickets.length) {
+    if (!tickets.length && !syncWithJql) {
         showToast('没有找到数据', 'warning');
         return;
     }
@@ -752,6 +837,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             }
 
             const keyToRowMap = new Map<string, number>();
+            const existingTicketsInfo = new Map<string, { rowIndex: number; rowData: string[] }>();
             // 从数据起始行开始遍历（跳过表头之前的行和表头行）
             values.slice(dataStartRowIndex).forEach((row: string[], index: number) => { 
                 const keyCell = row[keyColumnIndex];
@@ -766,9 +852,14 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     }
                 if (key) {
                     // 行索引 = 数据起始行索引 + 当前遍历索引（0-based）
-                    keyToRowMap.set(key, dataStartRowIndex + index);
+                    const rowIndex = dataStartRowIndex + index;
+                    keyToRowMap.set(key, rowIndex);
+                    existingTicketsInfo.set(key, { rowIndex, rowData: row });
                 }
             });
+
+            // 查询结果中的 ticket keys
+            const jqlTicketKeys = new Set(tickets.map(t => t.key));
 
             const operations: TicketOperation[] = tickets.map(ticket => {
                 const existingRowIndex = keyToRowMap.get(ticket.key);
@@ -778,6 +869,37 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     rowIndex: existingRowIndex
                 };
             });
+
+            // 如果启用了同步模式，找出需要移除的 tickets
+            if (syncWithJql) {
+                existingTicketsInfo.forEach((info, key) => {
+                    if (!jqlTicketKeys.has(key)) {
+                        // 构建一个用于显示的 ticket 对象
+                        const summaryColumnIndex = sheetHeaders.summary ? getColumnIndex(sheetHeaders.summary) : -1;
+                        const statusColumnIndex = sheetHeaders.status ? getColumnIndex(sheetHeaders.status) : -1;
+                        const assigneeColumnIndex = sheetHeaders.assignee ? getColumnIndex(sheetHeaders.assignee) : -1;
+                        const reporterColumnIndex = sheetHeaders.reporter ? getColumnIndex(sheetHeaders.reporter) : -1;
+                        const issuetypeColumnIndex = sheetHeaders.issuetype ? getColumnIndex(sheetHeaders.issuetype) : -1;
+                        const priorityColumnIndex = sheetHeaders.priority ? getColumnIndex(sheetHeaders.priority) : -1;
+                        
+                        const ticketToRemove: JiraTicket = {
+                            key: key,
+                            summary: summaryColumnIndex !== -1 ? (info.rowData[summaryColumnIndex] || '') : '',
+                            status: statusColumnIndex !== -1 ? (info.rowData[statusColumnIndex] || '') : '',
+                            assignee: assigneeColumnIndex !== -1 ? (info.rowData[assigneeColumnIndex] || '') : '',
+                            reporter: reporterColumnIndex !== -1 ? (info.rowData[reporterColumnIndex] || '') : '',
+                            issuetype: issuetypeColumnIndex !== -1 ? (info.rowData[issuetypeColumnIndex] || '') : '',
+                            priority: priorityColumnIndex !== -1 ? (info.rowData[priorityColumnIndex] || '') : ''
+                        };
+                        
+                        operations.push({
+                            ticket: ticketToRemove,
+                            type: 'remove',
+                            rowIndex: info.rowIndex
+                        });
+                    }
+                });
+            }
 
             const confirmedOperations = await showConfirmationDialog(operations, displayHeaders, sheetHeaders);
             
@@ -828,8 +950,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                         rowIndex: operation.rowIndex,
                         columnUpdates
                     });
-                } else {
-                    // 对于新增操作，创建完整行数据
+                } else if (operation.type === 'append') {
+                    // 只对新增操作创建完整行数据（跳过 'remove' 类型）
                     const row = new Array(maxColIndex).fill('');
                     Object.keys(operation.ticket).forEach(ticketKey => {
                         const columnLetter = (sheetHeaders as Record<string, string>)[ticketKey];
@@ -859,14 +981,24 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     });
                     appendData.push(row);
                 }
+                // 'remove' 类型的操作在这里跳过，由后面的删除逻辑单独处理
             });
+
+            // 收集需要删除的行（按行号从大到小排序，以便从后往前删除）
+            const rowsToDelete = confirmedOperations
+                .filter(op => op.type === 'remove' && op.rowIndex !== undefined)
+                .map(op => op.rowIndex as number)
+                .sort((a, b) => b - a);
 
             console.log('更新数据:', updatesData);
             console.log('追加数据:', appendData);
+            console.log('删除行:', rowsToDelete);
 
             let updatedCount = 0;
             let appendedCount = 0;
+            let removedCount = 0;
 
+            // 1. 先执行更新操作（使用原始行号，删除前行号是正确的）
             if (updatesData.length > 0) {
                 // 使用批量更新，避免超出 rate limit
                 const batchUpdates = updatesData.map(update => {
@@ -895,6 +1027,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 updatedCount = updatesData.length;
             }
 
+            // 2. 再执行追加操作（追加到末尾，不受删除影响）
             if (appendData.length > 0) {
                 const startPosition = `A${values.length + 1}`;
                 console.log(`Appending data starting from: ${startPosition}`, appendData);
@@ -902,10 +1035,25 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 appendedCount = appendData.length;
             }
 
+            // 3. 最后执行删除操作（从后往前删除，避免行号变化相互影响）
+            if (rowsToDelete.length > 0) {
+                try {
+                    for (const rowIndex of rowsToDelete) {
+                        await sheet.deleteDimension('ROWS', rowIndex, rowIndex + 1);
+                        console.log(`已删除行 ${rowIndex + 1}`);
+                    }
+                    removedCount = rowsToDelete.length;
+                } catch (error) {
+                    console.error('删除行失败:', error);
+                    showToast('删除行失败: ' + (error instanceof Error ? error.message : error), 'error');
+                }
+            }
+
             let toastMessage = '';
             if (updatedCount > 0) toastMessage += `已更新 ${updatedCount} 条数据。`;
             if (appendedCount > 0) toastMessage += `已追加 ${appendedCount} 条新数据。`;
-            if (toastMessage === '') toastMessage = '没有需要更新或追加的数据。';
+            if (removedCount > 0) toastMessage += `已移除 ${removedCount} 条数据。`;
+            if (toastMessage === '') toastMessage = '没有需要更新、追加或移除的数据。';
             
             showToast(toastMessage.trim(), 'success');
 
@@ -1225,6 +1373,8 @@ async function createConfigSheet(token: string, sheetId: string, configSheetName
     const configData = [
         ["Sheet Column", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Sheet Column - link ticket", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Global Settings", "Value"],
         ["JIRA", "JIRA key", "", "", "", "", "", "", "", "", "UX Ticket", "link key", "", "", "", "", "", "", "", "", "Header Row", "1"],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Default JQL", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Sync with JQL", "false"],
         ["Title", "summary", "Back", "text"],
         ["Type", "issuetype", "Back", "text"],
         ["Label", "labels", "To", "list", "Yes"],
