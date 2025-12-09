@@ -6,7 +6,7 @@
     "start": "webpack --watch --config webpack.dev.cjs",
     "build": "webpack --config webpack.prod.cjs && npm run zip",
     "deploy": "cd site && git init && git add -A && git commit -m \"Deploy to gh-pages\" && git branch -M gh-pages && git remote add origin git@github.com:ee01/personal-ai.git && git push -f origin gh-pages && rm -rf .git",
-    "zip": "mkdir aa; rm personal-ai.zip; cd dist && zip -r ../personal-ai.zip .",
+    "zip": "rm personal-ai.zip; cd dist && zip -r ../personal-ai.zip .",
     "backup": "tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data",
     "clean": "rm -rf dist/* && rm personal-ai.zip"
   },

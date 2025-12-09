@@ -106,7 +106,7 @@ module.exports = (env) => {
       new CopyPlugin({
         patterns: [
           { from: 'static' },
-          { from: 'docs/demo', to: 'demo' },
+          // { from: 'docs/demo', to: 'demo' }, // No compliance with MV3 policy
           { from: 'src/scheduled-messages/app-script-template.gs', to: 'app-script-template.gs' }
         ],
       }),
