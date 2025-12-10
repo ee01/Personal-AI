@@ -39,6 +39,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
 });
 
+// 创建带预填值的 JQL 查询对话框（用于错误恢复等场景）
+function openJqlDialogWithValues(url: string, sheetToken: string, jql: string, keepDataSameAsJql: boolean, keepOrderSameAsJql: boolean) {
+    openJqlDialog(url, sheetToken).then(() => {
+        // 对话框创建后填入之前的值
+        setTimeout(() => {
+            const jqlTextarea = document.getElementById('jql') as HTMLTextAreaElement;
+            const dataCheckbox = document.getElementById('keepDataSameAsJql') as HTMLInputElement;
+            const orderContainer = document.getElementById('orderContainer');
+            const orderCheckbox = document.getElementById('keepOrderSameAsJql') as HTMLInputElement;
+            
+            if (jqlTextarea) {
+                jqlTextarea.value = jql;
+                jqlTextarea.focus();
+            }
+            if (keepDataSameAsJql && dataCheckbox) {
+                dataCheckbox.checked = true;
+                if (orderContainer) {
+                    orderContainer.style.display = 'flex';
+                }
+                if (keepOrderSameAsJql && orderCheckbox) {
+                    orderCheckbox.checked = true;
+                }
+            }
+        }, 100);
+    });
+}
+
 // 创建 JQL 查询对话框
 async function openJqlDialog(url: string, sheetToken: string) {
     const _envConfig = await getEnvConfig();
@@ -65,12 +92,19 @@ async function openJqlDialog(url: string, sheetToken: string) {
         </div>
         <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="filter=xxxx"></textarea>
         <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
-        <div id="syncContainer" style="margin-bottom: 10px; padding: 10px; background: #fff3cd; border-radius: 4px; display: none;">
-            <label style="display: flex; align-items: flex-start; cursor: pointer;">
-                <input type="checkbox" id="syncWithJql" style="margin-right: 8px; margin-top: 3px;">
+        <div id="syncContainer" style="margin-bottom: 10px; padding: 10px; background: #fff3cd; border-radius: 4px;">
+            <label style="display: flex; align-items: flex-start; cursor: pointer; margin-bottom: 8px;">
+                <input type="checkbox" id="keepDataSameAsJql" style="margin-right: 8px; margin-top: 3px;">
                 <span style="font-size: 13px;">
-                    <strong>保持数据同步</strong><br>
+                    <strong>保持数据一致</strong><br>
                     <span style="color: #856404; font-size: 12px;">⚠️ 启用后，表格中不在 JQL 查询结果中的数据行将被移除</span>
+                </span>
+            </label>
+            <label id="orderContainer" style="display: none; align-items: flex-start; cursor: pointer; margin-left: 24px;">
+                <input type="checkbox" id="keepOrderSameAsJql" style="margin-right: 8px; margin-top: 3px;">
+                <span style="font-size: 13px;">
+                    <strong>同时使用 JQL 排序</strong><br>
+                    <span style="color: #856404; font-size: 12px;">📋 调整表格行顺序与 JQL 查询结果一致</span>
                 </span>
             </label>
         </div>
@@ -110,13 +144,19 @@ async function openJqlDialog(url: string, sheetToken: string) {
                     }
                 }
                 
-                // 更新同步选项显示状态
-                if (globalSettings.syncWithJql) {
-                    const syncContainer = document.getElementById('syncContainer');
-                    const syncCheckbox = document.getElementById('syncWithJql') as HTMLInputElement;
-                    if (syncContainer && syncCheckbox) {
-                        syncContainer.style.display = '';
-                        syncCheckbox.checked = true;
+                // 更新同步选项勾选状态
+                const dataCheckbox = document.getElementById('keepDataSameAsJql') as HTMLInputElement;
+                const orderContainer = document.getElementById('orderContainer');
+                const orderCheckbox = document.getElementById('keepOrderSameAsJql') as HTMLInputElement;
+                if (globalSettings.keepDataSameAsJql && dataCheckbox) {
+                    dataCheckbox.checked = true;
+                    // 显示排序选项
+                    if (orderContainer) {
+                        orderContainer.style.display = 'flex';
+                    }
+                    // 如果配置了保持顺序一致，则勾选
+                    if (globalSettings.keepOrderSameAsJql && orderCheckbox) {
+                        orderCheckbox.checked = true;
                     }
                 }
             } catch (error) {
@@ -131,19 +171,54 @@ async function openJqlDialog(url: string, sheetToken: string) {
             document.body.removeChild(dialog);
         }
     });
+    
+    // 当"保持数据一致"勾选状态变化时，切换"同时使用 JQL 排序"的显示
+    document.getElementById('keepDataSameAsJql')?.addEventListener('change', (e) => {
+        const orderContainer = document.getElementById('orderContainer');
+        const orderCheckbox = document.getElementById('keepOrderSameAsJql') as HTMLInputElement;
+        if (orderContainer) {
+            if ((e.target as HTMLInputElement).checked) {
+                orderContainer.style.display = 'flex';
+            } else {
+                orderContainer.style.display = 'none';
+                // 取消勾选排序选项
+                if (orderCheckbox) {
+                    orderCheckbox.checked = false;
+                }
+            }
+        }
+    });
 
     document.getElementById('submit')?.addEventListener('click', async () => {
         const jql = (document.getElementById('jql') as HTMLTextAreaElement).value;
-        const syncCheckbox = document.getElementById('syncWithJql') as HTMLInputElement;
-        const syncWithJql = syncCheckbox?.checked || false;
+        const dataCheckbox = document.getElementById('keepDataSameAsJql') as HTMLInputElement;
+        const orderCheckbox = document.getElementById('keepOrderSameAsJql') as HTMLInputElement;
+        const keepDataSameAsJql = dataCheckbox?.checked || false;
+        const keepOrderSameAsJql = orderCheckbox?.checked || false;
         if (jql) {
-            try {
-                handleFetchJiraTicketsToSheet(jql, url, sheetToken, syncWithJql);
-            } catch (error) {
-                console.error('查询或处理失败: ', error);
-                showToast('查询或处理失败: ' + (error instanceof Error ? error.message : error), 'error');
+            // 保存配置到配置表（填了 JQL 就存储，各选项根据勾选状态存储）
+            if (sheetToken && url) {
+                saveGlobalSettingsToConfig(url, sheetToken, {
+                    defaultJql: jql,
+                    keepDataSameAsJql,
+                    keepOrderSameAsJql
+                }).catch(err => console.warn('保存配置失败:', err));
             }
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
+            try {
+                await handleFetchJiraTicketsToSheet(jql, url, sheetToken, keepDataSameAsJql, keepOrderSameAsJql);
+            } catch (error) {
+                console.error('查询或处理失败: ', error);
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                showToast('查询或处理失败: ' + errorMessage, 'error');
+                
+                // 如果是登录错误，重新打开对话框并带入之前的输入
+                if (errorMessage.includes('需要登录')) {
+                    setTimeout(() => {
+                        openJqlDialogWithValues(url, sheetToken, jql, keepDataSameAsJql, keepOrderSameAsJql);
+                    }, 1000);
+                }
+            }
         } else {
             showToast('请输入 JQL 查询语句', 'warning');
         }
@@ -288,7 +363,8 @@ interface JiraHeaders {
 interface GlobalSettings {
     headerRow: number;  // 表头所在行号（1-based），默认为 1
     defaultJql: string; // 默认 JQL 查询语句
-    syncWithJql: boolean; // 是否保持表内容与 JQL 查询结果一致
+    keepDataSameAsJql: boolean; // 是否保持表内容与 JQL 查询结果一致
+    keepOrderSameAsJql: boolean; // 是否保持表内容顺序与 JQL 查询结果一致
 }
 
 interface JiraFieldMetadata {
@@ -313,7 +389,8 @@ function parseGlobalSettings(configData: string[][]): GlobalSettings {
     const defaultSettings: GlobalSettings = {
         headerRow: 1,
         defaultJql: '',
-        syncWithJql: false
+        keepDataSameAsJql: false,
+        keepOrderSameAsJql: false
     };
     
     if (!configData || configData.length < 1) {
@@ -352,13 +429,187 @@ function parseGlobalSettings(configData: string[][]): GlobalSettings {
         } else if (settingName === 'default jql' || settingName === 'jql') {
             defaultSettings.defaultJql = settingValue || '';
             console.log(`全局设置: Default JQL = ${settingValue}`);
-        } else if (settingName === 'sync with jql' || settingName === 'sync mode') {
-            defaultSettings.syncWithJql = settingValue?.toLowerCase() === 'true' || settingValue === '1' || settingValue?.toLowerCase() === 'yes';
-            console.log(`全局设置: Sync with JQL = ${defaultSettings.syncWithJql}`);
+        } else if (settingName === 'keep data same as jql' || settingName === 'sync with jql' || settingName === 'sync mode') {
+            // 兼容旧配置名
+            defaultSettings.keepDataSameAsJql = settingValue?.toLowerCase() === 'true' || settingValue === '1' || settingValue?.toLowerCase() === 'yes';
+            console.log(`全局设置: Keep data same as JQL = ${defaultSettings.keepDataSameAsJql}`);
+        } else if (settingName === 'keep order same as jql') {
+            defaultSettings.keepOrderSameAsJql = settingValue?.toLowerCase() === 'true' || settingValue === '1' || settingValue?.toLowerCase() === 'yes';
+            console.log(`全局设置: Keep order same as JQL = ${defaultSettings.keepOrderSameAsJql}`);
         }
     }
     
     return defaultSettings;
+}
+
+// 保存全局设置到配置表
+async function saveGlobalSettingsToConfig(
+    sheetUrl: string, 
+    token: string, 
+    settings: { defaultJql?: string; keepDataSameAsJql?: boolean; keepOrderSameAsJql?: boolean }
+): Promise<void> {
+    try {
+        const sheet = await Sheet.fromUrl(sheetUrl, token);
+        const sheetName = sheet.getSheetName();
+        const configSheetName = `${sheetName}_config`;
+        const sheetId = Sheet.extractSheetId(sheetUrl);
+        
+        if (!sheetId) {
+            console.warn('无法提取 Sheet ID，跳过保存配置');
+            return;
+        }
+        
+        // 检查配置表是否存在
+        const sheets = await Sheet.getSheetNames(token, sheetId);
+        const configSheet = sheets.find((s: any) => s.properties.title === configSheetName);
+        
+        if (!configSheet) {
+            // 配置表不存在，不创建，跳过保存
+            console.warn('配置表不存在，跳过保存配置');
+            return;
+        }
+        
+        // 读取现有配置
+        const configUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${configSheetName}`;
+        const res = await fetch(configUrl, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const configJson = await res.json();
+        const configData: string[][] = configJson.values || [];
+        
+        if (configData.length < 1) {
+            console.warn('配置表为空，跳过保存配置');
+            return;
+        }
+        
+        // 查找 Global Settings 列
+        const headerRow = configData[0];
+        let globalSettingsIndex = headerRow.findIndex((h: string) => 
+            h && h.toLowerCase().includes('global settings')
+        );
+        
+        // 如果没有 Global Settings 列，添加到表头末尾
+        if (globalSettingsIndex === -1) {
+            console.log('配置表中未找到 Global Settings 区域，将添加...');
+            // 找到表头中最后一个非空列的位置
+            let lastNonEmptyCol = 0;
+            for (let i = headerRow.length - 1; i >= 0; i--) {
+                if (headerRow[i] && headerRow[i].trim()) {
+                    lastNonEmptyCol = i;
+                    break;
+                }
+            }
+            // 空一列作为分隔，然后添加 Global Settings
+            globalSettingsIndex = lastNonEmptyCol + 2;
+            
+            // 添加 Global Settings 表头
+            const gsHeaderRange = `${configSheetName}!${indexToColumnLetter(globalSettingsIndex)}1:${indexToColumnLetter(globalSettingsIndex + 1)}1`;
+            await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${gsHeaderRange}?valueInputOption=USER_ENTERED`, {
+                method: 'PUT',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ values: [['Global Settings', 'Value']] })
+            });
+            
+            // 更新 configData 以反映新添加的列
+            configData[0] = [...headerRow, '', 'Global Settings', 'Value'];
+        }
+        
+        const valueIndex = globalSettingsIndex + 1;
+        
+        // 定义需要的配置项
+        const requiredSettings: Array<{ key: string; aliases: string[]; settingKey: 'defaultJql' | 'keepDataSameAsJql' | 'keepOrderSameAsJql' }> = [
+            { key: 'default jql', aliases: ['jql'], settingKey: 'defaultJql' },
+            { key: 'keep data same as jql', aliases: ['sync with jql', 'sync mode'], settingKey: 'keepDataSameAsJql' },
+            { key: 'keep order same as jql', aliases: [], settingKey: 'keepOrderSameAsJql' }
+        ];
+        
+        // 构建更新请求
+        const updates: Array<{ range: string; values: string[][] }> = [];
+        const foundSettings = new Set<string>();
+        
+        // 遍历配置行，找到需要更新的设置
+        for (let i = 1; i < configData.length; i++) {
+            const row = configData[i];
+            if (!row || row.length <= globalSettingsIndex) continue;
+            
+            const settingName = row[globalSettingsIndex]?.trim().toLowerCase();
+            if (!settingName) continue;
+            
+            for (const reqSetting of requiredSettings) {
+                if (settingName === reqSetting.key || reqSetting.aliases.includes(settingName)) {
+                    foundSettings.add(reqSetting.key);
+                    const value = settings[reqSetting.settingKey];
+                    if (value !== undefined) {
+                        const displayValue = typeof value === 'boolean' ? (value ? 'true' : 'false') : value;
+                        updates.push({
+                            range: `${configSheetName}!${indexToColumnLetter(valueIndex)}${i + 1}`,
+                            values: [[displayValue]]
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // 检查是否有缺失的配置项，需要添加
+        const missingSettings: Array<{ name: string; value: string }> = [];
+        for (const reqSetting of requiredSettings) {
+            if (!foundSettings.has(reqSetting.key)) {
+                const value = settings[reqSetting.settingKey];
+                if (value !== undefined) {
+                    const displayValue = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value);
+                    // 格式化配置名：首字母大写
+                    const formattedName = reqSetting.key.split(' ').map(word => 
+                        word.charAt(0).toUpperCase() + word.slice(1)
+                    ).join(' ');
+                    missingSettings.push({ name: formattedName, value: displayValue });
+                }
+            }
+        }
+        
+        // 如果有缺失的配置项，追加到 Global Settings 区域
+        if (missingSettings.length > 0) {
+            // 找到 Global Settings 区域最后一个有内容的行
+            let lastGsRow = 0;
+            for (let i = 1; i < configData.length; i++) {
+                const row = configData[i];
+                if (row && row.length > globalSettingsIndex && row[globalSettingsIndex]?.trim()) {
+                    lastGsRow = i;
+                }
+            }
+            
+            // 追加缺失的配置项
+            for (let j = 0; j < missingSettings.length; j++) {
+                const rowNum = lastGsRow + 1 + j + 1; // +1 因为行号从1开始，再+1因为在最后一行之后
+                updates.push({
+                    range: `${configSheetName}!${indexToColumnLetter(globalSettingsIndex)}${rowNum}:${indexToColumnLetter(valueIndex)}${rowNum}`,
+                    values: [[missingSettings[j].name, missingSettings[j].value]]
+                });
+            }
+            console.log('添加缺失的配置项:', missingSettings);
+        }
+        
+        if (updates.length > 0) {
+            const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`;
+            await fetch(batchUrl, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    valueInputOption: 'USER_ENTERED',
+                    data: updates
+                })
+            });
+            console.log('已保存全局设置到配置表:', settings);
+        }
+    } catch (error) {
+        console.error('保存全局设置失败:', error);
+    }
 }
 
 // 查找有效的Jira字段表头
@@ -367,7 +618,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
         let headerMapping: { [key: string]: string } = {};
         const customFieldMapping: { [key: string]: string } = {};
         const fieldTypes: { [jiraField: string]: string } = {};
-        let globalSettings: GlobalSettings = { headerRow: 1, defaultJql: '', syncWithJql: false };
+        let globalSettings: GlobalSettings = { headerRow: 1, defaultJql: '', keepDataSameAsJql: false, keepOrderSameAsJql: false };
         
         try {
             const configData = await sheet.readConfigSheet();
@@ -784,12 +1035,12 @@ function showToast(message: string, type = 'info') {
 }
 
 // 从 Jira 查询 tickets 并更新到 Google Sheet
-async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, sheetToken: string, syncWithJql = false) {
+async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, sheetToken: string, keepDataSameAsJql = false, keepOrderSameAsJql = false) {
     showToast('正在查询 Jira...');
     const envConfig = await getEnvConfig();
     const tickets = await fetchJiraTickets(jql);
     console.log('tickets', tickets);
-    if (!tickets.length && !syncWithJql) {
+    if (!tickets.length && !keepDataSameAsJql) {
         showToast('没有找到数据', 'warning');
         return;
     }
@@ -870,8 +1121,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 };
             });
 
-            // 如果启用了同步模式，找出需要移除的 tickets
-            if (syncWithJql) {
+            // 如果启用了保持数据一致模式，找出需要移除的 tickets
+            if (keepDataSameAsJql) {
                 existingTicketsInfo.forEach((info, key) => {
                     if (!jqlTicketKeys.has(key)) {
                         // 构建一个用于显示的 ticket 对象
@@ -1049,10 +1300,106 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 }
             }
 
+            // 4. 如果需要保持顺序一致，执行排序操作（使用行移动，保留格式）
+            let reorderedCount = 0;
+            if (keepOrderSameAsJql && tickets.length > 0) {
+                try {
+                    showToast('正在调整行顺序...');
+                    
+                    // 重新读取表格数据（因为前面的操作可能已经改变了数据）
+                    const currentValues = await sheet.readSheet('FORMULA');
+                    if (currentValues && currentValues.length > dataStartRowIndex) {
+                        // 获取 JQL 结果中的 ticket 顺序
+                        const jqlOrder = tickets.map(t => t.key);
+                        
+                        // 提取数据行及其当前行索引（跳过表头）
+                        const dataRows = currentValues.slice(dataStartRowIndex);
+                        
+                        // 构建 key 到当前行索引的映射（0-based，相对于数据起始行）
+                        const keyToCurrentIndex = new Map<string, number>();
+                        const rowsWithoutKeyIndices: number[] = [];
+                        
+                        dataRows.forEach((row: string[], index: number) => {
+                            const keyCell = row[keyColumnIndex];
+                            let key = '';
+                            if (keyCell) {
+                                const match = keyCell.match(/browse\/([A-Z0-9]+-[0-9]+)/i);
+                                if (match && match[1]) {
+                                    key = match[1];
+                                } else if (/^[A-Z0-9]+-[0-9]+$/i.test(keyCell.trim())) {
+                                    key = keyCell.trim();
+                                }
+                            }
+                            if (key) {
+                                keyToCurrentIndex.set(key, index);
+                            } else {
+                                rowsWithoutKeyIndices.push(index);
+                            }
+                        });
+                        
+                        // 构建目标顺序的索引数组
+                        const targetOrder: number[] = [];
+                        jqlOrder.forEach(key => {
+                            const currentIndex = keyToCurrentIndex.get(key);
+                            if (currentIndex !== undefined) {
+                                targetOrder.push(currentIndex);
+                                keyToCurrentIndex.delete(key);
+                            }
+                        });
+                        
+                        // 把不在 JQL 结果中但有 key 的行追加到末尾
+                        keyToCurrentIndex.forEach((index) => {
+                            targetOrder.push(index);
+                        });
+                        
+                        // 把没有 key 的行追加到末尾
+                        targetOrder.push(...rowsWithoutKeyIndices);
+                        
+                        // 使用行移动来重新排序（保留格式）
+                        // 策略：从第一个位置开始，把应该在那个位置的行移动过来
+                        const sheetGid = sheet.getGid();
+                        const numericGid = sheetGid ? parseInt(sheetGid) : 0;
+                        
+                        // 创建当前位置到目标位置的映射
+                        // currentPositions[i] 表示当前在位置 i 的行原本的索引
+                        const currentPositions = dataRows.map((_, i) => i);
+                        
+                        let moveCount = 0;
+                        for (let targetPos = 0; targetPos < targetOrder.length; targetPos++) {
+                            const targetIndex = targetOrder[targetPos];
+                            // 找到目标索引当前在哪个位置
+                            const currentPos = currentPositions.indexOf(targetIndex);
+                            
+                            if (currentPos !== targetPos) {
+                                // 需要移动：把 currentPos 行移动到 targetPos
+                                const fromRow = dataStartRowIndex + currentPos; // 0-based sheet row
+                                const toRow = dataStartRowIndex + targetPos;
+                                
+                                await sheet.moveRow(fromRow, toRow, numericGid);
+                                moveCount++;
+                                
+                                // 更新 currentPositions 以反映移动
+                                const movedValue = currentPositions.splice(currentPos, 1)[0];
+                                currentPositions.splice(targetPos, 0, movedValue);
+                            }
+                        }
+                        
+                        reorderedCount = moveCount;
+                        if (moveCount > 0) {
+                            console.log(`已移动 ${moveCount} 行以重新排序`);
+                        }
+                    }
+                } catch (error) {
+                    console.error('排序失败:', error);
+                    showToast('排序失败: ' + (error instanceof Error ? error.message : error), 'error');
+                }
+            }
+
             let toastMessage = '';
             if (updatedCount > 0) toastMessage += `已更新 ${updatedCount} 条数据。`;
             if (appendedCount > 0) toastMessage += `已追加 ${appendedCount} 条新数据。`;
             if (removedCount > 0) toastMessage += `已移除 ${removedCount} 条数据。`;
+            if (reorderedCount > 0) toastMessage += `已按 JQL 顺序排列 ${reorderedCount} 行。`;
             if (toastMessage === '') toastMessage = '没有需要更新、追加或移除的数据。';
             
             showToast(toastMessage.trim(), 'success');
@@ -1374,7 +1721,8 @@ async function createConfigSheet(token: string, sheetId: string, configSheetName
         ["Sheet Column", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Sheet Column - link ticket", "JIRA Field", "Sync mode", "Field type", "Change as adding?", "Prefix", "Suffix", "Format function", "Back format", "", "Global Settings", "Value"],
         ["JIRA", "JIRA key", "", "", "", "", "", "", "", "", "UX Ticket", "link key", "", "", "", "", "", "", "", "", "Header Row", "1"],
         ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Default JQL", ""],
-        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Sync with JQL", "false"],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Keep data same as JQL", "false"],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Keep order same as JQL", "false"],
         ["Title", "summary", "Back", "text"],
         ["Type", "issuetype", "Back", "text"],
         ["Label", "labels", "To", "list", "Yes"],
