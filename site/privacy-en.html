@@ -159,29 +159,109 @@
                 <h2>5. Google API Services Data Usage</h2>
                 <p>Personal AI's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank">Google API Services User Data Policy</a>, including Limited Use requirements.</p>
                 
-                <h3>5.1 Google User Data We Access</h3>
+                <h3>5.1 What Google User Data We Access</h3>
+                <p>Personal AI accesses the following Google user data through Google Workspace APIs (only when you explicitly authorize via OAuth 2.0):</p>
+                
+                <h4>Google Sheets API</h4>
                 <ul>
-                    <li>Google Sheets: Read and write spreadsheet data for scheduled messages and data synchronization</li>
-                    <li>Google Slides: Read slide content for project progress analysis</li>
-                    <li>Google Drive: Access files you authorize</li>
+                    <li><strong>Data Accessed:</strong> Spreadsheet content, cell values, formulas, formatting, and metadata from sheets you authorize</li>
+                    <li><strong>Permissions:</strong> Read and write access to create, update, and manage spreadsheets</li>
+                    <li><strong>Purpose:</strong> 
+                        <ul>
+                            <li>Synchronize Jira ticket data to Google Sheets for tracking and reporting</li>
+                            <li>Create and manage scheduled message data tables</li>
+                            <li>Deploy Google Apps Script for automated message scheduling</li>
+                        </ul>
+                    </li>
                 </ul>
 
-                <h3>5.2 Data Usage Restrictions</h3>
+                <h4>Google Slides API</h4>
                 <ul>
-                    <li>Only access data you explicitly authorize</li>
-                    <li>Only use data to provide requested features</li>
-                    <li>Do not transfer data to third parties (except at your explicit request)</li>
-                    <li>Do not use data to develop, improve, or train generalized AI models</li>
-                    <li>Do not use data for ad targeting</li>
+                    <li><strong>Data Accessed:</strong> Slide content, text, images, and presentation structure from presentations you authorize</li>
+                    <li><strong>Permissions:</strong> Read-only access to analyze slide content</li>
+                    <li><strong>Purpose:</strong> 
+                        <ul>
+                            <li>Analyze project progress information from presentation slides</li>
+                            <li>Extract and organize content to help you create summaries</li>
+                            <li>Assist in content organization and information retrieval</li>
+                        </ul>
+                    </li>
                 </ul>
 
-                <h3>5.3 Your Control Rights</h3>
-                <p>You can revoke Personal AI's access to Google data anytime through Google Account settings:</p>
+                <h4>Google Drive API</h4>
+                <ul>
+                    <li><strong>Data Accessed:</strong> File metadata and content for Sheets and Slides files you explicitly authorize</li>
+                    <li><strong>Permissions:</strong> Limited access to files created by or shared with the application</li>
+                    <li><strong>Purpose:</strong> 
+                        <ul>
+                            <li>Store and retrieve spreadsheets created for scheduled messages</li>
+                            <li>Access presentations you choose to analyze</li>
+                        </ul>
+                    </li>
+                </ul>
+
+                <p class="privacy-note"><strong>Important:</strong> Personal AI does NOT access your Gmail, Google Calendar, Google Contacts, Google Photos, or any other Google services not explicitly listed above.</p>
+
+                <h3>5.2 How We Use Google User Data</h3>
+                <p>Google user data is used exclusively to provide and improve the user-facing features you request:</p>
+                <ul>
+                    <li><strong>Jira Synchronization:</strong> Read Jira data and write to your Google Sheets for project tracking</li>
+                    <li><strong>Scheduled Messages:</strong> Create and manage Google Sheets with Apps Script to automate message delivery</li>
+                    <li><strong>Content Analysis:</strong> Read Google Slides content to help you organize and summarize information</li>
+                    <li><strong>Data Visualization:</strong> Display synchronized data in the extension interface</li>
+                </ul>
+
+                <p><strong>All data processing happens:</strong></p>
+                <ul>
+                    <li>Only when you explicitly request a feature</li>
+                    <li>Within the scope of the specific task you initiated</li>
+                    <li>In compliance with Google's Limited Use requirements</li>
+                </ul>
+
+                <h3>5.3 How We Share Google User Data</h3>
+                <p><strong>Personal AI does NOT share, sell, or transfer your Google user data to any third parties.</strong></p>
+                
+                <p>Your Google data may only be transferred in the following limited circumstances:</p>
+                <ul>
+                    <li><strong>To Google Services:</strong> Data is sent back to Google APIs only as necessary to provide the features (e.g., writing data to your Google Sheets)</li>
+                    <li><strong>To AI Services (Optional):</strong> If you configure AI analysis features, text content may be sent to AI providers (OpenAI, Claude, Gemini) you explicitly configure. This is optional and requires your separate API key configuration.</li>
+                    <li><strong>No Other Third Parties:</strong> We do not transfer data to advertisers, data brokers, or any other external entities</li>
+                </ul>
+
+                <h3>5.4 How We Protect Google User Data</h3>
+                <p>We implement industry-standard security measures to protect your Google user data:</p>
+                <ul>
+                    <li><strong>Encryption in Transit:</strong> All data transmission between Personal AI and Google APIs uses HTTPS/TLS encryption</li>
+                    <li><strong>Secure Authentication:</strong> OAuth 2.0 tokens are encrypted and stored securely in Chrome's local storage</li>
+                    <li><strong>Minimal Data Retention:</strong> We only cache data temporarily in local storage for performance; no data is stored on remote servers</li>
+                    <li><strong>Access Control:</strong> The extension only accesses data you explicitly authorize through OAuth consent screens</li>
+                    <li><strong>No Central Database:</strong> Personal AI does not maintain any central server or database storing your Google data</li>
+                </ul>
+
+                <h3>5.5 Data Retention and Deletion</h3>
+                <p><strong>How Long We Keep Google User Data:</strong></p>
+                <ul>
+                    <li><strong>OAuth Tokens:</strong> Stored locally until you revoke access or uninstall the extension</li>
+                    <li><strong>Cached Data:</strong> Temporarily stored in local browser storage, automatically cleared when you close the browser or clear browsing data</li>
+                    <li><strong>Created Spreadsheets:</strong> Remain in your Google Drive under your control until you delete them</li>
+                </ul>
+
+                <p><strong>How to Delete Your Data:</strong></p>
                 <ol>
-                    <li>Go to Google Account → Security → Third-party apps with account access</li>
-                    <li>Find Personal AI</li>
-                    <li>Click "Remove Access"</li>
+                    <li><strong>Revoke Access:</strong> Go to <a href="https://myaccount.google.com/permissions" target="_blank">Google Account Permissions</a> → Find "Personal AI" → Click "Remove Access". All OAuth tokens will be immediately invalidated.</li>
+                    <li><strong>Clear Local Data:</strong> Uninstall the extension or clear Chrome browsing data to remove all locally cached information</li>
+                    <li><strong>Delete Spreadsheets:</strong> Delete any spreadsheets created by Personal AI from your Google Drive</li>
+                    <li><strong>Contact Us:</strong> Email us at privacy@personal-ai.example.com to request complete data deletion</li>
                 </ol>
+
+                <h3>5.6 Your Control Rights</h3>
+                <p>You have complete control over your Google data:</p>
+                <ul>
+                    <li><strong>Granular Permissions:</strong> Choose which specific files and folders to authorize</li>
+                    <li><strong>Revoke Anytime:</strong> Revoke access at any time through Google Account settings</li>
+                    <li><strong>Audit Access:</strong> View all access history in your Google Account activity log</li>
+                    <li><strong>Delete Data:</strong> Delete any data created by Personal AI from your Google Drive</li>
+                </ul>
             </div>
 
             <!-- Your Rights -->
