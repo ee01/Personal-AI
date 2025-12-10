@@ -316,7 +316,15 @@ export class ScheduledMessageService {
     }
     
     const newStatus = message.Status === 'Active' ? 'Paused' : 'Active';
-    return await this.updateMessage(id, { Status: newStatus });
+    
+    // 如果从 Done 状态切换到 Active，清空 Last_Exec（允许重新推送）
+    const updates: any = { Status: newStatus };
+    if (message.Status === 'Done' && newStatus === 'Active') {
+      updates.Last_Exec = '';
+      console.log(`✅ 消息 ${id} 从 Done 切换到 Active，已清空 Last_Exec 以允许重新推送`);
+    }
+    
+    return await this.updateMessage(id, updates);
   }
   
   /**

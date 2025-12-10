@@ -130,6 +130,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [appScriptVersion, setAppScriptVersion] = useState<string>('');
+  const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
   
   useEffect(() => {
     initializeApp();
@@ -261,11 +262,31 @@ const ScheduledMessagesManager: React.FC = () => {
   };
   
   const handleSync = async () => {
-    if (!service) return;
+    if (!service || !config) return;
     
     setIsLoading(true);
     try {
       await loadMessages(service);
+      
+      // 检查并补充 logsSheetId（如果缺失）
+      if (config.logsSheetId === undefined || config.logsSheetId === null) {
+        console.log('⏳ 同步时发现 logsSheetId 缺失，尝试获取...');
+        try {
+          const token = await getAuthToken();
+          if (token) {
+            const logsSheetId = await fetchLogsSheetId(token, config.sheetId);
+            if (logsSheetId !== null) {
+              // 保存到配置
+              const updatedConfig = { ...config, logsSheetId };
+              await chrome.storage.local.set({ scheduledMessagesConfig: updatedConfig });
+              setConfig(updatedConfig);
+              console.log('✅ 已补充 logsSheetId:', logsSheetId);
+            }
+          }
+        } catch (error) {
+          console.error('补充 logsSheetId 失败:', error);
+        }
+      }
     } finally {
       setIsLoading(false);
     }
@@ -394,23 +415,91 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   }, [isInitialized, config]);
   
-  const handleOpenSheet = () => {
+  const handleOpenSheet = async () => {
     if (config && config.sheetUrl) {
       // 如果有 logsSheetId，直接打开 Logs 表
-      const url = config.logsSheetId 
-        ? `${config.sheetUrl.replace('/edit', '')}#gid=${config.logsSheetId}`
-        : config.sheetUrl;
-      window.open(url, '_blank');
+      if (config.logsSheetId !== undefined && config.logsSheetId !== null) {
+        const url = `${config.sheetUrl.replace('/edit', '')}#gid=${config.logsSheetId}`;
+        window.open(url, '_blank');
+      } else {
+        // 没有 logsSheetId，尝试获取并保存
+        console.log('⏳ logsSheetId 未记录，尝试获取...');
+        try {
+          const token = await getAuthToken();
+          if (token && service) {
+            const logsSheetId = await fetchLogsSheetId(token, config.sheetId);
+            if (logsSheetId !== null) {
+              // 保存到配置
+              const updatedConfig = { ...config, logsSheetId };
+              await chrome.storage.local.set({ scheduledMessagesConfig: updatedConfig });
+              setConfig(updatedConfig);
+              
+              // 打开 Logs 表
+              const url = `${config.sheetUrl.replace('/edit', '')}#gid=${logsSheetId}`;
+              window.open(url, '_blank');
+              console.log('✅ 已获取并保存 logsSheetId:', logsSheetId);
+            } else {
+              // 找不到 Logs 表，打开默认页
+              window.open(config.sheetUrl, '_blank');
+            }
+          } else {
+            window.open(config.sheetUrl, '_blank');
+          }
+        } catch (error) {
+          console.error('获取 logsSheetId 失败:', error);
+          // 出错时打开默认页
+          window.open(config.sheetUrl, '_blank');
+        }
+      }
+    }
+  };
+  
+  // 获取 Logs Sheet ID
+  const fetchLogsSheetId = async (token: string, sheetId: string): Promise<number | null> => {
+    try {
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`获取 Sheet 信息失败: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const logsSheet = data.sheets.find((s: any) => s.properties.title === 'Logs');
+      
+      if (!logsSheet) {
+        console.warn('未找到 Logs 工作表');
+        return null;
+      }
+      
+      return logsSheet.properties.sheetId;
+    } catch (error) {
+      console.error('fetchLogsSheetId 失败:', error);
+      return null;
     }
   };
   
   const handleAddMessage = () => {
     setIsReminderMode(false);
+    setEditingMessage(null);
     setShowAddDialog(true);
   };
   
   const handleAddReminder = () => {
     setIsReminderMode(true);
+    setEditingMessage(null);
+    setShowAddDialog(true);
+  };
+  
+  const handleEditMessage = (message: ScheduledMessage) => {
+    setIsReminderMode(false);
+    setEditingMessage(message);
     setShowAddDialog(true);
   };
   
@@ -454,13 +543,23 @@ const ScheduledMessagesManager: React.FC = () => {
     
     setIsSubmitting(true);
     try {
-      await service.createMessage(formData);
-      await loadMessages(service);
-      setShowAddDialog(false);
-      alert('消息创建成功！');
+      if (editingMessage) {
+        // 编辑模式：更新消息
+        await service.updateMessage(editingMessage.ID, formData);
+        await loadMessages(service);
+        setShowAddDialog(false);
+        setEditingMessage(null);
+        alert('消息更新成功！');
+      } else {
+        // 新建模式：创建消息
+        await service.createMessage(formData);
+        await loadMessages(service);
+        setShowAddDialog(false);
+        alert('消息创建成功！');
+      }
     } catch (error) {
-      console.error('创建消息失败:', error);
-      alert(`创建失败: ${error.message}`);
+      console.error(editingMessage ? '更新消息失败:' : '创建消息失败:', error);
+      alert(`${editingMessage ? '更新' : '创建'}失败: ${error.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -911,13 +1010,22 @@ const ScheduledMessagesManager: React.FC = () => {
                           </span>
                         </td>
                         <td style={styles.td}>
-                          <button 
-                            style={styles.deleteButton}
-                            onClick={() => handleDeleteMessage(message.ID, displayTitle)}
-                            title="删除消息"
-                          >
-                            🗑️
-                          </button>
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button 
+                              style={styles.editButton}
+                              onClick={() => handleEditMessage(message)}
+                              title="编辑消息"
+                            >
+                              ✏️
+                            </button>
+                            <button 
+                              style={styles.deleteButton}
+                              onClick={() => handleDeleteMessage(message.ID, displayTitle)}
+                              title="删除消息"
+                            >
+                              🗑️
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -937,13 +1045,17 @@ const ScheduledMessagesManager: React.FC = () => {
        {showAddDialog && (
          <AddMessageDialog 
            onSubmit={handleSubmitNewMessage}
-           onCancel={() => setShowAddDialog(false)}
+           onCancel={() => {
+             setShowAddDialog(false);
+             setEditingMessage(null);
+           }}
            isSubmitting={isSubmitting}
            botConfigured={botConfigured}
            onConfigureBot={() => setShowBotConfigDialog(true)}
            isReminderMode={isReminderMode}
            currentUsername={currentUsername}
            availableCategories={availableCategories}
+           editingMessage={editingMessage}
          />
        )}
        
@@ -1262,7 +1374,7 @@ interface AIHeader {
   value: string;
 }
 
-// 新增消息对话框组件
+// 新增/编辑消息对话框组件
 const AddMessageDialog: React.FC<{
   onSubmit: (data: CreateMessageFormData) => void;
   onCancel: () => void;
@@ -1272,42 +1384,174 @@ const AddMessageDialog: React.FC<{
   isReminderMode?: boolean;
   currentUsername?: string;
   availableCategories: SelectOption[];
-}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '', availableCategories }) => {
-  const [formData, setFormData] = useState<CreateMessageFormData>({
-    Topic: '',
-    Content: '',
-    Schedule_Date: new Date().toISOString().split('T')[0],
-    Schedule_Time: '',
-    Push_Method: 'AsMe',
-    Target_Type: 'private',
-    Glip_User_Name: '',
-    Glip_Team_ID: ''
+  editingMessage?: ScheduledMessage | null;
+}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '', availableCategories, editingMessage = null }) => {
+  const isEditMode = !!editingMessage;
+  // 初始化表单数据（编辑模式时使用现有数据）
+  const getInitialFormData = (): CreateMessageFormData => {
+    if (editingMessage) {
+      return {
+        Topic: editingMessage.Topic || '',
+        Content: editingMessage.Content || '',
+        Schedule_Date: editingMessage.Schedule_Date || '',
+        Schedule_Time: editingMessage.Schedule_Time || '',
+        Push_Method: editingMessage.Push_Method || 'AsMe',
+        Target_Type: editingMessage.Glip_Team_ID ? 'group' : 'private',
+        Glip_User_Name: editingMessage.Glip_User_Name || '',
+        Glip_Team_ID: editingMessage.Glip_Team_ID || '',
+        Repeat_Every: editingMessage.Repeat_Every,
+        Repeat_Unit: editingMessage.Repeat_Unit,
+        Repeat_Count: editingMessage.Repeat_Count,
+        End_Date: editingMessage.End_Date,
+        AI_Endpoint: editingMessage.AI_Endpoint,
+        AI_Headers: editingMessage.AI_Headers,
+        AI_Body: editingMessage.AI_Body,
+        Timeline_Project: editingMessage.Timeline_Project,
+        Timeline_Milestone: editingMessage.Timeline_Milestone,
+        Timeline_Offset: editingMessage.Timeline_Offset,
+        Category: editingMessage.Category,
+      };
+    }
+    return {
+      Topic: '',
+      Content: '',
+      Schedule_Date: new Date().toISOString().split('T')[0],
+      Schedule_Time: '',
+      Push_Method: 'AsMe',
+      Target_Type: 'private',
+      Glip_User_Name: '',
+      Glip_Team_ID: ''
+    };
+  };
+  
+  // 初始化用户标签（编辑模式时解析现有用户名）
+  const getInitialUserTags = (): string[] => {
+    if (editingMessage && editingMessage.Glip_User_Name) {
+      // esone.qiu+john.doe -> ['Esone Qiu', 'John Doe']
+      return editingMessage.Glip_User_Name.split('+').map(name => formatUserName.toDisplayFormat(name));
+    }
+    return [];
+  };
+  
+  // 初始化分类标签
+  const getInitialCategoryTags = (): SelectOption[] => {
+    if (editingMessage && editingMessage.Category) {
+      return editingMessage.Category.split(',').map(cat => ({
+        value: cat.trim(),
+        label: cat.trim()
+      }));
+    }
+    return [];
+  };
+  
+  const [formData, setFormData] = useState<CreateMessageFormData>(getInitialFormData);
+  const [userTags, setUserTags] = useState<string[]>(getInitialUserTags);
+  const [isRepeating, setIsRepeating] = useState(editingMessage ? !!(editingMessage.Repeat_Every && editingMessage.Repeat_Unit) : false);
+  const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'custom'>(() => {
+    // 编辑模式时，根据 AI_Endpoint 判断模板类型
+    if (editingMessage && editingMessage.Push_Method === 'AI' && editingMessage.AI_Endpoint) {
+      if (editingMessage.AI_Endpoint.includes('dify.int.rclabenv.com')) {
+        return 'ai-report';
+      } else if (editingMessage.AI_Endpoint.includes('pep_daily_report')) {
+        return 'pep-report';
+      }
+      return 'custom';
+    }
+    return 'ai-report';
   });
-  const [userTags, setUserTags] = useState<string[]>([]);
-  const [isRepeating, setIsRepeating] = useState(false);
-  const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'custom'>('ai-report');
   const [aiHeaders, setAiHeaders] = useState<AIHeader[]>([]);
-  const [isTimelineTrigger, setIsTimelineTrigger] = useState(false);
+  const [isTimelineTrigger, setIsTimelineTrigger] = useState(editingMessage ? !!(editingMessage.Timeline_Milestone && !editingMessage.Schedule_Date) : false);
+  
+  // 解析编辑模式下 AI Report Body 的辅助函数
+  const parseAiReportBody = () => {
+    if (!editingMessage || editingMessage.Push_Method !== 'AI' || !editingMessage.AI_Body) {
+      return {
+        jql: '',
+        outputs: { noduedate: false, overdue: true, toTest: false, tickets: true },
+        ticketIncludes: ['summary', 'status', 'assignee', 'reporter'],
+        customOutputs: [] as {name: string; prompt: string}[],
+        teamId: '',
+        mentionList: [] as string[],
+        extraText: ''
+      };
+    }
+    
+    try {
+      const body = JSON.parse(editingMessage.AI_Body);
+      const inputs = body.inputs || {};
+      
+      // 解析 outputs
+      const outputsStr = inputs.outputs || '';
+      const outputsArr = outputsStr.split(',').map((s: string) => s.trim());
+      
+      // 解析 ticketIncludes
+      const ticketIncludesStr = inputs.ticketIncludes || 'summary, status, assignee, reporter';
+      const ticketIncludesArr = ticketIncludesStr.split(',').map((s: string) => s.trim());
+      
+      // 解析 customOutputs（格式：name1:prompt1 | prompt2）
+      const customOutputsStr = inputs.customOutputs || '';
+      const customOutputsArr = customOutputsStr ? customOutputsStr.split(' | ').map((item: string) => {
+        const colonIndex = item.indexOf(':');
+        if (colonIndex > 0) {
+          return { name: item.substring(0, colonIndex), prompt: item.substring(colonIndex + 1) };
+        }
+        return { name: '', prompt: item };
+      }) : [];
+      
+      // 解析 mentionList
+      const mentionListStr = inputs.mentionList || '';
+      const mentionListArr = mentionListStr ? mentionListStr.split(',').map((s: string) => formatUserName.toDisplayFormat(s.trim())) : [];
+      
+      return {
+        jql: editingMessage.Content || inputs.jql || '',
+        outputs: {
+          noduedate: outputsArr.includes('noduedate'),
+          overdue: outputsArr.includes('overdue'),
+          toTest: outputsArr.includes('toTest'),
+          tickets: outputsArr.includes('tickets')
+        },
+        ticketIncludes: ticketIncludesArr,
+        customOutputs: customOutputsArr,
+        teamId: editingMessage.Glip_Team_ID || inputs.teamId || '',
+        mentionList: mentionListArr,
+        extraText: inputs.extraText || ''
+      };
+    } catch (e) {
+      console.error('解析 AI Report Body 失败:', e);
+      return {
+        jql: editingMessage.Content || '',
+        outputs: { noduedate: false, overdue: true, toTest: false, tickets: true },
+        ticketIncludes: ['summary', 'status', 'assignee', 'reporter'],
+        customOutputs: [] as {name: string; prompt: string}[],
+        teamId: editingMessage.Glip_Team_ID || '',
+        mentionList: [] as string[],
+        extraText: ''
+      };
+    }
+  };
+  
+  const initialAiReportData = parseAiReportBody();
   
   // AI Report 可视化字段
-  const [aiReportJql, setAiReportJql] = useState('');
-  const [aiReportOutputs, setAiReportOutputs] = useState({
-    noduedate: false,
-    overdue: true,
-    toTest: false,
-    tickets: true
-  });
-  const [ticketIncludes, setTicketIncludes] = useState<string[]>(['summary', 'status', 'assignee', 'reporter']);
-  const [customOutputs, setCustomOutputs] = useState<{name: string; prompt: string}[]>([]);
+  const [aiReportJql, setAiReportJql] = useState(initialAiReportData.jql);
+  const [aiReportOutputs, setAiReportOutputs] = useState(initialAiReportData.outputs);
+  const [ticketIncludes, setTicketIncludes] = useState<string[]>(initialAiReportData.ticketIncludes);
+  const [customOutputs, setCustomOutputs] = useState<{name: string; prompt: string}[]>(initialAiReportData.customOutputs);
   const [showCustomOutputDialog, setShowCustomOutputDialog] = useState(false);
   const [editingCustomOutputIndex, setEditingCustomOutputIndex] = useState<number | null>(null);
   const [customOutputName, setCustomOutputName] = useState('');
   const [customOutputPrompt, setCustomOutputPrompt] = useState('');
-  const [aiReportTeamId, setAiReportTeamId] = useState('');
-  const [aiReportMentionList, setAiReportMentionList] = useState<string[]>([]);
-  const [aiReportExtraText, setAiReportExtraText] = useState('');
-  const [pepReportTeamId, setPepReportTeamId] = useState('');
-  const [categoryTags, setCategoryTags] = useState<SelectOption[]>([]);
+  const [aiReportTeamId, setAiReportTeamId] = useState(initialAiReportData.teamId);
+  const [aiReportMentionList, setAiReportMentionList] = useState<string[]>(initialAiReportData.mentionList);
+  const [aiReportExtraText, setAiReportExtraText] = useState(initialAiReportData.extraText);
+  const [pepReportTeamId, setPepReportTeamId] = useState(() => {
+    // 编辑模式时，如果是 pep-report 类型，初始化 TeamID
+    if (editingMessage && editingMessage.Push_Method === 'AI' && editingMessage.AI_Endpoint?.includes('pep_daily_report')) {
+      return editingMessage.Glip_Team_ID || '';
+    }
+    return '';
+  });
+  const [categoryTags, setCategoryTags] = useState<SelectOption[]>(getInitialCategoryTags);
   
   // Body 输入框的 ref，用于插入变量
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1317,9 +1561,9 @@ const AddMessageDialog: React.FC<{
   // 提醒模式：展开高级选项的状态
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   
-  // 提醒模式初始化
+  // 提醒模式初始化（仅新建模式时生效）
   React.useEffect(() => {
-    if (isReminderMode) {
+    if (isReminderMode && !isEditMode) {
       // 自动填充提醒模式的数据
       handleChange('Topic', '个人提醒事项');
       handleChange('Push_Method', 'Bot');
@@ -1331,7 +1575,7 @@ const AddMessageDialog: React.FC<{
         setUserTags([displayName]);
       }
     }
-  }, [isReminderMode]);
+  }, [isReminderMode, isEditMode]);
   
   // 三个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
@@ -1517,9 +1761,9 @@ const AddMessageDialog: React.FC<{
       .join('\n');
   };
   
-  // 当 Push_Method 切换到 AI 时，初始化模板
+  // 当 Push_Method 切换到 AI 时，初始化模板（仅新建模式时）
   React.useEffect(() => {
-    if (formData.Push_Method === 'AI' && !formData.AI_Endpoint) {
+    if (formData.Push_Method === 'AI' && !formData.AI_Endpoint && !isEditMode) {
       setAiReportTemplate('ai-report');
       const headersStr = aiReportPresets['ai-report'].AI_Headers;
       handleChange('AI_Endpoint', aiReportPresets['ai-report'].AI_Endpoint);
@@ -1527,7 +1771,14 @@ const AddMessageDialog: React.FC<{
       // ai-report 模板不需要初始化 AI_Body，会通过可视化字段动态生成
       setAiHeaders(parseHeadersString(headersStr));
     }
-  }, [formData.Push_Method]);
+  }, [formData.Push_Method, isEditMode]);
+  
+  // 编辑模式下，初始化 AI Headers
+  React.useEffect(() => {
+    if (isEditMode && editingMessage?.AI_Headers) {
+      setAiHeaders(parseHeadersString(editingMessage.AI_Headers));
+    }
+  }, [isEditMode, editingMessage]);
   
   // 当 ai-report 的可视化字段变化时，自动更新 Content 和 AI_Body
   React.useEffect(() => {
@@ -1797,7 +2048,7 @@ const AddMessageDialog: React.FC<{
       <div style={dialogStyles.dialog}>
         <div style={dialogStyles.header}>
           <h2 style={dialogStyles.title}>
-            {isReminderMode ? '⏰ 新增个人提醒' : '➕ 新增定时消息'}
+            {isEditMode ? '✏️ 编辑定时消息' : isReminderMode ? '⏰ 新增个人提醒' : '➕ 新增定时消息'}
           </h2>
           <button style={dialogStyles.closeButton} onClick={onCancel}>✕</button>
         </div>
@@ -3093,7 +3344,7 @@ const AddMessageDialog: React.FC<{
               style={dialogStyles.submitButton}
               disabled={isSubmitting}
             >
-              {isSubmitting ? '创建中...' : '✅ 创建消息'}
+              {isSubmitting ? (isEditMode ? '保存中...' : '创建中...') : (isEditMode ? '✅ 保存修改' : '✅ 创建消息')}
             </button>
           </div>
         </form>
@@ -3257,6 +3508,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '6px',
     cursor: 'pointer',
     fontSize: '14px',
+  },
+  editButton: {
+    padding: '4px 8px',
+    backgroundColor: 'transparent',
+    color: '#007bff',
+    border: '1px solid #007bff',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    transition: 'all 0.2s',
   },
   deleteButton: {
     padding: '4px 8px',
