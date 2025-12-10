@@ -248,4 +248,47 @@ export class Sheet {
   public getSheetName(): string {
     return this.sheetName;
   }
+
+  public getGid(): string | null {
+    return this.gid;
+  }
+
+  // 移动单行到新位置（保留格式）
+  async moveRow(fromRowIndex: number, toRowIndex: number, sheetId?: number): Promise<void> {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}:batchUpdate`;
+    
+    // 使用传入的 sheetId 或 this.gid，如果都没有则使用 0（第一个 sheet）
+    const targetSheetId = sheetId ?? (this.gid ? parseInt(this.gid) : 0);
+    
+    // moveDimension API: 把 [startIndex, endIndex) 的行移动到 destinationIndex
+    // 注意：如果 destinationIndex > startIndex，移动后的位置是 destinationIndex - 1
+    // 如果 destinationIndex < startIndex，移动后的位置是 destinationIndex
+    const request = {
+      requests: [{
+        moveDimension: {
+          source: {
+            sheetId: targetSheetId,
+            dimension: 'ROWS',
+            startIndex: fromRowIndex,
+            endIndex: fromRowIndex + 1
+          },
+          destinationIndex: toRowIndex > fromRowIndex ? toRowIndex + 1 : toRowIndex
+        }
+      }]
+    };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(request)
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(`移动行失败: ${error.error?.message || '未知错误'}`);
+    }
+  }
 }
