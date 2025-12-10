@@ -71,6 +71,9 @@ export class ConfigSyncService {
           case 'messages_sheet_id':
             config.messagesSheetId = parseInt(value);
             break;
+          case 'logs_sheet_id':
+            config.logsSheetId = parseInt(value);
+            break;
           // Bot Executor 配置
           case 'bot_executor_rule_id':
             if (!config.botExecutor) config.botExecutor = {} as any;
@@ -148,6 +151,11 @@ export class ConfigSyncService {
       // Messages Sheet ID
       if (config.messagesSheetId !== undefined) {
         configData.push(['messages_sheet_id', config.messagesSheetId.toString()]);
+      }
+      
+      // Logs Sheet ID
+      if (config.logsSheetId !== undefined && config.logsSheetId !== null) {
+        configData.push(['logs_sheet_id', config.logsSheetId.toString()]);
       }
       
       // Bot Executor 配置
