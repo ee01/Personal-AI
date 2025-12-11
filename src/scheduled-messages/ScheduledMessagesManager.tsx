@@ -3826,6 +3826,7 @@ const BotConfigDialog: React.FC<{
   const [step, setStep] = useState<'input' | 'testing' | 'creating'>('input');
   const [jiraUrl, setJiraUrl] = useState('https://jira.ringcentral.com');
   const [projectKey, setProjectKey] = useState('');
+  const [isJiraNotLoggedIn, setIsJiraNotLoggedIn] = useState(false);
   
   // 使用 ref 跟踪组件是否已挂载
   const isMountedRef = useRef(true);
@@ -3859,6 +3860,7 @@ const BotConfigDialog: React.FC<{
     
     setIsSubmitting(true);
     setError('');
+    setIsJiraNotLoggedIn(false);
     
     try {
       // 导入服务类
@@ -3906,7 +3908,16 @@ const BotConfigDialog: React.FC<{
     } catch (err: any) {
       console.error('配置 Bot 失败:', err);
       if (isMountedRef.current) {
-        setError(err.message || '配置失败，请重试');
+        const errorMessage = err.message || '配置失败，请重试';
+        // 检测未登录状态（通常是 401 错误或包含登录相关关键词）
+        const isNotLoggedIn = errorMessage.includes('401') || 
+                              errorMessage.includes('未登录') || 
+                              errorMessage.includes('登录') ||
+                              errorMessage.includes('Unauthorized') ||
+                              errorMessage.includes('authentication') ||
+                              errorMessage.includes('login');
+        setIsJiraNotLoggedIn(isNotLoggedIn);
+        setError(isNotLoggedIn ? 'JIRA 未登录，请先登录后再试' : errorMessage);
         setStep('input');
       }
     } finally {
@@ -3953,32 +3964,13 @@ const BotConfigDialog: React.FC<{
               
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>Jira URL *</label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input 
-                    style={{...dialogStyles.input, flex: 1}}
-                    type="text"
-                    value={jiraUrl}
-                    onChange={(e) => setJiraUrl(e.target.value)}
-                    placeholder="https://jira.ringcentral.com"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => window.open(jiraUrl, '_blank')}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#007bff',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      whiteSpace: 'nowrap',
-                    }}
-                    title="在新标签页中打开 Jira（需要先登录）"
-                  >
-                    🔗 打开 Jira
-                  </button>
-                </div>
+                <input 
+                  style={dialogStyles.input}
+                  type="text"
+                  value={jiraUrl}
+                  onChange={(e) => setJiraUrl(e.target.value)}
+                  placeholder="https://jira.ringcentral.com"
+                />
                 <small style={dialogStyles.hint}>
                   请确保您已在浏览器中登录此 Jira 实例
                 </small>
@@ -4002,19 +3994,37 @@ const BotConfigDialog: React.FC<{
               {error && (
                 <div style={{
                   padding: '12px',
-                  backgroundColor: '#f8d7da',
-                  color: '#721c24',
+                  backgroundColor: isJiraNotLoggedIn ? '#fff3cd' : '#f8d7da',
+                  color: isJiraNotLoggedIn ? '#856404' : '#721c24',
                   borderRadius: '6px',
                   fontSize: '14px',
                   marginTop: '16px',
-                  border: '1px solid #f5c6cb',
+                  border: `1px solid ${isJiraNotLoggedIn ? '#ffc107' : '#f5c6cb'}`,
                 }}>
                   <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>
-                    ❌ 配置失败
+                    {isJiraNotLoggedIn ? '⚠️ JIRA 未登录' : '❌ 配置失败'}
                   </div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>
+                  <div style={{ whiteSpace: 'pre-wrap', marginBottom: isJiraNotLoggedIn ? '12px' : '0' }}>
                     {error}
                   </div>
+                  {isJiraNotLoggedIn && (
+                    <button
+                      type="button"
+                      onClick={() => window.open(jiraUrl, '_blank')}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: '#ffc107',
+                        color: '#000',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      🔗 打开 JIRA 登录
+                    </button>
+                  )}
                 </div>
               )}
             </>

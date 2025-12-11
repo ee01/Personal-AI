@@ -862,11 +862,72 @@ function getOperationText(type: 'update' | 'append' | 'remove'): string {
     }
 }
 
+// Jira 字段名称映射（用于显示友好名称）
+const jiraFieldDisplayNames: { [key: string]: string } = {
+    'key': 'Jira Key',
+    'summary': '概要 (Summary)',
+    'description': '描述 (Description)',
+    'issuetype': '类型 (Issue Type)',
+    'priority': '优先级 (Priority)',
+    'assignee': '经办人 (Assignee)',
+    'reporter': '报告人 (Reporter)',
+    'status': '状态 (Status)',
+    'labels': '标签 (Labels)',
+    'components': '模块 (Components)',
+    'fixVersions': '修复版本 (Fix Versions)',
+    'affectsVersions': '影响版本 (Affects Versions)',
+    'linkedIssues': '关联问题 (Linked Issues)',
+    'epicLink': 'Epic Link',
+    'sprint': '冲刺 (Sprint)',
+    'storyPoints': '故事点 (Story Points)',
+    'created': '创建时间 (Created)',
+    'updated': '更新时间 (Updated)',
+    'duedate': '截止日期 (Due Date)'
+};
+
+// 检测缺失的 Jira 字段
+function findMissingJiraFields(
+    tickets: JiraTicket[],
+    sheetHeaders: JiraHeaders
+): string[] {
+    if (tickets.length === 0) {
+        return [];
+    }
+
+    // 获取表格中配置的所有字段（排除 key，因为 key 是必须存在的）
+    const configuredFields = Object.keys(sheetHeaders).filter(field => 
+        sheetHeaders[field as keyof JiraHeaders] && field !== 'key'
+    );
+
+    // 检查第一个 ticket 中有哪些字段是存在的（非空值）
+    // 使用第一个 ticket 作为样本，因为所有 tickets 应该有相同的字段集
+    const sampleTicket = tickets[0];
+    
+    const missingFields: string[] = [];
+    
+    configuredFields.forEach(field => {
+        // 检查该字段在所有 tickets 中是否都是空的
+        const allEmpty = tickets.every(ticket => {
+            const value = (ticket as Record<string, any>)[field];
+            return value === undefined || value === null || value === '';
+        });
+        
+        if (allEmpty) {
+            missingFields.push(field);
+        }
+    });
+
+    return missingFields;
+}
+
 // 显示确认弹窗
 async function showConfirmationDialog(
     operations: TicketOperation[],
     displayHeaders: string[],
-    sheetHeaders: JiraHeaders
+    sheetHeaders: JiraHeaders,
+    missingFields: string[] = [],
+    jiraBaseUrl: string = '',
+    jql: string = ''
 ): Promise<TicketOperation[]> {
     return new Promise((resolve) => {
         const dialog = document.createElement('div');
@@ -896,8 +957,35 @@ async function showConfirmationDialog(
         const appendCount = operations.filter(op => op.type === 'append').length;
         const removeCount = operations.filter(op => op.type === 'remove').length;
 
+        // 生成缺失字段警告 HTML
+        const jqlUrl = `${jiraBaseUrl}/issues/?jql=${encodeURIComponent(jql)}&wildcardFlag=true`;
+        const missingFieldsWarningHtml = missingFields.length > 0 ? `
+            <div style="margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; flex-shrink: 0;">
+                <div style="display: flex; align-items: flex-start; gap: 8px;">
+                    <span style="font-size: 18px;">⚠️</span>
+                    <div>
+                        <div style="font-weight: bold; color: #856404; margin-bottom: 6px;">
+                            以下字段在 Jira 查询结果中缺失，数据无法同步：
+                        </div>
+                        <div style="color: #856404; margin-bottom: 8px;">
+                            ${missingFields.map(field => {
+                                const displayName = jiraFieldDisplayNames[field] || field;
+                                return `<span style="display: inline-block; background: #ffeeba; padding: 2px 8px; border-radius: 3px; margin: 2px 4px 2px 0; font-size: 13px;">${displayName}</span>`;
+                            }).join('')}
+                        </div>
+                        <div style="font-size: 12px; color: #856404;">
+                            请前往 Jira 的 
+                            <a href="${jqlUrl}" target="_blank" style="color: #0056b3; text-decoration: underline;">filter 查询页面</a>，
+                            点击 <strong>Columns</strong> 按钮配置显示对应的列，然后重新查询。
+                        </div>
+                    </div>
+                </div>
+            </div>
+        ` : '';
+
         dialog.innerHTML = `
             <h3 style="margin-top: 0; flex-shrink: 0;">确认数据操作</h3>
+            ${missingFieldsWarningHtml}
             <div style="margin-bottom: 15px; flex-shrink: 0;">
                 <div style="margin-bottom: 10px;">
                     <strong>将要操作的列：</strong> 
@@ -1152,7 +1240,20 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 });
             }
 
-            const confirmedOperations = await showConfirmationDialog(operations, displayHeaders, sheetHeaders);
+            // 检测缺失的 Jira 字段
+            const missingFields = findMissingJiraFields(tickets, sheetHeaders);
+            if (missingFields.length > 0) {
+                console.warn('检测到以下字段在 Jira 查询结果中缺失:', missingFields);
+            }
+
+            const confirmedOperations = await showConfirmationDialog(
+                operations, 
+                displayHeaders, 
+                sheetHeaders, 
+                missingFields,
+                envConfig.JIRA_BASE_URL || '',
+                jql
+            );
             
             if (confirmedOperations.length === 0) {
                 showToast('操作已取消');
