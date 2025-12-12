@@ -899,10 +899,7 @@ function findMissingJiraFields(
         sheetHeaders[field as keyof JiraHeaders] && field !== 'key'
     );
 
-    // 检查第一个 ticket 中有哪些字段是存在的（非空值）
-    // 使用第一个 ticket 作为样本，因为所有 tickets 应该有相同的字段集
-    const sampleTicket = tickets[0];
-    
+    // 检查所有 ticket 中有哪些字段是存在的（非空值）
     const missingFields: string[] = [];
     
     configuredFields.forEach(field => {
@@ -926,8 +923,8 @@ async function showConfirmationDialog(
     displayHeaders: string[],
     sheetHeaders: JiraHeaders,
     missingFields: string[] = [],
-    jiraBaseUrl: string = '',
-    jql: string = ''
+    jiraBaseUrl = '',
+    jql = ''
 ): Promise<TicketOperation[]> {
     return new Promise((resolve) => {
         const dialog = document.createElement('div');

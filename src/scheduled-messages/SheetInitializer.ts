@@ -111,6 +111,7 @@ export class SheetInitializer {
    * 创建 Spreadsheet
    */
   private async createSpreadsheet(): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
+    const userInfo = await this.getUserInfo();
     const response = await fetch(
       'https://sheets.googleapis.com/v4/spreadsheets',
       {
@@ -121,7 +122,7 @@ export class SheetInitializer {
         },
         body: JSON.stringify({
           properties: {
-            title: `Personal AI - 定时消息管理`
+            title: `${userInfo.given_name} 的定时消息管理`
           },
           sheets: [
             { properties: { title: 'Messages', gridProperties: { frozenRowCount: 1 } } },
@@ -220,7 +221,7 @@ export class SheetInitializer {
   /**
    * 获取用户信息
    */
-  private async getUserInfo(): Promise<{ email: string }> {
+  private async getUserInfo(): Promise<{ email: string, name: string, given_name: string, family_name: string, picture: string, hd: string }> {
     const response = await fetch(
       'https://www.googleapis.com/oauth2/v2/userinfo',
       {
