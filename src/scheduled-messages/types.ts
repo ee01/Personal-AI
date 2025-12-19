@@ -6,7 +6,7 @@
 export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 
 // 推送方式
-export type PushMethod = 'AsMe' | 'Bot' | 'AI';
+export type PushMethod = 'AsMe' | 'Bot' | 'AI' | 'JiraAutomation';
 
 // 消息状态
 export type MessageStatus = 'Active' | 'Paused' | 'Completed' | 'Done';
@@ -70,6 +70,7 @@ export interface ScheduledMessage {
   Exec_Count?: number;
   Exec_Log?: string;
   Category?: string;      // 逗号分隔的标签，如 "工作,提醒,日常"
+  Automation_Link?: string;  // Jira Automation Rule 链接
 }
 
 // 创建消息的表单数据
@@ -97,6 +98,8 @@ export interface CreateMessageFormData {
   Timeline_Offset?: number;
   // 分类标签
   Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
+  // Jira Automation 链接
+  Automation_Link?: string;  // Jira Automation Rule 链接
 }
 
 // Sheet 配置接口

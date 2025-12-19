@@ -12,16 +12,17 @@ import { InitializationResult, SheetConfig } from './types';
  * 版本历史：
  * - v2.0: 初始版本
  * - v2.1: 添加 Category 列
+ * - v2.2: 添加 Automation_Link 列（支持 Jira Automation Rule 引用）
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.1',
+  version: '2.2',
   columns: [
     'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
     'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
     'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
     'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
     'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
-    'Category', 'Status', 'Last_Exec', 'Next_Exec',
+    'Category', 'Automation_Link', 'Status', 'Last_Exec', 'Next_Exec',
     'Exec_Count', 'Exec_Log'
   ]
 };
@@ -396,6 +397,7 @@ export class SheetInitializer {
       '',                             // AI_Headers
       '',                             // AI_Body
       '',                             // Category
+      '',                             // Automation_Link (v2.2 新增)
       'Active',                       // Status
       '',                             // Last_Exec
       this.formatDateTime(oneMinuteLater), // Next_Exec
@@ -404,7 +406,7 @@ export class SheetInitializer {
     ];
     
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:X2?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:Z2?valueInputOption=USER_ENTERED`,
       {
         method: 'PUT',
         headers: {

@@ -108,7 +108,7 @@ const Popup = () => {
         chrome.windows.create({
             url: 'scheduled-messages.html',
             type: 'popup',
-            width: 1200,
+            width: 1280,
             height: 700,
             focused: true
         });
