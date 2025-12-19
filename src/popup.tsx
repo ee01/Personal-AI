@@ -6,6 +6,8 @@ import { getEnvConfig } from './utils';
 import { getAuthToken } from './slide';
 import { getTaskEnabled } from './services/TaskScheduler';
 
+const WIKI_URL = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
+
 const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
     <div className="toggle-container">
         <span className="toggle-label">{label}</span>
@@ -24,6 +26,7 @@ const Popup = () => {
     const [isRingCentral, setIsRingCentral] = useState(false);
     const [isExpandingEpic, setIsExpandingEpic] = useState(false);
     const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
+    
 
     useEffect(() => {
         (async () => {
@@ -110,6 +113,22 @@ const Popup = () => {
             type: 'popup',
             width: 1280,
             height: 700,
+            focused: true
+        });
+    };
+    
+    // Help 图标点击处理
+    const handleOpenHelp = () => {
+        chrome.tabs.create({ url: WIKI_URL, active: true });
+    };
+    
+    // Share 图标点击处理 - 打开独立窗口
+    const handleOpenShare = () => {
+        chrome.windows.create({
+            url: 'share-modal.html',
+            type: 'popup',
+            width: 560,
+            height: 680,
             focused: true
         });
     };
@@ -251,11 +270,30 @@ const Popup = () => {
 
     return (
         <div className="popup-container">
-            <Toggle 
-                checked={isScheduleActive}
-                onChange={toggleSchedule}
-                label={`每隔 ${getIntervalHours()} 小时静默消息分析`}
-            />
+            {/* 顶部工具栏：包含开关和图标 */}
+            <div className="header-toolbar">
+                <Toggle 
+                    checked={isScheduleActive}
+                    onChange={toggleSchedule}
+                    label={`每隔 ${getIntervalHours()} 小时静默消息分析`}
+                />
+                <div className="header-icons">
+                    <button 
+                        className="header-icon-btn" 
+                        onClick={handleOpenHelp}
+                        title="查看帮助文档"
+                    >
+                        ❓
+                    </button>
+                    <button 
+                        className="header-icon-btn"
+                        onClick={handleOpenShare}
+                        title="分享给同事"
+                    >
+                        ↗️
+                    </button>
+                </div>
+            </div>
 
             {isGoogleSheets && (
                 <>
@@ -332,6 +370,55 @@ const Popup = () => {
             </button> */}
 
             <style>{`
+                .popup-container {
+                    padding-bottom: 8px; /* Add padding at the bottom */
+                    min-width: 300px;
+                }
+                
+                /* 顶部工具栏样式 */
+                .header-toolbar {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    padding: 4px 8px;
+                    border-bottom: 1px solid #eee;
+                    margin-bottom: 4px;
+                }
+                
+                .header-toolbar .toggle-container {
+                    flex: 1;
+                    margin-bottom: 0;
+                    padding: 4px 0;
+                }
+                
+                .header-icons {
+                    display: flex;
+                    gap: 4px;
+                    margin-left: 8px;
+                }
+                
+                .header-icon-btn {
+                    width: 28px !important;
+                    min-width: 28px !important;
+                    height: 28px;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    border: none;
+                    border-radius: 6px;
+                    background: #f0f0f0;
+                    cursor: pointer;
+                    font-size: 14px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: all 0.2s ease;
+                }
+                
+                .header-icon-btn:hover {
+                    background: #e0e0e0;
+                    transform: scale(1.1);
+                }
+
                 .toggle-container {
                     display: flex;
                     align-items: center;
@@ -501,10 +588,6 @@ const Popup = () => {
                     background-color: #2a75f3;
                  }
 
-                 .popup-container {
-                    padding-bottom: 8px; /* Add padding at the bottom */
-                 }
-
                  .loading-text {
                     display: flex;
                     align-items: center;
@@ -520,4 +603,4 @@ ReactDOM.render(
         <Popup />
     </React.StrictMode>,
     document.getElementById('popup-root')
-); 
+);
