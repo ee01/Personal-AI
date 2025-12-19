@@ -192,13 +192,74 @@ const ScheduledMessagesManager: React.FC = () => {
   const loadMessages = async (messageService: ScheduledMessageService) => {
     try {
       const msgs = await messageService.getAllMessages();
-      setMessages(msgs);
+      
+      // 同步 JiraAutomation 状态
+      const updatedMsgs = await syncJiraAutomationStatus(msgs, messageService);
+      
+      setMessages(updatedMsgs);
       
       const stats = await messageService.getStatistics();
       setStatistics(stats);
     } catch (error) {
       console.error('加载消息失败:', error);
     }
+  };
+  
+  /**
+   * 同步 JiraAutomation 状态
+   * 检查 Jira Rule 的实际状态，如果与 Sheet 记录不一致则更新
+   */
+  const syncJiraAutomationStatus = async (
+    msgs: ScheduledMessage[], 
+    messageService: ScheduledMessageService
+  ): Promise<ScheduledMessage[]> => {
+    const updatedMsgs = [...msgs];
+    let hasUpdates = false;
+    
+    for (let i = 0; i < updatedMsgs.length; i++) {
+      const msg = updatedMsgs[i];
+      
+      // 只处理 JiraAutomation 类型的消息
+      if (msg.Push_Method !== 'JiraAutomation' || !msg.Automation_Link) {
+        continue;
+      }
+      
+      try {
+        const linkInfo = parseAutomationLink(msg.Automation_Link);
+        if (!linkInfo) continue;
+        
+        const { jiraUrl, projectKey, ruleId } = linkInfo;
+        const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+        if (!projectId) continue;
+        
+        // 获取 Jira Rule 详情
+        const detailResult = await chrome.runtime.sendMessage({
+          type: 'GET_JIRA_RULE_DETAILS',
+          data: { jiraUrl, projectId, ruleId }
+        });
+        
+        if (detailResult?.success && detailResult.ruleData) {
+          const jiraState = detailResult.ruleData.state; // 'ENABLED' 或 'DISABLED'
+          const expectedStatus = jiraState === 'ENABLED' ? 'Active' : 'Paused';
+          
+          // 如果状态不一致，更新 Sheet
+          if (msg.Status !== expectedStatus) {
+            console.log(`[同步] Jira Rule ${ruleId} 状态不一致: Sheet=${msg.Status}, Jira=${jiraState}, 更新为 ${expectedStatus}`);
+            
+            // 更新本地状态
+            updatedMsgs[i] = { ...msg, Status: expectedStatus };
+            
+            // 更新 Sheet
+            await messageService.updateMessage(msg.ID, { Status: expectedStatus });
+            hasUpdates = true;
+          }
+        }
+      } catch (error) {
+        console.warn(`同步 Jira Rule 状态失败 (${msg.Topic}):`, error);
+      }
+    }
+    
+    return hasUpdates ? updatedMsgs : msgs;
   };
   
   const checkBotConfigValidity = async (savedConfig: SheetConfig, messageService: ScheduledMessageService) => {
@@ -497,29 +558,363 @@ const ScheduledMessagesManager: React.FC = () => {
     setShowAddDialog(true);
   };
   
-  const handleEditMessage = (message: ScheduledMessage) => {
+  // 托管确认弹窗状态
+  const [showTakeoverDialog, setShowTakeoverDialog] = useState(false);
+  const [takeoverMessage, setTakeoverMessage] = useState<ScheduledMessage | null>(null);
+  const [takeoverLoading, setTakeoverLoading] = useState(false);
+  const [takeoverError, setTakeoverError] = useState<string>('');
+  
+  const handleEditMessage = async (message: ScheduledMessage) => {
+    // 检查是否是需要托管确认的 JiraAutomation 消息
+    // 条件：Push_Method 是 JiraAutomation，有 Schedule_Date，但没有 AI_Endpoint
+    const needsTakeoverConfirmation = 
+      message.Push_Method === 'JiraAutomation' && 
+      message.Schedule_Date && 
+      !message.AI_Endpoint &&
+      message.Automation_Link;
+    
+    if (needsTakeoverConfirmation) {
+      // 显示托管确认弹窗
+      setTakeoverMessage(message);
+      setTakeoverError('');
+      setShowTakeoverDialog(true);
+      return;
+    }
+    
+    // 正常编辑流程
     setIsReminderMode(false);
     setEditingMessage(message);
     setShowAddDialog(true);
   };
   
+  // 处理托管确认
+  const handleTakeoverConfirm = async () => {
+    if (!takeoverMessage || !service) return;
+    
+    setTakeoverLoading(true);
+    setTakeoverError('');
+    
+    try {
+      const linkInfo = parseAutomationLink(takeoverMessage.Automation_Link!);
+      if (!linkInfo) {
+        throw new Error('无法解析 Automation_Link');
+      }
+      
+      const { jiraUrl, projectKey, ruleId } = linkInfo;
+      const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+      
+      if (!projectId) {
+        throw new Error('无法获取项目 ID');
+      }
+      
+      // 获取规则详情，检查 executionMode
+      console.log('🔍 检查规则 executionMode...');
+      const detailResult = await chrome.runtime.sendMessage({
+        type: 'GET_JIRA_RULE_DETAILS',
+        data: { jiraUrl, projectId, ruleId }
+      });
+      
+      if (!detailResult?.success || !detailResult.ruleData) {
+        throw new Error('无法获取规则详情');
+      }
+      
+      const ruleData = detailResult.ruleData;
+      const trigger = ruleData.trigger;
+      const executionMode = trigger?.value?.executionMode;
+      
+      // 检查执行频率是否小于 1 天
+      if (trigger && trigger.type === 'jira.jql.scheduled') {
+        const schedule = trigger.value?.schedule;
+        
+        if (schedule) {
+          let intervalTooShort = false;
+          let intervalDescription = '';
+          
+          // 检查 method=FIXED
+          if (schedule.method === 'FIXED') {
+            const rateInterval = schedule.rateInterval || 0;
+            
+            // rateInterval 单位是分钟，86400 分钟 = 1 天
+            if (rateInterval < 86400) {
+              intervalTooShort = true;
+              const hours = Math.floor(rateInterval / 60);
+              const minutes = rateInterval % 60;
+              intervalDescription = hours > 0 
+                ? `每 ${hours} 小时 ${minutes > 0 ? minutes + ' 分钟' : ''}`
+                : `每 ${minutes} 分钟`;
+            }
+          } 
+          // 检查 method=CRON
+          else if (schedule.method === 'CRON') {
+            const cronExpression = schedule.cronExpression || '';
+            
+            // 解析 CRON 表达式判断频率
+            // CRON 格式: 秒 分 时 日 月 周
+            // 例如: "0 0 */12 * * ?" = 每 12 小时执行一次
+            const parts = cronExpression.split(' ');
+            if (parts.length >= 6) {
+              const dayOfMonth = parts[3];
+              const hours = parts[2];
+              
+              // 检查是否是小时级别的执行（时字段包含 */N）
+              if (hours.includes('*/')) {
+                const hourMatch = hours.match(/^\*\/(\d+)$/);
+                if (hourMatch) {
+                  const hourInterval = parseInt(hourMatch[1], 10);
+                  if (hourInterval < 24) {
+                    intervalTooShort = true;
+                    intervalDescription = `每 ${hourInterval} 小时`;
+                  }
+                }
+              } else if (hours.includes(',')) {
+                // 多个小时执行（例如 "0,6,12,18"）
+                const hourList = hours.split(',');
+                if (hourList.length > 1) {
+                  intervalTooShort = true;
+                  intervalDescription = '每天多次执行';
+                }
+              }
+              
+              // 检查是否是每 N 天执行（日字段包含 */N，且 N < 1）
+              if (dayOfMonth.includes('*/')) {
+                const dayMatch = dayOfMonth.match(/^\*\/(\d+)$/);
+                if (dayMatch) {
+                  const dayInterval = parseInt(dayMatch[1], 10);
+                  if (dayInterval < 1) {
+                    intervalTooShort = true;
+                    intervalDescription = '小于 1 天';
+                  }
+                }
+              }
+            }
+          }
+          
+          // 如果间隔小于 1 天，显示错误并返回
+          if (intervalTooShort) {
+            setTakeoverError(
+              `⚠️ 该规则的执行间隔小于 1 天（${intervalDescription}），无法在 Personal AI 中托管。\n\n` +
+              'Personal AI 的调度系统基于 Google Sheets 和 Apps Script，仅支持每天最多执行一次。\n\n' +
+              '如果需要更高频率的执行，请保持规则在 Jira Automation 中运行。'
+            );
+            setTakeoverLoading(false);
+            return;
+          }
+        }
+      }
+      
+      // 检查是否是 nosearch 模式
+      if (executionMode !== 'nosearch') {
+        setTakeoverError(
+          '⚠️ 该规则的触发器使用了 JQL 查询模式（' + (executionMode || 'unknown') + '）。\n\n' +
+          '要使用 Personal AI 托管，请先在 Jira 中修改该规则的 Scheduled trigger 为：\n' +
+          '"Simply run the conditions and actions without providing issues" 模式，\n' +
+          '并使用 JQL branch 替代原有的 Jira 查询功能。\n\n' +
+          '修改完成后，请重新尝试托管。'
+        );
+        setTakeoverLoading(false);
+        return;
+      }
+      
+      // 执行 webhook 转换
+      console.log('🔄 转换规则为 incoming webhook...');
+      const webhookResult = await chrome.runtime.sendMessage({
+        type: 'CONVERT_JIRA_RULE_TO_WEBHOOK',
+        data: {
+          ruleId,
+          projectId,
+          jiraUrl
+        }
+      });
+      
+      if (!webhookResult?.success || !webhookResult.webhookUrl) {
+        throw new Error(webhookResult?.error || '转换 webhook 失败');
+      }
+      
+      // 更新 Sheet 中的 AI_Endpoint
+      console.log('📝 更新消息的 AI_Endpoint...');
+      const aiEndpoint = `POST ${webhookResult.webhookUrl}`;
+      await service.updateMessage(takeoverMessage.ID, {
+        AI_Endpoint: aiEndpoint
+      } as any);
+      
+      // 刷新消息列表
+      await loadMessages(service);
+      
+      // 关闭弹窗并进入编辑模式
+      setShowTakeoverDialog(false);
+      setTakeoverMessage(null);
+      
+      // 找到更新后的消息并进入编辑模式
+      const updatedMessages = await service.getAllMessages();
+      const updatedMessage = updatedMessages.find(m => m.ID === takeoverMessage.ID);
+      
+      if (updatedMessage) {
+        setIsReminderMode(false);
+        setEditingMessage(updatedMessage);
+        setShowAddDialog(true);
+        alert('✅ 已成功将规则托管给 Personal AI！\n现在可以编辑调度配置了。');
+      }
+      
+    } catch (error: any) {
+      console.error('托管失败:', error);
+      setTakeoverError(`托管失败: ${error.message}`);
+    } finally {
+      setTakeoverLoading(false);
+    }
+  };
+  
+  // 取消托管确认
+  const handleTakeoverCancel = () => {
+    setShowTakeoverDialog(false);
+    setTakeoverMessage(null);
+    setTakeoverError('');
+  };
+  
   const handleDeleteMessage = async (id: string, topic: string) => {
     if (!service) return;
     
-    if (!confirm(`确定要删除消息 "${topic}" 吗？此操作无法撤销。`)) {
-      return;
-    }
+    // 查找消息，检查是否是托管中的 JiraAutomation 消息
+    const message = messages.find(m => m.ID === id);
+    const isManagedJiraAutomation = message && 
+      message.Push_Method === 'JiraAutomation' && 
+      message.Schedule_Date && 
+      message.AI_Endpoint &&
+      message.Automation_Link;
     
-    setIsLoading(true);
+    if (isManagedJiraAutomation) {
+      // 托管消息需要特殊处理
+      const confirmMessage = 
+        `⚠️ 删除托管消息\n\n` +
+        `消息: "${topic}"\n\n` +
+        `此消息正在由 Personal AI 托管，删除后将：\n` +
+        `1. 将 Jira Rule 的 trigger 恢复为 Scheduled 模式\n` +
+        `2. 从 Personal AI 中移除此消息\n\n` +
+        `确定要撤销托管并删除吗？`;
+      
+      if (!confirm(confirmMessage)) {
+        return;
+      }
+      
+      setIsLoading(true);
+      try {
+        // 先恢复 Jira Rule 的 trigger
+        const linkInfo = parseAutomationLink(message.Automation_Link!);
+        if (linkInfo) {
+          const { jiraUrl, projectKey, ruleId } = linkInfo;
+          const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+          
+          if (projectId) {
+            console.log('🔄 恢复 Jira Rule 的 scheduled trigger...');
+            
+            // 构建调度配置
+            const scheduleConfig = {
+              scheduleTime: message.Schedule_Time || '09:00',
+              repeatEvery: Number(message.Repeat_Every) || 1,  // 确保转换为数字
+              repeatUnit: (message.Repeat_Unit || 'Day') as 'Day' | 'Week' | 'Month',
+              // TODO: 如果需要支持周几执行，可以从消息中读取
+              scheduleDaysOfWeek: undefined as number[] | undefined
+            };
+            
+            const convertResult = await chrome.runtime.sendMessage({
+              type: 'CONVERT_WEBHOOK_TO_SCHEDULED',
+              data: {
+                ruleId,
+                projectId,
+                jiraUrl,
+                scheduleConfig
+              }
+            });
+            
+            if (!convertResult?.success) {
+              const errorMsg = convertResult?.error || '未知错误';
+              // 恢复失败，不删除消息
+              alert(
+                `❌ 恢复 Jira Rule 失败: ${errorMsg}\n\n` +
+                `为了数据安全，不会删除 Personal AI 中的消息记录。\n` +
+                `请先手动检查并修复 Jira Rule，然后再尝试删除。`
+              );
+              setIsLoading(false);
+              return;
+            }
+          }
+        }
+        
+        // 只有在恢复成功后才删除消息
+        await service.deleteMessage(id);
+        await loadMessages(service);
+        
+        alert(
+          '✅ 消息已删除，Jira Rule 已恢复为 Scheduled 模式。\n\n' +
+          '请前往 Jira Automation 页面确认规则是否正常运作。'
+        );
+        
+      } catch (error: any) {
+        console.error('删除托管消息失败:', error);
+        alert(`删除失败: ${error.message}`);
+      } finally {
+        setIsLoading(false);
+      }
+      
+    } else {
+      // 普通消息的删除流程
+      if (!confirm(`确定要删除消息 "${topic}" 吗？此操作无法撤销。`)) {
+        return;
+      }
+      
+      setIsLoading(true);
+      try {
+        await service.deleteMessage(id);
+        await loadMessages(service);
+        alert('消息已删除');
+      } catch (error: any) {
+        console.error('删除消息失败:', error);
+        alert(`删除失败: ${error.message}`);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+  
+  // 从 Automation_Link 解析 Jira 信息
+  const parseAutomationLink = (link: string): { jiraUrl: string; projectKey: string; ruleId: string } | null => {
     try {
-      await service.deleteMessage(id);
-      await loadMessages(service);
-      alert('消息已删除');
+      // 格式: https://jira.ringcentral.com/secure/AutomationProjectAdminAction!default.jspa?projectKey=MTR#/rule/1646
+      const url = new URL(link);
+      const jiraUrl = url.origin;
+      const projectKey = url.searchParams.get('projectKey') || '';
+      const ruleIdMatch = link.match(/#\/rule\/(\d+)/);
+      const ruleId = ruleIdMatch ? ruleIdMatch[1] : '';
+      
+      if (jiraUrl && projectKey && ruleId) {
+        return { jiraUrl, projectKey, ruleId };
+      }
+      return null;
     } catch (error) {
-      console.error('删除消息失败:', error);
-      alert(`删除失败: ${error.message}`);
-    } finally {
-      setIsLoading(false);
+      console.error('解析 Automation_Link 失败:', error);
+      return null;
+    }
+  };
+  
+  // 获取项目 ID（从项目 key）
+  const getProjectIdFromKey = async (jiraUrl: string, projectKey: string): Promise<string | null> => {
+    try {
+      const response = await fetch(`${jiraUrl}/rest/api/2/project/${projectKey}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
+        credentials: 'include'
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data.id;
+      }
+      return null;
+    } catch (error) {
+      console.error('获取项目 ID 失败:', error);
+      return null;
     }
   };
   
@@ -528,6 +923,43 @@ const ScheduledMessagesManager: React.FC = () => {
     
     setIsLoading(true);
     try {
+      // 如果有 Automation_Link，同时更新 Jira Rule 状态
+      if (message.Automation_Link) {
+        const linkInfo = parseAutomationLink(message.Automation_Link);
+        if (linkInfo) {
+          const { jiraUrl, projectKey, ruleId } = linkInfo;
+          const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+          
+          if (projectId) {
+            // 获取规则详情
+            const detailResult = await chrome.runtime.sendMessage({
+              type: 'GET_JIRA_RULE_DETAILS',
+              data: { jiraUrl, projectId, ruleId }
+            });
+            
+            if (detailResult?.success && detailResult.ruleData) {
+              // 更新 Jira Rule 状态
+              const newState = message.Status === 'Active' ? 'DISABLED' : 'ENABLED';
+              const updateResult = await chrome.runtime.sendMessage({
+                type: 'UPDATE_JIRA_RULE_STATE',
+                data: {
+                  jiraUrl,
+                  projectId,
+                  ruleId,
+                  newState,
+                  ruleData: detailResult.ruleData
+                }
+              });
+              
+              if (!updateResult?.success) {
+                console.warn('更新 Jira Rule 状态失败:', updateResult?.error);
+                // 不阻止本地状态更新，只是给个警告
+              }
+            }
+          }
+        }
+      }
+      
       await service.toggleMessageStatus(message.ID);
       await loadMessages(service);
     } catch (error) {
@@ -644,6 +1076,11 @@ const ScheduledMessagesManager: React.FC = () => {
   
   // 频率格式化函数
   const formatFrequency = (message: ScheduledMessage): string => {
+    // 检查是否为只有 Automation_Link 而没有 Schedule_Date 的 Jira Automation 规则
+    if (message.Automation_Link && !message.Schedule_Date) {
+      return 'JIRA触发器';
+    }
+    
     // 检查是否为 Timeline 触发
     if (!message.Schedule_Date && message.Timeline_Milestone) {
       const milestone = message.Timeline_Milestone;
@@ -752,6 +1189,8 @@ const ScheduledMessagesManager: React.FC = () => {
         return '假装我发的';
       case 'Bot':
         return 'Bot 定时';
+      case 'JiraAutomation':
+        return 'JIRA自动化';
       default:
         return message.Push_Method;
     }
@@ -1011,13 +1450,25 @@ const ScheduledMessagesManager: React.FC = () => {
                         </td>
                         <td style={styles.td}>
                           <div style={{ display: 'flex', gap: '6px' }}>
-                            <button 
-                              style={styles.editButton}
-                              onClick={() => handleEditMessage(message)}
-                              title="编辑消息"
-                            >
-                              ✏️
-                            </button>
+                            {message.Automation_Link && (
+                              <button 
+                                style={styles.jiraLinkButton}
+                                onClick={() => window.open(message.Automation_Link, '_blank')}
+                                title="打开 Jira Automation Rule"
+                              >
+                                🔗
+                              </button>
+                            )}
+                            {/* 如果只有 Automation_Link 而没有 Schedule_Date，不显示编辑按钮 */}
+                            {!(message.Automation_Link && !message.Schedule_Date) && (
+                              <button 
+                                style={styles.editButton}
+                                onClick={() => handleEditMessage(message)}
+                                title="编辑消息"
+                              >
+                                ✏️
+                              </button>
+                            )}
                             <button 
                               style={styles.deleteButton}
                               onClick={() => handleDeleteMessage(message.ID, displayTitle)}
@@ -1070,6 +1521,111 @@ const ScheduledMessagesManager: React.FC = () => {
              alert('Bot 推送配置成功！');
            }}
          />
+       )}
+       
+       {/* 托管确认弹窗 */}
+       {showTakeoverDialog && takeoverMessage && (
+         <div style={{
+           position: 'fixed',
+           top: 0,
+           left: 0,
+           right: 0,
+           bottom: 0,
+           backgroundColor: 'rgba(0, 0, 0, 0.5)',
+           display: 'flex',
+           justifyContent: 'center',
+           alignItems: 'center',
+           zIndex: 1000
+         }}>
+           <div style={{
+             backgroundColor: 'white',
+             borderRadius: '12px',
+             padding: '24px',
+             maxWidth: '500px',
+             width: '90%',
+             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)'
+           }}>
+             <h3 style={{ margin: '0 0 16px', fontSize: '18px', color: '#172B4D' }}>
+               🤖 使用 Personal AI 托管此规则？
+             </h3>
+             
+             <div style={{
+               marginBottom: '16px',
+               padding: '12px',
+               backgroundColor: '#F4F5F7',
+               borderRadius: '8px'
+             }}>
+               <p style={{ margin: '0 0 8px', fontSize: '14px' }}>
+                 <strong>规则：</strong> {takeoverMessage.Topic}
+               </p>
+               <p style={{ margin: '0', fontSize: '13px', color: '#666' }}>
+                 当前调度：{takeoverMessage.Schedule_Time} | 
+                 每 {takeoverMessage.Repeat_Every} {takeoverMessage.Repeat_Unit === 'Day' ? '天' : takeoverMessage.Repeat_Unit === 'Week' ? '周' : '月'}
+               </p>
+             </div>
+             
+             <div style={{
+               marginBottom: '16px',
+               padding: '12px',
+               backgroundColor: '#FFFAE6',
+               borderRadius: '8px',
+               borderLeft: '3px solid #FFAB00'
+             }}>
+               <p style={{ margin: '0', fontSize: '13px', color: '#172B4D' }}>
+                 ⚠️ <strong>注意：</strong>确认后，规则的 Scheduled Trigger 将被转换为 Incoming Webhook 模式，
+                 由 Personal AI 接管调度时间管理。原有的定时触发将被替换。
+               </p>
+             </div>
+             
+             {takeoverError && (
+               <div style={{
+                 marginBottom: '16px',
+                 padding: '12px',
+                 backgroundColor: '#FFEBE6',
+                 borderRadius: '8px',
+                 borderLeft: '3px solid #FF5630'
+               }}>
+                 <p style={{ margin: '0', fontSize: '13px', color: '#BF2600', whiteSpace: 'pre-wrap' }}>
+                   {takeoverError}
+                 </p>
+               </div>
+             )}
+             
+             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+               <button
+                 onClick={handleTakeoverCancel}
+                 disabled={takeoverLoading}
+                 style={{
+                   padding: '10px 20px',
+                   border: '1px solid #DFE1E6',
+                   borderRadius: '6px',
+                   backgroundColor: 'white',
+                   cursor: takeoverLoading ? 'not-allowed' : 'pointer',
+                   fontSize: '14px',
+                   fontWeight: 500
+                 }}
+               >
+                 取消
+               </button>
+               <button
+                 onClick={handleTakeoverConfirm}
+                 disabled={takeoverLoading}
+                 style={{
+                   padding: '10px 20px',
+                   border: 'none',
+                   borderRadius: '6px',
+                   backgroundColor: takeoverLoading ? '#ccc' : '#0052cc',
+                   color: 'white',
+                   cursor: takeoverLoading ? 'not-allowed' : 'pointer',
+                   fontSize: '14px',
+                   fontWeight: 500
+                 }}
+               >
+                 {takeoverLoading ? '⏳ 处理中...' : '✅ 确认托管'}
+               </button>
+             </div>
+           </div>
+         </div>
        )}
        
        {/* 浮动 Tooltip */}
@@ -1387,6 +1943,21 @@ const AddMessageDialog: React.FC<{
   editingMessage?: ScheduledMessage | null;
 }> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '', availableCategories, editingMessage = null }) => {
   const isEditMode = !!editingMessage;
+  // 格式化时间为 HH:MM 格式（确保两位数）
+  const formatTimeToHHMM = (time: string | undefined): string => {
+    if (!time) return '';
+    // 如果已经是 HH:MM 格式，直接返回
+    if (/^\d{2}:\d{2}$/.test(time)) return time;
+    // 如果是 H:MM 或 H:M 格式，补零
+    const parts = time.split(':');
+    if (parts.length === 2) {
+      const hours = parts[0].padStart(2, '0');
+      const minutes = parts[1].padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+    return time;
+  };
+  
   // 初始化表单数据（编辑模式时使用现有数据）
   const getInitialFormData = (): CreateMessageFormData => {
     if (editingMessage) {
@@ -1394,7 +1965,7 @@ const AddMessageDialog: React.FC<{
         Topic: editingMessage.Topic || '',
         Content: editingMessage.Content || '',
         Schedule_Date: editingMessage.Schedule_Date || '',
-        Schedule_Time: editingMessage.Schedule_Time || '',
+        Schedule_Time: formatTimeToHHMM(editingMessage.Schedule_Time),
         Push_Method: editingMessage.Push_Method || 'AsMe',
         Target_Type: editingMessage.Glip_Team_ID ? 'group' : 'private',
         Glip_User_Name: editingMessage.Glip_User_Name || '',
@@ -1984,7 +2555,7 @@ const AddMessageDialog: React.FC<{
       }
       
       // 非提醒模式才需要验证推送目标（提醒模式已自动配置）
-      if (!isReminderMode) {
+      if (!isReminderMode && formData.Push_Method !== 'JiraAutomation') {
         if (formData.Target_Type === 'private' && userTags.length === 0) {
           alert('请至少添加一个接收人');
           return;
@@ -2579,6 +3150,21 @@ const AddMessageDialog: React.FC<{
            {/* 推送方式 */}
            <div style={dialogStyles.formGroup}>
              <label style={dialogStyles.label}>推送方式 *</label>
+             {/* JiraAutomation 模式只显示一个选中的选项 */}
+             {formData.Push_Method === 'JiraAutomation' ? (
+               <div style={dialogStyles.buttonGroup}>
+                 <button
+                   type="button"
+                   style={{
+                     ...getButtonStyle(true),
+                     cursor: 'default',
+                   }}
+                   disabled
+                 >
+                   🔧 JIRA 自动化
+                 </button>
+               </div>
+             ) : (
              <div style={dialogStyles.buttonGroup}>
                <button
                  type="button"
@@ -2602,6 +3188,7 @@ const AddMessageDialog: React.FC<{
                  🤖 AI Report
                </button>
              </div>
+             )}
              {formData.Push_Method === 'Bot' && !botConfigured && (
                <div style={{
                  marginTop: '12px',
@@ -3250,8 +3837,8 @@ const AddMessageDialog: React.FC<{
             </>
           )}
           
-          {/* 推送目标（仅 Bot/AsMe 时显示） */}
-          {formData.Push_Method !== 'AI' && (
+          {/* 推送目标（仅 Bot/AsMe 时显示，JiraAutomation 不显示） */}
+          {formData.Push_Method !== 'AI' && formData.Push_Method !== 'JiraAutomation' && (
             <>
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>推送目标 *</label>
@@ -3382,6 +3969,8 @@ const getTypeStyle = (pushMethod: string): React.CSSProperties => {
       return { ...baseStyle, backgroundColor: '#f3e5f5', color: '#7b1fa2' }; // 紫色 - 假装我发的
     case 'Bot':
       return { ...baseStyle, backgroundColor: '#fff3e0', color: '#f57c00' }; // 橙色 - Bot 定时
+    case 'JiraAutomation':
+      return { ...baseStyle, backgroundColor: '#e8f5e9', color: '#388e3c' }; // 绿色 - JIRA自动化
     default:
       return { ...baseStyle, backgroundColor: '#f5f5f5', color: '#666' };
   }
@@ -3514,6 +4103,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     backgroundColor: 'transparent',
     color: '#007bff',
     border: '1px solid #007bff',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    transition: 'all 0.2s',
+  },
+  jiraLinkButton: {
+    padding: '4px 8px',
+    backgroundColor: 'transparent',
+    color: '#0052cc',
+    border: '1px solid #0052cc',
     borderRadius: '4px',
     cursor: 'pointer',
     fontSize: '14px',

@@ -380,8 +380,9 @@ function showSuccessMessage(message: string): void {
   const successDiv = document.createElement('div');
   successDiv.style.cssText = `
     position: fixed;
-    top: 20px;
-    right: 20px;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     background-color: #4CAF50;
     color: white;
     padding: 16px;
@@ -405,8 +406,9 @@ function showErrorMessage(message: string): void {
   const errorDiv = document.createElement('div');
   errorDiv.style.cssText = `
     position: fixed;
-    top: 20px;
-    right: 20px;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     background-color: #f44336;
     color: white;
     padding: 16px;
@@ -646,9 +648,13 @@ async function main(): Promise<void> {
       console.log('Project ID:', projectId);
       
       // 等待页面内容加载
-      setTimeout(() => {
+      setTimeout(async () => {
         createImportButton(document, projectId);
         console.log('Import button created in iframe');
+        
+        // 同时初始化 Schedule 按钮（异步）
+        await initScheduleButtons(document, projectId);
+        console.log('Schedule buttons initialization completed in iframe');
       }, 2000);
       
     } else {
@@ -670,9 +676,13 @@ async function main(): Promise<void> {
       console.log('Iframe loaded successfully');
       
       // 等待页面内容加载
-      setTimeout(() => {
+      setTimeout(async () => {
         createImportButton(iframeDoc, projectId);
         console.log('Import button created in main page');
+        
+        // 同时初始化 Schedule 按钮（异步）
+        await initScheduleButtons(iframeDoc, projectId);
+        console.log('Schedule buttons initialization completed in main page');
       }, 2000);
     }
     
@@ -699,4 +709,1032 @@ const observer = new MutationObserver(() => {
   }
 });
 
-observer.observe(document, { subtree: true, childList: true }); 
+observer.observe(document, { subtree: true, childList: true });
+
+// =====================================================
+// Add to Scheduled Messages 功能
+// =====================================================
+
+// 存储已添加按钮的规则 ID，避免重复添加
+const addedScheduleButtons = new Set<string>();
+
+// 规则信息缓存
+interface RuleInfo {
+  id: string;
+  name: string;
+  trigger: any;
+  state: string;
+}
+
+/**
+ * 获取规则详情（通过 background script）
+ */
+async function getRuleDetails(ruleId: string, projectId: string): Promise<RuleInfo | null> {
+  try {
+    const response = await fetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      console.error('获取规则列表失败:', response.status);
+      return null;
+    }
+    
+    const rules = await response.json();
+    const rule = rules.find((r: any) => String(r.id) === String(ruleId));
+    
+    if (rule) {
+      return {
+        id: String(rule.id),
+        name: rule.name,
+        trigger: rule.trigger,
+        state: rule.state
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('获取规则详情失败:', error);
+    return null;
+  }
+}
+
+/**
+ * 获取规则的 Audit Log
+ */
+async function getRuleAuditLog(ruleId: string, projectId: string): Promise<any[]> {
+  try {
+    // 使用正确的 API 路径：/rest/cb-automation/latest/audit/{projectId}?limit=50&ruleId={ruleId}&offset=0
+    const response = await fetch(`/rest/cb-automation/latest/audit/${projectId}?limit=50&ruleId=${ruleId}&offset=0`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache'
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      console.warn('获取 Audit Log 失败:', response.status, response.statusText);
+      return [];
+    }
+    
+    const data = await response.json();
+    return data.items || data || [];
+  } catch (error) {
+    console.error('获取 Audit Log 失败:', error);
+    return [];
+  }
+}
+
+/**
+ * 解析 Cron 表达式获取调度配置
+ */
+function parseCronExpression(cron: string): { time: string; repeatEvery: number; repeatUnit: string; daysOfWeek?: number[] } | null {
+  if (!cron) return null;
+  
+  const parts = cron.split(' ');
+  if (parts.length < 6) return null;
+  
+  const [_seconds, minutes, hours, dayOfMonth, _month, dayOfWeek] = parts;
+  
+  // 解析时间
+  const timeMinutes = parseInt(minutes, 10) || 0;
+  const timeHours = parseInt(hours, 10) + 8 || 0; // Server Time to UTC Time
+  const time = `${String(timeHours).padStart(2, '0')}:${String(timeMinutes).padStart(2, '0')}`;
+  
+  let repeatEvery = 1;
+  let repeatUnit = 'Day';
+  let daysOfWeek: number[] | undefined;
+  
+  // 检查是否是每周特定几天
+  if (dayOfWeek !== '*' && dayOfWeek !== '?') {
+    daysOfWeek = parseDaysOfWeek(dayOfWeek);
+    if (daysOfWeek && daysOfWeek.length > 0) {
+      repeatUnit = 'Week';
+    }
+  }
+  
+  // 检查是否是每 N 天
+  if (dayOfMonth !== '*' && dayOfMonth !== '?') {
+    const dayMatch = dayOfMonth.match(/^\*\/(\d+)$/);
+    if (dayMatch) {
+      repeatEvery = parseInt(dayMatch[1], 10);
+      repeatUnit = 'Day';
+    } else if (/^\d+$/.test(dayOfMonth)) {
+      repeatUnit = 'Month';
+    }
+  }
+  
+  return { time, repeatEvery, repeatUnit, daysOfWeek };
+}
+
+/**
+ * 解析星期配置
+ */
+function parseDaysOfWeek(dayOfWeek: string): number[] {
+  const dayMap: Record<string, number> = {
+    'SUN': 1, 'MON': 2, 'TUE': 3, 'WED': 4, 'THU': 5, 'FRI': 6, 'SAT': 7,
+    '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7
+  };
+  
+  const result: number[] = [];
+  const segments = dayOfWeek.split(',');
+  
+  for (const segment of segments) {
+    const trimmed = segment.trim().toUpperCase();
+    
+    if (trimmed.includes('-')) {
+      const [start, end] = trimmed.split('-');
+      const startNum = dayMap[start.trim()] || parseInt(start.trim(), 10);
+      const endNum = dayMap[end.trim()] || parseInt(end.trim(), 10);
+      
+      if (!isNaN(startNum) && !isNaN(endNum)) {
+        for (let i = startNum; i <= endNum; i++) {
+          if (!result.includes(i)) result.push(i);
+        }
+      }
+    } else {
+      const num = dayMap[trimmed] || parseInt(trimmed, 10);
+      if (!isNaN(num) && !result.includes(num)) {
+        result.push(num);
+      }
+    }
+  }
+  
+  return result.sort((a, b) => a - b);
+}
+
+/**
+ * 计算下一个调度日期
+ */
+function getNextScheduleDate(hours: number, minutes: number, repeatUnit: string, daysOfWeek?: number[]): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
+  
+  if (repeatUnit === 'Week' && daysOfWeek && daysOfWeek.length > 0) {
+    const currentJiraDay = now.getDay() + 1;
+    
+    for (let offset = 0; offset < 7; offset++) {
+      const checkDay = ((currentJiraDay - 1 + offset) % 7) + 1;
+      if (daysOfWeek.includes(checkDay)) {
+        const targetDate = new Date(now);
+        targetDate.setDate(now.getDate() + offset);
+        
+        if (offset === 0 && now > today) {
+          continue;
+        }
+        
+        return targetDate.toISOString().split('T')[0];
+      }
+    }
+  }
+  
+  if (now > today) {
+    today.setDate(today.getDate() + 1);
+  }
+  
+  return today.toISOString().split('T')[0];
+}
+
+/**
+ * 创建 "Add to Scheduled Messages" 按钮
+ * @param isManaged - 是否已被 Personal AI 管理（true = 红色常亮，false = 灰色悬停显示）
+ */
+function createScheduleButton(ruleId: string, projectId: string, doc: Document, isManaged = false): HTMLElement {
+  const button = doc.createElement('button');
+  button.className = 'personal-ai-schedule-btn';
+  button.setAttribute('data-rule-id', ruleId);
+  
+  // 使用同一个 icon，通过 CSS filter 实现灰色效果
+  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+  
+  // 根据管理状态设置不同的样式和提示
+  if (isManaged) {
+    // 已管理：红色常亮
+    button.title = 'Already managed by Personal AI';
+    button.style.cssText = `
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      margin-left: 8px;
+      border: none;
+      border-radius: 4px;
+      background-color: transparent;
+      background-image: url('${iconUrl}');
+      background-size: 16px 16px;
+      background-position: center;
+      background-repeat: no-repeat;
+      cursor: pointer;
+      opacity: 1;
+      filter: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      vertical-align: middle;
+    `;
+    
+    // 红色常亮 icon 悬停时放大
+    button.addEventListener('mouseenter', () => {
+      button.style.transform = 'scale(1.2)';
+    });
+    
+    button.addEventListener('mouseleave', () => {
+      button.style.transform = 'scale(1)';
+    });
+    
+    // 点击红色常亮 icon 时提示已存在
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showErrorMessage('此规则已在 Scheduled Messages 中管理');
+    });
+  } else {
+    // 未管理：灰色悬停显示
+    button.title = 'Add to Scheduled Messages';
+    button.style.cssText = `
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      margin-left: 8px;
+      border: none;
+      border-radius: 4px;
+      background-color: transparent;
+      background-image: url('${iconUrl}');
+      background-size: 16px 16px;
+      background-position: center;
+      background-repeat: no-repeat;
+      cursor: pointer;
+      opacity: 0;
+      filter: grayscale(100%) brightness(1.2);
+      transition: opacity 0.2s ease, filter 0.2s ease, transform 0.2s ease;
+      vertical-align: middle;
+    `;
+    
+    // 灰色 icon 悬停时显示并变为红色+放大
+    button.addEventListener('mouseenter', () => {
+      button.style.opacity = '1';
+      button.style.filter = 'none';
+      button.style.transform = 'scale(1.2)';
+    });
+    
+    button.addEventListener('mouseleave', () => {
+      button.style.opacity = '0';
+      button.style.filter = 'grayscale(100%) brightness(1.2)';
+      button.style.transform = 'scale(1)';
+    });
+    
+    // 点击灰色 icon 时执行添加操作
+    button.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleAddToScheduledMessages(ruleId, projectId, doc);
+    });
+  }
+  
+  return button;
+}
+
+/**
+ * 更新按钮状态为已管理状态（红色常亮）
+ */
+function updateButtonToManagedState(button: HTMLElement, _doc: Document): void {
+  button.title = 'Already managed by Personal AI';
+  button.style.opacity = '1';
+  button.style.transform = 'scale(1)';
+  button.style.filter = 'none';
+  button.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+  
+  // 移除所有旧的事件监听器（通过克隆节点）
+  const newButton = button.cloneNode(true) as HTMLElement;
+  button.parentNode?.replaceChild(newButton, button);
+  
+  // 添加新的事件监听器
+  newButton.addEventListener('mouseenter', () => {
+    newButton.style.transform = 'scale(1.2)';
+  });
+  
+  newButton.addEventListener('mouseleave', () => {
+    newButton.style.transform = 'scale(1)';
+  });
+  
+  newButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showErrorMessage('此规则已在 Scheduled Messages 中管理');
+  });
+}
+
+/**
+ * 显示导入对话框（带 AI 总结）
+ */
+function showImportDialog(
+  ruleInfo: RuleInfo,
+  scheduleConfig: any,
+  projectId: string,
+  doc: Document
+): Promise<{ confirmed: boolean; scheduleDate?: string; ruleSummary: string }> {
+  return new Promise((resolve) => {
+    // 创建遮罩
+    const overlay = doc.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(0, 0, 0, 0.5);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    `;
+    
+    // 创建对话框
+    const dialog = doc.createElement('div');
+    dialog.style.cssText = `
+      background: white;
+      border-radius: 8px;
+      padding: 24px;
+      max-width: 600px;
+      width: 90%;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    `;
+    
+    const projectKey = getProjectKey();
+    // ruleUrl 用于可能的未来功能扩展
+    const _ruleUrl = `${window.location.origin}/jira/software/c/projects/${projectKey}/automation#/rule/${ruleInfo.id}`;
+    
+    // 根据配置显示不同内容
+    let scheduleInfo = '';
+    let showDateInput = false;
+    let warningMessage = '';
+    
+    if (scheduleConfig) {
+      // 情况一: scheduled + nosearch - 完整导入，需要转换为 webhook
+      if (scheduleConfig.needsWebhookConversion && scheduleConfig.scheduleDate) {
+        scheduleInfo = `
+          <p><strong>触发时间:</strong> ${scheduleConfig.scheduleDate}</p>
+          <p><strong>重复周期:</strong> 每 ${scheduleConfig.repeatEvery} ${scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月'}</p>
+        `;
+        if (!scheduleConfig.scheduleDate) {
+          showDateInput = true;
+        }
+        warningMessage = '✅ 此规则可以在[定时消息管理]中管理 schedule';
+      } 
+      // 情况二: scheduled + nosearch (FIXED模式) - 需要手动指定日期
+      else if (scheduleConfig.needsWebhookConversion && !scheduleConfig.scheduleDate) {
+        scheduleInfo = `
+          <p><strong>触发模式:</strong> FIXED 模式（需要手动指定开始日期）</p>
+          <p><strong>重复周期:</strong> 每 ${scheduleConfig.repeatEvery} ${scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月'}</p>
+        `;
+        showDateInput = true;
+        warningMessage = '✅ 此规则可以在[定时消息管理]中管理 schedule';
+      }
+      // 情况三: scheduled + jql - 仅展示，不可编辑
+      else if (scheduleConfig.executionMode === 'jql' && scheduleConfig.scheduleDate) {
+        scheduleInfo = `
+          <p><strong>触发时间:</strong> ${scheduleConfig.scheduleDate}</p>
+          <p><strong>重复周期:</strong> 每 ${scheduleConfig.repeatEvery} ${scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月'}</p>
+          <p><strong>执行模式:</strong> JQL 查询模式（仅作为引用记录）</p>
+        `;
+        warningMessage = 'ℹ️ 该规则将以 JQL 模式执行，添加到 Scheduled Messages 后仅可查看和跳转';
+      }
+      // 其他情况: 仅添加引用
+      else {
+        scheduleInfo = `
+          <p><strong>规则类型:</strong> ${scheduleConfig.executionMode || '其他'} 模式</p>
+          <p>此规则将仅作为引用添加，不会导入调度配置</p>
+        `;
+        warningMessage = 'ℹ️ 仅添加规则链接作为引用，不会修改原规则';
+      }
+    }
+    
+    dialog.innerHTML = `
+      <h3 style="margin: 0 0 16px; font-size: 18px; color: #172B4D;">Add to Scheduled Messages</h3>
+      <div style="margin-bottom: 16px; padding: 12px; background: #F4F5F7; border-radius: 4px;">
+        <p style="margin: 0 0 8px;"><strong>规则名称:</strong> ${ruleInfo.name}</p>
+        ${scheduleInfo}
+      </div>
+      <div id="ai-summary-container" style="margin-bottom: 16px; padding: 12px; background: #E3F2FD; border-radius: 4px; border-left: 3px solid #2196F3;">
+        <p style="margin: 0 0 4px; font-weight: 500; color: #1976D2;">🤖 AI 规则总结:</p>
+        <p id="ai-summary-text" style="margin: 0; font-size: 13px; color: #424242; font-style: italic;">
+          正在分析规则内容...
+        </p>
+      </div>
+      ${showDateInput ? `
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; margin-bottom: 4px; font-weight: 500;">开始日期:</label>
+          <input type="date" id="schedule-date-input" 
+            value="${scheduleConfig.scheduleDate || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0]}"
+            style="width: 100%; padding: 8px; border: 1px solid #DFE1E6; border-radius: 4px; box-sizing: border-box;">
+        </div>
+      ` : ''}
+      <div style="margin-bottom: 16px; padding: 12px; background: #FFFAE6; border-radius: 4px; border-left: 3px solid #FFAB00;">
+        <p style="margin: 0; font-size: 13px; color: #172B4D;">
+          ${warningMessage}
+        </p>
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="cancel-btn" style="padding: 8px 16px; border: 1px solid #DFE1E6; border-radius: 4px; background: white; cursor: pointer;">取消</button>
+        <button id="confirm-btn" style="padding: 8px 16px; border: none; border-radius: 4px; background: #0052cc; color: white; cursor: pointer;">确认添加</button>
+      </div>
+    `;
+    
+    overlay.appendChild(dialog);
+    doc.body.appendChild(overlay);
+    
+    // 异步获取 AI 总结
+    let ruleSummary = `关联的 Jira Automation 规则: ${ruleInfo.name}`;
+    const summaryElement = dialog.querySelector('#ai-summary-text') as HTMLParagraphElement;
+    
+    (async () => {
+      try {
+        ruleSummary = await summarizeRuleWithLLM(ruleInfo);
+        if (summaryElement) {
+          summaryElement.textContent = ruleSummary;
+          summaryElement.style.fontStyle = 'normal';
+        }
+      } catch (error) {
+        console.error('AI 总结失败:', error);
+        if (summaryElement) {
+          summaryElement.textContent = `关联的 Jira Automation 规则: ${ruleInfo.name}`;
+          summaryElement.style.fontStyle = 'normal';
+        }
+      }
+    })();
+    
+    // 事件处理
+    const cancelBtn = dialog.querySelector('#cancel-btn') as HTMLButtonElement;
+    const confirmBtn = dialog.querySelector('#confirm-btn') as HTMLButtonElement;
+    const dateInput = dialog.querySelector('#schedule-date-input') as HTMLInputElement;
+    
+    cancelBtn.addEventListener('click', () => {
+      doc.body.removeChild(overlay);
+      resolve({ confirmed: false, scheduleDate: undefined, ruleSummary });
+    });
+    
+    confirmBtn.addEventListener('click', () => {
+      const scheduleDate = dateInput ? dateInput.value : scheduleConfig?.scheduleDate;
+      doc.body.removeChild(overlay);
+      resolve({ confirmed: true, scheduleDate, ruleSummary });
+    });
+    
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        doc.body.removeChild(overlay);
+        resolve({ confirmed: false, scheduleDate: undefined, ruleSummary });
+      }
+    });
+  });
+}
+
+/**
+ * 检查 Automation_Link 是否已存在于 Scheduled Messages 中
+ */
+async function checkAutomationLinkExists(automationLink: string): Promise<boolean> {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'CHECK_AUTOMATION_LINK_EXISTS',
+      data: { automationLink }
+    });
+    return result?.exists || false;
+  } catch (error) {
+    console.error('检查 Automation_Link 是否存在失败:', error);
+    return false;
+  }
+}
+
+/**
+ * 批量检查多个 Automation_Link 是否已存在于 Scheduled Messages 中
+ */
+async function batchCheckAutomationLinksExist(automationLinks: string[]): Promise<Map<string, boolean>> {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'BATCH_CHECK_AUTOMATION_LINKS_EXIST',
+      data: { automationLinks }
+    });
+    
+    // 将结果转换为 Map
+    const resultMap = new Map<string, boolean>();
+    if (result?.results) {
+      Object.entries(result.results).forEach(([link, exists]) => {
+        resultMap.set(link, exists as boolean);
+      });
+    }
+    return resultMap;
+  } catch (error) {
+    console.error('批量检查 Automation_Link 失败:', error);
+    return new Map();
+  }
+}
+
+/**
+ * 使用 LLM 总结 Jira Rule 的功能
+ * 通过 background script 调用 LLM（content script 无法直接导入模块）
+ */
+async function summarizeRuleWithLLM(ruleInfo: RuleInfo): Promise<string> {
+  try {
+    // 构建规则描述
+    const triggerType = ruleInfo.trigger?.type || '未知';
+    const triggerValue = JSON.stringify(ruleInfo.trigger?.value || {}, null, 2);
+    
+    const prompt = `请用一句简洁的中文描述以下 Jira Automation 规则的功能：
+
+规则名称：${ruleInfo.name}
+触发器类型：${triggerType}
+触发器配置：${triggerValue}
+
+要求：用 20-50 字描述这个规则的主要功能，不要包含技术细节。`;
+    
+    // 通过 background script 调用 LLM
+    const result = await chrome.runtime.sendMessage({
+      type: 'CALL_LLM_SUMMARIZE',
+      data: { prompt }
+    });
+    
+    if (result?.success && result.summary) {
+      return result.summary.trim();
+    }
+    
+    // 如果 LLM 调用失败，返回默认描述
+    return `关联的 Jira Automation 规则: ${ruleInfo.name}`;
+  } catch (error) {
+    console.error('LLM 总结规则失败:', error);
+    return `关联的 Jira Automation 规则: ${ruleInfo.name}`;
+  }
+}
+
+/**
+ * 处理添加到 Scheduled Messages
+ */
+async function handleAddToScheduledMessages(ruleId: string, projectId: string, doc: Document): Promise<void> {
+  try {
+    showLoadingMessage('正在读取规则信息...', doc);
+    
+    // 获取规则详情
+    const ruleInfo = await getRuleDetails(ruleId, projectId);
+    if (!ruleInfo) {
+      showErrorMessage('无法获取规则信息');
+      return;
+    }
+    
+    // 构建 Automation_Link
+    const projectKey = getProjectKey();
+    const ruleUrl = `${window.location.origin}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${projectKey}#/rule/${ruleId}`;
+    
+    // 检查是否已存在
+    showLoadingMessage('正在检查是否已添加...', doc);
+    const alreadyExists = await checkAutomationLinkExists(ruleUrl);
+    if (alreadyExists) {
+      hideLoadingMessage(doc);
+      showErrorMessage('已经添加过了，你可以在定时消息管理界面查看！');
+      return;
+    }
+    
+    hideLoadingMessage(doc);
+    
+    // 分析 trigger 类型
+    const trigger = ruleInfo.trigger;
+    const isScheduledTrigger = trigger?.type === 'jira.jql.scheduled';
+    const executionMode = trigger?.value?.executionMode;
+    const schedule = trigger?.value?.schedule;
+    
+    let scheduleConfig: any = null;
+    
+    if (isScheduledTrigger && executionMode === 'nosearch') {
+      // 情况一：scheduled + nosearch - 完整导入，需要转换为 webhook
+      if (schedule?.method === 'CRON') {
+        // Cron 模式 - 可以完整解析
+        const cronConfig = parseCronExpression(schedule.cronExpression);
+        if (cronConfig) {
+          const [hours, minutes] = cronConfig.time.split(':').map(Number);
+          scheduleConfig = {
+            scheduleDate: getNextScheduleDate(hours, minutes, cronConfig.repeatUnit, cronConfig.daysOfWeek),
+            scheduleTime: cronConfig.time,
+            repeatEvery: cronConfig.repeatEvery,
+            repeatUnit: cronConfig.repeatUnit,
+            executionMode: 'nosearch',
+            needsWebhookConversion: true
+          };
+        }
+      } else if (schedule?.method === 'FIXED') {
+        // FIXED 模式 - 需要从 audit log 获取日期或让用户输入
+        showLoadingMessage('正在获取执行历史...', doc);
+        const auditLogs = await getRuleAuditLog(ruleId, projectId);
+        hideLoadingMessage(doc);
+        
+        const successLog = auditLogs.find((log: any) => log.category === 'SUCCESS');
+        let scheduleDate: string | undefined;
+        
+        if (successLog && successLog.created) {
+          const date = new Date(successLog.created);
+          scheduleDate = date.toISOString().split('T')[0];
+        }
+        
+        // 解析 FIXED 配置
+        // rateInterval 单位是分钟
+        // 3600 = 1小时, 86400 = 1天, 604800 = 1周, 2592000 = 1个月
+        let repeatUnit = 'Day';
+        let repeatEvery = schedule.rate || 1;
+        const rateInterval = schedule.rateInterval || 86400;
+        
+        if (rateInterval < 86400) {
+          // 小于1天的间隔（Hour、Minute），统一为"每天"
+          repeatUnit = 'Day';
+          repeatEvery = 1;
+        } else if (rateInterval === 604800) {
+          repeatUnit = 'Week';
+        } else if (rateInterval === 2592000) {
+          repeatUnit = 'Month';
+        }
+        
+        scheduleConfig = {
+          scheduleDate,
+          repeatEvery,
+          repeatUnit,
+          executionMode: 'nosearch',
+          needsWebhookConversion: true
+        };
+      }
+    } else if (isScheduledTrigger && executionMode === 'jql') {
+      // 情况二：scheduled + jql - 仅展示，读取日期和周期到 sheet
+      if (schedule?.method === 'CRON') {
+        const cronConfig = parseCronExpression(schedule.cronExpression);
+        if (cronConfig) {
+          const [hours, minutes] = cronConfig.time.split(':').map(Number);
+          scheduleConfig = {
+            scheduleDate: getNextScheduleDate(hours, minutes, cronConfig.repeatUnit, cronConfig.daysOfWeek),
+            scheduleTime: cronConfig.time,
+            repeatEvery: cronConfig.repeatEvery,
+            repeatUnit: cronConfig.repeatUnit,
+            executionMode: 'jql',
+            needsWebhookConversion: false
+          };
+        }
+      } else if (schedule?.method === 'FIXED') {
+        // FIXED 模式
+        showLoadingMessage('正在获取执行历史...', doc);
+        const auditLogs = await getRuleAuditLog(ruleId, projectId);
+        hideLoadingMessage(doc);
+        
+        const successLog = auditLogs.find((log: any) => log.state === 'COMPLETED' || log.state === 'SUCCESS');
+        let scheduleDate: string | undefined;
+        
+        if (successLog && successLog.created) {
+          const date = new Date(successLog.created);
+          scheduleDate = date.toISOString().split('T')[0];
+        }
+        
+        // 解析 FIXED 配置
+        // rateInterval 单位是分钟
+        // 60 = 1小时, 86400 = 1天, 604800 = 1周, 2592000 = 1个月
+        let repeatUnit = 'Day';
+        let repeatEvery = schedule.rate || 1;
+        const rateInterval = schedule.rateInterval || 86400;
+        
+        if (rateInterval < 86400) {
+          // 小于1天的间隔（Hour、Minute），统一为"每天"
+          repeatUnit = 'Day';
+          repeatEvery = 1;
+        } else if (rateInterval === 604800) {
+          repeatUnit = 'Week';
+        } else if (rateInterval === 2592000) {
+          repeatUnit = 'Month';
+        }
+        
+        scheduleConfig = {
+          scheduleDate,
+          repeatEvery,
+          repeatUnit,
+          executionMode: 'jql',
+          needsWebhookConversion: false
+        };
+      }
+    } else {
+      // 情况三：其他类型 - 仅添加引用
+      scheduleConfig = {
+        executionMode: executionMode || 'other',
+        needsWebhookConversion: false
+      };
+    }
+    
+    // 显示确认对话框（已包含 AI 总结）
+    const dialogResult = await showImportDialog(ruleInfo, scheduleConfig, projectId, doc);
+    
+    if (!dialogResult.confirmed) {
+      return;
+    }
+    
+    // 使用弹窗中已生成的 AI 总结
+    const ruleSummary = dialogResult.ruleSummary;
+    
+    showLoadingMessage('正在添加到 Scheduled Messages...', doc);
+    
+    // 准备消息数据 - 注意 ruleUrl 已在前面定义
+    const messageData: any = {
+      Topic: `${ruleInfo.name}`,
+      Content: ruleSummary,
+      Push_Method: 'JiraAutomation',
+      Target_Type: 'api',
+      // 根据 Jira Rule 的状态设置 Status：ENABLED -> Active, DISABLED -> Paused
+      Status: ruleInfo.state === 'ENABLED' ? 'Active' : 'Paused',
+      Automation_Link: ruleUrl,
+      // 添加 Category，使用项目 key
+      Category: projectKey
+    };
+    scheduleConfig.scheduleDate = dialogResult.scheduleDate || scheduleConfig.scheduleDate;
+    
+    if (scheduleConfig?.needsWebhookConversion && scheduleConfig.scheduleDate) {
+      // 情况一：scheduled + nosearch - 完整导入调度信息，但不立即转换为 webhook
+      // webhook 转换延迟到用户在 ScheduledMessagesManager 中确认托管时再执行
+      messageData.Schedule_Date = scheduleConfig.scheduleDate;
+      messageData.Schedule_Time = scheduleConfig.scheduleTime;
+      messageData.Repeat_Every = scheduleConfig.repeatEvery;
+      messageData.Repeat_Unit = scheduleConfig.repeatUnit;
+      // 不设置 AI_Endpoint，留待用户在管理界面确认后再转换
+      // 用户可以在 ScheduledMessagesManager 中点击编辑按钮来激活 Personal AI 托管
+    } else if (scheduleConfig?.executionMode === 'jql') {
+      // 情况二：scheduled + jql - 读取日期和周期到 sheet，作为展示使用
+      messageData.Schedule_Date = scheduleConfig.scheduleDate;
+      messageData.Schedule_Time = scheduleConfig.scheduleTime;
+      messageData.Repeat_Every = scheduleConfig.repeatEvery;
+      messageData.Repeat_Unit = scheduleConfig.repeatUnit;
+      // 不设置 AI_Endpoint，表示仅作为引用
+      messageData.Content = `Linked to Jira Automation Rule (JQL Mode, View Only): ${ruleInfo.name}`;
+    }
+    // 情况三：其他类型 - 仅添加引用，不设置调度信息
+    
+    // 发送到 background script 添加消息
+    console.log('[Personal AI] 发送 ADD_SCHEDULED_MESSAGE 消息:', messageData);
+    
+    let result: any;
+    try {
+      result = await chrome.runtime.sendMessage({
+        type: 'ADD_SCHEDULED_MESSAGE',
+        data: messageData
+      });
+      console.log('[Personal AI] ADD_SCHEDULED_MESSAGE 响应:', result);
+    } catch (sendError) {
+      console.error('[Personal AI] 发送消息失败:', sendError);
+      hideLoadingMessage(doc);
+      showErrorMessage(`发送消息失败: ${sendError instanceof Error ? sendError.message : '未知错误'}`);
+      return;
+    }
+    
+    hideLoadingMessage(doc);
+    
+    if (result && result.success) {
+      showSuccessMessage(`已添加到 Scheduled Messages: ${ruleInfo.name}`);
+      
+      // 立即更新当前按钮为已管理状态（红色常亮）
+      const currentButton = doc.querySelector(`.personal-ai-schedule-btn[data-rule-id="${ruleId}"]`) as HTMLElement;
+      if (currentButton) {
+        console.log('[Personal AI] 更新按钮为已管理状态（红色常亮）');
+        updateButtonToManagedState(currentButton, doc);
+      }
+    } else {
+      const errorMsg = result?.error || (result === undefined ? '未收到响应（可能 background script 未正确处理）' : '未知错误');
+      console.error('[Personal AI] 添加失败:', errorMsg, result);
+      showErrorMessage(`添加失败: ${errorMsg}`);
+    }
+    
+  } catch (error) {
+    hideLoadingMessage(doc);
+    console.error('添加到 Scheduled Messages 失败:', error);
+    showErrorMessage(`添加失败: ${error instanceof Error ? error.message : '未知错误'}`);
+  }
+}
+
+/**
+ * 显示加载消息
+ */
+function showLoadingMessage(message: string, doc: Document): void {
+  hideLoadingMessage(doc);
+  
+  const loadingDiv = doc.createElement('div');
+  loadingDiv.id = 'personal-ai-loading';
+  loadingDiv.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #0052cc;
+    color: white;
+    padding: 12px 16px;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    z-index: 10001;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  `;
+  loadingDiv.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 16 16" style="animation: spin 1s linear infinite;">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="white" stroke-width="2" stroke-dasharray="32" stroke-dashoffset="8"/>
+    </svg>
+    <span>${message}</span>
+  `;
+  
+  // 添加旋转动画
+  const style = doc.createElement('style');
+  style.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
+  doc.head.appendChild(style);
+  
+  doc.body.appendChild(loadingDiv);
+}
+
+/**
+ * 隐藏加载消息
+ */
+function hideLoadingMessage(doc: Document): void {
+  const loadingDiv = doc.getElementById('personal-ai-loading');
+  if (loadingDiv) {
+    loadingDiv.remove();
+  }
+}
+
+/**
+ * 为规则列表添加悬停按钮
+ * 
+ * DOM 结构参考:
+ * <tr class="css-1wodie7">
+ *   <td class="css-1edgzzu">
+ *     <div>
+ *       <div draggable="true">
+ *         <div class="sc-hzNEM cMGECf">
+ *           <div class="sc-LKuAh dxEdMv">...</div>
+ *           <span role="presentation">
+ *             <span style="display: inline-flex; ...">
+ *               <a href="...#/rule/1685">[Esone] AI notify...</a>
+ *               <span style="margin-left: 5px;"></span>  <!-- 插入点 -->
+ *             </span>
+ *           </span>
+ *         </div>
+ *       </div>
+ *     </div>
+ *   </td>
+ *   ...
+ * </tr>
+ */
+async function addScheduleButtonsToRules(doc: Document, projectId: string): Promise<void> {
+  console.log('[Personal AI] 开始查找规则链接...');
+  
+  // 查找所有规则链接
+  const allLinks = doc.querySelectorAll('a[href*="#/rule/"]');
+  console.log(`[Personal AI] 找到 ${allLinks.length} 个规则链接`);
+  
+  // 第一步：为所有规则添加灰色 icon（默认状态）
+  const ruleInfoMap = new Map<string, { link: Element; button: HTMLElement; ruleRow: Element; ruleUrl: string }>();
+  
+  allLinks.forEach((link) => {
+    const href = link.getAttribute('href');
+    const match = href?.match(/#\/rule\/(\d+)/);
+    
+    if (!match) return;
+    
+    const ruleId = match[1];
+    
+    // 检查该链接是否已经有按钮了（通过查找父元素中是否已有按钮）
+    const linkParent = link.parentElement;
+    if (linkParent) {
+      const existingButton = linkParent.querySelector('.personal-ai-schedule-btn');
+      if (existingButton) {
+        // console.log(`[Personal AI] 规则 ${ruleId} 已有按钮，跳过`);
+        return;
+      }
+    }
+    
+    console.log(`[Personal AI] 为规则 ${ruleId} 添加灰色按钮`);
+    
+    // 找到规则行 <tr>
+    const ruleRow = link.closest('tr');
+    if (!ruleRow) {
+      console.log(`[Personal AI] 规则 ${ruleId} 未找到 tr 容器`);
+      return;
+    }
+    
+    // 创建按钮（默认为灰色悬停，未管理状态）
+    const button = createScheduleButton(ruleId, projectId, doc, false);
+    
+    // 方案1：在链接后面的 span 中插入按钮
+    // 链接结构: <a>...</a><span style="margin-left: 5px;"></span>
+    if (linkParent) {
+      const spacerSpan = linkParent.querySelector('span[style*="margin-left"]');
+      if (spacerSpan) {
+        // 插入到 spacer span 中
+        spacerSpan.appendChild(button);
+        console.log(`[Personal AI] 按钮插入到 spacer span 中`);
+      } else {
+        // 直接插入到链接后面
+        link.insertAdjacentElement('afterend', button);
+        console.log(`[Personal AI] 按钮插入到链接后面`);
+      }
+    }
+    
+    // 添加悬停效果 - 监听整个表格行（仅对灰色按钮）
+    ruleRow.addEventListener('mouseenter', () => {
+      // 只有灰色按钮才需要悬停显示
+      if (button.style.opacity === '0') {
+        button.style.opacity = '1';
+      }
+    });
+    
+    ruleRow.addEventListener('mouseleave', () => {
+      // 只有灰色按钮才需要悬停隐藏
+      if (button.title === 'Add to Scheduled Messages') {
+        button.style.opacity = '0';
+      }
+    });
+    
+    // 构建规则 URL
+    const projectKey = getProjectKey();
+    const ruleUrl = `${window.location.origin}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${projectKey}#/rule/${ruleId}`;
+    
+    // 存储规则信息
+    ruleInfoMap.set(ruleId, { link, button, ruleRow, ruleUrl });
+    addedScheduleButtons.add(ruleId);
+  });
+  
+  console.log(`[Personal AI] 已为 ${ruleInfoMap.size} 个规则添加灰色按钮`);
+  
+  // 第二步：批量查询哪些规则已在 Scheduled Messages 中
+  if (ruleInfoMap.size > 0) {
+    console.log('[Personal AI] 开始批量查询规则状态...');
+    const ruleUrls = Array.from(ruleInfoMap.values()).map(info => info.ruleUrl);
+    const existsMap = await batchCheckAutomationLinksExist(ruleUrls);
+    
+    console.log(`[Personal AI] 批量查询完成，找到 ${existsMap.size} 个结果`);
+    
+    // 第三步：将已存在的规则的 icon 替换为红色常亮状态
+    ruleInfoMap.forEach((info, ruleId) => {
+      const exists = existsMap.get(info.ruleUrl);
+      if (exists) {
+        console.log(`[Personal AI] 规则 ${ruleId} 已存在，更新为红色常亮 icon`);
+        updateButtonToManagedState(info.button, doc);
+      }
+    });
+    
+    console.log('[Personal AI] 按钮状态更新完成');
+  }
+}
+
+/**
+ * 检查是否已初始化 Scheduled Messages 配置
+ */
+async function checkScheduledMessagesInitialized(): Promise<boolean> {
+  try {
+    const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
+    const config = result.scheduledMessagesConfig;
+    
+    if (config && config.sheetId) {
+      console.log('[Personal AI] Scheduled Messages 已初始化，sheetId:', config.sheetId);
+      return true;
+    }
+    
+    console.log('[Personal AI] Scheduled Messages 未初始化，跳过注入添加按钮');
+    return false;
+  } catch (error) {
+    console.error('[Personal AI] 检查 Scheduled Messages 配置失败:', error);
+    return false;
+  }
+}
+
+/**
+ * 初始化 Schedule 按钮功能
+ */
+async function initScheduleButtons(doc: Document, projectId: string): Promise<void> {
+  // 先检查是否已初始化 Scheduled Messages
+  const isInitialized = await checkScheduledMessagesInitialized();
+  if (!isInitialized) {
+    console.log('[Personal AI] 跳过 Schedule 按钮注入（未初始化 Scheduled Messages）');
+    return;
+  }
+  
+  // 初始添加按钮
+  addScheduleButtonsToRules(doc, projectId);
+  
+  // 监听 DOM 变化，为新加载的规则添加按钮
+  const scheduleObserver = new MutationObserver(() => {
+    addScheduleButtonsToRules(doc, projectId);
+  });
+  
+  scheduleObserver.observe(doc.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
+// Schedule 按钮初始化已集成到 main() 函数中
+// 与 Import button 共享同一个初始化时机，无需额外的独立入口 

@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.1.1';
-var APP_SCRIPT_LAST_UPDATED = '2025-12-04';
+var APP_SCRIPT_VERSION = '2.2.0';
+var APP_SCRIPT_LAST_UPDATED = '2025-12-12';
 
 
 /**
@@ -983,8 +983,11 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     const row = data[i];
     const rowData = parseRow(row, headers);
     
-    // 基本过滤：必须是 Active + Bot 或 AI
-    if (rowData.Status !== 'Active' || (rowData.Push_Method !== 'Bot' && rowData.Push_Method !== 'AI')) {
+    // 基本过滤：必须是 Active + Bot 或 AI 或 JiraAutomation（有 AI_Endpoint 的）
+    const isValidPushMethod = rowData.Push_Method === 'Bot' || 
+                              rowData.Push_Method === 'AI' || 
+                              (rowData.Push_Method === 'JiraAutomation' && rowData.AI_Endpoint);
+    if (rowData.Status !== 'Active' || !isValidPushMethod) {
       continue;
     }
     
@@ -1469,9 +1472,9 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     
     Logger.log(`返回待发送消息数据: ${messageId} - ${message.Topic}`);
     
-    // === 检查是否是 AI 消息 ===
-    if (message.Push_Method === 'AI') {
-      Logger.log(`处理 AI 消息: ${messageId}`);
+    // === 检查是否是 AI 消息或 JiraAutomation（有 AI_Endpoint）===
+    if (message.Push_Method === 'AI' || (message.Push_Method === 'JiraAutomation' && message.AI_Endpoint)) {
+      Logger.log(`处理 ${message.Push_Method} 消息: ${messageId}`);
       
       // 解析 AI 相关字段
       const endpointInfo = parseAIEndpoint(message.AI_Endpoint || '');

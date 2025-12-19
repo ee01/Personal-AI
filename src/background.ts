@@ -16,6 +16,8 @@ import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWi
 import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
+import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
+import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
 
 console.log('Background script loaded');
 
@@ -181,6 +183,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 console.log('✅ Alarm 监听器已设置（顶层同步）');
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // 全局日志：记录所有收到的消息
+    console.log('🔔 Background 收到消息:', request.type, '来自:', sender.tab?.url || sender.url || 'unknown');
+    
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
     if (request.type === 'MESSAGE_DEALING') {
         const { body } = request.data;
@@ -639,6 +644,291 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.error('❌ 重启智能分析组件失败:', error);
             sendResponse({ success: false, error: error.message });
         }
+        return true;
+    }
+    
+    // =====================================================
+    // Jira Automation 导入 Scheduled Messages 功能
+    // =====================================================
+    
+    // 转换 Jira Rule 的 trigger 为 incoming webhook
+    if (request.type === 'CONVERT_JIRA_RULE_TO_WEBHOOK') {
+        (async () => {
+            try {
+                const { ruleId, projectId, jiraUrl } = request.data;
+                
+                // 使用静态导入的 JiraAutomationService（避免 Service Worker 中动态导入问题）
+                const service = new JiraAutomationService();
+                
+                // 获取项目 Key
+                const projectResponse = await fetch(`${jiraUrl}/rest/api/2/project/${projectId}`, {
+                    credentials: 'include'
+                });
+                const projectData = await projectResponse.json();
+                const projectKey = projectData.key;
+                
+                const config = {
+                    jiraUrl,
+                    projectKey
+                };
+                
+                // 转换为 webhook trigger
+                const webhookUrl = await service.convertToWebhookTrigger(config, ruleId);
+                
+                sendResponse({ success: true, webhookUrl });
+            } catch (error: any) {
+                console.error('转换 Jira Rule 为 webhook 失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 将 Incoming Webhook Trigger 转换回 Scheduled Trigger（撤销托管）
+    if (request.type === 'CONVERT_WEBHOOK_TO_SCHEDULED') {
+        (async () => {
+            try {
+                const { ruleId, projectId, jiraUrl, scheduleConfig } = request.data;
+                console.log(`🔄 将规则 ${ruleId} 的 trigger 转换回 scheduled...`);
+                
+                // 使用 JiraAutomationService
+                const service = new JiraAutomationService();
+                
+                // 获取项目 Key
+                const projectResponse = await fetch(`${jiraUrl}/rest/api/2/project/${projectId}`, {
+                    credentials: 'include'
+                });
+                const projectData = await projectResponse.json();
+                const projectKey = projectData.key;
+                
+                const config = {
+                    jiraUrl,
+                    projectKey
+                };
+                
+                // 转换为 scheduled trigger
+                await service.convertToScheduledTrigger(config, ruleId, scheduleConfig);
+                
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error('转换 Jira Rule 为 scheduled 失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 添加 Scheduled Message（从 Jira Automation 页面调用）
+    if (request.type === 'ADD_SCHEDULED_MESSAGE') {
+        (async () => {
+            try {
+                console.log('📝 收到 ADD_SCHEDULED_MESSAGE 请求:', request.data);
+                const messageData = request.data;
+                
+                // 获取配置和 token
+                const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
+                const config = result.scheduledMessagesConfig;
+                
+                console.log('📋 Scheduled Messages 配置:', config);
+                
+                if (!config || !config.sheetId) {
+                    console.error('❌ 未配置 Scheduled Messages');
+                    sendResponse({ success: false, error: '未配置 Scheduled Messages，请先在设置中初始化' });
+                    return;
+                }
+                
+                // 获取 auth token
+                console.log('🔐 获取 Google 认证 token...');
+                const token = await getAuthToken();
+                console.log('✅ Token 获取成功');
+                
+                // 使用静态导入的 ScheduledMessageService（避免 Service Worker 中动态导入问题）
+                const service = new ScheduledMessageService(token);
+                
+                console.log('📤 创建消息:', messageData);
+                // 创建消息
+                const newMessage = await service.createMessage(messageData);
+                
+                console.log('✅ 消息创建成功:', newMessage);
+                sendResponse({ success: true, message: newMessage });
+            } catch (error: any) {
+                console.error('❌ 添加 Scheduled Message 失败:', error);
+                console.error('错误堆栈:', error.stack);
+                sendResponse({ success: false, error: error.message || '未知错误' });
+            }
+        })();
+        return true;
+    }
+    
+    // 检查 Automation_Link 是否已存在于 Scheduled Messages 中
+    if (request.type === 'CHECK_AUTOMATION_LINK_EXISTS') {
+        (async () => {
+            try {
+                const { automationLink } = request.data;
+                console.log('🔍 检查 Automation_Link 是否存在:', automationLink);
+                
+                // 获取配置和 token
+                const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
+                const config = result.scheduledMessagesConfig;
+                
+                if (!config || !config.sheetId) {
+                    sendResponse({ exists: false });
+                    return;
+                }
+                
+                const token = await getAuthToken();
+                const service = new ScheduledMessageService(token);
+                const messages = await service.getAllMessages();
+                
+                // 检查是否有相同的 Automation_Link
+                const exists = messages.some(msg => msg.Automation_Link === automationLink);
+                console.log('🔍 检查结果:', exists ? '已存在' : '不存在');
+                sendResponse({ exists });
+            } catch (error: any) {
+                console.error('❌ 检查 Automation_Link 失败:', error);
+                sendResponse({ exists: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 批量检查多个 Automation_Link 是否已存在于 Scheduled Messages 中
+    if (request.type === 'BATCH_CHECK_AUTOMATION_LINKS_EXIST') {
+        (async () => {
+            try {
+                const { automationLinks } = request.data;
+                console.log('🔍 批量检查 Automation_Links 是否存在:', automationLinks.length, '个');
+                
+                // 获取配置和 token
+                const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
+                const config = result.scheduledMessagesConfig;
+                
+                if (!config || !config.sheetId) {
+                    const emptyResults: Record<string, boolean> = {};
+                    automationLinks.forEach((link: string) => {
+                        emptyResults[link] = false;
+                    });
+                    sendResponse({ results: emptyResults });
+                    return;
+                }
+                
+                const token = await getAuthToken();
+                const service = new ScheduledMessageService(token);
+                const messages = await service.getAllMessages();
+                
+                // 构建 Automation_Link 的 Set 用于快速查找
+                const existingLinks = new Set(messages.map(msg => msg.Automation_Link).filter(Boolean));
+                
+                // 批量检查每个链接
+                const results: Record<string, boolean> = {};
+                automationLinks.forEach((link: string) => {
+                    results[link] = existingLinks.has(link);
+                });
+                
+                const existCount = Object.values(results).filter(Boolean).length;
+                console.log(`🔍 批量检查完成: ${existCount}/${automationLinks.length} 个已存在`);
+                sendResponse({ results });
+            } catch (error: any) {
+                console.error('❌ 批量检查 Automation_Links 失败:', error);
+                sendResponse({ results: {}, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 调用 LLM 总结规则内容
+    if (request.type === 'CALL_LLM_SUMMARIZE') {
+        (async () => {
+            try {
+                const { prompt } = request.data;
+                console.log('🤖 调用 LLM 总结规则...');
+                
+                const { handleLLMRequest } = await import('./llm');
+                const summary = await handleLLMRequest({ prompt });
+                
+                console.log('✅ LLM 总结完成:', summary);
+                sendResponse({ success: true, summary });
+            } catch (error: any) {
+                console.error('❌ LLM 总结失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 更新 Jira Automation Rule 状态（启用/禁用）
+    if (request.type === 'UPDATE_JIRA_RULE_STATE') {
+        (async () => {
+            try {
+                const { jiraUrl, projectId, ruleId, newState, ruleData } = request.data;
+                console.log(`🔄 更新 Jira Rule ${ruleId} 状态为: ${newState}`);
+                
+                // 发送请求更新规则状态
+                const response = await fetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        ...ruleData,
+                        state: newState
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`更新失败 (${response.status}): ${errorText}`);
+                }
+                
+                console.log(`✅ Jira Rule ${ruleId} 状态更新成功`);
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error('❌ 更新 Jira Rule 状态失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 获取 Jira Automation Rule 详情
+    if (request.type === 'GET_JIRA_RULE_DETAILS') {
+        (async () => {
+            try {
+                const { jiraUrl, projectId, ruleId } = request.data;
+                console.log(`📖 获取 Jira Rule ${ruleId} 详情...`);
+                
+                // 使用获取规则列表的接口（单条规则接口不支持 GET）
+                const response = await fetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    credentials: 'include'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`获取失败 (${response.status})`);
+                }
+                
+                const rules = await response.json();
+                // 在规则列表中查找指定的 rule ID
+                const ruleData = rules.find((r: any) => String(r.id) === String(ruleId));
+                
+                if (!ruleData) {
+                    throw new Error(`未找到规则 ${ruleId}`);
+                }
+                
+                console.log(`✅ 获取 Jira Rule ${ruleId} 成功`);
+                sendResponse({ success: true, ruleData });
+            } catch (error: any) {
+                console.error('❌ 获取 Jira Rule 详情失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
         return true;
     }
     
