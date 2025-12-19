@@ -36,6 +36,7 @@ module.exports = (env) => {
       'slides-analysis': './src/modals/slides-analysis.tsx',
       'project-dashboard': './src/modals/project-dashboard.tsx',
       'prompt-config': './src/modals/prompt-config.tsx',
+      'share-modal': './src/modals/share-modal.tsx',
       'analyzers/analyzerFactory': './src/analyzers/analyzerFactory.ts',
       'analyzers/llmAnalyzer': './src/analyzers/llmAnalyzer.ts',
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',

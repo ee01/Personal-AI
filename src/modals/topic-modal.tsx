@@ -28,7 +28,7 @@ const TopicModal = () => {
     const [newTopic, setNewTopic] = useState('');
     const [newExpiry, setNewExpiry] = useState('30');
     const [newPushToGlip, setNewPushToGlip] = useState(true);
-    const [newMentionMe, setNewMentionMe] = useState(true);
+    const [newMentionMe, setNewMentionMe] = useState(false);
     const [draggedItem, setDraggedItem] = useState<number | null>(null);
     const [dragOverItem, setDragOverItem] = useState<number | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -135,7 +135,7 @@ const TopicModal = () => {
         setNewTopic('');
         setNewExpiry('30');
         setNewPushToGlip(true);
-        setNewMentionMe(true);
+        setNewMentionMe(false);
         setShowAddForm(false);
     };
 
