@@ -371,6 +371,7 @@ interface JiraFieldMetadata {
     columnMapping: JiraHeaders;
     fieldTypes: { [jiraField: string]: string };
     globalSettings: GlobalSettings;
+    jiraFieldToSheetHeader: { [jiraField: string]: string };  // Jira Field -> Sheet Column 名称的映射
 }
 
 interface UpdateData {
@@ -618,6 +619,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
         let headerMapping: { [key: string]: string } = {};
         const customFieldMapping: { [key: string]: string } = {};
         const fieldTypes: { [jiraField: string]: string } = {};
+        const jiraFieldToSheetHeader: { [jiraField: string]: string } = {};  // Jira Field -> Sheet Column 原始名称
         let globalSettings: GlobalSettings = { headerRow: 1, defaultJql: '', keepDataSameAsJql: false, keepOrderSameAsJql: false };
         
         try {
@@ -641,7 +643,8 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
                 for (let i = 1; i < configData.length; i++) {
                     const row = configData[i];
                     if (row.length > Math.max(sheetHeaderIndex, jiraFieldIndex)) {
-                        const sheetHeader = row[sheetHeaderIndex]?.trim().toLowerCase();
+                        const sheetHeaderOriginal = row[sheetHeaderIndex]?.trim();  // 保留原始大小写用于显示
+                        const sheetHeader = sheetHeaderOriginal?.toLowerCase();
                         let jiraField = row[jiraFieldIndex]?.trim();
                         const fieldType = fieldTypeIndex !== -1 ? row[fieldTypeIndex]?.trim().toLowerCase() : '';
 
@@ -650,6 +653,8 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
                                 jiraField = 'key';
                             }
                             headerMapping[sheetHeader] = jiraField;
+                            // 存储 Jira Field -> Sheet Column 原始名称的映射
+                            jiraFieldToSheetHeader[jiraField] = sheetHeaderOriginal;
                             if (fieldType) {
                                 fieldTypes[jiraField] = fieldType;
                             }
@@ -770,7 +775,8 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
 
         console.log('最终有效表头映射:', validHeaders);
         console.log('字段类型映射:', fieldTypes);
-        return { columnMapping: validHeaders, fieldTypes, globalSettings };
+        console.log('Jira 字段到表头映射:', jiraFieldToSheetHeader);
+        return { columnMapping: validHeaders, fieldTypes, globalSettings, jiraFieldToSheetHeader };
     } catch (error) {
         console.error('查找有效 Jira 标题时出错:', error);
         showToast('查找表头映射时出错: ' + (error instanceof Error ? error.message : error), 'error')
@@ -929,7 +935,8 @@ async function showConfirmationDialog(
     sheetHeaders: JiraHeaders,
     missingFields: string[] = [],
     jiraBaseUrl = '',
-    jql = ''
+    jql = '',
+    jiraFieldToSheetHeader: { [jiraField: string]: string } = {}
 ): Promise<ConfirmationResult> {
     return new Promise((resolve) => {
         const dialog = document.createElement('div');
@@ -971,7 +978,8 @@ async function showConfirmationDialog(
                         </div>
                         <div style="color: #856404; margin-bottom: 8px;">
                             ${missingFields.map(field => {
-                                const displayName = jiraFieldDisplayNames[field] || field;
+                                // 优先使用配置表中的 Sheet Column 名称，其次使用预定义的友好名称，最后使用原始字段名
+                                const displayName = jiraFieldToSheetHeader[field] || jiraFieldDisplayNames[field] || field;
                                 return `<span style="display: inline-block; background: #ffeeba; padding: 2px 8px; border-radius: 3px; margin: 2px 4px 2px 0; font-size: 13px;">${displayName}</span>`;
                             }).join('')}
                         </div>
@@ -1260,7 +1268,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 sheetHeaders, 
                 missingFields,
                 envConfig.JIRA_BASE_URL || '',
-                jql
+                jql,
+                metadata.jiraFieldToSheetHeader
             );
             
             const confirmedOperations = confirmResult.operations;
