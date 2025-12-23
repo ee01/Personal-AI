@@ -3,6 +3,43 @@
  * 在Jira ticket页面上显示设计链接
  */
 
+import { getEnvConfig } from './utils';
+
+// 缓存 Jira token
+let cachedJiraToken: string | null = null;
+
+// 获取 Jira Token（如果用户配置了的话）
+async function getJiraToken(): Promise<string | null> {
+  if (cachedJiraToken !== null) {
+    return cachedJiraToken || null;
+  }
+  try {
+    const envConfig = await getEnvConfig();
+    cachedJiraToken = envConfig.JIRA_API_TOKEN || '';
+    return cachedJiraToken || null;
+  } catch (error) {
+    console.log('未配置 Jira Token，将使用 cookie 模式访问');
+    cachedJiraToken = '';
+    return null;
+  }
+}
+
+// 创建请求 headers，支持 token 和 cookie fallback
+async function createJiraHeaders(): Promise<HeadersInit> {
+  const token = await getJiraToken();
+  const headers: HeadersInit = {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache'
+  };
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+}
+
 // 检测页面是否是Jira ticket详情页
 function isJiraTicketPage(): boolean {
   return window.location.pathname.includes('/browse/');
@@ -121,9 +158,16 @@ function getUXTicketsFromLinkedIssues(): { key: string; url: string; summary: st
 }
 
 // 调用Jira API获取票据信息
+// 支持 token 和 cookie fallback 模式
 async function fetchTicketData(ticketKey: string): Promise<any> {
   try {
-    const response = await fetch(`/rest/api/2/issue/${ticketKey}?fields=issuelinks,subtasks`);
+    const headers = await createJiraHeaders();
+    // 使用 expand=names 获取更多字段信息
+    const response = await fetch(`/rest/api/2/issue/${ticketKey}?fields=issuelinks,subtasks&expand=names`, {
+      method: 'GET',
+      headers,
+      credentials: 'include'  // 使用 cookie 认证（当没有 token 时作为 fallback）
+    });
     if (!response.ok) throw new Error(`Failed to fetch ticket data: ${response.statusText}`);
     return await response.json();
   } catch (error) {
@@ -133,11 +177,17 @@ async function fetchTicketData(ticketKey: string): Promise<any> {
 }
 
 // 通过 JQL 查询 parent 字段获取所有 child issues
+// 支持 token 和 cookie fallback 模式
 async function fetchChildIssues(parentKey: string): Promise<any[]> {
   try {
+    const headers = await createJiraHeaders();
     const jql = `issueFunction in portfolioChildrenOf("key=${parentKey}")`;
     const url = `/rest/api/2/search?jql=${encodeURIComponent(jql)}&fields=key,summary,issuetype,status`;
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include'  // 使用 cookie 认证
+    });
     if (!response.ok) throw new Error('Failed to fetch child issues');
     const data = await response.json();
     return data.issues || [];
@@ -191,9 +241,15 @@ async function findUXTickets(parentData: any, currentTicketKey: string): Promise
 }
 
 // 获取设计链接
+// 支持 token 和 cookie fallback 模式
 async function getDesignLink(uxTicketKey: string): Promise<string | null> {
   try {
-    const response = await fetch(`/rest/api/2/issue/${uxTicketKey}?fields=customfield_21233`);
+    const headers = await createJiraHeaders();
+    const response = await fetch(`/rest/api/2/issue/${uxTicketKey}?fields=customfield_21233&expand=names`, {
+      method: 'GET',
+      headers,
+      credentials: 'include'  // 使用 cookie 认证
+    });
     if (!response.ok) throw new Error(`Failed to fetch UX ticket: ${response.statusText}`);
     const data = await response.json();
     return data.fields.customfield_21233 || null;
@@ -204,9 +260,15 @@ async function getDesignLink(uxTicketKey: string): Promise<string | null> {
 }
 
 // 获取Epic ticket的Parent Link
+// 支持 token 和 cookie fallback 模式
 async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: string } | null> {
   try {
-    const response = await fetch(`/rest/api/2/issue/${epicKey}?fields=customfield_15751`);
+    const headers = await createJiraHeaders();
+    const response = await fetch(`/rest/api/2/issue/${epicKey}?fields=customfield_15751&expand=names`, {
+      method: 'GET',
+      headers,
+      credentials: 'include'  // 使用 cookie 认证
+    });
     if (!response.ok) throw new Error(`Failed to fetch Epic ticket: ${response.statusText}`);
     const data = await response.json();
     
@@ -627,15 +689,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // 从 JIRA API 获取用户信息
+// 支持 token 和 cookie fallback 模式
 async function getUserInfoFromJiraAPI(): Promise<any> {
   try {
     console.log('Getting user info from JIRA API...');
+    const headers = await createJiraHeaders();
     const response = await fetch(window.location.origin + '/rest/api/2/myself', {
       method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      }
+      headers,
+      credentials: 'include'  // 使用 cookie 认证
     });
     
     if (!response.ok) {

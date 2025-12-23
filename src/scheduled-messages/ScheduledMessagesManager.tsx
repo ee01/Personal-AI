@@ -2018,13 +2018,15 @@ const AddMessageDialog: React.FC<{
   const [formData, setFormData] = useState<CreateMessageFormData>(getInitialFormData);
   const [userTags, setUserTags] = useState<string[]>(getInitialUserTags);
   const [isRepeating, setIsRepeating] = useState(editingMessage ? !!(editingMessage.Repeat_Every && editingMessage.Repeat_Unit) : false);
-  const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'custom'>(() => {
+  const [aiReportTemplate, setAiReportTemplate] = useState<'ai-report' | 'pep-report' | 'multiple-jira-query' | 'custom'>(() => {
     // 编辑模式时，根据 AI_Endpoint 判断模板类型
     if (editingMessage && editingMessage.Push_Method === 'AI' && editingMessage.AI_Endpoint) {
       if (editingMessage.AI_Endpoint.includes('dify.int.rclabenv.com')) {
         return 'ai-report';
       } else if (editingMessage.AI_Endpoint.includes('pep_daily_report')) {
         return 'pep-report';
+      } else if (editingMessage.AI_Endpoint.includes('multiple_jira_query_notify')) {
+        return 'multiple-jira-query';
       }
       return 'custom';
     }
@@ -2122,6 +2124,13 @@ const AddMessageDialog: React.FC<{
     }
     return '';
   });
+  const [multipleJiraQueryTeamId, setMultipleJiraQueryTeamId] = useState(() => {
+    // 编辑模式时，如果是 multiple-jira-query 类型，初始化 TeamID
+    if (editingMessage && editingMessage.Push_Method === 'AI' && editingMessage.AI_Endpoint?.includes('multiple_jira_query_notify')) {
+      return editingMessage.Glip_Team_ID || '';
+    }
+    return '';
+  });
   const [categoryTags, setCategoryTags] = useState<SelectOption[]>(getInitialCategoryTags);
   
   // Body 输入框的 ref，用于插入变量
@@ -2148,14 +2157,16 @@ const AddMessageDialog: React.FC<{
     }
   }, [isReminderMode, isEditMode]);
   
-  // 三个模板的数据缓存（内存中，关闭页面后失效）
+  // 四个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
     'ai-report': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
     'pep-report': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
+    'multiple-jira-query': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
     'custom': { AI_Endpoint: string; AI_Headers: string; AI_Body: string };
   }>({
     'ai-report': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' },
     'pep-report': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' },
+    'multiple-jira-query': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' },
     'custom': { AI_Endpoint: '', AI_Headers: '', AI_Body: '' }
   });
   
@@ -2213,11 +2224,31 @@ const AddMessageDialog: React.FC<{
           }
         ]
       }, null, 2)
+    },
+    'multiple-jira-query': {
+      AI_Endpoint: 'POST https://pep.int.rclabenv.com/multiple_jira_query_notify',
+      AI_Headers: 'Content-Type: application/json',
+      AI_Body: JSON.stringify({
+        team_id: '{TeamID}',
+        queries: [
+          {
+            query_id: 2253,
+            intro_text: 'High priority issues:',
+            mention: ['reporter', 'assignee'],
+            show_status: true
+          },
+          {
+            query: 'project = RCVR AND status = Open',
+            intro_text: 'Open RCVR issues:',
+            mention: ['firstof(assignee, reporter)']
+          }
+        ]
+      }, null, 2)
     }
   };
   
   // 处理模板切换
-  const handleTemplateChange = (newTemplate: 'ai-report' | 'pep-report' | 'custom') => {
+  const handleTemplateChange = (newTemplate: 'ai-report' | 'pep-report' | 'multiple-jira-query' | 'custom') => {
     // 保存当前模板的数据到缓存
     if (aiReportTemplate === 'ai-report') {
       // ai-report 使用可视化字段，不需要保存 Body
@@ -2249,6 +2280,12 @@ const AddMessageDialog: React.FC<{
       handleChange('AI_Endpoint', aiReportPresets['pep-report'].AI_Endpoint);
       handleChange('AI_Headers', headersStr);
       handleChange('AI_Body', aiReportPresets['pep-report'].AI_Body);
+      setAiHeaders(parseHeadersString(headersStr));
+    } else if (newTemplate === 'multiple-jira-query' && !templateCacheRef.current['multiple-jira-query']?.AI_Endpoint) {
+      const headersStr = aiReportPresets['multiple-jira-query'].AI_Headers;
+      handleChange('AI_Endpoint', aiReportPresets['multiple-jira-query'].AI_Endpoint);
+      handleChange('AI_Headers', headersStr);
+      handleChange('AI_Body', aiReportPresets['multiple-jira-query'].AI_Body);
       setAiHeaders(parseHeadersString(headersStr));
     } else {
       // 从缓存恢复数据
@@ -2588,6 +2625,9 @@ const AddMessageDialog: React.FC<{
       } else if (aiReportTemplate === 'pep-report') {
         // pep-report 模板：使用专用的输入框值
         glipTeamId = pepReportTeamId;
+      } else if (aiReportTemplate === 'multiple-jira-query') {
+        // multiple-jira-query 模板：使用专用的输入框值
+        glipTeamId = multipleJiraQueryTeamId;
       }
       // custom 模板：不处理，用户自己负责
     }
@@ -3263,13 +3303,47 @@ const AddMessageDialog: React.FC<{
                   options={[
                     { value: 'ai-report', label: '🤖 AI Report' },
                     { value: 'pep-report', label: '📊 PEP Report' },
+                    { value: 'multiple-jira-query', label: '🔍 Multiple Jira Query' },
                     { value: 'custom', label: '⚙️ 自定义' }
                   ]}
-                  value={{ value: aiReportTemplate, label: aiReportTemplate === 'ai-report' ? '🤖 AI Report' : aiReportTemplate === 'pep-report' ? '📊 PEP Report' : '⚙️ 自定义' }}
-                  onChange={(option: SingleValue<SelectOption>) => option && handleTemplateChange(option.value as 'ai-report' | 'pep-report' | 'custom')}
+                  value={{ 
+                    value: aiReportTemplate, 
+                    label: aiReportTemplate === 'ai-report' ? '🤖 AI Report' : 
+                           aiReportTemplate === 'pep-report' ? '📊 PEP Report' : 
+                           aiReportTemplate === 'multiple-jira-query' ? '🔍 Multiple Jira Query' : '⚙️ 自定义' 
+                  }}
+                  onChange={(option: SingleValue<SelectOption>) => option && handleTemplateChange(option.value as 'ai-report' | 'pep-report' | 'multiple-jira-query' | 'custom')}
                   styles={singleSelectStyles}
                   isSearchable={false}
                 />
+                {/* PEP Report 文档提示 */}
+                {aiReportTemplate === 'pep-report' && (
+                  <small style={{...dialogStyles.hint, marginTop: '8px'}}>
+                    📖 参数说明请参考文档：
+                    <a 
+                      href="https://wiki.ringcentral.com/spaces/XTO/pages/958780959/PEP+Daily+Report" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      style={{color: '#007bff', textDecoration: 'underline', marginLeft: '4px'}}
+                    >
+                      PEP Daily Report 文档
+                    </a>
+                  </small>
+                )}
+                {/* Multiple Jira Query 文档提示 */}
+                {aiReportTemplate === 'multiple-jira-query' && (
+                  <small style={{...dialogStyles.hint, marginTop: '8px'}}>
+                    📖 参数说明请参考 API 文档：
+                    <a 
+                      href="https://pep.int.rclabenv.com/usage/multiple_jira_query_notify" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      style={{color: '#007bff', textDecoration: 'underline', marginLeft: '4px'}}
+                    >
+                      Multiple Jira Query Notify
+                    </a>
+                  </small>
+                )}
               </div>
               
               {/* AI Endpoint */}
@@ -3816,7 +3890,22 @@ const AddMessageDialog: React.FC<{
                        <small style={dialogStyles.hint}>可选，填入后会将报告发送到指定群组</small>
                      </div>
                    )}
- 
+
+                   {/* Multiple Jira Query 专用：群组 ID 输入框 */}
+                   {aiReportTemplate === 'multiple-jira-query' && (
+                     <div style={dialogStyles.formGroup}>
+                       <label style={dialogStyles.label}>群组 ID</label>
+                       <input 
+                         style={dialogStyles.input}
+                         type="text"
+                         value={multipleJiraQueryTeamId}
+                         onChange={(e) => setMultipleJiraQueryTeamId(e.target.value)}
+                         placeholder="例如：148192141318"
+                       />
+                       <small style={dialogStyles.hint}>可选，填入后会将查询结果发送到指定群组</small>
+                     </div>
+                   )}
+
                     <div style={dialogStyles.formGroup}>
                     <label style={dialogStyles.label}>Body *</label>
                     <textarea 
