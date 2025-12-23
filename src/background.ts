@@ -2,7 +2,7 @@ import { analyzeMessagesInBackground } from './messageDealing';
 import { createOffscreenDocument, getEmbeddingInBackground, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
-import { getAuthToken } from './slide';
+import { getAuthToken, getCachedAuthToken } from './slide';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
 import { memorySystem } from './memory';
@@ -71,25 +71,29 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         await taskScheduler.startAllTasks();
         
         // 如果是扩展更新，检查并更新 Sheet Schema、App Script 和 Jira Rule
+        // 注意：使用 getCachedAuthToken 避免在无用户操作时弹出授权窗口
         if (details.reason === 'update') {
             console.log('🔄 检测到扩展更新，检查 Sheet Schema、App Script 和 Jira Rule 是否需要更新...');
             
             // 1. 检查并更新 Sheet Schema（先更新表结构，再更新脚本）
-            SheetSchemaUpdater.checkAndAutoUpdate(getAuthToken, {
+            // 使用 getCachedAuthToken：只使用缓存的 token，不弹出授权窗口
+            SheetSchemaUpdater.checkAndAutoUpdate(getCachedAuthToken, {
                 showNotification: true
             }).catch(error => {
                 console.error('❌ Sheet Schema 自动更新失败:', error);
             });
             
             // 2. 检查并更新 App Script（延迟 3 秒，等待 Schema 更新完成）
+            // 使用 getCachedAuthToken：只使用缓存的 token，不弹出授权窗口
             setTimeout(() => {
-                AppScriptUpdater.checkAndAutoUpdate(getAuthToken).catch(error => {
+                AppScriptUpdater.checkAndAutoUpdate(getCachedAuthToken).catch(error => {
                     console.error('❌ App Script 自动更新失败:', error);
                 });
             }, 3000);
             
             // 3. 检查并更新 Jira Automation Rule（延迟 8 秒，避免与上面的更新冲突）
-            JiraRuleUpdater.checkAndAutoUpdate(getAuthToken, {
+            // 使用 getCachedAuthToken：只使用缓存的 token，不弹出授权窗口
+            JiraRuleUpdater.checkAndAutoUpdate(getCachedAuthToken, {
                 delay: 8000,
                 showNotification: true
             }).catch(error => {

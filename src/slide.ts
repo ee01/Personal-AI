@@ -486,7 +486,7 @@ export async function applyProjectUpdates(
 }
 
 /**
- * 获取Google API认证token
+ * 获取Google API认证token（会弹出认证窗口）
  * @returns OAuth token
  */
 export async function getAuthToken(): Promise<string | null> {
@@ -497,6 +497,24 @@ export async function getAuthToken(): Promise<string | null> {
         resolve(null);
       } else {
         resolve(token);
+      }
+    });
+  });
+}
+
+/**
+ * 获取缓存的Google API认证token（不弹出认证窗口）
+ * 用于后台自动任务，避免在用户无操作时弹出授权窗口
+ * @returns OAuth token，如果没有缓存则返回 null
+ */
+export async function getCachedAuthToken(): Promise<string | null> {
+  return new Promise((resolve) => {
+    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+      if (chrome.runtime.lastError) {
+        // 静默处理错误，不打印日志（因为缓存不存在是正常情况）
+        resolve(null);
+      } else {
+        resolve(token || null);
       }
     });
   });
