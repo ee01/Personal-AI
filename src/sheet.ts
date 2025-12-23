@@ -96,6 +96,12 @@ export class Sheet {
         },
         body: JSON.stringify({ values })
     });
+    
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(`写入 Sheet 失败: ${error.error?.message || '未知错误'}`);
+    }
+    
     return res.json();
   }
 

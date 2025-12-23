@@ -917,6 +917,11 @@ function findMissingJiraFields(
     return missingFields;
 }
 
+interface ConfirmationResult {
+    operations: TicketOperation[];
+    dialogElement: HTMLDivElement | null;  // null 表示用户取消，对话框已关闭
+}
+
 // 显示确认弹窗
 async function showConfirmationDialog(
     operations: TicketOperation[],
@@ -925,7 +930,7 @@ async function showConfirmationDialog(
     missingFields: string[] = [],
     jiraBaseUrl = '',
     jql = ''
-): Promise<TicketOperation[]> {
+): Promise<ConfirmationResult> {
     return new Promise((resolve) => {
         const dialog = document.createElement('div');
         dialog.id = 'jiraConfirmationDialog';
@@ -1064,7 +1069,7 @@ async function showConfirmationDialog(
 
         document.getElementById('cancelOperation')?.addEventListener('click', () => {
             document.body.removeChild(dialog);
-            resolve([]);
+            resolve({ operations: [], dialogElement: null });
         });
 
         confirmButton.addEventListener('click', () => {
@@ -1072,8 +1077,14 @@ async function showConfirmationDialog(
                 .filter(checkbox => checkbox.checked)
                 .map(checkbox => operations[parseInt(checkbox.dataset.index || '0')]);
             
-            document.body.removeChild(dialog);
-            resolve(selectedOperations);
+            // 不在这里关闭对话框，由调用者在操作成功后关闭
+            // 禁用按钮防止重复点击
+            confirmButton.disabled = true;
+            confirmButton.textContent = '处理中...';
+            const cancelButton = document.getElementById('cancelOperation') as HTMLButtonElement;
+            if (cancelButton) cancelButton.disabled = true;
+            
+            resolve({ operations: selectedOperations, dialogElement: dialog });
         });
 
         updateConfirmButtonCount(); 
@@ -1243,7 +1254,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 console.warn('检测到以下字段在 Jira 查询结果中缺失:', missingFields);
             }
 
-            const confirmedOperations = await showConfirmationDialog(
+            const confirmResult = await showConfirmationDialog(
                 operations, 
                 displayHeaders, 
                 sheetHeaders, 
@@ -1252,9 +1263,20 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 jql
             );
             
+            const confirmedOperations = confirmResult.operations;
+            const dialogElement = confirmResult.dialogElement;
+            
             if (confirmedOperations.length === 0) {
                 showToast('操作已取消');
+                return; // 用户取消，对话框已关闭
             }
+            
+            // 辅助函数：关闭对话框
+            const closeDialog = () => {
+                if (dialogElement && document.body.contains(dialogElement)) {
+                    document.body.removeChild(dialogElement);
+                }
+            };
 
             const updatesData: UpdateData[] = [];
             const appendData: string[][] = [];
@@ -1500,10 +1522,27 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             if (reorderedCount > 0) toastMessage += `已按 JQL 顺序排列 ${reorderedCount} 行。`;
             if (toastMessage === '') toastMessage = '没有需要更新、追加或移除的数据。';
             
+            // 操作成功，关闭对话框
+            closeDialog();
             showToast(toastMessage.trim(), 'success');
 
         } catch (error) {
             console.error('Google Sheets 操作失败:', error);
+            // 操作失败，恢复对话框按钮状态，不关闭对话框
+            const dialogEl = document.getElementById('jiraConfirmationDialog') as HTMLDivElement;
+            if (dialogEl) {
+                const confirmBtn = dialogEl.querySelector('#confirmOperation') as HTMLButtonElement;
+                const cancelBtn = dialogEl.querySelector('#cancelOperation') as HTMLButtonElement;
+                if (confirmBtn) {
+                    confirmBtn.disabled = false;
+                    const ticketCheckboxes = dialogEl.getElementsByClassName('ticket-checkbox') as HTMLCollectionOf<HTMLInputElement>;
+                    const selectedCount = Array.from(ticketCheckboxes).filter(cb => cb.checked).length;
+                    confirmBtn.textContent = `确认 (${selectedCount})`;
+                }
+                if (cancelBtn) {
+                    cancelBtn.disabled = false;
+                }
+            }
             showToast('Google Sheets 操作失败: ' + (error instanceof Error ? error.message : error), 'error');
         }
     }
