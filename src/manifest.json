@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "7.6.0",
+  "version": "7.6.1",
   "permissions": [
     "tabs",
     "storage",
