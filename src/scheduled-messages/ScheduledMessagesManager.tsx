@@ -102,6 +102,46 @@ const singleSelectStyles: StylesConfig<SelectOption, false> = {
   }),
 };
 
+/**
+ * 解析 CRON 表达式中的 dayOfWeek 字段
+ * 支持格式：1-5, 1,3,5, MON-FRI, MON,WED,FRI, 2,4,6
+ * 返回数字数组：1=周日, 2=周一, ..., 7=周六（Jira CRON 使用 1-7）
+ */
+function parseCronDaysOfWeek(dayOfWeek: string): number[] {
+  const dayMap: Record<string, number> = {
+    'SUN': 1, 'MON': 2, 'TUE': 3, 'WED': 4, 'THU': 5, 'FRI': 6, 'SAT': 7,
+    '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7
+  };
+  
+  const result: number[] = [];
+  
+  // 处理范围和逗号分隔
+  const segments = dayOfWeek.split(',');
+  for (const segment of segments) {
+    const trimmed = segment.trim().toUpperCase();
+    
+    // 检查是否是范围（如 1-5, MON-FRI）
+    if (trimmed.includes('-')) {
+      const [start, end] = trimmed.split('-');
+      const startNum = dayMap[start.trim()] || parseInt(start.trim(), 10);
+      const endNum = dayMap[end.trim()] || parseInt(end.trim(), 10);
+      
+      if (!isNaN(startNum) && !isNaN(endNum)) {
+        for (let i = startNum; i <= endNum; i++) {
+          if (!result.includes(i)) result.push(i);
+        }
+      }
+    } else {
+      const num = dayMap[trimmed] || parseInt(trimmed, 10);
+      if (!isNaN(num) && !result.includes(num)) {
+        result.push(num);
+      }
+    }
+  }
+  
+  return result.sort((a, b) => a - b);
+}
+
 const ScheduledMessagesManager: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -591,6 +631,15 @@ const ScheduledMessagesManager: React.FC = () => {
   const handleTakeoverConfirm = async () => {
     if (!takeoverMessage || !service) return;
     
+    // 检查 Bot 是否已配置
+    if (!botConfigured) {
+      alert('⚠️ 托管 Jira 规则需要先配置 Bot 推送功能\n\n托管后的规则将通过 Bot 推送触发执行，请先完成 Bot 配置。');
+      setShowTakeoverDialog(false);
+      setTakeoverMessage(null);
+      setShowBotConfigDialog(true);
+      return;
+    }
+    
     setTakeoverLoading(true);
     setTakeoverError('');
     
@@ -651,10 +700,13 @@ const ScheduledMessagesManager: React.FC = () => {
             // 解析 CRON 表达式判断频率
             // CRON 格式: 秒 分 时 日 月 周
             // 例如: "0 0 */12 * * ?" = 每 12 小时执行一次
+            // 例如: "0 0 9 ? * MON-FRI" = 每工作日 9:00
+            // 例如: "0 0 9 ? * 2,4,6" = 每周一、三、五 9:00
             const parts = cronExpression.split(' ');
             if (parts.length >= 6) {
               const dayOfMonth = parts[3];
               const hours = parts[2];
+              const dayOfWeek = parts[5];
               
               // 检查是否是小时级别的执行（时字段包含 */N）
               if (hours.includes('*/')) {
@@ -684,6 +736,29 @@ const ScheduledMessagesManager: React.FC = () => {
                     intervalTooShort = true;
                     intervalDescription = '小于 1 天';
                   }
+                }
+              }
+              
+              // 检查是否是一周多天模式（如 MON-FRI, 1,3,5, 2,4,6 等）
+              // 这种模式是支持的，每天最多执行一次，不应视为"间隔过短"
+              if (!intervalTooShort && dayOfWeek && dayOfWeek !== '*' && dayOfWeek !== '?') {
+                // 解析多星期配置，转换为 JS 格式 (0=周日, 1=周一...6=周六)
+                const jiraDays = parseCronDaysOfWeek(dayOfWeek);
+                if (jiraDays.length > 0) {
+                  // 转换 Jira 格式 (1=周日, 2=周一...7=周六) 到 JS 格式 (0=周日, 1=周一...6=周六)
+                  const jsDays = jiraDays.map(d => (d - 1) % 7);
+                  
+                  // 保存解析的星期到消息中
+                  (takeoverMessage as any)._parsedRepeatDays = jsDays.join(',');
+                  (takeoverMessage as any)._parsedRepeatUnit = 'Week';
+                  (takeoverMessage as any)._parsedRepeatEvery = 1;
+                  
+                  console.log('📅 检测到一周多天模式:', {
+                    cronDayOfWeek: dayOfWeek,
+                    jiraDays,
+                    jsDays,
+                    repeatDays: jsDays.join(',')
+                  });
                 }
               }
             }
@@ -730,12 +805,26 @@ const ScheduledMessagesManager: React.FC = () => {
         throw new Error(webhookResult?.error || '转换 webhook 失败');
       }
       
-      // 更新 Sheet 中的 AI_Endpoint
-      console.log('📝 更新消息的 AI_Endpoint...');
+      // 更新 Sheet 中的 AI_Endpoint 和解析的调度配置
+      console.log('📝 更新消息的 AI_Endpoint 和调度配置...');
       const aiEndpoint = `POST ${webhookResult.webhookUrl}`;
-      await service.updateMessage(takeoverMessage.ID, {
-        AI_Endpoint: aiEndpoint
-      } as any);
+      
+      // 构建更新数据，包含解析的多星期配置
+      const updateData: any = { AI_Endpoint: aiEndpoint };
+      
+      // 如果从 CRON 解析出了多星期配置，一并更新
+      if ((takeoverMessage as any)._parsedRepeatDays) {
+        updateData.Repeat_Days = (takeoverMessage as any)._parsedRepeatDays;
+        updateData.Repeat_Unit = (takeoverMessage as any)._parsedRepeatUnit || 'Week';
+        updateData.Repeat_Every = (takeoverMessage as any)._parsedRepeatEvery || 1;
+        console.log('📅 同时更新多星期配置:', {
+          Repeat_Days: updateData.Repeat_Days,
+          Repeat_Unit: updateData.Repeat_Unit,
+          Repeat_Every: updateData.Repeat_Every
+        });
+      }
+      
+      await service.updateMessage(takeoverMessage.ID, updateData);
       
       // 刷新消息列表
       await loadMessages(service);
@@ -807,12 +896,32 @@ const ScheduledMessagesManager: React.FC = () => {
             console.log('🔄 恢复 Jira Rule 的 scheduled trigger...');
             
             // 构建调度配置
+            // 解析 Repeat_Days：JS 格式 (0=周日, 1=周一...6=周六) 转换回 Jira 格式 (1=周日, 2=周一...7=周六)
+            let scheduleDaysOfWeek: number[] | undefined;
+            if (message.Repeat_Days && message.Repeat_Unit === 'Week') {
+              scheduleDaysOfWeek = message.Repeat_Days.split(',')
+                .map(d => parseInt(d.trim(), 10))
+                .filter(d => !isNaN(d))
+                .map(d => d + 1);  // JS格式 -> Jira格式
+              console.log('📅 恢复多星期配置:', { 
+                jsDays: message.Repeat_Days, 
+                jiraDays: scheduleDaysOfWeek 
+              });
+            }
+            
+            // 将本地时间转换为 UTC 时间（Jira Automation Server 使用 UTC）
+            // 本地时间是 UTC+8，所以需要减去 8 小时
+            const localTime = message.Schedule_Time || '09:00';
+            const [localHours, localMinutes] = localTime.split(':').map(Number);
+            const utcHours = (localHours - 8 + 24) % 24;
+            const utcTime = `${String(utcHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}`;
+            console.log('🕐 时间转换:', { localTime, utcTime, offset: -8 });
+            
             const scheduleConfig = {
-              scheduleTime: message.Schedule_Time || '09:00',
+              scheduleTime: utcTime,  // 使用 UTC 时间
               repeatEvery: Number(message.Repeat_Every) || 1,  // 确保转换为数字
               repeatUnit: (message.Repeat_Unit || 'Day') as 'Day' | 'Week' | 'Month',
-              // TODO: 如果需要支持周几执行，可以从消息中读取
-              scheduleDaysOfWeek: undefined as number[] | undefined
+              scheduleDaysOfWeek
             };
             
             const convertResult = await chrome.runtime.sendMessage({
@@ -1124,10 +1233,37 @@ const ScheduledMessagesManager: React.FC = () => {
         freq = `每 ${every} 天`;
       }
     } else if (unit === 'Week') {
-      if (every === 1) {
-        // 解析 Schedule_Date 获取星期几
+      const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+      
+      // 检查是否有多星期配置
+      if (message.Repeat_Days) {
+        const days = message.Repeat_Days.split(',')
+          .map(d => parseInt(d.trim(), 10))
+          .filter(d => !isNaN(d) && d >= 0 && d <= 6)
+          .sort((a, b) => a - b);
+        
+        if (days.length > 0) {
+          // 检查是否是工作日 (1,2,3,4,5)
+          if (days.length === 5 && 
+              days[0] === 1 && days[1] === 2 && days[2] === 3 && 
+              days[3] === 4 && days[4] === 5) {
+            freq = '工作日';
+          }
+          // 检查是否是周末 (0,6)
+          else if (days.length === 2 && days[0] === 0 && days[1] === 6) {
+            freq = '周末';
+          }
+          // 其他情况，显示具体星期
+          else {
+            const dayNames = days.map(d => weekdays[d]).join('、');
+            freq = `每周${dayNames}`;
+          }
+        } else {
+          freq = `每周`;
+        }
+      } else if (every === 1) {
+        // 无 Repeat_Days，从 Schedule_Date 获取星期几（兼容旧数据）
         const date = new Date(scheduleDate);
-        const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
         const weekday = weekdays[date.getDay()];
         freq = `每周${weekday}`;
       } else {
@@ -1462,9 +1598,25 @@ const ScheduledMessagesManager: React.FC = () => {
                             {/* 如果只有 Automation_Link 而没有 Schedule_Date，不显示编辑按钮 */}
                             {!(message.Automation_Link && !message.Schedule_Date) && (
                               <button 
-                                style={styles.editButton}
+                                style={{
+                                  ...styles.editButton,
+                                  // 未托管的 JiraAutomation 消息（有 Automation_Link 但没有 AI_Endpoint）显示为灰度
+                                  filter: message.Push_Method === 'JiraAutomation' && 
+                                          message.Automation_Link && 
+                                          message.Schedule_Date && 
+                                          !message.AI_Endpoint 
+                                    ? 'grayscale(1) opacity(0.5)' 
+                                    : 'none'
+                                }}
                                 onClick={() => handleEditMessage(message)}
-                                title="编辑消息"
+                                title={
+                                  message.Push_Method === 'JiraAutomation' && 
+                                  message.Automation_Link && 
+                                  message.Schedule_Date && 
+                                  !message.AI_Endpoint
+                                    ? '点击托管此规则'
+                                    : '编辑消息'
+                                }
                               >
                                 ✏️
                               </button>
@@ -1559,8 +1711,27 @@ const ScheduledMessagesManager: React.FC = () => {
                  <strong>规则：</strong> {takeoverMessage.Topic}
                </p>
                <p style={{ margin: '0', fontSize: '13px', color: '#666' }}>
-                 当前调度：{takeoverMessage.Schedule_Time} | 
-                 每 {takeoverMessage.Repeat_Every} {takeoverMessage.Repeat_Unit === 'Day' ? '天' : takeoverMessage.Repeat_Unit === 'Week' ? '周' : '月'}
+                 当前调度：{takeoverMessage.Schedule_Time} | {(() => {
+                   // 检查是否有多星期配置
+                   if (takeoverMessage.Repeat_Days && takeoverMessage.Repeat_Unit === 'Week') {
+                     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                     const days = takeoverMessage.Repeat_Days.split(',')
+                       .map(d => parseInt(d.trim(), 10))
+                       .filter(d => !isNaN(d) && d >= 0 && d <= 6)
+                       .sort((a, b) => a - b);
+                     // 检查是否是工作日
+                     if (days.length === 5 && days[0] === 1 && days[1] === 2 && days[2] === 3 && days[3] === 4 && days[4] === 5) {
+                       return '工作日 (Mon-Fri)';
+                     }
+                     // 检查是否是周末
+                     if (days.length === 2 && days[0] === 0 && days[1] === 6) {
+                       return '周末 (Sat, Sun)';
+                     }
+                     return `每周 ${days.map(d => dayNames[d]).join(', ')}`;
+                   }
+                   // 默认显示
+                   return `每 ${takeoverMessage.Repeat_Every} ${takeoverMessage.Repeat_Unit === 'Day' ? '天' : takeoverMessage.Repeat_Unit === 'Week' ? '周' : '月'}`;
+                 })()}
                </p>
              </div>
              
@@ -2035,6 +2206,19 @@ const AddMessageDialog: React.FC<{
   const [aiHeaders, setAiHeaders] = useState<AIHeader[]>([]);
   const [isTimelineTrigger, setIsTimelineTrigger] = useState(editingMessage ? !!(editingMessage.Timeline_Milestone && !editingMessage.Schedule_Date) : false);
   
+  // 多星期选择状态（0=周日, 1=周一...6=周六）
+  const [selectedWeekDays, setSelectedWeekDays] = useState<number[]>(() => {
+    if (editingMessage && editingMessage.Repeat_Days && editingMessage.Repeat_Unit === 'Week') {
+      return editingMessage.Repeat_Days.split(',').map(d => parseInt(d.trim(), 10)).filter(d => !isNaN(d));
+    }
+    // 默认根据 Schedule_Date 的星期初始化
+    if (editingMessage && editingMessage.Schedule_Date) {
+      const dayOfWeek = new Date(editingMessage.Schedule_Date).getDay();
+      return [dayOfWeek];
+    }
+    return [];
+  });
+  
   // 解析编辑模式下 AI Report Body 的辅助函数
   const parseAiReportBody = () => {
     if (!editingMessage || editingMessage.Push_Method !== 'AI' || !editingMessage.AI_Body) {
@@ -2140,6 +2324,78 @@ const AddMessageDialog: React.FC<{
   
   // 提醒模式：展开高级选项的状态
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  
+  // Topic 自动生成相关状态
+  const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
+  const generateTopicRequestIdRef = useRef<number>(0); // 用于追踪请求，处理竞态条件
+  
+  // 当 Content blur 时自动生成 Topic
+  const handleContentBlur = async () => {
+    const content = formData.Content?.trim();
+    const topic = formData.Topic?.trim();
+    
+    // 如果 Content 为空或 Topic 已有值，不处理
+    if (!content || topic) {
+      return;
+    }
+    
+    // 生成唯一请求 ID，用于处理竞态条件
+    const currentRequestId = ++generateTopicRequestIdRef.current;
+    setIsGeneratingTopic(true);
+    
+    try {
+      // 构建 prompt
+      const prompt = `请根据以下消息内容，生成一个简短的主题标题（不超过20个字，不要加引号或标点）：
+
+${content}
+
+主题：`;
+      
+      // 调用 LLM 生成主题
+      const response = await chrome.runtime.sendMessage({
+        type: 'CALL_LLM_SUMMARIZE',
+        data: { prompt }
+      });
+      
+      // 检查是否是最新的请求（处理竞态条件）
+      if (currentRequestId !== generateTopicRequestIdRef.current) {
+        console.log('🔄 Topic 生成请求已过期，放弃填充');
+        return;
+      }
+      
+      // 检查用户是否已经开始输入 Topic
+      if (formData.Topic?.trim()) {
+        console.log('📝 用户已输入 Topic，放弃自动填充');
+        return;
+      }
+      
+      if (response?.success && response.summary) {
+        // 清理生成的主题（去除可能的引号、换行等）
+        let generatedTopic = response.summary
+          .replace(/^["'""'']+|["'""'']+$/g, '') // 去除引号
+          .replace(/\n/g, ' ') // 换行替换为空格
+          .trim();
+        
+        // 限制长度
+        if (generatedTopic.length > 30) {
+          generatedTopic = generatedTopic.substring(0, 30);
+        }
+        
+        // 再次检查 Topic 是否仍为空（双重保险）
+        if (!formData.Topic?.trim()) {
+          handleChange('Topic', generatedTopic);
+          console.log('✅ 自动生成 Topic:', generatedTopic);
+        }
+      }
+    } catch (error) {
+      console.error('❌ 自动生成 Topic 失败:', error);
+    } finally {
+      // 只有当前请求才能关闭 loading 状态
+      if (currentRequestId === generateTopicRequestIdRef.current) {
+        setIsGeneratingTopic(false);
+      }
+    }
+  };
   
   // 提醒模式初始化（仅新建模式时生效）
   React.useEffect(() => {
@@ -2611,6 +2867,11 @@ const AddMessageDialog: React.FC<{
         alert('请完整填写重复设置');
         return;
       }
+      // 验证周模式下必须选择至少一天
+      if (formData.Repeat_Unit === 'Week' && selectedWeekDays.length === 0) {
+        alert('请至少选择一个执行的星期');
+        return;
+      }
     }
     
     // 合并 userTags 到 Glip_User_Name（转换为存储格式：esone.qiu+john.doe）
@@ -2638,7 +2899,10 @@ const AddMessageDialog: React.FC<{
       Glip_Team_ID: glipTeamId,
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
-      Repeat_Count: isRepeating ? formData.Repeat_Count : undefined,
+      Repeat_Count: isRepeating && formData.Repeat_Unit !== 'Week' ? formData.Repeat_Count : undefined,
+      Repeat_Days: isRepeating && formData.Repeat_Unit === 'Week' && selectedWeekDays.length > 0
+        ? selectedWeekDays.join(',')
+        : undefined,
       End_Date: isRepeating ? formData.End_Date : undefined,
       Category: categoryTags.length > 0 ? categoryTags.map(t => t.value).join(',') : undefined,
     };
@@ -2692,6 +2956,7 @@ const AddMessageDialog: React.FC<{
                 style={dialogStyles.textarea}
                 value={formData.Content}
                 onChange={(e) => handleChange('Content', e.target.value)}
+                onBlur={handleContentBlur}
                 placeholder={isReminderMode ? "输入提醒内容" : "输入消息内容"}
                 rows={4}
               />
@@ -2727,13 +2992,27 @@ const AddMessageDialog: React.FC<{
               
               {/* 消息主题 */}
               <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>消息主题（可选）</label>
+                <label style={dialogStyles.label}>
+                  消息主题（可选）
+                  {isGeneratingTopic && (
+                    <span style={{ marginLeft: '8px', color: '#007bff', fontSize: '12px' }}>
+                      ✨ AI 生成中...
+                    </span>
+                  )}
+                </label>
                 <input 
                   style={dialogStyles.input}
                   type="text"
                   value={formData.Topic}
-                  onChange={(e) => handleChange('Topic', e.target.value)}
-                  placeholder="输入消息主题"
+                  onChange={(e) => {
+                    handleChange('Topic', e.target.value);
+                    // 用户开始输入时，取消正在进行的自动生成
+                    if (e.target.value.trim()) {
+                      generateTopicRequestIdRef.current++;
+                      setIsGeneratingTopic(false);
+                    }
+                  }}
+                  placeholder={isGeneratingTopic ? "AI 正在生成主题..." : "输入消息主题"}
                 />
               </div>
               
@@ -2798,13 +3077,27 @@ const AddMessageDialog: React.FC<{
             <>
               {/* 消息主题 */}
               <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>消息主题 *</label>
+                <label style={dialogStyles.label}>
+                  消息主题 *
+                  {isGeneratingTopic && (
+                    <span style={{ marginLeft: '8px', color: '#007bff', fontSize: '12px', fontWeight: 'normal' }}>
+                      ✨ AI 生成中...
+                    </span>
+                  )}
+                </label>
                 <input 
                   style={dialogStyles.input}
                   type="text"
                   value={formData.Topic}
-                  onChange={(e) => handleChange('Topic', e.target.value)}
-                  placeholder="输入消息主题"
+                  onChange={(e) => {
+                    handleChange('Topic', e.target.value);
+                    // 用户开始输入时，取消正在进行的自动生成
+                    if (e.target.value.trim()) {
+                      generateTopicRequestIdRef.current++;
+                      setIsGeneratingTopic(false);
+                    }
+                  }}
+                  placeholder={isGeneratingTopic ? "AI 正在生成主题..." : "输入消息主题"}
                 />
               </div>
               
@@ -3064,7 +3357,16 @@ const AddMessageDialog: React.FC<{
                         key={unit}
                         type="button"
                         style={getButtonStyle(formData.Repeat_Unit === unit)}
-                        onClick={() => handleChange('Repeat_Unit', unit)}
+                        onClick={() => {
+                          handleChange('Repeat_Unit', unit);
+                          // 切换到 Week 时，根据 Schedule_Date 初始化选中的星期
+                          if (unit === 'Week' && formData.Schedule_Date) {
+                            const dayOfWeek = new Date(formData.Schedule_Date).getDay();
+                            if (selectedWeekDays.length === 0) {
+                              setSelectedWeekDays([dayOfWeek]);
+                            }
+                          }
+                        }}
                       >
                         {unit === 'Day' ? '天' : unit === 'Week' ? '周' : unit === 'Month' ? '月' : '年'}
                       </button>
@@ -3084,17 +3386,80 @@ const AddMessageDialog: React.FC<{
                   />
                 </div>
                 
-                <div style={dialogStyles.formGroup}>
-                  <label style={dialogStyles.label}>重复次数（可选）</label>
-                  <input 
-                    style={dialogStyles.input}
-                    type="number"
-                    min="1"
-                    value={formData.Repeat_Count || ''}
-                    onChange={(e) => handleChange('Repeat_Count', e.target.value ? parseInt(e.target.value) : undefined)}
-                    placeholder="留空表示无限"
-                  />
-                </div>
+                {/* 多星期选择器（仅当重复单位为"周"时显示，与结束日期并列） */}
+                {formData.Repeat_Unit === 'Week' && (
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>每周几 *</label>
+                    <div style={{display: 'flex', gap: '4px', flexWrap: 'wrap'}}>
+                      {[
+                        { day: 0, label: 'Sun' },
+                        { day: 1, label: 'Mon' },
+                        { day: 2, label: 'Tue' },
+                        { day: 3, label: 'Wed' },
+                        { day: 4, label: 'Thu' },
+                        { day: 5, label: 'Fri' },
+                        { day: 6, label: 'Sat' },
+                      ].map(({ day, label }) => (
+                        <button
+                          key={day}
+                          type="button"
+                          style={{
+                            padding: '4px 8px',
+                            backgroundColor: selectedWeekDays.includes(day) ? '#007bff' : '#fff',
+                            color: selectedWeekDays.includes(day) ? '#fff' : '#666',
+                            border: `1px solid ${selectedWeekDays.includes(day) ? '#007bff' : '#ccc'}`,
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: selectedWeekDays.includes(day) ? '600' : 'normal',
+                            transition: 'all 0.15s',
+                            minWidth: '36px',
+                          }}
+                          onClick={() => {
+                            const newSelection = selectedWeekDays.includes(day)
+                              ? selectedWeekDays.filter(d => d !== day)
+                              : [...selectedWeekDays, day].sort((a, b) => a - b);
+                            setSelectedWeekDays(newSelection);
+                            
+                            // 自动调整执行日期到最近的符合条件的日期
+                            if (newSelection.length > 0) {
+                              const today = new Date();
+                              const currentDayOfWeek = today.getDay();
+                              
+                              // 找今天或之后最近的一个符合条件的日期
+                              for (let offset = 0; offset < 7; offset++) {
+                                const checkDay = (currentDayOfWeek + offset) % 7;
+                                if (newSelection.includes(checkDay)) {
+                                  const targetDate = new Date(today);
+                                  targetDate.setDate(today.getDate() + offset);
+                                  handleChange('Schedule_Date', targetDate.toISOString().split('T')[0]);
+                                  break;
+                                }
+                              }
+                            }
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* 重复次数（周模式下隐藏） */}
+                {formData.Repeat_Unit !== 'Week' && (
+                  <div style={dialogStyles.formGroup}>
+                    <label style={dialogStyles.label}>重复次数（可选）</label>
+                    <input 
+                      style={dialogStyles.input}
+                      type="number"
+                      min="1"
+                      value={formData.Repeat_Count || ''}
+                      onChange={(e) => handleChange('Repeat_Count', e.target.value ? parseInt(e.target.value) : undefined)}
+                      placeholder="留空表示无限"
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -3693,6 +4058,66 @@ const AddMessageDialog: React.FC<{
                       >
                         ➕ 添加自定义版块
                       </button>
+                      
+                      {/* 自定义版块的 ticket 字段选择器（仅当有自定义版块且未勾选"列出JQL查询结果"时显示） */}
+                      {customOutputs.length > 0 && !aiReportOutputs.tickets && (
+                        <div style={{
+                          marginTop: '12px',
+                          padding: '12px',
+                          backgroundColor: '#f8f9fa',
+                          borderRadius: '6px',
+                          border: '1px solid #e0e0e0',
+                        }}>
+                          <div style={{fontSize: '13px', color: '#666', marginBottom: '8px'}}>
+                            选择要提供给自定义版块分析的 ticket 字段：
+                          </div>
+                          <div style={{display: 'flex', flexWrap: 'wrap', gap: '8px'}}>
+                            {[
+                              { key: 'summary', label: 'Summary' },
+                              { key: 'status', label: 'Status' },
+                              { key: 'assignee', label: 'Assignee' },
+                              { key: 'reporter', label: 'Reporter' },
+                              { key: 'priority', label: 'Priority' },
+                              { key: 'duedate', label: 'Due Date' },
+                              { key: 'created', label: 'Created' },
+                              { key: 'updated', label: 'Updated' },
+                              { key: 'labels', label: 'Labels' },
+                              { key: 'components', label: 'Components' },
+                              { key: 'fixVersions', label: 'Fix Versions' },
+                              { key: 'sprint', label: 'Sprint' },
+                              { key: 'team', label: 'Team' },
+                            ].map(field => (
+                              <label 
+                                key={field.key}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  cursor: 'pointer',
+                                  fontSize: '13px',
+                                  padding: '4px 8px',
+                                  backgroundColor: ticketIncludes.includes(field.key) ? '#e3f2fd' : '#fff',
+                                  border: `1px solid ${ticketIncludes.includes(field.key) ? '#1976d2' : '#ddd'}`,
+                                  borderRadius: '4px',
+                                }}
+                              >
+                                <input 
+                                  type="checkbox"
+                                  checked={ticketIncludes.includes(field.key)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setTicketIncludes([...ticketIncludes, field.key]);
+                                    } else {
+                                      setTicketIncludes(ticketIncludes.filter(f => f !== field.key));
+                                    }
+                                  }}
+                                  style={{marginRight: '4px'}}
+                                />
+                                {field.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                   

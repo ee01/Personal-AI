@@ -59,6 +59,16 @@
     },
     {
       "matches": [
+        "https://rpa.int.rclabenv.com/*"
+      ],
+      "js": [
+        "contentScriptRPA.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": false
+    },
+    {
+      "matches": [
         "<all_urls>"
       ],
       "js": [
