@@ -51,6 +51,7 @@ export interface ScheduledMessage {
   Repeat_Every?: number;  // 重复间隔数字
   Repeat_Unit?: RepeatUnit; // 重复单位
   Repeat_Count?: number;  // 重复次数，留空表示无限
+  Repeat_Days?: string;   // 多选日期，逗号分隔的数字（周：0=周日,1=周一...6=周六；月：1-31）
   Push_Method: PushMethod;
   Glip_User_Name?: string;
   Glip_Team_ID?: string;
@@ -83,6 +84,7 @@ export interface CreateMessageFormData {
   Repeat_Every?: number;
   Repeat_Unit?: RepeatUnit;
   Repeat_Count?: number;
+  Repeat_Days?: string;   // 多选日期，逗号分隔的数字（周：0=周日,1=周一...6=周六；月：1-31）
   Push_Method: PushMethod;
   Target_Type: TargetType;  // 私发或群组
   Glip_User_Name?: string;  // 支持多个人名，用逗号分隔

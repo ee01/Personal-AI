@@ -804,10 +804,11 @@ function parseCronExpression(cron: string): { time: string; repeatEvery: number;
   
   const [_seconds, minutes, hours, dayOfMonth, _month, dayOfWeek] = parts;
   
-  // 解析时间
+  // 解析时间（Jira CRON 使用 UTC 时间，需要转换为本地时间 UTC+8）
   const timeMinutes = parseInt(minutes, 10) || 0;
-  const timeHours = parseInt(hours, 10) + 8 || 0; // Server Time to UTC Time
-  const time = `${String(timeHours).padStart(2, '0')}:${String(timeMinutes).padStart(2, '0')}`;
+  const utcHours = parseInt(hours, 10) || 0;
+  const localHours = (utcHours + 8) % 24;  // UTC -> 本地时间 (UTC+8)
+  const time = `${String(localHours).padStart(2, '0')}:${String(timeMinutes).padStart(2, '0')}`;
   
   let repeatEvery = 1;
   let repeatUnit = 'Day';
@@ -1034,6 +1035,33 @@ function updateButtonToManagedState(button: HTMLElement, _doc: Document): void {
 }
 
 /**
+ * 格式化星期显示（用于弹窗展示）
+ * @param daysOfWeek Jira格式的星期数组 (1=周日, 2=周一...7=周六)
+ */
+function formatDaysOfWeekDisplay(daysOfWeek: number[] | undefined): string {
+  if (!daysOfWeek || daysOfWeek.length === 0) return '';
+  
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  // 转换 Jira 格式 (1-7) 到 JS 格式 (0-6)
+  const jsDays = daysOfWeek.map(d => (d - 1) % 7).sort((a, b) => a - b);
+  
+  // 检查是否是工作日 (1,2,3,4,5 in JS = Mon-Fri)
+  if (jsDays.length === 5 && 
+      jsDays[0] === 1 && jsDays[1] === 2 && jsDays[2] === 3 && 
+      jsDays[3] === 4 && jsDays[4] === 5) {
+    return '工作日 (Mon-Fri)';
+  }
+  
+  // 检查是否是周末 (0,6 in JS = Sun, Sat)
+  if (jsDays.length === 2 && jsDays[0] === 0 && jsDays[1] === 6) {
+    return '周末 (Sat, Sun)';
+  }
+  
+  // 其他情况，显示具体星期
+  return jsDays.map(d => dayNames[d]).join(', ');
+}
+
+/**
  * 显示导入对话框（带 AI 总结）
  */
 function showImportDialog(
@@ -1080,11 +1108,21 @@ function showImportDialog(
     let warningMessage = '';
     
     if (scheduleConfig) {
+      // 格式化重复周期显示
+      const formatRepeatCycle = () => {
+        const daysDisplay = formatDaysOfWeekDisplay(scheduleConfig.daysOfWeek);
+        if (daysDisplay) {
+          return `${daysDisplay} ${scheduleConfig.scheduleTime || ''}`;
+        }
+        const unitText = scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月';
+        return `每 ${scheduleConfig.repeatEvery} ${unitText} ${scheduleConfig.scheduleTime || ''}`;
+      };
+      
       // 情况一: scheduled + nosearch - 完整导入，需要转换为 webhook
       if (scheduleConfig.needsWebhookConversion && scheduleConfig.scheduleDate) {
         scheduleInfo = `
-          <p><strong>触发时间:</strong> ${scheduleConfig.scheduleDate}</p>
-          <p><strong>重复周期:</strong> 每 ${scheduleConfig.repeatEvery} ${scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月'}</p>
+          <p><strong>执行时间:</strong> ${scheduleConfig.scheduleTime || '未指定'}</p>
+          <p><strong>重复周期:</strong> ${formatRepeatCycle()}</p>
         `;
         if (!scheduleConfig.scheduleDate) {
           showDateInput = true;
@@ -1095,7 +1133,7 @@ function showImportDialog(
       else if (scheduleConfig.needsWebhookConversion && !scheduleConfig.scheduleDate) {
         scheduleInfo = `
           <p><strong>触发模式:</strong> FIXED 模式（需要手动指定开始日期）</p>
-          <p><strong>重复周期:</strong> 每 ${scheduleConfig.repeatEvery} ${scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月'}</p>
+          <p><strong>重复周期:</strong> ${formatRepeatCycle()}</p>
         `;
         showDateInput = true;
         warningMessage = '✅ 此规则可以在[定时消息管理]中管理 schedule';
@@ -1103,8 +1141,8 @@ function showImportDialog(
       // 情况三: scheduled + jql - 仅展示，不可编辑
       else if (scheduleConfig.executionMode === 'jql' && scheduleConfig.scheduleDate) {
         scheduleInfo = `
-          <p><strong>触发时间:</strong> ${scheduleConfig.scheduleDate}</p>
-          <p><strong>重复周期:</strong> 每 ${scheduleConfig.repeatEvery} ${scheduleConfig.repeatUnit === 'Day' ? '天' : scheduleConfig.repeatUnit === 'Week' ? '周' : '月'}</p>
+          <p><strong>执行时间:</strong> ${scheduleConfig.scheduleTime || '未指定'}</p>
+          <p><strong>重复周期:</strong> ${formatRepeatCycle()}</p>
           <p><strong>执行模式:</strong> JQL 查询模式（仅作为引用记录）</p>
         `;
         warningMessage = 'ℹ️ 该规则将以 JQL 模式执行，添加到 Scheduled Messages 后仅可查看和跳转';
@@ -1323,6 +1361,7 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
             scheduleTime: cronConfig.time,
             repeatEvery: cronConfig.repeatEvery,
             repeatUnit: cronConfig.repeatUnit,
+            daysOfWeek: cronConfig.daysOfWeek, // 传递解析的星期配置
             executionMode: 'nosearch',
             needsWebhookConversion: true
           };
@@ -1377,6 +1416,7 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
             scheduleTime: cronConfig.time,
             repeatEvery: cronConfig.repeatEvery,
             repeatUnit: cronConfig.repeatUnit,
+            daysOfWeek: cronConfig.daysOfWeek, // 传递解析的星期配置
             executionMode: 'jql',
             needsWebhookConversion: false
           };
@@ -1461,6 +1501,12 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
       messageData.Schedule_Time = scheduleConfig.scheduleTime;
       messageData.Repeat_Every = scheduleConfig.repeatEvery;
       messageData.Repeat_Unit = scheduleConfig.repeatUnit;
+      // 如果有多星期配置，转换 Jira 格式 (1-7) 到 JS 格式 (0-6) 并保存
+      if (scheduleConfig.daysOfWeek && scheduleConfig.daysOfWeek.length > 0) {
+        const jsDays = scheduleConfig.daysOfWeek.map((d: number) => (d - 1) % 7).sort((a: number, b: number) => a - b);
+        messageData.Repeat_Days = jsDays.join(',');
+        console.log('[Personal AI] 保存多星期配置:', { jiraDays: scheduleConfig.daysOfWeek, jsDays, Repeat_Days: messageData.Repeat_Days });
+      }
       // 不设置 AI_Endpoint，留待用户在管理界面确认后再转换
       // 用户可以在 ScheduledMessagesManager 中点击编辑按钮来激活 Personal AI 托管
     } else if (scheduleConfig?.executionMode === 'jql') {
@@ -1469,6 +1515,11 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
       messageData.Schedule_Time = scheduleConfig.scheduleTime;
       messageData.Repeat_Every = scheduleConfig.repeatEvery;
       messageData.Repeat_Unit = scheduleConfig.repeatUnit;
+      // 如果有多星期配置，转换并保存
+      if (scheduleConfig.daysOfWeek && scheduleConfig.daysOfWeek.length > 0) {
+        const jsDays = scheduleConfig.daysOfWeek.map((d: number) => (d - 1) % 7).sort((a: number, b: number) => a - b);
+        messageData.Repeat_Days = jsDays.join(',');
+      }
       // 不设置 AI_Endpoint，表示仅作为引用
       messageData.Content = `Linked to Jira Automation Rule (JQL Mode, View Only): ${ruleInfo.name}`;
     }

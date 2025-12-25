@@ -100,10 +100,14 @@
 #### Periodic（周期性）
 - 按固定周期重复执行
 - 必填字段：Schedule_Date, Repeat_Every, Repeat_Unit
-- 可选字段：End_Date（结束日期）, Repeat_Count（重复次数）
+- 可选字段：End_Date（结束日期）, Repeat_Count（重复次数）, Repeat_Days（多选日期）
 - Repeat_Unit 可选值：
   - Day: 每 N 天（排除周末）
   - Week: 每 N 周
+    - 支持多星期选择：可通过 Repeat_Days 指定一周多天执行（如周一、三、五）
+    - Repeat_Days 格式：逗号分隔的数字（0=周日, 1=周一...6=周六）
+    - 示例：`1,3,5` 表示每周一、三、五执行
+    - 特殊情况：工作日（1,2,3,4,5）、周末（0,6）会显示为"工作日"、"周末"
   - Month: 每 N 个月
   - Year: 每 N 年
 
@@ -264,6 +268,7 @@ Google Sheets（统一数据源）
 | Repeat_Every | Number | ❌ | 重复间隔 |
 | Repeat_Unit | Enum | ❌ | Day/Week/Month/Year |
 | Repeat_Count | Number | ❌ | 重复次数 |
+| Repeat_Days | String | ❌ | 多选日期（周模式：0=周日,1=周一...6=周六，逗号分隔） |
 | Push_Method | Enum | ✅ | AsMe/Bot/AI |
 | Glip_User_Name | String | ❌ | 接收人用户名（AsMe或Bot私聊；有值时系统自动识别为私聊） |
 | Glip_Team_ID | String | ❌ | 群组 ID（Bot群组推送；有值时系统自动识别为群组） |

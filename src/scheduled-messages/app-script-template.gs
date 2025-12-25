@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.2.0';
-var APP_SCRIPT_LAST_UPDATED = '2025-12-12';
+var APP_SCRIPT_VERSION = '2.3.0';
+var APP_SCRIPT_LAST_UPDATED = '2025-12-24';
 
 
 /**
@@ -269,9 +269,21 @@ function checkPeriodicSchedule(rowData, now) {
     }
     
   } else if (repeatUnit === 'Week') {
-    // 每 N 周推送一次
-    if (daysToStart >= 0 && daysToStart % (7 * every) === 0) {
-      shouldSend = true;
+    // 检查 Repeat_Days 字段（多星期模式）
+    const repeatDays = rowData.Repeat_Days;
+    if (repeatDays && repeatDays.toString().trim()) {
+      // 多星期模式：检查今天是否在 repeatDays 中
+      // Repeat_Days 格式：逗号分隔的 JS 格式数字（0=周日, 1=周一...6=周六）
+      const todayDayOfWeek = now.getDay(); // 0=周日, 1=周一...6=周六
+      const allowedDays = repeatDays.toString().split(',').map(function(d) {
+        return parseInt(d.trim(), 10);
+      });
+      shouldSend = allowedDays.indexOf(todayDayOfWeek) !== -1;
+    } else {
+      // 原有逻辑：每 N 周的同一天
+      if (daysToStart >= 0 && daysToStart % (7 * every) === 0) {
+        shouldSend = true;
+      }
     }
     
   } else if (repeatUnit === 'Month') {
@@ -554,7 +566,28 @@ function calculateNextExecution(rowData, currentTime) {
     if (repeatUnit === 'Day') {
       nextDate.setDate(nextDate.getDate() + every);
     } else if (repeatUnit === 'Week') {
-      nextDate.setDate(nextDate.getDate() + (7 * every));
+      // 检查 Repeat_Days 字段（多星期模式）
+      const repeatDays = rowData.Repeat_Days;
+      if (repeatDays && repeatDays.toString().trim()) {
+        // 多星期模式：找下一个符合条件的日期
+        // Repeat_Days 格式：逗号分隔的 JS 格式数字（0=周日, 1=周一...6=周六）
+        var allowedDays = repeatDays.toString().split(',').map(function(d) {
+          return parseInt(d.trim(), 10);
+        }).sort(function(a, b) { return a - b; });
+        var todayDayOfWeek = nextDate.getDay();
+        
+        // 找今天之后最近的一个允许的星期
+        for (var offset = 1; offset <= 7; offset++) {
+          var checkDay = (todayDayOfWeek + offset) % 7;
+          if (allowedDays.indexOf(checkDay) !== -1) {
+            nextDate.setDate(nextDate.getDate() + offset);
+            break;
+          }
+        }
+      } else {
+        // 原有逻辑：每 N 周的同一天
+        nextDate.setDate(nextDate.getDate() + (7 * every));
+      }
     } else if (repeatUnit === 'Month') {
       nextDate.setMonth(nextDate.getMonth() + every);
     } else if (repeatUnit === 'Year') {

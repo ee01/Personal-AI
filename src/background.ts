@@ -936,6 +936,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
     
+    // 打开定时消息管理界面
+    if (request.type === 'OPEN_SCHEDULED_MESSAGES') {
+        (async () => {
+            try {
+                console.log('📅 打开定时消息管理界面...');
+                const url = chrome.runtime.getURL('scheduled-messages.html');
+                await chrome.tabs.create({ url });
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error('❌ 打开定时消息管理界面失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
     return false;
 });
 

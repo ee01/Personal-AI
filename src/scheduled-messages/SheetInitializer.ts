@@ -13,12 +13,13 @@ import { InitializationResult, SheetConfig } from './types';
  * - v2.0: 初始版本
  * - v2.1: 添加 Category 列
  * - v2.2: 添加 Automation_Link 列（支持 Jira Automation Rule 引用）
+ * - v2.3: 添加 Repeat_Days 列（支持一周多天或月份多日期）
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.2',
+  version: '2.3',
   columns: [
     'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
-    'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count',
+    'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count', 'Repeat_Days',
     'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
     'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
     'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
@@ -386,6 +387,7 @@ export class SheetInitializer {
       '',                             // Repeat_Every
       '',                             // Repeat_Unit
       '',                             // Repeat_Count
+      '',                             // Repeat_Days (v2.3 新增，多选日期)
       '',                             // Timeline_Project
       '',                             // Timeline_Milestone
       '',                             // Timeline_Offset
