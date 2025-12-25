@@ -718,6 +718,9 @@ observer.observe(document, { subtree: true, childList: true });
 // 存储已添加按钮的规则 ID，避免重复添加
 const addedScheduleButtons = new Set<string>();
 
+// 存储已被 Personal AI 管理的规则 ID（预加载）
+const managedRuleIds = new Set<string>();
+
 // 规则信息缓存
 interface RuleInfo {
   id: string;
@@ -727,9 +730,9 @@ interface RuleInfo {
 }
 
 /**
- * 获取规则详情（通过 background script）
+ * 获取项目的所有规则（直接调用 Jira API）
  */
-async function getRuleDetails(ruleId: string, projectId: string): Promise<RuleInfo | null> {
+async function getAllProjectRules(projectId: string): Promise<any[]> {
   try {
     const response = await fetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
       method: 'GET',
@@ -742,10 +745,58 @@ async function getRuleDetails(ruleId: string, projectId: string): Promise<RuleIn
     
     if (!response.ok) {
       console.error('获取规则列表失败:', response.status);
-      return null;
+      return [];
     }
     
-    const rules = await response.json();
+    return await response.json();
+  } catch (error) {
+    console.error('获取规则列表失败:', error);
+    return [];
+  }
+}
+
+/**
+ * 预加载已被 Personal AI 管理的规则 ID
+ * 通过 Jira API 获取所有规则，然后批量检查哪些已在 Scheduled Messages 中
+ */
+async function preloadManagedRules(projectId: string, projectKey: string): Promise<void> {
+  console.log('[Personal AI] 预加载已被管理的规则...');
+  
+  // 1. 获取项目的所有规则
+  const rules = await getAllProjectRules(projectId);
+  console.log(`[Personal AI] 获取到 ${rules.length} 个规则`);
+  
+  if (rules.length === 0) {
+    return;
+  }
+  
+  // 2. 为每个规则构建 Automation_Link URL
+  const automationLinks = rules.map(rule => {
+    const ruleId = String(rule.id);
+    return `${window.location.origin}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${projectKey}#/rule/${ruleId}`;
+  });
+  
+  // 3. 批量检查哪些规则已被管理
+  const existsMap = await batchCheckAutomationLinksExist(automationLinks);
+  
+  // 4. 存储已被管理的规则 ID
+  managedRuleIds.clear();
+  rules.forEach((rule, index) => {
+    const ruleUrl = automationLinks[index];
+    if (existsMap.get(ruleUrl)) {
+      managedRuleIds.add(String(rule.id));
+    }
+  });
+  
+  console.log(`[Personal AI] 已被管理的规则 ID: [${Array.from(managedRuleIds).join(', ')}]`);
+}
+
+/**
+ * 获取规则详情（通过 background script）
+ */
+async function getRuleDetails(ruleId: string, projectId: string): Promise<RuleInfo | null> {
+  try {
+    const rules = await getAllProjectRules(projectId);
     const rule = rules.find((r: any) => String(r.id) === String(ruleId));
     
     if (rule) {
@@ -1547,6 +1598,10 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
     if (result && result.success) {
       showSuccessMessage(`已添加到 Scheduled Messages: ${ruleInfo.name}`);
       
+      // 将规则 ID 加入已管理列表
+      managedRuleIds.add(ruleId);
+      console.log(`[Personal AI] 规则 ${ruleId} 已加入 managedRuleIds`);
+      
       // 立即更新当前按钮为已管理状态（红色常亮）
       const currentButton = doc.querySelector(`.personal-ai-schedule-btn[data-rule-id="${ruleId}"]`) as HTMLElement;
       if (currentButton) {
@@ -1639,15 +1694,9 @@ function hideLoadingMessage(doc: Document): void {
  *   ...
  * </tr>
  */
-async function addScheduleButtonsToRules(doc: Document, projectId: string): Promise<void> {
-  console.log('[Personal AI] 开始查找规则链接...');
-  
+function addScheduleButtonsToRules(doc: Document, projectId: string): void {
   // 查找所有规则链接
   const allLinks = doc.querySelectorAll('a[href*="#/rule/"]');
-  console.log(`[Personal AI] 找到 ${allLinks.length} 个规则链接`);
-  
-  // 第一步：为所有规则添加灰色 icon（默认状态）
-  const ruleInfoMap = new Map<string, { link: Element; button: HTMLElement; ruleRow: Element; ruleUrl: string }>();
   
   allLinks.forEach((link) => {
     const href = link.getAttribute('href');
@@ -1660,85 +1709,65 @@ async function addScheduleButtonsToRules(doc: Document, projectId: string): Prom
     // 检查该链接是否已经有按钮了（通过查找父元素中是否已有按钮）
     const linkParent = link.parentElement;
     if (linkParent) {
-      const existingButton = linkParent.querySelector('.personal-ai-schedule-btn');
+      const existingButton = linkParent.querySelector('.personal-ai-schedule-btn') as HTMLElement;
       if (existingButton) {
-        // console.log(`[Personal AI] 规则 ${ruleId} 已有按钮，跳过`);
-        return;
+        // 检查按钮的 data-rule-id 是否与当前链接的规则 ID 匹配
+        // 如果不匹配，说明 Jira SPA 翻页时复用了 DOM 元素，需要移除旧按钮重新创建
+        const buttonRuleId = existingButton.getAttribute('data-rule-id');
+        if (buttonRuleId === ruleId) {
+          // ID 匹配，保持现有按钮
+          return;
+        } else {
+          // ID 不匹配，移除旧按钮（包括其容器 div）
+          const buttonContainer = existingButton.parentElement;
+          if (buttonContainer && buttonContainer.style.display === 'inline-block') {
+            buttonContainer.remove();
+          } else {
+            existingButton.remove();
+          }
+        }
       }
     }
-    
-    console.log(`[Personal AI] 为规则 ${ruleId} 添加灰色按钮`);
     
     // 找到规则行 <tr>
     const ruleRow = link.closest('tr');
     if (!ruleRow) {
-      console.log(`[Personal AI] 规则 ${ruleId} 未找到 tr 容器`);
       return;
     }
     
-    // 创建按钮（默认为灰色悬停，未管理状态）
-    const button = createScheduleButton(ruleId, projectId, doc, false);
+    // 根据预加载的 managedRuleIds 判断是否已被管理
+    const isManaged = managedRuleIds.has(ruleId);
     
-    // 方案1：在链接后面的 span 中插入按钮
-    // 链接结构: <a>...</a><span style="margin-left: 5px;"></span>
+    // 创建按钮（根据管理状态决定样式）
+    const button = createScheduleButton(ruleId, projectId, doc, isManaged);
+    
+    // 在链接后面的 span 中插入按钮
     if (linkParent) {
       const spacerSpan = linkParent.querySelector('span[style*="margin-left"]');
       if (spacerSpan) {
-        // 插入到 spacer span 中
         spacerSpan.appendChild(button);
-        console.log(`[Personal AI] 按钮插入到 spacer span 中`);
       } else {
-        // 直接插入到链接后面
         link.insertAdjacentElement('afterend', button);
-        console.log(`[Personal AI] 按钮插入到链接后面`);
       }
     }
     
-    // 添加悬停效果 - 监听整个表格行（仅对灰色按钮）
-    ruleRow.addEventListener('mouseenter', () => {
-      // 只有灰色按钮才需要悬停显示
-      if (button.style.opacity === '0') {
-        button.style.opacity = '1';
-      }
-    });
+    // 添加悬停效果 - 监听整个表格行（仅对灰色未管理按钮）
+    if (!isManaged) {
+      ruleRow.addEventListener('mouseenter', () => {
+        if (button.style.opacity === '0') {
+          button.style.opacity = '1';
+        }
+      });
+      
+      ruleRow.addEventListener('mouseleave', () => {
+        if (button.title === 'Add to Scheduled Messages') {
+          button.style.opacity = '0';
+        }
+      });
+    }
     
-    ruleRow.addEventListener('mouseleave', () => {
-      // 只有灰色按钮才需要悬停隐藏
-      if (button.title === 'Add to Scheduled Messages') {
-        button.style.opacity = '0';
-      }
-    });
-    
-    // 构建规则 URL
-    const projectKey = getProjectKey();
-    const ruleUrl = `${window.location.origin}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${projectKey}#/rule/${ruleId}`;
-    
-    // 存储规则信息
-    ruleInfoMap.set(ruleId, { link, button, ruleRow, ruleUrl });
     addedScheduleButtons.add(ruleId);
   });
-  
-  console.log(`[Personal AI] 已为 ${ruleInfoMap.size} 个规则添加灰色按钮`);
-  
-  // 第二步：批量查询哪些规则已在 Scheduled Messages 中
-  if (ruleInfoMap.size > 0) {
-    console.log('[Personal AI] 开始批量查询规则状态...');
-    const ruleUrls = Array.from(ruleInfoMap.values()).map(info => info.ruleUrl);
-    const existsMap = await batchCheckAutomationLinksExist(ruleUrls);
-    
-    console.log(`[Personal AI] 批量查询完成，找到 ${existsMap.size} 个结果`);
-    
-    // 第三步：将已存在的规则的 icon 替换为红色常亮状态
-    ruleInfoMap.forEach((info, ruleId) => {
-      const exists = existsMap.get(info.ruleUrl);
-      if (exists) {
-        console.log(`[Personal AI] 规则 ${ruleId} 已存在，更新为红色常亮 icon`);
-        updateButtonToManagedState(info.button, doc);
-      }
-    });
-    
-    console.log('[Personal AI] 按钮状态更新完成');
-  }
 }
 
 /**
@@ -1772,6 +1801,10 @@ async function initScheduleButtons(doc: Document, projectId: string): Promise<vo
     console.log('[Personal AI] 跳过 Schedule 按钮注入（未初始化 Scheduled Messages）');
     return;
   }
+  
+  // 预加载已被管理的规则 ID（通过 Jira API 获取所有规则，批量检查）
+  const projectKey = getProjectKey();
+  await preloadManagedRules(projectId, projectKey);
   
   // 初始添加按钮
   addScheduleButtonsToRules(doc, projectId);
