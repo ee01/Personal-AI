@@ -3,6 +3,11 @@
  * 在 https://rpa.int.rclabenv.com/ 添加"导入到我的定时消息"按钮
  */
 
+import { 
+  analyzeTriggerForScheduledMessages, 
+  buildScheduleMessageFields 
+} from './scheduled-messages/scheduleUtils';
+
 // 类型定义
 interface ExportedRule {
   id?: number;
@@ -229,8 +234,19 @@ function hideLoadingMessage(): void {
   }
 }
 
-// 显示项目选择对话框
-function showProjectSelectionDialog(ruleName: string): Promise<{ confirmed: boolean; projectId: string; projectKey: string } | null> {
+// 更新加载消息文本
+function updateLoadingMessage(message: string): void {
+  const loadingDiv = document.getElementById('personal-ai-rpa-loading');
+  if (loadingDiv) {
+    const span = loadingDiv.querySelector('span');
+    if (span) {
+      span.textContent = message;
+    }
+  }
+}
+
+// 显示项目选择对话框（只需填写 projectKey，自动获取 projectId）
+function showProjectSelectionDialog(ruleName: string): Promise<{ confirmed: boolean; projectKey: string } | null> {
   return new Promise((resolve) => {
     // 创建遮罩
     const overlay = document.createElement('div');
@@ -253,7 +269,7 @@ function showProjectSelectionDialog(ruleName: string): Promise<{ confirmed: bool
       background: white;
       border-radius: 12px;
       padding: 28px;
-      max-width: 500px;
+      max-width: 450px;
       width: 90%;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -267,18 +283,14 @@ function showProjectSelectionDialog(ruleName: string): Promise<{ confirmed: bool
       </div>
       <div style="margin-bottom: 24px;">
         <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #172B4D;">
-          选择要导入的 JIRA 项目
+          输入要导入的 JIRA 项目 Key
         </label>
-        <div style="display: flex; gap: 12px;">
-          <input type="text" id="project-key-input" placeholder="项目 Key (如 MTR)" 
-            style="flex: 1; padding: 10px 14px; border: 2px solid #DFE1E6; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s;"
-            onfocus="this.style.borderColor='#0052cc'" onblur="this.style.borderColor='#DFE1E6'">
-          <input type="text" id="project-id-input" placeholder="项目 ID (如 11601)" 
-            style="flex: 1; padding: 10px 14px; border: 2px solid #DFE1E6; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s;"
-            onfocus="this.style.borderColor='#0052cc'" onblur="this.style.borderColor='#DFE1E6'">
-        </div>
+        <input type="text" id="project-key-input" placeholder="项目 Key (如 MTR, RPC, NOVA)" 
+          style="width: 100%; padding: 12px 14px; border: 2px solid #DFE1E6; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s; box-sizing: border-box;"
+          onfocus="this.style.borderColor='#0052cc'" onblur="this.style.borderColor='#DFE1E6'">
+        <p id="project-error" style="margin: 8px 0 0; font-size: 12px; color: #f44336; display: none;"></p>
         <p style="margin: 8px 0 0; font-size: 12px; color: #6B778C;">
-          💡 项目 ID 可以在 JIRA 项目设置页面的 URL 中找到 (pid=xxxx)
+          💡 项目 Key 通常是 JIRA ticket 的前缀，如 MTR-1234 中的 MTR
         </p>
       </div>
       <div style="margin-bottom: 20px; padding: 14px; background: #FFFAE6; border-radius: 8px; border-left: 4px solid #FFAB00;">
@@ -299,7 +311,7 @@ function showProjectSelectionDialog(ruleName: string): Promise<{ confirmed: bool
     const cancelBtn = dialog.querySelector('#cancel-btn') as HTMLButtonElement;
     const confirmBtn = dialog.querySelector('#confirm-btn') as HTMLButtonElement;
     const projectKeyInput = dialog.querySelector('#project-key-input') as HTMLInputElement;
-    const projectIdInput = dialog.querySelector('#project-id-input') as HTMLInputElement;
+    const projectError = dialog.querySelector('#project-error') as HTMLParagraphElement;
     
     cancelBtn.addEventListener('click', () => {
       document.body.removeChild(overlay);
@@ -307,17 +319,31 @@ function showProjectSelectionDialog(ruleName: string): Promise<{ confirmed: bool
     });
     
     confirmBtn.addEventListener('click', () => {
-      const projectKey = projectKeyInput.value.trim();
-      const projectId = projectIdInput.value.trim();
+      const projectKey = projectKeyInput.value.trim().toUpperCase();
       
-      if (!projectKey || !projectId) {
-        projectKeyInput.style.borderColor = !projectKey ? '#f44336' : '#DFE1E6';
-        projectIdInput.style.borderColor = !projectId ? '#f44336' : '#DFE1E6';
+      if (!projectKey) {
+        projectKeyInput.style.borderColor = '#f44336';
+        projectError.textContent = '请输入项目 Key';
+        projectError.style.display = 'block';
+        return;
+      }
+      
+      // 验证项目 Key 格式（字母和数字组成）
+      if (!/^[A-Z][A-Z0-9]*$/.test(projectKey)) {
+        projectKeyInput.style.borderColor = '#f44336';
+        projectError.textContent = '项目 Key 格式不正确，应以字母开头，只包含字母和数字';
+        projectError.style.display = 'block';
         return;
       }
       
       document.body.removeChild(overlay);
-      resolve({ confirmed: true, projectId, projectKey });
+      resolve({ confirmed: true, projectKey });
+    });
+    
+    // 输入时清除错误
+    projectKeyInput.addEventListener('input', () => {
+      projectError.style.display = 'none';
+      projectKeyInput.style.borderColor = '#DFE1E6';
     });
     
     overlay.addEventListener('click', (e) => {
@@ -368,55 +394,63 @@ async function convertExportedRuleToImportFormat(exportedRule: ExportedRule, pro
   };
 }
 
-// 创建automation rule的API调用
-async function createAutomationRule(ruleData: ImportRule, projectId: string): Promise<any> {
+// 通过 background script 创建 automation rule
+async function createAutomationRule(ruleData: ImportRule, projectId: string, projectKey: string): Promise<any> {
   try {
-    const response = await fetch(`https://jira.ringcentral.com/rest/cb-automation/latest/project/${projectId}/rule`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
-      credentials: 'include',
-      body: JSON.stringify(ruleData)
+    const result = await chrome.runtime.sendMessage({
+      type: 'RPA_CREATE_JIRA_AUTOMATION_RULE',
+      data: { ruleData, projectId, projectKey }
     });
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API call failed: ${response.status} ${response.statusText}\n${errorText}`);
+    if (!result?.success) {
+      throw new Error(result?.error || '创建规则失败');
     }
     
-    return await response.json();
+    return result.data;
   } catch (error) {
     console.error('Error creating automation rule:', error);
     throw error;
   }
 }
 
-// 获取当前用户ID
+// 通过 background script 获取当前用户 ID
 async function getCurrentOwnerId(): Promise<string> {
   try {
-    const response = await fetch('https://jira.ringcentral.com/rest/api/2/myself', {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
-      credentials: 'include'
+    const result = await chrome.runtime.sendMessage({
+      type: 'RPA_GET_JIRA_CURRENT_USER'
     });
     
-    if (response.ok) {
-      const userInfo = await response.json();
-      if (userInfo.key) {
-        return userInfo.key;
-      }
+    if (result?.success && result.ownerId) {
+      return result.ownerId;
     }
   } catch (error) {
     console.warn('Error fetching user info from JIRA API:', error);
   }
   
   return '';
+}
+
+// 通过 background script 获取项目 ID
+async function getProjectIdByKey(projectKey: string): Promise<string | null> {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'RPA_GET_JIRA_PROJECT_ID',
+      data: { projectKey }
+    });
+    
+    if (result?.success && result.projectId) {
+      return result.projectId;
+    }
+    
+    if (result?.error) {
+      console.warn('获取项目 ID 失败:', result.error);
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('获取项目 ID 失败:', error);
+    return null;
+  }
 }
 
 // 添加到 Scheduled Messages
@@ -429,8 +463,12 @@ async function addToScheduledMessages(ruleInfo: {
   try {
     const ruleUrl = `https://jira.ringcentral.com/secure/AutomationProjectAdminAction!default.jspa?projectKey=${ruleInfo.projectKey}#/rule/${ruleInfo.id}`;
     
+    // 分析 trigger 获取调度配置
+    const scheduleConfig = analyzeTriggerForScheduledMessages(ruleInfo.trigger);
+    console.log('[Personal AI RPA] 解析的调度配置:', scheduleConfig);
+    
     // 准备消息数据
-    const messageData = {
+    const messageData: Record<string, any> = {
       Topic: ruleInfo.name,
       Content: `从 RPA 平台导入的 Jira Automation 规则: ${ruleInfo.name}`,
       Push_Method: 'JiraAutomation',
@@ -439,6 +477,21 @@ async function addToScheduledMessages(ruleInfo: {
       Automation_Link: ruleUrl,
       Category: ruleInfo.projectKey
     };
+    
+    // 根据调度配置填充调度字段
+    if (scheduleConfig.executionMode === 'nosearch' || scheduleConfig.executionMode === 'jql') {
+      // 有调度信息，填充到 messageData
+      const scheduleFields = buildScheduleMessageFields(scheduleConfig);
+      Object.assign(messageData, scheduleFields);
+      
+      console.log('[Personal AI RPA] 添加调度字段:', scheduleFields);
+      
+      // 如果是 jql 模式，更新 Content 说明
+      if (scheduleConfig.executionMode === 'jql') {
+        messageData.Content = `从 RPA 平台导入 (JQL Mode, View Only): ${ruleInfo.name}`;
+      }
+    }
+    // 其他类型（如 incoming webhook）- 仅添加引用，不设置调度信息
     
     // 发送到 background script 添加消息
     const result = await chrome.runtime.sendMessage({
@@ -665,15 +718,30 @@ async function handleImport(cardElement: Element, cardData: RPACardData): Promis
     return;
   }
   
-  // 显示项目选择对话框
+  // 显示项目选择对话框（只需填写 projectKey）
   const projectSelection = await showProjectSelectionDialog(cardData.title);
   if (!projectSelection) {
     return; // 用户取消
   }
   
-  const loadingEl = showLoadingMessage('正在导入到 JIRA Automation...');
+  const projectKey = projectSelection.projectKey;
+  
+  showLoadingMessage(`正在验证项目 ${projectKey}...`);
   
   try {
+    // 通过 projectKey 获取 projectId
+    const projectId = await getProjectIdByKey(projectKey);
+    if (!projectId) {
+      hideLoadingMessage();
+      showErrorMessage(`无法找到项目 ${projectKey}，请确认项目 Key 是否正确`);
+      return;
+    }
+    
+    console.log(`[Personal AI RPA] 项目 ${projectKey} 的 ID: ${projectId}`);
+    
+    // 更新加载消息
+    updateLoadingMessage('正在获取用户信息...');
+    
     // 解析 scriptData
     let exportedData: ExportedData;
     try {
@@ -694,48 +762,51 @@ async function handleImport(cardElement: Element, cardData: RPACardData): Promis
     const ownerId = await getCurrentOwnerId();
     if (!ownerId) {
       hideLoadingMessage();
-      showErrorMessage('无法获取 JIRA 用户信息，请确保已登录 JIRA');
+      showErrorMessage('无法获取 JIRA 用户信息，请确保已登录 JIRA（在另一个标签页打开 jira.ringcentral.com）');
       return;
     }
+    
+    // 更新加载消息
+    updateLoadingMessage('正在创建 JIRA Automation 规则...');
     
     // 转换并创建规则
     const ruleToImport = exportedData.rules[0];
     const convertedRule = await convertExportedRuleToImportFormat(
       ruleToImport, 
-      projectSelection.projectId,
+      projectId,
       ownerId
     );
     
-    // 创建规则
-    const createResult = await createAutomationRule(convertedRule, projectSelection.projectId);
+    // 创建规则（传递 projectKey 给 background script）
+    const createResult = await createAutomationRule(convertedRule, projectId, projectKey);
     
     if (!createResult || !createResult.id) {
       hideLoadingMessage();
-      showErrorMessage('创建规则失败，请检查项目 ID 是否正确');
+      showErrorMessage('创建规则失败，请检查是否有权限在此项目创建 Automation 规则');
       return;
     }
     
     // 更新加载消息
-    loadingEl.querySelector('span')!.textContent = '正在添加到定时消息...';
+    updateLoadingMessage('正在添加到定时消息...');
     
     // 添加到 Scheduled Messages
     const addResult = await addToScheduledMessages({
       id: String(createResult.id),
       name: convertedRule.name,
       trigger: createResult.trigger,
-      projectKey: projectSelection.projectKey
+      projectKey: projectKey
     });
     
     hideLoadingMessage();
     
     if (addResult) {
       showSuccessMessage(
-        `✅ 导入成功！\n规则已添加到项目 ${projectSelection.projectKey}，并已设置为暂停状态。`,
+        `✅ 导入成功！\n规则已添加到项目 ${projectKey}，并已设置为暂停状态。`,
         () => openScheduledMessagesManager()
       );
     } else {
       showSuccessMessage(
-        `✅ 规则已导入到 JIRA 项目 ${projectSelection.projectKey}，但添加到定时消息失败。\n你可以手动在定时消息管理中添加。`,
+        `✅ 规则已导入到 JIRA 项目 ${projectKey}，但添加到定时消息失败。\n你可以手动在定时消息管理中添加。`,
         () => openScheduledMessagesManager()
       );
     }

@@ -1087,6 +1087,20 @@ const ScheduledMessagesManager: React.FC = () => {
       if (editingMessage) {
         // 编辑模式：更新消息
         await service.updateMessage(editingMessage.ID, formData);
+        
+        // 如果是 JiraAutomation 类型且 Topic 发生变化，同步更新 Jira Rule 名称
+        if (editingMessage.Push_Method === 'JiraAutomation' && 
+            editingMessage.Automation_Link &&
+            formData.Topic && 
+            formData.Topic !== editingMessage.Topic) {
+          try {
+            await syncJiraRuleName(editingMessage.Automation_Link, formData.Topic);
+          } catch (syncError: any) {
+            console.warn('同步 Jira Rule 名称失败:', syncError);
+            // 不阻塞主流程，只是警告
+          }
+        }
+        
         await loadMessages(service);
         setShowAddDialog(false);
         setEditingMessage(null);
@@ -1104,6 +1118,54 @@ const ScheduledMessagesManager: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
+  };
+  
+  /**
+   * 同步 Topic 到 Jira Automation Rule 名称
+   */
+  const syncJiraRuleName = async (automationLink: string, newTopic: string) => {
+    const linkInfo = parseAutomationLink(automationLink);
+    if (!linkInfo) {
+      console.warn('无法解析 Automation_Link，跳过同步');
+      return;
+    }
+    
+    const { jiraUrl, projectKey, ruleId } = linkInfo;
+    const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+    
+    if (!projectId) {
+      console.warn('无法获取项目 ID，跳过同步');
+      return;
+    }
+    
+    // 获取规则详情
+    const detailResult = await chrome.runtime.sendMessage({
+      type: 'GET_JIRA_RULE_DETAILS',
+      data: { jiraUrl, projectId, ruleId }
+    });
+    
+    if (!detailResult?.success || !detailResult.ruleData) {
+      throw new Error('无法获取规则详情');
+    }
+    
+    // 更新规则名称
+    console.log(`📝 同步 Topic 到 Jira Rule: ${newTopic}`);
+    const updateResult = await chrome.runtime.sendMessage({
+      type: 'UPDATE_JIRA_RULE_NAME',
+      data: {
+        jiraUrl,
+        projectId,
+        ruleId,
+        newName: newTopic,
+        ruleData: detailResult.ruleData
+      }
+    });
+    
+    if (!updateResult?.success) {
+      throw new Error(updateResult?.error || '更新规则名称失败');
+    }
+    
+    console.log('✅ Jira Rule 名称同步成功');
   };
   
   const handleCleanupCompleted = async () => {
