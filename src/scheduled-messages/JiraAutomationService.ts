@@ -754,6 +754,92 @@ export class JiraAutomationService {
   }
   
   /**
+   * 获取 Automation 的 securetoken（用于生成新的 webhook URL）
+   * 这是一个公共方法，可以在需要时直接调用
+   */
+  async getSecureToken(config: JiraAutomationConfig): Promise<string> {
+    const projectId = await this.getProjectId(config);
+    
+    const tokenUrl = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/securetoken`;
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache',
+        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
+      },
+      credentials: 'include'
+    });
+    
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      throw new Error(`获取 securetoken 失败 (${tokenResponse.status}): ${errorText}`);
+    }
+    
+    const tokenData = await tokenResponse.json();
+    if (!tokenData.token) {
+      throw new Error('未能获取到 securetoken');
+    }
+    
+    return tokenData.token;
+  }
+  
+  /**
+   * 创建 JIRA Automation 规则
+   * 如果规则包含 incoming webhook trigger，会自动获取新的 securetoken
+   * 这是一个公共方法，可用于任何需要创建规则的场景（不仅限于 RPA）
+   */
+  async createRule(config: JiraAutomationConfig, ruleData: any): Promise<any> {
+    const projectId = await this.getProjectId(config);
+    
+    // 处理 webhook trigger：如果是 incoming webhook，需要获取新的 securetoken
+    let finalRuleData = ruleData;
+    
+    if (ruleData.trigger?.type === 'jira.incoming.webhook') {
+      console.log('📝 检测到 incoming webhook trigger，需要获取新的 securetoken...');
+      
+      // 获取新的 securetoken
+      const webhookToken = await this.getSecureToken(config);
+      console.log(`✅ 获取到新的 securetoken: ${webhookToken.substring(0, 8)}...`);
+      
+      // 构建新的规则数据，使用新的 token
+      finalRuleData = {
+        ...ruleData,
+        trigger: {
+          ...ruleData.trigger,
+          id: '__NEW__TRIGGER',
+          value: {
+            webhookToken: webhookToken,
+            searchOrProvide: 'provided'
+          }
+        }
+      };
+    }
+    
+    const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
+      },
+      credentials: 'include',
+      body: JSON.stringify(finalRuleData)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`创建规则失败 (${response.status}): ${errorText}`);
+    }
+    
+    const result = await response.json();
+    return result;
+  }
+  
+  /**
    * 将 Scheduled Trigger 转换为 Incoming Webhook Trigger
    * 
    * 两步操作：
@@ -776,28 +862,7 @@ export class JiraAutomationService {
     
     // 第一步：获取 securetoken
     console.log('📝 步骤1: 获取 securetoken...');
-    const tokenUrl = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/securetoken`;
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include'
-    });
-    
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      throw new Error(`获取 securetoken 失败 (${tokenResponse.status}): ${errorText}`);
-    }
-    
-    const tokenData = await tokenResponse.json();
-    const webhookToken = tokenData.token;
-    
-    if (!webhookToken) {
-      throw new Error('未能获取到 securetoken');
-    }
+    const webhookToken = await this.getSecureToken(config);
     console.log(`✅ 获取到 securetoken: ${webhookToken.substring(0, 8)}...`);
     
     // 第二步：使用 token 更新 rule 的 trigger 为 incoming webhook
@@ -1087,4 +1152,3 @@ export interface RuleAuditLog {
   state: string;
   duration?: number;
 }
-

@@ -1,6 +1,92 @@
 import { JiraTicket } from './types';
 import { getEnvConfig } from './utils';
 
+// JIRA 基础配置
+const JIRA_BASE_URL = 'https://jira.ringcentral.com';
+
+// =====================================================
+// 通用 JIRA API 工具函数
+// =====================================================
+
+/**
+ * 获取当前 JIRA 用户信息
+ */
+export async function getCurrentUser(): Promise<{ success: boolean; ownerId?: string; accountId?: string; name?: string; error?: string }> {
+  try {
+    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/myself`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      return { success: false, error: `获取用户信息失败 (${response.status})` };
+    }
+    
+    const userInfo = await response.json();
+    const ownerId = userInfo.key || userInfo.name || userInfo.accountId;
+    
+    if (!ownerId) {
+      return { success: false, error: '无法从用户信息中获取用户标识' };
+    }
+    
+    return { 
+      success: true, 
+      ownerId,
+      accountId: userInfo.accountId,
+      name: userInfo.name
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message || '获取用户信息失败' };
+  }
+}
+
+/**
+ * 通过项目 Key 获取项目信息（ID、名称等）
+ */
+export async function getProjectByKey(projectKey: string): Promise<{ 
+  success: boolean; 
+  projectId?: string; 
+  projectName?: string; 
+  project?: any;
+  error?: string 
+}> {
+  try {
+    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/project/${projectKey}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        return { success: false, error: `项目 ${projectKey} 不存在` };
+      }
+      return { success: false, error: `获取项目信息失败 (${response.status})` };
+    }
+    
+    const projectInfo = await response.json();
+    return { 
+      success: true, 
+      projectId: projectInfo.id, 
+      projectName: projectInfo.name,
+      project: projectInfo
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message || '获取项目信息失败' };
+  }
+}
+
+// =====================================================
+// JIRA Issues 抓取功能
+// =====================================================
+
 // 从 Jira 页面抓取数据
 export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
     return new Promise((resolve, reject) => {

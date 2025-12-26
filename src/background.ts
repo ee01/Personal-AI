@@ -18,6 +18,7 @@ import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
+import { getCurrentUser, getProjectByKey } from './jira';
 
 console.log('Background script loaded');
 
@@ -936,6 +937,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
     
+    // 更新 Jira Automation Rule 名称（同步 Topic）
+    if (request.type === 'UPDATE_JIRA_RULE_NAME') {
+        (async () => {
+            try {
+                const { jiraUrl, projectId, ruleId, newName, ruleData } = request.data;
+                console.log(`📝 更新 Jira Rule ${ruleId} 名称为: ${newName}`);
+                
+                // 发送请求更新规则名称
+                const response = await fetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        ...ruleData,
+                        name: newName
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`更新失败 (${response.status}): ${errorText}`);
+                }
+                
+                console.log(`✅ Jira Rule ${ruleId} 名称更新成功`);
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error('❌ 更新 Jira Rule 名称失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
     // 打开定时消息管理界面
     if (request.type === 'OPEN_SCHEDULED_MESSAGES') {
         (async () => {
@@ -946,6 +984,63 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 sendResponse({ success: true });
             } catch (error: any) {
                 console.error('❌ 打开定时消息管理界面失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // RPA: 获取 JIRA 当前用户信息（使用 jira.ts 的通用方法）
+    if (request.type === 'RPA_GET_JIRA_CURRENT_USER') {
+        (async () => {
+            console.log('👤 RPA: 获取 JIRA 当前用户...');
+            const result = await getCurrentUser();
+            if (result.success) {
+                console.log('✅ 获取到用户:', result.ownerId);
+            } else {
+                console.error('❌ 获取 JIRA 用户信息失败:', result.error);
+            }
+            sendResponse(result);
+        })();
+        return true;
+    }
+    
+    // RPA: 通过 projectKey 获取 projectId（使用 jira.ts 的通用方法）
+    if (request.type === 'RPA_GET_JIRA_PROJECT_ID') {
+        (async () => {
+            const { projectKey } = request.data;
+            console.log(`🔍 RPA: 获取项目 ${projectKey} 的 ID...`);
+            const result = await getProjectByKey(projectKey);
+            if (result.success) {
+                console.log(`✅ 项目 ${projectKey} 的 ID: ${result.projectId}`);
+            } else {
+                console.error('❌ 获取项目 ID 失败:', result.error);
+            }
+            sendResponse(result);
+        })();
+        return true;
+    }
+    
+    // RPA: 创建 JIRA Automation 规则（使用 JiraAutomationService）
+    if (request.type === 'RPA_CREATE_JIRA_AUTOMATION_RULE') {
+        (async () => {
+            try {
+                const { ruleData, projectId, projectKey } = request.data;
+                console.log(`📝 RPA: 创建 Automation 规则到项目 ${projectKey} (ID: ${projectId})...`);
+                
+                // 创建 JiraAutomationService 实例
+                const service = new JiraAutomationService();
+                const config = {
+                    jiraUrl: 'https://jira.ringcentral.com',
+                    projectKey: projectKey
+                };
+                
+                // 调用 createRule 方法（会自动处理 webhook trigger）
+                const result = await service.createRule(config, ruleData);
+                console.log(`✅ 规则创建成功，ID: ${result.id}`);
+                sendResponse({ success: true, data: result });
+            } catch (error: any) {
+                console.error('❌ 创建 Automation 规则失败:', error);
                 sendResponse({ success: false, error: error.message });
             }
         })();

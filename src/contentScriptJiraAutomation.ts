@@ -4,6 +4,14 @@
  */
 
 import { getLocalStorageItem, setLocalStorageItem } from "./storage";
+import { 
+  parseCronExpression, 
+  parseDaysOfWeek, 
+  getNextScheduleDate,
+  parseFixedRateConfig,
+  formatDaysOfWeekDisplay,
+  jiraDaysToJsDays
+} from './scheduled-messages/scheduleUtils';
 
 // 类型定义
 interface ExportedRule {
@@ -844,116 +852,10 @@ async function getRuleAuditLog(ruleId: string, projectId: string): Promise<any[]
   }
 }
 
-/**
- * 解析 Cron 表达式获取调度配置
- */
-function parseCronExpression(cron: string): { time: string; repeatEvery: number; repeatUnit: string; daysOfWeek?: number[] } | null {
-  if (!cron) return null;
-  
-  const parts = cron.split(' ');
-  if (parts.length < 6) return null;
-  
-  const [_seconds, minutes, hours, dayOfMonth, _month, dayOfWeek] = parts;
-  
-  // 解析时间（Jira CRON 使用 UTC 时间，需要转换为本地时间 UTC+8）
-  const timeMinutes = parseInt(minutes, 10) || 0;
-  const utcHours = parseInt(hours, 10) || 0;
-  const localHours = (utcHours + 8) % 24;  // UTC -> 本地时间 (UTC+8)
-  const time = `${String(localHours).padStart(2, '0')}:${String(timeMinutes).padStart(2, '0')}`;
-  
-  let repeatEvery = 1;
-  let repeatUnit = 'Day';
-  let daysOfWeek: number[] | undefined;
-  
-  // 检查是否是每周特定几天
-  if (dayOfWeek !== '*' && dayOfWeek !== '?') {
-    daysOfWeek = parseDaysOfWeek(dayOfWeek);
-    if (daysOfWeek && daysOfWeek.length > 0) {
-      repeatUnit = 'Week';
-    }
-  }
-  
-  // 检查是否是每 N 天
-  if (dayOfMonth !== '*' && dayOfMonth !== '?') {
-    const dayMatch = dayOfMonth.match(/^\*\/(\d+)$/);
-    if (dayMatch) {
-      repeatEvery = parseInt(dayMatch[1], 10);
-      repeatUnit = 'Day';
-    } else if (/^\d+$/.test(dayOfMonth)) {
-      repeatUnit = 'Month';
-    }
-  }
-  
-  return { time, repeatEvery, repeatUnit, daysOfWeek };
-}
-
-/**
- * 解析星期配置
- */
-function parseDaysOfWeek(dayOfWeek: string): number[] {
-  const dayMap: Record<string, number> = {
-    'SUN': 1, 'MON': 2, 'TUE': 3, 'WED': 4, 'THU': 5, 'FRI': 6, 'SAT': 7,
-    '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7
-  };
-  
-  const result: number[] = [];
-  const segments = dayOfWeek.split(',');
-  
-  for (const segment of segments) {
-    const trimmed = segment.trim().toUpperCase();
-    
-    if (trimmed.includes('-')) {
-      const [start, end] = trimmed.split('-');
-      const startNum = dayMap[start.trim()] || parseInt(start.trim(), 10);
-      const endNum = dayMap[end.trim()] || parseInt(end.trim(), 10);
-      
-      if (!isNaN(startNum) && !isNaN(endNum)) {
-        for (let i = startNum; i <= endNum; i++) {
-          if (!result.includes(i)) result.push(i);
-        }
-      }
-    } else {
-      const num = dayMap[trimmed] || parseInt(trimmed, 10);
-      if (!isNaN(num) && !result.includes(num)) {
-        result.push(num);
-      }
-    }
-  }
-  
-  return result.sort((a, b) => a - b);
-}
-
-/**
- * 计算下一个调度日期
- */
-function getNextScheduleDate(hours: number, minutes: number, repeatUnit: string, daysOfWeek?: number[]): string {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
-  
-  if (repeatUnit === 'Week' && daysOfWeek && daysOfWeek.length > 0) {
-    const currentJiraDay = now.getDay() + 1;
-    
-    for (let offset = 0; offset < 7; offset++) {
-      const checkDay = ((currentJiraDay - 1 + offset) % 7) + 1;
-      if (daysOfWeek.includes(checkDay)) {
-        const targetDate = new Date(now);
-        targetDate.setDate(now.getDate() + offset);
-        
-        if (offset === 0 && now > today) {
-          continue;
-        }
-        
-        return targetDate.toISOString().split('T')[0];
-      }
-    }
-  }
-  
-  if (now > today) {
-    today.setDate(today.getDate() + 1);
-  }
-  
-  return today.toISOString().split('T')[0];
-}
+// 以下函数已移至 scheduleUtils.ts：
+// - parseCronExpression
+// - parseDaysOfWeek
+// - getNextScheduleDate
 
 /**
  * 创建 "Add to Scheduled Messages" 按钮
@@ -1089,28 +991,7 @@ function updateButtonToManagedState(button: HTMLElement, _doc: Document): void {
  * 格式化星期显示（用于弹窗展示）
  * @param daysOfWeek Jira格式的星期数组 (1=周日, 2=周一...7=周六)
  */
-function formatDaysOfWeekDisplay(daysOfWeek: number[] | undefined): string {
-  if (!daysOfWeek || daysOfWeek.length === 0) return '';
-  
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  // 转换 Jira 格式 (1-7) 到 JS 格式 (0-6)
-  const jsDays = daysOfWeek.map(d => (d - 1) % 7).sort((a, b) => a - b);
-  
-  // 检查是否是工作日 (1,2,3,4,5 in JS = Mon-Fri)
-  if (jsDays.length === 5 && 
-      jsDays[0] === 1 && jsDays[1] === 2 && jsDays[2] === 3 && 
-      jsDays[3] === 4 && jsDays[4] === 5) {
-    return '工作日 (Mon-Fri)';
-  }
-  
-  // 检查是否是周末 (0,6 in JS = Sun, Sat)
-  if (jsDays.length === 2 && jsDays[0] === 0 && jsDays[1] === 6) {
-    return '周末 (Sat, Sun)';
-  }
-  
-  // 其他情况，显示具体星期
-  return jsDays.map(d => dayNames[d]).join(', ');
-}
+// formatDaysOfWeekDisplay 已移至 scheduleUtils.ts
 
 /**
  * 显示导入对话框（带 AI 总结）
@@ -1431,27 +1312,13 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
           scheduleDate = date.toISOString().split('T')[0];
         }
         
-        // 解析 FIXED 配置
-        // rateInterval 单位是分钟
-        // 3600 = 1小时, 86400 = 1天, 604800 = 1周, 2592000 = 1个月
-        let repeatUnit = 'Day';
-        let repeatEvery = schedule.rate || 1;
-        const rateInterval = schedule.rateInterval || 86400;
-        
-        if (rateInterval < 86400) {
-          // 小于1天的间隔（Hour、Minute），统一为"每天"
-          repeatUnit = 'Day';
-          repeatEvery = 1;
-        } else if (rateInterval === 604800) {
-          repeatUnit = 'Week';
-        } else if (rateInterval === 2592000) {
-          repeatUnit = 'Month';
-        }
+        // 使用共享的 FIXED 配置解析函数
+        const fixedConfig = parseFixedRateConfig(schedule);
         
         scheduleConfig = {
           scheduleDate,
-          repeatEvery,
-          repeatUnit,
+          repeatEvery: fixedConfig.repeatEvery,
+          repeatUnit: fixedConfig.repeatUnit,
           executionMode: 'nosearch',
           needsWebhookConversion: true
         };
@@ -1486,27 +1353,13 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
           scheduleDate = date.toISOString().split('T')[0];
         }
         
-        // 解析 FIXED 配置
-        // rateInterval 单位是分钟
-        // 60 = 1小时, 86400 = 1天, 604800 = 1周, 2592000 = 1个月
-        let repeatUnit = 'Day';
-        let repeatEvery = schedule.rate || 1;
-        const rateInterval = schedule.rateInterval || 86400;
-        
-        if (rateInterval < 86400) {
-          // 小于1天的间隔（Hour、Minute），统一为"每天"
-          repeatUnit = 'Day';
-          repeatEvery = 1;
-        } else if (rateInterval === 604800) {
-          repeatUnit = 'Week';
-        } else if (rateInterval === 2592000) {
-          repeatUnit = 'Month';
-        }
+        // 使用共享的 FIXED 配置解析函数
+        const fixedConfig = parseFixedRateConfig(schedule);
         
         scheduleConfig = {
           scheduleDate,
-          repeatEvery,
-          repeatUnit,
+          repeatEvery: fixedConfig.repeatEvery,
+          repeatUnit: fixedConfig.repeatUnit,
           executionMode: 'jql',
           needsWebhookConversion: false
         };
@@ -1554,7 +1407,7 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
       messageData.Repeat_Unit = scheduleConfig.repeatUnit;
       // 如果有多星期配置，转换 Jira 格式 (1-7) 到 JS 格式 (0-6) 并保存
       if (scheduleConfig.daysOfWeek && scheduleConfig.daysOfWeek.length > 0) {
-        const jsDays = scheduleConfig.daysOfWeek.map((d: number) => (d - 1) % 7).sort((a: number, b: number) => a - b);
+        const jsDays = jiraDaysToJsDays(scheduleConfig.daysOfWeek);
         messageData.Repeat_Days = jsDays.join(',');
         console.log('[Personal AI] 保存多星期配置:', { jiraDays: scheduleConfig.daysOfWeek, jsDays, Repeat_Days: messageData.Repeat_Days });
       }
@@ -1568,7 +1421,7 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
       messageData.Repeat_Unit = scheduleConfig.repeatUnit;
       // 如果有多星期配置，转换并保存
       if (scheduleConfig.daysOfWeek && scheduleConfig.daysOfWeek.length > 0) {
-        const jsDays = scheduleConfig.daysOfWeek.map((d: number) => (d - 1) % 7).sort((a: number, b: number) => a - b);
+        const jsDays = jiraDaysToJsDays(scheduleConfig.daysOfWeek);
         messageData.Repeat_Days = jsDays.join(',');
       }
       // 不设置 AI_Endpoint，表示仅作为引用
