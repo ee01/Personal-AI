@@ -18,7 +18,7 @@ import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
-import { getCurrentUser, getProjectByKey } from './jira';
+import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './jira';
 
 console.log('Background script loaded');
 
@@ -275,6 +275,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'FETCH_JIRA_TICKETS') {
         const { jql, requestId } = request;
         FETCH_JIRA_TICKETS(jql, requestId, sender.tab?.id);
+        return true; // 保持消息通道开放
+    }
+
+    // 获取单个 Jira ticket 的详细信息（用于消息中的 Jira 链接预览）
+    if (request.type === 'FETCH_JIRA_TICKET_DETAIL') {
+        (async () => {
+            const { ticketKey } = request;
+            console.log(`📋 获取 Jira Ticket 详情: ${ticketKey}`);
+            const result = await getTicketDetail(ticketKey);
+            sendResponse(result);
+        })();
         return true; // 保持消息通道开放
     }
 
@@ -665,10 +676,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // 使用静态导入的 JiraAutomationService（避免 Service Worker 中动态导入问题）
                 const service = new JiraAutomationService();
                 
-                // 获取项目 Key
-                const projectResponse = await fetch(`${jiraUrl}/rest/api/2/project/${projectId}`, {
-                    credentials: 'include'
-                });
+                // 获取项目 Key（使用统一的 jiraFetch，自动支持 token 和 cookie）
+                const projectResponse = await jiraFetch(`${jiraUrl}/rest/api/2/project/${projectId}`);
                 const projectData = await projectResponse.json();
                 const projectKey = projectData.key;
                 
@@ -699,10 +708,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // 使用 JiraAutomationService
                 const service = new JiraAutomationService();
                 
-                // 获取项目 Key
-                const projectResponse = await fetch(`${jiraUrl}/rest/api/2/project/${projectId}`, {
-                    credentials: 'include'
-                });
+                // 获取项目 Key（使用统一的 jiraFetch）
+                const projectResponse = await jiraFetch(`${jiraUrl}/rest/api/2/project/${projectId}`);
                 const projectData = await projectResponse.json();
                 const projectKey = projectData.key;
                 
@@ -868,19 +875,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const { jiraUrl, projectId, ruleId, newState, ruleData } = request.data;
                 console.log(`🔄 更新 Jira Rule ${ruleId} 状态为: ${newState}`);
                 
-                // 发送请求更新规则状态
-                const response = await fetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`, {
+                // 发送请求更新规则状态（使用统一的 jiraFetch）
+                const response = await jiraFetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`, {
                     method: 'PUT',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                        'Cache-Control': 'no-cache'
-                    },
-                    credentials: 'include',
-                    body: JSON.stringify({
+                    body: {
                         ...ruleData,
                         state: newState
-                    })
+                    }
                 });
                 
                 if (!response.ok) {
@@ -905,15 +906,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const { jiraUrl, projectId, ruleId } = request.data;
                 console.log(`📖 获取 Jira Rule ${ruleId} 详情...`);
                 
-                // 使用获取规则列表的接口（单条规则接口不支持 GET）
-                const response = await fetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Cache-Control': 'no-cache'
-                    },
-                    credentials: 'include'
-                });
+                // 使用获取规则列表的接口（使用统一的 jiraFetch）
+                const response = await jiraFetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`);
                 
                 if (!response.ok) {
                     throw new Error(`获取失败 (${response.status})`);
@@ -944,19 +938,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const { jiraUrl, projectId, ruleId, newName, ruleData } = request.data;
                 console.log(`📝 更新 Jira Rule ${ruleId} 名称为: ${newName}`);
                 
-                // 发送请求更新规则名称
-                const response = await fetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`, {
+                // 发送请求更新规则名称（使用统一的 jiraFetch）
+                const response = await jiraFetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`, {
                     method: 'PUT',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                        'Cache-Control': 'no-cache'
-                    },
-                    credentials: 'include',
-                    body: JSON.stringify({
+                    body: {
                         ...ruleData,
                         name: newName
-                    })
+                    }
                 });
                 
                 if (!response.ok) {

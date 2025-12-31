@@ -3,42 +3,7 @@
  * 在Jira ticket页面上显示设计链接
  */
 
-import { getEnvConfig } from './utils';
-
-// 缓存 Jira token
-let cachedJiraToken: string | null = null;
-
-// 获取 Jira Token（如果用户配置了的话）
-async function getJiraToken(): Promise<string | null> {
-  if (cachedJiraToken !== null) {
-    return cachedJiraToken || null;
-  }
-  try {
-    const envConfig = await getEnvConfig();
-    cachedJiraToken = envConfig.JIRA_API_TOKEN || '';
-    return cachedJiraToken || null;
-  } catch (error) {
-    console.log('未配置 Jira Token，将使用 cookie 模式访问');
-    cachedJiraToken = '';
-    return null;
-  }
-}
-
-// 创建请求 headers，支持 token 和 cookie fallback
-async function createJiraHeaders(): Promise<HeadersInit> {
-  const token = await getJiraToken();
-  const headers: HeadersInit = {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-cache'
-  };
-  
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  
-  return headers;
-}
+import { createJiraHeaders } from './jira';
 
 // 检测页面是否是Jira ticket详情页
 function isJiraTicketPage(): boolean {
