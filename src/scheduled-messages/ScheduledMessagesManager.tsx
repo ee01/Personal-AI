@@ -13,6 +13,7 @@ import { SheetSchemaUpdater } from './SheetSchemaUpdater';
 import { JiraRuleUpdater } from './JiraRuleUpdater';
 import Select, { StylesConfig, MultiValue, SingleValue } from 'react-select';
 import CreatableSelect from 'react-select/creatable';
+import { jiraFetch } from '../jira';
 
 // react-select 选项类型
 interface SelectOption {
@@ -1004,17 +1005,10 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
-  // 获取项目 ID（从项目 key）
+  // 获取项目 ID（从项目 key，使用统一的 jiraFetch）
   const getProjectIdFromKey = async (jiraUrl: string, projectKey: string): Promise<string | null> => {
     try {
-      const response = await fetch(`${jiraUrl}/rest/api/2/project/${projectKey}`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Cache-Control': 'no-cache'
-        },
-        credentials: 'include'
-      });
+      const response = await jiraFetch(`${jiraUrl}/rest/api/2/project/${projectKey}`);
       
       if (response.ok) {
         const data = await response.json();

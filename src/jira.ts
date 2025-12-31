@@ -5,6 +5,135 @@ import { getEnvConfig } from './utils';
 const JIRA_BASE_URL = 'https://jira.ringcentral.com';
 
 // =====================================================
+// JIRA 认证工具函数（统一管理 Token 和 Cookie 认证）
+// =====================================================
+
+// 缓存 Jira token
+let cachedJiraToken: string | null = null;
+
+/**
+ * 获取 JIRA Token（优先使用配置的 token）
+ * @returns token 字符串，如果未配置则返回 null
+ */
+export async function getJiraToken(): Promise<string | null> {
+  if (cachedJiraToken !== null) {
+    return cachedJiraToken || null;
+  }
+  try {
+    const envConfig = await getEnvConfig();
+    cachedJiraToken = envConfig.JIRA_API_TOKEN || '';
+    return cachedJiraToken || null;
+  } catch (error) {
+    console.log('未配置 Jira Token，将使用 cookie 模式访问');
+    cachedJiraToken = '';
+    return null;
+  }
+}
+
+/**
+ * 清除 token 缓存（当用户更新配置时调用）
+ */
+export function clearJiraTokenCache(): void {
+  cachedJiraToken = null;
+}
+
+/**
+ * 创建 JIRA 请求头，自动支持 token 和 cookie fallback
+ * @param additionalHeaders 额外的请求头
+ * @param overrideToken 可选的覆盖 token（用于调用方明确指定 token 的情况）
+ * @returns 请求头对象
+ */
+export async function createJiraHeaders(
+  additionalHeaders: Record<string, string> = {},
+  overrideToken?: string
+): Promise<Record<string, string>> {
+  const token = overrideToken ?? await getJiraToken();
+  
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',
+    ...additionalHeaders
+  };
+  
+  // 如果有 token，添加 Authorization 头
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+}
+
+/**
+ * 创建 JIRA 请求配置，自动支持 token 和 cookie fallback
+ * @param method HTTP 方法
+ * @param additionalHeaders 额外的请求头
+ * @param body 请求体（会被 JSON.stringify）
+ * @param overrideToken 可选的覆盖 token
+ * @returns fetch 请求的 init 配置对象
+ */
+export async function createJiraFetchInit(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+  additionalHeaders: Record<string, string> = {},
+  body?: any,
+  overrideToken?: string
+): Promise<RequestInit> {
+  const headers = await createJiraHeaders(additionalHeaders, overrideToken);
+  
+  const init: RequestInit = {
+    method,
+    headers,
+    credentials: 'include' // 始终包含 cookie 作为 fallback
+  };
+  
+  if (body && method !== 'GET') {
+    init.body = JSON.stringify(body);
+  }
+  
+  return init;
+}
+
+/**
+ * 统一的 JIRA API 请求方法
+ * 自动处理 token 和 cookie 双重认证
+ * 
+ * @param url 完整的 API URL 或相对路径
+ * @param options 请求配置
+ * @returns fetch Response
+ */
+export async function jiraFetch(
+  url: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    headers?: Record<string, string>;
+    body?: any;
+    token?: string;  // 可选的覆盖 token
+  } = {}
+): Promise<Response> {
+  const init = await createJiraFetchInit(
+    options.method || 'GET',
+    options.headers || {},
+    options.body,
+    options.token
+  );
+  
+  return fetch(url, init);
+}
+
+/**
+ * 获取 JIRA Base URL
+ * 优先从环境配置读取，否则使用默认值
+ */
+export async function getJiraBaseUrl(): Promise<string> {
+  try {
+    const envConfig = await getEnvConfig();
+    return envConfig.JIRA_BASE_URL || JIRA_BASE_URL;
+  } catch {
+    return JIRA_BASE_URL;
+  }
+}
+
+// =====================================================
 // 通用 JIRA API 工具函数
 // =====================================================
 
@@ -13,14 +142,8 @@ const JIRA_BASE_URL = 'https://jira.ringcentral.com';
  */
 export async function getCurrentUser(): Promise<{ success: boolean; ownerId?: string; accountId?: string; name?: string; error?: string }> {
   try {
-    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/myself`, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
-      credentials: 'include'
-    });
+    const baseUrl = await getJiraBaseUrl();
+    const response = await jiraFetch(`${baseUrl}/rest/api/2/myself`);
     
     if (!response.ok) {
       return { success: false, error: `获取用户信息失败 (${response.status})` };
@@ -55,14 +178,8 @@ export async function getProjectByKey(projectKey: string): Promise<{
   error?: string 
 }> {
   try {
-    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/project/${projectKey}`, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
-      credentials: 'include'
-    });
+    const baseUrl = await getJiraBaseUrl();
+    const response = await jiraFetch(`${baseUrl}/rest/api/2/project/${projectKey}`);
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -80,6 +197,110 @@ export async function getProjectByKey(projectKey: string): Promise<{
     };
   } catch (error: any) {
     return { success: false, error: error.message || '获取项目信息失败' };
+  }
+}
+
+/**
+ * 获取单个 JIRA Ticket 的详细信息
+ * @param ticketKey Ticket 的 key，如 INIT-23647
+ * @returns Ticket 详细信息
+ */
+export async function getTicketDetail(ticketKey: string): Promise<{
+  success: boolean;
+  data?: {
+    key: string;
+    summary: string;
+    status: string;
+    statusCategory: string;
+    issuetype: string;
+    priority: string;
+    assignee: string;
+    assigneeAvatar?: string;
+    reporter: string;
+    reporterAvatar?: string;
+    created: string;
+    updated: string;
+    duedate?: string;
+    resolution?: string;
+    labels: string[];
+    components: string[];
+    fixVersions: string[];
+    epicLink?: string;
+    epicName?: string;
+    storyPoints?: number;
+    sprint?: string;
+    description?: string;
+    url: string;
+  };
+  error?: string;
+}> {
+  try {
+    const baseUrl = await getJiraBaseUrl();
+    const fields = [
+      'summary', 'status', 'issuetype', 'priority', 'assignee', 'reporter',
+      'created', 'updated', 'duedate', 'resolution', 'labels', 'components',
+      'fixVersions', 'customfield_11450', 'customfield_11451', 'customfield_10106',
+      'description'
+    ].join(',');
+    
+    const response = await jiraFetch(`${baseUrl}/rest/api/2/issue/${ticketKey}?fields=${fields}`);
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        return { success: false, error: `Ticket ${ticketKey} 不存在` };
+      }
+      if (response.status === 401 || response.status === 403) {
+        return { success: false, error: '未授权访问，请先登录 JIRA' };
+      }
+      return { success: false, error: `获取 Ticket 信息失败 (${response.status})` };
+    }
+    
+    const issue = await response.json();
+    const fields_data = issue.fields;
+    
+    // 处理 Sprint 字段 (customfield_10106)
+    let sprintName: string | undefined;
+    if (fields_data.customfield_10106 && Array.isArray(fields_data.customfield_10106)) {
+      const activeSprint = fields_data.customfield_10106.find((s: any) => s.state === 'active');
+      const latestSprint = activeSprint || fields_data.customfield_10106[fields_data.customfield_10106.length - 1];
+      if (latestSprint) {
+        sprintName = typeof latestSprint === 'string' 
+          ? latestSprint.match(/name=([^,]+)/)?.[1] 
+          : latestSprint.name;
+      }
+    }
+    
+    return {
+      success: true,
+      data: {
+        key: issue.key,
+        summary: fields_data.summary || '',
+        status: fields_data.status?.name || '',
+        statusCategory: fields_data.status?.statusCategory?.key || '',
+        issuetype: fields_data.issuetype?.name || '',
+        priority: fields_data.priority?.name || '',
+        assignee: fields_data.assignee?.displayName || '未分配',
+        assigneeAvatar: fields_data.assignee?.avatarUrls?.['24x24'],
+        reporter: fields_data.reporter?.displayName || '',
+        reporterAvatar: fields_data.reporter?.avatarUrls?.['24x24'],
+        created: fields_data.created || '',
+        updated: fields_data.updated || '',
+        duedate: fields_data.duedate,
+        resolution: fields_data.resolution?.name,
+        labels: fields_data.labels || [],
+        components: (fields_data.components || []).map((c: any) => c.name),
+        fixVersions: (fields_data.fixVersions || []).map((v: any) => v.name),
+        epicLink: fields_data.customfield_11450,
+        epicName: fields_data.customfield_11451,
+        storyPoints: fields_data.customfield_10106,
+        sprint: sprintName,
+        description: fields_data.description?.substring(0, 500),
+        url: `${baseUrl}/browse/${issue.key}`
+      }
+    };
+  } catch (error: any) {
+    console.error('Error fetching ticket detail:', error);
+    return { success: false, error: error.message || '获取 Ticket 信息失败' };
   }
 }
 

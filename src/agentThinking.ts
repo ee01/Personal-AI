@@ -6,6 +6,7 @@
 import { callLLMJsonAPI } from './llm';
 import { memorySystem } from './memory';
 import { getEnvConfig } from './utils';
+import { jiraFetch, getJiraBaseUrl, getJiraToken } from './jira';
 import { 
   AnalysisConfig, 
   AnalysisContext,
@@ -520,20 +521,10 @@ export class IntelligentAgent {
       ],
       execute: async (params) => {
         try {
-          // 从环境配置或参数中获取JIRA连接信息
-          const envConfig = await getEnvConfig();
-          const jiraBaseUrl = envConfig.JIRA_BASE_URL || 'https://your-domain.atlassian.net';
-          const apiToken = envConfig.JIRA_API_TOKEN;
+          // 从环境配置或公共方法获取JIRA连接信息（自动支持 token 和 cookie fallback）
+          const jiraBaseUrl = await getJiraBaseUrl();
+          const apiToken = await getJiraToken();
           const excludeCommentKeyworkds = ['Esone\'s AI', 'SDET bot'];
-          
-          // 检查认证信息是否可用
-          if (!apiToken) {
-            return {
-              success: false,
-              source: 'jira-api',
-              error: '缺少JIRA认证信息，请在参数中提供username和apiToken或在环境配置中设置'
-            };
-          }
           
           // 生成缓存键
           let cacheKey = '';
@@ -558,23 +549,16 @@ export class IntelligentAgent {
             return cacheEntry.data;
           }
           
-          // 为Basic认证创建Authorization头
-          const authHeader = `Bearer ${apiToken}`;
-          
           let result;
           let resultMessage = '';
           let type = 'single';
           // 处理不同的查询类型
           if (params.issueId) {
-            // 查询单个JIRA问题
+            // 查询单个JIRA问题（使用统一的 jiraFetch，自动处理 token 和 cookie）
             const issueUrl = `${jiraBaseUrl}/rest/api/2/issue/${params.issueId}`;
             
-            const response = await fetch(issueUrl, {
-              method: 'GET',
-              headers: {
-                'Accept': 'application/json',
-                'Authorization': authHeader
-              }
+            const response = await jiraFetch(issueUrl, {
+              token: apiToken || undefined
             });
             
             if (!response.ok) {
@@ -621,16 +605,11 @@ export class IntelligentAgent {
             
             console.log(`执行JQL查询: ${jql}`);
             
-            // 使用POST方法进行搜索以处理可能较长的JQL
+            // 使用POST方法进行搜索以处理可能较长的JQL（使用统一的 jiraFetch）
             const searchUrl = `${jiraBaseUrl}/rest/api/2/search`;
-            const response = await fetch(searchUrl, {
+            const response = await jiraFetch(searchUrl, {
               method: 'POST',
-              headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': authHeader
-              },
-              body: JSON.stringify({
+              body: {
                 jql: jql,
                 maxResults: 10,
                 fields: [
@@ -645,7 +624,8 @@ export class IntelligentAgent {
                   'duedate',
                   'reporter'
                 ]
-              })
+              },
+              token: apiToken || undefined
             });
             
             if (!response.ok) {

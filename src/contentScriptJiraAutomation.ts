@@ -6,12 +6,12 @@
 import { getLocalStorageItem, setLocalStorageItem } from "./storage";
 import { 
   parseCronExpression, 
-  parseDaysOfWeek, 
   getNextScheduleDate,
   parseFixedRateConfig,
   formatDaysOfWeekDisplay,
   jiraDaysToJsDays
 } from './scheduled-messages/scheduleUtils';
+import { createJiraHeaders } from './jira';
 
 // 类型定义
 interface ExportedRule {
@@ -105,15 +105,14 @@ async function getCurrentOwnerId(): Promise<string> {
       }
     }
     
-    // 如果页面元素中也获取不到，尝试通过API获取
+    // 如果页面元素中也获取不到，尝试通过API获取（使用统一的认证方法）
     try {
       console.log('Trying to get ownerId from JIRA API...');
+      const headers = await createJiraHeaders();
       const response = await fetch(window.location.origin + '/rest/api/2/myself', {
         method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Cache-Control': 'no-cache'
-        }
+        headers,
+        credentials: 'include'
       });
       
       if (response.ok) {
@@ -358,16 +357,14 @@ async function convertExportedRuleToImportFormat(exportedRule: ExportedRule, pro
   };
 }
 
-// 创建automation rule的API调用
+// 创建automation rule的API调用（使用统一的认证方法）
 async function createAutomationRule(ruleData: ImportRule, projectId: string): Promise<any> {
   try {
+    const headers = await createJiraHeaders();
     const response = await fetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
+      headers,
+      credentials: 'include',
       body: JSON.stringify(ruleData)
     });
     
@@ -742,12 +739,11 @@ interface RuleInfo {
  */
 async function getAllProjectRules(projectId: string): Promise<any[]> {
   try {
+    // 使用统一的认证方法
+    const headers = await createJiraHeaders();
     const response = await fetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
       method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
+      headers,
       credentials: 'include'
     });
     
@@ -829,13 +825,11 @@ async function getRuleDetails(ruleId: string, projectId: string): Promise<RuleIn
 async function getRuleAuditLog(ruleId: string, projectId: string): Promise<any[]> {
   try {
     // 使用正确的 API 路径：/rest/cb-automation/latest/audit/{projectId}?limit=50&ruleId={ruleId}&offset=0
+    // 使用统一的认证方法
+    const headers = await createJiraHeaders();
     const response = await fetch(`/rest/cb-automation/latest/audit/${projectId}?limit=50&ruleId=${ruleId}&offset=0`, {
       method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache'
-      },
+      headers,
       credentials: 'include'
     });
     

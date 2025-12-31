@@ -5,6 +5,7 @@
 
 import ruleTemplate from './jira-rule-template.json';
 import { getEnvConfig } from '../utils';
+import { getJiraToken, jiraFetch } from '../jira';
 
 // Jira Rule 版本信息（从模板的 _metadata 字段读取）
 export const JIRA_RULE_VERSION = (ruleTemplate as any)._metadata?.version || '1.0.0';
@@ -47,20 +48,26 @@ export interface JiraRule {
 
 export class JiraAutomationService {
   /**
+   * 获取有效的 token（优先使用 config.token，否则自动从配置获取）
+   */
+  private async getEffectiveToken(config: JiraAutomationConfig): Promise<string | undefined> {
+    // 如果 config 中明确指定了 token，优先使用
+    if (config.token) {
+      return config.token;
+    }
+    // 否则从全局配置自动获取
+    const token = await getJiraToken();
+    return token || undefined;
+  }
+  
+  /**
    * 获取当前用户的 account key
    */
   private async getCurrentUserKey(config: JiraAutomationConfig): Promise<string> {
     const url = `${config.jiraUrl}/rest/api/2/myself`;
+    const token = await this.getEffectiveToken(config);
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include'
-    });
+    const response = await jiraFetch(url, { token });
     
     if (!response.ok) {
       throw new Error(`无法获取用户信息 (${response.status}): ${await response.text()}`);
@@ -84,15 +91,9 @@ export class JiraAutomationService {
    */
   private async getProjectId(config: JiraAutomationConfig): Promise<string> {
     const url = `${config.jiraUrl}/rest/api/2/project/${config.projectKey}`;
+    const token = await this.getEffectiveToken(config);
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include'
-    });
+    const response = await jiraFetch(url, { token });
     
     if (!response.ok) {
       throw new Error(`无法获取项目信息 (${response.status}): ${await response.text()}`);
@@ -132,14 +133,16 @@ export class JiraAutomationService {
    */
   async testAccess(config: JiraAutomationConfig): Promise<{ success: boolean; message: string }> {
     try {
-      // 先检查登录状态
+      // 检查是否有可用的认证方式
+      const token = await this.getEffectiveToken(config);
       const loginStatus = await this.checkJiraLoginStatus(config.jiraUrl);
       console.log('Jira 登录状态:', loginStatus);
+      console.log('Token 可用:', !!token);
       
-      if (!loginStatus.loggedIn && !config.token) {
+      if (!loginStatus.loggedIn && !token) {
         return { 
           success: false, 
-          message: '未检测到 Jira 登录状态。请先在浏览器中打开 Jira 并登录，或提供 Personal Access Token。' 
+          message: '未检测到 Jira 登录状态且未配置 Token。请先在浏览器中打开 Jira 并登录，或在设置中配置 Personal Access Token。' 
         };
       }
       
@@ -150,14 +153,7 @@ export class JiraAutomationService {
       
       const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
       
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-        },
-        credentials: 'include'  // 使用 cookies 认证
-      });
+      const response = await jiraFetch(url, { token });
       
       console.log('Jira API 响应状态:', response.status);
       
@@ -168,10 +164,10 @@ export class JiraAutomationService {
         console.error('认证失败，响应:', errorText);
         
         // 提供更详细的错误信息
-        if (!loginStatus.loggedIn) {
+        if (!loginStatus.loggedIn && !token) {
           return { 
             success: false, 
-            message: '认证失败：未检测到 Jira 登录。请在新标签页中打开 Jira 并完成登录后重试。' 
+            message: '认证失败：未检测到 Jira 登录且未配置 Token。请在新标签页中打开 Jira 并完成登录，或在设置中配置 Personal Access Token。' 
           };
         } else {
           return { 
@@ -251,16 +247,13 @@ export class JiraAutomationService {
     console.log('Rule Payload:', JSON.stringify(rulePayload, null, 2));
     
     const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
+    const token = await this.getEffectiveToken(config);
     
-    const response = await fetch(url, {
+    const response = await jiraFetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Atlassian-Token': 'no-check',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include',
-      body: JSON.stringify(rulePayload)
+      headers: { 'X-Atlassian-Token': 'no-check' },
+      body: rulePayload,
+      token
     });
     
     if (!response.ok) {
@@ -289,15 +282,9 @@ export class JiraAutomationService {
     // 获取项目 ID 
     const projectId = await this.getProjectId(config);
     const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
+    const token = await this.getEffectiveToken(config);
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include'
-    });
+    const response = await jiraFetch(url, { token });
     
     if (!response.ok) {
       throw new Error(`获取规则列表失败 (${response.status})`);
@@ -335,14 +322,12 @@ export class JiraAutomationService {
    */
   async deleteRule(config: JiraAutomationConfig, ruleId: string): Promise<void> {
     const url = `${config.jiraUrl}/rest/cb-automation/latest/rule/${ruleId}`;
+    const token = await this.getEffectiveToken(config);
     
-    const response = await fetch(url, {
+    const response = await jiraFetch(url, {
       method: 'DELETE',
-      headers: {
-        'X-Atlassian-Token': 'no-check',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include'
+      headers: { 'X-Atlassian-Token': 'no-check' },
+      token
     });
     
     if (!response.ok) {
@@ -419,18 +404,13 @@ export class JiraAutomationService {
     console.log('Rule Payload:', JSON.stringify(mergedPayload, null, 2));
     
     const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`;
+    const token = await this.getEffectiveToken(config);
     
-    const response = await fetch(url, {
+    const response = await jiraFetch(url, {
       method: 'PUT',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-Atlassian-Token': 'no-check',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include',
-      body: JSON.stringify(mergedPayload)
+      headers: { 'X-Atlassian-Token': 'no-check' },
+      body: mergedPayload,
+      token
     });
     
     if (!response.ok) {
@@ -701,17 +681,9 @@ export class JiraAutomationService {
       const projectId = await this.getProjectId(config);
       // 使用正确的 API 路径：/rest/cb-automation/latest/audit/{projectId}?limit={limit}&ruleId={ruleId}&offset=0
       const url = `${config.jiraUrl}/rest/cb-automation/latest/audit/${projectId}?limit=${limit}&ruleId=${ruleId}&offset=0`;
+      const token = await this.getEffectiveToken(config);
       
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache',
-          ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-        },
-        credentials: 'include'
-      });
+      const response = await jiraFetch(url, { token });
       
       if (!response.ok) {
         console.warn(`获取 Audit Log 失败 (${response.status}): ${response.statusText}`);
@@ -759,17 +731,10 @@ export class JiraAutomationService {
    */
   async getSecureToken(config: JiraAutomationConfig): Promise<string> {
     const projectId = await this.getProjectId(config);
+    const token = await this.getEffectiveToken(config);
     
     const tokenUrl = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/securetoken`;
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include'
-    });
+    const tokenResponse = await jiraFetch(tokenUrl, { token });
     
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
@@ -791,6 +756,7 @@ export class JiraAutomationService {
    */
   async createRule(config: JiraAutomationConfig, ruleData: any): Promise<any> {
     const projectId = await this.getProjectId(config);
+    const token = await this.getEffectiveToken(config);
     
     // 处理 webhook trigger：如果是 incoming webhook，需要获取新的 securetoken
     let finalRuleData = ruleData;
@@ -818,16 +784,10 @@ export class JiraAutomationService {
     
     const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
     
-    const response = await fetch(url, {
+    const response = await jiraFetch(url, {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include',
-      body: JSON.stringify(finalRuleData)
+      body: finalRuleData,
+      token
     });
     
     if (!response.ok) {
@@ -888,16 +848,12 @@ export class JiraAutomationService {
     
     // 直接调用 PUT API 更新规则（不使用 updateRule 方法以避免额外的合并逻辑）
     const updateUrl = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`;
-    const updateResponse = await fetch(updateUrl, {
+    const token = await this.getEffectiveToken(config);
+    
+    const updateResponse = await jiraFetch(updateUrl, {
       method: 'PUT',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include',
-      body: JSON.stringify(updatePayload)
+      body: updatePayload,
+      token
     });
     
     if (!updateResponse.ok) {
@@ -979,16 +935,12 @@ export class JiraAutomationService {
     
     // 调用 PUT API 更新规则
     const updateUrl = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`;
-    const updateResponse = await fetch(updateUrl, {
+    const token = await this.getEffectiveToken(config);
+    
+    const updateResponse = await jiraFetch(updateUrl, {
       method: 'PUT',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(config.token ? { 'Authorization': `Bearer ${config.token}` } : {})
-      },
-      credentials: 'include',
-      body: JSON.stringify(updatePayload)
+      body: updatePayload,
+      token
     });
     
     if (!updateResponse.ok) {
