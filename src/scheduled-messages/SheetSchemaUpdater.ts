@@ -106,6 +106,10 @@ export class SheetSchemaUpdater {
     const startColumn = this.columnIndexToLetter(currentHeaders.length);
     const endColumn = this.columnIndexToLetter(currentHeaders.length + missingColumns.length - 1);
     
+    // 先扩展表格列数（如果需要）
+    const requiredColumns = currentHeaders.length + missingColumns.length;
+    await this.ensureColumnCount(requiredColumns);
+    
     // 添加表头
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}/values/Messages!${startColumn}1:${endColumn}1?valueInputOption=USER_ENTERED`,
@@ -130,6 +134,82 @@ export class SheetSchemaUpdater {
     await this.formatNewHeaders(currentHeaders.length, missingColumns.length);
     
     console.log(`✅ 已添加 ${missingColumns.length} 个新列: ${missingColumns.join(', ')}`);
+  }
+  
+  /**
+   * 确保表格有足够的列数
+   */
+  private async ensureColumnCount(requiredColumns: number): Promise<void> {
+    const messagesSheetId = this.config.messagesSheetId || 0;
+    
+    // 获取当前表格的列数
+    const metaResponse = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}?fields=sheets(properties)`,
+      {
+        headers: {
+          'Authorization': `Bearer ${this.token}`
+        }
+      }
+    );
+    
+    if (!metaResponse.ok) {
+      console.warn('无法获取表格元数据，尝试直接扩展列');
+      // 直接尝试扩展列
+      await this.appendColumns(messagesSheetId, requiredColumns);
+      return;
+    }
+    
+    const metaData = await metaResponse.json();
+    const messagesSheet = metaData.sheets?.find(
+      (s: { properties: { sheetId: number } }) => s.properties.sheetId === messagesSheetId
+    );
+    
+    const currentColumnCount = messagesSheet?.properties?.gridProperties?.columnCount || 26;
+    
+    if (currentColumnCount >= requiredColumns) {
+      console.log(`表格列数足够: ${currentColumnCount} >= ${requiredColumns}`);
+      return;
+    }
+    
+    // 需要增加列
+    const columnsToAdd = requiredColumns - currentColumnCount + 5; // 多预留 5 列
+    console.log(`扩展表格列数: ${currentColumnCount} + ${columnsToAdd} = ${currentColumnCount + columnsToAdd}`);
+    
+    await this.appendColumns(messagesSheetId, columnsToAdd);
+  }
+  
+  /**
+   * 向表格追加列
+   */
+  private async appendColumns(sheetId: number, count: number): Promise<void> {
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              appendDimension: {
+                sheetId: sheetId,
+                dimension: 'COLUMNS',
+                length: count
+              }
+            }
+          ]
+        })
+      }
+    );
+    
+    if (!response.ok) {
+      const error = await response.text();
+      console.warn(`扩展列失败: ${error}，但会尝试继续`);
+    } else {
+      console.log(`✅ 已扩展 ${count} 列`);
+    }
   }
   
   /**

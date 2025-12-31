@@ -127,7 +127,16 @@ export class SheetInitializer {
             title: `${userInfo.given_name} 的定时消息管理`
           },
           sheets: [
-            { properties: { title: 'Messages', gridProperties: { frozenRowCount: 1 } } },
+            { 
+              properties: { 
+                title: 'Messages', 
+                gridProperties: { 
+                  frozenRowCount: 1,
+                  // 确保列数足够容纳所有 schema 列，预留 5 列用于未来扩展
+                  columnCount: Math.max(MESSAGES_SCHEMA.columns.length + 5, 26)
+                } 
+              } 
+            },
             { properties: { title: 'Config', gridProperties: { frozenRowCount: 1 } } },
             { properties: { title: 'Logs', gridProperties: { frozenRowCount: 1 } } }
           ]
