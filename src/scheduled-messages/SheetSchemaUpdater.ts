@@ -31,6 +31,9 @@ export class SheetSchemaUpdater {
     try {
       console.log('🔍 检查 Sheet 表结构...');
       
+      // 0. 主动验证并刷新 messagesSheetId（修复老用户的配置）
+      await this.refreshSheetIds();
+      
       // 1. 获取当前 Messages 表的表头
       const currentHeaders = await this.getMessagesHeaders();
       console.log('当前表头:', currentHeaders);
@@ -73,6 +76,76 @@ export class SheetSchemaUpdater {
         addedColumns: [],
         error: error instanceof Error ? error.message : String(error)
       };
+    }
+  }
+  
+  /**
+   * 主动验证并刷新 Sheet IDs（messagesSheetId, logsSheetId）
+   * 通过工作表名称获取真实的 sheetId，修复老用户可能存在的配置问题
+   */
+  private async refreshSheetIds(): Promise<void> {
+    try {
+      console.log('🔄 验证 Sheet IDs...');
+      
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}?fields=sheets.properties`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.token}`
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        console.warn('无法获取 Sheet 元数据，跳过 ID 验证');
+        return;
+      }
+      
+      const data = await response.json();
+      const sheets = data.sheets || [];
+      
+      // 通过工作表名称找到真实的 sheetId
+      const messagesSheet = sheets.find((s: any) => s.properties?.title === 'Messages');
+      const logsSheet = sheets.find((s: any) => s.properties?.title === 'Logs');
+      
+      let needsUpdate = false;
+      
+      if (messagesSheet) {
+        const realMessagesSheetId = messagesSheet.properties.sheetId;
+        if (this.config.messagesSheetId !== realMessagesSheetId) {
+          console.log(`📝 修复 messagesSheetId: ${this.config.messagesSheetId} -> ${realMessagesSheetId}`);
+          this.config.messagesSheetId = realMessagesSheetId;
+          needsUpdate = true;
+        }
+      }
+      
+      if (logsSheet) {
+        const realLogsSheetId = logsSheet.properties.sheetId;
+        if (this.config.logsSheetId !== realLogsSheetId) {
+          console.log(`📝 修复 logsSheetId: ${this.config.logsSheetId} -> ${realLogsSheetId}`);
+          this.config.logsSheetId = realLogsSheetId;
+          needsUpdate = true;
+        }
+      }
+      
+      // 如果有变更，同步保存到 Chrome Storage 和 Config Sheet
+      if (needsUpdate) {
+        // 保存到 Chrome Storage
+        await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+        
+        // 保存到 Config Sheet
+        const { ConfigSyncService } = await import('./ConfigSyncService');
+        const syncService = new ConfigSyncService(this.token);
+        await syncService.saveConfigToSheet(this.config);
+        
+        console.log('✅ Sheet IDs 已修复并同步');
+      } else {
+        console.log('✅ Sheet IDs 验证通过');
+      }
+      
+    } catch (error) {
+      console.warn('验证 Sheet IDs 失败，继续执行:', error);
+      // 不抛出错误，允许继续执行后续逻辑
     }
   }
   

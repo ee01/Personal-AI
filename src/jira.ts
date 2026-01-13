@@ -315,6 +315,7 @@ export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
         
         // 监听来自 background script 的消息
         const messageListener = (message: any) => {
+            // 只处理匹配的消息类型和请求ID
             if (message.type === 'JIRA_TICKETS_RESULT' && message.requestId === requestId) {
                 chrome.runtime.onMessage.removeListener(messageListener);
                 if (message.error) {
@@ -322,8 +323,10 @@ export async function fetchJiraTickets(jql: string): Promise<JiraTicket[]> {
                 } else {
                     resolve(message.tickets);
                 }
+                return true; // 只对匹配的消息返回 true
             }
-            return true;
+            // 不处理的消息类型，返回 false 或不返回，让其他监听器处理
+            return false;
         };
         
         chrome.runtime.onMessage.addListener(messageListener);

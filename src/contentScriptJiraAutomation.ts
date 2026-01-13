@@ -861,7 +861,7 @@ function createScheduleButton(ruleId: string, projectId: string, doc: Document, 
   button.setAttribute('data-rule-id', ruleId);
   
   // 使用同一个 icon，通过 CSS filter 实现灰色效果
-  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+  const iconUrl = chrome.runtime.getURL('icons/icon32.png');
   
   // 根据管理状态设置不同的样式和提示
   if (isManaged) {
