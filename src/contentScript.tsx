@@ -7,6 +7,7 @@ import { ViewModel } from './viewModel';
 import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 import { getLocalStorageItem, getCurrentUserInfo } from './storage';
+import { initSnooze } from './snooze';
 
 // =====================================================
 // Jira Ticket 悬浮卡片功能
@@ -144,7 +145,7 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
   
   const statusColors = getStatusColor(ticket.statusCategory);
   const priorityColor = getPriorityColor(ticket.priority);
-  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+  const iconUrl = chrome.runtime.getURL('icons/icon32.png');
   
   card.innerHTML = `
     <div class="jira-card-header">
@@ -425,7 +426,7 @@ function isOverdue(duedate: string): boolean {
 function injectJiraCardStyles() {
   if (document.getElementById('jira-hover-card-styles')) return;
   
-  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+  const iconUrl = chrome.runtime.getURL('icons/icon32.png');
   
   const style = document.createElement('style');
   style.id = 'jira-hover-card-styles';
@@ -714,7 +715,7 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
   const ticketKey = match[1].toUpperCase();
   
   // 创建图标
-  const iconUrl = chrome.runtime.getURL('icons/icon16.png');
+  const iconUrl = chrome.runtime.getURL('icons/icon32.png');
   const icon = document.createElement('img');
   icon.src = iconUrl;
   icon.className = 'jira-link-icon';
@@ -803,9 +804,11 @@ function initJiraLinkProcessor() {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(initJiraLinkProcessor, 1000);
+    setTimeout(initSnooze, 1500);  // 初始化 Snooze 稍后处理功能
   });
 } else {
   setTimeout(initJiraLinkProcessor, 1000);
+  setTimeout(initSnooze, 1500);  // 初始化 Snooze 稍后处理功能
 }
 
 
@@ -842,12 +845,14 @@ function bootstrap() {
 }
 
 // Main listener
+// 注意：只有当 contentScript 实际处理某个消息类型时才返回 true
+// 如果不处理，应该返回 false 或 undefined，让其他监听器（如 background.ts）处理
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('收到消息:', message, '发送者:', sender);
 
     if (!message || !message.type) {
         console.warn('收到无效消息格式');
-        return;
+        return false; // 不处理，让其他监听器处理
     }
 
     const { type } = message;
@@ -869,6 +874,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log('处理 RADAR-POC-OPEN-PANEL 消息');
         bootstrap();
         sendResponse({ status: 'done', type });
+        return true; // 添加 return true
     }
 
     if (type === 'FETCH_USER_MESSAGES') {
@@ -911,7 +917,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true; // 保持消息通道开启
     }
 
-    return true; // 为所有消息保持消息通道开启
+    // 不处理的消息类型，返回 false 让其他监听器（如 background.ts）处理
+    return false;
 });
 
 function getUserInfoInRCTab() {

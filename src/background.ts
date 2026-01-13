@@ -19,6 +19,7 @@ import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
 import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './jira';
+import { handleLLMRequest } from './llm';
 
 console.log('Background script loaded');
 
@@ -1005,6 +1006,250 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 console.error('❌ 获取项目 ID 失败:', result.error);
             }
             sendResponse(result);
+        })();
+        return true;
+    }
+    
+    // =====================================================
+    // Snooze 稍后处理功能
+    // =====================================================
+    
+    // 创建 Snooze 提醒（从 RingCentral 消息页面调用）
+    // 注意：MV3 Service Worker 有严格的生命周期管理，需要快速返回响应
+    if (request.type === 'CREATE_SNOOZE_REMINDER') {
+        console.log('🔔 Background: 收到 CREATE_SNOOZE_REMINDER 请求');
+        
+        // 使用同步方式获取必要数据，然后快速响应
+        const { messageInfo, remindAt, note } = request.data;
+        console.log('🔔 Background: Snooze 请求数据:', {
+            messageId: messageInfo?.id,
+            groupName: messageInfo?.groupName,
+            remindAt: remindAt
+        });
+        
+        // 快速处理核心逻辑，然后立即响应
+        (async () => {
+            try {
+                // 获取配置
+                console.log('🔔 Background: 获取配置...');
+                const result = await chrome.storage.local.get(['scheduledMessagesConfig', 'userinfo']);
+                const config = result.scheduledMessagesConfig;
+                const userinfo = result.userinfo;
+                
+                console.log('🔔 Background: 配置状态:', {
+                    hasConfig: !!config,
+                    hasSheetId: !!config?.sheetId,
+                    hasUserinfo: !!userinfo
+                });
+                
+                if (!config || !config.sheetId) {
+                    console.error('❌ Background: 未配置 Scheduled Messages');
+                    sendResponse({ success: false, error: '请先在设置中初始化定时消息系统' });
+                    return;
+                }
+                
+                // 获取 auth token
+                console.log('🔔 Background: 获取 Google Auth Token...');
+                const token = await getAuthToken();
+                console.log('🔔 Background: Token 获取成功');
+                
+                const service = new ScheduledMessageService(token);
+                
+                // 格式化提醒时间
+                const remindDate = new Date(remindAt);
+                const dateStr = remindDate.toISOString().split('T')[0];  // YYYY-MM-DD
+                const timeStr = remindDate.toTimeString().slice(0, 5);   // HH:mm
+                
+                console.log('🔔 Background: 提醒时间:', dateStr, timeStr);
+                
+                // 直接使用群组名作为 Topic，跳过耗时的 LLM 调用
+                // LLM 摘要会在后台异步更新
+                const topicSummary = messageInfo.groupName || '消息提醒';
+                
+                // 构建提醒内容
+                const contentParts = [
+                    `📌 **您设置了一个稍后处理提醒**`,
+                    ``,
+                    `**来自**: ${messageInfo.senderName}`,
+                    `**群组**: ${messageInfo.groupName}`,
+                    `**原文摘要**:`,
+                    `> ${messageInfo.content}`,
+                    ``,
+                    `🔗 [点击查看原消息](${messageInfo.messageLink})`
+                ];
+                
+                if (note) {
+                    contentParts.splice(2, 0, `**备注**: ${note}`);
+                }
+                
+                // 创建定时消息（核心操作）
+                console.log('🔔 Background: 创建定时消息...');
+                const newMessage = await service.createMessage({
+                    Topic: `稍后处理: ${topicSummary}`,
+                    Content: contentParts.join('\n'),
+                    Schedule_Date: dateStr,
+                    Schedule_Time: timeStr,
+                    Push_Method: 'Bot',
+                    Target_Type: 'private',
+                    Glip_User_Name: userinfo?.fullName || userinfo?.username || '',
+                    Category: 'Snooze,提醒'
+                });
+                
+                console.log('✅ Background: Snooze 定时消息创建成功:', newMessage.ID);
+                
+                // 🔥 立即发送成功响应，避免消息通道超时
+                sendResponse({ success: true, messageId: newMessage.ID });
+                
+                // ========== 以下为后台异步任务，不阻塞响应 ==========
+                
+                // 异步生成 LLM 摘要并更新 Topic（可选，失败不影响主功能）
+                setTimeout(async () => {
+                    try {
+                        console.log('🔔 Background: 后台生成消息摘要...');
+                        const summaryPrompt = `请用不超过15个字概括以下消息的核心内容，直接输出摘要，不要任何前缀或解释：
+
+消息内容：${messageInfo.content}`;
+                        
+                        const summaryResult = await handleLLMRequest({ prompt: summaryPrompt });
+                        if (summaryResult && summaryResult.trim()) {
+                            const newTopicSummary = summaryResult.trim().substring(0, 20);
+                            console.log('✅ Background: 后台摘要生成成功:', newTopicSummary);
+                            
+                            // 更新已创建消息的 Topic
+                            try {
+                                const freshToken = await getAuthToken();
+                                const freshService = new ScheduledMessageService(freshToken);
+                                await freshService.updateMessage(newMessage.ID, {
+                                    Topic: `稍后处理: ${newTopicSummary}`
+                                });
+                                console.log('✅ Background: 消息 Topic 已更新');
+                            } catch (updateError) {
+                                console.warn('⚠️ Background: 更新 Topic 失败（不影响功能）:', updateError);
+                            }
+                        }
+                    } catch (summaryError) {
+                        console.warn('⚠️ Background: 后台摘要生成失败（不影响功能）:', summaryError);
+                    }
+                }, 100);
+                
+                // 异步存储到云端记忆系统
+                setTimeout(async () => {
+                    try {
+                        console.log('🔔 Background: 后台存储 Snooze 消息到云端记忆...');
+                        
+                        const messageId = `snooze_${messageInfo.id}_${Date.now()}`;
+                        const messageContent = `[稍后处理] ${messageInfo.senderName}: ${messageInfo.content}`;
+                        
+                        await memorySystem.storeMessage({
+                            id: messageId,
+                            content: messageContent,
+                            metadata: {
+                                sender: messageInfo.senderName,
+                                groupId: messageInfo.groupId,
+                                groupName: messageInfo.groupName,
+                                groupUrl: messageInfo.messageLink,
+                                datetime: Date.now(),
+                                summary: `用户主动关注的消息：${messageInfo.content.substring(0, 100)}`,
+                                matchedRules: ['user_snooze'],
+                                replyAdvice: '',
+                                contextMessages: [{
+                                    id: messageInfo.id,
+                                    sender: messageInfo.senderName,
+                                    content: messageInfo.content,
+                                    datetime: messageInfo.timestamp,
+                                    isMainMessage: true
+                                }],
+                                entities: {
+                                    people: messageInfo.senderName ? [{
+                                        name: messageInfo.senderName,
+                                        type: 'Person',
+                                        relevanceScore: 0.9
+                                    }] : [],
+                                    topics: [{
+                                        name: messageInfo.groupName,
+                                        type: 'Topic',
+                                        relevanceScore: 0.8
+                                    }]
+                                },
+                                metadata: {
+                                    snoozeInfo: {
+                                        remindAt: remindAt,
+                                        scheduledMessageId: newMessage.ID,
+                                        note: note || ''
+                                    }
+                                }
+                            }
+                        });
+                        
+                        console.log('✅ Background: Snooze 消息已存储到云端记忆');
+                        
+                        // 更新用户画像
+                        if (memorySystem.userProfileManager) {
+                            console.log('🔔 Background: 后台更新用户画像...');
+                            
+                            if (messageInfo.senderName) {
+                                await memorySystem.updateUserProfile({
+                                    userId: userinfo?.userId || userinfo?.id || 'unknown',
+                                    action: {
+                                        actionType: 'favorite',
+                                        timestamp: Date.now(),
+                                        context: 'snooze_reminder',
+                                        weight: 0.3,
+                                        metadata: {
+                                            messageId: messageInfo.id,
+                                            groupName: messageInfo.groupName,
+                                            remindAt: remindAt
+                                        }
+                                    },
+                                    targetItem: {
+                                        id: messageInfo.senderName.replace(/\s+/g, '_').toLowerCase(),
+                                        type: 'person',
+                                        name: messageInfo.senderName,
+                                        metadata: {
+                                            source: 'snooze',
+                                            groupName: messageInfo.groupName
+                                        }
+                                    }
+                                });
+                            }
+                            
+                            if (messageInfo.groupName) {
+                                await memorySystem.updateUserProfile({
+                                    userId: userinfo?.userId || userinfo?.id || 'unknown',
+                                    action: {
+                                        actionType: 'favorite',
+                                        timestamp: Date.now(),
+                                        context: 'snooze_reminder',
+                                        weight: 0.2,
+                                        metadata: {
+                                            messageId: messageInfo.id,
+                                            senderName: messageInfo.senderName
+                                        }
+                                    },
+                                    targetItem: {
+                                        id: messageInfo.groupName.replace(/\s+/g, '_').toLowerCase(),
+                                        type: 'topic',
+                                        name: messageInfo.groupName,
+                                        metadata: {
+                                            source: 'snooze',
+                                            groupId: messageInfo.groupId
+                                        }
+                                    }
+                                });
+                            }
+                            
+                            console.log('✅ Background: 用户画像已更新');
+                        }
+                    } catch (memoryError) {
+                        console.error('⚠️ Background: 后台存储到记忆系统失败（不影响提醒功能）:', memoryError);
+                    }
+                }, 200);
+                
+            } catch (error: any) {
+                console.error('❌ Background: 创建 Snooze 提醒失败:', error);
+                console.error('❌ Background: 错误堆栈:', error.stack);
+                sendResponse({ success: false, error: error.message || '创建失败' });
+            }
         })();
         return true;
     }

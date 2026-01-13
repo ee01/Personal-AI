@@ -4326,7 +4326,9 @@ ${content}
                       onChange={(e) => setAiReportTeamId(e.target.value)}
                       placeholder="例如：148192141318"
                     />
-                    <small style={dialogStyles.hint}>可选，填入后会将报告发送到指定群组</small>
+                    <small style={dialogStyles.hint}>
+                      如何获取 Team ID 请参考 <a href="https://drive.google.com/file/d/1t6KrOK7OZL3f8X2LBIM02H5OsIl38_QC/view" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>教程</a>
+                    </small>
                   </div>
                   
                   {/* @ 成员 */}
@@ -4368,7 +4370,9 @@ ${content}
                          onChange={(e) => setPepReportTeamId(e.target.value)}
                          placeholder="例如：148192141318"
                        />
-                       <small style={dialogStyles.hint}>可选，填入后会将报告发送到指定群组</small>
+                       <small style={dialogStyles.hint}>
+                         如何获取 Team ID 请参考 <a href="https://drive.google.com/file/d/1t6KrOK7OZL3f8X2LBIM02H5OsIl38_QC/view" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>教程</a>
+                       </small>
                      </div>
                    )}
 
@@ -4383,7 +4387,9 @@ ${content}
                          onChange={(e) => setMultipleJiraQueryTeamId(e.target.value)}
                          placeholder="例如：148192141318"
                        />
-                       <small style={dialogStyles.hint}>可选，填入后会将查询结果发送到指定群组</small>
+                       <small style={dialogStyles.hint}>
+                         如何获取 Team ID 请参考 <a href="https://drive.google.com/file/d/1t6KrOK7OZL3f8X2LBIM02H5OsIl38_QC/view" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>教程</a>
+                       </small>
                      </div>
                    )}
 
@@ -4460,6 +4466,9 @@ ${content}
                     onChange={(e) => handleChange('Glip_Team_ID', e.target.value)}
                     placeholder="例如：148192141318"
                   />
+                  <small style={dialogStyles.hint}>
+                    如何获取 Team ID 请参考 <a href="https://drive.google.com/file/d/1t6KrOK7OZL3f8X2LBIM02H5OsIl38_QC/view" target="_blank" rel="noopener noreferrer" style={{color: '#007bff', textDecoration: 'underline'}}>教程</a>
+                  </small>
                 </div>
               )}
             </>

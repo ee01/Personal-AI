@@ -673,7 +673,7 @@ function doGet(e) {
           <div class="container">
             <div class="success-icon">🎉</div>
             <h1>授权成功！</h1>
-            <p>您已成功授权 <span class="highlight">Personal AI - Scheduled Messages</span></p>
+            <p>您已成功授权你私人表格 <span class="highlight">定时消息管理</span></p>
             <p>现在可以关闭此页面，返回扩展页面点击 <span class="highlight">"我已完成授权，继续初始化"</span> 按钮完成剩余步骤。</p>
             <p style="font-size: 14px; color: #999; margin-top: 30px;">
               💡 提示：请保持此标签页打开，直到完成所有初始化步骤

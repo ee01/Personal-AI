@@ -124,7 +124,7 @@ export class SheetInitializer {
         },
         body: JSON.stringify({
           properties: {
-            title: `${userInfo.given_name} 的定时消息管理`
+            title: `${userInfo.given_name} 的定时消息管理 - Personal AI`
           },
           sheets: [
             { 
@@ -416,8 +416,11 @@ export class SheetInitializer {
       '待执行'                        // Exec_Log
     ];
     
+    // 根据数据列数动态计算结束列名
+    const endColumn = this.getColumnName(sampleMessage.length);
+    
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:Z2?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:${endColumn}2?valueInputOption=USER_ENTERED`,
       {
         method: 'PUT',
         headers: {
@@ -440,6 +443,7 @@ export class SheetInitializer {
    * 创建 AppScript 项目
    */
   private async createAppScriptProject(spreadsheetId: string): Promise<string> {
+    const userInfo = await this.getUserInfo();
     // 读取 AppScript 模板代码
     const scriptCode = await this.loadAppScriptTemplate();
     
@@ -453,7 +457,7 @@ export class SheetInitializer {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          title: 'Personal AI - Scheduled Messages',
+          title: `${userInfo.given_name} - Scheduled Messages`,
           parentId: spreadsheetId
         })
       }
@@ -775,6 +779,22 @@ function dailyTrigger() {
   
   private formatDateTime(date: Date): string {
     return `${this.formatDate(date)} ${this.formatTime(date)}`;
+  }
+  
+  /**
+   * 将列索引转换为列名（1→A, 26→Z, 27→AA, 28→AB, ...）
+   */
+  private getColumnName(columnIndex: number): string {
+    let result = '';
+    let index = columnIndex;
+    
+    while (index > 0) {
+      const remainder = (index - 1) % 26;
+      result = String.fromCharCode(65 + remainder) + result;
+      index = Math.floor((index - 1) / 26);
+    }
+    
+    return result;
   }
 }
 

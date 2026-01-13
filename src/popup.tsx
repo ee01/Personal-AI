@@ -240,9 +240,18 @@ const Popup = () => {
     };
 
     // 监听内容脚本发来的请求
+    // ⚠️ 重要：不能使用 async 函数作为消息监听器！
+    // async 函数会返回 Promise，这会干扰 Chrome 的消息传递机制
     useEffect(() => {
-        const handleMessage = async (message: any, _sender: chrome.runtime.MessageSender, _sendResponse: (response?: any) => void) => {
-            if (message.type === 'REQUEST_SLIDES_ANALYSIS') {
+        const handleMessage = (message: any, _sender: chrome.runtime.MessageSender, _sendResponse: (response?: any) => void) => {
+            // 只处理 REQUEST_SLIDES_ANALYSIS 消息
+            if (message.type !== 'REQUEST_SLIDES_ANALYSIS') {
+                // 不处理的消息，返回 false 让其他监听器处理
+                return false;
+            }
+            
+            // 使用 IIFE 处理异步操作
+            (async () => {
                 // 获取当前标签页
                 const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
                 const activeTab = tabs[0];
@@ -259,7 +268,10 @@ const Popup = () => {
                         console.error('获取Google认证失败');
                     }
                 }
-            }
+            })();
+            
+            // 这个消息不需要响应，但我们处理了它
+            return true;
         };
         
         chrome.runtime.onMessage.addListener(handleMessage);
