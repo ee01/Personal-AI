@@ -55,35 +55,47 @@ export class ScheduledMessageService {
   
   /**
    * 刷新 token
+   * 🔧 关键修复：不再弹出授权窗口，只尝试使用缓存的 token
+   * 如果 token 真的过期了，调用方需要处理这个错误，让用户手动重新授权
    */
   private async refreshToken(): Promise<string> {
+    console.log('🔐 [ScheduledMessageService.refreshToken] 开始刷新 token（无弹窗模式）');
     return new Promise((resolve, reject) => {
       // 先移除缓存的 token
       chrome.identity.getAuthToken({ interactive: false }, (cachedToken) => {
+        console.log('🔐 [ScheduledMessageService.refreshToken] 获取缓存 token:', cachedToken ? '已获取' : '无');
         if (cachedToken) {
           chrome.identity.removeCachedAuthToken({ token: cachedToken }, () => {
-            // 获取新 token
-            chrome.identity.getAuthToken({ interactive: true }, (newToken) => {
+            console.log('🔐 [ScheduledMessageService.refreshToken] 已移除缓存 token，尝试获取新 token');
+            // 🔧 使用 interactive: false，避免弹出授权窗口
+            chrome.identity.getAuthToken({ interactive: false }, (newToken) => {
               if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
+                console.warn('🔐 [ScheduledMessageService.refreshToken] 无法刷新 token:', chrome.runtime.lastError.message);
+                reject(new Error('Token 已过期，请手动重新授权'));
               } else if (newToken) {
+                console.log('🔐 [ScheduledMessageService.refreshToken] 刷新 token 成功');
                 this.token = newToken;
                 resolve(newToken);
               } else {
-                reject(new Error('无法获取新 token'));
+                console.warn('🔐 [ScheduledMessageService.refreshToken] 刷新 token 失败：无 token');
+                reject(new Error('Token 已过期，请手动重新授权'));
               }
             });
           });
         } else {
-          // 直接获取新 token
-          chrome.identity.getAuthToken({ interactive: true }, (newToken) => {
+          console.log('🔐 [ScheduledMessageService.refreshToken] 无缓存 token，尝试直接获取');
+          // 🔧 使用 interactive: false，避免弹出授权窗口
+          chrome.identity.getAuthToken({ interactive: false }, (newToken) => {
             if (chrome.runtime.lastError) {
-              reject(chrome.runtime.lastError);
+              console.warn('🔐 [ScheduledMessageService.refreshToken] 无法获取新 token:', chrome.runtime.lastError.message);
+              reject(new Error('Token 已过期，请手动重新授权'));
             } else if (newToken) {
+              console.log('🔐 [ScheduledMessageService.refreshToken] 获取新 token 成功');
               this.token = newToken;
               resolve(newToken);
             } else {
-              reject(new Error('无法获取新 token'));
+              console.warn('🔐 [ScheduledMessageService.refreshToken] 获取新 token 失败：无 token');
+              reject(new Error('Token 已过期，请手动重新授权'));
             }
           });
         }

@@ -7,7 +7,7 @@ import { ViewModel } from './viewModel';
 import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 import { getLocalStorageItem, getCurrentUserInfo } from './storage';
-import { initSnooze } from './snooze';
+import { initMessageReaction, MessageReactionConfig } from './message-reaction';
 
 // =====================================================
 // Jira Ticket 悬浮卡片功能
@@ -800,15 +800,47 @@ function initJiraLinkProcessor() {
   });
 }
 
+// 获取消息交互功能配置
+async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
+  try {
+    const result = await chrome.storage.local.get(['envConfig']);
+    const config = result.envConfig || {};
+    return {
+      enableSnooze: config.ENABLE_SNOOZE !== false,      // 默认启用
+      enableAutoReply: config.ENABLE_AUTO_REPLY !== false  // 默认启用
+    };
+  } catch (error) {
+    console.log('获取消息交互配置失败，使用默认值');
+    return {
+      enableSnooze: true,
+      enableAutoReply: true
+    };
+  }
+}
+
+// 初始化消息交互功能（包装器）
+async function setupMessageReaction() {
+  const config = await getMessageReactionConfig();
+  console.log('🔔 消息交互功能配置:', config);
+  
+  // 如果两个功能都禁用，跳过初始化
+  if (!config.enableSnooze && !config.enableAutoReply) {
+    console.log('🔔 稍后处理和自动答复功能都已禁用，不显示工具栏');
+    return;
+  }
+  
+  initMessageReaction(config);
+}
+
 // 在页面加载后初始化
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(initJiraLinkProcessor, 1000);
-    setTimeout(initSnooze, 1500);  // 初始化 Snooze 稍后处理功能
+    setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
   });
 } else {
   setTimeout(initJiraLinkProcessor, 1000);
-  setTimeout(initSnooze, 1500);  // 初始化 Snooze 稍后处理功能
+  setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
 }
 
 

@@ -24,7 +24,7 @@
         "https://rc-a-develop.jupiter.int.rclabenv.com/*",
         "https://app.ringcentral.com/*"
       ],
-      "js": ["contentScript.js"]
+      "js": ["contentScriptGlip.js"]
     },
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],

@@ -490,12 +490,14 @@ export async function applyProjectUpdates(
  * @returns OAuth token
  */
 export async function getAuthToken(): Promise<string | null> {
+  console.log('🔐 [slide.getAuthToken] 被调用, interactive=true');
   return new Promise((resolve) => {
     chrome.identity.getAuthToken({ interactive: true }, (token) => {
       if (chrome.runtime.lastError) {
-        console.error('获取token失败:', chrome.runtime.lastError);
+        console.error('🔐 [slide.getAuthToken] 获取token失败:', chrome.runtime.lastError);
         resolve(null);
       } else {
+        console.log('🔐 [slide.getAuthToken] 成功');
         resolve(token);
       }
     });
@@ -508,12 +510,15 @@ export async function getAuthToken(): Promise<string | null> {
  * @returns OAuth token，如果没有缓存则返回 null
  */
 export async function getCachedAuthToken(): Promise<string | null> {
+  console.log('🔐 [slide.getCachedAuthToken] 被调用, interactive=false');
   return new Promise((resolve) => {
     chrome.identity.getAuthToken({ interactive: false }, (token) => {
       if (chrome.runtime.lastError) {
+        console.log('🔐 [slide.getCachedAuthToken] 无缓存 token（正常情况）');
         // 静默处理错误，不打印日志（因为缓存不存在是正常情况）
         resolve(null);
       } else {
+        console.log('🔐 [slide.getCachedAuthToken] 成功获取缓存 token');
         resolve(token || null);
       }
     });

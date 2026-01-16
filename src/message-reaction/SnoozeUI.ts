@@ -1,11 +1,14 @@
 /**
- * Snooze UI - 悬浮菜单和时间选择器界面
+ * Snooze UI - 消息交互工具栏界面
  * 
  * UI 结构：
- * - 悬停 1.5 秒后显示工具栏（左侧"稍后处理"文字按钮 + 右侧 icon）
+ * - 悬停 3 秒后显示工具栏（稍后处理按钮 + 自动答复按钮 + icon）
  * - 点击"稍后处理"按钮默认触发 1 小时后提醒
- * - hover "稍后处理"按钮时显示快速选项下拉菜单
- * - icon 仅作为视觉标识，不可点击
+ * - hover "稍后处理"按钮时显示 Snooze 快速选项菜单
+ * - 点击"自动答复"按钮打开自动答复配置
+ * - 根据配置开关决定显示哪些按钮
+ * 
+ * 此模块属于消息交互功能 (Message Reaction) 的一部分
  */
 
 import { 
@@ -18,14 +21,26 @@ import {
   showErrorToast
 } from './SnoozeManager';
 
+// 功能开关配置接口
+export interface MessageReactionConfig {
+  enableSnooze: boolean;
+  enableAutoReply: boolean;
+}
+
+// 全局功能开关配置
+let globalConfig: MessageReactionConfig = {
+  enableSnooze: true,
+  enableAutoReply: true
+};
+
 // 全局状态
-let currentMenu: HTMLElement | null = null;
-let currentPicker: HTMLElement | null = null;
+let currentSnoozeMenu: HTMLElement | null = null;  // Snooze 快速选项菜单
+let currentSnoozePicker: HTMLElement | null = null;  // Snooze 时间选择器
 const _hoverTimeout: ReturnType<typeof setTimeout> | null = null; // eslint-disable-line
-let hideTimeout: ReturnType<typeof setTimeout> | null = null;
-let isHoveringTrigger = false;
-let isHoveringMenu = false;
-let isPickerOpen = false;  // 标记时间选择器是否打开
+let snoozeHideTimeout: ReturnType<typeof setTimeout> | null = null;
+let isHoveringToolbar = false;
+let isHoveringSnoozeMenu = false;
+let isSnoozePickerOpen = false;  // 标记时间选择器是否打开
 let currentMessageElement: HTMLElement | null = null;
 
 // 处理过的消息元素
@@ -386,32 +401,32 @@ function injectStyles() {
 }
 
 /**
- * 隐藏菜单
+ * 隐藏 Snooze 快速选项菜单
  */
-function hideMenu() {
-  if (currentMenu) {
-    currentMenu.remove();
-    currentMenu = null;
+function hideSnoozeMenu() {
+  if (currentSnoozeMenu) {
+    currentSnoozeMenu.remove();
+    currentSnoozeMenu = null;
   }
 }
 
 /**
- * 隐藏时间选择器
+ * 隐藏 Snooze 时间选择器
  */
-function hidePicker() {
-  if (currentPicker) {
-    currentPicker.remove();
-    currentPicker = null;
+function hideSnoozePicker() {
+  if (currentSnoozePicker) {
+    currentSnoozePicker.remove();
+    currentSnoozePicker = null;
   }
-  isPickerOpen = false;
+  isSnoozePickerOpen = false;
 }
 
 /**
- * 隐藏所有 UI（菜单和选择器）
+ * 隐藏所有 Snooze UI（菜单和选择器）
  */
-function hideAllUI() {
-  hideMenu();
-  hidePicker();
+function hideAllSnoozeUI() {
+  hideSnoozeMenu();
+  hideSnoozePicker();
 }
 
 /**
@@ -427,42 +442,42 @@ function hideToolbar() {
 }
 
 /**
- * 延迟隐藏菜单和工具栏
+ * 延迟隐藏 Snooze 菜单和工具栏
  */
-function scheduleHide() {
+function scheduleSnoozeHide() {
   // 如果时间选择器打开，不隐藏任何东西
-  if (isPickerOpen) return;
+  if (isSnoozePickerOpen) return;
   
-  if (hideTimeout) {
-    clearTimeout(hideTimeout);
+  if (snoozeHideTimeout) {
+    clearTimeout(snoozeHideTimeout);
   }
-  hideTimeout = setTimeout(() => {
-    if (!isHoveringTrigger && !isHoveringMenu && !isPickerOpen) {
-      hideMenu();
+  snoozeHideTimeout = setTimeout(() => {
+    if (!isHoveringToolbar && !isHoveringSnoozeMenu && !isSnoozePickerOpen) {
+      hideSnoozeMenu();
       hideToolbar();
     }
   }, 200);
 }
 
 /**
- * 取消隐藏
+ * 取消隐藏 Snooze UI
  */
-function cancelHide() {
-  if (hideTimeout) {
-    clearTimeout(hideTimeout);
-    hideTimeout = null;
+function cancelSnoozeHide() {
+  if (snoozeHideTimeout) {
+    clearTimeout(snoozeHideTimeout);
+    snoozeHideTimeout = null;
   }
 }
 
 /**
  * 显示时间选择器
  */
-async function showTimePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
+async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   // 标记选择器打开
-  isPickerOpen = true;
+  isSnoozePickerOpen = true;
   
   // 移除当前菜单但不隐藏工具栏
-  hideMenu();
+  hideSnoozeMenu();
   
   const picker = document.createElement('div');
   picker.className = 'snooze-picker';
@@ -504,7 +519,7 @@ async function showTimePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   `;
   
   document.body.appendChild(picker);
-  currentPicker = picker;
+  currentSnoozePicker = picker;
   
   // 定位
   const pickerRect = picker.getBoundingClientRect();
@@ -536,18 +551,18 @@ async function showTimePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   });
   
   picker.querySelector('.snooze-picker-back')!.addEventListener('click', () => {
-    hidePicker();
+    hideSnoozePicker();
     // 返回时重新显示菜单
     if (currentMessageElement) {
       const toolbar = currentMessageElement.querySelector('.snooze-toolbar');
       if (toolbar) {
-        showQuickMenu(messageInfo, toolbar as HTMLElement);
+        showSnoozeQuickMenu(messageInfo, toolbar as HTMLElement);
       }
     }
   });
   
   picker.querySelector('.snooze-btn-cancel')!.addEventListener('click', () => {
-    hideAllUI();
+    hideAllSnoozeUI();
     hideToolbar();
   });
   
@@ -562,7 +577,7 @@ async function showTimePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     
     // 如果成功，隐藏 UI；如果失败，恢复按钮状态
     if (success) {
-      hideAllUI();
+      hideAllSnoozeUI();
       hideToolbar();
       showSuccessToast(`已设置提醒：${formatRemindTime(selectedDate)}`);
     } else {
@@ -575,7 +590,7 @@ async function showTimePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   
   // 点击选择器外部不自动关闭（只能通过按钮关闭）
   picker.addEventListener('mouseenter', () => {
-    cancelHide();
+    cancelSnoozeHide();
   });
   
   picker.addEventListener('click', (e) => {
@@ -584,10 +599,10 @@ async function showTimePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
 }
 
 /**
- * 显示快速菜单
+ * 显示 Snooze 快速选项菜单
  */
-async function showQuickMenu(messageInfo: MessageInfo, anchorElement: HTMLElement) {
-  hideMenu();
+async function showSnoozeQuickMenu(messageInfo: MessageInfo, anchorElement: HTMLElement) {
+  hideSnoozeMenu();
   
   const menu = document.createElement('div');
   menu.className = 'snooze-menu';
@@ -613,7 +628,7 @@ async function showQuickMenu(messageInfo: MessageInfo, anchorElement: HTMLElemen
   `;
   
   document.body.appendChild(menu);
-  currentMenu = menu;
+  currentSnoozeMenu = menu;
   
   // 定位菜单（在按钮下方，左对齐）
   const anchorRect = anchorElement.getBoundingClientRect();
@@ -652,7 +667,7 @@ async function showQuickMenu(messageInfo: MessageInfo, anchorElement: HTMLElemen
       
       // 如果成功，隐藏 UI；如果失败，恢复菜单状态
       if (success) {
-        hideAllUI();
+        hideAllSnoozeUI();
         hideToolbar();
         showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
       } else {
@@ -667,18 +682,18 @@ async function showQuickMenu(messageInfo: MessageInfo, anchorElement: HTMLElemen
   // 绑定自定义选项点击
   menu.querySelector('.snooze-custom-option')!.addEventListener('click', (e) => {
     e.stopPropagation();
-    showTimePicker(messageInfo, anchorRect);
+    showSnoozePicker(messageInfo, anchorRect);
   });
   
   // 鼠标事件
   menu.addEventListener('mouseenter', () => {
-    isHoveringMenu = true;
-    cancelHide();
+    isHoveringSnoozeMenu = true;
+    cancelSnoozeHide();
   });
   
   menu.addEventListener('mouseleave', () => {
-    isHoveringMenu = false;
-    scheduleHide();
+    isHoveringSnoozeMenu = false;
+    scheduleSnoozeHide();
   });
 }
 
@@ -718,17 +733,38 @@ function processMessageElement(messageElement: HTMLElement) {
     targetElement.style.position = 'relative';
   }
   
+  // 如果两个功能都禁用，不添加工具栏
+  if (!globalConfig.enableSnooze && !globalConfig.enableAutoReply) {
+    return;
+  }
+  
   // 创建工具栏容器
   const iconUrl = chrome.runtime.getURL('icons/icon16.png');
   const toolbar = document.createElement('div');
   toolbar.className = 'snooze-toolbar';
-  toolbar.innerHTML = `
-    <span class="snooze-text-btn">稍后处理</span>
-    <span class="auto-reply-btn">自动答复</span>
-    <div class="snooze-icon">
+  
+  // 根据配置决定显示哪些按钮
+  let buttonsHtml = '';
+  
+  if (globalConfig.enableSnooze) {
+    const borderRadius = globalConfig.enableAutoReply ? 'border-radius: 4px 0 0 4px;' : 'border-radius: 4px;';
+    buttonsHtml += `<span class="snooze-text-btn" style="${borderRadius}">稍后处理</span>`;
+  }
+  
+  if (globalConfig.enableAutoReply) {
+    const borderStyle = globalConfig.enableSnooze ? 'border-left: none;' : 'border-radius: 4px 0 0 4px;';
+    buttonsHtml += `<span class="auto-reply-btn" style="${borderStyle}">自动答复</span>`;
+  }
+  
+  // 图标根据是否有自动答复按钮调整样式
+  const iconBorderStyle = globalConfig.enableAutoReply ? '' : (globalConfig.enableSnooze ? 'border-radius: 0 4px 4px 0; border-left: none;' : 'border-radius: 4px;');
+  buttonsHtml += `
+    <div class="snooze-icon" style="${iconBorderStyle}">
       <img src="${iconUrl}" alt="Snooze" />
     </div>
   `;
+  
+  toolbar.innerHTML = buttonsHtml;
   
   // 将工具栏添加到消息卡片
   targetElement.appendChild(toolbar);
@@ -743,15 +779,15 @@ function processMessageElement(messageElement: HTMLElement) {
     currentMessageElement = targetElement;
     
     // 取消之前的隐藏计划
-    cancelHide();
+    cancelSnoozeHide();
     
-    // 1.5 秒后显示工具栏
+    // 3 秒后显示工具栏
     if (showTriggerTimeout) {
       clearTimeout(showTriggerTimeout);
     }
     showTriggerTimeout = setTimeout(() => {
       toolbar.classList.add('visible');
-    }, 1500);
+    }, 3000);
   });
   
   conversationCard.addEventListener('mouseleave', (e: MouseEvent) => {
@@ -772,137 +808,142 @@ function processMessageElement(messageElement: HTMLElement) {
     }
     
     // 立即隐藏工具栏（除非时间选择器打开）
-    if (!isPickerOpen) {
+    if (!isSnoozePickerOpen) {
       toolbar.classList.remove('visible');
-      hideMenu();
+      hideSnoozeMenu();
     }
   });
   
   // 工具栏悬浮事件
   toolbar.addEventListener('mouseenter', () => {
-    isHoveringTrigger = true;
-    cancelHide();
+    isHoveringToolbar = true;
+    cancelSnoozeHide();
     toolbar.classList.add('visible');
   });
   
   toolbar.addEventListener('mouseleave', () => {
-    isHoveringTrigger = false;
-    scheduleHide();
+    isHoveringToolbar = false;
+    scheduleSnoozeHide();
   });
   
-  // 文字按钮点击：默认 1 小时后提醒
-  const textBtn = toolbar.querySelector('.snooze-text-btn') as HTMLElement;
+  // 稍后处理按钮事件绑定（仅当按钮存在时）
+  const textBtn = toolbar.querySelector('.snooze-text-btn') as HTMLElement | null;
   
-  textBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    
-    console.log('🔔 Snooze: 点击稍后处理按钮（1小时后提醒）');
-    
-    // 获取消息信息
-    if (!messageInfo) {
-      messageInfo = await extractMessageInfo(targetElement);
-    }
-    
-    if (!messageInfo) {
-      showErrorToast('无法获取消息信息');
-      return;
-    }
-    
-    // 禁用按钮
-    textBtn.style.pointerEvents = 'none';
-    textBtn.style.opacity = '0.6';
-    
-    // 1 小时后提醒
-    const remindAt = new Date();
-    remindAt.setHours(remindAt.getHours() + 1);
-    
-    const success = await createSnoozeReminder({
-      messageInfo,
-      remindAt
-    });
-    
-    // 如果成功，隐藏 UI；如果失败，恢复按钮状态
-    if (success) {
-      hideAllUI();
-      hideToolbar();
-      showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
-    } else {
-      // 恢复按钮状态
-      textBtn.style.pointerEvents = '';
-      textBtn.style.opacity = '';
-      showErrorToast('创建提醒失败，请稍后重试');
-    }
-  });
-  
-  // 文字按钮悬浮：显示快速菜单
-  textBtn.addEventListener('mouseenter', async () => {
-    // 取消隐藏
-    cancelHide();
-    
-    // 获取消息信息
-    if (!messageInfo) {
-      messageInfo = await extractMessageInfo(targetElement);
-    }
-    
-    if (messageInfo) {
-      showQuickMenu(messageInfo, textBtn); // 传入 textBtn 而不是 toolbar
-    }
-  });
-  
-  // 文字按钮移出：检查是否移动到快速菜单，如果不是则隐藏菜单
-  textBtn.addEventListener('mouseleave', (e: MouseEvent) => {
-    const relatedTarget = e.relatedTarget as HTMLElement;
-    const isMovingToMenu = relatedTarget?.closest('.snooze-menu');
-    
-    // 如果不是移动到快速菜单，则隐藏菜单
-    if (!isMovingToMenu) {
-      hideMenu();
-    }
-  });
-  
-  // 自动答复按钮点击处理
-  const autoReplyBtn = toolbar.querySelector('.auto-reply-btn') as HTMLElement;
-  
-  // 自动答复按钮悬浮：隐藏快速菜单
-  autoReplyBtn.addEventListener('mouseenter', () => {
-    hideMenu();
-  });
-  
-  autoReplyBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    
-    // 获取消息信息
-    if (!messageInfo) {
-      messageInfo = await extractMessageInfo(targetElement);
-    }
-    
-    if (!messageInfo) {
-      showErrorToast('无法获取消息信息');
-      return;
-    }
-    
-    // 发送消息给 background 打开自动答复配置窗口
-    try {
-      await chrome.runtime.sendMessage({
-        type: 'OPEN_AUTO_REPLY_CONFIG',
-        data: {
-          sender: messageInfo.senderName,
-          groupId: messageInfo.groupId,
-          groupName: messageInfo.groupName,
-          content: messageInfo.content,
-          messageId: messageInfo.id
-        }
+  if (textBtn) {
+    // 点击：默认 1 小时后提醒
+    textBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      console.log('🔔 Snooze: 点击稍后处理按钮（1小时后提醒）');
+      
+      // 获取消息信息
+      if (!messageInfo) {
+        messageInfo = await extractMessageInfo(targetElement);
+      }
+      
+      if (!messageInfo) {
+        showErrorToast('无法获取消息信息');
+        return;
+      }
+      
+      // 禁用按钮
+      textBtn.style.pointerEvents = 'none';
+      textBtn.style.opacity = '0.6';
+      
+      // 1 小时后提醒
+      const remindAt = new Date();
+      remindAt.setHours(remindAt.getHours() + 1);
+      
+      const success = await createSnoozeReminder({
+        messageInfo,
+        remindAt
       });
       
-      hideAllUI();
-      hideToolbar();
-      showSuccessToast('正在打开自动答复配置...');
-    } catch (error) {
-      console.error('打开自动答复配置失败:', error);
-      showErrorToast('打开配置失败，请稍后重试');
-    }
-  });
+      // 如果成功，隐藏 UI；如果失败，恢复按钮状态
+      if (success) {
+        hideAllSnoozeUI();
+        hideToolbar();
+        showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
+      } else {
+        // 恢复按钮状态
+        textBtn.style.pointerEvents = '';
+        textBtn.style.opacity = '';
+        showErrorToast('创建提醒失败，请稍后重试');
+      }
+    });
+    
+    // 悬浮：显示 Snooze 快速选项菜单
+    textBtn.addEventListener('mouseenter', async () => {
+      // 取消隐藏
+      cancelSnoozeHide();
+      
+      // 获取消息信息
+      if (!messageInfo) {
+        messageInfo = await extractMessageInfo(targetElement);
+      }
+      
+      if (messageInfo) {
+        showSnoozeQuickMenu(messageInfo, textBtn);
+      }
+    });
+    
+    // 移出：检查是否移动到 Snooze 菜单，如果不是则隐藏菜单
+    textBtn.addEventListener('mouseleave', (e: MouseEvent) => {
+      const relatedTarget = e.relatedTarget as HTMLElement;
+      const isMovingToSnoozeMenu = relatedTarget?.closest('.snooze-menu');
+      
+      if (!isMovingToSnoozeMenu) {
+        hideSnoozeMenu();
+      }
+    });
+  }
+  
+  // 自动答复按钮事件绑定（仅当按钮存在时）
+  const autoReplyBtn = toolbar.querySelector('.auto-reply-btn') as HTMLElement | null;
+  
+  if (autoReplyBtn) {
+    // 悬浮：隐藏 Snooze 快速菜单
+    autoReplyBtn.addEventListener('mouseenter', () => {
+      hideSnoozeMenu();
+    });
+    
+    // 点击：打开自动答复配置
+    autoReplyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      
+      // 获取消息信息
+      if (!messageInfo) {
+        messageInfo = await extractMessageInfo(targetElement);
+      }
+      
+      if (!messageInfo) {
+        showErrorToast('无法获取消息信息');
+        return;
+      }
+      
+      // 发送消息给 background 打开自动答复配置窗口
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'OPEN_AUTO_REPLY_CONFIG',
+          data: {
+            sender: messageInfo.senderName,
+            groupId: messageInfo.groupId,
+            groupName: messageInfo.groupName,
+            content: messageInfo.content,
+            messageId: messageInfo.id
+          }
+        });
+        
+        hideAllSnoozeUI();
+        hideToolbar();
+        showSuccessToast('正在打开自动答复配置...');
+      } catch (error) {
+        console.error('打开自动答复配置失败:', error);
+        showErrorToast('打开配置失败，请稍后重试');
+      }
+    });
+  }
   
   console.log('🔔 Snooze: 已为消息添加工具栏', targetElement.getAttribute('data-id'));
 }
@@ -953,9 +994,21 @@ function scanAndProcessMessages(container?: Element) {
 
 /**
  * 初始化 Snooze 功能
+ * @param config 可选配置，用于控制功能开关
  */
-export function initSnooze() {
-  console.log('🔔 Snooze: 开始初始化...');
+export function initSnooze(config?: MessageReactionConfig) {
+  console.log('🔔 Snooze: 开始初始化...', config);
+  
+  // 应用配置
+  if (config) {
+    globalConfig = config;
+  }
+  
+  // 如果两个功能都禁用，跳过初始化
+  if (!globalConfig.enableSnooze && !globalConfig.enableAutoReply) {
+    console.log('🔔 Snooze: 稍后处理和自动答复功能都已禁用，跳过初始化');
+    return;
+  }
   
   // 检查是否在 RingCentral 页面
   if (!window.location.href.includes('app.ringcentral.com')) {
@@ -1003,15 +1056,15 @@ export function initSnooze() {
     subtree: true
   });
   
-  // 点击页面其他区域时，如果不是在选择器打开状态，隐藏菜单
+  // 点击页面其他区域时，如果不是在选择器打开状态，隐藏 Snooze 菜单
   document.addEventListener('click', (e) => {
-    if (isPickerOpen) return;  // 选择器打开时不处理
+    if (isSnoozePickerOpen) return;  // 选择器打开时不处理
     
     const target = e.target as HTMLElement;
     if (!target.closest('.snooze-menu') && 
         !target.closest('.snooze-toolbar') &&
         !target.closest('.snooze-picker')) {
-      hideMenu();
+      hideSnoozeMenu();
     }
   });
   

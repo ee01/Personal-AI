@@ -180,15 +180,18 @@ const Popup = () => {
             const activeTab = tabs[0];
             if (activeTab?.id && activeTab.url) { // Check for both id and url
                 const tabId = activeTab.id; // Store ID in a local constant
+                console.log('🔐 [popup.openJiraQueryDialog] getAuthToken 被调用, interactive=true');
                 chrome.identity.getAuthToken({ interactive: true }, (token) => {
                     if (chrome.runtime.lastError) {
-                        console.error('获取 token 失败: ', chrome.runtime.lastError);
+                        console.error('🔐 [popup.openJiraQueryDialog] 获取 token 失败:', chrome.runtime.lastError);
                         // Consider showing an error message to the user here
                     }
                     // Ensure token is not null/undefined before sending
                     if (!token) {
-                         console.error('获取到的 token 无效');
+                         console.error('🔐 [popup.openJiraQueryDialog] 获取到的 token 无效');
                          // Consider showing an error message to the user here
+                    } else {
+                        console.log('🔐 [popup.openJiraQueryDialog] getAuthToken 成功');
                     }
                     chrome.tabs.sendMessage(tabId, { // Use the local constant
                         type: 'OPEN_JIRA_QUERY_DIALOG',
@@ -212,12 +215,14 @@ const Popup = () => {
             const activeTab = tabs[0];
             if (activeTab?.id && activeTab.url) {
                 const tabId = activeTab.id;
+                console.log('🔐 [popup.expandEpicTickets] getAuthToken 被调用, interactive=true');
                 chrome.identity.getAuthToken({ interactive: true }, (token) => {
                     if (chrome.runtime.lastError) {
-                        console.error('获取 token 失败: ', chrome.runtime.lastError);
+                        console.error('🔐 [popup.expandEpicTickets] 获取 token 失败:', chrome.runtime.lastError);
                         setIsExpandingEpic(false);
                         return;
                     }
+                    console.log('🔐 [popup.expandEpicTickets] getAuthToken 成功');
                     if (token) {
                         chrome.tabs.sendMessage(tabId, {
                             type: 'EXPAND_EPIC_TICKETS',

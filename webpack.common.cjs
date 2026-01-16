@@ -21,7 +21,7 @@ module.exports = (env) => {
   return {
     entry: {
       background: './src/background.ts',
-      contentScript: './src/contentScript.tsx',
+      contentScriptGlip: './src/contentScriptGlip.tsx',
       contentScriptGoogleSheet: './src/contentScriptGoogleSheet.tsx',
       contentScriptGoogleSlide: './src/contentScriptGoogleSlide.tsx',
       contentScriptJira: './src/contentScriptJira.ts',
