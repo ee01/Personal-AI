@@ -65,9 +65,9 @@ function injectStyles() {
       padding: 4px 8px;
       font-size: 11px;
       font-weight: 500;
-      color: #ee5a5a;
-      background: rgba(238, 90, 90, 0.08);
-      border: 1px solid rgba(238, 90, 90, 0.2);
+      color: #2196F3;
+      background: rgba(33, 150, 243, 0.08);
+      border: 1px solid rgba(33, 150, 243, 0.2);
       border-radius: 4px 0 0 4px;
       cursor: pointer;
       white-space: nowrap;
@@ -76,11 +76,35 @@ function injectStyles() {
     }
     
     .snooze-text-btn:hover {
+      background: rgba(33, 150, 243, 0.15);
+      border-color: rgba(33, 150, 243, 0.4);
+    }
+    
+    .snooze-text-btn:active {
+      background: rgba(33, 150, 243, 0.25);
+    }
+    
+    /* ===== 自动答复按钮 ===== */
+    .auto-reply-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #ee5a5a;
+      background: rgba(238, 90, 90, 0.08);
+      border: 1px solid rgba(238, 90, 90, 0.2);
+      border-left: none;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    
+    .auto-reply-btn:hover {
       background: rgba(238, 90, 90, 0.15);
       border-color: rgba(238, 90, 90, 0.4);
     }
     
-    .snooze-text-btn:active {
+    .auto-reply-btn:active {
       background: rgba(238, 90, 90, 0.25);
     }
     
@@ -591,15 +615,18 @@ async function showQuickMenu(messageInfo: MessageInfo, anchorElement: HTMLElemen
   document.body.appendChild(menu);
   currentMenu = menu;
   
-  // 定位菜单（在工具栏下方）
+  // 定位菜单（在按钮下方，左对齐）
   const anchorRect = anchorElement.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
   
-  let left = anchorRect.right - menuRect.width;
+  let left = anchorRect.left; // 左对齐到按钮
   let top = anchorRect.bottom + 4;
   
   // 边界检测
   if (left < 10) left = 10;
+  if (left + menuRect.width > window.innerWidth - 10) {
+    left = window.innerWidth - menuRect.width - 10;
+  }
   if (top + menuRect.height > window.innerHeight - 10) {
     top = anchorRect.top - menuRect.height - 4;
   }
@@ -697,6 +724,7 @@ function processMessageElement(messageElement: HTMLElement) {
   toolbar.className = 'snooze-toolbar';
   toolbar.innerHTML = `
     <span class="snooze-text-btn">稍后处理</span>
+    <span class="auto-reply-btn">自动答复</span>
     <div class="snooze-icon">
       <img src="${iconUrl}" alt="Snooze" />
     </div>
@@ -818,7 +846,61 @@ function processMessageElement(messageElement: HTMLElement) {
     }
     
     if (messageInfo) {
-      showQuickMenu(messageInfo, toolbar);
+      showQuickMenu(messageInfo, textBtn); // 传入 textBtn 而不是 toolbar
+    }
+  });
+  
+  // 文字按钮移出：检查是否移动到快速菜单，如果不是则隐藏菜单
+  textBtn.addEventListener('mouseleave', (e: MouseEvent) => {
+    const relatedTarget = e.relatedTarget as HTMLElement;
+    const isMovingToMenu = relatedTarget?.closest('.snooze-menu');
+    
+    // 如果不是移动到快速菜单，则隐藏菜单
+    if (!isMovingToMenu) {
+      hideMenu();
+    }
+  });
+  
+  // 自动答复按钮点击处理
+  const autoReplyBtn = toolbar.querySelector('.auto-reply-btn') as HTMLElement;
+  
+  // 自动答复按钮悬浮：隐藏快速菜单
+  autoReplyBtn.addEventListener('mouseenter', () => {
+    hideMenu();
+  });
+  
+  autoReplyBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    
+    // 获取消息信息
+    if (!messageInfo) {
+      messageInfo = await extractMessageInfo(targetElement);
+    }
+    
+    if (!messageInfo) {
+      showErrorToast('无法获取消息信息');
+      return;
+    }
+    
+    // 发送消息给 background 打开自动答复配置窗口
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'OPEN_AUTO_REPLY_CONFIG',
+        data: {
+          sender: messageInfo.senderName,
+          groupId: messageInfo.groupId,
+          groupName: messageInfo.groupName,
+          content: messageInfo.content,
+          messageId: messageInfo.id
+        }
+      });
+      
+      hideAllUI();
+      hideToolbar();
+      showSuccessToast('正在打开自动答复配置...');
+    } catch (error) {
+      console.error('打开自动答复配置失败:', error);
+      showErrorToast('打开配置失败，请稍后重试');
     }
   });
   

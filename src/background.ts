@@ -197,7 +197,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { body } = request.data;
         console.log('Sending request to LLM:', body);
         analyzeMessagesInBackground(body.data, body.username, body.isScheduledTask).then(raw => {
-            sendResponse({ data: raw });
+            sendResponse(raw);
         });
         return true;
     }
@@ -973,6 +973,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 sendResponse({ success: true });
             } catch (error: any) {
                 console.error('❌ 打开定时消息管理界面失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
+    // 打开自动答复配置界面（从消息悬浮菜单触发）
+    if (request.type === 'OPEN_AUTO_REPLY_CONFIG') {
+        (async () => {
+            try {
+                console.log('🤖 打开自动答复配置界面...', request.data);
+                
+                // 将消息上下文存储到 storage，供 topic-modal 使用
+                if (request.data) {
+                    await chrome.storage.local.set({
+                        pendingAutoReplyConfig: {
+                            sender: request.data.sender,
+                            groupId: request.data.groupId,
+                            groupName: request.data.groupName,
+                            content: request.data.content,
+                            messageId: request.data.messageId,
+                            timestamp: Date.now()
+                        }
+                    });
+                }
+                
+                // 使用独立窗口打开 topic-modal 页面
+                const url = chrome.runtime.getURL('topic-modal.html');
+                await chrome.windows.create({
+                    url,
+                    type: 'popup',
+                    width: 920,
+                    height: 720
+                });
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error('❌ 打开自动答复配置界面失败:', error);
                 sendResponse({ success: false, error: error.message });
             }
         })();

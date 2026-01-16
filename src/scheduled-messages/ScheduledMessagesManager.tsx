@@ -154,6 +154,7 @@ const ScheduledMessagesManager: React.FC = () => {
     paused: 0,
     completed: 0,
     done: 0,
+    pendingReview: 0,
     executedToday: 0
   });
   const [service, setService] = useState<ScheduledMessageService | null>(null);
@@ -163,6 +164,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [botConfigured, setBotConfigured] = useState(false);
   const [showBotConfigWarning, setShowBotConfigWarning] = useState(false);
   const [filterSelfOnly, setFilterSelfOnly] = useState(false);
+  const [filterPendingReview, setFilterPendingReview] = useState(false);  // 仅过滤待审核推送
   const [selectedCategories, setSelectedCategories] = useState<SelectOption[]>([]);
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const [hoveredMessage, setHoveredMessage] = useState<ScheduledMessage | null>(null);
@@ -860,6 +862,57 @@ const ScheduledMessagesManager: React.FC = () => {
     setTakeoverError('');
   };
   
+  // 批准自动答复消息（将状态改为 Active，并设置下一分钟执行）
+  const handleApproveAutoReply = async (message: ScheduledMessage) => {
+    if (!service) return;
+    
+    try {
+      const now = new Date();
+      const nextMinute = new Date(now.getTime() + 60 * 1000);
+      const scheduleDate = nextMinute.toISOString().split('T')[0];
+      const scheduleTime = nextMinute.toTimeString().substring(0, 5);
+      
+      await service.updateMessage(message.ID, {
+        Status: 'Active',
+        Schedule_Date: scheduleDate,
+        Schedule_Time: scheduleTime
+      });
+      
+      // 刷新消息列表
+      await loadMessages(service);
+      
+      console.log(`✅ 自动答复已批准: ${message.Topic}`);
+    } catch (error) {
+      console.error('批准自动答复失败:', error);
+      alert('批准失败，请稍后重试');
+    }
+  };
+  
+  // 拒绝自动答复消息（将状态改为 Done）
+  const handleRejectAutoReply = async (message: ScheduledMessage) => {
+    if (!service) return;
+    
+    const confirmReject = window.confirm(
+      `确定要拒绝此自动答复吗？\n\n主题: ${message.Topic}\n内容: ${message.Content.substring(0, 100)}...`
+    );
+    
+    if (!confirmReject) return;
+    
+    try {
+      await service.updateMessage(message.ID, {
+        Status: 'Done'
+      });
+      
+      // 刷新消息列表
+      await loadMessages(service);
+      
+      console.log(`❌ 自动答复已拒绝: ${message.Topic}`);
+    } catch (error) {
+      console.error('拒绝自动答复失败:', error);
+      alert('拒绝失败，请稍后重试');
+    }
+  };
+  
   const handleDeleteMessage = async (id: string, topic: string) => {
     if (!service) return;
     
@@ -1493,11 +1546,28 @@ const ScheduledMessagesManager: React.FC = () => {
           <span style={styles.statusItem}>
             已完成: <strong style={{ color: '#6c757d' }}>{statistics.done}</strong>
           </span>
+          {statistics.pendingReview > 0 && (
+            <span style={styles.statusItem}>
+              待审核: <strong style={{ color: '#ff9800' }}>{statistics.pendingReview}</strong>
+            </span>
+          )}
           <span style={styles.statusItem}>
             今日已执行: <strong style={{ color: '#007bff' }}>{statistics.executedToday}</strong>
           </span>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          {/* 仅过滤待审核推送 */}
+          {statistics.pendingReview > 0 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={filterPendingReview}
+                onChange={(e) => setFilterPendingReview(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              <span style={{ color: '#ff9800', fontWeight: 500 }}>仅过滤待审核推送</span>
+            </label>
+          )}
           {statistics.done > 0 && (
             <button
               onClick={handleCleanupCompleted}
@@ -1580,6 +1650,10 @@ const ScheduledMessagesManager: React.FC = () => {
                     if (filterSelfOnly && isSelfOnlyMessage(message)) {
                       return false;
                     }
+                    // 仅显示待审核消息
+                    if (filterPendingReview && message.Status !== 'PendingReview') {
+                      return false;
+                    }
                     // Category 筛选（并集逻辑）
                     if (selectedCategories.length > 0) {
                       const messageCategories = message.Category 
@@ -1614,7 +1688,12 @@ const ScheduledMessagesManager: React.FC = () => {
                           </span>
                         </td>
                         <td style={styles.td}>
-                          <span style={styles.topicText}>{displayTitle}</span>
+                          <span style={styles.topicText}>
+                            {message.Category?.includes('自动答复') && (
+                              <span title="自动答复消息" style={{ marginRight: '4px' }}>🤖</span>
+                            )}
+                            {displayTitle}
+                          </span>
                         </td>
                         <td style={styles.td}>
                           {message.Category ? (
@@ -1642,6 +1721,43 @@ const ScheduledMessagesManager: React.FC = () => {
                         </td>
                         <td style={styles.td}>
                           <div style={{ display: 'flex', gap: '6px' }}>
+                            {/* 待审核消息的快速操作按钮 */}
+                            {message.Status === 'PendingReview' && (
+                              <>
+                                <button 
+                                  style={{
+                                    padding: '4px 8px',
+                                    backgroundColor: '#28a745',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '11px',
+                                    fontWeight: 500
+                                  }}
+                                  onClick={() => handleApproveAutoReply(message)}
+                                  title="批准发送（将在下一分钟执行）"
+                                >
+                                  ✓ 批准
+                                </button>
+                                <button 
+                                  style={{
+                                    padding: '4px 8px',
+                                    backgroundColor: '#dc3545',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '11px',
+                                    fontWeight: 500
+                                  }}
+                                  onClick={() => handleRejectAutoReply(message)}
+                                  title="拒绝此自动答复"
+                                >
+                                  ✗ 拒绝
+                                </button>
+                              </>
+                            )}
                             {message.Automation_Link && (
                               <button 
                                 style={styles.jiraLinkButton}
@@ -4570,6 +4686,8 @@ const getStatusStyle = (status: string): React.CSSProperties => {
       return { ...baseStyle, backgroundColor: '#fff3cd', color: '#856404' };
     case 'Completed':
       return { ...baseStyle, backgroundColor: '#d1ecf1', color: '#0c5460' };
+    case 'PendingReview':
+      return { ...baseStyle, backgroundColor: '#ffe0b2', color: '#e65100' };
     default:
       return { ...baseStyle, backgroundColor: '#f5f5f5', color: '#666' };
   }

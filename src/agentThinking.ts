@@ -151,6 +151,31 @@ export class IntelligentAgent {
   }
   
   /**
+   * 构建 matchedRule 字符串
+   * 优先使用 matchedRuleIds 构建包含 RULE_ID 标识符的字符串，便于后续精确匹配
+   * @param matchedRuleIds LLM 返回的规则 ID 数组
+   * @param matchedRules LLM 返回的规则文本数组（作为 fallback）
+   */
+  private buildMatchedRuleString(matchedRuleIds?: number[], matchedRules?: string[]): string {
+    // 如果有规则 ID，构建包含 RULE_ID 标识符的字符串
+    if (matchedRuleIds && matchedRuleIds.length > 0) {
+      const ruleIdParts = matchedRuleIds.map(id => `[RULE_ID:${id}]`);
+      // 如果同时有规则文本，一起包含
+      if (matchedRules && matchedRules.length > 0) {
+        return `${ruleIdParts.join(' ')} ${matchedRules.join('; ')}`;
+      }
+      return ruleIdParts.join(' ');
+    }
+    
+    // Fallback: 只使用规则文本
+    if (matchedRules && matchedRules.length > 0) {
+      return matchedRules.join('; ');
+    }
+    
+    return '';
+  }
+  
+  /**
    * 从 chrome.storage.local 加载用户自定义配置
    */
   private async loadUserConfiguration(): Promise<{
@@ -1101,9 +1126,9 @@ export class IntelligentAgent {
           reasonsToStore: [],
           thoughtProcess: messageThoughtProcess,
           messageContext: message,
-          matchedRule: analysis.matchedRules && analysis.matchedRules.length > 0 
-            ? analysis.matchedRules.join('; ') 
-            : '',
+          // 优先使用 matchedRuleIds 构建 matchedRule（包含 RULE_ID 标识符用于精确匹配）
+          // 如果 LLM 返回了 matchedRuleIds，在 matchedRule 中包含它们
+          matchedRule: this.buildMatchedRuleString(analysis.matchedRuleIds, analysis.matchedRules),
           metaData: {
             llmCallCount: 0,
             llmCallTokens: 0,
@@ -2260,10 +2285,19 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
     // 构建用户上下文信息
     const userContextInfo = this.buildUserContextInfo(userConfig.userContextConfig);
     
-    // 构建关注规则
+    // 构建关注规则（动态拼接 filterSender/filterGroup 条件，并添加规则 ID 用于精确匹配）
     const concernedRules = context?.concernedRules || [];
+    const buildRuleText = (rule: any): string => {
+      const parts: string[] = [];
+      if (rule.filterSender) parts.push(rule.filterSender);
+      if (rule.filterGroup) parts.push(`在 ${rule.filterGroup} 中`);
+      if (rule.filterSender) parts.push(`发送的`);
+      if (rule.text) parts.push(rule.text);
+      return parts.join(' ') || rule.text;
+    };
+    // 添加 [RULE_ID:X] 标识符，用于 LLM 返回时精确匹配
     const filterRulesInfo = concernedRules.length > 0 
-      ? `关注规则:\n${concernedRules.map((rule, i) => `- 规则${i+1}: ${rule.text}`).join('\n')}`
+      ? `关注规则:\n${concernedRules.map((rule, i) => `- 规则${i+1} [RULE_ID:${i}]: ${buildRuleText(rule)}`).join('\n')}`
       : '';
     
     // 获取工具描述
@@ -2305,7 +2339,8 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
   {
     ${messages.length > 1 ? '"messageIndex": 0,' : ''}
     "summary": "根据消息上下文，总结消息的简要内容",
-    "matchedRules": ["匹配的关注规则1", "匹配的关注规则2"],
+    "matchedRuleIds": [0, 2],  // 【重要】匹配的规则 ID 数组，使用规则定义中的 [RULE_ID:X] 中的 X 值
+    "matchedRules": ["匹配的关注规则1（备用参考）", "匹配的关注规则2"],
     "matchReasons": ["匹配原因1", "匹配原因2"],
     "importanceLevel": "low|medium|high",
     "needsAttention": true|false,
@@ -2353,7 +2388,8 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
 4. 如果不需要处理(nextAction为finish)，请提供完整的决策信息(shouldStore, shouldNotify等)
 5. 对于entities字段，请尽可能完整提取实体信息
 6. 'tools'字段中只能包含上面列出的可用工具ID
-7. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义`
+7. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义
+8. 【重要】'matchedRuleIds'字段必须使用规则定义中的 [RULE_ID:X] 中的数字 X，这是用于精确匹配规则的关键字段`
     
     // 构建最终提示
     return `

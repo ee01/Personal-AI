@@ -1433,6 +1433,84 @@ class OllamaChat {
   }
 }
 
+// ==================== 自动答复相关函数 ====================
+
+/**
+ * 生成自动答复内容
+ * @param messageContext 消息上下文
+ * @returns 生成的答复内容
+ */
+export async function generateAutoReply(messageContext: {
+    messageContent: string;
+    sender: string;
+    groupName?: string;
+    summary?: string;
+    replyTemplate?: string;  // 用户填写的答复模板，用于风格参考
+}): Promise<string> {
+    // 如果有用户模板，生成风格参考提示
+    const templateHint = messageContext.replyTemplate 
+        ? `\n用户期望的答复风格参考："${messageContext.replyTemplate}"\n请保持这个风格和内容目的，但换一种表达方式，让每次答复略有不同。`
+        : '';
+    
+    const prompt = `请根据以下消息生成一个简短的自动答复：
+
+消息内容：${messageContext.messageContent}
+发送者：${messageContext.sender}
+群组：${messageContext.groupName || '私聊'}
+上下文总结：${messageContext.summary || '无'}
+${templateHint}
+
+要求：
+1. 简短（1-2句话）
+2. ${messageContext.replyTemplate ? '保持用户的答复风格，但措辞略有变化' : '礼貌且专业'}
+3. 使用与原消息相同的语言
+
+只返回答复内容，不要包含其他解释。`;
+    
+    try {
+        const response = await handleLLMRequest({ prompt, type: 'auto_reply' });
+        // 清理可能的思考标签
+        const cleanedResponse = response
+            .replace(/<think>[\s\S]*?<\/think>/g, '')
+            .trim();
+        return cleanedResponse;
+    } catch (error) {
+        console.error('生成自动答复失败:', error);
+        throw error;
+    }
+}
+
+/**
+ * 判断两条消息内容是否语义相似
+ * @param content1 消息1
+ * @param content2 消息2
+ * @returns 是否相似
+ */
+export async function isContentSimilar(
+    content1: string, 
+    content2: string
+): Promise<boolean> {
+    const prompt = `请判断以下两条消息是否表达类似的意思：
+
+消息1：${content1}
+消息2：${content2}
+
+如果两条消息的核心意图相似，请回复"相似"，否则回复"不相似"。
+只返回一个词，不要其他内容。`;
+    
+    try {
+        const response = await handleLLMRequest({ prompt, type: 'similarity' });
+        // 清理可能的思考标签
+        const cleanedResponse = response
+            .replace(/<think>[\s\S]*?<\/think>/g, '')
+            .trim();
+        return cleanedResponse.includes('相似') && !cleanedResponse.includes('不相似');
+    } catch (error) {
+        console.error('判断内容相似度失败:', error);
+        return false;  // 出错时默认返回不相似，避免错误触发
+    }
+}
+
 // 导出所有实现
 export {
   ChatMessage,
