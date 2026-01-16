@@ -11,7 +11,7 @@
 ### 🔴 优先级 P0（核心 MVP）
 
 - [ ] **T1. 稍后处理（Snooze）** → [§3.1](#31-snooze稍后处理延迟提醒)
-  - 实现：在 RingCentral/Glip 任意消息上悬停 2 秒后，右下角出现带红色 icon（`@static/icons/icon16.png`）的菜单
+  - 实现：在 RingCentral/Glip 任意消息上悬停 1.5 秒后，右下角出现带红色 icon（`@static/icons/icon16.png`）的菜单
   - 菜单中一个文字按钮是"稍后处理"
   - 点击后弹出窗口选择时间，默认明天 9 点
   - 确认时间后在 scheduled messages（Google Sheet）添加一条记录：
@@ -22,17 +22,17 @@
   - 到时由 Jira Automation 执行 Bot 推送提醒我处理该消息
 
 - [ ] **T2. 匹配自动回复** → [§3.6](#36-下班专注模式自动回复) / [§5.1](#51-自动澄清问题减少往返)
-  - 实现：同样在悬停 2 秒的菜单中有"自动答复"按钮
+  - 实现：同样在悬停 1.5 秒的菜单中有"自动答复"按钮
   - 点击后弹出配置窗口：
-    - LLM 根据当前消息生成回复建议
+    - LLM 根据当前消息生成回复建议（多一个勾选，每次 AI 生成类似答复）
     - 勾选匹配条件：
       - ☐ 匹配类似内容（LLM 语义匹配）
       - ☐ 匹配发送者（同一发送人）
       - ☐ 匹配在当前群组（同一 Team ID）
     - 同时满足勾选的条件时触发自动回复
     - 审核模式开关：
-      - 选项1："仅添加到审核列表"（需手动确认后发送）
-      - 选项2："自动答复前 X 小时可拦截"（用户输入小时数，在此时间窗口内可取消）
+      - 选项1："仅添加到审核列表"（需手动确认后发送），可以考虑直接用定时消息的 status 来过滤审核列表
+      - 选项2："自动答复前 X 小时可拦截"（用户输入小时数，在此时间窗口内可取消），同时要推送通知给用户提醒用户审核（chrome notification，以及 调用 @bot.ts 推送给用户）
   - 存储结构需扩展，新增 `auto_reply_rules` 表或字段
 
 ### 🟡 优先级 P1（高价值扩展）
@@ -514,5 +514,53 @@ interface PendingMessage {
   status: 'pending' | 'processed' | 'dismissed';
 }
 ```
+
+---
+
+## T3. 用户回复风格学习（未来增强）
+
+### 需求背景
+自动答复功能需要生成符合用户个人风格的回复，当前仅依赖 replyContent 模板，无法学习用户的整体回复习惯。
+
+### 功能设计
+
+#### 1. 回复行为监控
+- 监控用户在 RingCentral 页面发送消息的操作
+- 记录用户的回复内容、回复对象、回复时间、上下文等
+- 在 contentScript 中监听消息发送事件
+
+#### 2. 风格分析
+- 定期分析用户的回复数据
+- 提取用户的语言风格特征（正式/随意、简短/详细、表情使用等）
+- 生成 few-shot 示例库
+
+#### 3. Context 记录方案
+- 存储位置：chrome.storage.local
+- 数据结构：
+```typescript
+interface UserReplyRecord {
+    id: string;
+    originalMessage: string;      // 原消息
+    userReply: string;            // 用户回复
+    sender: string;               // 原消息发送者
+    groupName?: string;           // 群组名
+    timestamp: number;
+    // 分析结果
+    style?: {
+        formality: 'formal' | 'casual';
+        length: 'short' | 'medium' | 'long';
+        hasEmoji: boolean;
+    };
+}
+```
+- 保留最近 100 条记录用于 few-shot
+
+#### 4. generateAutoReply 集成
+- 读取用户回复历史
+- 筛选相似场景的 few-shot（同一发送者/群组）
+- 拼接到 prompt 中作为示例
+
+### 实现优先级
+此功能为未来增强，当前版本暂不实现。
 
 ---

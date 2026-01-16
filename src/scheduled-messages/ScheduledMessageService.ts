@@ -340,6 +340,7 @@ export class ScheduledMessageService {
       paused: messages.filter(m => m.Status === 'Paused').length,
       completed: messages.filter(m => m.Status === 'Completed').length,
       done: messages.filter(m => m.Status === 'Done').length,
+      pendingReview: messages.filter(m => m.Status === 'PendingReview').length,
       executedToday: messages.filter(m => 
         m.Last_Exec && m.Last_Exec.startsWith(today)
       ).length

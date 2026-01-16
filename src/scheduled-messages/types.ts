@@ -9,7 +9,8 @@ export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 export type PushMethod = 'AsMe' | 'Bot' | 'AI' | 'JiraAutomation';
 
 // 消息状态
-export type MessageStatus = 'Active' | 'Paused' | 'Completed' | 'Done';
+// PendingReview: 待审核状态，用于自动答复的审核模式，需手动确认后才会执行
+export type MessageStatus = 'Active' | 'Paused' | 'Completed' | 'Done' | 'PendingReview';
 
 // 重复周期单位
 export type RepeatUnit = 'Day' | 'Week' | 'Month' | 'Year';
@@ -164,6 +165,7 @@ export interface Statistics {
   paused: number;
   completed: number;
   done: number;
+  pendingReview: number;  // 待审核的自动答复消息数量
   executedToday: number;
 }
 
