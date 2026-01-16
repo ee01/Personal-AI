@@ -173,26 +173,34 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   };
   
   const getAuthToken = (): Promise<string> => {
+    console.log('🔐 [OneClickSetup.getAuthToken] 被调用（用户主动初始化）');
     return new Promise((resolve, reject) => {
       // 先清除旧 token，强制重新获取以应用新的权限范围
       chrome.identity.getAuthToken({ interactive: false }, (oldToken) => {
+        console.log('🔐 [OneClickSetup.getAuthToken] 检查旧 token:', oldToken ? '存在' : '不存在');
         if (oldToken) {
           chrome.identity.removeCachedAuthToken({ token: oldToken }, () => {
+            console.log('🔐 [OneClickSetup.getAuthToken] 已清除旧 token，重新获取 interactive=true');
             // 重新获取 token
             chrome.identity.getAuthToken({ interactive: true }, (token) => {
               if (chrome.runtime.lastError) {
+                console.error('🔐 [OneClickSetup.getAuthToken] 获取 token 失败:', chrome.runtime.lastError);
                 reject(chrome.runtime.lastError);
               } else {
+                console.log('🔐 [OneClickSetup.getAuthToken] 获取 token 成功');
                 resolve(token || '');
               }
             });
           });
         } else {
+          console.log('🔐 [OneClickSetup.getAuthToken] 无旧 token，直接获取 interactive=true');
           // 没有旧 token，直接获取新的
           chrome.identity.getAuthToken({ interactive: true }, (token) => {
             if (chrome.runtime.lastError) {
+              console.error('🔐 [OneClickSetup.getAuthToken] 获取 token 失败:', chrome.runtime.lastError);
               reject(chrome.runtime.lastError);
             } else {
+              console.log('🔐 [OneClickSetup.getAuthToken] 获取 token 成功');
               resolve(token || '');
             }
           });

@@ -1,7 +1,6 @@
 import { sendBotMessage } from './bot';
-import { callLLMJsonAPI, handleLLMRequest, generateAutoReply, isContentSimilar } from './llm';
+import { callLLMJsonAPI, handleLLMRequest, isContentSimilar } from './llm';
 import { getEnvConfig, showToast } from './utils';
-import { getAuthToken, getCachedAuthToken } from './slide';
 import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
@@ -9,246 +8,13 @@ import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
 import { memorySystem, StoreResult } from './memory';
 import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
-import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
+import { 
+    handleAutoReplyRules, 
+    TopicItemWithAutoReply,
+    AutoReplyContext,
+    formatAutoReplyTime
+} from './message-reaction';
 
-// 自动答复配置接口（与 topic-modal.tsx 中定义保持一致）
-interface AutoReplyConfig {
-    enabled: boolean;
-    replyContent: string;
-    useAIGenerate: boolean;
-    reviewMode: 'immediate' | 'delayed' | 'manual';  // immediate: 直接发送, delayed: 延迟可拦截, manual: 审核
-    delayHours?: number;
-}
-
-interface TopicItemWithAutoReply {
-    id: string;
-    text: string;
-    expiredAt: number;
-    pushToGlip?: boolean;
-    mentionMe?: boolean;
-    // 通用匹配条件
-    filterSender?: string;
-    filterGroup?: string;
-    // 自动答复相关
-    autoReply?: boolean;
-    autoReplyConfig?: AutoReplyConfig;
-}
-
-/**
- * 根据 TopicItem 的匹配条件生成完整规则文本
- * 用于 system_prompt 拼接
- * @param item TopicItem 对象
- * @param includeId 是否包含规则 ID 前缀（用于 LLM 精确匹配）
- * @param ruleIndex 规则索引（从 0 开始）
- */
-function buildRuleText(item: TopicItemWithAutoReply, includeId = false, ruleIndex?: number): string {
-    const parts: string[] = [];
-    
-    // 发送者条件
-    if (item.filterSender) {
-        parts.push(item.filterSender);
-    }
-    
-    // 群组条件
-    if (item.filterGroup) {
-        parts.push(`在 ${item.filterGroup} 中`);
-    }
-    
-    // 发送者条件承接
-    if (item.filterSender) {
-        parts.push(`发送的`);
-    }
-    
-    // 拼接用户编写的规则描述
-    if (item.text) {
-        parts.push(item.text);
-    }
-    
-    const ruleText = parts.join(' ') || item.text;
-    
-    // 如果需要包含 ID 前缀，用于帮助 LLM 精确返回匹配的规则
-    if (includeId && ruleIndex !== undefined) {
-        return `[RULE_ID:${ruleIndex}] ${ruleText}`;
-    }
-    
-    return ruleText;
-}
-
-/**
- * 从 LLM 返回的 matchedRule 中提取规则 ID
- * 支持格式: "[RULE_ID:0]", "RULE_ID:0", "规则0", "规则1" 等
- * @returns 提取的规则 ID 数组（作为数字索引）
- */
-function extractRuleIdsFromMatchedRule(matchedRule: string): number[] {
-    if (!matchedRule) return [];
-    
-    const ids: number[] = [];
-    let match: RegExpExecArray | null;
-    
-    // 匹配 [RULE_ID:X] 格式
-    const ruleIdRegex = /\[RULE_ID:(\d+)\]/g;
-    while ((match = ruleIdRegex.exec(matchedRule)) !== null) {
-        ids.push(parseInt(match[1], 10));
-    }
-    
-    // 匹配 RULE_ID:X 格式（无方括号，避免重复匹配带方括号的）
-    const ruleIdRegex2 = /(?<!\[)RULE_ID:(\d+)(?!\])/g;
-    while ((match = ruleIdRegex2.exec(matchedRule)) !== null) {
-        const id = parseInt(match[1], 10);
-        if (!ids.includes(id)) ids.push(id);
-    }
-    
-    // 匹配 "规则X" 格式（兼容中文）
-    const chineseRuleRegex = /规则(\d+)/g;
-    while ((match = chineseRuleRegex.exec(matchedRule)) !== null) {
-        // 注意：中文格式通常从 1 开始，需要转换为 0-based index
-        const id = parseInt(match[1], 10) - 1;
-        if (id >= 0 && !ids.includes(id)) ids.push(id);
-    }
-    
-    return ids;
-}
-
-/**
- * 在 concernedItems 中查找匹配的项
- * 优先使用规则 ID 匹配，如果无法匹配则 fallback 到文本模糊匹配
- * @param matchedRule LLM 返回的匹配规则文本
- * @param concernedItems 关注项列表
- * @param matchedRuleIds 可选的规则 ID 数组（直接从 LLM 返回的 matchedRuleIds 字段获取）
- * @returns 匹配的 concernedItem，如果没有找到返回 undefined
- */
-function findMatchedConcernedItem<T extends { text: string; id?: string }>(
-    matchedRule: string | undefined,
-    concernedItems: T[],
-    matchedRuleIds?: number[]
-): T | undefined {
-    if (!matchedRule && (!matchedRuleIds || matchedRuleIds.length === 0)) {
-        return undefined;
-    }
-    
-    // 策略 1: 使用直接提供的规则 ID 数组
-    if (matchedRuleIds && matchedRuleIds.length > 0) {
-        for (const id of matchedRuleIds) {
-            if (id >= 0 && id < concernedItems.length) {
-                return concernedItems[id];
-            }
-        }
-    }
-    
-    // 策略 2: 从 matchedRule 文本中提取规则 ID
-    if (matchedRule) {
-        const extractedIds = extractRuleIdsFromMatchedRule(matchedRule);
-        for (const id of extractedIds) {
-            if (id >= 0 && id < concernedItems.length) {
-                return concernedItems[id];
-            }
-        }
-    }
-    
-    // 策略 3: Fallback 到文本模糊匹配
-    if (matchedRule) {
-        // 首先尝试精确包含匹配
-        const exactMatch = concernedItems.find(item => 
-            matchedRule.includes(item.text) || item.text.includes(matchedRule)
-        );
-        if (exactMatch) return exactMatch;
-        
-        // 然后尝试规范化后的匹配（去除空格、换行等）
-        const normalizedMatchedRule = matchedRule.replace(/\s+/g, ' ').trim().toLowerCase();
-        const normalizedMatch = concernedItems.find(item => {
-            const normalizedItemText = item.text.replace(/\s+/g, ' ').trim().toLowerCase();
-            return normalizedMatchedRule.includes(normalizedItemText) || 
-                   normalizedItemText.includes(normalizedMatchedRule);
-        });
-        if (normalizedMatch) return normalizedMatch;
-        
-        // 最后尝试关键词匹配（至少 50% 的词匹配）
-        const matchedWords = matchedRule.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-        if (matchedWords.length > 0) {
-            let bestMatch: T | undefined;
-            let bestScore = 0;
-            
-            for (const item of concernedItems) {
-                const itemWords = item.text.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-                const matchCount = matchedWords.filter(word => 
-                    itemWords.some(itemWord => itemWord.includes(word) || word.includes(itemWord))
-                ).length;
-                const score = matchCount / Math.max(matchedWords.length, itemWords.length);
-                
-                if (score > bestScore && score >= 0.5) {
-                    bestScore = score;
-                    bestMatch = item;
-                }
-            }
-            
-            if (bestMatch) return bestMatch;
-        }
-    }
-    
-    return undefined;
-}
-
-/**
- * 在 concernedItems 中查找所有匹配的项（用于多规则匹配场景）
- */
-function findAllMatchedConcernedItems<T extends { text: string; id?: string }>(
-    matchedRule: string | undefined,
-    concernedItems: T[],
-    matchedRuleIds?: number[]
-): T[] {
-    const results: T[] = [];
-    
-    if (!matchedRule && (!matchedRuleIds || matchedRuleIds.length === 0)) {
-        return results;
-    }
-    
-    // 使用直接提供的规则 ID 数组
-    if (matchedRuleIds && matchedRuleIds.length > 0) {
-        for (const id of matchedRuleIds) {
-            if (id >= 0 && id < concernedItems.length && !results.includes(concernedItems[id])) {
-                results.push(concernedItems[id]);
-            }
-        }
-    }
-    
-    // 从 matchedRule 文本中提取规则 ID
-    if (matchedRule) {
-        const extractedIds = extractRuleIdsFromMatchedRule(matchedRule);
-        for (const id of extractedIds) {
-            if (id >= 0 && id < concernedItems.length && !results.includes(concernedItems[id])) {
-                results.push(concernedItems[id]);
-            }
-        }
-    }
-    
-    // 如果通过 ID 找到了结果，直接返回
-    if (results.length > 0) {
-        return results;
-    }
-    
-    // Fallback: 使用文本匹配（只返回第一个匹配项）
-    const fallbackMatch = findMatchedConcernedItem(matchedRule, concernedItems);
-    if (fallbackMatch) {
-        results.push(fallbackMatch);
-    }
-    
-    return results;
-}
-
-// 自动答复上下文接口
-interface AutoReplyContext {
-    matchedRule: string;
-    matchedRuleIds?: number[];  // 规则 ID 数组，用于精确匹配
-    messageContext: {
-        sender: string;
-        groupId: string;
-        groupName: string;
-        messageContent: string;
-        summary?: string;
-        datetime: string;
-        postId?: string;
-    };
-}
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages (data: any[], username: string, isScheduledTask = false) {
@@ -436,13 +202,37 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				}
 			});
 
-			// 处理 shouldNotify 和 shouldStore 标志
+			// 处理 shouldNotify、自动答复和 shouldStore 标志
+			// 处理顺序：1.自动答复 2.通知（包含自动答复信息） 3.存储
 			for (const result of resultsArray) {
-				// 处理 shouldNotify 标志
-				if (result.shouldNotify && envConfig.ENABLE_BOT) {
-					// 直接使用 result 中的信息，不需要复杂的查找
-					const originalMessage = result.messageContext || {};
+				const originalMessage = result.messageContext || {};
+				const postId = (originalMessage as any).postId || 
+					(originalMessage as any).post_id || 
+					(originalMessage as any).raw?.id || '';
+				
+				// 1️⃣ 处理自动答复规则（最先处理，以便在通知中包含自动答复信息）
+				let autoReplyResult: { handled: boolean; replyInfo?: { content: string; scheduleTime: Date; status: string; messageId?: string } } = { handled: false };
+				if (result.matchedRule) {
+					// 从 matchedRule 中提取规则 ID（如果可用）
+					const matchedRuleIds = extractRuleIdsFromMatchedRule(result.matchedRule);
 					
+					autoReplyResult = await handleAutoReplyRules({
+						matchedRule: result.matchedRule,
+						matchedRuleIds,  // 传入提取的规则 ID 数组
+						messageContext: {
+							sender: originalMessage.sender || '',
+							groupId: originalMessage.groupId || '',
+							groupName: originalMessage.groupName || '',
+							messageContent: originalMessage.messageContent || '',
+							summary: result.summary || '',
+							datetime: originalMessage.datetime || '',
+							postId
+						}
+					}, concernedItems as TopicItemWithAutoReply[]);
+				}
+				
+				// 2️⃣ 处理 shouldNotify 标志 - 发送通知（包含自动答复信息）
+				if (result.shouldNotify && envConfig.ENABLE_BOT) {
 					// 使用新的匹配函数查找关注项（优先使用规则 ID，fallback 到文本匹配）
 					const matchedRuleIds = extractRuleIdsFromMatchedRule(result.matchedRule || '');
 					const matchedConcernedItem = findMatchedConcernedItem(
@@ -451,6 +241,14 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						matchedRuleIds
 					);
 					const shouldMention = matchedConcernedItem?.mentionMe || false;
+					
+					// 构建自动答复信息（如果有）
+					const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
+						hasAutoReply: true,
+						replyContent: autoReplyResult.replyInfo.content,
+						scheduleTime: formatAutoReplyTime(autoReplyResult.replyInfo.scheduleTime),
+						messageId: autoReplyResult.replyInfo.messageId
+					} : undefined;
 					
 					sendBotMessage({
 						matched_rule: result.matchedRule || '',
@@ -461,14 +259,15 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						summary: result.summary || '',
 						reply_advice: result.replyAdvice || '',
 						datetime: originalMessage.datetime || '',
-						mention: shouldMention
+						mention: shouldMention,
+						post_id: postId,
+						autoReplyInfo
 					}).catch(console.error);
 				}
 				
-										// 🆕 处理 shouldStore 标志 - 使用统一存储接口
+				// 3️⃣ 处理 shouldStore 标志 - 使用统一存储接口（后于自动答复）
 				if (result.shouldStore) {
 					try {
-						const originalMessage = result.messageContext || {};
 						const messageId = uuidv4();
 						
 						// 构建消息元数据
@@ -494,7 +293,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							replyAdvice: result.replyAdvice || ''
 						};
 
-						// 🆕 使用统一存储接口 - 内部自动处理实体关联数据
+						// 使用统一存储接口 - 内部自动处理实体关联数据
 						try {
 							// 确保记忆系统已初始化
 							await memorySystem.initialize();
@@ -518,32 +317,6 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					} catch (error) {
 						console.error('存储消息失败:', error);
 					}
-				}
-				
-				// 🆕 处理自动答复规则
-				if (result.matchedRule) {
-					const originalMessage = result.messageContext || {};
-					// 从 originalMessage 中获取 postId（可能在 raw 属性中）
-					const postId = (originalMessage as any).postId || 
-						(originalMessage as any).post_id || 
-						(originalMessage as any).raw?.id || '';
-					
-					// 从 matchedRule 中提取规则 ID（如果可用）
-					const matchedRuleIds = extractRuleIdsFromMatchedRule(result.matchedRule);
-					
-					await handleAutoReplyRules({
-						matchedRule: result.matchedRule,
-						matchedRuleIds,  // 传入提取的规则 ID 数组
-						messageContext: {
-							sender: originalMessage.sender || '',
-							groupId: originalMessage.groupId || '',
-							groupName: originalMessage.groupName || '',
-							messageContent: originalMessage.messageContent || '',
-							summary: result.summary || '',
-							datetime: originalMessage.datetime || '',
-							postId
-						}
-					}, concernedItems as TopicItemWithAutoReply[]);
 				}
 			}
 
@@ -622,7 +395,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						summary: processResult.summary || '',
 						reply_advice: processResult.replyAdvice || '',
 						datetime: processResult.messageContext?.datetime || '',
-						mention: shouldMention
+						mention: shouldMention,
+						post_id: post.id || ''
 					}).catch(console.error);
 				}
 			}
@@ -857,7 +631,60 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				  }
 				}
 
-				// 存储消息
+				// 处理顺序：1.自动答复 2.通知（包含自动答复信息） 3.存储
+				
+				// 1️⃣ 处理自动答复规则（最先处理，以便在通知中包含自动答复信息）
+				let autoReplyResult: { handled: boolean; replyInfo?: { content: string; scheduleTime: Date; status: string; messageId?: string } } = { handled: false };
+				if (matched_rule || (json.matched_rule_ids && json.matched_rule_ids.length > 0)) {
+					autoReplyResult = await handleAutoReplyRules({
+						matchedRule: matched_rule,
+						matchedRuleIds: json.matched_rule_ids,  // 传入规则 ID 数组用于精确匹配
+						messageContext: {
+							sender: json.sender,
+							groupId: json.team_id,
+							groupName: json.team_name,
+							messageContent: json.message_content,
+							summary: json.summary,
+							datetime: json.datetime,
+							postId: json.post_id
+						}
+					}, concernedItems as TopicItemWithAutoReply[]);
+				}
+				
+				// 2️⃣ 如果审核通过，则推送 Glip 消息（包含自动答复信息）
+				if (isPassReview && envConfig.ENABLE_BOT) {
+					// 使用新的匹配函数查找关注项（优先使用规则 ID，fallback 到文本匹配）
+					const matchedConcernedItem = findMatchedConcernedItem(
+						matched_rule,
+						concernedItems as TopicItemWithAutoReply[],
+						json.matched_rule_ids // LLM 返回的规则 ID 数组
+					);
+					const shouldMention = matchedConcernedItem?.mentionMe || false;
+					
+					// 构建自动答复信息（如果有）
+					const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
+						hasAutoReply: true,
+						replyContent: autoReplyResult.replyInfo.content,
+						scheduleTime: formatAutoReplyTime(autoReplyResult.replyInfo.scheduleTime),
+						messageId: autoReplyResult.replyInfo.messageId
+					} : undefined;
+					
+					sendBotMessage({
+						matched_rule,
+						team_name: body.messageData ? body.messageData.groupName : json.team_name,
+						team_id: body.messageData ? body.messageData.groupId : json.team_id,
+						sender: json.sender,
+						message_content: json.message_content,
+						summary: json.summary,
+						reply_advice: json.reply_advice,
+						datetime: json.datetime,
+						mention: shouldMention,
+						post_id: json.post_id,
+						autoReplyInfo
+					}).catch(console.error);
+				}
+				
+				// 3️⃣ 存储消息（后于自动答复）
 				// 增强逻辑：使用新的统一存储系统
 				const messageId = uuidv4();
 				const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
@@ -896,7 +723,7 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 					}
 				};
 
-				// 🆕 使用统一存储接口（与 agentThinking 方式一致）
+				// 使用统一存储接口（与 agentThinking 方式一致）
 				try {
 					// 确保记忆系统已初始化
 					await memorySystem.initialize();
@@ -916,46 +743,6 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 				} catch (memoryError) {
 					console.error('🚨 统一存储系统失败', memoryError);
 				}
-
-				// 如果审核通过，则推送 Glip 消息
-				if (isPassReview && envConfig.ENABLE_BOT) {
-					// 使用新的匹配函数查找关注项（优先使用规则 ID，fallback 到文本匹配）
-					const matchedConcernedItem = findMatchedConcernedItem(
-						matched_rule,
-						concernedItems as TopicItemWithAutoReply[],
-						json.matched_rule_ids // LLM 返回的规则 ID 数组
-					);
-					const shouldMention = matchedConcernedItem?.mentionMe || false;
-					
-					sendBotMessage({
-						matched_rule,
-						team_name: body.messageData ? body.messageData.groupName : json.team_name,
-						team_id: body.messageData ? body.messageData.groupId : json.team_id,
-						sender: json.sender,
-						message_content: json.message_content,
-						summary: json.summary,
-						reply_advice: json.reply_advice,
-						datetime: json.datetime,
-						mention: shouldMention
-					}).catch(console.error);
-				}
-				
-				// 🆕 处理自动答复规则（filter 模式）
-				if (matched_rule || (json.matched_rule_ids && json.matched_rule_ids.length > 0)) {
-					await handleAutoReplyRules({
-						matchedRule: matched_rule,
-						matchedRuleIds: json.matched_rule_ids,  // 传入规则 ID 数组用于精确匹配
-						messageContext: {
-							sender: json.sender,
-							groupId: json.team_id,
-							groupName: json.team_name,
-							messageContent: json.message_content,
-							summary: json.summary,
-							datetime: json.datetime,
-							postId: json.post_id
-						}
-					}, concernedItems as TopicItemWithAutoReply[]);
-				}
 			}
 		}
 		return dealResponse;
@@ -968,225 +755,158 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 	}
 }
 
-// ==================== 自动答复处理逻辑 ====================
+/**
+ * 根据 TopicItem 的匹配条件生成完整规则文本
+ * 用于 system_prompt 拼接
+ * @param item TopicItem 对象
+ * @param includeId 是否包含规则 ID 前缀（用于 LLM 精确匹配）
+ * @param ruleIndex 规则索引（从 0 开始）
+ */
+function buildRuleText(item: TopicItemWithAutoReply, includeId = false, ruleIndex?: number): string {
+    const parts: string[] = [];
+    
+    // 发送者条件
+    if (item.filterSender) {
+        parts.push(item.filterSender);
+    }
+    
+    // 群组条件
+    if (item.filterGroup) {
+        parts.push(`在 ${item.filterGroup} 中`);
+    }
+    
+    // 发送者条件承接
+    if (item.filterSender) {
+        parts.push(`发送的`);
+    }
+    
+    // 拼接用户编写的规则描述
+    if (item.text) {
+        parts.push(item.text);
+    }
+    
+    const ruleText = parts.join(' ') || item.text;
+    
+    // 如果需要包含 ID 前缀，用于帮助 LLM 精确返回匹配的规则
+    if (includeId && ruleIndex !== undefined) {
+        return `[RULE_ID:${ruleIndex}] ${ruleText}`;
+    }
+    
+    return ruleText;
+}
 
 /**
- * 统一的自动答复规则处理函数
- * 同时支持 agentThinking 模式和 filter 模式
+ * 从 LLM 返回的 matchedRule 中提取规则 ID
+ * 支持格式: "[RULE_ID:0]", "RULE_ID:0", "规则0", "规则1" 等
+ * @returns 提取的规则 ID 数组（作为数字索引）
  */
-async function handleAutoReplyRules(
-    context: AutoReplyContext,
-    concernedItems: TopicItemWithAutoReply[]
-): Promise<void> {
-    try {
-        // 1. 找到匹配的关注项（启用了自动答复的）
-        // 使用新的匹配函数：优先使用规则 ID，fallback 到文本匹配
-        const allMatchedItems = findAllMatchedConcernedItems(
-            context.matchedRule,
-            concernedItems,
-            context.matchedRuleIds
-        );
-        
-        // 筛选启用了自动答复的项
-        const matchedItem = allMatchedItems.find(item => 
-            item.autoReply && item.autoReplyConfig?.enabled
-        );
-        
-        if (!matchedItem || !matchedItem.autoReplyConfig) {
-            return;
-        }
-        
-        const config = matchedItem.autoReplyConfig;
-        const msgContext = context.messageContext;
-        
-        console.log('🤖 检测到自动答复规则匹配:', {
-            rule: matchedItem.text,
-            sender: msgContext.sender,
-            groupName: msgContext.groupName,
-            filterSender: matchedItem.filterSender,
-            filterGroup: matchedItem.filterGroup,
-            config
-        });
-        
-        // 2. 验证匹配条件（由于规则已在 LLM 第一步中综合判断，这里做简单验证）
-        // 如果配置了 filterSender，验证发送者是否匹配
-        if (matchedItem.filterSender && !msgContext.sender?.includes(matchedItem.filterSender)) {
-            console.log('🤖 发送者不匹配，跳过自动答复');
-            return;
-        }
-        
-        // 如果配置了 filterGroup，验证群组是否匹配
-        if (matchedItem.filterGroup && !msgContext.groupName?.includes(matchedItem.filterGroup)) {
-            console.log('🤖 群组不匹配，跳过自动答复');
-            return;
-        }
-        
-        // 3. 检查是否已经对这条消息创建过自动答复（通过 postId 去重）
-        if (msgContext.postId) {
-            const existingReplies = await checkExistingAutoReply(msgContext.postId);
-            if (existingReplies) {
-                console.log('🤖 已存在对此消息的自动答复，跳过');
-                return;
+function extractRuleIdsFromMatchedRule(matchedRule: string): number[] {
+    if (!matchedRule) return [];
+    
+    const ids: number[] = [];
+    let match: RegExpExecArray | null;
+    
+    // 匹配 [RULE_ID:X] 格式
+    const ruleIdRegex = /\[RULE_ID:(\d+)\]/g;
+    while ((match = ruleIdRegex.exec(matchedRule)) !== null) {
+        ids.push(parseInt(match[1], 10));
+    }
+    
+    // 匹配 RULE_ID:X 格式（无方括号，避免重复匹配带方括号的）
+    const ruleIdRegex2 = /(?<!\[)RULE_ID:(\d+)(?!\])/g;
+    while ((match = ruleIdRegex2.exec(matchedRule)) !== null) {
+        const id = parseInt(match[1], 10);
+        if (!ids.includes(id)) ids.push(id);
+    }
+    
+    // 匹配 "规则X" 格式（兼容中文）
+    const chineseRuleRegex = /规则(\d+)/g;
+    while ((match = chineseRuleRegex.exec(matchedRule)) !== null) {
+        // 注意：中文格式通常从 1 开始，需要转换为 0-based index
+        const id = parseInt(match[1], 10) - 1;
+        if (id >= 0 && !ids.includes(id)) ids.push(id);
+    }
+    
+    return ids;
+}
+
+/**
+ * 在 concernedItems 中查找匹配的项
+ * 优先使用规则 ID 匹配，如果无法匹配则 fallback 到文本模糊匹配
+ * @param matchedRule LLM 返回的匹配规则文本
+ * @param concernedItems 关注项列表
+ * @param matchedRuleIds 可选的规则 ID 数组（直接从 LLM 返回的 matchedRuleIds 字段获取）
+ * @returns 匹配的 concernedItem，如果没有找到返回 undefined
+ */
+function findMatchedConcernedItem<T extends { text: string; id?: string }>(
+    matchedRule: string | undefined,
+    concernedItems: T[],
+    matchedRuleIds?: number[]
+): T | undefined {
+    if (!matchedRule && (!matchedRuleIds || matchedRuleIds.length === 0)) {
+        return undefined;
+    }
+    
+    // 策略 1: 使用直接提供的规则 ID 数组
+    if (matchedRuleIds && matchedRuleIds.length > 0) {
+        for (const id of matchedRuleIds) {
+            if (id >= 0 && id < concernedItems.length) {
+                return concernedItems[id];
             }
         }
+    }
+    
+    // 策略 2: 从 matchedRule 文本中提取规则 ID
+    if (matchedRule) {
+        const extractedIds = extractRuleIdsFromMatchedRule(matchedRule);
+        for (const id of extractedIds) {
+            if (id >= 0 && id < concernedItems.length) {
+                return concernedItems[id];
+            }
+        }
+    }
+    
+    // 策略 3: Fallback 到文本模糊匹配
+    if (matchedRule) {
+        // 首先尝试精确包含匹配
+        const exactMatch = concernedItems.find(item => 
+            matchedRule.includes(item.text) || item.text.includes(matchedRule)
+        );
+        if (exactMatch) return exactMatch;
         
-        // 4. 生成答复内容
-        let replyContent = config.replyContent;
-        if (config.useAIGenerate) {
-            console.log('🤖 使用 AI 生成答复内容...');
-            try {
-                replyContent = await generateAutoReply({
-                    messageContent: msgContext.messageContent,
-                    sender: msgContext.sender,
-                    groupName: msgContext.groupName,
-                    summary: msgContext.summary,
-                    replyTemplate: config.replyContent  // 传递用户模板作为风格参考
-                });
-                console.log('🤖 AI 生成的答复:', replyContent);
-            } catch (error) {
-                console.error('🤖 AI 生成回复失败，使用固定模板:', error);
-                // 如果 AI 生成失败，使用固定模板
-                if (!replyContent) {
-                    replyContent = '嗯。好';
+        // 然后尝试规范化后的匹配（去除空格、换行等）
+        const normalizedMatchedRule = matchedRule.replace(/\s+/g, ' ').trim().toLowerCase();
+        const normalizedMatch = concernedItems.find(item => {
+            const normalizedItemText = item.text.replace(/\s+/g, ' ').trim().toLowerCase();
+            return normalizedMatchedRule.includes(normalizedItemText) || 
+                   normalizedItemText.includes(normalizedMatchedRule);
+        });
+        if (normalizedMatch) return normalizedMatch;
+        
+        // 最后尝试关键词匹配（至少 50% 的词匹配）
+        const matchedWords = matchedRule.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        if (matchedWords.length > 0) {
+            let bestMatch: T | undefined;
+            let bestScore = 0;
+            
+            for (const item of concernedItems) {
+                const itemWords = item.text.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                const matchCount = matchedWords.filter(word => 
+                    itemWords.some(itemWord => itemWord.includes(word) || word.includes(itemWord))
+                ).length;
+                const score = matchCount / Math.max(matchedWords.length, itemWords.length);
+                
+                if (score > bestScore && score >= 0.5) {
+                    bestScore = score;
+                    bestMatch = item;
                 }
             }
+            
+            if (bestMatch) return bestMatch;
         }
-        
-        // 5. 创建定时消息
-        await createAutoReplyScheduledMessage({
-            matchedItem,
-            msgContext,
-            replyContent,
-            config
-        });
-        
-        console.log('🤖 自动答复消息已创建');
-        
-    } catch (error) {
-        console.error('🤖 处理自动答复规则失败:', error);
     }
-}
-
-/**
- * 检查是否已存在对某条消息的自动答复
- */
-async function checkExistingAutoReply(postId: string): Promise<boolean> {
-    try {
-        // 从 Chrome storage 获取已处理的自动答复记录
-        const { autoReplyHistory } = await chrome.storage.local.get('autoReplyHistory');
-        if (autoReplyHistory && Array.isArray(autoReplyHistory)) {
-            return autoReplyHistory.includes(postId);
-        }
-        return false;
-    } catch (error) {
-        console.warn('检查自动答复历史失败:', error);
-        return false;
-    }
-}
-
-/**
- * 记录自动答复历史
- */
-async function recordAutoReplyHistory(postId: string): Promise<void> {
-    try {
-        const { autoReplyHistory = [] } = await chrome.storage.local.get('autoReplyHistory');
-        // 保留最近 1000 条记录，避免存储过大
-        const newHistory = [...autoReplyHistory, postId].slice(-1000);
-        await chrome.storage.local.set({ autoReplyHistory: newHistory });
-    } catch (error) {
-        console.warn('记录自动答复历史失败:', error);
-    }
-}
-
-/**
- * 创建自动答复的定时消息
- */
-async function createAutoReplyScheduledMessage(params: {
-    matchedItem: TopicItemWithAutoReply;
-    msgContext: AutoReplyContext['messageContext'];
-    replyContent: string;
-    config: AutoReplyConfig;
-}): Promise<void> {
-    const { matchedItem, msgContext, replyContent, config } = params;
     
-    try {
-        // 🔧 优先使用缓存的 token，避免在后台任务中弹出授权窗口
-        let token = await getCachedAuthToken();
-        if (!token) {
-            console.warn('⚠️ 无缓存的 Google 认证 token，尝试交互式获取...');
-            token = await getAuthToken();
-        }
-        
-        if (!token) {
-            console.error('❌ 无法获取 Google 认证 token，跳过创建自动答复消息');
-            return;
-        }
-        const service = new ScheduledMessageService(token);
-        
-        // 根据 reviewMode 计算执行时间和状态
-        const now = new Date();
-        let scheduleTime: Date;
-        let status: 'Active' | 'PendingReview';
-        
-        switch (config.reviewMode) {
-            case 'immediate': {
-                // 直接发送：下一分钟执行，状态为 Active
-                scheduleTime = new Date(now.getTime() + 60 * 1000);
-                status = 'Active';
-                break;
-            }
-            case 'delayed': {
-                // 延迟可拦截：X 小时后执行，状态为 Active
-                const delayMs = (config.delayHours || 1) * 60 * 60 * 1000;
-                scheduleTime = new Date(now.getTime() + delayMs);
-                status = 'Active';
-                break;
-            }
-            case 'manual':
-            default: {
-                // 仅添加到审核列表：下一分钟，状态为 PendingReview
-                scheduleTime = new Date(now.getTime() + 60 * 1000);
-                status = 'PendingReview';
-                break;
-            }
-        }
-        
-        // 格式化日期和时间
-        const scheduleDate = scheduleTime.toISOString().split('T')[0];
-        const scheduleTimeStr = scheduleTime.toTimeString().substring(0, 5);
-        
-        // 创建消息
-        const createResult = await service.createMessage({
-            Topic: `自动答复 ${msgContext.sender.split(' ')[0]}「${msgContext.messageContent.substring(0, 50)}${msgContext.messageContent.length > 50 ? '...' : ''}」`,
-            Content: replyContent,
-            Schedule_Date: scheduleDate,
-            Schedule_Time: scheduleTimeStr,
-            Push_Method: 'AsMe',
-            Target_Type: msgContext.groupId ? 'group' : 'private',
-            Glip_Team_ID: msgContext.groupId || undefined,
-            Category: '自动答复'
-        });
-        
-        // 如果创建成功，更新状态（因为 createMessage 默认是 Active）
-        if (createResult && status === 'PendingReview') {
-            // 需要更新状态为 PendingReview
-            await service.updateMessage(createResult.ID, { Status: 'PendingReview' });
-        }
-        
-        // 记录自动答复历史
-        if (msgContext.postId) {
-            await recordAutoReplyHistory(msgContext.postId);
-        }
-        
-        console.log('✅ 自动答复消息创建成功:', {
-            topic: matchedItem.text,
-            scheduleTime: `${scheduleDate} ${scheduleTimeStr}`,
-            status,
-            replyContent: replyContent.substring(0, 50) + '...'
-        });
-        
-    } catch (error) {
-        console.error('❌ 创建自动答复消息失败:', error);
-        throw error;
-    }
+    return undefined;
 }
+
+// 自动答复处理逻辑已抽取到 message-reaction/AutoReplyHandler.ts

@@ -4,6 +4,18 @@
 
 消息交互功能提供了在 RingCentral 消息流中快速处理消息的能力，包括自动答复和稍后处理（Snooze）两大核心功能。
 
+## 功能开关
+
+在插件的设置页面（Options）中，可以独立开启或关闭这两个功能：
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `ENABLE_SNOOZE` | 启用「稍后处理」功能 | `true` |
+| `ENABLE_AUTO_REPLY` | 启用「自动答复」功能 | `true` |
+
+- 如果两个功能都关闭，消息上将不会显示交互工具栏
+- 如果只开启其中一个功能，工具栏只显示对应的按钮
+
 ---
 
 ## 自动答复 (Auto Reply)
@@ -41,7 +53,7 @@
 ### 配置入口
 
 1. **关注主题管理** (`topic-modal.tsx`)：添加关注项时勾选"自动答复"
-2. **Snooze 工具栏**：点击"自动答复"按钮快速配置
+2. **消息交互工具栏** (`message-reaction/MessageReactionUI.ts`)：点击"自动答复"按钮快速配置
 
 ### 核心数据结构
 
@@ -77,8 +89,9 @@ interface TopicItem {
 
 ### 触发方式
 
-- **悬停触发**：在 RingCentral 消息页面，将鼠标悬停在任意消息上 **1.5 秒**后，自动显示浮动工具栏
+- **悬停触发**：在 RingCentral 消息页面，将鼠标悬停在任意消息上 **3 秒**后，自动显示浮动工具栏
 - **排除规则**：Reply 输入框不会显示工具栏
+- **功能开关**：需要在设置中启用对应功能，否则不显示工具栏或对应按钮
 
 ### UI 结构
 
@@ -186,14 +199,22 @@ interface SnoozeRequest {
 
 | 文件 | 说明 |
 |------|------|
+| `src/message-reaction/` | 消息交互功能模块（稍后处理、自动答复） |
+| `src/message-reaction/index.ts` | 模块入口，导出所有公共接口 |
+| `src/message-reaction/MessageReactionUI.ts` | 消息交互工具栏 UI、消息信息提取、功能开关控制 |
+| `src/message-reaction/SnoozeManager.ts` | Snooze 功能核心逻辑 |
+| `src/message-reaction/AutoReplyHandler.ts` | 自动答复处理逻辑（含初始化检查） |
 | `src/modals/topic-modal.tsx` | 关注主题管理，自动答复配置 UI |
-| `src/messageDealing.ts` | 消息分析，自动答复规则匹配 |
+| `src/messageDealing.ts` | 消息分析，调用自动答复处理 |
 | `src/agentThinking.ts` | Agent 模式消息分析 |
-| `src/snooze/SnoozeUI.ts` | Snooze 工具栏 UI、消息信息提取 |
-| `src/snooze/SnoozeManager.ts` | Snooze 功能初始化管理 |
+| `src/contentScriptGlip.tsx` | RingCentral 页面内容脚本，初始化消息交互功能 |
 | `src/background.ts` | Snooze 请求处理、定时消息创建 |
+| `src/bot.ts` | Bot 消息发送，包含原消息链接和自动答复信息 |
 | `src/scheduled-messages/` | 定时消息管理 |
+| `src/scheduled-messages/ScheduledMessagesUtils.ts` | 定时消息共用工具（初始化检查、提示对话框） |
 | `src/llm.ts` | LLM 调用，`generateAutoReply`、摘要生成 |
+| `src/utils.ts` | 包含 `ENABLE_SNOOZE`、`ENABLE_AUTO_REPLY` 配置 |
+| `src/options.tsx` | 设置页面，消息交互功能开关 UI |
 
 ---
 

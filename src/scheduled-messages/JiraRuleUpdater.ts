@@ -328,11 +328,14 @@ export class JiraRuleUpdater {
   private async syncConfigToSheet(): Promise<void> {
     try {
       // 获取 Google token
+      console.log('🔐 [JiraRuleUpdater.syncConfigToSheet] getAuthToken 被调用, interactive=false');
       const token = await new Promise<string>((resolve, reject) => {
         chrome.identity.getAuthToken({ interactive: false }, (token) => {
           if (chrome.runtime.lastError || !token) {
+            console.warn('🔐 [JiraRuleUpdater.syncConfigToSheet] 无法获取 token:', chrome.runtime.lastError?.message || 'No token');
             reject(new Error(chrome.runtime.lastError?.message || 'No token'));
           } else {
+            console.log('🔐 [JiraRuleUpdater.syncConfigToSheet] getAuthToken 成功');
             resolve(token);
           }
         });

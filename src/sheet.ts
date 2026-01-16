@@ -34,10 +34,16 @@ export class Sheet {
   }
 
   static async getToken(): Promise<string> {
+    console.log('🔐 [Sheet.getToken] getAuthToken 被调用, interactive=true');
     return new Promise((resolve, reject) => {
         chrome.identity.getAuthToken({ interactive: true }, (token) => {
-            if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-            else resolve(token);
+            if (chrome.runtime.lastError) {
+                console.error('🔐 [Sheet.getToken] 获取 token 失败:', chrome.runtime.lastError);
+                reject(chrome.runtime.lastError);
+            } else {
+                console.log('🔐 [Sheet.getToken] getAuthToken 成功');
+                resolve(token);
+            }
         });
     });
   }

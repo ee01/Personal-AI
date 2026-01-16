@@ -146,6 +146,7 @@ function parseCronDaysOfWeek(dayOfWeek: string): number[] {
 const ScheduledMessagesManager: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [needsReauth, setNeedsReauth] = useState(false);  // 🔧 新增：是否需要重新授权
   const [config, setConfig] = useState<SheetConfig | null>(null);
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
   const [statistics, setStatistics] = useState<Statistics>({
@@ -212,8 +213,14 @@ const ScheduledMessagesManager: React.FC = () => {
           setBotConfigured(true);
         }
         
-        // 获取 token 并加载数据
-        const token = await getAuthToken();
+        // 🔧 优先使用缓存的 token，避免在页面加载时弹出授权窗口
+        const token = await getAuthToken(false);  // 先尝试非交互式
+        if (!token) {
+          // 如果没有缓存的 token，显示提示让用户手动授权
+          console.warn('⚠️ 无缓存的 Google 认证 token，需要用户手动授权');
+          setNeedsReauth(true);
+        }
+        
         if (token) {
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
@@ -232,12 +239,17 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
-  const loadMessages = async (messageService: ScheduledMessageService) => {
+  /**
+   * 加载消息列表
+   * @param messageService 消息服务
+   * @param skipJiraSync 是否跳过 Jira 状态同步（保存消息后可跳过以提升性能）
+   */
+  const loadMessages = async (messageService: ScheduledMessageService, skipJiraSync = false) => {
     try {
       const msgs = await messageService.getAllMessages();
       
-      // 同步 JiraAutomation 状态
-      const updatedMsgs = await syncJiraAutomationStatus(msgs, messageService);
+      // 同步 JiraAutomation 状态（可跳过以提升性能）
+      const updatedMsgs = skipJiraSync ? msgs : await syncJiraAutomationStatus(msgs, messageService);
       
       setMessages(updatedMsgs);
       
@@ -248,9 +260,27 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
+  // projectId 缓存，避免重复请求
+  const projectIdCacheRef = useRef<Map<string, string>>(new Map());
+  
   /**
-   * 同步 JiraAutomation 状态
-   * 检查 Jira Rule 的实际状态，如果与 Sheet 记录不一致则更新
+   * 获取项目 ID（带缓存）
+   */
+  const getProjectIdFromKeyWithCache = async (jiraUrl: string, projectKey: string): Promise<string | null> => {
+    const cacheKey = `${jiraUrl}::${projectKey}`;
+    if (projectIdCacheRef.current.has(cacheKey)) {
+      return projectIdCacheRef.current.get(cacheKey)!;
+    }
+    const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+    if (projectId) {
+      projectIdCacheRef.current.set(cacheKey, projectId);
+    }
+    return projectId;
+  };
+  
+  /**
+   * 同步 JiraAutomation 状态（优化版本）
+   * 按项目分组，每个项目只请求一次 API，大幅减少网络请求
    */
   const syncJiraAutomationStatus = async (
     msgs: ScheduledMessage[], 
@@ -258,6 +288,15 @@ const ScheduledMessagesManager: React.FC = () => {
   ): Promise<ScheduledMessage[]> => {
     const updatedMsgs = [...msgs];
     let hasUpdates = false;
+    
+    // 1. 筛选需要同步的消息，并按项目分组
+    interface MessageToSync {
+      index: number;
+      msg: ScheduledMessage;
+      linkInfo: { jiraUrl: string; projectKey: string; ruleId: string };
+    }
+    
+    const messagesGroupedByProject = new Map<string, MessageToSync[]>();
     
     for (let i = 0; i < updatedMsgs.length; i++) {
       const msg = updatedMsgs[i];
@@ -267,40 +306,98 @@ const ScheduledMessagesManager: React.FC = () => {
         continue;
       }
       
-      try {
-        const linkInfo = parseAutomationLink(msg.Automation_Link);
-        if (!linkInfo) continue;
-        
-        const { jiraUrl, projectKey, ruleId } = linkInfo;
-        const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
-        if (!projectId) continue;
-        
-        // 获取 Jira Rule 详情
-        const detailResult = await chrome.runtime.sendMessage({
-          type: 'GET_JIRA_RULE_DETAILS',
-          data: { jiraUrl, projectId, ruleId }
-        });
-        
-        if (detailResult?.success && detailResult.ruleData) {
-          const jiraState = detailResult.ruleData.state; // 'ENABLED' 或 'DISABLED'
-          const expectedStatus = jiraState === 'ENABLED' ? 'Active' : 'Paused';
-          
-          // 如果状态不一致，更新 Sheet
-          if (msg.Status !== expectedStatus) {
-            console.log(`[同步] Jira Rule ${ruleId} 状态不一致: Sheet=${msg.Status}, Jira=${jiraState}, 更新为 ${expectedStatus}`);
-            
-            // 更新本地状态
-            updatedMsgs[i] = { ...msg, Status: expectedStatus };
-            
-            // 更新 Sheet
-            await messageService.updateMessage(msg.ID, { Status: expectedStatus });
-            hasUpdates = true;
-          }
-        }
-      } catch (error) {
-        console.warn(`同步 Jira Rule 状态失败 (${msg.Topic}):`, error);
+      const linkInfo = parseAutomationLink(msg.Automation_Link);
+      if (!linkInfo) continue;
+      
+      const { jiraUrl, projectKey } = linkInfo;
+      const groupKey = `${jiraUrl}::${projectKey}`;
+      
+      if (!messagesGroupedByProject.has(groupKey)) {
+        messagesGroupedByProject.set(groupKey, []);
       }
+      messagesGroupedByProject.get(groupKey)!.push({ index: i, msg, linkInfo });
     }
+    
+    // 如果没有需要同步的消息，直接返回
+    if (messagesGroupedByProject.size === 0) {
+      return msgs;
+    }
+    
+    console.log(`[同步] 需要同步 ${messagesGroupedByProject.size} 个项目的 Jira 规则状态`);
+    
+    // 2. 并行获取每个项目的所有规则
+    const syncTasks = Array.from(messagesGroupedByProject.entries()).map(
+      async ([groupKey, messagesToSync]) => {
+        const [jiraUrl, projectKey] = groupKey.split('::');
+        
+        try {
+          // 获取项目 ID（带缓存）
+          const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
+          if (!projectId) {
+            console.warn(`[同步] 无法获取项目 ${projectKey} 的 ID`);
+            return;
+          }
+          
+          // 批量获取该项目的所有规则（单次请求）
+          const result = await chrome.runtime.sendMessage({
+            type: 'GET_ALL_JIRA_RULES',
+            data: { jiraUrl, projectId }
+          });
+          
+          if (!result?.success || !result.rules) {
+            console.warn(`[同步] 获取项目 ${projectKey} 的规则失败:`, result?.error);
+            return;
+          }
+          
+          // 构建规则 ID 到规则的映射
+          const rulesMap = new Map<string, any>();
+          for (const rule of result.rules) {
+            rulesMap.set(String(rule.id), rule);
+          }
+          
+          // 3. 在本地匹配并更新状态
+          const updatePromises: Promise<void>[] = [];
+          
+          for (const { index, msg, linkInfo } of messagesToSync) {
+            const ruleData = rulesMap.get(linkInfo.ruleId);
+            if (!ruleData) {
+              console.warn(`[同步] 未找到规则 ${linkInfo.ruleId}`);
+              continue;
+            }
+            
+            const jiraState = ruleData.state; // 'ENABLED' 或 'DISABLED'
+            const expectedStatus = jiraState === 'ENABLED' ? 'Active' : 'Paused';
+            
+            // 如果状态不一致，更新
+            if (msg.Status !== expectedStatus) {
+              console.log(`[同步] Jira Rule ${linkInfo.ruleId} 状态不一致: Sheet=${msg.Status}, Jira=${jiraState}, 更新为 ${expectedStatus}`);
+              
+              // 更新本地状态
+              updatedMsgs[index] = { ...msg, Status: expectedStatus };
+              hasUpdates = true;
+              
+              // 异步更新 Sheet（收集到数组中）
+              updatePromises.push(
+                messageService.updateMessage(msg.ID, { Status: expectedStatus })
+                  .then(() => { return; })  // 转换返回类型为 void
+                  .catch(err => {
+                    console.warn(`[同步] 更新消息 ${msg.ID} 状态失败:`, err);
+                  })
+              );
+            }
+          }
+          
+          // 等待所有 Sheet 更新完成
+          await Promise.all(updatePromises);
+          
+        } catch (error) {
+          console.warn(`[同步] 同步项目 ${projectKey} 的规则状态失败:`, error);
+        }
+      }
+    );
+    
+    // 并行执行所有项目的同步任务
+    await Promise.all(syncTasks);
     
     return hasUpdates ? updatedMsgs : msgs;
   };
@@ -653,7 +750,8 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       const { jiraUrl, projectKey, ruleId } = linkInfo;
-      const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+      // 使用带缓存的版本
+      const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
       
       if (!projectId) {
         throw new Error('无法获取项目 ID');
@@ -829,15 +927,19 @@ const ScheduledMessagesManager: React.FC = () => {
       
       await service.updateMessage(takeoverMessage.ID, updateData);
       
-      // 刷新消息列表
-      await loadMessages(service);
+      // 获取更新后的消息列表用于查找（不更新 state，避免重复请求）
+      const updatedMessages = await service.getAllMessages();
+      
+      // 更新 state（跳过 Jira 同步，因为状态刚刚被手动更新）
+      setMessages(updatedMessages);
+      const stats = await service.getStatistics();
+      setStatistics(stats);
       
       // 关闭弹窗并进入编辑模式
       setShowTakeoverDialog(false);
       setTakeoverMessage(null);
       
       // 找到更新后的消息并进入编辑模式
-      const updatedMessages = await service.getAllMessages();
       const updatedMessage = updatedMessages.find(m => m.ID === takeoverMessage.ID);
       
       if (updatedMessage) {
@@ -878,8 +980,8 @@ const ScheduledMessagesManager: React.FC = () => {
         Schedule_Time: scheduleTime
       });
       
-      // 刷新消息列表
-      await loadMessages(service);
+      // 刷新消息列表（跳过 Jira 同步，因为状态已手动更新）
+      await loadMessages(service, true);
       
       console.log(`✅ 自动答复已批准: ${message.Topic}`);
     } catch (error) {
@@ -903,8 +1005,8 @@ const ScheduledMessagesManager: React.FC = () => {
         Status: 'Done'
       });
       
-      // 刷新消息列表
-      await loadMessages(service);
+      // 刷新消息列表（跳过 Jira 同步，因为状态已手动更新）
+      await loadMessages(service, true);
       
       console.log(`❌ 自动答复已拒绝: ${message.Topic}`);
     } catch (error) {
@@ -944,7 +1046,8 @@ const ScheduledMessagesManager: React.FC = () => {
         const linkInfo = parseAutomationLink(message.Automation_Link!);
         if (linkInfo) {
           const { jiraUrl, projectKey, ruleId } = linkInfo;
-          const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+          // 使用带缓存的版本
+          const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
           
           if (projectId) {
             console.log('🔄 恢复 Jira Rule 的 scheduled trigger...');
@@ -1084,7 +1187,8 @@ const ScheduledMessagesManager: React.FC = () => {
         const linkInfo = parseAutomationLink(message.Automation_Link);
         if (linkInfo) {
           const { jiraUrl, projectKey, ruleId } = linkInfo;
-          const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+          // 使用带缓存的版本
+          const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
           
           if (projectId) {
             // 获取规则详情
@@ -1117,7 +1221,8 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       await service.toggleMessageStatus(message.ID);
-      await loadMessages(service);
+      // 跳过 Jira 同步，因为状态刚刚被手动更新了
+      await loadMessages(service, true);
     } catch (error) {
       console.error('切换状态失败:', error);
       alert(`切换状态失败: ${error.message}`);
@@ -1148,14 +1253,16 @@ const ScheduledMessagesManager: React.FC = () => {
           }
         }
         
-        await loadMessages(service);
+        // 跳过 Jira 状态同步，因为刚保存的消息状态是一致的
+        await loadMessages(service, true);
         setShowAddDialog(false);
         setEditingMessage(null);
         alert('消息更新成功！');
       } else {
         // 新建模式：创建消息
         await service.createMessage(formData);
-        await loadMessages(service);
+        // 跳过 Jira 状态同步，因为新建的消息不需要同步
+        await loadMessages(service, true);
         setShowAddDialog(false);
         alert('消息创建成功！');
       }
@@ -1178,7 +1285,8 @@ const ScheduledMessagesManager: React.FC = () => {
     }
     
     const { jiraUrl, projectKey, ruleId } = linkInfo;
-    const projectId = await getProjectIdFromKey(jiraUrl, projectKey);
+    // 使用带缓存的版本
+    const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
     
     if (!projectId) {
       console.warn('无法获取项目 ID，跳过同步');
@@ -1224,7 +1332,8 @@ const ScheduledMessagesManager: React.FC = () => {
     
     try {
       const deletedCount = await service.deleteCompletedMessages();
-      await loadMessages(service);
+      // 跳过 Jira 同步，因为删除的是已完成的消息
+      await loadMessages(service, true);
       alert(`成功清理 ${deletedCount} 条已完成的消息！`);
     } catch (error) {
       console.error('清理已完成消息失败:', error);
@@ -1232,12 +1341,24 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
-  const getAuthToken = (): Promise<string> => {
+  /**
+   * 获取 Google 认证 token
+   * @param interactive 是否允许交互式授权（弹出授权窗口）
+   */
+  const getAuthToken = (interactive = true): Promise<string> => {
+    console.log(`🔐 [ScheduledMessagesManager] getAuthToken 被调用, interactive=${interactive}`);
     return new Promise((resolve, reject) => {
-      chrome.identity.getAuthToken({ interactive: true }, (token) => {
+      chrome.identity.getAuthToken({ interactive }, (token) => {
         if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
+          console.warn(`🔐 [ScheduledMessagesManager] getAuthToken 失败:`, chrome.runtime.lastError.message);
+          if (!interactive) {
+            // 非交互模式下，缺少 token 不算错误，返回空字符串
+            resolve('');
+          } else {
+            reject(chrome.runtime.lastError);
+          }
         } else {
+          console.log(`🔐 [ScheduledMessagesManager] getAuthToken 成功, token=${token ? '已获取' : '空'}`);
           resolve(token || '');
         }
       });
@@ -1476,6 +1597,52 @@ const ScheduledMessagesManager: React.FC = () => {
   
   if (!isInitialized) {
     return <OneClickSetup onComplete={handleInitializationComplete} />;
+  }
+  
+  // 🔧 需要重新授权的提示
+  if (needsReauth) {
+    const handleReauth = async () => {
+      try {
+        const token = await getAuthToken(true);  // 交互式获取
+        if (token) {
+          setNeedsReauth(false);
+          const messageService = new ScheduledMessageService(token);
+          setService(messageService);
+          await loadMessages(messageService);
+          if (config) {
+            await checkBotConfigValidity(config, messageService);
+          }
+        }
+      } catch (error) {
+        console.error('重新授权失败:', error);
+        alert('授权失败，请重试');
+      }
+    };
+    
+    return (
+      <div style={styles.loadingContainer}>
+        <div style={{ textAlign: 'center' }}>
+          <p style={{ fontSize: '18px', marginBottom: '16px' }}>🔐 需要 Google 授权</p>
+          <p style={{ color: '#666', marginBottom: '24px' }}>
+            您的 Google 授权已过期，请点击下方按钮重新授权以继续使用定时消息功能。
+          </p>
+          <button 
+            onClick={handleReauth}
+            style={{
+              padding: '12px 24px',
+              fontSize: '16px',
+              backgroundColor: '#4285f4',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer'
+            }}
+          >
+            🔓 重新授权
+          </button>
+        </div>
+      </div>
+    );
   }
   
   return (
@@ -5135,11 +5302,14 @@ const BotConfigDialog: React.FC<{
   
   // 获取授权 token（用户主动配置 Bot，允许弹出认证窗口）
   const getAuthToken = (): Promise<string> => {
+    console.log('🔐 [BotConfigDialog] getAuthToken 被调用, interactive=true（用户主动配置 Bot）');
     return new Promise((resolve, reject) => {
       chrome.identity.getAuthToken({ interactive: true }, (token) => {
         if (chrome.runtime.lastError) {
+          console.warn('🔐 [BotConfigDialog] getAuthToken 失败:', chrome.runtime.lastError.message);
           reject(chrome.runtime.lastError);
         } else {
+          console.log('🔐 [BotConfigDialog] getAuthToken 成功');
           resolve(token || '');
         }
       });

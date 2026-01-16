@@ -1,13 +1,16 @@
 /**
- * Snooze Manager - 消息稍后处理功能
+ * Snooze Manager - 稍后处理功能核心逻辑
  * 
  * 功能：
- * 1. 在 RingCentral/Glip 消息上悬停 2 秒后显示操作菜单
- * 2. 点击"稍后处理"后显示时间选择器
+ * 1. 从消息 DOM 提取消息信息 (MessageInfo)
+ * 2. 提供快速选项和时间格式化工具
  * 3. 创建定时提醒（通过 Bot 私聊提醒）
+ * 
+ * 此模块属于消息交互功能 (Message Reaction) 的一部分
  */
 
 import { getIndexedDBData } from '../storage';
+import { isScheduledMessagesInitialized, showInitRequiredDialog } from '../scheduled-messages/ScheduledMessagesUtils';
 
 // 消息信息接口
 export interface MessageInfo {
@@ -274,144 +277,7 @@ export function formatRemindTime(date: Date): string {
   }
 }
 
-/**
- * 检查定时消息是否已初始化
- */
-async function isScheduledMessagesInitialized(): Promise<boolean> {
-  try {
-    const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-    const config = result.scheduledMessagesConfig;
-    // 检查配置是否存在且有基本的必要字段（如 sheetId）
-    return !!(config && config.sheetId);
-  } catch (error) {
-    console.error('🔔 Snooze: 检查定时消息配置失败', error);
-    return false;
-  }
-}
-
-/**
- * 显示初始化提示对话框
- */
-function showInitRequiredDialog(): Promise<boolean> {
-  return new Promise((resolve) => {
-    // 创建遮罩层
-    const overlay = document.createElement('div');
-    overlay.className = 'snooze-init-overlay';
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.5);
-      z-index: 99999999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      animation: snooze-overlay-in 0.2s ease;
-    `;
-    
-    // 创建对话框
-    const dialog = document.createElement('div');
-    dialog.className = 'snooze-init-dialog';
-    dialog.style.cssText = `
-      background: #ffffff;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-      max-width: 400px;
-      width: 90%;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      animation: snooze-dialog-in 0.2s ease;
-    `;
-    
-    dialog.innerHTML = `
-      <div style="padding: 20px 24px; border-bottom: 1px solid #f0f0f0;">
-        <div style="display: flex; align-items: center; gap: 12px;">
-          <span style="font-size: 28px;">⚙️</span>
-          <h3 style="margin: 0; font-size: 16px; font-weight: 600; color: #333;">需要先初始化定时消息</h3>
-        </div>
-      </div>
-      <div style="padding: 16px 24px;">
-        <p style="margin: 0; font-size: 14px; color: #666; line-height: 1.6;">
-          使用「稍后处理」功能需要先完成定时消息的初始化设置。
-          <br><br>
-          点击「前往设置」将打开定时消息管理界面，按照引导完成初始化后即可使用此功能。
-        </p>
-      </div>
-      <div style="padding: 16px 24px; display: flex; gap: 12px; justify-content: flex-end; border-top: 1px solid #f0f0f0;">
-        <button class="snooze-init-cancel" style="
-          padding: 8px 16px;
-          border: none;
-          border-radius: 6px;
-          font-size: 14px;
-          font-weight: 500;
-          cursor: pointer;
-          background: #f0f0f0;
-          color: #666;
-          transition: background 0.15s;
-        ">取消</button>
-        <button class="snooze-init-confirm" style="
-          padding: 8px 16px;
-          border: none;
-          border-radius: 6px;
-          font-size: 14px;
-          font-weight: 500;
-          cursor: pointer;
-          background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
-          color: white;
-          transition: box-shadow 0.15s;
-        ">前往设置</button>
-      </div>
-    `;
-    
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-    
-    // 添加动画样式
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes snooze-overlay-in {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-      @keyframes snooze-dialog-in {
-        from { opacity: 0; transform: scale(0.95); }
-        to { opacity: 1; transform: scale(1); }
-      }
-    `;
-    document.head.appendChild(style);
-    
-    // 绑定事件
-    const cleanup = () => {
-      overlay.remove();
-      style.remove();
-    };
-    
-    dialog.querySelector('.snooze-init-cancel')!.addEventListener('click', () => {
-      cleanup();
-      resolve(false);
-    });
-    
-    dialog.querySelector('.snooze-init-confirm')!.addEventListener('click', async () => {
-      cleanup();
-      // 发送消息打开定时消息管理界面
-      try {
-        await chrome.runtime.sendMessage({ type: 'OPEN_SCHEDULED_MESSAGES' });
-      } catch (e) {
-        console.error('🔔 Snooze: 打开定时消息管理界面失败', e);
-      }
-      resolve(true);
-    });
-    
-    // 点击遮罩层关闭
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) {
-        cleanup();
-        resolve(false);
-      }
-    });
-  });
-}
+// isScheduledMessagesInitialized 和 showInitRequiredDialog 已移至 scheduled-messages/ScheduledMessagesUtils.ts 共用
 
 /**
  * 创建 Snooze 提醒消息
@@ -424,7 +290,7 @@ export async function createSnoozeReminder(config: SnoozeConfig): Promise<boolea
   const initialized = await isScheduledMessagesInitialized();
   if (!initialized) {
     console.log('🔔 Snooze: 定时消息未初始化，显示提示对话框');
-    await showInitRequiredDialog();
+    await showInitRequiredDialog('稍后处理');
     return false;
   }
   

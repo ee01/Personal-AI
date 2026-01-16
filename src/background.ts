@@ -900,6 +900,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
     
+    // 批量获取某个项目的所有 Jira Automation Rules（用于状态同步优化）
+    if (request.type === 'GET_ALL_JIRA_RULES') {
+        (async () => {
+            try {
+                const { jiraUrl, projectId } = request.data;
+                console.log(`📖 批量获取项目 ${projectId} 的所有 Jira Rules...`);
+                
+                const response = await jiraFetch(`${jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`);
+                
+                if (!response.ok) {
+                    throw new Error(`获取失败 (${response.status})`);
+                }
+                
+                const rules = await response.json();
+                console.log(`✅ 获取项目 ${projectId} 的 ${rules.length} 条规则成功`);
+                sendResponse({ success: true, rules });
+            } catch (error: any) {
+                console.error('❌ 批量获取 Jira Rules 失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+    
     // 获取 Jira Automation Rule 详情
     if (request.type === 'GET_JIRA_RULE_DETAILS') {
         (async () => {

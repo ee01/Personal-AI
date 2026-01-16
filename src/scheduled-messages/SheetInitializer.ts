@@ -585,6 +585,10 @@ function dailyTrigger() {
       console.log('步骤 8/8: 保存配置...');
       await this.saveConfig(sheetId, scriptId, webAppUrl, triggers);
       
+      // 9. 启用消息交互功能（稍后处理 + 自动答复）
+      console.log('步骤 9: 启用消息交互功能...');
+      await this.enableMessageReactionFeatures();
+      
       console.log('定时消息系统创建成功！');
       
       return {
@@ -604,6 +608,27 @@ function dailyTrigger() {
         webAppUrl,
         error: error.message || '未知错误'
       };
+    }
+  }
+  
+  /**
+   * 启用消息交互功能（稍后处理 + 自动答复）
+   * 在定时消息系统初始化完成后自动启用这些功能
+   */
+  private async enableMessageReactionFeatures(): Promise<void> {
+    try {
+      const result = await chrome.storage.local.get(['envConfig']);
+      const envConfig = result.envConfig || {};
+      
+      // 启用稍后处理和自动答复功能
+      envConfig.ENABLE_SNOOZE = true;
+      envConfig.ENABLE_AUTO_REPLY = true;
+      
+      await chrome.storage.local.set({ envConfig });
+      console.log('✅ 已启用消息交互功能：稍后处理、自动答复');
+    } catch (error) {
+      console.warn('启用消息交互功能失败:', error);
+      // 不抛出错误，允许继续执行
     }
   }
   

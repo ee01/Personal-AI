@@ -283,6 +283,35 @@ const Options = () => {
             </div>
 
             <div className="form-section">
+                <h2>消息交互功能</h2>
+                <p style={{ color: '#666', fontSize: '13px', marginBottom: '15px' }}>
+                    在 RingCentral 消息页面，悬停在消息上时会显示交互工具栏。可以选择启用/禁用以下功能：
+                </p>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="ENABLE_SNOOZE"
+                            checked={config.ENABLE_SNOOZE}
+                            onChange={handleInputChange}
+                        />
+                        启用「稍后处理」功能（设置提醒时间，到时 Bot 会推送消息提醒您）
+                    </label>
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="ENABLE_AUTO_REPLY"
+                            checked={config.ENABLE_AUTO_REPLY}
+                            onChange={handleInputChange}
+                        />
+                        启用「自动答复」功能（配置自动答复规则，匹配消息时自动发送回复）
+                    </label>
+                </div>
+            </div>
+
+            <div className="form-section">
                 <h2>LLM 设置</h2>
                 <div className="form-group">
                     <label htmlFor="LLM_TYPE">LLM 类型</label>
