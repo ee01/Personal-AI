@@ -789,7 +789,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 
-                const token = await getAuthToken();
+                // 🔧 使用缓存的 token，避免在后台检查时弹出授权窗口
+                console.log('🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 使用 getCachedAuthToken（自动检查）');
+                const token = await getCachedAuthToken();
+                if (!token) {
+                    console.warn('🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 无缓存 token，返回不存在');
+                    sendResponse({ exists: false });
+                    return;
+                }
+                
                 const service = new ScheduledMessageService(token);
                 const messages = await service.getAllMessages();
                 
@@ -825,7 +833,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 
-                const token = await getAuthToken();
+                // 🔧 使用缓存的 token，避免在后台批量检查时弹出授权窗口
+                console.log('🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 使用 getCachedAuthToken（自动预加载）');
+                const token = await getCachedAuthToken();
+                if (!token) {
+                    console.warn('🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 无缓存 token，返回空结果');
+                    const emptyResults: Record<string, boolean> = {};
+                    automationLinks.forEach((link: string) => {
+                        emptyResults[link] = false;
+                    });
+                    sendResponse({ results: emptyResults });
+                    return;
+                }
+                
                 const service = new ScheduledMessageService(token);
                 const messages = await service.getAllMessages();
                 
