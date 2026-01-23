@@ -3,7 +3,7 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
-import { getAuthToken } from './slide';
+import { getGoogleAuthToken } from './utils/googleAuth';
 import { getTaskEnabled } from './services/TaskScheduler';
 
 const WIKI_URL = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
@@ -137,7 +137,7 @@ const Popup = () => {
         try {
             setIsAnalyzingSlides(true);
             // 先获取OAuth token
-            const token = await getAuthToken();
+            const token = await getGoogleAuthToken({ caller: 'popup.analyzeSlidesProjects' });
             if (!token) {
                 console.error('无法获取Google认证，请检查账号授权');
                 alert('无法获取Google认证，请检查账号授权');
@@ -175,73 +175,58 @@ const Popup = () => {
         return '2.0'; // 默认值
     };
 
-    const openJiraQueryDialog = () => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            const activeTab = tabs[0];
-            if (activeTab?.id && activeTab.url) { // Check for both id and url
-                const tabId = activeTab.id; // Store ID in a local constant
-                console.log('🔐 [popup.openJiraQueryDialog] getAuthToken 被调用, interactive=true');
-                chrome.identity.getAuthToken({ interactive: true }, (token) => {
-                    if (chrome.runtime.lastError) {
-                        console.error('🔐 [popup.openJiraQueryDialog] 获取 token 失败:', chrome.runtime.lastError);
-                        // Consider showing an error message to the user here
-                    }
-                    // Ensure token is not null/undefined before sending
-                    if (!token) {
-                         console.error('🔐 [popup.openJiraQueryDialog] 获取到的 token 无效');
-                         // Consider showing an error message to the user here
-                    } else {
-                        console.log('🔐 [popup.openJiraQueryDialog] getAuthToken 成功');
-                    }
-                    chrome.tabs.sendMessage(tabId, { // Use the local constant
-                        type: 'OPEN_JIRA_QUERY_DIALOG',
-                        url: activeTab.url, // Pass the URL
-                        sheetToken: token
-                    }, (_response) => {
-                        // close the popup window
-                        window.close();
-                    });
-                });
-            } else {
-                console.error("无法获取活动标签页 ID 或 URL");
-                // Consider showing an error message to the user here
-            }
-        });
+    const openJiraQueryDialog = async () => {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const activeTab = tabs[0];
+        
+        if (activeTab?.id && activeTab.url) {
+            const tabId = activeTab.id;
+            const token = await getGoogleAuthToken({ caller: 'popup.openJiraQueryDialog' });
+            
+            chrome.tabs.sendMessage(tabId, {
+                type: 'OPEN_JIRA_QUERY_DIALOG',
+                url: activeTab.url,
+                sheetToken: token
+            }, (_response) => {
+                // close the popup window
+                window.close();
+            });
+        } else {
+            console.error("无法获取活动标签页 ID 或 URL");
+        }
     };
 
-    const expandEpicTickets = () => {
+    const expandEpicTickets = async () => {
         setIsExpandingEpic(true);
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        
+        try {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
             const activeTab = tabs[0];
+            
             if (activeTab?.id && activeTab.url) {
                 const tabId = activeTab.id;
-                console.log('🔐 [popup.expandEpicTickets] getAuthToken 被调用, interactive=true');
-                chrome.identity.getAuthToken({ interactive: true }, (token) => {
-                    if (chrome.runtime.lastError) {
-                        console.error('🔐 [popup.expandEpicTickets] 获取 token 失败:', chrome.runtime.lastError);
+                const token = await getGoogleAuthToken({ caller: 'popup.expandEpicTickets' });
+                
+                if (token) {
+                    chrome.tabs.sendMessage(tabId, {
+                        type: 'EXPAND_EPIC_TICKETS',
+                        url: activeTab.url,
+                        sheetToken: token
+                    }, (_response) => {
                         setIsExpandingEpic(false);
-                        return;
-                    }
-                    console.log('🔐 [popup.expandEpicTickets] getAuthToken 成功');
-                    if (token) {
-                        chrome.tabs.sendMessage(tabId, {
-                            type: 'EXPAND_EPIC_TICKETS',
-                            url: activeTab.url,
-                            sheetToken: token
-                        }, (_response) => {
-                            // 当收到响应时（无论成功失败）都关闭 loading
-                            setIsExpandingEpic(false);
-                        });
-                    } else {
-                        console.error('获取到的 token 无效');
-                        setIsExpandingEpic(false);
-                    }
-                });
+                    });
+                } else {
+                    console.error('获取到的 token 无效');
+                    setIsExpandingEpic(false);
+                }
             } else {
                 console.error("无法获取活动标签页 ID 或 URL");
                 setIsExpandingEpic(false);
             }
-        });
+        } catch (error) {
+            console.error('expandEpicTickets 失败:', error);
+            setIsExpandingEpic(false);
+        }
     };
 
     // 监听内容脚本发来的请求
@@ -263,7 +248,7 @@ const Popup = () => {
                 
                 if (activeTab?.id && activeTab.url?.includes('docs.google.com/presentation')) {
                     // 获取token并发送回内容脚本
-                    const token = await getAuthToken();
+                    const token = await getGoogleAuthToken({ caller: 'popup.handleSlidesAnalysis' });
                     if (token) {
                         chrome.tabs.sendMessage(activeTab.id, { 
                             type: 'ANALYZE_SLIDES_PROJECTS',

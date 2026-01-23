@@ -44,6 +44,7 @@ module.exports = (env) => {
       'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts',
       'memory-exploring': './src/modals/memory-exploring-entry.ts',
       'scheduled-messages': './src/scheduled-messages/ScheduledMessagesManager.tsx',
+      'auth-logs': './src/auth-logs.tsx',
     },
     module: {
       rules: [

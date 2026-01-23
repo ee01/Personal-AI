@@ -14,6 +14,7 @@ import { JiraRuleUpdater } from './JiraRuleUpdater';
 import Select, { StylesConfig, MultiValue, SingleValue } from 'react-select';
 import CreatableSelect from 'react-select/creatable';
 import { jiraFetch } from '../jira';
+import { getGoogleAuthToken, getGoogleAuthTokenSilently } from '../utils/googleAuth';
 
 // react-select 选项类型
 interface SelectOption {
@@ -214,7 +215,7 @@ const ScheduledMessagesManager: React.FC = () => {
         }
         
         // 🔧 优先使用缓存的 token，避免在页面加载时弹出授权窗口
-        const token = await getAuthToken(false);  // 先尝试非交互式
+        const token = await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.init' });
         if (!token) {
           // 如果没有缓存的 token，显示提示让用户手动授权
           console.warn('⚠️ 无缓存的 Google 认证 token，需要用户手动授权');
@@ -473,7 +474,7 @@ const ScheduledMessagesManager: React.FC = () => {
       if (config.logsSheetId === undefined || config.logsSheetId === null) {
         console.log('⏳ 同步时发现 logsSheetId 缺失，尝试获取...');
         try {
-          const token = await getAuthToken();
+          const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.syncLogsSheetId' });
           if (token) {
             const logsSheetId = await fetchLogsSheetId(token, config.sheetId);
             if (logsSheetId !== null) {
@@ -500,7 +501,7 @@ const ScheduledMessagesManager: React.FC = () => {
         return;
       }
       
-      const token = await getAuthToken();
+      const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.checkForUpdates' });
       if (!token) {
         return;
       }
@@ -533,7 +534,7 @@ const ScheduledMessagesManager: React.FC = () => {
     const updateResults: string[] = [];
     
     try {
-      const token = await getAuthToken();
+      const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.handleUpgrade' });
       if (!token) {
         throw new Error('无法获取 Google 授权');
       }
@@ -626,7 +627,7 @@ const ScheduledMessagesManager: React.FC = () => {
         // 没有 logsSheetId，尝试获取并保存
         console.log('⏳ logsSheetId 未记录，尝试获取...');
         try {
-          const token = await getAuthToken();
+          const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.openLogsSheet' });
           if (token && service) {
             const logsSheetId = await fetchLogsSheetId(token, config.sheetId);
             if (logsSheetId !== null) {
@@ -1341,33 +1342,12 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
-  /**
-   * 获取 Google 认证 token
-   * @param interactive 是否允许交互式授权（弹出授权窗口）
-   */
-  const getAuthToken = (interactive = true): Promise<string> => {
-    console.log(`🔐 [ScheduledMessagesManager] getAuthToken 被调用, interactive=${interactive}`);
-    return new Promise((resolve, reject) => {
-      chrome.identity.getAuthToken({ interactive }, (token) => {
-        if (chrome.runtime.lastError) {
-          console.warn(`🔐 [ScheduledMessagesManager] getAuthToken 失败:`, chrome.runtime.lastError.message);
-          if (!interactive) {
-            // 非交互模式下，缺少 token 不算错误，返回空字符串
-            resolve('');
-          } else {
-            reject(chrome.runtime.lastError);
-          }
-        } else {
-          console.log(`🔐 [ScheduledMessagesManager] getAuthToken 成功, token=${token ? '已获取' : '空'}`);
-          resolve(token || '');
-        }
-      });
-    });
-  };
+  // Google Auth Token 已迁移到 utils/googleAuth.ts
+  // 使用 getGoogleAuthToken（会弹窗）和 getGoogleAuthTokenSilently（静默）
   
   const getCurrentUserName = async () => {
     try {
-      const token = await getAuthToken();
+      const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.getCurrentUserName' });
       const response = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -1603,7 +1583,7 @@ const ScheduledMessagesManager: React.FC = () => {
   if (needsReauth) {
     const handleReauth = async () => {
       try {
-        const token = await getAuthToken(true);  // 交互式获取
+        const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.handleReauth' });
         if (token) {
           setNeedsReauth(false);
           const messageService = new ScheduledMessageService(token);
@@ -5300,21 +5280,8 @@ const BotConfigDialog: React.FC<{
     };
   }, []);
   
-  // 获取授权 token（用户主动配置 Bot，允许弹出认证窗口）
-  const getAuthToken = (): Promise<string> => {
-    console.log('🔐 [BotConfigDialog] getAuthToken 被调用, interactive=true（用户主动配置 Bot）');
-    return new Promise((resolve, reject) => {
-      chrome.identity.getAuthToken({ interactive: true }, (token) => {
-        if (chrome.runtime.lastError) {
-          console.warn('🔐 [BotConfigDialog] getAuthToken 失败:', chrome.runtime.lastError.message);
-          reject(chrome.runtime.lastError);
-        } else {
-          console.log('🔐 [BotConfigDialog] getAuthToken 成功');
-          resolve(token || '');
-        }
-      });
-    });
-  };
+  // Google Auth Token 已迁移到 utils/googleAuth.ts
+  // 使用 getGoogleAuthToken（会弹窗）
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -5364,7 +5331,7 @@ const BotConfigDialog: React.FC<{
       };
       
       // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
-      const token = await getAuthToken();
+      const token = await getGoogleAuthToken({ caller: 'BotConfigDialog.handleSubmit' });
       const { ConfigSyncService } = await import('./ConfigSyncService');
       const syncService = new ConfigSyncService(token);
       await syncService.syncConfig(updatedConfig);

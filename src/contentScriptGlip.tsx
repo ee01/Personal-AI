@@ -426,8 +426,6 @@ function isOverdue(duedate: string): boolean {
 function injectJiraCardStyles() {
   if (document.getElementById('jira-hover-card-styles')) return;
   
-  const iconUrl = chrome.runtime.getURL('icons/icon32.png');
-  
   const style = document.createElement('style');
   style.id = 'jira-hover-card-styles';
   style.textContent = `

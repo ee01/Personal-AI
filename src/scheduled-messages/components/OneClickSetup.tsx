@@ -7,6 +7,7 @@ import * as React from 'react';
 import { useState } from 'react';
 import { SheetInitializer } from '../SheetInitializer';
 import { InitializationResult } from '../types';
+import { getGoogleAuthToken } from '../../utils/googleAuth';
 
 interface OneClickSetupProps {
   onComplete: (result: InitializationResult) => void;
@@ -29,9 +30,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     setError('');
     
     try {
-      // 获取 Google OAuth token
+      // 获取 Google OAuth token（强制刷新以应用新权限）
       setCurrentStep('正在获取授权...');
-      const token = await getAuthToken();
+      const token = await getAuthTokenWithForceRefresh();
       
       if (!token) {
         throw new Error('无法获取 Google 授权，请检查账号登录状态');
@@ -129,8 +130,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         throw new Error('无效的 Sheet URL');
       }
       
-      // 获取授权
-      const token = await getAuthToken();
+      // 获取授权（强制刷新以应用新权限）
+      const token = await getAuthTokenWithForceRefresh();
       if (!token) {
         throw new Error('无法获取 Google 授权');
       }
@@ -172,40 +173,12 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     }
   };
   
-  const getAuthToken = (): Promise<string> => {
-    console.log('🔐 [OneClickSetup.getAuthToken] 被调用（用户主动初始化）');
-    return new Promise((resolve, reject) => {
-      // 先清除旧 token，强制重新获取以应用新的权限范围
-      chrome.identity.getAuthToken({ interactive: false }, (oldToken) => {
-        console.log('🔐 [OneClickSetup.getAuthToken] 检查旧 token:', oldToken ? '存在' : '不存在');
-        if (oldToken) {
-          chrome.identity.removeCachedAuthToken({ token: oldToken }, () => {
-            console.log('🔐 [OneClickSetup.getAuthToken] 已清除旧 token，重新获取 interactive=true');
-            // 重新获取 token
-            chrome.identity.getAuthToken({ interactive: true }, (token) => {
-              if (chrome.runtime.lastError) {
-                console.error('🔐 [OneClickSetup.getAuthToken] 获取 token 失败:', chrome.runtime.lastError);
-                reject(chrome.runtime.lastError);
-              } else {
-                console.log('🔐 [OneClickSetup.getAuthToken] 获取 token 成功');
-                resolve(token || '');
-              }
-            });
-          });
-        } else {
-          console.log('🔐 [OneClickSetup.getAuthToken] 无旧 token，直接获取 interactive=true');
-          // 没有旧 token，直接获取新的
-          chrome.identity.getAuthToken({ interactive: true }, (token) => {
-            if (chrome.runtime.lastError) {
-              console.error('🔐 [OneClickSetup.getAuthToken] 获取 token 失败:', chrome.runtime.lastError);
-              reject(chrome.runtime.lastError);
-            } else {
-              console.log('🔐 [OneClickSetup.getAuthToken] 获取 token 成功');
-              resolve(token || '');
-            }
-          });
-        }
-      });
+  // Google Auth Token 已迁移到 utils/googleAuth.ts
+  // 使用 forceRefresh: true 以确保应用新的权限范围
+  const getAuthTokenWithForceRefresh = async (): Promise<string | null> => {
+    return getGoogleAuthToken({ 
+      caller: 'OneClickSetup.getAuthToken',
+      forceRefresh: true  // 强制刷新，以应用新的权限范围
     });
   };
   

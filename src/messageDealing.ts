@@ -1,5 +1,5 @@
 import { sendBotMessage } from './bot';
-import { callLLMJsonAPI, handleLLMRequest, isContentSimilar } from './llm';
+import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
 import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
@@ -11,7 +11,6 @@ import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
 import { 
     handleAutoReplyRules, 
     TopicItemWithAutoReply,
-    AutoReplyContext,
     formatAutoReplyTime
 } from './message-reaction';
 

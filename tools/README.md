@@ -4,6 +4,26 @@
 
 ## 工具列表
 
+### 🆕 message_manager.py - 消息管理工具
+
+**强大的消息管理工具，支持查找、删除和编辑消息。**
+
+- 📖 [完整说明](./message_manager.md)
+- 📚 [详细指南](./message_manager_guide.md)
+- 🔧 [安装指南](./message_manager_install.md)
+- 🎬 [示例脚本](./message_manager_examples.sh)
+
+**快速开始：**
+```bash
+# 交互模式（最推荐）
+python tools/message_manager.py -i --user esone.qiu
+
+# 或使用友好的示例脚本
+bash tools/message_manager_examples.sh
+```
+
+---
+
 ### 1. query_conversations.py - Conversations 数据分析工具
 
 查询和分析 ChromaDB 中 `esone.qiu-graph-entities` collection 的 conversations 数据。
@@ -139,7 +159,131 @@ python tools/semantic_search.py "报告" --output results.json
 
 ---
 
-### 3. migrate_chroma_via_http.py - ChromaDB 数据迁移工具
+### 3. message_manager.py - 消息管理工具 🆕
+
+强大的消息管理工具，支持通过 messageId 或语义搜索查找消息，并进行删除或编辑操作。
+
+**核心功能：**
+- 🔍 **通过 ID 查找** - 直接通过 messageId 精确查找消息
+- 🧠 **语义搜索** - 集成 semantic_search.py，使用自然语言查找消息
+- 🗑️ **删除消息** - 支持单条或批量删除
+- ✏️ **编辑消息** - 修改消息内容和元数据
+- 🎨 **交互式模式** - 友好的交互界面，推荐使用
+- 🔒 **安全确认** - 所有危险操作都需要确认（可通过 --no-confirm 跳过）
+
+**快速开始：**
+
+```bash
+# 1. 激活虚拟环境
+source venv/bin/activate
+
+# 2. 启动 ChromaDB 服务
+docker-compose up -d
+
+# 3. 进入交互模式（推荐）
+python tools/message_manager.py --interactive
+python tools/message_manager.py -i --user esone.qiu
+```
+
+**常用命令示例：**
+
+```bash
+# 通过 ID 查找并删除
+python tools/message_manager.py --id MESSAGE_ID --delete
+python tools/message_manager.py --id MESSAGE_ID --user esone.qiu --delete
+
+# 通过 ID 查找并编辑
+python tools/message_manager.py --id MESSAGE_ID --edit --content "新的消息内容"
+python tools/message_manager.py --id MESSAGE_ID --edit --metadata '{"priority": "high"}'
+
+# 语义搜索并预览
+python tools/message_manager.py --search "垃圾消息"
+python tools/message_manager.py --search "会议讨论" --user esone.qiu --limit 20
+
+# 语义搜索并删除单条
+python tools/message_manager.py --search "要删除的内容" --delete
+
+# 语义搜索并批量删除
+python tools/message_manager.py --search "测试消息" --batch-delete --limit 100
+
+# 组合过滤条件
+python tools/message_manager.py --search "项目" \
+  --user esone.qiu \
+  --where '{"sender": "张三"}' \
+  --batch-delete
+
+# 跳过确认（危险！仅用于脚本自动化）
+python tools/message_manager.py --id MESSAGE_ID --delete --no-confirm
+```
+
+**核心参数：**
+
+| 参数 | 简写 | 说明 | 示例 |
+|------|------|------|------|
+| `--interactive` | `-i` | 交互式模式（推荐） | `-i` |
+| `--id` | - | 消息 ID | `MESSAGE_ID` |
+| `--search` | - | 语义搜索查询 | `"要查找的内容"` |
+| `--user` | `-u` | 用户名过滤 | `esone.qiu` |
+| `--where` | `-w` | 元数据过滤（JSON） | `'{"sender": "张三"}'` |
+| `--limit` | `-n` | 搜索结果数量 | `10` (默认) |
+| `--delete` | - | 删除消息 | - |
+| `--batch-delete` | - | 批量删除 | - |
+| `--edit` | - | 编辑消息 | - |
+| `--content` | - | 新的消息内容 | `"新内容"` |
+| `--metadata` | - | 新的元数据（JSON） | `'{"key": "value"}'` |
+| `--no-confirm` | - | 跳过确认提示 | - |
+| `--host` | - | 服务器地址 | `10.32.56.212` |
+| `--port` | - | 服务器端口 | `8000` |
+
+**交互模式使用流程：**
+
+1. 启动交互模式：`python tools/message_manager.py -i`
+2. 选择查找方式：通过 ID 或语义搜索
+3. 查看消息详情
+4. 选择操作：删除、编辑或返回
+5. 确认操作
+
+**使用技巧：**
+
+1. **精确查找**（最快）
+   ```bash
+   python tools/message_manager.py --id MESSAGE_ID --user esone.qiu
+   ```
+
+2. **模糊搜索**（最灵活）
+   ```bash
+   python tools/message_manager.py --search "关键词" --user esone.qiu
+   ```
+
+3. **批量清理**
+   ```bash
+   # 先预览
+   python tools/message_manager.py --search "测试" --limit 50
+   
+   # 确认后删除
+   python tools/message_manager.py --search "测试" --batch-delete --limit 50
+   ```
+
+4. **安全编辑**
+   ```bash
+   # 修改内容和元数据
+   python tools/message_manager.py --id MESSAGE_ID \
+     --edit \
+     --content "新内容" \
+     --metadata '{"updated": true}'
+   ```
+
+**注意事项：**
+
+⚠️ **删除操作不可逆！** 请务必：
+1. 先使用预览模式查看要删除的消息
+2. 仔细确认消息内容
+3. 建议先在测试环境操作
+4. 生产环境操作前备份数据
+
+---
+
+### 4. migrate_chroma_via_http.py - ChromaDB 数据迁移工具
 
 用于从本地 ChromaDB v1 数据库迁移数据到运行中的 Chroma HTTP 服务。
 

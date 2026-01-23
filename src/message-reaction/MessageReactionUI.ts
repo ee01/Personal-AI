@@ -742,7 +742,7 @@ function hideSettingsPopup() {
 /**
  * 显示设置弹出框
  */
-async function showSettingsPopup(anchorElement: HTMLElement, toolbar: HTMLElement) {
+async function showSettingsPopup(anchorElement: HTMLElement) {
   hideSettingsPopup();
   hideSnoozeMenu();
   
@@ -1124,7 +1124,7 @@ function bindToolbarEvents(
   if (settingsBtn) {
     settingsBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      showSettingsPopup(settingsBtn, toolbar);
+      showSettingsPopup(settingsBtn);
     });
   }
   

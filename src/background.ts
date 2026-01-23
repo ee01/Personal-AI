@@ -2,7 +2,7 @@ import { analyzeMessagesInBackground } from './messageDealing';
 import { createOffscreenDocument, getEmbeddingInBackground, handleEmbeddingResult } from './embeddings';
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
-import { getAuthToken, getCachedAuthToken } from './slide';
+import { getGoogleAuthToken, getGoogleAuthTokenSilently } from './utils/googleAuth';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
 import { memorySystem } from './memory';
@@ -21,7 +21,12 @@ import { JiraAutomationService } from './scheduled-messages/JiraAutomationServic
 import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './jira';
 import { handleLLMRequest } from './llm';
 
+import { Logger } from './utils/logger';
+
 console.log('Background script loaded');
+
+// 记录扩展启动
+Logger.lifecycle('startup', 'Background script loaded');
 
 // Background script 加载时检查并初始化任务调度器
 // 
@@ -65,6 +70,20 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     try {
         console.log('Extension event:', details.reason); // 可能的值: install, update, chrome_update, shared_module_update
         
+        // 记录生命周期事件
+        const manifest = chrome.runtime.getManifest();
+        Logger.lifecycle(details.reason, `扩展 ${details.reason}`, {
+            version: manifest.version,
+            previousVersion: details.previousVersion,
+        });
+        
+        // 如果是更新，记录版本升级日志
+        if (details.reason === 'update' && details.previousVersion) {
+            Logger.upgrade(manifest.version, true, `从 v${details.previousVersion} 升级到 v${manifest.version}`);
+        } else if (details.reason === 'install') {
+            Logger.upgrade(manifest.version, true, `首次安装 v${manifest.version}`);
+        }
+        
         // 加载配置
         const config = await getEnvConfig();
         console.log('Global config loaded:', config);
@@ -78,28 +97,37 @@ chrome.runtime.onInstalled.addListener(async (details) => {
             console.log('🔄 检测到扩展更新，检查 Sheet Schema、App Script 和 Jira Rule 是否需要更新...');
             
             // 1. 检查并更新 Sheet Schema（先更新表结构，再更新脚本）
-            // 使用 getCachedAuthToken：只使用缓存的 token，不弹出授权窗口
-            SheetSchemaUpdater.checkAndAutoUpdate(getCachedAuthToken, {
+            // 使用静默方法：只使用缓存的 token，不弹出授权窗口
+            SheetSchemaUpdater.checkAndAutoUpdate(() => getGoogleAuthTokenSilently({ caller: 'background.autoUpdateSchema' }), {
                 showNotification: true
+            }).then(() => {
+                Logger.upgrade(manifest.version, true, 'Sheet Schema 更新成功', { component: 'SheetSchema' });
             }).catch(error => {
                 console.error('❌ Sheet Schema 自动更新失败:', error);
+                Logger.upgrade(manifest.version, false, 'Sheet Schema 更新失败', { component: 'SheetSchema', error: error.message });
             });
             
             // 2. 检查并更新 App Script（延迟 3 秒，等待 Schema 更新完成）
-            // 使用 getCachedAuthToken：只使用缓存的 token，不弹出授权窗口
+            // 使用静默方法：只使用缓存的 token，不弹出授权窗口
             setTimeout(() => {
-                AppScriptUpdater.checkAndAutoUpdate(getCachedAuthToken).catch(error => {
+                AppScriptUpdater.checkAndAutoUpdate(() => getGoogleAuthTokenSilently({ caller: 'background.autoUpdateAppScript' })).then(() => {
+                    Logger.upgrade(manifest.version, true, 'App Script 更新成功', { component: 'AppScript' });
+                }).catch(error => {
                     console.error('❌ App Script 自动更新失败:', error);
+                    Logger.upgrade(manifest.version, false, 'App Script 更新失败', { component: 'AppScript', error: error.message });
                 });
             }, 3000);
             
             // 3. 检查并更新 Jira Automation Rule（延迟 8 秒，避免与上面的更新冲突）
-            // 使用 getCachedAuthToken：只使用缓存的 token，不弹出授权窗口
-            JiraRuleUpdater.checkAndAutoUpdate(getCachedAuthToken, {
+            // 使用静默方法：只使用缓存的 token，不弹出授权窗口
+            JiraRuleUpdater.checkAndAutoUpdate(() => getGoogleAuthTokenSilently({ caller: 'background.autoUpdateJiraRule' }), {
                 delay: 8000,
                 showNotification: true
+            }).then(() => {
+                Logger.upgrade(manifest.version, true, 'Jira Rule 更新成功', { component: 'JiraRule' });
             }).catch(error => {
                 console.error('❌ Jira Rule 自动更新失败:', error);
+                Logger.upgrade(manifest.version, false, 'Jira Rule 更新失败', { component: 'JiraRule', error: error.message });
             });
         }
         
@@ -750,9 +778,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 
-                // 获取 auth token
+                // 获取 auth token（用户主动操作，可以弹窗）
                 console.log('🔐 获取 Google 认证 token...');
-                const token = await getAuthToken();
+                const token = await getGoogleAuthToken({ caller: 'background.createScheduledMessage' });
                 console.log('✅ Token 获取成功');
                 
                 // 使用静态导入的 ScheduledMessageService（避免 Service Worker 中动态导入问题）
@@ -789,9 +817,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 
-                // 🔧 使用缓存的 token，避免在后台检查时弹出授权窗口
-                console.log('🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 使用 getCachedAuthToken（自动检查）');
-                const token = await getCachedAuthToken();
+                // 🔧 使用静默方法，避免在后台检查时弹出授权窗口
+                console.log('🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 使用静默方法（自动检查）');
+                const token = await getGoogleAuthTokenSilently({ caller: 'background.checkAutomationLink' });
                 if (!token) {
                     console.warn('🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 无缓存 token，返回不存在');
                     sendResponse({ exists: false });
@@ -833,9 +861,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 
-                // 🔧 使用缓存的 token，避免在后台批量检查时弹出授权窗口
-                console.log('🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 使用 getCachedAuthToken（自动预加载）');
-                const token = await getCachedAuthToken();
+                // 🔧 使用静默方法，避免在后台批量检查时弹出授权窗口
+                console.log('🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 使用静默方法（自动预加载）');
+                const token = await getGoogleAuthTokenSilently({ caller: 'background.batchCheckAutomationLinks' });
                 if (!token) {
                     console.warn('🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 无缓存 token，返回空结果');
                     const emptyResults: Record<string, boolean> = {};
@@ -1129,9 +1157,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 
-                // 获取 auth token
+                // 获取 auth token（用户主动操作，可以弹窗）
                 console.log('🔔 Background: 获取 Google Auth Token...');
-                const token = await getAuthToken();
+                const token = await getGoogleAuthToken({ caller: 'background.createSnoozeMessage' });
                 console.log('🔔 Background: Token 获取成功');
                 
                 const service = new ScheduledMessageService(token);
@@ -1198,7 +1226,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             
                             // 更新已创建消息的 Topic
                             try {
-                                const freshToken = await getAuthToken();
+                                const freshToken = await getGoogleAuthToken({ caller: 'background.updateMessageTopic' });
                                 const freshService = new ScheduledMessageService(freshToken);
                                 await freshService.updateMessage(newMessage.ID, {
                                     Topic: `稍后处理: ${newTopicSummary}`
@@ -1488,8 +1516,8 @@ async function getUserinfoFromJiraPage() {
 // 处理幻灯片分析请求
 async function handleSlideAnalysisRequest(tabId: number) {
     try {
-        // 获取认证token
-        const token = await getAuthToken();
+        // 获取认证token（用户主动操作，可以弹窗）
+        const token = await getGoogleAuthToken({ caller: 'background.analyzeSlides' });
         if (token) {
             // 发送回内容脚本
             chrome.tabs.sendMessage(tabId, { 

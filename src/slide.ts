@@ -485,44 +485,32 @@ export async function applyProjectUpdates(
   }
 }
 
+// ============ Google Auth Token 重导出 ============
+// 统一使用 utils/googleAuth.ts 中的实现
+// 这里的导出是为了向后兼容，避免大规模修改现有代码
+
+import { 
+  getGoogleAuthToken, 
+  getGoogleAuthTokenSilently 
+} from './utils/googleAuth';
+
 /**
  * 获取Google API认证token（会弹出认证窗口）
+ * @deprecated 请直接使用 getGoogleAuthToken({ caller: 'xxx' })
  * @returns OAuth token
  */
 export async function getAuthToken(): Promise<string | null> {
-  console.log('🔐 [slide.getAuthToken] 被调用, interactive=true');
-  return new Promise((resolve) => {
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
-      if (chrome.runtime.lastError) {
-        console.error('🔐 [slide.getAuthToken] 获取token失败:', chrome.runtime.lastError);
-        resolve(null);
-      } else {
-        console.log('🔐 [slide.getAuthToken] 成功');
-        resolve(token);
-      }
-    });
-  });
+  return getGoogleAuthToken({ caller: 'slide.getAuthToken' });
 }
 
 /**
  * 获取缓存的Google API认证token（不弹出认证窗口）
  * 用于后台自动任务，避免在用户无操作时弹出授权窗口
+ * @deprecated 请直接使用 getGoogleAuthTokenSilently({ caller: 'xxx' })
  * @returns OAuth token，如果没有缓存则返回 null
  */
 export async function getCachedAuthToken(): Promise<string | null> {
-  console.log('🔐 [slide.getCachedAuthToken] 被调用, interactive=false');
-  return new Promise((resolve) => {
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
-      if (chrome.runtime.lastError) {
-        console.log('🔐 [slide.getCachedAuthToken] 无缓存 token（正常情况）');
-        // 静默处理错误，不打印日志（因为缓存不存在是正常情况）
-        resolve(null);
-      } else {
-        console.log('🔐 [slide.getCachedAuthToken] 成功获取缓存 token');
-        resolve(token || null);
-      }
-    });
-  });
+  return getGoogleAuthTokenSilently({ caller: 'slide.getCachedAuthToken' });
 }
 
 /**
