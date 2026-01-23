@@ -1,0 +1,104 @@
+┌────────────────────────────────────────────────────────────────────────┐
+│                      消息管理工具 - 快速参考卡                          │
+│                     message_manager.py v1.0.0                          │
+└────────────────────────────────────────────────────────────────────────┘
+
+📌 启动方式
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  交互模式（推荐）
+    python tools/message_manager.py -i
+    python tools/message_manager.py -i --user esone.qiu
+    bash tools/message_manager_examples.sh
+
+🔍 查找消息
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  通过 ID 查找
+    --id MESSAGE_ID
+    --id MESSAGE_ID --user esone.qiu
+
+  语义搜索（需要 sentence-transformers）
+    --search "关键词"
+    --search "关键词" --user esone.qiu --limit 20
+    --search "关键词" --where '{"sender": "张三"}'
+
+🗑️  删除消息
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  删除单条
+    --id MESSAGE_ID --delete
+    --search "关键词" --delete
+
+  批量删除（⚠️ 危险！）
+    --search "关键词" --batch-delete --limit 50
+    --search "测试" --user esone.qiu --batch-delete
+
+✏️  编辑消息
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  编辑内容
+    --id MESSAGE_ID --edit --content "新内容"
+
+  编辑元数据
+    --id MESSAGE_ID --edit --metadata '{"priority": "high"}'
+
+  同时编辑
+    --id MESSAGE_ID --edit --content "新内容" --metadata '{"key": "value"}'
+
+🎯 常用参数
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  -i, --interactive     交互模式
+  --id ID               消息 ID
+  --search QUERY        语义搜索
+  -u, --user USER       用户名过滤
+  -n, --limit N         结果数量
+  -w, --where JSON      元数据过滤
+  --delete              删除消息
+  --batch-delete        批量删除
+  --edit                编辑消息
+  --content TEXT        新内容
+  --metadata JSON       新元数据
+  --no-confirm          跳过确认（危险！）
+  --help                显示帮助
+
+📦 安装依赖
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  基础功能（通过 ID 查找）
+    pip install chromadb
+
+  完整功能（包括语义搜索）
+    pip install chromadb sentence-transformers
+
+⚠️  安全提示
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ⚠️  删除操作不可逆！请务必：
+    1. 先预览再删除
+    2. 使用精确过滤条件
+    3. 小批量操作
+    4. 避免使用 --no-confirm
+
+💡 使用示例
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  清理测试消息
+    # 先预览
+    python tools/message_manager.py --search "测试" --limit 50
+    # 再删除
+    python tools/message_manager.py --search "测试" --batch-delete --limit 50
+
+  修正错误内容
+    python tools/message_manager.py --id "msg-12345" \
+      --edit --content "正确的内容"
+
+  组合过滤查询
+    python tools/message_manager.py --search "项目" \
+      --user esone.qiu \
+      --where '{"sender": "张三", "teamName": "研发部"}'
+
+📚 更多帮助
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  完整说明:  cat tools/message_manager.md
+  详细指南:  cat tools/message_manager_guide.md
+  安装指南:  cat tools/message_manager_install.md
+  命令帮助:  python tools/message_manager.py --help
+  示例脚本:  bash tools/message_manager_examples.sh
+
+┌────────────────────────────────────────────────────────────────────────┐
+│  快速上手: python tools/message_manager.py -i                         │
+└────────────────────────────────────────────────────────────────────────┘

@@ -15,6 +15,7 @@ import {
   JIRA_RULE_LAST_UPDATED 
 } from './JiraAutomationService';
 import { getEnvConfig } from '../utils';
+import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 
 export interface JiraRuleUpdateCheckResult {
   needsUpdate: boolean;
@@ -327,19 +328,12 @@ export class JiraRuleUpdater {
    */
   private async syncConfigToSheet(): Promise<void> {
     try {
-      // 获取 Google token
-      console.log('🔐 [JiraRuleUpdater.syncConfigToSheet] getAuthToken 被调用, interactive=false');
-      const token = await new Promise<string>((resolve, reject) => {
-        chrome.identity.getAuthToken({ interactive: false }, (token) => {
-          if (chrome.runtime.lastError || !token) {
-            console.warn('🔐 [JiraRuleUpdater.syncConfigToSheet] 无法获取 token:', chrome.runtime.lastError?.message || 'No token');
-            reject(new Error(chrome.runtime.lastError?.message || 'No token'));
-          } else {
-            console.log('🔐 [JiraRuleUpdater.syncConfigToSheet] getAuthToken 成功');
-            resolve(token);
-          }
-        });
-      });
+      // 获取 Google token（静默方式，不弹窗）
+      const token = await getGoogleAuthTokenSilently({ caller: 'JiraRuleUpdater.syncConfigToSheet' });
+      
+      if (!token) {
+        throw new Error('No token');
+      }
       
       const syncService = new ConfigSyncService(token);
       await syncService.saveConfigToSheet(this.config!);

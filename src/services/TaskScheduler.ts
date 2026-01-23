@@ -14,6 +14,7 @@ import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../uti
 import { analyzeMessages } from '../messageDealing';
 import { getEnvConfig } from '../utils';
 import { CloudStorage } from '../storage/CloudStorage';
+import { Logger } from '../utils/logger';
 
 // 任务类型定义
 export interface ScheduledTask {
@@ -535,8 +536,22 @@ export class TaskScheduler {
 
       const duration = Date.now() - startTime;
       console.log(`✅ 任务 ${task.name} 执行完成，耗时: ${duration}ms`);
-    } catch (error) {
+      
+      // 记录任务执行日志
+      Logger.task(task.id, true, `${task.name} 执行完成`, {
+        duration: `${duration}ms`,
+        category: task.category,
+      });
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
       console.error(`❌ 任务 ${task.name} 执行失败:`, error);
+      
+      // 记录任务执行失败日志
+      Logger.task(task.id, false, `${task.name} 执行失败: ${error.message}`, {
+        duration: `${duration}ms`,
+        category: task.category,
+        error: error.message,
+      });
     }
   }
 
@@ -544,6 +559,8 @@ export class TaskScheduler {
    * 执行消息分析任务
    */
   private async executeMessageAnalysis(): Promise<void> {
+    const startTime = Date.now();
+    
     try {
       // 获取配置
       const config = await getEnvConfig();
@@ -562,6 +579,10 @@ export class TaskScheduler {
       if (!userinfo || userinfo.fullName === '') {
         // 如果没有用户信息，跳过此次分析
         console.log('📝 用户信息不完整，跳过消息分析');
+        Logger.analysis('message_analysis', {
+          result: '跳过 - 用户信息不完整',
+          duration: Date.now() - startTime,
+        });
         return;
       }
 
@@ -569,21 +590,40 @@ export class TaskScheduler {
       // 使用新配置：MESSAGE_ANALYSIS_INTERVAL（分析间隔）+ MESSAGE_CONTEXT_WINDOW（上下文窗口）
       const analysisInterval = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
       const contextWindow = Number(config.MESSAGE_CONTEXT_WINDOW) || 5;
-      const startTime = new Date(Date.now() - (analysisInterval + contextWindow) * 60 * 1000);
+      const messageStartTime = new Date(Date.now() - (analysisInterval + contextWindow) * 60 * 1000);
       
       console.log(`📝 开始消息分析，时间范围: ${analysisInterval + contextWindow} 分钟（分析间隔: ${analysisInterval} 分钟 + 上下文窗口: ${contextWindow} 分钟）`);
 
       // 发送消息获取请求
       const response = await this.sendMessageWithRetry(rcTab.id, {
         type: 'FETCH_USER_MESSAGES',
-        startTime,
+        startTime: messageStartTime,
       });
+
+      const messagesCount = response.data?.length || 0;
 
       // 分析消息
       await analyzeMessages(response.data, userinfo.fullName, true);
+      
+      const duration = Date.now() - startTime;
       console.log('📝 消息分析任务执行完成');
-    } catch (error) {
+      
+      // 记录消息分析日志
+      Logger.analysis('message_analysis', {
+        messagesCount,
+        duration,
+        result: `分析了 ${messagesCount} 条消息`,
+      });
+    } catch (error: any) {
       console.error('❌ 消息分析任务失败:', error);
+      
+      // 记录消息分析错误日志
+      Logger.analysis('message_analysis', {
+        duration: Date.now() - startTime,
+        error: error.message,
+      });
+      
+      throw error; // 重新抛出以便 executeTask 记录
     }
   }
 

@@ -1,3 +1,5 @@
+import { getGoogleAuthToken } from './utils/googleAuth';
+
 export class Sheet {
   private token: string;
   private sheetId: string;
@@ -34,18 +36,11 @@ export class Sheet {
   }
 
   static async getToken(): Promise<string> {
-    console.log('🔐 [Sheet.getToken] getAuthToken 被调用, interactive=true');
-    return new Promise((resolve, reject) => {
-        chrome.identity.getAuthToken({ interactive: true }, (token) => {
-            if (chrome.runtime.lastError) {
-                console.error('🔐 [Sheet.getToken] 获取 token 失败:', chrome.runtime.lastError);
-                reject(chrome.runtime.lastError);
-            } else {
-                console.log('🔐 [Sheet.getToken] getAuthToken 成功');
-                resolve(token);
-            }
-        });
-    });
+    const token = await getGoogleAuthToken({ caller: 'Sheet.getToken' });
+    if (!token) {
+      throw new Error('无法获取 Google 授权');
+    }
+    return token;
   }
 
   static extractSheetId(url: string): string | null {

@@ -10,7 +10,7 @@
  */
 
 import { generateAutoReply } from '../llm';
-import { getAuthToken, getCachedAuthToken } from '../slide';
+import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 import { ScheduledMessageService } from '../scheduled-messages/ScheduledMessageService';
 import { isScheduledMessagesInitialized } from '../scheduled-messages/ScheduledMessagesUtils';
 
@@ -320,8 +320,8 @@ async function createAutoReplyScheduledMessage(params: {
             throw new Error('定时消息未初始化');
         }
         
-        // 🔧 优先使用缓存的 token，避免在后台任务中弹出授权窗口
-        const token = await getCachedAuthToken();
+        // 🔧 优先使用静默方法，避免在后台任务中弹出授权窗口
+        const token = await getGoogleAuthTokenSilently({ caller: 'AutoReplyHandler.createMessage' });
         if (!token) {
             console.warn('⚠️ 无缓存的 Google 认证 token，跳过创建自动答复消息（避免弹出授权窗口）');
             // 🔥 关键修复：在后台任务中，如果没有缓存 token，直接抛出错误，不要尝试交互式获取
@@ -361,7 +361,7 @@ async function createAutoReplyScheduledMessage(params: {
         
         // 创建消息
         const createResult = await service.createMessage({
-            Topic: `自动答复 ${msgContext.sender.split(' ')[0]}「${msgContext.messageContent.substring(0, 50)}${msgContext.messageContent.length > 50 ? '...' : ''}」`,
+            Topic: `自动答复 ${msgContext.summary.includes(msgContext.sender.split(' ')[0]) ? '' : msgContext.sender.split(' ')[0]}「${msgContext.summary.substring(0, 50)}${msgContext.summary.length > 50 ? '...' : ''}」`,
             Content: replyContent,
             Schedule_Date: scheduleDate,
             Schedule_Time: scheduleTimeStr,
