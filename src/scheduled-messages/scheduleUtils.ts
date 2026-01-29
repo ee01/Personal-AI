@@ -152,6 +152,19 @@ export function parseCronExpression(cron: string): CronParseResult | null {
 }
 
 /**
+ * 为 FIXED 模式计算默认的调度日期
+ * 规则：使用今天的日期作为起始点
+ * @param repeatUnit - 重复单位
+ * @returns YYYY-MM-DD 格式的日期字符串
+ */
+export function getDefaultScheduleDateForFixed(repeatUnit: 'Day' | 'Week' | 'Month'): string {
+  const now = new Date();
+  // 对于所有 FIXED 模式，默认使用今天的日期
+  // 用户可以在导入后通过管理界面调整
+  return now.toISOString().split('T')[0];
+}
+
+/**
  * 解析 FIXED 模式配置
  * @param schedule - trigger.value.schedule 对象
  * @returns 解析后的重复配置
@@ -215,8 +228,10 @@ export function analyzeTriggerForScheduledMessages(
       }
     } else if (schedule?.method === 'FIXED') {
       const { repeatEvery, repeatUnit } = parseFixedRateConfig(schedule);
+      // FIXED 模式：优先使用外部传入日期，否则使用默认计算的日期
+      const defaultScheduleDate = getDefaultScheduleDateForFixed(repeatUnit);
       return {
-        scheduleDate,  // FIXED 模式需要外部传入日期
+        scheduleDate: scheduleDate || defaultScheduleDate,
         repeatEvery,
         repeatUnit,
         executionMode: 'nosearch',
@@ -245,8 +260,10 @@ export function analyzeTriggerForScheduledMessages(
       }
     } else if (schedule?.method === 'FIXED') {
       const { repeatEvery, repeatUnit } = parseFixedRateConfig(schedule);
+      // FIXED 模式：优先使用外部传入日期，否则使用默认计算的日期
+      const defaultScheduleDate = getDefaultScheduleDateForFixed(repeatUnit);
       return {
-        scheduleDate,  // FIXED 模式需要外部传入日期
+        scheduleDate: scheduleDate || defaultScheduleDate,
         repeatEvery,
         repeatUnit,
         executionMode: 'jql',
