@@ -11,6 +11,24 @@
  * 此模块是消息交互功能 (Message Reaction) 的 UI 层实现
  */
 
+// =====================================================
+// Personal AI Message Toolbar (PAI Toolbar) 组件命名定义
+// =====================================================
+// 
+// 工具栏名称: Personal AI Message Toolbar (PAI Toolbar)
+// 主要 CSS 类名:
+//   - .message-reaction-toolbar     : 工具栏容器 (PAI Toolbar Container)
+//   - .snooze-text-btn              : "稍后处理" 按钮 (Snooze Button)
+//   - .auto-reply-btn               : "自动答复" 按钮 (Auto Reply Button)
+//   - .snooze-icon                  : Personal AI 图标 (PAI Icon)
+//   - .reaction-settings-btn        : 设置按钮 (Settings Button)
+// 
+// 位置行为:
+//   - 默认垂直居中于消息卡片 (top: 50%)
+//   - 当存在 reply input (.conversation-reply-inline-input) 时，
+//     自动上移对齐到消息文本区域的垂直中心 (.align-to-text)
+// =====================================================
+
 import { 
   MessageInfo, 
   extractMessageInfo, 
@@ -91,7 +109,7 @@ function injectStyles() {
   const style = document.createElement('style');
   style.id = 'message-reaction-styles';
   style.textContent = `
-    /* ===== 消息交互工具栏容器 ===== */
+    /* ===== Personal AI Message Toolbar (PAI Toolbar) 消息交互工具栏容器 ===== */
     .message-reaction-toolbar {
       position: absolute;
       right: 8px;
@@ -101,9 +119,14 @@ function injectStyles() {
       align-items: center;
       gap: 0;
       opacity: 0;
-      transition: opacity 0.2s ease;
+      transition: opacity 0.2s ease, top 0.15s ease;
       z-index: 100000;
       pointer-events: none;
+    }
+    
+    /* 当有 reply input 时，工具栏对齐到消息文本区域 */
+    .message-reaction-toolbar.align-to-text {
+      /* top 值会通过 JS 动态计算设置 */
     }
     
     .message-reaction-toolbar.visible {
@@ -1013,6 +1036,41 @@ function processMessageElement(messageElement: HTMLElement) {
   // 将工具栏添加到消息卡片
   targetElement.appendChild(toolbar);
   
+  /**
+   * 调整工具栏位置：当有 reply input 时，对齐到消息文本区域
+   * PAI Toolbar Position Adjustment
+   */
+  function adjustToolbarPosition() {
+    // 检查是否有 reply input（在同一个父容器中查找）
+    const parentContainer = targetElement.closest('.conversation-card') || targetElement.parentElement;
+    const replyInput = parentContainer?.querySelector('.conversation-reply-inline-input');
+    
+    if (replyInput) {
+      // 有 reply input，需要调整位置到消息文本区域
+      const textBody = targetElement.querySelector('[data-name="body"]') || 
+                       targetElement.querySelector('[data-name="text"]') ||
+                       targetElement.querySelector('.sc-cnQiCv'); // 消息文本容器的备用选择器
+      
+      if (textBody) {
+        const targetRect = targetElement.getBoundingClientRect();
+        const textRect = textBody.getBoundingClientRect();
+        
+        // 计算文本区域相对于目标元素的中心位置
+        const textCenterY = textRect.top + textRect.height / 2;
+        const targetTop = targetRect.top;
+        const relativeTop = textCenterY - targetTop;
+        
+        // 设置工具栏位置
+        toolbar.style.top = `${relativeTop}px`;
+        toolbar.classList.add('align-to-text');
+      }
+    } else {
+      // 没有 reply input，恢复默认位置
+      toolbar.style.top = '50%';
+      toolbar.classList.remove('align-to-text');
+    }
+  }
+  
   let showTriggerTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSettingsBtnTimeout: ReturnType<typeof setTimeout> | null = null;
   let messageInfo: MessageInfo | null = null;
@@ -1038,6 +1096,9 @@ function processMessageElement(messageElement: HTMLElement) {
       if (!config.enableSnooze && !config.enableAutoReply) {
         return;
       }
+      
+      // 调整工具栏位置（PAI Toolbar Position Adjustment）
+      adjustToolbarPosition();
       
       toolbar.classList.add('visible');
       
@@ -1074,6 +1135,10 @@ function processMessageElement(messageElement: HTMLElement) {
   toolbar.addEventListener('mouseenter', () => {
     isHoveringToolbar = true;
     cancelSnoozeHide();
+    
+    // 重新调整位置（以防 reply input 动态变化）
+    adjustToolbarPosition();
+    
     toolbar.classList.add('visible');
     
     // 2 秒后显示设置按钮

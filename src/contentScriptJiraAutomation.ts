@@ -1030,7 +1030,7 @@ function showImportDialog(
     
     // 根据配置显示不同内容
     let scheduleInfo = '';
-    let showDateInput = false;
+    const showDateInput = false;
     let warningMessage = '';
     
     if (scheduleConfig) {
@@ -1046,22 +1046,15 @@ function showImportDialog(
       
       // 情况一: scheduled + nosearch - 完整导入，需要转换为 webhook
       if (scheduleConfig.needsWebhookConversion && scheduleConfig.scheduleDate) {
-        scheduleInfo = `
-          <p><strong>执行时间:</strong> ${scheduleConfig.scheduleTime || '未指定'}</p>
+        // FIXED 模式没有 scheduleTime，显示开始日期
+        const hasScheduleTime = !!scheduleConfig.scheduleTime;
+        scheduleInfo = hasScheduleTime ? `
+          <p><strong>执行时间:</strong> ${scheduleConfig.scheduleTime}</p>
+          <p><strong>重复周期:</strong> ${formatRepeatCycle()}</p>
+        ` : `
+          <p><strong>开始日期:</strong> ${scheduleConfig.scheduleDate}</p>
           <p><strong>重复周期:</strong> ${formatRepeatCycle()}</p>
         `;
-        if (!scheduleConfig.scheduleDate) {
-          showDateInput = true;
-        }
-        warningMessage = '✅ 此规则可以在[定时消息管理]中管理 schedule';
-      } 
-      // 情况二: scheduled + nosearch (FIXED模式) - 需要手动指定日期
-      else if (scheduleConfig.needsWebhookConversion && !scheduleConfig.scheduleDate) {
-        scheduleInfo = `
-          <p><strong>触发模式:</strong> FIXED 模式（需要手动指定开始日期）</p>
-          <p><strong>重复周期:</strong> ${formatRepeatCycle()}</p>
-        `;
-        showDateInput = true;
         warningMessage = '✅ 此规则可以在[定时消息管理]中管理 schedule';
       }
       // 情况三: scheduled + jql - 仅展示，不可编辑
@@ -1309,8 +1302,11 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
         // 使用共享的 FIXED 配置解析函数
         const fixedConfig = parseFixedRateConfig(schedule);
         
+        // 如果 audit log 没有日期，使用今天作为默认值
+        const defaultScheduleDate = scheduleDate || new Date().toISOString().split('T')[0];
+        
         scheduleConfig = {
-          scheduleDate,
+          scheduleDate: defaultScheduleDate,
           repeatEvery: fixedConfig.repeatEvery,
           repeatUnit: fixedConfig.repeatUnit,
           executionMode: 'nosearch',
@@ -1350,8 +1346,11 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
         // 使用共享的 FIXED 配置解析函数
         const fixedConfig = parseFixedRateConfig(schedule);
         
+        // 如果 audit log 没有日期，使用今天作为默认值
+        const defaultScheduleDate = scheduleDate || new Date().toISOString().split('T')[0];
+        
         scheduleConfig = {
-          scheduleDate,
+          scheduleDate: defaultScheduleDate,
           repeatEvery: fixedConfig.repeatEvery,
           repeatUnit: fixedConfig.repeatUnit,
           executionMode: 'jql',
