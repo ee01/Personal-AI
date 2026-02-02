@@ -936,7 +936,8 @@ async function showConfirmationDialog(
     missingFields: string[] = [],
     jiraBaseUrl = '',
     jql = '',
-    jiraFieldToSheetHeader: { [jiraField: string]: string } = {}
+    jiraFieldToSheetHeader: { [jiraField: string]: string } = {},
+    actualSheetHeaders: string[] = []  // 新增：实际的表头列名
 ): Promise<ConfirmationResult> {
     return new Promise((resolve) => {
         const dialog = document.createElement('div');
@@ -958,9 +959,20 @@ async function showConfirmationDialog(
             flex-direction: column;
         `;
 
-        const columnsToUpdate = displayHeaders
+        // 生成友好的列名显示
+        const columnsToUpdateDisplay = displayHeaders
             .filter(field => sheetHeaders[field as keyof JiraHeaders])
-            .map(field => field);
+            .map(field => {
+                const columnLetter = sheetHeaders[field as keyof JiraHeaders];
+                if (!columnLetter) return field;
+                
+                // 查找该列对应的实际表头名称
+                const colIndex = getColumnIndex(columnLetter);
+                const actualHeaderName = actualSheetHeaders[colIndex];
+                
+                // 优先使用实际表头名称，其次使用配置中的映射，最后使用 Jira 字段名
+                return actualHeaderName || jiraFieldToSheetHeader[field] || jiraFieldDisplayNames[field] || field;
+            });
 
         const updateCount = operations.filter(op => op.type === 'update').length;
         const appendCount = operations.filter(op => op.type === 'append').length;
@@ -999,7 +1011,7 @@ async function showConfirmationDialog(
             <div style="margin-bottom: 15px; flex-shrink: 0;">
                 <div style="margin-bottom: 10px;">
                     <strong>将要操作的列：</strong> 
-                    <span style="color: #666;">${columnsToUpdate.join(', ')}</span>
+                    <span style="color: #666;">${columnsToUpdateDisplay.join(', ')}</span>
                 </div>
                 <div style="color: #666;">
                     <div>更新现有数据：<span style="color: #f0ad4e; font-weight: bold;">${updateCount}</span> 条</div>
@@ -1019,7 +1031,7 @@ async function showConfirmationDialog(
                         <tr>
                             <th style="padding: 8px; text-align: left; width: 50px;">选择</th>
                             <th style="padding: 8px; text-align: left; width: 80px;">操作</th>
-                            ${displayHeaders.map(header => `<th style="padding: 8px; text-align: left;">${header}</th>`).join('')}
+                            ${columnsToUpdateDisplay.map(header => `<th style="padding: 8px; text-align: left;">${header}</th>`).join('')}
                         </tr>
                     </thead>
                     <tbody>
@@ -1172,7 +1184,10 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             const sheetHeaders = metadata.columnMapping;
             const fieldTypes = metadata.fieldTypes;
             const globalSettings = metadata.globalSettings;
-            const displayHeaders = ['key', 'summary', 'status', 'assignee', 'reporter']; 
+            // const jiraFieldToSheetHeader = metadata.jiraFieldToSheetHeader;
+            
+            // 根据实际映射的字段动态生成 displayHeaders
+            const displayHeaders = Object.keys(sheetHeaders).filter(field => sheetHeaders[field as keyof JiraHeaders]); 
 
             // 使用全局设置中的 headerRow（1-based）
             const headerRowIndex = globalSettings.headerRow - 1; // 转为 0-based 索引
@@ -1262,6 +1277,9 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 console.warn('检测到以下字段在 Jira 查询结果中缺失:', missingFields);
             }
 
+            // 获取实际的表头数据用于显示
+            const actualSheetHeaders = values[headerRowIndex] as string[];
+
             const confirmResult = await showConfirmationDialog(
                 operations, 
                 displayHeaders, 
@@ -1269,7 +1287,8 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                 missingFields,
                 envConfig.JIRA_BASE_URL || '',
                 jql,
-                metadata.jiraFieldToSheetHeader
+                metadata.jiraFieldToSheetHeader,
+                actualSheetHeaders
             );
             
             const confirmedOperations = confirmResult.operations;

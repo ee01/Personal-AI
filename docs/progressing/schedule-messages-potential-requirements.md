@@ -10,8 +10,8 @@
 
 ### 🔴 优先级 P0（核心 MVP）
 
-- [ ] **T1. 稍后处理（Snooze）** → [§3.1](#31-snooze稍后处理延迟提醒)
-  - 实现：在 RingCentral/Glip 任意消息上悬停 1.5 秒后，右下角出现带红色 icon（`@static/icons/icon16.png`）的菜单
+- [x] **T1. 稍后处理（Snooze）** → [§3.1](#31-snooze稍后处理延迟提醒) ✅ 已完成
+  - 实现：在 RingCentral/Glip 任意消息上悬停 3 秒后，右下角出现带红色 icon（`@static/icons/icon16.png`）的菜单
   - 菜单中一个文字按钮是"稍后处理"
   - 点击后弹出窗口选择时间，默认明天 9 点
   - 确认时间后在 scheduled messages（Google Sheet）添加一条记录：
@@ -20,9 +20,10 @@
     - `Content`: 包含原消息的链接/内容摘要
     - `Glip_User_Name`: 当前用户（私聊提醒自己）
   - 到时由 Jira Automation 执行 Bot 推送提醒我处理该消息
+  - **已实现**：`src/message-reaction/` 模块（MessageReactionUI.ts、SnoozeManager.ts、SnoozeUI.ts）
 
-- [ ] **T2. 匹配自动回复** → [§3.6](#36-下班专注模式自动回复) / [§5.1](#51-自动澄清问题减少往返)
-  - 实现：同样在悬停 1.5 秒的菜单中有"自动答复"按钮
+- [x] **T2. 自动答复** → [§3.6](#36-下班专注模式自动回复) / [§5.1](#51-自动澄清问题减少往返) ✅ 已完成
+  - 实现：同样在悬停 3 秒的菜单中有"自动答复"按钮
   - 点击后弹出配置窗口：
     - LLM 根据当前消息生成回复建议（多一个勾选，每次 AI 生成类似答复）
     - 勾选匹配条件：
@@ -33,7 +34,14 @@
     - 审核模式开关：
       - 选项1："仅添加到审核列表"（需手动确认后发送），可以考虑直接用定时消息的 status 来过滤审核列表
       - 选项2："自动答复前 X 小时可拦截"（用户输入小时数，在此时间窗口内可取消），同时要推送通知给用户提醒用户审核（chrome notification，以及 调用 @bot.ts 推送给用户）
-  - 存储结构需扩展，新增 `auto_reply_rules` 表或字段
+  - **已实现**：`src/message-reaction/AutoReplyHandler.ts`、`src/modals/topic-modal.tsx`（自动答复配置）
+
+- [ ] **T0. 关注后续（Follow Thread）** → [§3.9](#39-关注后续持续追踪消息回复)
+  - 实现：在悬停菜单中添加"关注后续"按钮
+  - 点击后持续关注该消息的后续回复/讨论
+  - 有新回复时立即推送通知给用户
+  - 浏览 Glip 消息时，对关注消息的关联消息进行视觉标识
+  - 详细设计见 [§3.9](#39-关注后续持续追踪消息回复)
 
 ### 🟡 优先级 P1（高价值扩展）
 
@@ -201,6 +209,274 @@
   - 或让 Bot 以中性口吻提醒（更适合群场景）
 - **适配度**：✅
 - **复杂度**：S
+
+### 3.9 关注后续（持续追踪消息回复）
+- **用户痛点**：发送消息或看到重要消息后，需要知道后续是否有回复/讨论，但容易遗漏或忘记追踪。
+- **Personal AI 实现方案**：
+  - 在悬停菜单中添加"关注后续"按钮
+  - 点击后对该消息设置关注，默认 7 天后失效
+  - 系统持续监控该消息/线程的后续回复
+  - 有新回复时立即推送通知给用户
+  - 浏览 Glip 消息时，对关联消息进行视觉标识
+- **适配度**：✅
+- **复杂度**：M–L（需扩展消息监控、关联关系检测、视觉标识系统）
+
+#### 3.9.1 核心功能设计
+
+##### A. 设置关注
+- **入口**：悬停菜单新增"关注后续"按钮（与"稍后处理"、"自动答复"并列）
+- **交互流程**：
+  1. 点击"关注后续"按钮
+  2. **复用 `topic-modal.tsx` 弹窗**（与"自动答复"功能一致的用户体验）：
+     - 弹窗标题："关注后续配置"
+     - 预填原消息信息（发送者、群组、内容摘要）
+     - 配置项：
+       - 关注时长：7 天（默认）/ 14 天 / 30 天 / 自定义
+       - 通知方式：Bot 推送（默认）/ Chrome 通知 / 两者都
+       - 可选：关注关键词过滤（仅匹配包含特定关键词的回复）
+     - 保存后自动添加到 `concernedItems` 列表，类型为 `followThread`
+  3. 确认后消息右上角显示"👁"图标，表示正在关注
+  
+> **设计决策**：复用现有 topic-modal 弹窗而非新建配置面板，优势：
+> - 统一的用户体验（与自动答复配置一致）
+> - 减少代码重复，共享 UI 组件
+> - 在同一界面统一管理所有"感兴趣话题"（包括关注后续项）
+
+##### B. 后续消息检测与推送
+- **检测机制**：
+  - 利用现有的 `FETCH_USER_MESSAGES` 能力，在消息分析时检测关联关系
+  - 关联关系判定：
+    - 同一线程（thread_id 相同）
+    - 同一群组且时间接近的消息中 @提及了原消息发送者
+    - 同一群组且消息内容引用或回复了原消息
+    - LLM 语义判断：新消息是对原消息的回应/讨论
+- **推送内容**：
+  - 原消息摘要（链接可点击跳转）
+  - 新回复内容
+  - 发送者 + 时间
+  - 快捷操作：查看原文 / 取消关注 / 延长关注
+
+##### C. 关联消息视觉标识（浏览时）
+基于业界调研（Slack 线程设计、邮件状态指示器），采用以下视觉方案：
+
+| 元素 | 设计 | 说明 |
+|------|------|------|
+| **原消息（被关注的）** | 右上角显示 `👁` 图标 + 淡蓝色右边框 | 表示此消息正在被关注 |
+| **关联消息（后续回复）** | 淡黄色底色（`#FFFEF0`） + 右上角关联标识 | 视觉突出但不突兀 |
+| **关联标识** | 消息时间旁显示 `↩ 关联` 小标签 | 灰色文字，hover 显示 tooltip |
+| **Tooltip** | 显示原消息预览（发送者 + 内容摘要 + 时间） | 最多 100 字 |
+| **点击关联标识** | 跳转到原消息 | 平滑滚动 + 高亮闪烁 |
+| **原消息 hover** | 右侧浮出关联消息列表 | 显示关键后续讨论摘要 |
+
+**视觉层级设计原则**（参考业界实践）：
+- 底色使用低饱和度颜色（如淡黄 `#FFFEF0`），避免干扰正常阅读
+- 关联标识使用图标+文字组合，兼顾识别效率和信息密度
+- Tooltip 采用渐进式披露，默认只显示简要标识，hover 后展示详情
+- 跳转使用平滑滚动 + 短暂高亮，帮助用户定位
+
+#### 3.9.2 数据存储设计
+
+##### 存储架构设计
+
+考虑到以下需求：
+- 需要在消息分析时快速判断关联关系
+- 关注项有过期时间，需要定期清理
+- 未来需要在 `memory-exploring.vue` 中做 Thread Overview Dashboard
+- 需要支持语义相似度匹配检测关联消息
+
+采用**分层存储策略**：
+
+| 数据类型 | 存储位置 | 用途 | 说明 |
+|----------|----------|------|------|
+| **关注项元数据** | `chrome.storage.local` (`concernedItems`) | 关注配置、过期时间、通知设置 | 复用现有结构，新增 `followThread` 类型 |
+| **关联消息记录** | ChromaDB | 消息向量存储、语义检索 | 支持 Thread Overview Dashboard |
+| **消息内容缓存** | `chrome.storage.local` | 原消息/关联消息内容摘要 | 快速显示，减少重复获取 |
+
+> **设计决策**：不使用 Google Sheet 存储关注后续记录
+> 
+> 原因分析：
+> 1. 核心元数据已在 `concernedItems` 中，无需重复存储
+> 2. Google Sheet 主要用于定时消息执行（需要 AppScript 触发），关注后续不需要定时触发
+> 3. ChromaDB 可支持语义检索，更适合判断"消息是否是对原消息的回应"
+> 4. 未来 Thread Overview Dashboard 可直接复用 `memory-exploring.vue` 的 ChromaDB 查询能力
+
+##### 扩展现有 `concernedItems` 结构
+
+复用现有的 `concernedItems` 存储结构（`chrome.storage.local`），新增 `followThread` 类型：
+
+```typescript
+// 扩展 TopicItemWithAutoReply 接口
+interface TopicItemWithAutoReply {
+  id: string;
+  text: string;
+  expiredAt: number;
+  pushToGlip?: boolean;
+  mentionMe?: boolean;
+  
+  // 自动答复相关字段（现有）
+  filterSender?: string;
+  filterGroup?: string;
+  autoReply?: boolean;
+  autoReplyConfig?: AutoReplyConfig;
+  
+  // === 新增：关注后续相关字段 ===
+  followThread?: boolean;              // 是否是关注后续类型
+  followConfig?: FollowThreadConfig;   // 关注配置
+}
+
+// 关注后续配置
+interface FollowThreadConfig {
+  // 原消息信息
+  originalMessage: {
+    postId: string;            // 消息 ID
+    threadId?: string;         // 线程 ID（如有）
+    teamId: string;            // 群组 ID
+    teamName: string;          // 群组名称
+    sender: string;            // 发送者
+    content: string;           // 消息内容（摘要）
+    datetime: string;          // 发送时间
+    messageUrl?: string;       // 消息链接
+  };
+  
+  // 关注配置
+  duration: number;            // 关注时长（天）：7/14/30/自定义
+  createdAt: string;           // 创建时间
+  expiresAt: string;           // 过期时间
+  
+  // 通知配置
+  notifyMethod: 'bot' | 'chrome' | 'both';  // 通知方式
+  keywordFilter?: string[];    // 关键词过滤（可选）
+  
+  // 关联消息记录
+  relatedMessages: RelatedMessage[];  // 已检测到的关联消息
+  lastCheckedAt?: string;      // 最后检查时间
+}
+
+// 关联消息记录
+interface RelatedMessage {
+  postId: string;              // 消息 ID
+  sender: string;              // 发送者
+  content: string;             // 内容摘要
+  datetime: string;            // 发送时间
+  relationType: 'thread_reply' | 'mention' | 'quote' | 'semantic';  // 关联类型
+  notifiedAt?: string;         // 已通知时间（如已通知）
+}
+```
+
+##### ChromaDB 集合设计（`followed_thread_messages`）
+
+关联消息存入 ChromaDB，支持语义检索和 Thread Overview Dashboard：
+
+```typescript
+// ChromaDB Collection: followed_thread_messages
+interface FollowedThreadDocument {
+  // ChromaDB 文档 ID
+  id: string;                      // 格式: {followItemId}_{postId}
+  
+  // 向量嵌入
+  embedding: number[];             // 消息内容的向量表示
+  
+  // 元数据
+  metadata: {
+    followItemId: string;          // 关联的 concernedItem ID
+    postId: string;                // 消息 ID
+    teamId: string;                // 群组 ID
+    teamName: string;              // 群组名称
+    sender: string;                // 发送者
+    datetime: string;              // 发送时间
+    relationType: 'original' | 'thread_reply' | 'mention' | 'quote' | 'semantic';
+    isOriginal: boolean;           // 是否是原消息
+    notifiedAt?: string;           // 已通知时间
+  };
+  
+  // 文档内容（用于检索和展示）
+  document: string;                // 消息内容摘要
+}
+```
+
+**ChromaDB 查询用例**：
+
+```typescript
+// 1. 检测新消息是否与关注项语义相关
+const similarMessages = await collection.query({
+  queryEmbeddings: [newMessageEmbedding],
+  where: { isOriginal: true },
+  nResults: 5
+});
+
+// 2. 获取某个关注项的所有关联消息（Thread Overview）
+const relatedMessages = await collection.get({
+  where: { followItemId: itemId },
+  include: ['documents', 'metadatas']
+});
+
+// 3. 按群组检索关注的消息
+const teamMessages = await collection.get({
+  where: { teamId: 'xxx', isOriginal: true }
+});
+```
+
+##### Thread Overview Dashboard 设计
+
+在 `memory-exploring.vue` 中新增 "关注后续" Tab，展示：
+
+| 组件 | 内容 | 交互 |
+|------|------|------|
+| **关注列表** | 所有正在关注的消息卡片 | 按创建时间/到期时间/关联数排序 |
+| **消息卡片** | 原消息摘要 + 关联消息数 + 到期倒计时 | 点击展开关联消息时间线 |
+| **关联时间线** | 按时间排序的后续讨论 | 点击跳转到 Glip 消息 |
+| **状态筛选** | Active / Expired / All | 过滤显示 |
+| **快捷操作** | 延长关注 / 取消关注 / 查看原文 | 批量操作支持 |
+
+#### 3.9.3 关联消息检测机制
+
+在现有的消息分析流程（`messageDealing.ts`）中扩展：
+
+```typescript
+// 在 processMessageGroupByLLM 或 agentThinking 分析后
+async function checkFollowedThreadRelation(
+  newMessage: MessageInfo,
+  followedItems: TopicItemWithAutoReply[]
+): Promise<{
+  isRelated: boolean;
+  relatedTo?: TopicItemWithAutoReply;
+  relationType?: 'thread_reply' | 'mention' | 'quote' | 'semantic';
+}> {
+  // 1. 线程匹配：同一 thread_id
+  // 2. @提及匹配：@了原消息发送者
+  // 3. 引用匹配：消息包含原消息内容片段
+  // 4. 语义匹配：LLM 判断是否是回应（可选，性能考量）
+}
+```
+
+#### 3.9.4 技术实现参考
+
+| 能力 | 复用代码 | 新增代码 |
+|------|----------|----------|
+| 悬停菜单 | `MessageReactionUI.ts` | 新增"关注后续"按钮 |
+| 配置弹窗 | `topic-modal.tsx` | 新增 `followThread` 类型表单区块 |
+| 关注项存储 | `concernedItems` (chrome.storage.local) | 扩展 `FollowThreadConfig` 类型 |
+| 消息向量存储 | `memory.ts` (ChromaDB) | 新增 `followed_thread_messages` 集合 |
+| 消息分析 | `messageDealing.ts` + `agentThinking.ts` | 新增关联检测逻辑 |
+| 通知推送 | `bot.ts` + Chrome Notification | 复用现有推送能力 |
+| 视觉标识 | `contentScriptGlip.tsx` | 新增消息装饰器 + 样式注入 |
+| Thread Overview | `memory-exploring.vue` | 新增"关注后续"Tab + 时间线组件 |
+
+#### 3.9.5 性能与边界考量
+
+1. **关注项数量限制**：建议单用户最多同时关注 50 条消息，超出提示清理
+2. **检测频率**：复用现有消息分析定时任务，不额外增加 API 调用
+3. **ChromaDB 向量匹配**：设置相似度阈值（如 0.8），避免误判；首次使用时需要初始化嵌入模型
+4. **过期清理**：在 `background.ts` 启动时清理过期的 followThread 项（复用现有 `concernedItems` 清理逻辑），同时清理 ChromaDB 中对应的文档
+5. **视觉标识渲染**：使用 MutationObserver 监听 DOM 变化，动态为关联消息添加装饰
+6. **本地存储限制**：ChromaDB 数据量较大时考虑定期归档旧数据（如只保留最近 90 天）
+
+#### 3.9.6 待确认事项
+
+1. **关联消息 LLM 语义判断**：是否启用？启用会增加 LLM 调用成本，但检测更准确
+2. **通知频率控制**：同一关注项在短时间内多条回复，是否合并通知？
+3. **原消息 hover 浮出**：是否需要显示完整的后续讨论列表？还是只显示最近 3 条？
+4. **跨群组关联**：如果有人在另一个群提到了这条消息，是否也算关联？
 
 ---
 
@@ -406,12 +682,13 @@
 
 > 标准：高频 + 易落地 + 价值可感知 + 风险可控 + 与现有代码架构契合
 
-1. **Snooze（稍后处理）+ Bot 提醒**（§3.1）→ T1
-2. **匹配自动回复**（§3.6 / §5.1）→ T2
-3. **分阶段回复：先回执、后提醒、超时自动更新 ETA（可选）**（§3.2）→ T3
-4. **自动追问：等对方反馈未回则追问**（§3.4）→ T4
-5. **消息一键转 Todo/提醒链（队列）**（§4.1 / §3.7）→ T5
-6. **Jira key 识别 → 票据摘要卡片（Bot 发）**（§6.3）→ T6
+1. ~~**Snooze（稍后处理）+ Bot 提醒**（§3.1）→ T1~~ ✅ 已完成
+2. ~~**匹配自动回复**（§3.6 / §5.1）→ T2~~ ✅ 已完成
+3. **关注后续（Follow Thread）**（§3.9）→ T0 🆕 **新增 P0**
+4. **分阶段回复：先回执、后提醒、超时自动更新 ETA（可选）**（§3.2）→ T3
+5. **自动追问：等对方反馈未回则追问**（§3.4）→ T4
+6. **消息一键转 Todo/提醒链（队列）**（§4.1 / §3.7）→ T5
+7. **Jira key 识别 → 票据摘要卡片（Bot 发）**（§6.3）→ T6
 
 ---
 
@@ -469,12 +746,16 @@
 
 | 能力 | 文件位置 | 说明 |
 |------|----------|------|
-| Jira 悬浮卡片 | `src/contentScript.tsx` | 悬停 300ms 显示，可复用 UI 模式 |
+| Jira 悬浮卡片 | `src/contentScriptGlip.tsx` | 悬停 300ms 显示，可复用 UI 模式 |
+| 消息交互工具栏 | `src/message-reaction/MessageReactionUI.ts` | 悬停 3 秒显示，已实现稍后处理+自动答复 |
+| 稍后处理逻辑 | `src/message-reaction/SnoozeManager.ts` | 消息提取、提醒创建 |
+| 自动答复处理 | `src/message-reaction/AutoReplyHandler.ts` | 规则匹配、回复生成 |
 | 定时消息 CRUD | `src/scheduled-messages/ScheduledMessageService.ts` | 封装 Google Sheets API |
 | Bot 发送 | `src/bot.ts` | Bot API 调用封装 |
 | LLM 分析 | `src/agentThinking.ts` | `IntelligentAgent` 通用分析框架 |
 | 实体提取 | `src/services/entityExtraction.ts` | 从消息提取人物/项目/时间等 |
 | 消息处理 | `src/messageDealing.ts` | 消息分析和 Bot 推送逻辑 |
+| 关注项存储 | `src/modals/topic-modal.tsx` | concernedItems 管理，可扩展 followThread |
 | 类型定义 | `src/scheduled-messages/types.ts` | `ScheduledMessage`、`PushMethod` 等 |
 
 ### 12.2 待新增的数据结构
