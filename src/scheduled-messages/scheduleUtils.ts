@@ -157,7 +157,7 @@ export function parseCronExpression(cron: string): CronParseResult | null {
  * @param repeatUnit - 重复单位
  * @returns YYYY-MM-DD 格式的日期字符串
  */
-export function getDefaultScheduleDateForFixed(repeatUnit: 'Day' | 'Week' | 'Month'): string {
+export function getDefaultScheduleDateForFixed(): string {
   const now = new Date();
   // 对于所有 FIXED 模式，默认使用今天的日期
   // 用户可以在导入后通过管理界面调整
@@ -229,7 +229,7 @@ export function analyzeTriggerForScheduledMessages(
     } else if (schedule?.method === 'FIXED') {
       const { repeatEvery, repeatUnit } = parseFixedRateConfig(schedule);
       // FIXED 模式：优先使用外部传入日期，否则使用默认计算的日期
-      const defaultScheduleDate = getDefaultScheduleDateForFixed(repeatUnit);
+      const defaultScheduleDate = getDefaultScheduleDateForFixed();
       return {
         scheduleDate: scheduleDate || defaultScheduleDate,
         repeatEvery,
@@ -261,7 +261,7 @@ export function analyzeTriggerForScheduledMessages(
     } else if (schedule?.method === 'FIXED') {
       const { repeatEvery, repeatUnit } = parseFixedRateConfig(schedule);
       // FIXED 模式：优先使用外部传入日期，否则使用默认计算的日期
-      const defaultScheduleDate = getDefaultScheduleDateForFixed(repeatUnit);
+      const defaultScheduleDate = getDefaultScheduleDateForFixed();
       return {
         scheduleDate: scheduleDate || defaultScheduleDate,
         repeatEvery,
