@@ -127,7 +127,7 @@ export class TaskScheduler {
         // 优先使用新配置，如果不存在则使用旧配置作为回退
         taskCopy.intervalMinutes = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
         console.log(`⚙️ message_analysis 任务间隔已设置为: ${taskCopy.intervalMinutes} 分钟`);
-        console.log(`⚙️ 消息上下文窗口已设置为: ${config.MESSAGE_CONTEXT_WINDOW || 5} 分钟`);
+        console.log(`⚙️ 消息上下文窗口已设置为: ${config.MESSAGE_CONTEXT_WINDOW || 125} 分钟`);
       }
       
       this.tasks.set(taskCopy.id, taskCopy);
@@ -587,12 +587,11 @@ export class TaskScheduler {
       }
 
       // 计算分析时间范围
-      // 使用新配置：MESSAGE_ANALYSIS_INTERVAL（分析间隔）+ MESSAGE_CONTEXT_WINDOW（上下文窗口）
-      const analysisInterval = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
-      const contextWindow = Number(config.MESSAGE_CONTEXT_WINDOW) || 5;
-      const messageStartTime = new Date(Date.now() - (analysisInterval + contextWindow) * 60 * 1000);
+      // MESSAGE_CONTEXT_WINDOW 是从此刻往前推的绝对时间窗口
+      const contextWindow = Number(config.MESSAGE_CONTEXT_WINDOW) || 125;
+      const messageStartTime = new Date(Date.now() - contextWindow * 60 * 1000);
       
-      console.log(`📝 开始消息分析，时间范围: ${analysisInterval + contextWindow} 分钟（分析间隔: ${analysisInterval} 分钟 + 上下文窗口: ${contextWindow} 分钟）`);
+      console.log(`📝 开始消息分析，时间范围: 距离此刻 ${contextWindow} 分钟内的消息`);
 
       // 发送消息获取请求
       const response = await this.sendMessageWithRetry(rcTab.id, {

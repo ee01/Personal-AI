@@ -88,11 +88,17 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
   /** 思考过程记录 */
   thoughtProcess?: ThoughtStep[];
 
-  /** 消息索引 */
-  messageIndex: number;
+  /** 消息ID（post_id）- 全局唯一标识符 */
+  postId: string;
   
   /** 群组索引 */
   groupIndex?: number;
+  
+  /** 群组ID */
+  groupId?: string;
+  
+  /** 群组名称 */
+  groupName?: string;
   
   /** 消息上下文信息 */
   messageContext?: {
@@ -110,6 +116,9 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
     
     /** 发送时间 */
     datetime?: string;
+    
+    /** 消息ID（post_id） */
+    postId?: string;
   };
   
   /** 提取的实体信息 */
@@ -159,6 +168,16 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
   
   /** 消息分类 */
   category?: string[];
+  
+  /** 关注后续讨论信息（仅当匹配"关注后续讨论"规则时填写） */
+  followThreadInfo?: {
+    /** 被关注的原消息 post_id */
+    originalPostId: string;
+    /** 与原消息的关系类型 */
+    relationType: 'direct_reply' | 'same_thread' | 'semantic_related' | 'mention';
+    /** 相关度评分 (0-1) */
+    relevanceScore?: number;
+  };
 }
 
 /**

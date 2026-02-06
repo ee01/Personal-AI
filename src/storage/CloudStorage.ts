@@ -247,7 +247,7 @@ export class CloudStorage {
 
   constructor() {
     this.config = {
-      collections: ['messages', 'webpages', 'projects', 'documents', 'graph-entities', 'userprofiles'],
+      collections: ['messages', 'webpages', 'projects', 'documents', 'graph-entities', 'userprofiles', 'followed_thread_messages'],
       batchSize: 100,
       timeout: 10000
     };

@@ -25,7 +25,13 @@
             <div class="entity-icon">👤</div>
             <div class="entity-name">用户画像</div>
           </router-link>
-          
+
+          <router-link to="/follow-threads" class="entity-type" active-class="router-link-active">
+            <div class="entity-icon">👁</div>
+            <div class="entity-name">关注后续</div>
+            <div class="entity-count">{{ followThreadCount }}</div>
+          </router-link>
+
           <hr class="sidebar-divider" />
           
           <router-link 
@@ -78,12 +84,30 @@ import { useRouter, useRoute } from 'vue-router';
 import { useMemoryStore } from './memory-store';
 import AISearchAnimation from './components/AISearchAnimation.vue';
 
+/* eslint-disable no-undef */
+declare const chrome: any;
+/* eslint-enable no-undef */
+
 // 应用初始化逻辑
 const store = useMemoryStore();
 const router = useRouter();
 const route = useRoute();
 const entityTypes = computed(() => store.entityTypes);
 const searchQuery = ref('');
+const followThreadCount = ref(0);
+
+// 加载关注后续数量
+onMounted(async () => {
+  try {
+    const result = await chrome.storage.local.get('concernedItems');
+    const items = result.concernedItems || [];
+    followThreadCount.value = items.filter(
+      (item: any) => item.followThread && item.followConfig
+    ).length;
+  } catch (error) {
+    console.error('加载关注后续数量失败:', error);
+  }
+});
 
 const handleSearchInput = () => {
   // 首页概览搜索：不在输入时触发搜索，避免频繁调用 ask()
