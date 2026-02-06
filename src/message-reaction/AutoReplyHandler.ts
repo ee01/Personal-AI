@@ -27,14 +27,39 @@ export interface TopicItemWithAutoReply {
     id: string;
     text: string;
     expiredAt: number;
+    /** @deprecated 使用 notifyMethod 替代 */
     pushToGlip?: boolean;
     mentionMe?: boolean;
     // 通用匹配条件
     filterSender?: string;
     filterGroup?: string;
+    // 🆕 通用通知配置（适用于所有类型）
+    // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
+    notifyMethod?: string;
+    notifyFrequency?: 'immediate' | 'merged';
     // 自动答复相关
     autoReply?: boolean;
     autoReplyConfig?: AutoReplyConfig;
+    // 关注后续相关
+    followThread?: boolean;
+    followConfig?: {
+        originalMessage: {
+            postId: string;
+            threadId?: string;
+            teamId: string;
+            teamName: string;
+            sender: string;
+            content: string;
+            datetime: string | number;
+            messageUrl: string;
+        };
+        createdAt: string;
+        // 🆕 移除 duration、expiresAt、notifyMethod、notifyFrequency，使用外层字段
+        keywordFilter?: string[];
+        relatedMessages: any[];
+        lastCheckedAt?: string;
+        lastNotifiedAt?: string;
+    };
 }
 
 // 自动答复上下文接口

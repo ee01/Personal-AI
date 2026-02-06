@@ -438,7 +438,7 @@ function injectJiraCardStyles() {
       width: 14px;
       height: 14px;
       vertical-align: middle;
-      margin-left: 2px;
+      margin-right: 2px;
       cursor: pointer;
       opacity: 0.8;
       transition: opacity 0.2s, transform 0.2s;
@@ -719,15 +719,14 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
   icon.className = 'jira-link-icon';
   icon.title = `查看 ${ticketKey} 详情`;
   
-  // 在链接后面插入图标
-  linkElement.insertAdjacentElement('afterend', icon);
-  
   // 创建一个包装器来统一处理 hover 事件
   const wrapper = document.createElement('span');
   wrapper.className = 'jira-link-wrapper';
   linkElement.parentNode?.insertBefore(wrapper, linkElement);
-  wrapper.appendChild(linkElement);
+  
+  // 在链接前面插入图标
   wrapper.appendChild(icon);
+  wrapper.appendChild(linkElement);
   
   // 添加悬浮事件
   const handleMouseEnter = () => {
@@ -835,10 +834,12 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(initJiraLinkProcessor, 1000);
     setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
+    setTimeout(initFollowThreadVisuals, 2000);  // 初始化关注后续视觉标识
   });
 } else {
   setTimeout(initJiraLinkProcessor, 1000);
   setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
+  setTimeout(initFollowThreadVisuals, 2000);  // 初始化关注后续视觉标识
 }
 
 
@@ -972,3 +973,931 @@ function getUserInfoInRCTab() {
       email: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, '') + '@ringcentral.com'
     };
   }
+
+// ==================== 关注后续视觉标识功能 ====================
+
+/**
+ * 注入关注后续视觉标识的样式
+ */
+function injectFollowThreadStyles() {
+  if (document.getElementById('follow-thread-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'follow-thread-styles';
+  style.textContent = `
+    /* 原消息：👁 图标 + 淡蓝色右边框 */
+    .follow-thread-original {
+      border-right: 3px solid rgba(96, 165, 250, 0.6) !important;
+      position: relative;
+    }
+
+    /* 👁 图标容器，放在消息时间左侧 */
+    .follow-thread-eye-icon {
+      position: absolute;
+      top: 8px;
+      right: 80px; /* 默认值，会被 JS 动态覆盖 */
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      z-index: 10;
+      cursor: help;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-weight: 500;
+      box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .follow-thread-eye-icon:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+    }
+
+    .follow-thread-eye-icon .eye-emoji {
+      font-size: 14px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    /* 原消息浮出层 - 更丰富的内容 */
+    .follow-thread-tooltip {
+      position: absolute;
+      right: 60px;
+      background: white;
+      color: #333;
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 1000;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.1);
+      min-width: 280px;
+      max-width: 360px;
+      border: 1px solid #e5e7eb;
+    }
+
+    /* 默认显示在下方 */
+    .follow-thread-tooltip.position-below {
+      top: 30px;
+      transform: translateY(-4px);
+    }
+
+    /* 空间不足时显示在上方 */
+    .follow-thread-tooltip.position-above {
+      bottom: 30px;
+      transform: translateY(4px);
+    }
+
+    /* 下方箭头 */
+    .follow-thread-tooltip.position-below::before {
+      content: '';
+      position: absolute;
+      top: -6px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-bottom-color: white;
+    }
+
+    .follow-thread-tooltip.position-below::after {
+      content: '';
+      position: absolute;
+      top: -7px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-bottom-color: #e5e7eb;
+      z-index: -1;
+    }
+
+    /* 上方箭头 */
+    .follow-thread-tooltip.position-above::before {
+      content: '';
+      position: absolute;
+      bottom: -6px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-top-color: white;
+    }
+
+    .follow-thread-tooltip.position-above::after {
+      content: '';
+      position: absolute;
+      bottom: -7px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-top-color: #e5e7eb;
+      z-index: -1;
+    }
+
+    .follow-thread-eye-icon:hover + .follow-thread-tooltip,
+    .follow-thread-tooltip:hover {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .follow-thread-tooltip.position-below:hover,
+    .follow-thread-eye-icon:hover + .follow-thread-tooltip.position-below {
+      transform: translateY(0);
+    }
+
+    .follow-thread-tooltip.position-above:hover,
+    .follow-thread-eye-icon:hover + .follow-thread-tooltip.position-above {
+      transform: translateY(0);
+    }
+
+    .tooltip-title {
+      font-weight: 600;
+      color: #667eea;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tooltip-status-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-weight: 500;
+    }
+
+    .tooltip-section {
+      margin: 10px 0;
+    }
+
+    .tooltip-section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: #9ca3af;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .tooltip-original-content {
+      background: #f9fafb;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #4b5563;
+      line-height: 1.5;
+      border-left: 3px solid #667eea;
+    }
+
+    .tooltip-related-list {
+      margin-top: 10px;
+    }
+
+    .tooltip-related-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px dashed #f0f0f0;
+    }
+
+    .tooltip-related-item:last-child {
+      border-bottom: none;
+    }
+
+    .tooltip-related-type {
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .tooltip-related-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tooltip-related-sender {
+      font-weight: 500;
+      color: #374151;
+      font-size: 11px;
+    }
+
+    .tooltip-related-summary {
+      color: #6b7280;
+      font-size: 11px;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .tooltip-no-related {
+      color: #9ca3af;
+      font-size: 11px;
+      font-style: italic;
+      text-align: center;
+      padding: 8px 0;
+    }
+
+    /* 关联消息：淡黄色底色 + 关联标识 */
+    .follow-thread-related {
+      background-color: rgba(255, 254, 240, 0.5) !important;
+      position: relative;
+    }
+
+    .follow-thread-related-badge {
+      position: absolute;
+      top: 8px;
+      right: 80px; /* 默认值，会被 JS 动态覆盖 */
+      background: linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%);
+      color: white;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: help;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(156, 39, 176, 0.3);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .follow-thread-related-badge:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 8px rgba(156, 39, 176, 0.4);
+    }
+
+    /* 关联类型 Tooltip - 增强版 */
+    .follow-thread-related-tooltip {
+      position: absolute;
+      right: 60px;
+      background: white;
+      border: 1px solid #e1bee7;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 1000;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      min-width: 280px;
+      max-width: 360px;
+    }
+
+    /* 默认显示在下方 */
+    .follow-thread-related-tooltip.position-below {
+      top: 30px;
+      transform: translateY(-4px);
+    }
+
+    /* 空间不足时显示在上方 */
+    .follow-thread-related-tooltip.position-above {
+      bottom: 30px;
+      transform: translateY(4px);
+    }
+
+    /* 下方箭头 */
+    .follow-thread-related-tooltip.position-below::before {
+      content: '';
+      position: absolute;
+      top: -6px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-bottom-color: white;
+    }
+
+    .follow-thread-related-tooltip.position-below::after {
+      content: '';
+      position: absolute;
+      top: -7px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-bottom-color: #e1bee7;
+      z-index: -1;
+    }
+
+    /* 上方箭头 */
+    .follow-thread-related-tooltip.position-above::before {
+      content: '';
+      position: absolute;
+      bottom: -6px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-top-color: white;
+    }
+
+    .follow-thread-related-tooltip.position-above::after {
+      content: '';
+      position: absolute;
+      bottom: -7px;
+      right: 20px;
+      border: 6px solid transparent;
+      border-top-color: #e1bee7;
+      z-index: -1;
+    }
+
+    .follow-thread-related-badge:hover + .follow-thread-related-tooltip,
+    .follow-thread-related-tooltip:hover {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .follow-thread-related-tooltip.position-below:hover,
+    .follow-thread-related-badge:hover + .follow-thread-related-tooltip.position-below {
+      transform: translateY(0);
+    }
+
+    .follow-thread-related-tooltip.position-above:hover,
+    .follow-thread-related-badge:hover + .follow-thread-related-tooltip.position-above {
+      transform: translateY(0);
+    }
+
+    .tooltip-header {
+      font-weight: 600;
+      color: #9c27b0;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #f0f0f0;
+      padding-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tooltip-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 6px 0;
+      color: #666;
+    }
+
+    .tooltip-label {
+      font-weight: 500;
+      color: #333;
+    }
+
+    .tooltip-value {
+      color: #9c27b0;
+      font-weight: 600;
+    }
+
+    .tooltip-original-section {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #f0f0f0;
+    }
+
+    .tooltip-original-section .tooltip-section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: #9ca3af;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .tooltip-original-preview {
+      background: #faf5ff;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #7c3aed;
+      line-height: 1.4;
+      border-left: 3px solid #9c27b0;
+    }
+
+    .tooltip-original-link {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #f0f0f0;
+    }
+
+    .tooltip-original-link a {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: #9c27b0;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 10px;
+      background: #faf5ff;
+      border-radius: 6px;
+      transition: background 0.2s ease;
+    }
+
+    .tooltip-original-link a:hover {
+      background: #f3e8ff;
+      text-decoration: none;
+    }
+
+    .tooltip-all-related {
+      margin-top: 10px;
+    }
+
+    .tooltip-all-related .tooltip-section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: #9ca3af;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .tooltip-related-compact {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 6px 0;
+      font-size: 11px;
+      color: #6b7280;
+      border-bottom: 1px dashed #f0f0f0;
+    }
+
+    .tooltip-related-compact:last-child {
+      border-bottom: none;
+    }
+
+    .tooltip-related-compact-icon {
+      font-size: 12px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .tooltip-related-compact-text {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      line-height: 1.4;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
+ * 获取所有关注后续项
+ */
+async function getFollowThreadItems(): Promise<any[]> {
+  try {
+    // eslint-disable-next-line no-undef
+    const result = await chrome.storage.local.get('concernedItems');
+    const items = result.concernedItems || [];
+    return items.filter((item: any) => item.followThread && item.followConfig);
+  } catch (error) {
+    console.error('❌ 获取关注后续项失败:', error);
+    return [];
+  }
+}
+
+/**
+ * 获取关联类型的文本描述
+ */
+function getRelationTypeText(type: string): string {
+  const map: Record<string, string> = {
+    thread_reply: '线程回复',
+    mention: '@提及',
+    quote: '引用',
+    semantic: '语义相关'
+  };
+  return map[type] || type;
+}
+
+/**
+ * 获取关联类型的图标
+ */
+function getRelationTypeIcon(type: string): string {
+  const map: Record<string, string> = {
+    thread_reply: '💬',
+    mention: '@',
+    quote: '📝',
+    semantic: '🔗'
+  };
+  return map[type] || '🔗';
+}
+
+/**
+ * 截断文本，保留指定长度
+ */
+function truncateText(text: string, maxLength: number): string {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '...';
+}
+
+/**
+ * 计算消息卡片中时间元素的宽度，返回图标应该的 right 值
+ * @param card 消息卡片元素
+ * @returns right 值（像素数），如果找不到时间元素则返回默认值
+ */
+function calculateTimeElementWidth(card: Element): number {
+  // 查找时间元素: .conversation-card-head__right 下的 [data-name="time"]
+  const timeElement = card.querySelector('.conversation-card-head__right [data-name="time"]');
+  if (timeElement) {
+    const timeWidth = timeElement.getBoundingClientRect().width;
+    // 时间宽度 + 一些间距（8px 右边距 + 8px 与时间的间隔）
+    return Math.ceil(timeWidth) + 16;
+  }
+  
+  // 备选：直接获取 .conversation-card-head__right 的宽度
+  const rightSection = card.querySelector('.conversation-card-head__right');
+  if (rightSection) {
+    const rightWidth = rightSection.getBoundingClientRect().width;
+    // 右侧区域宽度 + 间距
+    return Math.ceil(rightWidth) + 8;
+  }
+  
+  // 默认值
+  return 120;
+}
+
+/**
+ * 智能定位 tooltip：检测屏幕空间，决定显示在上方还是下方
+ */
+function positionTooltip(tooltip: HTMLElement, triggerElement: HTMLElement) {
+  // 获取触发元素和视口信息
+  const triggerRect = triggerElement.getBoundingClientRect();
+  const viewportHeight = window.innerHeight;
+  
+  // 临时显示 tooltip 以获取其高度
+  tooltip.style.visibility = 'hidden';
+  tooltip.style.opacity = '1';
+  const tooltipRect = tooltip.getBoundingClientRect();
+  tooltip.style.visibility = '';
+  tooltip.style.opacity = '';
+  
+  // 计算下方和上方的可用空间
+  const spaceBelow = viewportHeight - triggerRect.bottom;
+  const spaceAbove = triggerRect.top;
+  
+  // 决定显示位置（需要额外 50px 的缓冲空间）
+  if (spaceBelow >= tooltipRect.height + 50) {
+    // 下方空间足够，显示在下方
+    tooltip.classList.add('position-below');
+    tooltip.classList.remove('position-above');
+  } else if (spaceAbove >= tooltipRect.height + 50) {
+    // 下方空间不足但上方空间足够，显示在上方
+    tooltip.classList.add('position-above');
+    tooltip.classList.remove('position-below');
+  } else {
+    // 两边空间都不足，选择空间较大的一侧
+    if (spaceBelow >= spaceAbove) {
+      tooltip.classList.add('position-below');
+      tooltip.classList.remove('position-above');
+    } else {
+      tooltip.classList.add('position-above');
+      tooltip.classList.remove('position-below');
+    }
+  }
+}
+
+/**
+ * 装饰消息：添加视觉标识
+ */
+async function decorateFollowThreadMessages() {
+  const followItems = await getFollowThreadItems();
+  if (followItems.length === 0) return;
+
+  // 获取所有消息卡片
+  const messageCards = Array.from(document.querySelectorAll('.conversation-card-wrapper[data-id]'));
+
+  for (const card of messageCards) {
+    const postId = card.getAttribute('data-id');
+    if (!postId) continue;
+
+    // 移除已有的装饰，避免重复
+    card.classList.remove('follow-thread-original', 'follow-thread-related');
+    const existingTooltip = card.querySelector('.follow-thread-tooltip, .follow-thread-related-tooltip');
+    if (existingTooltip) {
+      existingTooltip.remove();
+    }
+    const existingBadge = card.querySelector('.follow-thread-related-badge');
+    if (existingBadge) {
+      existingBadge.remove();
+    }
+    const existingEyeIcon = card.querySelector('.follow-thread-eye-icon');
+    if (existingEyeIcon) {
+      existingEyeIcon.remove();
+    }
+
+    // 检查是否是原消息
+    const originalItem = followItems.find(
+      (item: any) => item.followConfig?.originalMessage.postId === postId
+    );
+
+    if (originalItem) {
+      // 添加原消息样式
+      card.classList.add('follow-thread-original');
+
+      // 计算剩余时间
+      const now = Date.now();
+      const timeLeft = originalItem.expiredAt - now;
+      let timeText = '';
+      if (timeLeft <= 0) {
+        timeText = '已过期';
+      } else {
+        const daysLeft = Math.ceil(timeLeft / (1000 * 60 * 60 * 24));
+        timeText = `${daysLeft}天后过期`;
+      }
+
+      // 计算时间元素宽度，动态设置 right 值
+      const rightOffset = calculateTimeElementWidth(card);
+
+      // 创建 👁 图标元素（包含过期时间文字）
+      const eyeIcon = document.createElement('div');
+      eyeIcon.className = 'follow-thread-eye-icon';
+      eyeIcon.style.right = `${rightOffset}px`;
+      eyeIcon.innerHTML = `<span class="eye-emoji">👁</span> ${timeText}`;
+      eyeIcon.title = '正在关注后续';
+      card.appendChild(eyeIcon);
+
+      // 获取原消息信息
+      const originalMsg = originalItem.followConfig.originalMessage;
+      const originalSummary = originalItem.summary || originalMsg.content;
+      const relatedMessages = originalItem.followConfig.relatedMessages || [];
+
+      // 创建丰富的浮出层
+      const tooltip = document.createElement('div');
+      tooltip.className = 'follow-thread-tooltip';
+      
+      // 构建关联消息列表
+      let relatedListHtml = '';
+      if (relatedMessages.length > 0) {
+        relatedListHtml = relatedMessages.slice(0, 5).map((msg: any) => `
+          <div class="tooltip-related-item">
+            <span class="tooltip-related-type">${getRelationTypeIcon(msg.relationType)}</span>
+            <div class="tooltip-related-info">
+              <div class="tooltip-related-sender">${escapeHtml(msg.sender)} · ${getRelationTypeText(msg.relationType)}</div>
+              <div class="tooltip-related-summary">${escapeHtml(truncateText(msg.summary || '暂无摘要', 60))}</div>
+            </div>
+          </div>
+        `).join('');
+        
+        if (relatedMessages.length > 5) {
+          relatedListHtml += `<div class="tooltip-no-related">还有 ${relatedMessages.length - 5} 条关联消息...</div>`;
+        }
+      } else {
+        relatedListHtml = '<div class="tooltip-no-related">暂无关联消息</div>';
+      }
+
+      tooltip.innerHTML = `
+        <div class="tooltip-title">
+          👁 正在关注后续
+          <span class="tooltip-status-badge">${timeText}</span>
+        </div>
+        <div class="tooltip-section">
+          <div class="tooltip-section-label">原消息摘要</div>
+          <div class="tooltip-original-content">${escapeHtml(truncateText(originalSummary, 100))}</div>
+        </div>
+        <div class="tooltip-section tooltip-related-list">
+          <div class="tooltip-section-label">关联消息 (${relatedMessages.length})</div>
+          ${relatedListHtml}
+        </div>
+      `;
+      card.appendChild(tooltip);
+      
+      // 智能定位 tooltip
+      positionTooltip(tooltip, eyeIcon);
+      
+      continue;
+    }
+
+    // 检查是否是关联消息
+    for (const item of followItems) {
+      const relatedMsg = item.followConfig?.relatedMessages.find(
+        (msg: any) => msg.postId === postId
+      );
+
+      if (relatedMsg) {
+        // 添加关联消息样式
+        card.classList.add('follow-thread-related');
+
+        // 计算时间元素宽度，动态设置 right 值
+        const rightOffset = calculateTimeElementWidth(card);
+
+        // 添加关联徽章
+        const badge = document.createElement('div');
+        badge.className = 'follow-thread-related-badge';
+        badge.style.right = `${rightOffset}px`;
+        badge.textContent = `${getRelationTypeIcon(relatedMsg.relationType)} 关联`;
+        card.appendChild(badge);
+
+        // 获取原消息和所有关联消息信息
+        const originalMsg = item.followConfig.originalMessage;
+        const originalSummary = item.summary || originalMsg.content;
+        const allRelatedMessages = item.followConfig.relatedMessages || [];
+
+        // 构建其他关联消息列表（排除当前消息）
+        const otherRelated = allRelatedMessages.filter((m: any) => m.postId !== postId);
+        let otherRelatedHtml = '';
+        if (otherRelated.length > 0) {
+          otherRelatedHtml = `
+            <div class="tooltip-all-related">
+              <div class="tooltip-section-label">其他关联消息 (${otherRelated.length})</div>
+              ${otherRelated.slice(0, 5).map((m: any) => `
+                <div class="tooltip-related-compact">
+                  <span class="tooltip-related-compact-icon">${getRelationTypeIcon(m.relationType)}</span>
+                  <span class="tooltip-related-compact-text">${escapeHtml(m.sender)}: ${escapeHtml(truncateText(m.summary || '暂无摘要', 120))}</span>
+                </div>
+              `).join('')}
+              ${otherRelated.length > 5 ? `<div class="tooltip-related-compact" style="color: #9ca3af; padding: 8px 0; text-align: center; font-size: 10px;">还有 ${otherRelated.length - 5} 条...</div>` : ''}
+            </div>
+          `;
+        }
+
+        // 添加详细 Tooltip
+        const tooltip = document.createElement('div');
+        tooltip.className = 'follow-thread-related-tooltip';
+        tooltip.innerHTML = `
+          <div class="tooltip-header">
+            ${getRelationTypeIcon(relatedMsg.relationType)} 关注后续的关联消息
+          </div>
+          <div class="tooltip-row">
+            <span class="tooltip-label">原消息发送者:</span>
+            <span class="tooltip-value">${escapeHtml(originalMsg.sender)}</span>
+          </div>
+          <div class="tooltip-original-section">
+            <div class="tooltip-section-label">原消息摘要</div>
+            <div class="tooltip-original-preview">${escapeHtml(truncateText(originalSummary, 80))}</div>
+          </div>
+          ${otherRelatedHtml}
+          <div class="tooltip-original-link">
+            <a href="${originalMsg.messageUrl}" target="_blank" onclick="event.stopPropagation();">🔗 查看原消息</a>
+          </div>
+        `;
+        card.appendChild(tooltip);
+        
+        // 智能定位 tooltip
+        positionTooltip(tooltip, badge);
+        
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * 初始化关注后续视觉标识
+ */
+export function initFollowThreadVisuals() {
+  console.log('🎨 初始化关注后续视觉标识...');
+
+  // 1. 注入样式
+  injectFollowThreadStyles();
+
+  // 2. 初次装饰消息
+  setTimeout(() => decorateFollowThreadMessages(), 2000);
+
+  // 3. 防抖函数，避免频繁执行
+  let decorateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const debouncedDecorate = (delay = 500) => {
+    if (decorateDebounceTimer) {
+      clearTimeout(decorateDebounceTimer);
+    }
+    decorateDebounceTimer = setTimeout(() => {
+      decorateFollowThreadMessages();
+      decorateDebounceTimer = null;
+    }, delay);
+  };
+
+  // 4. 监听 DOM 变化，动态装饰新消息
+  const observer = new MutationObserver((mutations) => {
+    let shouldRedecorate = false;
+
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList') {
+        for (const node of mutation.addedNodes) {
+          if (node instanceof HTMLElement) {
+            // 检测新消息卡片
+            if (
+              node.classList.contains('conversation-card-wrapper') ||
+              node.querySelector('.conversation-card-wrapper')
+            ) {
+              shouldRedecorate = true;
+              break;
+            }
+            // 🆕 检测会话切换：整个消息容器被替换
+            if (
+              node.classList.contains('conversation-list-content') ||
+              node.classList.contains('conversation-list') ||
+              node.querySelector('.conversation-list-content') ||
+              node.querySelector('.conversation-list')
+            ) {
+              console.log('🔄 检测到消息容器变化，可能是会话切换');
+              shouldRedecorate = true;
+              break;
+            }
+          }
+        }
+      }
+      if (shouldRedecorate) break;
+    }
+
+    if (shouldRedecorate) {
+      debouncedDecorate(500);
+    }
+  });
+
+  // 5. 🆕 监听 URL 变化，检测会话切换
+  let lastUrl = window.location.href;
+  const urlCheckInterval = setInterval(() => {
+    const currentUrl = window.location.href;
+    if (currentUrl !== lastUrl) {
+      console.log('🔄 检测到 URL 变化，重新装饰消息...');
+      lastUrl = currentUrl;
+      // URL 变化后延迟稍长一些，等待消息列表渲染完成
+      debouncedDecorate(1000);
+    }
+  }, 500);
+
+  // 6. 🆕 监听 hashchange 和 popstate 事件（更即时的 URL 变化检测）
+  window.addEventListener('hashchange', () => {
+    console.log('🔄 hashchange 事件，重新装饰消息...');
+    debouncedDecorate(1000);
+  });
+
+  window.addEventListener('popstate', () => {
+    console.log('🔄 popstate 事件，重新装饰消息...');
+    debouncedDecorate(1000);
+  });
+
+  // 7. 🆕 监听 body 级别的 DOM 变化，捕获更大范围的变化
+  const bodyObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList') {
+        for (const node of mutation.addedNodes) {
+          if (node instanceof HTMLElement) {
+            // 检测主要内容区域被替换
+            if (
+              node.id === 'app-main-section' ||
+              node.classList.contains('conversation-view') ||
+              node.querySelector('.conversation-card-wrapper')
+            ) {
+              console.log('🔄 检测到主内容区域变化，重新装饰消息...');
+              debouncedDecorate(800);
+              break;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  // 监听 body 的子节点变化
+  bodyObserver.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+
+  // 8. 监听消息列表容器
+  const setupConversationObserver = () => {
+    const conversationList = document.querySelector('.conversation-list-content, .conversation-list, [class*="conversation"]');
+    if (conversationList) {
+      observer.observe(conversationList, {
+        childList: true,
+        subtree: true
+      });
+      console.log('✅ MutationObserver 已启动，监听新消息');
+      return true;
+    }
+    return false;
+  };
+
+  if (!setupConversationObserver()) {
+    console.warn('⚠️ 未找到消息列表容器，稍后重试...');
+    // 5秒后重试
+    setTimeout(() => {
+      if (setupConversationObserver()) {
+        console.log('✅ MutationObserver 已启动（重试成功）');
+      }
+    }, 5000);
+  }
+
+  // 9. 监听 storage 变化，实时更新装饰
+  // eslint-disable-next-line no-undef
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.concernedItems) {
+      console.log('📦 关注项已更新，重新装饰消息...');
+      debouncedDecorate(500);
+    }
+  });
+
+  // 10. 🆕 监听页面可见性变化，从后台切换回来时重新装饰
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      console.log('👁 页面变为可见，重新检查装饰...');
+      debouncedDecorate(500);
+    }
+  });
+
+  console.log('✅ 关注后续视觉标识初始化完成');
+}

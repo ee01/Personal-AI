@@ -1435,6 +1435,8 @@ class OllamaChat {
 
 // ==================== 自动答复相关函数 ====================
 
+import { buildAutoReplyPrompt } from './prompts';
+
 /**
  * 生成自动答复内容
  * @param messageContext 消息上下文
@@ -1447,25 +1449,7 @@ export async function generateAutoReply(messageContext: {
     summary?: string;
     replyTemplate?: string;  // 用户填写的答复模板，用于风格参考
 }): Promise<string> {
-    // 如果有用户模板，生成风格参考提示
-    const templateHint = messageContext.replyTemplate 
-        ? `\n用户期望的答复风格参考："${messageContext.replyTemplate}"\n请保持这个风格和内容目的，但换一种表达方式，让每次答复略有不同。`
-        : '';
-    
-    const prompt = `请根据以下消息生成一个简短的自动答复：
-
-消息内容：${messageContext.messageContent}
-发送者：${messageContext.sender}
-群组：${messageContext.groupName || '私聊'}
-上下文总结：${messageContext.summary || '无'}
-${templateHint}
-
-要求：
-1. 简短（1-2句话）
-2. ${messageContext.replyTemplate ? '保持用户的答复风格，但措辞略有变化' : '礼貌且专业'}
-3. 使用与原消息相同的语言
-
-只返回答复内容，不要包含其他解释。`;
+    const prompt = buildAutoReplyPrompt(messageContext);
     
     try {
         const response = await handleLLMRequest({ prompt, type: 'auto_reply' });

@@ -22,6 +22,7 @@ import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './j
 import { handleLLMRequest } from './llm';
 
 import { Logger } from './utils/logger';
+import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage } from './message-reaction/FollowThreadHandler';
 
 console.log('Background script loaded');
 
@@ -148,12 +149,31 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         }
         
         // 如果没有 concernedItems 或已清空，设置默认值
+        // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
         if (!concernedItems || concernedItems.length === 0) {
             chrome.storage.local.set({concernedItems: [
-                {text:'聊到关于公司政策，也可以是政策相关的八卦消息', pushToGlip: true},
-                {text:'任何提到我的名字的消息，排除 @Team，排除明确@{我的名字}，排除发送者是我', pushToGlip: false},
-                {text:'可能是回复我的消息，比如在我发完消息之后的答复。排除发送者是我，排除明确@{我的名字}', pushToGlip: true, mentionMe: true},
+                {id: '1', text:'聊到关于公司政策，也可以是政策相关的八卦消息', expiredAt: 0, notifyMethod: 'bot'},
+                {id: '2', text:'任何提到我的名字的消息，排除 @Team，排除明确@{我的名字}，排除发送者是我', expiredAt: 0, notifyMethod: 'chrome'},
+                {id: '3', text:'可能是回复我的消息，比如在我发完消息之后的答复。排除发送者是我，排除明确@{我的名字}', expiredAt: 0, notifyMethod: 'bot', mentionMe: true},
             ]});
+        } else {
+            // 迁移旧的 pushToGlip 到 notifyMethod
+            let needsMigration = false;
+            const migratedItems = concernedItems.map((item: any) => {
+                if (item.pushToGlip !== undefined && !item.notifyMethod) {
+                    needsMigration = true;
+                    return {
+                        ...item,
+                        notifyMethod: item.pushToGlip ? 'bot' : '',
+                        pushToGlip: undefined  // 移除旧字段
+                    };
+                }
+                return item;
+            });
+            if (needsMigration) {
+                await chrome.storage.local.set({ concernedItems: migratedItems });
+                console.log('✅ 已迁移 pushToGlip 到 notifyMethod');
+            }
         }
         console.log('concernedItems', concernedItems);
 
@@ -196,18 +216,28 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // 监听器必须在顶层同步设置，不能延迟或等待异步初始化。
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.log('🔔 收到 alarm 事件:', alarm.name);
-    
+
     try {
         // 所有定时任务统一由 TaskScheduler 管理
         if (await TaskScheduler.tryHandleAlarm(alarm)) {
             return;
         }
-        
+
+        // 处理关注后续清理任务
+        if (alarm.name === 'cleanupFollowThreads') {
+            await cleanupExpiredFollowThreads();
+            // 设置下一次清理时间
+            chrome.alarms.create('cleanupFollowThreads', {
+                when: getNextCleanupTime()
+            });
+            return;
+        }
+
         // 如果有其他模块需要处理 alarm，在这里添加
         // if (await OtherModule.tryHandleAlarm(alarm)) {
         //     return;
         // }
-        
+
         // 处理未知 alarm
         console.log(`⚡ 未处理的 alarm 事件: ${alarm.name}`);
     } catch (error) {
@@ -1388,10 +1418,163 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })();
         return true;
     }
-    
+
+    // 存储关注后续的原消息到 ChromaDB
+    if (request.type === 'STORE_FOLLOWED_MESSAGE') {
+        storeRelatedMessage(request.data)
+            .then(() => sendResponse({ success: true }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+    }
+
+    // 打开关注后续配置表单
+    if (request.type === 'OPEN_FOLLOW_THREAD_CONFIG') {
+        (async () => {
+            try {
+                await chrome.storage.local.set({
+                    pendingFollowThreadConfig: {
+                        ...request.data,
+                        timestamp: Date.now()
+                    }
+                });
+
+                // 打开 topic-modal
+                await chrome.windows.create({
+                    url: chrome.runtime.getURL('topic-modal.html'),
+                    type: 'popup',
+                    width: 800,
+                    height: 700
+                });
+
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error('❌ 打开关注后续配置失败:', error);
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+
     return false;
 });
 
+// 处理 Chrome 通知点击事件
+chrome.notifications.onClicked.addListener(async (notificationId) => {
+    // 处理新的统一通知格式 (msg_xxx)
+    if (notificationId.startsWith('msg_')) {
+        try {
+            const result = await chrome.storage.local.get(`notification_link_${notificationId}`);
+            const link = result[`notification_link_${notificationId}`];
+            
+            if (link) {
+                await chrome.tabs.create({ url: link });
+                await chrome.storage.local.remove(`notification_link_${notificationId}`);
+            }
+        } catch (error) {
+            console.error('❌ 处理通知点击失败:', error);
+        }
+        chrome.notifications.clear(notificationId);
+        return;
+    }
+    
+    // 处理旧的关注后续通知格式 (followThread_xxx)
+    if (notificationId.startsWith('followThread_')) {
+        const parts = notificationId.split('_');
+        if (parts.length >= 3) {
+            const originalPostId = parts[1];
+            const relatedPostId = parts[2];
+
+            try {
+                // 获取关注项配置以获取 teamId
+                const result = await chrome.storage.local.get('concernedItems');
+                const concernedItems = result.concernedItems || [];
+                const followItem = concernedItems.find((item: any) =>
+                    item.followConfig?.originalMessage.postId === originalPostId
+                );
+
+                if (followItem && followItem.followConfig) {
+                    const teamId = followItem.followConfig.originalMessage.teamId;
+                    const messageUrl = `https://app.ringcentral.com/l/messages/${teamId}/${relatedPostId}`;
+                    await chrome.tabs.create({ url: messageUrl });
+                }
+            } catch (error) {
+                console.error('❌ 处理通知点击失败:', error);
+            }
+        }
+        chrome.notifications.clear(notificationId);
+    }
+});
+
+// 处理 Chrome 通知按钮点击事件
+chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
+    // 处理新的统一通知格式 (msg_xxx)
+    if (notificationId.startsWith('msg_')) {
+        if (buttonIndex === 0) {
+            // 查看消息
+            try {
+                const result = await chrome.storage.local.get(`notification_link_${notificationId}`);
+                const link = result[`notification_link_${notificationId}`];
+                
+                if (link) {
+                    await chrome.tabs.create({ url: link });
+                    await chrome.storage.local.remove(`notification_link_${notificationId}`);
+                }
+            } catch (error) {
+                console.error('❌ 处理通知按钮点击失败:', error);
+            }
+        }
+        chrome.notifications.clear(notificationId);
+        return;
+    }
+    
+    // 处理旧的关注后续通知格式 (followThread_xxx)
+    if (notificationId.startsWith('followThread_')) {
+        const parts = notificationId.split('_');
+        if (parts.length >= 3) {
+            const originalPostId = parts[1];
+
+            if (buttonIndex === 0) {
+                // 查看消息（与点击通知相同）
+                // 手动触发点击处理逻辑
+                try {
+                    const result = await chrome.storage.local.get('concernedItems');
+                    const concernedItems = result.concernedItems || [];
+                    const followItem = concernedItems.find((item: any) =>
+                        item.followConfig?.originalMessage.postId === originalPostId
+                    );
+                    if (followItem && followItem.followConfig) {
+                        const teamId = followItem.followConfig.originalMessage.teamId;
+                        const relatedPostId = parts[2];
+                        const messageUrl = `https://app.ringcentral.com/l/messages/${teamId}/${relatedPostId}`;
+                        await chrome.tabs.create({ url: messageUrl });
+                    }
+                } catch (error) {
+                    console.error('❌ 查看消息失败:', error);
+                }
+            } else if (buttonIndex === 1) {
+                // 取消关注
+                try {
+                    const result = await chrome.storage.local.get('concernedItems');
+                    const concernedItems = result.concernedItems || [];
+                    const updatedItems = concernedItems.filter((item: any) =>
+                        item.followConfig?.originalMessage.postId !== originalPostId
+                    );
+                    await chrome.storage.local.set({ concernedItems: updatedItems });
+                    console.log('✅ 已取消关注');
+                } catch (error) {
+                    console.error('❌ 取消关注失败:', error);
+                }
+            }
+        }
+        chrome.notifications.clear(notificationId);
+    }
+});
+
+// 初始化关注后续清理任务
+chrome.alarms.create('cleanupFollowThreads', {
+    when: getNextCleanupTime()
+});
+console.log('✅ 关注后续清理任务已设置');
 
 // 监听扩展命令
 chrome.commands.onCommand.addListener(async (command) => {
@@ -1404,7 +1587,7 @@ chrome.commands.onCommand.addListener(async (command) => {
             
             if (activeTab?.id) {
                 // 打开记忆查询界面
-                const memoryUrl = chrome.runtime.getURL('memory.html');
+                const memoryUrl = chrome.runtime.getURL('memory-exploring.html');
                 
                 // 使用弹窗方式打开记忆界面
                 await chrome.windows.create({

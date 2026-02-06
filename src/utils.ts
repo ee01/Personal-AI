@@ -1,7 +1,7 @@
 // 环境配置类型定义
 export interface EnvConfigType {
   MESSAGE_ANALYSIS_INTERVAL: number; // 分析消息的频度（分钟）
-  MESSAGE_CONTEXT_WINDOW: number;    // 每次分析获取的上下文时间窗口（分钟）
+  MESSAGE_CONTEXT_WINDOW: number;    // 消息上下文窗口：距离此刻的历史消息时间范围（分钟）
   SCHEDULED_INTERVAL: number;        // 已废弃，保留用于向后兼容
   ANALYSIS_TYPE: string;
   ANALYZE_BY_GROUP: boolean;
@@ -25,7 +25,8 @@ export interface EnvConfigType {
   BOT_ID: string;
   BOT_TYPE: string;
   TEAM_ID: string;
-  ENABLE_BOT: boolean;
+  /** @deprecated 使用每个 concernedItem 的 notifyMethod 替代 */
+  ENABLE_BOT?: boolean;
   LLM_REVIEW_BEFORE_SEND: boolean;
   ENABLE_CHROMA: boolean;
   CHROMA_API_URL: string;  // 保留用于兼容旧配置
@@ -40,6 +41,8 @@ export interface EnvConfigType {
   // 消息交互功能开关
   ENABLE_AUTO_REPLY: boolean;    // 启用自动答复功能
   ENABLE_SNOOZE: boolean;        // 启用稍后处理功能
+  // 消息过滤配置
+  FILTER_OWN_MESSAGES: boolean;  // 是否过滤自己发送的消息
 }
 
 export function formatDate(dateString: string | number) {
@@ -131,7 +134,7 @@ export function transformPostLinks(inputString: string) {
 // 默认环境配置
 export const defaultEnvConfig: EnvConfigType = {
   MESSAGE_ANALYSIS_INTERVAL: Number(process.env.MESSAGE_ANALYSIS_INTERVAL) || Number(process.env.SCHEDULED_INTERVAL) || 120,
-  MESSAGE_CONTEXT_WINDOW: Number(process.env.MESSAGE_CONTEXT_WINDOW) || 5,
+  MESSAGE_CONTEXT_WINDOW: Number(process.env.MESSAGE_CONTEXT_WINDOW) || 125,
   SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120, // 保留用于向后兼容
   ANALYSIS_TYPE: process.env.ANALYSIS_TYPE || "filter",
   LLM_TYPE: process.env.LLM_TYPE || "dify",
@@ -155,7 +158,8 @@ export const defaultEnvConfig: EnvConfigType = {
   BOT_ID: process.env.BOT_ID || "4700372020@37439510.bot.glip.net",
   BOT_TYPE: process.env.BOT_TYPE || "user",
   TEAM_ID: process.env.TEAM_ID || "",
-  ENABLE_BOT: process.env.ENABLE_BOT === "true",
+  // ENABLE_BOT 已废弃，使用每个 concernedItem 的 notifyMethod 替代
+  ENABLE_BOT: undefined,
   LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
   ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
   CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",  // 保留用于兼容
@@ -169,6 +173,8 @@ export const defaultEnvConfig: EnvConfigType = {
   // 消息交互功能开关（默认全部启用）
   ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== "false",
   ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== "false",
+  // 消息过滤配置（默认开启过滤）
+  FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== "false",
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

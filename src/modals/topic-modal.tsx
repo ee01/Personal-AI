@@ -3,9 +3,10 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
 import { analyzeMessages } from '../messageDealing';
-import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../utils/tabHelpers';
+import { findRingCentralTab, createRingCentralTab, waitForTabLoad, sendMessageWithRetry } from '../utils/tabHelpers';
 import { getEnvConfig } from '../utils';
 import { generateAutoReply } from '../llm';
+import { getTaskEnabled } from '../services/TaskScheduler';
 
 // 自动答复配置接口
 interface AutoReplyConfig {
@@ -21,18 +22,45 @@ interface AutoReplyConfig {
 // - 'delayed': 延迟可拦截（默认，答复前 X 小时可拦截）
 // - 'manual': 仅添加到审核列表（PendingReview 状态，需手动批准）
 
+interface FollowThreadConfigType {
+    originalMessage: {
+        postId: string;
+        teamId: string;
+        teamName: string;
+        sender: string;
+        content: string;
+        datetime: string | number;
+        messageUrl: string;
+    };
+    createdAt: string;
+    // 🆕 移除 expiresAt，使用 TopicItem.expiredAt
+    // 🆕 移除 notifyMethod/notifyFrequency，移到 TopicItem 外层
+    keywordFilter?: string[];
+    relatedMessages: any[];
+    lastCheckedAt?: string;
+    lastNotifiedAt?: string;
+}
+
 interface TopicItem {
     id: string;
     text: string;
     expiredAt: number;
+    /** @deprecated 使用 notifyMethod 替代 */
     pushToGlip?: boolean;
     mentionMe?: boolean;
     // 通用匹配条件（可编辑）
     filterSender?: string;      // 匹配的发送者（可编辑）
     filterGroup?: string;       // 匹配的群组名（可编辑）
+    // 🆕 通用通知配置（适用于所有类型）
+    // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
+    notifyMethod?: string;
+    notifyFrequency?: 'immediate' | 'merged';
     // 自动答复相关字段
     autoReply?: boolean;        // 是否启用自动答复
     autoReplyConfig?: AutoReplyConfig;
+    // 关注后续相关字段
+    followThread?: boolean;     // 是否启用关注后续
+    followConfig?: FollowThreadConfigType;
 }
 
 interface TabResponse {
@@ -48,7 +76,6 @@ const TopicModal = () => {
     const [showAddForm, setShowAddForm] = useState(false);
     const [newTopic, setNewTopic] = useState('');
     const [newExpiry, setNewExpiry] = useState('30');
-    const [newPushToGlip, setNewPushToGlip] = useState(true);
     const [newMentionMe, setNewMentionMe] = useState(false);
     // 自动答复相关状态
     const [newAutoReply, setNewAutoReply] = useState(false);
@@ -59,6 +86,13 @@ const TopicModal = () => {
         reviewMode: 'delayed',  // 默认延迟可拦截
         delayHours: 1
     });
+    // 关注后续相关状态
+    const [newFollowThread, setNewFollowThread] = useState(false);
+    const [newFollowConfig, setNewFollowConfig] = useState<any>(null);
+    // 🆕 通用通知配置状态（适用于所有类型）
+    // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
+    const [newNotifyMethod, setNewNotifyMethod] = useState<string>('bot');
+    const [newNotifyFrequency, setNewNotifyFrequency] = useState<'immediate' | 'merged'>('immediate');
     // 新增：通用匹配条件状态
     const [newFilterSender, setNewFilterSender] = useState('');
     const [newFilterGroup, setNewFilterGroup] = useState('');
@@ -72,10 +106,18 @@ const TopicModal = () => {
         lastAnalyzedIndex: number;
         lastAnalyzedTime: string;
     } | null>(null);
+    const [isSilentAnalysisEnabled, setIsSilentAnalysisEnabled] = useState(false);
 
     useEffect(() => {
         loadTopics();
+        checkSilentAnalysisStatus();
     }, []);
+
+    // 检查静默消息分析状态
+    const checkSilentAnalysisStatus = async () => {
+        const isEnabled = await getTaskEnabled('message_analysis');
+        setIsSilentAnalysisEnabled(isEnabled);
+    };
 
     useEffect(() => {
         (async () => {
@@ -96,7 +138,7 @@ const TopicModal = () => {
                     
                     // 自动填充表单 - 使用新的数据结构
                     // text 存储内容描述，filterSender/filterGroup 存储匹配条件
-                    setNewTopic(config.content ? `发送了内容与以下语义相似："${config.content.substring(0, 50)}${config.content.length > 50 ? '...' : ''}"` : '发送的消息');
+                    setNewTopic(config.content ? `发送了内容与以下语义相似："${config.content}"` : '发送的消息');
                     setNewFilterSender(config.sender || '');
                     setNewFilterGroup(config.groupName || '');
                     setNewAutoReply(true);
@@ -132,6 +174,50 @@ const TopicModal = () => {
         })();
     }, []);
 
+    // 检查是否有从消息悬浮菜单传来的关注后续配置请求
+    useEffect(() => {
+        (async () => {
+            const result = await chrome.storage.local.get('pendingFollowThreadConfig');
+            if (result.pendingFollowThreadConfig) {
+                const config = result.pendingFollowThreadConfig;
+                // 检查是否是最近5分钟内的请求
+                if (Date.now() - config.timestamp < 5 * 60 * 1000) {
+                    console.log('👁 检测到关注后续配置请求:', config);
+
+                    // 自动填充表单
+                    // 🆕 预先生成规则主体文本，类似自动答复的做法
+                    setNewTopic(`关于以下内容的后续讨论："${config.content}"`);
+                    // 🔧 关注后续应该捕获所有人的讨论，所以发送人留空（允许用户自定义）
+                    setNewFilterSender('');
+                    setNewFilterGroup(config.groupName || '');
+                    setNewFollowThread(true);
+                    // 🆕 设置通用通知配置（外层）
+                    setNewNotifyMethod('bot');
+                    setNewNotifyFrequency('immediate');
+                    // 🆕 followConfig 只保留原消息和关键词等特有配置
+                    setNewFollowConfig({
+                        originalMessage: {
+                            postId: config.postId,
+                            teamId: config.groupId,
+                            teamName: config.groupName,
+                            sender: config.sender,
+                            content: config.content,
+                            datetime: config.timestamp,
+                            messageUrl: config.messageLink
+                        },
+                        createdAt: new Date().toISOString(),
+                        keywordFilter: [],
+                        relatedMessages: []
+                    });
+                    setShowAddForm(true);
+                }
+
+                // 清除 pending 配置
+                await chrome.storage.local.remove('pendingFollowThreadConfig');
+            }
+        })();
+    }, []);
+
     useEffect(() => {
         // 初始化时获取进度
         chrome.storage.local.get('ollamaAnalysisProgress', (result) => {
@@ -152,6 +238,14 @@ const TopicModal = () => {
                 }
             }
             
+            // 监听任务状态变化
+            if (changes.taskStates) {
+                const taskStates = changes.taskStates.newValue;
+                if (taskStates && taskStates.message_analysis) {
+                    setIsSilentAnalysisEnabled(taskStates.message_analysis.enabled);
+                }
+            }
+            
             // 监听配置变化
             if (changes.envConfig) {
                 setEnvConfig(changes.envConfig.newValue);
@@ -168,16 +262,34 @@ const TopicModal = () => {
     const loadTopics = async () => {
         const result = await chrome.storage.local.get('concernedItems');
         if (result.concernedItems) {
-            const topicsWithIds = result.concernedItems.map((topic: TopicItem) => ({
-                ...topic,
-                id: topic.id || Math.random().toString(36).substr(2, 9),
-                pushToGlip: topic.pushToGlip || false,
-                mentionMe: topic.mentionMe || false,
-                // 兼容旧数据：自动答复相关字段
-                autoReply: topic.autoReply || false,
-                autoReplyConfig: topic.autoReplyConfig || undefined
-            }));
+            let needsMigration = false;
+            const topicsWithIds = result.concernedItems.map((topic: TopicItem) => {
+                const migrated = {
+                    ...topic,
+                    id: topic.id || Math.random().toString(36).substr(2, 9),
+                    mentionMe: topic.mentionMe || false,
+                    // 兼容旧数据：自动答复相关字段
+                    autoReply: topic.autoReply || false,
+                    autoReplyConfig: topic.autoReplyConfig || undefined
+                };
+                
+                // 🆕 迁移 pushToGlip 到 notifyMethod
+                if (topic.pushToGlip !== undefined && !topic.notifyMethod) {
+                    migrated.notifyMethod = topic.pushToGlip ? 'bot' : '';
+                    needsMigration = true;
+                }
+                // 删除已废弃的 pushToGlip 字段
+                delete (migrated as any).pushToGlip;
+                
+                return migrated;
+            });
             setTopics(topicsWithIds);
+            
+            // 如果有数据需要迁移，自动保存
+            if (needsMigration) {
+                await chrome.storage.local.set({ concernedItems: topicsWithIds });
+                console.log('✅ 已迁移 pushToGlip 到 notifyMethod');
+            }
         }
     };
 
@@ -198,38 +310,91 @@ const TopicModal = () => {
     const handleSaveEdit = async () => {
         if (!editingTopic) return;
         
+        // 🔧 在保存之前，保存需要检查的状态
+        const savedAutoReply = editingTopic.autoReply;
+        const savedFollowThread = editingTopic.followThread;
+        
+        // 🆕 直接保存，不再需要同步 expiresAt（已移除）
         const newTopics = topics.map(t => 
             t.id === editingTopic.id ? editingTopic : t
         );
         await saveTopics(newTopics);
         setEditingTopic(null);
+
+        // 如果保存的是自动答复或关注后续，检查静默消息分析是否启用
+        if ((savedAutoReply || savedFollowThread) && !isSilentAnalysisEnabled) {
+            const shouldEnable = confirm(
+                '✅ 保存成功！\n\n⚠️ 检测到您尚未开启"静默消息分析"功能。\n\n如果不开启此功能，系统将无法捕获消息并触发自动答复或关注后续。\n\n是否立即开启静默消息分析？'
+            );
+            if (shouldEnable) {
+                chrome.runtime.sendMessage({
+                    type: 'CONTROL_TASK',
+                    taskId: 'message_analysis',
+                    action: 'toggle',
+                    enabled: true
+                });
+                setIsSilentAnalysisEnabled(true);
+            }
+        }
     };
 
     const handleAdd = async () => {
         if (!newTopic) return;
-        
+
         const newTopicItem: TopicItem = {
             id: Math.random().toString(36).substr(2, 9),
             text: newTopic,
             expiredAt: newExpiry ? Date.now() + (parseInt(newExpiry) * 24 * 60 * 60 * 1000) : 0,
-            pushToGlip: newPushToGlip,
             mentionMe: newMentionMe,
             // 新增：通用匹配条件
             filterSender: newFilterSender || undefined,
             filterGroup: newFilterGroup || undefined,
+            // 🆕 通用通知配置（notifyMethod 使用逗号分隔格式）
+            notifyMethod: newNotifyMethod || undefined,
+            notifyFrequency: (newFollowThread || newAutoReply) ? newNotifyFrequency : undefined,
             // 自动答复配置
             autoReply: newAutoReply,
-            autoReplyConfig: newAutoReply ? { ...newAutoReplyConfig, enabled: true } : undefined
+            autoReplyConfig: newAutoReply ? { ...newAutoReplyConfig, enabled: true } : undefined,
+            // 关注后续配置
+            followThread: newFollowThread,
+            followConfig: newFollowThread && newFollowConfig ? {
+                ...newFollowConfig,
+                createdAt: new Date().toISOString()
+                // 🆕 移除 expiresAt，使用外层 expiredAt
+            } : undefined
         };
-        
+
         await saveTopics([...topics, newTopicItem]);
+
+        // 如果启用了关注后续，存储原消息到 ChromaDB
+        if (newFollowThread && newFollowConfig) {
+            try {
+                await chrome.runtime.sendMessage({
+                    type: 'STORE_FOLLOWED_MESSAGE',
+                    data: {
+                        followItemId: newTopicItem.id,
+                        message: newFollowConfig.originalMessage,
+                        isOriginal: true
+                    }
+                });
+                console.log('✅ 原消息已存储到 ChromaDB');
+            } catch (error) {
+                console.error('❌ 存储原消息失败:', error);
+            }
+        }
+
+        // 🔧 在重置表单之前，保存需要检查的状态
+        const savedAutoReply = newAutoReply;
+        const savedFollowThread = newFollowThread;
+
         // 重置表单
         setNewTopic('');
         setNewExpiry('30');
-        setNewPushToGlip(true);
         setNewMentionMe(false);
         setNewFilterSender('');
         setNewFilterGroup('');
+        setNewNotifyMethod('bot');
+        setNewNotifyFrequency('immediate');
         setNewAutoReply(false);
         setNewAutoReplyConfig({
             enabled: false,
@@ -238,7 +403,25 @@ const TopicModal = () => {
             reviewMode: 'delayed',
             delayHours: 1
         });
+        setNewFollowThread(false);
+        setNewFollowConfig(null);
         setShowAddForm(false);
+
+        // 如果保存的是自动答复或关注后续，检查静默消息分析是否启用
+        if ((savedAutoReply || savedFollowThread) && !isSilentAnalysisEnabled) {
+            const shouldEnable = confirm(
+                '✅ 保存成功！\n\n⚠️ 检测到您尚未开启"静默消息分析"功能。\n\n如果不开启此功能，系统将无法捕获消息并触发自动答复或关注后续。\n\n是否立即开启静默消息分析？'
+            );
+            if (shouldEnable) {
+                chrome.runtime.sendMessage({
+                    type: 'CONTROL_TASK',
+                    taskId: 'message_analysis',
+                    action: 'toggle',
+                    enabled: true
+                });
+                setIsSilentAnalysisEnabled(true);
+            }
+        }
     };
 
     const getDaysRemaining = (expiredAt: number) => {
@@ -287,7 +470,7 @@ const TopicModal = () => {
             xml += `    <id>${topic.id}</id>\n`;
             xml += `    <text>${encodeXML(topic.text)}</text>\n`;
             xml += `    <expiredAt>${topic.expiredAt}</expiredAt>\n`;
-            xml += `    <pushToGlip>${topic.pushToGlip || false}</pushToGlip>\n`;
+            xml += `    <notifyMethod>${topic.notifyMethod || ''}</notifyMethod>\n`;
             xml += `    <mentionMe>${topic.mentionMe || false}</mentionMe>\n`;
             xml += `    <autoReply>${topic.autoReply || false}</autoReply>\n`;
             if (topic.autoReplyConfig) {
@@ -332,8 +515,15 @@ const TopicModal = () => {
                 const text = topicEl.getElementsByTagName("text")[0]?.textContent || "";
                 const expiredAtStr = topicEl.getElementsByTagName("expiredAt")[0]?.textContent || "0";
                 const expiredAt = parseInt(expiredAtStr);
+                
+                // 🆕 支持新的 notifyMethod 格式，同时兼容旧的 pushToGlip
+                let notifyMethod = topicEl.getElementsByTagName("notifyMethod")[0]?.textContent || "";
                 const pushToGlipStr = topicEl.getElementsByTagName("pushToGlip")[0]?.textContent || "false";
-                const pushToGlip = pushToGlipStr === "true";
+                // 如果没有 notifyMethod 但有 pushToGlip，进行迁移
+                if (!notifyMethod && pushToGlipStr === "true") {
+                    notifyMethod = 'bot';
+                }
+                
                 const mentionMeStr = topicEl.getElementsByTagName("mentionMe")[0]?.textContent || "false";
                 const mentionMe = mentionMeStr === "true";
                 const autoReplyStr = topicEl.getElementsByTagName("autoReply")[0]?.textContent || "false";
@@ -353,7 +543,7 @@ const TopicModal = () => {
                         id,
                         text,
                         expiredAt,
-                        pushToGlip,
+                        notifyMethod,
                         mentionMe,
                         autoReply,
                         autoReplyConfig
@@ -397,16 +587,20 @@ const TopicModal = () => {
             
             // 获取页面配置
             let { userinfo } = await chrome.storage.local.get(['userinfo'])
-            if (!userinfo || userinfo.fullName === '') userinfo = (await chrome.tabs.sendMessage(rcTab.id, { type: 'GET_USER_INFO' }) as unknown as TabResponse).data;
+            if (!userinfo || userinfo.fullName === '') {
+                const userInfoResponse = await sendMessageWithRetry(rcTab.id, { type: 'GET_USER_INFO' }) as unknown as TabResponse;
+                userinfo = userInfoResponse.data;
+            }
             if (!userinfo || !userinfo.fullName) {
                 throw new Error('Failed to get page config');
             }
             
-            const scheduledInterval = envConfig ? Number(envConfig.MESSAGE_CONTEXT_WINDOW) : 120;
-            const startTime = new Date(Date.now() - (scheduledInterval + 5) * 60 * 1000);
+            // MESSAGE_CONTEXT_WINDOW 是从此刻往前推的绝对时间窗口
+            const contextWindow = envConfig ? Number(envConfig.MESSAGE_CONTEXT_WINDOW) : 125;
+            const startTime = new Date(Date.now() - contextWindow * 60 * 1000);
             
             // 获取用户数据
-            const response = await chrome.tabs.sendMessage(rcTab.id, {
+            const response = await sendMessageWithRetry(rcTab.id, {
                 type: 'FETCH_USER_MESSAGES',
                 startTime,
             }) as unknown as TabResponse;
@@ -427,7 +621,7 @@ const TopicModal = () => {
         if (envConfig) {
             return (Number(envConfig.MESSAGE_CONTEXT_WINDOW) / 60).toFixed(1);
         }
-        return '2.0'; // 默认值
+        return '2.1'; // 默认 125 分钟 ≈ 2.1 小时
     };
 
     // AI 生成答复建议（新增表单）
@@ -484,9 +678,38 @@ const TopicModal = () => {
         }
     };
 
+    // 启用静默消息分析
+    const enableSilentAnalysis = () => {
+        chrome.runtime.sendMessage({
+            type: 'CONTROL_TASK',
+            taskId: 'message_analysis',
+            action: 'toggle',
+            enabled: true
+        });
+        setIsSilentAnalysisEnabled(true);
+    };
+
     return (
         <div className="topic-modal">
             <h2>关注话题管理</h2>
+            
+            {/* 静默消息分析警告横幅 */}
+            {!isSilentAnalysisEnabled && (
+                <div className="warning-banner">
+                    <div className="warning-content">
+                        <span className="warning-icon">⚠️</span>
+                        <span className="warning-text">
+                            静默消息分析未启用！自动答复和关注后续功能需要开启此功能才能正常工作。
+                        </span>
+                        <button 
+                            className="warning-action-btn"
+                            onClick={enableSilentAnalysis}
+                        >
+                            立即启用
+                        </button>
+                    </div>
+                </div>
+            )}
             
             <div className="topic-list">
                 {topics.map((topic, index) => (
@@ -531,22 +754,52 @@ const TopicModal = () => {
                                     <div className="checkbox-container">
                                         <input
                                             type="checkbox"
-                                            id={`push-glip-${topic.id}`}
-                                            checked={editingTopic.pushToGlip || false}
-                                            onChange={e => setEditingTopic({
-                                                ...editingTopic,
-                                                pushToGlip: e.target.checked,
-                                                mentionMe: e.target.checked ? (editingTopic.mentionMe || false) : false
-                                            })}
+                                            id={`notify-bot-${topic.id}`}
+                                            checked={(editingTopic.notifyMethod || '').includes('bot')}
+                                            onChange={e => {
+                                                const methods = (editingTopic.notifyMethod || '').split(',').filter(m => m);
+                                                if (e.target.checked) {
+                                                    if (!methods.includes('bot')) methods.push('bot');
+                                                } else {
+                                                    const idx = methods.indexOf('bot');
+                                                    if (idx > -1) methods.splice(idx, 1);
+                                                }
+                                                setEditingTopic({
+                                                    ...editingTopic,
+                                                    notifyMethod: methods.join(','),
+                                                    mentionMe: methods.includes('bot') ? (editingTopic.mentionMe || false) : false
+                                                });
+                                            }}
                                         />
-                                        <label htmlFor={`push-glip-${topic.id}`}>推送Glip消息</label>
+                                        <label htmlFor={`notify-bot-${topic.id}`}>Glip推送</label>
+                                    </div>
+                                    <div className="checkbox-container">
+                                        <input
+                                            type="checkbox"
+                                            id={`notify-chrome-${topic.id}`}
+                                            checked={(editingTopic.notifyMethod || '').includes('chrome')}
+                                            onChange={e => {
+                                                const methods = (editingTopic.notifyMethod || '').split(',').filter(m => m);
+                                                if (e.target.checked) {
+                                                    if (!methods.includes('chrome')) methods.push('chrome');
+                                                } else {
+                                                    const idx = methods.indexOf('chrome');
+                                                    if (idx > -1) methods.splice(idx, 1);
+                                                }
+                                                setEditingTopic({
+                                                    ...editingTopic,
+                                                    notifyMethod: methods.join(',')
+                                                });
+                                            }}
+                                        />
+                                        <label htmlFor={`notify-chrome-${topic.id}`}>Chrome通知</label>
                                     </div>
                                     <div className="checkbox-container">
                                         <input
                                             type="checkbox"
                                             id={`mention-me-${topic.id}`}
                                             checked={editingTopic.mentionMe || false}
-                                            disabled={!editingTopic.pushToGlip}
+                                            disabled={!(editingTopic.notifyMethod || '').includes('bot')}
                                             onChange={e => setEditingTopic({
                                                 ...editingTopic,
                                                 mentionMe: e.target.checked
@@ -572,6 +825,18 @@ const TopicModal = () => {
                                             })}
                                         />
                                         <label htmlFor={`auto-reply-${topic.id}`}>自动答复</label>
+                                    </div>
+                                    <div className="checkbox-container">
+                                        <input
+                                            type="checkbox"
+                                            id={`follow-thread-${topic.id}`}
+                                            checked={editingTopic.followThread || false}
+                                            onChange={e => setEditingTopic({
+                                                ...editingTopic,
+                                                followThread: e.target.checked
+                                            })}
+                                        />
+                                        <label htmlFor={`follow-thread-${topic.id}`}>关注后续</label>
                                     </div>
                                 </div>
                                 
@@ -723,6 +988,154 @@ const TopicModal = () => {
                                         </div>
                                     </div>
                                 )}
+
+                                {/* 编辑时的关注后续配置区域 */}
+                                {editingTopic.followThread && editingTopic.followConfig && (
+                                    <div className="follow-thread-config">
+                                        {/* 原消息预览卡片 */}
+                                        <div className="config-section">
+                                            <div className="config-title">原消息：</div>
+                                            <div className="original-message-preview">
+                                                <div className="message-meta">
+                                                    <span className="sender">{editingTopic.followConfig.originalMessage.sender}</span>
+                                                    <span className="datetime">{new Date(editingTopic.followConfig.originalMessage.datetime).toLocaleString()}</span>
+                                                </div>
+                                                <div className="message-content">
+                                                    {editingTopic.followConfig.originalMessage.content}
+                                                </div>
+                                                <a
+                                                    href={editingTopic.followConfig.originalMessage.messageUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="message-link"
+                                                >
+                                                    🔗 查看原消息
+                                                </a>
+                                            </div>
+                                        </div>
+
+                                        {/* 过期时间提示（使用外层 expiredAt） */}
+                                        <div className="config-section">
+                                            <div className="config-title">过期时间：</div>
+                                            <div className="hint-text">
+                                                剩余 {editingTopic.expiredAt ? Math.ceil((editingTopic.expiredAt - Date.now()) / (1000 * 60 * 60 * 24)) : 0} 天（修改上方"天数"可调整）
+                                            </div>
+                                        </div>
+
+                                        {/* 🆕 通知方式（使用外层字段，多选） */}
+                                        <div className="config-section">
+                                            <div className="config-title">通知方式：</div>
+                                            <div className="checkbox-group">
+                                                <div className="checkbox-option">
+                                                    <input
+                                                        type="checkbox"
+                                                        id={`edit-notify-bot-followthread-${topic.id}`}
+                                                        checked={(editingTopic.notifyMethod || '').includes('bot')}
+                                                        onChange={e => {
+                                                            const methods = (editingTopic.notifyMethod || '').split(',').filter(m => m);
+                                                            if (e.target.checked) {
+                                                                if (!methods.includes('bot')) methods.push('bot');
+                                                            } else {
+                                                                const idx = methods.indexOf('bot');
+                                                                if (idx > -1) methods.splice(idx, 1);
+                                                            }
+                                                            setEditingTopic({
+                                                                ...editingTopic,
+                                                                notifyMethod: methods.join(',')
+                                                            });
+                                                        }}
+                                                    />
+                                                    <label htmlFor={`edit-notify-bot-followthread-${topic.id}`}>Glip推送</label>
+                                                </div>
+                                                <div className="checkbox-option">
+                                                    <input
+                                                        type="checkbox"
+                                                        id={`edit-notify-chrome-followthread-${topic.id}`}
+                                                        checked={(editingTopic.notifyMethod || '').includes('chrome')}
+                                                        onChange={e => {
+                                                            const methods = (editingTopic.notifyMethod || '').split(',').filter(m => m);
+                                                            if (e.target.checked) {
+                                                                if (!methods.includes('chrome')) methods.push('chrome');
+                                                            } else {
+                                                                const idx = methods.indexOf('chrome');
+                                                                if (idx > -1) methods.splice(idx, 1);
+                                                            }
+                                                            setEditingTopic({
+                                                                ...editingTopic,
+                                                                notifyMethod: methods.join(',')
+                                                            });
+                                                        }}
+                                                    />
+                                                    <label htmlFor={`edit-notify-chrome-followthread-${topic.id}`}>Chrome通知</label>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 🆕 通知频率（使用外层字段） */}
+                                        <div className="config-section">
+                                            <div className="config-title">通知频率：</div>
+                                            <div className="radio-group">
+                                                <div className="radio-option">
+                                                    <input
+                                                        type="radio"
+                                                        id={`edit-freq-immediate-${topic.id}`}
+                                                        name={`edit-notify-frequency-${topic.id}`}
+                                                        checked={editingTopic.notifyFrequency === 'immediate'}
+                                                        onChange={() => setEditingTopic({
+                                                            ...editingTopic,
+                                                            notifyFrequency: 'immediate'
+                                                        })}
+                                                    />
+                                                    <label htmlFor={`edit-freq-immediate-${topic.id}`}>立即通知（每条新消息）</label>
+                                                </div>
+                                                <div className="radio-option">
+                                                    <input
+                                                        type="radio"
+                                                        id={`edit-freq-merged-${topic.id}`}
+                                                        name={`edit-notify-frequency-${topic.id}`}
+                                                        checked={editingTopic.notifyFrequency === 'merged'}
+                                                        onChange={() => setEditingTopic({
+                                                            ...editingTopic,
+                                                            notifyFrequency: 'merged'
+                                                        })}
+                                                    />
+                                                    <label htmlFor={`edit-freq-merged-${topic.id}`}>合并通知（定期汇总）</label>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 关键词过滤（可选） */}
+                                        <div className="config-section">
+                                            <div className="config-title">关键词过滤（可选）：</div>
+                                            <input
+                                                type="text"
+                                                className="keyword-filter-input"
+                                                placeholder="输入关键词，用逗号分隔（留空表示不过滤）"
+                                                value={editingTopic.followConfig.keywordFilter?.join(', ') || ''}
+                                                onChange={e => setEditingTopic({
+                                                    ...editingTopic,
+                                                    followConfig: {
+                                                        ...editingTopic.followConfig!,
+                                                        keywordFilter: e.target.value.split(',').map(k => k.trim()).filter(k => k.length > 0)
+                                                    }
+                                                })}
+                                            />
+                                            <div className="hint-text">
+                                                只有包含这些关键词的回复才会触发通知
+                                            </div>
+                                        </div>
+
+                                        {/* 关联消息统计 */}
+                                        {editingTopic.followConfig.relatedMessages && editingTopic.followConfig.relatedMessages.length > 0 && (
+                                            <div className="config-section">
+                                                <div className="config-title">关联消息：</div>
+                                                <div className="hint-text">
+                                                    已捕获 {editingTopic.followConfig.relatedMessages.length} 条关联消息
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                                 
                                 <div className="form-buttons">
                                     <button onClick={handleSaveEdit}>保存</button>
@@ -738,14 +1151,24 @@ const TopicModal = () => {
                                         还剩 {getDaysRemaining(topic.expiredAt)} 天
                                     </span>
                                 )}
-                                {topic.pushToGlip && (
+                                {(topic.notifyMethod || '').includes('bot') && (
                                     <span className="glip-indicator">
                                         Glip ✓{topic.mentionMe && <span className="mention-indicator"> @</span>}
+                                    </span>
+                                )}
+                                {(topic.notifyMethod || '').includes('chrome') && (
+                                    <span className="chrome-indicator">
+                                        🔔
                                     </span>
                                 )}
                                 {topic.autoReply && (
                                     <span className="auto-reply-indicator" title="已启用自动答复">
                                         🤖
+                                    </span>
+                                )}
+                                {topic.followThread && (
+                                    <span className="follow-thread-indicator" title="正在关注后续">
+                                        👁
                                     </span>
                                 )}
                                 <button onClick={() => handleEdit(topic)}>✏️</button>
@@ -784,21 +1207,46 @@ const TopicModal = () => {
                         <div className="checkbox-container">
                             <input
                                 type="checkbox"
-                                id="new-push-glip"
-                                checked={newPushToGlip}
+                                id="new-notify-bot"
+                                checked={(newNotifyMethod || '').includes('bot')}
                                 onChange={e => {
-                                    setNewPushToGlip(e.target.checked);
-                                    if (!e.target.checked) setNewMentionMe(false);
+                                    const methods = (newNotifyMethod || '').split(',').filter(m => m);
+                                    if (e.target.checked) {
+                                        if (!methods.includes('bot')) methods.push('bot');
+                                    } else {
+                                        const idx = methods.indexOf('bot');
+                                        if (idx > -1) methods.splice(idx, 1);
+                                        setNewMentionMe(false);
+                                    }
+                                    setNewNotifyMethod(methods.join(','));
                                 }}
                             />
-                            <label htmlFor="new-push-glip">推送Glip消息</label>
+                            <label htmlFor="new-notify-bot">Glip推送</label>
+                        </div>
+                        <div className="checkbox-container">
+                            <input
+                                type="checkbox"
+                                id="new-notify-chrome"
+                                checked={(newNotifyMethod || '').includes('chrome')}
+                                onChange={e => {
+                                    const methods = (newNotifyMethod || '').split(',').filter(m => m);
+                                    if (e.target.checked) {
+                                        if (!methods.includes('chrome')) methods.push('chrome');
+                                    } else {
+                                        const idx = methods.indexOf('chrome');
+                                        if (idx > -1) methods.splice(idx, 1);
+                                    }
+                                    setNewNotifyMethod(methods.join(','));
+                                }}
+                            />
+                            <label htmlFor="new-notify-chrome">Chrome通知</label>
                         </div>
                         <div className="checkbox-container">
                             <input
                                 type="checkbox"
                                 id="new-mention-me"
                                 checked={newMentionMe}
-                                disabled={!newPushToGlip}
+                                disabled={!(newNotifyMethod || '').includes('bot')}
                                 onChange={e => setNewMentionMe(e.target.checked)}
                             />
                             <label htmlFor="new-mention-me">@我</label>
@@ -812,8 +1260,17 @@ const TopicModal = () => {
                             />
                             <label htmlFor="new-auto-reply">自动答复</label>
                         </div>
+                        <div className="checkbox-container">
+                            <input
+                                type="checkbox"
+                                id="new-follow-thread"
+                                checked={newFollowThread}
+                                onChange={e => setNewFollowThread(e.target.checked)}
+                            />
+                            <label htmlFor="new-follow-thread">关注后续</label>
+                        </div>
                     </div>
-                    
+
                     {/* 通用匹配条件（可编辑） */}
                     <div className="filter-conditions">
                         <div className="filter-item">
@@ -938,7 +1395,116 @@ const TopicModal = () => {
                             </div>
                         </div>
                     )}
-                    
+
+                    {/* 关注后续配置区域 */}
+                    {newFollowThread && newFollowConfig && (
+                        <div className="follow-thread-config">
+                            {/* 原消息预览卡片 */}
+                            <div className="config-section">
+                                <div className="config-title">原消息：</div>
+                                <div className="original-message-preview">
+                                    <div className="message-meta">
+                                        <span className="sender">{newFollowConfig.originalMessage.sender}</span>
+                                        <span className="datetime">{new Date(newFollowConfig.originalMessage.datetime).toLocaleString()}</span>
+                                    </div>
+                                    <div className="message-content">
+                                        {newFollowConfig.originalMessage.content}
+                                    </div>
+                                    <a
+                                        href={newFollowConfig.originalMessage.messageUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="message-link"
+                                    >
+                                        🔗 查看原消息
+                                    </a>
+                                </div>
+                            </div>
+
+                            {/* 🆕 通知方式（使用外层状态） */}
+                            <div className="config-section">
+                                <div className="config-title">通知方式：</div>
+                                <div className="radio-group">
+                                    <div className="radio-option">
+                                        <input
+                                            type="radio"
+                                            id="notify-bot"
+                                            name="notify-method"
+                                            checked={newNotifyMethod === 'bot'}
+                                            onChange={() => setNewNotifyMethod('bot')}
+                                        />
+                                        <label htmlFor="notify-bot">Glip推送</label>
+                                    </div>
+                                    <div className="radio-option">
+                                        <input
+                                            type="radio"
+                                            id="notify-chrome"
+                                            name="notify-method"
+                                            checked={newNotifyMethod === 'chrome'}
+                                            onChange={() => setNewNotifyMethod('chrome')}
+                                        />
+                                        <label htmlFor="notify-chrome">Chrome通知</label>
+                                    </div>
+                                    <div className="radio-option">
+                                        <input
+                                            type="radio"
+                                            id="notify-both"
+                                            name="notify-method"
+                                            checked={newNotifyMethod === 'both'}
+                                            onChange={() => setNewNotifyMethod('both')}
+                                        />
+                                        <label htmlFor="notify-both">两者都推送</label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 🆕 通知频率（使用外层状态） */}
+                            <div className="config-section">
+                                <div className="config-title">通知频率：</div>
+                                <div className="radio-group">
+                                    <div className="radio-option">
+                                        <input
+                                            type="radio"
+                                            id="freq-immediate"
+                                            name="notify-frequency"
+                                            checked={newNotifyFrequency === 'immediate'}
+                                            onChange={() => setNewNotifyFrequency('immediate')}
+                                        />
+                                        <label htmlFor="freq-immediate">立即通知（每条新消息）</label>
+                                    </div>
+                                    <div className="radio-option">
+                                        <input
+                                            type="radio"
+                                            id="freq-merged"
+                                            name="notify-frequency"
+                                            checked={newNotifyFrequency === 'merged'}
+                                            onChange={() => setNewNotifyFrequency('merged')}
+                                        />
+                                        <label htmlFor="freq-merged">合并通知（定期汇总）</label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 关键词过滤（可选） */}
+                            <div className="config-section">
+                                <div className="config-title">关键词过滤（可选）：</div>
+                                <input
+                                    type="text"
+                                    className="keyword-filter-input"
+                                    placeholder="输入关键词，用逗号分隔（留空表示不过滤）"
+                                    value={newFollowConfig.keywordFilter?.join(', ') || ''}
+                                    onChange={e => setNewFollowConfig({
+                                        ...newFollowConfig,
+                                        keywordFilter: e.target.value.split(',').map(k => k.trim()).filter(k => k.length > 0)
+                                    })}
+                                />
+                                <div className="hint-text">
+                                    只有包含这些关键词的回复才会触发通知
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="form-buttons">
                         <button onClick={handleAdd}>确认</button>
                         <button onClick={() => setShowAddForm(false)}>取消</button>
@@ -976,6 +1542,59 @@ const TopicModal = () => {
             <style>{`
                 .topic-modal {
                     padding: 16px;
+                }
+
+                .warning-banner {
+                    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+                    border: 2px solid #ffc107;
+                    border-radius: 8px;
+                    padding: 12px 16px;
+                    margin-bottom: 16px;
+                    box-shadow: 0 2px 8px rgba(255, 193, 7, 0.2);
+                }
+
+                .warning-content {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                }
+
+                .warning-icon {
+                    font-size: 24px;
+                    flex-shrink: 0;
+                }
+
+                .warning-text {
+                    flex: 1;
+                    color: #856404;
+                    font-size: 14px;
+                    font-weight: 500;
+                    line-height: 1.5;
+                }
+
+                .warning-action-btn {
+                    background-color: #ff9800;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 16px;
+                    font-size: 13px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    white-space: nowrap;
+                    box-shadow: 0 2px 4px rgba(255, 152, 0, 0.3);
+                }
+
+                .warning-action-btn:hover {
+                    background-color: #f57c00;
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 8px rgba(255, 152, 0, 0.4);
+                }
+
+                .warning-action-btn:active {
+                    transform: translateY(0);
+                    box-shadow: 0 2px 4px rgba(255, 152, 0, 0.3);
                 }
                 
                 .topic-list {
@@ -1208,6 +1827,77 @@ const TopicModal = () => {
                     border-radius: 6px;
                 }
 
+                .follow-thread-config {
+                    margin-top: 12px;
+                    padding: 12px;
+                    background-color: #faf5ff;
+                    border: 1px solid #e1bee7;
+                    border-radius: 6px;
+                }
+
+                .original-message-preview {
+                    padding: 10px;
+                    background-color: white;
+                    border: 1px solid #e1bee7;
+                    border-radius: 4px;
+                    font-size: 12px;
+                }
+
+                .message-meta {
+                    display: flex;
+                    justify-content: space-between;
+                    margin-bottom: 8px;
+                    padding-bottom: 6px;
+                    border-bottom: 1px solid #f0f0f0;
+                }
+
+                .message-meta .sender {
+                    font-weight: 600;
+                    color: #9c27b0;
+                }
+
+                .message-meta .datetime {
+                    color: #666;
+                    font-size: 11px;
+                }
+
+                .message-content {
+                    color: #333;
+                    line-height: 1.4;
+                    margin-bottom: 8px;
+                    max-height: 80px;
+                    overflow-y: auto;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }
+
+                .message-link {
+                    color: #9c27b0;
+                    text-decoration: none;
+                    font-size: 11px;
+                }
+
+                .message-link:hover {
+                    text-decoration: underline;
+                }
+
+                .keyword-filter-input {
+                    width: 100%;
+                    box-sizing: border-box;
+                    padding: 6px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    font-family: inherit;
+                    font-size: 12px;
+                }
+
+                .hint-text {
+                    margin-top: 4px;
+                    font-size: 11px;
+                    color: #666;
+                    font-style: italic;
+                }
+
                 .config-section {
                     margin-bottom: 12px;
                 }
@@ -1297,6 +1987,13 @@ const TopicModal = () => {
 
                 .auto-reply-indicator {
                     color: #2196F3;
+                    font-weight: bold;
+                    font-size: 0.9em;
+                    margin-left: 8px;
+                }
+
+                .follow-thread-indicator {
+                    color: #9c27b0;
                     font-weight: bold;
                     font-size: 0.9em;
                     margin-left: 8px;

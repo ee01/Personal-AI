@@ -18,6 +18,13 @@ interface MessageData {
         scheduleTime?: string;
         messageId?: string;  // 定时消息 ID
     };
+    // 关注后续相关信息
+    originalMessageInfo?: {
+        sender: string;
+        content: string;
+        datetime: string;
+        messageUrl: string;
+    };
 }
 
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
@@ -30,20 +37,31 @@ export async function sendBotMessage(messageData: MessageData): Promise<void> {
         ? `https://app.ringcentral.com/l/messages/${messageData.team_id}/${messageData.post_id}`
         : `https://app.ringcentral.com/messages/${messageData.team_id}`;
     
+    // 构建关注后续的原消息预览（如果有）
+    let originalMessageSection = '';
+    if (messageData.originalMessageInfo) {
+        originalMessageSection = `__原消息__（来自 ${messageData.originalMessageInfo.sender}）：
+> ${messageData.originalMessageInfo.content.substring(0, 150)}${messageData.originalMessageInfo.content.length > 150 ? '...' : ''}
+🔗 [查看原消息](${messageData.originalMessageInfo.messageUrl})
+
+__后续回复__：
+`;
+    }
+
     // 构建回复建议或自动答复信息
     let replySection: string;
     if (messageData.autoReplyInfo?.hasAutoReply) {
         // 构建 scheduled messages 页面链接（带筛选参数）
         const scheduledMessagesUrl = chrome.runtime.getURL('scheduled-messages.html?filterPendingReview=true');
-        
+
         replySection = `__自动答复__：✅ 已配置自动答复，将于 ${messageData.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl}?messageId=${messageData.autoReplyInfo.messageId})
 > ${messageData.autoReplyInfo.replyContent?.substring(0, 100)}${(messageData.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
     } else {
         replySection = `__回复建议__：${messageData.reply_advice}`;
     }
-    
+
     const formattedMessage = `\`${messageData.summary}\`
-__关注项__：${messageData.matched_rule}
+${originalMessageSection}__关注项__：${messageData.matched_rule}
 __在群__：<a class='at_mention_compose' rel='{"id":${messageData.team_id}}'>@${messageData.team_name}</a>
 __发送者__：${messageData.sender}
 __时间__：${messageData.datetime}

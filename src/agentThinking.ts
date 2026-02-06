@@ -1064,7 +1064,10 @@ export class IntelligentAgent {
       // 为每条消息进行深度分析（思考-行动循环）
       for (let i = 0; i < messages.length; i++) {
         const message = messages[i];
-        const analysis = analysisResult.find((r:any) => r.messageIndex === i) || {
+        const messagePostId = message.post_id || message.id || '';
+        
+        // 🆕 使用 post_id 精确匹配 LLM 返回的分析结果
+        const analysis = analysisResult.find((r:any) => r.post_id === messagePostId) || {
           summary: "没有分析结果",
           importanceLevel: "low",
           needsProcessing: false,
@@ -1075,7 +1078,7 @@ export class IntelligentAgent {
         if (analysis.isNoiseMessage === true && analysis.needsProcessing === false) {
           finalResults.push({
             type: 'message',
-            messageIndex: i,
+            postId: messagePostId,
             groupIndex: context.groupInfo?.index || groupIndex,
             messageContext: message,
             isImportant: false,
@@ -1108,7 +1111,7 @@ export class IntelligentAgent {
         
         const result: MessageAnalysisResult = {
           type: 'message',
-          messageIndex: i,
+          postId: messagePostId,
           groupIndex: context.groupInfo?.index || groupIndex,
           isImportant: analysis.importanceLevel === "high",
           shouldStore: false,
@@ -1177,9 +1180,9 @@ export class IntelligentAgent {
       });
       
       // 返回错误结果
-      const errorResults = messages.map((message, index) => ({
+      const errorResults = messages.map((message) => ({
         type: 'message' as const,
-        messageIndex: index,
+        postId: message.post_id || message.id || '',
         isImportant: false,
         shouldStore: false,
         shouldNotify: false,
@@ -2240,7 +2243,7 @@ ${context}
 
   /**
    * 构建消息分析提示
-   * 修改以支持不同数量的消息
+   * 修改以支持不同数量的消息和 Thread 结构
    */
   private async buildMessageAnalysisPrompt(
     messages: any[],
@@ -2254,14 +2257,8 @@ ${context}
     const envConfig = await getEnvConfig();
     const analyzeByGroup = envConfig.ANALYZE_BY_GROUP === true;
     
-    // 构建消息内容部分
-    const messagesContent = messages.map((msg, index) => {
-      return `消息 #${index + 1}:
-发送者: ${msg.sender || '未知发送者'}
-${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '未知群组'}` : ''}
-时间: ${msg.datetime || '未知时间'}
-内容: ${msg.messageContent || '无内容'}`;
-    }).join('\n\n');
+    // 构建消息内容部分（支持 Thread 结构）
+    const messagesContent = this.buildMessagesContentWithThreads(messages, analyzeByGroup);
     
     // 构建群组上下文信息
     let contextInfo = '';
@@ -2288,12 +2285,57 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
     // 构建关注规则（动态拼接 filterSender/filterGroup 条件，并添加规则 ID 用于精确匹配）
     const concernedRules = context?.concernedRules || [];
     const buildRuleText = (rule: any): string => {
-      const parts: string[] = [];
-      if (rule.filterSender) parts.push(rule.filterSender);
-      if (rule.filterGroup) parts.push(`在 ${rule.filterGroup} 中`);
-      if (rule.filterSender) parts.push(`发送的`);
-      if (rule.text) parts.push(rule.text);
-      return parts.join(' ') || rule.text;
+      // 🔧 通用前缀构建：处理 filterSender 和 filterGroup
+      const buildPrefix = (): string => {
+        const prefixParts: string[] = [];
+        if (rule.filterSender) prefixParts.push(rule.filterSender);
+        if (rule.filterGroup) prefixParts.push(`在 ${rule.filterGroup} 中`);
+        if (rule.filterSender) prefixParts.push(`发送的`);
+        return prefixParts.join(' ');
+      };
+      
+      let ruleText = '';
+      
+      // 🆕 关注后续类型：使用预先生成的主体文本 + 补充匹配细节
+      if (rule.followThread && rule.followConfig) {
+        const config = rule.followConfig;
+        const original = config.originalMessage;
+        const originalDatetime = new Date(original.datetime).toLocaleString('zh-CN');
+        
+        // 1️⃣ 添加通用前缀（如果有 filterSender 或 filterGroup）
+        const prefix = buildPrefix();
+        if (prefix) {
+          ruleText = prefix + ' ';
+        }
+        
+        // 2️⃣ 使用 rule.text 作为主体（已在创建时预先生成）
+        // 例如："关注后续讨论：原消息 \"过年什么时候放假？\""
+        ruleText += rule.text || `关注后续讨论：原消息 "${(original.content || '').substring(0, 50)}"`;
+        
+        // 3️⃣ 补充匹配细节和技术说明
+        ruleText += `。【匹配细节】在 ${original.teamName} 群组中，`;
+        ruleText += `检测所有与 post_id="${original.postId}" 相关的后续讨论。`;
+        ruleText += `原消息由 "${original.sender}" 在 ${originalDatetime} 发送。`;
+        ruleText += `匹配条件（满足任一）：`;
+        ruleText += `(1) reply_to 属性指向 "${original.postId}" 的直接回复；`;
+        ruleText += `(2) 在同一 Thread 中且时间在原消息之后的消息；`;
+        ruleText += `(3) 虽然不在同一 thread，但语义上是在讨论或回应原消息内容的消息；`;
+        ruleText += `(4) @提及原消息发送者 "${original.sender}" 且内容与原话题相关的消息。`;
+        ruleText += `【注意】排除原消息本身（post_id="${original.postId}"），只识别后续的讨论消息。`;
+      } 
+      // 📋 普通规则类型：使用通用前缀 + 规则文本
+      else {
+        const prefix = buildPrefix();
+        const mainText = rule.text || '';
+        
+        if (prefix && mainText) {
+          ruleText = `${prefix} ${mainText}`;
+        } else {
+          ruleText = prefix || mainText;
+        }
+      }
+      
+      return ruleText;
     };
     // 添加 [RULE_ID:X] 标识符，用于 LLM 返回时精确匹配
     const filterRulesInfo = concernedRules.length > 0 
@@ -2316,6 +2358,26 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
       ? `分析以下群组中的一组消息，提取关键信息并判断各消息的重要性:` 
       : `分析以下消息，提取关键信息并判断其重要性:`;
     
+    // 构建消息结构说明
+    const messageStructureNote = `
+## 消息结构说明
+消息可能包含以下结构：
+- **对话线程 (Thread)**: 包含明确的回复关系
+  - root: 线程的根消息（发起话题的消息）
+  - reply: 对根消息的回复，包含 reply_to 指向被回复消息的 post_id
+- **独立消息 (Standalone)**: 没有明确的回复关系
+  - 注意：standalone 消息虽然没有明确点击"回复"，但可能在语义上是对同一群组中时间相近的对话线程的隐式回应。分析时请结合时间顺序和内容语义判断其是否属于某个对话线程的一部分。
+
+群组类型判断：如果群组名称是单个人名则视为私聊，多个人名则是临时会话，否则视为群聊。
+
+## 特殊规则说明：关注后续讨论
+规则中带有【关注后续讨论】标记的是"关注后续"类型规则，需要特别注意：
+1. 这类规则关注的是**某条特定消息的后续讨论**，规则中会提供原消息的 post_id 和内容
+2. 匹配时需要综合判断：直接回复（reply_to 指向原消息）、同 Thread 后续、语义相关的隐式回复
+3. **排除原消息本身**，只识别后续的讨论消息
+4. 对于这类规则匹配的消息，需要额外填写 followThreadInfo 字段
+`;
+    
     // 构建分析要点
     const analysisPoints = `请分析:
 1. 这条消息是关于什么的？简要总结。
@@ -2326,7 +2388,10 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
 6. 消息是否需要特别关注或回复？
 7. 这条消息可能与哪些其他信息或系统(如JIRA, Wiki)相关？
 8. 是否建议使用某些工具来进一步处理这条消息？如果是，请推荐工具和参数。
-${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是对前面消息的回应？` : ''}`;
+${messages.length > 1 ? `9. 【线程关系分析】消息间存在什么关联？
+   - 如果消息在 Thread 中，请分析 root 和 reply 的关系
+   - 如果消息是 Standalone，请判断它是否可能是对附近 Thread 消息的隐式回复
+   - 考虑时间顺序和内容语义进行判断` : ''}`;
     
     // 构建自定义prompt部分
     const customPromptSection = userConfig.customPrompts?.message?.enabled 
@@ -2337,7 +2402,7 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     const returnFormat = `请以JSON数组格式返回分析结果，每个元素对应一条消息:
 [
   {
-    ${messages.length > 1 ? '"messageIndex": 0,' : ''}
+    "post_id": "消息的post_id（必填，用于精确关联消息）",
     "summary": "根据消息上下文，总结消息的简要内容",
     "matchedRuleIds": [0, 2],  // 【重要】匹配的规则 ID 数组，使用规则定义中的 [RULE_ID:X] 中的 X 值
     "matchedRules": ["匹配的关注规则1（备用参考）", "匹配的关注规则2"],
@@ -2349,6 +2414,22 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     "sentiment": "positive|negative|neutral",
     "context": "消息在对话中的角色，如'提问','回答','确认'等",
     "mentionedSystems": ["系统1", "系统2"],
+    
+    // 线程上下文信息
+    "threadContext": {
+      "rootId": "所属线程的根消息ID（如果适用）",
+      "messageType": "root|reply|standalone",
+      "replyTo": "被回复消息的post_id（如果是reply）",
+      "isImplicitReply": false,  // 如果是 standalone 但判断为隐式回复，设为 true
+      "implicitReplyToRootId": null  // 如果 isImplicitReply 为 true，填写相关的 thread root_id
+    },
+    
+    // 关注后续讨论信息（仅当匹配"关注后续讨论"规则时填写）
+    "followThreadInfo": {
+      "originalPostId": "被关注的原消息post_id",
+      "relationType": "direct_reply|same_thread|semantic_related|mention",  // 与原消息的关系类型
+      "relevanceScore": 0.9  // 0-1 之间的相关度评分
+    },
     
     // 决策和工具字段
     "thought": "分析当前情况和下一步行动的详细思考过程",
@@ -2382,24 +2463,25 @@ ${messages.length > 1 ? `9. 消息间存在什么关联？后续消息是否是�
     
     // 构建特别说明
     const specialNotes = `特别说明:
-1. 'needsProcessing'字段表示消息是否需要进一步处理(如存储、通知等)
-2. 'isNoiseMessage'字段标识是否为噪音消息(如单纯的"好的"、"谢谢"等)
-3. 'nextAction'应该是'use_tool'或'finish'，表示是否需要进一步处理
-4. 如果不需要处理(nextAction为finish)，请提供完整的决策信息(shouldStore, shouldNotify等)
-5. 对于entities字段，请尽可能完整提取实体信息
-6. 'tools'字段中只能包含上面列出的可用工具ID
-7. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义
-8. 【重要】'matchedRuleIds'字段必须使用规则定义中的 [RULE_ID:X] 中的数字 X，这是用于精确匹配规则的关键字段`
+1. 'post_id'字段必填，用于精确关联消息，请从输入消息的 post_id 属性中获取
+2. 'needsProcessing'字段表示消息是否需要进一步处理(如存储、通知等)
+3. 'isNoiseMessage'字段标识是否为噪音消息(如单纯的"好的"、"谢谢"等)
+4. 'nextAction'应该是'use_tool'或'finish'，表示是否需要进一步处理
+5. 如果不需要处理(nextAction为finish)，请提供完整的决策信息(shouldStore, shouldNotify等)
+6. 对于entities字段，请尽可能完整提取实体信息
+7. 'tools'字段中只能包含上面列出的可用工具ID
+8. 'params'字段应该根据选择的工具提供合适的参数，参考工具描述中的参数定义
+9. 【重要】'matchedRuleIds'字段必须使用规则定义中的 [RULE_ID:X] 中的数字 X，这是用于精确匹配规则的关键字段
+10. 【关注后续讨论】如果消息匹配了带有【关注后续讨论】标记的规则，必须填写'followThreadInfo'字段，包括原消息ID、关系类型和相关度评分`
     
     // 构建最终提示
     return `
 ${promptPrefix}
+${messageStructureNote}
 
 ${messages.length > 1 ? `群组信息:\n${contextInfo}` : `上下文信息:\n${contextInfo}`}
 
 ${messages.length > 1 ? `消息列表:\n${messagesContent}` : `消息内容:\n${messagesContent}`}
-
-如果群组名称是单个人名，则视为私聊，如果是多个人名，则是临时会话，否则视为群聊。
 
 ${filterRulesInfo}
 
@@ -2423,6 +2505,86 @@ ${specialNotes}
 - 如果消息涉及组织关系或人员，考虑使用orgStructure
 - 如果需要了解历史上下文，考虑使用historySearch
 `;
+  }
+
+  /**
+   * 构建支持 Thread 结构的消息内容
+   */
+  private buildMessagesContentWithThreads(messages: any[], analyzeByGroup: boolean): string {
+    // 检查是否有 thread 结构数据
+    const hasThreadStructure = messages.some(msg => 
+      msg.threads && msg.threads.length > 0 || 
+      msg.standalone && msg.standalone.length > 0
+    );
+
+    if (!hasThreadStructure) {
+      // 回退到旧的扁平格式
+      return messages.map((msg, index) => {
+        const parentInfo = msg.parentId || msg.parent_id ? `\n回复: ${msg.parentId || msg.parent_id}` : '';
+        return `消息 #${index + 1}:
+发送者: ${msg.sender || '未知发送者'}
+${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '未知群组'}` : ''}
+时间: ${msg.datetime || '未知时间'}${parentInfo}
+内容: ${msg.messageContent || '无内容'}`;
+      }).join('\n\n');
+    }
+
+    // 使用 Thread 结构化格式
+    let output = '';
+    let messageIndex = 0;
+
+    for (const group of messages) {
+      const threads = group.threads || [];
+      const standalone = group.standalone || [];
+
+      // 如果是多群组分析，添加群组分隔
+      if (messages.length > 1 && !analyzeByGroup) {
+        output += `\n【群组: ${group.groupName || '未知群组'}】\n`;
+      }
+
+      // 输出对话线程
+      if (threads.length > 0) {
+        output += '\n--- 对话线程 ---\n';
+        for (const thread of threads) {
+          output += `\n[Thread root_id=${thread.rootPostId}]\n`;
+          
+          // 根消息
+          if (thread.rootPost) {
+            const root = thread.rootPost;
+            output += `  [ROOT] 消息 #${++messageIndex}:\n`;
+            output += `    发送者: ${root.creator || root.sender || 'Unknown'}\n`;
+            output += `    时间: ${root.time || root.datetime}\n`;
+            output += `    post_id: ${root.id}\n`;
+            output += `    内容: ${root.text || root.content || ''}\n`;
+          } else {
+            output += `  [ROOT] post_id=${thread.rootPostId}: [原消息不在当前时间窗口内]\n`;
+          }
+          
+          // 回复消息
+          for (const reply of (thread.replies || [])) {
+            output += `  [REPLY → ${reply.parentId}] 消息 #${++messageIndex}:\n`;
+            output += `    发送者: ${reply.creator || reply.sender}\n`;
+            output += `    时间: ${reply.time || reply.datetime}\n`;
+            output += `    post_id: ${reply.id}\n`;
+            output += `    内容: ${reply.text || reply.content || ''}\n`;
+          }
+        }
+      }
+
+      // 输出独立消息
+      if (standalone.length > 0) {
+        output += '\n--- 独立消息（可能是对上述线程的隐式回复，请根据时间和内容判断）---\n';
+        for (const msg of standalone) {
+          output += `  [STANDALONE] 消息 #${++messageIndex}:\n`;
+          output += `    发送者: ${msg.creator || msg.sender}\n`;
+          output += `    时间: ${msg.time || msg.datetime}\n`;
+          output += `    post_id: ${msg.id}\n`;
+          output += `    内容: ${msg.text || msg.content || ''}\n`;
+        }
+      }
+    }
+
+    return output;
   }
   
   /**

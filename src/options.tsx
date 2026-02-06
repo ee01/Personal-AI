@@ -53,6 +53,27 @@ const Options = () => {
     // 保存配置到 Chrome 存储
     const saveConfig = async () => {
         try {
+            // 验证配置：检查是否会导致消息遗漏
+            if (config.MESSAGE_CONTEXT_WINDOW < config.MESSAGE_ANALYSIS_INTERVAL) {
+                const confirmed = window.confirm(
+                    `⚠️ 警告：当前配置可能导致消息遗漏！\n\n` +
+                    `消息上下文窗口（${config.MESSAGE_CONTEXT_WINDOW}分钟）小于分析频度（${config.MESSAGE_ANALYSIS_INTERVAL}分钟）\n\n` +
+                    `建议：将上下文窗口设置为至少 ${config.MESSAGE_ANALYSIS_INTERVAL} 分钟或更大。\n\n` +
+                    `是否仍要保存此配置？`
+                );
+                
+                if (!confirmed) {
+                    setStatus({
+                        message: '已取消保存',
+                        type: 'error'
+                    });
+                    setTimeout(() => {
+                        setStatus({message: '', type: ''});
+                    }, 3000);
+                    return;
+                }
+            }
+            
             await chrome.storage.local.set({ envConfig: config });
             // 通知background脚本更新配置
             await chrome.runtime.sendMessage({
@@ -198,6 +219,17 @@ const Options = () => {
                                 ...prev,
                                 MESSAGE_ANALYSIS_INTERVAL: numValue
                             }));
+                            
+                            // 检查是否会导致消息遗漏
+                            if (numValue > config.MESSAGE_CONTEXT_WINDOW) {
+                                setStatus({
+                                    message: '⚠️ 警告：消息上下文窗口小于分析频度，可能会遗漏消息！建议将上下文窗口设置为大于等于分析频度。',
+                                    type: 'error'
+                                });
+                                setTimeout(() => {
+                                    setStatus({message: '', type: ''});
+                                }, 8000);
+                            }
                         }}
                         min="1"
                     />
@@ -221,12 +253,28 @@ const Options = () => {
                                 ...prev,
                                 MESSAGE_CONTEXT_WINDOW: numValue
                             }));
+                            
+                            // 检查是否会导致消息遗漏
+                            if (numValue < config.MESSAGE_ANALYSIS_INTERVAL) {
+                                setStatus({
+                                    message: '⚠️ 警告：消息上下文窗口小于分析频度，可能会遗漏消息！建议将上下文窗口设置为大于等于分析频度。',
+                                    type: 'error'
+                                });
+                                setTimeout(() => {
+                                    setStatus({message: '', type: ''});
+                                }, 8000);
+                            }
                         }}
                         min="1"
                     />
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        每次分析时额外获取的历史消息时间范围（默认: 5分钟）
+                        每次分析时获取距离此刻的历史消息时间范围（默认: 125分钟）
                     </small>
+                    {config.MESSAGE_CONTEXT_WINDOW < config.MESSAGE_ANALYSIS_INTERVAL && (
+                        <small style={{ color: '#d32f2f', display: 'block', marginTop: '5px', fontWeight: 'bold' }}>
+                            ⚠️ 当前设置可能导致消息遗漏！上下文窗口（{config.MESSAGE_CONTEXT_WINDOW}分钟）小于分析频度（{config.MESSAGE_ANALYSIS_INTERVAL}分钟）
+                        </small>
+                    )}
                 </div>
                 
                 <div className="form-group">
@@ -278,6 +326,21 @@ const Options = () => {
                             onChange={handleInputChange}
                         />
                         启用消息审核（若不启用审核，会推送所有关注消息）
+                    </label>
+                </div>
+            </div>
+
+            <div className="form-section">
+                <h2>消息过滤设置</h2>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="FILTER_OWN_MESSAGES"
+                            checked={config.FILTER_OWN_MESSAGES}
+                            onChange={handleInputChange}
+                        />
+                        过滤自己发送的消息（消息分析时会自动忽略自己发送的消息）
                     </label>
                 </div>
             </div>

@@ -20,18 +20,11 @@ When you modify TypeScript/JavaScript files in `src/`:
    - Faster rebuilds with hot-reload
    - Output goes to `dist/` folder
 
-2. **Only use `npm run build`** when:
-   - User explicitly requests a production build
-   - Final verification before deployment
-   - Need to create the zip package
-
 ### Build Commands
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
 | `npm start` | Development build with watch mode | After code changes (default) |
-| `npm run build` | Production build + zip | Explicit request or deployment |
-| `npm run clean` | Clean dist folder | Before fresh build |
 
 ## Code Conventions
 

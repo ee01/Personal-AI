@@ -24,9 +24,9 @@
 //   - .reaction-settings-btn        : 设置按钮 (Settings Button)
 // 
 // 位置行为:
-//   - 默认垂直居中于消息卡片 (top: 50%)
+//   - 默认对齐到消息卡片右下角 (bottom: 8px)
 //   - 当存在 reply input (.conversation-reply-inline-input) 时，
-//     自动上移对齐到消息文本区域的垂直中心 (.align-to-text)
+//     自动调整到消息文本区域的底部 (.align-to-text)
 // =====================================================
 
 import { 
@@ -43,12 +43,14 @@ import {
 export interface MessageReactionConfig {
   enableSnooze: boolean;
   enableAutoReply: boolean;
+  enableFollowThread: boolean;
 }
 
 // 全局功能开关配置（仅用于初始化判断，实际显示时会实时获取）
 let globalConfig: MessageReactionConfig = {
   enableSnooze: true,
-  enableAutoReply: true
+  enableAutoReply: true,
+  enableFollowThread: true
 };
 
 /**
@@ -60,13 +62,15 @@ async function getRealtimeConfig(): Promise<MessageReactionConfig> {
     const config = result.envConfig || {};
     return {
       enableSnooze: config.ENABLE_SNOOZE !== false,
-      enableAutoReply: config.ENABLE_AUTO_REPLY !== false
+      enableAutoReply: config.ENABLE_AUTO_REPLY !== false,
+      enableFollowThread: config.ENABLE_FOLLOW_THREAD !== false
     };
   } catch (error) {
     console.log('获取消息交互配置失败，使用默认值');
     return {
       enableSnooze: true,
-      enableAutoReply: true
+      enableAutoReply: true,
+      enableFollowThread: true
     };
   }
 }
@@ -113,20 +117,19 @@ function injectStyles() {
     .message-reaction-toolbar {
       position: absolute;
       right: 8px;
-      top: 50%;
-      transform: translateY(-50%);
+      bottom: 8px;
       display: flex;
       align-items: center;
       gap: 0;
       opacity: 0;
-      transition: opacity 0.2s ease, top 0.15s ease;
+      transition: opacity 0.2s ease, bottom 0.15s ease;
       z-index: 100000;
       pointer-events: none;
     }
     
     /* 当有 reply input 时，工具栏对齐到消息文本区域 */
     .message-reaction-toolbar.align-to-text {
-      /* top 值会通过 JS 动态计算设置 */
+      /* bottom 值会通过 JS 动态计算设置 */
     }
     
     .message-reaction-toolbar.visible {
@@ -181,7 +184,31 @@ function injectStyles() {
     .auto-reply-btn:active {
       background: rgba(238, 90, 90, 0.25);
     }
-    
+
+    /* ===== 关注后续按钮 ===== */
+    .follow-thread-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #9c27b0;
+      background: rgba(156, 39, 176, 0.08);
+      border: 1px solid rgba(156, 39, 176, 0.2);
+      border-left: none;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .follow-thread-btn:hover {
+      background: rgba(156, 39, 176, 0.15);
+      border-color: rgba(156, 39, 176, 0.4);
+    }
+
+    .follow-thread-btn:active {
+      background: rgba(156, 39, 176, 0.25);
+    }
+
     /* ===== Icon 标识 ===== */
     .snooze-icon {
       width: 24px;
@@ -213,9 +240,20 @@ function injectStyles() {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 12px;
       color: #333;
-      overflow: hidden;
+      overflow: visible;
       animation: snooze-menu-in 0.12s ease-out;
       padding: 4px 0;
+    }
+    
+    /* 透明的连接区域，防止鼠标移动时菜单消失 */
+    .snooze-menu::before {
+      content: '';
+      position: absolute;
+      top: -10px;
+      left: 0;
+      right: 0;
+      height: 14px;
+      background: transparent;
     }
     
     @keyframes snooze-menu-in {
@@ -820,7 +858,8 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
     
     const newConfig: MessageReactionConfig = {
       enableSnooze: snoozeCheckbox.checked,
-      enableAutoReply: autoReplyCheckbox.checked
+      enableAutoReply: autoReplyCheckbox.checked,
+      enableFollowThread: true  // 保持关注后续功能启用
     };
     
     await saveReactionConfig(newConfig);
@@ -998,37 +1037,61 @@ function processMessageElement(messageElement: HTMLElement) {
    */
   async function updateToolbarContent(): Promise<MessageReactionConfig> {
     const config = await getRealtimeConfig();
-    
-    // 如果两个功能都禁用，隐藏工具栏
-    if (!config.enableSnooze && !config.enableAutoReply) {
+
+    // 如果所有功能都禁用，隐藏工具栏
+    if (!config.enableSnooze && !config.enableAutoReply && !config.enableFollowThread) {
       toolbar.classList.remove('visible');
       return config;
     }
-    
+
     // 根据配置决定显示哪些按钮
     let buttonsHtml = '';
-    
+
     // 设置按钮（x 按钮）在最左边，初始隐藏
     buttonsHtml += `<span class="reaction-settings-btn">×</span>`;
-    
+
+    // 计算按钮数量，用于调整边框样式
+    const enabledButtons = [config.enableSnooze, config.enableAutoReply, config.enableFollowThread].filter(Boolean);
+    const buttonCount = enabledButtons.length;
+
+    let buttonIndex = 0;
+
     if (config.enableSnooze) {
-      const borderRadius = config.enableAutoReply ? '' : 'border-radius: 4px 0 0 4px;';
-      buttonsHtml += `<span class="snooze-text-btn" style="${borderRadius}">稍后处理</span>`;
+      const isFirst = buttonIndex === 0;
+      const isLast = buttonIndex === buttonCount - 1;
+      const borderRadius = isFirst && isLast ? 'border-radius: 4px 0 0 4px;' : isFirst ? 'border-radius: 4px 0 0 4px;' : '';
+      const borderLeft = !isFirst ? 'border-left: none;' : '';
+      buttonsHtml += `<span class="snooze-text-btn" style="${borderRadius}${borderLeft}">稍后处理</span>`;
+      buttonIndex++;
     }
-    
+
+    if (config.enableFollowThread) {
+      const isFirst = buttonIndex === 0;
+      const isLast = buttonIndex === buttonCount - 1;
+      const borderRadius = isFirst && isLast ? 'border-radius: 4px 0 0 4px;' : isFirst ? 'border-radius: 4px 0 0 4px;' : '';
+      const borderLeft = !isFirst ? 'border-left: none;' : '';
+      buttonsHtml += `<span class="follow-thread-btn" style="${borderRadius}${borderLeft}">关注后续</span>`;
+      buttonIndex++;
+    }
+
     if (config.enableAutoReply) {
-      const borderStyle = config.enableSnooze ? 'border-left: none;' : 'border-radius: 4px 0 0 4px;';
-      buttonsHtml += `<span class="auto-reply-btn" style="${borderStyle}">自动答复</span>`;
+      const isFirst = buttonIndex === 0;
+      const isLast = buttonIndex === buttonCount - 1;
+      const borderRadius = isFirst && isLast ? 'border-radius: 4px 0 0 4px;' : isFirst ? 'border-radius: 4px 0 0 4px;' : '';
+      const borderLeft = !isFirst ? 'border-left: none;' : '';
+      buttonsHtml += `<span class="auto-reply-btn" style="${borderRadius}${borderLeft}">自动答复</span>`;
+      buttonIndex++;
     }
-    
+
     // 图标根据按钮情况调整样式
-    const iconBorderStyle = config.enableAutoReply ? '' : (config.enableSnooze ? 'border-radius: 0 4px 4px 0; border-left: none;' : 'border-radius: 4px;');
+    const hasAnyButton = buttonCount > 0;
+    const iconBorderStyle = hasAnyButton ? '' : 'border-radius: 4px;';
     buttonsHtml += `
       <div class="snooze-icon" style="${iconBorderStyle}">
         <img src="${iconUrl}" alt="Personal AI" />
       </div>
     `;
-    
+
     toolbar.innerHTML = buttonsHtml;
     return config;
   }
@@ -1037,7 +1100,7 @@ function processMessageElement(messageElement: HTMLElement) {
   targetElement.appendChild(toolbar);
   
   /**
-   * 调整工具栏位置：当有 reply input 时，对齐到消息文本区域
+   * 调整工具栏位置：当有 reply input 时，对齐到消息文本区域底部
    * PAI Toolbar Position Adjustment
    */
   function adjustToolbarPosition() {
@@ -1046,7 +1109,7 @@ function processMessageElement(messageElement: HTMLElement) {
     const replyInput = parentContainer?.querySelector('.conversation-reply-inline-input');
     
     if (replyInput) {
-      // 有 reply input，需要调整位置到消息文本区域
+      // 有 reply input，需要调整位置到消息文本区域底部
       const textBody = targetElement.querySelector('[data-name="body"]') || 
                        targetElement.querySelector('[data-name="text"]') ||
                        targetElement.querySelector('.sc-cnQiCv'); // 消息文本容器的备用选择器
@@ -1055,18 +1118,18 @@ function processMessageElement(messageElement: HTMLElement) {
         const targetRect = targetElement.getBoundingClientRect();
         const textRect = textBody.getBoundingClientRect();
         
-        // 计算文本区域相对于目标元素的中心位置
-        const textCenterY = textRect.top + textRect.height / 2;
-        const targetTop = targetRect.top;
-        const relativeTop = textCenterY - targetTop;
+        // 计算文本区域底部相对于目标元素底部的距离
+        const textBottom = textRect.bottom;
+        const targetBottom = targetRect.bottom;
+        const relativeBottom = targetBottom - textBottom;
         
         // 设置工具栏位置
-        toolbar.style.top = `${relativeTop}px`;
+        toolbar.style.bottom = `${Math.max(8, relativeBottom)}px`;
         toolbar.classList.add('align-to-text');
       }
     } else {
       // 没有 reply input，恢复默认位置
-      toolbar.style.top = '50%';
+      toolbar.style.bottom = '8px';
       toolbar.classList.remove('align-to-text');
     }
   }
@@ -1313,6 +1376,56 @@ function bindToolbarEvents(
         showSuccessToast('正在打开自动答复配置...');
       } catch (error) {
         console.error('打开自动答复配置失败:', error);
+        showErrorToast('打开配置失败，请稍后重试');
+      }
+    });
+  }
+
+  // 关注后续按钮事件绑定
+  const followThreadBtn = toolbar.querySelector('.follow-thread-btn') as HTMLElement | null;
+
+  if (followThreadBtn) {
+    // 悬浮：隐藏 Snooze 快速菜单
+    followThreadBtn.addEventListener('mouseenter', () => {
+      hideSnoozeMenu();
+    });
+
+    // 点击：打开关注后续配置
+    followThreadBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+
+      // 获取消息信息
+      let messageInfo = getMessageInfo();
+      if (!messageInfo) {
+        messageInfo = await extractMessageInfo(targetElement);
+        if (messageInfo) setMessageInfo(messageInfo);
+      }
+
+      if (!messageInfo) {
+        showErrorToast('无法获取消息信息');
+        return;
+      }
+
+      // 发送消息给 background 打开关注后续配置窗口
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'OPEN_FOLLOW_THREAD_CONFIG',
+          data: {
+            postId: messageInfo.id,
+            sender: messageInfo.senderName,
+            groupId: messageInfo.groupId,
+            groupName: messageInfo.groupName,
+            content: messageInfo.content,
+            timestamp: messageInfo.timestamp,
+            messageLink: messageInfo.messageLink
+          }
+        });
+
+        hideAllSnoozeUI();
+        hideToolbar();
+        showSuccessToast('正在打开关注后续配置...');
+      } catch (error) {
+        console.error('打开关注后续配置失败:', error);
         showErrorToast('打开配置失败，请稍后重试');
       }
     });

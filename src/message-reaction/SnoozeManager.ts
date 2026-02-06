@@ -114,14 +114,17 @@ export async function extractMessageInfo(messageElement: HTMLElement): Promise<M
     if (textElement) {
       // 克隆元素并移除 @ 提及的额外信息
       const clone = textElement.cloneNode(true) as HTMLElement;
-      content = clone.textContent?.trim() || '';
+      // 保留换行符和其他格式,只移除首尾空白
+      content = clone.textContent || '';
+      content = content.replace(/^\s+|\s+$/g, '');
     }
     
     // 如果还没找到内容，尝试其他选择器
     if (!content) {
       const bodyElement = messageElement.querySelector('.sc-jPbAGM, .sc-cnQiCv');
       if (bodyElement) {
-        content = bodyElement.textContent?.trim() || '';
+        content = bodyElement.textContent || '';
+        content = content.replace(/^\s+|\s+$/g, '');
       }
     }
     
@@ -162,8 +165,9 @@ export async function extractMessageInfo(messageElement: HTMLElement): Promise<M
       ? `https://app.ringcentral.com/l/messages/${groupId}/${postId}`
       : window.location.href;
     
-    // 清理内容，移除多余空白
-    content = content.replace(/\s+/g, ' ').trim();
+    // 不再压缩空白字符,保留原始格式(包括换行符)
+    // 只规范化连续的空格(但保留换行符)
+    content = content.replace(/ {2,}/g, ' ');
     
     console.log('🔔 Snooze: 提取消息信息', {
       postId,
@@ -178,7 +182,8 @@ export async function extractMessageInfo(messageElement: HTMLElement): Promise<M
       groupId,
       groupName: groupName || 'Unknown',
       senderName: senderName || 'Unknown',
-      content: content.substring(0, 200) + (content.length > 200 ? '...' : ''),
+      // 保留完整内容,不截断(移除 200 字符限制)
+      content: content,
       timestamp,
       messageLink
     };

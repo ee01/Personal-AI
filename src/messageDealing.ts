@@ -1,4 +1,3 @@
-import { sendBotMessage } from './bot';
 import { callLLMJsonAPI, handleLLMRequest } from './llm';
 import { getEnvConfig, showToast } from './utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -8,11 +7,23 @@ import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
 import { memorySystem, StoreResult } from './memory';
 import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
-import { 
-    handleAutoReplyRules, 
+import {
+    handleAutoReplyRules,
     TopicItemWithAutoReply,
     formatAutoReplyTime
 } from './message-reaction';
+import {
+    updateRelatedMessages,
+    storeRelatedMessage
+} from './message-reaction/FollowThreadHandler';
+import { FollowThreadMatch, MessageInfo, RelatedMessageMeta } from './types/followThread';
+import {
+    notificationService,
+    NotificationData,
+    hasNotifyMethod
+} from './services/NotificationService';
+import { buildRuleText, extractRuleIdsFromMatchedRule } from './utils/ruleTextBuilder';
+import { buildMessageFilterSystemPrompt } from './prompts';
 
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
@@ -72,11 +83,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 		};
 	}
 
-	const concernedItems: {text: string, pushToGlip?: boolean, mentionMe?: boolean}[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
-		{text:'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况（关键词：recording/RCV mobile/BE dependencies，必须同时包含"recording"和"BE"相关关键词）'},
-		{text:'聊到关于公司政策，也可以是政策相关的八卦消息'},
-		{text:'Sophia (Jinmei) Lin 发送的所有消息（只需要检查发送者是否完全匹配）'},
-		{text:'任何明确 @我 的消息，或者提到我的名字的消息'},
+	// concernedItems 使用 TopicItemWithAutoReply 类型，notifyMethod 使用逗号分隔格式如 'bot,chrome'
+	const concernedItems: TopicItemWithAutoReply[] = (await chrome.storage.local.get('concernedItems')).concernedItems || [
+		{id: '1', text:'recording 项目在 RCV mobile 中的相关信息，特别是 BE 依赖部分的完成情况', expiredAt: 0, notifyMethod: 'bot'},
+		{id: '2', text:'聊到关于公司政策，也可以是政策相关的八卦消息', expiredAt: 0, notifyMethod: 'bot'},
+		{id: '3', text:'Sophia (Jinmei) Lin 发送的所有消息（只需要检查发送者是否完全匹配）', expiredAt: 0, notifyMethod: 'bot'},
+		{id: '4', text:'任何明确 @我 的消息，或者提到我的名字的消息', expiredAt: 0, notifyMethod: 'bot'},
 	];
 
 	data = data.filter(item => item.type === 'message')
@@ -128,6 +140,9 @@ export async function analyzeMessagesInBackground (data: any[], username: string
         console.log('Using Intelligent Agent to process messages');
 		console.log('使用智能Agent系统直接批量处理消息，支持消息降噪和上下文分析...');
 		
+		// 获取用户信息
+		const { userinfo } = await chrome.storage.local.get('userinfo');
+		
 		try {
 			// 设置初始进度信息
 			chrome.storage.local.set({
@@ -138,7 +153,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				}
 			});
 			
-			// 构造消息组格式
+			// 构造消息组格式（包含 parentId 和 thread 结构）
 			const messageGroups = data.map(item => ({
 				groupName: item.groupName,
 				groupId: item.groupId,
@@ -146,10 +161,17 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					sender: post.creator,
 					datetime: post.time,
 					post_id: post.id || '',
+					parent_id: post.parentId || undefined,  // 新增：父消息 ID
 					content: post.text,
 					raw: post
-				}))
+				})),
+				// 新增：Thread 结构化数据
+				threads: item.threads || [],
+				standalone: item.standalone || []
 			}));
+
+			// 🆕 关注后续检测已移至 LLM 分析中统一处理（方案 B）
+			// 通过 buildRuleText 生成专门的"关注后续"规则，让 LLM 识别语义相关的消息
 			
 			// 一次性传递所有消息组给processMessage处理
 			console.log(`开始批量处理 ${messageGroups.length} 个群组的所有消息...`);
@@ -202,7 +224,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 			});
 
 			// 处理 shouldNotify、自动答复和 shouldStore 标志
-			// 处理顺序：1.自动答复 2.通知（包含自动答复信息） 3.存储
+			// 处理顺序：1.自动答复 1.5.关注后续（只更新数据） 2.统一通知 3.存储
 			for (const result of resultsArray) {
 				const originalMessage = result.messageContext || {};
 				const postId = (originalMessage as any).postId || 
@@ -229,18 +251,64 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						}
 					}, concernedItems as TopicItemWithAutoReply[]);
 				}
+
+				// 1.5️⃣ 处理关注后续（只更新数据，不推送通知）
+				let followThreadItem: TopicItemWithAutoReply | undefined;
+				if (result.followThreadInfo && result.followThreadInfo.originalPostId) {
+					try {
+						followThreadItem = (concernedItems as TopicItemWithAutoReply[]).find(item => 
+							item.followThread && 
+							item.followConfig?.originalMessage?.postId === result.followThreadInfo?.originalPostId
+						);
+
+						if (followThreadItem && followThreadItem.followConfig) {
+							console.log(`📌 关注后续匹配成功 [agentThinking-LLM识别]: ${originalMessage.sender} 的消息与 "${followThreadItem.followConfig.originalMessage.content?.substring(0, 30)}..." 相关`);
+
+							// 只更新关联消息数据，不推送通知（通知在下方统一处理）
+							const relatedMsg: RelatedMessageMeta = {
+								postId,
+								sender: originalMessage.sender || '',
+								datetime: originalMessage.datetime || '',
+								relationType: result.followThreadInfo.relationType || 'semantic_related',
+								notifiedAt: new Date().toISOString(),
+								summary: result.summary || ''
+							};
+							await updateRelatedMessages(followThreadItem.id, relatedMsg);
+
+							// 存储关联消息到 ChromaDB
+							await storeRelatedMessage({
+								followItemId: followThreadItem.id,
+								message: {
+									postId,
+									teamId: followThreadItem.followConfig.originalMessage.teamId,
+									sender: originalMessage.sender || '',
+									content: originalMessage.messageContent || '',
+									datetime: originalMessage.datetime || ''
+								},
+								isOriginal: false,
+								relationType: result.followThreadInfo.relationType || 'semantic_related'
+							});
+						}
+					} catch (followThreadError) {
+						console.error('❌ 关注后续数据处理失败:', followThreadError);
+					}
+				}
+
+				// 2️⃣ 统一通知推送（合并关注后续和普通推送）
+				// 查找匹配的关注项
+				const matchedRuleIds = extractRuleIdsFromMatchedRule(result.matchedRule || '');
+				const matchedConcernedItem = followThreadItem || findMatchedConcernedItem(
+					result.matchedRule,
+					concernedItems as TopicItemWithAutoReply[],
+					matchedRuleIds
+				);
 				
-				// 2️⃣ 处理 shouldNotify 标志 - 发送通知（包含自动答复信息）
-				if (result.shouldNotify && envConfig.ENABLE_BOT) {
-					// 使用新的匹配函数查找关注项（优先使用规则 ID，fallback 到文本匹配）
-					const matchedRuleIds = extractRuleIdsFromMatchedRule(result.matchedRule || '');
-					const matchedConcernedItem = findMatchedConcernedItem(
-						result.matchedRule,
-						concernedItems as TopicItemWithAutoReply[],
-						matchedRuleIds
-					);
-					const shouldMention = matchedConcernedItem?.mentionMe || false;
-					
+				// 获取通知方式
+				const notifyMethod = matchedConcernedItem?.notifyMethod || '';
+				const shouldMention = matchedConcernedItem?.mentionMe || false;
+				
+				// 如果需要通知且有配置通知方式，则发送通知
+				if ((result.shouldNotify || followThreadItem) && notifyMethod) {
 					// 构建自动答复信息（如果有）
 					const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
 						hasAutoReply: true,
@@ -249,19 +317,39 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 						messageId: autoReplyResult.replyInfo.messageId
 					} : undefined;
 					
-					sendBotMessage({
-						matched_rule: result.matchedRule || '',
-						team_name: originalMessage.groupName || '',
-						team_id: originalMessage.groupId || '',
+					// 构建通知数据
+					const notificationData: NotificationData = {
+						teamId: originalMessage.groupId || '',
+						teamName: originalMessage.groupName || '',
 						sender: originalMessage.sender || '',
-						message_content: originalMessage.messageContent || '',
+						messageContent: originalMessage.messageContent || '',
 						summary: result.summary || '',
-						reply_advice: result.replyAdvice || '',
 						datetime: originalMessage.datetime || '',
+						postId,
+						matchedRule: result.matchedRule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
+						replyAdvice: result.replyAdvice || '',
 						mention: shouldMention,
-						post_id: postId,
-						autoReplyInfo
-					}).catch(console.error);
+						autoReplyInfo,
+						// 如果是关注后续，添加原消息信息
+						originalMessageInfo: followThreadItem?.followConfig ? {
+							sender: followThreadItem.followConfig.originalMessage.sender,
+							content: followThreadItem.followConfig.originalMessage.content,
+							datetime: String(followThreadItem.followConfig.originalMessage.datetime),
+							messageUrl: followThreadItem.followConfig.originalMessage.messageUrl
+						} : undefined
+					};
+					
+					// 使用 NotificationService 发送通知
+					await notificationService.sendNotification(
+						notificationData,
+						{ notifyMethod },
+						// LLM 审核配置（只对 bot 通知生效）
+						{
+							enabled: hasNotifyMethod(notifyMethod, 'bot'),
+							userName: userinfo.fullName,
+							concernedItems: concernedItems
+						}
+					).catch(console.error);
 				}
 				
 				// 3️⃣ 处理 shouldStore 标志 - 使用统一存储接口（后于自动答复）
@@ -345,6 +433,9 @@ export async function analyzeMessagesInBackground (data: any[], username: string
         // 使用智能 Agent 系统处理
         console.log('Using Intelligent Agent Workflow to process messages');
 		
+		// 获取用户信息
+		const { userinfo } = await chrome.storage.local.get('userinfo');
+		
 		// agentWorkflow 模式需要逐个处理每个群组的消息
 		for (let index = 0; index < data.length; index++) {
 			const item = data[index];
@@ -375,28 +466,44 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				console.log(`Agent处理消息结果:`, processResult);
 				
 				// 如果需要发送通知
-				if (processResult.shouldNotify && envConfig.ENABLE_BOT) {
-					// 使用新的匹配函数查找关注项（优先使用规则 ID，fallback 到文本匹配）
+				if (processResult.shouldNotify) {
+					// 使用新的匹配函数查找关注项
 					const matchedRuleIds = extractRuleIdsFromMatchedRule(processResult.matchedRule || '');
 					const matchedConcernedItem = findMatchedConcernedItem(
 						processResult.matchedRule,
 						concernedItems as TopicItemWithAutoReply[],
 						matchedRuleIds
 					);
+					
+					// 获取通知方式
+					const notifyMethod = matchedConcernedItem?.notifyMethod || '';
 					const shouldMention = matchedConcernedItem?.mentionMe || false;
 					
-					sendBotMessage({
-						matched_rule: processResult.matchedRule || '',
-						team_name: processResult.messageContext?.groupName || '',
-						team_id: processResult.messageContext?.groupId || '',
-						sender: processResult.messageContext?.sender || '',
-						message_content: processResult.messageContext?.messageContent || '',
-						summary: processResult.summary || '',
-						reply_advice: processResult.replyAdvice || '',
-						datetime: processResult.messageContext?.datetime || '',
-						mention: shouldMention,
-						post_id: post.id || ''
-					}).catch(console.error);
+					// 如果有配置通知方式，则发送通知
+					if (notifyMethod) {
+						const notificationData: NotificationData = {
+							teamId: processResult.messageContext?.groupId || '',
+							teamName: processResult.messageContext?.groupName || '',
+							sender: processResult.messageContext?.sender || '',
+							messageContent: processResult.messageContext?.messageContent || '',
+							summary: processResult.summary || '',
+							datetime: processResult.messageContext?.datetime || '',
+							postId: post.id || '',
+							matchedRule: processResult.matchedRule || '',
+							replyAdvice: processResult.replyAdvice || '',
+							mention: shouldMention
+						};
+						
+						await notificationService.sendNotification(
+							notificationData,
+							{ notifyMethod },
+							{
+								enabled: hasNotifyMethod(notifyMethod, 'bot'),
+								userName: userinfo.fullName,
+								concernedItems: concernedItems
+							}
+						).catch(console.error);
+					}
 				}
 			}
 		}
@@ -420,72 +527,12 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 async function processMessageFilterByConcernedItems(data: any[], concernedItems: {text: string}[], username: string, isScheduledTask: boolean) {
     const envConfig = await getEnvConfig();
 
-	const system_prompt = `
-你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
-${envConfig.ANALYZE_BY_GROUP ? '' : '每条 <message_group> 都是同一个群组的消息集合，其中可能包含了多条不同人发的 <message_content>，不同的 <message_group> 不相关联。'}
-<message_group> 的 property 有 team_name，如果team_name是单个人名，则视为私聊，如果是多个人名，则是临时会话，否则视为群聊。
-
----- 以下是我的需求和你需要返回的内容定义 ----
-${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个查看 <message_group>，并且针对每个 <message_group> 都' }执行以下三步的任务：
-1. 请仔细阅读 <message_group> 里的每条聊天消息，判断里面的 <message_content> 是否有符合以下规则其中一条${envConfig.ANALYZE_BY_GROUP ? '' : '。如果没有则跳过并查看下一个 message_group'}：
-	- 规则0: 排除发送者是"SM AI undefined"的消息，排除发送者是自己的消息
-	${concernedItems.map((item:any, i:number) => `- 规则${i+1} [RULE_ID:${i}]: ${buildRuleText(item as TopicItemWithAutoReply)}`).join('\n	')}
-2. 对 <message_group> 中有符合规则的消息，请提取以下字段：
-	- <message_content> 标签内的消息原文（只提取原文，即便文字很多，不做删减不做修改不做翻译，并保留原有格式包括<a>标签、换行等）
-	- <message_content> properties 中的发送者sender和发送时间datetime, 还有 <message_group> properties 中的 team_name, team_id, post_id
-	- <message_content> properties 中的 message_index（如果存在）
-3. 对 <message_group> 中刚有符合规则的消息，每条生成对应的这几个新字段：
-	- matched_rule_ids: 【重要】符合的规则的 ID 数组，使用规则定义中的 [RULE_ID:X] 中的 X 值，例如 [0, 2] 表示符合规则1和规则3
-	- matched_rule: 上面第一步的符合到的规则x的原文内容（作为备用参考）
-	- filter_reason: 选择这条消息过滤出来的原因，可以用中文表达
-	- summary: 对这条消息所在的 message_group 的其他消息的上下文做出总结并适当的推理为什么sender会发出这个消息。请不要留空，这里可以用中文
-	- reply_advice: 针对这条消息的上下文，给出回复建议，回复用的语言跟随上下文聊天语言。如果觉得这条消息不需要回复，请回复空字符串
-	- entities: 提取消息中的实体信息，包括人物、项目、话题、行动项、情感和类别
-	- user_relation_type: 基于智能分析结果推断本消息与我的关系，先检查是否有明确提及我的名字或者是在私聊(群组名是单个人名)直接对我说的话，如果有则返回 mention_me，提及团队或Team则返回 mention_team，如果没有则检查是否有明确提及项目、政策、人员等，如果有则返回 project_related、policy_related、person_tracking，如果没有则返回 general_interest
-${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，开始遍历下一个 <message_group>，直到所有 <message_group> 都遍历完成。'}
-
-将任务输出的数据进行如下验证：
-1. 以严格JSON格式输出，仅包含匹配的消息。如果没有匹配任何规则，输出{success: false, message: "No messages matched any rules", data: []}：
-{
-	"success": true,
-	"message": "消息过滤完成: 共处理 {total} 个群组",
-	"data": [{
-		"message_content": "{message_content}",
-		"sender": "{sender}",
-		"message_index": 0,
-		"matched_rule_ids": [0],
-		"matched_rule": "所符合的规则的内容（备用参考）",
-		"filter_reason": "",
-		"user_relation_type": "消息与用户的关系类型：mention_me(直接提到我)|mention_team(@Team)|project_related(项目相关关注)|policy_related(政策规定关注)|person_tracking(特定人员追踪)|general_interest(一般关注)",
-		"post_id": "{post_id}",
-		"team_name": "{team_name}",
-		"team_id": "{team_id}",
-		"team_url": "https://app.ringcentral.com/messages/{team_id}",
-		"summary": "请总结上下文到这里",
-		"reply_advice": "建议的回复填入此",
-		"datetime": "{datetime}",
-		"entities": {
-			"people": ["消息中提到的人物"],
-			"projects": ["消息中提到的项目"],
-			"topics": ["消息中提到的话题"],
-			"actions": ["消息中需要执行的动作"],
-			"documents": [{"name": "文档名称", "url": "链接", "type": "文档类型"}],
-			"technologies": [{"name": "技术名称", "category": "技术分类", "version": "版本号"}],
-			"sentiment": "整体情感(positive/negative/neutral)",
-			"category": [消息类别，如"决策"、"讨论"、"公告"等]
-		},
-		"contextMessages": [{
-			"id": "message_group内所有相关消息的post_id",
-			"sender": "message_group内所有相关消息的发送者",
-			"content": "message_group内所有相关消息原文",
-			"datetime": "message_group内所有相关消息的发送时间",
-			"isMainMessage": false // 是否是符合条件过滤出来的关键消息
-		}]
-	}]
-}
-2. 再次检查 message_content，是否是 <message_content> 标签内的消息原文，如果发现不是，找到对应的 <message_content> 标签，并返回对应的 message_content
-3. 再次检查下即将输出的内容，是否有重复记录，如果发现重复记录（message_content、team_id 和 datetime 都相同），保留时间较新的那条记录，删除重复的记录
-`
+	// 使用统一的 prompt 构建函数
+	const system_prompt = buildMessageFilterSystemPrompt({
+		concernedItems: concernedItems as TopicItemWithAutoReply[],
+		username,
+		envConfig
+	});
 
 	// 以下是原有的LLM处理逻辑，当未启用智能Agent时使用
 	if (envConfig.ANALYZE_BY_GROUP) {
@@ -517,9 +564,8 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 				chrome.storage.local.remove('ollamaAnalysisProgress');
 				break;
 			}
-			const message = `<message_group team_name="${item.groupName}" team_id="${item.groupId}">${item.posts.map((post:any, msgIdx: number) => `
-	<message_content sender="${post.creator}" datetime="${post.time}" post_id="${post.id}" message_index="${msgIdx}">${post.text}</message_content>`).join('')}
-</message_group>`
+			// 使用新的 Thread 结构化格式构建消息
+			const message = formatMessageGroupWithThreads(item);
 			const user_prompt = `
 我的名字是：<current_user_name>${username}</current_user_name> （如果过滤规则中消息的内容 message_content 有提到我，可作为判断消息是否有@我，即便是不带姓氏@名字部分 也视为提及，排除 sender 是我的消息）
 
@@ -540,15 +586,8 @@ ${message}
 		}
 		return {success: true, message: '消息过滤完成: 共处理 ' + data.length + ' 个群组'};
 	} else {
-		// 合并发送 LLM - 添加 message_index 和 post_id 用于精确匹配
-		let globalMsgIndex = 0;
-		const messages = data.reduce((acc, item) => `${acc}\n
-<message_group team_name="${item.groupName}" team_id="${item.groupId}">${item.posts.map((post:any) => {
-			const currentIndex = globalMsgIndex++;
-			return `
-	<message_content sender="${post.creator}" datetime="${post.time}" post_id="${post.id}" message_index="${currentIndex}">${post.text}</message_content>`;
-		}).join('')}
-</message_group>`, '<messages>') + '\n</messages>';
+		// 合并发送 LLM - 使用 Thread 结构化格式
+		const messages = '<messages>\n' + data.map(item => formatMessageGroupWithThreads(item)).join('\n') + '\n</messages>';
 
 		const user_prompt = `
 我的名字是：<current_user_name>${username}</current_user_name> （如果过滤规则中消息的内容 message_content 有提到我，可作为判断消息是否有@我，即便是不带姓氏@名字部分 也视为提及，排除 sender 是我的消息）
@@ -602,42 +641,23 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 					}
 				}
 			
-				// 如果需要推送 Glip 消息，则进行审核
-				if (body.messageData && (body.messageData.groupName.includes('4700372020') || body.messageData.groupName == 'SM AI')) continue;	// 排除 SM AI 的私人消息
-				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') continue;	// 排除 SM AI 的私人消息
-				if (json.sender == 'SM AI undefined' || json.sender == userinfo.fullName) continue;	// Todo: sender 在 SM AI bot 中会被误判
-				let isPassReview = true;
-				let matched_rule = json.matched_rule;
-				if (envConfig.LLM_REVIEW_BEFORE_SEND) {
-				  // 先进行 LLM 审核
-				  const concernedItemsForPush = concernedItems.filter((item:any) => item.pushToGlip);
-				  const reviewPrompt = `本条消息是由 ${json.sender} 在群 ${json.team_name} 中发送的，内容如下：
-<message_content>${json.message_content}</message_content>
-这是上下文的总结：<summary>${json.summary}</summary>
+				// 排除 SM AI 的私人消息和自己发送的消息
+				if (body.messageData && (body.messageData.groupName.includes('4700372020') || body.messageData.groupName == 'SM AI')) continue;
+				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') continue;
+				// 根据配置决定是否过滤自己发送的消息
+				if (json.sender == 'SM AI undefined') continue;
+				if (envConfig.FILTER_OWN_MESSAGES && json.sender == userinfo.fullName) continue;
+				
+				const matched_rule = json.matched_rule;
 
-请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${userinfo.fullName}）：
-${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text}`).join('\n')}
-
-如果符合规则，请直接返回符合的规则原文，符合多条规则用换行隔开，不要包含其他内容。如果不符合任何规则，请返回"不通过"。
-				  `;
-				  const reviewResponseRaw = await handleLLMRequest({ prompt: reviewPrompt, type: 'review' });
-				  console.log('reviewResponseRaw:', reviewResponseRaw, reviewPrompt);
-				  const reviewResponse = reviewResponseRaw.replace(/<think>[\s\S]*?<\/think>/g, '').replace('\n', '').trim()
-				  if (reviewResponse.includes('不通过')) {
-					isPassReview = false;
-				  }else{
-					  matched_rule = reviewResponse.length < 100 ? reviewResponse : matched_rule;
-				  }
-				}
-
-				// 处理顺序：1.自动答复 2.通知（包含自动答复信息） 3.存储
+				// 处理顺序：1.自动答复 1.5.关注后续（只更新数据） 2.统一通知 3.存储
 				
 				// 1️⃣ 处理自动答复规则（最先处理，以便在通知中包含自动答复信息）
 				let autoReplyResult: { handled: boolean; replyInfo?: { content: string; scheduleTime: Date; status: string; messageId?: string } } = { handled: false };
 				if (matched_rule || (json.matched_rule_ids && json.matched_rule_ids.length > 0)) {
 					autoReplyResult = await handleAutoReplyRules({
 						matchedRule: matched_rule,
-						matchedRuleIds: json.matched_rule_ids,  // 传入规则 ID 数组用于精确匹配
+						matchedRuleIds: json.matched_rule_ids,
 						messageContext: {
 							sender: json.sender,
 							groupId: json.team_id,
@@ -647,19 +667,65 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 							datetime: json.datetime,
 							postId: json.post_id
 						}
-					}, concernedItems as TopicItemWithAutoReply[]);
+					}, concernedItems);
+				}
+
+				// 1.5️⃣ 处理关注后续（只更新数据，不推送通知）
+				let followThreadItem: TopicItemWithAutoReply | undefined;
+				if (json.follow_thread_info && json.follow_thread_info.original_post_id) {
+					try {
+					followThreadItem = concernedItems.find((item: TopicItemWithAutoReply) => 
+						item.followThread && 
+						item.followConfig?.originalMessage?.postId === json.follow_thread_info.original_post_id
+					);
+
+						if (followThreadItem && followThreadItem.followConfig) {
+							console.log(`📌 关注后续匹配成功 [LLM识别]: ${json.sender} 的消息与 "${followThreadItem.followConfig.originalMessage.content.substring(0, 30)}..." 相关`);
+
+							// 只更新关联消息数据，不推送通知（通知在下方统一处理）
+							const relatedMsg: RelatedMessageMeta = {
+								postId: json.post_id,
+								sender: json.sender,
+								datetime: json.datetime,
+								relationType: json.follow_thread_info.relation_type || 'semantic_related',
+								notifiedAt: new Date().toISOString(),
+								summary: json.summary || ''
+							};
+							await updateRelatedMessages(followThreadItem.id, relatedMsg);
+
+							// 存储关联消息到 ChromaDB
+							await storeRelatedMessage({
+								followItemId: followThreadItem.id,
+								message: {
+									postId: json.post_id,
+									teamId: followThreadItem.followConfig.originalMessage.teamId,
+									sender: json.sender,
+									content: json.message_content,
+									datetime: json.datetime
+								},
+								isOriginal: false,
+								relationType: json.follow_thread_info.relation_type || 'semantic_related'
+							});
+						}
+					} catch (followThreadError) {
+						console.error('❌ 关注后续数据处理失败:', followThreadError);
+					}
 				}
 				
-				// 2️⃣ 如果审核通过，则推送 Glip 消息（包含自动答复信息）
-				if (isPassReview && envConfig.ENABLE_BOT) {
-					// 使用新的匹配函数查找关注项（优先使用规则 ID，fallback 到文本匹配）
-					const matchedConcernedItem = findMatchedConcernedItem(
-						matched_rule,
-						concernedItems as TopicItemWithAutoReply[],
-						json.matched_rule_ids // LLM 返回的规则 ID 数组
-					);
-					const shouldMention = matchedConcernedItem?.mentionMe || false;
-					
+				// 2️⃣ 统一通知推送（合并关注后续和普通推送）
+				// 查找匹配的关注项
+				const matchedConcernedItem = followThreadItem || findMatchedConcernedItem(
+					matched_rule,
+					concernedItems,
+					json.matched_rule_ids
+				);
+				
+				// 获取通知方式
+				const notifyMethod = matchedConcernedItem?.notifyMethod || '';
+				const shouldMention = matchedConcernedItem?.mentionMe || false;
+				
+				// 如果有配置通知方式，则发送通知
+				if (notifyMethod) {
 					// 构建自动答复信息（如果有）
 					const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
 						hasAutoReply: true,
@@ -668,19 +734,39 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 						messageId: autoReplyResult.replyInfo.messageId
 					} : undefined;
 					
-					sendBotMessage({
-						matched_rule,
-						team_name: body.messageData ? body.messageData.groupName : json.team_name,
-						team_id: body.messageData ? body.messageData.groupId : json.team_id,
+					// 构建通知数据
+					const notificationData: NotificationData = {
+						teamId: body.messageData ? body.messageData.groupId : json.team_id,
+						teamName: body.messageData ? body.messageData.groupName : json.team_name,
 						sender: json.sender,
-						message_content: json.message_content,
-						summary: json.summary,
-						reply_advice: json.reply_advice,
+						messageContent: json.message_content,
+						summary: json.summary || '',
 						datetime: json.datetime,
+						postId: json.post_id,
+						matchedRule: matched_rule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
+						replyAdvice: json.reply_advice,
 						mention: shouldMention,
-						post_id: json.post_id,
-						autoReplyInfo
-					}).catch(console.error);
+						autoReplyInfo,
+						// 如果是关注后续，添加原消息信息
+						originalMessageInfo: followThreadItem?.followConfig ? {
+							sender: followThreadItem.followConfig.originalMessage.sender,
+							content: followThreadItem.followConfig.originalMessage.content,
+							datetime: String(followThreadItem.followConfig.originalMessage.datetime),
+							messageUrl: followThreadItem.followConfig.originalMessage.messageUrl
+						} : undefined
+					};
+					
+					// 使用 NotificationService 发送通知
+					await notificationService.sendNotification(
+						notificationData,
+						{ notifyMethod },
+						// LLM 审核配置（只对 bot 通知生效）
+						{
+							enabled: hasNotifyMethod(notifyMethod, 'bot'),
+							userName: userinfo.fullName,
+							concernedItems: concernedItems
+						}
+					).catch(console.error);
 				}
 				
 				// 3️⃣ 存储消息（后于自动答复）
@@ -754,80 +840,6 @@ ${concernedItemsForPush.map((item:any, i:number) => `- 规则${i+1}: ${item.text
 	}
 }
 
-/**
- * 根据 TopicItem 的匹配条件生成完整规则文本
- * 用于 system_prompt 拼接
- * @param item TopicItem 对象
- * @param includeId 是否包含规则 ID 前缀（用于 LLM 精确匹配）
- * @param ruleIndex 规则索引（从 0 开始）
- */
-function buildRuleText(item: TopicItemWithAutoReply, includeId = false, ruleIndex?: number): string {
-    const parts: string[] = [];
-    
-    // 发送者条件
-    if (item.filterSender) {
-        parts.push(item.filterSender);
-    }
-    
-    // 群组条件
-    if (item.filterGroup) {
-        parts.push(`在 ${item.filterGroup} 中`);
-    }
-    
-    // 发送者条件承接
-    if (item.filterSender) {
-        parts.push(`发送的`);
-    }
-    
-    // 拼接用户编写的规则描述
-    if (item.text) {
-        parts.push(item.text);
-    }
-    
-    const ruleText = parts.join(' ') || item.text;
-    
-    // 如果需要包含 ID 前缀，用于帮助 LLM 精确返回匹配的规则
-    if (includeId && ruleIndex !== undefined) {
-        return `[RULE_ID:${ruleIndex}] ${ruleText}`;
-    }
-    
-    return ruleText;
-}
-
-/**
- * 从 LLM 返回的 matchedRule 中提取规则 ID
- * 支持格式: "[RULE_ID:0]", "RULE_ID:0", "规则0", "规则1" 等
- * @returns 提取的规则 ID 数组（作为数字索引）
- */
-function extractRuleIdsFromMatchedRule(matchedRule: string): number[] {
-    if (!matchedRule) return [];
-    
-    const ids: number[] = [];
-    let match: RegExpExecArray | null;
-    
-    // 匹配 [RULE_ID:X] 格式
-    const ruleIdRegex = /\[RULE_ID:(\d+)\]/g;
-    while ((match = ruleIdRegex.exec(matchedRule)) !== null) {
-        ids.push(parseInt(match[1], 10));
-    }
-    
-    // 匹配 RULE_ID:X 格式（无方括号，避免重复匹配带方括号的）
-    const ruleIdRegex2 = /(?<!\[)RULE_ID:(\d+)(?!\])/g;
-    while ((match = ruleIdRegex2.exec(matchedRule)) !== null) {
-        const id = parseInt(match[1], 10);
-        if (!ids.includes(id)) ids.push(id);
-    }
-    
-    // 匹配 "规则X" 格式（兼容中文）
-    const chineseRuleRegex = /规则(\d+)/g;
-    while ((match = chineseRuleRegex.exec(matchedRule)) !== null) {
-        // 注意：中文格式通常从 1 开始，需要转换为 0-based index
-        const id = parseInt(match[1], 10) - 1;
-        if (id >= 0 && !ids.includes(id)) ids.push(id);
-    }
-    
-    return ids;
-}
 
 /**
  * 在 concernedItems 中查找匹配的项
@@ -909,3 +921,95 @@ function findMatchedConcernedItem<T extends { text: string; id?: string }>(
 }
 
 // 自动答复处理逻辑已抽取到 message-reaction/AutoReplyHandler.ts
+
+/**
+ * 使用 Thread 结构化格式构建消息组
+ * 优化 LLM 分析的上下文理解能力
+ * 
+ * @param item 消息组数据（包含 threads 和 standalone）
+ * @returns 格式化的 XML 字符串
+ */
+function formatMessageGroupWithThreads(item: any): string {
+	const threads = item.threads || [];
+	const standalone = item.standalone || [];
+	const posts = item.posts || [];
+	
+	// 如果没有 thread 结构化数据，回退到旧的扁平格式
+	if (threads.length === 0 && standalone.length === 0) {
+		return formatMessageGroupFlat(item);
+	}
+	
+	let output = `<message_group team_name="${item.groupName}" team_id="${item.groupId}">`;
+	
+	// 1. 输出对话线程（有明确回复关系的消息）
+	if (threads.length > 0) {
+		output += `\n  <!-- 对话线程：有明确回复关系的消息 -->`;
+		
+		for (const thread of threads) {
+			const replyCount = thread.replies?.length || 0;
+			output += `\n  <thread root_id="${thread.rootPostId}" reply_count="${replyCount}">`;
+			
+			// 根消息
+			if (thread.rootPost) {
+				const root = thread.rootPost;
+				output += `\n    <root sender="${root.creator || root.sender || 'Unknown'}" datetime="${root.time || root.datetime}" post_id="${root.id}">${escapeXml(root.text || root.content || '')}</root>`;
+			} else {
+				// 根消息不在时间窗口内
+				output += `\n    <root post_id="${thread.rootPostId}">[原消息不在当前时间窗口内]</root>`;
+			}
+			
+			// 回复消息
+			for (const reply of (thread.replies || [])) {
+				output += `\n    <reply sender="${reply.creator || reply.sender}" datetime="${reply.time || reply.datetime}" post_id="${reply.id}" reply_to="${reply.parentId}">${escapeXml(reply.text || reply.content || '')}</reply>`;
+			}
+			
+			output += `\n  </thread>`;
+		}
+	}
+	
+	// 2. 输出独立消息（没有明确回复关系）
+	if (standalone.length > 0) {
+		output += `\n  <!-- 独立消息：没有明确回复关系 -->`;
+		output += `\n  <standalone>`;
+		
+		standalone.forEach((msg: any) => {
+			output += `\n    <message sender="${msg.creator || msg.sender}" datetime="${msg.time || msg.datetime}" post_id="${msg.id}">${escapeXml(msg.text || msg.content || '')}</message>`;
+		});
+		
+		output += `\n  </standalone>`;
+	}
+	
+	// 3. 如果既没有 threads 也没有 standalone，但有 posts（兼容旧数据）
+	if (threads.length === 0 && standalone.length === 0 && posts.length > 0) {
+		output += `\n  <!-- 消息列表 -->`;
+		posts.forEach((post: any) => {
+			const parentInfo = post.parentId ? ` reply_to="${post.parentId}"` : '';
+			output += `\n  <message sender="${post.creator}" datetime="${post.time}" post_id="${post.id}"${parentInfo}>${escapeXml(post.text)}</message>`;
+		});
+	}
+	
+	output += `\n</message_group>`;
+	return output;
+}
+
+/**
+ * 旧的扁平格式（兼容回退）
+ */
+function formatMessageGroupFlat(item: any): string {
+	return `<message_group team_name="${item.groupName}" team_id="${item.groupId}">${(item.posts || []).map((post: any) => `
+  <message_content sender="${post.creator}" datetime="${post.time}" post_id="${post.id}"${post.parentId ? ` parent_id="${post.parentId}"` : ''}>${escapeXml(post.text)}</message_content>`).join('')}
+</message_group>`;
+}
+
+/**
+ * 转义 XML 特殊字符
+ */
+function escapeXml(text: string): string {
+	if (!text) return '';
+	return text
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&apos;');
+}
