@@ -684,6 +684,36 @@ const Options = () => {
                         placeholder="输入你的 Jira API Token"
                     />
                 </div>
+
+                <div className="form-group">
+                    <label htmlFor="DESIGN_JIRA_PROJECT">Design JIRA Project 前缀</label>
+                    <input
+                        type="text"
+                        id="DESIGN_JIRA_PROJECT"
+                        name="DESIGN_JIRA_PROJECT"
+                        value={config.DESIGN_JIRA_PROJECT || ''}
+                        onChange={handleInputChange}
+                        placeholder="UX"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        设计相关的 JIRA 项目匹配规则。使用 "UX*" 前缀匹配（匹配 UX-123, UXDES-456 等），"UX" 完全匹配（只匹配 UX-xxx）
+                    </small>
+                </div>
+
+                <div className="form-group">
+                    <label htmlFor="DEPENDENCIES_JIRA_PROJECT">Dependencies JIRA Project 前缀</label>
+                    <input
+                        type="text"
+                        id="DEPENDENCIES_JIRA_PROJECT"
+                        name="DEPENDENCIES_JIRA_PROJECT"
+                        value={config.DEPENDENCIES_JIRA_PROJECT || ''}
+                        onChange={handleInputChange}
+                        placeholder="RCV"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        外部依赖的 JIRA 项目匹配规则，用于显示 Backend Progress。"RCV" 完全匹配（只匹配 RCV-xxx），"RCV*" 前缀匹配
+                    </small>
+                </div>
             </div>
 
             {config.ANALYSIS_TYPE === 'agentThinking' && (

@@ -718,6 +718,7 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
   icon.src = iconUrl;
   icon.className = 'jira-link-icon';
   icon.title = `查看 ${ticketKey} 详情`;
+  icon.alt = `JIRA: `;
   
   // 创建一个包装器来统一处理 hover 事件
   const wrapper = document.createElement('span');

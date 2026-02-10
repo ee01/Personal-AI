@@ -4,6 +4,26 @@
  */
 
 import { createJiraHeaders } from './jira';
+import { getEnvConfig } from './utils';
+
+// 匹配项目Key的工具函数
+// pattern 格式: "UX*" 表示前缀匹配, "RCV" 表示完全匹配项目部分
+function matchesProjectPattern(ticketKey: string, pattern: string): boolean {
+  if (!ticketKey || !pattern) return false;
+  
+  // 提取 ticket 的项目部分 (如 "RCV-123" -> "RCV", "UXDES-456" -> "UXDES")
+  const projectPart = ticketKey.split('-')[0];
+  if (!projectPart) return false;
+  
+  if (pattern.endsWith('*')) {
+    // 前缀匹配: "UX*" 匹配 "UX", "UXDES", "UX123" 等
+    const prefix = pattern.slice(0, -1);
+    return projectPart.startsWith(prefix);
+  } else {
+    // 完全匹配: "RCV" 只匹配 "RCV"
+    return projectPart === pattern;
+  }
+}
 
 // 检测页面是否是Jira ticket详情页
 function isJiraTicketPage(): boolean {
@@ -92,7 +112,7 @@ function getFigmaLinksFromDescription(): { type: 'figma'; url: string; source: '
 }
 
 // 从DOM中查找linked issues中的UX tickets
-function getUXTicketsFromLinkedIssues(): { key: string; url: string; summary: string; source: 'linked_issues' }[] {
+function getUXTicketsFromLinkedIssues(projectPrefix = 'UX'): { key: string; url: string; summary: string; source: 'linked_issues' }[] {
   const uxTickets: { key: string; url: string; summary: string; source: 'linked_issues' }[] = [];
   
   // 查找Issue Links部分
@@ -104,7 +124,7 @@ function getUXTicketsFromLinkedIssues(): { key: string; url: string; summary: st
       const key = linkElement.textContent?.trim();
       const href = (linkElement as HTMLAnchorElement).href;
       
-      if (key && key.startsWith('UX') && href) {
+      if (key && matchesProjectPattern(key, projectPrefix) && href) {
         // 尝试获取summary
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
         const summary = summaryElement?.textContent?.trim() || key;
@@ -163,7 +183,7 @@ async function fetchChildIssues(parentKey: string): Promise<any[]> {
 }
 
 // 查找UX类型的ticket
-async function findUXTickets(parentData: any, currentTicketKey: string): Promise<{ key: string; summary: string; source: string }[]> {
+async function findUXTickets(parentData: any, currentTicketKey: string, projectPrefix = 'UX'): Promise<{ key: string; summary: string; source: string }[]> {
   try {
     const uxTickets: { key: string; summary: string; source: string }[] = [];
     
@@ -187,9 +207,9 @@ async function findUXTickets(parentData: any, currentTicketKey: string): Promise
       ...childIssues.map((issue: any) => ({ ...issue, source: 'child_issue' }))
     ];
     
-    // 筛选UX开头且不是当前ticket的issue
+    // 筛选匹配项目前缀且不是当前ticket的issue
     allRelatedIssues.forEach((issue: any) => {
-      if (issue.key && issue.key.startsWith('UX') && issue.key !== currentTicketKey) {
+      if (issue.key && matchesProjectPattern(issue.key, projectPrefix) && issue.key !== currentTicketKey) {
         uxTickets.push({
           key: issue.key,
           summary: issue.fields?.summary || issue.summary || issue.key,
@@ -251,10 +271,10 @@ async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: s
 }
 
 // 从Epic ticket中查找UX linked issues
-async function getUXTicketsFromEpic(epicKey: string): Promise<{ key: string; summary: string; source: string }[]> {
+async function getUXTicketsFromEpic(epicKey: string, projectPrefix = 'UX'): Promise<{ key: string; summary: string; source: string }[]> {
   try {
     const epicData = await fetchTicketData(epicKey);
-    return await findUXTickets(epicData, ''); // 传空字符串作为currentTicketKey
+    return await findUXTickets(epicData, '', projectPrefix); // 传空字符串作为currentTicketKey
   } catch (error) {
     console.error('Error fetching UX tickets from Epic:', error);
     return [];
@@ -444,6 +464,457 @@ async function isEpicTicket(): Promise<boolean> {
   }
 }
 
+// ============================================================
+// Backend Progress (外部依赖进展) 相关函数
+// ============================================================
+
+// 判断是否为Sub-task ticket
+function isSubtaskTicket(): boolean {
+  try {
+    const issueTypeElement = document.querySelector('#type-val');
+    if (!issueTypeElement) return false;
+    const issueType = issueTypeElement.textContent?.trim();
+    return issueType === 'Sub-task' || issueType === '子任务';
+  } catch (error) {
+    console.error('Error checking Sub-task type:', error);
+    return false;
+  }
+}
+
+// 从API数据中查找外部依赖项目的tickets（仅搜索issue links）
+function findDependencyTicketsFromData(data: any, projectPrefix: string, currentTicketKey: string): { key: string; summary: string }[] {
+  const tickets: { key: string; summary: string }[] = [];
+  const issueLinks = data.fields?.issuelinks || [];
+  
+  issueLinks.forEach((link: any) => {
+    const issue = link.outwardIssue || link.inwardIssue;
+    if (issue && issue.key && matchesProjectPattern(issue.key, projectPrefix) && issue.key !== currentTicketKey) {
+      tickets.push({
+        key: issue.key,
+        summary: issue.fields?.summary || issue.key
+      });
+    }
+  });
+  
+  return tickets;
+}
+
+// 从DOM中查找linked issues中的外部依赖项目tickets
+function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: string; url: string; summary: string }[] {
+  const tickets: { key: string; url: string; summary: string }[] = [];
+  const issueLinkSections = document.querySelectorAll('.links-list .links-section');
+  
+  issueLinkSections.forEach(section => {
+    const links = section.querySelectorAll('.issue-link-key');
+    links.forEach(linkElement => {
+      const key = linkElement.textContent?.trim();
+      const href = (linkElement as HTMLAnchorElement).href;
+      
+      if (key && matchesProjectPattern(key, projectPrefix) && href) {
+        const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
+        const summary = summaryElement?.textContent?.trim() || key;
+        tickets.push({ key, url: href, summary });
+      }
+    });
+  });
+  
+  return tickets;
+}
+
+// 获取外部依赖ticket的详细信息（target end和fixVersions）
+async function fetchDependencyDetails(ticketKey: string): Promise<{
+  targetEnd: string | null;
+  fixVersion: string | null;
+}> {
+  try {
+    const headers = await createJiraHeaders();
+    const response = await fetch(
+      `/rest/api/2/issue/${ticketKey}?fields=customfield_18351,customfield_14354,fixVersions`,
+      { method: 'GET', headers, credentials: 'include' }
+    );
+    if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
+    const data = await response.json();
+    
+    // Target End优先取customfield_18351，取不到再取End date customfield_14354
+    const targetEnd = data.fields.customfield_18351 || data.fields.customfield_14354 || null;
+    const fixVersions = data.fields.fixVersions || [];
+    // 取最后一个fixVersion（最新的版本）
+    const fixVersion = fixVersions.length > 0 ? fixVersions[fixVersions.length - 1].name : null;
+    
+    return { targetEnd, fixVersion };
+  } catch (error) {
+    console.error('Error fetching dependency details:', error);
+    return { targetEnd: null, fixVersion: null };
+  }
+}
+
+// 通过API获取ticket的Epic Link字段
+async function fetchTicketEpicLink(ticketKey: string): Promise<string | null> {
+  try {
+    const headers = await createJiraHeaders();
+    const response = await fetch(
+      `/rest/api/2/issue/${ticketKey}?fields=customfield_11450`,
+      { method: 'GET', headers, credentials: 'include' }
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.fields.customfield_11450 || null;
+  } catch (error) {
+    console.error('Error fetching ticket Epic link:', error);
+    return null;
+  }
+}
+
+// 从DORA Metrics API获取Rollout to Production日期（通过background避免CORS）
+async function fetchRolloutDate(fixVersion: string): Promise<string | null> {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'FETCH_ROLLOUT_DATE',
+      fixVersion
+    });
+    if (response?.success && response.data) {
+      return response.data;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error fetching rollout date:', error);
+    return null;
+  }
+}
+
+// 格式化日期为短格式 (M/D/YYYY)
+function formatDateShort(dateStr: string): string {
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+// Backend Progress数据接口
+interface BackendProgressData {
+  dependencyTicketKey: string;
+  dependencyTicketUrl: string;
+  summary: string;
+  earlyBuildDate: string | null;
+  rolloutDate: string | null;
+  fixVersion: string | null;
+  source: string;
+}
+
+// 显示Backend Progress信息
+function displayBackendProgress(progressData: BackendProgressData[]): void {
+  const anchor = document.querySelector('.design-links-container') || document.querySelector('.issue-header-content');
+  if (!anchor) return;
+  
+  // 检查是否已经存在
+  const existing = document.querySelector('.backend-progress-container');
+  if (existing) existing.remove();
+  
+  if (progressData.length === 0) return;
+  
+  const container = document.createElement('div');
+  const iconUrl = chrome.runtime.getURL('icons/icon48.png');
+  container.className = 'backend-progress-container';
+  
+  let itemsHtml = '';
+  progressData.forEach(item => {
+    const earlyBuildDisplay = item.earlyBuildDate
+      ? `<a href="${item.dependencyTicketUrl}" target="_blank" class="progress-date-link">${formatDateShort(item.earlyBuildDate)}</a>`
+      : '<span class="progress-date-na">N/A</span>';
+    
+    const doraUrl = item.fixVersion
+      ? `https://rcv-dora-metrics.int.rclabenv.com/release-detail?releases=${encodeURIComponent(item.fixVersion)}`
+      : null;
+    const rolloutDisplay = item.rolloutDate
+      ? `<a href="${doraUrl}" target="_blank" class="progress-date-link">${formatDateShort(item.rolloutDate)}</a>`
+      : (item.fixVersion
+        ? `<a href="${doraUrl}" target="_blank" class="progress-date-pending">pending</a>`
+        : '<span class="progress-date-na">N/A</span>');
+    
+    itemsHtml += `
+      <div class="backend-progress-item">
+        <img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" />
+        Backend: <a href="${item.dependencyTicketUrl}" target="_blank" class="progress-link">
+          ${item.dependencyTicketKey} <span class="external-link-icon">↗️</span>
+        </a>
+        <span class="progress-detail">Early Build: ${earlyBuildDisplay}</span>
+        <span class="progress-separator">|</span>
+        <span class="progress-detail">Rollout to Prod: ${rolloutDisplay}</span>
+        <span class="source-tag">${item.source}</span>
+      </div>
+    `;
+  });
+  
+  container.innerHTML = `
+    <div class="backend-progress-content">
+      ${itemsHtml}
+    </div>
+    <div class="backend-progress-footer">
+      <span class="footer-text">Personal AI provided</span>
+      <span class="author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank">Esone</a></span>
+    </div>
+  `;
+  
+  anchor.insertAdjacentElement('afterend', container);
+  
+  // 添加样式（仅首次添加）
+  if (!document.getElementById('backend-progress-styles')) {
+    const style = document.createElement('style');
+    style.id = 'backend-progress-styles';
+    style.textContent = `
+      .backend-progress-container {
+        margin: 10px 0;
+        padding: 8px 12px;
+        background-color: #f0fff4;
+        border-radius: 4px;
+        display: inline-flex;
+        flex-direction: column;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: visible;
+        max-height: ${40 + (progressData.length - 1) * 30}px;
+        z-index: 1;
+      }
+      .backend-progress-container:hover {
+        max-height: ${80 + (progressData.length - 1) * 30}px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        transform: translateY(4px);
+        z-index: 1000;
+      }
+      .backend-progress-content {
+        display: flex;
+        flex-direction: column;
+        background-color: #f0fff4;
+        position: relative;
+        z-index: 2;
+      }
+      .backend-progress-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 4px;
+        position: relative;
+      }
+      .backend-progress-item:last-child {
+        margin-bottom: 0;
+      }
+      .backend-progress-footer {
+        font-size: 12px;
+        color: #666;
+        margin-top: 0;
+        padding-top: 8px;
+        border-top: 1px dashed #ccc;
+        opacity: 0;
+        transform: translateY(-10px);
+        transition: all 0.3s ease;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background-color: #f0fff4;
+        padding: 8px 12px;
+        border-radius: 0 0 4px 4px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .backend-progress-container:hover .backend-progress-footer {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .progress-link {
+        color: #0052cc;
+        font-weight: 500;
+        text-decoration: none;
+        margin-left: 4px;
+      }
+      .progress-link:hover {
+        text-decoration: underline;
+      }
+      .progress-detail {
+        margin-left: 8px;
+        font-size: 13px;
+        color: #333;
+      }
+      .progress-separator {
+        margin: 0 4px;
+        color: #ccc;
+      }
+      .progress-date-link {
+        color: #0052cc;
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .progress-date-link:hover {
+        text-decoration: underline;
+      }
+      .progress-date {
+        font-weight: 500;
+        color: #2e7d32;
+      }
+      .progress-date-na {
+        color: #999;
+        font-style: italic;
+      }
+      .progress-date-pending {
+        color: #ff9800;
+        font-style: italic;
+        text-decoration: none;
+      }
+      .progress-date-pending:hover {
+        text-decoration: underline;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
+
+// 收集并显示Backend Progress信息
+async function collectAndDisplayBackendProgress(ticketId: string, depProject: string): Promise<void> {
+  try {
+    const allProgressData: BackendProgressData[] = [];
+    
+    const isSubtask = isSubtaskTicket();
+    const isEpic = await isEpicTicket();
+    
+    if (isEpic) {
+      // 当前是Epic，查找Epic自身的linked issues中的依赖ticket
+      const epicData = await fetchTicketData(ticketId);
+      const depTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
+      for (const dep of depTickets) {
+        const details = await fetchDependencyDetails(dep.key);
+        let rolloutDate: string | null = null;
+        if (details.fixVersion) {
+          rolloutDate = await fetchRolloutDate(details.fixVersion);
+        }
+        allProgressData.push({
+          dependencyTicketKey: dep.key,
+          dependencyTicketUrl: `/browse/${dep.key}`,
+          summary: dep.summary,
+          earlyBuildDate: details.targetEnd,
+          rolloutDate,
+          fixVersion: details.fixVersion,
+          source: 'epic'
+        });
+      }
+    } else if (isSubtask) {
+      // 当前是Sub-task，先找到上级User Story，查找其linked issues
+      const parentLink = getParentLinkFromDOM();
+      if (parentLink) {
+        const parentData = await fetchTicketData(parentLink.key);
+        const depTickets = findDependencyTicketsFromData(parentData, depProject, ticketId);
+        for (const dep of depTickets) {
+          const details = await fetchDependencyDetails(dep.key);
+          let rolloutDate: string | null = null;
+          if (details.fixVersion) {
+            rolloutDate = await fetchRolloutDate(details.fixVersion);
+          }
+          allProgressData.push({
+            dependencyTicketKey: dep.key,
+            dependencyTicketUrl: `/browse/${dep.key}`,
+            summary: dep.summary,
+            earlyBuildDate: details.targetEnd,
+            rolloutDate,
+            fixVersion: details.fixVersion,
+            source: 'user_story'
+          });
+        }
+        
+        // Sub-task的Epic可能不在当前DOM中，通过API获取parent的Epic Link
+        const epicKey = await fetchTicketEpicLink(parentLink.key);
+        if (epicKey) {
+          const epicData = await fetchTicketData(epicKey);
+          const epicDepTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
+          for (const dep of epicDepTickets) {
+            const details = await fetchDependencyDetails(dep.key);
+            let rolloutDate: string | null = null;
+            if (details.fixVersion) {
+              rolloutDate = await fetchRolloutDate(details.fixVersion);
+            }
+            allProgressData.push({
+              dependencyTicketKey: dep.key,
+              dependencyTicketUrl: `/browse/${dep.key}`,
+              summary: dep.summary,
+              earlyBuildDate: details.targetEnd,
+              rolloutDate,
+              fixVersion: details.fixVersion,
+              source: 'epic'
+            });
+          }
+        }
+      }
+    } else {
+      // 普通ticket（Story, Task等），查找当前页面的linked issues
+      const domDepTickets = getDependencyTicketsFromLinkedIssues(depProject);
+      for (const dep of domDepTickets) {
+        const details = await fetchDependencyDetails(dep.key);
+        let rolloutDate: string | null = null;
+        if (details.fixVersion) {
+          rolloutDate = await fetchRolloutDate(details.fixVersion);
+        }
+        allProgressData.push({
+          dependencyTicketKey: dep.key,
+          dependencyTicketUrl: dep.url,
+          summary: dep.summary,
+          earlyBuildDate: details.targetEnd,
+          rolloutDate,
+          fixVersion: details.fixVersion,
+          source: 'linked_issues'
+        });
+      }
+      
+      // 查找Epic的linked issues
+      const epicLink = getParentEpicFromDOM();
+      if (epicLink) {
+        const epicData = await fetchTicketData(epicLink.key);
+        const epicDepTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
+        for (const dep of epicDepTickets) {
+          const details = await fetchDependencyDetails(dep.key);
+          let rolloutDate: string | null = null;
+          if (details.fixVersion) {
+            rolloutDate = await fetchRolloutDate(details.fixVersion);
+          }
+          allProgressData.push({
+            dependencyTicketKey: dep.key,
+            dependencyTicketUrl: `/browse/${dep.key}`,
+            summary: dep.summary,
+            earlyBuildDate: details.targetEnd,
+            rolloutDate,
+            fixVersion: details.fixVersion,
+            source: 'epic'
+          });
+        }
+      }
+    }
+    
+    // 合并重复的dependency tickets（同一ticket来自不同source时合并source标签）
+    const mergedProgressData: BackendProgressData[] = [];
+    for (const item of allProgressData) {
+      const existing = mergedProgressData.find(p => p.dependencyTicketKey === item.dependencyTicketKey);
+      if (existing) {
+        if (!existing.source.includes(item.source)) {
+          existing.source += `, ${item.source}`;
+        }
+      } else {
+        mergedProgressData.push({ ...item });
+      }
+    }
+    
+    if (mergedProgressData.length > 0) {
+      console.log('Backend progress found:', mergedProgressData);
+      displayBackendProgress(mergedProgressData);
+    } else {
+      console.log('No backend progress found');
+    }
+  } catch (error) {
+    console.error('Error collecting backend progress:', error);
+  }
+}
+
 // 主函数
 async function main(): Promise<void> {
   if (!isJiraTicketPage()) return;
@@ -452,6 +923,10 @@ async function main(): Promise<void> {
     // 获取当前ticket ID
     const ticketId = getTicketIdFromUrl();
     console.log('Current Jira ticket:', ticketId);
+    
+    // 加载配置
+    const config = await getEnvConfig();
+    const designProject = config.DESIGN_JIRA_PROJECT || 'UX';
     
     // 等待DOM加载完成
     await waitForElement('#customfield_15751-val, #customfield_11450-val, #type-val', 5000);
@@ -475,7 +950,7 @@ async function main(): Promise<void> {
     });
     
     // 2. 从当前页面的linked issues中查找UX tickets
-    const linkedUXTickets = getUXTicketsFromLinkedIssues();
+    const linkedUXTickets = getUXTicketsFromLinkedIssues(designProject);
     for (const uxTicket of linkedUXTickets) {
       const designLink = await getDesignLink(uxTicket.key);
       if (designLink) {
@@ -492,7 +967,7 @@ async function main(): Promise<void> {
     // 判断是否为Epic ticket
     if (await isEpicTicket()) {
       // 如果是Epic，直接从Epic中查找UX linked issues
-      const epicUXTickets = await getUXTicketsFromEpic(ticketId);
+      const epicUXTickets = await getUXTicketsFromEpic(ticketId, designProject);
       for (const uxTicket of epicUXTickets) {
         const designLink = await getDesignLink(uxTicket.key);
         if (designLink) {
@@ -511,7 +986,7 @@ async function main(): Promise<void> {
       if (parentLink) {
         console.log('Parent ticket:', parentLink.key);
         const parentData = await fetchTicketData(parentLink.key);
-        const parentUXTickets = await findUXTickets(parentData, ticketId);
+        const parentUXTickets = await findUXTickets(parentData, ticketId, designProject);
         for (const uxTicket of parentUXTickets) {
           const designLink = await getDesignLink(uxTicket.key);
           if (designLink) {
@@ -532,7 +1007,7 @@ async function main(): Promise<void> {
         console.log('Epic ticket:', epicLink.key);
         
         // 从Epic中查找UX linked issues
-        const epicUXTickets = await getUXTicketsFromEpic(epicLink.key);
+        const epicUXTickets = await getUXTicketsFromEpic(epicLink.key, designProject);
         for (const uxTicket of epicUXTickets) {
           const designLink = await getDesignLink(uxTicket.key);
           if (designLink) {
@@ -551,7 +1026,7 @@ async function main(): Promise<void> {
         if (parentLink) {
           console.log('Parent ticket:', parentLink.key);
           const parentData = await fetchTicketData(parentLink.key);
-          const parentUXTickets = await findUXTickets(parentData, ticketId);
+          const parentUXTickets = await findUXTickets(parentData, ticketId, designProject);
           for (const uxTicket of parentUXTickets) {
             const designLink = await getDesignLink(uxTicket.key);
             if (designLink) {
@@ -578,6 +1053,12 @@ async function main(): Promise<void> {
       displayDesignLinks(uniqueDesignData);
     } else {
       console.log('No design links found');
+    }
+    
+    // === Backend Progress (外部依赖进展) ===
+    const depProject = config.DEPENDENCIES_JIRA_PROJECT;
+    if (depProject) {
+      await collectAndDisplayBackendProgress(ticketId, depProject);
     }
     
   } catch (error) {
