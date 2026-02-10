@@ -38,6 +38,8 @@ export interface EnvConfigType {
   JIRA_BASE_URL?: string;
   JIRA_USERNAME?: string;
   JIRA_API_TOKEN?: string;
+  DESIGN_JIRA_PROJECT?: string;       // Jira Design项目前缀（如 UX）
+  DEPENDENCIES_JIRA_PROJECT?: string; // Jira外部依赖项目前缀（如 RCV）
   // 消息交互功能开关
   ENABLE_AUTO_REPLY: boolean;    // 启用自动答复功能
   ENABLE_SNOOZE: boolean;        // 启用稍后处理功能
@@ -170,6 +172,8 @@ export const defaultEnvConfig: EnvConfigType = {
   JIRA_BASE_URL: process.env.JIRA_BASE_URL || "https://jira.ringcentral.com",
   JIRA_USERNAME: process.env.JIRA_USERNAME || "",
   JIRA_API_TOKEN: process.env.JIRA_API_TOKEN || "",
+  DESIGN_JIRA_PROJECT: process.env.DESIGN_JIRA_PROJECT || "UX*",
+  DEPENDENCIES_JIRA_PROJECT: process.env.DEPENDENCIES_JIRA_PROJECT || "RCV",
   // 消息交互功能开关（默认全部启用）
   ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== "false",
   ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== "false",

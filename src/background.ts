@@ -348,6 +348,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // 保持消息通道开放
     }
 
+    // 获取 DORA Metrics Rollout Date（避免 CORS 问题）
+    if (request.type === 'FETCH_ROLLOUT_DATE') {
+        (async () => {
+            const { fixVersion } = request;
+            console.log(`📊 获取 Rollout Date: ${fixVersion}`);
+            try {
+                const url = `https://rcv-dora-metrics.int.rclabenv.com/api/releases/${encodeURIComponent(fixVersion)}/lead-time`;
+                const response = await fetch(url, { method: 'GET' });
+                if (!response.ok) {
+                    sendResponse({ success: false, data: null });
+                    return;
+                }
+                const data = await response.json();
+                const rolloutDate = data.metrics?.lastMrMergedTimestamp || null;
+                sendResponse({ success: true, data: rolloutDate });
+            } catch (error) {
+                console.error('获取 Rollout Date 失败:', error);
+                sendResponse({ success: false, data: null });
+            }
+        })();
+        return true; // 保持消息通道开放
+    }
+
     // 获取当前标签页 URL
     if (request.type === 'GET_CURRENT_TAB_URL') {
         chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
