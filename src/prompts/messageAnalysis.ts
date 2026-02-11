@@ -35,9 +35,9 @@ export function buildMessageFilterSystemPrompt(params: {
 
 群组类型判断：team_name 如果是单个人名则视为私聊，多个人名则是临时会话，否则视为群聊。
 
-## 🆕 关于"关注后续讨论"类型规则的特殊说明
-如果规则文本中包含【匹配细节】标记，说明这是一个"关注后续讨论"规则，需要特别注意：
-1. 这类规则要求匹配的是某条原始消息的**后续讨论**，而非原消息本身
+## 特殊规则说明：关注后续讨论
+规则中带有【关注后续讨论】标记的是"关注后续"类型规则，需要特别注意：
+1. 这类规则关注的是**某条特定消息的后续讨论**，规则中会提供原消息的 post_id 和内容
 2. 匹配时需要综合判断：直接回复（reply_to 指向原消息）、同 thread 后续、语义相关的隐式回复
 3. **排除原消息本身**，只识别后续的讨论消息
 4. 对于这类规则匹配的消息，需要额外填写 follow_thread_info 字段
@@ -47,64 +47,79 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
 
 ### 第一步：规则匹配
 请仔细阅读 <message_group> 里的每条消息（包括 <thread> 中的 <root>/<reply> 和 <standalone> 中的 <message>），判断是否符合以下规则之一${envConfig.ANALYZE_BY_GROUP ? '' : '。如果没有则跳过并查看下一个 message_group'}：
-	- 规则0: 排除发送者是"SM AI undefined"的消息${envConfig.FILTER_OWN_MESSAGES ? '，排除发送者是自己的消息' : ''}
-	${concernedItems.map((item: TopicItemWithAutoReply, i: number) => 
-        `- 规则${i+1} [RULE_ID:${i}]: ${buildRuleText(item)}`
-    ).join('\n	')}
+    - 规则0: 排除发送者是"SM AI undefined"的消息，排除发送者是自己的消息
+    ${concernedItems.map((item:any, i:number) => `- 规则${i+1} [RULE_ID:${i}]: ${buildRuleText(item as TopicItemWithAutoReply)}`).join('\n  ')}
 
 ### 第二步：提取匹配消息的字段
 对符合规则的消息，提取以下字段：
-	- 消息原文（只提取原文，不做删减修改翻译，保留原有格式）
-	- sender、datetime、post_id、team_name、team_id
-	- **post_id（必填）**：消息的全局唯一标识符，用于精确定位消息
-	- 如果消息在 <reply> 标签中，同时提取 reply_to（被回复的消息 ID）
+    - 消息原文（只提取原文，不做删减修改翻译，保留原有格式）
+    - sender、datetime、post_id、team_name、team_id
+    - **post_id（必填）**：消息的全局唯一标识符，用于精确定位消息
+    - 如果消息在 <reply> 标签中，同时提取 reply_to（被回复的消息 ID）
 
 ### 第三步：生成分析字段
 对每条匹配的消息，生成以下字段：
-	- summary：请用一句话简明扼要地总结这条消息以及（如果有的话）上下文的核心内容，供我快速浏览
-	- matchedRule：填写符合的规则编号，如"规则1"、"规则2"，如果符合多条规则则用逗号分隔，如"规则1,规则3"
-	- matchedRuleIds：填写符合的规则编号数组（重要：使用数字0、1、2...，不是"规则1"这种字符串），如 [0, 2]
-	- replyAdvice：如果我需要给对方答复，你需要给出建议的答复内容，供我参考
-	- 🆕 follow_thread_info：**仅当匹配到"关注后续讨论"类型规则时填写**，格式如下：
-		{
-			"original_post_id": "原消息的 post_id",
-			"match_type": "direct_reply|same_thread|semantic_related|mention_related",
-			"match_reason": "简短说明为什么这条消息被判定为后续讨论"
-		}
-	- actions：一个包含待办事项的数组，结构为：[{ id, summary, priority, deadline, ...}]，优先级可选值有 low、medium、high、urgent。如果消息涉及任务或需要采取行动，此字段必填；否则设为空数组。
+    - matched_rule_ids: 【重要】符合的规则 ID 数组，使用 [RULE_ID:X] 中的 X 值
+    - matched_rule: 符合的规则原文内容（备用参考）
+    - filter_reason: 选择这条消息的原因（中文）
+    - summary: 结合 <thread> 的上下文（包括 root 和其他 reply）总结为什么 sender 会发出这个消息。如果是 <standalone> 消息，分析它是否可能是对附近 <thread> 的隐式回应
+    - reply_advice: 回复建议，语言跟随上下文。不需要回复则返回空字符串
+    - entities: 提取实体信息（人物、项目、话题、行动项、情感、类别）
+    - user_relation_type: 与我的关系类型（mention_me/mention_team/project_related/policy_related/person_tracking/general_interest）
+    - thread_context: 如果消息属于某个 <thread>，记录该线程的 root_id；如果是 standalone 但判断为隐式回复，也记录相关的 thread root_id
+    - follow_thread_info: 【仅当匹配"关注后续讨论"规则时填写】记录与原消息的关系类型
+${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，继续下一个 <message_group>。'}
 
-## 🔧 返回格式要求（严格按照 JSON 格式）
+## 输出格式
+以严格 JSON 格式输出。如果没有匹配任何规则，输出 {success: false, message: "No messages matched any rules", data: []}：
 \`\`\`json
-[
-	{
-		"message_content": "消息原文",
-		"sender": "发送者名字",
-		"datetime": "消息时间",
-		"post_id": "消息的全局唯一标识符（必填）",
-		"reply_to": "被回复的消息 ID（如果有）",
-		"team_name": "群组名称",
-		"team_id": "群组ID",
-		"summary": "对消息及上下文的总结",
-		"matchedRule": "符合的规则，如'规则1'或'规则1,规则3'",
-		"matchedRuleIds": [0, 2],
-		"replyAdvice": "给出的答复建议",
-		"follow_thread_info": {
-			"original_post_id": "原消息ID",
-			"match_type": "匹配类型",
-			"match_reason": "匹配原因"
-		},
-		"actions": [
-			{
-				"id": "action_1",
-				"summary": "任务描述",
-				"priority": "medium",
-				"deadline": "2024-01-01",
-				"status": "pending",
-				"assignee": "${username}"
-			}
-		]
-	}
-]
+{
+    "success": true,
+    "message": "消息过滤完成: 共处理 {total} 个群组",
+    "data": [{
+        "message_content": "{消息原文}",
+        "sender": "{sender}",
+        "post_id": "{post_id}",  // 必填：消息的全局唯一标识符
+        "matched_rule_ids": [0],
+        "matched_rule": "符合的规则内容",
+        "filter_reason": "过滤原因",
+        "user_relation_type": "mention_me|mention_team|project_related|policy_related|person_tracking|general_interest",
+        "reply_to": "{被回复消息的post_id，如果是回复消息}",
+        "thread_context": {
+            "root_id": "{所属线程的根消息ID}",
+            "is_implicit_reply": false
+        },
+        "follow_thread_info": {  // 仅当匹配"关注后续讨论"规则时填写
+            "original_post_id": "{被关注的原消息post_id}",
+            "relation_type": "direct_reply|same_thread|semantic_related|mention",
+            "relevance_score": 0.9  // 0-1 之间的相关度评分
+        },
+        "team_name": "{team_name}",
+        "team_id": "{team_id}",
+        "team_url": "https://app.ringcentral.com/messages/{team_id}",
+        "summary": "上下文总结",
+        "reply_advice": "回复建议",
+        "datetime": "{datetime}",
+        "entities": {
+            "people": ["人物"],
+            "projects": ["项目"],
+            "topics": ["话题"],
+            "actions": ["行动项"],
+            "documents": [{"name": "文档名称", "url": "链接", "type": "文档类型"}],
+            "technologies": [{"name": "技术名称", "category": "技术分类", "version": "版本号"}],
+            "sentiment": "positive|negative|neutral",
+            "category": ["决策", "讨论", "公告"等]
+        },
+        "contextMessages": [{
+            "id": "{post_id}",
+            "sender": "{发送者}",
+            "content": "{消息原文}",
+            "datetime": "{发送时间}",
+            "isMainMessage": false,
+            "messageType": "root|reply|standalone"
+        }]
+    }]
+}
 \`\`\`
 
 ## 📌 重要提示

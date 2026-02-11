@@ -3,7 +3,6 @@
  */
 
 import {
-  FollowThreadConfig,
   FollowThreadMatch,
   MessageBasicInfo,
   MessageInfo,
@@ -12,6 +11,8 @@ import {
 } from '../types/followThread';
 import { TopicItemWithAutoReply } from './AutoReplyHandler';
 import { memorySystem } from '../memory';
+import { digestQueueService } from '../services/DigestQueueService';
+import { DigestQueueItem, DigestProcessor, DigestNotifyConfig } from '../types/digestQueue';
 // 注：通知逻辑已移至 NotificationService，此文件只处理数据更新
 
 // 语义匹配相似度阈值
@@ -267,7 +268,7 @@ export async function handleFollowThreadNotifications(
 }
 
 /**
- * 将消息加入合并通知队列
+ * 将消息加入合并通知队列（通过 DigestQueueService）
  */
 async function queueMergedNotification(
   followItemId: string,
@@ -275,23 +276,113 @@ async function queueMergedNotification(
   relationType: string
 ): Promise<void> {
   try {
-    const result = await chrome.storage.local.get('mergedNotificationQueue');
-    const queue = result.mergedNotificationQueue || {};
-
-    if (!queue[followItemId]) {
-      queue[followItemId] = [];
-    }
-
-    queue[followItemId].push({
-      message,
-      relationType,
-      timestamp: Date.now()
+    await digestQueueService.enqueue(FOLLOW_THREAD_DIGEST_TASK_ID, {
+      id: `${followItemId}_${message.postId}_${Date.now()}`,
+      data: {
+        followItemId,
+        message,
+        relationType
+      },
+      createdAt: new Date().toISOString(),
+      sourceId: followItemId
     });
-
-    await chrome.storage.local.set({ mergedNotificationQueue: queue });
   } catch (error) {
     console.error('❌ 加入合并通知队列失败:', error);
   }
+}
+
+// ==================== Digest 处理器 ====================
+
+/** 关注后续合并通知的任务 ID */
+export const FOLLOW_THREAD_DIGEST_TASK_ID = 'follow_thread_merged';
+
+/**
+ * 关注后续合并通知处理器
+ * 实现 DigestProcessor 接口，负责收集、格式化和推送合并通知
+ */
+export class FollowThreadDigestProcessor implements DigestProcessor {
+  async collect(items: DigestQueueItem[]): Promise<DigestQueueItem[]> {
+    // 直接返回所有条目，不做额外过滤
+    return items;
+  }
+
+  async format(items: DigestQueueItem[]): Promise<string> {
+    if (items.length === 0) return '';
+
+    // 按 followItemId 分组
+    const grouped: Record<string, Array<{ message: MessageInfo; relationType: string }>> = {};
+    for (const item of items) {
+      const { followItemId, message, relationType } = item.data;
+      if (!grouped[followItemId]) {
+        grouped[followItemId] = [];
+      }
+      grouped[followItemId].push({ message, relationType });
+    }
+
+    // 加载关注项配置用于展示原消息信息
+    const { concernedItems = [] } = await chrome.storage.local.get('concernedItems');
+
+    const sections: string[] = [];
+
+    for (const [followItemId, messages] of Object.entries(grouped)) {
+      const item: TopicItemWithAutoReply | undefined = concernedItems.find(
+        (i: TopicItemWithAutoReply) => i.id === followItemId
+      );
+      const originalMsg = item?.followConfig?.originalMessage;
+
+      // 统计关系类型
+      const relationStats = messages.reduce((acc, m) => {
+        acc[m.relationType] = (acc[m.relationType] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const relationSummary = Object.entries(relationStats)
+        .map(([type, count]) => {
+          const typeText: Record<string, string> = {
+            thread_reply: '线程回复',
+            mention: '提及',
+            quote: '引用',
+            semantic: '相关讨论'
+          };
+          return `${typeText[type] || '后续回复'} ${count}条`;
+        })
+        .join('、');
+
+      const latestMsg = messages[messages.length - 1].message;
+      
+      let section = `**关注话题**: ${item?.text || followItemId}\n`;
+      if (originalMsg) {
+        section += `**原消息**: ${originalMsg.sender}: ${originalMsg.content.substring(0, 80)}...\n`;
+      }
+      section += `**新增 ${messages.length} 条后续** (${relationSummary})\n`;
+      section += `**最新**: ${latestMsg.sender}: ${latestMsg.messageContent?.substring(0, 100) || latestMsg.summary || ''}`;
+
+      sections.push(section);
+    }
+
+    return `📌 **关注后续汇总** (${items.length} 条新消息)\n\n${sections.join('\n\n---\n\n')}`;
+  }
+
+  getNotifyConfig(): DigestNotifyConfig {
+    return {
+      notifyMethod: 'bot',
+      mention: false
+    };
+  }
+}
+
+/**
+ * 注册关注后续合并通知任务到 DigestQueueService
+ * 应在扩展启动时调用
+ */
+export function registerFollowThreadDigestTask(): void {
+  digestQueueService.register({
+    id: FOLLOW_THREAD_DIGEST_TASK_ID,
+    name: '关注后续合并通知',
+    frequency: { type: 'hourly' },
+    processor: new FollowThreadDigestProcessor(),
+    enabled: true
+  });
 }
 
 /**

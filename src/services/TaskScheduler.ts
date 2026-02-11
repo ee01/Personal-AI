@@ -15,6 +15,7 @@ import { analyzeMessages } from '../messageDealing';
 import { getEnvConfig } from '../utils';
 import { CloudStorage } from '../storage/CloudStorage';
 import { Logger } from '../utils/logger';
+import { digestQueueService } from './DigestQueueService';
 
 // 任务类型定义
 export interface ScheduledTask {
@@ -84,6 +85,14 @@ const TASK_DEFINITIONS: ScheduledTask[] = [
     category: 'system_maintenance',
     intervalMinutes: 4320, // 3天间隔
     description: '检查向量数据质量，修复异常记录',
+    enabled: true
+  },
+  {
+    id: 'digest_queue_process',
+    name: '汇总推送队列处理',
+    category: 'data_sync',
+    intervalMinutes: 60, // 每小时检查一次
+    description: '检查并处理到期的汇总推送任务（关注后续合并通知、每日摘要等）',
     enabled: true
   }
 ];
@@ -530,6 +539,9 @@ export class TaskScheduler {
         case 'vector_quality_check':
           await this.executeVectorQualityCheck();
           break;
+        case 'digest_queue_process':
+          await this.executeDigestQueueProcess();
+          break;
         default:
           console.warn(`⚠️ 未知任务类型: ${task.id}`);
       }
@@ -831,6 +843,31 @@ export class TaskScheduler {
       }
     } catch (error) {
       console.error('❌ 向量质量检查任务失败:', error);
+    }
+  }
+
+  /**
+   * 执行汇总推送队列处理
+   */
+  private async executeDigestQueueProcess(): Promise<void> {
+    try {
+      console.log('📬 开始处理汇总推送队列...');
+      
+      // 确保 DigestQueueService 已初始化
+      await digestQueueService.initialize();
+      
+      // 处理所有到期的 digest 任务
+      const results = await digestQueueService.processAll();
+      
+      const successCount = results.filter(r => r.success).length;
+      const totalItems = results.reduce((sum, r) => sum + r.itemsProcessed, 0);
+      
+      console.log(`✅ 汇总推送处理完成: ${successCount}/${results.length} 个任务成功, 共推送 ${totalItems} 条`);
+      
+      // 保存任务状态
+      await digestQueueService.saveTaskStates();
+    } catch (error) {
+      console.error('❌ 汇总推送队列处理失败:', error);
     }
   }
 

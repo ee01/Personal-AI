@@ -24,6 +24,7 @@ import {
 } from './services/NotificationService';
 import { buildRuleText, extractRuleIdsFromMatchedRule } from './utils/ruleTextBuilder';
 import { buildMessageFilterSystemPrompt } from './prompts';
+import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
@@ -309,47 +310,63 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				
 				// 如果需要通知且有配置通知方式，则发送通知
 				if ((result.shouldNotify || followThreadItem) && notifyMethod) {
-					// 构建自动答复信息（如果有）
-					const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
-						hasAutoReply: true,
-						replyContent: autoReplyResult.replyInfo.content,
-						scheduleTime: formatAutoReplyTime(autoReplyResult.replyInfo.scheduleTime),
-						messageId: autoReplyResult.replyInfo.messageId
-					} : undefined;
-					
-					// 构建通知数据
-					const notificationData: NotificationData = {
-						teamId: originalMessage.groupId || '',
-						teamName: originalMessage.groupName || '',
-						sender: originalMessage.sender || '',
-						messageContent: originalMessage.messageContent || '',
-						summary: result.summary || '',
-						datetime: originalMessage.datetime || '',
-						postId,
-						matchedRule: result.matchedRule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
-						replyAdvice: result.replyAdvice || '',
-						mention: shouldMention,
-						autoReplyInfo,
-						// 如果是关注后续，添加原消息信息
-						originalMessageInfo: followThreadItem?.followConfig ? {
-							sender: followThreadItem.followConfig.originalMessage.sender,
-							content: followThreadItem.followConfig.originalMessage.content,
-							datetime: String(followThreadItem.followConfig.originalMessage.datetime),
-							messageUrl: followThreadItem.followConfig.originalMessage.messageUrl
-						} : undefined
-					};
-					
-					// 使用 NotificationService 发送通知
-					await notificationService.sendNotification(
-						notificationData,
-						{ notifyMethod },
-						// LLM 审核配置（只对 bot 通知生效）
-						{
-							enabled: hasNotifyMethod(notifyMethod, 'bot'),
-							userName: userinfo.fullName,
-							concernedItems: concernedItems
-						}
-					).catch(console.error);
+					// 检查是否启用了每日摘要模式
+					if (matchedConcernedItem?.digestConfig?.enabled) {
+						// 加入摘要队列，不立即推送
+						await enqueueConcernedItemDigest({
+							matchedRule: result.matchedRule || matchedConcernedItem.text || '',
+							sender: originalMessage.sender || '',
+							teamName: originalMessage.groupName || '',
+							teamId: originalMessage.groupId || '',
+							messageContent: originalMessage.messageContent || '',
+							summary: result.summary || '',
+							datetime: originalMessage.datetime || '',
+							postId
+						});
+						console.log('📥 消息已加入摘要队列（非即时推送）');
+					} else {
+						// 构建自动答复信息（如果有）
+						const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
+							hasAutoReply: true,
+							replyContent: autoReplyResult.replyInfo.content,
+							scheduleTime: formatAutoReplyTime(autoReplyResult.replyInfo.scheduleTime),
+							messageId: autoReplyResult.replyInfo.messageId
+						} : undefined;
+						
+						// 构建通知数据
+						const notificationData: NotificationData = {
+							teamId: originalMessage.groupId || '',
+							teamName: originalMessage.groupName || '',
+							sender: originalMessage.sender || '',
+							messageContent: originalMessage.messageContent || '',
+							summary: result.summary || '',
+							datetime: originalMessage.datetime || '',
+							postId,
+							matchedRule: result.matchedRule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
+							replyAdvice: result.replyAdvice || '',
+							mention: shouldMention,
+							autoReplyInfo,
+							// 如果是关注后续，添加原消息信息
+							originalMessageInfo: followThreadItem?.followConfig ? {
+								sender: followThreadItem.followConfig.originalMessage.sender,
+								content: followThreadItem.followConfig.originalMessage.content,
+								datetime: String(followThreadItem.followConfig.originalMessage.datetime),
+								messageUrl: followThreadItem.followConfig.originalMessage.messageUrl
+							} : undefined
+						};
+						
+						// 使用 NotificationService 发送通知
+						await notificationService.sendNotification(
+							notificationData,
+							{ notifyMethod },
+							// LLM 审核配置（只对 bot 通知生效）
+							{
+								enabled: hasNotifyMethod(notifyMethod, 'bot'),
+								userName: userinfo.fullName,
+								concernedItems: concernedItems
+							}
+						).catch(console.error);
+					}
 				}
 				
 				// 3️⃣ 处理 shouldStore 标志 - 使用统一存储接口（后于自动答复）
@@ -481,28 +498,43 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 					
 					// 如果有配置通知方式，则发送通知
 					if (notifyMethod) {
-						const notificationData: NotificationData = {
-							teamId: processResult.messageContext?.groupId || '',
-							teamName: processResult.messageContext?.groupName || '',
-							sender: processResult.messageContext?.sender || '',
-							messageContent: processResult.messageContext?.messageContent || '',
-							summary: processResult.summary || '',
-							datetime: processResult.messageContext?.datetime || '',
-							postId: post.id || '',
-							matchedRule: processResult.matchedRule || '',
-							replyAdvice: processResult.replyAdvice || '',
-							mention: shouldMention
-						};
-						
-						await notificationService.sendNotification(
-							notificationData,
-							{ notifyMethod },
-							{
-								enabled: hasNotifyMethod(notifyMethod, 'bot'),
-								userName: userinfo.fullName,
-								concernedItems: concernedItems
-							}
-						).catch(console.error);
+						// 检查是否启用了每日摘要模式
+						if (matchedConcernedItem?.digestConfig?.enabled) {
+							await enqueueConcernedItemDigest({
+								matchedRule: processResult.matchedRule || matchedConcernedItem.text || '',
+								sender: processResult.messageContext?.sender || '',
+								teamName: processResult.messageContext?.groupName || '',
+								teamId: processResult.messageContext?.groupId || '',
+								messageContent: processResult.messageContext?.messageContent || '',
+								summary: processResult.summary || '',
+								datetime: processResult.messageContext?.datetime || '',
+								postId: post.id || ''
+							});
+							console.log('📥 消息已加入摘要队列（非即时推送）');
+						} else {
+							const notificationData: NotificationData = {
+								teamId: processResult.messageContext?.groupId || '',
+								teamName: processResult.messageContext?.groupName || '',
+								sender: processResult.messageContext?.sender || '',
+								messageContent: processResult.messageContext?.messageContent || '',
+								summary: processResult.summary || '',
+								datetime: processResult.messageContext?.datetime || '',
+								postId: post.id || '',
+								matchedRule: processResult.matchedRule || '',
+								replyAdvice: processResult.replyAdvice || '',
+								mention: shouldMention
+							};
+							
+							await notificationService.sendNotification(
+								notificationData,
+								{ notifyMethod },
+								{
+									enabled: hasNotifyMethod(notifyMethod, 'bot'),
+									userName: userinfo.fullName,
+									concernedItems: concernedItems
+								}
+							).catch(console.error);
+						}
 					}
 				}
 			}
@@ -726,47 +758,62 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 				
 				// 如果有配置通知方式，则发送通知
 				if (notifyMethod) {
-					// 构建自动答复信息（如果有）
-					const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
-						hasAutoReply: true,
-						replyContent: autoReplyResult.replyInfo.content,
-						scheduleTime: formatAutoReplyTime(autoReplyResult.replyInfo.scheduleTime),
-						messageId: autoReplyResult.replyInfo.messageId
-					} : undefined;
-					
-					// 构建通知数据
-					const notificationData: NotificationData = {
-						teamId: body.messageData ? body.messageData.groupId : json.team_id,
-						teamName: body.messageData ? body.messageData.groupName : json.team_name,
-						sender: json.sender,
-						messageContent: json.message_content,
-						summary: json.summary || '',
-						datetime: json.datetime,
-						postId: json.post_id,
-						matchedRule: matched_rule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
-						replyAdvice: json.reply_advice,
-						mention: shouldMention,
-						autoReplyInfo,
-						// 如果是关注后续，添加原消息信息
-						originalMessageInfo: followThreadItem?.followConfig ? {
-							sender: followThreadItem.followConfig.originalMessage.sender,
-							content: followThreadItem.followConfig.originalMessage.content,
-							datetime: String(followThreadItem.followConfig.originalMessage.datetime),
-							messageUrl: followThreadItem.followConfig.originalMessage.messageUrl
-						} : undefined
-					};
-					
-					// 使用 NotificationService 发送通知
-					await notificationService.sendNotification(
-						notificationData,
-						{ notifyMethod },
-						// LLM 审核配置（只对 bot 通知生效）
-						{
-							enabled: hasNotifyMethod(notifyMethod, 'bot'),
-							userName: userinfo.fullName,
-							concernedItems: concernedItems
-						}
-					).catch(console.error);
+					// 检查是否启用了每日摘要模式
+					if (matchedConcernedItem?.digestConfig?.enabled) {
+						await enqueueConcernedItemDigest({
+							matchedRule: matched_rule || matchedConcernedItem.text || '',
+							sender: json.sender,
+							teamName: body.messageData ? body.messageData.groupName : json.team_name,
+							teamId: body.messageData ? body.messageData.groupId : json.team_id,
+							messageContent: json.message_content,
+							summary: json.summary || '',
+							datetime: json.datetime,
+							postId: json.post_id
+						});
+						console.log('📥 消息已加入摘要队列（非即时推送）');
+					} else {
+						// 构建自动答复信息（如果有）
+						const autoReplyInfo = autoReplyResult.handled && autoReplyResult.replyInfo ? {
+							hasAutoReply: true,
+							replyContent: autoReplyResult.replyInfo.content,
+							scheduleTime: formatAutoReplyTime(autoReplyResult.replyInfo.scheduleTime),
+							messageId: autoReplyResult.replyInfo.messageId
+						} : undefined;
+						
+						// 构建通知数据
+						const notificationData: NotificationData = {
+							teamId: body.messageData ? body.messageData.groupId : json.team_id,
+							teamName: body.messageData ? body.messageData.groupName : json.team_name,
+							sender: json.sender,
+							messageContent: json.message_content,
+							summary: json.summary || '',
+							datetime: json.datetime,
+							postId: json.post_id,
+							matchedRule: matched_rule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
+							replyAdvice: json.reply_advice,
+							mention: shouldMention,
+							autoReplyInfo,
+							// 如果是关注后续，添加原消息信息
+							originalMessageInfo: followThreadItem?.followConfig ? {
+								sender: followThreadItem.followConfig.originalMessage.sender,
+								content: followThreadItem.followConfig.originalMessage.content,
+								datetime: String(followThreadItem.followConfig.originalMessage.datetime),
+								messageUrl: followThreadItem.followConfig.originalMessage.messageUrl
+							} : undefined
+						};
+						
+						// 使用 NotificationService 发送通知
+						await notificationService.sendNotification(
+							notificationData,
+							{ notifyMethod },
+							// LLM 审核配置（只对 bot 通知生效）
+							{
+								enabled: hasNotifyMethod(notifyMethod, 'bot'),
+								userName: userinfo.fullName,
+								concernedItems: concernedItems
+							}
+						).catch(console.error);
+					}
 				}
 				
 				// 3️⃣ 存储消息（后于自动答复）
