@@ -22,9 +22,14 @@ import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './j
 import { handleLLMRequest } from './llm';
 
 import { Logger } from './utils/logger';
-import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage } from './message-reaction/FollowThreadHandler';
+import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage, registerFollowThreadDigestTask } from './message-reaction/FollowThreadHandler';
+import { registerConcernedItemsDigestTask } from './services/DigestQueueService';
 
 console.log('Background script loaded');
+
+// 注册 Digest 任务（关注后续合并通知、concernedItems 每日摘要等）
+registerFollowThreadDigestTask();
+registerConcernedItemsDigestTask();
 
 // 记录扩展启动
 Logger.lifecycle('startup', 'Background script loaded');

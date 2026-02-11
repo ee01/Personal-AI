@@ -37,6 +37,12 @@ export interface TopicItemWithAutoReply {
     // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
     notifyMethod?: string;
     notifyFrequency?: 'immediate' | 'merged';
+    // 🆕 每日/每周摘要配置
+    digestConfig?: {
+        enabled: boolean;
+        frequency: 'daily' | 'weekly';
+        preferredHour?: number;  // 默认 18
+    };
     // 自动答复相关
     autoReply?: boolean;
     autoReplyConfig?: AutoReplyConfig;

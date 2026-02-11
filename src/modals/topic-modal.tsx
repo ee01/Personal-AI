@@ -41,6 +41,12 @@ interface FollowThreadConfigType {
     lastNotifiedAt?: string;
 }
 
+interface DigestConfigType {
+    enabled: boolean;
+    frequency: 'daily' | 'weekly';
+    preferredHour?: number;
+}
+
 interface TopicItem {
     id: string;
     text: string;
@@ -55,6 +61,8 @@ interface TopicItem {
     // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
     notifyMethod?: string;
     notifyFrequency?: 'immediate' | 'merged';
+    // 🆕 每日/每周摘要配置
+    digestConfig?: DigestConfigType;
     // 自动答复相关字段
     autoReply?: boolean;        // 是否启用自动答复
     autoReplyConfig?: AutoReplyConfig;
@@ -93,6 +101,10 @@ const TopicModal = () => {
     // notifyMethod 使用逗号分隔格式，如 'bot,chrome'
     const [newNotifyMethod, setNewNotifyMethod] = useState<string>('bot');
     const [newNotifyFrequency, setNewNotifyFrequency] = useState<'immediate' | 'merged'>('immediate');
+    // 🆕 每日摘要配置状态
+    const [newDigestEnabled, setNewDigestEnabled] = useState(false);
+    const [newDigestFrequency, setNewDigestFrequency] = useState<'daily' | 'weekly'>('daily');
+    const [newDigestHour, setNewDigestHour] = useState(18);
     // 新增：通用匹配条件状态
     const [newFilterSender, setNewFilterSender] = useState('');
     const [newFilterGroup, setNewFilterGroup] = useState('');
@@ -352,6 +364,12 @@ const TopicModal = () => {
             // 🆕 通用通知配置（notifyMethod 使用逗号分隔格式）
             notifyMethod: newNotifyMethod || undefined,
             notifyFrequency: (newFollowThread || newAutoReply) ? newNotifyFrequency : undefined,
+            // 🆕 每日摘要配置
+            digestConfig: newDigestEnabled ? {
+                enabled: true,
+                frequency: newDigestFrequency,
+                preferredHour: newDigestHour
+            } : undefined,
             // 自动答复配置
             autoReply: newAutoReply,
             autoReplyConfig: newAutoReply ? { ...newAutoReplyConfig, enabled: true } : undefined,
@@ -395,6 +413,9 @@ const TopicModal = () => {
         setNewFilterGroup('');
         setNewNotifyMethod('bot');
         setNewNotifyFrequency('immediate');
+        setNewDigestEnabled(false);
+        setNewDigestFrequency('daily');
+        setNewDigestHour(18);
         setNewAutoReply(false);
         setNewAutoReplyConfig({
             enabled: false,
@@ -989,6 +1010,85 @@ const TopicModal = () => {
                                     </div>
                                 )}
 
+                                {/* 编辑时的每日摘要配置区域 */}
+                                {(editingTopic.notifyMethod || '').includes('bot') && !editingTopic.followThread && (
+                                    <div className="digest-config">
+                                        <div className="config-section">
+                                            <div className="checkbox-container">
+                                                <input
+                                                    type="checkbox"
+                                                    id={`digest-enabled-${topic.id}`}
+                                                    checked={editingTopic.digestConfig?.enabled || false}
+                                                    onChange={e => setEditingTopic({
+                                                        ...editingTopic,
+                                                        digestConfig: e.target.checked ? {
+                                                            enabled: true,
+                                                            frequency: editingTopic.digestConfig?.frequency || 'daily',
+                                                            preferredHour: editingTopic.digestConfig?.preferredHour ?? 18
+                                                        } : undefined
+                                                    })}
+                                                />
+                                                <label htmlFor={`digest-enabled-${topic.id}`}>使用定时摘要推送（替代即时通知）</label>
+                                            </div>
+                                        </div>
+                                        {editingTopic.digestConfig?.enabled && (
+                                            <div className="digest-options">
+                                                <div className="config-section">
+                                                    <div className="config-title">推送频率：</div>
+                                                    <div className="radio-group horizontal">
+                                                        <div className="radio-option">
+                                                            <input
+                                                                type="radio"
+                                                                id={`digest-daily-${topic.id}`}
+                                                                name={`digest-freq-${topic.id}`}
+                                                                checked={editingTopic.digestConfig?.frequency === 'daily'}
+                                                                onChange={() => setEditingTopic({
+                                                                    ...editingTopic,
+                                                                    digestConfig: { ...editingTopic.digestConfig!, frequency: 'daily' }
+                                                                })}
+                                                            />
+                                                            <label htmlFor={`digest-daily-${topic.id}`}>每日</label>
+                                                        </div>
+                                                        <div className="radio-option">
+                                                            <input
+                                                                type="radio"
+                                                                id={`digest-weekly-${topic.id}`}
+                                                                name={`digest-freq-${topic.id}`}
+                                                                checked={editingTopic.digestConfig?.frequency === 'weekly'}
+                                                                onChange={() => setEditingTopic({
+                                                                    ...editingTopic,
+                                                                    digestConfig: { ...editingTopic.digestConfig!, frequency: 'weekly' }
+                                                                })}
+                                                            />
+                                                            <label htmlFor={`digest-weekly-${topic.id}`}>每周</label>
+                                                        </div>
+                                                        <div className="radio-option">
+                                                            <label>
+                                                                推送时间：
+                                                                <input
+                                                                    type="number"
+                                                                    className="delay-hours-input"
+                                                                    value={editingTopic.digestConfig?.preferredHour ?? 18}
+                                                                    onChange={e => setEditingTopic({
+                                                                        ...editingTopic,
+                                                                        digestConfig: { ...editingTopic.digestConfig!, preferredHour: parseInt(e.target.value) || 18 }
+                                                                    })}
+                                                                    min="0"
+                                                                    max="23"
+                                                                />
+                                                                :00
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="hint-text">
+                                                    匹配到的消息不会立即推送，而是在指定时间汇总推送
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
                                 {/* 编辑时的关注后续配置区域 */}
                                 {editingTopic.followThread && editingTopic.followConfig && (
                                     <div className="follow-thread-config">
@@ -1161,6 +1261,11 @@ const TopicModal = () => {
                                         🔔
                                     </span>
                                 )}
+                                {topic.digestConfig?.enabled && (
+                                    <span className="digest-indicator" title={`定时摘要 (${topic.digestConfig.frequency === 'daily' ? '每日' : '每周'} ${topic.digestConfig.preferredHour ?? 18}:00)`}>
+                                        📊
+                                    </span>
+                                )}
                                 {topic.autoReply && (
                                     <span className="auto-reply-indicator" title="已启用自动答复">
                                         🤖
@@ -1294,6 +1399,69 @@ const TopicModal = () => {
                             />
                         </div>
                     </div>
+
+                    {/* 每日摘要配置区域（仅在启用 Glip 推送且非关注后续模式时显示） */}
+                    {(newNotifyMethod || '').includes('bot') && !newFollowThread && (
+                        <div className="digest-config">
+                            <div className="config-section">
+                                <div className="checkbox-container">
+                                    <input
+                                        type="checkbox"
+                                        id="new-digest-enabled"
+                                        checked={newDigestEnabled}
+                                        onChange={e => setNewDigestEnabled(e.target.checked)}
+                                    />
+                                    <label htmlFor="new-digest-enabled">使用定时摘要推送（替代即时通知）</label>
+                                </div>
+                            </div>
+                            {newDigestEnabled && (
+                                <div className="digest-options">
+                                    <div className="config-section">
+                                        <div className="config-title">推送频率：</div>
+                                        <div className="radio-group horizontal">
+                                            <div className="radio-option">
+                                                <input
+                                                    type="radio"
+                                                    id="new-digest-daily"
+                                                    name="new-digest-freq"
+                                                    checked={newDigestFrequency === 'daily'}
+                                                    onChange={() => setNewDigestFrequency('daily')}
+                                                />
+                                                <label htmlFor="new-digest-daily">每日</label>
+                                            </div>
+                                            <div className="radio-option">
+                                                <input
+                                                    type="radio"
+                                                    id="new-digest-weekly"
+                                                    name="new-digest-freq"
+                                                    checked={newDigestFrequency === 'weekly'}
+                                                    onChange={() => setNewDigestFrequency('weekly')}
+                                                />
+                                                <label htmlFor="new-digest-weekly">每周</label>
+                                            </div>
+                                            <div className="radio-option">
+                                                <label>
+                                                    推送时间：
+                                                    <input
+                                                        type="number"
+                                                        className="delay-hours-input"
+                                                        value={newDigestHour}
+                                                        onChange={e => setNewDigestHour(parseInt(e.target.value) || 18)}
+                                                        min="0"
+                                                        max="23"
+                                                    />
+                                                    :00
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="hint-text">
+                                        匹配到的消息不会立即推送，而是在指定时间汇总推送
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                     
                     {/* 自动答复配置区域 */}
                     {newAutoReply && (
@@ -2006,6 +2174,32 @@ const TopicModal = () => {
                     padding: 4px 8px;
                     background-color: #f5f5f5;
                     border-radius: 4px;
+                }
+
+                /* 每日摘要配置样式 */
+                .digest-config {
+                    margin-top: 12px;
+                    padding: 12px;
+                    background-color: #f0f7ff;
+                    border: 1px solid #b3d4fc;
+                    border-radius: 6px;
+                }
+
+                .digest-options {
+                    margin-top: 8px;
+                }
+
+                .digest-indicator {
+                    color: #1976d2;
+                    font-weight: bold;
+                    font-size: 0.9em;
+                    margin-left: 8px;
+                }
+
+                .radio-group.horizontal {
+                    flex-direction: row;
+                    flex-wrap: wrap;
+                    gap: 16px;
                 }
             `}</style>
         </div>
