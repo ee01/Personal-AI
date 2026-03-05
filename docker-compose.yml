@@ -1,23 +1,18 @@
 version: '3.8'
 
 services:
-  chroma:
-    image: chromadb/chroma:latest
-    container_name: chroma-server
-    volumes:
-      - ./chroma-data:/data
+  memory-service:
+    build: ./memory-service
+    container_name: memory-service
     ports:
-      - "8000:8000"
-    environment:
-      - ALLOW_RESET=true
-      - ANONYMIZED_TELEMETRY=false
-      - CHROMA_SERVER_AUTH_CREDENTIALS_FILE=
-      - CHROMA_SERVER_AUTH_CREDENTIALS=
-      - CHROMA_SERVER_AUTH_PROVIDER=
-      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=*
+      - "3210:3210"
+    volumes:
+      - ./memory-service/data:/app/data
+    env_file:
+      - ./memory-service/.env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3210/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

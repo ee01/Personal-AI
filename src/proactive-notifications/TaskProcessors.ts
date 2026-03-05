@@ -4,7 +4,7 @@
  */
 
 import { NotificationItem } from './NotificationManager';
-import { memorySystem } from '../memory';
+import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import { IntelligentAgent } from '../agentThinking';
 
 // 基础任务处理器接口
@@ -158,25 +158,25 @@ export class DependencyMonitorProcessor implements TaskProcessor {
     try {
       // 🔄 使用向量搜索查找项目相关信息
       const projectQuery = '项目 进度 任务 依赖 团队';
-      await memorySystem.initialize();
-      const messages = await memorySystem.cloudStorage.getSimilarMessages(projectQuery, {
-        limit: 20,
-        minRelevanceScore: 0.3
+      const client = getMemoryServiceClient();
+      const recallResult = await client.recall(projectQuery, {
+        topK: 20,
+        channels: ['vector', 'fts']
       });
-      
-      if (!messages || messages.length === 0) {
+
+      if (!recallResult || !recallResult.items || recallResult.items.length === 0) {
         return [];
       }
-      
+
       // 转换为兼容格式
-      const memoryResults = messages.map(m => ({
-        id: m.id,
-        content: m.content,
+      const memoryResults = recallResult.items.map(item => ({
+        id: item.id,
+        content: item.content,
         metadata: {
-          sender: m.sender,
-          groupName: m.groupName,
-          datetime: m.datetime,
-          summary: m.summary
+          sender: item.metadata?.sender,
+          groupName: item.metadata?.groupName,
+          datetime: item.metadata?.datetime,
+          summary: item.metadata?.summary
         }
       }));
 
@@ -192,7 +192,7 @@ export class DependencyMonitorProcessor implements TaskProcessor {
 
       // 解析分析结果为项目数据
       return this.parseProjectsFromAnalysis(analysisResult);
-      
+
     } catch (error) {
       console.error('从记忆中提取项目失败:', error);
       return [];
@@ -246,25 +246,25 @@ export class DependencyMonitorProcessor implements TaskProcessor {
     try {
       // 🔄 查询项目相关的依赖信息
       const dependencyQuery = `项目 ${projectId} 依赖 设计 后端 外部 团队 阻塞`;
-      await memorySystem.initialize();
-      const messages = await memorySystem.cloudStorage.getSimilarMessages(dependencyQuery, {
-        limit: 10,
-        minRelevanceScore: 0.3
+      const client = getMemoryServiceClient();
+      const recallResult = await client.recall(dependencyQuery, {
+        topK: 10,
+        channels: ['vector', 'fts']
       });
-      
-      if (!messages || messages.length === 0) {
+
+      if (!recallResult || !recallResult.items || recallResult.items.length === 0) {
         return [];
       }
-      
+
       // 转换为兼容格式
-      const memoryResults = messages.map(m => ({
-        id: m.id,
-        content: m.content,
+      const memoryResults = recallResult.items.map(item => ({
+        id: item.id,
+        content: item.content,
         metadata: {
-          sender: m.sender,
-          groupName: m.groupName,
-          datetime: m.datetime,
-          summary: m.summary
+          sender: item.metadata?.sender,
+          groupName: item.metadata?.groupName,
+          datetime: item.metadata?.datetime,
+          summary: item.metadata?.summary
         }
       }));
 
@@ -280,7 +280,7 @@ export class DependencyMonitorProcessor implements TaskProcessor {
       });
 
       return this.parseDependenciesFromAnalysis(analysisResult, projectId);
-      
+
     } catch (error) {
       console.error('从记忆中提取依赖失败:', error);
       return [];
@@ -774,21 +774,21 @@ export class TeamCollaborationProcessor implements TaskProcessor {
 
   private async analyzeTeamCollaboration(): Promise<CollaborationIssue[]> {
     const issues: CollaborationIssue[] = [];
-    
+
     try {
       // 🔄 查询最近的团队消息
-      await memorySystem.initialize();
-      const recentMessages = await memorySystem.cloudStorage.getSimilarMessages('团队 协作 讨论 决策 问题', {
-        limit: 30,
-        minRelevanceScore: 0.3
+      const client = getMemoryServiceClient();
+      const recallResult = await client.recall('团队 协作 讨论 决策 问题', {
+        topK: 30,
+        channels: ['vector', 'fts']
       });
-      
-      if (recentMessages && recentMessages.length > 0) {
+
+      if (recallResult && recallResult.items && recallResult.items.length > 0) {
         // 使用智能代理分析协作模式
         const agent = new IntelligentAgent();
         const analysisResult = await agent.analyze({
           type: 'collaboration_analysis',
-          content: recentMessages.map(m => m.content).join('\n\n'),
+          content: recallResult.items.map(item => item.content).join('\n\n'),
           request: '分析团队协作模式，识别沟通问题、决策延迟和协作瓶颈'
         }, {
           type: 'message',
@@ -798,11 +798,11 @@ export class TeamCollaborationProcessor implements TaskProcessor {
         // 解析分析结果
         issues.push(...this.parseCollaborationIssues(analysisResult));
       }
-      
+
     } catch (error) {
       console.error('协作分析失败:', error);
     }
-    
+
     return issues;
   }
 
@@ -899,18 +899,18 @@ export class DailySummaryProcessor implements TaskProcessor {
     try {
       // 🔄 查询今日相关的活动和更新
       const todayQuery = '今天 完成 任务 进展 更新 截止';
-      await memorySystem.initialize();
-      const todayResults = await memorySystem.cloudStorage.getSimilarMessages(todayQuery, {
-        limit: 20,
-        minRelevanceScore: 0.3
+      const client = getMemoryServiceClient();
+      const recallResult = await client.recall(todayQuery, {
+        topK: 20,
+        channels: ['vector', 'fts']
       });
-      
-      if (todayResults && todayResults.length > 0) {
+
+      if (recallResult && recallResult.items && recallResult.items.length > 0) {
         // 使用智能代理生成摘要
         const agent = new IntelligentAgent();
         const analysisResult = await agent.analyze({
           type: 'daily_summary',
-          content: todayResults.map(r => r.content).join('\n\n'),
+          content: recallResult.items.map(item => item.content).join('\n\n'),
           date: summary.date,
           request: '生成今日项目活动摘要，包括完成的任务、即将到期的事项和重要更新'
         }, {
@@ -921,7 +921,7 @@ export class DailySummaryProcessor implements TaskProcessor {
         // 解析摘要内容
         summary.hasImportantContent = this.parseSummaryContent(analysisResult, summary);
       }
-      
+
     } catch (error) {
       console.error('摘要内容生成失败:', error);
     }

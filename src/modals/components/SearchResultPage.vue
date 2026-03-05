@@ -18,10 +18,8 @@
       </div>
       
       <div v-show="isAiAnswerExpanded" class="ai-answer-content">
-        <!-- 主要回答 -->
-        <div class="answer-main">
-          <p>{{ searchContext.askResult.answer }}</p>
-        </div>
+        <!-- 主要回答（支持 Markdown 渲染） -->
+        <div class="answer-main" v-html="renderedAnswer"></div>
         
         <!-- 结构化信息（如果有） -->
         <div v-if="searchContext.askResult.structuredAnswer" class="answer-structured">
@@ -150,6 +148,7 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore, ENTITY_TYPE_CONFIG } from '../memory-store';
+import { markdownToHtml } from '../utils/markdown';
 
 const route = useRoute();
 const router = useRouter();
@@ -161,6 +160,11 @@ const isLoading = computed(() => store.isLoading);
 const searchContext = computed(() => store.searchContext);
 const selectedTypeFilter = ref('all');
 const isAiAnswerExpanded = ref(true);
+
+const renderedAnswer = computed(() => {
+  const ans = searchContext.value.askResult?.answer;
+  return ans ? markdownToHtml(ans) : '';
+});
 
 // 自动设置筛选器：如果是从实体列表页搜索过来的，自动选中该实体类型
 watch(() => searchContext.value.entityType, (entityType) => {
@@ -327,7 +331,25 @@ const handleResultClick = (entity: any) => {
   color: #e2e8f0;
   font-size: 1rem;
   line-height: 1.8;
-  margin: 0;
+  margin: 0 0 0.75rem 0;
+}
+
+.answer-main p:last-child {
+  margin-bottom: 0;
+}
+
+.answer-main strong {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.answer-main a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.answer-main a:hover {
+  text-decoration: underline;
 }
 
 .answer-structured {

@@ -1,11 +1,10 @@
-import { callLLMJsonAPI, handleLLMRequest } from './llm';
+import { callLLMJsonAPI } from './llm';
 import { getEnvConfig, showToast } from './utils';
-import { v4 as uuidv4 } from 'uuid';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
-import { memorySystem, StoreResult } from './memory';
+import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
 import {
     handleAutoReplyRules,
@@ -16,13 +15,13 @@ import {
     updateRelatedMessages,
     storeRelatedMessage
 } from './message-reaction/FollowThreadHandler';
-import { FollowThreadMatch, MessageInfo, RelatedMessageMeta } from './types/followThread';
+import { RelatedMessageMeta } from './types/followThread';
 import {
     notificationService,
     NotificationData,
     hasNotifyMethod
 } from './services/NotificationService';
-import { buildRuleText, extractRuleIdsFromMatchedRule } from './utils/ruleTextBuilder';
+import { extractRuleIdsFromMatchedRule } from './utils/ruleTextBuilder';
 import { buildMessageFilterSystemPrompt } from './prompts';
 import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 
@@ -372,8 +371,6 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 				// 3️⃣ 处理 shouldStore 标志 - 使用统一存储接口（后于自动答复）
 				if (result.shouldStore) {
 					try {
-						const messageId = uuidv4();
-						
 						// 构建消息元数据
 						const messageMetadata = {
 							sender: originalMessage.sender || 'unknown',
@@ -397,21 +394,25 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							replyAdvice: result.replyAdvice || ''
 						};
 
-						// 使用统一存储接口 - 内部自动处理实体关联数据
+						// 使用 MemoryServiceClient HTTP 后端存储
 						try {
-							// 确保记忆系统已初始化
-							await memorySystem.initialize();
-							
-							// 统一存储接口 - 包含消息存储和实体关联数据处理
-							const storeResult: StoreResult = await memorySystem.storeMessage({
-								id: messageId,
+							const client = getMemoryServiceClient();
+							const ingestResult = await client.ingest({
 								content: originalMessage.messageContent || '',
-								metadata: messageMetadata
+								sourceType: 'glip',
+								sender: originalMessage.sender || 'unknown',
+								groupId: originalMessage.groupId || '',
+								groupName: originalMessage.groupName || '',
+								timestamp: new Date(originalMessage.datetime).getTime() || Date.now(),
+								metadata: {
+									...messageMetadata,
+								}
 							});
 
-							console.log(`✅ 消息完整存储完成: ${messageId}`, {
-								...storeResult,
-								performance: `${storeResult.processingTime}ms`
+							console.log(`✅ 消息完整存储完成: ${ingestResult.id}`, {
+								status: ingestResult.status,
+								entitiesExtracted: ingestResult.entitiesExtracted,
+								matchedProjects: ingestResult.matchedProjects
 							});
 
 						} catch (unifiedError) {
@@ -659,20 +660,6 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 		
 		if (dealResponse && dealResponse.data && dealResponse.data.length > 0) {
 			for (const json of dealResponse.data) {
-				// 🆕 检查消息是否已存在（通过 postId 去重）
-				if (json.post_id) {
-					try {
-						const existingMessage = await memorySystem.cloudStorage.getMessageByPostId(json.post_id);
-						if (existingMessage) {
-							console.log(`⏭️ 消息已存在，跳过处理: postId=${json.post_id}, messageId=${existingMessage.id}`);
-							continue;
-						}
-					} catch (error) {
-						console.warn(`检查消息是否存在时出错: postId=${json.post_id}`, error);
-						// 继续处理，防止因为查询错误而丢失消息
-					}
-				}
-			
 				// 排除 SM AI 的私人消息和自己发送的消息
 				if (body.messageData && (body.messageData.groupName.includes('4700372020') || body.messageData.groupName == 'SM AI')) continue;
 				if (json.team_name.includes('4700372020') || json.team_name == 'SM AI') continue;
@@ -682,7 +669,65 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 				
 				const matched_rule = json.matched_rule;
 
-				// 处理顺序：1.自动答复 1.5.关注后续（只更新数据） 2.统一通知 3.存储
+				// 0️⃣ 先 ingest，由后端去重。若为重复消息则跳过后续推送/通知等操作
+				const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
+				const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
+					id: post.id,
+					sender: post.creator,
+					content: post.text,
+					datetime: post.time,
+					isMainMessage: post.id == json.post_id
+				})) : json.contextMessages;
+				const messageMetadata = {
+					sender: json.sender || 'unknown',
+					datetime: new Date(json.datetime).getTime() || Date.now(),
+					postId: json.post_id,
+					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
+					summary: json.summary || '',
+					groupName: json.team_name,
+					groupId: json.team_id,
+					groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
+					user_relation_type: json.user_relation_type || 'general_interest',
+					contextMessages: contextMessages,
+					messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
+					actions: extractedEntities.actions,
+					replyAdvice: json.reply_advice,
+					entities: extractedEntities.entities,
+					metadata: {
+						sentiment: extractedEntities.metadata.sentiment,
+						priority: extractedEntities.metadata.priority,
+						category: extractedEntities.metadata.category,
+						tags: extractedEntities.metadata.tags
+					}
+				};
+
+				let ingestResult: { id?: string; status: string } | null = null;
+				try {
+					const client = getMemoryServiceClient();
+					ingestResult = await client.ingest({
+						content: json.message_content,
+						sourceType: 'glip',
+						sender: json.sender || 'unknown',
+						groupId: json.team_id,
+						groupName: json.team_name,
+						timestamp: new Date(json.datetime).getTime() || Date.now(),
+						metadata: { ...messageMetadata }
+					});
+					if (ingestResult.status === 'duplicate') {
+						console.log(`⏭️ 跳过重复消息 [post_id=${json.post_id}]`);
+						continue;
+					}
+					console.log(`✅ 消息完整存储完成 [统一接口]: ${ingestResult.id?.slice(0, 8)}`, {
+						status: ingestResult.status,
+						entitiesExtracted: (ingestResult as any).entitiesExtracted,
+						matchedProjects: (ingestResult as any).matchedProjects
+					});
+				} catch (memoryError) {
+					console.error('🚨 统一存储系统失败', memoryError);
+					// 存储失败仍继续执行推送等，避免漏通知
+				}
+
+				// 处理顺序：1.自动答复 1.5.关注后续（只更新数据） 2.统一通知（存储已在上面完成）
 				
 				// 1️⃣ 处理自动答复规则（最先处理，以便在通知中包含自动答复信息）
 				let autoReplyResult: { handled: boolean; replyInfo?: { content: string; scheduleTime: Date; status: string; messageId?: string } } = { handled: false };
@@ -814,66 +859,6 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 							}
 						).catch(console.error);
 					}
-				}
-				
-				// 3️⃣ 存储消息（后于自动答复）
-				// 增强逻辑：使用新的统一存储系统
-				const messageId = uuidv4();
-				const extractedEntities = await extractEntitiesFromMessage(json.message_content, json);
-				
-				// 构建消息元数据（包含上下文信息）
-				const contextMessages = body.messageData ? body.messageData.posts.map((post: any) => ({
-					id: post.id,
-					sender: post.creator,
-					content: post.text,
-					datetime: post.time,
-					isMainMessage: post.id == json.post_id
-				})) : json.contextMessages;
-				const messageMetadata = {
-					sender: json.sender || 'unknown',
-					datetime: new Date(json.datetime).getTime() || Date.now(),
-					postId: json.post_id,   // 原始消息ID
-					matchedRules: matched_rule ? matched_rule.split('\n').map((rule: string) => rule.trim()) : [],
-					summary: json.summary || '',
-					groupName: json.team_name,
-					groupId: json.team_id,
-					groupUrl: json.team_url || `https://app.ringcentral.com/messages/${json.team_id}`,
-					// 用户关系类型（用于更精确的用户画像更新）
-					user_relation_type: json.user_relation_type || 'general_interest',
-					// 上下文信息（如果是ANALYZE_BY_GROUP模式，添加同组其他消息）
-					contextMessages: contextMessages,
-					// 当前消息在上下文中的位置
-					messagePosition: contextMessages.findIndex((post: any) => post.id === json.post_id),
-					actions: extractedEntities.actions,
-					replyAdvice: json.reply_advice,
-					entities: extractedEntities.entities,
-					metadata: {
-						sentiment: extractedEntities.metadata.sentiment,
-						priority: extractedEntities.metadata.priority,
-						category: extractedEntities.metadata.category,
-						tags: extractedEntities.metadata.tags
-					}
-				};
-
-				// 使用统一存储接口（与 agentThinking 方式一致）
-				try {
-					// 确保记忆系统已初始化
-					await memorySystem.initialize();
-					
-					// 统一存储接口 - 包含消息存储和实体关联数据处理
-					const storeResult: StoreResult = await memorySystem.storeMessage({
-						id: messageId,
-						content: json.message_content,
-						metadata: messageMetadata
-					});
-
-					console.log(`✅ 消息完整存储完成 [统一接口]: ${messageId.slice(0,8)}`, {
-						...storeResult,
-						performance: `${storeResult.processingTime}ms`
-					});
-
-				} catch (memoryError) {
-					console.error('🚨 统一存储系统失败', memoryError);
 				}
 			}
 		}

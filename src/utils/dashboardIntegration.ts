@@ -697,19 +697,17 @@ export class DashboardDataManager {
   /** 🔄 使用向量数据库为项目名提供建议 */
   async suggestProjects(question: string): Promise<{ success: boolean; suggestions: string[]; error?: string }> {
     try {
-      const { memorySystem } = await import('../memory');
-      await memorySystem.initialize();
-      
-      const _messages = await memorySystem.cloudStorage.getSimilarMessages(question, {
-        limit: 10,
-        minRelevanceScore: 0.3
-      });
-      
+      const { getMemoryServiceClient } = await import('../services/MemoryServiceClient');
+      const client = getMemoryServiceClient();
+
+      // Recall similar messages for context (result not directly used for names)
+      await client.recall(question, { topK: 10 });
+
       const names = new Set<string>();
       // 直接从已知项目列表获取建议
-      const allProjects = await memorySystem.cloudStorage.getAllKnownProjects();
-      allProjects.forEach(p => names.add(p));
-      
+      const projectResult = await client.getEntities('Project');
+      (projectResult.items || []).forEach(p => names.add(p.name));
+
       const suggestions = Array.from(names).slice(0, 8);
       return { success: true, suggestions };
     } catch (e: any) {

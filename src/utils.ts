@@ -45,6 +45,10 @@ export interface EnvConfigType {
   ENABLE_SNOOZE: boolean;        // 启用稍后处理功能
   // 消息过滤配置
   FILTER_OWN_MESSAGES: boolean;  // 是否过滤自己发送的消息
+  // 记忆系统 (Memory Service)
+  MEMORY_SERVICE_BASE_URL: string;  // 记忆服务 API 地址，如 http://localhost:3210/api/v1
+  MEMORY_SERVICE_API_KEY?: string;  // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
+  MEMORY_SERVICE_TIMEOUT?: number;  // 请求超时（毫秒），默认 30000
 }
 
 export function formatDate(dateString: string | number) {
@@ -179,6 +183,10 @@ export const defaultEnvConfig: EnvConfigType = {
   ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== "false",
   // 消息过滤配置（默认开启过滤）
   FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== "false",
+  // 记忆系统 (Memory Service)
+  MEMORY_SERVICE_BASE_URL: process.env.MEMORY_SERVICE_BASE_URL || "http://localhost:3210/api/v1",
+  MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || "",
+  MEMORY_SERVICE_TIMEOUT: Number(process.env.MEMORY_SERVICE_TIMEOUT) || 30_000,
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

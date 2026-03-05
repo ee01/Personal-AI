@@ -1,0 +1,1104 @@
+/**
+ * MemoryServiceClient — HTTP client for the Personal AI Memory Service.
+ * Replaces direct ChromaDB/LocalStorage access with API calls to the backend.
+ *
+ * Designed to run inside the Chrome Extension service worker context,
+ * using the standard fetch API and chrome.storage.local for configuration.
+ */
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+const DEFAULT_BASE_URL = 'http://localhost:3210/api/v1';
+const DEFAULT_TIMEOUT_MS = 30_000;
+const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+export interface MemoryServiceConfig {
+  baseUrl: string;
+  apiKey?: string;
+  timeout?: number;  // ms, default 30000
+  userId?: string;   // multi-user isolation, default 'default'
+}
+
+// ============================================================================
+// Ingest types
+// ============================================================================
+
+export interface IngestPayload {
+  content: string;
+  sourceType: 'glip' | 'jira' | 'web' | 'manual' | 'system';
+  sender?: string;
+  groupId?: string;
+  groupName?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  timestamp?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface IngestResult {
+  id: string;
+  status: 'created' | 'duplicate' | 'error';
+  entitiesExtracted?: number;
+  matchedProjects?: string[];
+}
+
+export interface BatchIngestResult {
+  results: IngestResult[];
+  totalCreated: number;
+  totalDuplicate: number;
+  totalError: number;
+}
+
+// ============================================================================
+// Recall & Ask types
+// ============================================================================
+
+export interface RecallOptions {
+  topK?: number;
+  channels?: ('vector' | 'fts' | 'graph' | 'time')[];
+  timeRange?: { start?: number; end?: number };
+  entityTypes?: string[];
+  projectFilter?: string;
+  minSalience?: number;
+  includeMetadata?: boolean;
+}
+
+export interface RecallResult {
+  items: RecallItem[];
+  totalFound: number;
+  queryTimeMs: number;
+  channels: string[];
+}
+
+export interface RecallItem {
+  id: string;
+  type: 'message' | 'chunk' | 'entity';
+  content: string;
+  score: number;
+  source?: string;
+  timestamp?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface AskResponse {
+  answer: string;
+  evidence?: RecallItem[];
+  queryTimeMs: number;
+}
+
+// ============================================================================
+// Entity types
+// ============================================================================
+
+export interface Entity {
+  id: string;
+  type: string;
+  name: string;
+  aliases?: string[];
+  description?: string;
+  importance: number;
+  accessCount: number;
+  lastAccessed?: number;
+  firstSeen?: number;
+  lastSeen?: number;
+  mentionCount: number;
+  tags?: string[];
+  status: string;
+  mergedInto?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export interface EntityListResponse {
+  items: Entity[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface EntityDetailResponse extends Entity {
+  properties: EntityProperty[];
+}
+
+export interface EntityProperty {
+  id: number;
+  entityId: string;
+  propertyKey: string;
+  propertyValue: string;
+  valueType: string;
+  sourceMessageId?: string;
+  sourceAuthor?: string;
+  sourceAuthority?: string;
+  sourceContext?: string;
+  validFrom?: number;
+  validTo?: number;
+  txStart: number;
+  txEnd?: number;
+  confidence: number;
+  supersededBy?: number;
+  supersedeReason?: string;
+  isFinal: boolean;
+  status: string;
+  actionType?: string;
+}
+
+export interface EntityTimelineEntry {
+  propertyKey: string;
+  propertyValue: string;
+  actionType: string;
+  sourceAuthor?: string;
+  txStart: number;
+  txEnd?: number;
+  status: string;
+}
+
+export interface EntityRelationship {
+  id: number;
+  fromEntityId: string;
+  toEntityId: string;
+  relationType: string;
+  strength: number;
+  coOccurrenceCount: number;
+  evidenceMessageIds?: string[];
+  context?: string;
+  validFrom?: number;
+  validTo?: number;
+  createdAt: number;
+  updatedAt?: number;
+  entityName?: string;
+  entityType?: string;
+}
+
+// ============================================================================
+// Project types
+// ============================================================================
+
+export interface WatchedProject {
+  id: string;
+  entityId?: string;
+  name: string;
+  description?: string;
+  aliases?: string[];
+  autoCaptureRules?: Array<{ field: string; pattern: string; action: string }>;
+  trackedProperties?: string[];
+  isActive: boolean;
+  priority: number;
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export interface CreateWatchedProjectPayload {
+  name: string;
+  description?: string;
+  aliases?: string[];
+  autoCaptureRules?: object;
+  trackedProperties?: string[];
+  priority?: number;
+}
+
+// ============================================================================
+// Notification types
+// ============================================================================
+
+export interface NotificationRecord {
+  id: string;
+  channel: string;
+  type?: string;
+  title: string;
+  body?: string;
+  payload?: Record<string, any>;
+  topicId?: string;
+  relatedEntityId?: string;
+  utilityScore?: number;
+  sentAt?: number;
+  clickedAt?: number;
+  dismissedAt?: number;
+  actionTaken?: string;
+  createdAt: number;
+}
+
+// ============================================================================
+// Confirm Request types
+// ============================================================================
+
+export interface ConfirmRequest {
+  id: string;
+  question: string;
+  context?: string;
+  options?: Array<{ label: string; value: string }>;
+  evidenceRefs?: string[];
+  category?: string;
+  relatedEntityId?: string;
+  relatedPropertyId?: number;
+  priority: string;
+  state: string;
+  userAnswer?: string;
+  answeredAt?: number;
+  snoozeUntil?: number;
+  snoozeCount: number;
+  expiresAt?: number;
+  createdAt: number;
+}
+
+export interface ConfirmRequestListResponse {
+  items: ConfirmRequest[];
+  total: number;
+  limit: number;
+  state: string;
+}
+
+// ============================================================================
+// Health & Stats types
+// ============================================================================
+
+export interface HealthResponse {
+  status: 'ok' | 'degraded' | 'error';
+  version: string;
+  uptime: number;
+  database: {
+    connected: boolean;
+    messageCount: number;
+    entityCount: number;
+    chunkCount: number;
+  };
+  embedding: {
+    loaded: boolean;
+    model: string;
+  };
+}
+
+export interface StatsResponse {
+  messages: { total: number; today: number; thisWeek: number };
+  entities: { total: number; byType: Record<string, number> };
+  chunks: { total: number };
+  relationships: { total: number };
+  watchedProjects: { active: number };
+  notifications: { pending: number; sentToday: number };
+  confirmRequests: { pending: number };
+  memory: {
+    temporary: number;
+    working: number;
+    consolidated: number;
+    core: number;
+    forgotten: number;
+    archived: number;
+  };
+}
+
+export interface ExportResponse {
+  files: string[];
+  totalFiles: number;
+  dataDir: string;
+}
+
+// ============================================================================
+// Error class
+// ============================================================================
+
+export class MemoryServiceError extends Error {
+  public status: number;
+  public body: any;
+
+  constructor(status: number, message: string, body?: any) {
+    super(`MemoryService ${status}: ${message}`);
+    this.name = 'MemoryServiceError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+// ============================================================================
+// Client class
+// ============================================================================
+
+export class MemoryServiceClient {
+  private baseUrl: string;
+  private apiKey: string | undefined;
+  private timeout: number;
+  private userId: string;
+  private configLoaded = false;
+  private _userIdResolvePromise: Promise<void> | null = null;
+
+  constructor(config?: Partial<MemoryServiceConfig>) {
+    this.baseUrl = config?.baseUrl ?? DEFAULT_BASE_URL;
+    this.apiKey = config?.apiKey;
+    this.timeout = config?.timeout ?? DEFAULT_TIMEOUT_MS;
+    this.userId = config?.userId ?? 'default';
+
+    // If no explicit config provided, try to load from chrome.storage.local
+    if (!config?.baseUrl) {
+      this.loadConfigFromStorage();
+    }
+  }
+
+  /**
+   * Load configuration from envConfig and userinfo in chrome.storage.local.
+   * - baseUrl, apiKey, timeout: from envConfig (MEMORY_SERVICE_*)
+   * - userId: from userinfo.username
+   */
+  private loadConfigFromStorage(): void {
+    try {
+      if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+        chrome.storage.local.get(
+          ['envConfig', 'userinfo'],
+          (result: { envConfig?: Record<string, any>; userinfo?: { username?: string } }) => {
+            const env = result.envConfig;
+            if (env?.MEMORY_SERVICE_BASE_URL) {
+              this.baseUrl = env.MEMORY_SERVICE_BASE_URL;
+            }
+            if (env?.MEMORY_SERVICE_API_KEY != null && env.MEMORY_SERVICE_API_KEY !== '') {
+              this.apiKey = env.MEMORY_SERVICE_API_KEY;
+            }
+            if (env?.MEMORY_SERVICE_TIMEOUT != null) {
+              const t = Number(env.MEMORY_SERVICE_TIMEOUT);
+              if (!Number.isNaN(t)) this.timeout = t;
+            }
+            const username = result.userinfo?.username?.trim();
+            if (username && USER_ID_PATTERN.test(username)) {
+              this.userId = username;
+            }
+            this.configLoaded = true;
+          },
+        );
+      }
+    } catch {
+      // chrome.storage not available — use defaults
+    }
+  }
+
+  /**
+   * Resolve userId from userinfo.username when it is still 'default'.
+   * Runs once per "default" period.
+   */
+  private async ensureUserIdResolved(): Promise<void> {
+    if (this.userId !== 'default') return;
+    if (this._userIdResolvePromise) return this._userIdResolvePromise;
+
+    this._userIdResolvePromise = (async () => {
+      try {
+        if (typeof chrome === 'undefined' || !chrome?.storage?.local) return;
+        const result = (await chrome.storage.local.get('userinfo')) as {
+          userinfo?: { username?: string };
+        };
+        const username = result.userinfo?.username?.trim();
+        if (username && USER_ID_PATTERN.test(username)) {
+          this.userId = username;
+        }
+      } finally {
+        this._userIdResolvePromise = null;
+      }
+    })();
+
+    return this._userIdResolvePromise;
+  }
+
+  // --------------------------------------------------------------------------
+  // Core HTTP wrapper
+  // --------------------------------------------------------------------------
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: any,
+  ): Promise<T> {
+    await this.ensureUserIdResolved();
+
+    const url = `${this.baseUrl}${path}`;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-User-Id': this.userId,
+    };
+
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        let errorBody: any;
+        try {
+          errorBody = await response.json();
+        } catch {
+          errorBody = await response.text();
+        }
+        const message = errorBody?.error || errorBody?.message || response.statusText;
+        throw new MemoryServiceError(response.status, message, errorBody);
+      }
+
+      // Handle empty responses (204 No Content, etc.)
+      const contentType = response.headers.get('content-type');
+      if (response.status === 204 || !contentType?.includes('application/json')) {
+        return undefined as unknown as T;
+      }
+
+      return (await response.json()) as T;
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+
+      if (err instanceof MemoryServiceError) {
+        throw err;
+      }
+
+      if (err.name === 'AbortError') {
+        throw new MemoryServiceError(
+          0,
+          `Request to ${path} timed out after ${this.timeout}ms`,
+        );
+      }
+
+      throw new MemoryServiceError(
+        0,
+        `Network error: ${err.message || 'Failed to connect to Memory Service'}`,
+      );
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Ingest
+  // --------------------------------------------------------------------------
+
+  /**
+   * Ingest a single message/document into the Memory Service.
+   */
+  async ingest(payload: IngestPayload): Promise<IngestResult> {
+    return this.request<IngestResult>('POST', '/ingest', payload);
+  }
+
+  /**
+   * Ingest a batch of messages/documents.
+   */
+  async ingestBatch(items: IngestPayload[]): Promise<BatchIngestResult> {
+    return this.request<BatchIngestResult>('POST', '/ingest/batch', { items });
+  }
+
+  // --------------------------------------------------------------------------
+  // Recall & Ask
+  // --------------------------------------------------------------------------
+
+  /**
+   * Multi-channel recall — search across vector, full-text, graph, and time channels.
+   */
+  async recall(query: string, options?: RecallOptions): Promise<RecallResult> {
+    return this.request<RecallResult>('POST', '/recall', {
+      query,
+      ...options,
+    });
+  }
+
+  /**
+   * Natural language Q&A — combines recall with LLM generation.
+   */
+  async ask(
+    query: string,
+    context?: string,
+    includeEvidence?: boolean,
+  ): Promise<AskResponse> {
+    return this.request<AskResponse>('POST', '/ask', {
+      query,
+      context,
+      includeEvidence,
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Entities
+  // --------------------------------------------------------------------------
+
+  /**
+   * List entities with optional filters.
+   */
+  async getEntities(
+    type?: string,
+    search?: string,
+    limit?: number,
+    offset?: number,
+  ): Promise<EntityListResponse> {
+    const params = new URLSearchParams();
+    if (type) params.set('type', type);
+    if (search) params.set('search', search);
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (offset !== undefined) params.set('offset', String(offset));
+
+    const qs = params.toString();
+    const path = `/entities${qs ? '?' + qs : ''}`;
+    return this.request<EntityListResponse>('GET', path);
+  }
+
+  /**
+   * Get a single entity with its current active properties.
+   */
+  async getEntityDetail(id: string): Promise<EntityDetailResponse> {
+    return this.request<EntityDetailResponse>('GET', `/entities/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Get the property history for an entity.
+   */
+  async getEntityProperties(
+    id: string,
+    key?: string,
+    includeSuperseded?: boolean,
+  ): Promise<{ entityId: string; properties: EntityProperty[]; total: number }> {
+    const params = new URLSearchParams();
+    if (key) params.set('key', key);
+    if (includeSuperseded) params.set('includeSuperseded', 'true');
+
+    const qs = params.toString();
+    const path = `/entities/${encodeURIComponent(id)}/properties${qs ? '?' + qs : ''}`;
+    return this.request('GET', path);
+  }
+
+  /**
+   * Get the property change timeline for an entity.
+   */
+  async getEntityTimeline(
+    id: string,
+  ): Promise<{ entityId: string; timeline: EntityTimelineEntry[]; total: number }> {
+    return this.request('GET', `/entities/${encodeURIComponent(id)}/timeline`);
+  }
+
+  /**
+   * Get relationships for an entity, with optional breadth-first depth traversal.
+   */
+  async getEntityRelationships(
+    id: string,
+    depth?: number,
+  ): Promise<{ entityId: string; relationships: EntityRelationship[]; depth: number; total: number }> {
+    const params = new URLSearchParams();
+    if (depth !== undefined) params.set('depth', String(depth));
+
+    const qs = params.toString();
+    const path = `/entities/${encodeURIComponent(id)}/relationships${qs ? '?' + qs : ''}`;
+    return this.request('GET', path);
+  }
+
+  // --------------------------------------------------------------------------
+  // Watched Projects
+  // --------------------------------------------------------------------------
+
+  /**
+   * List all watched projects.
+   */
+  async getWatchedProjects(activeOnly?: boolean): Promise<WatchedProject[]> {
+    const params = new URLSearchParams();
+    if (activeOnly === false) params.set('active_only', 'false');
+
+    const qs = params.toString();
+    const path = `/projects/watched${qs ? '?' + qs : ''}`;
+    return this.request<WatchedProject[]>('GET', path);
+  }
+
+  /**
+   * Create a new watched project.
+   */
+  async addWatchedProject(project: CreateWatchedProjectPayload): Promise<WatchedProject> {
+    return this.request<WatchedProject>('POST', '/projects/watched', project);
+  }
+
+  /**
+   * Get a single watched project by ID.
+   */
+  async getWatchedProject(id: string): Promise<WatchedProject> {
+    return this.request<WatchedProject>(
+      'GET',
+      `/projects/watched/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /**
+   * Update a watched project (partial update).
+   */
+  async updateWatchedProject(
+    id: string,
+    updates: Partial<Pick<WatchedProject, 'name' | 'description' | 'aliases' | 'priority'>> & {
+      autoCaptureRules?: object;
+      trackedProperties?: string[];
+    },
+  ): Promise<WatchedProject> {
+    return this.request<WatchedProject>(
+      'PUT',
+      `/projects/watched/${encodeURIComponent(id)}`,
+      updates,
+    );
+  }
+
+  /**
+   * Soft-delete a watched project (sets is_active = false).
+   */
+  async deleteWatchedProject(id: string): Promise<{ id: string; deleted: boolean }> {
+    return this.request('DELETE', `/projects/watched/${encodeURIComponent(id)}`);
+  }
+
+  // --------------------------------------------------------------------------
+  // Notifications
+  // --------------------------------------------------------------------------
+
+  /**
+   * List notifications with optional filters.
+   */
+  async getNotifications(
+    state?: string,
+    type?: string,
+    limit?: number,
+    offset?: number,
+  ): Promise<NotificationRecord[]> {
+    const params = new URLSearchParams();
+    if (state) params.set('state', state);
+    if (type) params.set('type', type);
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (offset !== undefined) params.set('offset', String(offset));
+
+    const qs = params.toString();
+    const path = `/notifications${qs ? '?' + qs : ''}`;
+    return this.request<NotificationRecord[]>('GET', path);
+  }
+
+  /**
+   * Acknowledge a notification (mark as clicked).
+   */
+  async acknowledgeNotification(id: string, detail?: string): Promise<NotificationRecord> {
+    return this.request<NotificationRecord>(
+      'POST',
+      `/notifications/${encodeURIComponent(id)}/action`,
+      { action: 'acknowledge', detail },
+    );
+  }
+
+  /**
+   * Dismiss a notification.
+   */
+  async dismissNotification(id: string, detail?: string): Promise<NotificationRecord> {
+    return this.request<NotificationRecord>(
+      'POST',
+      `/notifications/${encodeURIComponent(id)}/action`,
+      { action: 'dismiss', detail },
+    );
+  }
+
+  /**
+   * Snooze a notification (creates a new notification 24 hours later).
+   */
+  async snoozeNotification(id: string): Promise<{
+    id: string;
+    action: string;
+    newNotificationId: string;
+    scheduledAt: number;
+  }> {
+    return this.request(
+      'POST',
+      `/notifications/${encodeURIComponent(id)}/action`,
+      { action: 'snooze' },
+    );
+  }
+
+  /**
+   * Get notification statistics.
+   */
+  async getNotificationStats(): Promise<{
+    pending: number;
+    clicked: number;
+    dismissed: number;
+    dailyCounts: Array<{ date: string; count: number }>;
+  }> {
+    return this.request('GET', '/notifications/stats');
+  }
+
+  // --------------------------------------------------------------------------
+  // Confirm Requests
+  // --------------------------------------------------------------------------
+
+  /**
+   * List confirm requests, filtered by state.
+   */
+  async getConfirmRequests(
+    state?: string,
+    limit?: number,
+  ): Promise<ConfirmRequestListResponse> {
+    const params = new URLSearchParams();
+    if (state) params.set('state', state);
+    if (limit !== undefined) params.set('limit', String(limit));
+
+    const qs = params.toString();
+    const path = `/confirm-requests${qs ? '?' + qs : ''}`;
+    return this.request<ConfirmRequestListResponse>('GET', path);
+  }
+
+  /**
+   * Answer a pending confirm request.
+   */
+  async answerConfirmRequest(
+    id: string,
+    answer: string,
+    detail?: string,
+  ): Promise<{ status: string; confirmRequest: ConfirmRequest }> {
+    return this.request(
+      'POST',
+      `/confirm-requests/${encodeURIComponent(id)}/answer`,
+      { answer, detail },
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Profile Items (Human Model)
+  // --------------------------------------------------------------------------
+
+  /**
+   * List profile items with optional filters.
+   */
+  async getProfileItems(filters?: {
+    type?: string;
+    status?: string;
+    key?: string;
+    confirmedOnly?: boolean;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: any[]; total: number }> {
+    const params = new URLSearchParams();
+    if (filters?.type) params.set('type', filters.type);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.key) params.set('key', filters.key);
+    if (filters?.confirmedOnly !== undefined) params.set('confirmedOnly', String(filters.confirmedOnly));
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+
+    const qs = params.toString();
+    const path = `/profile/items${qs ? '?' + qs : ''}`;
+    return this.request<{ items: any[]; total: number }>('GET', path);
+  }
+
+  /**
+   * Create a new profile item.
+   */
+  async createProfileItem(body: {
+    itemType: string;
+    itemKey: string;
+    itemValue: string;
+    evidenceRefs?: unknown[];
+    confidence?: number;
+  }): Promise<any> {
+    return this.request('POST', '/profile/items', body);
+  }
+
+  /**
+   * Update an existing profile item.
+   */
+  async updateProfileItem(id: string, body: {
+    itemValue?: string;
+    confidence?: number;
+    salienceScore?: number;
+    status?: string;
+  }): Promise<any> {
+    return this.request(
+      'PUT',
+      `/profile/items/${encodeURIComponent(id)}`,
+      body,
+    );
+  }
+
+  /**
+   * Delete a profile item.
+   */
+  async deleteProfileItem(id: string): Promise<{ id: string; deleted: boolean }> {
+    return this.request('DELETE', `/profile/items/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Confirm a profile item (mark as user-verified).
+   */
+  async confirmProfileItem(id: string): Promise<any> {
+    return this.request(
+      'POST',
+      `/profile/items/${encodeURIComponent(id)}/confirm`,
+    );
+  }
+
+  /**
+   * Get the user's core profile summary.
+   */
+  async getUserCore(): Promise<{ content: string }> {
+    return this.request<{ content: string }>('GET', '/profile/core');
+  }
+
+  // --------------------------------------------------------------------------
+  // Social Edges
+  // --------------------------------------------------------------------------
+
+  /**
+   * List social edges with optional pagination.
+   */
+  async getSocialEdges(
+    limit?: number,
+    offset?: number,
+  ): Promise<{ items: any[]; total: number }> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (offset !== undefined) params.set('offset', String(offset));
+
+    const qs = params.toString();
+    const path = `/profile/social${qs ? '?' + qs : ''}`;
+    return this.request<{ items: any[]; total: number }>('GET', path);
+  }
+
+  /**
+   * Create a new social edge between two entities.
+   */
+  async createSocialEdge(body: {
+    fromEntityId: string;
+    toEntityId: string;
+    relationType: string;
+    strength?: number;
+  }): Promise<any> {
+    return this.request('POST', '/profile/social', body);
+  }
+
+  // --------------------------------------------------------------------------
+  // Opinions
+  // --------------------------------------------------------------------------
+
+  /**
+   * List opinions with optional filters.
+   */
+  async getOpinions(filters?: {
+    status?: string;
+    dimension?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: any[]; total: number }> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.dimension) params.set('dimension', filters.dimension);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+
+    const qs = params.toString();
+    const path = `/profile/opinions${qs ? '?' + qs : ''}`;
+    return this.request<{ items: any[]; total: number }>('GET', path);
+  }
+
+  /**
+   * Confirm or reject an opinion.
+   */
+  async confirmOpinion(id: string, action: 'accept' | 'reject'): Promise<any> {
+    return this.request(
+      'POST',
+      `/profile/opinions/${encodeURIComponent(id)}/confirm`,
+      { action },
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Agent Profile (Agent Model)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get an agent profile document by kind (identity, soul, or policy).
+   */
+  async getAgentProfile(
+    kind: 'identity' | 'soul' | 'policy',
+  ): Promise<{ kind: string; content: string; updatedAt: number }> {
+    return this.request<{ kind: string; content: string; updatedAt: number }>(
+      'GET',
+      `/agent/${encodeURIComponent(kind)}`,
+    );
+  }
+
+  /**
+   * Update an agent profile document.
+   */
+  async updateAgentProfile(
+    kind: string,
+    content: string,
+    rationale?: string,
+  ): Promise<{ id: string; kind: string }> {
+    return this.request<{ id: string; kind: string }>(
+      'PUT',
+      `/agent/${encodeURIComponent(kind)}`,
+      { content, rationale },
+    );
+  }
+
+  /**
+   * Get the version history for an agent profile document.
+   */
+  async getAgentHistory(
+    kind: string,
+    limit?: number,
+  ): Promise<{ kind: string; versions: any[] }> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+
+    const qs = params.toString();
+    const path = `/agent/${encodeURIComponent(kind)}/history${qs ? '?' + qs : ''}`;
+    return this.request<{ kind: string; versions: any[] }>('GET', path);
+  }
+
+  // --------------------------------------------------------------------------
+  // Export & Stats
+  // --------------------------------------------------------------------------
+
+  /**
+   * Export memory data as a manifest of markdown files.
+   */
+  async exportMemory(
+    scope?: 'all' | 'project',
+    projectId?: string,
+    timeRange?: { start: number; end: number },
+  ): Promise<ExportResponse> {
+    return this.request<ExportResponse>('POST', '/export', {
+      format: 'markdown_zip',
+      scope,
+      projectId,
+      timeRange,
+    });
+  }
+
+  /**
+   * Get aggregate statistics for the memory service.
+   */
+  async getStats(): Promise<StatsResponse> {
+    return this.request<StatsResponse>('GET', '/stats');
+  }
+
+  /**
+   * Health check — returns service status, version, database stats, and embedding status.
+   */
+  async getHealth(): Promise<HealthResponse> {
+    return this.request<HealthResponse>('GET', '/health');
+  }
+
+  // --------------------------------------------------------------------------
+  // SSE Events
+  // --------------------------------------------------------------------------
+
+  /**
+   * Subscribe to real-time server-sent events from the Memory Service.
+   *
+   * Listens for event types:
+   *   - connected
+   *   - notification
+   *   - confirm_request
+   *   - ingestion_complete
+   *   - heartbeat_complete
+   *   - consolidation_complete
+   *
+   * Returns an unsubscribe function that closes the EventSource connection.
+   */
+  subscribeEvents(
+    onEvent: (event: string, data: any) => void,
+    onError?: (error: Event) => void,
+  ): () => void {
+    const url = `${this.baseUrl}/events?userId=${encodeURIComponent(this.userId)}`;
+    const eventSource = new EventSource(url);
+
+    const eventTypes = [
+      'connected',
+      'notification',
+      'confirm_request',
+      'ingestion_complete',
+      'heartbeat_complete',
+      'consolidation_complete',
+    ];
+
+    for (const eventType of eventTypes) {
+      eventSource.addEventListener(eventType, (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          onEvent(eventType, data);
+        } catch {
+          onEvent(eventType, event.data);
+        }
+      });
+    }
+
+    eventSource.onerror = (event: Event) => {
+      if (onError) {
+        onError(event);
+      }
+    };
+
+    // Return unsubscribe function
+    return () => {
+      eventSource.close();
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Configuration helpers
+  // --------------------------------------------------------------------------
+
+  /**
+   * Update the base URL at runtime (e.g. from a settings page).
+   * Also persists the new value to chrome.storage.local if available.
+   */
+  setBaseUrl(url: string): void {
+    this.baseUrl = url;
+  }
+
+  /**
+   * Update the API key at runtime.
+   * Config is persisted via envConfig when user saves options.
+   */
+  setApiKey(key: string | undefined): void {
+    this.apiKey = key;
+  }
+
+  /**
+   * Update the user ID at runtime for multi-user isolation.
+   * Also persists the new value to chrome.storage.local if available.
+   */
+  setUserId(userId: string): void {
+    this.userId = userId;
+  }
+
+  /**
+   * Get the current user ID (useful for diagnostics / settings UI).
+   */
+  getUserId(): string {
+    return this.userId;
+  }
+
+  /**
+   * Get the current base URL (useful for diagnostics / settings UI).
+   */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+}
+
+// ============================================================================
+// Singleton accessor
+// ============================================================================
+
+let _client: MemoryServiceClient | null = null;
+
+/**
+ * Get (or lazily create) the global MemoryServiceClient singleton.
+ *
+ * If called with a config object, the existing singleton is replaced.
+ * If called without arguments, returns the existing instance or creates
+ * one with default configuration.
+ */
+export function getMemoryServiceClient(
+  config?: Partial<MemoryServiceConfig>,
+): MemoryServiceClient {
+  if (config || !_client) {
+    _client = new MemoryServiceClient(config);
+  }
+  return _client;
+}

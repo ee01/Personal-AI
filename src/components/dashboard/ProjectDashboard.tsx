@@ -148,15 +148,16 @@ const ProjectDashboard: React.FC = () => {
   const handleSuggest = async () => {
     setSuggesting(true);
     try {
-      // 🔄 改用新的 memorySystem API 获取项目建议
-      const { memorySystem } = await import('../../memory');
-      await memorySystem.initialize();
-      const allProjects = await memorySystem.cloudStorage.getAllKnownProjects();
-      
+      // 使用 MemoryServiceClient 获取项目建议
+      const { getMemoryServiceClient } = await import('../../services/MemoryServiceClient');
+      const client = getMemoryServiceClient();
+      const projectResult = await client.getEntities('Project');
+
       // 按项目名称长度倒序排列（可能代表信息量）
-      const sortedProjects = allProjects
-        .filter(name => name && name.trim().length > 0)
-        .sort((a, b) => b.length - a.length)
+      const sortedProjects = (projectResult.items || [])
+        .map((p: any) => p.name)
+        .filter((name: string) => name && name.trim().length > 0)
+        .sort((a: string, b: string) => b.length - a.length)
         .slice(0, 8);
       
       setSuggestions(sortedProjects);

@@ -9,13 +9,12 @@
  * - 无需手动干预，配置更改后立即生效
  */
 
-import { memorySystem } from '../memory';
 import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../utils/tabHelpers';
 import { analyzeMessages } from '../messageDealing';
 import { getEnvConfig } from '../utils';
-import { CloudStorage } from '../storage/CloudStorage';
 import { Logger } from '../utils/logger';
 import { digestQueueService } from './DigestQueueService';
+import { getMemoryServiceClient } from './MemoryServiceClient';
 
 // 任务类型定义
 export interface ScheduledTask {
@@ -102,12 +101,10 @@ export class TaskScheduler {
   private tasks: Map<string, ScheduledTask> = new Map();
   private alarmListeners: Set<string> = new Set();
   public isInitialized = false; // 改为 public，方便 background.ts 检查状态
-  private cloudStorage: CloudStorage | null = null;
   private storageChangeListener: ((changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => void) | null = null;
 
   private constructor() {
     // initializeTasks 现在是异步的，将在 startAllTasks 中调用
-    this.cloudStorage = new CloudStorage();
   }
 
   /**
@@ -640,18 +637,14 @@ export class TaskScheduler {
 
   /**
    * 执行记忆系统同步任务
+   * Note: With the new Memory Service backend, cache sync is no longer needed.
+   * The backend manages its own data persistence and synchronization.
    */
   private async executeMemorySync(): Promise<void> {
     try {
-      // 确保记忆系统已初始化
-      if (!memorySystem.initialize()) {
-        console.log('🧠 记忆系统未初始化，跳过同步');
-        return;
-      }
-
-      // 执行数据同步
-      await memorySystem.syncCache();
-      console.log('🔄 记忆系统同步任务执行完成');
+      // No-op: backend Memory Service handles its own sync.
+      // Kept as a placeholder to avoid breaking the task dispatch table.
+      console.log('🔄 记忆系统同步任务跳过（后端自动管理）');
     } catch (error) {
       console.error('❌ 记忆系统同步任务失败:', error);
     }
@@ -662,13 +655,14 @@ export class TaskScheduler {
    */
   private async executeSystemMonitoring(): Promise<void> {
     try {
-      // 执行健康检查
-      const healthStatus = await memorySystem.performHealthCheck();
+      // 执行健康检查（通过 Memory Service HTTP API）
+      const client = getMemoryServiceClient();
+      const healthStatus = await client.getHealth();
       console.log('🔍 系统健康检查完成:', healthStatus);
 
-      // 执行自动维护
-      const maintenanceResult = await memorySystem.performSystemMaintenance();
-      console.log('🔧 系统维护任务完成:', maintenanceResult);
+      // Note: System maintenance is now auto-managed by the backend Memory Service.
+      // No explicit performSystemMaintenance() call needed.
+      console.log('🔧 系统维护由后端自动管理');
     } catch (error) {
       console.error('❌ 系统监控任务失败:', error);
     }
@@ -676,12 +670,13 @@ export class TaskScheduler {
 
   /**
    * 执行用户画像权重衰变任务
+   * Note: With the new Memory Service backend, profile decay is handled
+   * automatically by the backend's ForgettingEngine. This is now a no-op.
    */
   private async executeUserProfileDecay(): Promise<void> {
     try {
-      // 执行权重衰变
-      await memorySystem.applyUserProfileDecay();
-      console.log('🧠 用户画像权重衰变任务执行完成');
+      // No-op: backend ForgettingEngine handles profile decay automatically.
+      console.log('🧠 用户画像权重衰变由后端自动管理');
     } catch (error) {
       console.error('❌ 用户画像权重衰变任务失败:', error);
     }
@@ -689,36 +684,13 @@ export class TaskScheduler {
 
   /**
    * 执行向量化数据维护任务
+   * Note: With the new Memory Service backend, vectorized data maintenance
+   * is handled automatically by the backend. This is now a no-op.
    */
   private async executeVectorizedDataMaintenance(): Promise<void> {
     try {
-      if (!this.cloudStorage) {
-        console.log('⚠️ CloudStorage 未初始化，跳过向量化数据维护');
-        return;
-      }
-
-      // 确保CloudStorage已连接
-      const isConnected = await this.cloudStorage.isConnected();
-      if (!isConnected) {
-        console.log('⚠️ CloudStorage 未连接，跳过向量化数据维护');
-        return;
-      }
-
-      console.log('🔧 开始向量化数据维护...');
-      
-      // 执行维护操作
-      const result = await this.cloudStorage.performUserprofilesMaintenance();
-      
-      console.log('✅ 向量化数据维护完成:', {
-        cleaned_records: result.cleaned_records,
-        updated_records: result.updated_records,
-        created_summaries: result.created_summaries,
-        errors: result.errors.length
-      });
-
-      if (result.errors.length > 0) {
-        console.warn('⚠️ 维护过程中出现错误:', result.errors);
-      }
+      // No-op: backend Memory Service handles vectorized data maintenance automatically.
+      console.log('🔧 向量化数据维护由后端自动管理');
     } catch (error) {
       console.error('❌ 向量化数据维护任务失败:', error);
     }
@@ -726,37 +698,26 @@ export class TaskScheduler {
 
   /**
    * 执行用户概要生成任务
+   * Note: With the new Memory Service backend, user summary generation
+   * is handled by the backend's consolidation engine. We can optionally
+   * fetch stats for logging purposes.
    */
   private async executeUserSummaryGeneration(): Promise<void> {
     try {
-      if (!this.cloudStorage) {
-        console.log('⚠️ CloudStorage 未初始化，跳过用户概要生成');
-        return;
-      }
-
-      const isConnected = await this.cloudStorage.isConnected();
-      if (!isConnected) {
-        console.log('⚠️ CloudStorage 未连接，跳过用户概要生成');
-        return;
-      }
-
       console.log('📊 开始用户概要生成...');
-      
-      // 获取存储统计信息
-      const stats = await this.cloudStorage.getUserprofilesStorageStats();
-      
-      console.log('📈 当前向量存储统计:', {
-        total_records: stats.total_records,
-        users: Object.keys(stats.records_by_user).length,
-        types: Object.keys(stats.records_by_type).length,
-        health_score: stats.health_score
+
+      // Fetch stats from the backend for logging purposes
+      const client = getMemoryServiceClient();
+      const stats = await client.getStats();
+
+      console.log('📈 当前存储统计:', {
+        total_messages: stats.messages.total,
+        total_entities: stats.entities.total,
+        total_chunks: stats.chunks.total
       });
 
-      // 检查是否需要进行概要更新（这里通过维护任务触发）
-      if (stats.total_records > 0) {
-        const maintenanceResult = await this.cloudStorage.performUserprofilesMaintenance();
-        console.log(`📊 概要生成完成，创建了 ${maintenanceResult.created_summaries} 个新概要`);
-      }
+      // No-op: backend consolidation engine handles summary generation automatically.
+      console.log('📊 用户概要生成由后端自动管理');
     } catch (error) {
       console.error('❌ 用户概要生成任务失败:', error);
     }
@@ -764,80 +725,61 @@ export class TaskScheduler {
 
   /**
    * 执行向量质量检查任务
+   * Uses the Memory Service backend health and stats endpoints to assess quality.
    */
   private async executeVectorQualityCheck(): Promise<void> {
     try {
-      if (!this.cloudStorage) {
-        console.log('⚠️ CloudStorage 未初始化，跳过向量质量检查');
-        return;
-      }
-
-      const isConnected = await this.cloudStorage.isConnected();
-      if (!isConnected) {
-        console.log('⚠️ CloudStorage 未连接，跳过向量质量检查');
-        return;
-      }
-
       console.log('🔍 开始向量质量检查...');
-      
-      // 获取存储统计信息
-      const stats = await this.cloudStorage.getUserprofilesStorageStats();
-      
-      // 质量检查指标
+
+      const client = getMemoryServiceClient();
+
+      // Fetch health and stats from the backend
+      const health = await client.getHealth();
+      const stats = await client.getStats();
+
       const qualityChecks = {
-        total_records: stats.total_records,
-        health_score: stats.health_score,
-        type_distribution: stats.records_by_type,
-        user_distribution: stats.records_by_user,
-        storage_size: stats.storage_size_mb,
+        serviceStatus: health.status,
+        dbConnected: health.database.connected,
+        messageCount: health.database.messageCount,
+        entityCount: health.database.entityCount,
+        chunkCount: health.database.chunkCount,
+        embeddingLoaded: health.embedding.loaded,
+        embeddingModel: health.embedding.model,
         issues: [] as string[]
       };
 
-      // 检查1: 记录数量是否合理
-      if (stats.total_records === 0) {
-        qualityChecks.issues.push('向量存储中无记录');
-      } else if (stats.total_records > 100000) {
-        qualityChecks.issues.push('向量存储记录数量过多，可能需要清理');
+      // 检查1: 服务状态
+      if (health.status !== 'ok') {
+        qualityChecks.issues.push(`服务状态异常: ${health.status}`);
       }
 
-      // 检查2: 健康度评估
-      if (stats.health_score < 0.5) {
-        qualityChecks.issues.push(`存储健康度较低: ${stats.health_score.toFixed(2)}`);
+      // 检查2: 数据库连接
+      if (!health.database.connected) {
+        qualityChecks.issues.push('数据库未连接');
       }
 
-      // 检查3: 用户数据分布
-      const userCounts = Object.values(stats.records_by_user);
-      const maxUserRecords = Math.max(...userCounts);
-      const minUserRecords = Math.min(...userCounts);
-      
-      if (maxUserRecords > 1000) {
-        qualityChecks.issues.push(`某些用户记录数量过多: ${maxUserRecords}`);
-      }
-      
-      if (minUserRecords === 0) {
-        qualityChecks.issues.push('存在无记录的用户');
+      // 检查3: 嵌入模型
+      if (!health.embedding.loaded) {
+        qualityChecks.issues.push('嵌入模型未加载');
       }
 
-      // 检查4: 记录类型分布
-      const expectedTypes = ['interest_item', 'behavior_pattern', 'social_relationship', 'expertise_area'];
-      const missingTypes = expectedTypes.filter(type => !stats.records_by_type[type]);
-      
-      if (missingTypes.length > 0) {
-        qualityChecks.issues.push(`缺少记录类型: ${missingTypes.join(', ')}`);
+      // 检查4: 记录数量
+      if (health.database.messageCount === 0) {
+        qualityChecks.issues.push('存储中无消息记录');
+      } else if (health.database.messageCount > 100000) {
+        qualityChecks.issues.push('消息记录数量过多，可能需要清理');
+      }
+
+      // 检查5: 实体分布
+      if (stats.entities.total === 0) {
+        qualityChecks.issues.push('无实体记录');
       }
 
       // 输出检查结果
       console.log('📊 向量质量检查结果:', qualityChecks);
 
-      // 如果发现问题，可以触发自动修复
       if (qualityChecks.issues.length > 0) {
-        console.warn('⚠️ 发现质量问题，建议执行维护操作:', qualityChecks.issues);
-        
-        // 可选：自动触发维护
-        if (qualityChecks.issues.some(issue => issue.includes('记录数量过多') || issue.includes('健康度较低'))) {
-          console.log('🔧 自动触发维护操作...');
-          await this.cloudStorage.performUserprofilesMaintenance();
-        }
+        console.warn('⚠️ 发现质量问题:', qualityChecks.issues);
       } else {
         console.log('✅ 向量数据质量良好');
       }

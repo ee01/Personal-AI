@@ -1,7 +1,6 @@
 import { callLLMJsonAPI } from './llm';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
-import { memorySystem, StoreResult } from './memory';
-import { v4 as uuidv4 } from 'uuid';
+import { getMemoryServiceClient } from './services/MemoryServiceClient';
 
 // Agent配置接口
 interface AgentConfig {
@@ -89,61 +88,63 @@ const availableTools: Record<string, AgentTool> = {
     description: '搜索历史消息以提供上下文',
     execute: async (params) => {
       const searchQuery = `与"${params.person || ''}"相关的最近消息`;
-      
-      // 构建过滤条件
-      const filters: any = {};
-      if (params.person) {
-        filters.entities = {
-          people: [{
-            name: params.person,
-            required: true
-          }]
+
+      const timeRange = params.time_range && params.time_range.start && params.time_range.end
+        ? { start: params.time_range.start, end: params.time_range.end }
+        : undefined;
+
+      try {
+        const client = getMemoryServiceClient();
+        const recallResult = await client.recall(searchQuery, {
+          topK: 5,
+          channels: ['vector', 'fts'],
+          timeRange,
+        });
+
+        const items = recallResult.items || [];
+
+        // 转换为兼容格式
+        return {
+          question: searchQuery,
+          results: {
+            ids: items.map(m => m.id),
+            documents: items.map(m => m.content),
+            metadatas: items.map(m => ({
+              sender: m.metadata?.sender,
+              groupName: m.metadata?.groupName,
+              datetime: m.metadata?.datetime,
+              summary: m.metadata?.summary
+            })),
+            distances: items.map(m => 1 - (m.score || 0))
+          }
+        };
+      } catch (error) {
+        console.error('历史消息搜索失败:', error);
+        return {
+          question: searchQuery,
+          results: { ids: [], documents: [], metadatas: [], distances: [] }
         };
       }
-      
-      // 🔄 使用新的 memorySystem API
-      await memorySystem.initialize();
-      
-      const timeRange = filters.time_range && filters.time_range.start && filters.time_range.end
-        ? { start: filters.time_range.start, end: filters.time_range.end }
-        : undefined;
-      
-      const messages = await memorySystem.cloudStorage.getSimilarMessages(searchQuery, {
-        limit: 5,
-        minRelevanceScore: 0.3,
-        timeRange,
-        sortBy: 'time',
-        sortOrder: 'desc',
-        filters: {
-          entities: filters.entities
-        }
-      });
-      
-      // 转换为兼容格式
-      return {
-        question: searchQuery,
-        results: {
-          ids: messages.map(m => m.id),
-          documents: messages.map(m => m.content),
-          metadatas: messages.map(m => ({
-            sender: m.sender,
-            groupName: m.groupName,
-            datetime: m.datetime,
-            summary: m.summary
-          })),
-          distances: messages.map(m => 1 - (m.relevanceScore || 0))
-        }
-      };
     }
   },
   relevanceJudgment: {
     name: '重要性判断工具',
     description: '判断消息的重要性及是否需要存储',
     execute: async (params) => {
-      // 🔄 使用新的 memorySystem API 获取相关的人物及项目信息
-      await memorySystem.initialize();
-      const knownPeople = await memorySystem.cloudStorage.getAllKnownPeople();
-      const knownProjects = await memorySystem.cloudStorage.getAllKnownProjects();
+      // 🔄 使用 MemoryServiceClient 获取相关的人物及项目信息
+      let knownPeople: string[] = [];
+      let knownProjects: string[] = [];
+      try {
+        const client = getMemoryServiceClient();
+        const [peopleRes, projectsRes] = await Promise.all([
+          client.getEntities('Person'),
+          client.getEntities('Project'),
+        ]);
+        knownPeople = (peopleRes.items || []).map(e => e.name);
+        knownProjects = (projectsRes.items || []).map(e => e.name);
+      } catch (error) {
+        console.error('获取已知人物/项目失败:', error);
+      }
       
       // 构建重要性判断提示
       const relevancePrompt = `
@@ -489,38 +490,32 @@ export async function processNewMessage(message: any): Promise<MessageProcessRes
   // 调用Agent协调器处理消息，传递完整的消息上下文
   const processResult = await agentCoordinator.processMessage(message);
   
-  // 🆕 如果消息需要存储到向量数据库（更新为新的关联数据存储）
+  // 🆕 如果消息需要存储到向量数据库（通过 MemoryServiceClient HTTP 后端）
   if (processResult.shouldStore) {
     try {
-      await memorySystem.initialize();
-      
-      const messageId = uuidv4();
-      const messageMetadata = {
-        source: message.sender || 'unknown',
-        timestamp: new Date(message.datetime).getTime(),
-        datetime: message.datetime || new Date().toISOString(),
-        matchedRules: [message.matched_rule],
-        summary: message.summary || '',
-        replyAdvice: processResult.replyAdvice || message.reply_advice || '',
-        groupName: message.team_name,
-        groupId: message.team_id,
-        groupUrl: message.team_url,
-        contextMessages: [], // agentWorkflow 模式下暂无上下文
-        ...processResult.enrichedData
-      };
-
-      // 🆕 使用新的分离式存储系统
-      const storeResult: StoreResult = await memorySystem.storeMessage({
-        id: messageId,
+      const client = getMemoryServiceClient();
+      const ingestResult = await client.ingest({
         content: message.message_content,
-        metadata: messageMetadata
+        sourceType: 'glip',
+        sender: message.sender || 'unknown',
+        groupId: message.team_id,
+        groupName: message.team_name,
+        timestamp: new Date(message.datetime).getTime() || Date.now(),
+        metadata: {
+          datetime: message.datetime || new Date().toISOString(),
+          matchedRules: [message.matched_rule],
+          summary: message.summary || '',
+          replyAdvice: processResult.replyAdvice || message.reply_advice || '',
+          groupUrl: message.team_url,
+          contextMessages: [], // agentWorkflow 模式下暂无上下文
+          ...processResult.enrichedData
+        }
       });
-      
-      console.log(`✅ 消息和实体关联存储完成 [agentWorkflow新系统]: ${messageId}`, {
-        success: storeResult.success,
-        cloudStored: storeResult.cloudStored,
-        localCached: storeResult.localCached,
-        performance: `${storeResult.processingTime}ms`
+
+      console.log(`✅ 消息和实体关联存储完成 [agentWorkflow]: ${ingestResult.id}`, {
+        status: ingestResult.status,
+        entitiesExtracted: ingestResult.entitiesExtracted,
+        matchedProjects: ingestResult.matchedProjects
       });
     } catch (error) {
       console.error('🚨 agentWorkflow存储消息失败:', error);
