@@ -141,40 +141,46 @@ export class IngestionPipeline {
 
     // ---- 2. LLM entity extraction (non-blocking on failure) ----
     let extraction: LLMExtraction | null = null;
-    try {
-      extraction = await this.extractEntities(
-        { ...payload, content: contentNormalized },
-        ts,
-      );
-    } catch (err) {
-      console.warn(
-        '[IngestionPipeline] LLM extraction failed, proceeding without entities:',
-        (err as Error).message,
-      );
+    const skip = payload.skipExtraction === true;
+
+    if (!skip) {
+      try {
+        extraction = await this.extractEntities(
+          { ...payload, content: contentNormalized },
+          ts,
+        );
+      } catch (err) {
+        console.warn(
+          '[IngestionPipeline] LLM extraction failed, proceeding without entities:',
+          (err as Error).message,
+        );
+      }
     }
 
-    const importance = extraction?.importance ?? 0.5;
-    const sentiment = extraction?.sentiment ?? 'neutral';
-    const summary = extraction?.summary ?? null;
+    const importance = extraction?.importance ?? (payload.metadata?.importance ?? 0.5);
+    const sentiment = extraction?.sentiment ?? (payload.metadata?.sentiment ?? 'neutral');
+    const summary = extraction?.summary ?? (payload.metadata?.summary ?? null);
 
     // Build entities array for the messages_raw JSON column
     const entitiesList = extraction ? this.flattenEntities(extraction) : [];
 
     // ---- 3. Compute salience score ----
     let salienceScore = 0.5;
-    try {
-      const salienceResult = await this.scorer.scoreMessage(
-        contentNormalized,
-        importance,
-        sentiment,
-        ts,
-      );
-      salienceScore = salienceResult.score;
-    } catch (err) {
-      console.warn(
-        '[IngestionPipeline] Salience scoring failed, using default:',
-        (err as Error).message,
-      );
+    if (!skip) {
+      try {
+        const salienceResult = await this.scorer.scoreMessage(
+          contentNormalized,
+          importance,
+          sentiment,
+          ts,
+        );
+        salienceScore = salienceResult.score;
+      } catch (err) {
+        console.warn(
+          '[IngestionPipeline] Salience scoring failed, using default:',
+          (err as Error).message,
+        );
+      }
     }
 
     // ---- 4. Store in messages_raw ----

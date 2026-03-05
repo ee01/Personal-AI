@@ -301,6 +301,8 @@ export interface IngestPayload {
   sourceTitle?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
+  /** When true, skip LLM extraction / salience scoring. Used for migration. */
+  skipExtraction?: boolean;
 }
 
 export interface IngestResult {

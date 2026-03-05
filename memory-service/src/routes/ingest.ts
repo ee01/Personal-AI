@@ -26,6 +26,7 @@ const ingestBodySchema = {
     sourceTitle: { type: 'string' as const },
     timestamp: { type: 'number' as const },
     metadata: { type: 'object' as const, additionalProperties: true },
+    skipExtraction: { type: 'boolean' as const },
   },
   additionalProperties: false,
 };
