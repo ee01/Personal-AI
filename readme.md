@@ -51,6 +51,29 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 
 ## 开发环境设置
 
+### 开箱使用（本地开发）
+
+```bash
+# 1. 依赖
+yarn install
+
+# 2. 启动 Memory Service（记忆系统）
+cd memory-service
+cp .env.example .env
+# 编辑 .env 填入 OPENAI_API_KEY
+npm install && npm run build
+npm run dev   # 保持运行，或改用 docker-compose up -d
+
+# 3. 新终端：插件开发模式
+yarn start
+
+# 4. Chrome 加载 dist 目录
+```
+
+插件默认连接 `http://localhost:3210`。可在插件**选项页**的「记忆系统」中修改 API 地址，或通过 `.env` 的 `MEMORY_SERVICE_BASE_URL` 设置默认值。记忆系统文档：[docs/features/memory_system.md](docs/features/memory_system.md)
+
+---
+
 1. 从 .env.example 创建 .env.development 配置
 2. 替换 GOOGLE_CLIENT_ID: 850492875483-m5hdm6mtj068npvdl9r8sr51n9cijndg.apps.googleusercontent.com （配置测试设备：https://console.cloud.google.com/auth/clients?invt=AbuzdQ&project=sync-data-with-jira）
 
@@ -59,49 +82,42 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 yarn install
 ```
 
-### 启动 Chroma 向量数据库服务
-有三种方式可以启动 Chroma 服务：
+### 启动 Memory Service（记忆系统后端）
 
-#### 方式一：使用便捷脚本（最推荐）
+记忆系统已迁移至独立后端服务，需先启动 Memory Service，插件才能使用记忆、知识图谱、用户画像等功能。
+
+#### 方式一：Docker Compose（推荐）
+
 ```bash
-# 添加执行权限
-chmod +x chroma.sh
-
-# 启动服务
-./chroma.sh start
-
-# 查看服务状态
-./chroma.sh status
-
-# 查看服务日志
-./chroma.sh logs
-
-# 停止服务
-./chroma.sh stop
-
-# 查看帮助信息
-./chroma.sh help
-```
-
-#### 方式二：使用 Docker Compose
-```bash
-# 启动服务
+# 1. 构建并启动
+cd memory-service
+cp .env.example .env
+# 编辑 .env，至少配置 OPENAI_API_KEY（用于实体抽取等 LLM 能力）
+npm install && npm run build
+cd ..
 docker-compose up -d
 
-# 查看服务状态
-docker-compose ps
+# 2. 验证
+curl http://localhost:3210/health
 
-# 停止服务
+# 查看日志 / 停止
+docker-compose logs -f memory-service
 docker-compose down
 ```
 
-#### 方式三：直接使用 Docker 命令
+#### 方式二：本地开发模式
+
 ```bash
-docker run -d --name chroma-server \
-  -p 8000:8000 \
-  -v $PWD/chroma-data:/chroma/chroma \
-  chromadb/chroma:latest
+cd memory-service
+cp .env.example .env
+# 编辑 .env，配置 OPENAI_API_KEY
+npm install
+npm run dev
 ```
+
+服务默认运行在 `http://localhost:3210`，API 文档：http://localhost:3210/docs
+
+> **说明**：Embedding 使用本地模型（Xenova），无需额外 API。LLM 用于实体抽取、问答等，需配置 `OPENAI_API_KEY` 或改用 Groq/Ollama/Dify。
 
 ### 开发模式
 ```bash
@@ -124,18 +140,8 @@ yarn build
 
 ## 数据备份
 
-运行如下命令备份本地 chroma data 文件夹
+Memory Service 数据位于 `memory-service/data/`，按用户隔离（`users/{userId}/memory.db` 及 markdown 日志）。
+
 ```bash
-tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data
-```
-
-### 迁移数据
-
-从备份文件夹解压出chroma-data目录后，使用 migrate_chroma_via_http.py 脚本迁移恢复
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-python tools/migrate_chroma_via_http.py
+tar -czf ./memory-backup-$(date +%Y%m%d).tar.gz ./memory-service/data
 ```

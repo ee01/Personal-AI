@@ -1,11 +1,12 @@
 /**
  * 网页智能分析器
  * 负责分析网页内容，识别与用户项目相关的信息
+ *
+ * Migrated from UserProfileManager to MemoryServiceClient HTTP backend.
  */
 
 import { ChromeBuiltInAIAnalyzer } from './ChromeBuiltInAI';
-import { UserProfileManager } from '../services/UserProfileManager';
-import { UserProfile, UserProfileAnalysis } from '../types/userProfile';
+import { getMemoryServiceClient, MemoryServiceClient } from '../services/MemoryServiceClient';
 
 export interface PageContent {
   title: string;
@@ -72,36 +73,64 @@ interface AnalysisContext {
   }>;
 }
 
+/**
+ * Lightweight in-memory representation of user profile data retrieved
+ * from the MemoryServiceClient, used only for analysis-context enrichment.
+ */
+interface UserProfileSnapshot {
+  interests: {
+    projects: Array<{ name: string; weight: number }>;
+    topics: Array<{ name: string; weight: number }>;
+    focusAreas: string[];
+  };
+}
+
 export class WebIntelligenceAnalyzer {
   private analysisContext: AnalysisContext | null = null;
   private modelCache: Map<string, any> = new Map();
   private chromeAI: ChromeBuiltInAIAnalyzer;
-  private userProfileManager: UserProfileManager | null = null;
-  private userProfile: UserProfile | null = null;
-  private userProfileAnalysis: UserProfileAnalysis | null = null;
+  private client: MemoryServiceClient;
+  private userProfileSnapshot: UserProfileSnapshot | null = null;
 
   constructor() {
+    this.client = getMemoryServiceClient();
     this.loadAnalysisContext();
     this.chromeAI = new ChromeBuiltInAIAnalyzer();
     this.initializeUserProfile();
   }
 
   /**
-   * 初始化用户画像
+   * 初始化用户画像 — fetches data from the Memory Service backend.
    */
   private async initializeUserProfile(): Promise<void> {
     try {
-      const result = await chrome.storage.local.get(['userinfo']);
-      const userId = result?.userinfo?.username || 'default_user';
-      
-      this.userProfileManager = new UserProfileManager(userId);
-      await this.userProfileManager.initialize();
-      this.userProfile = await this.userProfileManager.getProfile();
-      this.userProfileAnalysis = await this.userProfileManager.generateAnalysis();
-      
-      console.log('✅ 用户画像初始化成功');
+      const [, profileItemsResult] = await Promise.all([
+        this.client.getUserCore(),
+        this.client.getProfileItems({ limit: 100 }),
+      ]);
+
+      // Build a lightweight snapshot used for analysis enrichment
+      const projects: Array<{ name: string; weight: number }> = [];
+      const topics: Array<{ name: string; weight: number }> = [];
+      const focusAreas: string[] = [];
+
+      for (const item of profileItemsResult.items) {
+        const name = item.itemKey || item.itemValue || '';
+        const weight = item.confidence ?? item.salienceScore ?? 0.5;
+        if (item.itemType === 'project') {
+          projects.push({ name, weight });
+        } else if (item.itemType === 'topic') {
+          topics.push({ name, weight });
+        } else if (item.itemType === 'technology' || item.itemType === 'focus_area') {
+          focusAreas.push(name);
+        }
+      }
+
+      this.userProfileSnapshot = { interests: { projects, topics, focusAreas } };
+
+      console.log('用户画像初始化成功');
     } catch (error) {
-      console.error('❌ 用户画像初始化失败:', error);
+      console.error('用户画像初始化失败:', error);
     }
   }
 
@@ -111,10 +140,10 @@ export class WebIntelligenceAnalyzer {
   private async loadAnalysisContext(): Promise<void> {
     try {
       const result = await chrome.storage.local.get([
-        'userProjects', 'userKeywords', 'recentTopics', 
+        'userProjects', 'userKeywords', 'recentTopics',
         'organizationContext', 'analysisHistory'
       ]);
-      
+
       // 从存储获取基本上下文
       const baseContext = {
         userProjects: result.userProjects || [],
@@ -123,34 +152,34 @@ export class WebIntelligenceAnalyzer {
         organizationContext: result.organizationContext || [],
         analysisHistory: result.analysisHistory || []
       };
-      
-      // 从用户画像补充上下文
-      if (this.userProfileAnalysis) {
+
+      // 从用户画像快照补充上下文
+      if (this.userProfileSnapshot) {
         // 添加用户最关注的项目
         baseContext.userProjects = [
           ...new Set([
             ...baseContext.userProjects,
-            ...this.userProfileAnalysis.topInterests.projects
+            ...this.userProfileSnapshot.interests.projects.map(p => p.name)
           ])
         ];
-        
+
         // 添加用户关注的主题
         baseContext.recentTopics = [
           ...new Set([
             ...baseContext.recentTopics,
-            ...this.userProfileAnalysis.topInterests.topics
+            ...this.userProfileSnapshot.interests.topics.map(t => t.name)
           ])
         ];
-        
+
         // 添加专业领域作为关键词
         baseContext.userKeywords = [
           ...new Set([
             ...baseContext.userKeywords,
-            ...this.userProfileAnalysis.insights.focusAreas
+            ...this.userProfileSnapshot.interests.focusAreas
           ])
         ];
       }
-      
+
       this.analysisContext = baseContext;
     } catch (error) {
       console.warn('Failed to load analysis context:', error);
@@ -170,28 +199,28 @@ export class WebIntelligenceAnalyzer {
   async quickAnalyze(pageContent: PageContent): Promise<WebAnalysisResult> {
     try {
       let result: WebAnalysisResult;
-      
+
       // 优先尝试使用Chrome内置AI
       if (this.chromeAI.isAvailable()) {
-        console.log('🧠 使用Chrome内置AI分析');
+        console.log('使用Chrome内置AI分析');
         result = await this.analyzeWithChromeAI(pageContent);
       } else {
-        console.log('⚙️ Chrome AI不可用，使用规则引擎');
+        console.log('Chrome AI不可用，使用规则引擎');
         result = await this.analyzeWithRuleEngine(pageContent);
       }
-      
+
       // 如果页面相关，更新用户画像
-      if (result.isRelevant && this.userProfileManager) {
+      if (result.isRelevant) {
         await this.updateUserProfileFromAnalysis(pageContent, result);
       }
-      
+
       return result;
-      
+
     } catch (error) {
       console.error('Quick analysis failed:', error);
       // Chrome AI失败时回退到规则引擎
       if (this.chromeAI.isAvailable()) {
-        console.log('🔄 Chrome AI失败，回退到规则引擎');
+        console.log('Chrome AI失败，回退到规则引擎');
         return await this.analyzeWithRuleEngine(pageContent);
       }
       return this.getDefaultResult();
@@ -209,9 +238,9 @@ export class WebIntelligenceAnalyzer {
         pageContent.title,
         pageContent.url
       );
-      
+
       const processingTime = Date.now() - startTime;
-      console.log(`✅ Chrome AI分析完成 (${processingTime}ms)`);
+      console.log(`Chrome AI分析完成 (${processingTime}ms)`);
 
       // 转换Chrome AI实体格式为标准格式
       const convertedEntities = this.convertChromeAIEntities(chromeResult.entities);
@@ -238,25 +267,25 @@ export class WebIntelligenceAnalyzer {
   private async analyzeWithRuleEngine(pageContent: PageContent): Promise<WebAnalysisResult> {
     try {
       const startTime = Date.now();
-      
+
       // 1. 基于规则的快速筛选
       const ruleBasedResult = this.ruleBasedAnalysis(pageContent);
-      
+
       // 2. 关键词匹配分析
       const keywordResult = this.keywordAnalysis(pageContent);
-      
+
       // 3. 实体提取
       const extractedInfo = this.extractBasicEntities(pageContent);
-      
+
       // 4. 计算综合相关性得分
       const confidence = this.calculateConfidence(ruleBasedResult, keywordResult, extractedInfo);
-      
+
       // 5. 生成推理说明
       const reasoning = this.generateReasoning(ruleBasedResult, keywordResult, extractedInfo);
-      
+
       const processingTime = Date.now() - startTime;
-      console.log(`✅ 规则引擎分析完成 (${processingTime}ms)`);
-      
+      console.log(`规则引擎分析完成 (${processingTime}ms)`);
+
       return {
         isRelevant: confidence > 0.5,
         confidence,
@@ -266,7 +295,7 @@ export class WebIntelligenceAnalyzer {
         reasoning: `规则引擎分析 (${processingTime}ms): ${reasoning}`,
         categories: this.categorizeContent(pageContent, extractedInfo)
       };
-      
+
     } catch (error) {
       console.error('Rule engine analysis failed:', error);
       return this.getDefaultResult();
@@ -280,16 +309,16 @@ export class WebIntelligenceAnalyzer {
     try {
       // 首先进行快速分析
       const quickResult = await this.quickAnalyze(pageContent);
-      
+
       // 准备LLM分析的上下文
       const analysisPrompt = this.buildAnalysisPrompt(pageContent, quickResult);
-      
+
       // 调用LLM进行深度分析
       const llmResult = await this.callLLMForAnalysis(analysisPrompt);
-      
+
       // 查找相关记忆
       const relevantMemories = await this.findRelevantMemories(pageContent.mainContent);
-      
+
       // 合并结果
       return {
         ...quickResult,
@@ -299,10 +328,10 @@ export class WebIntelligenceAnalyzer {
         actionableItems: llmResult.actionableItems,
         relevantMemories
       };
-      
+
     } catch (error) {
       console.error('Deep analysis failed:', error);
-      
+
       // 返回快速分析结果作为后备
       const quickResult = await this.quickAnalyze(pageContent);
       return {
@@ -378,15 +407,15 @@ export class WebIntelligenceAnalyzer {
     // 项目关键词匹配
     for (const project of this.analysisContext.userProjects) {
       if (content.includes(project.toLowerCase())) {
-        // 检查用户画像中的项目权重
+        // 检查用户画像快照中的项目权重
         let weight = 0.3;
-        if (this.userProfile) {
-          const profileProject = this.userProfile.interests.projects.find(
+        if (this.userProfileSnapshot) {
+          const profileProject = this.userProfileSnapshot.interests.projects.find(
             p => p.name.toLowerCase() === project.toLowerCase()
           );
           if (profileProject) {
             // 根据用户画像中的权重调整得分
-            weight = 0.3 * (0.5 + profileProject.currentWeight * 0.5);
+            weight = 0.3 * (0.5 + profileProject.weight * 0.5);
           }
         }
         matches.push(`项目: ${project}`);
@@ -433,7 +462,7 @@ export class WebIntelligenceAnalyzer {
       /([A-Z][a-z]+ [A-Z][a-z]+)/g, // 英文姓名
       /([\u4e00-\u9fff]{2,4})/g      // 中文姓名
     ];
-    
+
     const people = new Set<string>();
     for (const pattern of peoplePatterns) {
       const matches = content.match(pattern);
@@ -453,7 +482,7 @@ export class WebIntelligenceAnalyzer {
       /project[：:]\s*([^\n\r,，。.]{2,30})/gi,
       /([A-Z][A-Z0-9_-]{2,20})/g // 项目代号
     ];
-    
+
     const projects = new Set<string>();
     for (const pattern of projectPatterns) {
       const matches = content.match(pattern);
@@ -474,7 +503,7 @@ export class WebIntelligenceAnalyzer {
       /(\d{1,2}[-/]\d{1,2}[-/]\d{4})/g,
       /(截止|deadline|due).*?(\d{4}[-/]\d{1,2}[-/]\d{1,2})/gi
     ];
-    
+
     const dates = new Set<string>();
     for (const pattern of datePatterns) {
       const matches = content.match(pattern);
@@ -494,7 +523,7 @@ export class WebIntelligenceAnalyzer {
       /(TODO|待办|需要|要求|应该).*?[。.!！\n]/gi,
       /action.*?item.*?[：:]\s*([^\n\r]{5,100})/gi
     ];
-    
+
     const actionItems = new Set<string>();
     for (const pattern of actionPatterns) {
       const matches = content.match(pattern);
@@ -515,7 +544,7 @@ export class WebIntelligenceAnalyzer {
       'Node.js', 'Docker', 'Kubernetes', 'AWS', 'Azure', 'GCP',
       'MySQL', 'PostgreSQL', 'MongoDB', 'Redis', 'Elasticsearch'
     ];
-    
+
     const technologies = new Set<string>();
     const contentUpper = content.toUpperCase();
     for (const tech of techKeywords) {
@@ -531,7 +560,7 @@ export class WebIntelligenceAnalyzer {
       /(讨论|discuss).*?([^\n\r]{5,50})/gi,
       /关于\s*([^\n\r]{5,50})/g
     ];
-    
+
     const topics = new Set<string>();
     for (const pattern of topicPatterns) {
       const matches = content.match(pattern);
@@ -572,7 +601,7 @@ export class WebIntelligenceAnalyzer {
     if (extractedInfo.deadlines && extractedInfo.deadlines.length > 0) entityScore += 0.2;
     if (extractedInfo.actionItems && extractedInfo.actionItems.length > 0) entityScore += 0.2;
     if (extractedInfo.technologies && extractedInfo.technologies.length > 0) entityScore += 0.1;
-    
+
     confidence += Math.min(entityScore, 1) * 0.3;
 
     return Math.min(confidence, 1);
@@ -626,12 +655,12 @@ export class WebIntelligenceAnalyzer {
 
     // 包含实体的句子
     const sentences = content.split(/[。.!！\n]/);
-    
+
     for (const sentence of sentences) {
       if (sentence.trim().length < 10) continue;
-      
+
       let isRelevant = false;
-      
+
       // 检查是否包含提取的实体
       if (extractedInfo.projects) {
         for (const project of extractedInfo.projects) {
@@ -641,7 +670,7 @@ export class WebIntelligenceAnalyzer {
           }
         }
       }
-      
+
       if (!isRelevant && extractedInfo.people) {
         for (const person of extractedInfo.people) {
           if (sentence.includes(person)) {
@@ -650,7 +679,7 @@ export class WebIntelligenceAnalyzer {
           }
         }
       }
-      
+
       if (!isRelevant && extractedInfo.actionItems) {
         for (const action of extractedInfo.actionItems) {
           if (sentence.includes(action.substring(0, 10))) {
@@ -659,7 +688,7 @@ export class WebIntelligenceAnalyzer {
           }
         }
       }
-      
+
       if (isRelevant) {
         relevantSentences.push(sentence.trim());
       }
@@ -715,129 +744,66 @@ export class WebIntelligenceAnalyzer {
   }
 
   /**
-   * 根据分析结果更新用户画像
+   * 根据分析结果更新用户画像 — uses MemoryServiceClient.createProfileItem
+   * to record discovered interests for each entity category.
    */
   private async updateUserProfileFromAnalysis(
-    pageContent: PageContent, 
+    pageContent: PageContent,
     analysisResult: WebAnalysisResult
   ): Promise<void> {
-    if (!this.userProfileManager) return;
-    
     try {
-      // 根据分析结果的实体更新用户画像
       const extractedInfo = analysisResult.extractedInfo;
-      
+
+      // Helper to create a profile item for a discovered entity
+      const recordInterest = async (type: string, name: string, weight: number) => {
+        try {
+          await this.client.createProfileItem({
+            itemType: type,
+            itemKey: name,
+            itemValue: JSON.stringify({
+              source: pageContent.domain,
+              url: pageContent.url,
+              title: pageContent.title,
+              analysisConfidence: analysisResult.confidence,
+              discoveredAt: Date.now(),
+            }),
+            confidence: weight,
+          });
+        } catch (err) {
+          // Non-critical — log and continue
+          console.warn(`Failed to record interest ${type}/${name}:`, err);
+        }
+      };
+
       // 更新项目兴趣
       if (extractedInfo.projects) {
         for (const project of extractedInfo.projects) {
-          await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager.userId,
-            action: {
-              actionType: 'view',
-              timestamp: Date.now(),
-              context: 'web_analysis',
-              weight: analysisResult.confidence * 0.2,
-              metadata: {
-                url: pageContent.url,
-                title: pageContent.title,
-                analysisConfidence: analysisResult.confidence
-              }
-            },
-            targetItem: {
-              id: `project_${project}`,
-              type: 'project',
-              name: project,
-              metadata: {
-                source: pageContent.domain,
-                firstSeenUrl: pageContent.url
-              }
-            }
-          });
+          await recordInterest('project', project, analysisResult.confidence * 0.2);
         }
       }
-      
+
       // 更新人员兴趣
       if (extractedInfo.people) {
         for (const person of extractedInfo.people) {
-          await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager.userId,
-            action: {
-              actionType: 'view',
-              timestamp: Date.now(),
-              context: 'web_analysis',
-              weight: analysisResult.confidence * 0.15,
-              metadata: {
-                url: pageContent.url,
-                title: pageContent.title
-              }
-            },
-            targetItem: {
-              id: `person_${person}`,
-              type: 'person',
-              name: person,
-              metadata: {
-                source: pageContent.domain
-              }
-            }
-          });
+          await recordInterest('person', person, analysisResult.confidence * 0.15);
         }
       }
-      
+
       // 更新技术兴趣
       if (extractedInfo.technologies) {
         for (const tech of extractedInfo.technologies) {
-          await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager.userId,
-            action: {
-              actionType: 'view',
-              timestamp: Date.now(),
-              context: 'web_analysis',
-              weight: analysisResult.confidence * 0.1,
-              metadata: {
-                url: pageContent.url,
-                title: pageContent.title
-              }
-            },
-            targetItem: {
-              id: `tech_${tech}`,
-              type: 'technology',
-              name: tech,
-              metadata: {
-                source: pageContent.domain
-              }
-            }
-          });
+          await recordInterest('technology', tech, analysisResult.confidence * 0.1);
         }
       }
-      
+
       // 更新主题兴趣
       if (extractedInfo.topics) {
         for (const topic of extractedInfo.topics) {
-          await this.userProfileManager.updateProfile({
-            userId: this.userProfileManager.userId,
-            action: {
-              actionType: 'view',
-              timestamp: Date.now(),
-              context: 'web_analysis',
-              weight: analysisResult.confidence * 0.15,
-              metadata: {
-                url: pageContent.url,
-                title: pageContent.title
-              }
-            },
-            targetItem: {
-              id: `topic_${topic}`,
-              type: 'topic',
-              name: topic,
-              metadata: {
-                source: pageContent.domain
-              }
-            }
-          });
+          await recordInterest('topic', topic, analysisResult.confidence * 0.15);
         }
       }
-      
-      console.log('✅ 用户画像已更新');
+
+      console.log('用户画像已更新');
     } catch (error) {
       console.error('更新用户画像失败:', error);
     }
@@ -875,7 +841,7 @@ ${pageContent.mainContent.substring(0, 2000)}
   "relationships": [
     {
       "source": "实体1",
-      "target": "实体2", 
+      "target": "实体2",
       "type": "关系类型",
       "confidence": 0.8
     }
@@ -922,19 +888,20 @@ ${pageContent.mainContent.substring(0, 2000)}
   }
 
   /**
-   * 查找相关记忆
+   * 查找相关记忆 — uses MemoryServiceClient.recall for semantic search.
    */
   private async findRelevantMemories(content: string): Promise<DetailedAnalysisResult['relevantMemories']> {
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'SEARCH_RELEVANT_MEMORIES',
-        query: content.substring(0, 500),
-        limit: 5
+      const recallResult = await this.client.recall(content.substring(0, 500), {
+        topK: 5,
+        channels: ['vector', 'fts'],
       });
 
-      if (response.success) {
-        return response.memories || [];
-      }
+      return recallResult.items.map(item => ({
+        id: item.id,
+        similarity: item.score,
+        snippet: item.content.substring(0, 200),
+      }));
     } catch (error) {
       console.error('Memory search error:', error);
     }

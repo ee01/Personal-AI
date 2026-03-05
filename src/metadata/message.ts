@@ -278,7 +278,7 @@ async function transformData2GroupWithThreads(
 /**
  * 原有的同步版本（保持兼容，但不包含 thread 结构）
  */
-function transformData2Group(data: any[]) {
+function _transformData2Group(data: any[]) {
   const groupedData = data.reduce((acc, item) => {
     if (!acc[item.groupId]) {
       acc[item.groupId] = {

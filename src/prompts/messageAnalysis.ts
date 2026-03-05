@@ -17,7 +17,7 @@ export function buildMessageFilterSystemPrompt(params: {
     username: string;
     envConfig: EnvConfigType;
 }): string {
-    const { concernedItems, username, envConfig } = params;
+    const { concernedItems, envConfig } = params;
     
     return `
 你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。

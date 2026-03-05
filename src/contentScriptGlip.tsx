@@ -1810,7 +1810,7 @@ export function initFollowThreadVisuals() {
 
   // 5. 🆕 监听 URL 变化，检测会话切换
   let lastUrl = window.location.href;
-  const urlCheckInterval = setInterval(() => {
+  const _urlCheckInterval = setInterval(() => {
     const currentUrl = window.location.href;
     if (currentUrl !== lastUrl) {
       console.log('🔄 检测到 URL 变化，重新装饰消息...');

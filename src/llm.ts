@@ -270,45 +270,49 @@ function extractJsonFromResponse(response: string): any[] {
 
 /**
  * 知识查询 - 兼容层
- * 
- * 🔄 重构说明：此函数现在是一个兼容层，实际查询逻辑已移至 memorySystem.knowledgeQuery
- * 新的架构中，memorySystem 作为统一的记忆查询路由，负责：
+ *
+ * 🔄 重构说明：此函数现在通过 MemoryServiceClient HTTP 后端进行查询
+ * 新的架构中，MemoryServiceClient 作为统一的记忆查询路由，负责：
  * 1. 智能决策：选择本地缓存还是云端查询
  * 2. 查询策略：实体搜索 + 消息搜索 + 关系扩展
  * 3. 结果融合：优先使用实体信息，消息作为补充
  * 4. LLM 生成：基于融合后的上下文生成答案
- * 
+ *
  * @param question 用户的自然语言问题
  * @returns 查询结果
  */
 export async function knowledgeQuery(question: string) {
   console.log('🔄 knowledgeQuery [兼容层] ->', question);
   try {
-    // 🆕 调用新的 ask() 接口
-    const { memorySystem } = await import('./memory');
-    const result = await memorySystem.ask(question);
-    
+    // 🆕 调用 MemoryServiceClient 的 ask() 接口
+    const { getMemoryServiceClient } = await import('./services/MemoryServiceClient');
+    const client = getMemoryServiceClient();
+    const result = await client.ask(question);
+
     // 🔄 转换新格式到旧格式（向后兼容）
-    if (!result.success) {
-      return {
-        success: false,
-        message: result.message || '查询时发生错误'
-      };
-    }
-    
-    // 将 entitiesByType 展平为单一数组
+    // client.ask() returns { answer, evidence?: RecallItem[], queryTimeMs }
+
+    // 将 evidence 转换为扁平实体数组
     const flatEntities: any[] = [];
-    if (result.entitiesByType) {
-      for (const entities of Object.values(result.entitiesByType)) {
-        flatEntities.push(...entities);
+    if (result.evidence) {
+      for (const item of result.evidence) {
+        flatEntities.push({
+          name: item.content,
+          type: item.type,
+          id: item.id,
+          score: item.score,
+          source: item.source,
+          timestamp: item.timestamp,
+          metadata: item.metadata
+        });
       }
     }
-    
+
     return {
       success: true,
       analysis: result.answer,
-      relatedMessages: result.metadata?.totalEntities || 0,
-      queryIntent: result.metadata?.queryIntent,
+      relatedMessages: flatEntities.length,
+      queryIntent: undefined,
       results: flatEntities
     };
   } catch (error) {
@@ -322,17 +326,17 @@ export async function knowledgeQuery(question: string) {
 
 /**
  * @deprecated 旧的 knowledgeQuery 实现，已废弃
- * 新实现在 memorySystem.knowledgeQuery
- * 
+ * 新实现通过 MemoryServiceClient HTTP 后端
+ *
  * 🔄 重构说明：
- * - 此函数的逻辑已完整移植到 memorySystem.knowledgeQuery
+ * - 此函数的逻辑已完整移植到 MemoryServiceClient.ask()
  * - 新实现增强了实体直接检索和关系扩展查询
- * - 不再需要直接访问 cloudStorage，所有查询通过 memorySystem 路由
- * 
+ * - 不再需要直接访问 cloudStorage，所有查询通过 MemoryServiceClient 路由
+ *
  * 此函数已不再使用，保留仅供参考
  */
 export async function knowledgeQueryOld_DEPRECATED(_question: string) {
-  throw new Error('此函数已废弃，请使用 memorySystem.knowledgeQuery 代替');
+  throw new Error('此函数已废弃，请使用 MemoryServiceClient.ask() 代替');
   
   /* 旧实现已注释，请参考 memorySystem.knowledgeQuery
   console.log('knowledgeQuery', question, new Date().getTime());
