@@ -18,6 +18,7 @@ import { ProactivityPolicy, type NotificationCandidate } from './ProactivityPoli
 import { ProfileManager } from './ProfileManager.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
+import { getBotSender } from '../utils/botSender.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,16 +169,37 @@ export class HeartbeatLoop {
         actions.push(`found ${deadlineCandidates.length} upcoming deadline(s)`);
       }
 
-      // 5. Apply ProactivityPolicy to filter candidates
+      // 5. Check dream digest (Monday morning)
+      const dreamCandidates = this.checkDreamDigest();
+      if (dreamCandidates.length > 0) {
+        allCandidates.push(...dreamCandidates);
+        actions.push('dream digest ready for delivery');
+      }
+
+      // 6. Apply ProactivityPolicy to filter candidates
       const approved = await this.policy.filterNotifications(allCandidates);
 
-      // 6. Deliver approved notifications
+      // 7. Deliver approved notifications
       if (approved.length > 0) {
         this.deliverNotifications(approved);
         actions.push(`delivered ${approved.length} notification(s)`);
       }
 
-      // 7. Update heartbeat timestamp
+      // 7b. Bot push for dream digest
+      for (const notif of approved) {
+        if (notif.type === 'dream_digest' && notif.payload?.digestBody) {
+          const botSender = getBotSender();
+          if (botSender.isConfigured()) {
+            await botSender.sendMarkdown(
+              'Weekly Dream Digest',
+              notif.payload.digestBody as string,
+              { mention: false },
+            );
+          }
+        }
+      }
+
+      // 8. Update heartbeat timestamp
       this.lastHeartbeat = checkedAt;
 
       console.log(
@@ -582,6 +604,66 @@ export class HeartbeatLoop {
         );
       }
     }
+  }
+
+  // ---- Step 5: Dream digest (Monday morning) ------------------------------
+
+  /**
+   * On Monday morning 08:00-10:00, check for recent dreams and generate
+   * a dream_digest notification (max once per week, idempotent).
+   */
+  private checkDreamDigest(): NotificationCandidate[] {
+    const d = new Date();
+    if (d.getDay() !== 1 || d.getHours() < 8 || d.getHours() >= 10) {
+      return [];
+    }
+
+    // Idempotency: skip if dream_digest sent in last 7 days
+    const sevenDaysAgo = now() - 7 * 86400;
+    const existing = this.db
+      .prepare(`SELECT id FROM notification_records WHERE type = 'dream_digest' AND created_at > ? LIMIT 1`)
+      .get(sevenDaysAgo);
+    if (existing) return [];
+
+    if (!this.userDataManager) return [];
+
+    // List dream files
+    const dreamFiles = this.userDataManager.listFiles('dreams');
+    if (!dreamFiles || dreamFiles.length === 0) return [];
+
+    // Read recent dreams and extract content
+    const recentDreams: string[] = [];
+    for (const file of dreamFiles) {
+      if (!file.endsWith('.md')) continue;
+      const content = this.userDataManager.readFile(`dreams/${file}`);
+      if (content) recentDreams.push(content);
+    }
+    if (recentDreams.length === 0) return [];
+
+    // Build digest body from dream content
+    const digestBody = recentDreams
+      .map(content => {
+        const titleMatch = content.match(/# Dream: (.+)/);
+        const narrativeMatch = content.match(/## Narrative\n([\s\S]*?)(?=\n## |$)/);
+        const insightsMatch = content.match(/## Insights\n([\s\S]*?)(?=\n## |$)/);
+        const title = titleMatch?.[1] || 'Untitled';
+        const narrative = narrativeMatch?.[1]?.trim().slice(0, 200) || '';
+        const insights = insightsMatch?.[1]?.trim() || '';
+        return `**${title}**\n${narrative}...\n${insights}`;
+      })
+      .join('\n\n---\n\n');
+
+    return [{
+      type: 'dream_digest',
+      title: 'Weekly Dream Digest',
+      body: `${recentDreams.length} dream(s) generated this week`,
+      importance: 0.8,
+      urgency: 0.3,
+      confidence: 0.95,
+      actionability: 0.4,
+      topicId: `dream_digest_${new Date().toISOString().slice(0, 10)}`,
+      payload: { dreamCount: recentDreams.length, digestBody },
+    }];
   }
 
   // ---- Utility helpers ----------------------------------------------------
