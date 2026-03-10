@@ -193,11 +193,14 @@ export class LLMClient {
     const mode = this.config.difyAppMode;
     const path = mode === 'completion' ? 'completion-messages' : 'chat-messages';
     const url = isV1Base ? `${base}/${path}` : `${base}/v1/${path}`;
+    const effectivePrompt = options?.systemPrompt
+      ? `System instructions:\n${options.systemPrompt}\n\nUser request:\n${prompt}`
+      : prompt;
 
     const body =
       mode === 'completion'
-        ? { inputs: { query: prompt }, response_mode: 'blocking' as const, user: 'memory-service' }
-        : { inputs: {}, query: prompt, response_mode: 'blocking' as const, user: 'memory-service' };
+        ? { inputs: { query: effectivePrompt }, response_mode: 'blocking' as const, user: 'memory-service' }
+        : { inputs: {}, query: effectivePrompt, response_mode: 'blocking' as const, user: 'memory-service' };
 
     const res = await fetch(url, {
       method: 'POST',

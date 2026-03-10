@@ -358,6 +358,7 @@ export async function askRoutes(
         }
 
         fullPrompt += `\n\nQuestion: ${query}`;
+        fullPrompt += `\n\nReturn JSON only. Required key: "answer". Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence". Do not wrap the JSON in prose.`;
 
         // Step 3: Call the LLM (inject agent persona + USER_CORE.md into system prompt)
         let enhancedPrompt = SYSTEM_PROMPT;
