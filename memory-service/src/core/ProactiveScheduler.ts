@@ -17,6 +17,7 @@ import { getConfig } from '../config.js';
 import { HeartbeatLoop } from './HeartbeatLoop.js';
 import { ConsolidationEngine } from './ConsolidationEngine.js';
 import { GenerativeReplay } from './GenerativeReplay.js';
+import { WeeklyReporter } from './WeeklyReporter.js';
 import { UserContextManager } from './UserContextManager.js';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,7 @@ export class ProactiveScheduler {
   private heartbeatIntervalId: ReturnType<typeof setInterval> | null = null;
   private dailyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyTask: ReturnType<typeof cron.schedule> | null = null;
+  private weeklyReportTask: ReturnType<typeof cron.schedule> | null = null;
   private running = false;
 
   constructor(ucm: UserContextManager) {
@@ -64,11 +66,17 @@ export class ProactiveScheduler {
       this.safeRun('weeklyDreaming', () => this.runWeeklyDreaming());
     });
 
+    // 4. Weekly report cron
+    this.weeklyReportTask = cron.schedule(config.weeklyReportCron, () => {
+      this.safeRun('weeklyReport', () => this.runWeeklyReport());
+    });
+
     this.running = true;
 
     console.log(
       `[ProactiveScheduler] Started — heartbeat every ${config.heartbeatIntervalMs}ms, ` +
-        `daily cron "${config.dailyCron}", weekly cron "${config.weeklyCron}"`,
+        `daily cron "${config.dailyCron}", weekly cron "${config.weeklyCron}", ` +
+        `weekly report cron "${config.weeklyReportCron}"`,
     );
   }
 
@@ -93,6 +101,11 @@ export class ProactiveScheduler {
     if (this.weeklyTask) {
       this.weeklyTask.stop();
       this.weeklyTask = null;
+    }
+
+    if (this.weeklyReportTask) {
+      this.weeklyReportTask.stop();
+      this.weeklyReportTask = null;
     }
 
     this.running = false;
@@ -180,6 +193,23 @@ export class ProactiveScheduler {
     console.log(
       `[ProactiveScheduler] Weekly dreaming complete for ${userIds.length} user(s) in ${elapsedMs}ms`,
     );
+  }
+
+  // ---- Weekly report (all users) ------------------------------------------
+
+  private async runWeeklyReport(): Promise<void> {
+    console.log('[ProactiveScheduler] Starting weekly report...');
+    const userIds = this.ucm.getRegisteredUserIds();
+    for (const userId of userIds) {
+      try {
+        const ctx = this.ucm.getContext(userId);
+        const reporter = new WeeklyReporter(ctx.db, ctx.userDataManager);
+        const result = await reporter.generateWeeklyReport();
+        console.log(`[ProactiveScheduler] Weekly report for user ${userId}:`, JSON.stringify(result));
+      } catch (err) {
+        console.error(`[ProactiveScheduler] Weekly report error for user ${userId}:`, (err as Error).message);
+      }
+    }
   }
 
   // ---- Error wrapper ------------------------------------------------------
