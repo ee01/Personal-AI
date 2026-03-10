@@ -16,6 +16,7 @@ import { now } from '../utils/time.js';
 import { contentHash } from '../utils/hashing.js';
 import { ProactivityPolicy, type NotificationCandidate } from './ProactivityPolicy.js';
 import { ProfileManager } from './ProfileManager.js';
+import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 
 // ---------------------------------------------------------------------------
@@ -106,6 +107,7 @@ export class HeartbeatLoop {
   private policy: ProactivityPolicy;
   private profileManager: ProfileManager;
   private userDataManager?: UserDataManager;
+  private markdownManager?: MarkdownManager;
   private lastHeartbeat: number = 0;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager) {
@@ -113,6 +115,9 @@ export class HeartbeatLoop {
     this.policy = new ProactivityPolicy(db);
     this.profileManager = new ProfileManager(db);
     this.userDataManager = userDataManager;
+    this.markdownManager = userDataManager?.isInitialized
+      ? new MarkdownManager(db, userDataManager.rootDir)
+      : undefined;
   }
 
   // ---- Main entry point ---------------------------------------------------
@@ -137,7 +142,7 @@ export class HeartbeatLoop {
       }
 
       // 1b. Check if user profile needs a snapshot refresh
-      const profileRefreshed = this.checkProfileDirty();
+      const profileRefreshed = await this.checkProfileDirty();
       if (profileRefreshed) {
         actions.push('refreshed USER_CORE.md (profile dirty)');
       }
@@ -285,7 +290,7 @@ export class HeartbeatLoop {
    *
    * Returns true if USER_CORE.md was regenerated.
    */
-  private checkProfileDirty(): boolean {
+  private async checkProfileDirty(): Promise<boolean> {
     try {
       const syncState = this.db
         .prepare("SELECT profile_dirty, last_snapshot_at FROM profile_sync_state WHERE id = 'singleton'")
@@ -334,6 +339,7 @@ export class HeartbeatLoop {
       // Regenerate USER_CORE.md via ProfileManager (per-user via UserDataManager)
       const rendered = this.profileManager.renderUserCore(10);
       this.userDataManager?.writeFile('USER_CORE.md', rendered);
+      await this.markdownManager?.reindexFile('USER_CORE.md');
 
       // Clear dirty flag and update last_snapshot_at
       this.clearProfileDirty();

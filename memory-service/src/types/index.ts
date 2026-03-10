@@ -2,6 +2,15 @@
 
 export type EntityType = 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
 export type SourceType = 'glip' | 'jira' | 'web' | 'manual' | 'system';
+export type RecallSourceType =
+  | SourceType
+  | 'daily_log'
+  | 'project_summary'
+  | 'reflection'
+  | 'dream'
+  | 'entity_profile'
+  | 'markdown'
+  | 'user_core';
 export type ConsolidationLevel = 'temporary' | 'working' | 'consolidated' | 'core';
 export type ActionState = 'pending' | 'approved' | 'executed' | 'dismissed' | 'expired';
 export type ConfirmState = 'pending' | 'answered' | 'snoozed' | 'expired';
@@ -321,6 +330,10 @@ export interface RecallQuery {
   projectFilter?: string;
   minSalience?: number;
   includeMetadata?: boolean;
+  senderFilter?: string[];
+  groupFilter?: string[];
+  minImportance?: number;
+  sourceTypes?: RecallSourceType[];
 }
 
 export interface RecallResult {

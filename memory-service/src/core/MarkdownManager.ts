@@ -382,6 +382,7 @@ export class MarkdownManager {
   inferSourceType(filePath: string): string {
     const normalized = filePath.replace(/\\/g, '/');
 
+    if (normalized === 'USER_CORE.md') return 'user_core';
     if (normalized.startsWith('daily/')) return 'daily_log';
     if (normalized.startsWith('projects/')) return 'project_summary';
     if (normalized.startsWith('reflections/')) return 'reflection';

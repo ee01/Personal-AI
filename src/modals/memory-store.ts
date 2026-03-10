@@ -1597,6 +1597,7 @@ export const useMemoryStore = defineStore('memory', () => {
       searchContext.value.askResult = {
         success: true,
         answer: result.answer,
+        structuredAnswer: result.structuredAnswer,
         evidence,
         entitiesByType: {},
         metadata: {
@@ -1619,7 +1620,7 @@ export const useMemoryStore = defineStore('memory', () => {
       console.log('[智能搜索] Ask 搜索完成:', {
         query,
         entitiesCount: allEntities.length,
-        hasStructuredAnswer: !!result.answer,
+        hasStructuredAnswer: !!result.structuredAnswer,
       });
     } catch (error) {
       console.error('[智能搜索] Ask 搜索异常:', error);

@@ -17,10 +17,10 @@
 import type Database from 'better-sqlite3';
 
 import { ForgettingEngine } from './ForgettingEngine.js';
+import { MarkdownManager } from './MarkdownManager.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
-import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
 import { now, formatDate } from '../utils/time.js';
 
@@ -106,10 +106,14 @@ interface SocialEdgeRow {
 export class ConsolidationEngine {
   private db: Database.Database;
   private userDataManager?: UserDataManager;
+  private markdownManager?: MarkdownManager;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager) {
     this.db = db;
     this.userDataManager = userDataManager;
+    this.markdownManager = userDataManager?.isInitialized
+      ? new MarkdownManager(db, userDataManager.rootDir)
+      : undefined;
   }
 
   // =========================================================================
@@ -245,6 +249,7 @@ ${formattedMessages}`;
     const udm = this.userDataManager;
     if (!udm) throw new Error('UserDataManager not available');
     udm.writeFile(dailyPath, header + response.content);
+    await this.markdownManager?.reindexFile(dailyPath);
 
     return messages.length;
   }
@@ -444,6 +449,7 @@ Brief current status
         const dateStr = formatDate(currentTime);
         const header = `# ${project.name}\n\n_Last updated: ${dateStr}_\n\n`;
         udm.writeFile(projectPath, header + response.content);
+        await this.markdownManager?.reindexFile(projectPath);
 
         // Append to entity timeline if entity_id is linked
         if (project.entity_id) {
@@ -718,6 +724,7 @@ Brief current status
 
     // Write USER_CORE.md (per-user via UserDataManager)
     this.userDataManager?.writeFile('USER_CORE.md', lines.join('\n'));
+    await this.markdownManager?.reindexFile('USER_CORE.md');
 
     // Step 5 — Update sync state
     this.db
@@ -764,7 +771,6 @@ Brief current status
       for (const file of files) {
         if (!file.endsWith('.md')) continue;
         const relativePath = `${dir}/${file}`;
-        const absolutePath = udm.getAbsolutePath(relativePath);
 
         // Check if the file's corresponding chunks were created/updated today
         const existingChunk = this.db
@@ -773,12 +779,12 @@ Brief current status
              WHERE file_path = ? AND (created_at >= ? OR updated_at >= ?)
              LIMIT 1`,
           )
-          .get(absolutePath, startOfDay, startOfDay) as { chunk_id: number } | undefined;
+          .get(relativePath, startOfDay, startOfDay) as { chunk_id: number } | undefined;
 
         // Also check if file has no chunks at all (new file)
         const anyChunk = this.db
           .prepare(`SELECT chunk_id FROM chunks WHERE file_path = ? LIMIT 1`)
-          .get(absolutePath) as { chunk_id: number } | undefined;
+          .get(relativePath) as { chunk_id: number } | undefined;
 
         if (existingChunk || !anyChunk) {
           modifiedFiles.push(relativePath);
@@ -790,83 +796,11 @@ Brief current status
       return 0;
     }
 
-    let embeddingClient: EmbeddingClient | null = null;
-    try {
-      embeddingClient = await EmbeddingClient.getInstance();
-    } catch (err) {
-      console.warn('[ConsolidationEngine] Embedding client unavailable for reindex:', err);
-      return 0;
-    }
-
     for (const relativePath of modifiedFiles) {
       try {
-        const absolutePath = udm.getAbsolutePath(relativePath);
         const content = udm.readFile(relativePath);
         if (!content || content.trim().length === 0) continue;
-
-        // Delete old chunks and their vectors for this file
-        const oldChunks = this.db
-          .prepare(`SELECT chunk_id FROM chunks WHERE file_path = ?`)
-          .all(absolutePath) as Array<{ chunk_id: number }>;
-
-        if (oldChunks.length > 0) {
-          const chunkIds = oldChunks.map((c) => c.chunk_id);
-          const ph = chunkIds.map(() => '?').join(', ');
-
-          this.db.prepare(`DELETE FROM chunks WHERE chunk_id IN (${ph})`).run(...chunkIds);
-
-          // Delete from chunks_vec (may fail if vec not loaded)
-          try {
-            this.db.prepare(`DELETE FROM chunks_vec WHERE chunk_id IN (${ph})`).run(...chunkIds);
-          } catch {
-            // sqlite-vec may not be available
-          }
-        }
-
-        // Re-chunk the content
-        const chunks = chunkText(content);
-        if (chunks.length === 0) continue;
-
-        // Embed all chunks
-        const texts = chunks.map((c) => c.content);
-        const embeddings = await embeddingClient.embedBatch(texts);
-
-        // Insert new chunks and vectors
-        const insertChunk = this.db.prepare(
-          `INSERT INTO chunks (file_path, line_start, line_end, content, content_hash, token_count, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-
-        const insertVec = this.db.prepare(
-          `INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)`,
-        );
-
-        const insertAll = this.db.transaction(() => {
-          for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            const hash = contentHash(chunk.content);
-
-            const result = insertChunk.run(
-              absolutePath,
-              chunk.lineStart,
-              chunk.lineEnd,
-              chunk.content,
-              hash,
-              chunk.tokenCount,
-              currentTime,
-            );
-
-            const newChunkId = result.lastInsertRowid;
-
-            try {
-              insertVec.run(newChunkId, JSON.stringify(embeddings[i]));
-            } catch {
-              // sqlite-vec may not be available
-            }
-          }
-        });
-
-        insertAll();
+        await this.markdownManager?.reindexFile(relativePath);
         reindexed++;
       } catch (err) {
         console.warn(`[ConsolidationEngine] Reindex failed for ${relativePath}:`, err);
@@ -959,6 +893,7 @@ ${(reflectionData.discoveries ?? []).map((d) => `- ${d}`).join('\n') || '- None'
 `;
 
     udm?.writeFile(markdownPath, reflectionMd);
+    await this.markdownManager?.reindexFile(markdownPath);
 
     return 1;
   }

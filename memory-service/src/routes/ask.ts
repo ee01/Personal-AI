@@ -9,6 +9,8 @@ import type { FastifyInstance } from 'fastify';
 
 import type { RecallItem } from '../types/index.js';
 import { RecallEngine } from '../core/RecallEngine.js';
+import { QueryIntentParser } from '../core/QueryIntentParser.js';
+import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
@@ -24,10 +26,30 @@ interface AskBody {
   includeEvidence?: boolean;
 }
 
+interface StructuredTimelineItem {
+  date: string;
+  event: string;
+}
+
+interface StructuredRelatedEntity {
+  name: string;
+  type: string;
+  relevance: string;
+}
+
+interface StructuredAskAnswer {
+  timeline?: StructuredTimelineItem[];
+  keyFindings?: string[];
+  insights?: string[];
+  relatedEntities?: StructuredRelatedEntity[];
+  confidence?: number;
+}
+
 interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
   queryTimeMs: number;
+  structuredAnswer?: StructuredAskAnswer;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,13 +71,32 @@ const askBodySchema = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are a personal AI assistant with access to the user's memory. Answer based on the provided context. If the information is not in the context, say so honestly. Be concise and accurate.`;
+const SYSTEM_PROMPT = `You are a personal AI assistant with access to the user's memory.
+
+Answer only from the provided context. If the context is insufficient, say so clearly.
+
+Return a JSON object with this shape:
+{
+  "answer": "markdown answer",
+  "timeline": [{ "date": "YYYY-MM-DD or relative time", "event": "what happened" }],
+  "keyFindings": ["important finding"],
+  "insights": ["higher-level insight"],
+  "relatedEntities": [{ "name": "entity", "type": "Person|Project|Topic|Other", "relevance": "why it matters" }],
+  "confidence": 0.0
+}
+
+Rules:
+- "answer" is required
+- Omit optional fields when there is no useful data
+- Keep "confidence" between 0 and 1
+- Do not invent evidence that is not supported by the provided context`;
 
 /**
  * Load the USER_CORE.md file via the per-user UserDataManager.
  * Returns the file content, or an empty string if the file does not exist.
  */
-function loadUserCore(userDataManager: UserDataManager): string {
+function loadUserCore(userDataManager?: UserDataManager | null): string {
+  if (!userDataManager) return '';
   try {
     return userDataManager.readFile('USER_CORE.md') ?? '';
   } catch {
@@ -113,6 +154,99 @@ function formatRecalledContext(items: RecallItem[]): string {
     .join('\n');
 }
 
+function formatIntentContext(intent: ParsedQueryIntent): string {
+  const parts: string[] = [];
+
+  if (intent.intent !== 'search') {
+    parts.push(`- intent: ${intent.intent}`);
+  }
+  if (intent.filters.senderNames?.length) {
+    parts.push(`- sender filter: ${intent.filters.senderNames.join(', ')}`);
+  }
+  if (intent.filters.groupNames?.length) {
+    parts.push(`- group filter: ${intent.filters.groupNames.join(', ')}`);
+  }
+  if (intent.filters.projectNames?.length) {
+    parts.push(`- project filter: ${intent.filters.projectNames.join(', ')}`);
+  }
+  if (intent.filters.sourceTypes?.length) {
+    parts.push(`- source filter: ${intent.filters.sourceTypes.join(', ')}`);
+  }
+  if (intent.filters.minImportance != null) {
+    parts.push(`- minimum importance: ${intent.filters.minImportance}`);
+  }
+  if (intent.filters.timeRange) {
+    parts.push(
+      `- time range: ${new Date(intent.filters.timeRange.start * 1000).toISOString()} -> ` +
+        `${new Date(intent.filters.timeRange.end * 1000).toISOString()}`,
+    );
+  }
+
+  return parts.join('\n');
+}
+
+function parseStructuredAnswer(raw: string): {
+  answer: string;
+  structuredAnswer?: StructuredAskAnswer;
+} {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+
+  try {
+    const parsed = JSON.parse(candidate) as Record<string, unknown>;
+    const structuredAnswer: StructuredAskAnswer = {};
+
+    if (Array.isArray(parsed.timeline)) {
+      const timeline = parsed.timeline
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map((item) => ({
+          date: String(item.date ?? ''),
+          event: String(item.event ?? ''),
+        }))
+        .filter((item) => item.date && item.event);
+      if (timeline.length > 0) structuredAnswer.timeline = timeline;
+    }
+
+    if (Array.isArray(parsed.keyFindings)) {
+      const keyFindings = parsed.keyFindings.map((item) => String(item)).filter(Boolean);
+      if (keyFindings.length > 0) structuredAnswer.keyFindings = keyFindings;
+    }
+
+    if (Array.isArray(parsed.insights)) {
+      const insights = parsed.insights.map((item) => String(item)).filter(Boolean);
+      if (insights.length > 0) structuredAnswer.insights = insights;
+    }
+
+    if (Array.isArray(parsed.relatedEntities)) {
+      const relatedEntities = parsed.relatedEntities
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map((item) => ({
+          name: String(item.name ?? ''),
+          type: String(item.type ?? ''),
+          relevance: String(item.relevance ?? ''),
+        }))
+        .filter((item) => item.name && item.type && item.relevance);
+      if (relatedEntities.length > 0) structuredAnswer.relatedEntities = relatedEntities;
+    }
+
+    if (typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1) {
+      structuredAnswer.confidence = parsed.confidence;
+    }
+
+    const answer = typeof parsed.answer === 'string' && parsed.answer.trim()
+      ? parsed.answer.trim()
+      : raw;
+
+    return {
+      answer,
+      structuredAnswer: Object.keys(structuredAnswer).length > 0 ? structuredAnswer : undefined,
+    };
+  } catch {
+    return { answer: raw };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Route plugin
 // ---------------------------------------------------------------------------
@@ -148,6 +282,36 @@ export async function askRoutes(
                 },
               },
               queryTimeMs: { type: 'number' },
+              structuredAnswer: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  timeline: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        date: { type: 'string' },
+                        event: { type: 'string' },
+                      },
+                    },
+                  },
+                  keyFindings: { type: 'array', items: { type: 'string' } },
+                  insights: { type: 'array', items: { type: 'string' } },
+                  relatedEntities: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string' },
+                        type: { type: 'string' },
+                        relevance: { type: 'string' },
+                      },
+                    },
+                  },
+                  confidence: { type: 'number' },
+                },
+              },
             },
           },
         },
@@ -160,11 +324,21 @@ export async function askRoutes(
       const { query, context: userContext, includeEvidence } = request.body;
 
       try {
+        const parser = new QueryIntentParser(db);
+        const parsedIntent = parser.parse(query);
+        const recallQueryText = parsedIntent.cleanedQuery || query;
+
         // Step 1: Recall relevant memories
         const recallResult = await recallEngine.recall({
-          query,
-          topK: 10,
-          includeMetadata: false,
+          query: recallQueryText,
+          topK: parsedIntent.intent === 'profile' || Object.keys(parsedIntent.filters).length > 0 ? 15 : 10,
+          includeMetadata: Boolean(includeEvidence),
+          timeRange: parsedIntent.filters.timeRange,
+          projectFilter: parsedIntent.filters.projectNames?.[0],
+          senderFilter: parsedIntent.filters.senderNames,
+          groupFilter: parsedIntent.filters.groupNames,
+          minImportance: parsedIntent.filters.minImportance,
+          sourceTypes: parsedIntent.filters.sourceTypes,
         });
 
         const recalledItems = recallResult.items;
@@ -176,6 +350,11 @@ export async function askRoutes(
 
         if (userContext) {
           fullPrompt += `\n\nAdditional context from user:\n${userContext}`;
+        }
+
+        const intentContext = formatIntentContext(parsedIntent);
+        if (intentContext) {
+          fullPrompt += `\n\nDetected query constraints:\n${intentContext}`;
         }
 
         fullPrompt += `\n\nQuestion: ${query}`;
@@ -191,15 +370,17 @@ export async function askRoutes(
         const llmResponse = await llmClient.generate(fullPrompt, {
           systemPrompt,
           temperature: 0.3,
-          maxTokens: 1500,
+          maxTokens: 1800,
         });
 
         // Step 4: Build the response
         const queryTimeMs = Date.now() - startMs;
+        const parsedAnswer = parseStructuredAnswer(llmResponse.content);
 
         const response: AskResponse = {
-          answer: llmResponse.content,
+          answer: parsedAnswer.answer,
           queryTimeMs,
+          structuredAnswer: parsedAnswer.structuredAnswer,
         };
 
         if (includeEvidence) {

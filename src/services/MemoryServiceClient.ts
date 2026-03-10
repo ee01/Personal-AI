@@ -63,6 +63,10 @@ export interface RecallOptions {
   projectFilter?: string;
   minSalience?: number;
   includeMetadata?: boolean;
+  senderFilter?: string[];
+  groupFilter?: string[];
+  minImportance?: number;
+  sourceTypes?: string[];
 }
 
 export interface RecallResult {
@@ -86,6 +90,13 @@ export interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
   queryTimeMs: number;
+  structuredAnswer?: {
+    timeline?: Array<{ date: string; event: string }>;
+    keyFindings?: string[];
+    insights?: string[];
+    relatedEntities?: Array<{ name: string; type: string; relevance: string }>;
+    confidence?: number;
+  };
 }
 
 // ============================================================================

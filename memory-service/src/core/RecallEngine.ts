@@ -19,10 +19,13 @@ import type {
   RecallItem,
   Entity,
   EntityType,
+  RecallSourceType,
   SourceType,
 } from '../types/index.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { now } from '../utils/time.js';
+import { toSlug } from '../utils/slug.js';
+import { parseQueryTimeRange } from '../utils/queryTime.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -56,6 +59,7 @@ interface MessageRow {
   timestamp: number;
   sender: string | null;
   group_name: string | null;
+  matched_projects_json: string | null;
   metadata_json: string | null;
   importance: number;
   entities_json: string | null;
@@ -65,7 +69,7 @@ interface ChunkRow {
   chunk_id: number;
   content: string;
   file_path: string;
-  source_type: string | null;
+  source_type: RecallSourceType | null;
   related_project: string | null;
   created_at: number;
 }
@@ -143,82 +147,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 /**
- * Parse simple time expressions in a query string and return an epoch-second
- * range { start, end }.  Returns null if no time reference is detected.
- *
- * Supported patterns:
- *   "today", "yesterday", "last week", "this week", "last month",
- *   "past N days", "past N hours", "last N days", "last N hours",
- *   YYYY-MM-DD (single date treated as full day)
- */
-function parseTimeRange(query: string): { start: number; end: number } | null {
-  const lower = query.toLowerCase();
-  const currentTime = now();
-
-  // Helper: start of today (local time, midnight)
-  const todayDate = new Date(currentTime * 1000);
-  todayDate.setHours(0, 0, 0, 0);
-  const startOfToday = Math.floor(todayDate.getTime() / 1000);
-
-  if (/\btoday\b/.test(lower)) {
-    return { start: startOfToday, end: currentTime };
-  }
-
-  if (/\byesterday\b/.test(lower)) {
-    const startOfYesterday = startOfToday - 86400;
-    return { start: startOfYesterday, end: startOfToday - 1 };
-  }
-
-  if (/\bthis week\b/.test(lower)) {
-    const dayOfWeek = todayDate.getDay(); // 0=Sun
-    const startOfWeek = startOfToday - dayOfWeek * 86400;
-    return { start: startOfWeek, end: currentTime };
-  }
-
-  if (/\blast week\b/.test(lower)) {
-    const dayOfWeek = todayDate.getDay();
-    const startOfThisWeek = startOfToday - dayOfWeek * 86400;
-    const startOfLastWeek = startOfThisWeek - 7 * 86400;
-    return { start: startOfLastWeek, end: startOfThisWeek - 1 };
-  }
-
-  if (/\blast month\b/.test(lower)) {
-    const d = new Date(todayDate);
-    d.setDate(1); // first of current month
-    const startOfThisMonth = Math.floor(d.getTime() / 1000);
-    d.setMonth(d.getMonth() - 1);
-    const startOfLastMonth = Math.floor(d.getTime() / 1000);
-    return { start: startOfLastMonth, end: startOfThisMonth - 1 };
-  }
-
-  // "past N days" / "last N days"
-  const daysMatch = lower.match(/(?:past|last)\s+(\d+)\s+days?/);
-  if (daysMatch) {
-    const n = parseInt(daysMatch[1], 10);
-    return { start: currentTime - n * 86400, end: currentTime };
-  }
-
-  // "past N hours" / "last N hours"
-  const hoursMatch = lower.match(/(?:past|last)\s+(\d+)\s+hours?/);
-  if (hoursMatch) {
-    const n = parseInt(hoursMatch[1], 10);
-    return { start: currentTime - n * 3600, end: currentTime };
-  }
-
-  // Explicit date: YYYY-MM-DD
-  const dateMatch = query.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  if (dateMatch) {
-    const d = new Date(dateMatch[1] + 'T00:00:00');
-    if (!isNaN(d.getTime())) {
-      const dayStart = Math.floor(d.getTime() / 1000);
-      return { start: dayStart, end: dayStart + 86400 - 1 };
-    }
-  }
-
-  return null;
-}
-
-/**
  * Sanitize a user query for FTS5 MATCH syntax.
  * Strips characters that are special in FTS5 and wraps each token in quotes.
  */
@@ -266,6 +194,31 @@ function safeJsonParse<T>(json: string): T | undefined {
   } catch {
     return undefined;
   }
+}
+
+function matchesTextFilter(value: string | null, filters?: string[]): boolean {
+  if (!filters || filters.length === 0) return true;
+  if (!value) return false;
+
+  const normalized = value.toLowerCase();
+  return filters.some((filter) => normalized.includes(filter.toLowerCase()));
+}
+
+function normalizeProjectKey(value: string | null | undefined): string {
+  if (!value) return '';
+  const normalized = value.trim().toLowerCase();
+  return toSlug(normalized) || normalized.replace(/\s+/g, ' ');
+}
+
+function matchesProjectFilter(
+  projectFilter: string | undefined,
+  rawProjectValues: string[],
+): boolean {
+  if (!projectFilter) return true;
+  const normalizedFilter = normalizeProjectKey(projectFilter);
+  if (!normalizedFilter) return true;
+
+  return rawProjectValues.some((value) => normalizeProjectKey(value) === normalizedFilter);
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +386,7 @@ export class RecallEngine {
         const msgs = this.db
           .prepare(
             `SELECT id, content, source_type, timestamp, sender, group_name,
+                    matched_projects_json,
                     metadata_json, importance, entities_json
              FROM messages_raw
              WHERE id IN (${ph})`,
@@ -493,8 +447,9 @@ export class RecallEngine {
           const chunk = chunkMap.get(row.chunk_id);
           if (!chunk) continue;
 
-          // Apply project filter
-          if (query.projectFilter && chunk.related_project !== query.projectFilter) continue;
+          if (!matchesProjectFilter(query.projectFilter, [chunk.related_project ?? ''])) continue;
+          if (query.sourceTypes?.length && !chunk.source_type) continue;
+          if (query.sourceTypes?.length && !query.sourceTypes.includes(chunk.source_type!)) continue;
 
           const score = 1 / (1 + row.distance);
           candidates.push({
@@ -561,7 +516,9 @@ export class RecallEngine {
         const chunk = chunkMap.get(row.rowid);
         if (!chunk) continue;
 
-        if (query.projectFilter && chunk.related_project !== query.projectFilter) continue;
+        if (!matchesProjectFilter(query.projectFilter, [chunk.related_project ?? ''])) continue;
+        if (query.sourceTypes?.length && !chunk.source_type) continue;
+        if (query.sourceTypes?.length && !query.sourceTypes.includes(chunk.source_type!)) continue;
 
         // Normalize: best rank -> score ~1, worst -> score ~0
         const score = Math.abs(row.rank) / maxAbsRank;
@@ -703,6 +660,7 @@ export class RecallEngine {
           const mentionMsgs = this.db
             .prepare(
               `SELECT id, content, source_type, timestamp, sender, group_name,
+                      matched_projects_json,
                       metadata_json, importance, entities_json
                FROM messages_raw
                WHERE entities_json LIKE ?
@@ -753,7 +711,7 @@ export class RecallEngine {
           start: query.timeRange!.start ?? 0,
           end: query.timeRange!.end ?? now(),
         }
-      : parseTimeRange(queryText);
+      : parseQueryTimeRange(queryText);
 
     if (!range) return candidates;
 
@@ -761,6 +719,7 @@ export class RecallEngine {
       const msgs = this.db
         .prepare(
           `SELECT id, content, source_type, timestamp, sender, group_name,
+                  matched_projects_json,
                   metadata_json, importance, entities_json
            FROM messages_raw
            WHERE timestamp BETWEEN ? AND ?
@@ -1003,9 +962,12 @@ export class RecallEngine {
    */
   private findMatchingEntities(queryText: string, entityTypes?: EntityType[]): Entity[] {
     const queryLower = queryText.toLowerCase();
-    const queryTokens = queryLower.split(/\s+/).filter((t) => t.length > 2);
+    const queryTokens = queryLower
+      .split(/[^\p{L}\p{N}_-]+/u)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1);
 
-    if (queryTokens.length === 0) return [];
+    if (queryTokens.length === 0 && queryLower.trim().length === 0) return [];
 
     try {
       // Build type filter
@@ -1038,15 +1000,18 @@ export class RecallEngine {
           : [];
         const aliasesLower = aliases.map((a) => a.toLowerCase());
 
-        // Check if any query token matches entity name or aliases
-        const nameMatch = queryTokens.some(
+        const directPhraseMatch =
+          queryLower.includes(nameLower) ||
+          aliasesLower.some((alias) => queryLower.includes(alias));
+
+        const tokenMatch = queryTokens.some(
           (token) =>
             nameLower.includes(token) ||
             token.includes(nameLower) ||
             aliasesLower.some((alias) => alias.includes(token) || token.includes(alias)),
         );
 
-        if (nameMatch) {
+        if (directPhraseMatch || tokenMatch) {
           matched.push(entityRowToEntity(row));
         }
       }
@@ -1093,10 +1058,24 @@ export class RecallEngine {
       if (query.timeRange.end != null && msg.timestamp > query.timeRange.end) return false;
     }
 
-    // Project filter — check entities_json for matched project
-    if (query.projectFilter && msg.entities_json) {
-      // A simple heuristic: check if the project name appears in entities
-      if (!msg.entities_json.includes(query.projectFilter)) return false;
+    if (!matchesTextFilter(msg.sender, query.senderFilter)) return false;
+    if (!matchesTextFilter(msg.group_name, query.groupFilter)) return false;
+
+    if (query.minImportance != null && msg.importance < query.minImportance) return false;
+
+    if (query.sourceTypes?.length && !query.sourceTypes.includes(msg.source_type)) return false;
+
+    if (query.projectFilter) {
+      const matchedProjects = safeJsonParse<string[]>(msg.matched_projects_json ?? '') ?? [];
+      const entityMatches = safeJsonParse<Array<{ name?: string; id?: string }>>(msg.entities_json ?? '') ?? [];
+      const projectCandidates = [
+        ...matchedProjects,
+        ...entityMatches.flatMap((entity) => [entity.name ?? '', entity.id ?? '']),
+      ];
+
+      if (!matchesProjectFilter(query.projectFilter, projectCandidates)) {
+        return false;
+      }
     }
 
     return true;

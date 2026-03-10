@@ -40,6 +40,19 @@ const recallBodySchema = {
     projectFilter: { type: 'string' as const },
     minSalience: { type: 'number' as const },
     includeMetadata: { type: 'boolean' as const },
+    senderFilter: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+    },
+    groupFilter: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+    },
+    minImportance: { type: 'number' as const },
+    sourceTypes: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+    },
   },
   additionalProperties: false,
 };

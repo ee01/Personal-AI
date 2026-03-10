@@ -16,6 +16,7 @@ import type Database from 'better-sqlite3';
 
 import { RecallEngine } from './RecallEngine.js';
 import { ForgettingEngine } from './ForgettingEngine.js';
+import { MarkdownManager } from './MarkdownManager.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { toSlug } from '../utils/slug.js';
@@ -98,10 +99,14 @@ const LOOKBACK_DAYS = 30;
 export class GenerativeReplay {
   private db: Database.Database;
   private userDataManager?: UserDataManager;
+  private markdownManager?: MarkdownManager;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager) {
     this.db = db;
     this.userDataManager = userDataManager;
+    this.markdownManager = userDataManager?.isInitialized
+      ? new MarkdownManager(db, userDataManager.rootDir)
+      : undefined;
   }
 
   // =========================================================================
@@ -256,6 +261,7 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
 `;
 
     udm.writeFile(dreamPath, dreamMd);
+    await this.markdownManager?.reindexFile(dreamPath);
 
     // 2f. Insert discovered relationships with low confidence
     const newRelationships = dreamData.newRelationships ?? [];
