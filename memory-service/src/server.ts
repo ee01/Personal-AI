@@ -82,7 +82,11 @@ export async function buildApp(
 
   // ---- Plugins ----
   await app.register(cors, {
-    origin: true, // allow all origins for local development
+    origin: true, // 允许所有跨域来源（反射请求的 Origin）
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+    allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-User-Id'],
+    exposedHeaders: [],
+    credentials: false,
   });
 
   await app.register(swagger, {
