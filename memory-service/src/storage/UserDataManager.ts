@@ -14,6 +14,7 @@ const DIRECTORY_TREE = [
   'skills',
   'reflections',
   'dreams',
+  'reports',
   'agent',
 ] as const;
 

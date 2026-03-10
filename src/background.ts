@@ -453,6 +453,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // Context Match: proxy request to memory-service backend
+    if (request.type === 'CONTEXT_MATCH_REQUEST') {
+        (async () => {
+            try {
+                const client = getMemoryServiceClient();
+                const url = `${client.getBaseUrl()}/context-match`;
+                const headers: Record<string, string> = {
+                    'Content-Type': 'application/json',
+                    'X-User-Id': client.getUserId(),
+                };
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        title: request.title,
+                        keywords: request.keywords,
+                        snippet: request.snippet,
+                    }),
+                });
+                if (!resp.ok) {
+                    sendResponse({ success: true, match: null });
+                    return;
+                }
+                const data = await resp.json();
+                sendResponse({ success: true, match: data.match ?? null });
+            } catch {
+                sendResponse({ success: true, match: null });
+            }
+        })();
+        return true;
+    }
+
     // 🆕 处理用户画像相关请求
     const userProfileHandled = UserProfileMessageHandler.handleMessage(request, sender, sendResponse);
     if (userProfileHandled) {
