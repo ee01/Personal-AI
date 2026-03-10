@@ -6,6 +6,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import type Database from 'better-sqlite3';
 
 import type { RecallItem } from '../types/index.js';
 import { RecallEngine } from '../core/RecallEngine.js';
@@ -123,6 +124,30 @@ function loadAgentPersona(profileManager: ProfileManager): string {
   }
 
   return parts.join('\n\n');
+}
+
+/**
+ * Load active user preferences from the database.
+ * Returns a formatted string of preferences, or empty string if none found.
+ */
+function loadUserPreferences(db: Database.Database): string {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT item_key, item_value
+         FROM user_profile_items
+         WHERE item_type = 'preference' AND status = 'active'
+         ORDER BY salience_score DESC
+         LIMIT 10`,
+      )
+      .all() as Array<{ item_key: string; item_value: string }>;
+
+    if (rows.length === 0) return '';
+
+    return rows.map((r) => `- ${r.item_key}: ${r.item_value}`).join('\n');
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -366,6 +391,11 @@ export async function askRoutes(
         if (agentPersona) enhancedPrompt += '\n\n' + agentPersona;
         const userCore = loadUserCore(userDataManager);
         if (userCore) enhancedPrompt += '\n\n--- User Context ---\n' + userCore;
+
+        const preferences = loadUserPreferences(db);
+        if (preferences) {
+          enhancedPrompt += '\n\n--- User Preferences (apply these silently when relevant) ---\n' + preferences;
+        }
         const systemPrompt = enhancedPrompt;
 
         const llmResponse = await llmClient.generate(fullPrompt, {
