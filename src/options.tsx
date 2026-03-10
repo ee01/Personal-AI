@@ -5,11 +5,6 @@ import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
 import { agentCoordinator } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
-import { DatabaseMaintenanceTool } from './storage/DatabaseMaintenanceTool';
-import { EntityEmbeddingRebuildTool } from './storage/EntityEmbeddingRebuildTool';
-import V6DataMigrationTool from './storage/V6DataMigrationTool';
-import EntityRebuildTool from './storage/EntityRebuildTool';
-import { runUserProfileDemo, runUserProfilePerformanceTest } from './services/UserProfileDemo';
 
 // 使用从utils.ts导入的类型
 const Options = () => {
@@ -24,7 +19,7 @@ const Options = () => {
         chrome.storage.local.get(['envConfig'], (result) => {
             console.log('result', result);
             if (result.envConfig) {
-                setConfig(result.envConfig);
+                setConfig({ ...defaultEnvConfig, ...result.envConfig });
             } else {
                 // 如果没有保存过配置，则尝试从 .env 加载
                 loadEnvDefaults();
@@ -114,7 +109,7 @@ const Options = () => {
             ...prev,
             [name]: type === 'checkbox' 
                 ? (e.target as HTMLInputElement).checked 
-                : name === 'SCHEDULED_INTERVAL' || name === 'MESSAGE_ANALYSIS_INTERVAL' || name === 'MESSAGE_CONTEXT_WINDOW' || name === 'CHROMA_PORT'
+                : name === 'SCHEDULED_INTERVAL' || name === 'MESSAGE_ANALYSIS_INTERVAL' || name === 'MESSAGE_CONTEXT_WINDOW'
                     ? Number(value)
                     : value
         }));
@@ -375,6 +370,38 @@ const Options = () => {
             </div>
 
             <div className="form-section">
+                <h2>记忆系统 (Memory Service)</h2>
+                <div className="form-group">
+                    <label htmlFor="MEMORY_SERVICE_BASE_URL">记忆服务 API 地址</label>
+                    <input
+                        type="url"
+                        id="MEMORY_SERVICE_BASE_URL"
+                        name="MEMORY_SERVICE_BASE_URL"
+                        value={config.MEMORY_SERVICE_BASE_URL}
+                        onChange={handleInputChange}
+                        placeholder="http://localhost:3210/api/v1"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        记忆系统后端地址，需包含 /api/v1 路径。默认 localhost:3210
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="MEMORY_SERVICE_API_KEY">API 密钥（可选）</label>
+                    <input
+                        type="password"
+                        id="MEMORY_SERVICE_API_KEY"
+                        name="MEMORY_SERVICE_API_KEY"
+                        value={config.MEMORY_SERVICE_API_KEY || ''}
+                        onChange={handleInputChange}
+                        placeholder="后端配置 API_KEY 时填写"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        后端配置 API_KEY 时需填写相同密钥；本地开发通常留空
+                    </small>
+                </div>
+            </div>
+
+            <div className="form-section">
                 <h2>LLM 设置</h2>
                 <div className="form-group">
                     <label htmlFor="LLM_TYPE">LLM 类型</label>
@@ -593,61 +620,6 @@ const Options = () => {
             </div>
 
             <div className="form-section">
-                <h2>向量数据库设置</h2>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ENABLE_CHROMA"
-                            checked={config.ENABLE_CHROMA}
-                            onChange={handleInputChange}
-                        />
-                        启用 Chroma 向量数据库
-                    </label>
-                </div>
-
-                {config.ENABLE_CHROMA && (
-                    <>
-                        <div className="form-group">
-                            <label htmlFor="CHROMA_HOST">Chroma 主机地址</label>
-                            <input
-                                type="text"
-                                id="CHROMA_HOST"
-                                name="CHROMA_HOST"
-                                value={config.CHROMA_HOST}
-                                onChange={handleInputChange}
-                                placeholder="localhost"
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label htmlFor="CHROMA_PORT">Chroma 端口</label>
-                            <input
-                                type="number"
-                                id="CHROMA_PORT"
-                                name="CHROMA_PORT"
-                                value={config.CHROMA_PORT}
-                                onChange={handleInputChange}
-                                placeholder="8000"
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    name="CHROMA_SSL"
-                                    checked={config.CHROMA_SSL}
-                                    onChange={handleInputChange}
-                                />
-                                启用 SSL 连接
-                            </label>
-                        </div>
-                    </>
-                )}
-            </div>
-
-            <div className="form-section">
                 <h2>Jira 设置</h2>
                 <div className="form-group">
                     <label htmlFor="JIRA_BASE_URL">Jira Base URL</label>
@@ -729,26 +701,6 @@ const Options = () => {
                     <AgentSettings />
                 </div>
             )}
-
-            <div className="form-section">
-                <h2>数据库维护</h2>
-                <DatabaseMaintenanceTool />
-                <EntityRebuildTool />
-                <EntityEmbeddingRebuildTool />
-                <div className="form-group">
-                    <label htmlFor="CHROMA_COLLECTION_NAME">集合名称</label>
-                    <input
-                        type="text"
-                        id="CHROMA_COLLECTION_NAME"
-                        name="CHROMA_COLLECTION_NAME"
-                        value={config.CHROMA_COLLECTION_NAME}
-                        onChange={handleInputChange}
-                        placeholder="默认为 <username>-messages"
-                    />
-                </div>
-                <V6DataMigrationTool />
-                <UserProfileDemoTool />
-            </div>
 
             <div className="form-section">
                 <h2>配置导入/导出</h2>
@@ -1163,147 +1115,6 @@ const IntelligentAgentSettings = () => {
                         )}
                     </>
                 )}
-            </div>
-        </div>
-    );
-};
-
-
-
-// 用户画像演示工具组件
-const UserProfileDemoTool = () => {
-    const [loading, setLoading] = useState(false);
-    const [status, setStatus] = useState<{message: string, type: 'info' | 'success' | 'error' | 'warning'}>({
-        message: '',
-        type: 'info'
-    });
-
-    // 生成示例用户画像数据
-    const generateDemoData = async () => {
-        setLoading(true);
-        setStatus({message: '正在生成用户画像示例数据...', type: 'info'});
-        
-        try {
-            await runUserProfileDemo();
-            
-            setStatus({
-                message: '✅ 用户画像示例数据生成完成！已创建多个示例用户的向量化画像数据，包含兴趣项、行为模式等信息。',
-                type: 'success'
-            });
-        } catch (error: any) {
-            console.error('生成示例数据失败:', error);
-            setStatus({
-                message: `❌ 生成示例数据失败: ${error.message}`,
-                type: 'error'
-            });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // 运行性能测试
-    const runPerformanceTest = async () => {
-        setLoading(true);
-        setStatus({message: '正在运行用户画像性能测试...', type: 'info'});
-        
-        try {
-            await runUserProfilePerformanceTest();
-            
-            setStatus({
-                message: '✅ 性能测试完成！请查看控制台了解详细的性能数据和测试结果。',
-                type: 'success'
-            });
-        } catch (error: any) {
-            console.error('性能测试失败:', error);
-            setStatus({
-                message: `❌ 性能测试失败: ${error.message}`,
-                type: 'error'
-            });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="user-profile-demo-tool" style={{ marginTop: '20px', padding: '15px', border: '1px solid #e0e0e0', borderRadius: '8px' }}>
-            <h3 style={{ margin: '0 0 15px 0', color: '#333' }}>用户画像系统演示</h3>
-            
-            <div className="demo-actions" style={{ marginBottom: '15px' }}>
-                <button 
-                    onClick={generateDemoData} 
-                    disabled={loading}
-                    style={{ 
-                        marginRight: '10px',
-                        padding: '8px 16px',
-                        backgroundColor: '#4CAF50',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: loading ? 'not-allowed' : 'pointer',
-                        opacity: loading ? 0.6 : 1
-                    }}
-                >
-                    {loading ? '生成中...' : '生成用户画像示例数据'}
-                </button>
-                
-                <button 
-                    onClick={runPerformanceTest} 
-                    disabled={loading}
-                    style={{ 
-                        padding: '8px 16px',
-                        backgroundColor: '#2196F3',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: loading ? 'not-allowed' : 'pointer',
-                        opacity: loading ? 0.6 : 1
-                    }}
-                >
-                    {loading ? '测试中...' : '运行性能测试'}
-                </button>
-            </div>
-
-            {status.message && (
-                <div 
-                    className={`status-message ${status.type}`}
-                    style={{
-                        padding: '10px',
-                        border: '1px solid',
-                        borderRadius: '4px',
-                        backgroundColor: 
-                            status.type === 'error' ? '#ffebee' :
-                            status.type === 'success' ? '#e8f5e8' :
-                            status.type === 'warning' ? '#fff3cd' : '#e3f2fd',
-                        borderColor:
-                            status.type === 'error' ? '#f44336' :
-                            status.type === 'success' ? '#4caf50' :
-                            status.type === 'warning' ? '#ff9800' : '#2196f3',
-                        color:
-                            status.type === 'error' ? '#c62828' :
-                            status.type === 'success' ? '#2e7d32' :
-                            status.type === 'warning' ? '#ef6c00' : '#1565c0'
-                    }}
-                >
-                    {status.message}
-                </div>
-            )}
-
-            <div style={{ 
-                marginTop: '15px', 
-                padding: '10px', 
-                backgroundColor: '#f9f9f9', 
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                fontSize: '14px'
-            }}>
-                <h4 style={{ margin: '0 0 10px 0' }}>功能说明:</h4>
-                <ul style={{ margin: '0', paddingLeft: '20px' }}>
-                    <li><strong>生成示例数据：</strong>创建4个不同类型的用户画像示例（React开发者、Python工程师、全栈开发者、八卦达人），展示向量化存储功能</li>
-                    <li><strong>性能测试：</strong>测试向量化查询和存储的性能，包括查询速度、批量存储效率等</li>
-                    <li><strong>查看结果：</strong>打开浏览器控制台可以看到详细的演示过程和测试结果</li>
-                    <li>💡 生成的示例数据包含兴趣项、行为模式、社交关系等向量化记录</li>
-                    <li>🔍 可以在内存管理界面中查看生成的用户画像数据</li>
-                </ul>
             </div>
         </div>
     );

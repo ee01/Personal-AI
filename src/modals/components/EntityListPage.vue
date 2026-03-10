@@ -78,10 +78,8 @@
       </div>
       
       <div v-show="isAnalysisPanelExpanded" class="panel-content">
-        <!-- 主要回答 -->
-        <div class="answer-main">
-          <p>{{ searchContext.askResult.answer }}</p>
-        </div>
+        <!-- 主要回答（支持 Markdown 渲染） -->
+        <div class="answer-main" v-html="renderedAnswer"></div>
         
         <!-- 结构化信息（如果有） -->
         <div v-if="searchContext.askResult.structuredAnswer" class="answer-structured">
@@ -492,6 +490,7 @@
 import { computed, watch, ref, toRaw } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore, ENTITY_TYPE_CONFIG, chromeAPI } from '../memory-store';
+import { markdownToHtml } from '../utils/markdown';
 
 const route = useRoute();
 const router = useRouter();
@@ -511,6 +510,11 @@ const topicSortMode = ref('time'); // 'time' | 'importance' | 'unread-count'
 // AI 分析状态
 const isAnalyzing = ref(false);
 const isAnalysisPanelExpanded = ref(true);
+
+const renderedAnswer = computed(() => {
+  const ans = searchContext.value.askResult?.answer;
+  return ans ? markdownToHtml(ans) : '';
+});
 
 const handleAskAnalyze = async () => {
   if (!searchQuery.value.trim()) {
@@ -884,7 +888,25 @@ watch(entityType, (newType) => {
   color: #e2e8f0;
   font-size: 1rem;
   line-height: 1.8;
-  margin: 0;
+  margin: 0 0 0.75rem 0;
+}
+
+.panel-content .answer-main p:last-child {
+  margin-bottom: 0;
+}
+
+.panel-content .answer-main strong {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.panel-content .answer-main a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.panel-content .answer-main a:hover {
+  text-decoration: underline;
 }
 
 .panel-content .answer-structured {

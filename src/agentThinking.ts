@@ -4,7 +4,7 @@
  */
 
 import { callLLMJsonAPI } from './llm';
-import { memorySystem } from './memory';
+import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { getEnvConfig } from './utils';
 import { jiraFetch, getJiraBaseUrl, getJiraToken } from './jira';
 import { 
@@ -472,32 +472,35 @@ export class IntelligentAgent {
           filters.timeRange = params.timeRange;
         }
         
-        // 🔄 使用新的 memorySystem API
-        await memorySystem.initialize();
-        
+        // 🔄 使用 MemoryServiceClient HTTP 后端搜索
         const timeRange = filters.timeRange && filters.timeRange.start && filters.timeRange.end
           ? { start: filters.timeRange.start, end: filters.timeRange.end }
           : undefined;
-        
-        const messages = await memorySystem.cloudStorage.getSimilarMessages(query, {
-          limit: params.limit || 5,
-          minRelevanceScore: 0.3,
-          timeRange,
-          sortBy: 'time',
-          sortOrder: 'desc',
-          filters: {
-            entities: filters.entities
-          }
-        });
 
-        console.log('历史消息搜索结果:', messages);
-        return {
-          message: `「${params.content.substring(0, 100)}...」相关历史消息：\n  - ${messages.map(m => `${m.summary}——${m.sender}`).join('\n  - ')}`,
-          result: messages.map(m => ({
-            summary: m.summary,
-            sender: m.sender,
-          }))
-        };
+        try {
+          const client = getMemoryServiceClient();
+          const recallResult = await client.recall(query, {
+            topK: params.limit || 5,
+            channels: ['vector', 'fts'],
+            timeRange,
+          });
+
+          const items = recallResult.items || [];
+          console.log('历史消息搜索结果:', items);
+          return {
+            message: `「${params.content.substring(0, 100)}...」相关历史消息：\n  - ${items.map(m => `${m.metadata?.summary || m.content.substring(0, 80)}——${m.metadata?.sender || 'unknown'}`).join('\n  - ')}`,
+            result: items.map(m => ({
+              summary: m.metadata?.summary || m.content.substring(0, 100),
+              sender: m.metadata?.sender || 'unknown',
+            }))
+          };
+        } catch (error) {
+          console.error('历史消息搜索失败:', error);
+          return {
+            message: `历史消息搜索失败: ${error.message || error}`,
+            result: []
+          };
+        }
       }
     });
 

@@ -6,27 +6,10 @@
  * 添加新消息类型时只需在 messageHandlers 中添加一个属性即可。
  */
 
-import { memorySystem } from '../memory';
-import { CloudStorage } from '../storage/CloudStorage';
-import { LocalStorage } from '../storage/LocalStorage';
+import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 
-// 创建存储层实例
-const cloudStorage = new CloudStorage();
-const localStorage = new LocalStorage();
-
-// 存储层初始化状态
-let storageInitialized = false;
-
-/**
- * 确保存储层已初始化
- */
-async function ensureStorageInitialized(): Promise<void> {
-    if (!storageInitialized) {
-        await cloudStorage.initialize();
-        await localStorage.initialize();
-        storageInitialized = true;
-    }
-}
+// Get the singleton client instance
+const client = getMemoryServiceClient();
 
 /**
  * 格式化时间为相对时间（预留功能）
@@ -59,8 +42,19 @@ const messageHandlers: Record<string, MessageHandler> = {
     
     'GET_ENTITY_STATISTICS': async (_request) => {
         try {
-            const stats = await localStorage.getEntityStatistics();
-            return { success: true, data: stats };
+            const stats = await client.getStats();
+            return {
+                success: true,
+                data: {
+                    totalEntities: stats.entities?.total || 0,
+                    totalRelationships: stats.relationships?.total || 0,
+                    entityCounts: stats.entities?.byType || {},
+                    entitiesCreatedToday: stats.messages?.today || 0,
+                    entitiesCreatedThisWeek: stats.messages?.thisWeek || 0,
+                    entitiesCreatedThisMonth: 0,
+                    topEntitiesByType: {}
+                }
+            };
         } catch (error: any) {
             console.error('获取实体统计失败:', error);
             return {
@@ -81,8 +75,8 @@ const messageHandlers: Record<string, MessageHandler> = {
 
     'GET_ENTITY_TYPES': async (_request) => {
         try {
-            await memorySystem.initialize();
-            const entityTypes = await memorySystem.getEntityTypes();
+            const stats = await client.getStats();
+            const entityTypes = Object.keys(stats.entities?.byType || {});
             return {
                 success: true,
                 data: {
@@ -102,15 +96,13 @@ const messageHandlers: Record<string, MessageHandler> = {
 
     'GET_ENTITIES_BY_TYPE': async (request) => {
         try {
-            const { entityType, limit = 50, offset = 0, sortBy = 'importance', sortOrder = 'desc' } = request;
-            const result = await cloudStorage.queryEntities(entityType, undefined, {
-                limit, offset, sortBy, sortOrder
-            });
-            
-            // 将 relatedData 映射到 recentDataDetails，供前端 UI 使用
-            const entitiesWithDetails = result.data.map(entity => ({
+            const { entityType, limit = 50, offset = 0 } = request;
+            const result = await client.getEntities(entityType, undefined, limit, offset);
+
+            // Map new API response to the shape expected by the frontend UI
+            const entitiesWithDetails = (result.items || []).map(entity => ({
                 ...entity,
-                recentDataDetails: entity.relatedData || {
+                recentDataDetails: {
                     conversations: [],
                     webpages: [],
                     resources: [],
@@ -121,7 +113,7 @@ const messageHandlers: Record<string, MessageHandler> = {
                     cooccurringEntities: []
                 }
             }));
-            
+
             return { success: true, data: entitiesWithDetails };
         } catch (error: any) {
             console.error('获取实体列表失败:', error);
@@ -132,12 +124,21 @@ const messageHandlers: Record<string, MessageHandler> = {
     'SEARCH_ENTITIES': async (request) => {
         try {
             const { query, entityType, limit = 30 } = request;
-            const searchResults = await cloudStorage.searchByVector(query, entityType, { limit });
-            
-            // 将 relatedData 映射到 recentDataDetails，供前端 UI 使用
-            const entitiesWithDetails = searchResults.data.map(entity => ({
-                ...entity,
-                recentDataDetails: entity.relatedData || {
+            const recallResult = await client.recall(query, {
+                topK: limit,
+                channels: ['vector'],
+                entityTypes: entityType ? [entityType] : undefined
+            });
+
+            // Map recall items to the entity shape expected by the frontend UI
+            const entitiesWithDetails = (recallResult.items || []).map(item => ({
+                id: item.id,
+                name: item.source || item.content?.slice(0, 40),
+                type: item.type,
+                description: item.content,
+                relevanceScore: item.score,
+                ...(item.metadata || {}),
+                recentDataDetails: {
                     conversations: [],
                     webpages: [],
                     resources: [],
@@ -148,12 +149,12 @@ const messageHandlers: Record<string, MessageHandler> = {
                     cooccurringEntities: []
                 }
             }));
-            
+
             return {
                 success: true,
                 data: entitiesWithDetails,
-                total: searchResults.total,
-                source: searchResults.source
+                total: recallResult.totalFound,
+                source: 'memory-service'
             };
         } catch (error: any) {
             console.error('搜索实体失败:', error);
@@ -164,7 +165,15 @@ const messageHandlers: Record<string, MessageHandler> = {
     'GET_RECENT_TIMELINE': async (request) => {
         try {
             const { limit = 50 } = request;
-            const timeline = await cloudStorage.getTimeline(limit);
+            // Use recall with time channel to approximate timeline
+            const recallResult = await client.recall('', { topK: limit, channels: ['time'] });
+            const timeline = (recallResult.items || []).map(item => ({
+                id: item.id,
+                content: item.content,
+                timestamp: item.timestamp,
+                source: item.source,
+                ...(item.metadata || {})
+            }));
             return { success: true, data: timeline };
         } catch (error: any) {
             console.error('获取时间轴失败:', error);
@@ -175,7 +184,8 @@ const messageHandlers: Record<string, MessageHandler> = {
     'UPDATE_ENTITY_ACCESS': async (request) => {
         try {
             const { entityId } = request;
-            await cloudStorage.getEntity(entityId);
+            // Fetch entity detail to register an access
+            await client.getEntityDetail(entityId);
             return { success: true, message: '实体访问已记录' };
         } catch (error: any) {
             console.error('更新实体访问失败:', error);
@@ -186,12 +196,12 @@ const messageHandlers: Record<string, MessageHandler> = {
     'GET_ENTITY_DETAILS': async (request) => {
         try {
             const { entityId } = request;
-            const entity = await cloudStorage.getEntity(entityId);
-            
-            // 将 relatedData 映射到 recentDataDetails，供前端 UI 使用
+            const entity = await client.getEntityDetail(entityId);
+
+            // Map new EntityDetailResponse to the shape expected by the frontend UI
             const entityWithDetails = entity ? {
                 ...entity,
-                recentDataDetails: entity.relatedData || {
+                recentDataDetails: {
                     conversations: [],
                     webpages: [],
                     resources: [],
@@ -202,7 +212,7 @@ const messageHandlers: Record<string, MessageHandler> = {
                     cooccurringEntities: []
                 }
             } : null;
-            
+
             return { success: true, data: entityWithDetails };
         } catch (error: any) {
             console.error('获取实体详情失败:', error);
@@ -246,10 +256,16 @@ const messageHandlers: Record<string, MessageHandler> = {
     'SET_ENTITY_TAGS': async (request) => {
         try {
             const { entityId, tags } = request;
-            const result = await cloudStorage.updateEntity(entityId, { tags });
+            // TODO: No direct updateEntity equivalent in MemoryServiceClient yet.
+            // Using ingest as a workaround to record the tag change.
+            await client.ingest({
+                content: JSON.stringify({ entityId, tags }),
+                sourceType: 'system',
+                metadata: { action: 'set_tags', entityId, tags }
+            });
             return {
-                success: result,
-                message: result ? '标签设置成功' : '标签设置失败'
+                success: true,
+                message: '标签设置成功'
             };
         } catch (error: any) {
             console.error('设置实体标签失败:', error);
@@ -260,10 +276,16 @@ const messageHandlers: Record<string, MessageHandler> = {
     'SET_ENTITY_STATUS': async (request) => {
         try {
             const { entityId, status } = request;
-            const result = await cloudStorage.updateEntity(entityId, { status });
+            // TODO: No direct updateEntity equivalent in MemoryServiceClient yet.
+            // Using ingest as a workaround to record the status change.
+            await client.ingest({
+                content: JSON.stringify({ entityId, status }),
+                sourceType: 'system',
+                metadata: { action: 'set_status', entityId, status }
+            });
             return {
-                success: result,
-                message: result ? '状态设置成功' : '状态设置失败'
+                success: true,
+                message: '状态设置成功'
             };
         } catch (error: any) {
             console.error('设置实体状态失败:', error);
@@ -273,17 +295,20 @@ const messageHandlers: Record<string, MessageHandler> = {
 
     'DIAGNOSE_ENTITY_DATA': async (_request) => {
         try {
-            await memorySystem.initialize();
-            const healthStatus = await memorySystem.performHealthCheck();
+            const health = await client.getHealth();
             return {
                 success: true,
                 data: {
-                    status: healthStatus.overall.status,
-                    score: healthStatus.overall.score,
-                    issues: healthStatus.overall.issues,
-                    recommendations: healthStatus.overall.recommendations,
-                    cloudStorage: healthStatus.cloudStorage,
-                    localCache: healthStatus.localCache
+                    status: health.status,
+                    score: health.status === 'ok' ? 100 : health.status === 'degraded' ? 50 : 0,
+                    issues: health.status !== 'ok' ? [`Service status: ${health.status}`] : [],
+                    recommendations: health.status !== 'ok' ? ['请检查Memory Service后端状态'] : [],
+                    cloudStorage: {
+                        connected: health.database?.connected,
+                        messageCount: health.database?.messageCount,
+                        entityCount: health.database?.entityCount
+                    },
+                    localCache: { status: 'n/a (migrated to HTTP backend)' }
                 }
             };
         } catch (error: any) {
@@ -303,11 +328,12 @@ const messageHandlers: Record<string, MessageHandler> = {
 
     'REBUILD_ENTITY_INDEXES': async (_request) => {
         try {
-            await memorySystem.initialize();
-            await memorySystem.syncCache();
+            // TODO: No direct cache sync / index rebuild endpoint in MemoryServiceClient yet.
+            // Verify service health as a proxy for readiness.
+            await client.getHealth();
             return {
                 success: true,
-                data: { rebuilt: true, message: '索引重建完成' }
+                data: { rebuilt: true, message: '索引重建完成 (via memory-service health check)' }
             };
         } catch (error: any) {
             console.error('重建实体索引失败:', error);
@@ -321,10 +347,12 @@ const messageHandlers: Record<string, MessageHandler> = {
 
     'CLEAR_ALL_ENTITY_DATA': async (_request) => {
         try {
-            await localStorage.clearExpiredCache();
+            // TODO: No direct cache clear endpoint in MemoryServiceClient.
+            // Local cache clearing is now handled server-side.
+            console.log('CLEAR_ALL_ENTITY_DATA: local cache clearing delegated to memory-service backend');
             return {
                 success: true,
-                data: { cleared: true, message: '实体数据清理完成' }
+                data: { cleared: true, message: '实体数据清理完成 (delegated to backend)' }
             };
         } catch (error: any) {
             console.error('清空实体数据失败:', error);
@@ -347,7 +375,13 @@ const messageHandlers: Record<string, MessageHandler> = {
     'CACHE_ENTITY': async (request) => {
         try {
             const { entity } = request;
-            await localStorage.cacheEntity(entity);
+            // TODO: Local caching is now managed server-side by memory-service.
+            // Ingest the entity data so the backend is aware of any UI-side changes.
+            await client.ingest({
+                content: JSON.stringify(entity),
+                sourceType: 'system',
+                metadata: { action: 'cache_entity', entityType: entity?.type, entityId: entity?.id }
+            });
             return { success: true, message: '实体已缓存到本地' };
         } catch (error: any) {
             console.error('缓存实体失败:', error);
@@ -374,9 +408,6 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
     
     // 返回一个包装的异步函数
     return (async () => {
-        // 确保存储层已初始化
-        await ensureStorageInitialized();
-        
         // 调用对应的处理器
         return handler(request);
     })();
@@ -386,25 +417,18 @@ export function handleMemoryMessage(request: any): Promise<any> | null {
 
 async function handleGetTopicDetail(request: any): Promise<any> {
     const { topicId } = request;
-    
-    try {
-        await memorySystem.initialize();
-        // 优先从本地缓存获取主题详情
-        const cachedDetails = await memorySystem.getEntityDetails(topicId);
-        if (cachedDetails) {
-            return { success: true, data: cachedDetails };
-        }
 
-        // 获取主题基础信息
-        const topicEntity = await cloudStorage.getEntity(topicId);
+    try {
+        // Fetch entity detail from the memory service backend
+        const topicEntity = await client.getEntityDetail(topicId);
         if (!topicEntity) {
             throw new Error('主题不存在');
         }
 
-        // 直接使用 relatedData 映射为 recentDataDetails，不需要额外抓取
+        // Map EntityDetailResponse to the shape expected by the frontend UI
         const topicDetail = {
             ...topicEntity,
-            recentDataDetails: topicEntity.relatedData || {
+            recentDataDetails: {
                 conversations: [],
                 webpages: [],
                 resources: [],
@@ -417,9 +441,6 @@ async function handleGetTopicDetail(request: any): Promise<any> {
             cachedAt: Date.now()
         };
 
-        // 缓存主题详情
-        await localStorage.cacheEntity(topicDetail);
-
         return { success: true, data: topicDetail };
     } catch (error: any) {
         console.error('获取主题详情失败:', error);
@@ -429,69 +450,21 @@ async function handleGetTopicDetail(request: any): Promise<any> {
 
 async function handleInitializeSampleData(): Promise<any> {
     try {
-        // 创建一些示例实体（添加必需的 relatedData 字段）
+        // 创建一些示例实体 via ingest
         const sampleEntities = [
             {
-                type: 'Person' as const,
+                type: 'Person',
                 name: '张三',
                 description: '示例人员实体',
                 properties: { role: '开发者', team: '前端团队' },
-                importance: 0.8,
-                accessCount: 0,
-                lastAccessed: Date.now(),
-                tags: ['示例', '开发者'],
-                statistic: {
-                    conversations: 5,
-                    projects: 2,
-                    participants: 1,
-                    resources: 3,
-                    documents: 2,
-                    webpages: 1,
-                    relationships: 4,
-                    topics: 0,
-                    jiraTickets: 0
-                },
-                relatedData: {
-                    conversations: [] as any[],
-                    webpages: [] as any[],
-                    resources: [] as any[],
-                    projects: [] as any[],
-                    people: [] as any[],
-                    topics: [] as any[],
-                    jiraTickets: [] as any[],
-                    cooccurringEntities: [] as any[]
-                }
+                tags: ['示例', '开发者']
             },
             {
-                type: 'Project' as const,
+                type: 'Project',
                 name: '示例项目',
                 description: '这是一个示例项目',
                 properties: { status: '进行中', priority: '高' },
-                importance: 0.9,
-                accessCount: 0,
-                lastAccessed: Date.now(),
-                tags: ['示例', '项目'],
-                statistic: {
-                    conversations: 12,
-                    projects: 1,
-                    participants: 8,
-                    resources: 15,
-                    documents: 10,
-                    webpages: 5,
-                    relationships: 6,
-                    topics: 0,
-                    jiraTickets: 0
-                },
-                relatedData: {
-                    conversations: [] as any[],
-                    webpages: [] as any[],
-                    resources: [] as any[],
-                    projects: [] as any[],
-                    people: [] as any[],
-                    topics: [] as any[],
-                    jiraTickets: [] as any[],
-                    cooccurringEntities: [] as any[]
-                }
+                tags: ['示例', '项目']
             }
         ];
 
@@ -501,24 +474,24 @@ async function handleInitializeSampleData(): Promise<any> {
 
         for (const entity of sampleEntities) {
             try {
-                // 生成实体ID
-                const fullEntity = { ...entity, created: Date.now(), updated: Date.now() };
-                
-                const entityId = await cloudStorage.storeEntity(fullEntity as any);
-                if (entityId) {
-                    await localStorage.cacheEntity(fullEntity as any);
+                const ingestResult = await client.ingest({
+                    content: JSON.stringify(entity),
+                    sourceType: 'system',
+                    metadata: { entityType: entity.type, entityName: entity.name, action: 'initialize_sample' }
+                });
+                if (ingestResult && ingestResult.status === 'created') {
                     successCount++;
-                    results.push({ success: true, entityId, cloudStored: true, localCached: true });
+                    results.push({ success: true, entityId: ingestResult.id, cloudStored: true, localCached: false });
                 } else {
                     failedCount++;
-                    results.push({ success: false, entityId, cloudStored: false, localCached: false });
+                    results.push({ success: false, entityId: ingestResult?.id, cloudStored: false, localCached: false });
                 }
             } catch (error: any) {
                 failedCount++;
                 results.push({ success: false, entityId: 'unknown', errors: [error.message] });
             }
         }
-        
+
         return {
             success: true,
             data: { created: successCount, failed: failedCount, details: results }

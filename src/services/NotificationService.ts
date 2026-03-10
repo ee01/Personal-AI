@@ -8,7 +8,7 @@
  * 4. 替代原有的 sendBotMessage 和分散的通知逻辑
  */
 
-import { getEnvConfig, EnvConfigType } from '../utils';
+import { getEnvConfig } from '../utils';
 import { handleLLMRequest } from '../llm';
 import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';

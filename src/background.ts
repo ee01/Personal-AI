@@ -1,11 +1,11 @@
 import { analyzeMessagesInBackground } from './messageDealing';
-import { createOffscreenDocument, getEmbeddingInBackground, handleEmbeddingResult } from './embeddings';
+// embeddings.ts 已废弃 — 后端 memory-service 处理嵌入生成
 import { getEnvConfig } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
 import { getGoogleAuthToken, getGoogleAuthTokenSilently } from './utils/googleAuth';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
-import { memorySystem } from './memory';
+import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
@@ -203,8 +203,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
             console.error('Error refreshing RingCentral tab:', error);
         }
 
-        // 预先创建离屏文档
-        await createOffscreenDocument();
+        // 离屏文档已废弃 — 后端 memory-service 处理嵌入生成
     } catch (error) {
         console.error('Error in onInstalled listener:', error);
     }
@@ -311,29 +310,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.type === 'KNOWLEDGE_QUERY') {
-        memorySystem.ask(request.question).then(result => {
+        const client = getMemoryServiceClient();
+        client.ask(request.question).then(result => {
             console.log('General query result:', result);
-            sendResponse(result);
+            // Adapt AskResponse { answer, evidence, queryTimeMs } to legacy format
+            sendResponse({
+                success: true,
+                answer: result.answer,
+                evidence: result.evidence || [],
+                queryTimeMs: result.queryTimeMs
+            });
+        }).catch(error => {
+            console.error('Knowledge query failed:', error);
+            sendResponse({
+                success: false,
+                message: error.message || 'Query failed'
+            });
         });
         return true;
     }
     
     // 更新环境配置
     if (request.type === 'UPDATE_ENV_CONFIG') {
+        const config = request.config as {
+            MEMORY_SERVICE_BASE_URL?: string;
+            MEMORY_SERVICE_API_KEY?: string;
+        };
         chrome.storage.local.set({ envConfig: request.config });
         console.log('Updated environment config:', request.config);
-        sendResponse({ success: true });
+        // 同步 MemoryServiceClient 配置（从 envConfig 读取，此处做运行时更新）
+        (async () => {
+            try {
+                const { getMemoryServiceClient } = await import('./services/MemoryServiceClient');
+                const client = getMemoryServiceClient();
+                if (config?.MEMORY_SERVICE_BASE_URL) client.setBaseUrl(config.MEMORY_SERVICE_BASE_URL);
+                if (config?.MEMORY_SERVICE_API_KEY !== undefined) client.setApiKey(config.MEMORY_SERVICE_API_KEY || undefined);
+            } catch (e) {
+                console.warn('MemoryServiceClient config sync:', e);
+            }
+            sendResponse({ success: true });
+        })();
         return true;
     }
 
-    // 监听来自离屏文档的消息
-    handleEmbeddingResult(request);
-    if (request.type === 'EXEC_EMBEDDING_REQUEST') {
-        getEmbeddingInBackground(request.text).then((result: any) => {
-          sendResponse(result);
-        });
-        return true
-    }
+    // 离屏嵌入已废弃 — 后端 memory-service 处理嵌入生成
 
     // 处理 Jira tickets 获取
     if (request.type === 'FETCH_JIRA_TICKETS') {
@@ -402,35 +422,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 处理存储健康检查请求
     if (request.type === 'GET_STORAGE_HEALTH') {
-        memorySystem.initialize().then(() => {
-            memorySystem.performHealthCheck()
-                .then(healthStatus => sendResponse({
-                    success: true,
-                    healthMetrics: healthStatus
-                }))
-                .catch(error => sendResponse({
-                    success: false,
-                    error: error.message
-                }));
-        });
+        const client = getMemoryServiceClient();
+        client.getHealth()
+            .then(healthStatus => sendResponse({
+                success: true,
+                healthMetrics: healthStatus
+            }))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
         return true;
     }
 
     // 处理维护任务执行请求
+    // Note: The new Memory Service backend handles maintenance internally.
+    // This handler is kept for backward compatibility but no longer triggers maintenance directly.
     if (request.type === 'RUN_MAINTENANCE_TASK') {
-        const { taskId: _taskId } = request;
-        memorySystem.initialize().then(() => {
-            memorySystem.performSystemMaintenance()
-                .then(maintenanceResult => sendResponse({
-                    success: maintenanceResult.success,
-                    data: maintenanceResult,
-                    message: maintenanceResult.success ? '维护任务执行成功' : '维护任务执行失败'
-                }))
-                .catch(error => sendResponse({
-                    success: false,
-                        error: error.message
-                    }));
-        });
+        const client = getMemoryServiceClient();
+        client.getHealth()
+            .then(healthStatus => sendResponse({
+                success: true,
+                data: { success: true, healthStatus },
+                message: '维护任务由后端服务自动管理'
+            }))
+            .catch(error => sendResponse({
+                success: false,
+                error: error.message
+            }));
         return true;
     }
 
@@ -1303,19 +1322,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 setTimeout(async () => {
                     try {
                         console.log('🔔 Background: 后台存储 Snooze 消息到云端记忆...');
-                        
-                        const messageId = `snooze_${messageInfo.id}_${Date.now()}`;
+
                         const messageContent = `[稍后处理] ${messageInfo.senderName}: ${messageInfo.content}`;
-                        
-                        await memorySystem.storeMessage({
-                            id: messageId,
+
+                        const memClient = getMemoryServiceClient();
+                        await memClient.ingest({
                             content: messageContent,
+                            sourceType: 'glip',
+                            sender: messageInfo.senderName,
+                            groupId: messageInfo.groupId,
+                            groupName: messageInfo.groupName,
+                            sourceUrl: messageInfo.messageLink,
+                            timestamp: Date.now(),
                             metadata: {
-                                sender: messageInfo.senderName,
-                                groupId: messageInfo.groupId,
-                                groupName: messageInfo.groupName,
-                                groupUrl: messageInfo.messageLink,
-                                datetime: Date.now(),
                                 summary: `用户主动关注的消息：${messageInfo.content.substring(0, 100)}`,
                                 matchedRules: ['user_snooze'],
                                 replyAdvice: '',
@@ -1338,74 +1357,57 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                                         relevanceScore: 0.8
                                     }]
                                 },
-                                metadata: {
-                                    snoozeInfo: {
-                                        remindAt: remindAt,
-                                        scheduledMessageId: newMessage.ID,
-                                        note: note || ''
-                                    }
+                                snoozeInfo: {
+                                    remindAt: remindAt,
+                                    scheduledMessageId: newMessage.ID,
+                                    note: note || ''
                                 }
                             }
                         });
-                        
+
                         console.log('✅ Background: Snooze 消息已存储到云端记忆');
-                        
-                        // 更新用户画像
-                        if (memorySystem.userProfileManager) {
+
+                        // 更新用户画像 via profile items
+                        try {
                             console.log('🔔 Background: 后台更新用户画像...');
-                            
+
                             if (messageInfo.senderName) {
-                                await memorySystem.updateUserProfile({
-                                    userId: userinfo?.userId || userinfo?.id || 'unknown',
-                                    action: {
+                                await memClient.createProfileItem({
+                                    itemType: 'interaction',
+                                    itemKey: `snooze_person_${messageInfo.senderName.replace(/\s+/g, '_').toLowerCase()}`,
+                                    itemValue: JSON.stringify({
                                         actionType: 'favorite',
-                                        timestamp: Date.now(),
                                         context: 'snooze_reminder',
                                         weight: 0.3,
-                                        metadata: {
-                                            messageId: messageInfo.id,
-                                            groupName: messageInfo.groupName,
-                                            remindAt: remindAt
-                                        }
-                                    },
-                                    targetItem: {
-                                        id: messageInfo.senderName.replace(/\s+/g, '_').toLowerCase(),
-                                        type: 'person',
-                                        name: messageInfo.senderName,
-                                        metadata: {
-                                            source: 'snooze',
-                                            groupName: messageInfo.groupName
-                                        }
-                                    }
+                                        personName: messageInfo.senderName,
+                                        messageId: messageInfo.id,
+                                        groupName: messageInfo.groupName,
+                                        remindAt: remindAt
+                                    }),
+                                    confidence: 0.3
                                 });
                             }
-                            
+
                             if (messageInfo.groupName) {
-                                await memorySystem.updateUserProfile({
-                                    userId: userinfo?.userId || userinfo?.id || 'unknown',
-                                    action: {
+                                await memClient.createProfileItem({
+                                    itemType: 'interaction',
+                                    itemKey: `snooze_topic_${messageInfo.groupName.replace(/\s+/g, '_').toLowerCase()}`,
+                                    itemValue: JSON.stringify({
                                         actionType: 'favorite',
-                                        timestamp: Date.now(),
                                         context: 'snooze_reminder',
                                         weight: 0.2,
-                                        metadata: {
-                                            messageId: messageInfo.id,
-                                            senderName: messageInfo.senderName
-                                        }
-                                    },
-                                    targetItem: {
-                                        id: messageInfo.groupName.replace(/\s+/g, '_').toLowerCase(),
-                                        type: 'topic',
-                                        name: messageInfo.groupName,
-                                        metadata: {
-                                            source: 'snooze',
-                                            groupId: messageInfo.groupId
-                                        }
-                                    }
+                                        topicName: messageInfo.groupName,
+                                        messageId: messageInfo.id,
+                                        senderName: messageInfo.senderName,
+                                        groupId: messageInfo.groupId
+                                    }),
+                                    confidence: 0.2
                                 });
                             }
-                            
+
                             console.log('✅ Background: 用户画像已更新');
+                        } catch (profileError) {
+                            console.warn('⚠️ Background: 更新用户画像失败（不影响功能）:', profileError);
                         }
                     } catch (memoryError) {
                         console.error('⚠️ Background: 后台存储到记忆系统失败（不影响提醒功能）:', memoryError);
@@ -1646,14 +1648,13 @@ async function getUserinfoFromRCpage() {
         const response = await sendMessageWithRetry(rcTab.id, {
             type: 'GET_USER_INFO'
         });
-        chrome.storage.local.set({
-            userinfo: response.data || {
-                fullName: "",
-                username: "",
-                userEmail: "",
-                extensionId: "",
-            }
-        }); 
+        const userinfo = response.data || {
+            fullName: "",
+            username: "",
+            userEmail: "",
+            extensionId: "",
+        };
+        chrome.storage.local.set({ userinfo });
         return response.data;
     } catch (error) {
         console.error('Failed to get userinfo:', error);
@@ -1703,7 +1704,7 @@ async function getUserinfoFromJiraPage() {
         
         chrome.storage.local.set({ userinfo });
         if (userinfo.ownerId) chrome.storage.local.set({ ownerId: userinfo.ownerId });
-        
+
         // 如果是新创建的tab，关闭它
         if (shouldCloseTab && jiraTab.id) {
             setTimeout(() => {

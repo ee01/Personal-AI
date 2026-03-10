@@ -1,0 +1,124 @@
+[
+  {
+    "content": "Hey team, the Apollo project alpha release date has been moved to March 15th. Please adjust your schedules accordingly.",
+    "sourceType": "glip",
+    "sender": "Alice Wang",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709000000
+  },
+  {
+    "content": "JIRA-1234 has been assigned to Bob. The performance optimization task is critical and needs to be done by end of week.",
+    "sourceType": "jira",
+    "sender": "Project Manager",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709010000
+  },
+  {
+    "content": "Quick update: I've finished the database migration script. It handles both MySQL and PostgreSQL. Tests are passing.",
+    "sourceType": "glip",
+    "sender": "Bob Chen",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709020000
+  },
+  {
+    "content": "The client meeting is scheduled for Thursday at 2pm. Carol will present the Q1 roadmap.",
+    "sourceType": "glip",
+    "sender": "Alice Wang",
+    "groupId": "group_general",
+    "groupName": "General",
+    "timestamp": 1709030000
+  },
+  {
+    "content": "FYI - the Apollo alpha release date has been pushed back to March 22nd due to testing delays.",
+    "sourceType": "glip",
+    "sender": "Dave Kim",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709100000
+  },
+  {
+    "content": "Carol mentioned that Acme Corp wants to integrate our API into their platform. She's setting up a call with their CTO next Tuesday.",
+    "sourceType": "glip",
+    "sender": "Eve Martinez",
+    "groupId": "group_partnerships",
+    "groupName": "Partnerships",
+    "timestamp": 1709110000
+  },
+  {
+    "content": "We should migrate the Apollo backend from Express to Fastify. The benchmarks show 2x throughput improvement and the plugin ecosystem is mature enough now. I've already prototyped the health and ingest routes.",
+    "sourceType": "glip",
+    "sender": "Bob Chen",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709120000
+  },
+  {
+    "content": "Reminder: the security audit for Apollo is due by March 30th. Frank from InfoSec will lead. All PRs must have threat model annotations starting next sprint.",
+    "sourceType": "glip",
+    "sender": "Alice Wang",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709130000
+  },
+  {
+    "content": "Acme Corp's annual revenue is $450M. They have 2,000 employees and are headquartered in San Francisco. Key contact: Grace Liu, VP Engineering.",
+    "sourceType": "web",
+    "sender": null,
+    "groupId": null,
+    "groupName": null,
+    "timestamp": 1709140000,
+    "sourceUrl": "https://www.acmecorp.com/about",
+    "sourceTitle": "Acme Corp - About Us"
+  },
+  {
+    "content": "Note to self: Bob prefers async communication over meetings. He's most productive in the mornings before 11am. Timezone is PST.",
+    "sourceType": "manual",
+    "sender": "self",
+    "groupId": null,
+    "groupName": null,
+    "timestamp": 1709150000
+  },
+  {
+    "content": "JIRA-1234 status changed to In Review. Bob submitted the PR for the performance optimization. Reviewers: Alice Wang, Dave Kim.",
+    "sourceType": "jira",
+    "sender": "System",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709200000
+  },
+  {
+    "content": "Really frustrated with the CI pipeline. It's been flaky for two weeks and nobody is owning the fix. We've lost at least 8 hours of developer time this sprint.",
+    "sourceType": "glip",
+    "sender": "Dave Kim",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709210000
+  },
+  {
+    "content": "Great news! The Apollo performance benchmarks are in. Response times dropped from 340ms to 95ms after Bob's optimization. Throughput is up 3.5x under load.",
+    "sourceType": "glip",
+    "sender": "Alice Wang",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709220000
+  },
+  {
+    "content": "Action items from today's standup: 1) Bob to fix CI flakiness by Wednesday 2) Carol to finalize Acme Corp contract terms 3) Dave to set up staging environment for Apollo beta 4) Eve to draft the partner API documentation.",
+    "sourceType": "glip",
+    "sender": "Alice Wang",
+    "groupId": "group_general",
+    "groupName": "General",
+    "timestamp": 1709230000
+  },
+  {
+    "content": "Correction: the Apollo alpha release is actually March 15th as originally planned. Dave's earlier message was based on outdated info from the old sprint board. I confirmed with the VP directly.",
+    "sourceType": "glip",
+    "sender": "Alice Wang",
+    "groupId": "group_apollo_dev",
+    "groupName": "Apollo Dev Team",
+    "timestamp": 1709300000
+  }
+]

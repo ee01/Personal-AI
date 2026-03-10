@@ -5,8 +5,9 @@ venv
 .env
 .env.development
 .vscode/symbols.json
+.claude/
 chroma-data/
 chroma-backup/
 static/manifest.json
 dist/
-.personal-ai.zip
+personal-ai.zip

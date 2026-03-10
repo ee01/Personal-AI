@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "7.9.0",
+  "version": "8.0.0",
   "permissions": [
     "tabs",
     "storage",
@@ -10,7 +10,6 @@
     "alarms",
     "background",
     "unlimitedStorage",
-    "offscreen",
     "scripting",
     "identity",
     "clipboardWrite",
@@ -100,7 +99,7 @@
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "offscreen.html", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "share-modal.html", "share-modal.js", "auth-logs.html", "auth-logs.js", "app-script-template.gs", "previews/Personal AI - fetch jira.png", "previews/Personal AI - import jira automation.png", "previews/Personal AI - ask.png", "previews/Personal AI - messages filter.png", "previews/Personal AI - design link.png", "previews/Personal AI - scheduled messages.png"],
+    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "share-modal.html", "share-modal.js", "auth-logs.html", "auth-logs.js", "app-script-template.gs", "previews/Personal AI - fetch jira.png", "previews/Personal AI - import jira automation.png", "previews/Personal AI - ask.png", "previews/Personal AI - messages filter.png", "previews/Personal AI - design link.png", "previews/Personal AI - scheduled messages.png"],
     "matches": ["<all_urls>"]
   }],
   "icons": {
