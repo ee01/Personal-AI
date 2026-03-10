@@ -488,3 +488,118 @@ try {
 }
 
 console.log('🧠 智能网页分析 Content Script 已加载');
+
+// ===========================================================================
+// Context Match — floating insight bubble
+// ===========================================================================
+
+function escapeHtml(str: string): string {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+(() => {
+    const urlCache = new Map<string, boolean>();
+    const domainLastRequest = new Map<string, number>();
+    const DOMAIN_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
+
+    function requestContextMatch(): void {
+        const url = window.location.href;
+        if (urlCache.has(url)) return;
+
+        const domain = window.location.hostname;
+        const lastReq = domainLastRequest.get(domain);
+        if (lastReq && Date.now() - lastReq < DOMAIN_DEBOUNCE_MS) return;
+
+        urlCache.set(url, true);
+        domainLastRequest.set(domain, Date.now());
+
+        const title = document.title || '';
+        const metaKeywords = document.querySelector('meta[name="keywords"]')?.getAttribute('content') || '';
+        const snippet = (document.body?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+
+        if (!title && !snippet) return;
+
+        chrome.runtime.sendMessage({
+            type: 'CONTEXT_MATCH_REQUEST',
+            title,
+            keywords: metaKeywords,
+            snippet,
+        }).then((response: any) => {
+            if (response?.success && response.match) {
+                showInsightBubble(response.match);
+            }
+        }).catch(() => {
+            // silently ignore
+        });
+    }
+
+    function showInsightBubble(match: { content: string; source: string; score: number }): void {
+        if (document.querySelector('.pai-context-bubble')) return;
+
+        // Collapsed bubble (small icon)
+        const bubble = document.createElement('div');
+        bubble.className = 'pai-context-bubble';
+        bubble.style.cssText = `
+            position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
+            width: 44px; height: 44px; border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-size: 22px; transition: transform 0.2s ease;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        `;
+        bubble.textContent = '\u{1F4A1}';
+        bubble.title = 'Personal AI found a related insight';
+
+        // Expanded panel
+        const panel = document.createElement('div');
+        panel.className = 'pai-context-panel';
+        panel.style.cssText = `
+            position: fixed; bottom: 80px; right: 24px; z-index: 2147483647;
+            width: 320px; max-height: 260px; overflow-y: auto;
+            background: #1e1e2e; color: #e0e0e0; border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4); padding: 16px;
+            display: none; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px; line-height: 1.5;
+        `;
+
+        const sourceLabel = match.source.includes('reflections/') ? 'Reflection' : 'Dream';
+        const scorePercent = Math.round(match.score * 100);
+
+        panel.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="font-weight:600;font-size:14px;">\u{1F4A1} Related ${escapeHtml(sourceLabel)}</span>
+                <span style="font-size:11px;opacity:0.6;">${scorePercent}% match</span>
+            </div>
+            <div style="font-size:12px;opacity:0.85;white-space:pre-wrap;">${escapeHtml(match.content.slice(0, 500))}</div>
+            <div style="margin-top:8px;font-size:11px;opacity:0.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                ${escapeHtml(match.source)}
+            </div>
+        `;
+
+        let expanded = false;
+
+        bubble.addEventListener('click', () => {
+            expanded = !expanded;
+            panel.style.display = expanded ? 'block' : 'none';
+            bubble.style.transform = expanded ? 'scale(1.1)' : 'scale(1)';
+        });
+
+        // Close panel when clicking outside
+        document.addEventListener('click', (e) => {
+            if (expanded && !bubble.contains(e.target as Node) && !panel.contains(e.target as Node)) {
+                expanded = false;
+                panel.style.display = 'none';
+                bubble.style.transform = 'scale(1)';
+            }
+        });
+
+        document.body.appendChild(panel);
+        document.body.appendChild(bubble);
+    }
+
+    // Trigger after 2s delay on page load
+    setTimeout(requestContextMatch, 2000);
+})();

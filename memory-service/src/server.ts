@@ -40,6 +40,7 @@ import { feedbackRoutes } from './routes/feedback.js';
 import { profileRoutes } from './routes/profile.js';
 import { agentRoutes } from './routes/agent.js';
 import { migrateRoutes } from './routes/migrate.js';
+import { contextMatchRoutes } from './routes/contextMatch.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,7 @@ export async function buildApp(
       await instance.register(profileRoutes);
       await instance.register(agentRoutes);
       await instance.register(migrateRoutes);
+      await instance.register(contextMatchRoutes);
     },
     { prefix: '/api/v1' },
   );
