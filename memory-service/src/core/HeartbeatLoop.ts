@@ -19,6 +19,7 @@ import { ProfileManager } from './ProfileManager.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getBotSender } from '../utils/botSender.js';
+import { getConfig } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,6 +100,20 @@ interface HighSalienceItemRow {
   updated_at: number;
 }
 
+type DreamDigestScheduleType = 'weekly' | 'every_x_days' | 'monthly';
+
+interface DreamDigestRuntimeConfig {
+  scheduleType: DreamDigestScheduleType;
+  intervalDays: number;
+}
+
+export interface DreamDigestPushResult {
+  generated: boolean;
+  delivered: boolean;
+  botSent: boolean;
+  reason?: string;
+}
+
 // ---------------------------------------------------------------------------
 // HeartbeatLoop
 // ---------------------------------------------------------------------------
@@ -155,6 +170,13 @@ export class HeartbeatLoop {
         actions.push(`found ${conflictCandidates.length} stale truth conflict(s)`);
       }
 
+      // 2b. Check new confirm requests (created since last heartbeat)
+      const newConflictCandidates = this.checkNewConflicts();
+      if (newConflictCandidates.length > 0) {
+        allCandidates.push(...newConflictCandidates);
+        actions.push(`found ${newConflictCandidates.length} new conflict(s)`);
+      }
+
       // 3. Check watched project updates
       const projectCandidates = this.checkWatchedProjects();
       if (projectCandidates.length > 0) {
@@ -199,6 +221,20 @@ export class HeartbeatLoop {
         }
       }
 
+      // 7c. Bot push for truth conflicts (stale reminders and new conflicts)
+      for (const notif of approved) {
+        if ((notif.type === 'truth_conflict' || notif.type === 'new_conflict') && notif.payload?.confirmRequestId) {
+          const botSender = getBotSender();
+          if (botSender.isConfigured()) {
+            await botSender.sendMarkdown(
+              '需要您的决策',
+              `${notif.body}\n\n前往决策中心查看和处理此冲突。`,
+              { mention: true },
+            );
+          }
+        }
+      }
+
       // 8. Update heartbeat timestamp
       this.lastHeartbeat = checkedAt;
 
@@ -218,6 +254,50 @@ export class HeartbeatLoop {
 
       return { actions, notifications: [], updated, checkedAt };
     }
+  }
+
+  /**
+   * Manually trigger a dream digest push immediately.
+   *
+   * This bypasses normal schedule window checks and idempotency guards,
+   * so it is suitable for explicit user-triggered "push now" actions.
+   */
+  async triggerDreamDigestNow(): Promise<DreamDigestPushResult> {
+    const candidate = this.buildDreamDigestCandidate({
+      ignoreScheduleWindow: true,
+      ignoreIdempotency: true,
+      manual: true,
+    });
+
+    if (!candidate) {
+      return {
+        generated: false,
+        delivered: false,
+        botSent: false,
+        reason: 'No dream content available for digest.',
+      };
+    }
+
+    this.deliverNotifications([candidate]);
+
+    let botSent = false;
+    if (candidate.payload?.digestBody) {
+      const botSender = getBotSender();
+      if (botSender.isConfigured()) {
+        await botSender.sendMarkdown(
+          'Weekly Dream Digest',
+          candidate.payload.digestBody as string,
+          { mention: false },
+        );
+        botSent = true;
+      }
+    }
+
+    return {
+      generated: true,
+      delivered: true,
+      botSent,
+    };
   }
 
   // ---- Step 1: Micro-consolidation ---------------------------------------
@@ -427,6 +507,34 @@ export class HeartbeatLoop {
     }));
   }
 
+  /**
+   * Check for newly created confirm_requests since last heartbeat
+   * and push Bot notifications for them.
+   */
+  private checkNewConflicts(): NotificationCandidate[] {
+    const newRequests = this.db
+      .prepare(
+        `SELECT id, question, context, related_entity_id, state, created_at
+         FROM confirm_requests
+         WHERE state = 'pending' AND created_at > ?
+         ORDER BY created_at ASC`,
+      )
+      .all(this.lastHeartbeat) as ConfirmRequestRow[];
+
+    return newRequests.map((req) => ({
+      type: 'new_conflict',
+      title: '新的认知冲突需要决策',
+      body: req.question,
+      importance: 0.75,
+      urgency: 0.7,
+      confidence: 0.9,
+      actionability: 0.9,
+      topicId: `new_confirm_${req.id}`,
+      relatedEntityId: req.related_entity_id ?? undefined,
+      payload: { confirmRequestId: req.id, context: req.context },
+    }));
+  }
+
   // ---- Step 3: Watched project updates -----------------------------------
 
   /**
@@ -613,29 +721,40 @@ export class HeartbeatLoop {
    * Generates a dream_digest notification (max once per week).
    */
   private checkDreamDigest(): NotificationCandidate[] {
+    const candidate = this.buildDreamDigestCandidate();
+    return candidate ? [candidate] : [];
+  }
+
+  private buildDreamDigestCandidate(options?: {
+    ignoreScheduleWindow?: boolean;
+    ignoreIdempotency?: boolean;
+    manual?: boolean;
+  }): NotificationCandidate | null {
     const nowDate = new Date();
-    // Only on Monday 08:00-10:00
-    if (nowDate.getDay() !== 1 || nowDate.getHours() < 8 || nowDate.getHours() >= 10) {
-      return [];
+    const runtimeConfig = this.getDreamDigestRuntimeConfig();
+
+    if (!options?.ignoreScheduleWindow && !this.isDreamDigestWindow(nowDate, runtimeConfig)) {
+      return null;
     }
 
-    // Check idempotency: no dream_digest in last 7 days
-    const sevenDaysAgo = now() - 7 * 86400;
-    const existing = this.db
-      .prepare(
-        `SELECT id FROM notification_records WHERE type = 'dream_digest' AND created_at > ? LIMIT 1`,
-      )
-      .get(sevenDaysAgo);
+    if (!options?.ignoreIdempotency) {
+      const periodStart = this.getDreamDigestPeriodStart(nowDate, runtimeConfig);
+      const existing = this.db
+        .prepare(
+          `SELECT id
+           FROM notification_records
+           WHERE type = 'dream_digest' AND created_at >= ?
+           LIMIT 1`,
+        )
+        .get(periodStart);
+      if (existing) return null;
+    }
 
-    if (existing) return [];
-
-    // Find recent dream files
-    if (!this.userDataManager) return [];
+    if (!this.userDataManager) return null;
 
     const dreamFiles = this.userDataManager.listFiles('dreams/');
-    if (!dreamFiles || dreamFiles.length === 0) return [];
+    if (!dreamFiles || dreamFiles.length === 0) return null;
 
-    // Read dream file contents (only .md files)
     const recentDreams: string[] = [];
     for (const file of dreamFiles) {
       if (!file.endsWith('.md')) continue;
@@ -644,9 +763,8 @@ export class HeartbeatLoop {
       recentDreams.push(content);
     }
 
-    if (recentDreams.length === 0) return [];
+    if (recentDreams.length === 0) return null;
 
-    // Extract summaries from dream content
     const digestBody = recentDreams
       .map((content) => {
         const titleMatch = content.match(/# Dream: (.+)/);
@@ -659,19 +777,110 @@ export class HeartbeatLoop {
       })
       .join('\n\n---\n\n');
 
-    return [
-      {
-        type: 'dream_digest',
-        title: 'Weekly Dream Digest',
-        body: `${recentDreams.length} dream(s) generated this week`,
-        importance: 0.8,
-        urgency: 0.3,
-        confidence: 0.95,
-        actionability: 0.4,
-        topicId: `dream_digest_${nowDate.toISOString().slice(0, 10)}`,
-        payload: { dreamCount: recentDreams.length, digestBody },
-      },
-    ];
+    const dateTag = nowDate.toISOString().slice(0, 10);
+    const topicId = options?.manual
+      ? `dream_digest_manual_${dateTag}_${now()}`
+      : `dream_digest_${dateTag}`;
+
+    return {
+      type: 'dream_digest',
+      title: 'Weekly Dream Digest',
+      body: `${recentDreams.length} dream(s) generated this period`,
+      importance: 0.8,
+      urgency: 0.3,
+      confidence: 0.95,
+      actionability: 0.4,
+      topicId,
+      payload: { dreamCount: recentDreams.length, digestBody },
+    };
+  }
+
+  private getDreamDigestRuntimeConfig(): DreamDigestRuntimeConfig {
+    const appConfig = getConfig();
+    const defaultConfig: DreamDigestRuntimeConfig = {
+      scheduleType: appConfig.dreamDigestScheduleType,
+      intervalDays: appConfig.dreamDigestIntervalDays,
+    };
+
+    try {
+      if (!this.userDataManager) return defaultConfig;
+      const raw = this.userDataManager.readFile('config.json');
+      if (!raw) return defaultConfig;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+      const scheduleType: DreamDigestScheduleType =
+        parsed.dreamDigestScheduleType === 'every_x_days' || parsed.dreamDigestScheduleType === 'monthly'
+          ? parsed.dreamDigestScheduleType
+          : 'weekly';
+
+      const intervalCandidate = Number(parsed.dreamDigestIntervalDays) || (Number(parsed.dreamDigestIntervalWeeks) || 0) * 7;
+      const intervalDays = Number.isFinite(intervalCandidate)
+        ? Math.max(1, Math.floor(intervalCandidate))
+        : defaultConfig.intervalDays;
+
+      return { scheduleType, intervalDays };
+    } catch {
+      return defaultConfig;
+    }
+  }
+
+  private isDreamDigestWindow(nowDate: Date, cfg: DreamDigestRuntimeConfig): boolean {
+    // Shared delivery window: 08:00 <= hour < 10:00 local time.
+    if (nowDate.getHours() < 8 || nowDate.getHours() >= 10) {
+      return false;
+    }
+
+    if (cfg.scheduleType === 'monthly') {
+      return this.isFirstMondayOfMonth(nowDate);
+    }
+
+    if (cfg.scheduleType === 'every_x_days') {
+      // Any day in the window; interval check is done via getDreamDigestPeriodStart
+      return true;
+    }
+
+    if (nowDate.getDay() !== 1) {
+      return false;
+    }
+
+    return true; // weekly
+  }
+
+  private getDreamDigestPeriodStart(nowDate: Date, cfg: DreamDigestRuntimeConfig): number {
+    if (cfg.scheduleType === 'monthly') {
+      const start = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1, 0, 0, 0, 0);
+      return Math.floor(start.getTime() / 1000);
+    }
+
+    if (cfg.scheduleType === 'every_x_days') {
+      const nowSec = Math.floor(nowDate.getTime() / 1000);
+      return nowSec - cfg.intervalDays * 24 * 3600;
+    }
+
+    const thisWeekStart = this.getMondayStart(nowDate);
+    return Math.floor(thisWeekStart.getTime() / 1000);
+  }
+
+  private isFirstMondayOfMonth(date: Date): boolean {
+    if (date.getDay() !== 1) return false;
+    const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
+    const firstMondayDate = 1 + ((8 - firstDay.getDay()) % 7);
+    return date.getDate() === firstMondayDate;
+  }
+
+  private getMondayStart(date: Date): Date {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const mondayOffset = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - mondayOffset);
+    return d;
+  }
+
+  private getMondayWeekIndex(date: Date): number {
+    const weekStart = this.getMondayStart(date);
+    const epochMonday = new Date(1970, 0, 5);
+    epochMonday.setHours(0, 0, 0, 0);
+    return Math.floor((weekStart.getTime() - epochMonday.getTime()) / (7 * 24 * 3600 * 1000));
   }
 
   // ---- Utility helpers ----------------------------------------------------
