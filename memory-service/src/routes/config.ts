@@ -22,6 +22,9 @@ interface UpdatableConfig {
   quietHoursEnd?: number;
   dailyCron?: string;
   weeklyCron?: string;
+  weeklyReportEnabled?: boolean;
+  weeklyReportCron?: string;
+  weeklyReportMinMessages?: number;
 }
 
 /** Keys that must never be returned to the client. */
@@ -93,6 +96,9 @@ const updateConfigBodySchema = {
     quietHoursEnd: { type: 'number' as const },
     dailyCron: { type: 'string' as const },
     weeklyCron: { type: 'string' as const },
+    weeklyReportEnabled: { type: 'boolean' as const },
+    weeklyReportCron: { type: 'string' as const },
+    weeklyReportMinMessages: { type: 'number' as const },
   },
   additionalProperties: false,
 };
@@ -139,6 +145,15 @@ export async function configRoutes(
       }
       if (updates.weeklyCron !== undefined) {
         persisted.weeklyCron = updates.weeklyCron;
+      }
+      if (updates.weeklyReportEnabled !== undefined) {
+        persisted.weeklyReportEnabled = updates.weeklyReportEnabled;
+      }
+      if (updates.weeklyReportCron !== undefined) {
+        persisted.weeklyReportCron = updates.weeklyReportCron;
+      }
+      if (updates.weeklyReportMinMessages !== undefined) {
+        persisted.weeklyReportMinMessages = updates.weeklyReportMinMessages;
       }
 
       writePersistedConfig(persisted, request);

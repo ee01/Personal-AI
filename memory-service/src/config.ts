@@ -50,8 +50,8 @@ export interface Config {
   quietHoursEnd: number;
 
   // Weekly Report
-  weeklyReportCron: string;
   weeklyReportEnabled: boolean;
+  weeklyReportCron: string;
   weeklyReportMinMessages: number;
 }
 
@@ -109,8 +109,8 @@ export function getConfig(): Readonly<Config> {
     quietHoursEnd: parseInt(process.env.QUIET_HOURS_END || '8', 10),
 
     // Weekly Report
-    weeklyReportCron: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
     weeklyReportEnabled: process.env.WEEKLY_REPORT_ENABLED !== 'false',
+    weeklyReportCron: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
     weeklyReportMinMessages: parseInt(process.env.WEEKLY_REPORT_MIN_MESSAGES || '20', 10),
   };
 

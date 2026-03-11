@@ -49,6 +49,10 @@ export interface EnvConfigType {
   MEMORY_SERVICE_BASE_URL: string;  // 记忆服务 API 地址，如 http://localhost:3210/api/v1
   MEMORY_SERVICE_API_KEY?: string;  // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
   MEMORY_SERVICE_TIMEOUT?: number;  // 请求超时（毫秒），默认 30000
+  // 自动周报 (Weekly Report)
+  WEEKLY_REPORT_ENABLED: string;        // 'true' | 'false'
+  WEEKLY_REPORT_CRON: string;           // cron 表达式，默认 '0 18 * * 5'（每周五 18:00）
+  WEEKLY_REPORT_MIN_MESSAGES: number;   // 最少消息数阈值，默认 20
 }
 
 export function formatDate(dateString: string | number) {
@@ -187,6 +191,10 @@ export const defaultEnvConfig: EnvConfigType = {
   MEMORY_SERVICE_BASE_URL: process.env.MEMORY_SERVICE_BASE_URL || "http://localhost:3210/api/v1",
   MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || "",
   MEMORY_SERVICE_TIMEOUT: Number(process.env.MEMORY_SERVICE_TIMEOUT) || 30_000,
+  // 自动周报 (Weekly Report)
+  WEEKLY_REPORT_ENABLED: process.env.WEEKLY_REPORT_ENABLED || "true",
+  WEEKLY_REPORT_CRON: process.env.WEEKLY_REPORT_CRON || "0 18 * * 5",
+  WEEKLY_REPORT_MIN_MESSAGES: Number(process.env.WEEKLY_REPORT_MIN_MESSAGES) || 20,
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

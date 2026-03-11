@@ -14,6 +14,66 @@ const Options = () => {
         type: ''
     });
 
+    // Weekly Report backend state (synced with memory-service)
+    const [weeklyReportEnabled, setWeeklyReportEnabled] = useState<string>('true');
+    const [weeklyReportCron, setWeeklyReportCron] = useState<string>('0 18 * * 5');
+    const [weeklyReportMinMessages, setWeeklyReportMinMessages] = useState<number>(20);
+    const [weeklyReportSaving, setWeeklyReportSaving] = useState(false);
+
+    // Load weekly report settings from backend
+    const loadWeeklyReportSettingsFromBackend = async (baseUrl: string, apiKey?: string) => {
+        try {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['x-api-key'] = apiKey;
+            const res = await fetch(`${baseUrl}/config`, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.weeklyReportEnabled !== undefined) {
+                    setWeeklyReportEnabled(String(data.weeklyReportEnabled));
+                }
+                if (data.weeklyReportCron) {
+                    setWeeklyReportCron(data.weeklyReportCron);
+                }
+                if (data.weeklyReportMinMessages !== undefined) {
+                    setWeeklyReportMinMessages(Number(data.weeklyReportMinMessages));
+                }
+            }
+        } catch (err) {
+            console.warn('Failed to load weekly report settings from backend:', err);
+        }
+    };
+
+    // Save weekly report settings to backend
+    const saveWeeklyReportSettings = async () => {
+        const baseUrl = config.MEMORY_SERVICE_BASE_URL || 'http://localhost:3210/api/v1';
+        const apiKey = config.MEMORY_SERVICE_API_KEY;
+        setWeeklyReportSaving(true);
+        try {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['x-api-key'] = apiKey;
+            const res = await fetch(`${baseUrl}/config`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({
+                    weeklyReportEnabled: weeklyReportEnabled === 'true',
+                    weeklyReportCron,
+                    weeklyReportMinMessages,
+                }),
+            });
+            if (res.ok) {
+                setStatus({ message: '周报设置已保存到后端', type: 'success' });
+            } else {
+                setStatus({ message: '保存周报设置失败: ' + res.statusText, type: 'error' });
+            }
+        } catch (err) {
+            console.error('Save weekly report settings failed:', err);
+            setStatus({ message: '保存周报设置失败', type: 'error' });
+        } finally {
+            setWeeklyReportSaving(false);
+            setTimeout(() => setStatus({ message: '', type: '' }), 3000);
+        }
+    };
+
     // 页面加载时从 Chrome 存储中获取配置
     useEffect(() => {
         chrome.storage.local.get(['envConfig'], (result) => {
@@ -26,6 +86,13 @@ const Options = () => {
             }
         });
     }, []);
+
+    // Load weekly report settings from backend when config is ready
+    useEffect(() => {
+        if (config.MEMORY_SERVICE_BASE_URL) {
+            loadWeeklyReportSettingsFromBackend(config.MEMORY_SERVICE_BASE_URL, config.MEMORY_SERVICE_API_KEY);
+        }
+    }, [config.MEMORY_SERVICE_BASE_URL, config.MEMORY_SERVICE_API_KEY]);
 
     // 从.env加载默认值（通过background脚本）
     const loadEnvDefaults = async () => {
@@ -399,6 +466,66 @@ const Options = () => {
                         后端配置 API_KEY 时需填写相同密钥；本地开发通常留空
                     </small>
                 </div>
+            </div>
+
+            <div className="form-section">
+                <h2>自动周报 (Weekly Report)</h2>
+                <small style={{ color: '#666', display: 'block', marginBottom: '15px' }}>
+                    自动周报功能会在指定时间自动生成本周工作总结并通过 Bot 推送。设置保存到后端记忆服务。
+                </small>
+                <div className="form-group">
+                    <label htmlFor="WEEKLY_REPORT_ENABLED">启用自动周报</label>
+                    <select
+                        id="WEEKLY_REPORT_ENABLED"
+                        value={weeklyReportEnabled}
+                        onChange={(e) => setWeeklyReportEnabled(e.target.value)}
+                    >
+                        <option value="true">启用</option>
+                        <option value="false">禁用</option>
+                    </select>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="WEEKLY_REPORT_CRON">Cron 表达式</label>
+                    <input
+                        type="text"
+                        id="WEEKLY_REPORT_CRON"
+                        value={weeklyReportCron}
+                        onChange={(e) => setWeeklyReportCron(e.target.value)}
+                        placeholder="0 18 * * 5"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        默认: 每周五 18:00 (0 18 * * 5)。格式: 分 时 日 月 周几
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="WEEKLY_REPORT_MIN_MESSAGES">最少消息数阈值</label>
+                    <input
+                        type="number"
+                        id="WEEKLY_REPORT_MIN_MESSAGES"
+                        value={weeklyReportMinMessages}
+                        onChange={(e) => setWeeklyReportMinMessages(Number(e.target.value))}
+                        min={0}
+                        placeholder="20"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        本周消息数低于此阈值时不生成周报。默认 20
+                    </small>
+                </div>
+                <button
+                    onClick={saveWeeklyReportSettings}
+                    disabled={weeklyReportSaving}
+                    style={{
+                        backgroundColor: '#2ecc71',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: weeklyReportSaving ? 'not-allowed' : 'pointer',
+                        fontSize: '14px',
+                    }}
+                >
+                    {weeklyReportSaving ? '保存中...' : '保存周报设置到后端'}
+                </button>
             </div>
 
             <div className="form-section">
