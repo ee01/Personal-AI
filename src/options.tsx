@@ -13,6 +13,7 @@ const Options = () => {
         message: '',
         type: ''
     });
+    const [isDreamDigestPushing, setIsDreamDigestPushing] = useState(false);
 
     // Weekly Report backend state (synced with memory-service)
     const [weeklyReportEnabled, setWeeklyReportEnabled] = useState<string>('true');
@@ -79,7 +80,9 @@ const Options = () => {
         chrome.storage.local.get(['envConfig'], (result) => {
             console.log('result', result);
             if (result.envConfig) {
-                setConfig({ ...defaultEnvConfig, ...result.envConfig });
+                const merged = { ...defaultEnvConfig, ...result.envConfig };
+                setConfig(merged);
+                loadDreamDigestSettingsFromBackend(merged);
             } else {
                 // 如果没有保存过配置，则尝试从 .env 加载
                 loadEnvDefaults();
@@ -99,6 +102,7 @@ const Options = () => {
         try {
             const config = getDefaultEnvConfig();
             setConfig(config);
+            await loadDreamDigestSettingsFromBackend(config);
             setStatus({
                 message: '已从.env文件加载默认配置',
                 type: 'success'
@@ -109,6 +113,49 @@ const Options = () => {
                 message: '加载环境配置失败',
                 type: 'error'
             });
+        }
+    };
+
+    const getRequestHeaders = async (targetConfig: EnvConfigType): Promise<Record<string, string>> => {
+        const result = await chrome.storage.local.get(['userinfo']);
+        const username = result?.userinfo?.username?.trim();
+        const userId = username || 'default';
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-User-Id': userId,
+        };
+        if (targetConfig.MEMORY_SERVICE_API_KEY) {
+            headers['Authorization'] = `Bearer ${targetConfig.MEMORY_SERVICE_API_KEY}`;
+        }
+        return headers;
+    };
+
+    const loadDreamDigestSettingsFromBackend = async (targetConfig: EnvConfigType) => {
+        if (!targetConfig.MEMORY_SERVICE_BASE_URL) return;
+        try {
+            const headers = await getRequestHeaders(targetConfig);
+            const response = await fetch(`${targetConfig.MEMORY_SERVICE_BASE_URL}/config`, {
+                method: 'GET',
+                headers,
+            });
+            if (!response.ok) return;
+            const serverConfig = await response.json();
+            const scheduleType = serverConfig?.dreamDigestScheduleType;
+            const intervalDays = Number(serverConfig?.dreamDigestIntervalDays) || (Number(serverConfig?.dreamDigestIntervalWeeks) || 0) * 7;
+            const resolvedScheduleType = scheduleType === 'every_x_weeks' ? 'every_x_days' : scheduleType;
+            setConfig(prev => ({
+                ...prev,
+                DREAM_DIGEST_SCHEDULE_TYPE:
+                    resolvedScheduleType === 'every_x_days' || resolvedScheduleType === 'monthly'
+                        ? resolvedScheduleType
+                        : (prev.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly'),
+                DREAM_DIGEST_INTERVAL_DAYS: Number.isFinite(intervalDays)
+                    ? Math.max(1, Math.floor(intervalDays))
+                    : (prev.DREAM_DIGEST_INTERVAL_DAYS || 7),
+            }));
+        } catch (error) {
+            console.warn('加载梦境简报配置失败:', error);
         }
     };
 
@@ -135,6 +182,17 @@ const Options = () => {
                     return;
                 }
             }
+
+            if (
+                config.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' &&
+                (Number(config.DREAM_DIGEST_INTERVAL_DAYS) < 1 || Number.isNaN(Number(config.DREAM_DIGEST_INTERVAL_DAYS)))
+            ) {
+                setStatus({
+                    message: '梦境简报间隔天数必须 >= 1',
+                    type: 'error'
+                });
+                return;
+            }
             
             await chrome.storage.local.set({ envConfig: config });
             // 通知background脚本更新配置
@@ -142,6 +200,22 @@ const Options = () => {
                 type: 'UPDATE_ENV_CONFIG',
                 config
             });
+
+            // 同步梦境简报计划到 memory-service 运行时配置
+            const headers = await getRequestHeaders(config);
+            const syncResponse = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/config`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({
+                    dreamDigestScheduleType: config.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly',
+                    dreamDigestIntervalDays: Math.max(1, Number(config.DREAM_DIGEST_INTERVAL_DAYS) || 7),
+                }),
+            });
+            if (!syncResponse.ok) {
+                const errorText = await syncResponse.text();
+                throw new Error(`同步梦境简报配置失败: ${syncResponse.status} ${errorText}`);
+            }
+
             setStatus({
                 message: '配置已保存',
                 type: 'success'
@@ -156,6 +230,43 @@ const Options = () => {
                 message: '保存配置失败',
                 type: 'error'
             });
+        }
+    };
+
+    const handlePushDreamDigestNow = async () => {
+        setIsDreamDigestPushing(true);
+        try {
+            const headers = await getRequestHeaders(config);
+            const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/dream-digest/push-now`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ force: true }),
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result?.error || '推送失败');
+            }
+            if (result?.generated) {
+                setStatus({
+                    message: result?.botSent
+                        ? '梦境洞察简报已立即推送（Chrome + Bot）'
+                        : '梦境洞察简报已立即推送（Chrome 通知已写入）',
+                    type: 'success',
+                });
+            } else {
+                setStatus({
+                    message: result?.reason || '未生成简报（可能暂无 dreams 内容）',
+                    type: 'error',
+                });
+            }
+        } catch (error) {
+            console.error('立即推送梦境简报失败:', error);
+            setStatus({
+                message: `立即推送失败: ${(error as Error).message}`,
+                type: 'error',
+            });
+        } finally {
+            setIsDreamDigestPushing(false);
         }
     };
 
@@ -176,7 +287,11 @@ const Options = () => {
             ...prev,
             [name]: type === 'checkbox' 
                 ? (e.target as HTMLInputElement).checked 
-                : name === 'SCHEDULED_INTERVAL' || name === 'MESSAGE_ANALYSIS_INTERVAL' || name === 'MESSAGE_CONTEXT_WINDOW'
+                : name === 'SCHEDULED_INTERVAL' ||
+                  name === 'MESSAGE_ANALYSIS_INTERVAL' ||
+                  name === 'MESSAGE_CONTEXT_WINDOW' ||
+                  name === 'MEMORY_SERVICE_TIMEOUT' ||
+                  name === 'DREAM_DIGEST_INTERVAL_DAYS'
                     ? Number(value)
                     : value
         }));
@@ -464,6 +579,61 @@ const Options = () => {
                     />
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
                         后端配置 API_KEY 时需填写相同密钥；本地开发通常留空
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="MEMORY_SERVICE_TIMEOUT">请求超时（毫秒）</label>
+                    <input
+                        type="number"
+                        id="MEMORY_SERVICE_TIMEOUT"
+                        name="MEMORY_SERVICE_TIMEOUT"
+                        value={config.MEMORY_SERVICE_TIMEOUT || 30000}
+                        onChange={handleInputChange}
+                        min="1000"
+                        step="1000"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="DREAM_DIGEST_SCHEDULE_TYPE">梦境洞察简报周期</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <select
+                            id="DREAM_DIGEST_SCHEDULE_TYPE"
+                            name="DREAM_DIGEST_SCHEDULE_TYPE"
+                            value={config.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly'}
+                            onChange={handleInputChange}
+                        >
+                            <option value="weekly">每周</option>
+                            <option value="every_x_days">每隔 X 天</option>
+                            <option value="monthly">每月</option>
+                        </select>
+                        {config.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' && (
+                            <>
+                                <span>每隔</span>
+                                <input
+                                    type="number"
+                                    id="DREAM_DIGEST_INTERVAL_DAYS"
+                                    name="DREAM_DIGEST_INTERVAL_DAYS"
+                                    value={config.DREAM_DIGEST_INTERVAL_DAYS || 7}
+                                    onChange={handleInputChange}
+                                    min="1"
+                                    style={{ width: '80px' }}
+                                />
+                                <span>天</span>
+                            </>
+                        )}
+                        <button
+                            type="button"
+                            onClick={handlePushDreamDigestNow}
+                            disabled={isDreamDigestPushing}
+                        >
+                            {isDreamDigestPushing ? '推送中...' : '立即推送'}
+                        </button>
+                    </div>
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        点击「保存配置」后会同步到 memory-service。点击「立即推送」会跳过时间窗口，直接触发 Dream Digest 推送。
                     </small>
                 </div>
             </div>

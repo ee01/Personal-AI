@@ -53,6 +53,10 @@ export interface Config {
   weeklyReportEnabled: boolean;
   weeklyReportCron: string;
   weeklyReportMinMessages: number;
+
+  // Dream Digest
+  dreamDigestScheduleType: 'weekly' | 'every_x_days' | 'monthly';
+  dreamDigestIntervalDays: number;
 }
 
 let _config: Readonly<Config> | null = null;
@@ -63,6 +67,15 @@ export function getConfig(): Readonly<Config> {
   }
 
   const dataDir = process.env.DATA_DIR || path.resolve(__dirname, '..', 'data');
+  const rawDreamDigestScheduleType = process.env.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly';
+  const dreamDigestScheduleType: 'weekly' | 'every_x_days' | 'monthly' =
+    rawDreamDigestScheduleType === 'every_x_days' || rawDreamDigestScheduleType === 'monthly'
+      ? rawDreamDigestScheduleType
+      : 'weekly';
+  const parsedDreamIntervalDays = parseInt(process.env.DREAM_DIGEST_INTERVAL_DAYS || '7', 10);
+  const dreamDigestIntervalDays = Number.isFinite(parsedDreamIntervalDays)
+    ? Math.max(1, parsedDreamIntervalDays)
+    : 7;
 
   const config: Config = {
     // Server
@@ -112,6 +125,10 @@ export function getConfig(): Readonly<Config> {
     weeklyReportEnabled: process.env.WEEKLY_REPORT_ENABLED !== 'false',
     weeklyReportCron: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
     weeklyReportMinMessages: parseInt(process.env.WEEKLY_REPORT_MIN_MESSAGES || '20', 10),
+
+    // Dream Digest
+    dreamDigestScheduleType,
+    dreamDigestIntervalDays,
   };
 
   _config = Object.freeze(config);

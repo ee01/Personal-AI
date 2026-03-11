@@ -25,6 +25,8 @@ interface UpdatableConfig {
   weeklyReportEnabled?: boolean;
   weeklyReportCron?: string;
   weeklyReportMinMessages?: number;
+  dreamDigestScheduleType?: 'weekly' | 'every_x_days' | 'monthly';
+  dreamDigestIntervalDays?: number;
 }
 
 /** Keys that must never be returned to the client. */
@@ -99,6 +101,11 @@ const updateConfigBodySchema = {
     weeklyReportEnabled: { type: 'boolean' as const },
     weeklyReportCron: { type: 'string' as const },
     weeklyReportMinMessages: { type: 'number' as const },
+    dreamDigestScheduleType: {
+      type: 'string' as const,
+      enum: ['weekly', 'every_x_days', 'monthly'],
+    },
+    dreamDigestIntervalDays: { type: 'number' as const, minimum: 1 },
   },
   additionalProperties: false,
 };
@@ -154,6 +161,12 @@ export async function configRoutes(
       }
       if (updates.weeklyReportMinMessages !== undefined) {
         persisted.weeklyReportMinMessages = updates.weeklyReportMinMessages;
+      }
+      if (updates.dreamDigestScheduleType !== undefined) {
+        persisted.dreamDigestScheduleType = updates.dreamDigestScheduleType;
+      }
+      if (updates.dreamDigestIntervalDays !== undefined) {
+        persisted.dreamDigestIntervalDays = Math.max(1, Math.floor(updates.dreamDigestIntervalDays));
       }
 
       writePersistedConfig(persisted, request);

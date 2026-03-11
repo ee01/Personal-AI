@@ -240,10 +240,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             return;
         }
 
-        // 如果有其他模块需要处理 alarm，在这里添加
-        // if (await OtherModule.tryHandleAlarm(alarm)) {
-        //     return;
-        // }
+        // Poll backend notifications (dream_digest, weekly_report, etc.)
+        if (alarm.name === 'pollBackendNotifications') {
+            pollBackendNotifications();
+            return;
+        }
 
         // 处理未知 alarm
         console.log(`⚡ 未处理的 alarm 事件: ${alarm.name}`);
@@ -1663,6 +1664,52 @@ chrome.alarms.create('cleanupFollowThreads', {
     when: getNextCleanupTime()
 });
 console.log('✅ 关注后续清理任务已设置');
+
+// Poll backend notifications every 15 minutes for dream_digest, weekly_report, etc.
+chrome.alarms.create('pollBackendNotifications', {
+    delayInMinutes: 1,
+    periodInMinutes: 15,
+});
+
+/** Track the last notification we saw so we don't re-show it. */
+let _lastSeenNotifCreatedAt = 0;
+
+async function pollBackendNotifications(): Promise<void> {
+    try {
+        const client = getMemoryServiceClient();
+        const pending = await client.getNotifications('pending');
+        if (!pending || pending.length === 0) return;
+
+        // Notification types that the backend generates but the extension
+        // doesn't have a client-side processor for.
+        const backendOnlyTypes = new Set([
+            'dream_digest',
+            'weekly_report',
+            'new_conflict',
+            'truth_conflict',
+        ]);
+
+        for (const n of pending) {
+            if (!n.type || !backendOnlyTypes.has(n.type)) continue;
+            if (n.createdAt <= _lastSeenNotifCreatedAt) continue;
+            _lastSeenNotifCreatedAt = n.createdAt;
+
+            // Show Chrome notification
+            const notifId = `backend-${n.id}`;
+            chrome.notifications.create(notifId, {
+                type: 'basic',
+                iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+                title: n.title || 'Personal AI',
+                message: (n.body || '').slice(0, 200),
+                priority: 1,
+            });
+        }
+    } catch (err) {
+        // Silently ignore — backend may be offline
+        console.debug('pollBackendNotifications error:', err);
+    }
+}
+console.log('✅ Backend notification poller 已设置 (15min)');
 
 // 监听扩展命令
 chrome.commands.onCommand.addListener(async (command) => {

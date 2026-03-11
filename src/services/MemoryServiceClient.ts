@@ -1094,6 +1094,15 @@ export class MemoryServiceClient {
   }
 
   /**
+   * Update request timeout at runtime.
+   */
+  setTimeout(timeoutMs: number): void {
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      this.timeout = timeoutMs;
+    }
+  }
+
+  /**
    * Update the user ID at runtime for multi-user isolation.
    * Also persists the new value to chrome.storage.local if available.
    */

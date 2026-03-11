@@ -53,6 +53,8 @@ export interface EnvConfigType {
   WEEKLY_REPORT_ENABLED: string;        // 'true' | 'false'
   WEEKLY_REPORT_CRON: string;           // cron 表达式，默认 '0 18 * * 5'（每周五 18:00）
   WEEKLY_REPORT_MIN_MESSAGES: number;   // 最少消息数阈值，默认 20
+  DREAM_DIGEST_SCHEDULE_TYPE?: 'weekly' | 'every_x_days' | 'monthly';
+  DREAM_DIGEST_INTERVAL_DAYS?: number;
 }
 
 export function formatDate(dateString: string | number) {
@@ -195,6 +197,11 @@ export const defaultEnvConfig: EnvConfigType = {
   WEEKLY_REPORT_ENABLED: process.env.WEEKLY_REPORT_ENABLED || "true",
   WEEKLY_REPORT_CRON: process.env.WEEKLY_REPORT_CRON || "0 18 * * 5",
   WEEKLY_REPORT_MIN_MESSAGES: Number(process.env.WEEKLY_REPORT_MIN_MESSAGES) || 20,
+  DREAM_DIGEST_SCHEDULE_TYPE: (
+    process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' ||
+    process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'monthly'
+  ) ? process.env.DREAM_DIGEST_SCHEDULE_TYPE : 'weekly',
+  DREAM_DIGEST_INTERVAL_DAYS: Math.max(1, Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 7),
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
