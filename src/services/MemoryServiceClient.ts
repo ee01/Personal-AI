@@ -1050,6 +1050,30 @@ export class MemoryServiceClient {
   }
 
   // --------------------------------------------------------------------------
+  // User Files (dreams, reflections, reports)
+  // --------------------------------------------------------------------------
+
+  /**
+   * List files in a user data subdirectory (dreams, reflections, reports).
+   */
+  async listUserFiles(subdir: string): Promise<string[]> {
+    const result = await this.request<{ files: string[] }>('GET', `/user-files/${encodeURIComponent(subdir)}`);
+    return result.files;
+  }
+
+  /**
+   * Read a specific file from a user data subdirectory.
+   */
+  async readUserFile(subdir: string, filename: string): Promise<string | null> {
+    try {
+      const result = await this.request<{ filename: string; content: string }>('GET', `/user-files/${encodeURIComponent(subdir)}/${encodeURIComponent(filename)}`);
+      return result.content;
+    } catch {
+      return null;
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Configuration helpers
   // --------------------------------------------------------------------------
 

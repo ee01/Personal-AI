@@ -32,6 +32,11 @@
             <div class="entity-count">{{ followThreadCount }}</div>
           </router-link>
 
+          <router-link to="/dreams" class="entity-type" active-class="router-link-active">
+            <div class="entity-icon">🌙</div>
+            <div class="entity-name">梦境洞察</div>
+          </router-link>
+
           <router-link to="/decisions" class="entity-type" active-class="router-link-active">
             <div class="entity-icon">⚖️</div>
             <div class="entity-name">决策中心</div>

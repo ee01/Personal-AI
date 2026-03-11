@@ -27,6 +27,9 @@ import { registerConcernedItemsDigestTask } from './services/DigestQueueService'
 
 console.log('Background script loaded');
 
+// Map to track backend notification types for click handling
+const backendNotificationTypes = new Map<string, string>();
+
 // 注册 Digest 任务（关注后续合并通知、concernedItems 每日摘要等）
 registerFollowThreadDigestTask();
 registerConcernedItemsDigestTask();
@@ -1541,7 +1544,27 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
         chrome.notifications.clear(notificationId);
         return;
     }
-    
+
+    // 处理后端推送通知 (backend-xxx)
+    if (notificationId.startsWith('backend-')) {
+        try {
+            const notifType = backendNotificationTypes.get(notificationId) || '';
+            let targetHash = '/dreams';
+            if (notifType === 'dream_digest' || notifType === 'weekly_report') {
+                targetHash = '/dreams';
+            } else {
+                targetHash = '/decisions';
+            }
+            const url = chrome.runtime.getURL(`memory-exploring.html#${targetHash}`);
+            await chrome.tabs.create({ url });
+            backendNotificationTypes.delete(notificationId);
+        } catch (error) {
+            console.error('Failed to handle backend notification click:', error);
+        }
+        chrome.notifications.clear(notificationId);
+        return;
+    }
+
     // 处理旧的关注后续通知格式 (followThread_xxx)
     if (notificationId.startsWith('followThread_')) {
         const parts = notificationId.split('_');

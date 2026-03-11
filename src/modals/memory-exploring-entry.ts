@@ -14,6 +14,7 @@ import SearchResultPage from './components/SearchResultPage.vue';
 import PlaceholderPage from './components/PlaceholderPage.vue';
 import FollowThreads from './components/FollowThreads.vue';
 import DecisionCenter from './components/DecisionCenter.vue';
+import DreamInsights from './components/DreamInsights.vue';
 
 // 路由配置
 const routes = [
@@ -26,7 +27,8 @@ const routes = [
   { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
   { path: '/person/:id', name: 'PersonDetail', component: PersonDetailPage, props: true },
   { path: '/project/:id', name: 'ProjectDetail', component: PlaceholderPage, props: true },
-  { path: '/search', name: 'Search', component: SearchResultPage }
+  { path: '/search', name: 'Search', component: SearchResultPage },
+  { path: '/dreams', name: 'Dreams', component: DreamInsights }
 ];
 
 // 等待DOM加载完成
