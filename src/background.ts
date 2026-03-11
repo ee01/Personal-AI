@@ -335,6 +335,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const config = request.config as {
             MEMORY_SERVICE_BASE_URL?: string;
             MEMORY_SERVICE_API_KEY?: string;
+            MEMORY_SERVICE_TIMEOUT?: number;
         };
         chrome.storage.local.set({ envConfig: request.config });
         console.log('Updated environment config:', request.config);
@@ -345,6 +346,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const client = getMemoryServiceClient();
                 if (config?.MEMORY_SERVICE_BASE_URL) client.setBaseUrl(config.MEMORY_SERVICE_BASE_URL);
                 if (config?.MEMORY_SERVICE_API_KEY !== undefined) client.setApiKey(config.MEMORY_SERVICE_API_KEY || undefined);
+                if (config?.MEMORY_SERVICE_TIMEOUT !== undefined) client.setTimeout(Number(config.MEMORY_SERVICE_TIMEOUT));
             } catch (e) {
                 console.warn('MemoryServiceClient config sync:', e);
             }
@@ -563,27 +565,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // 保持消息通道开放
     }
 
-    // Context match: find related reflections/dreams for current page
-    if (request.type === 'CONTEXT_MATCH_REQUEST') {
-        const { title, keywords, snippet } = request;
-        const client = getMemoryServiceClient();
-        const baseUrl = client.getBaseUrl();
-        fetch(`${baseUrl}/context-match`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-User-Id': 'default',
-            },
-            body: JSON.stringify({ title, keywords, snippet }),
-        })
-        .then(res => res.json())
-        .then(result => sendResponse({ success: true, match: result.match }))
-        .catch(error => {
-            console.warn('Context match failed:', error);
-            sendResponse({ success: true, match: null });
-        });
-        return true;
-    }
 
     // 获取智能网页分析统计
     if (request.type === 'GET_WEB_INTELLIGENCE_STATS') {
