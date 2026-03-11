@@ -563,6 +563,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // 保持消息通道开放
     }
 
+    // Context match: find related reflections/dreams for current page
+    if (request.type === 'CONTEXT_MATCH_REQUEST') {
+        const { title, keywords, snippet } = request;
+        const client = getMemoryServiceClient();
+        const baseUrl = client.getBaseUrl();
+        fetch(`${baseUrl}/context-match`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-Id': 'default',
+            },
+            body: JSON.stringify({ title, keywords, snippet }),
+        })
+        .then(res => res.json())
+        .then(result => sendResponse({ success: true, match: result.match }))
+        .catch(error => {
+            console.warn('Context match failed:', error);
+            sendResponse({ success: true, match: null });
+        });
+        return true;
+    }
+
     // 获取智能网页分析统计
     if (request.type === 'GET_WEB_INTELLIGENCE_STATS') {
         try {

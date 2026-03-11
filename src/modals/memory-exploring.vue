@@ -33,7 +33,7 @@
           </router-link>
 
           <router-link to="/decisions" class="entity-type" active-class="router-link-active">
-            <div class="entity-icon">⚖</div>
+            <div class="entity-icon">⚖️</div>
             <div class="entity-name">决策中心</div>
             <div v-if="pendingDecisionCount > 0" class="entity-count">{{ pendingDecisionCount }}</div>
           </router-link>
@@ -117,14 +117,14 @@ onMounted(async () => {
   }
 });
 
-// 加载待处理决策数量
+// 加载待决策数量
 onMounted(async () => {
   try {
     const client = getMemoryServiceClient();
     const res = await client.getConfirmRequests('pending', 1);
     pendingDecisionCount.value = res.total;
   } catch (error) {
-    console.error('加载决策数量失败:', error);
+    console.error('加载待决策数量失败:', error);
   }
 });
 

@@ -6,7 +6,6 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import type Database from 'better-sqlite3';
 
 import type { RecallItem } from '../types/index.js';
 import { RecallEngine } from '../core/RecallEngine.js';
@@ -16,6 +15,7 @@ import type { ProfileManager } from '../core/ProfileManager.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
+import type Database from 'better-sqlite3';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -391,7 +391,6 @@ export async function askRoutes(
         if (agentPersona) enhancedPrompt += '\n\n' + agentPersona;
         const userCore = loadUserCore(userDataManager);
         if (userCore) enhancedPrompt += '\n\n--- User Context ---\n' + userCore;
-
         const preferences = loadUserPreferences(db);
         if (preferences) {
           enhancedPrompt += '\n\n--- User Preferences (apply these silently when relevant) ---\n' + preferences;

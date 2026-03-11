@@ -21,7 +21,7 @@ const routes = [
   { path: '/timeline', name: 'Timeline', component: TimelinePage },
   { path: '/user-profile', name: 'UserProfile', component: UserProfilePage },
   { path: '/follow-threads', name: 'FollowThreads', component: FollowThreads },
-  { path: '/decisions', name: 'DecisionCenter', component: DecisionCenter },
+  { path: '/decisions', name: 'Decisions', component: DecisionCenter },
   { path: '/entity/:type', name: 'EntityDetail', component: EntityListPage, props: true },
   { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
   { path: '/person/:id', name: 'PersonDetail', component: PersonDetailPage, props: true },

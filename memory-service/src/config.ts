@@ -31,6 +31,17 @@ export interface Config {
   // Auth
   apiKey: string;
 
+  // Bot
+  botApiBaseUrl: string;
+  botToken: string;
+  botId: string;
+  botType: string;
+  botTeamId: string;
+  botTargetEmail: string;
+
+  // Context Match
+  contextMatchThreshold: number;
+
   // Scheduler
   heartbeatIntervalMs: number;
   dailyCron: string;
@@ -42,17 +53,6 @@ export interface Config {
   weeklyReportCron: string;
   weeklyReportEnabled: boolean;
   weeklyReportMinMessages: number;
-
-  // Context Match
-  contextMatchThreshold: number;
-
-  // Bot
-  botApiBaseUrl: string;
-  botToken: string;
-  botId: string;
-  botType: string;
-  botTeamId: string;
-  botTargetEmail: string;
 }
 
 let _config: Readonly<Config> | null = null;
@@ -90,6 +90,17 @@ export function getConfig(): Readonly<Config> {
     // Auth
     apiKey: process.env.API_KEY || '',
 
+    // Bot
+    botApiBaseUrl: process.env.BOT_API_BASE_URL || '',
+    botToken: process.env.BOT_TOKEN || '',
+    botId: process.env.BOT_ID || '',
+    botType: process.env.BOT_TYPE || 'user',
+    botTeamId: process.env.BOT_TEAM_ID || '',
+    botTargetEmail: process.env.BOT_TARGET_EMAIL || '',
+
+    // Context Match
+    contextMatchThreshold: parseFloat(process.env.CONTEXT_MATCH_THRESHOLD || '0.78'),
+
     // Scheduler
     heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '900000', 10),
     dailyCron: process.env.DAILY_CRON || '0 23 * * *',
@@ -101,17 +112,6 @@ export function getConfig(): Readonly<Config> {
     weeklyReportCron: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
     weeklyReportEnabled: process.env.WEEKLY_REPORT_ENABLED !== 'false',
     weeklyReportMinMessages: parseInt(process.env.WEEKLY_REPORT_MIN_MESSAGES || '20', 10),
-
-    // Context Match
-    contextMatchThreshold: parseFloat(process.env.CONTEXT_MATCH_THRESHOLD || '0.78'),
-
-    // Bot
-    botApiBaseUrl: process.env.BOT_API_BASE_URL || '',
-    botToken: process.env.BOT_TOKEN || '',
-    botId: process.env.BOT_ID || '',
-    botType: process.env.BOT_TYPE || 'user',
-    botTeamId: process.env.BOT_TEAM_ID || '',
-    botTargetEmail: process.env.BOT_TARGET_EMAIL || '',
   };
 
   _config = Object.freeze(config);

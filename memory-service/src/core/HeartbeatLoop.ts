@@ -609,40 +609,46 @@ export class HeartbeatLoop {
   // ---- Step 5: Dream digest (Monday morning) ------------------------------
 
   /**
-   * On Monday morning 08:00-10:00, check for recent dreams and generate
-   * a dream_digest notification (max once per week, idempotent).
+   * Check if it's Monday morning and there are recent dreams to digest.
+   * Generates a dream_digest notification (max once per week).
    */
   private checkDreamDigest(): NotificationCandidate[] {
-    const d = new Date();
-    if (d.getDay() !== 1 || d.getHours() < 8 || d.getHours() >= 10) {
+    const nowDate = new Date();
+    // Only on Monday 08:00-10:00
+    if (nowDate.getDay() !== 1 || nowDate.getHours() < 8 || nowDate.getHours() >= 10) {
       return [];
     }
 
-    // Idempotency: skip if dream_digest sent in last 7 days
+    // Check idempotency: no dream_digest in last 7 days
     const sevenDaysAgo = now() - 7 * 86400;
     const existing = this.db
-      .prepare(`SELECT id FROM notification_records WHERE type = 'dream_digest' AND created_at > ? LIMIT 1`)
+      .prepare(
+        `SELECT id FROM notification_records WHERE type = 'dream_digest' AND created_at > ? LIMIT 1`,
+      )
       .get(sevenDaysAgo);
+
     if (existing) return [];
 
+    // Find recent dream files
     if (!this.userDataManager) return [];
 
-    // List dream files
-    const dreamFiles = this.userDataManager.listFiles('dreams');
+    const dreamFiles = this.userDataManager.listFiles('dreams/');
     if (!dreamFiles || dreamFiles.length === 0) return [];
 
-    // Read recent dreams and extract content
+    // Read dream file contents (only .md files)
     const recentDreams: string[] = [];
     for (const file of dreamFiles) {
       if (!file.endsWith('.md')) continue;
       const content = this.userDataManager.readFile(`dreams/${file}`);
-      if (content) recentDreams.push(content);
+      if (!content) continue;
+      recentDreams.push(content);
     }
+
     if (recentDreams.length === 0) return [];
 
-    // Build digest body from dream content
+    // Extract summaries from dream content
     const digestBody = recentDreams
-      .map(content => {
+      .map((content) => {
         const titleMatch = content.match(/# Dream: (.+)/);
         const narrativeMatch = content.match(/## Narrative\n([\s\S]*?)(?=\n## |$)/);
         const insightsMatch = content.match(/## Insights\n([\s\S]*?)(?=\n## |$)/);
@@ -653,17 +659,19 @@ export class HeartbeatLoop {
       })
       .join('\n\n---\n\n');
 
-    return [{
-      type: 'dream_digest',
-      title: 'Weekly Dream Digest',
-      body: `${recentDreams.length} dream(s) generated this week`,
-      importance: 0.8,
-      urgency: 0.3,
-      confidence: 0.95,
-      actionability: 0.4,
-      topicId: `dream_digest_${new Date().toISOString().slice(0, 10)}`,
-      payload: { dreamCount: recentDreams.length, digestBody },
-    }];
+    return [
+      {
+        type: 'dream_digest',
+        title: 'Weekly Dream Digest',
+        body: `${recentDreams.length} dream(s) generated this week`,
+        importance: 0.8,
+        urgency: 0.3,
+        confidence: 0.95,
+        actionability: 0.4,
+        topicId: `dream_digest_${nowDate.toISOString().slice(0, 10)}`,
+        payload: { dreamCount: recentDreams.length, digestBody },
+      },
+    ];
   }
 
   // ---- Utility helpers ----------------------------------------------------

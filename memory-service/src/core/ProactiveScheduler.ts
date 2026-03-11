@@ -199,17 +199,30 @@ export class ProactiveScheduler {
 
   private async runWeeklyReport(): Promise<void> {
     console.log('[ProactiveScheduler] Starting weekly report...');
+    const startMs = Date.now();
+
     const userIds = this.ucm.getRegisteredUserIds();
     for (const userId of userIds) {
       try {
         const ctx = this.ucm.getContext(userId);
         const reporter = new WeeklyReporter(ctx.db, ctx.userDataManager);
         const result = await reporter.generateWeeklyReport();
-        console.log(`[ProactiveScheduler] Weekly report for user ${userId}:`, JSON.stringify(result));
+        console.log(
+          `[ProactiveScheduler] Weekly report for user ${userId}:`,
+          JSON.stringify(result),
+        );
       } catch (err) {
-        console.error(`[ProactiveScheduler] Weekly report error for user ${userId}:`, (err as Error).message);
+        console.error(
+          `[ProactiveScheduler] Weekly report error for user ${userId}:`,
+          (err as Error).message,
+        );
       }
     }
+
+    const elapsedMs = Date.now() - startMs;
+    console.log(
+      `[ProactiveScheduler] Weekly report complete for ${userIds.length} user(s) in ${elapsedMs}ms`,
+    );
   }
 
   // ---- Error wrapper ------------------------------------------------------

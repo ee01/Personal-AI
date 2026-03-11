@@ -28,6 +28,22 @@ interface SimpleAnalysisResult {
     categories: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ---------------------------------------------------------------------------
+// Context Match: URL-based cache and domain debounce
+// ---------------------------------------------------------------------------
+const contextMatchCache = new Map<string, { match: any; ts: number }>();
+const domainLastRequest = new Map<string, number>();
+const CONTEXT_MATCH_DOMAIN_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
+
 class WebIntelligenceContentScript {
     private isAnalyzing = false;
     private lastAnalysisTime = 0;
@@ -57,6 +73,11 @@ class WebIntelligenceContentScript {
         // 延迟执行初始分析
         setTimeout(() => {
             this.scheduleAnalysis();
+        }, 2000);
+
+        // Context match: check for related reflections/dreams after page loads
+        setTimeout(() => {
+            this.tryContextMatch();
         }, 2000);
     }
 
@@ -419,6 +440,147 @@ class WebIntelligenceContentScript {
         return Array.from(results).slice(0, 10); // 限制数量
     }
 
+    // -----------------------------------------------------------------------
+    // Context Match — surface related reflections/dreams as a floating bubble
+    // -----------------------------------------------------------------------
+
+    private tryContextMatch(): void {
+        const url = window.location.href;
+        const domain = window.location.hostname;
+
+        // URL-level cache check
+        const cached = contextMatchCache.get(url);
+        if (cached && Date.now() - cached.ts < CONTEXT_MATCH_DOMAIN_DEBOUNCE_MS) {
+            if (cached.match) this.showContextBubble(cached.match);
+            return;
+        }
+
+        // Domain-level debounce
+        const lastReq = domainLastRequest.get(domain);
+        if (lastReq && Date.now() - lastReq < CONTEXT_MATCH_DOMAIN_DEBOUNCE_MS) {
+            return;
+        }
+        domainLastRequest.set(domain, Date.now());
+
+        // Extract lightweight page context
+        const title = document.title || '';
+        const metaKeywords = document.querySelector('meta[name="keywords"]')?.getAttribute('content');
+        const keywords = metaKeywords ? metaKeywords.split(',').map(k => k.trim()).filter(Boolean) : undefined;
+
+        // First 300 chars of visible text as snippet
+        const mainEl = document.querySelector('main, article, [role="main"]');
+        const snippet = (mainEl || document.body)?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 300) || undefined;
+
+        if (!title.trim() && !snippet?.trim()) return;
+
+        chrome.runtime.sendMessage({
+            type: 'CONTEXT_MATCH_REQUEST',
+            title,
+            keywords,
+            snippet,
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.warn('Context match message error:', chrome.runtime.lastError.message);
+                return;
+            }
+            const match = response?.match ?? null;
+            contextMatchCache.set(url, { match, ts: Date.now() });
+            if (match) {
+                this.showContextBubble(match);
+            }
+        });
+    }
+
+    private showContextBubble(match: { content: string; source: string; score: number }): void {
+        // Don't inject twice
+        if (document.querySelector('.pai-context-bubble')) return;
+
+        const bubble = document.createElement('div');
+        bubble.className = 'pai-context-bubble';
+        bubble.style.cssText = `
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 2147483646;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+            font-size: 20px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            user-select: none;
+        `;
+        bubble.textContent = '\uD83D\uDCA1'; // 💡
+        bubble.title = 'Related memory found';
+
+        // Expanded card (hidden initially)
+        const card = document.createElement('div');
+        card.className = 'pai-context-card';
+        card.style.cssText = `
+            position: fixed;
+            bottom: 72px;
+            right: 24px;
+            width: 320px;
+            max-height: 260px;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+            padding: 16px;
+            z-index: 2147483646;
+            display: none;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            color: #333;
+            overflow-y: auto;
+        `;
+
+        const sourceLabel = match.source.startsWith('reflections/') ? 'Reflection' : 'Dream';
+        card.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="font-weight:600;color:#764ba2;">\uD83E\uDDE0 ${sourceLabel}</span>
+                <span style="font-size:11px;color:#999;">score ${(match.score * 100).toFixed(0)}%</span>
+            </div>
+            <div style="line-height:1.5;color:#555;white-space:pre-wrap;">${escapeHtml(match.content)}</div>
+            <div style="margin-top:8px;font-size:11px;color:#aaa;">${escapeHtml(match.source)}</div>
+        `;
+
+        let expanded = false;
+
+        bubble.addEventListener('mouseenter', () => {
+            bubble.style.transform = 'scale(1.1)';
+            bubble.style.boxShadow = '0 4px 16px rgba(0,0,0,0.3)';
+        });
+        bubble.addEventListener('mouseleave', () => {
+            if (!expanded) {
+                bubble.style.transform = 'scale(1)';
+                bubble.style.boxShadow = '0 2px 10px rgba(0,0,0,0.25)';
+            }
+        });
+
+        bubble.addEventListener('click', () => {
+            expanded = !expanded;
+            card.style.display = expanded ? 'block' : 'none';
+        });
+
+        // Close card when clicking outside
+        document.addEventListener('click', (e) => {
+            if (expanded && !bubble.contains(e.target as Node) && !card.contains(e.target as Node)) {
+                expanded = false;
+                card.style.display = 'none';
+                bubble.style.transform = 'scale(1)';
+            }
+        });
+
+        document.body.appendChild(card);
+        document.body.appendChild(bubble);
+    }
+
     private showNotification(result: SimpleAnalysisResult): void {
         // 检查是否已存在通知
         if (document.querySelector('.web-intelligence-notification')) {
@@ -492,12 +654,6 @@ console.log('🧠 智能网页分析 Content Script 已加载');
 // ===========================================================================
 // Context Match — floating insight bubble
 // ===========================================================================
-
-function escapeHtml(str: string): string {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
 
 (() => {
     const urlCache = new Map<string, boolean>();
