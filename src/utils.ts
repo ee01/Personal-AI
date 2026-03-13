@@ -1,3 +1,18 @@
+export type BotPushTargetMode = 'me' | 'group' | 'none';
+
+export type BotPushScenario =
+  | 'message_analysis'
+  | 'follow_up'
+  | 'dream_insight'
+  | 'weekly_report'
+  | 'decision_center';
+
+export interface ResolvedBotPushTarget {
+  mode: BotPushTargetMode;
+  apiType: 'user' | 'team' | null;
+  teamId?: string;
+}
+
 // 环境配置类型定义
 export interface EnvConfigType {
   MESSAGE_ANALYSIS_INTERVAL: number; // 分析消息的频度（分钟）
@@ -53,8 +68,92 @@ export interface EnvConfigType {
   WEEKLY_REPORT_ENABLED: string;        // 'true' | 'false'
   WEEKLY_REPORT_CRON: string;           // cron 表达式，默认 '0 18 * * 5'（每周五 18:00）
   WEEKLY_REPORT_MIN_MESSAGES: number;   // 最少消息数阈值，默认 20
+  MESSAGE_ANALYSIS_PUSH_TARGET?: BotPushTargetMode;
+  MESSAGE_ANALYSIS_PUSH_GROUP_ID?: string;
+  FOLLOW_UP_PUSH_TARGET?: BotPushTargetMode;
+  FOLLOW_UP_PUSH_GROUP_ID?: string;
+  DREAM_INSIGHT_PUSH_TARGET?: BotPushTargetMode;
+  DREAM_INSIGHT_PUSH_GROUP_ID?: string;
+  WEEKLY_REPORT_PUSH_TARGET?: BotPushTargetMode;
+  WEEKLY_REPORT_PUSH_GROUP_ID?: string;
+  DECISION_CENTER_PUSH_TARGET?: BotPushTargetMode;
+  DECISION_CENTER_PUSH_GROUP_ID?: string;
   DREAM_DIGEST_SCHEDULE_TYPE?: 'weekly' | 'every_x_days' | 'monthly';
   DREAM_DIGEST_INTERVAL_DAYS?: number;
+}
+
+export function normalizeBotPushTarget(
+  value: string | undefined | null,
+  allowNone = false,
+  fallback: BotPushTargetMode = 'me'
+): BotPushTargetMode {
+  if (value === 'group' || value === 'team') {
+    return 'group';
+  }
+  if (value === 'me' || value === 'user') {
+    return 'me';
+  }
+  if (allowNone && value === 'none') {
+    return 'none';
+  }
+  return fallback;
+}
+
+export function getBotPushTarget(config: EnvConfigType, scenario?: BotPushScenario): ResolvedBotPushTarget {
+  const fallbackMode = config.BOT_TYPE === 'team' ? 'group' : 'me';
+  const fallbackTeamId = config.TEAM_ID || '';
+
+  const scenarioConfig = (() => {
+    switch (scenario) {
+      case 'message_analysis':
+        return {
+          mode: normalizeBotPushTarget(config.MESSAGE_ANALYSIS_PUSH_TARGET, false, fallbackMode),
+          teamId: config.MESSAGE_ANALYSIS_PUSH_GROUP_ID || fallbackTeamId
+        };
+      case 'follow_up':
+        return {
+          mode: normalizeBotPushTarget(config.FOLLOW_UP_PUSH_TARGET, false, fallbackMode),
+          teamId: config.FOLLOW_UP_PUSH_GROUP_ID || fallbackTeamId
+        };
+      case 'dream_insight':
+        return {
+          mode: normalizeBotPushTarget(config.DREAM_INSIGHT_PUSH_TARGET, true, fallbackMode),
+          teamId: config.DREAM_INSIGHT_PUSH_GROUP_ID || fallbackTeamId
+        };
+      case 'weekly_report':
+        return {
+          mode: normalizeBotPushTarget(config.WEEKLY_REPORT_PUSH_TARGET, true, fallbackMode),
+          teamId: config.WEEKLY_REPORT_PUSH_GROUP_ID || fallbackTeamId
+        };
+      case 'decision_center':
+        return {
+          mode: normalizeBotPushTarget(config.DECISION_CENTER_PUSH_TARGET, false, fallbackMode),
+          teamId: config.DECISION_CENTER_PUSH_GROUP_ID || fallbackTeamId
+        };
+      default:
+        return {
+          mode: normalizeBotPushTarget(config.BOT_TYPE, false, fallbackMode),
+          teamId: fallbackTeamId
+        };
+    }
+  })();
+
+  if (scenarioConfig.mode === 'none') {
+    return { mode: 'none', apiType: null };
+  }
+
+  if (scenarioConfig.mode === 'group') {
+    return {
+      mode: 'group',
+      apiType: 'team',
+      teamId: scenarioConfig.teamId
+    };
+  }
+
+  return {
+    mode: 'me',
+    apiType: 'user'
+  };
 }
 
 export function formatDate(dateString: string | number) {
@@ -197,11 +296,21 @@ export const defaultEnvConfig: EnvConfigType = {
   WEEKLY_REPORT_ENABLED: process.env.WEEKLY_REPORT_ENABLED || "true",
   WEEKLY_REPORT_CRON: process.env.WEEKLY_REPORT_CRON || "0 18 * * 5",
   WEEKLY_REPORT_MIN_MESSAGES: Number(process.env.WEEKLY_REPORT_MIN_MESSAGES) || 20,
+  MESSAGE_ANALYSIS_PUSH_TARGET: 'me',
+  MESSAGE_ANALYSIS_PUSH_GROUP_ID: '',
+  FOLLOW_UP_PUSH_TARGET: 'me',
+  FOLLOW_UP_PUSH_GROUP_ID: '',
+  DREAM_INSIGHT_PUSH_TARGET: 'me',
+  DREAM_INSIGHT_PUSH_GROUP_ID: '',
+  WEEKLY_REPORT_PUSH_TARGET: 'me',
+  WEEKLY_REPORT_PUSH_GROUP_ID: '',
+  DECISION_CENTER_PUSH_TARGET: 'me',
+  DECISION_CENTER_PUSH_GROUP_ID: '',
   DREAM_DIGEST_SCHEDULE_TYPE: (
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' ||
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'monthly'
-  ) ? process.env.DREAM_DIGEST_SCHEDULE_TYPE : 'weekly',
-  DREAM_DIGEST_INTERVAL_DAYS: Math.max(1, Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 7),
+  ) ? process.env.DREAM_DIGEST_SCHEDULE_TYPE : 'every_x_days',
+  DREAM_DIGEST_INTERVAL_DAYS: Math.max(1, Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1),
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

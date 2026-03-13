@@ -45,8 +45,8 @@
         *   梦境内容来源：直接读取 `dreams/*.md` 文件，提取 Narrative + Insights 部分
     *   **前端 / 插件端**：
         *   Extension 后台 SW 拉取到 `dream_digest` 类型的 notification，使用 `chrome.notifications.create` 弹出通知
-        *   点击通知打开扩展 Dashboard (`memory-exploring.vue`) 并定位到一个新的 "Weekly Dream" 卡片区块
-        *   新增路由 `/dreams` 或在 Overview 页面增加 Dream 板块，拉取对应的 `dreams/*.md` 内容进行渲染
+        *   点击通知打开扩展 Dashboard (`memory-exploring.vue`) 并定位到一个新的「梦境洞察」卡片区块
+        *   新增路由 `/dreams` 或在 Overview 页面增加「梦境洞察」板块，拉取对应的 `dreams/*.md` 内容进行渲染
     *   **注意**：
         *   Weekly dreaming 的 cron 当前是 `'0 3 * * 0'` (周日凌晨3点)，与周一推送的时间差是合理的
         *   梦境文件路径模式为 `dreams/{topic-slug}-{date}.md`（参考 GenerativeReplay.ts）

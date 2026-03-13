@@ -310,7 +310,8 @@ export class FollowThreadDigestProcessor implements DigestProcessor {
   getNotifyConfig(): DigestNotifyConfig {
     return {
       notifyMethod: 'bot',
-      mention: false
+      mention: false,
+      pushScenario: 'follow_up'
     };
   }
 }

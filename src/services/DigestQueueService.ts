@@ -224,7 +224,8 @@ export class DigestQueueService {
           summary: `[${task.name}] ${collectedItems.length} 条汇总`,
           datetime: new Date().toLocaleString('zh-CN'),
           matchedRule: task.name,
-          mention: notifyConfig.mention
+          mention: notifyConfig.mention,
+          pushScenario: notifyConfig.pushScenario
         };
 
         await notificationService.sendNotification(
@@ -457,7 +458,8 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
   getNotifyConfig(): import('../types/digestQueue').DigestNotifyConfig {
     return {
       notifyMethod: 'bot',
-      mention: false
+      mention: false,
+      pushScenario: 'message_analysis'
     };
   }
 }

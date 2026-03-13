@@ -125,8 +125,9 @@ export class HeartbeatLoop {
   private userDataManager?: UserDataManager;
   private markdownManager?: MarkdownManager;
   private lastHeartbeat: number = 0;
+  private userId?: string;
 
-  constructor(db: Database.Database, userDataManager?: UserDataManager) {
+  constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
     this.db = db;
     this.policy = new ProactivityPolicy(db);
     this.profileManager = new ProfileManager(db);
@@ -134,6 +135,7 @@ export class HeartbeatLoop {
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
+    this.userId = userId;
   }
 
   // ---- Main entry point ---------------------------------------------------
@@ -215,7 +217,7 @@ export class HeartbeatLoop {
             await botSender.sendMarkdown(
               'Weekly Dream Digest',
               notif.payload.digestBody as string,
-              { mention: false },
+              { mention: false, targetUserId: this.userId },
             );
           }
         }
@@ -229,7 +231,7 @@ export class HeartbeatLoop {
             await botSender.sendMarkdown(
               '需要您的决策',
               `${notif.body}\n\n前往决策中心查看和处理此冲突。`,
-              { mention: true },
+              { mention: true, targetUserId: this.userId },
             );
           }
         }
@@ -261,8 +263,9 @@ export class HeartbeatLoop {
    *
    * This bypasses normal schedule window checks and idempotency guards,
    * so it is suitable for explicit user-triggered "push now" actions.
+   * @param userId - Used to derive target email (e.g. esone.qiu -> esone.qiu@ringcentral.com)
    */
-  async triggerDreamDigestNow(): Promise<DreamDigestPushResult> {
+  async triggerDreamDigestNow(userId?: string): Promise<DreamDigestPushResult> {
     const candidate = this.buildDreamDigestCandidate({
       ignoreScheduleWindow: true,
       ignoreIdempotency: true,
@@ -270,6 +273,7 @@ export class HeartbeatLoop {
     });
 
     if (!candidate) {
+      console.log('[DreamDigest] push-now: no candidate (no dream content or userDataManager)');
       return {
         generated: false,
         delivered: false,
@@ -284,13 +288,19 @@ export class HeartbeatLoop {
     if (candidate.payload?.digestBody) {
       const botSender = getBotSender();
       if (botSender.isConfigured()) {
+        console.log('[DreamDigest] push-now: sending to Bot...');
         await botSender.sendMarkdown(
           'Weekly Dream Digest',
           candidate.payload.digestBody as string,
-          { mention: false },
+          { mention: false, targetUserId: userId ?? this.userId },
         );
         botSent = true;
+        console.log('[DreamDigest] push-now: botSent=true');
+      } else {
+        console.warn('[DreamDigest] push-now: Bot not configured (BOT_API_BASE_URL/BOT_TOKEN/BOT_ID missing)');
       }
+    } else {
+      console.warn('[DreamDigest] push-now: digestBody empty, skipping Bot send');
     }
 
     return {
@@ -767,10 +777,11 @@ export class HeartbeatLoop {
 
     const digestBody = recentDreams
       .map((content) => {
-        const titleMatch = content.match(/# Dream: (.+)/);
+        const titleMatch =
+          content.match(/# Dream: (.+)/) || content.match(/^# (.+)$/m);
         const narrativeMatch = content.match(/## Narrative\n([\s\S]*?)(?=\n## |$)/);
         const insightsMatch = content.match(/## Insights\n([\s\S]*?)(?=\n## |$)/);
-        const title = titleMatch?.[1] || 'Untitled';
+        const title = titleMatch?.[1]?.trim() || 'Untitled';
         const narrative = narrativeMatch?.[1]?.trim().slice(0, 200) || '';
         const insights = insightsMatch?.[1]?.trim() || '';
         return `**${title}**\n${narrative}...\n${insights}`;

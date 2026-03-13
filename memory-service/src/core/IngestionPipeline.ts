@@ -86,11 +86,11 @@ export class IngestionPipeline {
   private truthMaintainer: TruthMaintainer;
   private userDataManager?: UserDataManager;
 
-  constructor(db: Database.Database, userDataManager?: UserDataManager) {
+  constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
     this.db = db;
     this.userDataManager = userDataManager;
     this.scorer = new SalienceScorer(db);
-    this.truthMaintainer = new TruthMaintainer(db);
+    this.truthMaintainer = new TruthMaintainer(db, userId);
   }
 
   /**

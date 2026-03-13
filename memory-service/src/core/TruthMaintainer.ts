@@ -14,6 +14,7 @@
 
 import type Database from 'better-sqlite3';
 import { now } from '../utils/time.js';
+import { getBotSender } from '../utils/botSender.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -112,9 +113,11 @@ interface EntityPropertyRow {
 
 export class TruthMaintainer {
   private db: Database.Database;
+  private userId?: string;
 
-  constructor(db: Database.Database) {
+  constructor(db: Database.Database, userId?: string) {
     this.db = db;
+    this.userId = userId;
   }
 
   // -------------------------------------------------------------------------
@@ -741,7 +744,45 @@ export class TruthMaintainer {
       params.timestamp,
     );
 
+    void this.notifyConfirmRequestCreated({
+      id,
+      question,
+      context: contextParts.join('; ') || null,
+      priority: params.isFinalConflict ? 'high' : 'normal',
+    });
+
     return id;
+  }
+
+  private async notifyConfirmRequestCreated(params: {
+    id: string;
+    question: string;
+    context: string | null;
+    priority: string;
+  }): Promise<void> {
+    const botSender = getBotSender();
+    if (!botSender.isConfigured()) return;
+
+    const bodyParts = [
+      `有新的待确认决策需要处理。`,
+      '',
+      `问题：${params.question}`,
+    ];
+
+    if (params.context) {
+      bodyParts.push(`上下文：${params.context}`);
+    }
+
+    bodyParts.push(`优先级：${params.priority}`);
+    bodyParts.push(`请求 ID：${params.id}`);
+    bodyParts.push('');
+    bodyParts.push('请打开扩展 Dashboard 的 `#/decisions` 页面处理。');
+
+    await botSender.sendMarkdown(
+      '新的待确认决策',
+      bodyParts.join('\n'),
+      { mention: true, targetUserId: this.userId },
+    );
   }
 
   // -------------------------------------------------------------------------

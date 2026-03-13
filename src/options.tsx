@@ -1,10 +1,43 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
-import { defaultEnvConfig, EnvConfigType, getDefaultEnvConfig } from './utils';
+import {
+    BotPushTargetMode,
+    defaultEnvConfig,
+    EnvConfigType,
+    getDefaultEnvConfig,
+    normalizeBotPushTarget,
+} from './utils';
 import { agentCoordinator } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
+
+type PushTargetField =
+    | 'MESSAGE_ANALYSIS_PUSH_TARGET'
+    | 'FOLLOW_UP_PUSH_TARGET'
+    | 'DREAM_INSIGHT_PUSH_TARGET'
+    | 'WEEKLY_REPORT_PUSH_TARGET'
+    | 'DECISION_CENTER_PUSH_TARGET';
+
+type PushGroupField =
+    | 'MESSAGE_ANALYSIS_PUSH_GROUP_ID'
+    | 'FOLLOW_UP_PUSH_GROUP_ID'
+    | 'DREAM_INSIGHT_PUSH_GROUP_ID'
+    | 'WEEKLY_REPORT_PUSH_GROUP_ID'
+    | 'DECISION_CENTER_PUSH_GROUP_ID';
+
+const PUSH_TARGET_RULES: Array<{
+    targetKey: PushTargetField;
+    groupKey: PushGroupField;
+    label: string;
+    allowNone?: boolean;
+}> = [
+    { targetKey: 'MESSAGE_ANALYSIS_PUSH_TARGET', groupKey: 'MESSAGE_ANALYSIS_PUSH_GROUP_ID', label: '消息分析推送' },
+    { targetKey: 'FOLLOW_UP_PUSH_TARGET', groupKey: 'FOLLOW_UP_PUSH_GROUP_ID', label: '关注后续推送' },
+    { targetKey: 'DREAM_INSIGHT_PUSH_TARGET', groupKey: 'DREAM_INSIGHT_PUSH_GROUP_ID', label: '梦境洞察推送', allowNone: true },
+    { targetKey: 'WEEKLY_REPORT_PUSH_TARGET', groupKey: 'WEEKLY_REPORT_PUSH_GROUP_ID', label: '周报推送', allowNone: true },
+    { targetKey: 'DECISION_CENTER_PUSH_TARGET', groupKey: 'DECISION_CENTER_PUSH_GROUP_ID', label: '决策中心推送' },
+];
 
 // 使用从utils.ts导入的类型
 const Options = () => {
@@ -14,12 +47,40 @@ const Options = () => {
         type: ''
     });
     const [isDreamDigestPushing, setIsDreamDigestPushing] = useState(false);
+    const [isWeeklyReportPushing, setIsWeeklyReportPushing] = useState(false);
 
     // Weekly Report backend state (synced with memory-service)
-    const [weeklyReportEnabled, setWeeklyReportEnabled] = useState<string>('true');
     const [weeklyReportCron, setWeeklyReportCron] = useState<string>('0 18 * * 5');
     const [weeklyReportMinMessages, setWeeklyReportMinMessages] = useState<number>(20);
     const [weeklyReportSaving, setWeeklyReportSaving] = useState(false);
+
+    const resolvePushTargetValue = (
+        target: string | undefined,
+        fallback: BotPushTargetMode = 'me',
+        allowNone = false,
+        enabled?: boolean
+    ): BotPushTargetMode => {
+        const normalizedFallback = allowNone && enabled === false ? 'none' : fallback;
+        return normalizeBotPushTarget(target, allowNone, normalizedFallback);
+    };
+
+    const validatePushTargets = (targetConfig: EnvConfigType, targetKeys?: PushTargetField[]): string | null => {
+        const rules = targetKeys
+            ? PUSH_TARGET_RULES.filter(rule => targetKeys.includes(rule.targetKey))
+            : PUSH_TARGET_RULES;
+
+        for (const rule of rules) {
+            const mode = resolvePushTargetValue(
+                String(targetConfig[rule.targetKey] || ''),
+                'me',
+                rule.allowNone
+            );
+            if (mode === 'group' && !String(targetConfig[rule.groupKey] || '').trim()) {
+                return `${rule.label} 已选择自定义群组，请填写群组 ID`;
+            }
+        }
+        return null;
+    };
 
     // Load weekly report settings from backend
     const loadWeeklyReportSettingsFromBackend = async (baseUrl: string, apiKey?: string) => {
@@ -29,15 +90,26 @@ const Options = () => {
             const res = await fetch(`${baseUrl}/config`, { headers });
             if (res.ok) {
                 const data = await res.json();
-                if (data.weeklyReportEnabled !== undefined) {
-                    setWeeklyReportEnabled(String(data.weeklyReportEnabled));
-                }
                 if (data.weeklyReportCron) {
                     setWeeklyReportCron(data.weeklyReportCron);
                 }
                 if (data.weeklyReportMinMessages !== undefined) {
                     setWeeklyReportMinMessages(Number(data.weeklyReportMinMessages));
                 }
+                setConfig(prev => ({
+                    ...prev,
+                    WEEKLY_REPORT_CRON: data.weeklyReportCron || prev.WEEKLY_REPORT_CRON,
+                    WEEKLY_REPORT_MIN_MESSAGES: data.weeklyReportMinMessages !== undefined
+                        ? Number(data.weeklyReportMinMessages)
+                        : prev.WEEKLY_REPORT_MIN_MESSAGES,
+                    WEEKLY_REPORT_PUSH_TARGET: resolvePushTargetValue(
+                        data.weeklyReportPushTarget,
+                        prev.WEEKLY_REPORT_PUSH_TARGET || 'me',
+                        true,
+                        data.weeklyReportEnabled
+                    ),
+                    WEEKLY_REPORT_PUSH_GROUP_ID: data.weeklyReportPushGroupId || prev.WEEKLY_REPORT_PUSH_GROUP_ID || '',
+                }));
             }
         } catch (err) {
             console.warn('Failed to load weekly report settings from backend:', err);
@@ -48,17 +120,31 @@ const Options = () => {
     const saveWeeklyReportSettings = async () => {
         const baseUrl = config.MEMORY_SERVICE_BASE_URL || 'http://localhost:3210/api/v1';
         const apiKey = config.MEMORY_SERVICE_API_KEY;
+        const pushTarget = resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true);
+        const validationError = validatePushTargets(config, ['WEEKLY_REPORT_PUSH_TARGET']);
+        if (validationError) {
+            setStatus({ message: validationError, type: 'error' });
+            return;
+        }
         setWeeklyReportSaving(true);
         try {
+            await chrome.storage.local.set({ envConfig: config });
+            await chrome.runtime.sendMessage({
+                type: 'UPDATE_ENV_CONFIG',
+                config
+            });
+
             const headers: Record<string, string> = { 'Content-Type': 'application/json' };
             if (apiKey) headers['x-api-key'] = apiKey;
             const res = await fetch(`${baseUrl}/config`, {
                 method: 'PUT',
                 headers,
                 body: JSON.stringify({
-                    weeklyReportEnabled: weeklyReportEnabled === 'true',
+                    weeklyReportEnabled: pushTarget !== 'none',
                     weeklyReportCron,
                     weeklyReportMinMessages,
+                    weeklyReportPushTarget: pushTarget,
+                    weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
                 }),
             });
             if (res.ok) {
@@ -82,6 +168,8 @@ const Options = () => {
             if (result.envConfig) {
                 const merged = { ...defaultEnvConfig, ...result.envConfig };
                 setConfig(merged);
+                setWeeklyReportCron(merged.WEEKLY_REPORT_CRON || '0 18 * * 5');
+                setWeeklyReportMinMessages(Number(merged.WEEKLY_REPORT_MIN_MESSAGES) || 20);
                 loadDreamDigestSettingsFromBackend(merged);
             } else {
                 // 如果没有保存过配置，则尝试从 .env 加载
@@ -102,6 +190,8 @@ const Options = () => {
         try {
             const config = getDefaultEnvConfig();
             setConfig(config);
+            setWeeklyReportCron(config.WEEKLY_REPORT_CRON || '0 18 * * 5');
+            setWeeklyReportMinMessages(Number(config.WEEKLY_REPORT_MIN_MESSAGES) || 20);
             await loadDreamDigestSettingsFromBackend(config);
             setStatus({
                 message: '已从.env文件加载默认配置',
@@ -149,10 +239,23 @@ const Options = () => {
                 DREAM_DIGEST_SCHEDULE_TYPE:
                     resolvedScheduleType === 'every_x_days' || resolvedScheduleType === 'monthly'
                         ? resolvedScheduleType
-                        : (prev.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly'),
+                        : (prev.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days'),
                 DREAM_DIGEST_INTERVAL_DAYS: Number.isFinite(intervalDays)
                     ? Math.max(1, Math.floor(intervalDays))
-                    : (prev.DREAM_DIGEST_INTERVAL_DAYS || 7),
+                    : (prev.DREAM_DIGEST_INTERVAL_DAYS || 1),
+                DREAM_INSIGHT_PUSH_TARGET: resolvePushTargetValue(
+                    serverConfig?.dreamDigestPushTarget,
+                    prev.DREAM_INSIGHT_PUSH_TARGET || 'me',
+                    true,
+                    serverConfig?.dreamDigestEnabled
+                ),
+                DREAM_INSIGHT_PUSH_GROUP_ID: serverConfig?.dreamDigestPushGroupId || prev.DREAM_INSIGHT_PUSH_GROUP_ID || '',
+                DECISION_CENTER_PUSH_TARGET: resolvePushTargetValue(
+                    serverConfig?.decisionCenterPushTarget,
+                    prev.DECISION_CENTER_PUSH_TARGET || 'me',
+                    false
+                ),
+                DECISION_CENTER_PUSH_GROUP_ID: serverConfig?.decisionCenterPushGroupId || prev.DECISION_CENTER_PUSH_GROUP_ID || '',
             }));
         } catch (error) {
             console.warn('加载梦境简报配置失败:', error);
@@ -193,6 +296,15 @@ const Options = () => {
                 });
                 return;
             }
+
+            const pushTargetValidationError = validatePushTargets(config);
+            if (pushTargetValidationError) {
+                setStatus({
+                    message: pushTargetValidationError,
+                    type: 'error'
+                });
+                return;
+            }
             
             await chrome.storage.local.set({ envConfig: config });
             // 通知background脚本更新配置
@@ -203,12 +315,23 @@ const Options = () => {
 
             // 同步梦境简报计划到 memory-service 运行时配置
             const headers = await getRequestHeaders(config);
+            const dreamInsightPushTarget = resolvePushTargetValue(config.DREAM_INSIGHT_PUSH_TARGET, 'me', true);
             const syncResponse = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/config`, {
                 method: 'PUT',
                 headers,
                 body: JSON.stringify({
-                    dreamDigestScheduleType: config.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly',
-                    dreamDigestIntervalDays: Math.max(1, Number(config.DREAM_DIGEST_INTERVAL_DAYS) || 7),
+                    dreamDigestScheduleType: config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
+                    dreamDigestIntervalDays: Math.max(1, Number(config.DREAM_DIGEST_INTERVAL_DAYS) || 1),
+                    dreamDigestEnabled: dreamInsightPushTarget !== 'none',
+                    dreamDigestPushTarget: dreamInsightPushTarget,
+                    dreamDigestPushGroupId: (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
+                    decisionCenterPushTarget: resolvePushTargetValue(config.DECISION_CENTER_PUSH_TARGET, 'me', false),
+                    decisionCenterPushGroupId: (config.DECISION_CENTER_PUSH_GROUP_ID || '').trim() || undefined,
+                    weeklyReportEnabled: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true) !== 'none',
+                    weeklyReportCron,
+                    weeklyReportMinMessages,
+                    weeklyReportPushTarget: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true),
+                    weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
                 }),
             });
             if (!syncResponse.ok) {
@@ -234,13 +357,23 @@ const Options = () => {
     };
 
     const handlePushDreamDigestNow = async () => {
+        const validationError = validatePushTargets(config, ['DREAM_INSIGHT_PUSH_TARGET']);
+        if (validationError) {
+            setStatus({ message: validationError, type: 'error' });
+            return;
+        }
         setIsDreamDigestPushing(true);
         try {
             const headers = await getRequestHeaders(config);
+            const dreamInsightPushTarget = resolvePushTargetValue(config.DREAM_INSIGHT_PUSH_TARGET, 'me', true);
             const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/dream-digest/push-now`, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ force: true }),
+                body: JSON.stringify({
+                    force: true,
+                    dreamDigestPushTarget: dreamInsightPushTarget,
+                    dreamDigestPushGroupId: (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
+                }),
             });
             const result = await response.json();
             if (!response.ok) {
@@ -248,7 +381,9 @@ const Options = () => {
             }
             if (result?.generated) {
                 setStatus({
-                    message: result?.botSent
+                    message: dreamInsightPushTarget === 'none'
+                        ? '梦境洞察简报已立即生成（当前配置为不推送）'
+                        : result?.botSent
                         ? '梦境洞察简报已立即推送（Chrome + Bot）'
                         : '梦境洞察简报已立即推送（Chrome 通知已写入）',
                     type: 'success',
@@ -270,9 +405,60 @@ const Options = () => {
         }
     };
 
+    const handlePushWeeklyReportNow = async () => {
+        const validationError = validatePushTargets(config, ['WEEKLY_REPORT_PUSH_TARGET']);
+        if (validationError) {
+            setStatus({ message: validationError, type: 'error' });
+            return;
+        }
+        setIsWeeklyReportPushing(true);
+        try {
+            const headers = await getRequestHeaders(config);
+            const weeklyReportPushTarget = resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true);
+            const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/weekly-report/push-now`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    force: true,
+                    weeklyReportPushTarget,
+                    weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
+                }),
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result?.error || '推送失败');
+            }
+            if (result?.generated) {
+                setStatus({
+                    message: weeklyReportPushTarget === 'none'
+                        ? '周报已立即生成（当前配置为不推送）'
+                        : result?.botSent
+                        ? '周报已立即推送（Chrome + Bot）'
+                        : '周报已立即生成（Chrome 通知已写入）',
+                    type: 'success',
+                });
+            } else {
+                setStatus({
+                    message: result?.reason || '未生成周报',
+                    type: 'error',
+                });
+            }
+        } catch (error) {
+            console.error('立即推送周报失败:', error);
+            setStatus({
+                message: `立即推送周报失败: ${(error as Error).message}`,
+                type: 'error',
+            });
+        } finally {
+            setIsWeeklyReportPushing(false);
+        }
+    };
+
     // 重置配置为默认值
     const resetConfig = () => {
         setConfig({...defaultEnvConfig});
+        setWeeklyReportCron(defaultEnvConfig.WEEKLY_REPORT_CRON || '0 18 * * 5');
+        setWeeklyReportMinMessages(Number(defaultEnvConfig.WEEKLY_REPORT_MIN_MESSAGES) || 20);
         setStatus({
             message: '配置已重置为默认值',
             type: 'success'
@@ -306,7 +492,9 @@ const Options = () => {
         reader.onload = (event) => {
             try {
                 const importedConfig = JSON.parse(event.target?.result as string);
-                setConfig(importedConfig);
+                setConfig({ ...defaultEnvConfig, ...importedConfig });
+                setWeeklyReportCron(importedConfig.WEEKLY_REPORT_CRON || defaultEnvConfig.WEEKLY_REPORT_CRON || '0 18 * * 5');
+                setWeeklyReportMinMessages(Number(importedConfig.WEEKLY_REPORT_MIN_MESSAGES) || Number(defaultEnvConfig.WEEKLY_REPORT_MIN_MESSAGES) || 20);
                 setStatus({
                     message: '配置已导入',
                     type: 'success'
@@ -334,6 +522,59 @@ const Options = () => {
         a.click();
         
         URL.revokeObjectURL(url);
+    };
+
+    const renderPushTargetFields = (
+        label: string,
+        targetKey: PushTargetField,
+        groupKey: PushGroupField,
+        allowNone = false,
+        description?: string
+    ) => {
+        const targetValue = resolvePushTargetValue(
+            String(config[targetKey] || ''),
+            'me',
+            allowNone
+        );
+
+        return (
+            <>
+                <div className="form-group">
+                    <label htmlFor={targetKey}>{label}</label>
+                    <select
+                        id={targetKey}
+                        name={targetKey}
+                        value={targetValue}
+                        onChange={handleInputChange}
+                    >
+                        {allowNone && <option value="none">不推送</option>}
+                        <option value="me">推送给 Me（user）</option>
+                        <option value="group">自定义群组</option>
+                    </select>
+                    {description && (
+                        <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                            {description}
+                        </small>
+                    )}
+                </div>
+                {targetValue === 'group' && (
+                    <div className="form-group">
+                        <label htmlFor={groupKey}>{label}群组 ID</label>
+                        <input
+                            type="text"
+                            id={groupKey}
+                            name={groupKey}
+                            value={String(config[groupKey] || '')}
+                            onChange={handleInputChange}
+                            placeholder="输入 RingCentral 群组 ID"
+                        />
+                        <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                            仅在选择「自定义群组」时生效。
+                        </small>
+                    </div>
+                )}
+            </>
+        );
     };
 
     return (
@@ -484,19 +725,6 @@ const Options = () => {
                     <label>
                         <input
                             type="checkbox"
-                            name="ENABLE_BOT"
-                            checked={config.ENABLE_BOT}
-                            disabled={config.ANALYSIS_TYPE === 'agentThinking'}
-                            onChange={handleInputChange}
-                        />
-                        启用消息提醒 {config.ANALYSIS_TYPE === 'agentThinking' ? '(Agent思考模式下自我决断)' : ''}
-                    </label>
-                </div>
-
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
                             name="LLM_REVIEW_BEFORE_SEND"
                             hidden={config.ANALYSIS_TYPE === 'agentThinking' || config.ANALYSIS_TYPE === 'agentWorkflow'}
                             checked={config.LLM_REVIEW_BEFORE_SEND}
@@ -505,6 +733,34 @@ const Options = () => {
                         启用消息审核（若不启用审核，会推送所有关注消息）
                     </label>
                 </div>
+            </div>
+
+            <div className="form-section">
+                <h2>Bot 推送设置</h2>
+                <small style={{ color: '#666', display: 'block', marginBottom: '15px' }}>
+                    Bot Key 和 Base URL 从 env 读取，这里只配置各场景推送到 Me（user）还是自定义群组。
+                </small>
+                {renderPushTargetFields(
+                    '消息分析推送',
+                    'MESSAGE_ANALYSIS_PUSH_TARGET',
+                    'MESSAGE_ANALYSIS_PUSH_GROUP_ID',
+                    false,
+                    '命中关注项后的即时提醒。默认推送给 Me。'
+                )}
+                {renderPushTargetFields(
+                    '关注后续推送',
+                    'FOLLOW_UP_PUSH_TARGET',
+                    'FOLLOW_UP_PUSH_GROUP_ID',
+                    false,
+                    '与消息分析拆开配置，关注后续汇总和相关提醒走这一套。'
+                )}
+                {renderPushTargetFields(
+                    '决策中心推送',
+                    'DECISION_CENTER_PUSH_TARGET',
+                    'DECISION_CENTER_PUSH_GROUP_ID',
+                    false,
+                    '用于冲突/待确认类的决策中心提醒。默认推送给 Me。'
+                )}
             </div>
 
             <div className="form-section">
@@ -596,17 +852,24 @@ const Options = () => {
                         对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
                     </small>
                 </div>
+                {renderPushTargetFields(
+                    '梦境洞察推送',
+                    'DREAM_INSIGHT_PUSH_TARGET',
+                    'DREAM_INSIGHT_PUSH_GROUP_ID',
+                    true,
+                    '默认每天推送给 Me，也可以切换到自定义群组或不推送。'
+                )}
                 <div className="form-group">
-                    <label htmlFor="DREAM_DIGEST_SCHEDULE_TYPE">梦境洞察简报周期</label>
+                    <label htmlFor="DREAM_DIGEST_SCHEDULE_TYPE">梦境洞察推送频率</label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         <select
                             id="DREAM_DIGEST_SCHEDULE_TYPE"
                             name="DREAM_DIGEST_SCHEDULE_TYPE"
-                            value={config.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly'}
+                            value={config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days'}
                             onChange={handleInputChange}
                         >
+                            <option value="every_x_days">每天 / 每隔 X 天</option>
                             <option value="weekly">每周</option>
-                            <option value="every_x_days">每隔 X 天</option>
                             <option value="monthly">每月</option>
                         </select>
                         {config.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' && (
@@ -616,7 +879,7 @@ const Options = () => {
                                     type="number"
                                     id="DREAM_DIGEST_INTERVAL_DAYS"
                                     name="DREAM_DIGEST_INTERVAL_DAYS"
-                                    value={config.DREAM_DIGEST_INTERVAL_DAYS || 7}
+                                    value={config.DREAM_DIGEST_INTERVAL_DAYS || 1}
                                     onChange={handleInputChange}
                                     min="1"
                                     style={{ width: '80px' }}
@@ -633,7 +896,7 @@ const Options = () => {
                         </button>
                     </div>
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        点击「保存配置」后会同步到 memory-service。点击「立即推送」会跳过时间窗口，直接触发 Dream Digest 推送。
+                        点击「保存配置」后会同步到 memory-service。选择「不推送」时会按禁用同步；点击「立即推送」会跳过时间窗口，直接触发 Dream Digest。
                     </small>
                 </div>
             </div>
@@ -641,26 +904,28 @@ const Options = () => {
             <div className="form-section">
                 <h2>自动周报 (Weekly Report)</h2>
                 <small style={{ color: '#666', display: 'block', marginBottom: '15px' }}>
-                    自动周报功能会在指定时间自动生成本周工作总结并通过 Bot 推送。设置保存到后端记忆服务。
+                    自动周报功能会在指定时间自动生成本周工作总结。默认每周推送给 Me，也可以切到自定义群组或不推送。
                 </small>
-                <div className="form-group">
-                    <label htmlFor="WEEKLY_REPORT_ENABLED">启用自动周报</label>
-                    <select
-                        id="WEEKLY_REPORT_ENABLED"
-                        value={weeklyReportEnabled}
-                        onChange={(e) => setWeeklyReportEnabled(e.target.value)}
-                    >
-                        <option value="true">启用</option>
-                        <option value="false">禁用</option>
-                    </select>
-                </div>
+                {renderPushTargetFields(
+                    '周报推送',
+                    'WEEKLY_REPORT_PUSH_TARGET',
+                    'WEEKLY_REPORT_PUSH_GROUP_ID',
+                    true,
+                    '选择「不推送」时，保存到后端会自动按禁用处理。'
+                )}
                 <div className="form-group">
                     <label htmlFor="WEEKLY_REPORT_CRON">Cron 表达式</label>
                     <input
                         type="text"
                         id="WEEKLY_REPORT_CRON"
                         value={weeklyReportCron}
-                        onChange={(e) => setWeeklyReportCron(e.target.value)}
+                        onChange={(e) => {
+                            setWeeklyReportCron(e.target.value);
+                            setConfig(prev => ({
+                                ...prev,
+                                WEEKLY_REPORT_CRON: e.target.value
+                            }));
+                        }}
                         placeholder="0 18 * * 5"
                     />
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
@@ -673,7 +938,14 @@ const Options = () => {
                         type="number"
                         id="WEEKLY_REPORT_MIN_MESSAGES"
                         value={weeklyReportMinMessages}
-                        onChange={(e) => setWeeklyReportMinMessages(Number(e.target.value))}
+                        onChange={(e) => {
+                            const value = Number(e.target.value);
+                            setWeeklyReportMinMessages(value);
+                            setConfig(prev => ({
+                                ...prev,
+                                WEEKLY_REPORT_MIN_MESSAGES: value
+                            }));
+                        }}
                         min={0}
                         placeholder="20"
                     />
@@ -695,6 +967,22 @@ const Options = () => {
                     }}
                 >
                     {weeklyReportSaving ? '保存中...' : '保存周报设置到后端'}
+                </button>
+                <button
+                    onClick={handlePushWeeklyReportNow}
+                    disabled={isWeeklyReportPushing}
+                    style={{
+                        backgroundColor: '#667eea',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: isWeeklyReportPushing ? 'not-allowed' : 'pointer',
+                        fontSize: '14px',
+                        marginLeft: '8px',
+                    }}
+                >
+                    {isWeeklyReportPushing ? '推送中...' : '立即推送周报'}
                 </button>
             </div>
 
@@ -879,42 +1167,6 @@ const Options = () => {
                     </div>
                 </div>
             )}
-
-            <div className="form-section">
-                <h2>推送设置</h2>
-                <div className="form-group">
-                    <label htmlFor="BOT_TYPE">消息推送对象</label>
-                    <select
-                        id="BOT_TYPE"
-                        name="BOT_TYPE"
-                        value={config.BOT_TYPE}
-                        onChange={handleInputChange}
-                    >
-                        <option value="user">我</option>
-                        <option value="team">团队</option>
-                    </select>
-                </div>
-                <div className="form-group">
-                    <label htmlFor="BOT_TOKEN">Bot Token</label>
-                    <input
-                        type="text"
-                        id="BOT_TOKEN"
-                        name="BOT_TOKEN"
-                        value={config.BOT_TOKEN}
-                        onChange={handleInputChange}
-                    />
-                </div>
-                <div className="form-group">
-                    <label htmlFor="TEAM_ID">团队 ID</label>
-                    <input
-                        type="text"
-                        id="TEAM_ID"
-                        name="TEAM_ID"
-                        value={config.TEAM_ID}
-                        onChange={handleInputChange}
-                    />
-                </div>
-            </div>
 
             <div className="form-section">
                 <h2>Jira 设置</h2>

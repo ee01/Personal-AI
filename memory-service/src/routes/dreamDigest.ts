@@ -25,8 +25,12 @@ export async function dreamDigestRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: pushNowBodySchema } },
     async (request, reply) => {
       const { db, userDataManager } = request.userContext;
-      const loop = new HeartbeatLoop(db, userDataManager);
-      const result = await loop.triggerDreamDigestNow();
+      const userId = request.userId ?? 'unknown';
+      const loop = new HeartbeatLoop(db, userDataManager, userId);
+      const result = await loop.triggerDreamDigestNow(userId);
+      console.log(
+        `[dream-digest/push-now] userId=${userId} result=${JSON.stringify(result)}`,
+      );
       return reply.status(200).send(result);
     },
   );

@@ -21,6 +21,8 @@ export interface WeeklyReportResult {
   reportPath?: string;
   messageCount: number;
   reflectionCount: number;
+  botSent?: boolean;
+  reason?: string;
 }
 
 interface CountRow { cnt: number; }
@@ -40,19 +42,30 @@ export class WeeklyReporter {
   private db: Database.Database;
   private userDataManager?: UserDataManager;
   private markdownManager?: MarkdownManager;
+  private userId?: string;
 
-  constructor(db: Database.Database, userDataManager?: UserDataManager) {
+  constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
     this.db = db;
     this.userDataManager = userDataManager;
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
+    this.userId = userId;
   }
 
-  async generateWeeklyReport(): Promise<WeeklyReportResult> {
+  async generateWeeklyReport(options?: {
+    ignoreEnabled?: boolean;
+    ignoreMinMessages?: boolean;
+    manual?: boolean;
+  }): Promise<WeeklyReportResult> {
     const config = getConfig();
-    if (!config.weeklyReportEnabled) {
-      return { generated: false, messageCount: 0, reflectionCount: 0 };
+    if (!options?.ignoreEnabled && !config.weeklyReportEnabled) {
+      return {
+        generated: false,
+        messageCount: 0,
+        reflectionCount: 0,
+        reason: 'Weekly report is disabled.',
+      };
     }
 
     const currentTime = now();
@@ -64,16 +77,26 @@ export class WeeklyReporter {
       .prepare('SELECT COUNT(*) as cnt FROM messages_raw WHERE created_at > ?')
       .get(sevenDaysAgo) as CountRow).cnt;
 
-    if (msgCount < config.weeklyReportMinMessages) {
+    if (!options?.ignoreMinMessages && msgCount < config.weeklyReportMinMessages) {
       console.log(`[WeeklyReporter] Skipping — only ${msgCount} messages (min: ${config.weeklyReportMinMessages})`);
-      return { generated: false, messageCount: msgCount, reflectionCount: 0 };
+      return {
+        generated: false,
+        messageCount: msgCount,
+        reflectionCount: 0,
+        reason: `Only ${msgCount} messages found; minimum is ${config.weeklyReportMinMessages}.`,
+      };
     }
 
     // 2. Read recent reflections
     const udm = this.userDataManager;
     if (!udm) {
       console.warn('[WeeklyReporter] UserDataManager not available');
-      return { generated: false, messageCount: msgCount, reflectionCount: 0 };
+      return {
+        generated: false,
+        messageCount: msgCount,
+        reflectionCount: 0,
+        reason: 'User data manager is not available.',
+      };
     }
 
     const reflectionFiles = udm.listFiles('reflections');
@@ -123,7 +146,9 @@ Keep it concise (under 500 words). Write in the same language as the source cont
     const reportContent = `# Weekly Report — ${dateStr}\n\n${reportText}`;
 
     // 5. Write report file
-    const reportPath = `reports/weekly-${dateStr}.md`;
+    const reportPath = options?.manual
+      ? `reports/weekly-manual-${dateStr}.md`
+      : `reports/weekly-${dateStr}.md`;
     udm.writeFile(reportPath, reportContent);
     await this.markdownManager?.reindexFile(reportPath);
 
@@ -143,11 +168,22 @@ Keep it concise (under 500 words). Write in the same language as the source cont
 
     // 7. Bot push
     const botSender = getBotSender();
+    let botSent = false;
     if (botSender.isConfigured()) {
-      await botSender.sendMarkdown('Weekly Report', reportText, { mention: false });
+      await botSender.sendMarkdown('Weekly Report', reportText, {
+        mention: false,
+        targetUserId: this.userId,
+      });
+      botSent = true;
     }
 
     console.log(`[WeeklyReporter] Report generated: ${reportPath}`);
-    return { generated: true, reportPath, messageCount: msgCount, reflectionCount: reflections.length };
+    return {
+      generated: true,
+      reportPath,
+      messageCount: msgCount,
+      reflectionCount: reflections.length,
+      botSent,
+    };
   }
 }

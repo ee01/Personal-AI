@@ -12,6 +12,7 @@ import { getEnvConfig } from '../utils';
 import { handleLLMRequest } from '../llm';
 import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';
+import { sendPlainBotMessage } from '../bot';
 
 // ==================== 类型定义 ====================
 
@@ -65,6 +66,9 @@ export interface NotificationData {
   
   // 提及控制
   mention?: boolean;
+
+  // 推送场景，用于选择独立的 Bot 目标
+  pushScenario?: import('../utils').BotPushScenario;
   
   // 自动答复信息
   autoReplyInfo?: AutoReplyInfo;
@@ -303,9 +307,6 @@ export class NotificationService {
    * 发送 Bot (Glip) 通知
    */
   private async sendBotNotification(data: NotificationData): Promise<void> {
-    const { userinfo } = await chrome.storage.local.get('userinfo');
-    const envConfig = await getEnvConfig();
-    
     // 构建消息链接
     const messageLink = data.postId && data.teamId 
       ? `https://app.ringcentral.com/l/messages/${data.teamId}/${data.postId}`
@@ -347,35 +348,13 @@ ${replySection}
 `;
 
     const shouldMention = data.mention !== false;
-    
-    const payload = envConfig.BOT_TYPE === 'team' ? {
-      mentionList: shouldMention ? [userinfo.userEmail] : [],
-      isTeamMention: false,
-      teamName: data.teamName,
-      teamId: envConfig.TEAM_ID,
+
+    await sendPlainBotMessage({
       message: formattedMessage,
-      skipMentionCheck: !shouldMention
-    } : {
       mention: shouldMention,
-      email: userinfo.userEmail,
-      emailAutoCorrect: true,
-      message: formattedMessage,
-    };
-    
-    const response = await fetch(`${envConfig.BOT_API_BASE_URL}/${envConfig.BOT_TYPE}/message`, {
-      method: 'POST',
-      headers: {
-        'accept': '*/*',
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${envConfig.BOT_TOKEN}`,
-        'bot': envConfig.BOT_ID
-      },
-      body: JSON.stringify(payload)
+      teamName: data.teamName,
+      pushScenario: data.pushScenario
     });
-    
-    if (!response.ok) {
-      throw new Error(`Bot API error: ${response.status}`);
-    }
   }
   
   /**

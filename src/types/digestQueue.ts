@@ -5,6 +5,8 @@
  * 支持多种场景：关注后续合并通知、concernedItems 每日摘要、Jira 周报等。
  */
 
+import type { BotPushScenario } from '../utils';
+
 // ==================== 频率配置 ====================
 
 /**
@@ -91,6 +93,8 @@ export interface DigestNotifyConfig {
   notifyMethod: string;
   /** 是否 @用户 */
   mention?: boolean;
+  /** Bot 推送场景，用于选择独立的推送目标 */
+  pushScenario?: BotPushScenario;
 }
 
 // ==================== 任务注册 ====================

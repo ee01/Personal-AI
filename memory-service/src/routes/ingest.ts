@@ -54,7 +54,7 @@ export async function ingestRoutes(
     },
     async (request, reply) => {
       const { db, userDataManager } = request.userContext;
-      const pipeline = new IngestionPipeline(db, userDataManager);
+      const pipeline = new IngestionPipeline(db, userDataManager, request.userId);
       const payload = request.body;
 
       const result: IngestResult = await pipeline.ingest(payload);

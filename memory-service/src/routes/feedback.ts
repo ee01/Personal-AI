@@ -134,7 +134,7 @@ export async function feedbackRoutes(
         case 'entity_correction': {
           // detail is expected in the format "key=value" for the correction
           // e.g. "role=Staff Engineer" or just a description for negative
-          const truthMaintainer = new TruthMaintainer(db);
+          const truthMaintainer = new TruthMaintainer(db, request.userId);
 
           if (action === 'positive') {
             // Positive feedback on an entity: confirm its current properties

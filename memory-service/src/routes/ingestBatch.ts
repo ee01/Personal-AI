@@ -104,7 +104,7 @@ export async function ingestBatchRoutes(
     },
     async (request, reply) => {
       const { db, userDataManager } = request.userContext;
-      const pipeline = new IngestionPipeline(db, userDataManager);
+      const pipeline = new IngestionPipeline(db, userDataManager, request.userId);
       const { items } = request.body;
       const results: IngestResult[] = [];
 

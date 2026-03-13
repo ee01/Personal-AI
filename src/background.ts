@@ -24,6 +24,7 @@ import { handleLLMRequest } from './llm';
 import { Logger } from './utils/logger';
 import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage, registerFollowThreadDigestTask } from './message-reaction/FollowThreadHandler';
 import { registerConcernedItemsDigestTask } from './services/DigestQueueService';
+import { sendPlainBotMessage } from './bot';
 
 console.log('Background script loaded');
 
@@ -1696,6 +1697,7 @@ async function pollBackendNotifications(): Promise<void> {
 
             // Show Chrome notification
             const notifId = `backend-${n.id}`;
+            backendNotificationTypes.set(notifId, n.type || '');
             chrome.notifications.create(notifId, {
                 type: 'basic',
                 iconUrl: chrome.runtime.getURL('icons/icon128.png'),
@@ -1703,6 +1705,19 @@ async function pollBackendNotifications(): Promise<void> {
                 message: (n.body || '').slice(0, 200),
                 priority: 1,
             });
+
+            if (n.type === 'new_conflict' || n.type === 'truth_conflict') {
+                try {
+                    await sendPlainBotMessage({
+                        message: `\`${n.title || '决策中心提醒'}\`\n${n.body || '有新的待确认事项，请在 Personal AI 的决策中心查看。'}\n\n请在扩展内打开「决策中心」处理。`,
+                        mention: false,
+                        teamName: 'Personal AI 决策中心',
+                        pushScenario: 'decision_center'
+                    });
+                } catch (pushError) {
+                    console.warn('Decision center bot push failed:', pushError);
+                }
+            }
         }
     } catch (err) {
         // Silently ignore — backend may be offline

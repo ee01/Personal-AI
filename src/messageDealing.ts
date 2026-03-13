@@ -344,6 +344,7 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 							matchedRule: result.matchedRule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
 							replyAdvice: result.replyAdvice || '',
 							mention: shouldMention,
+							pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
 							autoReplyInfo,
 							// 如果是关注后续，添加原消息信息
 							originalMessageInfo: followThreadItem?.followConfig ? {
@@ -523,7 +524,8 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 								postId: post.id || '',
 								matchedRule: processResult.matchedRule || '',
 								replyAdvice: processResult.replyAdvice || '',
-								mention: shouldMention
+								mention: shouldMention,
+								pushScenario: 'message_analysis'
 							};
 							
 							await notificationService.sendNotification(
@@ -837,6 +839,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 							matchedRule: matched_rule || (followThreadItem ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...` : ''),
 							replyAdvice: json.reply_advice,
 							mention: shouldMention,
+							pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
 							autoReplyInfo,
 							// 如果是关注后续，添加原消息信息
 							originalMessageInfo: followThreadItem?.followConfig ? {

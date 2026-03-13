@@ -1,4 +1,4 @@
-import { getEnvConfig } from "./utils";
+import { BotPushScenario, getBotPushTarget, getEnvConfig } from "./utils";
 
 interface MessageData {
     matched_rule: string;
@@ -25,12 +25,64 @@ interface MessageData {
         datetime: string;
         messageUrl: string;
     };
+    pushScenario?: BotPushScenario;
+}
+
+interface PlainBotMessageOptions {
+    message: string;
+    mention?: boolean;
+    teamName?: string;
+    pushScenario?: BotPushScenario;
+}
+
+export async function sendPlainBotMessage(options: PlainBotMessageOptions): Promise<void> {
+    const { userinfo } = await chrome.storage.local.get('userinfo');
+    const envConfig = await getEnvConfig();
+    const pushTarget = getBotPushTarget(envConfig, options.pushScenario);
+    const shouldMention = options.mention !== false;
+    const userEmail = userinfo?.userEmail || '';
+
+    if (!pushTarget.apiType) {
+        console.log(`Skipping bot push for scenario ${options.pushScenario || 'default'} because target is none`);
+        return;
+    }
+
+    if (pushTarget.apiType === 'team' && !pushTarget.teamId) {
+        throw new Error(`Missing group ID for bot push scenario: ${options.pushScenario || 'default'}`);
+    }
+
+    const payload = pushTarget.apiType === 'team' ? {
+        mentionList: shouldMention && userEmail ? [userEmail] : [],
+        isTeamMention: false,
+        teamName: options.teamName || 'Personal AI',
+        teamId: pushTarget.teamId,
+        message: options.message,
+        skipMentionCheck: !shouldMention
+    } : {
+        mention: shouldMention,
+        email: userEmail,
+        emailAutoCorrect: true,
+        message: options.message,
+    };
+
+    const response = await fetch(`${envConfig.BOT_API_BASE_URL}/${pushTarget.apiType}/message`, {
+        method: 'POST',
+        headers: {
+            'accept': '*/*',
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${envConfig.BOT_TOKEN}`,
+            'bot': envConfig.BOT_ID
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        throw new Error(`Bot API error: ${response.status}`);
+    }
 }
 
 export async function sendBotMessage(messageData: MessageData): Promise<void> {
     console.log("Sending bot message:", messageData);
-    const { userinfo } = await chrome.storage.local.get('userinfo');
-    const envConfig = await getEnvConfig();
     
     // 构建消息链接
     const messageLink = messageData.post_id && messageData.team_id 
@@ -73,36 +125,14 @@ ${replySection}
 `;
 
     const shouldMention = messageData.mention !== false; // 默认为true，除非明确设置为false
-    
-    const payload = envConfig.BOT_TYPE === 'team' ? {
-        mentionList: shouldMention ? [userinfo.userEmail] : [],
-        isTeamMention: false,
-        teamName: messageData.team_name,
-        teamId: envConfig.TEAM_ID,
-        message: formattedMessage,
-        skipMentionCheck: !shouldMention
-    } : {
-        mention: shouldMention,
-        email: userinfo.userEmail,
-        emailAutoCorrect: true,
-        message: formattedMessage,
-    };
 
     try {
-        const response = await fetch(`${envConfig.BOT_API_BASE_URL}/${envConfig.BOT_TYPE}/message`, {
-            method: 'POST',
-            headers: {
-                'accept': '*/*',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${envConfig.BOT_TOKEN}`,
-                'bot': envConfig.BOT_ID
-            },
-            body: JSON.stringify(payload)
+        await sendPlainBotMessage({
+            message: formattedMessage,
+            mention: shouldMention,
+            teamName: messageData.team_name,
+            pushScenario: messageData.pushScenario
         });
-
-        if (!response.ok) {
-            throw new Error(`Bot API error: ${response.status}`);
-        }
     } catch (error) {
         console.error('Error sending bot message:', error);
         throw error;

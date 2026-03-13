@@ -124,7 +124,7 @@ export class ProactiveScheduler {
     for (const userId of userIds) {
       try {
         const ctx = this.ucm.getContext(userId);
-        const heartbeat = new HeartbeatLoop(ctx.db, ctx.userDataManager);
+        const heartbeat = new HeartbeatLoop(ctx.db, ctx.userDataManager, userId);
         await heartbeat.run();
       } catch (err) {
         console.error(
@@ -205,7 +205,7 @@ export class ProactiveScheduler {
     for (const userId of userIds) {
       try {
         const ctx = this.ucm.getContext(userId);
-        const reporter = new WeeklyReporter(ctx.db, ctx.userDataManager);
+        const reporter = new WeeklyReporter(ctx.db, ctx.userDataManager, userId);
         const result = await reporter.generateWeeklyReport();
         console.log(
           `[ProactiveScheduler] Weekly report for user ${userId}:`,
