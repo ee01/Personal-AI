@@ -13,6 +13,7 @@ const DIRECTORY_TREE = [
   'entities/technologies',
   'skills',
   'reflections',
+  'reflection-threads',
   'dreams',
   'reports',
   'agent',

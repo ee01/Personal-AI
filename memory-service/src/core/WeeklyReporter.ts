@@ -5,12 +5,12 @@
 
 import type Database from 'better-sqlite3';
 import { getLLMClient } from '../llm/LLMClient.js';
-import { getConfig } from '../config.js';
 import { getBotSender } from '../utils/botSender.js';
 import { now, formatDate } from '../utils/time.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { randomUUID } from 'node:crypto';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,7 +58,7 @@ export class WeeklyReporter {
     ignoreMinMessages?: boolean;
     manual?: boolean;
   }): Promise<WeeklyReportResult> {
-    const config = getConfig();
+    const config = getUserRuntimeConfig(this.userDataManager);
     if (!options?.ignoreEnabled && !config.weeklyReportEnabled) {
       return {
         generated: false,

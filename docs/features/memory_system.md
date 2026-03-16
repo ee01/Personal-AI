@@ -1,10 +1,10 @@
 # Memory Service — 类人记忆系统架构
 
-*最后更新: 2026-02-26 (v8 Memory Service 迁移完成)*
+*最后更新: 2026-03-16 (补充自我反思与梦境重放)*
 
 ## 系统概述
 
-Memory Service 是一套独立部署的**类人记忆后端服务**，取代了原有的 Chrome Extension 内嵌记忆系统（memory.ts + ChromaDB + Chrome Storage）。它模拟人脑的记忆机制 —— 自动摄入、显著性评估、多通道召回、遗忘衰减、离线巩固与生成式重放（"做梦"），并提供双人格模型（用户画像 + AI 自我认知）。
+Memory Service 是一套独立部署的**类人记忆后端服务**，取代了原有的 Chrome Extension 内嵌记忆系统（memory.ts + ChromaDB + Chrome Storage）。它模拟人脑的记忆机制 —— 自动摄入、显著性评估、多通道召回、遗忘衰减、离线巩固、自我反思与生成式重放（梦境重放），并提供双人格模型（用户画像 + AI 自我认知）。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -26,7 +26,8 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 │       │             │            │                │          │
 │  ┌────┴─────────────┴────────────┴────────────────┴──────┐  │
 │  │              Core Engines                              │  │
-│  │  Salience · Forgetting · Truth · Consolidation · Dream │  │
+│  │  Salience · Forgetting · Truth · Consolidation         │  │
+│  │  Self-Reflection · Dream Replay                        │  │
 │  └────────────────────────┬──────────────────────────────┘  │
 │                           │                                  │
 │  ┌────────────────────────┴──────────────────────────────┐  │
@@ -48,7 +49,7 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 | 全文检索 | FTS5 (BM25) | SQLite 原生 |
 | Embedding | Xenova/all-MiniLM-L6-v2 (本地) | 无需外部 API |
 | LLM | OpenAI / Groq / Ollama / Dify | 可插拔 |
-| 调度 | node-cron | 巩固 & 做梦 定时任务 |
+| 调度 | node-cron + heartbeat loop | 巩固 / 自我反思 / 梦境重放 / 周报 / 通知 |
 
 ---
 
@@ -73,12 +74,12 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 
          ┌─── 定时循环 ───┐
          ▼                ▼
-┌──────────────────┐  ┌──────────────────┐
-│ Consolidation    │  │ GenerativeReplay │
-│ 每晚 23:00       │  │ 每周日 03:00      │
-│ 6阶段巩固压缩    │  │ "做梦"发现隐含    │
-│                  │  │ 关联              │
-└──────────────────┘  └──────────────────┘
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ Consolidation    │  │ Reflection       │  │ GenerativeReplay │
+│ 每晚 23:00       │  │ Heartbeat + /ask │  │ 每周日 03:00      │
+│ 6阶段巩固压缩    │  │ 自我反思/动作产出 │  │ 梦境重放发现隐含  │
+│                  │  │                  │  │ 关联              │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
 | 引擎 | 职责 |
@@ -89,8 +90,10 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 | **ForgettingEngine** | 指数衰减，可配半衰期 |
 | **TruthMaintainer** | 双时态属性 (valid_from/to + tx_start/end)，冲突确认队列 |
 | **ConsolidationEngine** | 每晚 6 阶段：压缩→去噪→结构化→清理→重索引→反思 |
-| **GenerativeReplay** | 每周"做梦"：发现隐含关系 |
-| **OnlineReflection** | 查询后即时反思强化 |
+| **OnlineReflection** | `/ask` 返回后异步运行，补充事实/偏好/改进建议，并可生成自我反思线索 |
+| **ReflectionPlanner / ReflectionThreadService / ReflectionWorker** | 管理自我反思线程、按心跳推进、生成反思 run、产出动作 |
+| **GenerativeReplay** | 每周执行梦境重放，写入 `dreams/*.md`、发现隐含关系并回灌到反思线程 |
+| **HeartbeatLoop** | 微巩固、通知检查、梦境报表检查、自我反思 planner、动作执行 |
 | **ProfileManager** | 双人格：用户画像 + AI 自我认知 (Identity/Soul/Policy) |
 
 ---
@@ -151,9 +154,90 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 
 | 循环 | 频率 | 动作 |
 |---|---|---|
-| Heartbeat | 每 15 分钟 | 微巩固、通知检查、关注项目更新 |
+| Heartbeat | 默认每 15 分钟 | 微巩固、通知检查、关注项目更新、自我反思 planner、自动动作执行 |
 | Daily | 每晚 23:00 | 6 阶段巩固（压缩/去噪/结构化/清理/重索引/反思） |
-| Weekly | 周日 03:00 | 生成式重放（"做梦"发现隐含关联） |
+| Weekly | 周日 03:00 | 梦境重放（发现隐含关联并生成 `dreams/*.md`） |
+
+---
+
+## 自我反思
+
+自我反思是 Memory Service 的**连续主题复盘机制**。它不是每天生成一篇固定总结，而是围绕一个长期话题维护 thread，在新证据出现时继续思考，并在必要时产出动作。
+
+### 触发来源
+
+- `/ask` 完成后，`OnlineReflection` 会异步分析本次问答是否沉淀出新事实、偏好或后续改进点
+- Heartbeat 会扫描新消息、高重要度消息、待确认冲突、实体属性变化、用户画像变化
+- 用户也可以手动触发某个 thread 的 `revisit`
+
+### 运行形态
+
+- 线程表：`reflection_threads`
+- 运行记录：`reflection_runs`
+- 关联梦境：`dream_runs`
+- 动作运行时：`proposed_actions` / action runtime
+- Markdown 输出：`reflection-threads/*.md`
+
+### 典型产出
+
+- 更新线程假设与开放问题
+- 生成给用户的动作，例如通知、确认请求、决策提醒
+- 生成给系统自己的动作，例如真值修正、外部工具查询
+
+### 用户级配置
+
+- `reflectionEnabled`
+- `reflectionHeartbeatMinutes`
+- `reflectionActiveTopicLimit`
+- 若干动作阈值，如 `reflectionUrgentNotifyThreshold`
+
+默认策略：
+
+- 新用户如果还没有自己的 `config.json`，自我反思默认是关闭的
+- 用户需要在 options 页显式开启，并保存后，后端才会对该用户开始运行自我反思
+
+这些配置都保存在**当前用户自己的** `data/users/{userId}/config.json` 中，通过 `X-User-Id` 隔离。  
+也就是说：
+
+- 用户 A 关闭自我反思，只会停止 A 自己的 `/ask` 在线反思和 heartbeat 反思推进
+- 用户 B 仍然会按自己的配置继续运行自我反思
+- 不存在某个用户关闭后影响其他用户反思能力的情况
+
+---
+
+## 梦境重放
+
+梦境重放是每周一次的**生成式长期记忆回放**。系统会从近一段时间内显著性高的实体主题出发，召回相关记忆，生成一段叙事式回放，并尝试发现潜在关系、风险与值得继续观察的线索。
+
+### 运行形态
+
+- 核心引擎：`GenerativeReplay`
+- Markdown 输出：`dreams/{topic}-{date}.md`
+- 数据表：`dream_runs`
+- 同时会把 dream run 关联回对应的反思线程，便于后续继续复盘
+
+### 典型产出
+
+- 一段梦境重放叙事
+- `insights`
+- `risks`
+- 低置信度的新关系（来源标记为 dream / generative replay）
+
+### 配置语义
+
+梦境重放和“梦境报表推送”是两个不同层次：
+
+- **梦境重放本身**：所有用户都会持续运行，用于内部长期记忆联想与知识发现
+- **梦境报表推送**：用户可以单独控制是否收到 digest / Bot 推送
+
+因此当前支持的用户级配置是：
+
+- `dreamDigestScheduleType`
+- `dreamDigestIntervalDays`
+- `dreamDigestPushTarget`
+- `dreamDigestPushGroupId`
+
+如果用户把梦境报表设为“不推送”，系统仍然会继续生成 `dreams/*.md` 和 `dream_runs`，只是不会再自动投递梦境报表通知。
 
 ---
 
@@ -174,6 +258,8 @@ data/
 
 - 认证：`X-User-Id` 请求头
 - UserContextManager 按需加载、30 分钟空闲回收
+- 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
+- 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
 
 ---
 
@@ -185,9 +271,13 @@ data/
 | 批量摄入 | `POST /ingest/batch` | 批量写入 |
 | 召回 | `POST /recall` | 多通道记忆检索 |
 | 问答 | `POST /ask` | RAG 风格自然语言问答 |
+| 配置 | `GET /config` / `PUT /config` | 按用户读取/写入运行时配置 |
 | 实体 | `GET /entities` | 知识图谱查询 |
 | 用户画像 | `GET /profile/core` | 核心画像 |
 | 通知 | `GET /notifications` | 主动通知列表 |
+| 自我反思 | `GET /reflection-threads` | 查看自我反思线程列表 |
+| 自我反思 | `POST /reflection-threads/:id/revisit` | 手动触发某个线程重新反思 |
+| 梦境报表 | `POST /dream-digest/push-now` | 手动立即推送一次梦境报表 |
 | 巩固 | `POST /consolidate` | 手动触发巩固 |
 | 导出 | `POST /export` | Markdown 格式导出 |
 | 健康 | `GET /health` | 服务状态 |
@@ -232,6 +322,7 @@ services:
 
 1. **"活的"记忆** — 不是被动存取，而是有显著性评估、自动衰减和定期巩固的生命周期
 2. **真值维护** — 双时态属性让事实可追溯，冲突自动检测并请求用户确认
-3. **做梦机制** — 周期性生成式重放，发现用户未显式表达的关联
-4. **4 通道召回** — 向量、全文、图谱、时间四路并行，比单纯向量检索更全面
-5. **完全自主可控** — 本地 Embedding + 本地 SQLite，无需任何云服务依赖
+3. **自我反思机制** — 不是“问完就结束”，而是可以围绕长期主题持续复盘，并把结论转成动作
+4. **梦境重放机制** — 周期性生成式重放，发现用户未显式表达的关联
+5. **4 通道召回** — 向量、全文、图谱、时间四路并行，比单纯向量检索更全面
+6. **完全自主可控** — 本地 Embedding + 本地 SQLite，无需任何云服务依赖

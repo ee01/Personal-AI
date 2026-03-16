@@ -264,7 +264,7 @@ export class MarkdownManager {
       // sqlite-vec virtual tables don't support IN(...) with variable
       // placeholders well, so delete one-by-one for safety.
       const deleteVec = this.db.prepare(
-        `DELETE FROM chunks_vec WHERE chunk_id = ?`,
+        `DELETE FROM chunks_vec WHERE chunk_id = CAST(? AS INTEGER)`,
       );
       for (const id of existingIds) {
         try {
@@ -301,7 +301,7 @@ export class MarkdownManager {
 
     const insertVec = this.db.prepare(
       `INSERT INTO chunks_vec (chunk_id, embedding)
-       VALUES (?, ?)`,
+       VALUES (CAST(? AS INTEGER), ?)`,
     );
 
     let embeddingClient: EmbeddingClient | null = null;
@@ -386,6 +386,7 @@ export class MarkdownManager {
     if (normalized.startsWith('daily/')) return 'daily_log';
     if (normalized.startsWith('projects/')) return 'project_summary';
     if (normalized.startsWith('reflections/')) return 'reflection';
+    if (normalized.startsWith('reflection-threads/')) return 'reflection_thread';
     if (normalized.startsWith('dreams/')) return 'dream';
     if (normalized.startsWith('entities/')) return 'entity_profile';
 

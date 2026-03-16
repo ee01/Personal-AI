@@ -17,6 +17,7 @@ import type Database from 'better-sqlite3';
 import { RecallEngine } from './RecallEngine.js';
 import { ForgettingEngine } from './ForgettingEngine.js';
 import { MarkdownManager } from './MarkdownManager.js';
+import { ReflectionThreadService } from './ReflectionThreadService.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { toSlug } from '../utils/slug.js';
@@ -100,6 +101,7 @@ export class GenerativeReplay {
   private db: Database.Database;
   private userDataManager?: UserDataManager;
   private markdownManager?: MarkdownManager;
+  private reflectionService: ReflectionThreadService;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager) {
     this.db = db;
@@ -107,6 +109,7 @@ export class GenerativeReplay {
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
+    this.reflectionService = new ReflectionThreadService(db, userDataManager);
   }
 
   // =========================================================================
@@ -158,7 +161,9 @@ export class GenerativeReplay {
     const currentTime = now();
     const cutoff = currentTime - LOOKBACK_DAYS * 86400;
 
-    // Join memory_metadata with entities to get named topics
+    // Dreaming should only select entity-level memories as topics.
+    // If we LIMIT before filtering, high-salience messages can crowd out
+    // all entities and weekly dreaming degenerates to zero topics.
     const rows = this.db
       .prepare(
         `SELECT
@@ -168,8 +173,9 @@ export class GenerativeReplay {
            e.name AS entity_name,
            e.type AS entity_type
          FROM memory_metadata mm
-         LEFT JOIN entities e ON mm.target_id = e.id AND mm.target_type = 'entity'
+         INNER JOIN entities e ON mm.target_id = e.id
          WHERE mm.consolidation_level NOT IN ('forgotten', 'archived')
+           AND mm.target_type = 'entity'
            AND mm.updated_at >= ?
            AND mm.salience_score > 0
          ORDER BY mm.salience_score DESC
@@ -177,7 +183,6 @@ export class GenerativeReplay {
       )
       .all(cutoff, TOP_SALIENT_LIMIT) as SalientEntityRow[];
 
-    // Filter to those that have a recognisable name
     return rows.filter((r) => r.entity_name != null && r.entity_name.length > 0);
   }
 
@@ -286,6 +291,17 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
         console.warn(`[GenerativeReplay] Failed to reinforce memory ${memory.id}:`, err);
       }
     }
+
+    this.reflectionService.recordDreamRun({
+      sourceType: topic.target_type,
+      sourceRefId: topic.target_id,
+      title: topicName,
+      summary: dreamData.narrative.slice(0, 400),
+      insights: dreamData.insights ?? [],
+      risks: dreamData.risks ?? [],
+      relationships: newRelationships as Array<Record<string, unknown>>,
+      markdownPath: dreamPath,
+    });
 
     return {
       topic: topicName,

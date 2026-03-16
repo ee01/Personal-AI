@@ -34,13 +34,25 @@
 
           <router-link to="/dreams" class="entity-type" active-class="router-link-active">
             <div class="entity-icon">🌙</div>
-            <div class="entity-name">梦境洞察</div>
+            <div class="entity-name">梦境重放</div>
+          </router-link>
+
+          <router-link to="/reflection-threads" class="entity-type" active-class="router-link-active">
+            <div class="entity-icon">🧠</div>
+            <div class="entity-name">自我反思</div>
+            <div v-if="activeReflectionCount > 0" class="entity-count">{{ activeReflectionCount }}</div>
           </router-link>
 
           <router-link to="/decisions" class="entity-type" active-class="router-link-active">
             <div class="entity-icon">⚖️</div>
             <div class="entity-name">决策中心</div>
             <div v-if="pendingDecisionCount > 0" class="entity-count">{{ pendingDecisionCount }}</div>
+          </router-link>
+
+          <router-link to="/actions" class="entity-type" active-class="router-link-active">
+            <div class="entity-icon">⚙️</div>
+            <div class="entity-name">动作队列</div>
+            <div v-if="queuedActionCount > 0" class="entity-count">{{ queuedActionCount }}</div>
           </router-link>
 
           <hr class="sidebar-divider" />
@@ -108,6 +120,8 @@ const entityTypes = computed(() => store.entityTypes);
 const searchQuery = ref('');
 const followThreadCount = ref(0);
 const pendingDecisionCount = ref(0);
+const activeReflectionCount = ref(0);
+const queuedActionCount = ref(0);
 
 // 加载关注后续数量
 onMounted(async () => {
@@ -130,6 +144,20 @@ onMounted(async () => {
     pendingDecisionCount.value = res.total;
   } catch (error) {
     console.error('加载待决策数量失败:', error);
+  }
+});
+
+onMounted(async () => {
+  try {
+    const client = getMemoryServiceClient();
+    const [threads, actions] = await Promise.all([
+      client.getReflectionThreads({ status: 'active', limit: 1 }),
+      client.getActions({ queueStatus: 'queued', limit: 1 }),
+    ]);
+    activeReflectionCount.value = threads.total;
+    queuedActionCount.value = actions.total;
+  } catch (error) {
+    console.error('加载反思线程/动作数量失败:', error);
   }
 });
 

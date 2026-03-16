@@ -80,6 +80,8 @@ export interface EnvConfigType {
   DECISION_CENTER_PUSH_GROUP_ID?: string;
   DREAM_DIGEST_SCHEDULE_TYPE?: 'weekly' | 'every_x_days' | 'monthly';
   DREAM_DIGEST_INTERVAL_DAYS?: number;
+  SELF_REFLECTION_ENABLED: boolean;
+  SELF_REFLECTION_HEARTBEAT_MINUTES: number;
 }
 
 export function normalizeBotPushTarget(
@@ -311,6 +313,8 @@ export const defaultEnvConfig: EnvConfigType = {
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'monthly'
   ) ? process.env.DREAM_DIGEST_SCHEDULE_TYPE : 'every_x_days',
   DREAM_DIGEST_INTERVAL_DAYS: Math.max(1, Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1),
+  SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED === "true",
+  SELF_REFLECTION_HEARTBEAT_MINUTES: Math.max(1, Number(process.env.REFLECTION_HEARTBEAT_MINUTES) || 15),
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

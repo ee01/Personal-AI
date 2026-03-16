@@ -1,5 +1,6 @@
 /**
- * Context Match route — finds reflections/dreams relevant to the current browsing context.
+ * Context Match route — finds reflection threads / reflections / dreams
+ * relevant to the current browsing context.
  *
  * POST /context-match
  * Body: { title, keywords?, snippet? }
@@ -12,7 +13,7 @@ import { getConfig } from '../config.js';
 
 interface ContextMatchBody {
   title: string;
-  keywords?: string;
+  keywords?: string | string[];
   snippet?: string;
 }
 
@@ -35,7 +36,8 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
 
         // Build query text from available fields
         const parts = [title];
-        if (keywords) parts.push(keywords);
+        const kw = Array.isArray(keywords) ? keywords.join(' ') : (keywords ?? '');
+        if (kw) parts.push(kw);
         if (snippet) parts.push(snippet);
         const queryText = parts.join(' ').slice(0, 1000);
 
@@ -62,7 +64,7 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
           return reply.send({ match: null });
         }
 
-        // Load chunk content and filter to reflections/dreams only
+        // Load chunk content and filter to reflection-like artifacts only
         const chunkIds = vecRows.map((r) => r.chunk_id);
         const ph = chunkIds.map(() => '?').join(', ');
         const chunks = db
@@ -75,7 +77,7 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
 
         const chunkMap = new Map(chunks.map((c) => [c.chunk_id, c]));
 
-        // Find best match from reflections/ or dreams/ paths
+        // Find best match from reflection threads / reflections / dreams paths
         let bestMatch: { content: string; source: string; score: number } | null = null;
 
         for (const row of vecRows) {
@@ -83,7 +85,11 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
           if (!chunk) continue;
 
           const fp = chunk.file_path.toLowerCase();
-          if (!fp.includes('reflections/') && !fp.includes('dreams/')) continue;
+          const isReflectionLike =
+            fp.includes('reflection-threads/') ||
+            fp.includes('reflections/') ||
+            fp.includes('dreams/');
+          if (!isReflectionLike) continue;
 
           const score = 1 / (1 + row.distance);
           if (score < config.contextMatchThreshold) continue;

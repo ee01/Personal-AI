@@ -261,6 +261,133 @@ export interface ConfirmRequestListResponse {
 }
 
 // ============================================================================
+// Reflection Thread & Action Runtime types
+// ============================================================================
+
+export interface ReflectionThread {
+  id: string;
+  topicKey: string;
+  title: string;
+  status: 'active' | 'paused' | 'closed';
+  priority: number;
+  salience: number;
+  sourceType?: string;
+  sourceRefId?: string;
+  currentHypothesis?: string;
+  openQuestions: string[];
+  latestSummary?: string;
+  latestMarkdownPath?: string;
+  nextReflectionAt?: number;
+  lastReflectedAt?: number;
+  reflectionCount: number;
+  continueReason?: string;
+  closureReason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ReflectionRun {
+  id: string;
+  threadId: string;
+  runType: string;
+  triggerType?: string;
+  inputRefs: string[];
+  previousRunId?: string;
+  summary: string;
+  hypothesisBefore?: string;
+  hypothesisAfter?: string;
+  discoveries: string[];
+  openQuestions: string[];
+  actions: Array<Record<string, any>>;
+  markdownSnapshotPath?: string;
+  createdAt: number;
+}
+
+export interface ReflectionLink {
+  id: string;
+  threadId: string;
+  sourceKind: string;
+  sourceId: string;
+  weight: number;
+  role: string;
+  createdAt: number;
+  preview?: string;
+  previewTitle?: string;
+  previewTimestamp?: number;
+}
+
+export interface DreamRun {
+  id: string;
+  sourceType: string;
+  sourceRefId?: string;
+  threadIds: string[];
+  summary?: string;
+  insights: string[];
+  risks: string[];
+  relationships: Array<Record<string, any>>;
+  markdownPath?: string;
+  createdAt: number;
+}
+
+export interface ReflectionThreadListResponse {
+  items: ReflectionThread[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface RuntimeAction {
+  id: string;
+  type: string;
+  actionType: string;
+  title: string;
+  description?: string;
+  params: Record<string, any>;
+  riskLevel: string;
+  confidence: number;
+  evidenceRefs: string[];
+  requiresApproval: boolean;
+  state: string;
+  approvedAt?: number;
+  executedAt?: number;
+  source?: string;
+  expiresAt?: number;
+  createdAt: number;
+  threadId?: string;
+  runId?: string;
+  executionMode: 'manual' | 'auto';
+  priority: number;
+  idempotencyKey?: string;
+  dependsOn: string[];
+  scheduledAt?: number;
+  startedAt?: number;
+  finishedAt?: number;
+  retryCount: number;
+  lastError?: string;
+  result?: Record<string, any>;
+  sourceKind?: string;
+  sourceRefId?: string;
+  queueStatus: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter';
+  utilityScore?: number;
+  urgencyScore?: number;
+}
+
+export interface RuntimeActionListResponse {
+  items: RuntimeAction[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ReflectionThreadDetailResponse {
+  thread: ReflectionThread;
+  runs: ReflectionRun[];
+  actions: RuntimeAction[];
+  links: ReflectionLink[];
+  dreamRuns: DreamRun[];
+}
+
+// ============================================================================
 // Health & Stats types
 // ============================================================================
 
@@ -419,10 +546,13 @@ export class MemoryServiceClient {
     const url = `${this.baseUrl}${path}`;
 
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
       'Accept': 'application/json',
       'X-User-Id': this.userId,
     };
+
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
 
     if (this.apiKey) {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -762,6 +892,134 @@ export class MemoryServiceClient {
       'POST',
       `/confirm-requests/${encodeURIComponent(id)}/answer`,
       { answer, detail },
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Reflection Threads
+  // --------------------------------------------------------------------------
+
+  async getReflectionThreads(filters?: {
+    status?: 'active' | 'paused' | 'closed' | 'all';
+    limit?: number;
+    offset?: number;
+    search?: string;
+  }): Promise<ReflectionThreadListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.search) params.set('search', filters.search);
+
+    const qs = params.toString();
+    return this.request<ReflectionThreadListResponse>(
+      'GET',
+      `/reflection-threads${qs ? '?' + qs : ''}`,
+    );
+  }
+
+  async getReflectionThread(id: string): Promise<ReflectionThreadDetailResponse> {
+    return this.request<ReflectionThreadDetailResponse>(
+      'GET',
+      `/reflection-threads/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async revisitReflectionThread(
+    id: string,
+    force = true,
+  ): Promise<{ thread: ReflectionThread; run: ReflectionRun; actions: RuntimeAction[] }> {
+    return this.request(
+      'POST',
+      `/reflection-threads/${encodeURIComponent(id)}/revisit`,
+      { force },
+    );
+  }
+
+  async pauseReflectionThread(
+    id: string,
+    reason?: string,
+  ): Promise<{ thread: ReflectionThread }> {
+    return this.request(
+      'POST',
+      `/reflection-threads/${encodeURIComponent(id)}/pause`,
+      { reason },
+    );
+  }
+
+  async closeReflectionThread(
+    id: string,
+    reason?: string,
+  ): Promise<{ thread: ReflectionThread }> {
+    return this.request(
+      'POST',
+      `/reflection-threads/${encodeURIComponent(id)}/close`,
+      { reason },
+    );
+  }
+
+  async resumeReflectionThread(id: string): Promise<{ thread: ReflectionThread }> {
+    return this.request(
+      'POST',
+      `/reflection-threads/${encodeURIComponent(id)}/resume`,
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Action Runtime
+  // --------------------------------------------------------------------------
+
+  async getActions(filters?: {
+    queueStatus?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all';
+    executionMode?: 'manual' | 'auto';
+    threadId?: string;
+    actionType?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<RuntimeActionListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.queueStatus) params.set('queueStatus', filters.queueStatus);
+    if (filters?.executionMode) params.set('executionMode', filters.executionMode);
+    if (filters?.threadId) params.set('threadId', filters.threadId);
+    if (filters?.actionType) params.set('actionType', filters.actionType);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+
+    const qs = params.toString();
+    return this.request<RuntimeActionListResponse>(
+      'GET',
+      `/actions${qs ? '?' + qs : ''}`,
+    );
+  }
+
+  async retryAction(id: string): Promise<{ action: RuntimeAction }> {
+    return this.request(
+      'POST',
+      `/actions/${encodeURIComponent(id)}/retry`,
+    );
+  }
+
+  async cancelAction(
+    id: string,
+    reason?: string,
+  ): Promise<{ action: RuntimeAction }> {
+    return this.request(
+      'POST',
+      `/actions/${encodeURIComponent(id)}/cancel`,
+      { reason },
+    );
+  }
+
+  async executeAction(id: string): Promise<{
+    actionId: string;
+    actionType: string;
+    queueStatus: string;
+    result?: Record<string, any>;
+    error?: string;
+  }> {
+    return this.request(
+      'POST',
+      `/actions/${encodeURIComponent(id)}/execute`,
     );
   }
 

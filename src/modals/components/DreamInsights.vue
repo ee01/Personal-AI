@@ -1,19 +1,19 @@
 <template>
   <div class="dream-insights-container">
     <div class="header">
-      <h2>🌙 梦境洞察</h2>
-      <p class="header-desc">AI 在你休息时对记忆进行的深度分析与洞察</p>
+      <h2>🌙 梦境重放</h2>
+      <p class="header-desc">AI 在系统空闲时回放长期记忆并生成新的联想与线索</p>
     </div>
 
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
-      <p>正在加载梦境洞察...</p>
+      <p>正在加载梦境重放...</p>
     </div>
 
     <div v-else-if="dreams.length === 0" class="empty-state">
       <div class="empty-icon">🌙</div>
-      <p>暂无梦境洞察内容</p>
-      <p class="empty-hint">梦境洞察会在系统空闲时自动生成</p>
+      <p>暂无梦境重放内容</p>
+      <p class="empty-hint">梦境重放会在系统空闲时自动生成</p>
     </div>
 
     <div v-else class="dream-list">

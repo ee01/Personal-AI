@@ -107,9 +107,15 @@ export class Database {
     `);
 
     // Read all .sql files from the migrations directory
-    const migrationsDir = path.join(__dirname, 'migrations');
-    if (!fs.existsSync(migrationsDir)) {
-      console.warn(`[Database] Migrations directory not found: ${migrationsDir}`);
+    const candidateDirs = [
+      path.join(__dirname, 'migrations'),
+      path.resolve(__dirname, '../../src/storage/migrations'),
+    ];
+    const migrationsDir = candidateDirs.find((dir) => fs.existsSync(dir));
+    if (!migrationsDir) {
+      console.warn(
+        `[Database] Migrations directory not found. Checked: ${candidateDirs.join(', ')}`,
+      );
       return [];
     }
 

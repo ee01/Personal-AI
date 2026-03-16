@@ -25,8 +25,25 @@ interface UpdatableConfig {
   weeklyReportEnabled?: boolean;
   weeklyReportCron?: string;
   weeklyReportMinMessages?: number;
+  weeklyReportPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  weeklyReportPushGroupId?: string;
+  dreamDigestEnabled?: boolean;
   dreamDigestScheduleType?: 'weekly' | 'every_x_days' | 'monthly';
   dreamDigestIntervalDays?: number;
+  dreamDigestPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  dreamDigestPushGroupId?: string;
+  reflectionEnabled?: boolean;
+  reflectionActiveTopicLimit?: number;
+  reflectionHeartbeatMinutes?: number;
+  reflectionUrgentNotifyThreshold?: number;
+  reflectionAutoExecuteThreshold?: number;
+  reflectionUrgentConfidenceThreshold?: number;
+  decisionCenterPushTarget?: 'me' | 'group' | 'user' | 'team';
+  decisionCenterPushGroupId?: string;
+  openClawEnabled?: boolean;
+  openClawBaseUrl?: string;
+  openClawApiKey?: string;
+  openClawTimeoutMs?: number;
 }
 
 /** Keys that must never be returned to the client. */
@@ -35,7 +52,18 @@ const SENSITIVE_KEYS = new Set([
   'groqApiKey',
   'difyApiKey',
   'apiKey',
+  'openClawApiKey',
 ]);
+
+function normalizePushTarget(
+  value: unknown,
+  allowNone = false,
+): 'me' | 'group' | 'none' {
+  if (value === 'group' || value === 'team') return 'group';
+  if (value === 'me' || value === 'user') return 'me';
+  if (allowNone && value === 'none') return 'none';
+  return 'me';
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -101,11 +129,37 @@ const updateConfigBodySchema = {
     weeklyReportEnabled: { type: 'boolean' as const },
     weeklyReportCron: { type: 'string' as const },
     weeklyReportMinMessages: { type: 'number' as const },
+    weeklyReportPushTarget: {
+      type: 'string' as const,
+      enum: ['me', 'group', 'none', 'user', 'team'],
+    },
+    weeklyReportPushGroupId: { type: 'string' as const },
+    dreamDigestEnabled: { type: 'boolean' as const },
     dreamDigestScheduleType: {
       type: 'string' as const,
       enum: ['weekly', 'every_x_days', 'monthly'],
     },
     dreamDigestIntervalDays: { type: 'number' as const, minimum: 1 },
+    dreamDigestPushTarget: {
+      type: 'string' as const,
+      enum: ['me', 'group', 'none', 'user', 'team'],
+    },
+    dreamDigestPushGroupId: { type: 'string' as const },
+    reflectionEnabled: { type: 'boolean' as const },
+    reflectionActiveTopicLimit: { type: 'number' as const, minimum: 1 },
+    reflectionHeartbeatMinutes: { type: 'number' as const, minimum: 1 },
+    reflectionUrgentNotifyThreshold: { type: 'number' as const, minimum: 0, maximum: 1 },
+    reflectionAutoExecuteThreshold: { type: 'number' as const, minimum: 0, maximum: 1 },
+    reflectionUrgentConfidenceThreshold: { type: 'number' as const, minimum: 0, maximum: 1 },
+    decisionCenterPushTarget: {
+      type: 'string' as const,
+      enum: ['me', 'group', 'user', 'team'],
+    },
+    decisionCenterPushGroupId: { type: 'string' as const },
+    openClawEnabled: { type: 'boolean' as const },
+    openClawBaseUrl: { type: 'string' as const },
+    openClawApiKey: { type: 'string' as const },
+    openClawTimeoutMs: { type: 'number' as const, minimum: 1000 },
   },
   additionalProperties: false,
 };
@@ -162,11 +216,62 @@ export async function configRoutes(
       if (updates.weeklyReportMinMessages !== undefined) {
         persisted.weeklyReportMinMessages = updates.weeklyReportMinMessages;
       }
+      if (updates.weeklyReportPushTarget !== undefined) {
+        persisted.weeklyReportPushTarget = normalizePushTarget(updates.weeklyReportPushTarget, true);
+      }
+      if (updates.weeklyReportPushGroupId !== undefined) {
+        persisted.weeklyReportPushGroupId = updates.weeklyReportPushGroupId.trim();
+      }
+      if (updates.dreamDigestEnabled !== undefined) {
+        persisted.dreamDigestEnabled = updates.dreamDigestEnabled;
+      }
       if (updates.dreamDigestScheduleType !== undefined) {
         persisted.dreamDigestScheduleType = updates.dreamDigestScheduleType;
       }
       if (updates.dreamDigestIntervalDays !== undefined) {
         persisted.dreamDigestIntervalDays = Math.max(1, Math.floor(updates.dreamDigestIntervalDays));
+      }
+      if (updates.dreamDigestPushTarget !== undefined) {
+        persisted.dreamDigestPushTarget = normalizePushTarget(updates.dreamDigestPushTarget, true);
+      }
+      if (updates.dreamDigestPushGroupId !== undefined) {
+        persisted.dreamDigestPushGroupId = updates.dreamDigestPushGroupId.trim();
+      }
+      if (updates.reflectionEnabled !== undefined) {
+        persisted.reflectionEnabled = updates.reflectionEnabled;
+      }
+      if (updates.reflectionActiveTopicLimit !== undefined) {
+        persisted.reflectionActiveTopicLimit = Math.max(1, Math.floor(updates.reflectionActiveTopicLimit));
+      }
+      if (updates.reflectionHeartbeatMinutes !== undefined) {
+        persisted.reflectionHeartbeatMinutes = Math.max(1, Math.floor(updates.reflectionHeartbeatMinutes));
+      }
+      if (updates.reflectionUrgentNotifyThreshold !== undefined) {
+        persisted.reflectionUrgentNotifyThreshold = Math.max(0, Math.min(1, updates.reflectionUrgentNotifyThreshold));
+      }
+      if (updates.reflectionAutoExecuteThreshold !== undefined) {
+        persisted.reflectionAutoExecuteThreshold = Math.max(0, Math.min(1, updates.reflectionAutoExecuteThreshold));
+      }
+      if (updates.reflectionUrgentConfidenceThreshold !== undefined) {
+        persisted.reflectionUrgentConfidenceThreshold = Math.max(0, Math.min(1, updates.reflectionUrgentConfidenceThreshold));
+      }
+      if (updates.decisionCenterPushTarget !== undefined) {
+        persisted.decisionCenterPushTarget = normalizePushTarget(updates.decisionCenterPushTarget, false);
+      }
+      if (updates.decisionCenterPushGroupId !== undefined) {
+        persisted.decisionCenterPushGroupId = updates.decisionCenterPushGroupId.trim();
+      }
+      if (updates.openClawEnabled !== undefined) {
+        persisted.openClawEnabled = updates.openClawEnabled;
+      }
+      if (updates.openClawBaseUrl !== undefined) {
+        persisted.openClawBaseUrl = updates.openClawBaseUrl;
+      }
+      if (updates.openClawApiKey !== undefined) {
+        persisted.openClawApiKey = updates.openClawApiKey;
+      }
+      if (updates.openClawTimeoutMs !== undefined) {
+        persisted.openClawTimeoutMs = Math.max(1000, Math.floor(updates.openClawTimeoutMs));
       }
 
       writePersistedConfig(persisted, request);

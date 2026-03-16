@@ -44,6 +44,8 @@ import { contextMatchRoutes } from './routes/contextMatch.js';
 import { userFilesRoutes } from './routes/userFiles.js';
 import { dreamDigestRoutes } from './routes/dreamDigest.js';
 import { weeklyReportRoutes } from './routes/weeklyReport.js';
+import { reflectionThreadRoutes } from './routes/reflectionThreads.js';
+import { actionRoutes } from './routes/actions.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -157,6 +159,8 @@ export async function buildApp(
       await instance.register(userFilesRoutes);
       await instance.register(dreamDigestRoutes);
       await instance.register(weeklyReportRoutes);
+      await instance.register(reflectionThreadRoutes);
+      await instance.register(actionRoutes);
     },
     { prefix: '/api/v1' },
   );

@@ -2,20 +2,20 @@
 name: continuous-reflection-redesign
 overview: 将当前一次性 dream/reflection 体系改造成“主题线程式持续反思 + 离线梦境重放 + 高阈值主动打扰”的分层架构，复用现有记忆、真值维护与通知能力，同时补齐 action 执行闭环。
 todos:
+  - id: normalize-runtime-primitives
+    content: 先统一 notification / checkpoint / runtime config 等基础运行时原语
+    status: pending
+  - id: wire-online-reflection
+    content: 把现有 OnlineReflection 真正接入 /ask 后台链路，并产出线程候选信号
+    status: pending
   - id: design-thread-model
-    content: 定义 reflection thread / run / action queue 数据模型与状态机
+    content: 定义 reflection thread / run / evidence link / worker checkpoint 数据模型
     status: pending
-  - id: wire-reflection-loop
-    content: 设计分钟级 Reflection Worker，并明确如何继承上一轮思考结果
-    status: pending
-  - id: separate-dream-layer
-    content: 定义 Dream Worker 与 Reflection Worker 的共享层和边界
-    status: pending
-  - id: design-action-routing
-    content: 设计 silent / decision / auto-execute / urgent-bot 的 action 分流策略
+  - id: upgrade-action-runtime
+    content: 基于现有 proposed_actions 升级 action runtime，并接入 TruthMaintainer / OpenClaw
     status: pending
   - id: ui-surface-plan
-    content: 规划前端“梦境反思”展示、待处理 action 和紧急提醒的界面分区
+    content: 在复用现有 Dreams / Decisions 页面前提下补齐 reflection threads 与 actions 视图
     status: pending
 isProject: false
 ---
@@ -78,6 +78,135 @@ flowchart TD
 ```
 
 
+
+## 基于当前代码的校正结论
+
+这份 redesign 不应该从零新造一套系统，而应该建立在现有 `memory-service` 与扩展侧已经落地的能力上做“线程化 + 动作闭环”升级。当前代码里已经存在并应直接复用的能力有：
+
+- 后端 Bot 推送：
+  - `[memory-service/src/utils/botSender.ts](memory-service/src/utils/botSender.ts)`
+- 梦境重放与周报：
+  - `[memory-service/src/core/GenerativeReplay.ts](memory-service/src/core/GenerativeReplay.ts)`
+  - `[memory-service/src/core/WeeklyReporter.ts](memory-service/src/core/WeeklyReporter.ts)`
+  - `[memory-service/src/routes/dreamDigest.ts](memory-service/src/routes/dreamDigest.ts)`
+  - `[memory-service/src/routes/weeklyReport.ts](memory-service/src/routes/weeklyReport.ts)`
+- 决策中心与待确认请求：
+  - `[memory-service/src/routes/confirmRequests.ts](memory-service/src/routes/confirmRequests.ts)`
+  - `[src/modals/components/DecisionCenter.vue](src/modals/components/DecisionCenter.vue)`
+- 梦境洞察与上下文命中：
+  - `[src/modals/components/DreamInsights.vue](src/modals/components/DreamInsights.vue)`
+  - `[memory-service/src/routes/contextMatch.ts](memory-service/src/routes/contextMatch.ts)`
+  - `[src/contentScriptWebIntelligence.ts](src/contentScriptWebIntelligence.ts)`
+- `/ask` 偏好注入：
+  - `[memory-service/src/routes/ask.ts](memory-service/src/routes/ask.ts)` 已经把 `USER_CORE.md` 和 `user_profile_items` 中的 active preference 注入 system prompt
+
+因此，本计划需要明确以下校正点，避免和现有实现冲突：
+
+### 校正 1：连续反思的入口不是重写 `/ask`，而是补齐现有 `OnlineReflection` 的调用
+
+- `[memory-service/src/core/OnlineReflection.ts](memory-service/src/core/OnlineReflection.ts)` 已存在，但当前仓库里没有实际调用点。
+- 连续反思的第一步不是再设计一个“新的 ask 后处理能力”，而是把现有 `OnlineReflection` 接到 `/ask` 响应后，作为线程规划器的信号源。
+
+### 校正 2：所有分钟级 worker 都不能依赖进程内字段保存游标
+
+- 当前 `[memory-service/src/core/ProactiveScheduler.ts](memory-service/src/core/ProactiveScheduler.ts)` 每个 heartbeat 周期都会重新 `new HeartbeatLoop(...)`。
+- 而 `[memory-service/src/core/HeartbeatLoop.ts](memory-service/src/core/HeartbeatLoop.ts)` 里的 `lastHeartbeat` 是实例字段，不会跨周期持久化。
+- 这说明后续的 `ReflectionPlanner` / `ActionExecutor` / `Dream callback scanner` 都不能把 checkpoint 放在 class 实例里，必须持久化到 DB。
+
+### 校正 3：通知链路必须先统一存储，再谈新的 action UX
+
+- 生产侧现在写的是 `notification_records`：
+  - `[memory-service/src/core/HeartbeatLoop.ts](memory-service/src/core/HeartbeatLoop.ts)`
+  - `[memory-service/src/core/WeeklyReporter.ts](memory-service/src/core/WeeklyReporter.ts)`
+  - `[memory-service/src/core/TruthMaintainer.ts](memory-service/src/core/TruthMaintainer.ts)`
+- 但消费侧 `[memory-service/src/routes/notifications.ts](memory-service/src/routes/notifications.ts)` 读的是 `notifications` 表，和现有 migration 不一致。
+- 连续反思要引入更多主动提醒、待处理 action、Bot push，这个不一致必须先解决，否则新设计会建立在不稳定的通知基础上。
+
+### 校正 4：不要再并存第二套动作表
+
+- 现有 schema 已经有 `proposed_actions`，但基本未被消费：
+  - `[memory-service/src/storage/migrations/001_initial.sql](memory-service/src/storage/migrations/001_initial.sql)`
+- 这次 redesign 不建议同时保留“旧 `proposed_actions` + 新 `action_queue`”两套平行表。
+- 更合理的方向是：实现层升级 `proposed_actions` 为统一 action runtime；概念层仍可称为 action queue。
+
+### 校正 5：前端已有 Dreams / Decisions 页面，应在其上增量扩展
+
+- `[src/modals/memory-exploring-entry.ts](src/modals/memory-exploring-entry.ts)` 已经有 `/dreams` 与 `/decisions` 路由。
+- redesign 的前端部分不应再把这两个能力当成“待新建”，而应新增：
+  - `/reflection-threads`
+  - `/reflection-threads/:id`
+  - 可选 `/actions`
+- 并把现有 `DreamInsights.vue` 定位为 `Dream Replay` 浏览页，而不是连续反思页。
+
+## P0 基础改造
+
+在进入线程化反思、梦境回流和动作执行之前，建议先补齐以下基础运行时原语。
+
+### P0.1 持久化 worker checkpoint / lease
+
+新增两个底层表：
+
+- `worker_checkpoints`
+  - `worker_key`
+  - `cursor_value`
+  - `cursor_type(timestamp|id|json)`
+  - `updated_at`
+- `worker_leases`
+  - `worker_key`
+  - `owner_id`
+  - `lease_until`
+  - `updated_at`
+
+用途：
+
+- `HeartbeatLoop` / `ReflectionPlanner` / `ActionExecutor` / `Dream callback scanner` 都从这里读取和更新游标
+- 后续即使保留单实例部署，也能避免当前“实例字段丢失状态”的问题
+- 如果未来进入多实例，这两张表也可作为最小分布式锁 / 选主能力
+
+### P0.2 统一 notification repository
+
+建议新增：
+
+- `memory-service/src/repositories/NotificationRepository.ts`
+
+职责：
+
+- 统一对 `notification_records` 做增删改查
+- 替换 `[memory-service/src/routes/notifications.ts](memory-service/src/routes/notifications.ts)` 中对 `notifications` 表的直接访问
+- 让 `HeartbeatLoop` / `WeeklyReporter` / `TruthMaintainer` 也走同一个 repository
+
+过渡策略：
+
+- 短期可以保留 `/notifications` API 路径不变，只改底层表
+- 如需兼容老逻辑，可临时提供一个 `notifications` view 映射到 `notification_records`，但最终应只保留一个真实来源
+
+### P0.3 把 `OnlineReflection` 接入 `/ask`
+
+建议在 `[memory-service/src/routes/ask.ts](memory-service/src/routes/ask.ts)` 中采用 fire-and-forget 方式触发：
+
+- 主响应返回后异步调用 `OnlineReflection.reflect(...)`
+- 第一阶段 `usedItemIds` 可先取 top-N recalled items（例如前 5 条），后续再升级为基于 answer grounding/citation 的精确集合
+- `OnlineReflection` 除了继续做 memory reinforce / preference extraction / fact extraction，还要新增可选产物：
+  - `reflectionSignal`
+  - `candidateTopicKeys`
+  - `proposedFollowups`
+
+### P0.4 扩展目录、索引分类与配置链路
+
+连续反思需要先补齐这些基础设施：
+
+- `[memory-service/src/storage/UserDataManager.ts](memory-service/src/storage/UserDataManager.ts)`
+  - 增加 `reflection-threads/`
+  - 可选增加 `reflection-threads/runs/`
+- `[memory-service/src/routes/userFiles.ts](memory-service/src/routes/userFiles.ts)`
+  - 允许读取 `reflection-threads`
+- `[memory-service/src/core/MarkdownManager.ts](memory-service/src/core/MarkdownManager.ts)`
+  - `inferSourceType()` 识别 `reflection-threads/`
+- `[memory-service/src/routes/contextMatch.ts](memory-service/src/routes/contextMatch.ts)`
+  - 搜索范围从 `reflections/` + `dreams/` 扩展到 `reflection-threads/` + `dreams/`
+- `[memory-service/src/routes/config.ts](memory-service/src/routes/config.ts)` / `[memory-service/src/config.ts](memory-service/src/config.ts)`
+  - 扩展 reflection / OpenClaw 相关配置
+  - 同时把 `openClawApiKey` 列入敏感字段，不在前端回显
 
 ## 设计重点
 
@@ -180,6 +309,12 @@ flowchart TD
 - `[memory-service/src/core/HeartbeatLoop.ts](memory-service/src/core/HeartbeatLoop.ts)` 作为分钟级调度入口
 - `[memory-service/src/core/ProactivityPolicy.ts](memory-service/src/core/ProactivityPolicy.ts)` 的评分思路扩展成 topic 排队策略
 
+但要注意：
+
+- 不要复用 `HeartbeatLoop.lastHeartbeat` 这种实例内状态
+- `ReflectionPlanner` 需要通过 `worker_checkpoints` 自己维护“上次扫描到哪里”
+- `ProactiveScheduler` 可以继续当总调度器，但具体 topic scan / action scan / dream callback scan 的 cursor 必须持久化
+
 ### 4. 定义“思考结束”条件
 
 建议不是单一条件，而是满足任一闭环：
@@ -241,7 +376,7 @@ flowchart TD
 
 不要放在反思 worker 里直接做完，建议新增独立执行层：
 
-- `ActionExecutor` 负责拉取 `action_queue`
+- `ActionExecutor` 负责拉取升级后的 `proposed_actions`（概念上即 action queue）
 - `Reflection Worker` 只负责“提出 action”
 - `ActionExecutor` 负责“执行、重试、记录结果、失败回流”
 
@@ -336,7 +471,7 @@ flowchart TD
 
 ### 6.5 ActionExecutor 是否是新增模块
 
-是的。当前代码里没有通用的 `ActionExecutor`，也没有 `action_queue` / `OpenClawClient` / `ToolRuntimeClient`。
+是的。当前代码里没有通用的 `ActionExecutor`，也没有真正被跑起来的 action runtime；只有一个尚未充分使用的 `proposed_actions` schema，以及尚不存在的 `OpenClawClient` / `ToolRuntimeClient`。
 
 当前最接近它的只有：
 
@@ -362,13 +497,29 @@ flowchart TD
   - 输入：高显著主题池 + 可选线程池
   - 输出：dream run、dream artifact、dream callback
 - `ActionExecutor`
-  - 输入：`action_queue`
+  - 输入：升级后的 `proposed_actions`
   - 输出：执行结果、重试、回写、失败记录
 - `OpenClawClient`
   - 输入：标准化工具调用请求
   - 输出：标准化外部结果
 - `ThreadRepository` / `ActionRepository`
   - 统一数据库读写，避免 worker 直接散写 SQL
+
+建议的文件落点：
+
+- `memory-service/src/core/reflection/ReflectionPlanner.ts`
+- `memory-service/src/core/reflection/ReflectionWorker.ts`
+- `memory-service/src/core/reflection/ReflectionThreadService.ts`
+- `memory-service/src/core/dream/DreamWorker.ts`
+- `memory-service/src/core/actions/ActionExecutor.ts`
+- `memory-service/src/core/actions/handlers/TruthActionHandler.ts`
+- `memory-service/src/core/actions/handlers/DecisionActionHandler.ts`
+- `memory-service/src/core/actions/handlers/NotifyActionHandler.ts`
+- `memory-service/src/core/actions/handlers/ExternalToolActionHandler.ts`
+- `memory-service/src/integrations/OpenClawClient.ts`
+- `memory-service/src/repositories/ReflectionThreadRepository.ts`
+- `memory-service/src/repositories/ActionRepository.ts`
+- `memory-service/src/repositories/WorkerCheckpointRepository.ts`
 
 ### 8. 线程状态机
 
@@ -396,9 +547,11 @@ flowchart TD
 - `closed -> active`：出现强新证据时重开
 - `dropped/closed -> archived`：长期冷却后归档
 
-### 9. action_queue 状态机
+### 9. 动作队列状态机（实现上升级 `proposed_actions`）
 
-建议 `action_queue.status`：
+概念上仍然叫 `action queue`，但实现上建议直接升级现有 `proposed_actions`，避免并存两套动作表。
+
+建议 `queue_status`：
 
 - `queued`
 - `running`
@@ -409,17 +562,13 @@ flowchart TD
 - `cancelled`
 - `dead_letter`
 
-建议字段：
+建议新增/补充字段：
 
-- `id`
 - `thread_id`
 - `run_id`
-- `action_type`
+- `action_type`（可直接复用/替换现有 `type`）
 - `execution_mode(auto|manual|assisted)`
 - `priority`
-- `risk_level`
-- `confidence`
-- `payload_json`
 - `idempotency_key`
 - `depends_on_json`
 - `scheduled_at`
@@ -428,13 +577,24 @@ flowchart TD
 - `retry_count`
 - `last_error`
 - `result_json`
+- `source_kind(reflection|dream|manual|system)`
+- `source_ref_id`
+
+保留并继续使用的现有字段：
+
+- `risk_level`
+- `confidence`
+- `params_json`
+- `evidence_refs_json`
+- `requires_approval`
+- `expires_at`
 - `created_at`
 
-如需更细审计，可加 `action_attempts` 子表记录每次执行。
+如需更细审计，可新增 `proposed_action_attempts` 子表记录每次执行。
 
 ### 10. 数据表建议
 
-建议最小新增表：
+建议最小新增/升级表：
 
 #### `reflection_threads`
 
@@ -475,6 +635,29 @@ flowchart TD
 - `markdown_snapshot_path`
 - `created_at`
 
+说明：
+
+- 现有 `reflection_artifacts` 继续保留给 daily / weekly summary 使用
+- `reflection_runs` 只承载线程化连续反思，不去覆盖 `ConsolidationEngine.phaseReflect()` 现有产物
+
+#### `dream_runs`
+
+- `id`
+- `source_type(entity_salience|thread_pool|manual)`
+- `source_ref_id`
+- `thread_ids_json`
+- `summary`
+- `insights_json`
+- `risks_json`
+- `relationships_json`
+- `markdown_path`
+- `created_at`
+
+说明：
+
+- 当前 `[memory-service/src/core/GenerativeReplay.ts](memory-service/src/core/GenerativeReplay.ts)` 只有 Markdown 产物和 relationship side effect
+- redesign 后需要结构化 `dream_runs`，这样才能做 dream callback -> reflection thread 的回流
+
 #### `topic_memory_links`
 
 - `id`
@@ -485,9 +668,40 @@ flowchart TD
 - `role(evidence|context|hypothesis|outcome)`
 - `created_at`
 
-#### `action_queue`
+#### `worker_checkpoints`
 
-- 见上文状态机字段
+- `worker_key`
+- `cursor_value`
+- `cursor_type`
+- `updated_at`
+
+#### `worker_leases`
+
+- `worker_key`
+- `owner_id`
+- `lease_until`
+- `updated_at`
+
+#### 升级后的 `proposed_actions`
+
+- 见上文动作队列状态机字段
+
+### 10.1 推荐 migration 拆分
+
+建议不要继续把所有 schema 堆进 `001_initial.sql`，而是显式新增 migration：
+
+- `003_notification_runtime.sql`
+  - 修正 notification runtime 相关 schema
+  - 可选提供 `notifications` compatibility view
+  - 建 `worker_checkpoints` / `worker_leases`
+- `004_reflection_threads.sql`
+  - 新建 `reflection_threads`
+  - 新建 `reflection_runs`
+  - 新建 `topic_memory_links`
+  - 新建 `dream_runs`
+- `005_action_runtime.sql`
+  - 对 `proposed_actions` 增列升级
+  - 新建 `proposed_action_attempts`
 
 ### 11. Prompt / 上下文装配策略
 
@@ -513,6 +727,74 @@ flowchart TD
 - `statusSuggestion(continue|waiting|closed|paused)`
 - `continueReason`
 
+### 11.1 ReflectionPlanner 的实际扫描输入
+
+第一阶段不要把 topic discovery 做得过度复杂，建议直接扫描以下几类增量信号：
+
+- `messages_raw.created_at > checkpoint`
+- `confirm_requests.created_at > checkpoint`
+- `entity_properties.tx_start > checkpoint` 且 `status in ('active', 'superseded')`
+- `dream_runs.created_at > checkpoint`
+- `proposed_actions.finished_at > checkpoint` 且结果会改变线程状态
+
+主题归并顺序建议：
+
+1. 先按结构化锚点归并：
+  - `entity_id`
+  - `property_key`
+  - `confirm_request.id`
+  - `watched_project.id`
+2. 若没有结构化锚点，再按 `topic_key` 规则归并：
+  - `project:<id>`
+  - `entity:<id>`
+  - `conflict:<entity_id>:<property_key>`
+  - `dream-risk:<slug>`
+3. 最后才做轻量语义匹配：
+  - 对 `reflection_threads.latest_summary` 做向量召回 / 文本相似度匹配
+
+这样可以先用确定性信号稳定收敛，减少“一个主题拆成多条线程”的噪音。
+
+### 11.2 ReflectionWorker 的一次完整执行
+
+建议执行步骤：
+
+1. 锁定一个 `reflection_thread`
+2. 读取：
+  - thread 当前状态
+  - 上一轮 run
+  - 最近 N 条 evidence links
+  - 相关 dream callback
+  - `USER_CORE.md`
+3. 组 prompt，调用 LLM
+4. 持久化 `reflection_run`
+5. 更新 `reflection_threads`：
+  - `latest_summary`
+  - `current_hypothesis`
+  - `open_questions_json`
+  - `status`
+  - `next_reflection_at`
+6. 追加/重写 `reflection-threads/<topic-slug>.md`
+7. 为 `proposedActions` 入队
+8. 更新 thread 对应 evidence link
+
+建议输出 JSON 增加两个字段，方便动作与调度直接消费：
+
+- `nextReflectionSuggestionSec`
+- `evidenceToLink`
+
+### 11.3 DreamWorker 对现有 `GenerativeReplay` 的改造方式
+
+不建议推翻 `[memory-service/src/core/GenerativeReplay.ts](memory-service/src/core/GenerativeReplay.ts)`，而建议分两步演进：
+
+- 第一步：
+  - 保留现有实体显著性选题逻辑
+  - 额外允许输入 `reflection_threads` 中 top-N active topics
+  - 把输出落一份 `dream_runs`
+- 第二步：
+  - dream output 不只写 relationship side effect
+  - 还要显式生成 `dream callbacks`
+  - 再由 `ReflectionPlanner` 消费回流
+
 ### 12. ActionExecutor 的执行器注册表
 
 建议做成可扩展 dispatcher，而不是一个大 if-else：
@@ -527,6 +809,33 @@ flowchart TD
 
 - `openclaw`
 - 未来可扩展 `jira-direct`、`mcp-tool`、`internal-http`
+
+### 12.1 动作分流阈值
+
+建议把“是否自动执行 / 是否打扰用户”做成显式策略函数，而不是散落在 worker prompt 或 handler 内部。
+
+建议最小判定维度：
+
+- `confidence`
+- `risk_level`
+- `source_kind`
+- `requires_approval`
+- `utility_score`
+- `urgency_score`
+
+初版规则建议：
+
+- `source_kind = dream`：
+  - 默认不能直接 `update_truth_property`
+  - 只能 `record_only` / `create_confirm_request` / `query_external_tool`
+- `risk_level = high` 或 `requires_approval = true`：
+  - 不自动执行，进入 `Decision Center`
+- `confidence >= autoExecuteThreshold` 且 `risk_level in (low, medium)`：
+  - 自动执行
+- `urgency_score >= urgentNotifyThreshold` 且 `confidence >= urgentConfidenceThreshold`：
+  - 自动执行后再走 Bot push
+- 其余：
+  - 静默沉淀或排队等待人工触发
 
 ### 13. OpenClawClient 接口建议
 
@@ -576,6 +885,15 @@ flowchart TD
 - `POST /actions/:id/retry`
 - `POST /actions/:id/cancel`
 
+建议继续复用、不重造的现有 API：
+
+- `GET /confirm-requests`
+- `POST /confirm-requests/:id/answer`
+- `POST /dream-digest/push-now`
+- `POST /weekly-report/push-now`
+- `POST /context-match`
+- `POST /ask`
+
 建议扩展现有配置 API：
 
 - `GET /config`
@@ -592,6 +910,12 @@ flowchart TD
 - `reflectionUrgentNotifyThreshold`
 - `reflectionAutoExecuteThreshold`
 
+如果要做实时更新，建议顺手补齐 `[memory-service/src/routes/events.ts](memory-service/src/routes/events.ts)` 的真实发射点：
+
+- 新 thread 创建时发 `reflection_thread`
+- action 入队/完成时发 `action_queue`
+- 新 confirm request 创建时发 `confirm_request`
+
 ### 15. 前端信息架构建议
 
 在 `[src/modals/memory-exploring.vue](src/modals/memory-exploring.vue)` 中建议增加：
@@ -604,11 +928,20 @@ flowchart TD
 - `决策中心`
 - `动作队列`
 
+建议基于现有页面增量演进：
+
+- 保留 `[src/modals/components/DreamInsights.vue](src/modals/components/DreamInsights.vue)`，但产品语义改为 `Dream Replay`
+- 继续复用 `[src/modals/components/DecisionCenter.vue](src/modals/components/DecisionCenter.vue)` 作为 confirm request 入口
+- 新增：
+  - `src/modals/components/ReflectionThreads.vue`
+  - `src/modals/components/ReflectionThreadDetail.vue`
+  - 可选 `src/modals/components/ActionQueue.vue`
+
 推荐路由：
 
 - `/reflection-threads`
 - `/reflection-threads/:id`
-- `/dream-replays`
+- `/dreams` 或显式别名 `/dream-replays`
 - `/actions`
 
 单主题详情页建议区块：
@@ -625,8 +958,10 @@ flowchart TD
 
 #### P0：基础设施
 
-- 新增数据表
+- 修正通知读写统一到 `notification_records`
+- 新增 `worker_checkpoints` / `worker_leases`
 - 新增配置项
+- 把 `OnlineReflection` 接入 `/ask`
 - 新增 `ReflectionPlanner` 最小实现
 
 #### P1：主题线程可运行
@@ -637,7 +972,7 @@ flowchart TD
 
 #### P2：动作闭环
 
-- `action_queue`
+- 升级 `proposed_actions`
 - `ActionExecutor`
 - 真值 action 统一接 `TruthMaintainer`
 - `Decision Center` 联动
@@ -659,9 +994,13 @@ flowchart TD
 
 ### 阶段 1：建立主题线程层
 
-新增后端数据结构和最小 worker，不改现有 dream/report 主链路：
+先修 runtime 断点，再新增后端数据结构和最小 worker，不改现有 dream/report 主链路：
 
-- 新增 `reflection_threads` / `reflection_runs` / `action_queue`
+- 修正 `/notifications` -> `notification_records`
+- 新增 `003_notification_runtime.sql`
+- 新增 `004_reflection_threads.sql`
+- 新增 `005_action_runtime.sql`
+- 新增 `reflection_threads` / `reflection_runs` / `dream_runs`
 - 新增 `ReflectionPlanner` 决定下一轮想什么
 - 让新一轮思考显式读取上一轮 run 结果
 - 输出到新的主题 Markdown 文档
@@ -672,7 +1011,10 @@ flowchart TD
 - `[memory-service/src/core/OnlineReflection.ts](memory-service/src/core/OnlineReflection.ts)`
 - `[memory-service/src/core/GenerativeReplay.ts](memory-service/src/core/GenerativeReplay.ts)`
 - `[memory-service/src/core/TruthMaintainer.ts](memory-service/src/core/TruthMaintainer.ts)`
-- `[memory-service/src/storage/migrations/001_initial.sql](memory-service/src/storage/migrations/001_initial.sql)`
+- `[memory-service/src/routes/notifications.ts](memory-service/src/routes/notifications.ts)`
+- `[memory-service/src/storage/migrations/003_notification_runtime.sql](memory-service/src/storage/migrations/003_notification_runtime.sql)`
+- `[memory-service/src/storage/migrations/004_reflection_threads.sql](memory-service/src/storage/migrations/004_reflection_threads.sql)`
+- `[memory-service/src/storage/migrations/005_action_runtime.sql](memory-service/src/storage/migrations/005_action_runtime.sql)`
 
 ### 阶段 2：把现有反思接入线程化
 
@@ -702,7 +1044,7 @@ flowchart TD
 
 ### 阶段 3.1：接入真值执行与 OpenClaw 工具运行时
 
-- 为 `action_queue` 增加 action type 约定，至少包含：
+- 为升级后的 `proposed_actions` 增加 action type 约定，至少包含：
   - `update_truth_property`
   - `query_external_tool`
   - `create_confirm_request`
@@ -744,7 +1086,7 @@ flowchart TD
 当前 `[src/modals/memory-exploring.vue](src/modals/memory-exploring.vue)` 和 `[src/modals/memory-exploring-entry.ts](src/modals/memory-exploring-entry.ts)` 已有 `/dreams`、`/decisions` 等导航，因此建议新增：
 
 - `/reflection-threads`：主题反思总览页
-- `/reflection-thread/:id`：单主题详情页
+- `/reflection-threads/:id`：单主题详情页
 - 可选 `/dream-replays`：若要与“梦境反思”视觉上彻底区分
 
 建议在总览页同时展示：
@@ -761,6 +1103,21 @@ flowchart TD
 - 每步输出摘要 / hypothesis 变化
 - action 列表（for_system / for_user / urgent）
 - 当前状态与“是否继续思考”的判定依据
+
+## 最小验收标准
+
+连续反思改造至少要满足以下验收条件，才算真正落地：
+
+- `/ask` 返回路径不被阻塞，但响应后能异步产出 `OnlineReflection` 信号
+- 同一批消息不会因为 scheduler 重建实例而被重复规划成多个 thread
+- `/notifications`、Chrome 轮询、Bot push 基于同一套 `notification_records` 数据
+- `GenerativeReplay` 产生的新 dream run 能够回流到 `ReflectionPlanner`
+- dream-derived action 不会直接污染真值层，必须经过 `ActionExecutor` 策略判定
+- `Decision Center` 继续可用，并且能处理 reflection / dream 产出的 confirm request
+- 前端可以浏览：
+  - active / waiting / archived threads
+  - 某线程的 run timeline
+  - action 执行结果
 
 ## 关键取舍建议
 
@@ -780,6 +1137,7 @@ flowchart TD
 ## 风险与注意点
 
 - 现有 `WeeklyReporter` 和 `Dream Digest` 对时间窗口的读取还比较粗，需要后续一起校正，避免线程化后输入范围继续失真。
+- 现有 `HeartbeatLoop` 的游标是实例内状态，而 `ProactiveScheduler` 每轮会重新 new 实例；如果不先上 `worker_checkpoints`，连续反思会重复扫描历史数据。
 - 现有通知链路里 `notification_records` 与旧 `notifications` 读写不完全一致，后续若要强化即时打扰，需要统一。
+- `context-match`、`user-files`、`MarkdownManager.inferSourceType()` 目前只认识 `reflections/` / `dreams/` 等旧目录；如果引入 `reflection-threads/` 但不补这些边界，前端体验会割裂。
 - `dream` 产物应持续保留 `low-confidence / inferred / dream` 来源标识，避免梦境推演污染真值层。
-

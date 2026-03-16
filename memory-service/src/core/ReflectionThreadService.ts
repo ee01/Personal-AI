@@ -1,0 +1,819 @@
+import { contentHash } from '../utils/hashing.js';
+import { now, formatDateTime } from '../utils/time.js';
+import { toSlug } from '../utils/slug.js';
+import type Database from 'better-sqlite3';
+
+import type { ReflectionInput, ReflectionOutput } from './OnlineReflection.js';
+import { ReflectionWorker, type DraftReflectionAction, type ReflectionEvidenceItem } from './ReflectionWorker.js';
+import { ActionRepository, type QueuedActionRecord } from '../repositories/ActionRepository.js';
+import {
+  ReflectionThreadRepository,
+  type ReflectionThreadRecord,
+  type ReflectionRunRecord,
+  type TopicMemoryLinkRecord,
+  type DreamRunRecord,
+} from '../repositories/ReflectionThreadRepository.js';
+import { MarkdownManager } from './MarkdownManager.js';
+import type { UserDataManager } from '../storage/UserDataManager.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
+
+interface MessageSignalRow {
+  id: string;
+  content: string;
+  importance: number;
+  entities_json: string | null;
+  matched_projects_json: string | null;
+  created_at: number;
+}
+
+interface ConfirmRequestSignalRow {
+  id: string;
+  question: string;
+  context: string | null;
+  priority: string;
+  related_entity_id: string | null;
+  created_at: number;
+}
+
+interface EntityPropertySignalRow {
+  id: number;
+  entity_id: string;
+  property_key: string;
+  property_value: string;
+  confidence: number;
+  source_context: string | null;
+  tx_start: number;
+}
+
+interface EntityRow {
+  id: string;
+  name: string;
+  type: string | null;
+}
+
+interface ProfileItemRow {
+  id: string;
+  item_type: string;
+  item_key: string;
+  item_value: string;
+  salience_score: number;
+  updated_at: number;
+}
+
+function uniqStrings(values: Array<string | undefined | null>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .filter((value): value is string => Boolean(value && value.trim()))
+        .map((value) => value.trim()),
+    ),
+  );
+}
+
+function toPriorityFromLabel(label: string | undefined): number {
+  if (label === 'high') return 9;
+  if (label === 'low') return 4;
+  return 6;
+}
+
+function clampSalience(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 0.5;
+  return Math.max(0, Math.min(value!, 1));
+}
+
+export class ReflectionThreadService {
+  private readonly repo: ReflectionThreadRepository;
+  private readonly actionRepo: ActionRepository;
+  private readonly worker: ReflectionWorker;
+  private readonly markdownManager?: MarkdownManager;
+
+  constructor(
+    private readonly db: Database.Database,
+    private readonly userDataManager?: UserDataManager,
+    private readonly userId?: string,
+  ) {
+    this.repo = new ReflectionThreadRepository(db);
+    this.actionRepo = new ActionRepository(db);
+    this.worker = new ReflectionWorker();
+    this.markdownManager = userDataManager?.isInitialized
+      ? new MarkdownManager(db, userDataManager.rootDir)
+      : undefined;
+  }
+
+  listThreads(filters: Parameters<ReflectionThreadRepository['listThreads']>[0]) {
+    return this.repo.listThreads(filters);
+  }
+
+  listDueThreads(limit: number): ReflectionThreadRecord[] {
+    return this.repo.listDueThreads(limit);
+  }
+
+  listThreadActions(threadId: string, limit = 20): QueuedActionRecord[] {
+    return this.actionRepo.list({ threadId, limit }).items;
+  }
+
+  listRuns(threadId: string, limit = 20): ReflectionRunRecord[] {
+    return this.repo.listRuns(threadId, limit);
+  }
+
+  getThreadDetail(threadId: string): {
+    thread: ReflectionThreadRecord;
+    runs: ReflectionRunRecord[];
+    actions: QueuedActionRecord[];
+    links: Array<TopicMemoryLinkRecord & { preview?: string; previewTitle?: string; previewTimestamp?: number }>;
+    dreamRuns: DreamRunRecord[];
+  } | null {
+    const thread = this.repo.getThreadById(threadId);
+    if (!thread) return null;
+
+    const runs = this.repo.listRuns(threadId, 20);
+    const actions = this.actionRepo.list({ threadId, limit: 20 }).items;
+    const rawLinks = this.repo.listLinks(threadId, 50);
+    const links = rawLinks.map((link) => ({
+      ...link,
+      ...this.hydrateLink(link),
+    }));
+    const dreamRuns = this.repo.listDreamRuns({ threadId, limit: 10 });
+
+    return { thread, runs, actions, links, dreamRuns };
+  }
+
+  private getReflectionHeartbeatSeconds(): number {
+    return getUserRuntimeConfig(this.userDataManager).reflectionHeartbeatMinutes * 60;
+  }
+
+  recordOnlineReflectionSignal(
+    input: ReflectionInput,
+    output: ReflectionOutput,
+  ): { thread: ReflectionThreadRecord; run: ReflectionRunRecord } | null {
+    const hasSignal =
+      output.shouldStore ||
+      output.newFacts.length > 0 ||
+      output.userPreferences.length > 0 ||
+      output.improvements.length > 0;
+    if (!hasSignal) return null;
+
+    const entityHint = output.newFacts[0]?.entity?.trim();
+    const topicKey = entityHint
+      ? `entity:${toSlug(entityHint)}`
+      : `ask:${contentHash(input.query.toLowerCase()).slice(0, 16)}`;
+    const title = entityHint
+      ? `自我反思: ${entityHint}`
+      : `自我反思: ${input.query.slice(0, 48)}`;
+
+    const salience = clampSalience(
+      0.45 +
+        output.newFacts.length * 0.1 +
+        output.userPreferences.length * 0.07 +
+        output.improvements.length * 0.06,
+    );
+    const openQuestions = output.improvements.slice(0, 6);
+    const summary = this.buildOnlineSummary(input, output);
+
+    let thread = this.repo.upsertThread({
+      topicKey,
+      title,
+      status: 'active',
+      priority: output.newFacts.length > 0 ? 7 : 6,
+      salience,
+      sourceType: 'ask',
+      currentHypothesis: output.userPreferences[0] ?? output.newFacts[0]?.value,
+      openQuestions,
+      latestSummary: summary,
+      nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
+      continueReason: 'Online reflection detected reusable insight from a user interaction.',
+    });
+
+    const defaultPath = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
+    if (!thread.latestMarkdownPath) {
+      thread = this.repo.upsertThread({
+        topicKey: thread.topicKey,
+        title: thread.title,
+        latestMarkdownPath: defaultPath,
+      });
+    }
+
+    for (const itemId of input.usedItemIds) {
+      const sourceKind = /^\d+$/.test(itemId) ? 'chunk' : 'message';
+      this.repo.addLink(thread.id, sourceKind, itemId, 1, 'evidence');
+    }
+
+    const run = this.repo.createRun({
+      threadId: thread.id,
+      runType: 'online_reflection',
+      triggerType: 'ask',
+      inputRefs: uniqStrings([`query:${input.query.slice(0, 120)}`]),
+      summary,
+      hypothesisBefore: thread.currentHypothesis,
+      hypothesisAfter: output.userPreferences[0] ?? thread.currentHypothesis,
+      discoveries: [
+        ...output.newFacts.map((fact) => `${fact.entity}.${fact.key} = ${fact.value} (${fact.confidence.toFixed(2)})`),
+        ...output.userPreferences.map((pref) => `Preference: ${pref}`),
+      ],
+      openQuestions,
+      actions: [],
+      markdownSnapshotPath: defaultPath,
+    });
+
+    this.repo.updateThreadAfterRun(thread.id, {
+      latestSummary: summary,
+      latestMarkdownPath: defaultPath,
+      currentHypothesis: output.userPreferences[0] ?? thread.currentHypothesis,
+      openQuestions,
+      nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
+      lastReflectedAt: now(),
+      continueReason: 'Online reflection produced facts, preferences, or improvements worth revisiting.',
+    });
+
+    this.syncThreadDocument(thread.id);
+
+    return {
+      thread: this.repo.getThreadById(thread.id)!,
+      run,
+    };
+  }
+
+  ingestConfirmRequest(confirmRequestId: string): ReflectionThreadRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, question, context, priority, related_entity_id, created_at
+         FROM confirm_requests
+         WHERE id = ?`,
+      )
+      .get(confirmRequestId) as ConfirmRequestSignalRow | undefined;
+    if (!row) return null;
+
+    const entityTitle = row.related_entity_id
+      ? (this.db.prepare('SELECT id, name, type FROM entities WHERE id = ?').get(row.related_entity_id) as EntityRow | undefined)?.name
+      : undefined;
+    const title = entityTitle
+      ? `决策跟进: ${entityTitle}`
+      : `决策跟进: ${row.question.slice(0, 48)}`;
+
+    const thread = this.repo.upsertThread({
+      topicKey: `confirm_request:${row.id}`,
+      title,
+      status: 'active',
+      priority: toPriorityFromLabel(row.priority),
+      salience: 0.82,
+      sourceType: 'confirm_request',
+      sourceRefId: row.id,
+      currentHypothesis: row.context ?? undefined,
+      openQuestions: [row.question],
+      latestSummary: row.question,
+      nextReflectionAt: now(),
+      continueReason: 'A confirm request needs human decision or further evidence.',
+    });
+
+    this.repo.addLink(thread.id, 'confirm_request', row.id, 1, 'trigger');
+    return thread;
+  }
+
+  ingestMessageSignal(messageId: string): ReflectionThreadRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, content, importance, entities_json, matched_projects_json, created_at
+         FROM messages_raw
+         WHERE id = ?`,
+      )
+      .get(messageId) as MessageSignalRow | undefined;
+    if (!row) return null;
+
+    const projectIds = this.parseJsonArray<string>(row.matched_projects_json);
+    const entityHints = this.parseJsonArray<{ id?: string; name?: string }>(row.entities_json);
+
+    let topicKey = `message:${row.id}`;
+    let title = `消息追踪: ${row.content.slice(0, 42)}`;
+
+    if (projectIds.length > 0) {
+      const project = this.db
+        .prepare('SELECT id, name FROM watched_projects WHERE id = ?')
+        .get(projectIds[0]) as { id: string; name: string } | undefined;
+      if (project) {
+        topicKey = `project:${project.id}`;
+        title = `项目反思: ${project.name}`;
+      }
+    } else if (entityHints.length > 0) {
+      const firstEntity = entityHints[0];
+      const name = firstEntity?.name ?? 'Unknown';
+      topicKey = firstEntity?.id ? `entity:${firstEntity.id}` : `entity-name:${toSlug(name)}`;
+      title = `实体反思: ${name}`;
+    }
+
+    const thread = this.repo.upsertThread({
+      topicKey,
+      title,
+      status: 'active',
+      priority: Math.max(5, Math.min(10, Math.round(row.importance * 10))),
+      salience: clampSalience(row.importance),
+      sourceType: 'message',
+      sourceRefId: row.id,
+      latestSummary: row.content.slice(0, 180),
+      nextReflectionAt: now(),
+      continueReason: 'A high-importance message was captured and queued for reflection.',
+    });
+
+    this.repo.addLink(thread.id, 'message', row.id, Math.max(0.5, row.importance), 'trigger');
+    return thread;
+  }
+
+  ingestEntityPropertySignal(propertyId: number): ReflectionThreadRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, entity_id, property_key, property_value, confidence, source_context, tx_start
+         FROM entity_properties
+         WHERE id = ?`,
+      )
+      .get(propertyId) as EntityPropertySignalRow | undefined;
+    if (!row) return null;
+
+    const entity = this.db
+      .prepare('SELECT id, name, type FROM entities WHERE id = ?')
+      .get(row.entity_id) as EntityRow | undefined;
+    const entityName = entity?.name ?? row.entity_id;
+
+    const thread = this.repo.upsertThread({
+      topicKey: `entity_property:${row.entity_id}:${row.property_key}`,
+      title: `事实跟进: ${entityName} · ${row.property_key}`,
+      status: 'active',
+      priority: Math.max(5, Math.min(10, Math.round((row.confidence || 0.6) * 10))),
+      salience: clampSalience(row.confidence),
+      sourceType: 'entity_property',
+      sourceRefId: String(row.id),
+      currentHypothesis: `${entityName}.${row.property_key} -> ${row.property_value}`,
+      openQuestions: [`${entityName} 的 ${row.property_key} 是否还会继续变化？`],
+      latestSummary: `${entityName} 的 ${row.property_key} 更新为 ${row.property_value}`,
+      nextReflectionAt: now(),
+      continueReason: 'A truth/property change was observed and needs follow-up.',
+    });
+
+    this.repo.addLink(thread.id, 'entity_property', String(row.id), Math.max(0.5, row.confidence), 'trigger');
+    return thread;
+  }
+
+  ingestProfileSignal(profileItemId: string): ReflectionThreadRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, item_type, item_key, item_value, salience_score, updated_at
+         FROM user_profile_items
+         WHERE id = ?`,
+      )
+      .get(profileItemId) as ProfileItemRow | undefined;
+    if (!row) return null;
+
+    const thread = this.repo.upsertThread({
+      topicKey: `profile:${row.item_type}:${toSlug(row.item_key)}`,
+      title: `画像反思: ${row.item_key}`,
+      status: 'active',
+      priority: 6,
+      salience: clampSalience(row.salience_score),
+      sourceType: 'profile_item',
+      sourceRefId: row.id,
+      currentHypothesis: row.item_value,
+      openQuestions: [`${row.item_key} 是否已经成为稳定偏好？`],
+      latestSummary: `${row.item_key}: ${row.item_value}`,
+      nextReflectionAt: now(),
+      continueReason: 'A high-salience user profile update should be revisited.',
+    });
+
+    this.repo.addLink(thread.id, 'profile_item', row.id, Math.max(0.5, row.salience_score), 'trigger');
+    return thread;
+  }
+
+  recordDreamRun(input: {
+    sourceType: string;
+    sourceRefId?: string;
+    title: string;
+    summary?: string;
+    insights?: string[];
+    risks?: string[];
+    relationships?: Array<Record<string, unknown>>;
+    markdownPath?: string;
+  }): DreamRunRecord {
+    const topicKey = input.sourceRefId
+      ? `${input.sourceType}:${input.sourceRefId}`
+      : `dream:${contentHash(input.title.toLowerCase()).slice(0, 16)}`;
+    const thread = this.repo.upsertThread({
+      topicKey,
+      title: `梦境重放: ${input.title}`,
+      status: 'active',
+      priority: 7,
+      salience: 0.78,
+      sourceType: 'dream',
+      sourceRefId: input.sourceRefId,
+      latestSummary: input.summary,
+      nextReflectionAt: now() + 6 * 3600,
+      continueReason: 'Weekly dream replay surfaced insights or risks to revisit.',
+    });
+
+    const dreamRun = this.repo.createDreamRun({
+      sourceType: input.sourceType,
+      sourceRefId: input.sourceRefId,
+      threadIds: [thread.id],
+      summary: input.summary,
+      insights: input.insights,
+      risks: input.risks,
+      relationships: input.relationships,
+      markdownPath: input.markdownPath,
+    });
+
+    this.repo.addLink(thread.id, 'dream_run', dreamRun.id, 1, 'dream');
+    this.syncThreadDocument(thread.id);
+    return dreamRun;
+  }
+
+  async runReflection(
+    threadId: string,
+    options: {
+      runType?: string;
+      triggerType?: string;
+      force?: boolean;
+    } = {},
+  ): Promise<{
+    thread: ReflectionThreadRecord;
+    run: ReflectionRunRecord;
+    actions: QueuedActionRecord[];
+  }> {
+    const thread = this.repo.getThreadById(threadId);
+    if (!thread) {
+      throw new Error(`Reflection thread "${threadId}" not found`);
+    }
+
+    if (!options.force && thread.status !== 'active') {
+      throw new Error(`Reflection thread "${threadId}" is not active`);
+    }
+
+    const evidence = this.collectEvidence(thread);
+    const generated = await this.worker.generate(
+      thread,
+      evidence,
+      options.triggerType ?? 'manual',
+    );
+
+    const threadPath = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
+    const latestRun = this.repo.getLatestRun(thread.id);
+    const run = this.repo.createRun({
+      threadId: thread.id,
+      runType: options.runType ?? 'continuous_reflection',
+      triggerType: options.triggerType ?? 'manual',
+      inputRefs: evidence.map((item) => `${item.sourceKind}:${item.sourceId}`),
+      previousRunId: latestRun?.id,
+      summary: generated.summary,
+      hypothesisBefore: thread.currentHypothesis,
+      hypothesisAfter: generated.hypothesisAfter,
+      discoveries: generated.discoveries,
+      openQuestions: generated.openQuestions,
+      actions: generated.actionProposals.map((action) => ({
+        ...action,
+      })),
+      markdownSnapshotPath: threadPath,
+    });
+
+    const createdActions = generated.actionProposals.map((proposal, index) =>
+      this.actionRepo.create({
+        actionType: proposal.actionType,
+        title: proposal.title,
+        description: proposal.description,
+        params: proposal.actionType === 'notify_user'
+          ? {
+              ...(proposal.params ?? {}),
+              payload: {
+                ...(proposal.params?.payload as Record<string, unknown> | undefined),
+                threadId: thread.id,
+                runId: run.id,
+                userId: this.userId,
+              },
+            }
+          : proposal.params,
+        riskLevel: proposal.riskLevel,
+        confidence: proposal.confidence,
+        evidenceRefs: uniqStrings([
+          ...(proposal.evidenceRefs ?? []),
+          ...evidence.slice(0, 3).map((item) => `${item.sourceKind}:${item.sourceId}`),
+        ]),
+        requiresApproval: proposal.requiresApproval,
+        state: 'pending',
+        source: 'reflection_worker',
+        threadId: thread.id,
+        runId: run.id,
+        executionMode: proposal.executionMode,
+        priority: proposal.priority,
+        idempotencyKey: `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`,
+        scheduledAt: proposal.scheduledAt,
+        sourceKind: 'reflection_run',
+        sourceRefId: run.id,
+        queueStatus: proposal.requiresApproval ? 'queued' : proposal.executionMode === 'auto' ? 'queued' : 'queued',
+        utilityScore: proposal.utilityScore,
+        urgencyScore: proposal.urgencyScore,
+      }),
+    );
+
+    if (createdActions.length > 0) {
+      this.repo.updateRunActions(
+        run.id,
+        createdActions.map((action) => ({
+          id: action.id,
+          actionType: action.actionType,
+          title: action.title,
+          queueStatus: action.queueStatus,
+          executionMode: action.executionMode,
+          priority: action.priority,
+        })),
+      );
+    }
+
+    const updatedThread = this.repo.updateThreadAfterRun(thread.id, {
+      latestSummary: generated.summary,
+      latestMarkdownPath: threadPath,
+      currentHypothesis: generated.hypothesisAfter,
+      openQuestions: generated.openQuestions,
+      nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
+      lastReflectedAt: now(),
+      continueReason: generated.openQuestions[0] ?? thread.continueReason,
+      status: thread.status,
+    });
+
+    this.syncThreadDocument(thread.id);
+
+    return {
+      thread: updatedThread ?? this.repo.getThreadById(thread.id)!,
+      run,
+      actions: createdActions,
+    };
+  }
+
+  pauseThread(threadId: string, reason?: string): ReflectionThreadRecord | null {
+    const thread = this.repo.setThreadStatus(threadId, 'paused', reason, null);
+    if (thread) this.syncThreadDocument(threadId);
+    return thread;
+  }
+
+  closeThread(threadId: string, reason?: string): ReflectionThreadRecord | null {
+    const thread = this.repo.setThreadStatus(threadId, 'closed', reason, null);
+    if (thread) this.syncThreadDocument(threadId);
+    return thread;
+  }
+
+  resumeThread(threadId: string): ReflectionThreadRecord | null {
+    const thread = this.repo.setThreadStatus(threadId, 'active', undefined, now());
+    if (thread) this.syncThreadDocument(threadId);
+    return thread;
+  }
+
+  private buildOnlineSummary(input: ReflectionInput, output: ReflectionOutput): string {
+    const parts: string[] = [];
+    if (output.newFacts.length > 0) {
+      parts.push(`Extracted ${output.newFacts.length} new fact(s) from the ask interaction.`);
+    }
+    if (output.userPreferences.length > 0) {
+      parts.push(`Detected ${output.userPreferences.length} implicit preference(s).`);
+    }
+    if (output.improvements.length > 0) {
+      parts.push(`Identified ${output.improvements.length} follow-up improvement(s).`);
+    }
+    if (parts.length === 0) {
+      parts.push(`The ask interaction "${input.query.slice(0, 80)}" was marked for future revisit.`);
+    }
+    return parts.join(' ');
+  }
+
+  private defaultThreadPath(thread: ReflectionThreadRecord): string {
+    return `reflection-threads/${toSlug(thread.title).slice(0, 48) || 'reflection-thread'}-${thread.id.slice(0, 8)}.md`;
+  }
+
+  private collectEvidence(thread: ReflectionThreadRecord): ReflectionEvidenceItem[] {
+    return this.repo.listLinks(thread.id, 20).map((link) => {
+      const hydrated = this.hydrateLink(link);
+      return {
+        sourceKind: link.sourceKind,
+        sourceId: link.sourceId,
+        title: hydrated.previewTitle ?? `${link.sourceKind}:${link.sourceId}`,
+        snippet: hydrated.preview ?? '(no preview available)',
+        createdAt: hydrated.previewTimestamp,
+        role: link.role,
+      };
+    });
+  }
+
+  private hydrateLink(link: TopicMemoryLinkRecord): {
+    preview?: string;
+    previewTitle?: string;
+    previewTimestamp?: number;
+  } {
+    if (link.sourceKind === 'message') {
+      const row = this.db
+        .prepare('SELECT content, created_at FROM messages_raw WHERE id = ?')
+        .get(link.sourceId) as { content: string; created_at: number } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '消息线索',
+        preview: row.content.slice(0, 240),
+        previewTimestamp: row.created_at,
+      };
+    }
+
+    if (link.sourceKind === 'confirm_request') {
+      const row = this.db
+        .prepare('SELECT question, context, created_at FROM confirm_requests WHERE id = ?')
+        .get(link.sourceId) as { question: string; context: string | null; created_at: number } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '待确认问题',
+        preview: row.context ? `${row.question} | ${row.context}` : row.question,
+        previewTimestamp: row.created_at,
+      };
+    }
+
+    if (link.sourceKind === 'entity_property') {
+      const row = this.db
+        .prepare(
+          `SELECT ep.property_key, ep.property_value, ep.tx_start, e.name AS entity_name
+           FROM entity_properties ep
+           LEFT JOIN entities e ON e.id = ep.entity_id
+           WHERE ep.id = ?`,
+        )
+        .get(link.sourceId) as {
+          property_key: string;
+          property_value: string;
+          tx_start: number;
+          entity_name: string | null;
+        } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '事实变化',
+        preview: `${row.entity_name ?? 'Unknown'} · ${row.property_key} = ${row.property_value}`,
+        previewTimestamp: row.tx_start,
+      };
+    }
+
+    if (link.sourceKind === 'profile_item') {
+      const row = this.db
+        .prepare(
+          `SELECT item_key, item_value, updated_at
+           FROM user_profile_items
+           WHERE id = ?`,
+        )
+        .get(link.sourceId) as { item_key: string; item_value: string; updated_at: number } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '用户画像',
+        preview: `${row.item_key}: ${row.item_value}`,
+        previewTimestamp: row.updated_at,
+      };
+    }
+
+    if (link.sourceKind === 'dream_run') {
+      const row = this.db
+        .prepare('SELECT summary, created_at FROM dream_runs WHERE id = ?')
+        .get(link.sourceId) as { summary: string | null; created_at: number } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '梦境重放',
+        preview: row.summary ?? 'Dream replay without summary.',
+        previewTimestamp: row.created_at,
+      };
+    }
+
+    if (link.sourceKind === 'chunk') {
+      const row = this.db
+        .prepare('SELECT content, created_at FROM chunks WHERE chunk_id = ?')
+        .get(Number(link.sourceId)) as { content: string; created_at: number } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '记忆片段',
+        preview: row.content.slice(0, 240),
+        previewTimestamp: row.created_at,
+      };
+    }
+
+    return {};
+  }
+
+  private syncThreadDocument(threadId: string): void {
+    const thread = this.repo.getThreadById(threadId);
+    if (!thread || !this.userDataManager) return;
+
+    const path = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
+    const runs = this.repo.listRuns(thread.id, 20);
+    const dreams = this.repo.listDreamRuns({ threadId: thread.id, limit: 10 });
+    const actions = this.actionRepo.list({ threadId: thread.id, limit: 20 }).items;
+    const links = this.repo.listLinks(thread.id, 20).map((link) => ({
+      ...link,
+      ...this.hydrateLink(link),
+    }));
+
+    const lines: string[] = [];
+    lines.push(`# Reflection Thread: ${thread.title}`);
+    lines.push('');
+    lines.push(`- Topic Key: \`${thread.topicKey}\``);
+    lines.push(`- Status: ${thread.status}`);
+    lines.push(`- Priority: ${thread.priority}`);
+    lines.push(`- Salience: ${thread.salience.toFixed(2)}`);
+    lines.push(`- Reflection Count: ${thread.reflectionCount}`);
+    if (thread.lastReflectedAt) lines.push(`- Last Reflected: ${formatDateTime(thread.lastReflectedAt)}`);
+    if (thread.nextReflectionAt) lines.push(`- Next Reflection: ${formatDateTime(thread.nextReflectionAt)}`);
+    lines.push('');
+
+    lines.push('## Current Hypothesis');
+    lines.push(thread.currentHypothesis ?? 'None');
+    lines.push('');
+
+    lines.push('## Latest Summary');
+    lines.push(thread.latestSummary ?? 'No summary yet.');
+    lines.push('');
+
+    lines.push('## Open Questions');
+    if (thread.openQuestions.length > 0) {
+      for (const question of thread.openQuestions) lines.push(`- ${question}`);
+    } else {
+      lines.push('- None');
+    }
+    lines.push('');
+
+    lines.push('## Evidence Links');
+    if (links.length > 0) {
+      for (const link of links) {
+        lines.push(`- [${link.sourceKind}/${link.role}] ${link.previewTitle ?? link.sourceId}: ${link.preview ?? '(no preview)'}`);
+      }
+    } else {
+      lines.push('- None');
+    }
+    lines.push('');
+
+    lines.push('## Dream Replays');
+    if (dreams.length > 0) {
+      for (const dream of dreams) {
+        lines.push(`- ${formatDateTime(dream.createdAt)}: ${dream.summary ?? 'Dream replay generated.'}`);
+      }
+    } else {
+      lines.push('- None');
+    }
+    lines.push('');
+
+    lines.push('## Action Queue');
+    if (actions.length > 0) {
+      for (const action of actions) {
+        lines.push(`- [${action.queueStatus}] ${action.actionType}: ${action.title}`);
+      }
+    } else {
+      lines.push('- None');
+    }
+    lines.push('');
+
+    lines.push('## Runs');
+    if (runs.length > 0) {
+      for (const run of runs) {
+        lines.push('');
+        lines.push(`### ${formatDateTime(run.createdAt)} · ${run.runType}/${run.triggerType ?? 'unknown'}`);
+        lines.push(run.summary);
+        lines.push('');
+        lines.push('#### Discoveries');
+        if (run.discoveries.length > 0) {
+          for (const discovery of run.discoveries) lines.push(`- ${discovery}`);
+        } else {
+          lines.push('- None');
+        }
+        lines.push('');
+        lines.push('#### Open Questions');
+        if (run.openQuestions.length > 0) {
+          for (const question of run.openQuestions) lines.push(`- ${question}`);
+        } else {
+          lines.push('- None');
+        }
+        lines.push('');
+        lines.push('#### Actions');
+        if (run.actions.length > 0) {
+          for (const action of run.actions) {
+            lines.push(`- ${(action.title as string | undefined) ?? JSON.stringify(action)}`);
+          }
+        } else {
+          lines.push('- None');
+        }
+      }
+    } else {
+      lines.push('- No runs yet.');
+    }
+    lines.push('');
+
+    this.userDataManager.writeFile(path, lines.join('\n'));
+    void this.markdownManager?.reindexFile(path);
+
+    if (path !== thread.latestMarkdownPath) {
+      this.repo.upsertThread({
+        topicKey: thread.topicKey,
+        title: thread.title,
+        latestMarkdownPath: path,
+      });
+    }
+  }
+
+  private parseJsonArray<T>(raw: string | null): T[] {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as T[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+}

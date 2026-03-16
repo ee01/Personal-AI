@@ -15,6 +15,9 @@ import PlaceholderPage from './components/PlaceholderPage.vue';
 import FollowThreads from './components/FollowThreads.vue';
 import DecisionCenter from './components/DecisionCenter.vue';
 import DreamInsights from './components/DreamInsights.vue';
+import ReflectionThreads from './components/ReflectionThreads.vue';
+import ReflectionThreadDetail from './components/ReflectionThreadDetail.vue';
+import ActionQueue from './components/ActionQueue.vue';
 
 // 路由配置
 const routes = [
@@ -23,6 +26,9 @@ const routes = [
   { path: '/user-profile', name: 'UserProfile', component: UserProfilePage },
   { path: '/follow-threads', name: 'FollowThreads', component: FollowThreads },
   { path: '/decisions', name: 'Decisions', component: DecisionCenter },
+  { path: '/reflection-threads', name: 'ReflectionThreads', component: ReflectionThreads },
+  { path: '/reflection-threads/:id', name: 'ReflectionThreadDetail', component: ReflectionThreadDetail, props: true },
+  { path: '/actions', name: 'ActionQueue', component: ActionQueue },
   { path: '/entity/:type', name: 'EntityDetail', component: EntityListPage, props: true },
   { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
   { path: '/person/:id', name: 'PersonDetail', component: PersonDetailPage, props: true },

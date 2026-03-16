@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '..', '.env'), override: true });
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 export interface Config {
   // Server
@@ -55,8 +55,23 @@ export interface Config {
   weeklyReportMinMessages: number;
 
   // Dream Digest
+  dreamDigestEnabled: boolean;
   dreamDigestScheduleType: 'weekly' | 'every_x_days' | 'monthly';
   dreamDigestIntervalDays: number;
+
+  // Reflection runtime
+  reflectionEnabled: boolean;
+  reflectionActiveTopicLimit: number;
+  reflectionHeartbeatMinutes: number;
+  reflectionUrgentNotifyThreshold: number;
+  reflectionAutoExecuteThreshold: number;
+  reflectionUrgentConfidenceThreshold: number;
+
+  // OpenClaw
+  openClawEnabled: boolean;
+  openClawBaseUrl: string;
+  openClawApiKey: string;
+  openClawTimeoutMs: number;
 }
 
 let _config: Readonly<Config> | null = null;
@@ -111,8 +126,8 @@ export function getConfig(): Readonly<Config> {
     botTeamId: process.env.BOT_TEAM_ID || '',
     botTargetEmail: process.env.BOT_TARGET_EMAIL || '',
 
-    // Context Match
-    contextMatchThreshold: parseFloat(process.env.CONTEXT_MATCH_THRESHOLD || '0.78'),
+    // Context Match (0.50: MiniLM 在混合语言下相似度偏低，0.78 过于严格)
+    contextMatchThreshold: parseFloat(process.env.CONTEXT_MATCH_THRESHOLD || '0.50'),
 
     // Scheduler
     heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '900000', 10),
@@ -127,8 +142,23 @@ export function getConfig(): Readonly<Config> {
     weeklyReportMinMessages: parseInt(process.env.WEEKLY_REPORT_MIN_MESSAGES || '20', 10),
 
     // Dream Digest
+    dreamDigestEnabled: process.env.DREAM_DIGEST_ENABLED !== 'false',
     dreamDigestScheduleType,
     dreamDigestIntervalDays,
+
+    // Reflection runtime
+    reflectionEnabled: process.env.REFLECTION_ENABLED === 'true',
+    reflectionActiveTopicLimit: parseInt(process.env.REFLECTION_ACTIVE_TOPIC_LIMIT || '6', 10),
+    reflectionHeartbeatMinutes: parseInt(process.env.REFLECTION_HEARTBEAT_MINUTES || '15', 10),
+    reflectionUrgentNotifyThreshold: parseFloat(process.env.REFLECTION_URGENT_NOTIFY_THRESHOLD || '0.88'),
+    reflectionAutoExecuteThreshold: parseFloat(process.env.REFLECTION_AUTO_EXECUTE_THRESHOLD || '0.8'),
+    reflectionUrgentConfidenceThreshold: parseFloat(process.env.REFLECTION_URGENT_CONFIDENCE_THRESHOLD || '0.9'),
+
+    // OpenClaw
+    openClawEnabled: process.env.OPENCLAW_ENABLED === 'true',
+    openClawBaseUrl: process.env.OPENCLAW_BASE_URL || '',
+    openClawApiKey: process.env.OPENCLAW_API_KEY || '',
+    openClawTimeoutMs: parseInt(process.env.OPENCLAW_TIMEOUT_MS || '30000', 10),
   };
 
   _config = Object.freeze(config);

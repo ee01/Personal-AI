@@ -504,19 +504,21 @@ class WebIntelligenceContentScript {
             width: 40px;
             height: 40px;
             border-radius: 50%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: #fff;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
             z-index: 2147483646;
             box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-            font-size: 20px;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
             user-select: none;
         `;
-        bubble.textContent = '\uD83D\uDCA1'; // 💡
+        const iconImg = document.createElement('img');
+        iconImg.src = chrome.runtime.getURL('icons/icon48.png');
+        iconImg.alt = 'Related memory';
+        iconImg.style.cssText = 'width: 28px; height: 28px; object-fit: contain;';
+        bubble.appendChild(iconImg);
         bubble.title = 'Related memory found';
 
         // Expanded card (hidden initially)

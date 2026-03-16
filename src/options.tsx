@@ -34,7 +34,7 @@ const PUSH_TARGET_RULES: Array<{
 }> = [
     { targetKey: 'MESSAGE_ANALYSIS_PUSH_TARGET', groupKey: 'MESSAGE_ANALYSIS_PUSH_GROUP_ID', label: '消息分析推送' },
     { targetKey: 'FOLLOW_UP_PUSH_TARGET', groupKey: 'FOLLOW_UP_PUSH_GROUP_ID', label: '关注后续推送' },
-    { targetKey: 'DREAM_INSIGHT_PUSH_TARGET', groupKey: 'DREAM_INSIGHT_PUSH_GROUP_ID', label: '梦境洞察推送', allowNone: true },
+    { targetKey: 'DREAM_INSIGHT_PUSH_TARGET', groupKey: 'DREAM_INSIGHT_PUSH_GROUP_ID', label: '梦境重放报表推送', allowNone: true },
     { targetKey: 'WEEKLY_REPORT_PUSH_TARGET', groupKey: 'WEEKLY_REPORT_PUSH_GROUP_ID', label: '周报推送', allowNone: true },
     { targetKey: 'DECISION_CENTER_PUSH_TARGET', groupKey: 'DECISION_CENTER_PUSH_GROUP_ID', label: '决策中心推送' },
 ];
@@ -83,11 +83,11 @@ const Options = () => {
     };
 
     // Load weekly report settings from backend
-    const loadWeeklyReportSettingsFromBackend = async (baseUrl: string, apiKey?: string) => {
+    const loadWeeklyReportSettingsFromBackend = async (targetConfig: EnvConfigType) => {
         try {
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (apiKey) headers['x-api-key'] = apiKey;
-            const res = await fetch(`${baseUrl}/config`, { headers });
+            if (!targetConfig.MEMORY_SERVICE_BASE_URL) return;
+            const headers = await getRequestHeaders(targetConfig);
+            const res = await fetch(`${targetConfig.MEMORY_SERVICE_BASE_URL}/config`, { headers });
             if (res.ok) {
                 const data = await res.json();
                 if (data.weeklyReportCron) {
@@ -118,8 +118,6 @@ const Options = () => {
 
     // Save weekly report settings to backend
     const saveWeeklyReportSettings = async () => {
-        const baseUrl = config.MEMORY_SERVICE_BASE_URL || 'http://localhost:3210/api/v1';
-        const apiKey = config.MEMORY_SERVICE_API_KEY;
         const pushTarget = resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true);
         const validationError = validatePushTargets(config, ['WEEKLY_REPORT_PUSH_TARGET']);
         if (validationError) {
@@ -134,9 +132,8 @@ const Options = () => {
                 config
             });
 
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (apiKey) headers['x-api-key'] = apiKey;
-            const res = await fetch(`${baseUrl}/config`, {
+            const headers = await getRequestHeaders(config);
+            const res = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/config`, {
                 method: 'PUT',
                 headers,
                 body: JSON.stringify({
@@ -181,7 +178,7 @@ const Options = () => {
     // Load weekly report settings from backend when config is ready
     useEffect(() => {
         if (config.MEMORY_SERVICE_BASE_URL) {
-            loadWeeklyReportSettingsFromBackend(config.MEMORY_SERVICE_BASE_URL, config.MEMORY_SERVICE_API_KEY);
+            loadWeeklyReportSettingsFromBackend(config);
         }
     }, [config.MEMORY_SERVICE_BASE_URL, config.MEMORY_SERVICE_API_KEY]);
 
@@ -250,6 +247,12 @@ const Options = () => {
                     serverConfig?.dreamDigestEnabled
                 ),
                 DREAM_INSIGHT_PUSH_GROUP_ID: serverConfig?.dreamDigestPushGroupId || prev.DREAM_INSIGHT_PUSH_GROUP_ID || '',
+                SELF_REFLECTION_ENABLED: serverConfig?.reflectionEnabled !== undefined
+                    ? Boolean(serverConfig.reflectionEnabled)
+                    : prev.SELF_REFLECTION_ENABLED,
+                SELF_REFLECTION_HEARTBEAT_MINUTES: Number.isFinite(Number(serverConfig?.reflectionHeartbeatMinutes))
+                    ? Math.max(1, Math.floor(Number(serverConfig.reflectionHeartbeatMinutes)))
+                    : (prev.SELF_REFLECTION_HEARTBEAT_MINUTES || 15),
                 DECISION_CENTER_PUSH_TARGET: resolvePushTargetValue(
                     serverConfig?.decisionCenterPushTarget,
                     prev.DECISION_CENTER_PUSH_TARGET || 'me',
@@ -258,7 +261,7 @@ const Options = () => {
                 DECISION_CENTER_PUSH_GROUP_ID: serverConfig?.decisionCenterPushGroupId || prev.DECISION_CENTER_PUSH_GROUP_ID || '',
             }));
         } catch (error) {
-            console.warn('加载梦境简报配置失败:', error);
+            console.warn('加载梦境重放报表配置失败:', error);
         }
     };
 
@@ -291,7 +294,15 @@ const Options = () => {
                 (Number(config.DREAM_DIGEST_INTERVAL_DAYS) < 1 || Number.isNaN(Number(config.DREAM_DIGEST_INTERVAL_DAYS)))
             ) {
                 setStatus({
-                    message: '梦境简报间隔天数必须 >= 1',
+                    message: '梦境重放报表间隔天数必须 >= 1',
+                    type: 'error'
+                });
+                return;
+            }
+
+            if (Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES) < 1 || Number.isNaN(Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES))) {
+                setStatus({
+                    message: '自我反思频率必须 >= 1 分钟',
                     type: 'error'
                 });
                 return;
@@ -313,7 +324,7 @@ const Options = () => {
                 config
             });
 
-            // 同步梦境简报计划到 memory-service 运行时配置
+            // 同步梦境重放报表计划到 memory-service 运行时配置
             const headers = await getRequestHeaders(config);
             const dreamInsightPushTarget = resolvePushTargetValue(config.DREAM_INSIGHT_PUSH_TARGET, 'me', true);
             const syncResponse = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/config`, {
@@ -325,6 +336,8 @@ const Options = () => {
                     dreamDigestEnabled: dreamInsightPushTarget !== 'none',
                     dreamDigestPushTarget: dreamInsightPushTarget,
                     dreamDigestPushGroupId: (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
+                    reflectionEnabled: config.SELF_REFLECTION_ENABLED !== false,
+                    reflectionHeartbeatMinutes: Math.max(1, Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES) || 15),
                     decisionCenterPushTarget: resolvePushTargetValue(config.DECISION_CENTER_PUSH_TARGET, 'me', false),
                     decisionCenterPushGroupId: (config.DECISION_CENTER_PUSH_GROUP_ID || '').trim() || undefined,
                     weeklyReportEnabled: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true) !== 'none',
@@ -336,7 +349,7 @@ const Options = () => {
             });
             if (!syncResponse.ok) {
                 const errorText = await syncResponse.text();
-                throw new Error(`同步梦境简报配置失败: ${syncResponse.status} ${errorText}`);
+                throw new Error(`同步梦境重放报表配置失败: ${syncResponse.status} ${errorText}`);
             }
 
             setStatus({
@@ -382,10 +395,10 @@ const Options = () => {
             if (result?.generated) {
                 setStatus({
                     message: dreamInsightPushTarget === 'none'
-                        ? '梦境洞察简报已立即生成（当前配置为不推送）'
+                        ? '梦境重放报表已立即生成（当前配置为不推送）'
                         : result?.botSent
-                        ? '梦境洞察简报已立即推送（Chrome + Bot）'
-                        : '梦境洞察简报已立即推送（Chrome 通知已写入）',
+                        ? '梦境重放报表已立即推送（Chrome + Bot）'
+                        : '梦境重放报表已立即推送（Chrome 通知已写入）',
                     type: 'success',
                 });
             } else {
@@ -395,7 +408,7 @@ const Options = () => {
                 });
             }
         } catch (error) {
-            console.error('立即推送梦境简报失败:', error);
+            console.error('立即推送梦境重放报表失败:', error);
             setStatus({
                 message: `立即推送失败: ${(error as Error).message}`,
                 type: 'error',
@@ -477,7 +490,8 @@ const Options = () => {
                   name === 'MESSAGE_ANALYSIS_INTERVAL' ||
                   name === 'MESSAGE_CONTEXT_WINDOW' ||
                   name === 'MEMORY_SERVICE_TIMEOUT' ||
-                  name === 'DREAM_DIGEST_INTERVAL_DAYS'
+                  name === 'DREAM_DIGEST_INTERVAL_DAYS' ||
+                  name === 'SELF_REFLECTION_HEARTBEAT_MINUTES'
                     ? Number(value)
                     : value
         }));
@@ -852,15 +866,45 @@ const Options = () => {
                         对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
                     </small>
                 </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="SELF_REFLECTION_ENABLED"
+                            checked={config.SELF_REFLECTION_ENABLED !== false}
+                            onChange={handleInputChange}
+                        />
+                        启用自我反思
+                    </label>
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        每个用户可以单独关闭自我反思；关闭后不会影响梦境重放的持续生成。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="SELF_REFLECTION_HEARTBEAT_MINUTES">自我反思频率（分钟）</label>
+                    <input
+                        type="number"
+                        id="SELF_REFLECTION_HEARTBEAT_MINUTES"
+                        name="SELF_REFLECTION_HEARTBEAT_MINUTES"
+                        value={config.SELF_REFLECTION_HEARTBEAT_MINUTES || 15}
+                        onChange={handleInputChange}
+                        min="1"
+                        step="1"
+                        disabled={config.SELF_REFLECTION_ENABLED === false}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        保存后会同步到 memory-service，按用户分别生效。
+                    </small>
+                </div>
                 {renderPushTargetFields(
-                    '梦境洞察推送',
+                    '梦境重放报表推送',
                     'DREAM_INSIGHT_PUSH_TARGET',
                     'DREAM_INSIGHT_PUSH_GROUP_ID',
                     true,
-                    '默认每天推送给 Me，也可以切换到自定义群组或不推送。'
+                    '梦境重放会持续运行；这里仅控制报表推送到 Me、自定义群组，或完全不推送。'
                 )}
                 <div className="form-group">
-                    <label htmlFor="DREAM_DIGEST_SCHEDULE_TYPE">梦境洞察推送频率</label>
+                    <label htmlFor="DREAM_DIGEST_SCHEDULE_TYPE">梦境重放报表推送频率</label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         <select
                             id="DREAM_DIGEST_SCHEDULE_TYPE"
@@ -896,7 +940,7 @@ const Options = () => {
                         </button>
                     </div>
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        点击「保存配置」后会同步到 memory-service。选择「不推送」时会按禁用同步；点击「立即推送」会跳过时间窗口，直接触发 Dream Digest。
+                        点击「保存配置」后会同步到 memory-service。选择「不推送」时只会关闭报表推送，不会停止梦境重放本身；点击「立即推送」会跳过时间窗口，直接触发 Dream Digest。
                     </small>
                 </div>
             </div>

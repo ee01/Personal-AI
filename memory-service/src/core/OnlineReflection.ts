@@ -23,6 +23,8 @@ import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { contentHash } from '../utils/hashing.js';
 import { now, formatDate } from '../utils/time.js';
+import { ReflectionThreadService } from './ReflectionThreadService.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,6 +98,10 @@ export class OnlineReflection {
   // =========================================================================
 
   private async doReflect(input: ReflectionInput): Promise<void> {
+    if (!getUserRuntimeConfig(this.userDataManager).reflectionEnabled) {
+      return;
+    }
+
     const { query, recalledItems, llmResponse, usedItemIds } = input;
     const currentTime = now();
 
@@ -225,6 +231,14 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
         `[OnlineReflection] Suggested improvements: ${improvements.join('; ')}`,
       );
     }
+
+    const reflectionService = new ReflectionThreadService(this.db, this.userDataManager);
+    reflectionService.recordOnlineReflectionSignal(input, {
+      newFacts,
+      userPreferences,
+      improvements,
+      shouldStore: reflectionData.shouldStore ?? false,
+    });
   }
 
   // =========================================================================

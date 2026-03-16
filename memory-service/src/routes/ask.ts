@@ -12,6 +12,7 @@ import { RecallEngine } from '../core/RecallEngine.js';
 import { QueryIntentParser } from '../core/QueryIntentParser.js';
 import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
+import { OnlineReflection } from '../core/OnlineReflection.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
@@ -416,6 +417,15 @@ export async function askRoutes(
         if (includeEvidence) {
           response.evidence = recalledItems;
         }
+
+        const usedItemIds = recalledItems.slice(0, 5).map((item) => item.id);
+        const onlineReflection = new OnlineReflection(db, userDataManager);
+        void onlineReflection.reflect({
+          query,
+          recalledItems,
+          llmResponse: parsedAnswer.answer,
+          usedItemIds,
+        });
 
         return reply.status(200).send(response);
       } catch (err) {

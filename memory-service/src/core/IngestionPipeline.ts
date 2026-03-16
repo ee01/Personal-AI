@@ -840,7 +840,7 @@ Rules:
         this.db
           .prepare(
             `INSERT INTO chunks_vec (chunk_id, embedding)
-             VALUES (?, ?)`,
+             VALUES (CAST(? AS INTEGER), ?)`,
           )
           .run(chunkId, JSON.stringify(embedding));
       })

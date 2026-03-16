@@ -19,7 +19,10 @@ import { ProfileManager } from './ProfileManager.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getBotSender } from '../utils/botSender.js';
-import { getConfig } from '../config.js';
+import { WorkerCheckpointRepository } from '../repositories/WorkerCheckpointRepository.js';
+import { ReflectionPlanner } from './ReflectionPlanner.js';
+import { ActionExecutor } from './actions/ActionExecutor.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,6 +106,7 @@ interface HighSalienceItemRow {
 type DreamDigestScheduleType = 'weekly' | 'every_x_days' | 'monthly';
 
 interface DreamDigestRuntimeConfig {
+  enabled: boolean;
   scheduleType: DreamDigestScheduleType;
   intervalDays: number;
 }
@@ -126,6 +130,7 @@ export class HeartbeatLoop {
   private markdownManager?: MarkdownManager;
   private lastHeartbeat: number = 0;
   private userId?: string;
+  private checkpointRepo: WorkerCheckpointRepository;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
     this.db = db;
@@ -136,6 +141,7 @@ export class HeartbeatLoop {
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
     this.userId = userId;
+    this.checkpointRepo = new WorkerCheckpointRepository(db);
   }
 
   // ---- Main entry point ---------------------------------------------------
@@ -146,6 +152,7 @@ export class HeartbeatLoop {
    */
   async run(): Promise<HeartbeatResult> {
     const checkedAt = now();
+    this.lastHeartbeat = this.getLastHeartbeatCheckpoint();
     const actions: string[] = [];
     const allCandidates: NotificationCandidate[] = [];
     let updated = 0;
@@ -200,6 +207,22 @@ export class HeartbeatLoop {
         actions.push('dream digest ready for delivery');
       }
 
+      // 5b. Continuous reflection planner/worker
+      const reflectionPlanner = new ReflectionPlanner(this.db, this.userDataManager, this.userId);
+      const reflectionResult = await reflectionPlanner.runHeartbeat();
+      if (!reflectionResult.skipped && (reflectionResult.threadsTouched > 0 || reflectionResult.runsCreated > 0)) {
+        actions.push(
+          `reflection planner touched ${reflectionResult.threadsTouched} thread(s), created ${reflectionResult.runsCreated} run(s), queued ${reflectionResult.actionsQueued} action(s)`,
+        );
+      }
+
+      // 5c. Execute due auto actions from reflection/action runtime
+      const actionExecutor = new ActionExecutor(this.db, this.userId);
+      const actionResults = await actionExecutor.runDueActions(10);
+      if (actionResults.length > 0) {
+        actions.push(`executed ${actionResults.length} queued action(s)`);
+      }
+
       // 6. Apply ProactivityPolicy to filter candidates
       const approved = await this.policy.filterNotifications(allCandidates);
 
@@ -239,6 +262,7 @@ export class HeartbeatLoop {
 
       // 8. Update heartbeat timestamp
       this.lastHeartbeat = checkedAt;
+      this.persistHeartbeatCheckpoint(checkedAt);
 
       console.log(
         `[HeartbeatLoop] Cycle complete: ${actions.length} action(s), ${approved.length} notification(s)`,
@@ -253,9 +277,20 @@ export class HeartbeatLoop {
 
       // Still advance the heartbeat so we don't reprocess on crash-loop
       this.lastHeartbeat = checkedAt;
+      this.persistHeartbeatCheckpoint(checkedAt);
 
       return { actions, notifications: [], updated, checkedAt };
     }
+  }
+
+  private getLastHeartbeatCheckpoint(): number {
+    const userKey = this.userId ?? 'default';
+    return this.checkpointRepo.getTimestamp(`heartbeat:${userKey}`, 0);
+  }
+
+  private persistHeartbeatCheckpoint(timestamp: number): void {
+    const userKey = this.userId ?? 'default';
+    this.checkpointRepo.set(`heartbeat:${userKey}`, timestamp, 'timestamp');
   }
 
   /**
@@ -269,6 +304,7 @@ export class HeartbeatLoop {
     const candidate = this.buildDreamDigestCandidate({
       ignoreScheduleWindow: true,
       ignoreIdempotency: true,
+      ignorePushDisabled: true,
       manual: true,
     });
 
@@ -738,10 +774,15 @@ export class HeartbeatLoop {
   private buildDreamDigestCandidate(options?: {
     ignoreScheduleWindow?: boolean;
     ignoreIdempotency?: boolean;
+    ignorePushDisabled?: boolean;
     manual?: boolean;
   }): NotificationCandidate | null {
     const nowDate = new Date();
     const runtimeConfig = this.getDreamDigestRuntimeConfig();
+
+    if (!options?.ignorePushDisabled && !runtimeConfig.enabled) {
+      return null;
+    }
 
     if (!options?.ignoreScheduleWindow && !this.isDreamDigestWindow(nowDate, runtimeConfig)) {
       return null;
@@ -807,32 +848,12 @@ export class HeartbeatLoop {
   }
 
   private getDreamDigestRuntimeConfig(): DreamDigestRuntimeConfig {
-    const appConfig = getConfig();
-    const defaultConfig: DreamDigestRuntimeConfig = {
-      scheduleType: appConfig.dreamDigestScheduleType,
-      intervalDays: appConfig.dreamDigestIntervalDays,
+    const runtimeConfig = getUserRuntimeConfig(this.userDataManager);
+    return {
+      enabled: runtimeConfig.dreamDigestEnabled,
+      scheduleType: runtimeConfig.dreamDigestScheduleType,
+      intervalDays: runtimeConfig.dreamDigestIntervalDays,
     };
-
-    try {
-      if (!this.userDataManager) return defaultConfig;
-      const raw = this.userDataManager.readFile('config.json');
-      if (!raw) return defaultConfig;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-      const scheduleType: DreamDigestScheduleType =
-        parsed.dreamDigestScheduleType === 'every_x_days' || parsed.dreamDigestScheduleType === 'monthly'
-          ? parsed.dreamDigestScheduleType
-          : 'weekly';
-
-      const intervalCandidate = Number(parsed.dreamDigestIntervalDays) || (Number(parsed.dreamDigestIntervalWeeks) || 0) * 7;
-      const intervalDays = Number.isFinite(intervalCandidate)
-        ? Math.max(1, Math.floor(intervalCandidate))
-        : defaultConfig.intervalDays;
-
-      return { scheduleType, intervalDays };
-    } catch {
-      return defaultConfig;
-    }
   }
 
   private isDreamDigestWindow(nowDate: Date, cfg: DreamDigestRuntimeConfig): boolean {
