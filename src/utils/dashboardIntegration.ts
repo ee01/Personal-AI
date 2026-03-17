@@ -3,6 +3,15 @@
  * 为项目仪表盘组件提供数据接口和消息处理
  */
 
+import {
+  buildProjectReport,
+  buildProjectReportFileName,
+  importProjectsFromReport,
+  serializeProjectReport,
+  type ProjectReportFile,
+  type ProjectReportImportMode,
+} from './projectReport';
+
 // ==================== 鱼骨时间线新模型类型（对齐 demo 结构） ====================
 export type FishboneTaskType = 'dep' | 'task' | 'design';
 export type DepStatus = 'todo' | 'progress' | 'testBuild' | 'rollout' | 'blocked';
@@ -650,21 +659,69 @@ export class DashboardDataManager {
   /**
    * 导出项目报告
    */
-  async exportProjectReport(projectId: string): Promise<{ success: boolean; report?: any; error?: string }> {
+  async exportProjectReport(projectId: string): Promise<{
+    success: boolean;
+    fileName?: string;
+    mimeType?: string;
+    data?: ProjectReportFile;
+    serializedData?: string;
+    error?: string;
+  }> {
     try {
-      const project = this.fishboneProjects.find(p => p.id === projectId);
-      if (!project) {
+      const isAllProjects = !projectId || projectId === 'all';
+      const projects = isAllProjects
+        ? this.fishboneProjects
+        : this.fishboneProjects.filter((project) => project.id === projectId);
+
+      if (!projects.length) {
         return { success: false, error: '项目不存在' };
       }
 
-      const report = {
-        projectName: project.name,
-        generatedAt: new Date().toISOString(),
-        milestones: project.milestones,
-        tasks: project.tasks
-      };
+      const exportedAt = new Date();
+      const scope = isAllProjects ? 'all_projects' : 'single_project';
+      const report = buildProjectReport(projects as any[], {
+        scope,
+        exportedAt,
+      });
 
-      return { success: true, report };
+      return {
+        success: true,
+        fileName: buildProjectReportFileName(scope, isAllProjects ? undefined : projectId, exportedAt),
+        mimeType: 'application/json;charset=utf-8',
+        data: report,
+        serializedData: serializeProjectReport(report),
+      };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async importProjectReport(
+    reportContent: string,
+    mode: ProjectReportImportMode = 'merge',
+  ): Promise<{
+    success: boolean;
+    importedData?: ProjectReportFile;
+    stats?: {
+      importedProjectCount: number;
+      createdProjectCount: number;
+      updatedProjectCount: number;
+      retainedProjectCount: number;
+      removedProjectCount: number;
+    };
+    totalProjects?: number;
+    error?: string;
+  }> {
+    try {
+      const result = importProjectsFromReport(this.fishboneProjects as any[], reportContent, { mode });
+      this.fishboneProjects = result.projects as FishboneProject[];
+
+      return {
+        success: true,
+        importedData: result.report,
+        stats: result.stats,
+        totalProjects: this.fishboneProjects.length,
+      };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
@@ -763,6 +820,11 @@ export class DashboardMessageHandler {
         console.log('➕ 添加项目项目');
         await this.handleAddProjectItem(request, sendResponse);
         return true;
+
+      case 'IMPORT_PROJECT_REPORT':
+        console.log('📥 导入项目报告');
+        await this.handleImportProjectReport(request, sendResponse);
+        return true;
         
       default:
         console.warn('⚠️ 未知的消息类型:', request.type);
@@ -836,6 +898,11 @@ export class DashboardMessageHandler {
           throw new Error(`Unknown quick action: ${action}`);
       }
 
+      if (result && result.success === false) {
+        sendResponse({ success: false, error: result.error, result });
+        return;
+      }
+
       sendResponse({ success: true, result });
     } catch (error: any) {
       sendResponse({ success: false, error: error.message });
@@ -866,6 +933,18 @@ export class DashboardMessageHandler {
     try {
       const { projectId, itemType, itemData } = request;
       const result = await this.dataManager.createProjectItem(projectId, itemType, itemData);
+      sendResponse(result);
+    } catch (error: any) {
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  private async handleImportProjectReport(request: any, sendResponse: (response: any) => void) {
+    try {
+      const result = await this.dataManager.importProjectReport(
+        request.reportContent,
+        request.mode === 'replace' ? 'replace' : 'merge',
+      );
       sendResponse(result);
     } catch (error: any) {
       sendResponse({ success: false, error: error.message });

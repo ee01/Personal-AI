@@ -16,6 +16,7 @@
 import type { FastifyInstance } from 'fastify';
 import { v4 } from 'uuid';
 
+import type { UserContext } from '../core/UserContextManager.js';
 import { contentHash } from '../utils/hashing.js';
 import { now } from '../utils/time.js';
 
@@ -256,6 +257,39 @@ interface ConfirmOpinionBody {
 export async function profileRoutes(
   app: FastifyInstance,
 ): Promise<void> {
+  async function refreshUserCoreSnapshot(userContext: UserContext): Promise<void> {
+    try {
+      const currentTime = now();
+      const content = userContext.profileManager.renderUserCore(50);
+
+      if (userContext.userDataManager?.isInitialized) {
+        userContext.userDataManager.writeFile('USER_CORE.md', content);
+        const { MarkdownManager } = await import('../core/MarkdownManager.js');
+        const markdownManager = new MarkdownManager(
+          userContext.db,
+          userContext.userDataManager.rootDir,
+        );
+        await markdownManager.reindexFile('USER_CORE.md');
+      }
+
+      userContext.db
+        .prepare(
+          `UPDATE profile_sync_state
+           SET profile_dirty = 0, last_snapshot_at = ?
+           WHERE id = 'singleton'`,
+        )
+        .run(currentTime);
+    } catch (error) {
+      requestContextWarn('Failed to refresh USER_CORE snapshot after profile mutation', error);
+    }
+  }
+
+  function requestContextWarn(message: string, error: unknown): void {
+    console.warn(
+      `[profileRoutes] ${message}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 
   // -----------------------------------------------------------------------
   // GET /profile/items -- List user profile items with filters
@@ -373,6 +407,7 @@ export async function profileRoutes(
         .prepare('SELECT * FROM user_profile_items WHERE id = ?')
         .get(id) as ProfileItemRow;
 
+      await refreshUserCoreSnapshot(request.userContext);
       return reply.status(201).send(formatProfileItem(row));
     },
   );
@@ -443,6 +478,7 @@ export async function profileRoutes(
         .prepare('SELECT * FROM user_profile_items WHERE id = ?')
         .get(id) as ProfileItemRow;
 
+      await refreshUserCoreSnapshot(request.userContext);
       return reply.status(200).send(formatProfileItem(row));
     },
   );
@@ -469,6 +505,7 @@ export async function profileRoutes(
         "UPDATE user_profile_items SET status = 'retracted', updated_at = ? WHERE id = ?",
       ).run(currentTime, id);
 
+      await refreshUserCoreSnapshot(request.userContext);
       return reply.status(200).send({ id, deleted: true });
     },
   );
@@ -506,6 +543,7 @@ export async function profileRoutes(
         .prepare('SELECT * FROM user_profile_items WHERE id = ?')
         .get(id) as ProfileItemRow;
 
+      await refreshUserCoreSnapshot(request.userContext);
       return reply.status(200).send(formatProfileItem(row));
     },
   );
@@ -514,11 +552,7 @@ export async function profileRoutes(
   // GET /profile/core -- Get USER_CORE.md content
   // -----------------------------------------------------------------------
   app.get('/profile/core', async (request, reply) => {
-    const { db } = request.userContext;
-    // Import ProfileManager dynamically to avoid circular deps at module level
-    const { ProfileManager } = await import('../core/ProfileManager.js');
-    const manager = new ProfileManager(db);
-    const content = manager.renderUserCore(50);
+    const content = request.userContext.profileManager.renderUserCore(50);
 
     return reply.status(200).send({ content });
   });
@@ -599,6 +633,7 @@ export async function profileRoutes(
         .prepare('SELECT * FROM social_edges WHERE id = ?')
         .get(id) as SocialEdgeRow;
 
+      await refreshUserCoreSnapshot(request.userContext);
       return reply.status(201).send(formatSocialEdge(row));
     },
   );

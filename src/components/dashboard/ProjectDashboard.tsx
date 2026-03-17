@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getEnvConfig, EnvConfigType } from '../../utils';
 
 // 新仪表盘数据结构（与 docs/demo/项目进展图-缩放版.html 对齐）
@@ -30,8 +30,12 @@ interface FishboneProject {
 const ProjectDashboard: React.FC = () => {
   const [projects, setProjects] = useState<FishboneProject[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [env, setEnv] = useState<EnvConfigType | null>(null);
+  const [actionStatus, setActionStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // 新增项目入口
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -83,6 +87,23 @@ const ProjectDashboard: React.FC = () => {
   useEffect(() => {
     getEnvConfig().then(setEnv).catch(() => setEnv(null));
   }, []);
+
+  const showActionStatus = (type: 'success' | 'error', text: string) => {
+    setActionStatus({ type, text });
+  };
+
+  const downloadTextFile = (fileName: string, mimeType: string, content: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const loadProjects = async () => {
     setIsLoading(true);
@@ -235,23 +256,94 @@ const ProjectDashboard: React.FC = () => {
   };
 
   // 导出报告
-  const handleExportReport = async () => {
+  const handleExportReport = async (projectId = 'all') => {
+    setIsExporting(true);
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'QUICK_ACTION',
         action: 'export_report',
-        data: { projectId: 'all' }
+        data: { projectId }
       });
 
-      if (response?.success) {
-        console.log('报告导出完成');
-        // 这里可以添加下载逻辑
-      } else {
-        console.error('导出失败:', response?.error);
+      if (!response?.success) {
+        throw new Error(response?.error || '导出失败');
       }
+
+      const result = response.result;
+      if (!result?.success || !result?.serializedData || !result?.fileName) {
+        throw new Error(result?.error || '导出结果不完整');
+      }
+
+      downloadTextFile(
+        result.fileName,
+        result.mimeType || 'application/json;charset=utf-8',
+        result.serializedData,
+      );
+      showActionStatus('success', projectId === 'all' ? '全部项目报告已导出' : `项目 ${projectId} 报告已导出`);
     } catch (error) {
       console.error('导出报告失败:', error);
+      showActionStatus('error', error instanceof Error ? error.message : '导出报告失败');
+    } finally {
+      setIsExporting(false);
     }
+  };
+
+  const handleOpenImportReport = () => {
+    if (isImporting) return;
+    importInputRef.current?.click();
+  };
+
+  const handleImportReport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      setIsImporting(true);
+      try {
+        const reportContent = typeof reader.result === 'string' ? reader.result : '';
+        if (!reportContent) {
+          throw new Error('导入文件内容为空');
+        }
+
+        const replaceExisting = window.confirm(
+          '是否用导入内容替换当前项目列表？\n选择“确定”会替换当前项目；选择“取消”会合并导入并保留现有项目。',
+        );
+
+        const response = await chrome.runtime.sendMessage({
+          type: 'IMPORT_PROJECT_REPORT',
+          reportContent,
+          mode: replaceExisting ? 'replace' : 'merge',
+        });
+
+        if (!response?.success) {
+          throw new Error(response?.error || '导入失败');
+        }
+
+        await loadProjects();
+
+        const stats = response.stats;
+        const summary = stats
+          ? `导入 ${stats.importedProjectCount} 个项目，新增 ${stats.createdProjectCount}，更新 ${stats.updatedProjectCount}，保留 ${stats.retainedProjectCount}，移除 ${stats.removedProjectCount}`
+          : '项目报告导入完成';
+        showActionStatus('success', summary);
+      } catch (error) {
+        console.error('导入项目报告失败:', error);
+        showActionStatus('error', error instanceof Error ? error.message : '导入项目报告失败');
+      } finally {
+        setIsImporting(false);
+        input.value = '';
+      }
+    };
+
+    reader.onerror = () => {
+      setIsImporting(false);
+      input.value = '';
+      showActionStatus('error', '读取导入文件失败');
+    };
+
+    reader.readAsText(file);
   };
 
   // 添加新任务
@@ -633,12 +725,22 @@ const ProjectDashboard: React.FC = () => {
               return (
     <div className="project-dashboard fishbone">
       <div id="notification-area" className="notification-area" />
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={handleImportReport}
+      />
       
       {/* 完整的仪表盘头部 */}
       <div className="dashboard-header">
         <div>
           <h1 className="dashboard-title">📊 项目进度仪表盘</h1>
           <p className="dashboard-subtitle">智能项目管理与团队协作可视化</p>
+          {actionStatus && (
+            <div className={`dashboard-status ${actionStatus.type}`}>{actionStatus.text}</div>
+          )}
         </div>
         <div className="dashboard-controls">
           <span className="last-refresh">最后更新: {lastRefresh.toLocaleTimeString()}</span>
@@ -652,8 +754,11 @@ const ProjectDashboard: React.FC = () => {
           <button className="control-button secondary" onClick={handleSyncData}>
             ⚡ 同步数据
           </button>
-          <button className="control-button success" onClick={handleExportReport}>
-            📄 导出报告
+          <button className="control-button warning" onClick={handleOpenImportReport} disabled={isImporting}>
+            📥 {isImporting ? '导入中...' : '导入报告'}
+          </button>
+          <button className="control-button success" onClick={() => handleExportReport('all')} disabled={isExporting}>
+            📄 {isExporting ? '导出中...' : '导出全部'}
           </button>
           <button className="control-button primary" onClick={handleOpenCreateModal}>
             ➕ 新增项目
@@ -673,6 +778,16 @@ const ProjectDashboard: React.FC = () => {
                   <div>
                     <h2 className="project-title">{project.name}</h2>
                     {project.description && <p style={{ margin: '5px 0 0', color: 'var(--text-muted)' }}>{project.description}</p>}
+                  </div>
+                  <div className="project-actions">
+                    <button
+                      className="badge"
+                      type="button"
+                      onClick={() => handleExportReport(project.id)}
+                      disabled={isExporting}
+                    >
+                      {isExporting ? '导出中...' : '导出当前项目'}
+                    </button>
                   </div>
                 </div>
                                 <div 
@@ -1051,14 +1166,20 @@ const ProjectDashboard: React.FC = () => {
         .control-button:disabled { background: #bdc3c7; transform: none; cursor: not-allowed; }
         .control-button.secondary { background: #95a5a6; }
         .control-button.secondary:hover:not(:disabled) { background: #7f8c8d; }
+        .control-button.warning { background: #f39c12; }
+        .control-button.warning:hover:not(:disabled) { background: #d68910; }
         .control-button.success { background: #27ae60; }
         .control-button.success:hover:not(:disabled) { background: #229954; }
         .control-button.primary { background: #3498db; }
         .project-actions { display: flex; align-items: center; gap: 12px; }
         .last-refresh { font-size: 12px; color: var(--text-muted); }
+        .dashboard-status { margin-top: 10px; font-size: 13px; font-weight: 600; }
+        .dashboard-status.success { color: #1f7a43; }
+        .dashboard-status.error { color: #c0392b; }
         .notification-area { position: fixed; top: 16px; right: 16px; z-index: 1000; max-width: 400px; pointer-events: none; }
         .refresh-btn { padding: 8px 16px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
         .badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; background: var(--primary-light); color: var(--primary); border: none; cursor: pointer; }
+        .badge:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .project-list { display: flex; flex-direction: column; gap: 30px; }
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }

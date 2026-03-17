@@ -20,13 +20,19 @@ import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageSe
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
 import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './jira';
 import { handleLLMRequest } from './llm';
+import { concernedItemsSyncService } from './services/ConcernedItemsSyncService';
 
 import { Logger } from './utils/logger';
 import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage, registerFollowThreadDigestTask } from './message-reaction/FollowThreadHandler';
 import { registerConcernedItemsDigestTask } from './services/DigestQueueService';
 import { sendPlainBotMessage } from './bot';
+import {
+    syncStoredUserIdentityToMemory,
+    syncUserIdentityToMemory
+} from './services/UserIdentitySyncService';
 
 console.log('Background script loaded');
+void concernedItemsSyncService.initialize();
 
 // Map to track backend notification types for click handling
 const backendNotificationTypes = new Map<string, string>();
@@ -37,6 +43,9 @@ registerConcernedItemsDigestTask();
 
 // 记录扩展启动
 Logger.lifecycle('startup', 'Background script loaded');
+void syncStoredUserIdentityToMemory().catch((error) => {
+    console.warn('User identity bootstrap sync failed:', error);
+});
 
 // Background script 加载时检查并初始化任务调度器
 // 
@@ -615,7 +624,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         request.type === 'UPDATE_PROJECT_ITEM' || 
         request.type === 'QUICK_ACTION' ||
         request.type === 'ADD_PROJECT' ||
-        request.type === 'SUGGEST_PROJECTS') {
+        request.type === 'SUGGEST_PROJECTS' ||
+        request.type === 'IMPORT_PROJECT_REPORT') {
         console.log('📊 仪表盘消息处理开始:', {
             type: request.type,
             projectId: request.projectId,
@@ -1775,6 +1785,9 @@ async function getUserinfoFromRCpage() {
             extensionId: "",
         };
         chrome.storage.local.set({ userinfo });
+        void syncUserIdentityToMemory(userinfo).catch((syncError) => {
+            console.warn('Failed to sync RC userinfo to memory profile:', syncError);
+        });
         return response.data;
     } catch (error) {
         console.error('Failed to get userinfo:', error);
@@ -1824,6 +1837,9 @@ async function getUserinfoFromJiraPage() {
         
         chrome.storage.local.set({ userinfo });
         if (userinfo.ownerId) chrome.storage.local.set({ ownerId: userinfo.ownerId });
+        void syncUserIdentityToMemory(userinfo).catch((syncError) => {
+            console.warn('Failed to sync JIRA userinfo to memory profile:', syncError);
+        });
 
         // 如果是新创建的tab，关闭它
         if (shouldCloseTab && jiraTab.id) {

@@ -13,6 +13,9 @@
     "node": true,
     "mocha": true
   },
+  "globals": {
+    "chrome": "readonly"
+  },
   "rules": {
     "@typescript-eslint/no-var-requires": 0,
     "@typescript-eslint/no-explicit-any": 0,

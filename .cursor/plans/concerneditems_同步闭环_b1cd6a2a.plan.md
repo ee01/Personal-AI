@@ -4,28 +4,28 @@ overview: 实现 concernedItems 的跨设备同步闭环：以 chrome.storage.lo
 todos:
   - id: backend-config-snapshot
     content: 新增 concerned_items_state 表与 concerned-items GET/PUT 接口（含版本冲突）
-    status: pending
+    status: completed
   - id: backend-hit-events
     content: 新增 follow_thread_hits 表与命中事件 POST/GET 接口（幂等去重）
-    status: pending
+    status: completed
   - id: backend-tests
     content: 补充 concerned-items 与 follow-thread-hits API 集成测试
-    status: pending
+    status: completed
   - id: client-api-methods
     content: 扩展 MemoryServiceClient：配置快照与命中事件接口
-    status: pending
+    status: completed
   - id: sync-service
     content: 新增 ConcernedItemsSyncService：配置同步 + 命中增量回填
-    status: pending
+    status: completed
   - id: background-hooks
     content: 在 background 接入 storage 监听、静默分析启动时拉取与周期同步
-    status: pending
+    status: completed
   - id: follow-handler-report
     content: 在 FollowThreadHandler 命中路径追加命中事件上报
-    status: pending
+    status: completed
   - id: ui-live-refresh
     content: 为 memory-exploring / FollowThreads 增加 storage 监听或可见时刷新，保证已打开页面看到同步结果
-    status: pending
+    status: completed
   - id: verification
     content: 验证 A配置/B分析/A可见命中的跨设备闭环
     status: pending
@@ -79,9 +79,21 @@ isProject: false
 - 这样 B 设备不需要重启 alarm/task scheduler；因为调度器本身不缓存 `concernedItems`，它每次执行分析时都会重新读本地。
 - 边界说明：如果 A 在 B 完成启动拉取之后、下一次周期同步之前修改规则，那么 B 会继续使用旧本地快照，直到下一个同步周期把新配置写回本地后才会在后续分析中生效。这是可接受的最终一致性边界。
 
+## 本次补充结论（关于“配置冲突如何决策”）
+
+- 配置同步继续保持“整份快照覆盖”模型，不做 item 级 merge。
+- 但冲突判定不再采用“谁先同步成功谁赢”，而改为 **最后编辑者赢（Last Edit Wins）**。
+- 这里比较的必须是“配置内容最后一次被用户修改的时间”，而不是“这次同步请求抵达服务端的时间”。
+- 原因是设备可能离线或延迟同步；如果比较的是服务端入库时间，会把“晚同步但其实更早编辑”的旧内容错误地判成更新版本。
+- 因此需要为配置快照单独维护一个逻辑时间字段，例如 `content_updated_at`：
+  - 本地每次用户修改 `concernedItems` 时更新该时间；
+  - push 时把该时间一并上传；
+  - 服务端以 `incoming.content_updated_at` 和 `current.content_updated_at` 比较，新者覆盖旧者。
+- 如果两个快照时间完全相同，需要一个固定 tie-breaker，建议“相同时间时保留服务端当前版本”或“按 deviceId 做稳定排序”，避免非确定性结果。
+
 ## 后端改造（memory-service）
 
-- 新增迁移 `[/Users/Esone/git/personal-ai/memory-service/src/storage/migrations/003_concerned_items.sql](/Users/Esone/git/personal-ai/memory-service/src/storage/migrations/003_concerned_items.sql)`
+- 新增迁移 `[/Users/Esone/git/personal-ai/memory-service/src/storage/migrations/006_concerned_items.sql](/Users/Esone/git/personal-ai/memory-service/src/storage/migrations/006_concerned_items.sql)`
   - `concerned_items_state`：每用户单行配置快照（`items_json`, `version`, `updated_at`, `updated_by_device`）。
   - `follow_thread_hits`：命中事件表（`id`, `follow_item_id`, `post_id`, `sender`, `datetime`, `relation_type`, `summary`, `team_id`, `created_at`, `source_device`）。
   - 唯一约束：`UNIQUE(follow_item_id, post_id)`，用于跨设备去重。
@@ -120,7 +132,7 @@ isProject: false
 
 ## 冲突与一致性策略
 
-- 配置：乐观并发（`baseVersion` + 409 重试）。
+- 配置：整份快照覆盖 + 最后编辑者赢（基于 `content_updated_at` 的 LWW）；不做 item 级 merge。
 - 命中：事件幂等（`follow_item_id + post_id` 唯一），天然可重放。
 - 本地合并：按 `postId` 去重，不覆盖已有更完整摘要字段。
 
@@ -145,4 +157,3 @@ HitStore --> HitPull[ADevicePullHits]
 HitPull --> ALocalMerge[MergeToALocalRelatedMessages]
 ALocalMerge --> AGlip[A sees hits in Glip and MemoryUI]
 ```
-

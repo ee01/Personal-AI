@@ -425,10 +425,91 @@ export interface StatsResponse {
   };
 }
 
-export interface ExportResponse {
-  files: string[];
-  totalFiles: number;
-  dataDir: string;
+export interface MemoryBackupDownloadResponse {
+  blob: Blob;
+  fileName: string;
+  contentType: string;
+}
+
+export interface MemoryBackupImportResponse {
+  mode: 'merge' | 'replace';
+  importedAt: string;
+  restoredLayers: Array<'A' | 'B'>;
+  database: {
+    action: 'merged' | 'replaced';
+    changedRows?: number;
+    tableChanges?: Record<string, number>;
+    skippedTables?: string[];
+  };
+  files: {
+    written: number;
+    overwritten: number;
+    preserved: number;
+    deleted: number;
+    writtenPaths: string[];
+    overwrittenPaths: string[];
+    preservedPaths: string[];
+    deletedPaths: string[];
+  };
+  warnings: string[];
+}
+
+function parseContentDispositionFilename(
+  contentDisposition: string | null,
+): string | null {
+  if (!contentDisposition) {
+    return null;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const match = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return match?.[1] ?? null;
+}
+
+// ============================================================================
+// concernedItems sync types
+// ============================================================================
+
+export interface ConcernedItemsSnapshotResponse {
+  items: any[];
+  version: number;
+  updatedAt: string | null;
+  contentUpdatedAt: string | null;
+  updatedByDevice?: string;
+}
+
+export interface PutConcernedItemsSnapshotPayload {
+  items: any[];
+  baseVersion?: number;
+  contentUpdatedAt?: string;
+  updatedByDevice?: string;
+}
+
+export interface FollowThreadHitEvent {
+  id?: string;
+  followItemId: string;
+  postId: string;
+  sender: string;
+  datetime: string;
+  relationType: string;
+  summary?: string;
+  teamId?: string;
+  createdAt?: string;
+  sourceDevice?: string;
+}
+
+export interface FollowThreadHitListResponse {
+  items: FollowThreadHitEvent[];
+  total: number;
+  nextSince: string | null;
 }
 
 // ============================================================================
@@ -572,12 +653,7 @@ export class MemoryServiceClient {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        let errorBody: any;
-        try {
-          errorBody = await response.json();
-        } catch {
-          errorBody = await response.text();
-        }
+        const errorBody = await this.parseErrorResponse(response);
         const message = errorBody?.error || errorBody?.message || response.statusText;
         throw new MemoryServiceError(response.status, message, errorBody);
       }
@@ -586,6 +662,146 @@ export class MemoryServiceClient {
       const contentType = response.headers.get('content-type');
       if (response.status === 204 || !contentType?.includes('application/json')) {
         return undefined as unknown as T;
+      }
+
+      return (await response.json()) as T;
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+
+      if (err instanceof MemoryServiceError) {
+        throw err;
+      }
+
+      if (err.name === 'AbortError') {
+        throw new MemoryServiceError(
+          0,
+          `Request to ${path} timed out after ${this.timeout}ms`,
+        );
+      }
+
+      throw new MemoryServiceError(
+        0,
+        `Network error: ${err.message || 'Failed to connect to Memory Service'}`,
+      );
+    }
+  }
+
+  private async parseErrorResponse(response: Response): Promise<any> {
+    const rawText = await response.text();
+
+    try {
+      return JSON.parse(rawText);
+    } catch {
+      return rawText;
+    }
+  }
+
+  private async requestBlob(
+    method: string,
+    path: string,
+    body?: any,
+  ): Promise<MemoryBackupDownloadResponse> {
+    await this.ensureUserIdResolved();
+
+    const url = `${this.baseUrl}${path}`;
+    const headers: Record<string, string> = {
+      Accept: 'application/zip',
+      'X-User-Id': this.userId,
+    };
+
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorBody = await this.parseErrorResponse(response);
+        const message = errorBody?.error || errorBody?.message || response.statusText;
+        throw new MemoryServiceError(response.status, message, errorBody);
+      }
+
+      const blob = await response.blob();
+      const fileName =
+        parseContentDispositionFilename(response.headers.get('content-disposition')) ||
+        `personal-ai-memory-${this.userId}.zip`;
+
+      return {
+        blob,
+        fileName,
+        contentType: response.headers.get('content-type') || 'application/zip',
+      };
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+
+      if (err instanceof MemoryServiceError) {
+        throw err;
+      }
+
+      if (err.name === 'AbortError') {
+        throw new MemoryServiceError(
+          0,
+          `Request to ${path} timed out after ${this.timeout}ms`,
+        );
+      }
+
+      throw new MemoryServiceError(
+        0,
+        `Network error: ${err.message || 'Failed to connect to Memory Service'}`,
+      );
+    }
+  }
+
+  private async requestForm<T>(
+    method: string,
+    path: string,
+    formData: FormData,
+    accept = 'application/json',
+  ): Promise<T> {
+    await this.ensureUserIdResolved();
+
+    const url = `${this.baseUrl}${path}`;
+    const headers: Record<string, string> = {
+      Accept: accept,
+      'X-User-Id': this.userId,
+    };
+
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorBody = await this.parseErrorResponse(response);
+        const message = errorBody?.error || errorBody?.message || response.statusText;
+        throw new MemoryServiceError(response.status, message, errorBody);
       }
 
       return (await response.json()) as T;
@@ -1224,17 +1440,30 @@ export class MemoryServiceClient {
   /**
    * Export memory data as a manifest of markdown files.
    */
-  async exportMemory(
-    scope?: 'all' | 'project',
-    projectId?: string,
-    timeRange?: { start: number; end: number },
-  ): Promise<ExportResponse> {
-    return this.request<ExportResponse>('POST', '/export', {
-      format: 'markdown_zip',
-      scope,
-      projectId,
-      timeRange,
+  async exportMemory(): Promise<MemoryBackupDownloadResponse> {
+    return this.requestBlob('POST', '/export', {
+      format: 'backup_zip',
     });
+  }
+
+  async importMemory(
+    file: Blob | File,
+    mode: 'merge' | 'replace' = 'merge',
+  ): Promise<MemoryBackupImportResponse> {
+    const formData = new FormData();
+    const fileName =
+      typeof File !== 'undefined' && file instanceof File
+        ? file.name
+        : 'personal-ai-memory-backup.zip';
+
+    formData.append('file', file, fileName);
+    formData.append('mode', mode);
+
+    return this.requestForm<MemoryBackupImportResponse>(
+      'POST',
+      '/import',
+      formData,
+    );
   }
 
   /**
@@ -1249,6 +1478,45 @@ export class MemoryServiceClient {
    */
   async getHealth(): Promise<HealthResponse> {
     return this.request<HealthResponse>('GET', '/health');
+  }
+
+  // --------------------------------------------------------------------------
+  // concernedItems sync
+  // --------------------------------------------------------------------------
+
+  async getConcernedItemsSnapshot(): Promise<ConcernedItemsSnapshotResponse> {
+    return this.request<ConcernedItemsSnapshotResponse>('GET', '/concerned-items');
+  }
+
+  async putConcernedItemsSnapshot(
+    payload: PutConcernedItemsSnapshotPayload,
+  ): Promise<ConcernedItemsSnapshotResponse> {
+    return this.request<ConcernedItemsSnapshotResponse>('PUT', '/concerned-items', payload);
+  }
+
+  async postFollowThreadHit(
+    payload: FollowThreadHitEvent,
+  ): Promise<{ status: 'created' | 'duplicate'; hit: FollowThreadHitEvent }> {
+    return this.request('POST', '/follow-thread-hits', payload);
+  }
+
+  async getFollowThreadHits(filters?: {
+    since?: string;
+    followItemIds?: string[];
+    limit?: number;
+  }): Promise<FollowThreadHitListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.since) params.set('since', filters.since);
+    if (filters?.followItemIds && filters.followItemIds.length > 0) {
+      params.set('followItemIds', filters.followItemIds.join(','));
+    }
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+
+    const qs = params.toString();
+    return this.request<FollowThreadHitListResponse>(
+      'GET',
+      `/follow-thread-hits${qs ? '?' + qs : ''}`,
+    );
   }
 
   // --------------------------------------------------------------------------

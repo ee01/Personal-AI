@@ -134,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -179,6 +179,12 @@ const expandedItems = ref(new Set<string>());
 
 onMounted(async () => {
   await loadFollowThreads();
+
+  chrome.storage.onChanged.addListener(handleStorageChange);
+});
+
+onUnmounted(() => {
+  chrome.storage.onChanged.removeListener(handleStorageChange);
 });
 
 async function loadFollowThreads() {
@@ -195,6 +201,12 @@ async function loadFollowThreads() {
     console.error('❌ 加载关注项失败:', error);
   } finally {
     loading.value = false;
+  }
+}
+
+function handleStorageChange(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) {
+  if (areaName === 'local' && changes.concernedItems) {
+    void loadFollowThreads();
   }
 }
 

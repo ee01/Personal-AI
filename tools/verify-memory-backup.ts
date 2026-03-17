@@ -1,0 +1,474 @@
+import { execFile as execFileCallback } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCallback);
+
+interface MemoryBackupManifest {
+  format: string;
+  formatVersion: number;
+  transport: string;
+  exportedAt: string;
+  userId: string;
+  includes: Array<{
+    path: string;
+    layer: 'A' | 'B' | 'C';
+    sizeBytes: number;
+    modifiedAt: number;
+    sha256: string;
+    required: boolean;
+  }>;
+  layers: {
+    A: { paths: string[] };
+    B: { paths: string[] };
+    C: {
+      generated: string[];
+      failed: Array<{ path: string; reason: string }>;
+      skipped: string[];
+    };
+  };
+}
+
+interface ImportResult {
+  mode: 'merge' | 'replace';
+  importedAt: string;
+  restoredLayers: Array<'A' | 'B'>;
+  database: {
+    action: 'merged' | 'replaced';
+    changedRows?: number;
+  };
+  files: {
+    written: number;
+    overwritten: number;
+    preserved: number;
+    deleted: number;
+  };
+  warnings: string[];
+}
+
+const EXPECTED_DERIVED_PATHS = [
+  'derived/messages/messages-overview.md',
+  'derived/profile/profile-overview.md',
+  'derived/timelines/entity-property-timeline.md',
+  'derived/relationships/relationship-overview.md',
+] as const;
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function sha256(content: string | Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function parseContentDispositionFilename(
+  contentDisposition: string | null,
+): string | null {
+  if (!contentDisposition) {
+    return null;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const match = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return match?.[1] ?? null;
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function unzipArchive(zipPath: string, outputDir: string): Promise<void> {
+  await fs.mkdir(outputDir, { recursive: true });
+  await execFile('unzip', ['-q', zipPath, '-d', outputDir]);
+}
+
+async function ensureOkResponse(response: Response, label: string): Promise<void> {
+  if (response.ok) {
+    return;
+  }
+
+  throw new Error(`${label}: ${response.status} ${await response.text()}`);
+}
+
+async function main(): Promise<void> {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'personal-ai-memory-backup-'),
+  );
+  const dataDir = path.join(workspaceDir, 'data');
+  const exportDir = path.join(workspaceDir, 'exported');
+  const extractedDir = path.join(workspaceDir, 'extracted');
+  const userId = 'verify-user';
+
+  await fs.mkdir(exportDir, { recursive: true });
+
+  process.env.DATA_DIR = dataDir;
+  process.env.LOG_LEVEL = 'error';
+
+  const { buildApp } = await import('../memory-service/src/server.ts');
+  const { app, userContextManager } = await buildApp();
+
+  let address = '';
+
+  try {
+    address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const baseUrl = `${address}/api/v1`;
+    const userHeaders = {
+      Accept: 'application/json',
+      'X-User-Id': userId,
+    };
+
+    const initialContext = userContextManager.getContext(userId);
+    const userDir = initialContext.userDataManager.rootDir;
+    const now = Date.now();
+
+    initialContext.userDataManager.writeFile(
+      'projects/project-alpha.md',
+      '# Project Alpha\n\nThis is the exported version.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'daily/2026-03-17.md',
+      '# Daily Log\n\nBackup checkpoint.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'reports/backup-report.md',
+      '# Weekly Snapshot\n\nGenerated from backup seed.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'entities/people/john-doe.md',
+      '# John Doe\n\nEntity profile markdown.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'skills/react.md',
+      '# React\n\nSkill note markdown.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'USER_CORE.md',
+      '# User Core\n\nExported root markdown.\n',
+    );
+    await fs.writeFile(
+      path.join(userDir, 'config.json'),
+      `${JSON.stringify({ reflectionEnabled: true }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    initialContext.db
+      .prepare(
+        `INSERT OR REPLACE INTO entities (id, type, name, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'project-alpha',
+        'Project',
+        'Project Alpha',
+        'Seed backup entity',
+        now,
+        now,
+      );
+
+    initialContext.db
+      .prepare(
+        `INSERT OR REPLACE INTO messages_raw (
+          id, content, source_type, timestamp, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run('msg-backup', 'Backup message body', 'manual', now, now, now);
+
+    initialContext.db
+      .prepare(
+        `INSERT INTO entity_properties (
+          entity_id, property_key, property_value, value_type, tx_start, confidence, is_final, status, action_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'project-alpha',
+        'phase',
+        'execution',
+        'text',
+        now,
+        0.92,
+        1,
+        'active',
+        'set',
+      );
+
+    const exportResponse = await fetch(`${baseUrl}/export`, {
+      method: 'POST',
+      headers: {
+        ...userHeaders,
+        Accept: 'application/zip',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        format: 'backup_zip',
+      }),
+    });
+
+    await ensureOkResponse(exportResponse, 'Export failed');
+
+    const exportArrayBuffer = await exportResponse.arrayBuffer();
+    const exportBuffer = Buffer.from(exportArrayBuffer);
+    const exportFileName =
+      parseContentDispositionFilename(
+        exportResponse.headers.get('content-disposition'),
+      ) || 'personal-ai-memory-backup.zip';
+    const exportFilePath = path.join(exportDir, exportFileName);
+    await fs.writeFile(exportFilePath, exportBuffer);
+
+    const exportHashBeforeImport = sha256(exportBuffer);
+
+    await unzipArchive(exportFilePath, extractedDir);
+
+    const manifestPath = path.join(extractedDir, 'manifest.json');
+    const manifest = JSON.parse(
+      await fs.readFile(manifestPath, 'utf-8'),
+    ) as MemoryBackupManifest;
+
+    assert(manifest.format === 'personal-ai-memory-backup', 'Unexpected backup format');
+    assert(manifest.formatVersion === 1, 'Unexpected backup format version');
+    assert(manifest.transport === 'zip', 'Unexpected backup transport');
+    assert(manifest.userId === userId, 'Manifest userId mismatch');
+    assert(await pathExists(path.join(extractedDir, 'user', 'memory.db')), 'Backup zip is missing user/memory.db');
+    assert(await pathExists(path.join(extractedDir, 'user', 'config.json')), 'Backup zip is missing user/config.json');
+    assert(await pathExists(path.join(extractedDir, 'user', 'projects', 'project-alpha.md')), 'Backup zip is missing exported markdown');
+    assert(await pathExists(path.join(extractedDir, 'user', 'entities', 'people', 'john-doe.md')), 'Backup zip is missing entity markdown');
+    assert(await pathExists(path.join(extractedDir, 'user', 'skills', 'react.md')), 'Backup zip is missing skill markdown');
+    assert(await pathExists(path.join(extractedDir, 'user', 'USER_CORE.md')), 'Backup zip is missing root markdown');
+
+    for (const relativePath of EXPECTED_DERIVED_PATHS) {
+      assert(await pathExists(path.join(extractedDir, relativePath)), `Backup zip is missing derived snapshot ${relativePath}`);
+      assert(
+        manifest.includes.some((entry) => entry.path === relativePath && entry.layer === 'C'),
+        `Manifest is missing derived snapshot ${relativePath}`,
+      );
+    }
+
+    const messagesOverview = await fs.readFile(
+      path.join(extractedDir, 'derived/messages/messages-overview.md'),
+      'utf-8',
+    );
+    assert(messagesOverview.includes('Backup message body'), 'Derived messages snapshot is not readable');
+    assert(!(await pathExists(path.join(userDir, 'derived'))), 'Export should not write derived snapshots into data/users');
+
+    initialContext.userDataManager.writeFile(
+      'projects/project-alpha.md',
+      '# Project Alpha\n\nThis content only exists locally before merge.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'reports/local-only.md',
+      '# Local Only\n\nKeep this file on merge.\n',
+    );
+    initialContext.db
+      .prepare(
+        `INSERT OR REPLACE INTO entities (id, type, name, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'local-only-entity',
+        'Topic',
+        'Local Only Entity',
+        'Should survive merge',
+        now + 1,
+        now + 1,
+      );
+
+    const mergeForm = new FormData();
+    mergeForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    mergeForm.append('mode', 'merge');
+
+    const mergeResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: mergeForm,
+    });
+
+    await ensureOkResponse(mergeResponse, 'Merge import failed');
+    const mergeResult = (await mergeResponse.json()) as ImportResult;
+    const mergeContext = userContextManager.getContext(userId);
+
+    assert(mergeResult.mode === 'merge', 'Merge response mode mismatch');
+    assert(
+      mergeContext.userDataManager
+        .readFile('projects/project-alpha.md')
+        ?.includes('exported version'),
+      'Merge should restore the exported project file content',
+    );
+    assert(
+      mergeContext.userDataManager
+        .readFile('reports/local-only.md')
+        ?.includes('Keep this file on merge'),
+      'Merge should preserve local-only files that are not in the backup',
+    );
+    assert(
+      mergeContext.userDataManager
+        .readFile('entities/people/john-doe.md')
+        ?.includes('Entity profile markdown'),
+      'Merge should restore entity markdown files from the backup',
+    );
+    assert(
+      mergeContext.userDataManager
+        .readFile('skills/react.md')
+        ?.includes('Skill note markdown'),
+      'Merge should restore skill markdown files from the backup',
+    );
+    assert(mergeResult.files.preserved >= 1, 'Merge should report preserved files');
+    assert(
+      Boolean(
+        mergeContext.db
+          .prepare('SELECT id FROM entities WHERE id = ?')
+          .get('local-only-entity'),
+      ),
+      'Merge should preserve local-only database rows',
+    );
+    assert(
+      Boolean(
+        mergeContext.db
+          .prepare('SELECT id FROM entities WHERE id = ?')
+          .get('project-alpha'),
+      ),
+      'Merge should keep imported database rows readable',
+    );
+    assert(!(await pathExists(path.join(userDir, 'derived'))), 'Merge import should not restore derived snapshots into user data');
+
+    mergeContext.userDataManager.writeFile(
+      'reports/replace-delete-me.md',
+      '# Replace Delete Me\n\nThis file must disappear after replace.\n',
+    );
+    mergeContext.db
+      .prepare(
+        `INSERT OR REPLACE INTO entities (id, type, name, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'replace-only-entity',
+        'Topic',
+        'Replace Only Entity',
+        'Should disappear on replace',
+        now + 2,
+        now + 2,
+      );
+
+    const replaceForm = new FormData();
+    replaceForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    replaceForm.append('mode', 'replace');
+
+    const replaceResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: replaceForm,
+    });
+
+    await ensureOkResponse(replaceResponse, 'Replace import failed');
+    const replaceResult = (await replaceResponse.json()) as ImportResult;
+    const replaceContext = userContextManager.getContext(userId);
+
+    assert(replaceResult.mode === 'replace', 'Replace response mode mismatch');
+    assert(
+      replaceContext.userDataManager.readFile('reports/local-only.md') === null,
+      'Replace should delete files not present in the backup',
+    );
+    assert(
+      replaceContext.userDataManager.readFile('reports/replace-delete-me.md') === null,
+      'Replace should delete newly-created local files',
+    );
+    assert(
+      replaceContext.userDataManager
+        .readFile('projects/project-alpha.md')
+        ?.includes('exported version'),
+      'Replace should restore the exported project file',
+    );
+    assert(
+      replaceContext.userDataManager
+        .readFile('entities/people/john-doe.md')
+        ?.includes('Entity profile markdown'),
+      'Replace should restore entity markdown files from the backup',
+    );
+    assert(
+      replaceContext.userDataManager
+        .readFile('skills/react.md')
+        ?.includes('Skill note markdown'),
+      'Replace should restore skill markdown files from the backup',
+    );
+    assert(replaceResult.files.deleted >= 1, 'Replace should report deleted files');
+    assert(
+      !replaceContext.db
+        .prepare('SELECT id FROM entities WHERE id = ?')
+        .get('replace-only-entity'),
+      'Replace should remove local-only database rows',
+    );
+    assert(
+      Boolean(
+        replaceContext.db
+          .prepare('SELECT id FROM entities WHERE id = ?')
+          .get('project-alpha'),
+      ),
+      'Replace should restore backup database rows',
+    );
+    assert(!(await pathExists(path.join(userDir, 'derived'))), 'Replace import should not restore derived snapshots into user data');
+
+    const exportBufferAfterImport = await fs.readFile(exportFilePath);
+    const exportHashAfterImport = sha256(exportBufferAfterImport);
+    assert(
+      exportHashBeforeImport === exportHashAfterImport,
+      'Exported zip hash changed after import flow',
+    );
+
+    const summary = {
+      exportFilePath,
+      exportHash: exportHashAfterImport,
+      manifest: {
+        includeCount: manifest.includes.length,
+        derivedGenerated: manifest.layers.C.generated.length,
+        derivedFailed: manifest.layers.C.failed.length,
+      },
+      merge: {
+        preservedFiles: mergeResult.files.preserved,
+        overwrittenFiles: mergeResult.files.overwritten,
+        databaseChangedRows: mergeResult.database.changedRows ?? 0,
+      },
+      replace: {
+        deletedFiles: replaceResult.files.deleted,
+        writtenFiles: replaceResult.files.written,
+      },
+    };
+
+    console.log(JSON.stringify(summary, null, 2));
+  } finally {
+    if (address) {
+      await app.close();
+    } else {
+      await app.close();
+    }
+    userContextManager.closeAll();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

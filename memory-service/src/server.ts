@@ -13,6 +13,7 @@ dotenv.config();
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -31,6 +32,7 @@ import { notificationRoutes } from './routes/notifications.js';
 import { eventsRoutes } from './routes/events.js';
 import { ingestBatchRoutes } from './routes/ingestBatch.js';
 import { exportRoutes } from './routes/export.js';
+import { importRoutes } from './routes/import.js';
 import { statsRoutes } from './routes/stats.js';
 import { entityRoutes } from './routes/entities.js';
 import { confirmRequestRoutes } from './routes/confirmRequests.js';
@@ -46,6 +48,8 @@ import { dreamDigestRoutes } from './routes/dreamDigest.js';
 import { weeklyReportRoutes } from './routes/weeklyReport.js';
 import { reflectionThreadRoutes } from './routes/reflectionThreads.js';
 import { actionRoutes } from './routes/actions.js';
+import { concernedItemsRoutes } from './routes/concernedItems.js';
+import { followThreadHitRoutes } from './routes/followThreadHits.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -85,6 +89,7 @@ export async function buildApp(
       level: config.logLevel,
     },
   });
+  app.decorate('userContextManager', userContextManager);
 
   // ---- Plugins ----
   await app.register(cors, {
@@ -93,6 +98,13 @@ export async function buildApp(
     allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-User-Id'],
     exposedHeaders: [],
     credentials: false,
+  });
+
+  await app.register(multipart, {
+    limits: {
+      files: 1,
+      fileSize: 512 * 1024 * 1024,
+    },
   });
 
   await app.register(swagger, {
@@ -146,6 +158,7 @@ export async function buildApp(
       await instance.register(eventsRoutes);
       await instance.register(ingestBatchRoutes);
       await instance.register(exportRoutes);
+      await instance.register(importRoutes);
       await instance.register(statsRoutes);
       await instance.register(entityRoutes);
       await instance.register(confirmRequestRoutes);
@@ -161,6 +174,8 @@ export async function buildApp(
       await instance.register(weeklyReportRoutes);
       await instance.register(reflectionThreadRoutes);
       await instance.register(actionRoutes);
+      await instance.register(concernedItemsRoutes);
+      await instance.register(followThreadHitRoutes);
     },
     { prefix: '/api/v1' },
   );

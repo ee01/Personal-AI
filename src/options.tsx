@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
     BotPushTargetMode,
     defaultEnvConfig,
@@ -26,6 +26,29 @@ type PushGroupField =
     | 'WEEKLY_REPORT_PUSH_GROUP_ID'
     | 'DECISION_CENTER_PUSH_GROUP_ID';
 
+interface MemoryImportResponse {
+    mode: 'merge' | 'replace';
+    importedAt: string;
+    restoredLayers: Array<'A' | 'B'>;
+    database: {
+        action: 'merged' | 'replaced';
+        changedRows?: number;
+        tableChanges?: Record<string, number>;
+        skippedTables?: string[];
+    };
+    files: {
+        written: number;
+        overwritten: number;
+        preserved: number;
+        deleted: number;
+        writtenPaths: string[];
+        overwrittenPaths: string[];
+        preservedPaths: string[];
+        deletedPaths: string[];
+    };
+    warnings: string[];
+}
+
 const PUSH_TARGET_RULES: Array<{
     targetKey: PushTargetField;
     groupKey: PushGroupField;
@@ -46,8 +69,12 @@ const Options = () => {
         message: '',
         type: ''
     });
+    const memoryImportInputRef = useRef<HTMLInputElement | null>(null);
     const [isDreamDigestPushing, setIsDreamDigestPushing] = useState(false);
     const [isWeeklyReportPushing, setIsWeeklyReportPushing] = useState(false);
+    const [isMemoryExporting, setIsMemoryExporting] = useState(false);
+    const [isMemoryImporting, setIsMemoryImporting] = useState(false);
+    const [replaceMemoryOnImport, setReplaceMemoryOnImport] = useState(false);
 
     // Weekly Report backend state (synced with memory-service)
     const [weeklyReportCron, setWeeklyReportCron] = useState<string>('0 18 * * 5');
@@ -203,19 +230,88 @@ const Options = () => {
         }
     };
 
-    const getRequestHeaders = async (targetConfig: EnvConfigType): Promise<Record<string, string>> => {
+    const getRequestHeaders = async (
+        targetConfig: EnvConfigType,
+        options?: {
+            accept?: string;
+            contentType?: string | null;
+        }
+    ): Promise<Record<string, string>> => {
         const result = await chrome.storage.local.get(['userinfo']);
         const username = result?.userinfo?.username?.trim();
         const userId = username || 'default';
         const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
+            'Accept': options?.accept || 'application/json',
             'X-User-Id': userId,
         };
+        if (options?.contentType !== null) {
+            headers['Content-Type'] = options?.contentType || 'application/json';
+        }
         if (targetConfig.MEMORY_SERVICE_API_KEY) {
             headers['Authorization'] = `Bearer ${targetConfig.MEMORY_SERVICE_API_KEY}`;
         }
         return headers;
+    };
+
+    const downloadJson = (payload: unknown, filename: string) => {
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        downloadBlob(blob, filename);
+    };
+
+    const downloadBlob = (blob: Blob, filename: string) => {
+        const url = URL.createObjectURL(blob);
+
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+
+        URL.revokeObjectURL(url);
+    };
+
+    const parseContentDispositionFilename = (contentDisposition: string | null) => {
+        if (!contentDisposition) {
+            return null;
+        }
+
+        const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+        if (utf8Match?.[1]) {
+            try {
+                return decodeURIComponent(utf8Match[1]);
+            } catch {
+                return utf8Match[1];
+            }
+        }
+
+        const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+        return filenameMatch?.[1] || null;
+    };
+
+    const readResponseErrorMessage = async (response: Response) => {
+        const rawText = await response.text();
+        try {
+            const payload = JSON.parse(rawText);
+            return payload?.error || payload?.message || response.statusText || '请求失败';
+        } catch {
+            return rawText || response.statusText || '请求失败';
+        }
+    };
+
+    const formatExportTimestamp = (iso?: string) => {
+        const source = iso || new Date().toISOString();
+        return source.replace(/\.\d{3}Z$/, 'Z').replace(/[:]/g, '-');
+    };
+
+    const ensureMemoryServiceConfigured = () => {
+        if (!config.MEMORY_SERVICE_BASE_URL) {
+            setStatus({
+                message: '请先配置 Memory Service API 地址',
+                type: 'error'
+            });
+            return false;
+        }
+        return true;
     };
 
     const loadDreamDigestSettingsFromBackend = async (targetConfig: EnvConfigType) => {
@@ -526,16 +622,120 @@ const Options = () => {
 
     // 处理导出配置
     const handleExport = () => {
-        const configJson = JSON.stringify(config, null, 2);
-        const blob = new Blob([configJson], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'personal-ai-config.json';
-        a.click();
-        
-        URL.revokeObjectURL(url);
+        downloadJson(config, 'personal-ai-config.json');
+    };
+
+    const handleMemoryExport = async () => {
+        if (!ensureMemoryServiceConfigured()) {
+            return;
+        }
+
+        setIsMemoryExporting(true);
+        try {
+            const headers = await getRequestHeaders(config, {
+                accept: 'application/zip',
+            });
+            const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/export`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    format: 'backup_zip'
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(await readResponseErrorMessage(response));
+            }
+
+            const backupBlob = await response.blob();
+            const filename =
+                parseContentDispositionFilename(response.headers.get('content-disposition')) ||
+                `personal-ai-memory-backup-${formatExportTimestamp()}.zip`;
+            downloadBlob(backupBlob, filename);
+
+            setStatus({
+                message: `记忆导出完成，已下载备份包 ${filename}`,
+                type: 'success'
+            });
+        } catch (error) {
+            console.error('导出记忆失败:', error);
+            setStatus({
+                message: error instanceof Error ? `导出记忆失败: ${error.message}` : '导出记忆失败',
+                type: 'error'
+            });
+        } finally {
+            setIsMemoryExporting(false);
+        }
+    };
+
+    const handleOpenMemoryImport = () => {
+        memoryImportInputRef.current?.click();
+    };
+
+    const handleMemoryImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+
+        if (!file) {
+            return;
+        }
+        if (!ensureMemoryServiceConfigured()) {
+            return;
+        }
+
+        const memoryImportMode = replaceMemoryOnImport ? 'replace' : 'merge';
+
+        if (memoryImportMode === 'replace') {
+            const confirmed = window.confirm(
+                'replace 会覆盖当前用户的记忆数据库，并删除备份包中不存在的本地文件。确定继续吗？'
+            );
+            if (!confirmed) {
+                return;
+            }
+        }
+
+        setIsMemoryImporting(true);
+        try {
+            const headers = await getRequestHeaders(config, {
+                accept: 'application/json',
+                contentType: null
+            });
+            const formData = new FormData();
+            formData.append('file', file, file.name || 'personal-ai-memory-backup.zip');
+            formData.append('mode', memoryImportMode);
+
+            const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/import`, {
+                method: 'POST',
+                headers,
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(await readResponseErrorMessage(response));
+            }
+
+            const result = await response.json() as MemoryImportResponse;
+            const warningText = result.warnings.length > 0
+                ? `，警告 ${result.warnings.length} 项`
+                : '';
+            const dbSummary = result.database.action === 'merged' && typeof result.database.changedRows === 'number'
+                ? `，数据库变更 ${result.database.changedRows} 行`
+                : '';
+
+            setStatus({
+                message:
+                    `记忆导入完成（${result.mode}）：写入 ${result.files.written} 个文件，覆盖 ${result.files.overwritten} 个，保留 ${result.files.preserved} 个，删除 ${result.files.deleted} 个${dbSummary}${warningText}`,
+                type: 'success'
+            });
+        } catch (error) {
+            console.error('导入记忆失败:', error);
+            setStatus({
+                message: error instanceof Error ? `导入记忆失败: ${error.message}` : '导入记忆失败',
+                type: 'error'
+            });
+        } finally {
+            setIsMemoryImporting(false);
+        }
     };
 
     const renderPushTargetFields = (
@@ -941,6 +1141,44 @@ const Options = () => {
                     </div>
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
                         点击「保存配置」后会同步到 memory-service。选择「不推送」时只会关闭报表推送，不会停止梦境重放本身；点击「立即推送」会跳过时间窗口，直接触发 Dream Digest。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label>记忆备份导入/导出</label>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <button
+                            type="button"
+                            onClick={handleMemoryExport}
+                            disabled={isMemoryExporting || isMemoryImporting}
+                        >
+                            {isMemoryExporting ? '导出中...' : '导出记忆'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleOpenMemoryImport}
+                            disabled={isMemoryExporting || isMemoryImporting}
+                        >
+                            {isMemoryImporting ? '导入中...' : '导入记忆'}
+                        </button>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+                            <input
+                                type="checkbox"
+                                checked={replaceMemoryOnImport}
+                                onChange={(e) => setReplaceMemoryOnImport(e.target.checked)}
+                                disabled={isMemoryImporting}
+                            />
+                            覆盖替换现有记忆
+                        </label>
+                    </div>
+                    <input
+                        ref={memoryImportInputRef}
+                        type="file"
+                        accept=".zip,application/zip"
+                        onChange={handleMemoryImport}
+                        style={{ display: 'none' }}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        默认不勾选时按 merge 导入 zip 备份，保留本地未冲突内容；勾选后按 replace 导入，会替换数据库并删除备份包中不存在的本地记忆文件。
                     </small>
                 </div>
             </div>

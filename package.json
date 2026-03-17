@@ -8,7 +8,9 @@
     "deploy": "cd site && git init && git add -A && git commit -m \"Deploy to gh-pages\" && git branch -M gh-pages && git remote add origin git@github.com:ee01/personal-ai.git && git push -f origin gh-pages && rm -rf .git",
     "zip": "rm personal-ai.zip; cd dist && zip -r ../personal-ai.zip .",
     "backup": "tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data",
-    "clean": "rm -rf dist/* && rm personal-ai.zip"
+    "clean": "rm -rf dist/* && rm personal-ai.zip",
+    "verify:project-report": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-project-report.ts",
+    "verify:memory-backup": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-backup.ts"
   },
   "type": "module",
   "license": "MIT",

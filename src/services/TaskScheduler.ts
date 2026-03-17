@@ -15,6 +15,7 @@ import { getEnvConfig } from '../utils';
 import { Logger } from '../utils/logger';
 import { digestQueueService } from './DigestQueueService';
 import { getMemoryServiceClient } from './MemoryServiceClient';
+import { concernedItemsSyncService } from './ConcernedItemsSyncService';
 
 // 任务类型定义
 export interface ScheduledTask {
@@ -158,6 +159,14 @@ export class TaskScheduler {
 
     // 从 storage 恢复任务状态
     await this.restoreTaskStates();
+
+    if (this.tasks.get('message_analysis')?.enabled) {
+      try {
+        await concernedItemsSyncService.syncOnSilentAnalysisStart();
+      } catch (error) {
+        console.warn('ConcernedItems startup sync skipped:', error);
+      }
+    }
 
     // 检查是否是首次启动（没有保存的状态）
     const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
@@ -642,9 +651,13 @@ export class TaskScheduler {
    */
   private async executeMemorySync(): Promise<void> {
     try {
-      // No-op: backend Memory Service handles its own sync.
-      // Kept as a placeholder to avoid breaking the task dispatch table.
-      console.log('🔄 记忆系统同步任务跳过（后端自动管理）');
+      if (!this.tasks.get('message_analysis')?.enabled) {
+        console.log('🔄 concernedItems 同步跳过（静默分析未启用）');
+        return;
+      }
+
+      await concernedItemsSyncService.runPeriodicSync();
+      console.log('🔄 concernedItems 周期同步完成');
     } catch (error) {
       console.error('❌ 记忆系统同步任务失败:', error);
     }
@@ -873,6 +886,13 @@ export class TaskScheduler {
 
     task.enabled = enabled;
     if (enabled) {
+      if (taskId === 'message_analysis') {
+        try {
+          await concernedItemsSyncService.syncOnSilentAnalysisStart();
+        } catch (error) {
+          console.warn('ConcernedItems enable sync skipped:', error);
+        }
+      }
       await this.createTaskAlarm(task);
       this.runTaskManually(taskId);
     } else {

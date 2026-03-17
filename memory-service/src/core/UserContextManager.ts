@@ -90,6 +90,24 @@ export class UserContextManager {
   }
 
   /**
+   * Close and remove a single cached context so it can be recreated on demand.
+   */
+  resetContext(userId: string): void {
+    const ctx = this.contexts.get(userId);
+    if (!ctx) {
+      return;
+    }
+
+    try {
+      ctx.database.close();
+    } catch {
+      // best-effort
+    }
+
+    this.contexts.delete(userId);
+  }
+
+  /**
    * Gracefully close every open database and clear all cached contexts.
    * Must be called on process shutdown.
    */

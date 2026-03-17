@@ -13,6 +13,7 @@ import { TopicItemWithAutoReply } from './AutoReplyHandler';
 import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import { digestQueueService } from '../services/DigestQueueService';
 import { DigestQueueItem, DigestProcessor, DigestNotifyConfig } from '../types/digestQueue';
+import { concernedItemsSyncService } from '../services/ConcernedItemsSyncService';
 // 注：通知逻辑已移至 NotificationService，此文件只处理数据更新
 
 // 语义匹配相似度阈值
@@ -198,6 +199,16 @@ export async function handleFollowThreadNotifications(
       },
       isOriginal: false,
       relationType: match.relationType
+    });
+
+    await concernedItemsSyncService.enqueueFollowThreadHit({
+      followItemId: match.followItemId,
+      postId: message.postId,
+      sender: message.sender,
+      datetime: message.datetime,
+      relationType: match.relationType,
+      summary: message.summary,
+      teamId: config.originalMessage.teamId,
     });
 
     // 处理合并通知队列（如果是 merged 频率）

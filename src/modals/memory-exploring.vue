@@ -102,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useMemoryStore } from './memory-store';
 import AISearchAnimation from './components/AISearchAnimation.vue';
@@ -123,8 +123,7 @@ const pendingDecisionCount = ref(0);
 const activeReflectionCount = ref(0);
 const queuedActionCount = ref(0);
 
-// 加载关注后续数量
-onMounted(async () => {
+async function loadFollowThreadCount() {
   try {
     const result = await chrome.storage.local.get('concernedItems');
     const items = result.concernedItems || [];
@@ -134,6 +133,22 @@ onMounted(async () => {
   } catch (error) {
     console.error('加载关注后续数量失败:', error);
   }
+}
+
+function handleStorageChange(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) {
+  if (areaName === 'local' && changes.concernedItems) {
+    void loadFollowThreadCount();
+  }
+}
+
+// 加载关注后续数量
+onMounted(async () => {
+  await loadFollowThreadCount();
+  chrome.storage.onChanged.addListener(handleStorageChange);
+});
+
+onUnmounted(() => {
+  chrome.storage.onChanged.removeListener(handleStorageChange);
 });
 
 // 加载待决策数量

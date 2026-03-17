@@ -372,10 +372,14 @@ export interface HealthResponse {
 
 // ============ Multi-User / Fastify Extensions ============
 
-import type { FastifyRequest } from 'fastify';
-import type { UserContext } from '../core/UserContextManager.js';
+import 'fastify';
+import type { UserContext, UserContextManager } from '../core/UserContextManager.js';
 
 declare module 'fastify' {
+  interface FastifyInstance {
+    userContextManager: UserContextManager;
+  }
+
   interface FastifyRequest {
     userId: string;
     userContext: UserContext;
