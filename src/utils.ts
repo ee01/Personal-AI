@@ -82,6 +82,12 @@ export interface EnvConfigType {
   DREAM_DIGEST_INTERVAL_DAYS?: number;
   SELF_REFLECTION_ENABLED: boolean;
   SELF_REFLECTION_HEARTBEAT_MINUTES: number;
+  OPENCLAW_ENABLED: boolean;
+  OPENCLAW_BASE_URL: string;
+  OPENCLAW_TIMEOUT_MS: number;
+  OPENCLAW_API_KEY?: string;
+  OPENCLAW_CLEAR_API_KEY?: boolean;
+  OPENCLAW_API_KEY_CONFIGURED?: boolean;
 }
 
 export function normalizeBotPushTarget(
@@ -315,6 +321,12 @@ export const defaultEnvConfig: EnvConfigType = {
   DREAM_DIGEST_INTERVAL_DAYS: Math.max(1, Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1),
   SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED === "true",
   SELF_REFLECTION_HEARTBEAT_MINUTES: Math.max(1, Number(process.env.REFLECTION_HEARTBEAT_MINUTES) || 15),
+  OPENCLAW_ENABLED: process.env.OPENCLAW_ENABLED === "true",
+  OPENCLAW_BASE_URL: process.env.OPENCLAW_BASE_URL || "",
+  OPENCLAW_TIMEOUT_MS: Math.max(1000, Number(process.env.OPENCLAW_TIMEOUT_MS) || 600000),
+  OPENCLAW_API_KEY: "",
+  OPENCLAW_CLEAR_API_KEY: false,
+  OPENCLAW_API_KEY_CONFIGURED: Boolean(process.env.OPENCLAW_API_KEY),
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取

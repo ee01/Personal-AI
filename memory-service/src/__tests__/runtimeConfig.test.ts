@@ -9,6 +9,9 @@ describe('getUserRuntimeConfig', () => {
     expect(config.reflectionEnabled).toBe(false);
     expect(config.reflectionHeartbeatMinutes).toBeGreaterThanOrEqual(1);
     expect(config.dreamDigestEnabled).toBe(true);
+    expect(config.openClawEnabled).toBe(false);
+    expect(config.openClawBaseUrl).toBeDefined();
+    expect(config.openClawTimeoutMs).toBe(600000);
   });
 
   it('applies per-user reflection and dream push overrides from config.json', () => {
@@ -20,6 +23,10 @@ describe('getUserRuntimeConfig', () => {
           reflectionHeartbeatMinutes: 42,
           dreamDigestPushTarget: 'none',
           weeklyReportPushTarget: 'none',
+          openClawEnabled: true,
+          openClawBaseUrl: 'https://openclaw.example.com',
+          openClawApiKey: 'test-openclaw-key',
+          openClawTimeoutMs: 45000,
         });
       },
     } as any;
@@ -31,5 +38,9 @@ describe('getUserRuntimeConfig', () => {
     expect(config.dreamDigestEnabled).toBe(false);
     expect(config.dreamDigestPushTarget).toBe('none');
     expect(config.weeklyReportEnabled).toBe(false);
+    expect(config.openClawEnabled).toBe(true);
+    expect(config.openClawBaseUrl).toBe('https://openclaw.example.com');
+    expect(config.openClawApiKey).toBe('test-openclaw-key');
+    expect(config.openClawTimeoutMs).toBe(45000);
   });
 });

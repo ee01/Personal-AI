@@ -23,6 +23,10 @@ export interface UserRuntimeConfig {
   reflectionUrgentConfidenceThreshold: number;
   decisionCenterPushTarget: RuntimePushTarget;
   decisionCenterPushGroupId: string;
+  openClawEnabled: boolean;
+  openClawBaseUrl: string;
+  openClawApiKey: string;
+  openClawTimeoutMs: number;
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
@@ -133,5 +137,21 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
     decisionCenterPushTarget: normalizePushTarget(persisted.decisionCenterPushTarget, false, 'me'),
     decisionCenterPushGroupId:
       typeof persisted.decisionCenterPushGroupId === 'string' ? persisted.decisionCenterPushGroupId : '',
+    openClawEnabled: normalizeBoolean(persisted.openClawEnabled, appConfig.openClawEnabled),
+    openClawBaseUrl:
+      typeof persisted.openClawBaseUrl === 'string' && persisted.openClawBaseUrl.trim().length > 0
+        ? persisted.openClawBaseUrl.trim()
+        : appConfig.openClawBaseUrl,
+    openClawApiKey:
+      typeof persisted.openClawApiKey === 'string' && persisted.openClawApiKey.length > 0
+        ? persisted.openClawApiKey
+        : appConfig.openClawApiKey,
+    openClawTimeoutMs: Math.max(
+      1000,
+      normalizePositiveInteger(
+        persisted.openClawTimeoutMs,
+        Math.max(1000, appConfig.openClawTimeoutMs),
+      ),
+    ),
   };
 }

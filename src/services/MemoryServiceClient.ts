@@ -383,8 +383,65 @@ export interface ReflectionThreadDetailResponse {
   thread: ReflectionThread;
   runs: ReflectionRun[];
   actions: RuntimeAction[];
+  actionResults?: ActionResultRecord[];
   links: ReflectionLink[];
   dreamRuns: DreamRun[];
+}
+
+export interface ActionResultRecord {
+  id: string;
+  actionId: string;
+  threadId: string;
+  runId?: string;
+  resultType: string;
+  summary: string;
+  payload?: Record<string, unknown>;
+  transcriptPath?: string;
+  createdAt: number;
+}
+
+export interface RuntimeConfigResponse {
+  dreamDigestEnabled?: boolean;
+  dreamDigestScheduleType?: 'weekly' | 'every_x_days' | 'monthly';
+  dreamDigestIntervalDays?: number;
+  dreamDigestIntervalWeeks?: number;
+  dreamDigestPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  dreamDigestPushGroupId?: string;
+  reflectionEnabled?: boolean;
+  reflectionHeartbeatMinutes?: number;
+  decisionCenterPushTarget?: 'me' | 'group' | 'user' | 'team';
+  decisionCenterPushGroupId?: string;
+  weeklyReportEnabled?: boolean;
+  weeklyReportCron?: string;
+  weeklyReportMinMessages?: number;
+  weeklyReportPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  weeklyReportPushGroupId?: string;
+  openClawEnabled?: boolean;
+  openClawBaseUrl?: string;
+  openClawTimeoutMs?: number;
+  openClawApiKeyConfigured?: boolean;
+}
+
+export interface UpdateRuntimeConfigPayload {
+  dreamDigestEnabled?: boolean;
+  dreamDigestScheduleType?: 'weekly' | 'every_x_days' | 'monthly';
+  dreamDigestIntervalDays?: number;
+  dreamDigestPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  dreamDigestPushGroupId?: string;
+  reflectionEnabled?: boolean;
+  reflectionHeartbeatMinutes?: number;
+  decisionCenterPushTarget?: 'me' | 'group' | 'user' | 'team';
+  decisionCenterPushGroupId?: string;
+  weeklyReportEnabled?: boolean;
+  weeklyReportCron?: string;
+  weeklyReportMinMessages?: number;
+  weeklyReportPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  weeklyReportPushGroupId?: string;
+  openClawEnabled?: boolean;
+  openClawBaseUrl?: string;
+  openClawTimeoutMs?: number;
+  openClawApiKey?: string;
+  clearOpenClawApiKey?: boolean;
 }
 
 // ============================================================================
@@ -1109,6 +1166,18 @@ export class MemoryServiceClient {
       `/confirm-requests/${encodeURIComponent(id)}/answer`,
       { answer, detail },
     );
+  }
+
+  // --------------------------------------------------------------------------
+  // Runtime Config
+  // --------------------------------------------------------------------------
+
+  async getRuntimeConfig(): Promise<RuntimeConfigResponse> {
+    return this.request<RuntimeConfigResponse>('GET', '/config');
+  }
+
+  async updateRuntimeConfig(payload: UpdateRuntimeConfigPayload): Promise<RuntimeConfigResponse> {
+    return this.request<RuntimeConfigResponse>('PUT', '/config', payload);
   }
 
   // --------------------------------------------------------------------------

@@ -217,7 +217,7 @@ export class HeartbeatLoop {
       }
 
       // 5c. Execute due auto actions from reflection/action runtime
-      const actionExecutor = new ActionExecutor(this.db, this.userId);
+      const actionExecutor = new ActionExecutor(this.db, this.userDataManager, this.userId);
       const actionResults = await actionExecutor.runDueActions(10);
       if (actionResults.length > 0) {
         actions.push(`executed ${actionResults.length} queued action(s)`);

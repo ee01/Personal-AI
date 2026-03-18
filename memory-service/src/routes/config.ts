@@ -44,6 +44,7 @@ interface UpdatableConfig {
   openClawBaseUrl?: string;
   openClawApiKey?: string;
   openClawTimeoutMs?: number;
+  clearOpenClawApiKey?: boolean;
 }
 
 /** Keys that must never be returned to the client. */
@@ -52,6 +53,7 @@ const SENSITIVE_KEYS = new Set([
   'groqApiKey',
   'difyApiKey',
   'apiKey',
+  'botToken',
   'openClawApiKey',
 ]);
 
@@ -111,6 +113,8 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
       clean[key] = value;
     }
   }
+  clean.openClawApiKeyConfigured =
+    typeof raw.openClawApiKey === 'string' && raw.openClawApiKey.trim().length > 0;
   return clean;
 }
 
@@ -160,6 +164,7 @@ const updateConfigBodySchema = {
     openClawBaseUrl: { type: 'string' as const },
     openClawApiKey: { type: 'string' as const },
     openClawTimeoutMs: { type: 'number' as const, minimum: 1000 },
+    clearOpenClawApiKey: { type: 'boolean' as const },
   },
   additionalProperties: false,
 };
@@ -268,10 +273,16 @@ export async function configRoutes(
         persisted.openClawBaseUrl = updates.openClawBaseUrl;
       }
       if (updates.openClawApiKey !== undefined) {
-        persisted.openClawApiKey = updates.openClawApiKey;
+        const trimmed = updates.openClawApiKey.trim();
+        if (trimmed.length > 0) {
+          persisted.openClawApiKey = trimmed;
+        }
       }
       if (updates.openClawTimeoutMs !== undefined) {
         persisted.openClawTimeoutMs = Math.max(1000, Math.floor(updates.openClawTimeoutMs));
+      }
+      if (updates.clearOpenClawApiKey === true) {
+        delete persisted.openClawApiKey;
       }
 
       writePersistedConfig(persisted, request);

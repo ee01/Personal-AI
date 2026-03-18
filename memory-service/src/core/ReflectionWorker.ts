@@ -115,9 +115,9 @@ Return JSON only:
   "hypothesisAfter": "updated hypothesis, if any",
   "discoveries": ["short bullet"],
   "openQuestions": ["short question"],
-  "actionProposals": [
+      "actionProposals": [
     {
-      "actionType": "notify_user | create_confirm_request | update_truth_property | query_external_tool",
+      "actionType": "notify_user | create_confirm_request | update_truth_property | delegate_openclaw",
       "title": "short title",
       "description": "why this action matters",
       "confidence": 0.0,
@@ -130,7 +130,11 @@ Return JSON only:
       "params": {}
     }
   ]
-}`;
+}
+
+Rules:
+- If actionType is "delegate_openclaw" and params.mode is "write", you must set requiresApproval=true and executionMode="manual".
+- Use "delegate_openclaw" only for external systems.`;
 
     const parsed = await llm.generateJSON<WorkerResponse>(prompt, {
       temperature: 0.3,
@@ -214,14 +218,29 @@ Return JSON only:
   ): DraftReflectionAction | null {
     if (!action.actionType?.trim() || !action.title?.trim()) return null;
 
+    const params = action.params && typeof action.params === 'object' && !Array.isArray(action.params)
+      ? action.params
+      : {};
+    const requestedMode =
+      action.actionType.trim() === 'delegate_openclaw' && typeof params.mode === 'string'
+        ? params.mode.trim().toLowerCase()
+        : undefined;
+    const isWriteDelegation = requestedMode === 'write';
+
     return {
       actionType: action.actionType.trim(),
       title: action.title.trim(),
       description: action.description?.trim(),
-      params: action.params ?? {},
+      params,
       confidence: clampScore(action.confidence, 0.6),
-      requiresApproval: action.requiresApproval ?? action.executionMode !== 'auto',
-      executionMode: action.executionMode === 'auto' ? 'auto' : 'manual',
+      requiresApproval: isWriteDelegation
+        ? true
+        : action.requiresApproval ?? action.executionMode !== 'auto',
+      executionMode: isWriteDelegation
+        ? 'manual'
+        : action.executionMode === 'auto'
+          ? 'auto'
+          : 'manual',
       priority: Math.max(1, Math.min(Math.round(action.priority ?? thread.priority), 10)),
       utilityScore: clampScore(action.utilityScore, thread.salience),
       urgencyScore: clampScore(action.urgencyScore, thread.salience),

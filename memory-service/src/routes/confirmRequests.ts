@@ -7,7 +7,10 @@
 
 import type { FastifyInstance } from 'fastify';
 
+import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { TruthMaintainer } from '../core/TruthMaintainer.js';
+import { ActionRepository } from '../repositories/ActionRepository.js';
 
 // ---------------------------------------------------------------------------
 // Row interfaces
@@ -115,7 +118,7 @@ export async function confirmRequestRoutes(
     Params: { id: string };
     Body: { answer: string; detail?: string };
   }>('/confirm-requests/:id/answer', async (request, reply) => {
-    const { db } = request.userContext;
+    const { db, userDataManager } = request.userContext;
     const truthMaintainer = new TruthMaintainer(db);
     const { id } = request.params;
     const { answer, detail } = request.body;
@@ -136,9 +139,42 @@ export async function confirmRequestRoutes(
         return reply.status(404).send({ error: 'Confirm request not found' });
       }
 
+      let retriedActionId: string | undefined;
+      let skippedActionId: string | undefined;
+      let stoppedActionId: string | undefined;
+      if (updated.category === 'openclaw_delegation') {
+        const evidenceRefs = safeJsonParse<string[]>(updated.evidence_refs_json, []);
+        const actionRef = evidenceRefs.find((ref) => ref.startsWith('action:'));
+        const actionId = actionRef?.slice('action:'.length);
+        if (actionId && answer === 'retry') {
+          const repo = new ActionRepository(db);
+          const retried = repo.retry(actionId);
+          if (retried) {
+            const executor = new ActionExecutor(db, userDataManager, request.userId);
+            await executor.executeAction(actionId);
+            retriedActionId = actionId;
+          }
+        } else if (actionId && answer === 'skip_once') {
+          skippedActionId = actionId;
+        } else if (actionId && answer === 'stop') {
+          const repo = new ActionRepository(db);
+          const stopped = repo.cancel(actionId, 'Stopped by user from confirm request');
+          if (stopped) {
+            stoppedActionId = actionId;
+            if (stopped.threadId) {
+              const threadService = new ReflectionThreadService(db, userDataManager, request.userId);
+              threadService.refreshThreadDocument(stopped.threadId);
+            }
+          }
+        }
+      }
+
       return reply.status(200).send({
         status: 'resolved',
         confirmRequest: formatConfirmRequest(updated),
+        retriedActionId,
+        skippedActionId,
+        stoppedActionId,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

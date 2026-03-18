@@ -1,13 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
-import { getConfig } from '../../config.js';
 import { OpenClawClient } from '../../integrations/OpenClawClient.js';
-import { ActionRepository, type QueuedActionRecord } from '../../repositories/ActionRepository.js';
-import { NotificationRepository } from '../../repositories/NotificationRepository.js';
+import {
+  OpenClawDelegationService,
+  type DelegationOutcome,
+} from '../../integrations/OpenClawDelegationService.js';
+import {
+  ActionRepository,
+  type ActionQueueStatus,
+  type QueuedActionRecord,
+} from '../../repositories/ActionRepository.js';
+import { ActionResultRepository } from '../../repositories/ActionResultRepository.js';
 import { now } from '../../utils/time.js';
 import { getBotSender } from '../../utils/botSender.js';
+import { getUserRuntimeConfig } from '../../runtimeConfig.js';
 import { TruthMaintainer, type PropertyChange } from '../TruthMaintainer.js';
+import { ReflectionThreadService } from '../ReflectionThreadService.js';
+import type { UserDataManager } from '../../storage/UserDataManager.js';
 
 export interface ActionExecutionResult {
   actionId: string;
@@ -17,6 +27,12 @@ export interface ActionExecutionResult {
   error?: string;
 }
 
+interface DispatchOutcome {
+  result: Record<string, unknown>;
+  queueStatus?: Extract<ActionQueueStatus, 'failed' | 'dead_letter'>;
+  errorMessage?: string;
+}
+
 function safeJsonValue(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -24,18 +40,45 @@ function safeJsonValue(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function uniqStrings(values: Array<string | undefined | null>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .filter((value): value is string => Boolean(value && value.trim()))
+        .map((value) => value.trim()),
+    ),
+  );
+}
+
+function normalizePriorityLabel(
+  value: unknown,
+  fallbackPriority?: number,
+): 'high' | 'normal' | 'low' {
+  if (value === 'high' || value === 'normal' || value === 'low') {
+    return value;
+  }
+  if ((fallbackPriority ?? 0) >= 8) return 'high';
+  if ((fallbackPriority ?? 0) <= 4) return 'low';
+  return 'normal';
+}
+
 export class ActionExecutor {
   private readonly actionRepo: ActionRepository;
-  private readonly notificationRepo: NotificationRepository;
+  private readonly actionResultRepo: ActionResultRepository;
   private readonly openClaw: OpenClawClient;
+  private readonly delegationService: OpenClawDelegationService;
+  private readonly threadService: ReflectionThreadService;
 
   constructor(
     private readonly db: Database.Database,
+    private readonly userDataManager?: UserDataManager,
     private readonly userId?: string,
   ) {
     this.actionRepo = new ActionRepository(db);
-    this.notificationRepo = new NotificationRepository(db);
-    this.openClaw = new OpenClawClient();
+    this.actionResultRepo = new ActionResultRepository(db);
+    this.openClaw = new OpenClawClient(userDataManager);
+    this.delegationService = new OpenClawDelegationService(userDataManager, userId);
+    this.threadService = new ReflectionThreadService(db, userDataManager, userId);
   }
 
   async runDueActions(limit = 10): Promise<ActionExecutionResult[]> {
@@ -66,13 +109,35 @@ export class ActionExecutor {
 
     const attemptId = this.actionRepo.markRunning(action.id);
     try {
-      const result = await this.dispatch(action);
-      const updated = this.actionRepo.markSucceeded(action.id, attemptId, result) ?? action;
+      const outcome = await this.dispatch(action);
+      if (outcome.queueStatus === 'failed' || outcome.queueStatus === 'dead_letter') {
+        const updated = this.actionRepo.markFailed(
+          action.id,
+          attemptId,
+          outcome.errorMessage ?? 'Action execution failed',
+          outcome.queueStatus === 'dead_letter',
+        ) ?? action;
+        if (updated.threadId) {
+          this.threadService.refreshThreadDocument(updated.threadId);
+        }
+        return {
+          actionId: updated.id,
+          actionType: updated.actionType,
+          queueStatus: updated.queueStatus,
+          result: outcome.result,
+          error: outcome.errorMessage,
+        };
+      }
+
+      const updated = this.actionRepo.markSucceeded(action.id, attemptId, outcome.result) ?? action;
+      if (updated.threadId) {
+        this.threadService.refreshThreadDocument(updated.threadId);
+      }
       return {
         actionId: updated.id,
         actionType: updated.actionType,
         queueStatus: updated.queueStatus,
-        result,
+        result: outcome.result,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -82,6 +147,9 @@ export class ActionExecutor {
         message,
         action.retryCount >= 2,
       ) ?? action;
+      if (updated.threadId) {
+        this.threadService.refreshThreadDocument(updated.threadId);
+      }
       return {
         actionId: updated.id,
         actionType: updated.actionType,
@@ -91,18 +159,21 @@ export class ActionExecutor {
     }
   }
 
-  private async dispatch(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+  private async dispatch(action: QueuedActionRecord): Promise<DispatchOutcome> {
     if (action.actionType === 'notify_user') {
-      return this.notifyUser(action);
+      return { result: await this.notifyUser(action) };
     }
     if (action.actionType === 'create_confirm_request') {
-      return this.createConfirmRequest(action);
+      return { result: await this.createConfirmRequest(action) };
     }
     if (action.actionType === 'update_truth_property') {
-      return this.updateTruthProperty(action);
+      return { result: await this.updateTruthProperty(action) };
+    }
+    if (action.actionType === 'delegate_openclaw') {
+      return this.delegateOpenClaw(action);
     }
     if (action.actionType === 'query_external_tool') {
-      return this.queryExternalTool(action);
+      return { result: await this.queryExternalTool(action) };
     }
 
     throw new Error(`Unsupported action type: ${action.actionType}`);
@@ -134,7 +205,7 @@ export class ActionExecutor {
 
     const botSender = getBotSender();
     const shouldPushBot =
-      (action.urgencyScore ?? 0) >= getConfig().reflectionUrgentNotifyThreshold ||
+      (action.urgencyScore ?? 0) >= getUserRuntimeConfig(this.userDataManager).reflectionUrgentNotifyThreshold ||
       action.priority >= 8 ||
       params.botPush === true;
     if (shouldPushBot && botSender.isConfigured()) {
@@ -155,6 +226,7 @@ export class ActionExecutor {
     const params = safeJsonValue(action.params);
     const confirmRequestId = String(params.confirmRequestId ?? randomUUID());
     const currentTime = now();
+    const priorityLabel = normalizePriorityLabel(params.priority, action.priority);
 
     this.db
       .prepare(
@@ -168,15 +240,60 @@ export class ActionExecutor {
         String(params.question ?? action.title),
         typeof params.context === 'string' ? params.context : action.description ?? null,
         JSON.stringify(params.options ?? []),
-        JSON.stringify(action.evidenceRefs),
+        JSON.stringify(
+          uniqStrings([
+            ...action.evidenceRefs,
+            ...(Array.isArray(params.evidenceRefs)
+              ? params.evidenceRefs.filter((item): item is string => typeof item === 'string')
+              : []),
+          ]),
+        ),
         typeof params.category === 'string' ? params.category : 'reflection',
         typeof params.relatedEntityId === 'string' ? params.relatedEntityId : null,
         typeof params.relatedPropertyId === 'number' ? params.relatedPropertyId : null,
-        typeof params.priority === 'string' ? params.priority : action.priority >= 8 ? 'high' : 'normal',
+        priorityLabel,
         currentTime,
       );
 
-    return { confirmRequestId };
+    let alertActionId: string | undefined;
+    if (priorityLabel === 'high') {
+      const notifyAction = this.actionRepo.create({
+        actionType: 'notify_user',
+        title: `待确认: ${String(params.question ?? action.title)}`,
+        description:
+          typeof params.context === 'string' && params.context.trim().length > 0
+            ? params.context.trim()
+            : action.description ?? '有一个高优先级待确认项需要你处理。',
+        params: {
+          title: `需要确认: ${String(params.question ?? action.title)}`,
+          body:
+            typeof params.context === 'string' && params.context.trim().length > 0
+              ? params.context.trim()
+              : action.description ?? '请在决策中心查看并处理该确认请求。',
+          payload: {
+            confirmRequestId,
+            threadId: action.threadId,
+            actionId: action.id,
+          },
+          botPush: true,
+        },
+        requiresApproval: false,
+        executionMode: 'auto',
+        priority: Math.max(8, action.priority),
+        threadId: action.threadId,
+        runId: action.runId,
+        sourceKind: 'confirm_request_alert',
+        sourceRefId: confirmRequestId,
+        queueStatus: 'queued',
+        confidence: action.confidence,
+        utilityScore: action.utilityScore,
+        urgencyScore: Math.max(action.urgencyScore ?? 0.8, 0.8),
+      });
+      alertActionId = notifyAction.id;
+      await this.executeAction(notifyAction.id);
+    }
+
+    return { confirmRequestId, ...(alertActionId ? { alertActionId } : {}) };
   }
 
   private async updateTruthProperty(action: QueuedActionRecord): Promise<Record<string, unknown>> {
@@ -184,6 +301,265 @@ export class ActionExecutor {
     const truthMaintainer = new TruthMaintainer(this.db);
     await truthMaintainer.processPropertyChange(params as unknown as PropertyChange);
     return { updated: true };
+  }
+
+  private async delegateOpenClaw(action: QueuedActionRecord): Promise<DispatchOutcome> {
+    const params = safeJsonValue(action.params);
+    const mode = params.mode === 'write' ? 'write' : 'read';
+    if (mode === 'write' && (action.executionMode !== 'manual' || !action.requiresApproval)) {
+      return {
+        result: {
+          status: 'error',
+          summary: 'OpenClaw 写操作必须以手动审批动作执行。',
+          payload: {
+            mode,
+            executionMode: action.executionMode,
+            requiresApproval: action.requiresApproval,
+          },
+        },
+        queueStatus: 'failed',
+        errorMessage: 'OpenClaw 写操作必须以手动审批动作执行。',
+      };
+    }
+
+    const outcome = await this.delegationService.delegate({
+      task:
+        typeof params.task === 'string' && params.task.trim().length > 0
+          ? params.task.trim()
+          : [action.title, action.description].filter(Boolean).join('\n\n'),
+      mode,
+      targetSystem:
+        typeof params.targetSystem === 'string' && params.targetSystem.trim().length > 0
+          ? params.targetSystem.trim()
+          : undefined,
+      threadId: action.threadId ?? String(params.threadId ?? action.id),
+      runId: action.runId,
+      actionId: action.id,
+      sessionKey: this.buildSessionKey(action, params),
+      agentId:
+        typeof params.agentId === 'string' && params.agentId.trim().length > 0
+          ? params.agentId.trim()
+          : undefined,
+      metadata:
+        params.metadata && typeof params.metadata === 'object' && !Array.isArray(params.metadata)
+          ? (params.metadata as Record<string, unknown>)
+          : undefined,
+    });
+
+    if (outcome.status === 'success') {
+      await this.recordDelegationSuccess(action, outcome);
+      return {
+        result: {
+          status: outcome.status,
+          summary: outcome.summary,
+          artifacts: outcome.artifacts,
+          transcriptPath: outcome.transcriptPath,
+          payload: outcome.payload,
+        },
+      };
+    }
+
+    if (outcome.status === 'capability_missing' || outcome.status === 'auth_error') {
+      const followUpActionIds = await this.enqueueDelegationRecovery(action, outcome);
+      return {
+        result: {
+          status: outcome.status,
+          summary: outcome.summary,
+          followUpActionIds,
+          transcriptPath: outcome.transcriptPath,
+          payload: outcome.payload,
+        },
+        queueStatus: 'failed',
+        errorMessage: outcome.summary,
+      };
+    }
+
+    if (outcome.status === 'need_human_decision') {
+      const confirmActionId = await this.enqueueHumanDecisionRequest(action, outcome);
+      return {
+        result: {
+          status: outcome.status,
+          summary: outcome.summary,
+          followUpActionIds: confirmActionId ? [confirmActionId] : [],
+          transcriptPath: outcome.transcriptPath,
+          payload: outcome.payload,
+        },
+        queueStatus: 'failed',
+        errorMessage: outcome.summary,
+      };
+    }
+
+    return {
+      result: {
+        status: outcome.status,
+        summary: outcome.summary,
+        transcriptPath: outcome.transcriptPath,
+        payload: outcome.payload,
+      },
+      queueStatus: action.retryCount >= 2 ? 'dead_letter' : 'failed',
+      errorMessage: outcome.summary,
+    };
+  }
+
+  private async recordDelegationSuccess(
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+  ): Promise<void> {
+    if (!action.threadId) return;
+
+    const record = this.actionResultRepo.create({
+      actionId: action.id,
+      threadId: action.threadId,
+      runId: action.runId,
+      resultType: outcome.status,
+      summary: outcome.summary,
+      payload: {
+        artifacts: outcome.artifacts,
+        ...(outcome.payload ?? {}),
+      },
+      transcriptPath: outcome.transcriptPath,
+    });
+    this.threadService.recordActionResult(record);
+
+    const detail = this.threadService.getThreadDetail(action.threadId);
+    if (
+      detail?.thread.status === 'active' &&
+      getUserRuntimeConfig(this.userDataManager).reflectionEnabled
+    ) {
+      await this.threadService.runReflection(action.threadId, {
+        runType: 'action_result_followup',
+        triggerType: 'action_result',
+        force: false,
+      });
+    }
+  }
+
+  private async enqueueDelegationRecovery(
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+  ): Promise<string[]> {
+    const followUps: string[] = [];
+    const notifyAction = this.actionRepo.create({
+      actionType: 'notify_user',
+      title:
+        outcome.status === 'auth_error'
+          ? `外部委派鉴权失败: ${action.title}`
+          : `外部委派缺少能力: ${action.title}`,
+      description: outcome.summary,
+      params: {
+        title:
+          outcome.status === 'auth_error'
+            ? `OpenClaw 鉴权失败: ${action.title}`
+            : `OpenClaw 缺少能力: ${action.title}`,
+        body: outcome.summary,
+        payload: {
+          actionId: action.id,
+          threadId: action.threadId,
+          outcome: outcome.status,
+        },
+        botPush: true,
+      },
+      requiresApproval: false,
+      executionMode: 'auto',
+      priority: Math.max(8, action.priority),
+      threadId: action.threadId,
+      runId: action.runId,
+      sourceKind: 'delegation_recovery',
+      sourceRefId: action.id,
+      queueStatus: 'queued',
+      confidence: action.confidence,
+      utilityScore: action.utilityScore,
+      urgencyScore: 1,
+    });
+    followUps.push(notifyAction.id);
+
+    const confirmAction = this.actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: `需要处理 OpenClaw 配置后重试: ${action.title}`,
+      description: outcome.summary,
+      params: {
+        question:
+          outcome.status === 'auth_error'
+            ? `OpenClaw 鉴权失败。配置或授权修复后，是否重试「${action.title}」？`
+            : `OpenClaw 当前缺少能力。配置完成后，是否重试「${action.title}」？`,
+        context: outcome.summary,
+        options: [
+          { label: '配置好了，请重试', value: 'retry' },
+          { label: '暂时跳过', value: 'skip_once' },
+          { label: '不再查询', value: 'stop' },
+        ],
+        category: 'openclaw_delegation',
+        priority: 'high',
+        evidenceRefs: [`action:${action.id}`],
+      },
+      requiresApproval: false,
+      executionMode: 'auto',
+      priority: Math.max(8, action.priority),
+      threadId: action.threadId,
+      runId: action.runId,
+      sourceKind: 'delegation_recovery',
+      sourceRefId: action.id,
+      queueStatus: 'queued',
+      confidence: action.confidence,
+      utilityScore: action.utilityScore,
+      urgencyScore: 1,
+    });
+    followUps.push(confirmAction.id);
+
+    for (const id of followUps) {
+      await this.executeAction(id);
+    }
+
+    return followUps;
+  }
+
+  private async enqueueHumanDecisionRequest(
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+  ): Promise<string | undefined> {
+    const payload = safeJsonValue(outcome.payload);
+    const options = Array.isArray(payload.options)
+      ? payload.options
+          .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+          .map((item) => ({
+            label: typeof item.label === 'string' ? item.label : String(item.value ?? 'option'),
+            value: typeof item.value === 'string' ? item.value : String(item.label ?? 'option'),
+          }))
+      : [
+          { label: '继续', value: 'continue' },
+          { label: '取消', value: 'cancel' },
+        ];
+
+    const confirmAction = this.actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: `需要人工判断: ${action.title}`,
+      description: outcome.summary,
+      params: {
+        question:
+          typeof payload.question === 'string' && payload.question.trim().length > 0
+            ? payload.question.trim()
+            : `处理「${action.title}」前需要你的判断。`,
+        context: outcome.summary,
+        options,
+        category: 'openclaw_delegation',
+        priority: action.priority >= 8 ? 'high' : 'normal',
+        evidenceRefs: [`action:${action.id}`],
+      },
+      requiresApproval: false,
+      executionMode: 'auto',
+      priority: Math.max(7, action.priority),
+      threadId: action.threadId,
+      runId: action.runId,
+      sourceKind: 'delegation_recovery',
+      sourceRefId: action.id,
+      queueStatus: 'queued',
+      confidence: action.confidence,
+      utilityScore: action.utilityScore,
+      urgencyScore: action.urgencyScore,
+    });
+
+    await this.executeAction(confirmAction.id);
+    return confirmAction.id;
   }
 
   private async queryExternalTool(action: QueuedActionRecord): Promise<Record<string, unknown>> {
@@ -212,5 +588,12 @@ export class ActionExecutor {
       data: result.data,
       text: result.text,
     };
+  }
+
+  private buildSessionKey(action: QueuedActionRecord, params: Record<string, unknown>): string {
+    if (typeof params.sessionKey === 'string' && params.sessionKey.trim().length > 0) {
+      return params.sessionKey.trim();
+    }
+    return `reflection-thread:${action.threadId ?? action.id}`;
   }
 }

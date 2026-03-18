@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 
 export async function actionRoutes(app: FastifyInstance): Promise<void> {
@@ -30,11 +31,15 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
   app.post<{
     Params: { id: string };
   }>('/actions/:id/retry', async (request, reply) => {
-    const { db } = request.userContext;
+    const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
     const action = repo.retry(request.params.id);
     if (!action) {
       return reply.status(404).send({ error: 'Action not found' });
+    }
+    if (action.threadId) {
+      const threadService = new ReflectionThreadService(db, userDataManager, request.userId);
+      threadService.refreshThreadDocument(action.threadId);
     }
     return reply.status(200).send({ action });
   });
@@ -43,11 +48,15 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
     Params: { id: string };
     Body: { reason?: string };
   }>('/actions/:id/cancel', async (request, reply) => {
-    const { db } = request.userContext;
+    const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
     const action = repo.cancel(request.params.id, request.body?.reason);
     if (!action) {
       return reply.status(404).send({ error: 'Action not found' });
+    }
+    if (action.threadId) {
+      const threadService = new ReflectionThreadService(db, userDataManager, request.userId);
+      threadService.refreshThreadDocument(action.threadId);
     }
     return reply.status(200).send({ action });
   });
@@ -55,14 +64,14 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
   app.post<{
     Params: { id: string };
   }>('/actions/:id/execute', async (request, reply) => {
-    const { db } = request.userContext;
+    const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
     const action = repo.getById(request.params.id);
     if (!action) {
       return reply.status(404).send({ error: 'Action not found' });
     }
 
-    const executor = new ActionExecutor(db, request.userId);
+    const executor = new ActionExecutor(db, userDataManager, request.userId);
     const result = await executor.executeAction(request.params.id);
     return reply.status(200).send(result);
   });

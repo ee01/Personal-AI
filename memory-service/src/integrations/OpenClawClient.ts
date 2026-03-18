@@ -1,4 +1,5 @@
-import { getConfig } from '../config.js';
+import type { UserDataManager } from '../storage/UserDataManager.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 
 export interface OpenClawRequest {
   path?: string;
@@ -9,8 +10,14 @@ export interface OpenClawRequest {
 }
 
 export class OpenClawClient {
+  constructor(private readonly userDataManager?: UserDataManager) {}
+
+  private getRuntimeConfig() {
+    return getUserRuntimeConfig(this.userDataManager);
+  }
+
   isConfigured(): boolean {
-    const config = getConfig();
+    const config = this.getRuntimeConfig();
     return config.openClawEnabled && Boolean(config.openClawBaseUrl);
   }
 
@@ -20,7 +27,7 @@ export class OpenClawClient {
     data?: unknown;
     text?: string;
   }> {
-    const config = getConfig();
+    const config = this.getRuntimeConfig();
     if (!this.isConfigured()) {
       throw new Error('OpenClaw is not configured');
     }

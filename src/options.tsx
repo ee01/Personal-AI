@@ -8,6 +8,11 @@ import {
     getDefaultEnvConfig,
     normalizeBotPushTarget,
 } from './utils';
+import {
+    MemoryServiceClient,
+    type RuntimeConfigResponse,
+    type UpdateRuntimeConfigPayload,
+} from './services/MemoryServiceClient';
 import { agentCoordinator } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { AgentVisualizer, AgentFlowVisualizer, AgentResultSummary } from './agent-visualizer';
@@ -62,6 +67,12 @@ const PUSH_TARGET_RULES: Array<{
     { targetKey: 'DECISION_CENTER_PUSH_TARGET', groupKey: 'DECISION_CENTER_PUSH_GROUP_ID', label: '决策中心推送' },
 ];
 
+const sanitizeLocalEnvConfig = (targetConfig: EnvConfigType): EnvConfigType => ({
+    ...targetConfig,
+    OPENCLAW_API_KEY: '',
+    OPENCLAW_CLEAR_API_KEY: false,
+});
+
 // 使用从utils.ts导入的类型
 const Options = () => {
     const [config, setConfig] = useState<EnvConfigType>({...defaultEnvConfig});
@@ -112,32 +123,28 @@ const Options = () => {
     // Load weekly report settings from backend
     const loadWeeklyReportSettingsFromBackend = async (targetConfig: EnvConfigType) => {
         try {
-            if (!targetConfig.MEMORY_SERVICE_BASE_URL) return;
-            const headers = await getRequestHeaders(targetConfig);
-            const res = await fetch(`${targetConfig.MEMORY_SERVICE_BASE_URL}/config`, { headers });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.weeklyReportCron) {
-                    setWeeklyReportCron(data.weeklyReportCron);
-                }
-                if (data.weeklyReportMinMessages !== undefined) {
-                    setWeeklyReportMinMessages(Number(data.weeklyReportMinMessages));
-                }
-                setConfig(prev => ({
-                    ...prev,
-                    WEEKLY_REPORT_CRON: data.weeklyReportCron || prev.WEEKLY_REPORT_CRON,
-                    WEEKLY_REPORT_MIN_MESSAGES: data.weeklyReportMinMessages !== undefined
-                        ? Number(data.weeklyReportMinMessages)
-                        : prev.WEEKLY_REPORT_MIN_MESSAGES,
-                    WEEKLY_REPORT_PUSH_TARGET: resolvePushTargetValue(
-                        data.weeklyReportPushTarget,
-                        prev.WEEKLY_REPORT_PUSH_TARGET || 'me',
-                        true,
-                        data.weeklyReportEnabled
-                    ),
-                    WEEKLY_REPORT_PUSH_GROUP_ID: data.weeklyReportPushGroupId || prev.WEEKLY_REPORT_PUSH_GROUP_ID || '',
-                }));
+            const data = await getRuntimeConfigFromBackend(targetConfig);
+            if (!data) return;
+            if (data.weeklyReportCron) {
+                setWeeklyReportCron(data.weeklyReportCron);
             }
+            if (data.weeklyReportMinMessages !== undefined) {
+                setWeeklyReportMinMessages(Number(data.weeklyReportMinMessages));
+            }
+            setConfig(prev => ({
+                ...prev,
+                WEEKLY_REPORT_CRON: data.weeklyReportCron || prev.WEEKLY_REPORT_CRON,
+                WEEKLY_REPORT_MIN_MESSAGES: data.weeklyReportMinMessages !== undefined
+                    ? Number(data.weeklyReportMinMessages)
+                    : prev.WEEKLY_REPORT_MIN_MESSAGES,
+                WEEKLY_REPORT_PUSH_TARGET: resolvePushTargetValue(
+                    data.weeklyReportPushTarget,
+                    prev.WEEKLY_REPORT_PUSH_TARGET || 'me',
+                    true,
+                    data.weeklyReportEnabled
+                ),
+                WEEKLY_REPORT_PUSH_GROUP_ID: data.weeklyReportPushGroupId || prev.WEEKLY_REPORT_PUSH_GROUP_ID || '',
+            }));
         } catch (err) {
             console.warn('Failed to load weekly report settings from backend:', err);
         }
@@ -153,29 +160,22 @@ const Options = () => {
         }
         setWeeklyReportSaving(true);
         try {
-            await chrome.storage.local.set({ envConfig: config });
+            const persistedConfig = sanitizeLocalEnvConfig(config);
+            await chrome.storage.local.set({ envConfig: persistedConfig });
             await chrome.runtime.sendMessage({
                 type: 'UPDATE_ENV_CONFIG',
-                config
+                config: persistedConfig
             });
 
-            const headers = await getRequestHeaders(config);
-            const res = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/config`, {
-                method: 'PUT',
-                headers,
-                body: JSON.stringify({
-                    weeklyReportEnabled: pushTarget !== 'none',
-                    weeklyReportCron,
-                    weeklyReportMinMessages,
-                    weeklyReportPushTarget: pushTarget,
-                    weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
-                }),
+            const client = await createMemoryServiceClient(config);
+            await client.updateRuntimeConfig({
+                weeklyReportEnabled: pushTarget !== 'none',
+                weeklyReportCron,
+                weeklyReportMinMessages,
+                weeklyReportPushTarget: pushTarget,
+                weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
             });
-            if (res.ok) {
-                setStatus({ message: '周报设置已保存到后端', type: 'success' });
-            } else {
-                setStatus({ message: '保存周报设置失败: ' + res.statusText, type: 'error' });
-            }
+            setStatus({ message: '周报设置已保存到后端', type: 'success' });
         } catch (err) {
             console.error('Save weekly report settings failed:', err);
             setStatus({ message: '保存周报设置失败', type: 'error' });
@@ -190,7 +190,7 @@ const Options = () => {
         chrome.storage.local.get(['envConfig'], (result) => {
             console.log('result', result);
             if (result.envConfig) {
-                const merged = { ...defaultEnvConfig, ...result.envConfig };
+                const merged = sanitizeLocalEnvConfig({ ...defaultEnvConfig, ...result.envConfig });
                 setConfig(merged);
                 setWeeklyReportCron(merged.WEEKLY_REPORT_CRON || '0 18 * * 5');
                 setWeeklyReportMinMessages(Number(merged.WEEKLY_REPORT_MIN_MESSAGES) || 20);
@@ -251,6 +251,28 @@ const Options = () => {
             headers['Authorization'] = `Bearer ${targetConfig.MEMORY_SERVICE_API_KEY}`;
         }
         return headers;
+    };
+
+    const createMemoryServiceClient = async (targetConfig: EnvConfigType) => {
+        const result = await chrome.storage.local.get(['userinfo']);
+        const userId = result?.userinfo?.username?.trim() || 'default';
+        return new MemoryServiceClient({
+            baseUrl: targetConfig.MEMORY_SERVICE_BASE_URL,
+            apiKey: targetConfig.MEMORY_SERVICE_API_KEY || undefined,
+            timeout: targetConfig.MEMORY_SERVICE_TIMEOUT || 30_000,
+            userId,
+        });
+    };
+
+    const getRuntimeConfigFromBackend = async (targetConfig: EnvConfigType): Promise<RuntimeConfigResponse | null> => {
+        if (!targetConfig.MEMORY_SERVICE_BASE_URL) return null;
+        try {
+            const client = await createMemoryServiceClient(targetConfig);
+            return await client.getRuntimeConfig();
+        } catch (err) {
+            console.warn('Failed to load runtime config from backend:', err);
+            return null;
+        }
     };
 
     const downloadJson = (payload: unknown, filename: string) => {
@@ -317,13 +339,8 @@ const Options = () => {
     const loadDreamDigestSettingsFromBackend = async (targetConfig: EnvConfigType) => {
         if (!targetConfig.MEMORY_SERVICE_BASE_URL) return;
         try {
-            const headers = await getRequestHeaders(targetConfig);
-            const response = await fetch(`${targetConfig.MEMORY_SERVICE_BASE_URL}/config`, {
-                method: 'GET',
-                headers,
-            });
-            if (!response.ok) return;
-            const serverConfig = await response.json();
+            const serverConfig = await getRuntimeConfigFromBackend(targetConfig);
+            if (!serverConfig) return;
             const scheduleType = serverConfig?.dreamDigestScheduleType;
             const intervalDays = Number(serverConfig?.dreamDigestIntervalDays) || (Number(serverConfig?.dreamDigestIntervalWeeks) || 0) * 7;
             const resolvedScheduleType = scheduleType === 'every_x_weeks' ? 'every_x_days' : scheduleType;
@@ -355,6 +372,16 @@ const Options = () => {
                     false
                 ),
                 DECISION_CENTER_PUSH_GROUP_ID: serverConfig?.decisionCenterPushGroupId || prev.DECISION_CENTER_PUSH_GROUP_ID || '',
+                OPENCLAW_ENABLED: serverConfig?.openClawEnabled !== undefined
+                    ? Boolean(serverConfig.openClawEnabled)
+                    : prev.OPENCLAW_ENABLED,
+                OPENCLAW_BASE_URL: typeof serverConfig?.openClawBaseUrl === 'string'
+                    ? serverConfig.openClawBaseUrl
+                    : prev.OPENCLAW_BASE_URL,
+                OPENCLAW_TIMEOUT_MS: Number.isFinite(Number(serverConfig?.openClawTimeoutMs))
+                    ? Math.max(1000, Math.floor(Number(serverConfig.openClawTimeoutMs)))
+                    : (prev.OPENCLAW_TIMEOUT_MS || 600000),
+                OPENCLAW_API_KEY_CONFIGURED: Boolean(serverConfig?.openClawApiKeyConfigured),
             }));
         } catch (error) {
             console.warn('加载梦境重放报表配置失败:', error);
@@ -404,6 +431,22 @@ const Options = () => {
                 return;
             }
 
+            if (config.OPENCLAW_ENABLED && !(config.OPENCLAW_BASE_URL || '').trim()) {
+                setStatus({
+                    message: '启用 OpenClaw 时，需填写 OpenClaw Base URL',
+                    type: 'error'
+                });
+                return;
+            }
+
+            if (Number(config.OPENCLAW_TIMEOUT_MS) < 1000 || Number.isNaN(Number(config.OPENCLAW_TIMEOUT_MS))) {
+                setStatus({
+                    message: 'OpenClaw 超时必须 >= 1000 毫秒',
+                    type: 'error'
+                });
+                return;
+            }
+
             const pushTargetValidationError = validatePushTargets(config);
             if (pushTargetValidationError) {
                 setStatus({
@@ -413,40 +456,52 @@ const Options = () => {
                 return;
             }
             
-            await chrome.storage.local.set({ envConfig: config });
+            const persistedConfig = sanitizeLocalEnvConfig(config);
+            await chrome.storage.local.set({ envConfig: persistedConfig });
             // 通知background脚本更新配置
             await chrome.runtime.sendMessage({
                 type: 'UPDATE_ENV_CONFIG',
-                config
+                config: persistedConfig
             });
 
-            // 同步梦境重放报表计划到 memory-service 运行时配置
-            const headers = await getRequestHeaders(config);
+            // 同步梦境重放/自我反思/OpenClaw配置到 memory-service 运行时配置
             const dreamInsightPushTarget = resolvePushTargetValue(config.DREAM_INSIGHT_PUSH_TARGET, 'me', true);
-            const syncResponse = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/config`, {
-                method: 'PUT',
-                headers,
-                body: JSON.stringify({
-                    dreamDigestScheduleType: config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
-                    dreamDigestIntervalDays: Math.max(1, Number(config.DREAM_DIGEST_INTERVAL_DAYS) || 1),
-                    dreamDigestEnabled: dreamInsightPushTarget !== 'none',
-                    dreamDigestPushTarget: dreamInsightPushTarget,
-                    dreamDigestPushGroupId: (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
-                    reflectionEnabled: config.SELF_REFLECTION_ENABLED !== false,
-                    reflectionHeartbeatMinutes: Math.max(1, Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES) || 15),
-                    decisionCenterPushTarget: resolvePushTargetValue(config.DECISION_CENTER_PUSH_TARGET, 'me', false),
-                    decisionCenterPushGroupId: (config.DECISION_CENTER_PUSH_GROUP_ID || '').trim() || undefined,
-                    weeklyReportEnabled: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true) !== 'none',
-                    weeklyReportCron,
-                    weeklyReportMinMessages,
-                    weeklyReportPushTarget: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true),
-                    weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
-                }),
-            });
-            if (!syncResponse.ok) {
-                const errorText = await syncResponse.text();
-                throw new Error(`同步梦境重放报表配置失败: ${syncResponse.status} ${errorText}`);
+            const openClawApiKey = (config.OPENCLAW_API_KEY || '').trim();
+            const clearOpenClawApiKey = Boolean(config.OPENCLAW_CLEAR_API_KEY) && openClawApiKey.length === 0;
+            const payload: UpdateRuntimeConfigPayload = {
+                dreamDigestScheduleType: config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
+                dreamDigestIntervalDays: Math.max(1, Number(config.DREAM_DIGEST_INTERVAL_DAYS) || 1),
+                dreamDigestEnabled: dreamInsightPushTarget !== 'none',
+                dreamDigestPushTarget: dreamInsightPushTarget,
+                dreamDigestPushGroupId: (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
+                reflectionEnabled: config.SELF_REFLECTION_ENABLED !== false,
+                reflectionHeartbeatMinutes: Math.max(1, Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES) || 15),
+                decisionCenterPushTarget: resolvePushTargetValue(config.DECISION_CENTER_PUSH_TARGET, 'me', false),
+                decisionCenterPushGroupId: (config.DECISION_CENTER_PUSH_GROUP_ID || '').trim() || undefined,
+                weeklyReportEnabled: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true) !== 'none',
+                weeklyReportCron,
+                weeklyReportMinMessages,
+                weeklyReportPushTarget: resolvePushTargetValue(config.WEEKLY_REPORT_PUSH_TARGET, 'me', true),
+                weeklyReportPushGroupId: (config.WEEKLY_REPORT_PUSH_GROUP_ID || '').trim() || undefined,
+                openClawEnabled: config.OPENCLAW_ENABLED,
+                openClawBaseUrl: (config.OPENCLAW_BASE_URL || '').trim(),
+                openClawTimeoutMs: Math.max(1000, Number(config.OPENCLAW_TIMEOUT_MS) || 600000),
+                clearOpenClawApiKey,
+            };
+            if (openClawApiKey.length > 0) {
+                payload.openClawApiKey = openClawApiKey;
             }
+            const client = await createMemoryServiceClient(config);
+            await client.updateRuntimeConfig(payload);
+            await loadDreamDigestSettingsFromBackend(config);
+            setConfig(prev => ({
+                ...prev,
+                OPENCLAW_API_KEY: '',
+                OPENCLAW_CLEAR_API_KEY: false,
+                OPENCLAW_API_KEY_CONFIGURED: clearOpenClawApiKey
+                    ? false
+                    : (openClawApiKey.length > 0 ? true : prev.OPENCLAW_API_KEY_CONFIGURED),
+            }));
 
             setStatus({
                 message: '配置已保存',
@@ -587,7 +642,8 @@ const Options = () => {
                   name === 'MESSAGE_CONTEXT_WINDOW' ||
                   name === 'MEMORY_SERVICE_TIMEOUT' ||
                   name === 'DREAM_DIGEST_INTERVAL_DAYS' ||
-                  name === 'SELF_REFLECTION_HEARTBEAT_MINUTES'
+                  name === 'SELF_REFLECTION_HEARTBEAT_MINUTES' ||
+                  name === 'OPENCLAW_TIMEOUT_MS'
                     ? Number(value)
                     : value
         }));
@@ -1095,6 +1151,76 @@ const Options = () => {
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
                         保存后会同步到 memory-service，按用户分别生效。
                     </small>
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="OPENCLAW_ENABLED"
+                            checked={config.OPENCLAW_ENABLED === true}
+                            onChange={handleInputChange}
+                        />
+                        启用 OpenClaw 外部委派
+                    </label>
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        启用后，自我反思动作可将外部系统查询/执行委派给 OpenClaw（OpenAI 兼容 Responses）。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="OPENCLAW_BASE_URL">OpenClaw Base URL</label>
+                    <input
+                        type="url"
+                        id="OPENCLAW_BASE_URL"
+                        name="OPENCLAW_BASE_URL"
+                        value={config.OPENCLAW_BASE_URL || ''}
+                        onChange={handleInputChange}
+                        placeholder="https://openclaw.example.com"
+                        disabled={config.OPENCLAW_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        示例：`https://openclaw.example.com`，后端会自动拼接 `/v1/responses`。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="OPENCLAW_TIMEOUT_MS">OpenClaw 超时（毫秒）</label>
+                    <input
+                        type="number"
+                        id="OPENCLAW_TIMEOUT_MS"
+                        name="OPENCLAW_TIMEOUT_MS"
+                        value={config.OPENCLAW_TIMEOUT_MS || 600000}
+                        onChange={handleInputChange}
+                        min="1000"
+                        step="1000"
+                        disabled={config.OPENCLAW_ENABLED !== true}
+                    />
+                </div>
+                <div className="form-group">
+                    <label htmlFor="OPENCLAW_API_KEY">OpenClaw API Key（写入后不回显）</label>
+                    <input
+                        type="password"
+                        id="OPENCLAW_API_KEY"
+                        name="OPENCLAW_API_KEY"
+                        value={config.OPENCLAW_API_KEY || ''}
+                        onChange={handleInputChange}
+                        placeholder={config.OPENCLAW_API_KEY_CONFIGURED ? '已配置（如需更新请输入新 key）' : '输入新的 OpenClaw API Key'}
+                        autoComplete="new-password"
+                        disabled={config.OPENCLAW_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        当前状态：{config.OPENCLAW_API_KEY_CONFIGURED ? '后端已配置 key' : '后端未配置 key'}。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="OPENCLAW_CLEAR_API_KEY"
+                            checked={config.OPENCLAW_CLEAR_API_KEY === true}
+                            onChange={handleInputChange}
+                            disabled={config.OPENCLAW_ENABLED !== true}
+                        />
+                        清除后端已保存的 OpenClaw API Key（仅当上方 key 输入为空时生效）
+                    </label>
                 </div>
                 {renderPushTargetFields(
                     '梦境重放报表推送',

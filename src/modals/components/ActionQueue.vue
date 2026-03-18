@@ -50,6 +50,9 @@
 
         <div class="card-meta">
           <span>{{ action.actionType }}</span>
+          <span v-if="delegationModeLabel(action)">{{ delegationModeLabel(action) }}</span>
+          <span v-if="delegationTargetLabel(action)">{{ delegationTargetLabel(action) }}</span>
+          <span v-if="action.requiresApproval">需人工确认</span>
           <span>置信 {{ action.confidence.toFixed(2) }}</span>
           <span>重试 {{ action.retryCount }}</span>
           <router-link
@@ -57,6 +60,13 @@
             :to="`/reflection-threads/${action.threadId}`"
             class="thread-link"
           >查看线程</router-link>
+        </div>
+
+        <div v-if="actionResultSummary(action)" class="result-box">
+          {{ actionResultSummary(action) }}
+        </div>
+        <div v-if="actionResultTranscriptPath(action)" class="result-path">
+          transcript: {{ actionResultTranscriptPath(action) }}
         </div>
 
         <div v-if="action.lastError" class="error-box">
@@ -132,6 +142,43 @@ async function retryAction(id: string) {
 async function cancelAction(id: string) {
   await client.cancelAction(id, 'Cancelled from action queue UI');
   await loadActions();
+}
+
+function delegationModeLabel(action: RuntimeAction) {
+  if (action.actionType !== 'delegate_openclaw' && action.actionType !== 'query_external_tool') {
+    return '';
+  }
+  if (action.actionType === 'query_external_tool') {
+    return '外部工具查询（兼容模式）';
+  }
+  const mode = String(action.params?.mode || 'read').toLowerCase();
+  return mode === 'write' ? '外部写操作委派' : '外部查询委派';
+}
+
+function delegationTargetLabel(action: RuntimeAction) {
+  if (action.actionType === 'query_external_tool') {
+    const path = action.params?.path;
+    return typeof path === 'string' && path.trim().length > 0
+      ? `路径 ${path.trim()}`
+      : '';
+  }
+  if (action.actionType !== 'delegate_openclaw') return '';
+  const target = action.params?.targetSystem;
+  return typeof target === 'string' && target.trim().length > 0
+    ? `目标 ${target.trim()}`
+    : '';
+}
+
+function actionResultSummary(action: RuntimeAction): string {
+  return action.result && typeof action.result.summary === 'string'
+    ? action.result.summary
+    : '';
+}
+
+function actionResultTranscriptPath(action: RuntimeAction): string {
+  return action.result && typeof action.result.transcriptPath === 'string'
+    ? action.result.transcriptPath
+    : '';
 }
 </script>
 
@@ -280,6 +327,23 @@ async function cancelAction(id: string) {
   background: rgba(127, 29, 29, 0.24);
   border: 1px solid rgba(248, 113, 113, 0.25);
   color: #fecaca;
+}
+
+.result-box {
+  margin-top: 0.8rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.8rem;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  color: #e2e8f0;
+  line-height: 1.55;
+}
+
+.result-path {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #7dd3fc;
+  word-break: break-all;
 }
 
 .button-row {

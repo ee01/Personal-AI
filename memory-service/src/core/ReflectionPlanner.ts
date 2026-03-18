@@ -138,6 +138,10 @@ export class ReflectionPlanner {
 
       const dueThreads = this.service.listDueThreads(topicLimit);
       for (const thread of dueThreads) {
+        if (this.service.hasPendingDelegation(thread.id)) {
+          this.service.deferHeartbeatReflection(thread.id);
+          continue;
+        }
         const runResult = await this.service.runReflection(thread.id, {
           runType: 'continuous_reflection',
           triggerType: 'heartbeat',

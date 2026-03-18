@@ -5,7 +5,9 @@ import type Database from 'better-sqlite3';
 
 import type { ReflectionInput, ReflectionOutput } from './OnlineReflection.js';
 import { ReflectionWorker, type DraftReflectionAction, type ReflectionEvidenceItem } from './ReflectionWorker.js';
+import { ReflectionResearcher, type LocalResearchQuery } from './ReflectionResearcher.js';
 import { ActionRepository, type QueuedActionRecord } from '../repositories/ActionRepository.js';
+import { ActionResultRepository, type ActionResultRecord } from '../repositories/ActionResultRepository.js';
 import {
   ReflectionThreadRepository,
   type ReflectionThreadRecord,
@@ -16,6 +18,7 @@ import {
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import { RecallEngine } from './RecallEngine.js';
 
 interface MessageSignalRow {
   id: string;
@@ -84,7 +87,9 @@ function clampSalience(value: number | undefined): number {
 export class ReflectionThreadService {
   private readonly repo: ReflectionThreadRepository;
   private readonly actionRepo: ActionRepository;
+  private readonly actionResultRepo: ActionResultRepository;
   private readonly worker: ReflectionWorker;
+  private readonly researcher: ReflectionResearcher;
   private readonly markdownManager?: MarkdownManager;
 
   constructor(
@@ -94,7 +99,9 @@ export class ReflectionThreadService {
   ) {
     this.repo = new ReflectionThreadRepository(db);
     this.actionRepo = new ActionRepository(db);
+    this.actionResultRepo = new ActionResultRepository(db);
     this.worker = new ReflectionWorker();
+    this.researcher = new ReflectionResearcher(userDataManager);
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
@@ -120,6 +127,7 @@ export class ReflectionThreadService {
     thread: ReflectionThreadRecord;
     runs: ReflectionRunRecord[];
     actions: QueuedActionRecord[];
+    actionResults: ActionResultRecord[];
     links: Array<TopicMemoryLinkRecord & { preview?: string; previewTitle?: string; previewTimestamp?: number }>;
     dreamRuns: DreamRunRecord[];
   } | null {
@@ -128,6 +136,7 @@ export class ReflectionThreadService {
 
     const runs = this.repo.listRuns(threadId, 20);
     const actions = this.actionRepo.list({ threadId, limit: 20 }).items;
+    const actionResults = this.actionResultRepo.listByThread(threadId, 20);
     const rawLinks = this.repo.listLinks(threadId, 50);
     const links = rawLinks.map((link) => ({
       ...link,
@@ -135,11 +144,15 @@ export class ReflectionThreadService {
     }));
     const dreamRuns = this.repo.listDreamRuns({ threadId, limit: 10 });
 
-    return { thread, runs, actions, links, dreamRuns };
+    return { thread, runs, actions, actionResults, links, dreamRuns };
   }
 
   private getReflectionHeartbeatSeconds(): number {
     return getUserRuntimeConfig(this.userDataManager).reflectionHeartbeatMinutes * 60;
+  }
+
+  listActionResults(threadId: string, limit = 20): ActionResultRecord[] {
+    return this.actionResultRepo.listByThread(threadId, limit);
   }
 
   recordOnlineReflectionSignal(
@@ -443,11 +456,16 @@ export class ReflectionThreadService {
       throw new Error(`Reflection thread "${threadId}" is not active`);
     }
 
-    const evidence = this.collectEvidence(thread);
+    const triggerType = options.triggerType ?? 'manual';
+    const evidence = this.collectEvidence(thread, 40);
+    const recentRuns = this.repo.listRuns(thread.id, 5);
+    const researchQueries = await this.researcher.plan(thread, evidence, recentRuns);
+    const researchEvidence = await this.executeResearchQueries(thread, researchQueries);
+    const combinedEvidence = this.mergeEvidence(evidence, researchEvidence);
     const generated = await this.worker.generate(
       thread,
-      evidence,
-      options.triggerType ?? 'manual',
+      combinedEvidence,
+      triggerType,
     );
 
     const threadPath = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
@@ -455,8 +473,8 @@ export class ReflectionThreadService {
     const run = this.repo.createRun({
       threadId: thread.id,
       runType: options.runType ?? 'continuous_reflection',
-      triggerType: options.triggerType ?? 'manual',
-      inputRefs: evidence.map((item) => `${item.sourceKind}:${item.sourceId}`),
+      triggerType,
+      inputRefs: combinedEvidence.map((item) => `${item.sourceKind}:${item.sourceId}`),
       previousRunId: latestRun?.id,
       summary: generated.summary,
       hypothesisBefore: thread.currentHypothesis,
@@ -489,14 +507,24 @@ export class ReflectionThreadService {
         confidence: proposal.confidence,
         evidenceRefs: uniqStrings([
           ...(proposal.evidenceRefs ?? []),
-          ...evidence.slice(0, 3).map((item) => `${item.sourceKind}:${item.sourceId}`),
+          ...combinedEvidence.slice(0, 5).map((item) => `${item.sourceKind}:${item.sourceId}`),
         ]),
-        requiresApproval: proposal.requiresApproval,
+        requiresApproval:
+          proposal.actionType === 'delegate_openclaw' &&
+          typeof proposal.params?.mode === 'string' &&
+          proposal.params.mode.trim().toLowerCase() === 'write'
+            ? true
+            : proposal.requiresApproval,
         state: 'pending',
         source: 'reflection_worker',
         threadId: thread.id,
         runId: run.id,
-        executionMode: proposal.executionMode,
+        executionMode:
+          proposal.actionType === 'delegate_openclaw' &&
+          typeof proposal.params?.mode === 'string' &&
+          proposal.params.mode.trim().toLowerCase() === 'write'
+            ? 'manual'
+            : proposal.executionMode,
         priority: proposal.priority,
         idempotencyKey: `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`,
         scheduledAt: proposal.scheduledAt,
@@ -542,6 +570,40 @@ export class ReflectionThreadService {
     };
   }
 
+  hasPendingDelegation(threadId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT id
+         FROM proposed_actions
+         WHERE thread_id = ?
+           AND action_type = 'delegate_openclaw'
+           AND queue_status IN ('queued', 'running')
+         LIMIT 1`,
+      )
+      .get(threadId) as { id: string } | undefined;
+    return Boolean(row);
+  }
+
+  deferHeartbeatReflection(threadId: string): ReflectionThreadRecord | null {
+    const thread = this.repo.getThreadById(threadId);
+    if (!thread) return null;
+    const updated = this.repo.updateThreadAfterRun(threadId, {
+      nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
+      continueReason: 'waiting_for_delegation',
+    });
+    if (updated) this.syncThreadDocument(threadId);
+    return updated;
+  }
+
+  recordActionResult(result: ActionResultRecord): void {
+    this.repo.addLink(result.threadId, 'action_result', result.id, 1, 'evidence');
+    this.repo.updateThreadAfterRun(result.threadId, {
+      nextReflectionAt: now(),
+      continueReason: 'new action result available',
+    });
+    this.syncThreadDocument(result.threadId);
+  }
+
   pauseThread(threadId: string, reason?: string): ReflectionThreadRecord | null {
     const thread = this.repo.setThreadStatus(threadId, 'paused', reason, null);
     if (thread) this.syncThreadDocument(threadId);
@@ -558,6 +620,10 @@ export class ReflectionThreadService {
     const thread = this.repo.setThreadStatus(threadId, 'active', undefined, now());
     if (thread) this.syncThreadDocument(threadId);
     return thread;
+  }
+
+  refreshThreadDocument(threadId: string): void {
+    this.syncThreadDocument(threadId);
   }
 
   private buildOnlineSummary(input: ReflectionInput, output: ReflectionOutput): string {
@@ -581,8 +647,8 @@ export class ReflectionThreadService {
     return `reflection-threads/${toSlug(thread.title).slice(0, 48) || 'reflection-thread'}-${thread.id.slice(0, 8)}.md`;
   }
 
-  private collectEvidence(thread: ReflectionThreadRecord): ReflectionEvidenceItem[] {
-    return this.repo.listLinks(thread.id, 20).map((link) => {
+  private collectEvidence(thread: ReflectionThreadRecord, limit = 20): ReflectionEvidenceItem[] {
+    return this.repo.listLinks(thread.id, limit).map((link) => {
       const hydrated = this.hydrateLink(link);
       return {
         sourceKind: link.sourceKind,
@@ -593,6 +659,68 @@ export class ReflectionThreadService {
         role: link.role,
       };
     });
+  }
+
+  private async executeResearchQueries(
+    thread: ReflectionThreadRecord,
+    queries: LocalResearchQuery[],
+  ): Promise<ReflectionEvidenceItem[]> {
+    if (queries.length === 0) return [];
+    const recallEngine = new RecallEngine(this.db);
+    const evidenceItems: ReflectionEvidenceItem[] = [];
+    const seen = new Set<string>();
+
+    for (const query of queries) {
+      const result = await recallEngine.recall({
+        query: query.query,
+        topK: query.topK,
+        includeMetadata: true,
+        timeRange: query.timeRange,
+        projectFilter: query.projectFilter,
+        senderFilter: query.senderFilter,
+        groupFilter: query.groupFilter,
+        sourceTypes: query.sourceTypes,
+      });
+
+      for (const item of result.items) {
+        const sourceKind = item.type === 'chunk' ? 'chunk' : item.type === 'entity' ? 'entity' : 'message';
+        const key = `${sourceKind}:${item.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        if (sourceKind === 'message' || sourceKind === 'chunk') {
+          this.repo.addLink(thread.id, sourceKind, item.id, Math.max(0.55, item.score), 'research');
+        }
+
+        evidenceItems.push({
+          sourceKind,
+          sourceId: item.id,
+          title: query.purpose,
+          snippet: item.content.slice(0, 240),
+          createdAt: item.timestamp,
+          role: 'research',
+        });
+      }
+    }
+
+    return evidenceItems;
+  }
+
+  private mergeEvidence(
+    primary: ReflectionEvidenceItem[],
+    secondary: ReflectionEvidenceItem[],
+  ): ReflectionEvidenceItem[] {
+    const result: ReflectionEvidenceItem[] = [];
+    const seen = new Set<string>();
+
+    for (const item of [...primary, ...secondary]) {
+      const key = `${item.sourceKind}:${item.sourceId}:${item.role}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(item);
+    }
+
+    return result;
   }
 
   private hydrateLink(link: TopicMemoryLinkRecord): {
@@ -686,6 +814,22 @@ export class ReflectionThreadService {
       };
     }
 
+    if (link.sourceKind === 'action_result') {
+      const row = this.db
+        .prepare(
+          `SELECT summary, created_at
+           FROM action_results
+           WHERE id = ?`,
+        )
+        .get(link.sourceId) as { summary: string; created_at: number } | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: '外部委派结果',
+        preview: row.summary,
+        previewTimestamp: row.created_at,
+      };
+    }
+
     return {};
   }
 
@@ -697,6 +841,7 @@ export class ReflectionThreadService {
     const runs = this.repo.listRuns(thread.id, 20);
     const dreams = this.repo.listDreamRuns({ threadId: thread.id, limit: 10 });
     const actions = this.actionRepo.list({ threadId: thread.id, limit: 20 }).items;
+    const actionResults = this.actionResultRepo.listByThread(thread.id, 20);
     const links = this.repo.listLinks(thread.id, 20).map((link) => ({
       ...link,
       ...this.hydrateLink(link),
@@ -744,6 +889,16 @@ export class ReflectionThreadService {
     if (dreams.length > 0) {
       for (const dream of dreams) {
         lines.push(`- ${formatDateTime(dream.createdAt)}: ${dream.summary ?? 'Dream replay generated.'}`);
+      }
+    } else {
+      lines.push('- None');
+    }
+    lines.push('');
+
+    lines.push('## Action Results');
+    if (actionResults.length > 0) {
+      for (const result of actionResults) {
+        lines.push(`- ${formatDateTime(result.createdAt)} [${result.resultType}] ${result.summary}`);
       }
     } else {
       lines.push('- None');

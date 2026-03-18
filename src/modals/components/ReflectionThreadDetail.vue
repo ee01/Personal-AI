@@ -76,9 +76,9 @@
               <span>{{ action.title }}</span>
               <span class="queue-badge" :class="action.queueStatus">{{ action.queueStatus }}</span>
             </div>
-            <p class="action-desc">{{ action.description || action.actionType }}</p>
+            <p class="action-desc">{{ action.description || displayActionType(action.actionType) }}</p>
             <div class="action-meta">
-              <span>{{ action.actionType }}</span>
+              <span>{{ displayActionType(action.actionType) }}</span>
               <span>{{ action.executionMode }}</span>
               <span>P{{ action.priority }}</span>
             </div>
@@ -99,6 +99,58 @@
                 @click="cancelAction(action.id)"
               >取消</button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">外部委派结果</div>
+        <div v-if="(detail.actionResults?.length ?? 0) === 0" class="muted">暂无外部委派结果</div>
+        <div v-else class="run-list">
+          <div
+            v-for="result in detail.actionResults ?? []"
+            :key="result.id"
+            class="run-card"
+          >
+            <div class="inline-head">
+              <span>{{ result.resultType }}</span>
+              <span class="muted small">{{ relativeTime(result.createdAt) }}</span>
+            </div>
+            <p class="run-summary">{{ result.summary }}</p>
+
+            <div v-if="result.payload && Object.keys(result.payload).length > 0" class="sub-block">
+              <div class="sub-title">关键结果</div>
+              <pre class="json-block">{{ formatJson(result.payload) }}</pre>
+            </div>
+
+            <div v-if="result.transcriptPath" class="sub-block">
+              <div class="inline-head">
+                <div class="sub-title">Transcript</div>
+                <button
+                  class="tiny-btn"
+                  @click="toggleTranscript(result.id, result.transcriptPath)"
+                >{{ transcriptVisible[result.id] ? '收起' : '展开' }}</button>
+              </div>
+              <div class="muted small">{{ result.transcriptPath }}</div>
+              <div v-if="transcriptVisible[result.id]" class="transcript-block">
+                <div v-if="transcriptLoading[result.id]" class="muted">正在加载 transcript...</div>
+                <pre v-else class="json-block">{{ transcriptContent[result.id] || '未能读取 transcript 内容。' }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">研究补充证据</div>
+        <div v-if="researchEvidence.length === 0" class="muted">暂无研究补充证据</div>
+        <div v-else class="evidence-list">
+          <div v-for="link in researchEvidence" :key="link.id" class="evidence-item">
+            <div class="inline-head">
+              <span>{{ link.previewTitle || link.sourceKind }}</span>
+              <span class="muted small">{{ link.sourceKind }}/{{ link.role }}</span>
+            </div>
+            <p>{{ link.preview || link.sourceId }}</p>
           </div>
         </div>
       </section>
@@ -149,7 +201,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -162,6 +214,10 @@ const router = useRouter();
 const loading = ref(true);
 const busy = ref(false);
 const detail = ref<ReflectionThreadDetailResponse | null>(null);
+const researchEvidence = computed(() => detail.value?.links.filter(link => link.role === 'research') ?? []);
+const transcriptVisible = ref<Record<string, boolean>>({});
+const transcriptLoading = ref<Record<string, boolean>>({});
+const transcriptContent = ref<Record<string, string | null>>({});
 
 onMounted(() => {
   void loadDetail();
@@ -248,10 +304,69 @@ async function cancelAction(id: string) {
   await loadDetail();
 }
 
+async function toggleTranscript(resultId: string, transcriptPath?: string) {
+  if (!transcriptPath) return;
+  const nextVisible = !transcriptVisible.value[resultId];
+  transcriptVisible.value = {
+    ...transcriptVisible.value,
+    [resultId]: nextVisible,
+  };
+  if (!nextVisible || transcriptContent.value[resultId] !== undefined) {
+    return;
+  }
+
+  const filename = transcriptFilename(transcriptPath);
+  if (!filename) {
+    transcriptContent.value = {
+      ...transcriptContent.value,
+      [resultId]: '暂不支持读取该 transcript 路径。',
+    };
+    return;
+  }
+
+  transcriptLoading.value = {
+    ...transcriptLoading.value,
+    [resultId]: true,
+  };
+  try {
+    const content = await client.readUserFile('delegations', filename);
+    transcriptContent.value = {
+      ...transcriptContent.value,
+      [resultId]: content,
+    };
+  } finally {
+    transcriptLoading.value = {
+      ...transcriptLoading.value,
+      [resultId]: false,
+    };
+  }
+}
+
+function transcriptFilename(transcriptPath: string): string | null {
+  if (!transcriptPath.startsWith('delegations/')) {
+    return null;
+  }
+  return transcriptPath.slice('delegations/'.length);
+}
+
+function formatJson(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function statusLabel(status: string) {
   if (status === 'active') return '进行中';
   if (status === 'paused') return '已暂停';
   return '已关闭';
+}
+
+function displayActionType(actionType: string) {
+  if (actionType === 'delegate_openclaw') return 'delegate_openclaw';
+  if (actionType === 'query_external_tool') return 'query_external_tool（兼容模式）';
+  return actionType;
 }
 
 function displayThreadTitle(title: string) {
@@ -368,6 +483,23 @@ function relativeTime(ts: number) {
   color: #94a3b8;
   font-size: 0.83rem;
   margin-top: 0.9rem;
+}
+
+.transcript-block,
+.json-block {
+  margin-top: 0.6rem;
+}
+
+.json-block {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.8rem;
+  padding: 0.85rem;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .metric-pill,
