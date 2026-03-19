@@ -7,6 +7,7 @@
 
 import { SheetConfig } from './types';
 import { MESSAGES_SCHEMA } from './SheetInitializer';
+import { normalizeSheetConfig } from './botAutomationConfig';
 
 export interface SchemaUpdateResult {
   success: boolean;
@@ -21,7 +22,7 @@ export class SheetSchemaUpdater {
   
   constructor(token: string, config: SheetConfig) {
     this.token = token;
-    this.config = config;
+    this.config = normalizeSheetConfig(config);
   }
   
   /**
@@ -131,7 +132,7 @@ export class SheetSchemaUpdater {
       // 如果有变更，同步保存到 Chrome Storage 和 Config Sheet
       if (needsUpdate) {
         // 保存到 Chrome Storage
-        await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+        await chrome.storage.local.set({ scheduledMessagesConfig: normalizeSheetConfig(this.config) });
         
         // 保存到 Config Sheet
         const { ConfigSyncService } = await import('./ConfigSyncService');
@@ -366,7 +367,7 @@ export class SheetSchemaUpdater {
     try {
       // 获取配置
       const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-      const config = result.scheduledMessagesConfig as SheetConfig;
+      const config = normalizeSheetConfig(result.scheduledMessagesConfig as SheetConfig);
       
       if (!config || !config.sheetId) {
         console.log('未找到定时消息配置，跳过 Sheet Schema 检查');
@@ -411,4 +412,3 @@ export class SheetSchemaUpdater {
     }
   }
 }
-

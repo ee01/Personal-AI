@@ -1,0 +1,60 @@
+{
+  "_metadata": {
+    "version": "1.3.1",
+    "lastUpdated": "2026-03-18",
+    "description": "Personal AI Scheduled Messages Timeline Sync Rule Template"
+  },
+  "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
+  "state": "ENABLED",
+  "description": "Personal AI Timeline Sync v{{RULE_VERSION}}",
+  "canOtherRuleTrigger": false,
+  "notifyOnError": "FIRSTERROR",
+  "authorAccountId": "{{USER_KEY}}",
+  "actorAccountId": "{{USER_KEY}}",
+  "trigger": {
+    "component": "TRIGGER",
+    "schemaVersion": 1,
+    "type": "jira.jql.scheduled",
+    "value": {
+      "schedule": {
+        "cronExpression": "0 0 5 * * ?",
+        "method": "CRON",
+        "rate": 0,
+        "rateInterval": 60
+      },
+      "jql": "",
+      "executionMode": "nosearch",
+      "onlyUpdatedIssues": false,
+      "processIssuesInBulk": false
+    },
+    "children": [],
+    "conditions": [],
+    "optimisedIds": [],
+    "newComponent": false
+  },
+  "components": [
+    {
+      "component": "CONDITION",
+      "schemaVersion": 1,
+      "type": "jira.comparator.condition",
+      "value": {
+        "first": "{{baseUrl}}",
+        "second": "https://jira-",
+        "operator": "NOT_CONTAINS"
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    "{{TIMELINE_SYNC_COMPONENTS}}"
+  ],
+  "projects": [
+    {
+      "projectId": "{{PROJECT_ID}}",
+      "projectTypeKey": "software"
+    }
+  ],
+  "labels": [],
+  "tags": []
+}

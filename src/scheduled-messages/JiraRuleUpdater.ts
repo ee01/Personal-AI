@@ -5,17 +5,21 @@
  * 参考 AppScriptUpdater.ts 的架构实现
  */
 
-import ruleTemplate from './jira-rule-template.json';
-import { SheetConfig } from './types';
+import executorRuleTemplate from './jira-rule-template.json';
+import timelineSyncRuleTemplate from './jira-timeline-sync-rule-template.json';
+import { BotAutomationRule, SheetConfig } from './types';
 import { ConfigSyncService } from './ConfigSyncService';
 import { 
   JiraAutomationService, 
   JiraAutomationConfig, 
   JIRA_RULE_VERSION, 
-  JIRA_RULE_LAST_UPDATED 
+  JIRA_RULE_LAST_UPDATED,
+  JIRA_TIMELINE_SYNC_RULE_VERSION,
 } from './JiraAutomationService';
 import { getEnvConfig } from '../utils';
 import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import { buildTimelineSyncComponentsFragment } from './timelineProjects';
+import { getExecutorRule, getTimelineSyncRule, normalizeSheetConfig } from './botAutomationConfig';
 
 export interface JiraRuleUpdateCheckResult {
   needsUpdate: boolean;
@@ -31,6 +35,8 @@ export interface JiraRuleUpdateResult {
   error?: string;
 }
 
+type ManagedRuleKind = 'executor' | 'timelineSync';
+
 export class JiraRuleUpdater {
   private config: SheetConfig | null = null;
   private jiraService: JiraAutomationService;
@@ -39,7 +45,7 @@ export class JiraRuleUpdater {
   private static cachedVersionInfo: { version: string; lastUpdated: string } | null = null;
   
   constructor(config?: SheetConfig) {
-    this.config = config || null;
+    this.config = config ? normalizeSheetConfig(config) : null;
     this.jiraService = new JiraAutomationService();
   }
   
@@ -53,7 +59,7 @@ export class JiraRuleUpdater {
     }
     
     // 从导入的模板中读取 _metadata
-    const metadata = (ruleTemplate as any)._metadata;
+    const metadata = (executorRuleTemplate as any)._metadata;
     
     if (metadata && metadata.version) {
       const versionInfo = {
@@ -100,8 +106,11 @@ export class JiraRuleUpdater {
     try {
       // 获取最新版本号
       const latestVersion = JiraRuleUpdater.getLatestVersion();
-      
-      if (!this.config?.botExecutor?.ruleId || !this.config?.botExecutor?.jiraUrl) {
+
+      const executorRule = getExecutorRule(this.config);
+      const timelineSyncRule = getTimelineSyncRule(this.config);
+
+      if (!executorRule?.ruleId || !executorRule?.jiraUrl) {
         return {
           needsUpdate: false,
           currentVersion: 'unknown',
@@ -109,12 +118,17 @@ export class JiraRuleUpdater {
           error: '未找到 Bot Executor 配置'
         };
       }
-      
-      // 从已部署规则获取当前版本
-      const currentVersion = await this.getDeployedVersion();
-      
-      // 比较版本
-      const needsUpdate = this.compareVersions(currentVersion, latestVersion) < 0;
+
+      const currentVersions = await Promise.all([
+        this.getDeployedVersionForRule(executorRule),
+        timelineSyncRule?.ruleId ? this.getDeployedVersionForRule(timelineSyncRule) : Promise.resolve(latestVersion),
+      ]);
+
+      const currentVersion = currentVersions
+        .slice()
+        .sort((a, b) => this.compareVersions(a, b))[0];
+
+      const needsUpdate = currentVersions.some(version => this.compareVersions(version, latestVersion) < 0);
       
       return {
         needsUpdate,
@@ -138,19 +152,15 @@ export class JiraRuleUpdater {
    * 获取已部署的 Jira Rule 版本
    * 通过解析规则名称中的版本号获取
    */
-  private async getDeployedVersion(): Promise<string> {
-    if (!this.config?.botExecutor?.ruleId || !this.config?.botExecutor?.jiraUrl) {
-      throw new Error('未找到 Bot Executor 配置');
-    }
-    
+  private async getDeployedVersionForRule(ruleConfig: BotAutomationRule): Promise<string> {
     const jiraConfig: JiraAutomationConfig = {
-      jiraUrl: this.config.botExecutor.jiraUrl,
-      projectKey: this.config.botExecutor.projectKey
+      jiraUrl: ruleConfig.jiraUrl,
+      projectKey: ruleConfig.projectKey
     };
     
     try {
       // 获取规则详情
-      const rule = await this.jiraService.getRuleById(jiraConfig, this.config.botExecutor.ruleId);
+      const rule = await this.jiraService.getRuleById(jiraConfig, ruleConfig.ruleId);
       
       if (!rule) {
         console.warn('⚠️ 无法获取规则详情，可能规则已被删除');
@@ -166,9 +176,9 @@ export class JiraRuleUpdater {
       }
       
       // 如果名称中没有版本号，尝试从配置中读取
-      if (this.config.botExecutor.ruleVersion) {
-        console.log(`📋 从配置读取规则版本: ${this.config.botExecutor.ruleVersion}`);
-        return this.config.botExecutor.ruleVersion;
+      if (ruleConfig.ruleVersion) {
+        console.log(`📋 从配置读取规则版本: ${ruleConfig.ruleVersion}`);
+        return ruleConfig.ruleVersion;
       }
       
       // 如果都没有，返回 0.0.0 表示旧版本
@@ -187,7 +197,10 @@ export class JiraRuleUpdater {
    */
   async updateJiraRule(): Promise<JiraRuleUpdateResult> {
     try {
-      if (!this.config?.botExecutor?.ruleId || !this.config?.botExecutor?.jiraUrl) {
+      const executorRule = getExecutorRule(this.config);
+      const timelineSyncRule = getTimelineSyncRule(this.config);
+
+      if (!executorRule?.ruleId || !executorRule?.jiraUrl) {
         return {
           success: false,
           message: '未找到 Bot Executor 配置',
@@ -202,36 +215,43 @@ export class JiraRuleUpdater {
       
       // 1. 准备 Jira 配置
       const jiraConfig: JiraAutomationConfig = {
-        jiraUrl: this.config.botExecutor.jiraUrl,
-        projectKey: this.config.botExecutor.projectKey
+        jiraUrl: executorRule.jiraUrl,
+        projectKey: executorRule.projectKey
       };
-      
-      // 2. 获取现有规则
-      const existingRule = await this.jiraService.getRuleById(
-        jiraConfig, 
-        this.config.botExecutor.ruleId
-      );
-      
-      if (!existingRule) {
-        return {
-          success: false,
-          message: '规则不存在或已被删除',
-          error: 'RULE_NOT_FOUND'
-        };
+
+      const managedRules: Array<{ kind: ManagedRuleKind; ruleConfig: BotAutomationRule }> = [
+        { kind: 'executor', ruleConfig: executorRule },
+      ];
+
+      if (timelineSyncRule?.ruleId) {
+        managedRules.push({ kind: 'timelineSync', ruleConfig: timelineSyncRule });
       }
-      
-      // 3. 准备新的规则 payload
-      const newRulePayload = await this.prepareRulePayload(existingRule);
-      
-      // 4. 调用更新 API
-      const updatedRule = await this.jiraService.updateRule(
-        jiraConfig,
-        this.config.botExecutor.ruleId,
-        newRulePayload
-      );
-      
-      // 5. 更新配置中的版本信息
-      await this.updateConfigVersion(latestVersion, updatedRule.name);
+
+      for (const { kind, ruleConfig } of managedRules) {
+        const existingRule = await this.jiraService.getRuleById(jiraConfig, ruleConfig.ruleId);
+
+        if (!existingRule) {
+          if (kind === 'executor') {
+            return {
+              success: false,
+              message: '执行规则不存在或已被删除',
+              error: 'RULE_NOT_FOUND'
+            };
+          }
+
+          console.warn(`⚠️ 跳过缺失的 ${kind} 规则: ${ruleConfig.ruleId}`);
+          continue;
+        }
+
+        const newRulePayload = await this.prepareRulePayload(kind, existingRule, ruleConfig);
+        const updatedRule = await this.jiraService.updateRule(
+          jiraConfig,
+          ruleConfig.ruleId,
+          newRulePayload
+        );
+
+        await this.updateRuleConfigVersion(kind, latestVersion, updatedRule.name);
+      }
       
       console.log('✅ Jira Automation Rule 更新成功！');
       
@@ -255,7 +275,11 @@ export class JiraRuleUpdater {
    * 准备规则 payload
    * 从模板创建新的规则内容，替换占位符
    */
-  private async prepareRulePayload(existingRule: any): Promise<any> {
+  private async prepareRulePayload(
+    kind: ManagedRuleKind,
+    existingRule: any,
+    ruleConfig: BotAutomationRule
+  ): Promise<any> {
     // 获取环境配置
     const envConfig = await getEnvConfig();
     const { userinfo } = await chrome.storage.local.get('userinfo');
@@ -263,22 +287,29 @@ export class JiraRuleUpdater {
     // 保持原有的规则名称前缀（用户名部分）
     const nameMatch = existingRule.name.match(/^\[([^\]]+)\]/);
     const userName = nameMatch ? nameMatch[1] : (userinfo?.fullName?.split(' ')[0] || 'User');
-    const ruleName = `[${userName}] Scheduled Messages`;
+    const ruleName = kind === 'timelineSync'
+      ? `[${userName}] Scheduled Messages Timeline Sync`
+      : `[${userName}] Scheduled Messages`;
     
     // 获取 Web App URL
-    const webAppUrl = this.config?.webAppUrl || this.config?.botExecutor?.webhookUrl || '';
+    const webAppUrl = this.config?.webAppUrl || ruleConfig.webhookUrl || '';
+    const template = kind === 'timelineSync' ? timelineSyncRuleTemplate : executorRuleTemplate;
+    const ruleVersion = kind === 'timelineSync' ? JIRA_TIMELINE_SYNC_RULE_VERSION : JiraRuleUpdater.getLatestVersion();
     
     // 从模板创建规则 payload
-    const templateString = JSON.stringify(ruleTemplate);
+    // 注意：必须先替换 TIMELINE_SYNC_COMPONENTS，再替换 WEB_APP_URL，
+    // 因为 {{WEB_APP_URL}} 存在于 buildTimelineSyncComponentsFragment() 的输出中
+    const templateString = JSON.stringify(template);
     const rulePayloadString = templateString
       .replace(/{{RULE_NAME}}/g, ruleName)
-      .replace(/{{RULE_VERSION}}/g, JiraRuleUpdater.getLatestVersion())
+      .replace(/{{RULE_VERSION}}/g, ruleVersion)
+      .replace(/"{{TIMELINE_SYNC_COMPONENTS}}"/g, buildTimelineSyncComponentsFragment())
       .replace(/{{WEB_APP_URL}}/g, webAppUrl)
       .replace(/{{BOT_API_BASE_URL}}/g, envConfig.BOT_API_BASE_URL)
       .replace(/{{BOT_TOKEN}}/g, envConfig.BOT_TOKEN)
       .replace(/{{BOT_ID}}/g, envConfig.BOT_ID)
       .replace(/{{USER_EMAIL}}/g, userinfo?.userEmail || '')
-      .replace(/{{PROJECT_KEY}}/g, this.config?.botExecutor?.projectKey || '')
+      .replace(/{{PROJECT_KEY}}/g, ruleConfig.projectKey || '')
       .replace(/{{PROJECT_ID}}/g, String(existingRule.projects?.[0]?.projectId || ''))
       .replace(/{{USER_KEY}}/g, existingRule.authorAccountId || '');
     
@@ -293,14 +324,28 @@ export class JiraRuleUpdater {
   /**
    * 更新配置中的版本信息
    */
-  private async updateConfigVersion(version: string, ruleName: string): Promise<void> {
-    if (!this.config || !this.config.botExecutor) {
+  private async updateRuleConfigVersion(
+    kind: ManagedRuleKind,
+    version: string,
+    ruleName: string
+  ): Promise<void> {
+    if (!this.config) {
       return;
     }
-    
-    this.config.botExecutor.ruleVersion = version;
-    this.config.botExecutor.ruleLastUpdated = new Date().toISOString();
-    this.config.botExecutor.ruleName = ruleName;
+
+    const targetRule = kind === 'timelineSync'
+      ? this.config.botAutomation?.timelineSyncRule
+      : this.config.botAutomation?.executorRule || this.config.botExecutor;
+
+    if (!targetRule) {
+      return;
+    }
+
+    targetRule.ruleVersion = version;
+    targetRule.ruleLastUpdated = new Date().toISOString();
+    targetRule.ruleName = ruleName;
+
+    this.config = normalizeSheetConfig(this.config);
     
     // 保存到 Chrome Storage
     await this.saveConfigToStorage();
@@ -319,6 +364,7 @@ export class JiraRuleUpdater {
       return;
     }
     
+    this.config = normalizeSheetConfig(this.config);
     await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
     console.log('✅ 配置已保存到 Chrome Storage');
   }
@@ -388,9 +434,11 @@ export class JiraRuleUpdater {
       
       // 从 Chrome Storage 读取配置
       const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-      const config = result.scheduledMessagesConfig as SheetConfig | undefined;
-      
-      if (!config || !config.botExecutor?.ruleId || !config.botExecutor?.jiraUrl) {
+      const rawConfig = result.scheduledMessagesConfig as SheetConfig | undefined;
+      const config = rawConfig ? normalizeSheetConfig(rawConfig) : undefined;
+      const executorRule = getExecutorRule(config);
+
+      if (!config || !executorRule?.ruleId || !executorRule?.jiraUrl) {
         console.log('⏭️ 未找到 Jira Bot Executor 配置，跳过 Jira Rule 更新检查');
         return;
       }
@@ -458,4 +506,3 @@ export class JiraRuleUpdater {
     }
   }
 }
-

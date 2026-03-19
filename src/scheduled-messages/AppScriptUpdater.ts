@@ -5,6 +5,7 @@
 
 import { SheetConfig } from './types';
 import { ConfigSyncService } from './ConfigSyncService';
+import { normalizeSheetConfig } from './botAutomationConfig';
 
 export interface UpdateCheckResult {
   needsUpdate: boolean;
@@ -18,6 +19,37 @@ export interface UpdateResult {
   message: string;
   newVersion?: string;
   error?: string;
+  errorCode?: string;
+  helpUrl?: string;
+  helpMessage?: string;
+}
+
+export const APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR = 'APP_SCRIPT_PROJECT_HISTORY_LIMIT';
+
+function buildProjectHistoryUrl(scriptId: string): string {
+  return `https://script.google.com/home/projects/${encodeURIComponent(scriptId)}/projecthistory`;
+}
+
+function isProjectHistoryLimitError(errorText: string): boolean {
+  return (
+    errorText.includes('Cannot create more versions') ||
+    errorText.includes('reached the limit of 200 versions')
+  );
+}
+
+class AppScriptProjectHistoryLimitError extends Error {
+  readonly errorCode = APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR;
+  readonly helpUrl: string;
+  readonly helpMessage: string;
+
+  constructor(scriptId: string) {
+    const helpUrl = buildProjectHistoryUrl(scriptId);
+    const helpMessage = '请打开 Project History 页面，使用右下角批量删除按钮清理旧的未使用版本（建议保留 5 个以内）后重试升级。';
+    super(`App Script 历史版本已达到 200 个上限，无法创建新版本。${helpMessage} ${helpUrl}`);
+    this.name = 'AppScriptProjectHistoryLimitError';
+    this.helpUrl = helpUrl;
+    this.helpMessage = helpMessage;
+  }
 }
 
 export class AppScriptUpdater {
@@ -29,7 +61,7 @@ export class AppScriptUpdater {
   
   constructor(token: string, config?: SheetConfig) {
     this.token = token;
-    this.config = config || null;
+    this.config = config ? normalizeSheetConfig(config) : null;
   }
   
   /**
@@ -208,6 +240,18 @@ export class AppScriptUpdater {
       
     } catch (error) {
       console.error('更新 App Script 失败:', error);
+
+      if (error instanceof AppScriptProjectHistoryLimitError) {
+        return {
+          success: false,
+          message: 'App Script 历史版本已达到 200 个上限',
+          error: error.message,
+          errorCode: error.errorCode,
+          helpUrl: error.helpUrl,
+          helpMessage: error.helpMessage
+        };
+      }
+
       return {
         success: false,
         message: '更新失败',
@@ -300,6 +344,9 @@ export class AppScriptUpdater {
     
     if (!response.ok) {
       const error = await response.text();
+      if (isProjectHistoryLimitError(error)) {
+        throw new AppScriptProjectHistoryLimitError(scriptId);
+      }
       throw new Error(`创建版本失败: ${error}`);
     }
     
@@ -491,7 +538,7 @@ export class AppScriptUpdater {
       return;
     }
     
-    await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+    await chrome.storage.local.set({ scheduledMessagesConfig: normalizeSheetConfig(this.config) });
     console.log('✅ 配置已保存到 Chrome Storage');
   }
   
@@ -553,7 +600,9 @@ export class AppScriptUpdater {
       
       // 从 Chrome Storage 读取配置
       const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-      const config = result.scheduledMessagesConfig as SheetConfig | undefined;
+      const config = result.scheduledMessagesConfig
+        ? normalizeSheetConfig(result.scheduledMessagesConfig as SheetConfig)
+        : undefined;
       
       if (!config || !config.scriptId || !config.webAppUrl) {
         console.log('⏭️ 未找到 Scheduled Messages 配置，跳过 App Script 更新检查');
@@ -607,6 +656,24 @@ export class AppScriptUpdater {
         
         // 发送失败通知
         if (showNotification) {
+          if (updateResult.errorCode === APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR && updateResult.helpUrl) {
+            const notificationId = `msg_appscript-project-history-${Date.now()}`;
+            await chrome.storage.local.set({
+              [`notification_link_${notificationId}`]: updateResult.helpUrl
+            });
+            chrome.notifications.create(
+              notificationId,
+              {
+                type: 'basic',
+                iconUrl: 'icons/icon128.png',
+                title: 'Personal AI - App Script 需要清理历史版本',
+                message: '脚本历史版本已达 200 上限。点击打开 Project History 页面，批量删除旧版本后重试升级。',
+                priority: 2
+              }
+            );
+            return;
+          }
+
           chrome.notifications.create(
             `appscript-update-failed-${Date.now()}`,
             {
@@ -625,4 +692,3 @@ export class AppScriptUpdater {
     }
   }
 }
-

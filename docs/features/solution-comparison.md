@@ -1,195 +1,221 @@
-# 解决方案对比：为什么选择一步GET方案
+# 解决方案对比：为什么升级为双 Jira Rule
 
-## 问题回顾
+## 当前结论
 
-**原始问题**：Jira Automation 无法处理 Google Apps Script POST 请求的 302 重定向
+当前实现采用两条 Jira Automation Rule：
 
-## 三种方案对比
+1. `Timeline Sync Rule`
+   - 每天清晨执行一次
+   - 按项目逐个调用内网 `get_release_info`
+   - 再逐个调用 Apps Script `cacheReleaseInfo`
+   - 将每个项目的 timeline 数据持久化到 Script Properties
 
-### ❌ 方案 0：POST 请求（失败）
+2. `Scheduled Messages Executor Rule`
+   - 每分钟执行一次
+   - 只调用 `getBotMessageCurrentTime`
+   - Apps Script 从缓存中读取 timeline 数据并匹配消息
 
-```
-Jira → POST (releaseInfo in body) → Apps Script
-                                    ↓
-                                302 Redirect
-                                    ↓
-                            ❌ Jira 无法处理
-```
-
-**问题**：
-- Google Apps Script 对 POST 请求返回 302 重定向
-- Jira Automation 无法跟随 POST 的 302 重定向
+这个方案替代了旧的“一步 GET”与“两批 GET cache”方案。
 
 ---
 
-### ✅ 方案 1：两步 GET 请求（可行但复杂）
+## 问题背景
 
-```
-步骤 1:
-Jira → GET cacheReleaseInfo (releaseInfo in URL params)
-       → Apps Script 存储到 Script Properties
+定时消息的 timeline 数据位于公司内网：
 
-步骤 2:
-Jira → GET getBotMessageCurrentTime
-       → Apps Script 从 Properties 读取
-       → 返回消息
-```
+- Google Apps Script 服务器不能直接访问内网
+- Jira Automation 可以访问内网 `get_release_info`
+- 因此必须由 Jira 先取到 timeline 数据，再把数据传给 Apps Script 做时间匹配
 
-**优点**：
-- ✅ 避免 302 问题
-- ✅ 数据持久化
+同时存在两个硬约束：
 
-**缺点**：
-- ❌ 需要两次 HTTP 请求（更慢）
-- ❌ 引入缓存复杂度
-- ❌ 可能的缓存过期问题
-- ❌ 需要额外的存储管理
+1. Google Apps Script Web App 对 `POST` 会返回 `302` 重定向
+2. Jira Automation 对 `GET` 的 302 兼容较好，但对 `POST` 的 302 不可靠
+
+所以主链路必须优先建立在 `GET` 之上。
 
 ---
 
-### ⭐ 方案 2：一步 GET 请求（推荐）
+## 方案对比
 
-```
-Jira → GET getBotMessageCurrentTime (所有数据in URL params)
-       → Apps Script 直接处理
-       → 返回消息
-```
+### 方案 0：Jira 直接 POST 到 Apps Script
 
-**优点**：
-- ✅ 避免 302 问题
-- ✅ **只需一次请求**（最快）
-- ✅ **无需缓存**（最简单）
-- ✅ **数据实时**（无过期风险）
-- ✅ **无状态设计**（降低复杂度）
-- ✅ URL 长度完全在限制内（~1500-2000 字符 vs 8000+ 限制）
-
-**缺点**：
-- ⚠️ URL 稍长（但完全可接受）
-
-## 详细对比表
-
-| 维度 | POST 方案 | 两步 GET | 一步 GET (推荐) |
-|-----|----------|---------|----------------|
-| **HTTP 请求次数** | 1 | 2 | 1 ⭐ |
-| **是否避免 302** | ❌ | ✅ | ✅ |
-| **实现复杂度** | 简单 | 复杂 | 简单 ⭐ |
-| **数据存储** | 无 | Script Properties | 无 ⭐ |
-| **缓存管理** | 无 | 需要 | 无 ⭐ |
-| **数据实时性** | ✅ | ⚠️ (依赖缓存) | ✅ ⭐ |
-| **URL 长度** | N/A | ~800 字符 | ~1500-2000 字符 |
-| **维护成本** | N/A | 高 | 低 ⭐ |
-| **错误风险** | 302 错误 | 缓存同步问题 | URL 编码问题 |
-
-## 为什么不需要 cacheReleaseInfo？
-
-### 原因 1：性能
-
-```
-两步方案：
-请求 1: Jira → Apps Script (写入缓存) ~200-300ms
-请求 2: Jira → Apps Script (读取缓存 + 查找消息) ~300-500ms
-总计: ~500-800ms
-
-一步方案：
-请求 1: Jira → Apps Script (直接处理) ~300-500ms
-总计: ~300-500ms  ⬆️ 快 40-60%
+```text
+Jira -> POST getBotMessageCurrentTime
+     -> Apps Script
+     -> 302 Redirect
+     -> Jira 无法稳定处理
 ```
 
-### 原因 2：简单性
+结论：
 
-**两步方案的额外代码**：
-- `cacheReleaseInfo()` 函数 (~30 行)
-- Script Properties 读写逻辑
-- 缓存时间戳管理
-- 错误处理（缓存未找到、过期等）
+- 失败方案
+- Apps Script Web App 的 POST 302 行为决定了它不适合作为 Jira 的直接 POST 目标
 
-**一步方案**：
-- 只需解析 URL 参数 (~10 行)
-- 无需存储，无需缓存管理
+---
 
-### 原因 3：可靠性
+### 方案 1：一步 GET，直接把所有 releaseInfo 塞进 URL
 
-**两步方案的潜在问题**：
-1. **缓存过期**：如果请求 1 和请求 2 之间 releaseInfo 更新了怎么办？
-2. **缓存丢失**：Script Properties 意外清空（虽然罕见）
-3. **并发问题**：多个 Jira rule 同时写入缓存
-4. **调试困难**：需要检查缓存状态
-
-**一步方案**：
-- ✅ 每次都使用最新数据
-- ✅ 无状态，易调试
-- ✅ 无并发问题
-
-## URL 长度验证
-
-### 实际 URL 示例
-
-```
-https://script.google.com/.../exec
-  ?action=getBotMessageCurrentTime
-  &currentTime=2025-11-11%2014:30
-  &mThor=%7B%22currentRelease%22%3A%221.0.0%22%2C...%7D    (~500 字符)
-  &jupiterDesktop=%7B%22currentRelease%22%3A%222.0.0%22%2C...%7D  (~500 字符)
-  &jupiterWeb=%7B%22currentRelease%22%3A%223.0.0%22%2C...%7D  (~500 字符)
-
-总长度: ~1500-2000 字符
+```text
+Jira -> GET getBotMessageCurrentTime
+     -> URL 中包含所有项目 releaseInfo
+     -> Apps Script 直接匹配
 ```
 
-### 限制对比
+优点：
 
-| 限制来源 | URL 长度限制 | 我们的 URL | 是否安全 |
-|---------|-------------|-----------|---------|
-| Google Apps Script | 8190 字符 | ~2000 字符 | ✅ (25%) |
-| Chrome 浏览器 | 2MB | ~2KB | ✅ (0.1%) |
-| Jira Automation | 未明确说明 | ~2000 字符 | ✅ (实测可行) |
+- 只需一次请求
+- 无缓存
+- 实时数据
 
-**结论**：完全在安全范围内，未来数据增长 3-4 倍仍然安全。
+缺点：
 
-## 实际执行流程
+- URL 长度会随项目数量线性增长
+- 7 个项目时实测完整 URL 已超过 Apps Script 可接受范围
+- 一旦 releaseInfo 字段继续增加，风险会进一步放大
 
-### 一步 GET 方案的完整流程
+结论：
 
-```
-1. Jira 每分钟触发 Automation Rule
-   ↓
-2. Jira 调用内网 API 获取 releaseInfo
-   - GET heimdall-xmn02.../mThor → mThorReleaseInfo
-   - GET heimdall-xmn02.../Jupiter desktop → jupiterDesktopReleaseInfo
-   - GET heimdall-xmn02.../Jupiter web → jupiterWebReleaseInfo
-   ↓
-3. Jira 构建 URL 参数
-   - 将 releaseInfo 对象转为 JSON 字符串
-   - URL 编码
-   ↓
-4. Jira 发送 GET 请求到 Apps Script
-   GET {{WEB_APP_URL}}?action=getBotMessageCurrentTime
-       &currentTime={{now}}
-       &mThor={{mThorReleaseInfo.asJsonString.urlEncode}}
-       &jupiterDesktop={{jupiterDesktopReleaseInfo.asJsonString.urlEncode}}
-       &jupiterWeb={{jupiterWebReleaseInfo.asJsonString.urlEncode}}
-   ↓
-5. Apps Script 接收并处理
-   - 从 URL 参数解析 releaseInfo
-   - 查找当前时间需要执行的消息
-   - 返回消息数据给 Jira
-   ↓
-6. Jira 根据返回的消息数据发送到对应渠道
-   - Bot 私聊/群组
-   - Email
-   - AI API
+- 3 个项目时代可以工作
+- 扩展到 Nova / RIO / NC / Rooms 后不再可持续
+
+---
+
+### 方案 2：单条 Rule 内做两批 GET cache
+
+```text
+Jira Rule 同一次执行中:
+  batch 1 cache -> batch 2 cache -> executor
 ```
 
-**总耗时**：约 5-10 秒（主要是内网 API 调用）
+优点：
 
-## 结论
+- 仍然全部使用 GET
+- 能绕开单条 URL 过长问题
 
-**推荐使用一步 GET 方案**，因为：
+缺点：
 
-1. ⚡ **更快**：减少一次 HTTP 往返
-2. 🎯 **更简单**：无需缓存管理，代码量减少 50%
-3. 🔒 **更可靠**：无状态设计，数据实时，无缓存问题
-4. 📏 **URL 长度安全**：完全在限制范围内（25% 使用率）
-5. 🛠️ **易维护**：更少的代码，更少的出错点
+- 仍然依赖手工分组
+- 新增项目时必须重新测长度、重新切 batch
+- 规则职责混在一起，可维护性差
+- 本质上只是把 URL 问题推迟，而不是消除
 
-**cacheReleaseInfo 是过度设计**，在当前场景下没有必要。一步 GET 方案已经完美解决问题。
+结论：
 
+- 过渡方案
+- 不适合作为长期架构
+
+---
+
+### 方案 3：双 Jira Rule + 每项目单独 GET 缓存
+
+```text
+Rule A: Timeline Sync Rule (daily)
+  Jira -> GET internal release info (per project)
+      -> GET Apps Script cacheReleaseInfo (per project)
+
+Rule B: Scheduled Messages Executor Rule (every minute)
+  Jira -> GET Apps Script getBotMessageCurrentTime
+      -> Apps Script 从缓存读取所有项目 releaseInfo
+      -> 返回当前应触发的消息
+```
+
+优点：
+
+- 全链路仍然是 GET，绕开 POST 302 限制
+- 每次 `cacheReleaseInfo` 只传一个项目，不再依赖 batch 拆分
+- `getBotMessageCurrentTime` 不携带大块 timeline 参数，URL 很短
+- timeline 采集和消息执行解耦，规则职责清晰
+- 新增项目只需要加项目配置，不需要重新估算 batch
+- 单个 Script Properties value 也不会因为所有项目聚合而逼近 9 KB 限制
+
+缺点：
+
+- 需要两条 Jira Rule，而不是一条
+- timeline 数据不是实时读取，而是按天同步
+- 如果 Sync Rule 丢失，Timeline Bot/AI 消息会停止触发
+
+结论：
+
+- 当前推荐方案
+- 在现有 Apps Script + Jira Automation 边界下最稳妥、最可扩展
+
+---
+
+## 为什么不是“一条共享 Sync Rule”
+
+当前架构中，每个用户都有自己独立的：
+
+- Google Sheet
+- Apps Script 项目
+- Web App URL
+- Script Properties 存储空间
+
+因此 timeline 缓存天然是“按用户隔离”的，不能靠一个用户的 Apps Script 缓存供所有人共享。
+
+这意味着：
+
+- 每个用户都必须拥有自己的 `Timeline Sync Rule`
+- 配置有效性检查也必须分别检查 `executorRule` 和 `timelineSyncRule`
+
+---
+
+## 为什么 Sync Rule 可以每天执行一次
+
+timeline 数据更新频率不高，按天同步可以接受。
+
+当前设计采用：
+
+- `Timeline Sync Rule` 每天清晨同步一次
+- Apps Script 缓存允许 36 小时冗余窗口
+
+这样做的目的：
+
+- 避免偶发执行延迟导致当天全部 timeline 消息失效
+- 在规则偶发晚跑或 Jira 有短暂抖动时，仍有足够容错空间
+
+如果未来 timeline 更新频率升高，再把每日同步提升到每 6 小时或每小时即可，整体架构无需变化。
+
+---
+
+## UI 升级策略
+
+老用户只配置过旧版执行 rule 时，系统按以下逻辑处理：
+
+- 如果没有激活的 Timeline Bot/AI 消息：
+  - 不显示全局失效警告
+  - 普通 Bot/AI 消息仍可工作
+
+- 如果存在激活的 Timeline Bot/AI 消息：
+  - 显示 warning banner
+  - 提示缺少 `Timeline Sync Rule`
+  - 点击后进入“补齐模式”，只创建缺失的 sync rule
+
+新用户初始化时则一次创建两条 rule。
+
+---
+
+## 长期演进方向
+
+如果未来想做到“全员只采一次 timeline 数据，再共享给所有用户”，不应继续压在 Apps Script 或 memory-service 上硬改。
+
+更合理的方向是引入独立的公网 timeline-cache service：
+
+- 接收 Jira 或定时任务提交的数据
+- 统一存储所有项目 timeline
+- Apps Script 或执行 rule 再去读取该服务
+
+但在当前代码库和部署方式下，这会引入新的服务边界和运维成本，不适合作为这轮改造的前提。
+
+---
+
+## 最终结论
+
+在当前约束下，最佳方案是：
+
+- 保留 Jira 访问内网的能力
+- 放弃 POST 到 Apps Script
+- 放弃一步 GET 和手工 batch GET
+- 采用“双 Jira Rule + 每项目单独 GET 缓存 + Executor 只读缓存”的结构
+
+这是当前实现采用的正式方案。

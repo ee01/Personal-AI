@@ -7,19 +7,46 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { OneClickSetup } from './components/OneClickSetup';
 import { ScheduledMessageService } from './ScheduledMessageService';
-import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData } from './types';
-import { AppScriptUpdater } from './AppScriptUpdater';
+import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData, BotAutomationConfig } from './types';
+import { AppScriptUpdater, APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR } from './AppScriptUpdater';
 import { SheetSchemaUpdater } from './SheetSchemaUpdater';
 import { JiraRuleUpdater } from './JiraRuleUpdater';
 import Select, { StylesConfig, MultiValue, SingleValue } from 'react-select';
 import CreatableSelect from 'react-select/creatable';
 import { jiraFetch } from '../jira';
 import { getGoogleAuthToken, getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import {
+  DEFAULT_TIMELINE_PROJECT,
+  TIMELINE_PROJECT_OPTIONS,
+  getTimelineProjectOption,
+} from './timelineProjects';
+import {
+  BotConfigDialogMode,
+  BotConfigValidityStatus,
+  getBotDialogModeForStatus,
+  getExecutorRule,
+  getTimelineSyncRule,
+  hasExecutorRule,
+  hasTimelineSyncRule,
+  normalizeSheetConfig,
+  withBotAutomation,
+} from './botAutomationConfig';
+import {
+  formatTimelineFrequencyText,
+  formatTimelineNextExecutionText,
+} from './timelineFormatting';
 
 // react-select 选项类型
 interface SelectOption {
   value: string;
   label: string;
+}
+
+interface BotConfigWarningState {
+  status: BotConfigValidityStatus;
+  title: string;
+  description: string;
+  dialogMode: BotConfigDialogMode;
 }
 
 // react-select 自定义样式
@@ -144,6 +171,50 @@ function parseCronDaysOfWeek(dayOfWeek: string): number[] {
   return result.sort((a, b) => a - b);
 }
 
+function isTimelineTriggeredMessage(message: ScheduledMessage): boolean {
+  return Boolean(message.Timeline_Milestone && !message.Schedule_Date);
+}
+
+function requiresBotAutomation(message: ScheduledMessage): boolean {
+  return message.Push_Method === 'Bot' || message.Push_Method === 'AI';
+}
+
+function buildBotConfigWarningState(
+  status: BotConfigValidityStatus,
+  config?: SheetConfig | null
+): BotConfigWarningState {
+  switch (status) {
+    case 'missing_timeline_sync_rule':
+      return {
+        status,
+        title: 'Timeline Sync Rule 缺失',
+        description: '检测到您有 Timeline Bot/AI 消息，但缺少 Timeline Sync Rule，相关消息不会触发。',
+        dialogMode: 'upgrade-sync-only',
+      };
+    case 'missing_executor_rule':
+      return {
+        status,
+        title: 'Bot 推送配置失效',
+        description: '检测到您有待推送的 Bot/AI 消息，但执行规则已不存在，需要重新配置。',
+        dialogMode: getBotDialogModeForStatus(status, config),
+      };
+    case 'missing_both':
+      return {
+        status,
+        title: 'Bot 推送配置失效',
+        description: '检测到您有待推送的 Bot/AI 消息，但执行规则和 Timeline Sync Rule 都缺失，需要重新配置。',
+        dialogMode: getBotDialogModeForStatus(status, config),
+      };
+    default:
+      return {
+        status: 'ok',
+        title: '',
+        description: '',
+        dialogMode: getBotDialogModeForStatus('ok', config),
+      };
+  }
+}
+
 const ScheduledMessagesManager: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -163,8 +234,13 @@ const ScheduledMessagesManager: React.FC = () => {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showBotConfigDialog, setShowBotConfigDialog] = useState(false);
+  const [botConfigDialogMode, setBotConfigDialogMode] = useState<BotConfigDialogMode>('create');
   const [botConfigured, setBotConfigured] = useState(false);
+  const [timelineBotConfigured, setTimelineBotConfigured] = useState(false);
   const [showBotConfigWarning, setShowBotConfigWarning] = useState(false);
+  const [botConfigWarningState, setBotConfigWarningState] = useState<BotConfigWarningState>(
+    buildBotConfigWarningState('ok')
+  );
   const [filterSelfOnly, setFilterSelfOnly] = useState(false);
   const [filterPendingReview, setFilterPendingReview] = useState(false);  // 仅过滤待审核推送
   const [selectedCategories, setSelectedCategories] = useState<SelectOption[]>([]);
@@ -203,16 +279,16 @@ const ScheduledMessagesManager: React.FC = () => {
     try {
       // 检查是否已初始化
       const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-      const savedConfig = result.scheduledMessagesConfig;
+      const savedConfig = result.scheduledMessagesConfig
+        ? normalizeSheetConfig(result.scheduledMessagesConfig)
+        : null;
       
       if (savedConfig && savedConfig.sheetId) {
         setConfig(savedConfig);
         setIsInitialized(true);
         
-        // 检查 Bot 是否已配置（从 scheduledMessagesConfig.botExecutor 读取）
-        if (savedConfig.botExecutor && savedConfig.botExecutor.ruleId) {
-          setBotConfigured(true);
-        }
+        setBotConfigured(hasExecutorRule(savedConfig));
+        setTimelineBotConfigured(hasTimelineSyncRule(savedConfig));
         
         // 🔧 优先使用缓存的 token，避免在页面加载时弹出授权窗口
         const token = await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.init' });
@@ -408,46 +484,69 @@ const ScheduledMessagesManager: React.FC = () => {
       // 获取所有消息
       const msgs = await messageService.getAllMessages();
       
-      // 检查是否有待推送的 Bot 消息（Active 状态 + Push_Method 为 Bot）
-      const hasPendingBotMessages = msgs.some(
-        msg => msg.Status === 'Active' && msg.Push_Method === 'Bot'
+      const normalizedConfig = normalizeSheetConfig(savedConfig);
+      const executorRule = getExecutorRule(normalizedConfig);
+      const timelineSyncRule = getTimelineSyncRule(normalizedConfig);
+
+      const hasPendingAutomationMessages = msgs.some(
+        msg => msg.Status === 'Active' && requiresBotAutomation(msg)
       );
-      
-      // 如果没有待推送的 Bot 消息，不需要显示警告
-      if (!hasPendingBotMessages) {
+      const hasPendingTimelineAutomationMessages = msgs.some(
+        msg => msg.Status === 'Active' && requiresBotAutomation(msg) && isTimelineTriggeredMessage(msg)
+      );
+
+      const executorConfigured = Boolean(executorRule?.ruleId);
+      const timelineSyncConfigured = Boolean(timelineSyncRule?.ruleId);
+
+      setBotConfigured(executorConfigured);
+      setTimelineBotConfigured(timelineSyncConfigured);
+
+      if (!hasPendingAutomationMessages) {
         setShowBotConfigWarning(false);
+        setBotConfigWarningState(buildBotConfigWarningState('ok', normalizedConfig));
         return;
       }
 
-      // 如果没有配置 Bot，跳过检查
-      if (!savedConfig.botExecutor || !savedConfig.botExecutor.ruleId) {
-        console.warn('没有配置 Bot 推送规则，但有待推送的 Bot 消息');
-        setShowBotConfigWarning(true);
-        setBotConfigured(false);
-        return;
-      }
-      
-      
-      // 检查 Jira 规则是否还存在
       const { JiraAutomationService } = await import('./JiraAutomationService');
       const jiraService = new JiraAutomationService();
-      
-      const ruleExists = await jiraService.checkRuleExists(
-        {
-          jiraUrl: savedConfig.botExecutor.jiraUrl,
-          projectKey: savedConfig.botExecutor.projectKey
-        },
-        savedConfig.botExecutor.ruleId
-      );
-      
-      // 如果规则不存在且有待推送的 Bot 消息，显示警告
-      if (!ruleExists) {
-        console.warn('Bot 推送规则不存在，但有待推送的 Bot 消息');
-        setShowBotConfigWarning(true);
-        setBotConfigured(false);
-      } else {
-        setShowBotConfigWarning(false);
+
+      let executorExists = executorConfigured;
+      if (executorRule?.ruleId && executorRule?.jiraUrl) {
+        executorExists = await jiraService.checkRuleExists(
+          {
+            jiraUrl: executorRule.jiraUrl,
+            projectKey: executorRule.projectKey
+          },
+          executorRule.ruleId
+        );
       }
+
+      let timelineSyncExists = timelineSyncConfigured;
+      if (timelineSyncRule?.ruleId && timelineSyncRule?.jiraUrl) {
+        timelineSyncExists = await jiraService.checkRuleExists(
+          {
+            jiraUrl: timelineSyncRule.jiraUrl,
+            projectKey: timelineSyncRule.projectKey
+          },
+          timelineSyncRule.ruleId
+        );
+      }
+
+      setBotConfigured(executorExists);
+      setTimelineBotConfigured(timelineSyncExists);
+
+      let status: BotConfigValidityStatus = 'ok';
+      if (!executorExists && hasPendingTimelineAutomationMessages) {
+        status = timelineSyncExists ? 'missing_executor_rule' : 'missing_both';
+      } else if (!executorExists) {
+        status = 'missing_executor_rule';
+      } else if (!timelineSyncExists && hasPendingTimelineAutomationMessages) {
+        status = 'missing_timeline_sync_rule';
+      }
+
+      const nextWarningState = buildBotConfigWarningState(status, normalizedConfig);
+      setBotConfigWarningState(nextWarningState);
+      setShowBotConfigWarning(status !== 'ok');
     } catch (error) {
       console.error('检查 Bot 配置有效性失败:', error);
       // 检查失败不影响正常使用，不显示警告
@@ -532,6 +631,8 @@ const ScheduledMessagesManager: React.FC = () => {
     
     setIsUpdating(true);
     const updateResults: string[] = [];
+    let appScriptHelpUrl = '';
+    let appScriptHelpMessage = '';
     
     try {
       const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.handleUpgrade' });
@@ -566,6 +667,15 @@ const ScheduledMessagesManager: React.FC = () => {
           updateResults.push(`✅ App Script 已升级到 ${appScriptResult.newVersion}`);
           setUpdateAvailable(false);
           setAppScriptVersion(appScriptResult.newVersion || '');
+        } else if (
+          appScriptResult.errorCode === APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR &&
+          appScriptResult.helpUrl
+        ) {
+          appScriptHelpUrl = appScriptResult.helpUrl;
+          appScriptHelpMessage = appScriptResult.helpMessage || '请先清理旧的历史版本后重试升级。';
+          updateResults.push(
+            `⚠️ App Script 升级失败：历史版本已达到 200 个上限\n   处理方式：${appScriptHelpMessage}\n   清理页面：${appScriptHelpUrl}`
+          );
         } else {
           throw new Error(appScriptResult.error || '更新失败');
         }
@@ -597,7 +707,17 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       // 显示升级结果
-      alert(`🎉 版本升级完成！\n\n${updateResults.join('\n\n')}\n\n页面将重新加载以应用更新...`);
+      const hasWarnings = updateResults.some(result => result.includes('⚠️'));
+      alert(`${hasWarnings ? '⚠️ 升级流程已执行完毕（含失败项）' : '🎉 版本升级完成！'}\n\n${updateResults.join('\n\n')}\n\n页面将重新加载以应用更新...`);
+
+      if (appScriptHelpUrl) {
+        const shouldOpenProjectHistory = confirm(
+          `App Script 历史版本已达到 200 个上限。\n\n${appScriptHelpMessage}\n\n是否立即打开 Project History 清理页面？`
+        );
+        if (shouldOpenProjectHistory) {
+          window.open(appScriptHelpUrl, '_blank');
+        }
+      }
       
       // 重新加载配置
       await initializeApp();
@@ -686,6 +806,12 @@ const ScheduledMessagesManager: React.FC = () => {
       return null;
     }
   };
+
+  const openBotConfigDialog = (mode?: BotConfigDialogMode) => {
+    const nextMode = mode || getBotDialogModeForStatus(botConfigWarningState.status, config);
+    setBotConfigDialogMode(nextMode);
+    setShowBotConfigDialog(true);
+  };
   
   const handleAddMessage = () => {
     setIsReminderMode(false);
@@ -737,7 +863,7 @@ const ScheduledMessagesManager: React.FC = () => {
       alert('⚠️ 托管 Jira 规则需要先配置 Bot 推送功能\n\n托管后的规则将通过 Bot 推送触发执行，请先完成 Bot 配置。');
       setShowTakeoverDialog(false);
       setTakeoverMessage(null);
-      setShowBotConfigDialog(true);
+      openBotConfigDialog();
       return;
     }
     
@@ -1370,23 +1496,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const formatNextExec = (message: ScheduledMessage): string => {
     // 检查是否为 Timeline 触发
     if (!message.Schedule_Date && message.Timeline_Milestone) {
-      const milestone = message.Timeline_Milestone;
-      const offset = message.Timeline_Offset ?? 0;
-      let offsetText = '';
-      
-      if (offset === 0) {
-        offsetText = '当天';
-      } else if (offset === 1) {
-        offsetText = '后一天';
-      } else if (offset === -1) {
-        offsetText = '前一天';
-      } else if (offset > 1) {
-        offsetText = `后${offset}天`;
-      } else if (offset < -1) {
-        offsetText = `前${Math.abs(offset)}天`;
-      }
-      
-      return `下次 ${milestone} ${offsetText}`;
+      return `下次 ${formatTimelineNextExecutionText(message)}`;
     }
     
     // 时间触发：返回原有的 Next_Exec 值
@@ -1402,24 +1512,7 @@ const ScheduledMessagesManager: React.FC = () => {
     
     // 检查是否为 Timeline 触发
     if (!message.Schedule_Date && message.Timeline_Milestone) {
-      const milestone = message.Timeline_Milestone;
-      const offset = message.Timeline_Offset ?? 0;
-      let offsetText = '';
-      
-      if (offset === 0) {
-        offsetText = '当天';
-      } else if (offset === 1) {
-        offsetText = '后一天';
-      } else if (offset === -1) {
-        offsetText = '前一天';
-      } else if (offset > 1) {
-        offsetText = `后${offset}天`;
-      } else if (offset < -1) {
-        offsetText = `前${Math.abs(offset)}天`;
-      }
-      
-      const timeText = message.Schedule_Time ? ` ${message.Schedule_Time}` : ' 早上';
-      return `${milestone} ${offsetText}${timeText}`;
+      return formatTimelineFrequencyText(message);
     }
     
     // 判断是否有重复规则
@@ -1661,17 +1754,17 @@ const ScheduledMessagesManager: React.FC = () => {
           <div style={styles.warningContent}>
             <span style={styles.warningIcon}>⚠️</span>
             <div style={styles.warningText}>
-              <strong>Bot 推送配置失效</strong>
+              <strong>{botConfigWarningState.title}</strong>
               <p style={styles.warningDescription}>
-                检测到您有待推送的 Bot 消息，但 Jira Automation 规则已不存在，需要重新配置。
+                {botConfigWarningState.description}
               </p>
             </div>
           </div>
           <button 
             style={styles.warningButton}
-            onClick={() => setShowBotConfigDialog(true)}
+            onClick={() => openBotConfigDialog(botConfigWarningState.dialogMode)}
           >
-            🔧 重新配置
+            {botConfigWarningState.status === 'missing_timeline_sync_rule' ? '🔧 立即升级' : '🔧 重新配置'}
           </button>
         </div>
       )}
@@ -1973,7 +2066,8 @@ const ScheduledMessagesManager: React.FC = () => {
            }}
            isSubmitting={isSubmitting}
            botConfigured={botConfigured}
-           onConfigureBot={() => setShowBotConfigDialog(true)}
+           timelineBotConfigured={timelineBotConfigured}
+           onConfigureBot={(mode) => openBotConfigDialog(mode)}
            isReminderMode={isReminderMode}
            currentUsername={currentUsername}
            availableCategories={availableCategories}
@@ -1984,15 +2078,25 @@ const ScheduledMessagesManager: React.FC = () => {
        {showBotConfigDialog && config && (
          <BotConfigDialog
            config={config}
+           mode={botConfigDialogMode}
            onClose={() => setShowBotConfigDialog(false)}
-           onSuccess={() => {
-             setBotConfigured(true);
-             setShowBotConfigWarning(false);
-             setShowBotConfigDialog(false);
-             alert('Bot 推送配置成功！');
-           }}
-         />
-       )}
+           onSuccess={(updatedConfig) => {
+             const normalizedConfig = normalizeSheetConfig(updatedConfig);
+             setConfig(normalizedConfig);
+             setBotConfigured(hasExecutorRule(normalizedConfig));
+           setTimelineBotConfigured(hasTimelineSyncRule(normalizedConfig));
+           setShowBotConfigWarning(false);
+           setBotConfigWarningState(buildBotConfigWarningState('ok', normalizedConfig));
+           setShowBotConfigDialog(false);
+           void initializeApp();
+            alert(
+              'Bot 推送配置成功！\n\n' +
+              '执行规则会立即按分钟运行；Timeline Sync Rule 会在每天清晨刷新缓存。\n' +
+              '如果刚补齐 Timeline 配置，相关 Timeline Bot/AI 消息会在下一次日同步后开始生效。'
+            );
+          }}
+        />
+      )}
        
        {/* 托管确认弹窗 */}
        {showTakeoverDialog && takeoverMessage && (
@@ -2426,12 +2530,24 @@ const AddMessageDialog: React.FC<{
   onCancel: () => void;
   isSubmitting: boolean;
   botConfigured: boolean;
-  onConfigureBot: () => void;
+  timelineBotConfigured: boolean;
+  onConfigureBot: (mode?: BotConfigDialogMode) => void;
   isReminderMode?: boolean;
   currentUsername?: string;
   availableCategories: SelectOption[];
   editingMessage?: ScheduledMessage | null;
-}> = ({ onSubmit, onCancel, isSubmitting, botConfigured, onConfigureBot, isReminderMode = false, currentUsername = '', availableCategories, editingMessage = null }) => {
+}> = ({
+  onSubmit,
+  onCancel,
+  isSubmitting,
+  botConfigured,
+  timelineBotConfigured,
+  onConfigureBot,
+  isReminderMode = false,
+  currentUsername = '',
+  availableCategories,
+  editingMessage = null
+}) => {
   const isEditMode = !!editingMessage;
   // 格式化时间为 HH:MM 格式（确保两位数）
   const formatTimeToHHMM = (time: string | undefined): string => {
@@ -3046,7 +3162,7 @@ ${content}
     
     // 如果插入的是项目变量，自动设置默认项目（如果还没设置）
     if (isProjectVariable(variable) && !formData.Timeline_Project) {
-      handleChange('Timeline_Project', 'mThor');
+      handleChange('Timeline_Project', DEFAULT_TIMELINE_PROJECT);
     }
     
     // 设置光标位置到插入变量之后
@@ -3070,7 +3186,7 @@ ${content}
     
     // 如果插入的是项目变量，自动设置默认项目（如果还没设置）
     if (isProjectVariable(variable) && !formData.Timeline_Project) {
-      handleChange('Timeline_Project', 'mThor');
+      handleChange('Timeline_Project', DEFAULT_TIMELINE_PROJECT);
     }
     
     // 设置光标位置到插入变量之后
@@ -3094,7 +3210,7 @@ ${content}
     
     // 如果插入的是项目变量，自动设置默认项目（如果还没设置）
     if (isProjectVariable(variable) && !formData.Timeline_Project) {
-      handleChange('Timeline_Project', 'mThor');
+      handleChange('Timeline_Project', DEFAULT_TIMELINE_PROJECT);
     }
     
     // 设置光标位置到插入变量之后
@@ -3121,9 +3237,16 @@ ${content}
     
     // 验证触发方式
     if (isTimelineTrigger) {
-      // Timeline 触发验证：必须先配置 Bot
+      const requiresTimelineSync = formData.Push_Method !== 'AsMe';
+
+      // Timeline 触发验证：必须先配置执行 rule
       if (!botConfigured) {
         alert('Timeline 触发功能需要先配置 Bot 推送（需要通过 Jira Automation 规则访问 Release 信息）');
+        return;
+      }
+
+      if (requiresTimelineSync && !timelineBotConfigured) {
+        alert('Timeline 触发功能需要先补齐 Timeline Sync Rule，相关消息才能按项目 Milestone 触发。');
         return;
       }
       
@@ -3358,7 +3481,7 @@ ${content}
                     onClick={() => {
                       setIsTimelineTrigger(true);
                       handleChange('Schedule_Date', '');
-                      handleChange('Timeline_Project', 'mThor');
+                      handleChange('Timeline_Project', DEFAULT_TIMELINE_PROJECT);
                       handleChange('Timeline_Milestone', 'FF');
                       handleChange('Timeline_Offset', 0);
                     }}
@@ -3443,7 +3566,7 @@ ${content}
                     onClick={() => {
                       setIsTimelineTrigger(true);
                       handleChange('Schedule_Date', '');
-                      handleChange('Timeline_Project', 'mThor');
+                      handleChange('Timeline_Project', DEFAULT_TIMELINE_PROJECT);
                       handleChange('Timeline_Milestone', 'FF');
                       handleChange('Timeline_Offset', 0);
                     }}
@@ -3486,7 +3609,7 @@ ${content}
           {isTimelineTrigger && (
             <div style={{...dialogStyles.section, backgroundColor: '#f0f7ff', padding: '16px', borderRadius: '8px', marginBottom: '16px'}}>
               {/* Timeline 模式 Bot 配置检查 */}
-              {!botConfigured && (
+              {(!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)) && (
                 <div style={{
                   padding: '12px',
                   backgroundColor: '#fff3cd',
@@ -3495,12 +3618,14 @@ ${content}
                   marginBottom: '16px',
                 }}>
                   <p style={{ margin: '0 0 10px 0', color: '#856404', fontSize: '14px' }}>
-                    ⚠️ Timeline 触发功能需要配置 Bot 推送才能使用（需要通过 Jira Automation 规则访问 Release 信息）
+                    {!botConfigured
+                      ? '⚠️ Timeline 触发功能需要先配置 Bot 推送才能使用（需要通过 Jira Automation 规则访问 Release 信息）'
+                      : '⚠️ 当前缺少 Timeline Sync Rule，Timeline Bot/AI 消息不会按项目 Milestone 触发，请先补齐配置。'}
                   </p>
                   <button
                     type="button"
                     onClick={() => {
-                      onConfigureBot();
+                      onConfigureBot(!botConfigured ? 'create' : 'upgrade-sync-only');
                     }}
                     style={{
                       padding: '8px 16px',
@@ -3522,19 +3647,11 @@ ${content}
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>项目 *</label>
                   <Select<SelectOption, false>
-                    options={[
-                      { value: 'mThor', label: '🚀 mThor' },
-                      { value: 'Jupiter desktop', label: '🖥️ Jupiter Desktop' },
-                      { value: 'Jupiter web', label: '🌐 Jupiter Web' }
-                    ]}
-                    value={{ 
-                      value: formData.Timeline_Project || 'mThor', 
-                      label: formData.Timeline_Project === 'Jupiter desktop' ? '🖥️ Jupiter Desktop' : 
-                             formData.Timeline_Project === 'Jupiter web' ? '🌐 Jupiter Web' : '🚀 mThor' 
-                    }}
+                    options={TIMELINE_PROJECT_OPTIONS}
+                    value={getTimelineProjectOption(formData.Timeline_Project)}
                     onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Project', option.value)}
                     styles={singleSelectStyles}
-                    isDisabled={!botConfigured}
+                    isDisabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
                     isSearchable={false}
                   />
                   <small style={dialogStyles.hint}>
@@ -3563,7 +3680,7 @@ ${content}
                     }}
                     onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Milestone', option.value)}
                     styles={singleSelectStyles}
-                    isDisabled={!botConfigured}
+                    isDisabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
                     isSearchable={false}
                   />
                 </div>
@@ -3579,10 +3696,10 @@ ${content}
                     max="30"
                     value={formData.Timeline_Offset ?? 0}
                     onChange={(e) => handleChange('Timeline_Offset', parseInt(e.target.value))}
-                    disabled={!botConfigured}
+                    disabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
                   />
                   <small style={dialogStyles.hint}>
-                    负数=之前，0=当天，正数=之后。例如：-1 表示 Milestone 前一天，1 表示后一天
+                    负数=之前，0=当天，正数=之后。例如：-1 表示 Milestone 前1天，1 表示后1天
                   </small>
                 </div>
                 
@@ -3594,7 +3711,7 @@ ${content}
                     value={formData.Schedule_Time || ''}
                     onChange={(e) => handleChange('Schedule_Time', e.target.value)}
                     placeholder="09:00"
-                    disabled={!botConfigured}
+                    disabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
                   />
                   <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
                 </div>
@@ -3611,16 +3728,8 @@ ${content}
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>项目 *</label>
                 <Select<SelectOption, false>
-                  options={[
-                    { value: 'mThor', label: '🚀 mThor' },
-                    { value: 'Jupiter desktop', label: '🖥️ Jupiter Desktop' },
-                    { value: 'Jupiter web', label: '🌐 Jupiter Web' }
-                  ]}
-                  value={{ 
-                    value: formData.Timeline_Project || 'mThor', 
-                    label: formData.Timeline_Project === 'Jupiter desktop' ? '🖥️ Jupiter Desktop' : 
-                           formData.Timeline_Project === 'Jupiter web' ? '🌐 Jupiter Web' : '🚀 mThor' 
-                  }}
+                  options={TIMELINE_PROJECT_OPTIONS}
+                  value={getTimelineProjectOption(formData.Timeline_Project)}
                   onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Project', option.value)}
                   styles={singleSelectStyles}
                   isSearchable={false}
@@ -3847,11 +3956,11 @@ ${content}
               <p style={{ margin: '0 0 12px 0', color: '#856404', fontSize: '14px', lineHeight: '1.6' }}>
                 个人提醒功能需要通过 Bot 发送消息。请先配置 Bot 推送功能才能使用。
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  onConfigureBot();
-                }}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onConfigureBot();
+                    }}
                 style={{
                   padding: '10px 20px',
                   backgroundColor: '#ffc107',
@@ -5261,15 +5370,21 @@ document.head.appendChild(styleSheet);
 // Bot 配置对话框组件
 const BotConfigDialog: React.FC<{
   config: SheetConfig;
+  mode: BotConfigDialogMode;
   onClose: () => void;
-  onSuccess: () => void;
-}> = ({ config, onClose, onSuccess }) => {
+  onSuccess: (updatedConfig: SheetConfig) => void;
+}> = ({ config, mode, onClose, onSuccess }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState<'input' | 'testing' | 'creating'>('input');
-  const [jiraUrl, setJiraUrl] = useState('https://jira.ringcentral.com');
-  const [projectKey, setProjectKey] = useState('');
   const [isJiraNotLoggedIn, setIsJiraNotLoggedIn] = useState(false);
+  const normalizedConfig = normalizeSheetConfig(config);
+  const existingExecutorRule = getExecutorRule(normalizedConfig);
+  const existingTimelineSyncRule = getTimelineSyncRule(normalizedConfig);
+  const existingBaseRule = existingExecutorRule || existingTimelineSyncRule;
+  const isProjectConfigLocked = mode !== 'create' && Boolean(existingBaseRule?.jiraUrl && existingBaseRule?.projectKey);
+  const [jiraUrl, setJiraUrl] = useState(existingBaseRule?.jiraUrl || 'https://jira.ringcentral.com');
+  const [projectKey, setProjectKey] = useState(existingBaseRule?.projectKey || '');
   
   // 使用 ref 跟踪组件是否已挂载
   const isMountedRef = useRef(true);
@@ -5282,12 +5397,53 @@ const BotConfigDialog: React.FC<{
   
   // Google Auth Token 已迁移到 utils/googleAuth.ts
   // 使用 getGoogleAuthToken（会弹窗）
+
+  const modeTitle = mode === 'upgrade-sync-only'
+    ? '🤖 升级 Timeline Sync'
+    : mode === 'repair'
+      ? '🤖 修复 Bot 推送'
+      : '🤖 配置 Bot 推送';
+  const displayedJiraUrl = (isProjectConfigLocked ? existingBaseRule?.jiraUrl : jiraUrl) || jiraUrl;
+
+  const modeDescription = mode === 'upgrade-sync-only'
+    ? [
+        '将补齐 Timeline Sync Rule，现有执行 rule 保持不变',
+        'Jira URL 和 Project Key 将复用现有配置',
+        '同步规则每天执行一次，负责刷新项目 Timeline 缓存',
+        '如果是首次补齐 Timeline Sync Rule，相关消息会在下一次日同步后开始生效'
+      ]
+    : mode === 'repair'
+      ? [
+          '将只重建缺失的 Jira Automation 规则',
+          '仍然存在的规则会保留，不会重复创建',
+          'Jira URL 和 Project Key 将优先复用现有配置'
+        ]
+      : [
+          '需要您在 Jira 上有管理权限的项目',
+          '系统将在该项目下创建 2 条 Automation 规则',
+          '执行规则每分钟检查并发送 Bot/AI 消息，Sync 规则每天刷新 Timeline 缓存',
+          '首次配置后，Timeline Bot/AI 消息会在下一次日同步完成后开始生效'
+        ];
+
+  const submitLabel = mode === 'upgrade-sync-only'
+    ? '✅ 补齐 Timeline Sync Rule'
+    : mode === 'repair'
+      ? '✅ 修复缺失规则'
+      : '✅ 开始配置';
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!projectKey.trim()) {
+
+    const resolvedJiraUrl = (isProjectConfigLocked ? existingBaseRule?.jiraUrl : jiraUrl)?.trim() || '';
+    const resolvedProjectKey = ((isProjectConfigLocked ? existingBaseRule?.projectKey : projectKey) || '').trim().toUpperCase();
+
+    if (!resolvedProjectKey) {
       setError('请输入 Jira Project Key');
+      return;
+    }
+
+    if (!resolvedJiraUrl) {
+      setError('请输入 Jira URL');
       return;
     }
     
@@ -5299,36 +5455,66 @@ const BotConfigDialog: React.FC<{
       // 导入服务类
       const { JiraAutomationService } = await import('./JiraAutomationService');
       const jiraService = new JiraAutomationService();
+      const jiraConfig = {
+        jiraUrl: resolvedJiraUrl,
+        projectKey: resolvedProjectKey
+      };
       
       // 步骤 1: 测试连接
       setStep('testing');
-      const testResult = await jiraService.testAccess({
-        jiraUrl,
-        projectKey: projectKey.toUpperCase()
-      });
+      const testResult = await jiraService.testAccess(jiraConfig);
       
       if (!testResult.success) {
         throw new Error(testResult.message);
       }
       
-      // 步骤 2: 创建规则
+      // 步骤 2: 创建/修复规则
       setStep('creating');
-      const ruleResult = await jiraService.createBotExecutorRule(
-        {
-          jiraUrl,
-          projectKey: projectKey.toUpperCase()
-        },
-        config.webAppUrl
-      );
-      
-      // 保存配置到 scheduledMessagesConfig.botExecutor
-      const updatedConfig = {
-        ...config,
-        botExecutor: {
-          ...ruleResult,
-          jiraUrl,
+      if (!normalizedConfig.webAppUrl) {
+        throw new Error('未找到 Web App URL，请先完成定时消息初始化。');
+      }
+
+      const existingBotAutomation = {
+        executorRule: existingExecutorRule,
+        timelineSyncRule: existingTimelineSyncRule,
+      } as BotAutomationConfig;
+
+      let nextBotAutomation: BotAutomationConfig = existingBotAutomation;
+
+      if (mode === 'create') {
+        nextBotAutomation = await jiraService.createBotAutomationRules(jiraConfig, normalizedConfig.webAppUrl);
+      } else if (mode === 'upgrade-sync-only') {
+        if (!existingBotAutomation.executorRule?.ruleId) {
+          throw new Error('缺少执行规则，无法仅升级 Timeline Sync Rule，请改用修复模式。');
         }
-      };
+
+        const timelineSyncRule = existingBotAutomation.timelineSyncRule?.ruleId
+          ? existingBotAutomation.timelineSyncRule
+          : await jiraService.createTimelineSyncRule(jiraConfig, normalizedConfig.webAppUrl);
+
+        nextBotAutomation = {
+          ...existingBotAutomation,
+          timelineSyncRule,
+        };
+      } else {
+        nextBotAutomation = { ...existingBotAutomation };
+
+        if (!nextBotAutomation.executorRule?.ruleId) {
+          nextBotAutomation.executorRule = await jiraService.createBotExecutorRule(
+            jiraConfig,
+            normalizedConfig.webAppUrl
+          );
+        }
+
+        if (!nextBotAutomation.timelineSyncRule?.ruleId) {
+          nextBotAutomation.timelineSyncRule = await jiraService.createTimelineSyncRule(
+            jiraConfig,
+            normalizedConfig.webAppUrl
+          );
+        }
+      }
+
+      const updatedConfig = withBotAutomation(normalizedConfig, nextBotAutomation);
       
       // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
       const token = await getGoogleAuthToken({ caller: 'BotConfigDialog.handleSubmit' });
@@ -5336,7 +5522,7 @@ const BotConfigDialog: React.FC<{
       const syncService = new ConfigSyncService(token);
       await syncService.syncConfig(updatedConfig);
       
-      onSuccess();
+      onSuccess(updatedConfig);
       
     } catch (err: any) {
       console.error('配置 Bot 失败:', err);
@@ -5364,7 +5550,7 @@ const BotConfigDialog: React.FC<{
     <div style={dialogStyles.overlay}>
       <div style={dialogStyles.dialog}>
         <div style={dialogStyles.header}>
-          <h2 style={dialogStyles.title}>🤖 配置 Bot 推送</h2>
+          <h2 style={dialogStyles.title}>{modeTitle}</h2>
           <button 
             style={dialogStyles.closeButton} 
             onClick={onClose}
@@ -5388,9 +5574,9 @@ const BotConfigDialog: React.FC<{
                   📋 配置说明
                 </p>
                 <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: '#666', lineHeight: '1.6' }}>
-                  <li>需要您在 Jira 上有管理权限的项目</li>
-                  <li>系统将在该项目下创建一个 Automation 规则</li>
-                  <li>该规则每分钟执行一次，检查并发送 Bot 消息</li>
+                  {modeDescription.map(item => (
+                    <li key={item}>{item}</li>
+                  ))}
                   <li>✅ Bot 配置（API 地址、Token、ID）将自动从扩展设置中读取，无需手动填写</li>
                 </ul>
               </div>
@@ -5403,9 +5589,10 @@ const BotConfigDialog: React.FC<{
                   value={jiraUrl}
                   onChange={(e) => setJiraUrl(e.target.value)}
                   placeholder="https://jira.ringcentral.com"
+                  disabled={isProjectConfigLocked}
                 />
                 <small style={dialogStyles.hint}>
-                  请确保您已在浏览器中登录此 Jira 实例
+                  {isProjectConfigLocked ? '已复用现有配置，如需变更请先重新配置执行规则' : '请确保您已在浏览器中登录此 Jira 实例'}
                 </small>
               </div>
               
@@ -5418,9 +5605,10 @@ const BotConfigDialog: React.FC<{
                   onChange={(e) => setProjectKey(e.target.value.toUpperCase())}
                   placeholder="MTR"
                   maxLength={10}
+                  disabled={isProjectConfigLocked}
                 />
                 <small style={dialogStyles.hint}>
-                  请输入您有管理权限的项目 Key，如：MTR
+                  {isProjectConfigLocked ? '已复用现有 Project Key' : '请输入您有管理权限的项目 Key，如：MTR'}
                 </small>
               </div>
               
@@ -5443,7 +5631,7 @@ const BotConfigDialog: React.FC<{
                   {isJiraNotLoggedIn && (
                     <button
                       type="button"
-                      onClick={() => window.open(jiraUrl, '_blank')}
+                      onClick={() => window.open(displayedJiraUrl, '_blank')}
                       style={{
                         padding: '8px 16px',
                         backgroundColor: '#ffc107',
@@ -5476,7 +5664,7 @@ const BotConfigDialog: React.FC<{
             <div style={{ textAlign: 'center', padding: '40px 20px' }}>
               <div style={styles.spinner}></div>
               <p style={{ fontSize: '16px', color: '#333', marginTop: '20px' }}>
-                正在创建 Jira Automation 规则...
+                正在处理 Jira Automation 规则...
               </p>
               <p style={{ fontSize: '13px', color: '#999', marginTop: '10px' }}>
                 这可能需要几秒钟，请稍候...
@@ -5499,7 +5687,7 @@ const BotConfigDialog: React.FC<{
                 style={dialogStyles.submitButton}
                 disabled={isSubmitting}
               >
-                {isSubmitting ? '配置中...' : '✅ 开始配置'}
+                {isSubmitting ? '处理中...' : submitLabel}
               </button>
             </div>
           )}
@@ -5516,5 +5704,3 @@ ReactDOM.render(
   </React.StrictMode>,
   document.getElementById('root')
 );
-
-

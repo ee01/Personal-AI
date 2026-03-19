@@ -2,6 +2,8 @@
  * 定时消息类型定义
  */
 
+import type { TimelineProject } from './timelineProjects';
+
 // 消息类型（用于内部判断，不在 Sheet 中存储）
 export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 
@@ -17,9 +19,6 @@ export type RepeatUnit = 'Day' | 'Week' | 'Month' | 'Year';
 
 // 推送目标类型
 export type TargetType = 'private' | 'group' | 'api';
-
-// Timeline 项目类型
-export type TimelineProject = 'mThor' | 'Jupiter desktop' | 'Jupiter web';
 
 // Timeline Milestone 类型
 export type TimelineMilestone = 'DoR' | 'Embedded' | 'FF' | 'Regression' | 'CF' | 'Release';
@@ -105,6 +104,22 @@ export interface CreateMessageFormData {
   Automation_Link?: string;  // Jira Automation Rule 链接
 }
 
+export interface BotAutomationRule {
+  ruleId: string;
+  ruleName: string;
+  webhookUrl: string;
+  projectKey: string;
+  jiraUrl: string;
+  createdAt: string;
+  ruleVersion?: string;      // Jira Rule 版本号
+  ruleLastUpdated?: string;  // Jira Rule 最后更新时间
+}
+
+export interface BotAutomationConfig {
+  executorRule?: BotAutomationRule;
+  timelineSyncRule?: BotAutomationRule;
+}
+
 // Sheet 配置接口
 export interface SheetConfig {
   sheetId: string;
@@ -123,17 +138,10 @@ export interface SheetConfig {
   created_by: string;
   created_at: string;
   last_sync_time?: string;
-  // Bot Executor 配置（Jira Automation Rule）
-  botExecutor?: {
-    ruleId: string;
-    ruleName: string;
-    webhookUrl: string;
-    projectKey: string;
-    jiraUrl: string;
-    createdAt: string;
-    ruleVersion?: string;        // Jira Rule 版本号
-    ruleLastUpdated?: string;    // Jira Rule 最后更新时间
-  };
+  // 新版 Bot 配置（双 Jira Automation Rule）
+  botAutomation?: BotAutomationConfig;
+  // 旧版兼容字段：仅 executor rule
+  botExecutor?: BotAutomationRule;
 }
 
 // 初始化结果
@@ -168,5 +176,3 @@ export interface Statistics {
   pendingReview: number;  // 待审核的自动答复消息数量
   executedToday: number;
 }
-
-

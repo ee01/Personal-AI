@@ -44,6 +44,8 @@
 import { Sheet } from '../sheet';
 import { ScheduledMessage, CreateMessageFormData, SheetConfig, Statistics, MessageType } from './types';
 import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
+import { normalizeSheetConfig } from './botAutomationConfig';
+import { formatTimelineNextExecutionText } from './timelineFormatting';
 
 export class ScheduledMessageService {
   private token: string;
@@ -102,7 +104,7 @@ export class ScheduledMessageService {
    */
   async loadConfig(): Promise<SheetConfig | null> {
     const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-    this.config = result.scheduledMessagesConfig || null;
+    this.config = result.scheduledMessagesConfig ? normalizeSheetConfig(result.scheduledMessagesConfig) : null;
     return this.config;
   }
   
@@ -536,7 +538,7 @@ export class ScheduledMessageService {
       
       // 缓存到配置中
       this.config.messagesSheetId = sheetId;
-      await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+      await chrome.storage.local.set({ scheduledMessagesConfig: normalizeSheetConfig(this.config) });
       
       return sheetId;
     });
@@ -587,7 +589,7 @@ export class ScheduledMessageService {
             if (this.config) {
               console.log(`🔄 检测到 sheetId 无效 (当前值: ${messagesSheetId})，将强制刷新...`);
               this.config.messagesSheetId = undefined;
-              await chrome.storage.local.set({ scheduledMessagesConfig: this.config });
+              await chrome.storage.local.set({ scheduledMessagesConfig: normalizeSheetConfig(this.config) });
             }
             return { success: false, needsRetry: true, error: errorText };
           }
@@ -627,23 +629,7 @@ export class ScheduledMessageService {
     // 检查是否为 Timeline 触发
     if (!message.Schedule_Date && message.Timeline_Milestone) {
       // Timeline 触发：返回描述性文本，不计算具体日期
-      const milestone = message.Timeline_Milestone;
-      const offset = message.Timeline_Offset ?? 0;
-      let offsetText = '';
-      
-      if (offset === 0) {
-        offsetText = '当天';
-      } else if (offset === 1) {
-        offsetText = '后一天';
-      } else if (offset === -1) {
-        offsetText = '前一天';
-      } else if (offset > 1) {
-        offsetText = `后${offset}天`;
-      } else if (offset < -1) {
-        offsetText = `前${Math.abs(offset)}天`;
-      }
-      
-      return `${milestone} ${offsetText}`;
+      return formatTimelineNextExecutionText(message);
     }
     
     if (message.Type === 'Daily') {
@@ -689,5 +675,3 @@ export class ScheduledMessageService {
     return '';
   }
 }
-
-

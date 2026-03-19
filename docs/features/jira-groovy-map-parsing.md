@@ -167,7 +167,7 @@ if (mThor) {
 }
 ```
 
-### Jira Rule 配置（保持不变）
+### Jira Rule 配置（兼容旧链路）
 
 ```json
 {
@@ -177,7 +177,8 @@ if (mThor) {
 ```
 
 **关键点**：
-- ✅ Jira 端**不需要修改**，继续使用 `.asJsonString`
+- ✅ 这套 inline 参数写法仍然被 Apps Script 兼容，用于旧 rule 或排障测试
+- ✅ 当前正式链路已升级为“双 rule”模式：Timeline Sync Rule 先调用 `cacheReleaseInfo`，Executor Rule 再调用 `getBotMessageCurrentTime`
 - ✅ Apps Script 端自动处理 Groovy Map 格式
 - ✅ 如果将来 Jira 升级支持标准 JSON，代码也能兼容
 
@@ -281,4 +282,3 @@ URL 编码说明：
 - [Jira Automation Smart Values](https://support.atlassian.com/cloud-automation/docs/jira-smart-values-reference/)
 - [Google Apps Script Logger](https://developers.google.com/apps-script/reference/base/logger)
 - [Groovy Map vs JSON](https://stackoverflow.com/questions/28341798/convert-groovy-map-to-json)
-

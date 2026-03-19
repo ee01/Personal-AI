@@ -13,7 +13,7 @@ Jira Automation 的 `{{webhookResponse.body.asJsonString}}` 返回的不是标�
 
 在 Apps Script 中添加了 `parseJiraJson()` 函数，自动兼容两种格式。
 
-### 1. Jira Rule 配置（无需修改）
+### 1. Jira Rule 配置（旧链路兼容）
 
 继续使用 `.asJsonString`：
 
@@ -23,6 +23,11 @@ Jira Automation 的 `{{webhookResponse.body.asJsonString}}` 返回的不是标�
   "method": "GET"
 }
 ```
+
+说明：
+
+- 这类 inline URL 参数写法仍然被 Apps Script 兼容，方便旧 rule 继续运行或手工测试
+- 当前正式实现已经切换为双 Jira Rule：先由 Timeline Sync Rule 调 `cacheReleaseInfo`，再由 Executor Rule 调 `getBotMessageCurrentTime`
 
 ### 2. Apps Script 自动处理
 
@@ -180,4 +185,3 @@ Groovy Map 解析失败: ...
 - ✅ 自动处理，透明转换
 
 **一切就绪，可以正常使用！** 🎉
-

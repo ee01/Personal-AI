@@ -26,8 +26,22 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.3.0';
-var APP_SCRIPT_LAST_UPDATED = '2025-12-24';
+var APP_SCRIPT_VERSION = '2.6.0';
+var APP_SCRIPT_LAST_UPDATED = '2026-03-18';
+var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
+var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
+// Timeline Sync Rule 默认每天运行一次，这里给缓存留出冗余窗口，避免偶发延迟导致全天失效
+var TIMELINE_CACHE_MAX_AGE_MS = 36 * 60 * 60 * 1000;
+
+var TIMELINE_PROJECT_PARAM_MAP = [
+  { project: 'mThor', paramKey: 'mThor' },
+  { project: 'Jupiter desktop', paramKey: 'jupiterDesktop' },
+  { project: 'Jupiter web', paramKey: 'jupiterWeb' },
+  { project: 'Nova', paramKey: 'nova' },
+  { project: 'RIO', paramKey: 'rio' },
+  { project: 'NC', paramKey: 'nc' },
+  { project: 'Rooms', paramKey: 'rooms' }
+];
 
 
 /**
@@ -684,36 +698,65 @@ function doGet(e) {
     `);
   }
   
+  // 按项目缓存 releaseInfo 到 Script Properties
+  // Timeline Sync Rule 会逐项目写入，避免 URL 过长和单 value 过大
+  if (action === 'cacheReleaseInfo') {
+    try {
+      const paramKey = e.parameter.project || '';
+      const projectInfo = parseSingleProjectReleaseInfo(e.parameter.releaseInfo || '');
+      const projectConfig = getTimelineProjectConfigByParamKey(paramKey);
+
+      if (projectConfig && projectInfo) {
+        const props = PropertiesService.getScriptProperties();
+        const cacheKey = getTimelineProjectCacheKey(paramKey);
+        const cachePayload = {
+          project: projectConfig.project,
+          paramKey: projectConfig.paramKey,
+          releaseInfo: projectInfo,
+          updatedAt: new Date().toISOString(),
+          timestamp: new Date().getTime(),
+        };
+
+        props.setProperty(cacheKey, JSON.stringify(cachePayload));
+        Logger.log(`[cacheReleaseInfo] 缓存成功，项目: ${projectConfig.project}`);
+      }
+      
+      return ContentService.createTextOutput(
+        JSON.stringify({ success: true })
+      ).setMimeType(ContentService.MimeType.JSON);
+    } catch (cacheError) {
+      Logger.log(`[cacheReleaseInfo] 错误: ${cacheError.toString()}`);
+      return ContentService.createTextOutput(
+        JSON.stringify({ success: false, error: cacheError.toString() })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  
   // 获取当前时间点需要执行的单条 Bot 消息（供 Jira Automation 调用）
   // 只返回消息数据，不调用 Bot API（Bot API 由 Jira 调用，因为在内网）
   // 支持两种模式：
-  // 1. 带 releaseInfo 参数：用于 Timeline 消息匹配
-  // 2. 不带 releaseInfo：只匹配普通时间触发的消息
+  // 1. 带 releaseInfo 参数（URL inline）：用于 Timeline 消息匹配
+  // 2. 不带参数：从 Script Properties 缓存读取（分批写入后调用此接口）
   if (action === 'getBotMessageCurrentTime') {
     const currentTimeStr = e.parameter.currentTime || '';
+
+    // 从 URL 参数接收 releaseInfo（可选，主要用于兼容旧调用）
+    let releaseInfo = extractReleaseInfoFromParameters(e.parameter);
     
-    // 从 URL 参数接收 releaseInfo（可选）
-    const mThor = e.parameter.mThor || '';
-    const jupiterDesktop = e.parameter.jupiterDesktop || '';
-    const jupiterWeb = e.parameter.jupiterWeb || '';
-    
-    let releaseInfo = null;
-    
-    // 如果提供了 releaseInfo 参数，则解析
-    if (mThor || jupiterDesktop || jupiterWeb) {
-      try {
-        releaseInfo = {};
-        if (mThor) releaseInfo['mThor'] = parseJiraJson(mThor);
-        if (jupiterDesktop) releaseInfo['Jupiter desktop'] = parseJiraJson(jupiterDesktop);
-        if (jupiterWeb) releaseInfo['Jupiter web'] = parseJiraJson(jupiterWeb);
-        
-        Logger.log(`[GET] 接收到 releaseInfo 参数，项目: ${Object.keys(releaseInfo).join(', ')}`);
-      } catch (parseError) {
-        Logger.log(`[GET] 解析 releaseInfo 失败: ${parseError.toString()}`);
-        releaseInfo = null; // 解析失败，使用原方案
-      }
+    if (releaseInfo) {
+      Logger.log(`[GET] 接收到 inline releaseInfo 参数，项目: ${Object.keys(releaseInfo).join(', ')}`);
     } else {
-      Logger.log(`[GET] 未提供 releaseInfo，使用原方案（不匹配 Timeline 消息）`);
+      // 无 inline 参数，从 Script Properties 缓存读取（正常工作流程）
+      try {
+        releaseInfo = readReleaseInfoFromCache();
+        if (releaseInfo && Object.keys(releaseInfo).length > 0) {
+          Logger.log(`[GET] 从缓存读取 releaseInfo，项目: ${Object.keys(releaseInfo).join(', ')}`);
+        } else {
+          Logger.log('[GET] 未找到缓存，使用无 releaseInfo 模式（不匹配 Timeline 消息）');
+        }
+      } catch (cacheReadError) {
+        Logger.log(`[GET] 读取缓存失败: ${cacheReadError.toString()}`);
+      }
     }
     
     // 构建 postData 格式，复用现有函数
@@ -786,8 +829,18 @@ function doPost(e) {
     
     if (action === 'getBotMessageCurrentTime') {
       // 解析 POST 数据
-      const postData = JSON.parse(e.postData.contents);
+      let postData = JSON.parse(e.postData.contents);
       Logger.log(`接收到 releaseInfo 数据: ${JSON.stringify(postData).substring(0, 200)}...`);
+      
+      // 支持两种 body 格式：
+      // 1. { releaseInfo: {...}, currentTime: "..." } - 标准格式
+      // 2. { mThor: "...", jupiterDesktop: "...", ... } - Jira POST 的 per-project 格式（规避 URL 长度限制）
+      if (!postData.releaseInfo || Object.keys(postData.releaseInfo).length === 0) {
+        const releaseInfo = extractReleaseInfoFromParameters(postData);
+        if (releaseInfo) {
+          postData = { releaseInfo: releaseInfo, currentTime: postData.currentTime || '' };
+        }
+      }
       
       // 调用新的处理函数
       const result = getMessageCurrentTimeWithReleaseInfo(postData);
@@ -1768,6 +1821,134 @@ function parseJiraJson(jsonStr) {
   }
 }
 
+function getTimelineProjectConfigByParamKey(paramKey) {
+  for (const config of TIMELINE_PROJECT_PARAM_MAP) {
+    if (config.paramKey === paramKey) {
+      return config;
+    }
+  }
+  return null;
+}
+
+function getTimelineProjectCacheKey(paramKey) {
+  return TIMELINE_CACHE_KEY_PREFIX + paramKey;
+}
+
+function parseSingleProjectReleaseInfo(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = parseJiraJson(rawValue);
+    if (parsed && Object.keys(parsed).length > 0) {
+      return parsed;
+    }
+  } catch (error) {
+    Logger.log(`[cacheReleaseInfo] 解析单项目 releaseInfo 失败: ${error.toString()}`);
+  }
+
+  return null;
+}
+
+function readLegacyReleaseInfoCache() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const cached = props.getProperty(LEGACY_RELEASE_INFO_CACHE_KEY);
+    if (!cached) {
+      return null;
+    }
+
+    const cachedData = JSON.parse(cached);
+    const ageMs = new Date().getTime() - (cachedData.timestamp || 0);
+    if (ageMs > TIMELINE_CACHE_MAX_AGE_MS) {
+      Logger.log(`[GET] 旧版缓存已过期 (${Math.round(ageMs / 1000)}秒)，不使用`);
+      return null;
+    }
+
+    return cachedData.releaseInfo || null;
+  } catch (error) {
+    Logger.log(`[GET] 读取旧版缓存失败: ${error.toString()}`);
+    return null;
+  }
+}
+
+function readReleaseInfoFromCache() {
+  const props = PropertiesService.getScriptProperties();
+  let releaseInfo = null;
+
+  for (const config of TIMELINE_PROJECT_PARAM_MAP) {
+    try {
+      const raw = props.getProperty(getTimelineProjectCacheKey(config.paramKey));
+      if (!raw) {
+        continue;
+      }
+
+      const cachedData = JSON.parse(raw);
+      const ageMs = new Date().getTime() - (cachedData.timestamp || 0);
+      if (ageMs > TIMELINE_CACHE_MAX_AGE_MS) {
+        Logger.log(`[GET] 项目 ${config.project} 缓存已过期 (${Math.round(ageMs / 1000)}秒)，跳过`);
+        continue;
+      }
+
+      if (!cachedData.releaseInfo) {
+        continue;
+      }
+
+      if (!releaseInfo) {
+        releaseInfo = {};
+      }
+
+      releaseInfo[config.project] = cachedData.releaseInfo;
+    } catch (error) {
+      Logger.log(`[GET] 读取项目 ${config.project} 缓存失败: ${error.toString()}`);
+    }
+  }
+
+  if (releaseInfo && Object.keys(releaseInfo).length > 0) {
+    return releaseInfo;
+  }
+
+  return readLegacyReleaseInfoCache();
+}
+
+function extractReleaseInfoFromParameters(parameters) {
+  const releaseInfoParam = parameters.releaseInfo || '';
+  
+  if (releaseInfoParam) {
+    try {
+      const parsedReleaseInfo = parseJiraJson(releaseInfoParam);
+      if (parsedReleaseInfo && Object.keys(parsedReleaseInfo).length > 0) {
+        return parsedReleaseInfo;
+      }
+    } catch (error) {
+      Logger.log(`[GET] 解析 releaseInfo 参数失败: ${error.toString()}`);
+    }
+  }
+  
+  let releaseInfo = null;
+  
+  try {
+    for (const config of TIMELINE_PROJECT_PARAM_MAP) {
+      const rawValue = parameters[config.paramKey] || '';
+      if (!rawValue) {
+        continue;
+      }
+      
+      if (!releaseInfo) {
+        releaseInfo = {};
+      }
+      
+      releaseInfo[config.project] = parseJiraJson(rawValue);
+    }
+  } catch (parseError) {
+    Logger.log(`[GET] 解析项目 releaseInfo 失败: ${parseError.toString()}`);
+    return null;
+  }
+  
+  return releaseInfo;
+}
+
 /**
  * 分割 Groovy Map 的键值对（处理嵌套情况）
  * 例如：key1=value1, key2={nested=value}, key3=value3
@@ -1811,4 +1992,3 @@ function splitGroovyMapPairs(content) {
   
   return pairs;
 }
-

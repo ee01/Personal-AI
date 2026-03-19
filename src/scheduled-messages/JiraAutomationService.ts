@@ -3,27 +3,26 @@
  * 负责创建和管理 Bot 推送的 Jira Automation 规则
  */
 
-import ruleTemplate from './jira-rule-template.json';
+import executorRuleTemplate from './jira-rule-template.json';
+import timelineSyncRuleTemplate from './jira-timeline-sync-rule-template.json';
 import { getEnvConfig } from '../utils';
 import { getJiraToken, jiraFetch } from '../jira';
+import { buildTimelineSyncComponentsFragment } from './timelineProjects';
+import { BotAutomationConfig, BotAutomationRule } from './types';
 
 // Jira Rule 版本信息（从模板的 _metadata 字段读取）
-export const JIRA_RULE_VERSION = (ruleTemplate as any)._metadata?.version || '1.0.0';
-export const JIRA_RULE_LAST_UPDATED = (ruleTemplate as any)._metadata?.lastUpdated || '2025-12-04';
+export const JIRA_EXECUTOR_RULE_VERSION = (executorRuleTemplate as any)._metadata?.version || '1.3.0';
+export const JIRA_EXECUTOR_RULE_LAST_UPDATED = (executorRuleTemplate as any)._metadata?.lastUpdated || '2026-03-18';
+export const JIRA_TIMELINE_SYNC_RULE_VERSION = (timelineSyncRuleTemplate as any)._metadata?.version || JIRA_EXECUTOR_RULE_VERSION;
+export const JIRA_TIMELINE_SYNC_RULE_LAST_UPDATED =
+  (timelineSyncRuleTemplate as any)._metadata?.lastUpdated || JIRA_EXECUTOR_RULE_LAST_UPDATED;
+export const JIRA_RULE_VERSION = JIRA_EXECUTOR_RULE_VERSION;
+export const JIRA_RULE_LAST_UPDATED = JIRA_EXECUTOR_RULE_LAST_UPDATED;
 
 export interface JiraAutomationConfig {
   jiraUrl: string;  // Jira 实例 URL，如 https://jira.ringcentral.com
   projectKey: string;  // 项目 Key，如 MTR
   token?: string;  // Personal Access Token (可选，用于认证)
-}
-
-export interface BotExecutorRule {
-  ruleId: string;
-  ruleName: string;
-  webhookUrl: string;
-  projectKey: string;
-  createdAt: string;
-  ruleVersion?: string;  // 规则版本号
 }
 
 // Jira 规则完整对象（从 API 返回）
@@ -44,6 +43,17 @@ export interface JiraRule {
   projects: any[];
   labels: any[];
   tags: any[];
+}
+
+type JiraRuleTemplateKind = 'executor' | 'timelineSync';
+
+interface CreateRuleContext {
+  projectId: string;
+  userKey: string;
+  ruleNameBase: string;
+  webAppUrl: string;
+  userEmail: string;
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>;
 }
 
 export class JiraAutomationService {
@@ -192,6 +202,113 @@ export class JiraAutomationService {
       return { success: false, message: `连接失败: ${error.message}` };
     }
   }
+
+  private getRuleTemplate(kind: JiraRuleTemplateKind): any {
+    return kind === 'timelineSync' ? timelineSyncRuleTemplate : executorRuleTemplate;
+  }
+
+  private getRuleVersion(kind: JiraRuleTemplateKind): string {
+    return kind === 'timelineSync' ? JIRA_TIMELINE_SYNC_RULE_VERSION : JIRA_EXECUTOR_RULE_VERSION;
+  }
+
+  private buildRulePayloadString(
+    kind: JiraRuleTemplateKind,
+    context: CreateRuleContext,
+    config: JiraAutomationConfig
+  ): string {
+    const template = this.getRuleTemplate(kind);
+    const templateString = JSON.stringify(template);
+    const ruleName = kind === 'timelineSync'
+      ? `${context.ruleNameBase} Timeline Sync`
+      : context.ruleNameBase;
+
+    // 必须先替换 TIMELINE_SYNC_COMPONENTS，再替换 WEB_APP_URL（后者存在于 fragment 中）
+    return templateString
+      .replace(/{{RULE_NAME}}/g, ruleName)
+      .replace(/{{RULE_VERSION}}/g, this.getRuleVersion(kind))
+      .replace(/"{{TIMELINE_SYNC_COMPONENTS}}"/g, buildTimelineSyncComponentsFragment())
+      .replace(/{{WEB_APP_URL}}/g, context.webAppUrl)
+      .replace(/{{BOT_API_BASE_URL}}/g, context.envConfig.BOT_API_BASE_URL)
+      .replace(/{{BOT_TOKEN}}/g, context.envConfig.BOT_TOKEN)
+      .replace(/{{BOT_ID}}/g, context.envConfig.BOT_ID)
+      .replace(/{{USER_EMAIL}}/g, context.userEmail)
+      .replace(/{{PROJECT_KEY}}/g, config.projectKey)
+      .replace(/{{PROJECT_ID}}/g, context.projectId)
+      .replace(/{{USER_KEY}}/g, context.userKey);
+  }
+
+  private async createRuleFromTemplate(
+    kind: JiraRuleTemplateKind,
+    config: JiraAutomationConfig,
+    context: CreateRuleContext
+  ): Promise<BotAutomationRule> {
+    const rulePayloadString = this.buildRulePayloadString(kind, context, config);
+    const rulePayload = JSON.parse(rulePayloadString);
+    delete rulePayload._metadata;
+
+    const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${context.projectId}/rule`;
+    const token = await this.getEffectiveToken(config);
+
+    console.log('创建 Jira Automation 规则:', rulePayload.name);
+    console.log('Rule Payload:', JSON.stringify(rulePayload, null, 2));
+
+    const response = await jiraFetch(url, {
+      method: 'POST',
+      headers: { 'X-Atlassian-Token': 'no-check' },
+      body: rulePayload,
+      token
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('创建规则失败，响应:', errorText);
+      throw new Error(`创建 Jira Automation 规则失败 (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log('创建规则成功:', result);
+
+    return {
+      ruleId: String(result.id),
+      ruleName: result.name,
+      webhookUrl: context.webAppUrl,
+      projectKey: config.projectKey,
+      jiraUrl: config.jiraUrl,
+      createdAt: new Date().toISOString(),
+      ruleVersion: this.getRuleVersion(kind),
+      ruleLastUpdated: new Date().toISOString(),
+    };
+  }
+
+  private async buildCreateRuleContext(
+    config: JiraAutomationConfig,
+    webAppUrl: string
+  ): Promise<CreateRuleContext> {
+    console.log('正在获取当前用户信息...');
+    const userKey = await this.getCurrentUserKey(config);
+    console.log(`当前用户 Key: ${userKey}`);
+
+    console.log('正在获取项目 ID...');
+    const projectId = await this.getProjectId(config);
+    console.log(`项目 ${config.projectKey} 的 ID: ${projectId}`);
+
+    console.log('正在读取 Bot 配置...');
+    const envConfig = await getEnvConfig();
+    const { userinfo } = await chrome.storage.local.get('userinfo');
+    const ruleNameBase = `[${userinfo.fullName.split(' ')[0]}] Scheduled Messages`;
+
+    console.log(`Bot Type: ${envConfig.BOT_TYPE}`);
+    console.log(`用户邮箱: ${userinfo.userEmail}`);
+
+    return {
+      projectId,
+      userKey,
+      ruleNameBase,
+      webAppUrl,
+      userEmail: userinfo.userEmail,
+      envConfig,
+    };
+  }
   
   /**
    * 创建 Bot 执行器规则
@@ -200,79 +317,51 @@ export class JiraAutomationService {
   async createBotExecutorRule(
     config: JiraAutomationConfig,
     webAppUrl: string
-  ): Promise<BotExecutorRule> {
-    
-    // 获取当前用户 Key
-    console.log('正在获取当前用户信息...');
-    const userKey = await this.getCurrentUserKey(config);
-    console.log(`当前用户 Key: ${userKey}`);
-    
-    // 获取项目 ID
-    console.log('正在获取项目 ID...');
-    const projectId = await this.getProjectId(config);
-    console.log(`项目 ${config.projectKey} 的 ID: ${projectId}`);
-    
-    // 读取 Bot 配置
-    console.log('正在读取 Bot 配置...');
-    const envConfig = await getEnvConfig();
-    const { userinfo } = await chrome.storage.local.get('userinfo');
-    const ruleName = `[${userinfo.fullName.split(' ')[0]}] Scheduled Messages`;
-    console.log(`Bot Type: ${envConfig.BOT_TYPE}`);
-    console.log(`用户邮箱: ${userinfo.userEmail}`);
-    
-    // 从模板创建规则 payload（模板中已包含完整结构和 smart values）
-    const templateString = JSON.stringify(ruleTemplate);
-    const rulePayloadString = templateString
-      .replace(/{{RULE_NAME}}/g, ruleName)
-      .replace(/{{RULE_VERSION}}/g, JIRA_RULE_VERSION)
-      .replace(/{{WEB_APP_URL}}/g, webAppUrl)
-      .replace(/{{BOT_API_BASE_URL}}/g, envConfig.BOT_API_BASE_URL)
-      .replace(/{{BOT_TOKEN}}/g, envConfig.BOT_TOKEN)
-      .replace(/{{BOT_ID}}/g, envConfig.BOT_ID)
-      .replace(/{{USER_EMAIL}}/g, userinfo.userEmail)
-      .replace(/{{PROJECT_KEY}}/g, config.projectKey)
-      .replace(/{{PROJECT_ID}}/g, projectId)
-      .replace(/{{USER_KEY}}/g, userKey);
-    
-    const rulePayload = JSON.parse(rulePayloadString);
-    
-    // 移除 _metadata 字段（这是模板内部使用的，不应发送到 Jira）
-    delete rulePayload._metadata;
-    
-    console.log('创建 Jira Automation 规则:', ruleName);
-    console.log('用户 Key:', userKey);
-    console.log('项目 ID:', projectId);
-    console.log('Web App URL:', webAppUrl);
-    console.log('Bot API Base URL:', envConfig.BOT_API_BASE_URL);
-    console.log('Rule Payload:', JSON.stringify(rulePayload, null, 2));
-    
-    const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule`;
-    const token = await this.getEffectiveToken(config);
-    
-    const response = await jiraFetch(url, {
-      method: 'POST',
-      headers: { 'X-Atlassian-Token': 'no-check' },
-      body: rulePayload,
-      token
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('创建规则失败，响应:', errorText);
-      throw new Error(`创建 Jira Automation 规则失败 (${response.status}): ${errorText}`);
+  ): Promise<BotAutomationRule> {
+    const context = await this.buildCreateRuleContext(config, webAppUrl);
+    return this.createRuleFromTemplate('executor', config, context);
+  }
+
+  /**
+   * 创建 Timeline Sync 规则
+   * 每天从内网获取 releaseInfo 并按项目写入 App Script 缓存
+   */
+  async createTimelineSyncRule(
+    config: JiraAutomationConfig,
+    webAppUrl: string
+  ): Promise<BotAutomationRule> {
+    const context = await this.buildCreateRuleContext(config, webAppUrl);
+    return this.createRuleFromTemplate('timelineSync', config, context);
+  }
+
+  /**
+   * 一次性创建 Bot 执行规则和 Timeline Sync 规则
+   */
+  async createBotAutomationRules(
+    config: JiraAutomationConfig,
+    webAppUrl: string
+  ): Promise<BotAutomationConfig> {
+    const context = await this.buildCreateRuleContext(config, webAppUrl);
+
+    let timelineSyncRule: BotAutomationRule | undefined;
+
+    try {
+      timelineSyncRule = await this.createRuleFromTemplate('timelineSync', config, context);
+      const executorRule = await this.createRuleFromTemplate('executor', config, context);
+
+      return {
+        executorRule,
+        timelineSyncRule,
+      };
+    } catch (error) {
+      if (timelineSyncRule?.ruleId) {
+        this.deleteRule(config, timelineSyncRule.ruleId).catch(deleteError => {
+          console.warn('清理已创建的 Timeline Sync Rule 失败:', deleteError);
+        });
+      }
+
+      throw error;
     }
-    
-    const result = await response.json();
-    console.log('创建规则成功:', result);
-    
-    return {
-      ruleId: String(result.id),
-      ruleName: `${ruleName} v${JIRA_RULE_VERSION}`,
-      webhookUrl: webAppUrl,
-      projectKey: config.projectKey,
-      createdAt: new Date().toISOString(),
-      ruleVersion: JIRA_RULE_VERSION
-    };
   }
   
   /**
@@ -401,7 +490,6 @@ export class JiraAutomationService {
     };
     
     console.log(`📝 更新规则 ${ruleId}...`);
-    console.log('Rule Payload:', JSON.stringify(mergedPayload, null, 2));
     
     const url = `${config.jiraUrl}/rest/cb-automation/latest/project/${projectId}/rule/${ruleId}`;
     const token = await this.getEffectiveToken(config);
