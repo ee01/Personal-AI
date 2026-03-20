@@ -55,6 +55,12 @@
             <div v-if="queuedActionCount > 0" class="entity-count">{{ queuedActionCount }}</div>
           </router-link>
 
+          <router-link to="/outreach" class="entity-type" active-class="router-link-active">
+            <div class="entity-icon">📡</div>
+            <div class="entity-name">主动询问</div>
+            <div v-if="outreachSessionCount > 0" class="entity-count">{{ outreachSessionCount }}</div>
+          </router-link>
+
           <hr class="sidebar-divider" />
           
           <router-link 
@@ -106,7 +112,10 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useMemoryStore } from './memory-store';
 import AISearchAnimation from './components/AISearchAnimation.vue';
-import { getMemoryServiceClient } from '../services/MemoryServiceClient';
+import {
+  getMemoryServiceClient,
+  type OutreachTemplateRuntimeStatusItem,
+} from '../services/MemoryServiceClient';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -122,6 +131,15 @@ const followThreadCount = ref(0);
 const pendingDecisionCount = ref(0);
 const activeReflectionCount = ref(0);
 const queuedActionCount = ref(0);
+const outreachSessionCount = ref(0);
+let outreachCountTimer: ReturnType<typeof setInterval> | null = null;
+const TERMINAL_OUTREACH_STATUSES = new Set([
+  'resolved',
+  'no_reply',
+  'escalated',
+  'cancelled',
+  'failed',
+]);
 
 async function loadFollowThreadCount() {
   try {
@@ -149,6 +167,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   chrome.storage.onChanged.removeListener(handleStorageChange);
+  if (outreachCountTimer) {
+    clearInterval(outreachCountTimer);
+    outreachCountTimer = null;
+  }
 });
 
 // 加载待决策数量
@@ -174,6 +196,65 @@ onMounted(async () => {
   } catch (error) {
     console.error('加载反思线程/动作数量失败:', error);
   }
+});
+
+async function loadOutreachSummaryCount() {
+  try {
+    const client = getMemoryServiceClient();
+    const [runtime, summary, templates] = await Promise.all([
+      client.getRuntimeConfig(),
+      client.getOutreachSummary(),
+      client.getOutreachTemplateRuntimeStatus(undefined, 100),
+    ]);
+    if (!runtime.outreachEnabled) {
+      outreachSessionCount.value = 0;
+      return;
+    }
+    const pendingTemplateCount = countPendingOutreachTemplates(templates.items);
+    outreachSessionCount.value =
+      Number(summary.upcomingCount || 0) +
+      Number(summary.waitingReplyCount || 0) +
+      Number(summary.escalatedCount || 0) +
+      pendingTemplateCount;
+  } catch (error) {
+    console.error('加载主动询问数量失败:', error);
+    outreachSessionCount.value = 0;
+  }
+}
+
+function countPendingOutreachTemplates(items: OutreachTemplateRuntimeStatusItem[]): number {
+  return items.filter((item) => isPendingTemplate(item)).length;
+}
+
+function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
+  const template = item.template;
+  const nextDispatchAt = resolveTemplateNextDispatchAt(item);
+  if (template.enabled === false) return false;
+  if (template.syncState && template.syncState !== 'synced') return false;
+  if (!nextDispatchAt) return false;
+  return !item.latestSession || TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status);
+}
+
+function resolveTemplateNextDispatchAt(item: OutreachTemplateRuntimeStatusItem): number | null {
+  const raw = item.template.scheduleSpec?.nextDispatchAt;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  const scheduleDate = typeof item.template.scheduleSpec?.scheduleDate === 'string'
+    ? item.template.scheduleSpec.scheduleDate
+    : '';
+  const scheduleTime = typeof item.template.scheduleSpec?.scheduleTime === 'string'
+    ? item.template.scheduleSpec.scheduleTime
+    : '09:00';
+  if (!scheduleDate) return null;
+  const date = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.floor(date.getTime() / 1000);
+}
+
+onMounted(async () => {
+  await loadOutreachSummaryCount();
+  outreachCountTimer = setInterval(() => {
+    void loadOutreachSummaryCount();
+  }, 60_000);
 });
 
 const handleSearchInput = () => {

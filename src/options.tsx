@@ -71,7 +71,101 @@ const sanitizeLocalEnvConfig = (targetConfig: EnvConfigType): EnvConfigType => (
     ...targetConfig,
     OPENCLAW_API_KEY: '',
     OPENCLAW_CLEAR_API_KEY: false,
+    RINGCENTRAL_CLIENT_SECRET: '',
+    RINGCENTRAL_JWT: '',
+    RINGCENTRAL_CLEAR_CLIENT_SECRET: false,
+    RINGCENTRAL_CLEAR_JWT: false,
 });
+
+interface ToggleFieldProps {
+    id: string;
+    name: string;
+    checked: boolean;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    label: string;
+    description?: React.ReactNode;
+    disabled?: boolean;
+}
+
+const ToggleField = ({
+    id,
+    name,
+    checked,
+    onChange,
+    label,
+    description,
+    disabled = false,
+}: ToggleFieldProps) => (
+    <div className="form-group">
+        <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '16px',
+        }}>
+            <div style={{ flex: 1 }}>
+                <label htmlFor={id} style={{ display: 'block', fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer' }}>
+                    {label}
+                </label>
+                {description && (
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        {description}
+                    </small>
+                )}
+            </div>
+            <label
+                htmlFor={id}
+                style={{
+                    position: 'relative',
+                    display: 'inline-flex',
+                    width: '46px',
+                    height: '28px',
+                    flexShrink: 0,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                }}
+            >
+                <input
+                    type="checkbox"
+                    id={id}
+                    name={name}
+                    checked={checked}
+                    onChange={onChange}
+                    disabled={disabled}
+                    style={{
+                        opacity: 0,
+                        width: 0,
+                        height: 0,
+                        position: 'absolute',
+                    }}
+                />
+                <span
+                    aria-hidden="true"
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        borderRadius: '999px',
+                        backgroundColor: disabled ? '#d0d7de' : (checked ? '#2ecc71' : '#c7ccd1'),
+                        transition: 'background-color 0.2s ease',
+                    }}
+                />
+                <span
+                    aria-hidden="true"
+                    style={{
+                        position: 'absolute',
+                        top: '3px',
+                        left: checked ? '21px' : '3px',
+                        width: '22px',
+                        height: '22px',
+                        borderRadius: '50%',
+                        backgroundColor: '#fff',
+                        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.24)',
+                        transition: 'left 0.2s ease',
+                    }}
+                />
+            </label>
+        </div>
+    </div>
+);
 
 // 使用从utils.ts导入的类型
 const Options = () => {
@@ -382,6 +476,26 @@ const Options = () => {
                     ? Math.max(1000, Math.floor(Number(serverConfig.openClawTimeoutMs)))
                     : (prev.OPENCLAW_TIMEOUT_MS || 600000),
                 OPENCLAW_API_KEY_CONFIGURED: Boolean(serverConfig?.openClawApiKeyConfigured),
+                OUTREACH_ENABLED: serverConfig?.outreachEnabled !== undefined
+                    ? Boolean(serverConfig.outreachEnabled)
+                    : prev.OUTREACH_ENABLED,
+                OUTREACH_INTERVAL_MS: Number.isFinite(Number(serverConfig?.outreachIntervalMs))
+                    ? Math.max(1000, Math.floor(Number(serverConfig.outreachIntervalMs)))
+                    : (prev.OUTREACH_INTERVAL_MS || 60000),
+                OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION: serverConfig?.outreachRequireApprovalForReflection !== undefined
+                    ? Boolean(serverConfig.outreachRequireApprovalForReflection)
+                    : prev.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION,
+                OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL: serverConfig?.outreachRequireApprovalForManual !== undefined
+                    ? Boolean(serverConfig.outreachRequireApprovalForManual)
+                    : prev.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL,
+                RINGCENTRAL_SERVER_URL: typeof serverConfig?.ringCentralServerUrl === 'string'
+                    ? serverConfig.ringCentralServerUrl
+                    : prev.RINGCENTRAL_SERVER_URL,
+                RINGCENTRAL_CLIENT_ID: typeof serverConfig?.ringCentralClientId === 'string'
+                    ? serverConfig.ringCentralClientId
+                    : prev.RINGCENTRAL_CLIENT_ID,
+                RINGCENTRAL_CLIENT_SECRET_CONFIGURED: Boolean(serverConfig?.ringCentralClientSecretConfigured),
+                RINGCENTRAL_JWT_CONFIGURED: Boolean(serverConfig?.ringCentralJwtConfigured),
             }));
         } catch (error) {
             console.warn('加载梦境重放报表配置失败:', error);
@@ -447,6 +561,14 @@ const Options = () => {
                 return;
             }
 
+            if (Number(config.OUTREACH_INTERVAL_MS) < 1000 || Number.isNaN(Number(config.OUTREACH_INTERVAL_MS))) {
+                setStatus({
+                    message: '主动询问轮询间隔必须 >= 1000 毫秒',
+                    type: 'error'
+                });
+                return;
+            }
+
             const pushTargetValidationError = validatePushTargets(config);
             if (pushTargetValidationError) {
                 setStatus({
@@ -468,6 +590,12 @@ const Options = () => {
             const dreamInsightPushTarget = resolvePushTargetValue(config.DREAM_INSIGHT_PUSH_TARGET, 'me', true);
             const openClawApiKey = (config.OPENCLAW_API_KEY || '').trim();
             const clearOpenClawApiKey = Boolean(config.OPENCLAW_CLEAR_API_KEY) && openClawApiKey.length === 0;
+            const ringCentralClientSecret = (config.RINGCENTRAL_CLIENT_SECRET || '').trim();
+            const ringCentralJwt = (config.RINGCENTRAL_JWT || '').trim();
+            const clearRingCentralClientSecret =
+                Boolean(config.RINGCENTRAL_CLEAR_CLIENT_SECRET) && ringCentralClientSecret.length === 0;
+            const clearRingCentralJwt =
+                Boolean(config.RINGCENTRAL_CLEAR_JWT) && ringCentralJwt.length === 0;
             const payload: UpdateRuntimeConfigPayload = {
                 dreamDigestScheduleType: config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
                 dreamDigestIntervalDays: Math.max(1, Number(config.DREAM_DIGEST_INTERVAL_DAYS) || 1),
@@ -487,9 +615,23 @@ const Options = () => {
                 openClawBaseUrl: (config.OPENCLAW_BASE_URL || '').trim(),
                 openClawTimeoutMs: Math.max(1000, Number(config.OPENCLAW_TIMEOUT_MS) || 600000),
                 clearOpenClawApiKey,
+                outreachEnabled: config.OUTREACH_ENABLED,
+                outreachIntervalMs: Math.max(1000, Number(config.OUTREACH_INTERVAL_MS) || 60000),
+                outreachRequireApprovalForReflection: config.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION,
+                outreachRequireApprovalForManual: config.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL,
+                ringCentralServerUrl: (config.RINGCENTRAL_SERVER_URL || '').trim(),
+                ringCentralClientId: (config.RINGCENTRAL_CLIENT_ID || '').trim(),
+                clearRingCentralClientSecret,
+                clearRingCentralJwt,
             };
             if (openClawApiKey.length > 0) {
                 payload.openClawApiKey = openClawApiKey;
+            }
+            if (ringCentralClientSecret.length > 0) {
+                payload.ringCentralClientSecret = ringCentralClientSecret;
+            }
+            if (ringCentralJwt.length > 0) {
+                payload.ringCentralJwt = ringCentralJwt;
             }
             const client = await createMemoryServiceClient(config);
             await client.updateRuntimeConfig(payload);
@@ -501,6 +643,16 @@ const Options = () => {
                 OPENCLAW_API_KEY_CONFIGURED: clearOpenClawApiKey
                     ? false
                     : (openClawApiKey.length > 0 ? true : prev.OPENCLAW_API_KEY_CONFIGURED),
+                RINGCENTRAL_CLIENT_SECRET: '',
+                RINGCENTRAL_JWT: '',
+                RINGCENTRAL_CLEAR_CLIENT_SECRET: false,
+                RINGCENTRAL_CLEAR_JWT: false,
+                RINGCENTRAL_CLIENT_SECRET_CONFIGURED: clearRingCentralClientSecret
+                    ? false
+                    : (ringCentralClientSecret.length > 0 ? true : prev.RINGCENTRAL_CLIENT_SECRET_CONFIGURED),
+                RINGCENTRAL_JWT_CONFIGURED: clearRingCentralJwt
+                    ? false
+                    : (ringCentralJwt.length > 0 ? true : prev.RINGCENTRAL_JWT_CONFIGURED),
             }));
 
             setStatus({
@@ -630,7 +782,7 @@ const Options = () => {
     };
 
     // 处理输入变化
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         const { name, value, type } = e.target;
         
         setConfig(prev => ({
@@ -643,7 +795,8 @@ const Options = () => {
                   name === 'MEMORY_SERVICE_TIMEOUT' ||
                   name === 'DREAM_DIGEST_INTERVAL_DAYS' ||
                   name === 'SELF_REFLECTION_HEARTBEAT_MINUTES' ||
-                  name === 'OPENCLAW_TIMEOUT_MS'
+                  name === 'OPENCLAW_TIMEOUT_MS' ||
+                  name === 'OUTREACH_INTERVAL_MS'
                     ? Number(value)
                     : value
         }));
@@ -979,30 +1132,25 @@ const Options = () => {
                     </select>
                 </div>
 
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ANALYZE_BY_GROUP"
-                            checked={config.ANALYZE_BY_GROUP}
-                            onChange={handleInputChange}
-                        />
-                        拆开每个群组独立分析
-                    </label>
-                </div>
+                <ToggleField
+                    id="ANALYZE_BY_GROUP"
+                    name="ANALYZE_BY_GROUP"
+                    checked={config.ANALYZE_BY_GROUP}
+                    onChange={handleInputChange}
+                    label="拆开每个群组独立分析"
+                    description="开启后，不同群组的消息会分别进入独立分析流程。"
+                />
 
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="LLM_REVIEW_BEFORE_SEND"
-                            hidden={config.ANALYSIS_TYPE === 'agentThinking' || config.ANALYSIS_TYPE === 'agentWorkflow'}
-                            checked={config.LLM_REVIEW_BEFORE_SEND}
-                            onChange={handleInputChange}
-                        />
-                        启用消息审核（若不启用审核，会推送所有关注消息）
-                    </label>
-                </div>
+                {config.ANALYSIS_TYPE !== 'agentThinking' && config.ANALYSIS_TYPE !== 'agentWorkflow' && (
+                    <ToggleField
+                        id="LLM_REVIEW_BEFORE_SEND"
+                        name="LLM_REVIEW_BEFORE_SEND"
+                        checked={config.LLM_REVIEW_BEFORE_SEND}
+                        onChange={handleInputChange}
+                        label="启用消息审核"
+                        description="关闭后，会直接推送所有命中关注项的消息。"
+                    />
+                )}
             </div>
 
             <div className="form-section">
@@ -1035,17 +1183,14 @@ const Options = () => {
 
             <div className="form-section">
                 <h2>消息过滤设置</h2>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="FILTER_OWN_MESSAGES"
-                            checked={config.FILTER_OWN_MESSAGES}
-                            onChange={handleInputChange}
-                        />
-                        过滤自己发送的消息（消息分析时会自动忽略自己发送的消息）
-                    </label>
-                </div>
+                <ToggleField
+                    id="FILTER_OWN_MESSAGES"
+                    name="FILTER_OWN_MESSAGES"
+                    checked={config.FILTER_OWN_MESSAGES}
+                    onChange={handleInputChange}
+                    label="过滤自己发送的消息"
+                    description="开启后，消息分析会自动忽略自己发出的消息。"
+                />
             </div>
 
             <div className="form-section">
@@ -1053,28 +1198,22 @@ const Options = () => {
                 <p style={{ color: '#666', fontSize: '13px', marginBottom: '15px' }}>
                     在 RingCentral 消息页面，悬停在消息上时会显示交互工具栏。可以选择启用/禁用以下功能：
                 </p>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ENABLE_SNOOZE"
-                            checked={config.ENABLE_SNOOZE}
-                            onChange={handleInputChange}
-                        />
-                        启用「稍后处理」功能（设置提醒时间，到时 Bot 会推送消息提醒您）
-                    </label>
-                </div>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="ENABLE_AUTO_REPLY"
-                            checked={config.ENABLE_AUTO_REPLY}
-                            onChange={handleInputChange}
-                        />
-                        启用「自动答复」功能（配置自动答复规则，匹配消息时自动发送回复）
-                    </label>
-                </div>
+                <ToggleField
+                    id="ENABLE_SNOOZE"
+                    name="ENABLE_SNOOZE"
+                    checked={config.ENABLE_SNOOZE}
+                    onChange={handleInputChange}
+                    label="启用「稍后处理」功能"
+                    description="设置提醒时间，到时 Bot 会推送消息提醒您。"
+                />
+                <ToggleField
+                    id="ENABLE_AUTO_REPLY"
+                    name="ENABLE_AUTO_REPLY"
+                    checked={config.ENABLE_AUTO_REPLY}
+                    onChange={handleInputChange}
+                    label="启用「自动答复」功能"
+                    description="配置自动答复规则，匹配消息时自动发送回复。"
+                />
             </div>
 
             <div className="form-section">
@@ -1122,20 +1261,14 @@ const Options = () => {
                         对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
                     </small>
                 </div>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="SELF_REFLECTION_ENABLED"
-                            checked={config.SELF_REFLECTION_ENABLED !== false}
-                            onChange={handleInputChange}
-                        />
-                        启用自我反思
-                    </label>
-                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        每个用户可以单独关闭自我反思；关闭后不会影响梦境重放的持续生成。
-                    </small>
-                </div>
+                <ToggleField
+                    id="SELF_REFLECTION_ENABLED"
+                    name="SELF_REFLECTION_ENABLED"
+                    checked={config.SELF_REFLECTION_ENABLED !== false}
+                    onChange={handleInputChange}
+                    label="启用自我反思"
+                    description="每个用户可以单独关闭自我反思；关闭后不会影响梦境重放的持续生成。"
+                />
                 <div className="form-group">
                     <label htmlFor="SELF_REFLECTION_HEARTBEAT_MINUTES">自我反思频率（分钟）</label>
                     <input
@@ -1151,76 +1284,6 @@ const Options = () => {
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
                         保存后会同步到 memory-service，按用户分别生效。
                     </small>
-                </div>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="OPENCLAW_ENABLED"
-                            checked={config.OPENCLAW_ENABLED === true}
-                            onChange={handleInputChange}
-                        />
-                        启用 OpenClaw 外部委派
-                    </label>
-                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        启用后，自我反思动作可将外部系统查询/执行委派给 OpenClaw（OpenAI 兼容 Responses）。
-                    </small>
-                </div>
-                <div className="form-group">
-                    <label htmlFor="OPENCLAW_BASE_URL">OpenClaw Base URL</label>
-                    <input
-                        type="url"
-                        id="OPENCLAW_BASE_URL"
-                        name="OPENCLAW_BASE_URL"
-                        value={config.OPENCLAW_BASE_URL || ''}
-                        onChange={handleInputChange}
-                        placeholder="https://openclaw.example.com"
-                        disabled={config.OPENCLAW_ENABLED !== true}
-                    />
-                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        示例：`https://openclaw.example.com`，后端会自动拼接 `/v1/responses`。
-                    </small>
-                </div>
-                <div className="form-group">
-                    <label htmlFor="OPENCLAW_TIMEOUT_MS">OpenClaw 超时（毫秒）</label>
-                    <input
-                        type="number"
-                        id="OPENCLAW_TIMEOUT_MS"
-                        name="OPENCLAW_TIMEOUT_MS"
-                        value={config.OPENCLAW_TIMEOUT_MS || 600000}
-                        onChange={handleInputChange}
-                        min="1000"
-                        step="1000"
-                        disabled={config.OPENCLAW_ENABLED !== true}
-                    />
-                </div>
-                <div className="form-group">
-                    <label htmlFor="OPENCLAW_API_KEY">OpenClaw API Key（写入后不回显）</label>
-                    <input
-                        type="password"
-                        id="OPENCLAW_API_KEY"
-                        name="OPENCLAW_API_KEY"
-                        value={config.OPENCLAW_API_KEY || ''}
-                        onChange={handleInputChange}
-                        placeholder={config.OPENCLAW_API_KEY_CONFIGURED ? '已配置（如需更新请输入新 key）' : '输入新的 OpenClaw API Key'}
-                        autoComplete="new-password"
-                        disabled={config.OPENCLAW_ENABLED !== true}
-                    />
-                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                        当前状态：{config.OPENCLAW_API_KEY_CONFIGURED ? '后端已配置 key' : '后端未配置 key'}。
-                    </small>
-                </div>
-                <div className="form-group">
-                    <label>
-                        <input
-                            type="checkbox"
-                            name="OPENCLAW_CLEAR_API_KEY"
-                            checked={config.OPENCLAW_CLEAR_API_KEY === true}
-                            onChange={handleInputChange}
-                            disabled={config.OPENCLAW_ENABLED !== true}
-                        />
-                        清除后端已保存的 OpenClaw API Key（仅当上方 key 输入为空时生效）
-                    </label>
                 </div>
                 {renderPushTargetFields(
                     '梦境重放报表推送',
@@ -1306,6 +1369,219 @@ const Options = () => {
                     <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
                         默认不勾选时按 merge 导入 zip 备份，保留本地未冲突内容；勾选后按 replace 导入，会替换数据库并删除备份包中不存在的本地记忆文件。
                     </small>
+                </div>
+            </div>
+
+            <div className="form-section">
+                <h2>OpenClaw 对接</h2>
+                <small style={{ color: '#666', display: 'block', marginBottom: '15px' }}>
+                    自我反思中的外部委派动作会走这里的 OpenClaw 配置。启用后才会真正调用外部系统。
+                </small>
+                <ToggleField
+                    id="OPENCLAW_ENABLED"
+                    name="OPENCLAW_ENABLED"
+                    checked={config.OPENCLAW_ENABLED === true}
+                    onChange={handleInputChange}
+                    label="启用 OpenClaw 外部委派"
+                    description="开启后，自我反思动作可把外部系统查询/执行委派给 OpenClaw（OpenAI 兼容 Responses）。"
+                />
+                <div className="form-group">
+                    <label htmlFor="OPENCLAW_BASE_URL">OpenClaw Base URL</label>
+                    <input
+                        type="url"
+                        id="OPENCLAW_BASE_URL"
+                        name="OPENCLAW_BASE_URL"
+                        value={config.OPENCLAW_BASE_URL || ''}
+                        onChange={handleInputChange}
+                        placeholder="https://openclaw.example.com"
+                        disabled={config.OPENCLAW_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        示例：`https://openclaw.example.com`，后端会自动拼接 `/v1/responses`。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="OPENCLAW_TIMEOUT_MS">OpenClaw 超时（毫秒）</label>
+                    <input
+                        type="number"
+                        id="OPENCLAW_TIMEOUT_MS"
+                        name="OPENCLAW_TIMEOUT_MS"
+                        value={config.OPENCLAW_TIMEOUT_MS || 600000}
+                        onChange={handleInputChange}
+                        min="1000"
+                        step="1000"
+                        disabled={config.OPENCLAW_ENABLED !== true}
+                    />
+                </div>
+                <div className="form-group">
+                    <label htmlFor="OPENCLAW_API_KEY">OpenClaw API Key（写入后不回显）</label>
+                    <input
+                        type="password"
+                        id="OPENCLAW_API_KEY"
+                        name="OPENCLAW_API_KEY"
+                        value={config.OPENCLAW_API_KEY || ''}
+                        onChange={handleInputChange}
+                        placeholder={config.OPENCLAW_API_KEY_CONFIGURED ? '已配置（如需更新请输入新 key）' : '输入新的 OpenClaw API Key'}
+                        autoComplete="new-password"
+                        disabled={config.OPENCLAW_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        当前状态：{config.OPENCLAW_API_KEY_CONFIGURED ? '后端已配置 key' : '后端未配置 key'}。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="OPENCLAW_CLEAR_API_KEY"
+                            checked={config.OPENCLAW_CLEAR_API_KEY === true}
+                            onChange={handleInputChange}
+                            disabled={config.OPENCLAW_ENABLED !== true}
+                        />
+                        清除后端已保存的 OpenClaw API Key（仅当上方 key 输入为空时生效）
+                    </label>
+                </div>
+            </div>
+
+            <div className="form-section">
+                <h2>主动询问</h2>
+                <small style={{ color: '#666', display: 'block', marginBottom: '15px' }}>
+                    Scheduled Messages 的 Outreach 模板和反思动作 `ask_external_user` 都由主动询问引擎推进。
+                </small>
+                <ToggleField
+                    id="OUTREACH_ENABLED"
+                    name="OUTREACH_ENABLED"
+                    checked={config.OUTREACH_ENABLED === true}
+                    onChange={handleInputChange}
+                    label="启用主动询问引擎"
+                    description="开启后，模板派发、等待回复、追问和升级才会真正运行。"
+                />
+                <div className="form-group">
+                    <label htmlFor="OUTREACH_INTERVAL_MS">主动询问轮询间隔（毫秒）</label>
+                    <input
+                        type="number"
+                        id="OUTREACH_INTERVAL_MS"
+                        name="OUTREACH_INTERVAL_MS"
+                        value={config.OUTREACH_INTERVAL_MS || 60000}
+                        onChange={handleInputChange}
+                        min="1000"
+                        step="1000"
+                        disabled={config.OUTREACH_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        决定模板派发和回复轮询频率。开发调试时可临时调小，例如 5000。
+                    </small>
+                </div>
+                <ToggleField
+                    id="OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION"
+                    name="OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION"
+                    checked={config.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION === true}
+                    onChange={handleInputChange}
+                    label="反思发起的主动询问默认先审批"
+                    description="开启后，反思生成的外联会先进入待审批，不会直接发出。"
+                    disabled={config.OUTREACH_ENABLED !== true}
+                />
+                <ToggleField
+                    id="OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL"
+                    name="OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL"
+                    checked={config.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL === true}
+                    onChange={handleInputChange}
+                    label="手动/定时模板发起的主动询问默认先审批"
+                    description="开启后，Scheduled Messages 里的手动模板也会进入待审批。"
+                    disabled={config.OUTREACH_ENABLED !== true}
+                />
+                <div className="form-group">
+                    <label htmlFor="RINGCENTRAL_SERVER_URL">RingCentral Server URL</label>
+                    <input
+                        type="url"
+                        id="RINGCENTRAL_SERVER_URL"
+                        name="RINGCENTRAL_SERVER_URL"
+                        value={config.RINGCENTRAL_SERVER_URL || ''}
+                        onChange={handleInputChange}
+                        placeholder="https://platform.ringcentral.com"
+                        disabled={config.OUTREACH_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        还没有 RingCentral app？可前往
+                        {' '}
+                        <a
+                            href="https://developer.ringcentral.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            developer.ringcentral.com
+                        </a>
+                        {' '}
+                        注册并创建应用，获取 Client ID / Secret / JWT。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="RINGCENTRAL_CLIENT_ID">RingCentral Client ID</label>
+                    <input
+                        type="text"
+                        id="RINGCENTRAL_CLIENT_ID"
+                        name="RINGCENTRAL_CLIENT_ID"
+                        value={config.RINGCENTRAL_CLIENT_ID || ''}
+                        onChange={handleInputChange}
+                        placeholder="输入 RingCentral app client id"
+                        disabled={config.OUTREACH_ENABLED !== true}
+                    />
+                </div>
+                <div className="form-group">
+                    <label htmlFor="RINGCENTRAL_CLIENT_SECRET">RingCentral Client Secret（写入后不回显）</label>
+                    <input
+                        type="password"
+                        id="RINGCENTRAL_CLIENT_SECRET"
+                        name="RINGCENTRAL_CLIENT_SECRET"
+                        value={config.RINGCENTRAL_CLIENT_SECRET || ''}
+                        onChange={handleInputChange}
+                        placeholder={config.RINGCENTRAL_CLIENT_SECRET_CONFIGURED ? '已配置（如需更新请输入新 secret）' : '输入新的 client secret'}
+                        autoComplete="new-password"
+                        disabled={config.OUTREACH_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        当前状态：{config.RINGCENTRAL_CLIENT_SECRET_CONFIGURED ? '后端已配置 secret' : '后端未配置 secret'}。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="RINGCENTRAL_JWT">RingCentral JWT（写入后不回显）</label>
+                    <textarea
+                        id="RINGCENTRAL_JWT"
+                        name="RINGCENTRAL_JWT"
+                        value={config.RINGCENTRAL_JWT || ''}
+                        onChange={handleInputChange}
+                        placeholder={config.RINGCENTRAL_JWT_CONFIGURED ? '已配置（如需更新请输入新的 JWT）' : '输入新的 JWT'}
+                        autoComplete="new-password"
+                        rows={4}
+                        disabled={config.OUTREACH_ENABLED !== true}
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        当前状态：{config.RINGCENTRAL_JWT_CONFIGURED ? '后端已配置 JWT' : '后端未配置 JWT'}。
+                    </small>
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="RINGCENTRAL_CLEAR_CLIENT_SECRET"
+                            checked={config.RINGCENTRAL_CLEAR_CLIENT_SECRET === true}
+                            onChange={handleInputChange}
+                            disabled={config.OUTREACH_ENABLED !== true}
+                        />
+                        清除后端已保存的 RingCentral Client Secret（仅当上方 secret 输入为空时生效）
+                    </label>
+                </div>
+                <div className="form-group">
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="RINGCENTRAL_CLEAR_JWT"
+                            checked={config.RINGCENTRAL_CLEAR_JWT === true}
+                            onChange={handleInputChange}
+                            disabled={config.OUTREACH_ENABLED !== true}
+                        />
+                        清除后端已保存的 RingCentral JWT（仅当上方 JWT 输入为空时生效）
+                    </label>
                 </div>
             </div>
 

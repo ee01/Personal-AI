@@ -8,7 +8,7 @@ import type { TimelineProject } from './timelineProjects';
 export type MessageType = 'Daily' | 'Hourly' | 'Periodic';
 
 // 推送方式
-export type PushMethod = 'AsMe' | 'Bot' | 'AI' | 'JiraAutomation';
+export type PushMethod = 'AsMe' | 'Bot' | 'AI' | 'JiraAutomation' | 'Outreach';
 
 // 消息状态
 // PendingReview: 待审核状态，用于自动答复的审核模式，需手动确认后才会执行
@@ -57,6 +57,17 @@ export interface ScheduledMessage {
   Glip_Team_ID?: string;
   Attachment?: string;
   Target_Type?: TargetType;
+  // Outreach 模板字段
+  Outreach_Target_Type?: TargetType;
+  Outreach_Target_Ref?: string;
+  Outreach_Context?: string;
+  Outreach_Max_Followup?: number;
+  Outreach_Followup_Interval_Hours?: number;
+  Outreach_Sync_State?: string;      // 运行/同步状态摘要，供 UI 展示
+  Outreach_Runtime_Status?: string;   // 会话状态摘要，供 UI 展示
+  Outreach_Last_Session_ID?: string;
+  Outreach_Last_Result?: string;
+  Outreach_Last_Updated?: string;
   // AI Report 字段
   AI_Endpoint?: string;    // "POST url" 或 "GET url" 或 "url"
   AI_Headers?: string;     // "key: value\nkey2: value2"
@@ -90,6 +101,12 @@ export interface CreateMessageFormData {
   Glip_User_Name?: string;  // 支持多个人名，用逗号分隔
   Glip_Team_ID?: string;
   Attachment?: string;
+  // Outreach 模板字段
+  Outreach_Target_Type?: TargetType;
+  Outreach_Target_Ref?: string;
+  Outreach_Context?: string;
+  Outreach_Max_Followup?: number;
+  Outreach_Followup_Interval_Hours?: number;
   // AI Report 字段
   AI_Endpoint?: string;
   AI_Headers?: string;

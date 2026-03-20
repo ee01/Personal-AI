@@ -72,6 +72,16 @@ export interface Config {
   openClawBaseUrl: string;
   openClawApiKey: string;
   openClawTimeoutMs: number;
+
+  // Outreach
+  outreachEnabled: boolean;
+  outreachIntervalMs: number;
+  outreachRequireApprovalForReflection: boolean;
+  outreachRequireApprovalForManual: boolean;
+  ringCentralServerUrl: string;
+  ringCentralClientId: string;
+  ringCentralClientSecret: string;
+  ringCentralJwt: string;
 }
 
 let _config: Readonly<Config> | null = null;
@@ -159,6 +169,18 @@ export function getConfig(): Readonly<Config> {
     openClawBaseUrl: process.env.OPENCLAW_BASE_URL || '',
     openClawApiKey: process.env.OPENCLAW_API_KEY || '',
     openClawTimeoutMs: parseInt(process.env.OPENCLAW_TIMEOUT_MS || '600000', 10),
+
+    // Outreach
+    outreachEnabled: process.env.OUTREACH_ENABLED === 'true',
+    outreachIntervalMs: parseInt(process.env.OUTREACH_INTERVAL_MS || '60000', 10),
+    outreachRequireApprovalForReflection:
+      process.env.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION !== 'false',
+    outreachRequireApprovalForManual:
+      process.env.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL === 'true',
+    ringCentralServerUrl: process.env.RINGCENTRAL_SERVER_URL || '',
+    ringCentralClientId: process.env.RINGCENTRAL_CLIENT_ID || '',
+    ringCentralClientSecret: process.env.RINGCENTRAL_CLIENT_SECRET || '',
+    ringCentralJwt: process.env.RINGCENTRAL_JWT || '',
   };
 
   _config = Object.freeze(config);

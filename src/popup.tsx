@@ -132,6 +132,16 @@ const Popup = () => {
             focused: true
         });
     };
+
+    const handleOpenDoubaoBridge = () => {
+        chrome.windows.create({
+            url: chrome.runtime.getURL('doubao-bridge.html'),
+            type: 'popup',
+            width: 900,
+            height: 920,
+            focused: true,
+        });
+    };
     
     const analyzeSlidesProjects = async () => {
         try {
@@ -294,6 +304,13 @@ const Popup = () => {
                     >
                         ↗️
                     </button>
+                    <button
+                        className="header-icon-btn doubao-icon-btn"
+                        onClick={handleOpenDoubaoBridge}
+                        title="Doubao Bridge"
+                    >
+                        豆
+                    </button>
                 </div>
             </div>
 
@@ -419,6 +436,16 @@ const Popup = () => {
                 .header-icon-btn:hover {
                     background: #e0e0e0;
                     transform: scale(1.1);
+                }
+
+                .doubao-icon-btn {
+                    background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);
+                    color: white;
+                    font-weight: 700;
+                }
+
+                .doubao-icon-btn:hover {
+                    background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
                 }
 
                 .toggle-container {

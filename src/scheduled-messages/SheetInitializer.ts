@@ -14,15 +14,21 @@ import { InitializationResult, SheetConfig } from './types';
  * - v2.1: 添加 Category 列
  * - v2.2: 添加 Automation_Link 列（支持 Jira Automation Rule 引用）
  * - v2.3: 添加 Repeat_Days 列（支持一周多天或月份多日期）
+ * - v2.4: 添加 Outreach 模板字段（支持主动询问模板）
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.3',
+  version: '2.4',
   columns: [
     'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
     'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count', 'Repeat_Days',
     'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
     'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
-    'Attachment', 'AI_Endpoint', 'AI_Headers', 'AI_Body',
+    'Attachment',
+    'Outreach_Target_Type', 'Outreach_Target_Ref', 'Outreach_Context',
+    'Outreach_Max_Followup', 'Outreach_Followup_Interval_Hours',
+    'Outreach_Sync_State', 'Outreach_Runtime_Status', 'Outreach_Last_Session_ID',
+    'Outreach_Last_Result', 'Outreach_Last_Updated',
+    'AI_Endpoint', 'AI_Headers', 'AI_Body',
     'Category', 'Automation_Link', 'Status', 'Last_Exec', 'Next_Exec',
     'Exec_Count', 'Exec_Log'
   ]
@@ -404,6 +410,16 @@ export class SheetInitializer {
       'sync.service',                 // Glip_User_Name
       '',                             // Glip_Team_ID
       '',                             // Attachment
+      '',                             // Outreach_Target_Type
+      '',                             // Outreach_Target_Ref
+      '',                             // Outreach_Context
+      '',                             // Outreach_Max_Followup
+      '',                             // Outreach_Followup_Interval_Hours
+      '',                             // Outreach_Sync_State
+      '',                             // Outreach_Runtime_Status
+      '',                             // Outreach_Last_Session_ID
+      '',                             // Outreach_Last_Result
+      '',                             // Outreach_Last_Updated
       '',                             // AI_Endpoint
       '',                             // AI_Headers
       '',                             // AI_Body
@@ -822,5 +838,3 @@ function dailyTrigger() {
     return result;
   }
 }
-
-

@@ -52,6 +52,12 @@
           <span>{{ action.actionType }}</span>
           <span v-if="delegationModeLabel(action)">{{ delegationModeLabel(action) }}</span>
           <span v-if="delegationTargetLabel(action)">{{ delegationTargetLabel(action) }}</span>
+          <span v-if="action.actionType === 'ask_external_user'">{{ outreachStatusLabel(action) }}</span>
+          <router-link
+            v-if="outreachSessionForAction(action)"
+            :to="`/outreach/${outreachSessionForAction(action)!.id}`"
+            class="thread-link"
+          >查看询问会话</router-link>
           <span v-if="action.requiresApproval">需人工确认</span>
           <span>置信 {{ action.confidence.toFixed(2) }}</span>
           <span>重试 {{ action.retryCount }}</span>
@@ -97,14 +103,18 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import {
   getMemoryServiceClient,
+  type OutreachSession,
   type RuntimeAction,
 } from '../../services/MemoryServiceClient';
 
 const client = getMemoryServiceClient();
+const route = useRoute();
 const loading = ref(true);
 const actions = ref<RuntimeAction[]>([]);
+const outreachByActionId = ref<Record<string, OutreachSession>>({});
 const queueStatus = ref<'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all'>('all');
 const executionMode = ref<'manual' | 'auto' | ''>('');
 
@@ -115,18 +125,72 @@ onMounted(() => {
 async function loadActions() {
   loading.value = true;
   try {
+    const actionId = typeof route.query.actionId === 'string' ? route.query.actionId : '';
     const response = await client.getActions({
       queueStatus: queueStatus.value,
       executionMode: executionMode.value || undefined,
       limit: 50,
     });
-    actions.value = response.items;
+    const filteredItems = actionId
+      ? response.items.filter((item) => item.id === actionId)
+      : response.items;
+    actions.value = filteredItems;
+    await hydrateOutreachSessions(filteredItems);
   } catch (error) {
     console.error('Failed to load actions:', error);
     actions.value = [];
+    outreachByActionId.value = {};
   } finally {
     loading.value = false;
   }
+}
+
+async function hydrateOutreachSessions(items: RuntimeAction[]) {
+  const askActions = items.filter((action) => action.actionType === 'ask_external_user');
+  if (askActions.length === 0) {
+    outreachByActionId.value = {};
+    return;
+  }
+
+  const mapping: Record<string, OutreachSession> = {};
+  const sessionIdPairs = askActions
+    .map((action) => ({ actionId: action.id, sessionId: resolveOutreachSessionId(action) }))
+    .filter((item): item is { actionId: string; sessionId: string } => Boolean(item.sessionId));
+
+  await Promise.all(
+    sessionIdPairs.map(async (pair) => {
+      try {
+        const session = await client.getOutreachSession(pair.sessionId);
+        mapping[pair.actionId] = session;
+      } catch {
+        // ignore lookup failures to keep the queue usable
+      }
+    }),
+  );
+
+  const unresolved = askActions.filter((action) => !mapping[action.id] && action.threadId);
+  const threadIds = Array.from(new Set(unresolved.map((action) => action.threadId!).filter(Boolean)));
+  await Promise.all(
+    threadIds.map(async (threadId) => {
+      try {
+        const sessions = await client.getOutreachSessions({
+          threadId,
+          limit: 50,
+        });
+        for (const action of unresolved) {
+          if (action.threadId !== threadId || mapping[action.id]) continue;
+          const matched = sessions.items.find((session) => session.actionId === action.id);
+          if (matched) {
+            mapping[action.id] = matched;
+          }
+        }
+      } catch {
+        // ignore lookup failures to keep the queue usable
+      }
+    }),
+  );
+
+  outreachByActionId.value = mapping;
 }
 
 async function executeAction(id: string) {
@@ -153,6 +217,41 @@ function delegationModeLabel(action: RuntimeAction) {
   }
   const mode = String(action.params?.mode || 'read').toLowerCase();
   return mode === 'write' ? '外部写操作委派' : '外部查询委派';
+}
+
+function resolveOutreachSessionId(action: RuntimeAction): string {
+  const idCandidates: unknown[] = [
+    action.outreachSessionId,
+    action.params?.outreachSessionId,
+    action.params?.sessionId,
+    action.result?.outreachSessionId,
+    action.result?.sessionId,
+  ];
+  const found = idCandidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  return typeof found === 'string' ? found.trim() : '';
+}
+
+function outreachSessionForAction(action: RuntimeAction): OutreachSession | null {
+  if (action.actionType !== 'ask_external_user') return null;
+  return outreachByActionId.value[action.id] ?? null;
+}
+
+function outreachStatusLabel(action: RuntimeAction): string {
+  const session = outreachSessionForAction(action);
+  return session ? `主动询问：${outreachSessionStatusLabel(session.status)}` : '主动询问：会话尚未创建';
+}
+
+function outreachSessionStatusLabel(status: string): string {
+  if (status === 'pending_approval') return '待审批';
+  if (status === 'scheduled') return '已排程';
+  if (status === 'waiting_reply') return '等待回复';
+  if (status === 'deferred') return '延期等待';
+  if (status === 'resolved') return '已拿到结果';
+  if (status === 'no_reply') return '无回复';
+  if (status === 'escalated') return '已升级';
+  if (status === 'cancelled') return '已取消';
+  if (status === 'failed') return '失败';
+  return status || '未知状态';
 }
 
 function delegationTargetLabel(action: RuntimeAction) {

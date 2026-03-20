@@ -17,6 +17,7 @@ import { getBotSender } from '../../utils/botSender.js';
 import { getUserRuntimeConfig } from '../../runtimeConfig.js';
 import { TruthMaintainer, type PropertyChange } from '../TruthMaintainer.js';
 import { ReflectionThreadService } from '../ReflectionThreadService.js';
+import { OutreachEngine } from '../OutreachEngine.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
 
 export interface ActionExecutionResult {
@@ -60,6 +61,63 @@ function normalizePriorityLabel(
   if ((fallbackPriority ?? 0) >= 8) return 'high';
   if ((fallbackPriority ?? 0) <= 4) return 'low';
   return 'normal';
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function normalizeOutreachIntent(action: QueuedActionRecord): {
+  targetType: string;
+  targetRef: string;
+  question: string;
+} {
+  const params = safeJsonValue(action.params);
+  const targetObject =
+    params.target && typeof params.target === 'object' && !Array.isArray(params.target)
+      ? (params.target as Record<string, unknown>)
+      : {};
+  const targetType =
+    firstNonEmptyString(
+      params.targetType,
+      params.target_type,
+      targetObject.type,
+    ) ?? 'person';
+  const targetRef =
+    firstNonEmptyString(
+      params.targetRef,
+      params.target_ref,
+      params.targetId,
+      params.chatId,
+      targetObject.id,
+    ) ?? '未指定目标';
+  const question =
+    firstNonEmptyString(
+      params.question,
+      params.prompt,
+      action.description,
+      action.title,
+    ) ?? '未提供问题';
+
+  return {
+    targetType,
+    targetRef,
+    question,
+  };
+}
+
+function isSelfDirectedOutreach(targetType: string, targetRef: string): boolean {
+  const normalizedTargetType = targetType.trim().toLowerCase();
+  const normalizedTargetRef = targetRef.trim().toLowerCase();
+  if (normalizedTargetRef === 'user' || normalizedTargetRef === 'me' || normalizedTargetRef === 'self') {
+    return true;
+  }
+  return normalizedTargetType === 'person' && normalizedTargetRef === 'current-user';
 }
 
 export class ActionExecutor {
@@ -174,6 +232,9 @@ export class ActionExecutor {
     }
     if (action.actionType === 'query_external_tool') {
       return { result: await this.queryExternalTool(action) };
+    }
+    if (action.actionType === 'ask_external_user') {
+      return { result: await this.askExternalUser(action) };
     }
 
     throw new Error(`Unsupported action type: ${action.actionType}`);
@@ -587,6 +648,109 @@ export class ActionExecutor {
       ok: result.ok,
       data: result.data,
       text: result.text,
+    };
+  }
+
+  private async askExternalUser(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+    const intent = normalizeOutreachIntent(action);
+    if (isSelfDirectedOutreach(intent.targetType, intent.targetRef)) {
+      return this.createOutreachFallbackConfirmRequest(action, 'self_target', intent);
+    }
+
+    const runtime = getUserRuntimeConfig(this.userDataManager);
+    if (!runtime.outreachEnabled) {
+      return this.createOutreachFallbackConfirmRequest(action, 'disabled', intent);
+    }
+
+    const ringCentralReady =
+      Boolean(runtime.ringCentralServerUrl?.trim()) &&
+      Boolean(runtime.ringCentralClientId?.trim()) &&
+      Boolean(runtime.ringCentralClientSecret) &&
+      Boolean(runtime.ringCentralJwt);
+    if (!ringCentralReady) {
+      return this.createOutreachFallbackConfirmRequest(action, 'missing_config', intent);
+    }
+
+    const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
+    const session = await engine.createSessionFromAction({ action });
+
+    return {
+      status: 'session_created',
+      summary: `Outreach session ${session.id} created with status ${session.status}`,
+      outreachSessionId: session.id,
+      sessionId: session.id,
+      sessionStatus: session.status,
+      requiresApproval: session.requiresApproval,
+      targetType: session.targetType,
+      targetRef: session.targetRef,
+    };
+  }
+
+  private async createOutreachFallbackConfirmRequest(
+    action: QueuedActionRecord,
+    reason: 'disabled' | 'missing_config' | 'self_target',
+    intent = normalizeOutreachIntent(action),
+  ): Promise<Record<string, unknown>> {
+    const { targetType, targetRef, question } = intent;
+
+    const prompt =
+      reason === 'self_target'
+        ? '这条询问的目标是你自己，不会进入主动询问引擎。是否改为由你手动处理，或转入决策中心继续判断？'
+        :
+      reason === 'disabled'
+        ? `主动询问引擎尚未开启：是否先去 Options 开启后，再向 ${targetRef} 发起询问？`
+        : `主动询问依赖的 RingCentral 配置未完成：是否先去 Options 补齐配置后，再向 ${targetRef} 发起询问？`;
+    const context =
+      `原计划目标：${targetType} / ${targetRef}\n` +
+      `原计划问题：${question}\n` +
+      (reason === 'self_target'
+        ? '因为目标实际上是当前用户，这条动作不会创建主动询问会话，而会回到决策中心等待你的决定。'
+        : '当前动作不会创建主动询问会话，改为进入决策中心等待你的选择。');
+
+    const confirmResult = await this.createConfirmRequest({
+      ...action,
+      actionType: 'create_confirm_request',
+      title: prompt,
+      description: context,
+      params: {
+        question: prompt,
+        context,
+        category: reason === 'self_target' ? 'outreach_target_review' : 'outreach_setup',
+        priority: 'high',
+        options:
+          reason === 'self_target'
+            ? [
+                { label: '我手动处理', value: 'handle_manually' },
+                { label: '放入决策中心继续判断', value: 'review_in_decision_center' },
+                { label: '忽略这次询问', value: 'skip' },
+              ]
+            : [
+                { label: '去 Options 配置', value: 'configure_outreach' },
+                { label: '我手动处理', value: 'handle_manually' },
+                { label: '忽略这次询问', value: 'skip' },
+              ],
+        evidenceRefs: uniqStrings([
+          ...action.evidenceRefs,
+          action.threadId ? `reflection_thread:${action.threadId}` : null,
+          `outreach_target:${targetType}:${targetRef}`,
+        ]),
+      },
+    } as QueuedActionRecord);
+
+    return {
+      status: 'blocked',
+      blockReason: reason,
+      summary:
+        reason === 'self_target'
+          ? 'Self-directed ask converted into confirm request instead of outreach session'
+          :
+        reason === 'disabled'
+          ? 'Outreach engine disabled; created confirm request instead of session'
+          : 'RingCentral config missing; created confirm request instead of session',
+      confirmRequestId: confirmResult.confirmRequestId,
+      targetType,
+      targetRef,
+      question,
     };
   }
 

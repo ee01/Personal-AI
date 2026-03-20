@@ -27,6 +27,14 @@ export interface UserRuntimeConfig {
   openClawBaseUrl: string;
   openClawApiKey: string;
   openClawTimeoutMs: number;
+  outreachEnabled: boolean;
+  outreachIntervalMs: number;
+  outreachRequireApprovalForReflection: boolean;
+  outreachRequireApprovalForManual: boolean;
+  ringCentralServerUrl: string;
+  ringCentralClientId: string;
+  ringCentralClientSecret: string;
+  ringCentralJwt: string;
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
@@ -153,5 +161,40 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
         Math.max(1000, appConfig.openClawTimeoutMs),
       ),
     ),
+    outreachEnabled: normalizeBoolean(persisted.outreachEnabled, appConfig.outreachEnabled),
+    outreachIntervalMs: Math.max(
+      1000,
+      normalizePositiveInteger(
+        persisted.outreachIntervalMs,
+        Math.max(1000, appConfig.outreachIntervalMs),
+      ),
+    ),
+    outreachRequireApprovalForReflection: normalizeBoolean(
+      persisted.outreachRequireApprovalForReflection,
+      appConfig.outreachRequireApprovalForReflection,
+    ),
+    outreachRequireApprovalForManual: normalizeBoolean(
+      persisted.outreachRequireApprovalForManual,
+      appConfig.outreachRequireApprovalForManual,
+    ),
+    ringCentralServerUrl:
+      typeof persisted.ringCentralServerUrl === 'string' &&
+      persisted.ringCentralServerUrl.trim().length > 0
+        ? persisted.ringCentralServerUrl.trim()
+        : appConfig.ringCentralServerUrl,
+    ringCentralClientId:
+      typeof persisted.ringCentralClientId === 'string' &&
+      persisted.ringCentralClientId.trim().length > 0
+        ? persisted.ringCentralClientId.trim()
+        : appConfig.ringCentralClientId,
+    ringCentralClientSecret:
+      typeof persisted.ringCentralClientSecret === 'string' &&
+      persisted.ringCentralClientSecret.length > 0
+        ? persisted.ringCentralClientSecret
+        : appConfig.ringCentralClientSecret,
+    ringCentralJwt:
+      typeof persisted.ringCentralJwt === 'string' && persisted.ringCentralJwt.length > 0
+        ? persisted.ringCentralJwt
+        : appConfig.ringCentralJwt,
   };
 }

@@ -157,6 +157,45 @@
           <span>→</span>
         </div>
       </div>
+
+      <!-- 主动询问概览 -->
+      <div
+        v-if="!isCardClosed('today-outreach')"
+        class="content-card"
+        style="position: relative;"
+        @click="router.push('/outreach')"
+      >
+        <button class="mark-read-btn" @click.stop="handleCloseTodayCard('today-outreach')">阅</button>
+        <div class="card-header">
+          <div class="card-title">
+            <span>📡</span>
+            <span>主动询问进度</span>
+          </div>
+          <div class="card-badge">{{ outreachTotal }} 项待关注</div>
+        </div>
+        <div class="card-content">外部主动询问的执行和回复状态</div>
+        <ul class="info-list">
+          <li class="info-item">
+            <span>🕒</span>
+            <span>待触发模板 {{ pendingTemplateCount }} · 已排程 {{ scheduledSessionCount }}<template v-if="outreachSummary.pendingApprovalCount > 0"> · 待审批 {{ outreachSummary.pendingApprovalCount }}</template></span>
+            <span class="info-time">计划中</span>
+          </li>
+          <li class="info-item">
+            <span>💬</span>
+            <span>等待回复 {{ outreachSummary.waitingReplyCount }}</span>
+            <span class="info-time">跟进中</span>
+          </li>
+          <li class="info-item">
+            <span>⚠️</span>
+            <span>已升级 {{ outreachSummary.escalatedCount }}</span>
+            <span class="info-time">需处理</span>
+          </li>
+        </ul>
+        <div class="view-more-btn">
+          <span>进入主动询问</span>
+          <span>→</span>
+        </div>
+      </div>
     </div>
 
     <!-- 未读主题瀑布流推送 -->
@@ -235,9 +274,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useMemoryStore } from '../memory-store';
+import {
+  getMemoryServiceClient,
+  type OutreachSummary,
+  type OutreachTemplateRuntimeStatusItem,
+} from '../../services/MemoryServiceClient';
 
 const store = useMemoryStore();
 const router = useRouter();
@@ -245,6 +289,35 @@ const router = useRouter();
 const overviewStats = computed(() => store.overviewStats);
 const closedTodayCards = computed(() => store.closedTodayCards);
 const waterfallDisplayCount = ref(6);
+const outreachSummary = ref<OutreachSummary>({
+  upcomingCount: 0,
+  waitingReplyCount: 0,
+  escalatedCount: 0,
+  pendingApprovalCount: 0,
+});
+const pendingTemplateCount = ref(0);
+const scheduledSessionCount = computed(() =>
+  Math.max(
+    Number(outreachSummary.value.upcomingCount || 0) -
+      Number(outreachSummary.value.pendingApprovalCount || 0),
+    0,
+  ),
+);
+const outreachTotal = computed(
+  () =>
+    pendingTemplateCount.value +
+    outreachSummary.value.upcomingCount +
+    outreachSummary.value.waitingReplyCount +
+    outreachSummary.value.escalatedCount,
+);
+let outreachSummaryTimer: ReturnType<typeof setInterval> | null = null;
+const TERMINAL_OUTREACH_STATUSES = new Set([
+  'resolved',
+  'no_reply',
+  'escalated',
+  'cancelled',
+  'failed',
+]);
 
 // 获取未读主题数量
 const unreadTopicsCount = computed(() => store.getUnreadTopics().length);
@@ -312,6 +385,58 @@ const formatTime = (timestamp: number) => {
   if (days < 30) return `${days}天前`;
   return new Date(timestamp).toLocaleDateString();
 };
+
+async function loadOutreachSummary() {
+  try {
+    const client = getMemoryServiceClient();
+    const [summary, templates] = await Promise.all([
+      client.getOutreachSummary(),
+      client.getOutreachTemplateRuntimeStatus(undefined, 100),
+    ]);
+    outreachSummary.value = summary;
+    pendingTemplateCount.value = templates.items.filter((item) => isPendingTemplate(item)).length;
+  } catch (error) {
+    console.error('加载主动询问概览失败:', error);
+  }
+}
+
+function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
+  const template = item.template;
+  const nextDispatchAt = resolveTemplateNextDispatchAt(item);
+  if (template.enabled === false) return false;
+  if (template.syncState && template.syncState !== 'synced') return false;
+  if (!nextDispatchAt) return false;
+  return !item.latestSession || TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status);
+}
+
+function resolveTemplateNextDispatchAt(item: OutreachTemplateRuntimeStatusItem): number | null {
+  const raw = item.template.scheduleSpec?.nextDispatchAt;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  const scheduleDate = typeof item.template.scheduleSpec?.scheduleDate === 'string'
+    ? item.template.scheduleSpec.scheduleDate
+    : '';
+  const scheduleTime = typeof item.template.scheduleSpec?.scheduleTime === 'string'
+    ? item.template.scheduleSpec.scheduleTime
+    : '09:00';
+  if (!scheduleDate) return null;
+  const date = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.floor(date.getTime() / 1000);
+}
+
+onMounted(async () => {
+  await loadOutreachSummary();
+  outreachSummaryTimer = setInterval(() => {
+    void loadOutreachSummary();
+  }, 60_000);
+});
+
+onUnmounted(() => {
+  if (outreachSummaryTimer) {
+    clearInterval(outreachSummaryTimer);
+    outreachSummaryTimer = null;
+  }
+});
 </script>
 
 <style scoped>

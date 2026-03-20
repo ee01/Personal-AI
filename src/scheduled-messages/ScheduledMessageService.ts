@@ -390,6 +390,31 @@ export class ScheduledMessageService {
     headers.forEach((header, index) => {
       message[header] = row[index] || '';
     });
+
+    const numericFields = [
+      'Repeat_Every',
+      'Repeat_Count',
+      'Timeline_Offset',
+      'Exec_Count',
+      'Outreach_Max_Followup',
+      'Outreach_Followup_Interval_Hours',
+    ];
+
+    numericFields.forEach((field) => {
+      const value = message[field];
+      if (value === '' || value === undefined || value === null) {
+        return;
+      }
+
+      const parsed = typeof value === 'number' ? value : Number(value);
+      if (!Number.isNaN(parsed)) {
+        message[field] = parsed;
+      }
+    });
+
+    if (!message.Target_Type && message.Outreach_Target_Type) {
+      message.Target_Type = message.Outreach_Target_Type;
+    }
     
     return message as ScheduledMessage;
   }

@@ -394,4 +394,130 @@ describe('ActionExecutor', () => {
     expect(result.queueStatus).toBe('succeeded');
     expect(runSpy).not.toHaveBeenCalled();
   });
+
+  it('creates a confirm request instead of an outreach session when outreach is disabled', async () => {
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        outreachEnabled: false,
+        ringCentralServerUrl: '',
+        ringCentralClientId: '',
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    );
+
+    const thread = threadRepo.upsertThread({
+      topicKey: 'project:outreach-disabled',
+      title: '项目反思: Outreach disabled',
+      status: 'active',
+      priority: 8,
+      salience: 0.88,
+      nextReflectionAt: Math.floor(Date.now() / 1000),
+    });
+
+    const action = actionRepo.create({
+      actionType: 'ask_external_user',
+      title: '询问 AI Service 当前版本号',
+      description: '当前 release 版本号是多少？',
+      params: {
+        targetType: 'private',
+        targetRef: 'AI Service',
+        question: '当前 release 版本号是多少？',
+      },
+      threadId: thread.id,
+      executionMode: 'manual',
+      queueStatus: 'queued',
+      priority: 8,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true }),
+      json: async () => ({ ok: true }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(result.queueStatus).toBe('succeeded');
+    expect(result.result?.status).toBe('blocked');
+    expect(result.result?.blockReason).toBe('disabled');
+    expect(result.result?.confirmRequestId).toBeTruthy();
+
+    const confirmRequest = db
+      .prepare(`SELECT question, category FROM confirm_requests WHERE id = ?`)
+      .get(String(result.result?.confirmRequestId)) as { question: string; category: string } | undefined;
+    expect(confirmRequest?.category).toBe('outreach_setup');
+    expect(confirmRequest?.question).toContain('主动询问引擎尚未开启');
+
+    const sessionCount = (db
+      .prepare(`SELECT COUNT(*) AS count FROM outreach_sessions`)
+      .get() as { count: number }).count;
+    expect(sessionCount).toBe(0);
+  });
+
+  it('routes self-targeted ask_external_user actions back to confirm request instead of outreach', async () => {
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        outreachEnabled: true,
+        ringCentralServerUrl: 'https://platform.ringcentral.example.com',
+        ringCentralClientId: 'client-id',
+        ringCentralClientSecret: 'client-secret',
+        ringCentralJwt: 'jwt-token',
+      }),
+    );
+
+    const thread = threadRepo.upsertThread({
+      topicKey: 'project:outreach-self-target',
+      title: '项目反思: Outreach self target',
+      status: 'active',
+      priority: 8,
+      salience: 0.88,
+      nextReflectionAt: Math.floor(Date.now() / 1000),
+    });
+
+    const action = actionRepo.create({
+      actionType: 'ask_external_user',
+      title: '让我自己去确认版本号',
+      description: '当前 release 版本号是多少？',
+      params: {
+        targetType: 'person',
+        targetRef: 'user',
+        question: '当前 release 版本号是多少？',
+      },
+      threadId: thread.id,
+      executionMode: 'manual',
+      queueStatus: 'queued',
+      priority: 8,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true }),
+      json: async () => ({ ok: true }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(result.queueStatus).toBe('succeeded');
+    expect(result.result?.status).toBe('blocked');
+    expect(result.result?.blockReason).toBe('self_target');
+    expect(result.result?.confirmRequestId).toBeTruthy();
+
+    const confirmRequest = db
+      .prepare(`SELECT question, category FROM confirm_requests WHERE id = ?`)
+      .get(String(result.result?.confirmRequestId)) as { question: string; category: string } | undefined;
+    expect(confirmRequest?.category).toBe('outreach_target_review');
+    expect(confirmRequest?.question).toContain('目标是你自己');
+
+    const sessionCount = (db
+      .prepare(`SELECT COUNT(*) AS count FROM outreach_sessions`)
+      .get() as { count: number }).count;
+    expect(sessionCount).toBe(0);
+  });
 });

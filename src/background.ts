@@ -18,6 +18,7 @@ import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
+import type { ScheduledMessage } from './scheduled-messages/types';
 import { getCurrentUser, getProjectByKey, jiraFetch, getTicketDetail } from './jira';
 import { handleLLMRequest } from './llm';
 import { concernedItemsSyncService } from './services/ConcernedItemsSyncService';
@@ -36,6 +37,96 @@ void concernedItemsSyncService.initialize();
 
 // Map to track backend notification types for click handling
 const backendNotificationTypes = new Map<string, string>();
+
+function parseOutreachEpochSeconds(raw?: string): number | undefined {
+    if (!raw || !raw.trim()) return undefined;
+    const normalized = raw.includes('T')
+        ? raw
+        : raw.includes(' ')
+            ? raw.replace(' ', 'T')
+            : `${raw}T09:00:00`;
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return undefined;
+    return Math.floor(date.getTime() / 1000);
+}
+
+function buildOutreachScheduleSpec(message: ScheduledMessage): Record<string, unknown> {
+    const spec: Record<string, unknown> = {};
+    const nextDispatchAt = parseOutreachEpochSeconds(message.Next_Exec || message.Schedule_Date);
+    if (nextDispatchAt) {
+        spec.nextDispatchAt = nextDispatchAt;
+    }
+    if (message.Schedule_Date) {
+        spec.scheduleDate = message.Schedule_Date;
+    }
+    if (message.Schedule_Time) {
+        spec.scheduleTime = message.Schedule_Time;
+    }
+    if (message.Repeat_Every && message.Repeat_Unit) {
+        spec.repeatEvery = Number(message.Repeat_Every);
+        spec.repeatUnit = message.Repeat_Unit;
+    }
+    return spec;
+}
+
+function resolveOutreachTargetRef(message: ScheduledMessage): string {
+    return (
+        message.Outreach_Target_Ref?.trim() ||
+        (message.Outreach_Target_Type === 'group' ? message.Glip_Team_ID?.trim() : message.Glip_User_Name?.trim()) ||
+        ''
+    );
+}
+
+function buildOutreachTemplatePayload(message: ScheduledMessage) {
+    const targetType = message.Outreach_Target_Type || message.Target_Type || (message.Glip_Team_ID ? 'group' : 'private');
+    const targetRef = resolveOutreachTargetRef(message);
+    if (!targetRef) {
+        throw new Error('Outreach target ref is required');
+    }
+
+    const status = message.Status || 'Active';
+    const enabled = status === 'Active';
+    const syncState =
+        status === 'Paused'
+            ? 'paused'
+            : status === 'Completed' || status === 'Done'
+                ? 'cancelled'
+                : 'synced';
+
+    return {
+        id: message.ID,
+        sourceKind: 'scheduled_message',
+        sourceRefId: message.ID,
+        sheetMessageId: message.ID,
+        title: message.Topic,
+        questionTemplate: message.Content,
+        contextTemplate: message.Outreach_Context?.trim(),
+        targetType,
+        targetRef,
+        scheduleSpec: buildOutreachScheduleSpec(message),
+        enabled,
+        approvalPolicy: 'manual_direct',
+        maxFollowup: Number(message.Outreach_Max_Followup ?? 1),
+        followupIntervalSeconds: Math.max(
+            3600,
+            Number(message.Outreach_Followup_Interval_Hours ?? 24) * 3600,
+        ),
+        syncState,
+        lastSyncError: message.Outreach_Sync_State === 'sync_error'
+            ? message.Outreach_Last_Result || 'Sync error'
+            : undefined,
+    };
+}
+
+async function syncOutreachTemplateMirror(message: ScheduledMessage): Promise<void> {
+    const client = getMemoryServiceClient();
+    await client.upsertOutreachTemplate(buildOutreachTemplatePayload(message));
+}
+
+async function cancelOutreachTemplateMirror(messageId: string): Promise<void> {
+    const client = getMemoryServiceClient();
+    await client.cancelOutreachTemplate(messageId);
+}
 
 // 注册 Digest 任务（关注后续合并通知、concernedItems 每日摘要等）
 registerFollowThreadDigestTask();
@@ -268,6 +359,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 全局日志：记录所有收到的消息
     console.log('🔔 Background 收到消息:', request.type, '来自:', sender.tab?.url || sender.url || 'unknown');
     
+    if (request.type === 'SYNC_OUTREACH_TEMPLATE_MIRROR') {
+        (async () => {
+            try {
+                await syncOutreachTemplateMirror(request.data?.message as ScheduledMessage);
+                sendResponse({ success: true });
+            } catch (error: any) {
+                sendResponse({ success: false, error: error?.message || 'sync_failed' });
+            }
+        })();
+        return true;
+    }
+
+    if (request.type === 'CANCEL_OUTREACH_TEMPLATE_MIRROR') {
+        (async () => {
+            try {
+                await cancelOutreachTemplateMirror(String(request.data?.messageId || ''));
+                sendResponse({ success: true });
+            } catch (error: any) {
+                sendResponse({ success: false, error: error?.message || 'cancel_failed' });
+            }
+        })();
+        return true;
+    }
+
     // 如果不是 background 定时程序，会从页面发送请求到这里执行
     if (request.type === 'MESSAGE_DEALING') {
         const { body } = request.data;

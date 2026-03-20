@@ -1,6 +1,6 @@
 # Memory Service — 类人记忆系统架构
 
-*最后更新: 2026-03-18 (补充自我反思 / 梦境重放 / 本地研究查询 / OpenClaw 外部委派)*
+*最后更新: 2026-03-20 (补充主动询问 / 决策中心 / 通知链路 / 目标解析器)*
 
 ## 系统概述
 
@@ -242,6 +242,7 @@ ReflectionResearcher      ReflectionWorker
 - `create_confirm_request`
 - `update_truth_property`
 - `delegate_openclaw`
+- `ask_external_user`
 
 它们的职责分别是：
 
@@ -249,6 +250,7 @@ ReflectionResearcher      ReflectionWorker
 - `create_confirm_request`：把需要用户判断的问题放进决策中心
 - `update_truth_property`：修改本地真值/画像
 - `delegate_openclaw`：把外部系统查询或操作委派给 OpenClaw
+- `ask_external_user`：当系统已经知道要找哪个外部人/群组时，发起主动询问并等待回复
 
 动作会进入 `proposed_actions` 队列，有独立状态机：
 
@@ -257,6 +259,211 @@ ReflectionResearcher      ReflectionWorker
 - `succeeded`
 - `failed`
 - `dead_letter`
+
+### 用户侧三条主要呈现链路
+
+反思线程、真值维护和其他后台引擎在需要“继续推进”时，面向用户大致会分成三条链路：
+
+- **主动询问（Outreach）**
+- **决策中心（Confirm Requests）**
+- **通知提醒（Notifications / 免打扰路径）**
+
+这三条链路不是一回事。区分标准不是“有没有提醒到用户”，而是“系统下一步缺的到底是什么”。
+
+需要特别说明的是：
+
+- 这三条是**用户最直接感知到的主要呈现链路**
+- 但系统内部真正的决策链路不止三条
+- 在进入这三条用户侧链路之前，系统还会先经过：
+  - 本地研究补查
+  - OpenClaw 外部系统查询/执行
+  - 本地真值更新 / 无需打扰用户的内部收敛
+
+#### 1. 主动询问（Outreach）
+
+适用场景：
+
+- 缺失信息确实来自外部人或群组
+- 系统已经知道具体应该问谁
+- 用户允许使用主动询问引擎，并且 RingCentral 已正确配置
+
+典型例子：
+
+- “Release 版本号还没同步到本地，需要问 AI Service 群确认”
+- “这个需求是谁最终拍板的，需要问 PM”
+
+当前实现特征：
+
+- 运行时引擎：`OutreachEngine`
+- 数据表：`outreach_templates` / `outreach_sessions` / `outreach_events`
+- 入口来源：
+  - 自我反思动作 `ask_external_user`
+  - 定时消息里的“帮询问”模板
+- 发送前必须做**目标解析**
+  - 如果能解析到唯一 RingCentral 用户/群组，才允许审批或发送
+  - 如果目标未解析或有多个候选，会停在 `pending_approval`
+  - UI 里需要先确认目标，不能直接批准
+
+#### 2. 决策中心（Confirm Requests）
+
+适用场景：
+
+- 缺的是**用户判断**
+- 目标不明确，系统还不知道该问谁
+- 目标实际上是用户自己，不应该走对外询问
+- 功能未配置，例如 OpenClaw / Outreach 能力缺失，需要用户决定是否配置或改走手动处理
+
+典型例子：
+
+- “这条主动询问其实目标是你自己，是否改为手动处理？”
+- “Outreach 引擎没开，是否去 Options 配置？”
+- “两个候选目标都可能对，应该问谁？”
+
+当前实现特征：
+
+- 数据表：`confirm_requests`
+- UI：`memory-exploring` 的“决策中心”
+- 当前 UI 行为只有**回答**，没有 snooze 入口
+
+#### 3. 通知提醒（Notifications / 免打扰路径）
+
+适用场景：
+
+- 系统只是想提醒你有一件事值得关注
+- 不一定需要你立刻给出明确判断
+- 更偏“稍后看”“稍后处理”“先提醒到你”
+
+典型例子：
+
+- 发现一个新的待决策项，但优先级没高到必须立刻打断你
+- 老的待决策项已经挂了一天，需要提醒你回来处理
+- 关注项目出现更新、临近 deadline、周报或梦境摘要可查看
+
+当前实现特征：
+
+- 数据表：`notification_records`
+- 能力：`acknowledge` / `dismiss` / `snooze`
+- `snooze` 当前默认是顺延 24 小时
+- 当前没有独立“通知中心”页面，主要呈现方式是：
+  - Chrome Extension 通知
+  - Bot 推送
+  - 点击通知后跳到 `memory-exploring` 对应页面，例如 `/decisions` 或 `/dreams`
+
+### 触发逻辑与优先级
+
+当前系统推荐的执行逻辑如下：
+
+1. **先判断是否能通过外部工具补齐信息**
+
+- 如果缺失信息更像是 Jira / GitLab / Confluence / 部署系统这类外部系统里已有的事实，优先走 `delegate_openclaw`
+- 这一步属于“先查工具”，不是先打扰人
+
+2. **如果无法靠工具拿到，且已知具体外部对象，再走主动询问**
+
+- 只有当系统已经知道“要问哪个人 / 哪个群组”，才应该产出 `ask_external_user`
+- `ask_external_user` 不是“有人应该知道”，而是“明确知道该找谁”
+- 如果目标解析失败或目标不唯一，会进入待审批并要求用户确认目标
+
+3. **如果目标不明确、能力没配置或需要用户判断，进入决策中心**
+
+- 决策中心承接的是“需要你做决定”的事情
+- 它不是提醒方式，而是一类待回答的问题
+
+4. **如果只是提醒你稍后关注，进入通知链路**
+
+- 通知链路承接的是“值得提醒”，不一定是“必须现在决策”
+- 它更接近免打扰/稍后处理，而不是审批工作队列
+
+### 系统级完整决策链路
+
+如果从“反思线程收到新证据”开始看，系统完整链路实际上更接近下面这张图，而不只是三个用户侧页面：
+
+```mermaid
+flowchart TD
+    A["新证据进入<br/>消息 / ask / 属性变化 / action_result / outreach_reply / dream_run"] --> B["ReflectionPlanner / ReflectionWorker"]
+    B --> C["本地研究补查<br/>消息、chunks、truth、画像、历史线程"]
+    C --> D{"本地证据够了吗？"}
+
+    D -->|够| E{"是否只需内部收敛？"}
+    E -->|是| F["update_truth_property / 更新线程假设<br/>不打扰用户"]
+    E -->|否| G{"是否需要提醒用户？"}
+    G -->|需要明确回答或决策| H["create_confirm_request<br/>进入决策中心"]
+    G -->|只是提醒或稍后关注| I["notify_user<br/>进入 notification_records"]
+
+    D -->|不够| J{"缺失信息是否更像外部系统事实？"}
+    J -->|是| K["delegate_openclaw<br/>查询 Jira / GitLab / Confluence / 部署等"]
+    J -->|否| L{"是否已经知道具体要问谁？"}
+
+    L -->|是| M{"Outreach 是否可用且目标可解析？"}
+    M -->|是| N["ask_external_user<br/>进入 OutreachEngine"]
+    M -->|否| O["create_confirm_request<br/>让用户配置/确认目标/改走手动处理"]
+
+    L -->|否| P{"需要用户现在判断吗？"}
+    P -->|需要| H
+    P -->|不需要| I
+
+    K --> Q["action_result 回流线程"]
+    N --> R["reply / no_reply / escalated 回流线程"]
+    Q --> B
+    R --> B
+```
+
+这张图对应的关键原则是：
+
+1. **先查本地，再查工具，再问人**
+
+- Memory Service 会先用本地研究补查现有消息、真值、画像和线程证据
+- 如果缺失信息本质上是 Jira / GitLab / Confluence / 部署系统里的事实，优先走 OpenClaw
+- 只有当系统已经知道“该问谁”，且这更像聊天可回答的信息，才走 Outreach
+
+2. **问人之前，必须先确认目标**
+
+- “有人应该知道”还不够
+- 必须已经定位到具体人或群组，或者至少能在审批时从候选里明确选出目标
+- 如果目标不明确、目标其实是你自己、或能力没配置，就不应该直接发主动询问
+
+3. **决策中心和通知链路不是互斥的**
+
+- `create_confirm_request` 解决的是“需要你回答什么问题”
+- `notify_user` / `notification_records` 解决的是“要不要现在提醒你”
+- 所以一个高优先级决策中心项，可能会同时伴随一次立即提醒
+
+4. **Outreach 和 OpenClaw 的结果都会回流线程**
+
+- OpenClaw 产出 `action_result`
+- Outreach 产出 `reply / no_reply / escalated`
+- 两者都不是终点，而是下一轮反思的输入
+
+### 这几条链路分别回答什么问题
+
+为了避免混淆，可以把它们理解成不同问题类型：
+
+| 链路 | 它回答的问题 |
+|---|---|
+| 本地研究补查 | “我本地是不是已经知道答案了？” |
+| OpenClaw | “外部系统里是不是已经有答案了？” |
+| Outreach | “外部某个人/群组能不能回答这个问题？” |
+| 决策中心 | “现在是不是必须由用户来判断？” |
+| 通知链路 | “这件事要不要现在提醒用户？” |
+
+### 立即打扰 vs 免打扰提醒
+
+“立即打扰”不是一条单独的数据链路，而是一种**投递强度**。
+
+- `create_confirm_request` 是“内容类型”：它表示有一个需要你回答的问题
+- `notify_user` / `notification_records` 是“提醒投递”：它表示系统是否现在把这件事推到你面前
+
+因此：
+
+- **立即打扰 ≠ 决策中心**
+- 一个高优先级的决策中心项，通常会伴随一次立即提醒
+- 但“立即提醒”本身也可以只是一个通知，不一定带决策题
+
+当前具体行为：
+
+- 高优先级 `confirm_request` 在创建时，会立即派生一个 `notify_user` 动作，尝试立刻 Bot 推送
+- 其他待决策项则会在 Heartbeat 中被扫描成通知候选，再经过 `ProactivityPolicy` 决定是否真的发出提醒
+- 所以，**决策中心项不一定一定推送；高优先级时会立即推送，普通优先级可能只是安静地留在决策中心，或稍后再提醒**
 
 ### 外部查询与执行操作
 
@@ -434,7 +641,11 @@ data/
 | 动作 | `POST /actions/:id/execute` | 手动执行某个动作 |
 | 动作 | `POST /actions/:id/retry` | 重试失败动作 |
 | 决策中心 | `GET /confirm-requests` | 查看待确认项 |
-| 决策中心 | `POST /confirm-requests/:id/respond` | 回答待确认项 |
+| 决策中心 | `POST /confirm-requests/:id/answer` | 回答待确认项 |
+| 主动询问 | `GET /outreach/sessions` | 查看主动询问会话 |
+| 主动询问 | `GET /outreach/sessions/:id` | 查看单个主动询问详情 |
+| 主动询问 | `POST /outreach/sessions/:id/approve` | 批准待发送询问 |
+| 主动询问 | `GET /outreach/targets/search` | 检索 RingCentral 用户/群组候选 |
 | 梦境报表 | `POST /dream-digest/push-now` | 手动立即推送一次梦境报表 |
 | 巩固 | `POST /consolidate` | 手动触发巩固 |
 | 导出 | `POST /export` | Markdown 格式导出 |

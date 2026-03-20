@@ -61,6 +61,15 @@ function uniqStrings(values: Array<string | undefined | null>): string[] {
   );
 }
 
+function isSelfOrUnknownOutreachTarget(targetRef: unknown): boolean {
+  if (typeof targetRef !== 'string') return true;
+  const normalized = targetRef.trim().toLowerCase();
+  if (!normalized) return true;
+  return ['me', 'myself', 'self', 'user', 'current_user', 'current user', '我', '自己'].includes(
+    normalized,
+  );
+}
+
 export class ReflectionWorker {
   async generate(
     thread: ReflectionThreadRecord,
@@ -117,7 +126,7 @@ Return JSON only:
   "openQuestions": ["short question"],
       "actionProposals": [
     {
-      "actionType": "notify_user | create_confirm_request | update_truth_property | delegate_openclaw",
+      "actionType": "notify_user | create_confirm_request | update_truth_property | delegate_openclaw | ask_external_user",
       "title": "short title",
       "description": "why this action matters",
       "confidence": 0.0,
@@ -133,8 +142,14 @@ Return JSON only:
 }
 
 Rules:
+- Prefer "delegate_openclaw" before "ask_external_user" when the missing information might already exist in an external system or tool.
+- Use "delegate_openclaw" only for external systems.
 - If actionType is "delegate_openclaw" and params.mode is "write", you must set requiresApproval=true and executionMode="manual".
-- Use "delegate_openclaw" only for external systems.`;
+- Use "ask_external_user" only when a concrete external owner is already identifiable and the gap is best answered by that person or group over chat.
+- For "ask_external_user", you must include params.targetRef, params.targetType, params.question, and optional params.context.
+- Do not use "ask_external_user" if the target is the user themself, if the target is still ambiguous, or if you only know that "someone should know".
+- If the next step requires the user's judgment, a missing configuration decision, or target clarification, prefer "create_confirm_request".
+- If the system should only inform or remind the user later, prefer "notify_user".`;
 
     const parsed = await llm.generateJSON<WorkerResponse>(prompt, {
       temperature: 0.3,
@@ -226,9 +241,18 @@ Rules:
         ? params.mode.trim().toLowerCase()
         : undefined;
     const isWriteDelegation = requestedMode === 'write';
+    const normalizedActionType = action.actionType.trim();
+
+    if (normalizedActionType === 'ask_external_user') {
+      const targetRef = params.targetRef ?? params.target_ref ?? params.targetId ?? params.chatId;
+      const question = typeof params.question === 'string' ? params.question.trim() : '';
+      if (isSelfOrUnknownOutreachTarget(targetRef) || !question) {
+        return null;
+      }
+    }
 
     return {
-      actionType: action.actionType.trim(),
+      actionType: normalizedActionType,
       title: action.title.trim(),
       description: action.description?.trim(),
       params,

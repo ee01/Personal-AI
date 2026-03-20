@@ -104,6 +104,31 @@
       </section>
 
       <section class="panel">
+        <div class="panel-title">关联主动询问</div>
+        <div v-if="threadOutreachLoading" class="muted">加载会话中...</div>
+        <div v-else-if="threadOutreachSessions.length === 0" class="muted">暂无关联主动询问会话</div>
+        <div v-else class="run-list">
+          <div
+            v-for="session in threadOutreachSessions"
+            :key="session.id"
+            class="run-card"
+          >
+            <div class="inline-head">
+              <span>{{ outreachStatusLabel(session.status) }}</span>
+              <span class="muted small">{{ relativeTime(session.createdAt) }}</span>
+            </div>
+            <p class="run-summary">{{ session.renderedQuestion || '(空问题)' }}</p>
+            <div class="action-meta">
+              <span>{{ outreachOriginLabel(session.originKind) }}</span>
+              <span>{{ outreachTargetTypeLabel(session.targetType) }} / {{ session.targetRef }}</span>
+              <span>追问 {{ session.followupCount }}/{{ session.maxFollowup }}</span>
+              <router-link :to="`/outreach/${session.id}`" class="thread-link">查看会话</router-link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="panel-title">外部委派结果</div>
         <div v-if="(detail.actionResults?.length ?? 0) === 0" class="muted">暂无外部委派结果</div>
         <div v-else class="run-list">
@@ -205,6 +230,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
+  type OutreachSession,
   type ReflectionThreadDetailResponse,
 } from '../../services/MemoryServiceClient';
 
@@ -218,6 +244,8 @@ const researchEvidence = computed(() => detail.value?.links.filter(link => link.
 const transcriptVisible = ref<Record<string, boolean>>({});
 const transcriptLoading = ref<Record<string, boolean>>({});
 const transcriptContent = ref<Record<string, string | null>>({});
+const threadOutreachLoading = ref(false);
+const threadOutreachSessions = ref<OutreachSession[]>([]);
 
 onMounted(() => {
   void loadDetail();
@@ -234,13 +262,24 @@ async function loadDetail() {
   const threadId = route.params.id as string;
   if (!threadId) return;
   loading.value = true;
+  threadOutreachLoading.value = true;
   try {
-    detail.value = await client.getReflectionThread(threadId);
+    const [threadDetail, outreach] = await Promise.all([
+      client.getReflectionThread(threadId),
+      client.getOutreachSessions({
+        threadId,
+        limit: 50,
+      }),
+    ]);
+    detail.value = threadDetail;
+    threadOutreachSessions.value = outreach.items;
   } catch (error) {
     console.error('Failed to load reflection detail:', error);
     detail.value = null;
+    threadOutreachSessions.value = [];
   } finally {
     loading.value = false;
+    threadOutreachLoading.value = false;
   }
 }
 
@@ -364,9 +403,35 @@ function statusLabel(status: string) {
 }
 
 function displayActionType(actionType: string) {
-  if (actionType === 'delegate_openclaw') return 'delegate_openclaw';
+  if (actionType === 'ask_external_user') return '主动询问';
+  if (actionType === 'delegate_openclaw') return 'OpenClaw 委派';
   if (actionType === 'query_external_tool') return 'query_external_tool（兼容模式）';
   return actionType;
+}
+
+function outreachStatusLabel(status: string) {
+  if (status === 'pending_approval') return '待审批';
+  if (status === 'scheduled') return '已排程';
+  if (status === 'waiting_reply') return '等待回复';
+  if (status === 'deferred') return '延期等待';
+  if (status === 'resolved') return '已拿到结果';
+  if (status === 'no_reply') return '无回复';
+  if (status === 'escalated') return '已升级';
+  if (status === 'cancelled') return '已取消';
+  if (status === 'failed') return '失败';
+  return status || '未知状态';
+}
+
+function outreachOriginLabel(originKind?: string) {
+  if (originKind === 'reflection_action') return '自我反思';
+  if (originKind === 'scheduled_template' || originKind === 'manual_action') return '手动/定时';
+  return '未知来源';
+}
+
+function outreachTargetTypeLabel(targetType?: string) {
+  if (targetType === 'private') return '私聊';
+  if (targetType === 'group') return '群组';
+  return targetType || '未知目标';
 }
 
 function displayThreadTitle(title: string) {
@@ -374,14 +439,20 @@ function displayThreadTitle(title: string) {
 }
 
 function relativeTime(ts: number) {
-  const diff = Date.now() - ts * 1000;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes}分钟前`;
+  const normalized = normalizeTimestamp(ts);
+  const diff = normalized - Date.now();
+  const abs = Math.abs(diff);
+  const minutes = Math.floor(abs / 60000);
+  if (minutes < 1) return diff >= 0 ? '即将' : '刚刚';
+  if (minutes < 60) return diff >= 0 ? `${minutes}分钟后` : `${minutes}分钟前`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}小时前`;
+  if (hours < 24) return diff >= 0 ? `${hours}小时后` : `${hours}小时前`;
   const days = Math.floor(hours / 24);
-  return `${days}天前`;
+  return diff >= 0 ? `${days}天后` : `${days}天前`;
+}
+
+function normalizeTimestamp(ts: number) {
+  return ts > 1_000_000_000_000 ? ts : ts * 1000;
 }
 </script>
 

@@ -29,6 +29,7 @@ module.exports = (env) => {
       contentScriptWebIntelligence: './src/contentScriptWebIntelligence.ts',
       contentScriptRPA: './src/contentScriptRPA.ts',
       popup: './src/popup.tsx',
+      'doubao-bridge': './src/modals/doubao-bridge-entry.tsx',
       options: './src/options.tsx',
       agentThinking: './src/agentThinking.ts',
       agentVisualizer: './src/agent-visualizer.tsx',

@@ -370,6 +370,7 @@ export interface RuntimeAction {
   queueStatus: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter';
   utilityScore?: number;
   urgencyScore?: number;
+  outreachSessionId?: string;
 }
 
 export interface RuntimeActionListResponse {
@@ -377,6 +378,114 @@ export interface RuntimeActionListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export type OutreachSessionStatus =
+  | 'pending_approval'
+  | 'scheduled'
+  | 'waiting_reply'
+  | 'deferred'
+  | 'resolved'
+  | 'no_reply'
+  | 'escalated'
+  | 'cancelled'
+  | 'failed';
+
+export interface OutreachSummary {
+  upcomingCount: number;
+  waitingReplyCount: number;
+  escalatedCount: number;
+  pendingApprovalCount: number;
+}
+
+export interface OutreachEvent {
+  id: string;
+  sessionId: string;
+  eventType: string;
+  payload?: Record<string, any>;
+  createdAt: number;
+}
+
+export interface OutreachTargetCandidate {
+  kind: 'user' | 'chat';
+  entityId: string;
+  chatId?: string;
+  label: string;
+  subtitle?: string;
+  score: number;
+  source: 'extension' | 'chat';
+}
+
+export interface OutreachSession {
+  id: string;
+  templateId?: string;
+  originKind?: string;
+  threadId?: string;
+  runId?: string;
+  actionId?: string;
+  channel?: string;
+  targetType: string;
+  targetRef: string;
+  targetResolutionStatus?: 'unresolved' | 'ambiguous' | 'resolved';
+  targetResolvedType?: string;
+  targetResolvedId?: string;
+  targetResolvedLabel?: string;
+  targetResolvedChatId?: string;
+  targetCandidates?: OutreachTargetCandidate[];
+  renderedQuestion: string;
+  renderedContext?: string;
+  status: OutreachSessionStatus;
+  requiresApproval: boolean;
+  followupCount: number;
+  maxFollowup: number;
+  waitUntil?: number;
+  nextCheckAt?: number;
+  sentPostId?: string;
+  replyPostId?: string;
+  replySender?: string;
+  replyRawText?: string;
+  replyClassification?: string;
+  replyConfidence?: number;
+  outcome?: Record<string, any>;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: number;
+  updatedAt: number;
+  resolvedAt?: number;
+  events?: OutreachEvent[];
+}
+
+export interface OutreachSessionListResponse {
+  items: OutreachSession[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface OutreachTemplateRuntimeStatusItem {
+  template: {
+    id: string;
+    sheetMessageId?: string;
+    sourceKind?: string;
+    title: string;
+    questionTemplate?: string;
+    contextTemplate?: string;
+    targetType?: string;
+    targetRef?: string;
+    scheduleSpec?: Record<string, any>;
+    enabled?: boolean;
+    syncState?: string;
+    lastSyncError?: string;
+    lastSessionId?: string;
+    createdAt?: number;
+    updatedAt?: number;
+  };
+  latestSession?: OutreachSession | null;
+}
+
+export interface OutreachTemplateRuntimeStatusResponse {
+  items: OutreachTemplateRuntimeStatusItem[];
+  total: number;
 }
 
 export interface ReflectionThreadDetailResponse {
@@ -420,6 +529,14 @@ export interface RuntimeConfigResponse {
   openClawBaseUrl?: string;
   openClawTimeoutMs?: number;
   openClawApiKeyConfigured?: boolean;
+  outreachEnabled?: boolean;
+  outreachIntervalMs?: number;
+  outreachRequireApprovalForReflection?: boolean;
+  outreachRequireApprovalForManual?: boolean;
+  ringCentralServerUrl?: string;
+  ringCentralClientId?: string;
+  ringCentralClientSecretConfigured?: boolean;
+  ringCentralJwtConfigured?: boolean;
 }
 
 export interface UpdateRuntimeConfigPayload {
@@ -442,6 +559,16 @@ export interface UpdateRuntimeConfigPayload {
   openClawTimeoutMs?: number;
   openClawApiKey?: string;
   clearOpenClawApiKey?: boolean;
+  outreachEnabled?: boolean;
+  outreachIntervalMs?: number;
+  outreachRequireApprovalForReflection?: boolean;
+  outreachRequireApprovalForManual?: boolean;
+  ringCentralServerUrl?: string;
+  ringCentralClientId?: string;
+  ringCentralClientSecret?: string;
+  ringCentralJwt?: string;
+  clearRingCentralClientSecret?: boolean;
+  clearRingCentralJwt?: boolean;
 }
 
 // ============================================================================
@@ -509,6 +636,145 @@ export interface MemoryBackupImportResponse {
     deletedPaths: string[];
   };
   warnings: string[];
+}
+
+// ============================================================================
+// Provider integration types
+// ============================================================================
+
+export type ProviderTransport = 'native_memory' | 'session_context' | 'document_context' | 'reminder';
+
+export type ProviderScenario =
+  | 'stable_memory'
+  | 'mobile_briefing'
+  | 'query_answer'
+  | 'reminder_sync'
+  | 'general';
+
+export type ProviderMemoryProductKind =
+  | 'persona_core'
+  | 'voice_mode'
+  | 'active_focus_digest'
+  | 'reminder_digest'
+  | 'query_answer_card';
+
+export interface ProviderCapabilities {
+  provider: string;
+  displayName: string;
+  supportedTransports: ProviderTransport[];
+  supportedBindingTypes: string[];
+  supportedScenarios: ProviderScenario[];
+  syncModel: 'local_bridge';
+  notes: string[];
+}
+
+export interface ProviderBindingRecord {
+  id: string;
+  provider: string;
+  bindingType: string;
+  externalThreadId: string;
+  title?: string;
+  deviceId?: string;
+  metadata?: Record<string, any>;
+  isActive: boolean;
+  lastSyncedAt?: number;
+  lastSyncJobId?: string;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertProviderBindingPayload {
+  externalThreadId: string;
+  title?: string;
+  deviceId?: string;
+  metadata?: Record<string, any>;
+  isActive?: boolean;
+  lastError?: string | null;
+}
+
+export interface ProviderMemoryProduct {
+  id: string;
+  kind: ProviderMemoryProductKind;
+  title: string;
+  bodyMd: string;
+  stability: 'stable' | 'rolling' | 'ephemeral';
+  transport: ProviderTransport;
+  targetBindingType: string;
+  ttlSeconds?: number;
+  sourceRefs: string[];
+  dedupeKey: string;
+  generatedAt: number;
+}
+
+export interface ProviderContextPackageResponse {
+  provider: string;
+  scenario: string;
+  generatedAt: number;
+  tokenBudget: number;
+  packages: ProviderMemoryProduct[];
+  bindings: ProviderBindingRecord[];
+  syncJob?: ProviderSyncJobRecord;
+}
+
+export interface RenderProviderContextPackagePayload {
+  provider: string;
+  scenario: ProviderScenario | string;
+  query?: string;
+  tokenBudget?: number;
+  freshnessWindowDays?: number;
+  includeKinds?: ProviderMemoryProductKind[];
+  deviceContext?: string;
+  bindingType?: string;
+  createSyncJob?: boolean;
+}
+
+export interface ProviderSyncJobRecord {
+  id: string;
+  provider: string;
+  scenario: string;
+  bindingType: string;
+  bindingId?: string;
+  title?: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
+  request: Record<string, any>;
+  response?: Record<string, any>;
+  result?: Record<string, any>;
+  errorMessage?: string;
+  dedupeKey?: string;
+  sourceRefs: string[];
+  tokenBudget?: number;
+  freshnessWindowDays?: number;
+  deviceContext?: string;
+  externalThreadId?: string;
+  providerMessageId?: string;
+  startedAt?: number;
+  completedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProviderSyncJobListResponse {
+  items: ProviderSyncJobRecord[];
+  total: number;
+}
+
+export interface ProviderSyncJobFilters {
+  status?: ProviderSyncJobRecord['status'] | 'all';
+  bindingType?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ReportProviderSyncJobPayload {
+  status: ProviderSyncJobRecord['status'];
+  result?: Record<string, any>;
+  errorMessage?: string;
+  response?: Record<string, any>;
+  providerMessageId?: string;
+  externalThreadId?: string;
+  completedAt?: number;
+  startedAt?: number;
 }
 
 function parseContentDispositionFilename(
@@ -1181,6 +1447,92 @@ export class MemoryServiceClient {
   }
 
   // --------------------------------------------------------------------------
+  // Provider Integrations
+  // --------------------------------------------------------------------------
+
+  async getProviderCapabilities(provider: string): Promise<ProviderCapabilities> {
+    return this.request<ProviderCapabilities>(
+      'GET',
+      `/providers/${encodeURIComponent(provider)}/capabilities`,
+    );
+  }
+
+  async getProviderBindings(
+    provider: string,
+    bindingType?: string,
+  ): Promise<{ items: ProviderBindingRecord[]; total: number }> {
+    const params = new URLSearchParams();
+    if (bindingType) params.set('bindingType', bindingType);
+
+    const qs = params.toString();
+    return this.request<{ items: ProviderBindingRecord[]; total: number }>(
+      'GET',
+      `/providers/${encodeURIComponent(provider)}/bindings${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async upsertProviderBinding(
+    provider: string,
+    bindingType: string,
+    payload: UpsertProviderBindingPayload,
+  ): Promise<{ binding: ProviderBindingRecord }> {
+    return this.request<{ binding: ProviderBindingRecord }>(
+      'PUT',
+      `/providers/${encodeURIComponent(provider)}/bindings/${encodeURIComponent(bindingType)}`,
+      payload,
+    );
+  }
+
+  async renderProviderContextPackage(
+    payload: RenderProviderContextPackagePayload,
+  ): Promise<ProviderContextPackageResponse> {
+    return this.request<ProviderContextPackageResponse>(
+      'POST',
+      '/providers/context-packages/render',
+      payload,
+    );
+  }
+
+  async getProviderSyncJobs(
+    provider: string,
+    filters?: ProviderSyncJobFilters,
+  ): Promise<ProviderSyncJobListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.bindingType) params.set('bindingType', filters.bindingType);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+
+    const qs = params.toString();
+    return this.request<ProviderSyncJobListResponse>(
+      'GET',
+      `/providers/${encodeURIComponent(provider)}/sync-jobs${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getProviderSyncJob(
+    provider: string,
+    id: string,
+  ): Promise<{ job: ProviderSyncJobRecord }> {
+    return this.request<{ job: ProviderSyncJobRecord }>(
+      'GET',
+      `/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async reportProviderSyncJob(
+    provider: string,
+    id: string,
+    payload: ReportProviderSyncJobPayload,
+  ): Promise<{ job: ProviderSyncJobRecord }> {
+    return this.request<{ job: ProviderSyncJobRecord }>(
+      'POST',
+      `/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`,
+      payload,
+    );
+  }
+
+  // --------------------------------------------------------------------------
   // Reflection Threads
   // --------------------------------------------------------------------------
 
@@ -1305,6 +1657,153 @@ export class MemoryServiceClient {
     return this.request(
       'POST',
       `/actions/${encodeURIComponent(id)}/execute`,
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Outreach Sessions
+  // --------------------------------------------------------------------------
+
+  async getOutreachSummary(): Promise<OutreachSummary> {
+    return this.request<OutreachSummary>('GET', '/outreach/summary');
+  }
+
+  async getOutreachTemplateRuntimeStatus(
+    ids?: string[],
+    limit = 100,
+  ): Promise<OutreachTemplateRuntimeStatusResponse> {
+    const params = new URLSearchParams();
+    if (ids && ids.length > 0) params.set('ids', ids.join(','));
+    params.set('limit', String(limit));
+    const qs = params.toString();
+    return this.request<OutreachTemplateRuntimeStatusResponse>(
+      'GET',
+      `/outreach/templates/runtime-status${qs ? '?' + qs : ''}`,
+    );
+  }
+
+  async upsertOutreachTemplate(body: {
+    id?: string;
+    sourceKind: string;
+    sourceRefId?: string;
+    sheetMessageId?: string;
+    title: string;
+    questionTemplate: string;
+    contextTemplate?: string;
+    targetType: string;
+    targetRef: string;
+    scheduleSpec?: Record<string, any>;
+    enabled?: boolean;
+    approvalPolicy?: string;
+    maxFollowup?: number;
+    followupIntervalSeconds?: number;
+    syncState?: string;
+    lastSyncError?: string;
+  }): Promise<{ template: Record<string, any> }> {
+    return this.request('POST', '/outreach/templates/upsert', body);
+  }
+
+  async cancelOutreachTemplate(id: string): Promise<{ template: Record<string, any> }> {
+    return this.request('POST', `/outreach/templates/${encodeURIComponent(id)}/cancel`);
+  }
+
+  async getOutreachSessions(filters?: {
+    status?: OutreachSessionStatus | 'all';
+    originKind?: string;
+    templateId?: string;
+    threadId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<OutreachSessionListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.originKind) params.set('originKind', filters.originKind);
+    if (filters?.templateId) params.set('templateId', filters.templateId);
+    if (filters?.threadId) params.set('threadId', filters.threadId);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+
+    const qs = params.toString();
+    return this.request<OutreachSessionListResponse>(
+      'GET',
+      `/outreach/sessions${qs ? '?' + qs : ''}`,
+    );
+  }
+
+  async getOutreachSession(id: string): Promise<OutreachSession> {
+    const response = await this.request<any>(
+      'GET',
+      `/outreach/sessions/${encodeURIComponent(id)}`,
+    );
+    if (response && typeof response === 'object' && response.session) {
+      return {
+        ...(response.session as OutreachSession),
+        events: Array.isArray(response.events) ? response.events : [],
+      };
+    }
+    return response as OutreachSession;
+  }
+
+  async searchOutreachTargets(
+    targetType: string,
+    query: string,
+    limit = 8,
+  ): Promise<{ items: OutreachTargetCandidate[]; total: number }> {
+    const params = new URLSearchParams();
+    params.set('targetType', targetType);
+    params.set('query', query);
+    params.set('limit', String(limit));
+    return this.request(
+      'GET',
+      `/outreach/targets/search?${params.toString()}`,
+    );
+  }
+
+  async approveOutreachSession(id: string): Promise<{ session: OutreachSession }> {
+    return this.request(
+      'POST',
+      `/outreach/sessions/${encodeURIComponent(id)}/approve`,
+    );
+  }
+
+  async cancelOutreachSession(
+    id: string,
+    reason?: string,
+  ): Promise<{ session: OutreachSession }> {
+    return this.request(
+      'POST',
+      `/outreach/sessions/${encodeURIComponent(id)}/cancel`,
+      { reason },
+    );
+  }
+
+  async updateOutreachSessionDraft(
+    id: string,
+    body: {
+      targetType?: string;
+      targetRef?: string;
+      targetResolutionStatus?: 'unresolved' | 'ambiguous' | 'resolved';
+      targetResolvedType?: string;
+      targetResolvedId?: string;
+      targetResolvedLabel?: string;
+      targetResolvedChatId?: string;
+      targetCandidates?: OutreachTargetCandidate[];
+      renderedQuestion?: string;
+      renderedContext?: string;
+      nextCheckAt?: number | null;
+    },
+  ): Promise<{ session: OutreachSession }> {
+    return this.request(
+      'POST',
+      `/outreach/sessions/${encodeURIComponent(id)}/update-draft`,
+      body,
+    );
+  }
+
+  async retryOutreachSession(id: string): Promise<{ session: OutreachSession }> {
+    return this.request(
+      'POST',
+      `/outreach/sessions/${encodeURIComponent(id)}/retry`,
     );
   }
 
@@ -1602,6 +2101,9 @@ export class MemoryServiceClient {
    *   - ingestion_complete
    *   - heartbeat_complete
    *   - consolidation_complete
+   *   - provider_binding_updated
+   *   - provider_context_package_rendered
+   *   - provider_sync_job_updated
    *
    * Returns an unsubscribe function that closes the EventSource connection.
    */
@@ -1619,6 +2121,9 @@ export class MemoryServiceClient {
       'ingestion_complete',
       'heartbeat_complete',
       'consolidation_complete',
+      'provider_binding_updated',
+      'provider_context_package_rendered',
+      'provider_sync_job_updated',
     ];
 
     for (const eventType of eventTypes) {

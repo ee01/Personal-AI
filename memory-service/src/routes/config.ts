@@ -45,6 +45,16 @@ interface UpdatableConfig {
   openClawApiKey?: string;
   openClawTimeoutMs?: number;
   clearOpenClawApiKey?: boolean;
+  outreachEnabled?: boolean;
+  outreachIntervalMs?: number;
+  outreachRequireApprovalForReflection?: boolean;
+  outreachRequireApprovalForManual?: boolean;
+  ringCentralServerUrl?: string;
+  ringCentralClientId?: string;
+  ringCentralClientSecret?: string;
+  ringCentralJwt?: string;
+  clearRingCentralClientSecret?: boolean;
+  clearRingCentralJwt?: boolean;
 }
 
 /** Keys that must never be returned to the client. */
@@ -55,6 +65,8 @@ const SENSITIVE_KEYS = new Set([
   'apiKey',
   'botToken',
   'openClawApiKey',
+  'ringCentralClientSecret',
+  'ringCentralJwt',
 ]);
 
 function normalizePushTarget(
@@ -115,6 +127,11 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
   }
   clean.openClawApiKeyConfigured =
     typeof raw.openClawApiKey === 'string' && raw.openClawApiKey.trim().length > 0;
+  clean.ringCentralClientSecretConfigured =
+    typeof raw.ringCentralClientSecret === 'string' &&
+    raw.ringCentralClientSecret.trim().length > 0;
+  clean.ringCentralJwtConfigured =
+    typeof raw.ringCentralJwt === 'string' && raw.ringCentralJwt.trim().length > 0;
   return clean;
 }
 
@@ -165,6 +182,16 @@ const updateConfigBodySchema = {
     openClawApiKey: { type: 'string' as const },
     openClawTimeoutMs: { type: 'number' as const, minimum: 1000 },
     clearOpenClawApiKey: { type: 'boolean' as const },
+    outreachEnabled: { type: 'boolean' as const },
+    outreachIntervalMs: { type: 'number' as const, minimum: 1000 },
+    outreachRequireApprovalForReflection: { type: 'boolean' as const },
+    outreachRequireApprovalForManual: { type: 'boolean' as const },
+    ringCentralServerUrl: { type: 'string' as const },
+    ringCentralClientId: { type: 'string' as const },
+    ringCentralClientSecret: { type: 'string' as const },
+    ringCentralJwt: { type: 'string' as const },
+    clearRingCentralClientSecret: { type: 'boolean' as const },
+    clearRingCentralJwt: { type: 'boolean' as const },
   },
   additionalProperties: false,
 };
@@ -283,6 +310,43 @@ export async function configRoutes(
       }
       if (updates.clearOpenClawApiKey === true) {
         delete persisted.openClawApiKey;
+      }
+      if (updates.outreachEnabled !== undefined) {
+        persisted.outreachEnabled = updates.outreachEnabled;
+      }
+      if (updates.outreachIntervalMs !== undefined) {
+        persisted.outreachIntervalMs = Math.max(1000, Math.floor(updates.outreachIntervalMs));
+      }
+      if (updates.outreachRequireApprovalForReflection !== undefined) {
+        persisted.outreachRequireApprovalForReflection =
+          updates.outreachRequireApprovalForReflection;
+      }
+      if (updates.outreachRequireApprovalForManual !== undefined) {
+        persisted.outreachRequireApprovalForManual = updates.outreachRequireApprovalForManual;
+      }
+      if (updates.ringCentralServerUrl !== undefined) {
+        persisted.ringCentralServerUrl = updates.ringCentralServerUrl.trim();
+      }
+      if (updates.ringCentralClientId !== undefined) {
+        persisted.ringCentralClientId = updates.ringCentralClientId.trim();
+      }
+      if (updates.ringCentralClientSecret !== undefined) {
+        const trimmed = updates.ringCentralClientSecret.trim();
+        if (trimmed.length > 0) {
+          persisted.ringCentralClientSecret = trimmed;
+        }
+      }
+      if (updates.ringCentralJwt !== undefined) {
+        const trimmed = updates.ringCentralJwt.trim();
+        if (trimmed.length > 0) {
+          persisted.ringCentralJwt = trimmed;
+        }
+      }
+      if (updates.clearRingCentralClientSecret === true) {
+        delete persisted.ringCentralClientSecret;
+      }
+      if (updates.clearRingCentralJwt === true) {
+        delete persisted.ringCentralJwt;
       }
 
       writePersistedConfig(persisted, request);

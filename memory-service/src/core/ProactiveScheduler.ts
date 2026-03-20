@@ -18,6 +18,7 @@ import { HeartbeatLoop } from './HeartbeatLoop.js';
 import { ConsolidationEngine } from './ConsolidationEngine.js';
 import { GenerativeReplay } from './GenerativeReplay.js';
 import { WeeklyReporter } from './WeeklyReporter.js';
+import { OutreachEngine } from './OutreachEngine.js';
 import { UserContextManager } from './UserContextManager.js';
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,7 @@ export class ProactiveScheduler {
   private ucm: UserContextManager;
 
   private heartbeatIntervalId: ReturnType<typeof setInterval> | null = null;
+  private outreachIntervalId: ReturnType<typeof setInterval> | null = null;
   private dailyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyReportTask: ReturnType<typeof cron.schedule> | null = null;
@@ -56,6 +58,10 @@ export class ProactiveScheduler {
       this.safeRun('heartbeat', () => this.runHeartbeat());
     }, config.heartbeatIntervalMs);
 
+    this.outreachIntervalId = setInterval(() => {
+      this.safeRun('outreach', () => this.runOutreachCycle());
+    }, config.outreachIntervalMs);
+
     // 2. Daily consolidation cron
     this.dailyTask = cron.schedule(config.dailyCron, () => {
       this.safeRun('dailyConsolidation', () => this.runDailyConsolidation());
@@ -75,6 +81,7 @@ export class ProactiveScheduler {
 
     console.log(
       `[ProactiveScheduler] Started — heartbeat every ${config.heartbeatIntervalMs}ms, ` +
+        `outreach every ${config.outreachIntervalMs}ms, ` +
         `daily cron "${config.dailyCron}", weekly cron "${config.weeklyCron}", ` +
         `weekly report cron "${config.weeklyReportCron}"`,
     );
@@ -91,6 +98,11 @@ export class ProactiveScheduler {
     if (this.heartbeatIntervalId !== null) {
       clearInterval(this.heartbeatIntervalId);
       this.heartbeatIntervalId = null;
+    }
+
+    if (this.outreachIntervalId !== null) {
+      clearInterval(this.outreachIntervalId);
+      this.outreachIntervalId = null;
     }
 
     if (this.dailyTask) {
@@ -129,6 +141,22 @@ export class ProactiveScheduler {
       } catch (err) {
         console.error(
           `[ProactiveScheduler] Heartbeat error for user ${userId}:`,
+          (err as Error).message,
+        );
+      }
+    }
+  }
+
+  private async runOutreachCycle(): Promise<void> {
+    const userIds = this.ucm.getRegisteredUserIds();
+    for (const userId of userIds) {
+      try {
+        const ctx = this.ucm.getContext(userId);
+        const engine = new OutreachEngine(ctx.db, ctx.userDataManager, userId);
+        await engine.runSchedulerCycle();
+      } catch (err) {
+        console.error(
+          `[ProactiveScheduler] Outreach cycle error for user ${userId}:`,
           (err as Error).message,
         );
       }

@@ -18,6 +18,8 @@ import DreamInsights from './components/DreamInsights.vue';
 import ReflectionThreads from './components/ReflectionThreads.vue';
 import ReflectionThreadDetail from './components/ReflectionThreadDetail.vue';
 import ActionQueue from './components/ActionQueue.vue';
+import OutreachSessions from './components/OutreachSessions.vue';
+import OutreachSessionDetail from './components/OutreachSessionDetail.vue';
 
 // 路由配置
 const routes = [
@@ -29,6 +31,8 @@ const routes = [
   { path: '/reflection-threads', name: 'ReflectionThreads', component: ReflectionThreads },
   { path: '/reflection-threads/:id', name: 'ReflectionThreadDetail', component: ReflectionThreadDetail, props: true },
   { path: '/actions', name: 'ActionQueue', component: ActionQueue },
+  { path: '/outreach', name: 'OutreachSessions', component: OutreachSessions },
+  { path: '/outreach/:id', name: 'OutreachSessionDetail', component: OutreachSessionDetail, props: true },
   { path: '/entity/:type', name: 'EntityDetail', component: EntityListPage, props: true },
   { path: '/topic/:id', name: 'TopicDetail', component: TopicDetailPage, props: true },
   { path: '/person/:id', name: 'PersonDetail', component: PersonDetailPage, props: true },
