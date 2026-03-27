@@ -1,5 +1,7 @@
 # 智能网页分析详细实现说明
 
+> 说明：本文是早期 Web Intelligence 设计说明，包含较多未成为现行主链路的实验架构。当前实际运行的网页记忆提示链路请优先参考 `docs/features/webpage_memory_detection.md`。
+
 *最后更新: 2024-12-20*
 
 ## 🎯 核心设计理念

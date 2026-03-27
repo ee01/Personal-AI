@@ -13,6 +13,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 import { now } from '../utils/time.js';
 import { getBotSender } from '../utils/botSender.js';
 
@@ -114,10 +115,12 @@ interface EntityPropertyRow {
 export class TruthMaintainer {
   private db: Database.Database;
   private userId?: string;
+  private confirmRequestRepo: ConfirmRequestRepository;
 
   constructor(db: Database.Database, userId?: string) {
     this.db = db;
     this.userId = userId;
+    this.confirmRequestRepo = new ConfirmRequestRepository(db);
   }
 
   // -------------------------------------------------------------------------
@@ -545,22 +548,18 @@ export class TruthMaintainer {
       { label: 'Accept new', value: 'accept_new' },
       { label: 'Keep both', value: 'keep_both' },
     ]);
-
-    db.prepare(`
-      INSERT INTO confirm_requests (
-        id, question, context, options_json, category,
-        related_entity_id, priority, state, created_at
-      ) VALUES (?, ?, ?, ?, 'profile_conflict', ?, 'normal', 'pending', ?)
-    `).run(
+    const result = this.confirmRequestRepo.createOrReusePending({
       id,
       question,
       context,
-      options,
-      existing.id,
-      timestamp,
-    );
+      options: JSON.parse(options) as Array<{ label: string; value: string }>,
+      category: 'profile_conflict',
+      relatedEntityId: existing.id,
+      priority: 'normal',
+      createdAt: timestamp,
+    });
 
-    return id;
+    return result.record.id;
   }
 
   /**
@@ -726,32 +725,28 @@ export class TruthMaintainer {
       { label: 'Reject', value: 'reject' },
     ]);
 
-    this.db.prepare(`
-      INSERT INTO confirm_requests (
-        id, question, context, options_json, category,
-        related_entity_id, related_property_id, priority,
-        state, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `).run(
-      id,
-      question,
-      contextParts.join('; ') || null,
-      options,
-      'property_change',
-      params.entityId,
-      params.propertyId,
-      params.isFinalConflict ? 'high' : 'normal',
-      params.timestamp,
-    );
-
-    void this.notifyConfirmRequestCreated({
+    const result = this.confirmRequestRepo.createOrReusePending({
       id,
       question,
       context: contextParts.join('; ') || null,
+      options: JSON.parse(options) as Array<{ label: string; value: string }>,
+      category: 'property_change',
+      relatedEntityId: params.entityId,
+      relatedPropertyId: params.propertyId,
       priority: params.isFinalConflict ? 'high' : 'normal',
+      createdAt: params.timestamp,
     });
 
-    return id;
+    if (result.created) {
+      void this.notifyConfirmRequestCreated({
+        id: result.record.id,
+        question,
+        context: contextParts.join('; ') || null,
+        priority: params.isFinalConflict ? 'high' : 'normal',
+      });
+    }
+
+    return result.record.id;
   }
 
   private async notifyConfirmRequestCreated(params: {

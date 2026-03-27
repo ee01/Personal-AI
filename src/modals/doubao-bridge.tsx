@@ -3,10 +3,18 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   DoubaoBridgeClient,
   type DoubaoBridgeBinding,
+  type DoubaoBridgeBindingType,
   type DoubaoBridgeHealth,
   type DoubaoBridgeSettings,
   type DoubaoBridgeStatus,
+  type DoubaoBridgeSyncResult,
 } from '../services/DoubaoBridgeClient';
+import {
+  MemoryServiceClient,
+  type HealthResponse,
+  type ProviderContextPackageResponse,
+  type ProviderMemoryProduct,
+} from '../services/MemoryServiceClient';
 
 type PanelMode = 'idle' | 'loading' | 'success' | 'error';
 
@@ -18,28 +26,135 @@ interface LogEntry {
 }
 
 const DEFAULT_SETTINGS: DoubaoBridgeSettings = {
-  baseUrl: 'http://127.0.0.1:46321/api/v1',
+  baseUrl: 'http://127.0.0.1:46321',
   bridgeToken: '',
+  autoRefreshMs: 12_000,
 };
 
-const formatTime = (value?: string) => {
+const RELEASE_DOWNLOAD_URL = 'https://github.com/ee01/personal-ai/releases/latest';
+
+const PROVIDER = 'doubao';
+
+const PROVIDER_BINDING_TYPES: Record<DoubaoBridgeBindingType, 'memory_sync_thread' | 'mobile_context_thread'> = {
+  memory_sync: 'memory_sync_thread',
+  mobile_context: 'mobile_context_thread',
+};
+
+const formatTime = (value?: string | number) => {
   if (!value) return 'unknown';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString();
 };
 
+function bridgeBindingsToArray(
+  bindings?: Partial<Record<DoubaoBridgeBindingType, DoubaoBridgeBinding>>,
+): DoubaoBridgeBinding[] {
+  if (!bindings) return [];
+  return Object.values(bindings).filter((item): item is DoubaoBridgeBinding => Boolean(item));
+}
+
+function stripMarkdownPrefix(line: string): string {
+  return line
+    .replace(/^#+\s*/, '')
+    .replace(/^>\s*/, '')
+    .replace(/^[-*]\s*/, '')
+    .replace(/^\d+\.\s*/, '')
+    .trim();
+}
+
+function extractPackageBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
+  const lines = pkg.bodyMd
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const bullets: string[] = [];
+  let currentSection = pkg.title;
+
+  for (const line of lines) {
+    if (line.startsWith('#')) {
+      const heading = stripMarkdownPrefix(line);
+      if (heading) currentSection = heading;
+      continue;
+    }
+
+    if (line.startsWith('- ') || line.startsWith('* ') || /^\d+\.\s/.test(line)) {
+      const value = stripMarkdownPrefix(line);
+      if (value) {
+        bullets.push(currentSection && currentSection !== pkg.title ? `${currentSection}: ${value}` : value);
+      }
+      if (bullets.length >= limit) break;
+      continue;
+    }
+  }
+
+  if (bullets.length > 0) {
+    return bullets.slice(0, limit);
+  }
+
+  return lines
+    .map((line) => stripMarkdownPrefix(line))
+    .filter(Boolean)
+    .slice(0, limit)
+    .map((line) => `${pkg.title}: ${line}`);
+}
+
+function extractReminderItems(pkg: ProviderMemoryProduct, limit = 8) {
+  return extractPackageBullets(pkg, limit).map((title) => ({
+    title,
+    severity: 'medium' as const,
+  }));
+}
+
+async function findBestOpenedDoubaoTab(): Promise<{ title?: string; url?: string } | null> {
+  const tabs = await chrome.tabs.query({
+    url: ['https://www.doubao.com/*', 'http://www.doubao.com/*'],
+  });
+
+  const candidates = tabs
+    .filter((tab) => tab.url && /^https?:\/\/www\.doubao\.com\//.test(tab.url))
+    .map((tab) => ({
+      title: tab.title,
+      url: tab.url,
+      active: Boolean(tab.active),
+      lastAccessed: (tab as chrome.tabs.Tab & { lastAccessed?: number }).lastAccessed ?? 0,
+    }))
+    .sort((left, right) => {
+      const leftScore =
+        (left.title?.includes('手机版对话') ? 10_000 : 0) +
+        (left.url?.includes('/chat/') ? 1_000 : 0) +
+        (left.active ? 100 : 0) +
+        left.lastAccessed;
+      const rightScore =
+        (right.title?.includes('手机版对话') ? 10_000 : 0) +
+        (right.url?.includes('/chat/') ? 1_000 : 0) +
+        (right.active ? 100 : 0) +
+        right.lastAccessed;
+      return rightScore - leftScore;
+    });
+
+  if (candidates.length === 0) return null;
+  return {
+    title: candidates[0].title,
+    url: candidates[0].url,
+  };
+}
+
 export const DoubaoBridgePanel: React.FC = () => {
-  const [client] = useState(() => new DoubaoBridgeClient(DEFAULT_SETTINGS));
+  const [bridgeClient] = useState(() => new DoubaoBridgeClient(DEFAULT_SETTINGS));
+  const [memoryClient] = useState(() => new MemoryServiceClient());
   const [settings, setSettings] = useState<DoubaoBridgeSettings>(DEFAULT_SETTINGS);
   const [health, setHealth] = useState<DoubaoBridgeHealth | null>(null);
   const [status, setStatus] = useState<DoubaoBridgeStatus | null>(null);
+  const [memoryHealth, setMemoryHealth] = useState<HealthResponse | null>(null);
+  const [memoryHealthError, setMemoryHealthError] = useState<string | null>(null);
   const [bindings, setBindings] = useState<DoubaoBridgeBinding[]>([]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [mode, setMode] = useState<PanelMode>('idle');
   const [message, setMessage] = useState('等待连接桥接器');
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [queryText, setQueryText] = useState('最近关于这个项目有什么结论？');
+  const [queryText, setQueryText] = useState('最近关于下一个版本需求有什么结论？');
   const [lastActiveTab, setLastActiveTab] = useState<{ title?: string; url?: string }>({});
   const [autoRefresh, setAutoRefresh] = useState(true);
 
@@ -55,38 +170,103 @@ export const DoubaoBridgePanel: React.FC = () => {
     ]);
   };
 
+  const describeError = (error: unknown, opts?: { includeMemoryServiceUrl?: boolean }) => {
+    const baseText = error instanceof Error ? error.message : '未知错误';
+    if (opts?.includeMemoryServiceUrl && /MemoryService|Failed to fetch|Network error/i.test(baseText)) {
+      return `${baseText} (Memory Service: ${memoryClient.getBaseUrl()})`;
+    }
+    return baseText;
+  };
+
+  const reportSyncJob = async (
+    rendered: ProviderContextPackageResponse,
+    result: DoubaoBridgeSyncResult,
+    startedAt: number,
+  ) => {
+    if (!rendered.syncJob?.id) return;
+
+    const statusValue =
+      result.accepted && !result.error ? 'succeeded' : 'failed';
+
+    await memoryClient.reportProviderSyncJob(PROVIDER, rendered.syncJob.id, {
+      status: statusValue,
+      result: {
+        bridgeKind: result.kind,
+        targetBindingType: result.targetBindingType,
+        transcriptPreview: result.transcript.slice(0, 400),
+      },
+      errorMessage: result.error,
+      externalThreadId: result.threadId,
+      completedAt: Date.now(),
+      startedAt,
+    });
+  };
+
+  const renderProviderPackages = async (
+    scenario: 'stable_memory' | 'mobile_briefing' | 'query_answer' | 'reminder_sync',
+    extra?: { query?: string; deviceContext?: string },
+  ) => {
+    return memoryClient.renderProviderContextPackage({
+      provider: PROVIDER,
+      scenario,
+      query: extra?.query,
+      deviceContext: extra?.deviceContext ?? 'extension_popup',
+      createSyncJob: true,
+    });
+  };
+
   const refresh = async () => {
     setMode('loading');
     setMessage('正在检查桥接器状态');
     try {
-      const loaded = await client.loadSettings();
+      const loaded = await bridgeClient.loadSettings();
       setSettings((prev) => ({ ...prev, ...loaded }));
-      client.setBaseUrl(loaded.baseUrl);
-      client.setBridgeToken(loaded.bridgeToken);
+      bridgeClient.setBaseUrl(loaded.baseUrl);
+      bridgeClient.setBridgeToken(loaded.bridgeToken);
 
-      const [healthResult, statusResult, bindingsResult] = await Promise.allSettled([
-        client.getHealth(),
-        client.getStatus(),
-        client.getBindings(),
+      const [healthResult, statusResult, threadsResult, memoryHealthResult] = await Promise.allSettled([
+        bridgeClient.getHealth(),
+        bridgeClient.getStatus(),
+        bridgeClient.getThreads(),
+        memoryClient.getHealth(),
       ]);
 
-      if (healthResult.status === 'fulfilled') {
-        setHealth(healthResult.value);
-      } else {
-        setHealth(null);
+      if (healthResult.status !== 'fulfilled' || statusResult.status !== 'fulfilled' || threadsResult.status !== 'fulfilled') {
+        throw new Error(
+          healthResult.status === 'rejected'
+            ? healthResult.reason instanceof Error
+              ? healthResult.reason.message
+              : 'Bridge health check failed'
+            : statusResult.status === 'rejected'
+              ? statusResult.reason instanceof Error
+                ? statusResult.reason.message
+                : 'Bridge status check failed'
+              : threadsResult.status === 'rejected'
+                ? threadsResult.reason instanceof Error
+                  ? threadsResult.reason.message
+                  : 'Bridge thread query failed'
+                : 'Bridge refresh failed',
+        );
       }
 
-      if (statusResult.status === 'fulfilled') {
-        setStatus(statusResult.value);
+      setHealth(healthResult.value);
+      setStatus(statusResult.value);
+      setBindings(bridgeBindingsToArray(threadsResult.value.bindings));
+      if (memoryHealthResult.status === 'fulfilled') {
+        setMemoryHealth(memoryHealthResult.value);
+        setMemoryHealthError(null);
       } else {
-        setStatus(null);
+        setMemoryHealth(null);
+        setMemoryHealthError(
+          memoryHealthResult.reason instanceof Error
+            ? memoryHealthResult.reason.message
+            : 'Memory Service unreachable',
+        );
       }
-
-      if (bindingsResult.status === 'fulfilled') {
-        setBindings(bindingsResult.value.bindings ?? []);
-      } else {
-        setBindings([]);
-      }
+      setSettings((prev) => ({
+        ...prev,
+        bridgeToken: bridgeClient.getBridgeToken(),
+      }));
 
       setMode('success');
       setMessage('桥接器状态已刷新');
@@ -107,22 +287,42 @@ export const DoubaoBridgePanel: React.FC = () => {
     if (!autoRefresh) return undefined;
     const timer = window.setInterval(() => {
       void refresh();
-    }, 12_000);
+    }, settings.autoRefreshMs ?? DEFAULT_SETTINGS.autoRefreshMs!);
     return () => window.clearInterval(timer);
-  }, [autoRefresh]);
+  }, [autoRefresh, settings.autoRefreshMs]);
 
   const saveSettings = async () => {
     setBusyAction('save');
     try {
-      const next = await client.saveSettings(settings);
+      const next = await bridgeClient.saveSettings(settings);
       setSettings(next);
-      client.setBaseUrl(next.baseUrl);
-      client.setBridgeToken(next.bridgeToken);
+      bridgeClient.setBaseUrl(next.baseUrl);
+      bridgeClient.setBridgeToken(next.bridgeToken);
       setMode('success');
       setMessage('桥接器配置已保存');
       pushLog('success', '已保存本地桥接器配置');
+      await refresh();
     } catch (error) {
       const text = error instanceof Error ? error.message : '保存失败';
+      setMode('error');
+      setMessage(text);
+      pushLog('error', text);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const pairBridge = async () => {
+    setBusyAction('pair');
+    try {
+      const result = await bridgeClient.pair();
+      setSettings((prev) => ({ ...prev, bridgeToken: result.token }));
+      setMode('success');
+      setMessage('桥接器配对成功');
+      pushLog('success', '已完成桥接器配对并保存 token');
+      await refresh();
+    } catch (error) {
+      const text = error instanceof Error ? error.message : '桥接器配对失败';
       setMode('error');
       setMessage(text);
       pushLog('error', text);
@@ -134,10 +334,10 @@ export const DoubaoBridgePanel: React.FC = () => {
   const openLogin = async () => {
     setBusyAction('login');
     try {
-      const result = await client.openLogin();
+      const result = await bridgeClient.openLogin();
       setMode('success');
-      setMessage(result.message || '已打开 Doubao 登录窗口');
-      pushLog('success', result.message || '已打开 Doubao 登录窗口');
+      setMessage(`已打开 Doubao 登录窗口：${result.url}`);
+      pushLog('success', '已打开 Doubao 登录窗口');
     } catch (error) {
       const text = error instanceof Error ? error.message : '打开登录窗口失败';
       setMode('error');
@@ -148,33 +348,37 @@ export const DoubaoBridgePanel: React.FC = () => {
     }
   };
 
-  const requestReauth = async () => {
-    setBusyAction('reauth');
-    try {
-      const result = await client.requestReauth();
-      setMode('success');
-      setMessage(result.message || '已请求重新登录');
-      pushLog('success', result.message || '已请求重新登录');
-    } catch (error) {
-      const text = error instanceof Error ? error.message : '请求重新登录失败';
-      setMode('error');
-      setMessage(text);
-      pushLog('error', text);
-    } finally {
-      setBusyAction(null);
-    }
+  const persistProviderBinding = async (
+    bindingType: DoubaoBridgeBindingType,
+    binding: DoubaoBridgeBinding,
+  ) => {
+    const externalThreadId = binding.threadId || binding.threadUrl;
+    if (!externalThreadId) return;
+
+    await memoryClient.upsertProviderBinding(PROVIDER, PROVIDER_BINDING_TYPES[bindingType], {
+      externalThreadId,
+      title: binding.title,
+      deviceId: 'extension-popup',
+      metadata: binding.threadUrl ? { threadUrl: binding.threadUrl } : undefined,
+      isActive: true,
+      lastError: null,
+    });
   };
 
   const bindMemorySync = async () => {
     setBusyAction('bind-memory');
     try {
-      const result = await client.bindMemorySyncThread({
-        title: 'Stable memory sync thread',
-        note: 'Dedicated thread for persona_core / voice_mode sync',
+      const thread = await bridgeClient.createMemorySyncThread();
+      await persistProviderBinding('memory_sync', {
+        bindingType: 'memory_sync',
+        threadId: thread.id,
+        threadUrl: thread.url,
+        title: thread.title,
+        updatedAt: thread.updatedAt,
       });
       setMode('success');
-      setMessage(result.message || '长期记忆线程已绑定');
-      pushLog('success', result.message || '长期记忆线程已绑定');
+      setMessage('长期记忆线程已创建并绑定');
+      pushLog('success', '已创建长期记忆同步线程，并回写到 memory-service provider binding');
       await refresh();
     } catch (error) {
       const text = error instanceof Error ? error.message : '绑定长期记忆线程失败';
@@ -189,22 +393,34 @@ export const DoubaoBridgePanel: React.FC = () => {
   const bindMobileContext = async () => {
     setBusyAction('bind-mobile');
     try {
-      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      const activeTab = tabs[0];
-      setLastActiveTab({
-        title: activeTab?.title,
-        url: activeTab?.url,
-      });
+      let binding: DoubaoBridgeBinding | null = null;
 
-      const result = await client.bindMobileContextThread({
-        threadId: activeTab?.url,
-        threadUrl: activeTab?.url,
-        title: activeTab?.title || 'Mobile Doubao thread',
-        note: 'Bind the current mobile-context conversation thread',
-      });
+      try {
+        binding = await bridgeClient.autoBindMobileContextThread('手机版对话');
+        pushLog('success', '已自动检索到标题为“手机版对话”的线程，准备完成绑定');
+      } catch {
+        const openedDoubaoTab = await findBestOpenedDoubaoTab();
+        setLastActiveTab(openedDoubaoTab || {});
+
+        if (!openedDoubaoTab?.url || !/doubao\.com/.test(openedDoubaoTab.url)) {
+          throw new Error('没有自动找到“手机版对话”线程，也没有找到可绑定的已打开 Doubao 聊天标签页。请先在任意浏览器窗口打开目标 Doubao 聊天页后重试。');
+        }
+
+        binding = await bridgeClient.bindMobileContextThread({
+          threadUrl: openedDoubaoTab.url,
+          title: openedDoubaoTab.title || '手机版对话',
+        });
+        pushLog('success', `自动检索失败，已退回到已打开的 Doubao 标签页绑定: ${openedDoubaoTab.title || openedDoubaoTab.url}`);
+      }
+
+      if (!binding) {
+        throw new Error('绑定手机版对话失败');
+      }
+
+      await persistProviderBinding('mobile_context', binding);
       setMode('success');
-      setMessage(result.message || '手机版对话线程已绑定');
-      pushLog('success', result.message || '手机版对话线程已绑定');
+      setMessage('手机版对话线程已绑定');
+      pushLog('success', '已绑定手机端真实对话线程，并回写到 memory-service');
       await refresh();
     } catch (error) {
       const text = error instanceof Error ? error.message : '绑定手机版对话失败';
@@ -218,21 +434,29 @@ export const DoubaoBridgePanel: React.FC = () => {
 
   const syncPersona = async () => {
     setBusyAction('sync-persona');
+    const startedAt = Date.now();
     try {
-      const result = await client.syncStableMemory({
-        title: 'persona_core',
-        body:
-          '请记住以下稳定信息，用于之后的长期对话：职业角色、长期偏好、沟通风格、稳定约束、长期目标。' +
-          '\n\n这条消息来自本机桥接器，只是长期记忆同步，不要把最近的临时项目状态混入长期记忆。',
-        stability: 'stable',
-        sourceRefs: ['bridge::persona_core'],
-        dedupeKey: 'persona_core::stable',
+      const rendered = await renderProviderPackages('stable_memory');
+      if (rendered.packages.length === 0) {
+        throw new Error('memory-service 没有生成可同步的长期记忆内容。');
+      }
+
+      const result = await bridgeClient.syncStableMemory({
+        items: rendered.packages.map((pkg) => ({
+          title: pkg.title,
+          body: pkg.bodyMd,
+        })),
       });
+      await reportSyncJob(rendered, result, startedAt);
+      if (result.error) {
+        throw new Error(result.error);
+      }
       setMode('success');
-      setMessage(result.message || '长期记忆同步已发起');
-      pushLog('success', result.message || '长期记忆同步已发起');
+      setMessage('长期记忆同步完成');
+      pushLog('success', `已同步 ${rendered.packages.length} 个稳定记忆包到 Doubao 长期记忆线程`);
+      await refresh();
     } catch (error) {
-      const text = error instanceof Error ? error.message : '同步长期记忆失败';
+      const text = describeError(error, { includeMemoryServiceUrl: true });
       setMode('error');
       setMessage(text);
       pushLog('error', text);
@@ -243,21 +467,30 @@ export const DoubaoBridgePanel: React.FC = () => {
 
   const syncBriefing = async () => {
     setBusyAction('sync-briefing');
+    const startedAt = Date.now();
     try {
-      const result = await client.syncMobileBriefing({
-        title: 'recent_focus_digest',
-        body:
-          '请把以下内容只作为当前会话上下文，不需要长期记住：\n' +
-          '1. 最近关注重点项目\n2. 最近待办\n3. 最近结论\n4. 今天通勤/语音聊天需要顺带提醒的事项',
-        sourceRefs: ['bridge::mobile_context'],
-        ttlMinutes: 240,
-        dedupeKey: `mobile_briefing::${new Date().toISOString().slice(0, 10)}`,
+      const rendered = await renderProviderPackages('mobile_briefing', {
+        deviceContext: 'commute_popup',
       });
+      const bullets = rendered.packages.flatMap((pkg) => extractPackageBullets(pkg, 5)).slice(0, 12);
+      if (bullets.length === 0) {
+        throw new Error('memory-service 没有生成可同步的手机版上下文。');
+      }
+
+      const result = await bridgeClient.syncMobileBriefing({
+        title: '今天的 Doubao 手机版上下文',
+        bullets,
+      });
+      await reportSyncJob(rendered, result, startedAt);
+      if (result.error) {
+        throw new Error(result.error);
+      }
       setMode('success');
-      setMessage(result.message || '手机版上下文已同步');
-      pushLog('success', result.message || '手机版上下文已同步');
+      setMessage('手机版上下文同步完成');
+      pushLog('success', `已同步 ${bullets.length} 条 briefing 到手机版对话线程`);
+      await refresh();
     } catch (error) {
-      const text = error instanceof Error ? error.message : '同步手机版上下文失败';
+      const text = describeError(error, { includeMemoryServiceUrl: true });
       setMode('error');
       setMessage(text);
       pushLog('error', text);
@@ -268,18 +501,27 @@ export const DoubaoBridgePanel: React.FC = () => {
 
   const syncReminder = async () => {
     setBusyAction('sync-reminder');
+    const startedAt = Date.now();
     try {
-      const result = await client.syncReminderDigest({
-        title: 'reminder_digest',
-        body: '请记住这是待提醒事项，优先提醒，不要把它当作长期固定事实。',
-        dedupeKey: `reminder_digest::${new Date().toISOString().slice(0, 10)}`,
-        sourceRefs: ['bridge::reminder'],
+      const rendered = await renderProviderPackages('reminder_sync');
+      const reminders = rendered.packages.flatMap((pkg) => extractReminderItems(pkg)).slice(0, 8);
+      if (reminders.length === 0) {
+        throw new Error('当前没有需要同步的提醒项。');
+      }
+
+      const result = await bridgeClient.syncReminders({
+        reminders,
       });
+      await reportSyncJob(rendered, result, startedAt);
+      if (result.error) {
+        throw new Error(result.error);
+      }
       setMode('success');
-      setMessage(result.message || '提醒已同步');
-      pushLog('success', result.message || '提醒已同步');
+      setMessage('提醒同步完成');
+      pushLog('success', `已同步 ${reminders.length} 条提醒到 Doubao 手机版对话`);
+      await refresh();
     } catch (error) {
-      const text = error instanceof Error ? error.message : '同步提醒失败';
+      const text = describeError(error, { includeMemoryServiceUrl: true });
       setMode('error');
       setMessage(text);
       pushLog('error', text);
@@ -290,22 +532,31 @@ export const DoubaoBridgePanel: React.FC = () => {
 
   const syncQueryCard = async () => {
     setBusyAction('sync-query');
+    const startedAt = Date.now();
     try {
-      const result = await client.syncQueryCard({
+      const rendered = await renderProviderPackages('query_answer', {
         query: queryText,
-        title: 'query_answer_card',
-        answer:
-          '请在当前会话中使用这条答案卡回答用户问题；如果还需要补查，请把证据分段列出，但不要把临时结论写成长期记忆。',
-        evidence: [
-          { label: 'query', value: queryText },
-          { label: 'mode', value: 'temporary_context' },
-        ],
       });
+      const queryPackage = rendered.packages[0];
+      if (!queryPackage) {
+        throw new Error('memory-service 没有生成查询答案卡。');
+      }
+
+      const result = await bridgeClient.injectQuery({
+        query: queryText,
+        answer: queryPackage.bodyMd,
+        evidence: queryPackage.sourceRefs.map((source) => ({ source })),
+      });
+      await reportSyncJob(rendered, result, startedAt);
+      if (result.error) {
+        throw new Error(result.error);
+      }
       setMode('success');
-      setMessage(result.message || '查询卡片已注入');
-      pushLog('success', result.message || '查询卡片已注入');
+      setMessage('查询卡片已注入手机对话');
+      pushLog('success', `已通过 memory-service 生成答案卡并注入 Doubao 手机版对话: ${queryText}`);
+      await refresh();
     } catch (error) {
-      const text = error instanceof Error ? error.message : '注入查询卡片失败';
+      const text = describeError(error, { includeMemoryServiceUrl: true });
       setMode('error');
       setMessage(text);
       pushLog('error', text);
@@ -315,15 +566,22 @@ export const DoubaoBridgePanel: React.FC = () => {
   };
 
   const summary = useMemo(() => {
-    const memoryBinding = bindings.find((item) => item.bindingType === 'memory_sync');
-    const mobileBinding = bindings.find((item) => item.bindingType === 'mobile_context');
+    const mappedBindings = status?.bindings
+      ? bridgeBindingsToArray(status.bindings)
+      : bindings;
+    const memoryBinding = mappedBindings.find((item) => item.bindingType === 'memory_sync');
+    const mobileBinding = mappedBindings.find((item) => item.bindingType === 'mobile_context');
     return {
       memoryBinding,
       mobileBinding,
-      lastSyncAt: status?.lastSyncAt || health?.lastLoginAt,
-      authState: status?.authState || (health?.signedIn ? 'signed_in' : 'unknown'),
+      lastSyncAt: status?.lastSyncAt,
+      authState: status?.authStatus || 'unknown',
+      paired: status?.paired || false,
+      browserRunning: status?.browserRunning || false,
+      currentUrl: status?.currentUrl,
+      memoryServiceBaseUrl: memoryClient.getBaseUrl(),
     };
-  }, [bindings, health, status]);
+  }, [bindings, memoryClient, status]);
 
   return (
     <div className="doubao-bridge-page">
@@ -333,7 +591,7 @@ export const DoubaoBridgePanel: React.FC = () => {
             <div className="eyebrow">Doubao Bridge</div>
             <h1>本机桥接器与豆包会话绑定</h1>
             <p>
-              桥接器常驻在本机，负责登录态、线程绑定和上下文同步。长期记忆进一个稳定线程，临时上下文进手机版对话线程。
+              这条链路现在会走真实的 memory-service provider API。长期记忆走独立同步线程，临时重点和查询结果走你绑定的手机版对话线程。
             </p>
           </div>
           <div className={`hero-status hero-status-${mode}`}>
@@ -350,7 +608,7 @@ export const DoubaoBridgePanel: React.FC = () => {
               <input
                 value={settings.baseUrl}
                 onChange={(e) => setSettings((prev) => ({ ...prev, baseUrl: e.target.value }))}
-                placeholder="http://127.0.0.1:46321/api/v1"
+                placeholder="http://127.0.0.1:46321"
               />
             </label>
             <label>
@@ -358,19 +616,22 @@ export const DoubaoBridgePanel: React.FC = () => {
               <input
                 value={settings.bridgeToken || ''}
                 onChange={(e) => setSettings((prev) => ({ ...prev, bridgeToken: e.target.value }))}
-                placeholder="本机桥接器 token"
+                placeholder="桥接器配对后自动写入"
               />
             </label>
             <div className="button-row">
               <button onClick={saveSettings} disabled={busyAction === 'save'}>
                 {busyAction === 'save' ? '保存中...' : '保存设置'}
               </button>
+              <button onClick={pairBridge} className="ghost" disabled={busyAction === 'pair'}>
+                {busyAction === 'pair' ? '配对中...' : '重新配对'}
+              </button>
               <button onClick={refresh} className="ghost">
                 刷新状态
               </button>
             </div>
             <div className="hint">
-              常驻的是桥接器进程，不是浏览器窗口。浏览器 profile 只用于保存登录态。
+              常驻的是桥接器进程，不是浏览器窗口。Playwright profile 只负责保存豆包登录态。
             </div>
           </div>
 
@@ -378,21 +639,29 @@ export const DoubaoBridgePanel: React.FC = () => {
             <h2>状态总览</h2>
             <div className="stat-list">
               <Stat label="健康状态" value={health?.ok ? '可用' : '未连接'} />
-              <Stat label="登录状态" value={summary.authState === 'signed_in' ? '已登录' : '未登录'} />
+              <Stat label="已配对" value={summary.paired ? '是' : '否'} />
+              <Stat label="登录状态" value={summary.authState === 'connected' ? '已登录' : summary.authState} />
+              <Stat label="浏览器实例" value={summary.browserRunning ? '运行中' : '未启动'} />
+              <Stat
+                label="Memory Service"
+                value={memoryHealth?.status || (memoryHealthError ? '不可达' : '未知')}
+              />
               <Stat label="长期记忆线程" value={summary.memoryBinding?.threadId ? '已绑定' : '未绑定'} />
               <Stat label="手机版对话" value={summary.mobileBinding?.threadId ? '已绑定' : '未绑定'} />
             </div>
             <div className="meta-grid">
               <Meta label="版本" value={health?.version || 'unknown'} />
-              <Meta label="模式" value={health?.mode || 'unknown'} />
+              <Meta label="模式" value={health?.config?.headless ? 'headless' : 'windowed'} />
               <Meta label="最后同步" value={formatTime(summary.lastSyncAt)} />
-              <Meta label="最后活动标签页" value={lastActiveTab.title || 'unknown'} />
+              <Meta label="当前页面" value={summary.currentUrl || lastActiveTab.url || 'unknown'} />
+              <Meta label="Memory URL" value={summary.memoryServiceBaseUrl} />
+              <Meta label="Memory 错误" value={memoryHealthError || 'none'} />
             </div>
             <div className="button-row">
               <button onClick={openLogin} disabled={busyAction === 'login'}>
                 {busyAction === 'login' ? '打开中...' : '打开登录窗口'}
               </button>
-              <button onClick={requestReauth} className="ghost" disabled={busyAction === 'reauth'}>
+              <button onClick={openLogin} className="ghost" disabled={busyAction === 'login'}>
                 重新登录
               </button>
             </div>
@@ -403,14 +672,14 @@ export const DoubaoBridgePanel: React.FC = () => {
           <div className="card">
             <h2>线程绑定</h2>
             <p className="card-desc">
-              长期记忆同步线程应该长期复用；手机版对话线程绑定到你真正聊天的会话，不要新开线程污染长期记忆。
+              长期记忆同步线程只承接“请记住”类稳定信息；点击“绑定手机对话”后会先自动检索标题为“手机版对话”的线程，失败时再从所有已打开的 Doubao 聊天标签页里挑选最可能的目标绑定。
             </p>
             <div className="button-row">
               <button onClick={bindMemorySync} disabled={busyAction === 'bind-memory'}>
-                {busyAction === 'bind-memory' ? '绑定中...' : '绑定长期记忆线程'}
+                {busyAction === 'bind-memory' ? '绑定中...' : '创建并绑定长期记忆线程'}
               </button>
               <button onClick={bindMobileContext} className="ghost" disabled={busyAction === 'bind-mobile'}>
-                {busyAction === 'bind-mobile' ? '绑定中...' : '绑定手机版对话'}
+                {busyAction === 'bind-mobile' ? '绑定中...' : '绑定手机对话'}
               </button>
             </div>
             <BindingBlock binding={summary.memoryBinding} title="长期记忆线程" />
@@ -420,17 +689,17 @@ export const DoubaoBridgePanel: React.FC = () => {
           <div className="card">
             <h2>同步动作</h2>
             <p className="card-desc">
-              长期信息和临时上下文分开处理。前者进稳定线程，后者进当前会话。
+              这些按钮不再发送占位文本，而是先从 memory-service 渲染 provider context package，再发给本机 bridge，并回写 sync job 结果。
             </p>
             <div className="button-stack">
               <button onClick={syncPersona} disabled={busyAction === 'sync-persona'}>
-                {busyAction === 'sync-persona' ? '同步中...' : '同步 persona_core'}
+                {busyAction === 'sync-persona' ? '同步中...' : '同步 persona_core / voice_mode'}
               </button>
               <button onClick={syncBriefing} disabled={busyAction === 'sync-briefing'}>
                 {busyAction === 'sync-briefing' ? '同步中...' : '同步今日重点到手机版对话'}
               </button>
               <button onClick={syncReminder} disabled={busyAction === 'sync-reminder'}>
-                {busyAction === 'sync-reminder' ? '同步中...' : '同步提醒'}
+                {busyAction === 'sync-reminder' ? '同步中...' : '同步提醒到手机对话'}
               </button>
             </div>
             <label>
@@ -444,7 +713,7 @@ export const DoubaoBridgePanel: React.FC = () => {
             </label>
             <div className="button-row">
               <button onClick={syncQueryCard} disabled={busyAction === 'sync-query'}>
-                {busyAction === 'sync-query' ? '注入中...' : '查记忆并注入当前会话'}
+                {busyAction === 'sync-query' ? '注入中...' : '查记忆并注入手机对话'}
               </button>
               <button onClick={() => setAutoRefresh((value) => !value)} className="ghost">
                 {autoRefresh ? '关闭自动刷新' : '开启自动刷新'}
@@ -457,11 +726,30 @@ export const DoubaoBridgePanel: React.FC = () => {
           <div className="card">
             <h2>安装指引</h2>
             <ul className="guide-list">
-              <li>桥接器是单独发布的本机常驻程序，不在扩展里保存豆包账号密码。</li>
-              <li>首次点击登录时，只在桥接器浏览器窗口里手动登录一次。</li>
-              <li>登录后，桥接器复用本地 profile，后续按需同步长期记忆和会话上下文。</li>
-              <li>如果你正在用手机或耳机聊天，把当前会话绑定成手机版对话线程。</li>
+              <li>面向最终用户的交付形态是 release pkg，而不是源码目录。</li>
+              <li>安装完成后，打开 `/Applications/Doubao Bridge`。</li>
+              <li>前台调试模式：双击 `Start Doubao Bridge.command`，不要关闭弹出的 Terminal 窗口。</li>
+              <li>后台常驻模式：双击 `Install Background Sync.command`，之后即使关闭 Terminal 也会继续同步。</li>
+              <li>停止与调试：用 `Stop Doubao Bridge.command` 停止进程，用 `Open Doubao Bridge Logs.command` 查看日志。</li>
+              <li>第一次连接后，再点击“重新配对”和“打开登录窗口”，完成 Doubao 登录和会话绑定。</li>
             </ul>
+            <p className="release-link">
+              最终用户下载页：{' '}
+              <a href={RELEASE_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+                GitHub Releases
+              </a>
+            </p>
+            <pre className="install-block">{`开发者打包:
+cd doubao-bridge
+npm install
+npm run package:macos
+
+最终用户使用:
+1. 打开 GitHub Releases 下载页，下载 Doubao-Bridge-Installer.pkg
+2. 安装后打开 /Applications/Doubao Bridge
+3. 双击 Start Doubao Bridge.command 或 Install Background Sync.command
+4. 如需让 bridge 后台自动从已运行的 memory-service 拉取记忆与上下文包，复制安装目录里的 bridge/.env.example 到:
+   ~/Library/Application Support/PersonalAI/DoubaoBridge/.env`}</pre>
           </div>
 
           <div className="card">
@@ -676,10 +964,36 @@ export const DoubaoBridgePanel: React.FC = () => {
         }
 
         .guide-list {
-          margin: 0;
+          margin: 0 0 14px;
           padding-left: 20px;
           color: #cbd5e1;
           line-height: 1.7;
+        }
+
+        .release-link {
+          margin: 0 0 14px;
+          color: #cbd5e1;
+          line-height: 1.7;
+        }
+
+        .release-link a {
+          color: #fbbf24;
+          text-decoration: none;
+          font-weight: 600;
+        }
+
+        .release-link a:hover {
+          text-decoration: underline;
+        }
+
+        .install-block {
+          margin: 0;
+          padding: 14px;
+          border-radius: 12px;
+          background: rgba(2, 6, 23, 0.72);
+          border: 1px solid rgba(148, 163, 184, 0.14);
+          overflow: auto;
+          color: #f8fafc;
         }
 
         .stat-list {
@@ -844,6 +1158,10 @@ function BindingBlock({ title, binding }: { title: string; binding?: DoubaoBridg
       <div className="binding-line">
         <span>thread id</span>
         <span>{binding?.threadId || '未绑定'}</span>
+      </div>
+      <div className="binding-line">
+        <span>thread url</span>
+        <span>{binding?.threadUrl || 'unknown'}</span>
       </div>
       <div className="binding-line">
         <span>title</span>

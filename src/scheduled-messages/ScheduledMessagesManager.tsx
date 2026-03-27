@@ -5253,7 +5253,7 @@ ${content}
 
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>
-                  {formData.Outreach_Target_Type === 'group' ? '群组/团队 ID *' : '接收人 *'}
+                  {formData.Outreach_Target_Type === 'group' ? '群组目标 *' : '接收对象 *'}
                 </label>
                 <input
                   style={dialogStyles.input}
@@ -5261,13 +5261,13 @@ ${content}
                   value={formData.Outreach_Target_Ref || ''}
                   onChange={(e) => handleChange('Outreach_Target_Ref', e.target.value)}
                   placeholder={formData.Outreach_Target_Type === 'group'
-                    ? '例如：148192141318'
-                    : '例如：esone.qiu 或 Esone Qiu'}
+                    ? '例如：RCV Mobile VT3、54490570758 或聊天链接'
+                    : '例如：AI Service、esone.qiu@ringcentral.com、1463750737922 或聊天链接'}
                 />
                 <small style={dialogStyles.hint}>
                   {formData.Outreach_Target_Type === 'group'
-                    ? '可填写群组/频道/团队的标识，后续由运行层映射到具体会话'
-                    : '可填写单个联系人或账号标识'}
+                    ? '群组模式只检索群名和群聊目标；支持群名、群聊 chat ID，或直接粘贴 RingCentral 聊天链接；审批时仍可改目标。通过链接或 chat ID 确认过一次后，后续可直接按群名搜。'
+                    : '私聊模式只检索人和私聊目标；支持人名、邮箱、私聊 chat ID，或直接粘贴 RingCentral 聊天链接；如果是 service account 或历史私聊，推荐优先贴链接。确认过一次后，后续可直接按名称搜。'}
                 </small>
               </div>
 

@@ -63,6 +63,18 @@ interface ProfileItemRow {
   updated_at: number;
 }
 
+type ReflectionWaitingReason =
+  | 'waiting_for_delegation'
+  | 'waiting_for_confirm_request'
+  | 'waiting_for_outreach'
+  | 'waiting_for_manual_action';
+
+interface PendingActionRow {
+  action_type: string | null;
+  execution_mode: 'manual' | 'auto' | null;
+  requires_approval: number;
+}
+
 function uniqStrings(values: Array<string | undefined | null>): string[] {
   return Array.from(
     new Set(
@@ -117,6 +129,20 @@ export class ReflectionThreadService {
 
   listThreadActions(threadId: string, limit = 20): QueuedActionRecord[] {
     return this.actionRepo.list({ threadId, limit }).items;
+  }
+
+  getHeartbeatBlockingReason(threadId: string): ReflectionWaitingReason | null {
+    const thread = this.repo.getThreadById(threadId);
+    if (!thread || thread.status !== 'active') return null;
+
+    if (this.hasPendingConfirmRequestForThread(thread)) {
+      return 'waiting_for_confirm_request';
+    }
+    if (this.hasActiveOutreachSession(thread.id)) {
+      return 'waiting_for_outreach';
+    }
+
+    return this.getPendingActionBlockingReason(thread.id);
   }
 
   listRuns(threadId: string, limit = 20): ReflectionRunRecord[] {
@@ -584,15 +610,71 @@ export class ReflectionThreadService {
     return Boolean(row);
   }
 
-  deferHeartbeatReflection(threadId: string): ReflectionThreadRecord | null {
+  deferHeartbeatReflection(
+    threadId: string,
+    reason: ReflectionWaitingReason = 'waiting_for_delegation',
+  ): ReflectionThreadRecord | null {
     const thread = this.repo.getThreadById(threadId);
     if (!thread) return null;
     const updated = this.repo.updateThreadAfterRun(threadId, {
       nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
-      continueReason: 'waiting_for_delegation',
+      continueReason: reason,
     });
     if (updated) this.syncThreadDocument(threadId);
     return updated;
+  }
+
+  markThreadWaitingForConfirmRequest(threadId: string): ReflectionThreadRecord | null {
+    return this.deferHeartbeatReflection(threadId, 'waiting_for_confirm_request');
+  }
+
+  markThreadWaitingForOutreach(threadId: string): ReflectionThreadRecord | null {
+    return this.deferHeartbeatReflection(threadId, 'waiting_for_outreach');
+  }
+
+  resumeThreadsForConfirmRequest(confirmRequestId: string): string[] {
+    const threadIds = new Set<string>();
+
+    const sourceThreads = this.db
+      .prepare(
+        `SELECT id
+         FROM reflection_threads
+         WHERE source_type = 'confirm_request'
+           AND source_ref_id = ?`,
+      )
+      .all(confirmRequestId) as Array<{ id: string }>;
+    for (const row of sourceThreads) {
+      threadIds.add(row.id);
+    }
+
+    const linkedActionThreads = this.db
+      .prepare(
+        `SELECT DISTINCT thread_id
+         FROM proposed_actions
+         WHERE thread_id IS NOT NULL
+           AND action_type = 'create_confirm_request'
+           AND json_extract(result_json, '$.confirmRequestId') = ?`,
+      )
+      .all(confirmRequestId) as Array<{ thread_id: string }>;
+    for (const row of linkedActionThreads) {
+      if (row.thread_id) threadIds.add(row.thread_id);
+    }
+
+    const resumed: string[] = [];
+    for (const threadId of threadIds) {
+      const thread = this.repo.getThreadById(threadId);
+      if (!thread || thread.status !== 'active') continue;
+      const updated = this.repo.updateThreadAfterRun(threadId, {
+        nextReflectionAt: now(),
+        continueReason: 'confirm request answered',
+      });
+      if (updated) {
+        resumed.push(threadId);
+        this.syncThreadDocument(threadId);
+      }
+    }
+
+    return resumed;
   }
 
   recordActionResult(result: ActionResultRecord): void {
@@ -704,6 +786,76 @@ export class ReflectionThreadService {
     }
 
     return evidenceItems;
+  }
+
+  private hasPendingConfirmRequestForThread(thread: ReflectionThreadRecord): boolean {
+    if (thread.sourceType === 'confirm_request' && thread.sourceRefId) {
+      const sourcePending = this.db
+        .prepare(
+          `SELECT id
+           FROM confirm_requests
+           WHERE id = ?
+             AND state = 'pending'
+           LIMIT 1`,
+        )
+        .get(thread.sourceRefId) as { id: string } | undefined;
+      if (sourcePending) return true;
+    }
+
+    const linkedPending = this.db
+      .prepare(
+        `SELECT cr.id
+         FROM proposed_actions a
+         JOIN confirm_requests cr
+           ON cr.id = json_extract(a.result_json, '$.confirmRequestId')
+         WHERE a.thread_id = ?
+           AND a.action_type = 'create_confirm_request'
+           AND a.queue_status = 'succeeded'
+           AND cr.state = 'pending'
+         LIMIT 1`,
+      )
+      .get(thread.id) as { id: string } | undefined;
+    return Boolean(linkedPending);
+  }
+
+  private hasActiveOutreachSession(threadId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT id
+         FROM outreach_sessions
+         WHERE thread_id = ?
+           AND status IN ('pending_approval', 'scheduled', 'waiting_reply', 'deferred')
+         LIMIT 1`,
+      )
+      .get(threadId) as { id: string } | undefined;
+    return Boolean(row);
+  }
+
+  private getPendingActionBlockingReason(threadId: string): ReflectionWaitingReason | null {
+    const rows = this.db
+      .prepare(
+        `SELECT action_type, execution_mode, requires_approval
+         FROM proposed_actions
+         WHERE thread_id = ?
+           AND queue_status IN ('queued', 'running')
+         ORDER BY created_at DESC
+         LIMIT 50`,
+      )
+      .all(threadId) as PendingActionRow[];
+
+    if (rows.some((row) => row.action_type === 'create_confirm_request')) {
+      return 'waiting_for_confirm_request';
+    }
+    if (rows.some((row) => row.action_type === 'ask_external_user')) {
+      return 'waiting_for_outreach';
+    }
+    if (rows.some((row) => row.action_type === 'delegate_openclaw')) {
+      return 'waiting_for_delegation';
+    }
+    if (rows.length > 0) {
+      return 'waiting_for_manual_action';
+    }
+    return null;
   }
 
   private mergeEvidence(

@@ -70,6 +70,31 @@ function isSelfOrUnknownOutreachTarget(targetRef: unknown): boolean {
   );
 }
 
+const INTERNAL_AUTO_ACTION_TYPES = new Set([
+  'notify_user',
+  'create_confirm_request',
+  'update_truth_property',
+  'ask_external_user',
+]);
+
+function normalizeExecutionMode(value: unknown): 'manual' | 'auto' | undefined {
+  if (value === 'manual' || value === 'auto') return value;
+  return undefined;
+}
+
+function defaultExecutionModeForAction(
+  actionType: string,
+  params: Record<string, unknown>,
+): 'manual' | 'auto' {
+  if (INTERNAL_AUTO_ACTION_TYPES.has(actionType)) {
+    return 'auto';
+  }
+  if (actionType === 'delegate_openclaw' && params.mode === 'write') {
+    return 'manual';
+  }
+  return 'manual';
+}
+
 export class ReflectionWorker {
   async generate(
     thread: ReflectionThreadRecord,
@@ -242,6 +267,7 @@ Rules:
         : undefined;
     const isWriteDelegation = requestedMode === 'write';
     const normalizedActionType = action.actionType.trim();
+    const explicitExecutionMode = normalizeExecutionMode(action.executionMode);
 
     if (normalizedActionType === 'ask_external_user') {
       const targetRef = params.targetRef ?? params.target_ref ?? params.targetId ?? params.chatId;
@@ -251,20 +277,27 @@ Rules:
       }
     }
 
+    const shouldForceAutoInternalAction =
+      INTERNAL_AUTO_ACTION_TYPES.has(normalizedActionType) && explicitExecutionMode !== 'manual';
+    const executionMode = isWriteDelegation
+      ? 'manual'
+      : shouldForceAutoInternalAction
+        ? 'auto'
+        : explicitExecutionMode ?? defaultExecutionModeForAction(normalizedActionType, params);
+    const requiresApproval = isWriteDelegation
+      ? true
+      : shouldForceAutoInternalAction
+        ? false
+        : action.requiresApproval ?? executionMode !== 'auto';
+
     return {
       actionType: normalizedActionType,
       title: action.title.trim(),
       description: action.description?.trim(),
       params,
       confidence: clampScore(action.confidence, 0.6),
-      requiresApproval: isWriteDelegation
-        ? true
-        : action.requiresApproval ?? action.executionMode !== 'auto',
-      executionMode: isWriteDelegation
-        ? 'manual'
-        : action.executionMode === 'auto'
-          ? 'auto'
-          : 'manual',
+      requiresApproval,
+      executionMode,
       priority: Math.max(1, Math.min(Math.round(action.priority ?? thread.priority), 10)),
       utilityScore: clampScore(action.utilityScore, thread.salience),
       urgencyScore: clampScore(action.urgencyScore, thread.salience),

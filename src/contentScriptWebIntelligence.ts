@@ -1,9 +1,8 @@
 /**
  * 智能网页分析 Content Script
- * 在所有网页中运行，自动分析相关内容
+ * 在所有网页中运行，自动分析相关内容与相关记忆提示
  */
 
-// 简化的页面内容接口
 interface SimplePageContent {
     title: string;
     url: string;
@@ -13,11 +12,10 @@ interface SimplePageContent {
     timestamp: number;
 }
 
-// 简化的分析结果接口
 interface SimpleAnalysisResult {
     isRelevant: boolean;
     confidence: number;
-    suggestedStorage: boolean; // 新增：是否建议存储
+    suggestedStorage: boolean;
     extractedInfo: {
         projects?: string[];
         people?: string[];
@@ -28,38 +26,63 @@ interface SimpleAnalysisResult {
     categories: string[];
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+interface ContextMatchPayload {
+    contextKey: string;
+    stabilityKey: string;
+    title: string;
+    keywords?: string[];
+    snippet?: string;
+}
+
+interface ContextMatchResult {
+    content: string;
+    source: string;
+    score: number;
+}
+
 function escapeHtml(text: string): string {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-// ---------------------------------------------------------------------------
-// Context Match: URL-based cache and domain debounce
-// ---------------------------------------------------------------------------
-const contextMatchCache = new Map<string, { match: any; ts: number }>();
-const domainLastRequest = new Map<string, number>();
-const CONTEXT_MATCH_DOMAIN_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
+function normalizeText(text?: string | null): string {
+    return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+const contextMatchCache = new Map<string, { match: ContextMatchResult | null; ts: number }>();
+const CONTEXT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const URL_WATCH_INTERVAL_MS = 500;
+const GENERIC_CONTEXT_STABLE_MS = 250;
+const RINGCENTRAL_CONTEXT_STABLE_MS = 700;
 
 class WebIntelligenceContentScript {
     private isAnalyzing = false;
     private lastAnalysisTime = 0;
     private analysisCount = 0;
-    private readonly MIN_ANALYSIS_INTERVAL = 5000; // 5秒
+    private readonly MIN_ANALYSIS_INTERVAL = 5000;
     private readonly BLOCKED_DOMAINS = [
         'google.com', 'facebook.com', 'twitter.com', 'youtube.com',
         'amazon.com', 'netflix.com', 'spotify.com'
     ];
+
+    private lastSeenUrl = window.location.href;
+    private urlWatcherId: number | null = null;
+    private contextMatchTimer: number | null = null;
+    private observedContextStabilityKey: string | null = null;
+    private observedContextSince = 0;
+    private pendingContextRequestId = 0;
+    private pendingContextKey: string | null = null;
+    private activeBubbleContextKey: string | null = null;
+    private bubbleElement: HTMLDivElement | null = null;
+    private cardElement: HTMLDivElement | null = null;
+    private outsideClickListener: ((event: MouseEvent) => void) | null = null;
 
     constructor() {
         this.initialize();
     }
 
     private initialize(): void {
-        // 检查是否应该在当前域名运行
         if (!this.shouldRunOnCurrentDomain()) {
             console.log('🚫 智能网页分析: 当前域名被跳过');
             return;
@@ -67,60 +90,68 @@ class WebIntelligenceContentScript {
 
         console.log('🧠 智能网页分析已启动:', window.location.href);
 
-        // 设置事件监听
         this.setupEventListeners();
-        
-        // 延迟执行初始分析
-        setTimeout(() => {
-            this.scheduleAnalysis();
-        }, 2000);
 
-        // Context match: check for related reflections/dreams after page loads
-        setTimeout(() => {
-            this.tryContextMatch();
-        }, 2000);
+        this.scheduleAnalysis(2000);
+        this.scheduleContextMatch(2000);
     }
 
     private shouldRunOnCurrentDomain(): boolean {
         const domain = window.location.hostname;
         const url = window.location.href;
 
-        // 跳过扩展页面
         if (url.startsWith('chrome-extension://') || url.startsWith('chrome://')) {
             return false;
         }
 
-        // 跳过被阻止的域名
         return !this.BLOCKED_DOMAINS.some(blocked => domain.includes(blocked));
     }
 
     private setupEventListeners(): void {
-        // 页面加载完成后分析
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => {
-                this.scheduleAnalysis();
+                this.scheduleAnalysis(1000);
+                this.scheduleContextMatch(1500);
+            });
+        } else {
+            this.scheduleAnalysis(1000);
+            this.scheduleContextMatch(1500);
+        }
+
+        if (document.body) {
+            const observer = new MutationObserver((mutations) => {
+                const hasSignificantChanges = this.hasSignificantAnalysisChanges(mutations);
+                if (hasSignificantChanges) {
+                    this.scheduleAnalysis(1000);
+                }
+
+                if (this.shouldReevaluateContext(mutations)) {
+                    this.scheduleContextMatch(this.getContextChangeDelayMs());
+                }
+            });
+
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
             });
         }
 
-        // 监听内容变化
-        const observer = new MutationObserver((mutations) => {
-            const hasSignificantChanges = mutations.some(mutation => 
-                mutation.type === 'childList' && 
-                mutation.addedNodes.length > 3
-            );
-            
-            if (hasSignificantChanges) {
-                this.scheduleAnalysis();
-            }
+        window.addEventListener('focus', () => {
+            this.scheduleAnalysis(1000);
+            this.scheduleContextMatch(400);
         });
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
+        window.addEventListener('hashchange', () => {
+            this.handleUrlMaybeChanged();
         });
 
-        // 监听扩展消息
-        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        window.addEventListener('popstate', () => {
+            this.handleUrlMaybeChanged();
+        });
+
+        this.startUrlWatcher();
+
+        chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             if (request.type === 'TRIGGER_MANUAL_ANALYSIS') {
                 this.performAnalysis()
                     .then(result => sendResponse({ success: true, result }))
@@ -135,22 +166,144 @@ class WebIntelligenceContentScript {
                         analysisCount: this.analysisCount,
                         lastAnalysisTime: this.lastAnalysisTime,
                         isAnalyzing: this.isAnalyzing,
-                        currentDomain: window.location.hostname
+                        currentDomain: window.location.hostname,
+                        currentContextKey: this.activeBubbleContextKey
                     }
                 });
             }
         });
     }
 
-    private scheduleAnalysis(): void {
+    private startUrlWatcher(): void {
+        if (this.urlWatcherId !== null) return;
+
+        this.urlWatcherId = window.setInterval(() => {
+            if (window.location.href !== this.lastSeenUrl) {
+                this.handleUrlMaybeChanged();
+            }
+        }, URL_WATCH_INTERVAL_MS);
+    }
+
+    private handleUrlMaybeChanged(): void {
+        const currentUrl = window.location.href;
+        const hasChanged = currentUrl !== this.lastSeenUrl;
+        this.lastSeenUrl = currentUrl;
+
+        if (hasChanged) {
+            this.resetContextStability();
+            this.clearContextBubble();
+        }
+
+        this.scheduleAnalysis(1000);
+        this.scheduleContextMatch(this.getContextChangeDelayMs());
+    }
+
+    private hasSignificantAnalysisChanges(mutations: MutationRecord[]): boolean {
+        return mutations.some((mutation) => {
+            if (mutation.type !== 'childList') return false;
+
+            const nodes = Array.from(mutation.addedNodes);
+            if (nodes.length > 3) return true;
+
+            return nodes.some((node) => {
+                if (!(node instanceof HTMLElement)) return false;
+                if (this.isOwnedContextUiNode(node)) return false;
+                return normalizeText(node.textContent).length > 200;
+            });
+        });
+    }
+
+    private shouldReevaluateContext(mutations: MutationRecord[]): boolean {
+        if (this.isRingCentralMessagePage()) {
+            return this.hasRingCentralConversationChanges(mutations);
+        }
+
+        return mutations.some((mutation) => {
+            if (mutation.type !== 'childList') return false;
+            return Array.from(mutation.addedNodes).some((node) => {
+                if (!(node instanceof HTMLElement)) return false;
+                if (this.isOwnedContextUiNode(node)) return false;
+                return normalizeText(node.textContent).length > 200;
+            });
+        });
+    }
+
+    private hasRingCentralConversationChanges(mutations: MutationRecord[]): boolean {
+        for (const mutation of mutations) {
+            if (mutation.type !== 'childList') continue;
+
+            const touchedNodes = [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)];
+            for (const node of touchedNodes) {
+                if (!(node instanceof HTMLElement)) continue;
+                if (this.isOwnedContextUiNode(node)) continue;
+
+                if (
+                    node.id === 'message-chat-stream-wrapper' ||
+                    node.matches('[role="tab"], [role="tablist"], .conversation-card-wrapper, [data-id]') ||
+                    node.querySelector?.('#message-chat-stream-wrapper, [role="tab"], [role="tablist"], .conversation-card-wrapper, [data-id]')
+                ) {
+                    return true;
+                }
+            }
+
+            const target = mutation.target instanceof HTMLElement ? mutation.target : null;
+            if (!target) continue;
+
+            if (
+                target.closest('#leftRail') ||
+                target.closest('#message-chat-stream-wrapper') ||
+                target.closest('main')
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private isOwnedContextUiNode(node: HTMLElement): boolean {
+        return (
+            node.classList.contains('pai-context-bubble') ||
+            node.classList.contains('pai-context-card') ||
+            node.id === 'pai-context-bubble-styles' ||
+            !!node.closest('.pai-context-bubble, .pai-context-card')
+        );
+    }
+
+    private scheduleAnalysis(delayMs = 1000): void {
         const now = Date.now();
         if (now - this.lastAnalysisTime < this.MIN_ANALYSIS_INTERVAL || this.isAnalyzing) {
             return;
         }
 
-        setTimeout(() => {
-            this.performAnalysis();
-        }, 1000);
+        window.setTimeout(() => {
+            void this.performAnalysis();
+        }, delayMs);
+    }
+
+    private scheduleContextMatch(delayMs = 0): void {
+        if (this.contextMatchTimer !== null) {
+            window.clearTimeout(this.contextMatchTimer);
+        }
+
+        this.contextMatchTimer = window.setTimeout(() => {
+            this.contextMatchTimer = null;
+            this.tryContextMatch();
+        }, delayMs);
+    }
+
+    private resetContextStability(): void {
+        this.observedContextStabilityKey = null;
+        this.observedContextSince = 0;
+        this.pendingContextKey = null;
+    }
+
+    private getContextChangeDelayMs(): number {
+        return this.isRingCentralMessagePage() ? 800 : 1200;
+    }
+
+    private getContextStabilityMs(): number {
+        return this.isRingCentralMessagePage() ? RINGCENTRAL_CONTEXT_STABLE_MS : GENERIC_CONTEXT_STABLE_MS;
     }
 
     private async performAnalysis(): Promise<SimpleAnalysisResult | null> {
@@ -163,17 +316,14 @@ class WebIntelligenceContentScript {
         try {
             console.log(`🔍 开始智能分析 #${this.analysisCount}:`, window.location.href);
 
-            // 提取页面内容
             const pageContent = this.extractPageContent();
             if (!pageContent || pageContent.wordCount < 50) {
                 console.log('📄 页面内容不足，跳过分析');
                 return null;
             }
 
-            // 执行快速本地分析
             const analysisResult = this.quickAnalyze(pageContent);
 
-            // 如果相关且置信度高，发送到后台处理
             if (analysisResult.isRelevant && analysisResult.confidence > 0.5) {
                 console.log('📤 准备发送到后台处理:', {
                     相关性: analysisResult.isRelevant,
@@ -200,9 +350,7 @@ class WebIntelligenceContentScript {
                     console.error('❌ 发送分析结果失败:', error);
                 });
 
-                // 显示用户提示
                 if (analysisResult.confidence > 0.8) {
-                    // 暂时禁用弹窗提示
                     // this.showNotification(analysisResult);
                 }
             } else {
@@ -220,7 +368,6 @@ class WebIntelligenceContentScript {
             });
 
             return analysisResult;
-
         } catch (error) {
             console.error('❌ 智能分析失败:', error);
             return null;
@@ -235,7 +382,6 @@ class WebIntelligenceContentScript {
             const url = window.location.href;
             const domain = window.location.hostname;
 
-            // 提取主要内容
             const mainContent = this.extractMainContent();
             if (!mainContent) return null;
 
@@ -245,8 +391,9 @@ class WebIntelligenceContentScript {
                 title,
                 url,
                 domain,
-                mainContent: mainContent.length > 10000 ? 
-                    mainContent.substring(0, 10000) + '...' : mainContent,
+                mainContent: mainContent.length > 10000
+                    ? mainContent.substring(0, 10000) + '...'
+                    : mainContent,
                 wordCount,
                 timestamp: Date.now()
             };
@@ -257,7 +404,6 @@ class WebIntelligenceContentScript {
     }
 
     private extractMainContent(): string {
-        // 优先选择器列表
         const selectors = [
             'main', 'article', '[role="main"]',
             '#main', '#content', '.content', '.main-content',
@@ -273,22 +419,19 @@ class WebIntelligenceContentScript {
                         return content;
                     }
                 }
-            } catch (error) {
+            } catch (_error) {
                 continue;
             }
         }
 
-        // 回退到body
         return this.getTextContent(document.body);
     }
 
     private getTextContent(element: Element): string {
-        // 移除脚本和样式
         const clone = element.cloneNode(true) as Element;
         const unwanted = clone.querySelectorAll('script, style, nav, header, footer, .sidebar, .ads');
         unwanted.forEach(el => el.remove());
-
-        return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+        return normalizeText(clone.textContent);
     }
 
     private countWords(text: string): number {
@@ -301,32 +444,29 @@ class WebIntelligenceContentScript {
         const content = pageContent.mainContent.toLowerCase();
         let confidence = 0;
         const categories: string[] = [];
-        const extractedInfo: any = {};
+        const extractedInfo: SimpleAnalysisResult['extractedInfo'] = {};
         const reasons: string[] = [];
 
-        // URL模式分析
         const urlAnalysis = this.analyzeUrl(pageContent.url);
         confidence += urlAnalysis.score;
         categories.push(...urlAnalysis.categories);
         reasons.push(...urlAnalysis.reasons);
 
-        // 关键词分析
         const keywordAnalysis = this.analyzeKeywords(content);
         confidence += keywordAnalysis.score;
         reasons.push(...keywordAnalysis.reasons);
 
-        // 实体提取
         const entities = this.extractSimpleEntities(pageContent.mainContent);
         Object.assign(extractedInfo, entities);
 
         const finalConfidence = Math.min(confidence, 1);
         const isRelevant = finalConfidence > 0.3;
-        const suggestedStorage = isRelevant && finalConfidence > 0.4; // 添加存储建议逻辑
+        const suggestedStorage = isRelevant && finalConfidence > 0.4;
 
         return {
             isRelevant,
             confidence: finalConfidence,
-            suggestedStorage, // 新增字段
+            suggestedStorage,
             extractedInfo,
             reasoning: reasons.join('; ') || '基于内容特征分析',
             categories: Array.from(new Set(categories))
@@ -385,18 +525,16 @@ class WebIntelligenceContentScript {
         return { score, reasons };
     }
 
-    private extractSimpleEntities(content: string): any {
-        const entities: any = {};
+    private extractSimpleEntities(content: string): SimpleAnalysisResult['extractedInfo'] {
+        const entities: SimpleAnalysisResult['extractedInfo'] = {};
 
-        // 项目名称
         const projects = this.extractWithPattern(content, [
             /项目[：:]?\s*([^\s,，。]{2,20})/g,
             /Project[:\s]+([A-Za-z0-9\s-]{2,30})/gi,
-            /\[([A-Z]+-\d+)\]/g // Jira格式
+            /\[([A-Z]+-\d+)\]/g
         ]);
         if (projects.length > 0) entities.projects = projects;
 
-        // 人员
         const people = this.extractWithPattern(content, [
             /@([a-zA-Z0-9\u4e00-\u9fa5]{2,20})/g,
             /负责人[：:]?\s*([^\s,，。]{2,10})/g,
@@ -404,17 +542,13 @@ class WebIntelligenceContentScript {
         ]);
         if (people.length > 0) entities.people = people;
 
-        // 技术栈
         const techKeywords = [
-            'react', 'vue', 'angular', 'javascript', 'typescript', 'node.js', 'python', 
+            'react', 'vue', 'angular', 'javascript', 'typescript', 'node.js', 'python',
             'java', 'spring', 'docker', 'kubernetes', 'aws', 'mongodb', 'mysql', 'redis'
         ];
-        const technologies = techKeywords.filter(tech => 
-            content.toLowerCase().includes(tech)
-        );
+        const technologies = techKeywords.filter(tech => content.toLowerCase().includes(tech));
         if (technologies.length > 0) entities.technologies = technologies;
 
-        // 行动项
         const actions = this.extractWithPattern(content, [
             /TODO[:\s]*([^。！!.\n]{5,50})/gi,
             /需要\s*([^。！!.]{5,50})/g,
@@ -427,7 +561,7 @@ class WebIntelligenceContentScript {
 
     private extractWithPattern(content: string, patterns: RegExp[]): string[] {
         const results = new Set<string>();
-        
+
         for (const pattern of patterns) {
             let match;
             while ((match = pattern.exec(content)) !== null) {
@@ -436,116 +570,354 @@ class WebIntelligenceContentScript {
                 }
             }
         }
-        
-        return Array.from(results).slice(0, 10); // 限制数量
+
+        return Array.from(results).slice(0, 10);
     }
 
-    // -----------------------------------------------------------------------
-    // Context Match — surface related reflections/dreams as a floating bubble
-    // -----------------------------------------------------------------------
-
     private tryContextMatch(): void {
-        const url = window.location.href;
-        const domain = window.location.hostname;
-
-        // URL-level cache check
-        const cached = contextMatchCache.get(url);
-        if (cached && Date.now() - cached.ts < CONTEXT_MATCH_DOMAIN_DEBOUNCE_MS) {
-            if (cached.match) this.showContextBubble(cached.match);
+        const payload = this.buildContextMatchPayload();
+        if (!payload) {
+            this.clearContextBubble();
             return;
         }
 
-        // Domain-level debounce
-        const lastReq = domainLastRequest.get(domain);
-        if (lastReq && Date.now() - lastReq < CONTEXT_MATCH_DOMAIN_DEBOUNCE_MS) {
+        const now = Date.now();
+        if (payload.stabilityKey !== this.observedContextStabilityKey) {
+            this.observedContextStabilityKey = payload.stabilityKey;
+            this.observedContextSince = now;
+            this.scheduleContextMatch(this.getContextStabilityMs());
             return;
         }
-        domainLastRequest.set(domain, Date.now());
 
-        // Extract lightweight page context
-        const title = document.title || '';
-        const metaKeywords = document.querySelector('meta[name="keywords"]')?.getAttribute('content');
-        const keywords = metaKeywords ? metaKeywords.split(',').map(k => k.trim()).filter(Boolean) : undefined;
+        const stableForMs = now - this.observedContextSince;
+        const requiredStableMs = this.getContextStabilityMs();
+        if (stableForMs < requiredStableMs) {
+            this.scheduleContextMatch(requiredStableMs - stableForMs);
+            return;
+        }
 
-        // First 300 chars of visible text as snippet
-        const mainEl = document.querySelector('main, article, [role="main"]');
-        const snippet = (mainEl || document.body)?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 300) || undefined;
+        const cached = contextMatchCache.get(payload.contextKey);
+        if (cached && now - cached.ts < CONTEXT_MATCH_CACHE_TTL_MS) {
+            if (cached.match) {
+                this.showContextBubble(cached.match, payload.contextKey, this.activeBubbleContextKey !== payload.contextKey);
+            } else {
+                this.clearContextBubble();
+            }
+            return;
+        }
 
-        if (!title.trim() && !snippet?.trim()) return;
+        if (this.pendingContextKey === payload.contextKey) {
+            return;
+        }
+
+        if (this.activeBubbleContextKey && this.activeBubbleContextKey !== payload.contextKey) {
+            this.clearContextBubble();
+        }
+
+        this.pendingContextKey = payload.contextKey;
+        const requestId = ++this.pendingContextRequestId;
 
         chrome.runtime.sendMessage({
             type: 'CONTEXT_MATCH_REQUEST',
-            title,
-            keywords,
-            snippet,
+            title: payload.title,
+            keywords: payload.keywords,
+            snippet: payload.snippet,
         }, (response) => {
+            if (requestId !== this.pendingContextRequestId) {
+                return;
+            }
+
+            this.pendingContextKey = null;
+
             if (chrome.runtime.lastError) {
                 console.warn('Context match message error:', chrome.runtime.lastError.message);
                 return;
             }
-            const match = response?.match ?? null;
-            contextMatchCache.set(url, { match, ts: Date.now() });
+
+            const currentPayload = this.buildContextMatchPayload();
+            if (!currentPayload || currentPayload.contextKey !== payload.contextKey) {
+                return;
+            }
+
+            const match = (response?.match ?? null) as ContextMatchResult | null;
+            contextMatchCache.set(payload.contextKey, { match, ts: Date.now() });
+
             if (match) {
-                this.showContextBubble(match);
+                this.showContextBubble(match, payload.contextKey, true);
+            } else {
+                this.clearContextBubble();
             }
         });
     }
 
-    private showContextBubble(match: { content: string; source: string; score: number }): void {
-        // Don't inject twice
-        if (document.querySelector('.pai-context-bubble')) return;
+    private buildContextMatchPayload(): ContextMatchPayload | null {
+        if (this.isRingCentralMessagePage()) {
+            return this.buildRingCentralContextPayload();
+        }
+
+        return this.buildGenericContextPayload();
+    }
+
+    private buildGenericContextPayload(): ContextMatchPayload | null {
+        const title = normalizeText(document.title);
+        const metaKeywords = document.querySelector('meta[name="keywords"]')?.getAttribute('content');
+        const mainEl = document.querySelector('main, article, [role="main"]');
+        const snippet = normalizeText((mainEl || document.body)?.textContent).slice(0, 500);
+        if (!title && !snippet) {
+            return null;
+        }
+
+        const keywords = this.collectKeywords([
+            ...(metaKeywords ? metaKeywords.split(',').map(k => normalizeText(k)) : []),
+            title,
+            snippet
+        ]);
+        const snippetToken = normalizeText(snippet).slice(0, 160);
+        const contextKey = `page:${window.location.href}|${title}|${snippetToken}`;
+
+        return {
+            contextKey,
+            stabilityKey: contextKey,
+            title: title || window.location.href,
+            keywords,
+            snippet
+        };
+    }
+
+    private isRingCentralMessagePage(): boolean {
+        return (
+            window.location.hostname === 'app.ringcentral.com' &&
+            /^\/messages\/[^/?#]+/.test(window.location.pathname)
+        );
+    }
+
+    private buildRingCentralContextPayload(): ContextMatchPayload | null {
+        const conversationId = this.getRingCentralConversationId();
+        const title = this.getRingCentralConversationTitle();
+        const stream = document.querySelector<HTMLElement>('#message-chat-stream-wrapper');
+        const messageCards = Array.from(document.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'));
+
+        if (!conversationId || !title || !stream || messageCards.length === 0) {
+            return null;
+        }
+
+        const cardsForSnippet = this.getRingCentralSnippetCards(stream, messageCards);
+        const snippet = normalizeText(cardsForSnippet.map(card => card.textContent || '').join('\n')).slice(0, 1400);
+        if (!snippet) {
+            return null;
+        }
+
+        const messageIds = messageCards
+            .slice(0, 3)
+            .map(card => card.getAttribute('data-id'))
+            .filter((id): id is string => !!id);
+        const selectedTabText = normalizeText(document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.textContent);
+        const contextKey = `ringcentral:${conversationId}|${title}`;
+        const stabilityKey = `${contextKey}|${messageIds.join(',')}`;
+
+        return {
+            contextKey,
+            stabilityKey,
+            title,
+            keywords: this.collectKeywords([title, selectedTabText, snippet]),
+            snippet
+        };
+    }
+
+    private getRingCentralConversationId(): string | null {
+        const match = window.location.pathname.match(/^\/messages\/([^/?#]+)/);
+        return match?.[1] || null;
+    }
+
+    private getRingCentralConversationTitle(): string {
+        const heading = document.querySelector<HTMLElement>('main h1, main [role="heading"]');
+        return normalizeText(heading?.textContent || document.title);
+    }
+
+    private getRingCentralSnippetCards(
+        stream: HTMLElement,
+        messageCards: HTMLElement[]
+    ): HTMLElement[] {
+        const streamRect = stream.getBoundingClientRect();
+        const visibleCards = messageCards.filter((card) => {
+            const rect = card.getBoundingClientRect();
+            return rect.bottom > streamRect.top && rect.top < streamRect.bottom;
+        });
+
+        const sourceCards = visibleCards.length > 0 ? visibleCards : messageCards;
+        return sourceCards.slice(0, 6);
+    }
+
+    private collectKeywords(parts: string[]): string[] | undefined {
+        const keywords = new Set<string>();
+
+        for (const part of parts) {
+            const text = normalizeText(part);
+            if (!text) continue;
+
+            const jiraKeys = text.match(/\b[A-Z][A-Z0-9]{1,9}-\d+\b/g) || [];
+            jiraKeys.forEach(key => keywords.add(key));
+
+            const mentions = text.match(/@[a-zA-Z0-9._-]+/g) || [];
+            mentions.forEach(mention => keywords.add(mention));
+        }
+
+        const list = Array.from(keywords).slice(0, 8);
+        return list.length > 0 ? list : undefined;
+    }
+
+    private ensureContextBubbleStyles(): void {
+        if (document.getElementById('pai-context-bubble-styles')) {
+            return;
+        }
+
+        const style = document.createElement('style');
+        style.id = 'pai-context-bubble-styles';
+        style.textContent = `
+            .pai-context-bubble {
+                position: fixed;
+                bottom: 24px;
+                right: 24px;
+                width: 44px;
+                height: 44px;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.96);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                z-index: 2147483646;
+                box-shadow: 0 6px 18px rgba(15, 23, 42, 0.22);
+                transition: transform 0.18s ease, box-shadow 0.18s ease;
+                user-select: none;
+                backdrop-filter: blur(10px);
+                animation: pai-context-bubble-enter 0.28s ease-out;
+            }
+
+            .pai-context-bubble:hover {
+                transform: translateY(-1px) scale(1.06);
+                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.28);
+            }
+
+            .pai-context-bubble::after {
+                content: '';
+                position: absolute;
+                inset: -6px;
+                border-radius: inherit;
+                border: 2px solid rgba(102, 126, 234, 0);
+                pointer-events: none;
+            }
+
+            .pai-context-bubble--fresh::after {
+                animation: pai-context-bubble-ring 1s ease-out 2;
+            }
+
+            .pai-context-bubble--fresh img {
+                animation: pai-context-bubble-pulse 0.9s ease-in-out 2;
+            }
+
+            .pai-context-card {
+                position: fixed;
+                bottom: 76px;
+                right: 24px;
+                width: 320px;
+                max-height: 280px;
+                background: rgba(255, 255, 255, 0.98);
+                border-radius: 12px;
+                box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+                padding: 16px;
+                z-index: 2147483646;
+                display: none;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+                color: #333;
+                overflow-y: auto;
+                line-height: 1.5;
+                backdrop-filter: blur(12px);
+            }
+
+            @keyframes pai-context-bubble-enter {
+                from {
+                    opacity: 0;
+                    transform: translateY(8px) scale(0.88);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0) scale(1);
+                }
+            }
+
+            @keyframes pai-context-bubble-pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.14); }
+            }
+
+            @keyframes pai-context-bubble-ring {
+                0% {
+                    opacity: 0.65;
+                    transform: scale(0.92);
+                    border-color: rgba(102, 126, 234, 0.48);
+                }
+                100% {
+                    opacity: 0;
+                    transform: scale(1.22);
+                    border-color: rgba(102, 126, 234, 0);
+                }
+            }
+        `;
+
+        document.head.appendChild(style);
+    }
+
+    private clearContextBubble(): void {
+        if (this.outsideClickListener) {
+            document.removeEventListener('click', this.outsideClickListener, true);
+            this.outsideClickListener = null;
+        }
+
+        this.cardElement?.remove();
+        this.bubbleElement?.remove();
+        this.cardElement = null;
+        this.bubbleElement = null;
+        this.activeBubbleContextKey = null;
+    }
+
+    private showContextBubble(match: ContextMatchResult, contextKey: string, animate: boolean): void {
+        if (this.activeBubbleContextKey === contextKey && this.bubbleElement && this.cardElement) {
+            return;
+        }
+
+        this.clearContextBubble();
+        this.ensureContextBubbleStyles();
+
+        if (!document.body) {
+            return;
+        }
 
         const bubble = document.createElement('div');
         bubble.className = 'pai-context-bubble';
-        bubble.style.cssText = `
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #fff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            z-index: 2147483646;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            user-select: none;
-        `;
+        if (animate) {
+            bubble.classList.add('pai-context-bubble--fresh');
+        }
+        bubble.title = 'Related memory found';
+
         const iconImg = document.createElement('img');
         iconImg.src = chrome.runtime.getURL('icons/icon48.png');
         iconImg.alt = 'Related memory';
         iconImg.style.cssText = 'width: 28px; height: 28px; object-fit: contain;';
         bubble.appendChild(iconImg);
-        bubble.title = 'Related memory found';
 
-        // Expanded card (hidden initially)
         const card = document.createElement('div');
         card.className = 'pai-context-card';
-        card.style.cssText = `
-            position: fixed;
-            bottom: 72px;
-            right: 24px;
-            width: 320px;
-            max-height: 260px;
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.18);
-            padding: 16px;
-            z-index: 2147483646;
-            display: none;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 13px;
-            color: #333;
-            overflow-y: auto;
-        `;
 
-        const sourceLabel = match.source.startsWith('reflections/') ? 'Reflection' : 'Dream';
+        const sourceLabel =
+            match.source.startsWith('reflections/') || match.source.startsWith('reflection-threads/')
+                ? 'Reflection'
+                : 'Dream';
+
         card.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                <span style="font-weight:600;color:#764ba2;">\uD83E\uDDE0 ${sourceLabel}</span>
+                <span style="font-weight:600;color:#5b5bd6;">🧠 ${sourceLabel}</span>
                 <span style="font-size:11px;color:#999;">score ${(match.score * 100).toFixed(0)}%</span>
             </div>
             <div style="line-height:1.5;color:#555;white-space:pre-wrap;">${escapeHtml(match.content)}</div>
@@ -553,38 +925,44 @@ class WebIntelligenceContentScript {
         `;
 
         let expanded = false;
-
-        bubble.addEventListener('mouseenter', () => {
-            bubble.style.transform = 'scale(1.1)';
-            bubble.style.boxShadow = '0 4px 16px rgba(0,0,0,0.3)';
-        });
-        bubble.addEventListener('mouseleave', () => {
-            if (!expanded) {
-                bubble.style.transform = 'scale(1)';
-                bubble.style.boxShadow = '0 2px 10px rgba(0,0,0,0.25)';
-            }
-        });
-
-        bubble.addEventListener('click', () => {
+        bubble.addEventListener('click', (event) => {
+            event.stopPropagation();
             expanded = !expanded;
             card.style.display = expanded ? 'block' : 'none';
         });
 
-        // Close card when clicking outside
-        document.addEventListener('click', (e) => {
-            if (expanded && !bubble.contains(e.target as Node) && !card.contains(e.target as Node)) {
-                expanded = false;
-                card.style.display = 'none';
-                bubble.style.transform = 'scale(1)';
-            }
+        card.addEventListener('click', (event) => {
+            event.stopPropagation();
         });
+
+        this.outsideClickListener = (event: MouseEvent) => {
+            const target = event.target as Node | null;
+            if (!target) return;
+            if (bubble.contains(target) || card.contains(target)) {
+                return;
+            }
+
+            expanded = false;
+            card.style.display = 'none';
+        };
+
+        document.addEventListener('click', this.outsideClickListener, true);
 
         document.body.appendChild(card);
         document.body.appendChild(bubble);
+
+        this.bubbleElement = bubble;
+        this.cardElement = card;
+        this.activeBubbleContextKey = contextKey;
+
+        if (animate) {
+            window.setTimeout(() => {
+                bubble.classList.remove('pai-context-bubble--fresh');
+            }, 2200);
+        }
     }
 
     private showNotification(result: SimpleAnalysisResult): void {
-        // 检查是否已存在通知
         if (document.querySelector('.web-intelligence-notification')) {
             return;
         }
@@ -623,28 +1001,24 @@ class WebIntelligenceContentScript {
 
         document.body.appendChild(notification);
 
-        // 显示动画
-        setTimeout(() => {
+        window.setTimeout(() => {
             notification.style.transform = 'translateX(0)';
         }, 100);
 
-        // 点击关闭
         notification.addEventListener('click', () => {
             notification.style.transform = 'translateX(300px)';
-            setTimeout(() => notification.remove(), 300);
+            window.setTimeout(() => notification.remove(), 300);
         });
 
-        // 自动关闭
-        setTimeout(() => {
+        window.setTimeout(() => {
             if (notification.parentNode) {
                 notification.style.transform = 'translateX(300px)';
-                setTimeout(() => notification.remove(), 300);
+                window.setTimeout(() => notification.remove(), 300);
             }
         }, 6000);
     }
 }
 
-// 启动智能网页分析
 try {
     new WebIntelligenceContentScript();
 } catch (error) {

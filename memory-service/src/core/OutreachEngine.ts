@@ -6,6 +6,7 @@ import {
   type QueuedActionRecord,
 } from '../repositories/ActionRepository.js';
 import { ActionResultRepository } from '../repositories/ActionResultRepository.js';
+import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 import {
   OutreachRepository,
   type OutreachOriginKind,
@@ -199,6 +200,7 @@ function classifyReply(text: string, currentTime: number): ParsedReply {
 export class OutreachEngine {
   private readonly repo: OutreachRepository;
   private readonly actionResultRepo: ActionResultRepository;
+  private readonly confirmRequestRepo: ConfirmRequestRepository;
   private readonly threadService: ReflectionThreadService;
   private readonly ringClient: RingCentralClient;
 
@@ -209,6 +211,7 @@ export class OutreachEngine {
   ) {
     this.repo = new OutreachRepository(db);
     this.actionResultRepo = new ActionResultRepository(db);
+    this.confirmRequestRepo = new ConfirmRequestRepository(db);
     this.threadService = new ReflectionThreadService(db, userDataManager, userId);
     this.ringClient = new RingCentralClient(userDataManager);
   }
@@ -946,24 +949,14 @@ export class OutreachEngine {
       { label: '先暂停', value: 'pause' },
       { label: '关闭该询问', value: 'close' },
     ];
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO confirm_requests
-          (id, question, context, options_json, evidence_refs_json, category, related_entity_id,
-           related_property_id, priority, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        randomUUID(),
-        question,
-        context,
-        JSON.stringify(options),
-        JSON.stringify([`outreach_session:${session.id}`]),
-        'outreach_followup',
-        null,
-        null,
-        'high',
-        now(),
-      );
+    this.confirmRequestRepo.createOrReusePending({
+      question,
+      context,
+      options,
+      evidenceRefs: [`outreach_session:${session.id}`],
+      category: 'outreach_followup',
+      priority: 'high',
+      createdAt: now(),
+    });
   }
 }

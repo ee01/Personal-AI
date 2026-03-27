@@ -97,10 +97,16 @@
               v-model="draft.targetRef"
               class="field-input"
               type="text"
-              placeholder="输入用户名、群组名或群组 ID"
+              :placeholder="draft.targetType === 'group'
+                ? '输入群名、群聊 chat ID 或 RingCentral 聊天链接'
+                : '输入人名、邮箱、私聊 chat ID 或 RingCentral 聊天链接'"
               @input="handleTargetInput"
             />
-            <span class="muted small">输入时会自动检索 RingCentral 用户或群组候选。</span>
+            <span class="muted small">
+              {{ draft.targetType === 'group'
+                ? '群组模式只检索群名和群聊目标；支持群名、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。通过链接或 chat ID 确认过一次后，系统会记住这个群名。'
+                : '私聊/联系人模式只检索人和私聊目标；支持人名、邮箱、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。若是 service account 或较早的私聊，直接贴聊天链接会更稳；确认过一次后系统会记住这个名称。' }}
+            </span>
           </label>
           <div class="field-block full-span">
             <div class="search-row">
@@ -513,7 +519,9 @@ async function searchTargets(manual = true) {
     draft.targetCandidates = response.items;
     if (response.items.length === 0) {
       clearResolvedTarget();
-      searchError.value = `未找到与 “${query}” 匹配的 RingCentral 用户/群组，请调整后重试。`;
+      searchError.value = draft.targetType === 'group'
+        ? `未找到与 “${query}” 匹配的群组目标。请确认当前已切到群组模式；也可以直接粘贴群聊链接或 chat ID。`
+        : `未找到与 “${query}” 匹配的私聊/联系人目标。私聊模式不会检索群名；如果你要找群，请切到群组模式。若是 service account 或历史私聊，建议直接粘贴聊天链接。`;
       return;
     }
     if (response.items.length === 1 && response.items[0].score >= 90) {

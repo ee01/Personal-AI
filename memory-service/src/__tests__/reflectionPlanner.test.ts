@@ -7,6 +7,7 @@ import { getTestDb } from './setup.js';
 import { ReflectionPlanner } from '../core/ReflectionPlanner.js';
 import { ReflectionThreadRepository } from '../repositories/ReflectionThreadRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
+import { OutreachRepository } from '../repositories/OutreachRepository.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
 
@@ -14,6 +15,7 @@ describe('ReflectionPlanner', () => {
   const db = getTestDb();
   const threadRepo = new ReflectionThreadRepository(db);
   const actionRepo = new ActionRepository(db);
+  const outreachRepo = new OutreachRepository(db);
   let userDataManager: UserDataManager;
   let tempDir: string;
 
@@ -127,5 +129,124 @@ describe('ReflectionPlanner', () => {
 
     const updatedThread = threadRepo.getThreadById(thread.id);
     expect(updatedThread?.continueReason).not.toBe('waiting_for_delegation');
+  });
+
+  it('skips heartbeat reflection when a linked confirm request is still pending', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const thread = threadRepo.upsertThread({
+      topicKey: 'message:mtr-144628',
+      title: '消息追踪: MTR-144628',
+      status: 'active',
+      priority: 9,
+      salience: 0.92,
+      nextReflectionAt: currentTime - 60,
+    });
+
+    const action = actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: 'Request user approval for read-only Jira query',
+      description: 'Need a user decision before proceeding.',
+      threadId: thread.id,
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+    db.prepare(
+      `UPDATE proposed_actions
+       SET queue_status = 'succeeded',
+           state = 'executed',
+           result_json = ?
+       WHERE id = ?`,
+    ).run(JSON.stringify({ confirmRequestId: 'cr-pending-1' }), action.id);
+    db.prepare(
+      `INSERT INTO confirm_requests
+        (id, question, context, options_json, evidence_refs_json, category, priority, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+    ).run(
+      'cr-pending-1',
+      'Should this Jira query be allowed?',
+      'Read-only access still needs confirmation.',
+      JSON.stringify([{ label: 'Allow', value: 'allow' }]),
+      JSON.stringify([]),
+      'reflection',
+      'high',
+      currentTime,
+    );
+
+    const runSpy = vi.spyOn(ReflectionThreadService.prototype, 'runReflection');
+    const planner = new ReflectionPlanner(db, userDataManager, 'test-user');
+    const result = await planner.runHeartbeat();
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(result.runsCreated).toBe(0);
+
+    const updatedThread = threadRepo.getThreadById(thread.id);
+    expect(updatedThread?.continueReason).toBe('waiting_for_confirm_request');
+    expect((updatedThread?.nextReflectionAt ?? 0)).toBeGreaterThan(currentTime);
+  });
+
+  it('skips heartbeat reflection when outreach is waiting for approval or reply', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const thread = threadRepo.upsertThread({
+      topicKey: 'project:orbit-outreach',
+      title: '项目反思: Orbit Outreach',
+      status: 'active',
+      priority: 8,
+      salience: 0.88,
+      nextReflectionAt: currentTime - 60,
+    });
+
+    outreachRepo.createSession({
+      id: 'outreach-1',
+      originKind: 'reflection_action',
+      threadId: thread.id,
+      targetType: 'person',
+      targetRef: 'maya',
+      renderedQuestion: 'Can you confirm the rollout status?',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      nextCheckAt: currentTime + 300,
+    });
+
+    const runSpy = vi.spyOn(ReflectionThreadService.prototype, 'runReflection');
+    const planner = new ReflectionPlanner(db, userDataManager, 'test-user');
+    const result = await planner.runHeartbeat();
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(result.runsCreated).toBe(0);
+
+    const updatedThread = threadRepo.getThreadById(thread.id);
+    expect(updatedThread?.continueReason).toBe('waiting_for_outreach');
+  });
+
+  it('skips heartbeat reflection when a manual action is still queued', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const thread = threadRepo.upsertThread({
+      topicKey: 'project:orbit-manual',
+      title: '项目反思: Orbit Manual',
+      status: 'active',
+      priority: 7,
+      salience: 0.8,
+      nextReflectionAt: currentTime - 60,
+    });
+
+    actionRepo.create({
+      actionType: 'notify_user',
+      title: 'Need manual notification review',
+      description: 'Still waiting for manual approval.',
+      threadId: thread.id,
+      executionMode: 'manual',
+      queueStatus: 'queued',
+      requiresApproval: true,
+    });
+
+    const runSpy = vi.spyOn(ReflectionThreadService.prototype, 'runReflection');
+    const planner = new ReflectionPlanner(db, userDataManager, 'test-user');
+    const result = await planner.runHeartbeat();
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(result.runsCreated).toBe(0);
+
+    const updatedThread = threadRepo.getThreadById(thread.id);
+    expect(updatedThread?.continueReason).toBe('waiting_for_manual_action');
   });
 });

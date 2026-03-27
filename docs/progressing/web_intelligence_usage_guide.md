@@ -1,5 +1,7 @@
 # 🧠 智能网页分析使用指南
 
+> 说明：本文是早期 Web Intelligence 使用草稿，和当前实际生效的“网页记忆探测与右下角提示”实现并不完全一致。当前代码请优先参考 `docs/features/webpage_memory_detection.md`。
+
 *最后更新: 2024-12-20*
 
 ## 📋 概述

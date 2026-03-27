@@ -5,8 +5,10 @@ import path from 'node:path';
 
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
+import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { ReflectionThreadRepository } from '../repositories/ReflectionThreadRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
+import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 import { getTestDb } from './setup.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
 
@@ -15,11 +17,13 @@ describe('ActionExecutor', () => {
   const db = getTestDb();
   const threadRepo = new ReflectionThreadRepository(db);
   const actionRepo = new ActionRepository(db);
+  const confirmRequestRepo = new ConfirmRequestRepository(db);
   const originalRunReflection = ReflectionThreadService.prototype.runReflection;
   let userDataManager: UserDataManager;
   let tempDir: string;
 
   beforeEach(() => {
+    RingCentralClient.clearSharedCacheForTests();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockReset();
 
@@ -70,6 +74,7 @@ describe('ActionExecutor', () => {
   });
 
   afterEach(() => {
+    RingCentralClient.clearSharedCacheForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     ReflectionThreadService.prototype.runReflection = originalRunReflection;
@@ -291,6 +296,77 @@ describe('ActionExecutor', () => {
       .all(`%${String(result.result?.confirmRequestId)}%`) as Array<{ title: string; body: string }>;
     expect(notifications).toHaveLength(1);
     expect(notifications[0].title).toContain('需要确认');
+  });
+
+  it('reuses an existing pending confirm request instead of creating a duplicate', async () => {
+    const thread = threadRepo.upsertThread({
+      topicKey: 'project:orbit',
+      title: '项目反思: Orbit',
+      status: 'active',
+      priority: 9,
+      salience: 0.82,
+      nextReflectionAt: Math.floor(Date.now() / 1000),
+    });
+
+    const existing = confirmRequestRepo.createOrReusePending({
+      id: 'cr-existing',
+      question: '请求用户确认已收到通知',
+      context: '确保用户已收到并理解风险通知，减少遗漏和误解。',
+      options: [
+        { label: '已收到', value: 'received' },
+        { label: '未收到', value: 'not_received' },
+      ],
+      category: 'reflection',
+      priority: 'normal',
+      createdAt: Math.floor(Date.now() / 1000),
+    });
+    const existingAction = actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: '请求用户确认已收到通知',
+      threadId: thread.id,
+      runId: 'run-existing',
+      executionMode: 'auto',
+      queueStatus: 'succeeded',
+      createdAt: Math.floor(Date.now() / 1000),
+    });
+    db.prepare('UPDATE proposed_actions SET result_json = ? WHERE id = ?').run(
+      JSON.stringify({ confirmRequestId: 'cr-existing' }),
+      existingAction.id,
+    );
+
+    const action = actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: '请求用户确认已收到通知',
+      description: 'Project Orbit 的风险推送已经发出。',
+      params: {
+        question: '请求用户确认已收到通知',
+        context: '确保用户已知晓风险并理解下一步建议，降低沟通遗漏风险。',
+        options: [
+          { label: '已收到', value: 'received' },
+          { label: '未收到', value: 'not_received' },
+        ],
+        category: 'reflection',
+        priority: 'high',
+      },
+      threadId: thread.id,
+      executionMode: 'auto',
+      queueStatus: 'queued',
+      priority: 9,
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(existing.created).toBe(true);
+    expect(result.queueStatus).toBe('succeeded');
+    expect(result.result?.confirmRequestId).toBe('cr-existing');
+    expect(result.result?.reusedExisting).toBe(true);
+    expect(result.result?.alertActionId).toBeUndefined();
+
+    const requests = db
+      .prepare(`SELECT id, priority FROM confirm_requests ORDER BY created_at ASC`)
+      .all() as Array<{ id: string; priority: string }>;
+    expect(requests).toEqual([{ id: 'cr-existing', priority: 'high' }]);
   });
 
   it('rejects delegate_openclaw write actions unless they remain manual approvals', async () => {

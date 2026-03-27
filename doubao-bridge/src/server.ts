@@ -60,6 +60,16 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
   app.post('/threads/create-memory-sync', async () => service.createMemorySyncThread());
 
   app.post<{
+    Body: { title?: string };
+  }>('/threads/auto-bind-mobile', async (request, reply) => {
+    const binding = await service.bindMobileContextByTitle(request.body?.title || '手机版对话');
+    if (!binding) {
+      return reply.code(404).send({ error: 'Mobile-context thread not found' });
+    }
+    return binding;
+  });
+
+  app.post<{
     Body: { bindingType: BindingType; threadId?: string; threadUrl?: string; title?: string };
   }>('/threads/bind', async (request) =>
     service.bindThread(request.body.bindingType, {

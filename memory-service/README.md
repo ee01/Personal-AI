@@ -37,6 +37,33 @@ npm run build
 npm start
 ```
 
+### Production (Docker)
+
+For production, use the repo-root [docker-compose.yml](../docker-compose.yml). It builds the `memory-service` image from this directory and bind-mounts `./memory-service/data` on the host.
+
+From the **repository root**:
+
+```bash
+# First start, or when only .env / host data changed (image already up to date)
+docker compose up -d
+
+# After changing service source or Dockerfile: rebuild image then (re)start
+docker compose up -d --build
+```
+
+Legacy CLI: `docker-compose up -d` and `docker-compose up -d --build`.
+
+**Prerequisites**: copy `.env.example` to `.env` in `memory-service/` and configure at least LLM-related variables (see Configuration). Compose loads `env_file: ./memory-service/.env`.
+
+Health: `curl http://localhost:3210/health`. Logs: `docker compose logs -f memory-service`.
+
+Standalone build/run from this folder (without repo-root compose):
+
+```bash
+docker build -t memory-service .
+docker run --rm -p 3210:3210 -v "$(pwd)/data:/app/data" --env-file .env memory-service
+```
+
 ### Database Migrations
 
 ```bash

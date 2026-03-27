@@ -91,7 +91,12 @@ export function getConfig(): Readonly<Config> {
     return _config;
   }
 
-  const dataDir = process.env.DATA_DIR || path.resolve(__dirname, '..', 'data');
+  const rawDataDir = process.env.DATA_DIR;
+  const dataDir = rawDataDir
+    ? path.isAbsolute(rawDataDir)
+      ? rawDataDir
+      : path.resolve(__dirname, '..', rawDataDir)
+    : path.resolve(__dirname, '..', 'data');
   const rawDreamDigestScheduleType = process.env.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly';
   const dreamDigestScheduleType: 'weekly' | 'every_x_days' | 'monthly' =
     rawDreamDigestScheduleType === 'every_x_days' || rawDreamDigestScheduleType === 'monthly'

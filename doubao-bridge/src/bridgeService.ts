@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { format } from 'node:util';
 
 import type { BridgeConfig } from './config.js';
 import type {
@@ -15,21 +14,58 @@ import type {
   ThreadRecord,
 } from './types.js';
 import { StateStore, type BridgeStateFile } from './persistence.js';
-import type { BrowserSessionAdapter } from './browserSession.js';
+import type { BrowserSessionAdapter, BrowserThreadSnapshot } from './browserSession.js';
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function asThreadRecord(bindingType: BindingType, title: string, url?: string): ThreadRecord {
-  const id = randomUUID();
+const MEMORY_SYNC_SEED_MESSAGE = [
+  '建立长期记忆同步线程。',
+  '后续我会在这个线程里同步稳定画像、长期偏好与记忆，请把它们作为长期记忆沉淀。',
+  '当前只需要简要回复“长期记忆线程已就绪”。',
+].join('');
+
+function extractThreadId(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/(?:chat|thread)\/([^/?#]+)/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function looksLikeThreadUrl(url?: string): boolean {
+  return Boolean(extractThreadId(url));
+}
+
+function normalizeThreadTitle(title: string | undefined, fallbackTitle: string): string {
+  const trimmed = title?.trim();
+  if (!trimmed) return fallbackTitle;
+  if (/^(豆包|Doubao)(\s*[|:-].*)?$/i.test(trimmed)) {
+    return fallbackTitle;
+  }
+  return trimmed;
+}
+
+function asThreadRecord(
+  bindingType: BindingType,
+  snapshot: Partial<BrowserThreadSnapshot> & Partial<ThreadRecord>,
+  fallbackTitle: string,
+  existingRecord?: ThreadRecord,
+): ThreadRecord {
+  const id = snapshot.id || snapshot.threadId || extractThreadId(snapshot.url) || existingRecord?.id || randomUUID();
+  const title = normalizeThreadTitle(snapshot.title || existingRecord?.title, fallbackTitle);
+  const url = snapshot.url || existingRecord?.url;
   return {
     id,
     kind: bindingType,
     title,
     url,
     bindingType,
-    createdAt: nowIso(),
+    createdAt: existingRecord?.createdAt || snapshot.createdAt || nowIso(),
     updatedAt: nowIso(),
   };
 }
@@ -139,6 +175,18 @@ export class DoubaoBridgeService {
 
   async getStatus(): Promise<BridgeStatus> {
     const browserStatus = this.browser.status();
+    if (browserStatus.running) {
+      try {
+        const probedAuthStatus = await this.browser.probeAuthStatus();
+        if (probedAuthStatus !== this.state.authStatus) {
+          this.state.authStatus = probedAuthStatus;
+          await this.persist();
+        }
+      } catch (error) {
+        this.state.lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
     return {
       paired: this.state.paired,
       authStatus: this.state.authStatus,
@@ -167,55 +215,71 @@ export class DoubaoBridgeService {
   }
 
   async createMemorySyncThread(): Promise<ThreadRecord> {
-    await this.browser.openThread(this.config.doubaoBaseUrl);
-    const record = asThreadRecord('memory_sync', 'Memory Sync Thread', this.config.doubaoBaseUrl);
-    this.state.threads.push(record);
-    this.state.bindings.memory_sync = {
-      bindingType: 'memory_sync',
-      threadId: record.id,
-      threadUrl: record.url,
-      title: record.title,
-      updatedAt: nowIso(),
-    };
+    const existingBinding = this.state.bindings.memory_sync;
+    const existingRecord = this.findThreadRecord(existingBinding?.threadId);
+    if (existingBinding?.threadUrl && looksLikeThreadUrl(existingBinding.threadUrl) && existingRecord) {
+      return existingRecord;
+    }
+
+    const result = await this.browser.sendTranscript(MEMORY_SYNC_SEED_MESSAGE);
+    if (!result.sent || !looksLikeThreadUrl(result.url)) {
+      throw new Error(result.error || 'Unable to create a real Doubao memory-sync conversation');
+    }
+
+    const record = this.upsertThreadRecord(
+      asThreadRecord('memory_sync', result, '长期记忆同步线程', existingRecord),
+    );
+    this.state.bindings.memory_sync = this.bindingFromRecord('memory_sync', record);
     this.state.authStatus = 'connected';
     await this.persist();
     return record;
   }
 
   async bindThread(bindingType: BindingType, thread: Partial<ThreadRecord> & { threadUrl?: string }): Promise<ThreadBinding> {
+    let openedSnapshot: BrowserThreadSnapshot | undefined;
     if (thread.threadUrl) {
-      await this.browser.openThread(thread.threadUrl);
+      openedSnapshot = await this.browser.openThread(thread.threadUrl);
     }
 
-    const record: ThreadRecord = {
-      id: thread.id || randomUUID(),
-      kind: bindingType,
-      title: thread.title || `${bindingType} thread`,
-      url: thread.url || thread.threadUrl,
-      bindingType,
-      createdAt: thread.createdAt || nowIso(),
-      updatedAt: nowIso(),
-    };
+    const existingRecord = this.findThreadRecord(thread.id || openedSnapshot?.threadId);
+    const fallbackTitle = bindingType === 'memory_sync' ? '长期记忆同步线程' : '手机版对话';
+    const resolvedUrl =
+      (openedSnapshot?.url && looksLikeThreadUrl(openedSnapshot.url) ? openedSnapshot.url : undefined) ||
+      thread.url ||
+      thread.threadUrl;
+    const resolvedThreadId =
+      openedSnapshot?.threadId ||
+      thread.id ||
+      extractThreadId(thread.url || thread.threadUrl);
+    const record = this.upsertThreadRecord(
+      asThreadRecord(
+        bindingType,
+        {
+          ...thread,
+          url: resolvedUrl,
+          title: thread.title || openedSnapshot?.title,
+          threadId: resolvedThreadId,
+        },
+        fallbackTitle,
+        existingRecord,
+      ),
+    );
 
-    const existingIndex = this.state.threads.findIndex((item) => item.id === record.id);
-    if (existingIndex >= 0) {
-      this.state.threads[existingIndex] = record;
-    } else {
-      this.state.threads.push(record);
-    }
-
-    const binding: ThreadBinding = {
-      bindingType,
-      threadId: record.id,
-      threadUrl: record.url,
-      title: record.title,
-      updatedAt: nowIso(),
-    };
-
+    const binding = this.bindingFromRecord(bindingType, record);
     this.state.bindings[bindingType] = binding;
     this.state.authStatus = 'connected';
     await this.persist();
     return binding;
+  }
+
+  async bindMobileContextByTitle(title: string): Promise<ThreadBinding | null> {
+    const found = await this.browser.findThreadByTitle(title);
+    if (!found) return null;
+
+    return this.bindThread('mobile_context', {
+      threadUrl: found.url,
+      title: found.title,
+    });
   }
 
   async syncStableMemory(payload: StableMemorySyncRequest): Promise<SyncResult> {
@@ -245,9 +309,15 @@ export class DoubaoBridgeService {
     explicitThreadId?: string,
     dryRun = false,
   ): Promise<SyncResult> {
-    const binding = this.state.bindings[targetBindingType];
+    let binding = this.state.bindings[targetBindingType];
+    if (targetBindingType === 'memory_sync' && (!binding?.threadUrl || !looksLikeThreadUrl(binding.threadUrl))) {
+      await this.createMemorySyncThread();
+      binding = this.state.bindings[targetBindingType];
+    }
+
     const threadId = explicitThreadId || binding?.threadId;
-    const threadUrl = binding?.threadUrl || this.state.threads.find((thread) => thread.id === threadId)?.url;
+    const existingRecord = this.findThreadRecord(threadId);
+    const threadUrl = binding?.threadUrl || existingRecord?.url;
 
     if (dryRun) {
       return {
@@ -262,8 +332,25 @@ export class DoubaoBridgeService {
 
     try {
       const result = await this.browser.sendTranscript(transcript, threadUrl);
+      const resolvedThreadId = result.threadId || threadId;
+      if (result.sent) {
+        const updatedRecord = this.upsertThreadRecord(
+          asThreadRecord(
+            targetBindingType,
+            {
+              id: resolvedThreadId,
+              url: result.url || threadUrl,
+              title: result.title || binding?.title,
+              threadId: resolvedThreadId,
+            },
+            targetBindingType === 'memory_sync' ? '长期记忆同步线程' : binding?.title || '手机版对话',
+            existingRecord,
+          ),
+        );
+        this.state.bindings[targetBindingType] = this.bindingFromRecord(targetBindingType, updatedRecord);
+      }
       this.state.lastSyncAt = nowIso();
-      this.state.lastError = result.sent ? undefined : 'Transcript was not sent';
+      this.state.lastError = result.sent ? undefined : result.error || 'Transcript was not sent';
       this.state.authStatus = result.sent ? 'connected' : this.state.authStatus;
       await this.persist();
 
@@ -271,10 +358,10 @@ export class DoubaoBridgeService {
         accepted: true,
         kind,
         targetBindingType,
-        threadId,
+        threadId: resolvedThreadId,
         transcript,
         sentAt: nowIso(),
-        error: result.sent ? undefined : 'No editable element found on the current Doubao page',
+        error: result.sent ? undefined : result.error || 'No editable element found on the current Doubao page',
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -290,5 +377,37 @@ export class DoubaoBridgeService {
         error: message,
       };
     }
+  }
+
+  private findThreadRecord(threadId?: string): ThreadRecord | undefined {
+    if (!threadId) return undefined;
+    return this.state.threads.find((thread) => thread.id === threadId);
+  }
+
+  private upsertThreadRecord(record: ThreadRecord): ThreadRecord {
+    const existingIndex = this.state.threads.findIndex(
+      (item) => item.id === record.id || (!!record.url && item.url === record.url),
+    );
+    if (existingIndex >= 0) {
+      this.state.threads[existingIndex] = {
+        ...this.state.threads[existingIndex],
+        ...record,
+        updatedAt: nowIso(),
+      };
+      return this.state.threads[existingIndex];
+    }
+
+    this.state.threads.push(record);
+    return record;
+  }
+
+  private bindingFromRecord(bindingType: BindingType, record: ThreadRecord): ThreadBinding {
+    return {
+      bindingType,
+      threadId: record.id,
+      threadUrl: record.url,
+      title: record.title,
+      updatedAt: nowIso(),
+    };
   }
 }

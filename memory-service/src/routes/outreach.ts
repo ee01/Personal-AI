@@ -41,6 +41,17 @@ interface UpdateSessionBody {
   nextCheckAt?: number | null;
 }
 
+interface TargetSearchCacheEntry {
+  expiresAt: number;
+  payload: {
+    items: Awaited<ReturnType<OutreachEngine['searchTargets']>>;
+    total: number;
+  };
+}
+
+const targetSearchCache = new Map<string, TargetSearchCacheEntry>();
+const TARGET_SEARCH_CACHE_TTL_MS = 3_000;
+
 function parseStatuses(raw?: string): OutreachSessionStatus[] | undefined {
   if (!raw) return undefined;
   const statuses = raw
@@ -60,6 +71,16 @@ function parseStatuses(raw?: string): OutreachSessionStatus[] | undefined {
       ].includes(item),
     );
   return statuses.length > 0 ? statuses : undefined;
+}
+
+function deriveUpstreamStatus(message: string): number | undefined {
+  if (/timeout/i.test(message)) {
+    return 504;
+  }
+  const match = message.match(/\((\d{3})\)/);
+  if (!match) return undefined;
+  const status = Number(match[1]);
+  return Number.isFinite(status) && status >= 400 && status < 600 ? status : undefined;
 }
 
 export async function outreachRoutes(app: FastifyInstance): Promise<void> {
@@ -140,12 +161,58 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     if (!query) {
       return reply.status(200).send({ items: [], total: 0 });
     }
-    const items = await engine.searchTargets(
-      targetType,
-      query,
-      parseInt(request.query.limit ?? '8', 10) || 8,
-    );
-    return reply.status(200).send({ items, total: items.length });
+    const startedAt = Date.now();
+    const normalizedLimit = parseInt(request.query.limit ?? '8', 10) || 8;
+    const cacheKey = `${request.userId}|${targetType}|${normalizedLimit}|${query.toLowerCase()}`;
+    const cached = targetSearchCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      request.log.info(
+        {
+          targetType,
+          query,
+          total: cached.payload.total,
+          durationMs: Date.now() - startedAt,
+          userId: request.userId,
+          cacheHit: true,
+        },
+        'outreach target search completed',
+      );
+      return reply.status(200).send(cached.payload);
+    }
+    try {
+      const items = await engine.searchTargets(targetType, query, normalizedLimit);
+      const payload = { items, total: items.length };
+      targetSearchCache.set(cacheKey, {
+        payload,
+        expiresAt: Date.now() + TARGET_SEARCH_CACHE_TTL_MS,
+      });
+      request.log.info(
+        {
+          targetType,
+          query,
+          total: items.length,
+          durationMs: Date.now() - startedAt,
+          userId: request.userId,
+        },
+        'outreach target search completed',
+      );
+      return reply.status(200).send(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      request.log.warn(
+        {
+          targetType,
+          query,
+          durationMs: Date.now() - startedAt,
+          userId: request.userId,
+          message,
+        },
+        'outreach target search failed',
+      );
+      return reply
+        .status(deriveUpstreamStatus(message) ?? 500)
+        .send({ error: 'Target search failed', message });
+    }
   });
 
   app.get<{

@@ -7,6 +7,9 @@ import { getGoogleAuthToken } from './utils/googleAuth';
 import { getTaskEnabled } from './services/TaskScheduler';
 
 const WIKI_URL = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
+const DOUBAO_ICON_URL = typeof chrome !== 'undefined' && chrome.runtime?.getURL
+    ? chrome.runtime.getURL('icons/doubao-icon.png')
+    : '';
 
 const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
     <div className="toggle-container">
@@ -309,7 +312,11 @@ const Popup = () => {
                         onClick={handleOpenDoubaoBridge}
                         title="Doubao Bridge"
                     >
-                        豆
+                        {DOUBAO_ICON_URL ? (
+                            <img className="doubao-icon-image" src={DOUBAO_ICON_URL} alt="Doubao" />
+                        ) : (
+                            '豆'
+                        )}
                     </button>
                 </div>
             </div>
@@ -439,13 +446,24 @@ const Popup = () => {
                 }
 
                 .doubao-icon-btn {
-                    background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);
-                    color: white;
-                    font-weight: 700;
+                    padding: 0 !important;
+                    overflow: hidden;
+                    background: transparent;
+                    border: 1px solid rgba(0, 0, 0, 0.08);
                 }
 
                 .doubao-icon-btn:hover {
-                    background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
+                    background: transparent;
+                    transform: scale(1.1);
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+                }
+
+                .doubao-icon-image {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                    display: block;
+                    border-radius: 6px;
                 }
 
                 .toggle-container {

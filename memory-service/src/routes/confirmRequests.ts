@@ -129,6 +129,8 @@ export async function confirmRequestRoutes(
 
     try {
       truthMaintainer.resolveConfirmRequest(id, answer, detail);
+      const threadService = new ReflectionThreadService(db, userDataManager, request.userId);
+      threadService.resumeThreadsForConfirmRequest(id);
 
       // Fetch the updated confirm request to return
       const updated = db
@@ -162,7 +164,6 @@ export async function confirmRequestRoutes(
           if (stopped) {
             stoppedActionId = actionId;
             if (stopped.threadId) {
-              const threadService = new ReflectionThreadService(db, userDataManager, request.userId);
               threadService.refreshThreadDocument(stopped.threadId);
             }
           }

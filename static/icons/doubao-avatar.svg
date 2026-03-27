@@ -1,0 +1,47 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="108" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F1ED"/>
+      <stop offset="1" stop-color="#EEE7E0"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="43" y1="34" x2="84" y2="96" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD9C8"/>
+      <stop offset="1" stop-color="#F7B89A"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="28" y1="18" x2="73" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6A463F"/>
+      <stop offset="1" stop-color="#4A312C"/>
+    </linearGradient>
+    <radialGradient id="cheek" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(48 73) rotate(90) scale(12 14)">
+      <stop stop-color="#FF9DB0" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF9DB0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cheek2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(81 73) rotate(90) scale(12 14)">
+      <stop stop-color="#FF9DB0" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#FF9DB0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="64" cy="64" r="62" fill="url(#bg)"/>
+  <ellipse cx="66" cy="107" rx="24" ry="11" fill="#101522" fill-opacity="0.08"/>
+  <path d="M43 101C47 94 54 90 64 90C74 90 81 94 85 101V112H43V101Z" fill="#111827"/>
+  <path d="M63.5 22C82.7 22 95 35.4 95 53.3C95 67.9 85.8 79.5 72.2 84.1L75.4 97.6H52.9L56.4 83.7C43.3 78.8 34.5 67.4 34.5 53.3C34.5 35.4 47.8 22 63.5 22Z" fill="url(#skin)"/>
+  <path d="M38 47.5C39.8 30.1 50.3 19 66.1 19C79 19 88 25.7 92.2 37.9C93.5 41.5 94 45.1 94 49.8C90.5 47.2 87.2 45.7 83.1 44.1C77.3 41.8 73.9 39.4 71.4 35.3C67.8 40.7 62 44.6 55.1 46.9C49.6 48.7 44.2 49.2 38 47.5Z" fill="url(#hair)"/>
+  <path d="M37.4 46.9C35.9 54.4 35.6 61.8 36.5 69.4C37.6 78.5 39.2 88.6 39.3 101.6C28.7 94.8 22 83 22 68.9C22 49.7 28.2 35.1 41.3 26.6L37.4 46.9Z" fill="url(#hair)"/>
+  <path d="M68 20.3C80.8 21.8 89.7 29.5 93 41.6C95.8 52 95.1 65.1 89.8 75.5C88 63.5 84.5 54 76.5 46.7C72.2 42.7 68.8 36.2 68 20.3Z" fill="url(#hair)"/>
+  <path d="M75.2 26.4C83.7 29.8 89.9 37.4 92.1 47.9C94.8 61.1 92 74.4 83.7 84.6C84.1 76.3 83 69.3 80 61.5C77.3 54.4 73.2 48.1 66.5 42.2L75.2 26.4Z" fill="url(#hair)"/>
+  <ellipse cx="36.5" cy="57.8" rx="5.1" ry="8.2" fill="#F5B08E"/>
+  <ellipse cx="91.1" cy="57.8" rx="5.1" ry="8.2" fill="#F5B08E"/>
+  <ellipse cx="50.7" cy="58.5" rx="5.1" ry="6.4" fill="white"/>
+  <ellipse cx="78.7" cy="58.5" rx="5.1" ry="6.4" fill="white"/>
+  <ellipse cx="51.5" cy="59.8" rx="2.5" ry="3.2" fill="#2B303E"/>
+  <ellipse cx="79.5" cy="59.8" rx="2.5" ry="3.2" fill="#2B303E"/>
+  <ellipse cx="52.4" cy="58.6" rx="0.9" ry="1.1" fill="white"/>
+  <ellipse cx="80.4" cy="58.6" rx="0.9" ry="1.1" fill="white"/>
+  <path d="M45.3 49.9C47.4 47.8 50 46.8 53.5 47.2" stroke="#5D4039" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M74.1 47.1C77.1 46.6 79.7 47.5 82 49.6" stroke="#5D4039" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M63.4 61.5C62 64.3 61.7 67.3 62.6 70.5" stroke="#E59D7F" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M55.8 78.1C58.6 80.7 62.2 82 66.7 81.9C70.7 81.8 73.9 80.6 76.3 78.4" stroke="#C26E73" stroke-width="2.8" stroke-linecap="round"/>
+  <ellipse cx="48" cy="73.1" rx="9.6" ry="8.4" fill="url(#cheek)"/>
+  <ellipse cx="81" cy="73.1" rx="9.6" ry="8.4" fill="url(#cheek2)"/>
+  <path d="M42.5 102C47 94.7 54.4 90.8 64.5 90.8C74.4 90.8 81.7 94.4 86.1 101.4" stroke="#0F172A" stroke-width="8" stroke-linecap="round"/>
+</svg>

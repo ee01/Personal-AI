@@ -49,6 +49,45 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 3. npm run build
 5. 上传 personal-ai.zip 到 chrome store: https://chrome.google.com/webstore/devconsole/2ae6926c-357d-4b1b-b4fc-5313c4e19f24/kefnadjndpllbibeklhajjddgmlbafel/edit/package?pli=1
 
+## 豆包对接
+
+### 初始化
+
+```bash
+cd doubao-bridge
+npm install
+npx playwright install chromium
+cp .env.example .env
+```
+
+初始化后需要做两件事：
+
+1. 在 `doubao-bridge/.env` 中填入 `GITHUB_TOKEN`，如果不想写 token，也可以先执行 `gh auth login`；如果 `origin` 不是 GitHub 仓库，再补 `GITHUB_REPOSITORY`
+2. 启动 bridge，完成 Doubao 登录、长期记忆线程绑定、手机对话绑定
+
+如果要让发布出来的 `.pkg` 在其他 Mac 上尽量不被 Gatekeeper 拦截，再做这一步：
+
+```bash
+npm --prefix doubao-bridge run macos:signing-info
+```
+
+然后按输出配置：
+
+1. `APPLE_INSTALLER_SIGNING_IDENTITY`
+2. `APPLE_NOTARY_KEYCHAIN_PROFILE`
+
+### 发布
+
+```bash
+npm --prefix doubao-bridge run deploy
+```
+
+发布时会自动做这些事：
+
+1. 生成 macOS installer pkg
+2. 如已配置签名与 notarization，则对 pkg 签名并公证
+3. 上传 pkg 到 GitHub Release
+
 ## 开发环境设置
 
 ### 开箱使用（本地开发）

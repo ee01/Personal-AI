@@ -12,6 +12,7 @@ import {
   type QueuedActionRecord,
 } from '../../repositories/ActionRepository.js';
 import { ActionResultRepository } from '../../repositories/ActionResultRepository.js';
+import { ConfirmRequestRepository } from '../../repositories/ConfirmRequestRepository.js';
 import { now } from '../../utils/time.js';
 import { getBotSender } from '../../utils/botSender.js';
 import { getUserRuntimeConfig } from '../../runtimeConfig.js';
@@ -123,6 +124,7 @@ function isSelfDirectedOutreach(targetType: string, targetRef: string): boolean 
 export class ActionExecutor {
   private readonly actionRepo: ActionRepository;
   private readonly actionResultRepo: ActionResultRepository;
+  private readonly confirmRequestRepo: ConfirmRequestRepository;
   private readonly openClaw: OpenClawClient;
   private readonly delegationService: OpenClawDelegationService;
   private readonly threadService: ReflectionThreadService;
@@ -134,6 +136,7 @@ export class ActionExecutor {
   ) {
     this.actionRepo = new ActionRepository(db);
     this.actionResultRepo = new ActionResultRepository(db);
+    this.confirmRequestRepo = new ConfirmRequestRepository(db);
     this.openClaw = new OpenClawClient(userDataManager);
     this.delegationService = new OpenClawDelegationService(userDataManager, userId);
     this.threadService = new ReflectionThreadService(db, userDataManager, userId);
@@ -285,39 +288,35 @@ export class ActionExecutor {
 
   private async createConfirmRequest(action: QueuedActionRecord): Promise<Record<string, unknown>> {
     const params = safeJsonValue(action.params);
-    const confirmRequestId = String(params.confirmRequestId ?? randomUUID());
     const currentTime = now();
     const priorityLabel = normalizePriorityLabel(params.priority, action.priority);
-
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO confirm_requests
-          (id, question, context, options_json, evidence_refs_json, category, related_entity_id,
-           related_property_id, priority, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        confirmRequestId,
-        String(params.question ?? action.title),
-        typeof params.context === 'string' ? params.context : action.description ?? null,
-        JSON.stringify(params.options ?? []),
-        JSON.stringify(
-          uniqStrings([
-            ...action.evidenceRefs,
-            ...(Array.isArray(params.evidenceRefs)
-              ? params.evidenceRefs.filter((item): item is string => typeof item === 'string')
-              : []),
-          ]),
-        ),
-        typeof params.category === 'string' ? params.category : 'reflection',
-        typeof params.relatedEntityId === 'string' ? params.relatedEntityId : null,
-        typeof params.relatedPropertyId === 'number' ? params.relatedPropertyId : null,
-        priorityLabel,
-        currentTime,
-      );
+    const confirmRequestInput = {
+      id: typeof params.confirmRequestId === 'string' ? params.confirmRequestId : undefined,
+      question: String(params.question ?? action.title),
+      context: typeof params.context === 'string' ? params.context : action.description ?? null,
+      options: Array.isArray(params.options) ? (params.options as Array<{ label: string; value: string }>) : [],
+      evidenceRefs: uniqStrings([
+        ...action.evidenceRefs,
+        ...(Array.isArray(params.evidenceRefs)
+          ? params.evidenceRefs.filter((item): item is string => typeof item === 'string')
+          : []),
+      ]),
+      category: typeof params.category === 'string' ? params.category : 'reflection',
+      relatedEntityId: typeof params.relatedEntityId === 'string' ? params.relatedEntityId : null,
+      relatedPropertyId: typeof params.relatedPropertyId === 'number' ? params.relatedPropertyId : null,
+      priority: priorityLabel,
+      createdAt: currentTime,
+    };
+    const reusedFromThread = action.threadId
+      ? this.confirmRequestRepo.reusePendingForOriginThread(action.threadId, confirmRequestInput)
+      : null;
+    const { record: confirmRequest, created } = reusedFromThread
+      ? { record: reusedFromThread, created: false }
+      : this.confirmRequestRepo.createOrReusePending(confirmRequestInput);
+    const confirmRequestId = confirmRequest.id;
 
     let alertActionId: string | undefined;
-    if (priorityLabel === 'high') {
+    if (created && priorityLabel === 'high') {
       const notifyAction = this.actionRepo.create({
         actionType: 'notify_user',
         title: `待确认: ${String(params.question ?? action.title)}`,
@@ -354,7 +353,15 @@ export class ActionExecutor {
       await this.executeAction(notifyAction.id);
     }
 
-    return { confirmRequestId, ...(alertActionId ? { alertActionId } : {}) };
+    if (action.threadId) {
+      this.threadService.markThreadWaitingForConfirmRequest(action.threadId);
+    }
+
+    return {
+      confirmRequestId,
+      reusedExisting: !created,
+      ...(alertActionId ? { alertActionId } : {}),
+    };
   }
 
   private async updateTruthProperty(action: QueuedActionRecord): Promise<Record<string, unknown>> {
@@ -673,6 +680,10 @@ export class ActionExecutor {
 
     const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
     const session = await engine.createSessionFromAction({ action });
+
+    if (action.threadId) {
+      this.threadService.markThreadWaitingForOutreach(action.threadId);
+    }
 
     return {
       status: 'session_created',

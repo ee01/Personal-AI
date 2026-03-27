@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { OutreachEngine } from '../core/OutreachEngine.js';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { OutreachRepository } from '../repositories/OutreachRepository.js';
 import { ReflectionThreadRepository } from '../repositories/ReflectionThreadRepository.js';
@@ -21,6 +22,7 @@ describe('OutreachEngine', () => {
   let tempDir: string;
 
   beforeEach(() => {
+    RingCentralClient.clearSharedCacheForTests();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockReset();
 
@@ -58,6 +60,7 @@ describe('OutreachEngine', () => {
   });
 
   afterEach(() => {
+    RingCentralClient.clearSharedCacheForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     fs.rmSync(tempDir, { recursive: true, force: true });

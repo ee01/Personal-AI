@@ -19,6 +19,7 @@
 ### 专项功能
 - [`custom_prompts.md`](features/custom_prompts.md) - 自定义提示词功能
 - [`google_slides_analyzer.md`](features/google_slides_analyzer.md) - Google幻灯片分析器
+- [`webpage_memory_detection.md`](features/webpage_memory_detection.md) - 网页记忆探测与右下角提示（当前实现与 RingCentral 会话级设计）
 
 ### 集成功能
 - [`jira_automation_import.md`](features/jira_automation_import.md) - Jira自动化导入

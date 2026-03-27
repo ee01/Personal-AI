@@ -1,8 +1,10 @@
-const DEFAULT_BASE_URL = 'http://127.0.0.1:46321/api/v1';
+const DEFAULT_BASE_URL = 'http://127.0.0.1:46321';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const STORAGE_KEY = 'doubaoBridgeConfig';
 
 export type DoubaoBridgeBindingType = 'memory_sync' | 'mobile_context';
+export type DoubaoBridgeAuthStatus = 'unknown' | 'needs_login' | 'connected' | 'error';
+export type DoubaoBridgeSyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync';
 
 export interface DoubaoBridgeSettings {
   baseUrl: string;
@@ -12,13 +14,13 @@ export interface DoubaoBridgeSettings {
 
 export interface DoubaoBridgeHealth {
   ok: boolean;
+  service?: string;
   version?: string;
-  mode?: 'headless' | 'windowed' | 'service';
-  profilePath?: string;
-  signedIn?: boolean;
-  accountLabel?: string;
-  lastLoginAt?: string;
-  lastError?: string;
+  config?: {
+    host?: string;
+    port?: number;
+    headless?: boolean;
+  };
 }
 
 export interface DoubaoBridgeBinding {
@@ -29,65 +31,88 @@ export interface DoubaoBridgeBinding {
   updatedAt?: string;
 }
 
+export interface DoubaoBridgeThread {
+  id: string;
+  kind: DoubaoBridgeBindingType | 'manual' | 'unknown';
+  title: string;
+  url?: string;
+  bindingType?: DoubaoBridgeBindingType;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DoubaoBridgePairResult {
+  paired: boolean;
+  token: string;
+  createdAt: string;
+}
+
 export interface DoubaoBridgeStatus {
-  ok: boolean;
-  bridgeRunning?: boolean;
-  authState?: 'signed_in' | 'signed_out' | 'unknown';
-  bindings?: DoubaoBridgeBinding[];
+  paired: boolean;
+  authStatus: DoubaoBridgeAuthStatus;
+  browserRunning: boolean;
+  currentUrl?: string;
+  pairToken?: string;
+  bindings: Partial<Record<DoubaoBridgeBindingType, DoubaoBridgeBinding>>;
+  threads: DoubaoBridgeThread[];
   lastSyncAt?: string;
   lastError?: string;
 }
 
-export interface DoubaoBridgeCapability {
-  name: string;
-  enabled: boolean;
-  description?: string;
+export interface DoubaoBridgeThreadsResponse {
+  threads: DoubaoBridgeThread[];
+  bindings: Partial<Record<DoubaoBridgeBindingType, DoubaoBridgeBinding>>;
 }
 
 export interface DoubaoBridgeSyncResult {
   accepted: boolean;
-  jobId?: string;
-  message?: string;
+  kind: DoubaoBridgeSyncKind;
+  targetBindingType: DoubaoBridgeBindingType;
   threadId?: string;
-  updatedAt?: string;
+  transcript: string;
+  sentAt: string;
+  error?: string;
 }
 
 export interface DoubaoBridgeThreadBindingPayload {
   threadId?: string;
   threadUrl?: string;
   title?: string;
-  note?: string;
 }
 
 export interface DoubaoBridgeStableMemoryPayload {
-  title: string;
-  body: string;
-  stability?: 'stable' | 'rolling';
-  sourceRefs?: string[];
-  dedupeKey?: string;
+  items: Array<{
+    title: string;
+    body: string;
+  }>;
+  threadId?: string;
+  dryRun?: boolean;
 }
 
 export interface DoubaoBridgeMobileBriefingPayload {
   title: string;
-  body: string;
-  sourceRefs?: string[];
-  ttlMinutes?: number;
-  dedupeKey?: string;
+  bullets: string[];
+  threadId?: string;
+  dryRun?: boolean;
 }
 
 export interface DoubaoBridgeQueryCardPayload {
   query: string;
-  title: string;
   answer: string;
-  evidence?: Array<{ label: string; value: string }>;
+  evidence?: Array<{ title?: string; snippet?: string; source?: string }>;
+  threadId?: string;
+  dryRun?: boolean;
 }
 
 export interface DoubaoBridgeReminderPayload {
-  title: string;
-  body: string;
-  dueAt?: string;
-  sourceRefs?: string[];
-  dedupeKey?: string;
+  reminders: Array<{
+    title: string;
+    dueAt?: string;
+    note?: string;
+    severity?: 'low' | 'medium' | 'high';
+  }>;
+  threadId?: string;
+  dryRun?: boolean;
 }
 
 function safeJsonParse<T>(value: string | null | undefined): T | null {
@@ -129,7 +154,7 @@ export class DoubaoBridgeClient {
       return { baseUrl: this.baseUrl, bridgeToken: this.bridgeToken };
     }
 
-    const result = await chrome.storage.local.get(STORAGE_KEY) as {
+    const result = (await chrome.storage.local.get(STORAGE_KEY)) as {
       [STORAGE_KEY]?: DoubaoBridgeSettings;
     };
     const stored = result[STORAGE_KEY];
@@ -146,6 +171,17 @@ export class DoubaoBridgeClient {
     };
   }
 
+  private async persistSettings(): Promise<void> {
+    if (typeof chrome === 'undefined' || !chrome?.storage?.local) return;
+
+    await chrome.storage.local.set({
+      [STORAGE_KEY]: {
+        baseUrl: this.baseUrl,
+        bridgeToken: this.bridgeToken,
+      } satisfies DoubaoBridgeSettings,
+    });
+  }
+
   async saveSettings(settings: Partial<DoubaoBridgeSettings>): Promise<DoubaoBridgeSettings> {
     const next: DoubaoBridgeSettings = {
       baseUrl: settings.baseUrl?.trim() || this.baseUrl || DEFAULT_BASE_URL,
@@ -155,11 +191,7 @@ export class DoubaoBridgeClient {
 
     this.baseUrl = next.baseUrl;
     this.bridgeToken = next.bridgeToken;
-
-    if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
-      await chrome.storage.local.set({ [STORAGE_KEY]: next });
-    }
-
+    await this.persistSettings();
     return next;
   }
 
@@ -183,6 +215,10 @@ export class DoubaoBridgeClient {
     method: string,
     path: string,
     body?: unknown,
+    options?: {
+      skipAuth?: boolean;
+      retryOnUnauthorized?: boolean;
+    },
   ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -194,8 +230,8 @@ export class DoubaoBridgeClient {
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }
-    if (this.bridgeToken) {
-      headers.Authorization = `Bearer ${this.bridgeToken}`;
+    if (!options?.skipAuth && this.bridgeToken) {
+      headers['x-bridge-token'] = this.bridgeToken;
     }
 
     const response = await fetch(mergeUrl(this.baseUrl, path), {
@@ -208,6 +244,14 @@ export class DoubaoBridgeClient {
     });
 
     if (!response.ok) {
+      if (response.status === 401 && options?.retryOnUnauthorized !== false && path !== '/pair') {
+        await this.pair();
+        return this.request<T>(method, path, body, {
+          skipAuth: false,
+          retryOnUnauthorized: false,
+        });
+      }
+
       const errorText = await readTextResponse(response);
       throw new Error(
         errorText ||
@@ -221,48 +265,65 @@ export class DoubaoBridgeClient {
     }
 
     const parsed = safeJsonParse<T>(text);
-    return (parsed ?? (text as unknown as T));
+    return parsed ?? (text as unknown as T);
+  }
+
+  async pair(): Promise<DoubaoBridgePairResult> {
+    const result = await this.request<DoubaoBridgePairResult>('POST', '/pair', {}, {
+      skipAuth: true,
+      retryOnUnauthorized: false,
+    });
+    if (result.token) {
+      this.bridgeToken = result.token;
+      await this.persistSettings();
+    }
+    return result;
   }
 
   getHealth(): Promise<DoubaoBridgeHealth> {
-    return this.request<DoubaoBridgeHealth>('GET', '/health');
+    return this.request<DoubaoBridgeHealth>('GET', '/health', undefined, {
+      skipAuth: true,
+      retryOnUnauthorized: false,
+    });
   }
 
   getStatus(): Promise<DoubaoBridgeStatus> {
-    return this.request<DoubaoBridgeStatus>('GET', '/status');
+    return this.request<DoubaoBridgeStatus>('GET', '/auth/status');
   }
 
-  getCapabilities(): Promise<{ capabilities: DoubaoBridgeCapability[] }> {
-    return this.request<{ capabilities: DoubaoBridgeCapability[] }>('GET', '/capabilities');
+  openLogin(): Promise<{ url: string }> {
+    return this.request<{ url: string }>('POST', '/auth/open-login', {});
   }
 
-  openLogin(): Promise<{ opened: boolean; message?: string }> {
-    return this.request<{ opened: boolean; message?: string }>('POST', '/auth/open-login');
+  getThreads(): Promise<DoubaoBridgeThreadsResponse> {
+    return this.request<DoubaoBridgeThreadsResponse>('GET', '/threads');
   }
 
-  requestReauth(): Promise<{ opened: boolean; message?: string }> {
-    return this.request<{ opened: boolean; message?: string }>('POST', '/auth/request-login');
+  createMemorySyncThread(): Promise<DoubaoBridgeThread> {
+    return this.request<DoubaoBridgeThread>('POST', '/threads/create-memory-sync', {});
   }
 
-  getBindings(): Promise<{ bindings: DoubaoBridgeBinding[] }> {
-    return this.request<{ bindings: DoubaoBridgeBinding[] }>('GET', '/bindings');
+  autoBindMobileContextThread(title = '手机版对话'): Promise<DoubaoBridgeBinding> {
+    return this.request<DoubaoBridgeBinding>('POST', '/threads/auto-bind-mobile', { title });
   }
 
   bindThread(
     bindingType: DoubaoBridgeBindingType,
     payload: DoubaoBridgeThreadBindingPayload,
-  ): Promise<{ binding: DoubaoBridgeBinding; message?: string }> {
-    return this.request<{ binding: DoubaoBridgeBinding; message?: string }>('POST', '/bindings', {
+  ): Promise<DoubaoBridgeBinding> {
+    return this.request<DoubaoBridgeBinding>('POST', '/threads/bind', {
       bindingType,
-      ...payload,
+      threadId: payload.threadId,
+      threadUrl: payload.threadUrl,
+      title: payload.title,
     });
   }
 
-  bindMemorySyncThread(payload: DoubaoBridgeThreadBindingPayload): Promise<{ binding: DoubaoBridgeBinding; message?: string }> {
+  bindMemorySyncThread(payload: DoubaoBridgeThreadBindingPayload): Promise<DoubaoBridgeBinding> {
     return this.bindThread('memory_sync', payload);
   }
 
-  bindMobileContextThread(payload: DoubaoBridgeThreadBindingPayload): Promise<{ binding: DoubaoBridgeBinding; message?: string }> {
+  bindMobileContextThread(payload: DoubaoBridgeThreadBindingPayload): Promise<DoubaoBridgeBinding> {
     return this.bindThread('mobile_context', payload);
   }
 
@@ -274,11 +335,11 @@ export class DoubaoBridgeClient {
     return this.request<DoubaoBridgeSyncResult>('POST', '/sync/mobile-briefing', payload);
   }
 
-  syncQueryCard(payload: DoubaoBridgeQueryCardPayload): Promise<DoubaoBridgeSyncResult> {
-    return this.request<DoubaoBridgeSyncResult>('POST', '/sync/query-card', payload);
+  injectQuery(payload: DoubaoBridgeQueryCardPayload): Promise<DoubaoBridgeSyncResult> {
+    return this.request<DoubaoBridgeSyncResult>('POST', '/inject/query', payload);
   }
 
-  syncReminderDigest(payload: DoubaoBridgeReminderPayload): Promise<DoubaoBridgeSyncResult> {
-    return this.request<DoubaoBridgeSyncResult>('POST', '/sync/reminders', payload);
+  syncReminders(payload: DoubaoBridgeReminderPayload): Promise<DoubaoBridgeSyncResult> {
+    return this.request<DoubaoBridgeSyncResult>('POST', '/reminders/sync', payload);
   }
 }
