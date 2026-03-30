@@ -8,6 +8,12 @@ import { loadConfig } from '../config.js';
 import { StateStore } from '../persistence.js';
 import { DoubaoBridgeService } from '../bridgeService.js';
 import { createBridgeServer } from '../server.js';
+import { BridgeMemoryServiceClient } from '../memoryServiceClient.js';
+import {
+  applyBridgeSettingsToConfig,
+  BridgeSettingsStore,
+} from '../settings.js';
+import { BridgeSyncManager } from '../syncManager.js';
 import type { BrowserSendResult, BrowserThreadSnapshot } from '../browserSession.js';
 
 class FakeBrowser {
@@ -82,11 +88,21 @@ test('bridge health and pairing flow', async () => {
   });
 
   const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(config, path.join(tempDir, 'bridge-settings.json'));
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
   const browser = new FakeBrowser();
   const service = new DoubaoBridgeService(config, store, browser);
   await service.init();
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(config, settingsStore, memoryClient, service);
 
-  const app = await createBridgeServer(config, service);
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
   const health = await app.inject({ method: 'GET', url: '/health' });
   assert.equal(health.statusCode, 200);
 
@@ -98,9 +114,15 @@ test('bridge health and pairing flow', async () => {
 
   const status = await app.inject({ method: 'GET', url: '/auth/status', headers: { 'x-bridge-token': pairBody.token } });
   assert.equal(status.statusCode, 200);
-  const statusBody = status.json() as { paired: boolean };
+  const statusBody = status.json() as { paired: boolean; appVersion: string; blockingReasons: Array<{ code: string }> };
   assert.equal(statusBody.paired, true);
+  assert.equal(statusBody.appVersion, '2.0.0-test');
+  assert.deepEqual(
+    statusBody.blockingReasons.map((item) => item.code).sort(),
+    ['auth_required', 'memory_service_user_missing', 'memory_sync_not_bound', 'mobile_context_not_bound'].sort(),
+  );
 
+  syncManager.stop();
   await app.close();
 });
 
@@ -113,11 +135,21 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   });
 
   const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(config, path.join(tempDir, 'bridge-settings.json'));
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
   const browser = new FakeBrowser();
   const service = new DoubaoBridgeService(config, store, browser);
   await service.init();
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(config, settingsStore, memoryClient, service);
 
-  const app = await createBridgeServer(config, service);
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
   const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
   const token = (pair.json() as { token: string }).token;
 
@@ -148,6 +180,7 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   assert.equal(autoBindBody.bindingType, 'mobile_context');
   assert.equal(autoBindBody.title, '手机版对话');
 
+  syncManager.stop();
   await app.close();
 });
 
@@ -171,4 +204,85 @@ test('createMemorySyncThread creates a real chat-style binding', async () => {
   const status = await service.getStatus();
   assert.equal(status.bindings.memory_sync?.threadId, thread.id);
   assert.equal(status.bindings.memory_sync?.threadUrl, thread.url);
+});
+
+test('settings endpoint updates effective sync configuration', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'doubao-bridge-test-settings-'));
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(config, path.join(tempDir, 'bridge-settings.json'));
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+  const browser = new FakeBrowser();
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(config, settingsStore, memoryClient, service);
+
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
+  const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
+  const token = (pair.json() as { token: string }).token;
+
+  const update = await app.inject({
+    method: 'PUT',
+    url: '/settings',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      memoryServiceBaseUrl: 'http://127.0.0.1:3210',
+      memoryServiceUserId: 'esone.qiu',
+      autoSync: true,
+      stableMemoryIntervalMs: 60_000,
+    },
+  });
+  assert.equal(update.statusCode, 200);
+
+  const settings = await app.inject({
+    method: 'GET',
+    url: '/settings',
+    headers: { 'x-bridge-token': token },
+  });
+  const settingsBody = settings.json() as {
+    effective: {
+      memoryServiceBaseUrl?: string;
+      memoryServiceUserId?: string;
+      autoSync?: boolean;
+      stableMemoryIntervalMs?: number;
+    };
+  };
+  assert.equal(settingsBody.effective.memoryServiceBaseUrl, 'http://127.0.0.1:3210');
+  assert.equal(settingsBody.effective.memoryServiceUserId, 'esone.qiu');
+  assert.equal(settingsBody.effective.autoSync, true);
+  assert.equal(settingsBody.effective.stableMemoryIntervalMs, 60_000);
+
+  const status = await app.inject({
+    method: 'GET',
+    url: '/status',
+    headers: { 'x-bridge-token': token },
+  });
+  const statusBody = status.json() as {
+    memoryServiceConfigured: boolean;
+    autoSyncEnabled: boolean;
+    syncReadiness: {
+      stableMemory: { reasons: Array<{ code: string }> };
+    };
+  };
+  assert.equal(statusBody.memoryServiceConfigured, true);
+  assert.equal(statusBody.autoSyncEnabled, true);
+  assert.deepEqual(
+    statusBody.syncReadiness.stableMemory.reasons.map((item) => item.code).sort(),
+    ['auth_required', 'memory_sync_not_bound'].sort(),
+  );
+
+  syncManager.stop();
+  await app.close();
 });

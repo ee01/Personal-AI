@@ -2,6 +2,14 @@ export type BridgeAuthStatus = 'unknown' | 'needs_login' | 'connected' | 'error'
 export type BindingType = 'memory_sync' | 'mobile_context';
 export type SyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync';
 export type ThreadKind = 'memory_sync' | 'mobile_context' | 'manual' | 'unknown';
+export type AutoSyncKind = 'stable_memory' | 'mobile_briefing' | 'reminder_sync';
+export type BridgeBlockingReasonCode =
+  | 'auto_sync_disabled'
+  | 'memory_service_not_configured'
+  | 'memory_service_user_missing'
+  | 'auth_required'
+  | 'memory_sync_not_bound'
+  | 'mobile_context_not_bound';
 
 export interface ThreadRecord {
   id: string;
@@ -29,6 +37,11 @@ export interface SyncResult {
   transcript: string;
   sentAt: string;
   error?: string;
+  transportUsed?: 'dom';
+  verified?: boolean;
+  challengeDetected?: boolean;
+  messageVisible?: boolean;
+  observedBodySnippet?: string;
 }
 
 export interface BridgePairResult {
@@ -37,7 +50,7 @@ export interface BridgePairResult {
   createdAt: string;
 }
 
-export interface BridgeStatus {
+export interface BridgeServiceStatus {
   paired: boolean;
   authStatus: BridgeAuthStatus;
   browserRunning: boolean;
@@ -47,6 +60,56 @@ export interface BridgeStatus {
   threads: ThreadRecord[];
   lastSyncAt?: string;
   lastError?: string;
+}
+
+export interface BridgeStatus extends BridgeServiceStatus {
+  appVersion: string;
+  memoryServiceConfigured: boolean;
+  autoSyncEnabled: boolean;
+  blockingReasons: BridgeBlockingReason[];
+  syncReadiness: Record<'stableMemory' | 'mobileBriefing' | 'reminderSync', BridgeSyncReadiness>;
+  syncState: {
+    timerActive: boolean;
+    running: boolean;
+    autoSyncEnabled: boolean;
+    memoryServiceConfigured: boolean;
+    pollIntervalMs: number;
+    tasks: Record<'stableMemory' | 'mobileBriefing' | 'reminderSync', {
+      intervalMs: number;
+      lastRunAt?: string;
+      nextDueAt?: string;
+      due: boolean;
+    }>;
+  };
+  settings?: {
+    memoryServiceBaseUrl?: string;
+    memoryServiceUserId?: string;
+    autoSync: boolean;
+    pollIntervalMs: number;
+    stableMemoryIntervalMs: number;
+    mobileBriefingIntervalMs: number;
+    reminderSyncIntervalMs: number;
+  };
+  setupChecklist?: {
+    memoryServiceConfigured: boolean;
+    autoSyncEnabled: boolean;
+    doubaoConnected: boolean;
+    memorySyncBound: boolean;
+    mobileContextBound: boolean;
+  };
+}
+
+export interface BridgeBlockingReason {
+  code: BridgeBlockingReasonCode;
+  message: string;
+  syncKinds: Array<'stableMemory' | 'mobileBriefing' | 'reminderSync'>;
+}
+
+export interface BridgeSyncReadiness {
+  ready: boolean;
+  reasons: BridgeBlockingReason[];
+  intervalMs: number;
+  lastRunAt?: string;
 }
 
 export interface StableMemoryItem {
@@ -83,5 +146,15 @@ export interface ReminderSyncRequest {
     severity?: 'low' | 'medium' | 'high';
   }>;
   threadId?: string;
+  dryRun?: boolean;
+}
+
+export interface SendExperimentRequest {
+  transcript: string;
+  bindingType?: BindingType;
+  threadId?: string;
+  inputMode?: 'default' | 'paste' | 'type' | 'insert' | 'fill';
+  sendMode?: 'auto' | 'button' | 'enter';
+  preSendDelayMs?: number;
   dryRun?: boolean;
 }

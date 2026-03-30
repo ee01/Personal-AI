@@ -1,11 +1,33 @@
 import type { BridgeConfig } from './config.js';
 import { BridgeMemoryServiceClient, type ProviderMemoryProduct, type RenderContextPackageResponse } from './memoryServiceClient.js';
+import { BridgeSettingsStore } from './settings.js';
 import { DoubaoBridgeService } from './bridgeService.js';
+import type { AutoSyncKind } from './types.js';
 
 interface SyncState {
   stableMemory?: number;
   mobileBriefing?: number;
   reminderSync?: number;
+}
+
+export interface SyncTaskSnapshot {
+  intervalMs: number;
+  lastRunAt?: string;
+  nextDueAt?: string;
+  due: boolean;
+}
+
+export interface BridgeSyncManagerSnapshot {
+  timerActive: boolean;
+  running: boolean;
+  autoSyncEnabled: boolean;
+  memoryServiceConfigured: boolean;
+  pollIntervalMs: number;
+  tasks: {
+    stableMemory: SyncTaskSnapshot;
+    mobileBriefing: SyncTaskSnapshot;
+    reminderSync: SyncTaskSnapshot;
+  };
 }
 
 function stripMarkdown(line: string): string {
@@ -61,29 +83,79 @@ export class BridgeSyncManager {
   private timer: NodeJS.Timeout | null = null;
   private syncState: SyncState = {};
   private running = false;
+  private settingsUnsubscribe: (() => void) | null = null;
 
   constructor(
     private readonly config: BridgeConfig,
+    private readonly settingsStore: BridgeSettingsStore,
     private readonly memoryClient: BridgeMemoryServiceClient,
     private readonly bridgeService: DoubaoBridgeService,
   ) {}
 
   start(): void {
-    if (!this.config.autoSync || !this.memoryClient.isEnabled()) return;
-    if (this.timer) return;
+    if (this.settingsUnsubscribe) return;
+    this.settingsUnsubscribe = this.settingsStore.subscribe(() => {
+      this.reconfigure();
+    });
+    this.reconfigure();
+  }
+
+  stop(): void {
+    this.clearTimer();
+    this.settingsUnsubscribe?.();
+    this.settingsUnsubscribe = null;
+  }
+
+  reload(): void {
+    if (!this.settingsUnsubscribe) {
+      this.start();
+      return;
+    }
+    this.reconfigure();
+  }
+
+  getSnapshot(): BridgeSyncManagerSnapshot {
+    const settings = this.settingsStore.getSettings();
+    return {
+      timerActive: !!this.timer,
+      running: this.running,
+      autoSyncEnabled: settings.autoSync,
+      memoryServiceConfigured: Boolean(settings.memoryServiceBaseUrl && settings.memoryServiceUserId),
+      pollIntervalMs: settings.pollIntervalMs,
+      tasks: {
+        stableMemory: this.taskSnapshot(this.syncState.stableMemory, settings.stableMemoryIntervalMs),
+        mobileBriefing: this.taskSnapshot(this.syncState.mobileBriefing, settings.mobileBriefingIntervalMs),
+        reminderSync: this.taskSnapshot(this.syncState.reminderSync, settings.reminderSyncIntervalMs),
+      },
+    };
+  }
+
+  private reconfigure(): void {
+    this.clearTimer();
+    const settings = this.settingsStore.getSettings();
+    if (!settings.autoSync || !this.memoryClient.isEnabled()) return;
 
     this.timer = setInterval(() => {
       void this.tick();
-    }, this.config.pollIntervalMs);
+    }, settings.pollIntervalMs);
 
     void this.tick();
   }
 
-  stop(): void {
+  private clearTimer(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  private taskSnapshot(lastRunAtMs: number | undefined, intervalMs: number): SyncTaskSnapshot {
+    return {
+      intervalMs,
+      lastRunAt: lastRunAtMs ? new Date(lastRunAtMs).toISOString() : undefined,
+      nextDueAt: lastRunAtMs ? new Date(lastRunAtMs + intervalMs).toISOString() : undefined,
+      due: this.due(lastRunAtMs, intervalMs),
+    };
   }
 
   private due(lastRunAt: number | undefined, intervalMs: number): boolean {
@@ -91,24 +163,25 @@ export class BridgeSyncManager {
   }
 
   async tick(): Promise<void> {
-    if (this.running || !this.config.autoSync || !this.memoryClient.isEnabled()) return;
+    const settings = this.settingsStore.getSettings();
+    if (this.running || !settings.autoSync || !this.memoryClient.isEnabled()) return;
     this.running = true;
 
     try {
       const status = await this.bridgeService.getStatus();
       if (status.authStatus !== 'connected') return;
 
-      if (status.bindings.memory_sync && this.due(this.syncState.stableMemory, this.config.stableMemoryIntervalMs)) {
+      if (status.bindings.memory_sync && this.due(this.syncState.stableMemory, settings.stableMemoryIntervalMs)) {
         await this.syncStableMemory();
         this.syncState.stableMemory = Date.now();
       }
 
-      if (status.bindings.mobile_context && this.due(this.syncState.mobileBriefing, this.config.mobileBriefingIntervalMs)) {
+      if (status.bindings.mobile_context && this.due(this.syncState.mobileBriefing, settings.mobileBriefingIntervalMs)) {
         await this.syncMobileBriefing();
         this.syncState.mobileBriefing = Date.now();
       }
 
-      if (status.bindings.mobile_context && this.due(this.syncState.reminderSync, this.config.reminderSyncIntervalMs)) {
+      if (status.bindings.mobile_context && this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)) {
         await this.syncReminders();
         this.syncState.reminderSync = Date.now();
       }
@@ -117,6 +190,23 @@ export class BridgeSyncManager {
     } finally {
       this.running = false;
     }
+  }
+
+  async runNow(kind: AutoSyncKind): Promise<void> {
+    if (kind === 'stable_memory') {
+      await this.syncStableMemory();
+      this.syncState.stableMemory = Date.now();
+      return;
+    }
+
+    if (kind === 'mobile_briefing') {
+      await this.syncMobileBriefing();
+      this.syncState.mobileBriefing = Date.now();
+      return;
+    }
+
+    await this.syncReminders();
+    this.syncState.reminderSync = Date.now();
   }
 
   private async syncStableMemory(): Promise<void> {

@@ -4,17 +4,18 @@ import type { BridgeConfig } from './config.js';
 import type {
   BindingType,
   BridgePairResult,
-  BridgeStatus,
+  BridgeServiceStatus,
   MobileBriefingRequest,
   QueryInjectRequest,
   ReminderSyncRequest,
+  SendExperimentRequest,
   StableMemorySyncRequest,
   SyncResult,
   ThreadBinding,
   ThreadRecord,
 } from './types.js';
 import { StateStore, type BridgeStateFile } from './persistence.js';
-import type { BrowserSessionAdapter, BrowserThreadSnapshot } from './browserSession.js';
+import type { BrowserSendOptions, BrowserSessionAdapter, BrowserThreadSnapshot } from './browserSession.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -128,6 +129,7 @@ export class DoubaoBridgeService {
     private readonly config: BridgeConfig,
     private readonly store: StateStore,
     private readonly browser: BrowserSessionAdapter,
+    private readonly version = '0.0.0',
   ) {}
 
   async init(): Promise<void> {
@@ -146,7 +148,7 @@ export class DoubaoBridgeService {
     return {
       ok: true,
       service: 'doubao-bridge',
-      version: '0.1.0',
+      version: this.version,
       config: {
         host: this.config.host,
         port: this.config.port,
@@ -173,7 +175,7 @@ export class DoubaoBridgeService {
     };
   }
 
-  async getStatus(): Promise<BridgeStatus> {
+  async getStatus(): Promise<BridgeServiceStatus> {
     const browserStatus = this.browser.status();
     if (browserStatus.running) {
       try {
@@ -302,12 +304,28 @@ export class DoubaoBridgeService {
     return this.sendToBinding('reminder_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
   }
 
+  async sendExperiment(payload: SendExperimentRequest): Promise<SyncResult> {
+    return this.sendToBinding(
+      'query_inject',
+      payload.bindingType || 'mobile_context',
+      payload.transcript,
+      payload.threadId,
+      payload.dryRun,
+      {
+        inputMode: payload.inputMode,
+        sendMode: payload.sendMode,
+        preSendDelayMs: payload.preSendDelayMs,
+      },
+    );
+  }
+
   private async sendToBinding(
     kind: SyncResult['kind'],
     targetBindingType: BindingType,
     transcript: string,
     explicitThreadId?: string,
     dryRun = false,
+    sendOptions?: BrowserSendOptions,
   ): Promise<SyncResult> {
     let binding = this.state.bindings[targetBindingType];
     if (targetBindingType === 'memory_sync' && (!binding?.threadUrl || !looksLikeThreadUrl(binding.threadUrl))) {
@@ -331,7 +349,7 @@ export class DoubaoBridgeService {
     }
 
     try {
-      const result = await this.browser.sendTranscript(transcript, threadUrl);
+      const result = await this.browser.sendTranscript(transcript, threadUrl, sendOptions);
       const resolvedThreadId = result.threadId || threadId;
       if (result.sent) {
         const updatedRecord = this.upsertThreadRecord(
@@ -361,7 +379,12 @@ export class DoubaoBridgeService {
         threadId: resolvedThreadId,
         transcript,
         sentAt: nowIso(),
+        transportUsed: result.transportUsed,
         error: result.sent ? undefined : result.error || 'No editable element found on the current Doubao page',
+        verified: result.verified,
+        challengeDetected: result.challengeDetected,
+        messageVisible: result.messageVisible,
+        observedBodySnippet: result.observedBodySnippet,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

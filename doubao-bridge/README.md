@@ -1,77 +1,88 @@
 # Doubao Bridge
 
-Local bridge service for Personal AI. It runs on your machine and does three things:
+Doubao Bridge v2 is the local macOS app and background service that connects Personal AI Memory Service with Doubao.
 
-1. Keeps a persistent Playwright browser profile for Doubao login state.
-2. Can pull provider context packages from Memory Service and send them into the correct Doubao conversation.
-3. Exposes a small localhost API for the extension and other local tooling.
+It does three things:
 
-## What It Is Not
+1. Keeps a dedicated Playwright browser profile for Doubao login state.
+2. Pulls memory/context packages from Memory Service and sends them into the correct Doubao conversation.
+3. Exposes a localhost API for the Chrome extension and the desktop app shell.
 
-- It is not the system of record for memory.
-- It is not a cloud service.
-- It does not need access to your main browser cookies.
+## End-User Install
 
-## Install
+Download the latest installer from GitHub Releases:
+
+[https://github.com/ee01/personal-ai/releases/latest](https://github.com/ee01/personal-ai/releases/latest)
+
+After installing:
+
+1. Open `/Applications/Doubao Bridge.app`
+2. In the app, complete these steps in order:
+   - Connect Memory Service
+   - Open Doubao login
+   - Create or repair the long-term memory thread
+   - Bind the mobile chat thread
+   - Enable auto sync
+3. Close the window when finished. The app keeps running in the background.
+4. Use the Chrome extension's Doubao page only as a status/onboarding page. Real configuration now lives in the app.
+
+To really stop syncing, open the app again and click `停止后台并退出`.
+
+## Developer Setup
 
 ```bash
 cd /Users/Esone/git/personal-ai/doubao-bridge
 npm install
-npx playwright install chromium
 cp .env.example .env
 ```
 
-For end users, the packaged macOS installer is published on GitHub Releases:
+The packaged app vendors Playwright Chromium automatically during `package:macos`, so end users do not need to run `playwright install`.
 
-[https://github.com/ee01/personal-ai/releases/latest](https://github.com/ee01/personal-ai/releases/latest)
-
-## Run
+Useful local commands:
 
 ```bash
 npm run dev
-```
-
-To build an end-user macOS installer:
-
-```bash
+npm run app:start
 npm run package:macos
-```
-
-To inspect your local signing/notarization readiness:
-
-```bash
 npm run macos:signing-info
-```
-
-To package and publish the macOS installer to GitHub Releases:
-
-```bash
 npm run deploy
 ```
 
-`npm run deploy` will automatically read `doubao-bridge/.env` first, then fall back to shell environment variables. If no token is found, it will try `gh auth token`, and finally fall back to `gh release` commands when `gh` is installed and already authenticated.
+`npm run deploy` reads `doubao-bridge/.env` first, then falls back to shell environment variables. If no token is found, it tries `gh auth token`, and finally falls back to `gh release` commands when `gh` is installed and already authenticated.
+
+## Release Configuration
 
 Required variables:
 
 - `GITHUB_TOKEN` or `GH_TOKEN` if you do not want to rely on `gh auth login`
 - `GITHUB_REPOSITORY` if the GitHub remote cannot be inferred
 - Optional: `GITHUB_RELEASE_TAG`, `GITHUB_RELEASE_TITLE`, `GITHUB_RELEASE_NOTES`
-- Optional for signing/notarization: `APPLE_INSTALLER_SIGNING_IDENTITY`, `APPLE_NOTARY_KEYCHAIN_PROFILE`
+- Optional for signing/notarization: `APPLE_APPLICATION_SIGNING_IDENTITY`, `APPLE_INSTALLER_SIGNING_IDENTITY`, `APPLE_NOTARY_KEYCHAIN_PROFILE`
 
-This writes:
+Local packaging writes:
 
 ```text
-doubao-bridge/release/doubao-bridge-macos
-doubao-bridge/release/Doubao-Bridge-Installer.pkg
+doubao-bridge/release/Doubao Bridge.app
+doubao-bridge/release/Doubao-Bridge-<version>-Installer.pkg
 ```
 
-Default address:
+GitHub Release should only publish the `.pkg` installer for end users.
+
+Versioning is driven by `doubao-bridge/package.json.version`, for example:
+
+- release tag: `doubao-bridge-v2.0.1`
+- release title: `Doubao Bridge 2.0.1`
+- installer: `Doubao-Bridge-2.0.1-Installer.pkg`
+
+## Runtime Defaults
+
+Default bridge address:
 
 ```text
 http://127.0.0.1:46321
 ```
 
-Environment variables:
+Environment/default variables:
 
 - `DOUBAO_BRIDGE_PORT`
 - `DOUBAO_BRIDGE_HOST`
@@ -90,44 +101,46 @@ Environment variables:
 - `MEMORY_SERVICE_API_KEY`
 - `MEMORY_SERVICE_USER_ID`
 
-## API
+For normal users, these values are configured in `Doubao Bridge.app`, not in the extension UI.
+
+## Main Flow Readiness
+
+Auto sync only runs when all of these are true:
+
+1. `Memory Service Base URL` is configured
+2. `autoSync` is enabled
+3. Doubao login state is `connected`
+4. `memory_sync` is bound, for `stable_memory`
+5. `mobile_context` is bound, for `mobile_briefing` and `reminder_sync`
+
+Default cadence:
+
+- poll: every 5 minutes
+- stable memory: every 12 hours
+- mobile briefing: every 4 hours
+- reminder sync: every 15 minutes
+
+## Local API
 
 The bridge exposes these endpoints:
 
 - `GET /health`
 - `POST /pair`
+- `GET /status`
 - `GET /auth/status`
 - `POST /auth/open-login`
+- `GET /settings`
+- `PUT /settings`
+- `POST /settings/test-memory-service`
 - `GET /threads`
 - `POST /threads/create-memory-sync`
+- `POST /threads/auto-bind-mobile`
 - `POST /threads/bind`
+- `POST /sync/run-now`
 - `POST /sync/stable-memory`
 - `POST /sync/mobile-briefing`
 - `POST /inject/query`
 - `POST /reminders/sync`
-
-## Automatic Sync
-
-If `MEMORY_SERVICE_BASE_URL` is configured, the bridge can poll the provider APIs directly and push:
-
-- `stable_memory` into the dedicated memory sync thread
-- `mobile_briefing` into the bound mobile-context thread
-- `reminder_sync` into the same active mobile-context thread as a fallback reminder channel
-
-Example:
-
-```bash
-MEMORY_SERVICE_BASE_URL=http://127.0.0.1:3210 \
-MEMORY_SERVICE_USER_ID=your-user-id \
-DOUBAO_BRIDGE_AUTO_SYNC=true \
-npm start
-```
-
-The default polling cadence is:
-
-- stable memory: every 12 hours
-- mobile briefing: every 4 hours
-- reminder sync: every 15 minutes
 
 ## Signing and Notarization
 
@@ -139,8 +152,14 @@ Use this when you want the released `.pkg` to install cleanly on other Macs with
 npm run macos:signing-info
 ```
 
-2. Import a `Developer ID Installer` certificate into Keychain Access.
-3. Copy the exact certificate name into `APPLE_INSTALLER_SIGNING_IDENTITY` in `doubao-bridge/.env`.
+2. Import both `Developer ID Application` and `Developer ID Installer` certificates into Keychain Access.
+3. Copy the exact names into `doubao-bridge/.env`:
+
+```env
+APPLE_APPLICATION_SIGNING_IDENTITY=Developer ID Application: Your Name (TEAMID)
+APPLE_INSTALLER_SIGNING_IDENTITY=Developer ID Installer: Your Name (TEAMID)
+```
+
 4. Create a notary profile:
 
 ```bash
@@ -157,61 +176,3 @@ xcrun notarytool store-credentials "personal-ai-notary" \
 npm run package:macos
 npm run deploy
 ```
-
-## Autostart
-
-### macOS launchd
-
-Create a launch agent plist that runs `node dist/index.js` from this directory.
-
-Example outline:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>com.personalai.doubao-bridge</string>
-    <key>ProgramArguments</key>
-    <array>
-      <string>/usr/bin/env</string>
-      <string>node</string>
-      <string>/Users/Esone/git/personal-ai/doubao-bridge/dist/index.js</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/Users/Esone/git/personal-ai/doubao-bridge</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-      <key>DOUBAO_BRIDGE_PORT</key>
-      <string>46321</string>
-    </dict>
-  </dict>
-</plist>
-```
-
-Load it with `launchctl bootstrap gui/$UID ...` or `launchctl load` depending on your macOS version.
-
-### Windows Task Scheduler
-
-Create a scheduled task that runs at login:
-
-```text
-Program:  node
-Arguments: C:\Users\<you>\git\personal-ai\doubao-bridge\dist\index.js
-Start in: C:\Users\<you>\git\personal-ai\doubao-bridge
-```
-
-Use `At log on` trigger and `Run whether user is logged on or not` if you want it to keep running in the background.
-
-## Smoke Check
-
-1. Start the service.
-2. Open `http://127.0.0.1:46321/health`.
-3. Call `POST /pair`.
-4. Open Doubao login via `POST /auth/open-login`.
-5. Bind a mobile conversation thread and verify `GET /threads`.

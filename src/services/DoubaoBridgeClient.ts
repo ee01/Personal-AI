@@ -12,6 +12,21 @@ export interface DoubaoBridgeSettings {
   autoRefreshMs?: number;
 }
 
+export interface DoubaoBridgeRuntimeSettings {
+  memoryServiceBaseUrl?: string;
+  autoSync: boolean;
+  pollIntervalMs: number;
+  stableMemoryIntervalMs: number;
+  mobileBriefingIntervalMs: number;
+  reminderSyncIntervalMs: number;
+}
+
+export interface DoubaoBridgeSettingsPayload {
+  defaults: DoubaoBridgeRuntimeSettings;
+  user: Partial<DoubaoBridgeRuntimeSettings>;
+  effective: DoubaoBridgeRuntimeSettings;
+}
+
 export interface DoubaoBridgeHealth {
   ok: boolean;
   service?: string;
@@ -48,6 +63,7 @@ export interface DoubaoBridgePairResult {
 }
 
 export interface DoubaoBridgeStatus {
+  appVersion?: string;
   paired: boolean;
   authStatus: DoubaoBridgeAuthStatus;
   browserRunning: boolean;
@@ -57,6 +73,40 @@ export interface DoubaoBridgeStatus {
   threads: DoubaoBridgeThread[];
   lastSyncAt?: string;
   lastError?: string;
+  memoryServiceConfigured?: boolean;
+  autoSyncEnabled?: boolean;
+  blockingReasons?: Array<{
+    code: string;
+    message: string;
+    syncKinds?: Array<'stableMemory' | 'mobileBriefing' | 'reminderSync'>;
+  }>;
+  syncReadiness?: Record<'stableMemory' | 'mobileBriefing' | 'reminderSync', {
+    ready: boolean;
+    reasons: Array<{ code: string; message: string }>;
+    intervalMs: number;
+    lastRunAt?: string;
+  }>;
+  syncState?: {
+    timerActive: boolean;
+    running: boolean;
+    autoSyncEnabled: boolean;
+    memoryServiceConfigured: boolean;
+    pollIntervalMs: number;
+    tasks: Record<'stableMemory' | 'mobileBriefing' | 'reminderSync', {
+      intervalMs: number;
+      lastRunAt?: string;
+      nextDueAt?: string;
+      due: boolean;
+    }>;
+  };
+  settings?: DoubaoBridgeRuntimeSettings;
+  setupChecklist?: {
+    memoryServiceConfigured: boolean;
+    autoSyncEnabled: boolean;
+    doubaoConnected: boolean;
+    memorySyncBound: boolean;
+    mobileContextBound: boolean;
+  };
 }
 
 export interface DoubaoBridgeThreadsResponse {
@@ -289,6 +339,22 @@ export class DoubaoBridgeClient {
 
   getStatus(): Promise<DoubaoBridgeStatus> {
     return this.request<DoubaoBridgeStatus>('GET', '/auth/status');
+  }
+
+  getRuntimeSettings(): Promise<DoubaoBridgeSettingsPayload> {
+    return this.request<DoubaoBridgeSettingsPayload>('GET', '/settings');
+  }
+
+  updateRuntimeSettings(settings: Partial<DoubaoBridgeRuntimeSettings>): Promise<DoubaoBridgeSettingsPayload> {
+    return this.request<DoubaoBridgeSettingsPayload>('PUT', '/settings', settings);
+  }
+
+  testMemoryServiceConnection(): Promise<{ ok: boolean; baseUrl?: string; error?: string; health?: Record<string, unknown> }> {
+    return this.request<{ ok: boolean; baseUrl?: string; error?: string; health?: Record<string, unknown> }>(
+      'POST',
+      '/settings/test-memory-service',
+      {},
+    );
   }
 
   openLogin(): Promise<{ url: string }> {

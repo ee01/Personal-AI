@@ -17,13 +17,29 @@ export interface BrowserThreadSnapshot {
 export interface BrowserSendResult extends BrowserThreadSnapshot {
   sent: boolean;
   error?: string;
+  transportUsed?: 'dom';
+  verified?: boolean;
+  challengeDetected?: boolean;
+  messageVisible?: boolean;
+  observedBodySnippet?: string;
+}
+
+export type BrowserInputMode = 'default' | 'paste' | 'type' | 'insert' | 'fill';
+export type BrowserSendMode = 'auto' | 'button' | 'enter';
+
+export interface BrowserSendOptions {
+  inputMode?: BrowserInputMode;
+  sendMode?: BrowserSendMode;
+  preSendDelayMs?: number;
+  retryInputMode?: BrowserInputMode;
+  retryPreSendDelayMs?: number;
 }
 
 export interface BrowserSessionAdapter {
   ensureStarted(): Promise<void>;
   openLogin(): Promise<string>;
   openThread(url: string): Promise<BrowserThreadSnapshot>;
-  sendTranscript(transcript: string, threadUrl?: string): Promise<BrowserSendResult>;
+  sendTranscript(transcript: string, threadUrl?: string, options?: BrowserSendOptions): Promise<BrowserSendResult>;
   probeAuthStatus(): Promise<'connected' | 'needs_login'>;
   findThreadByTitle(title: string): Promise<BrowserThreadSnapshot | null>;
   status(): BrowserStatus;
@@ -63,6 +79,17 @@ const NEW_CHAT_SELECTORS = [
   'a:has-text("新聊天")',
 ];
 
+const CHALLENGE_PATTERNS = [
+  /请完成(?:安全)?验证/,
+  /请先完成(?:安全)?验证/,
+  /安全验证/,
+  /行为异常/,
+  /操作过于频繁/,
+  /真人验证/,
+  /风险验证/,
+  /继续使用前请验证/,
+];
+
 function normalizeUrl(baseUrl: string, href: string): string {
   try {
     return new URL(href, baseUrl).toString();
@@ -82,12 +109,50 @@ function extractThreadId(url?: string): string | undefined {
   }
 }
 
+function samePageUrl(left?: string, right?: string): boolean {
+  if (!left || !right) return false;
+  try {
+    const leftUrl = new URL(left);
+    const rightUrl = new URL(right);
+    return (
+      leftUrl.origin === rightUrl.origin &&
+      leftUrl.pathname === rightUrl.pathname &&
+      leftUrl.search === rightUrl.search
+    );
+  } catch {
+    return left === right;
+  }
+}
+
+function randomDelay(minMs: number, maxMs: number): number {
+  return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+}
+
+function compactText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
 export class DoubaoBrowserSession implements BrowserSessionAdapter {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private lastError?: string;
+  private operationTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly config: BridgeConfig) {}
+
+  private async withPageLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationTail;
+    let release: (() => void) | undefined;
+    this.operationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
+  }
 
   async ensureStarted(): Promise<void> {
     if (this.context) return;
@@ -96,6 +161,12 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
       headless: this.config.headless,
       viewport: { width: 1280, height: 900 },
     });
+    try {
+      const origin = new URL(this.config.doubaoBaseUrl).origin;
+      await this.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+    } catch {
+      // Permission grant is best-effort. Fallbacks below do not depend on it.
+    }
 
     const pages = this.context.pages();
     this.page = pages[0] ?? (await this.context.newPage());
@@ -110,29 +181,97 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   async openLogin(): Promise<string> {
-    await this.ensureStarted();
-    if (!this.page) throw new Error('Browser page not available');
-    await this.page.goto(this.config.doubaoBaseUrl, { waitUntil: 'domcontentloaded' });
-    return this.page.url();
+    return this.withPageLock(async () => {
+      await this.ensureStarted();
+      if (!this.page) throw new Error('Browser page not available');
+      if (!samePageUrl(this.page.url(), this.config.doubaoBaseUrl)) {
+        await this.page.goto(this.config.doubaoBaseUrl, { waitUntil: 'domcontentloaded' });
+      }
+      return this.page.url();
+    });
   }
 
   async openThread(url: string): Promise<BrowserThreadSnapshot> {
-    await this.ensureStarted();
-    if (!this.page) throw new Error('Browser page not available');
-    await this.page.goto(url, { waitUntil: 'domcontentloaded' });
-    await this.page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
-    return this.captureSnapshot();
+    return this.withPageLock(async () => {
+      await this.ensureStarted();
+      if (!this.page) throw new Error('Browser page not available');
+      if (!samePageUrl(this.page.url(), url)) {
+        await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+      }
+      await this.page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
+      return this.captureSnapshot();
+    });
   }
 
-  async sendTranscript(transcript: string, threadUrl?: string): Promise<BrowserSendResult> {
+  async sendTranscript(
+    transcript: string,
+    threadUrl?: string,
+    options: BrowserSendOptions = {},
+  ): Promise<BrowserSendResult> {
+    return this.withPageLock(async () => {
+      const explicitMode = options.inputMode;
+      if (explicitMode && explicitMode !== 'default') {
+        return this.performSendAttempt(transcript, threadUrl, { ...options, inputMode: explicitMode }, false);
+      }
+
+      const firstAttempt = await this.performSendAttempt(
+        transcript,
+        threadUrl,
+        {
+          ...options,
+          inputMode: 'paste',
+        },
+        false,
+      );
+      if (firstAttempt.sent || firstAttempt.challengeDetected) {
+        return firstAttempt;
+      }
+
+      const fallbackModes: BrowserInputMode[] = options.retryInputMode
+        ? [options.retryInputMode, 'type']
+        : ['insert', 'type'];
+      let lastAttempt = firstAttempt;
+      for (const fallbackMode of fallbackModes) {
+        const attempt = await this.performSendAttempt(
+          transcript,
+          threadUrl,
+          {
+            ...options,
+            inputMode: fallbackMode,
+            preSendDelayMs: options.retryPreSendDelayMs ?? Math.max(options.preSendDelayMs ?? 1800, 2000),
+          },
+          true,
+        );
+        if (attempt.sent || attempt.challengeDetected) {
+          return attempt;
+        }
+        lastAttempt = attempt;
+      }
+
+      return lastAttempt;
+    });
+  }
+
+  private async performSendAttempt(
+    transcript: string,
+    threadUrl: string | undefined,
+    options: BrowserSendOptions,
+    skipNavigation: boolean,
+  ): Promise<BrowserSendResult> {
     await this.ensureStarted();
     if (!this.page) throw new Error('Browser page not available');
 
-    if (threadUrl) {
-      await this.page.goto(threadUrl, { waitUntil: 'domcontentloaded' });
-    } else {
-      await this.page.goto(this.config.doubaoBaseUrl, { waitUntil: 'domcontentloaded' });
-      await this.tryOpenNewChat();
+    if (!skipNavigation) {
+      if (threadUrl) {
+        if (!samePageUrl(this.page.url(), threadUrl)) {
+          await this.page.goto(threadUrl, { waitUntil: 'domcontentloaded' });
+        }
+      } else {
+        if (!samePageUrl(this.page.url(), this.config.doubaoBaseUrl)) {
+          await this.page.goto(this.config.doubaoBaseUrl, { waitUntil: 'domcontentloaded' });
+        }
+        await this.tryOpenNewChat();
+      }
     }
 
     await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
@@ -146,10 +285,15 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
       }
 
       const beforeUrl = this.page.url();
-      await this.fillComposer(composer, transcript);
+      await this.fillComposer(composer, transcript, options.inputMode || 'default');
+      await this.page.waitForTimeout(options.preSendDelayMs ?? randomDelay(1200, 2100));
 
       const sendButton = await this.findVisibleLocator(SEND_BUTTON_SELECTORS, 1_500);
-      if (sendButton) {
+      if (options.sendMode === 'button' && sendButton) {
+        await sendButton.click({ timeout: 2_000 }).catch(() => undefined);
+      } else if (options.sendMode === 'enter') {
+        await this.page.keyboard.press('Enter');
+      } else if (sendButton) {
         await sendButton.click({ timeout: 2_000 }).catch(() => undefined);
       } else {
         await this.page.keyboard.press('Enter');
@@ -165,55 +309,92 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
       await this.page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
 
       const snapshot = await this.captureSnapshot();
+      const postSend = await this.inspectPostSend(transcript);
+      if (postSend.challengeDetected) {
+        this.lastError = `Doubao challenge detected after send (${postSend.observedBodySnippet || 'unknown'})`;
+        return {
+          ...snapshot,
+          sent: false,
+          transportUsed: 'dom',
+          verified: false,
+          challengeDetected: true,
+          messageVisible: postSend.messageVisible,
+          observedBodySnippet: postSend.observedBodySnippet,
+          error: this.lastError,
+        };
+      }
+      if (!postSend.messageVisible) {
+        this.lastError = `Doubao did not show the message after send (${postSend.observedBodySnippet || 'unknown'})`;
+        return {
+          ...snapshot,
+          sent: false,
+          transportUsed: 'dom',
+          verified: false,
+          challengeDetected: false,
+          messageVisible: false,
+          observedBodySnippet: postSend.observedBodySnippet,
+          error: this.lastError,
+        };
+      }
       this.lastError = undefined;
-      return { ...snapshot, sent: true };
+      return {
+        ...snapshot,
+        sent: true,
+        transportUsed: 'dom',
+        verified: postSend.messageVisible,
+        challengeDetected: false,
+        messageVisible: postSend.messageVisible,
+        observedBodySnippet: postSend.observedBodySnippet,
+      };
     }
 
     const snapshot = await this.captureSnapshot();
     const bodySnippet = (((await this.page.textContent('body').catch(() => '')) || '').trim()).slice(0, 120);
     this.lastError = `No editable element found on the current Doubao page (${snapshot.url || 'unknown'}${bodySnippet ? `; ${bodySnippet}` : ''})`;
-    return { ...snapshot, sent: false, error: this.lastError };
+    return { ...snapshot, sent: false, error: this.lastError, transportUsed: 'dom' };
   }
 
   async findThreadByTitle(title: string): Promise<BrowserThreadSnapshot | null> {
-    await this.ensureStarted();
-    if (!this.page) return null;
+    return this.withPageLock(async () => {
+      await this.ensureStarted();
+      if (!this.page) return null;
 
-    const candidateUrls = Array.from(
-      new Set([this.page.url(), this.config.doubaoBaseUrl].filter(Boolean)),
-    );
+      const candidateUrls = Array.from(
+        new Set([this.page.url(), this.config.doubaoBaseUrl].filter(Boolean)),
+      );
 
-    for (const url of candidateUrls) {
-      if (url && this.page.url() !== url) {
-        await this.page.goto(url, { waitUntil: 'domcontentloaded' });
-      }
+      for (const url of candidateUrls) {
+        if (url && !samePageUrl(this.page.url(), url)) {
+          await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+        }
 
-      const anchor = this.page.locator('a').filter({ hasText: title }).first();
-      if (await anchor.count()) {
-        const href = await anchor.getAttribute('href');
-        return {
-          title,
-          url: href ? normalizeUrl(this.config.doubaoBaseUrl, href) : this.page.url(),
-          threadId: extractThreadId(href ? normalizeUrl(this.config.doubaoBaseUrl, href) : this.page.url()),
-        };
-      }
+        const anchor = this.page.locator('a').filter({ hasText: title }).first();
+        if (await anchor.count()) {
+          const href = await anchor.getAttribute('href');
+          return {
+            title,
+            url: href ? normalizeUrl(this.config.doubaoBaseUrl, href) : this.page.url(),
+            threadId: extractThreadId(href ? normalizeUrl(this.config.doubaoBaseUrl, href) : this.page.url()),
+          };
+        }
 
-      const clickable = this.page
-        .locator('[role="link"], [role="button"], button')
-        .filter({ hasText: title })
-        .first();
-      if (await clickable.count()) {
-        try {
-          await clickable.click({ timeout: 3000 });
-          await this.page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => undefined);
-          return this.captureSnapshot(title);
-        } catch {
-          // Fall through to the next strategy.
+        const clickable = this.page
+          .locator('[role="link"], [role="button"], button')
+          .filter({ hasText: title })
+          .first();
+        if (await clickable.count()) {
+          try {
+            await clickable.click({ timeout: 3000 });
+            await this.page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => undefined);
+            return this.captureSnapshot(title);
+          } catch {
+            // Fall through to the next strategy.
+          }
         }
       }
-    }
 
-    return null;
+      return null;
+    });
   }
 
   async probeAuthStatus(): Promise<'connected' | 'needs_login'> {
@@ -252,6 +433,29 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
     };
   }
 
+  private async inspectPostSend(transcript: string): Promise<{
+    challengeDetected: boolean;
+    messageVisible: boolean;
+    observedBodySnippet?: string;
+  }> {
+    if (!this.page) {
+      return {
+        challengeDetected: false,
+        messageVisible: false,
+      };
+    }
+
+    const bodyText = compactText((await this.page.textContent('body').catch(() => '')) || '');
+    const transcriptProbe = compactText(transcript).slice(0, 24);
+    const observedBodySnippet = bodyText.slice(0, 160);
+
+    return {
+      challengeDetected: CHALLENGE_PATTERNS.some((pattern) => pattern.test(bodyText)),
+      messageVisible: transcriptProbe.length > 0 ? bodyText.includes(transcriptProbe) : false,
+      observedBodySnippet,
+    };
+  }
+
   private async tryOpenNewChat(): Promise<void> {
     if (!this.page) return;
 
@@ -269,25 +473,93 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
     }
   }
 
-  private async fillComposer(locator: Locator, transcript: string): Promise<void> {
+  private async fillComposer(locator: Locator, transcript: string, inputMode: BrowserInputMode): Promise<void> {
     if (!this.page) return;
 
-    try {
-      await locator.fill(transcript, { timeout: 3_000 });
+    if (inputMode === 'type') {
+      await this.typeComposer(locator, transcript);
       return;
-    } catch {
-      // Fallback to keyboard insertion for custom editors.
     }
 
+    if (inputMode === 'insert') {
+      await this.insertComposer(locator, transcript);
+      return;
+    }
+
+    if (inputMode === 'fill') {
+      await this.fillComposerDirect(locator, transcript);
+      return;
+    }
+
+    if (await this.tryPasteComposer(locator, transcript)) {
+      return;
+    }
+
+    throw new Error('Paste mode failed to write transcript into composer.');
+  }
+
+  private async tryPasteComposer(locator: Locator, transcript: string): Promise<boolean> {
+    if (!this.page) return false;
+
+    let clipboardBackup: string | undefined;
+    try {
+      clipboardBackup = await this.readClipboardText();
+      await locator.focus();
+      await this.page.waitForTimeout(randomDelay(180, 320));
+      await this.page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`).catch(() => undefined);
+      await this.page.keyboard.press('Backspace').catch(() => undefined);
+      await this.page.waitForTimeout(randomDelay(120, 220));
+
+      await this.page.evaluate(async (text) => {
+        await navigator.clipboard.writeText(text);
+      }, transcript);
+
+      await this.page.waitForTimeout(randomDelay(180, 300));
+      await this.page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+V`);
+      await this.page.waitForTimeout(randomDelay(250, 450));
+
+      const currentValue = await locator.evaluate((element) => {
+        if ('value' in element) {
+          return String((element as HTMLInputElement | HTMLTextAreaElement).value || '');
+        }
+        return (element.textContent || '').trim();
+      });
+
+      return currentValue.includes(transcript.trim().slice(0, 24));
+    } catch {
+      return false;
+    } finally {
+      await this.restoreClipboardText(clipboardBackup);
+    }
+  }
+
+  private async typeComposer(locator: Locator, transcript: string): Promise<void> {
+    if (!this.page) return;
+    await locator.focus();
+    await this.page.waitForTimeout(randomDelay(180, 320));
+    await this.page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`).catch(() => undefined);
+    await this.page.keyboard.press('Backspace').catch(() => undefined);
+    await this.page.waitForTimeout(randomDelay(160, 280));
+    await this.page.keyboard.type(transcript, { delay: randomDelay(26, 54) });
+  }
+
+  private async insertComposer(locator: Locator, transcript: string): Promise<void> {
+    if (!this.page) return;
     try {
       await locator.focus();
     } catch {
       // Best-effort.
     }
-
     await this.page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`).catch(() => undefined);
     await this.page.keyboard.press('Backspace').catch(() => undefined);
+    await this.page.waitForTimeout(randomDelay(160, 260));
     await this.page.keyboard.insertText(transcript);
+  }
+
+  private async fillComposerDirect(locator: Locator, transcript: string): Promise<void> {
+    if (!this.page) return;
+    await locator.fill('').catch(() => undefined);
+    await locator.fill(transcript);
   }
 
   private async findVisibleLocator(selectors: string[], timeoutMs: number): Promise<Locator | null> {
@@ -313,5 +585,23 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
     }
 
     return null;
+  }
+
+  private async readClipboardText(): Promise<string | undefined> {
+    if (!this.page) return undefined;
+    try {
+      return await this.page.evaluate(async () => navigator.clipboard.readText());
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async restoreClipboardText(value: string | undefined): Promise<void> {
+    if (!this.page || value === undefined) return;
+    await this.page
+      .evaluate(async (text) => {
+        await navigator.clipboard.writeText(text);
+      }, value)
+      .catch(() => undefined);
   }
 }

@@ -8,7 +8,7 @@ import { getTaskEnabled } from './services/TaskScheduler';
 
 const WIKI_URL = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
 const DOUBAO_ICON_URL = typeof chrome !== 'undefined' && chrome.runtime?.getURL
-    ? chrome.runtime.getURL('icons/doubao-icon.png')
+    ? chrome.runtime.getURL('icons/connect-doubao.png')
     : '';
 
 const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
