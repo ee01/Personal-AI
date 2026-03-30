@@ -416,6 +416,17 @@ export interface OutreachTargetCandidate {
   source: 'extension' | 'chat';
 }
 
+export interface OutreachDirectoryStatus {
+  scope: 'users' | 'teams';
+  status: 'idle' | 'syncing' | 'ready' | 'error';
+  lastStartedAt?: number;
+  lastFinishedAt?: number;
+  lastSuccessAt?: number;
+  recordCount: number;
+  lastError?: string;
+  stale: boolean;
+}
+
 export interface OutreachSession {
   id: string;
   templateId?: string;
@@ -1748,7 +1759,7 @@ export class MemoryServiceClient {
     targetType: string,
     query: string,
     limit = 8,
-  ): Promise<{ items: OutreachTargetCandidate[]; total: number }> {
+  ): Promise<{ items: OutreachTargetCandidate[]; total: number; directoryStatus?: OutreachDirectoryStatus[] }> {
     const params = new URLSearchParams();
     params.set('targetType', targetType);
     params.set('query', query);
@@ -1757,6 +1768,18 @@ export class MemoryServiceClient {
       'GET',
       `/outreach/targets/search?${params.toString()}`,
     );
+  }
+
+  async getOutreachDirectoryStatus(): Promise<{ items: OutreachDirectoryStatus[] }> {
+    return this.request('GET', '/outreach/directory/status');
+  }
+
+  async syncOutreachDirectory(force = false): Promise<{ items: OutreachDirectoryStatus[] }> {
+    const params = new URLSearchParams();
+    if (force) {
+      params.set('force', 'true');
+    }
+    return this.request('POST', `/outreach/directory/sync${params.toString() ? `?${params.toString()}` : ''}`);
   }
 
   async approveOutreachSession(id: string): Promise<{ session: OutreachSession }> {

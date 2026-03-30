@@ -316,4 +316,65 @@ describe('OutreachEngine', () => {
       .find((item) => item.eventType === 'edited');
     expect(editedEvent?.payload?.targetRef).toBe('release-team');
   });
+
+  it('backfills missing reply sender on session detail lookup', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'chat-backfill',
+      renderedQuestion: '当前版本号是多少？',
+      status: 'resolved',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-backfill',
+      sentPostId: 'post-seed',
+      replyPostId: 'reply-1',
+      replyRawText: '26.2.10',
+      replyClassification: 'answer',
+      replyConfidence: 0.7,
+      waitUntil: Math.floor(Date.now() / 1000) + 3600,
+      nextCheckAt: null,
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.includes('/team-messaging/v1/chats/chat-backfill/posts?recordCount=50')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'reply-1',
+                  text: '26.2.10',
+                  creator: {
+                    id: 'user-42',
+                    name: 'AI Service',
+                  },
+                  creationTime: '2026-03-30T08:00:00Z',
+                },
+              ],
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    const detail = await engine.getSessionDetail(session.id);
+
+    expect(detail?.session.replySender).toBe('AI Service');
+
+    const refreshed = outreachRepo.getSessionById(session.id);
+    expect(refreshed?.replySender).toBe('AI Service');
+  });
 });

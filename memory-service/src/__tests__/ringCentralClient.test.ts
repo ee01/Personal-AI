@@ -64,7 +64,7 @@ describe('RingCentralClient', () => {
             }),
         };
       }
-      if (url.includes('/team-messaging/v1/chats?recordCount=200')) {
+      if (url.includes('/team-messaging/v1/chats?recordCount=50')) {
         return {
           ok: true,
           status: 200,
@@ -166,21 +166,7 @@ describe('RingCentralClient', () => {
             }),
         };
       }
-      if (url.includes('/team-messaging/v1/teams?recordCount=200')) {
-        return {
-          ok: false,
-          status: 404,
-          text: async () => JSON.stringify({ message: 'not found' }),
-        };
-      }
-      if (url.includes('/glip/teams?recordCount=200')) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ records: [], navigation: {} }),
-        };
-      }
-      if (url.includes('/team-messaging/v1/chats?recordCount=200&pageToken=page-2')) {
+      if (url.includes('/team-messaging/v1/chats?recordCount=50&pageToken=page-2')) {
         return {
           ok: true,
           status: 200,
@@ -198,7 +184,7 @@ describe('RingCentralClient', () => {
             }),
         };
       }
-      if (url.includes('/team-messaging/v1/chats?recordCount=200')) {
+      if (url.includes('/team-messaging/v1/chats?recordCount=50')) {
         return {
           ok: true,
           status: 200,
@@ -212,7 +198,7 @@ describe('RingCentralClient', () => {
                 },
               ],
               navigation: {
-                prevPageToken: 'page-2',
+                nextPageToken: 'page-2',
               },
             }),
         };
@@ -260,14 +246,7 @@ describe('RingCentralClient', () => {
           text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
         };
       }
-      if (url.includes('/team-messaging/v1/teams?recordCount=200')) {
-        return {
-          ok: false,
-          status: 404,
-          text: async () => JSON.stringify({ message: 'not found' }),
-        };
-      }
-      if (url.includes('/glip/teams?recordCount=200&pageToken=team-page-2')) {
+      if (url.includes('/team-messaging/v1/chats?recordCount=50&pageToken=team-page-2')) {
         return {
           ok: true,
           status: 200,
@@ -276,6 +255,7 @@ describe('RingCentralClient', () => {
               records: [
                 {
                   id: '54490570758',
+                  type: 'Team',
                   name: 'RCV Mobile VT3',
                   description: 'Release room',
                 },
@@ -284,7 +264,7 @@ describe('RingCentralClient', () => {
             }),
         };
       }
-      if (url.includes('/glip/teams?recordCount=200')) {
+      if (url.includes('/team-messaging/v1/chats?recordCount=50')) {
         return {
           ok: true,
           status: 200,
@@ -293,20 +273,14 @@ describe('RingCentralClient', () => {
               records: [
                 {
                   id: 'team-1',
+                  type: 'Team',
                   name: 'General',
                 },
               ],
               navigation: {
-                prevPageToken: 'team-page-2',
+                nextPageToken: 'team-page-2',
               },
             }),
-        };
-      }
-      if (url.includes('/team-messaging/v1/chats?recordCount=200')) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ records: [], navigation: {} }),
         };
       }
       throw new Error(`Unexpected fetch ${url}`);
@@ -320,5 +294,68 @@ describe('RingCentralClient', () => {
     });
 
     expect(groupResults.some((item) => item.chatId === '54490570758' && item.label === 'RCV Mobile VT3')).toBe(true);
+  });
+
+  it('resolves readable sender names when listing chat posts', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.includes('/team-messaging/v1/chats/chat-123/posts?recordCount=50')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'post-1',
+                  text: '26.2.10',
+                  creator: {
+                    id: 'user-42',
+                    firstName: 'Ada',
+                    lastName: 'Lovelace',
+                  },
+                  creationTime: '2026-03-30T08:00:00Z',
+                },
+                {
+                  id: 'post-2',
+                  text: '已同步',
+                  creator: {
+                    id: 'user-77',
+                  },
+                  creationTime: '2026-03-30T08:05:00Z',
+                },
+              ],
+            }),
+        };
+      }
+      if (url.includes('/team-messaging/v1/persons/user-77')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'user-77',
+              firstName: 'Grace',
+              lastName: 'Hopper',
+              email: 'grace.hopper@example.com',
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const client = new RingCentralClient(userDataManager);
+    const posts = await client.listPosts('chat-123');
+
+    expect(posts).toHaveLength(2);
+    expect(posts[0].creatorName).toBe('Ada Lovelace');
+    expect(posts[1].creatorName).toBe('Grace Hopper');
   });
 });

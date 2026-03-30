@@ -46,6 +46,7 @@ interface TargetSearchCacheEntry {
   payload: {
     items: Awaited<ReturnType<OutreachEngine['searchTargets']>>;
     total: number;
+    directoryStatus: Awaited<ReturnType<OutreachEngine['getTargetDirectoryStatus']>>;
   };
 }
 
@@ -147,6 +148,25 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send(summary);
   });
 
+  app.get('/outreach/directory/status', async (request, reply) => {
+    const { db, userDataManager } = request.userContext;
+    const engine = new OutreachEngine(db, userDataManager, request.userId);
+    return reply.status(200).send({
+      items: engine.getTargetDirectoryStatus(),
+    });
+  });
+
+  app.post<{
+    Querystring: {
+      force?: string;
+    };
+  }>('/outreach/directory/sync', async (request, reply) => {
+    const { db, userDataManager } = request.userContext;
+    const engine = new OutreachEngine(db, userDataManager, request.userId);
+    const items = await engine.syncTargetDirectory(request.query.force === 'true');
+    return reply.status(200).send({ items });
+  });
+
   app.get<{
     Querystring: {
       targetType?: string;
@@ -180,8 +200,12 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send(cached.payload);
     }
     try {
-      const items = await engine.searchTargets(targetType, query, normalizedLimit);
-      const payload = { items, total: items.length };
+      const response = await engine.searchTargetsDetailed(targetType, query, normalizedLimit);
+      const payload = {
+        items: response.items,
+        total: response.total,
+        directoryStatus: response.directoryStatus,
+      };
       targetSearchCache.set(cacheKey, {
         payload,
         expiresAt: Date.now() + TARGET_SEARCH_CACHE_TTL_MS,
@@ -190,7 +214,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         {
           targetType,
           query,
-          total: items.length,
+          total: response.total,
           durationMs: Date.now() - startedAt,
           userId: request.userId,
         },
@@ -247,7 +271,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   }>('/outreach/sessions/:id', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
-    const detail = engine.getSessionDetail(request.params.id);
+    const detail = await engine.getSessionDetail(request.params.id);
     if (!detail) {
       return reply.status(404).send({ error: 'Outreach session not found' });
     }

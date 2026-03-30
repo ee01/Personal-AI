@@ -84,15 +84,14 @@
 
         <div v-if="editing" class="edit-grid">
           <label class="field-block">
-            <span>目标类型</span>
+            <span>询问对象类型</span>
             <select v-model="draft.targetType" class="field-input" @change="handleTargetTypeChange">
-              <option value="private">私聊</option>
+              <option value="private">某个人</option>
               <option value="group">群组</option>
-              <option value="person">联系人</option>
             </select>
           </label>
           <label class="field-block">
-            <span>目标用户/群组</span>
+            <span>目标对象</span>
             <input
               v-model="draft.targetRef"
               class="field-input"
@@ -104,8 +103,8 @@
             />
             <span class="muted small">
               {{ draft.targetType === 'group'
-                ? '群组模式只检索群名和群聊目标；支持群名、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。通过链接或 chat ID 确认过一次后，系统会记住这个群名。'
-                : '私聊/联系人模式只检索人和私聊目标；支持人名、邮箱、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。若是 service account 或较早的私聊，直接贴聊天链接会更稳；确认过一次后系统会记住这个名称。' }}
+                ? '群组模式用于“问某个群”。支持群名、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。通过链接或 chat ID 确认过一次后，系统会记住这个群名。'
+                : '某个人模式用于“问某个人”。你只需要输入人名、邮箱，或直接贴已有私聊链接/chat ID；系统会自动判断是命中联系人，还是命中已有私聊。若是 service account 或较早的私聊，直接贴聊天链接会更稳。' }}
             </span>
           </label>
           <div class="field-block full-span">
@@ -113,9 +112,17 @@
               <span class="muted small">
                 {{ searchingTargets ? '正在检索候选...' : `当前解析状态：${draftResolutionLabel}` }}
               </span>
-              <button class="ghost-btn" :disabled="busy || searchingTargets" @click="searchTargets(true)">
-                重新检索
-              </button>
+              <div class="search-action-group">
+                <button class="ghost-btn" :disabled="busy || syncingDirectory" @click="refreshDirectory">
+                  {{ syncingDirectory ? '刷新目录中...' : '刷新目录' }}
+                </button>
+                <button class="ghost-btn" :disabled="busy || searchingTargets" @click="searchTargets(true)">
+                  重新检索
+                </button>
+              </div>
+            </div>
+            <div class="muted small" style="margin-top: 6px;">
+              {{ directoryStatusHint }}
             </div>
             <p v-if="searchError" class="field-error">{{ searchError }}</p>
             <div v-if="draft.targetCandidates.length > 0" class="candidate-list">
@@ -128,7 +135,7 @@
               >
                 <strong>{{ candidate.label }}</strong>
                 <span class="muted small">
-                  {{ candidate.subtitle || candidate.source }} · 匹配度 {{ candidate.score }}
+                  {{ candidateTypeLabel(candidate) }}<template v-if="candidate.subtitle"> · {{ candidate.subtitle }}</template> · 匹配度 {{ candidate.score }}
                 </span>
               </button>
             </div>
@@ -161,7 +168,7 @@
           </label>
           <div class="field-block">
             <span>说明</span>
-            <p class="muted">留空表示批准后立即发送；如果当前已排程，留空则改为尽快发送。</p>
+            <p class="muted">留空表示批准后立即发送；如果当前已排程，留空则改为尽快发送。问某个人时不需要先分辨“联系人”还是“已有私聊”，选候选即可。</p>
           </div>
           <div class="edit-actions full-span">
             <button class="primary-btn" :disabled="busy" @click="saveDraft">保存调整</button>
@@ -170,7 +177,7 @@
         </div>
 
         <div v-else class="summary-text">
-          <p>当前目标：{{ targetTypeLabel(detail.targetType) }} / {{ detail.targetRef }}</p>
+          <p>当前对象：{{ targetTypeLabel(detail.targetType) }} / {{ detail.targetRef }}</p>
           <p>目标解析：{{ sessionTargetResolutionLabel(detail) }}</p>
           <p>计划发送：{{ detail.nextCheckAt ? relativeTime(detail.nextCheckAt) : '批准后立即发送' }}</p>
         </div>
@@ -185,10 +192,13 @@
         <div class="panel-title">回复内容</div>
         <div v-if="detail.replyRawText" class="reply-box">
           <div class="inline-head">
-            <span>{{ detail.replySender || '未知发送者' }}</span>
+            <span>{{ replySenderDisplay(detail) }}</span>
             <span class="muted small">{{ replyClassificationLabel(detail.replyClassification) }}</span>
           </div>
           <p>{{ detail.replyRawText }}</p>
+          <div v-if="replySenderIsInferred(detail)" class="muted small">
+            当前未拿到原始 reply sender，先按目标对象回退展示。
+          </div>
           <div v-if="detail.replyConfidence !== undefined" class="muted small">
             解析置信度：{{ Number(detail.replyConfidence).toFixed(2) }}
           </div>
@@ -231,6 +241,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
+  type OutreachDirectoryStatus,
   type OutreachEvent,
   type OutreachSession,
   type OutreachSessionStatus,
@@ -245,7 +256,9 @@ const loading = ref(true);
 const busy = ref(false);
 const editing = ref(false);
 const searchingTargets = ref(false);
+const syncingDirectory = ref(false);
 const searchError = ref('');
+const directoryStatus = ref<OutreachDirectoryStatus[]>([]);
 const detail = ref<OutreachSession | null>(null);
 const draft = reactive({
   targetType: 'private',
@@ -292,11 +305,17 @@ async function loadDetail() {
   if (!id) return;
   loading.value = true;
   try {
-    detail.value = await client.getOutreachSession(id);
+    const [session, directory] = await Promise.all([
+      client.getOutreachSession(id),
+      client.getOutreachDirectoryStatus(),
+    ]);
+    detail.value = session;
+    directoryStatus.value = Array.isArray(directory?.items) ? directory.items : [];
     resetDraft(detail.value);
   } catch (error) {
     console.error('Failed to load outreach session detail:', error);
     detail.value = null;
+    directoryStatus.value = [];
     resetDraft(null);
   } finally {
     loading.value = false;
@@ -330,6 +349,9 @@ function handleTargetInput() {
 }
 
 function handleTargetTypeChange() {
+  if (draft.targetType !== 'group') {
+    draft.targetType = 'private';
+  }
   clearResolvedTarget();
   scheduleTargetSearch(120);
 }
@@ -371,7 +393,7 @@ async function retrySession() {
 async function saveDraft() {
   if (!detail.value) return;
   if (!draft.targetRef.trim()) {
-    window.alert('请先填写目标用户/群组。');
+    window.alert('请先填写目标对象。');
     return;
   }
   if (!draft.renderedQuestion.trim()) {
@@ -380,7 +402,7 @@ async function saveDraft() {
   }
   const normalizedTargetRef = draft.targetRef.trim().toLowerCase();
   if (
-    (draft.targetType === 'private' || draft.targetType === 'person') &&
+    draft.targetType !== 'group' &&
     (normalizedTargetRef === 'user' || normalizedTargetRef === 'me' || normalizedTargetRef === 'self')
   ) {
     window.alert('主动询问只用于对外询问，不应把当前用户作为目标。');
@@ -479,7 +501,7 @@ function parseDateTimeLocal(value: string): number | null {
 }
 
 function resetDraft(session: OutreachSession | null) {
-  draft.targetType = session?.targetType || 'private';
+  draft.targetType = session?.targetType === 'group' ? 'group' : 'private';
   draft.targetRef = session?.targetRef || '';
   draft.targetResolutionStatus = session?.targetResolutionStatus || 'unresolved';
   draft.targetResolvedType = session?.targetResolvedType || '';
@@ -516,12 +538,19 @@ async function searchTargets(manual = true) {
     if (currentSearch !== targetSearchSequence) {
       return;
     }
+    directoryStatus.value = Array.isArray(response.directoryStatus) ? response.directoryStatus : directoryStatus.value;
     draft.targetCandidates = response.items;
     if (response.items.length === 0) {
       clearResolvedTarget();
+      const scopeStatus = activeDirectoryScopeStatus();
+      const syncHint = scopeStatus?.status === 'syncing'
+        ? '目录仍在同步中，你也可以稍后再试。'
+        : scopeStatus?.status === 'error'
+          ? '目录同步失败，建议先去 Options 刷新目录，或直接粘贴聊天链接 / chat ID。'
+          : '';
       searchError.value = draft.targetType === 'group'
-        ? `未找到与 “${query}” 匹配的群组目标。请确认当前已切到群组模式；也可以直接粘贴群聊链接或 chat ID。`
-        : `未找到与 “${query}” 匹配的私聊/联系人目标。私聊模式不会检索群名；如果你要找群，请切到群组模式。若是 service account 或历史私聊，建议直接粘贴聊天链接。`;
+        ? `未找到与 “${query}” 匹配的群组目标。请确认当前已切到群组模式；也可以直接粘贴群聊链接或 chat ID。${syncHint ? ` ${syncHint}` : ''}`
+        : `未找到与 “${query}” 匹配的人员或私聊目标。某个人模式不会检索群名；如果你要找群，请切到群组模式。若是 service account 或历史私聊，建议直接粘贴聊天链接。${syncHint ? ` ${syncHint}` : ''}`;
       return;
     }
     if (response.items.length === 1 && response.items[0].score >= 90) {
@@ -547,6 +576,21 @@ async function searchTargets(manual = true) {
   }
 }
 
+async function refreshDirectory() {
+  syncingDirectory.value = true;
+  try {
+    const response = await client.syncOutreachDirectory(true);
+    directoryStatus.value = Array.isArray(response?.items) ? response.items : [];
+    if (draft.targetRef.trim().length >= 2) {
+      await searchTargets(false);
+    }
+  } catch (error) {
+    searchError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    syncingDirectory.value = false;
+  }
+}
+
 function selectTargetCandidate(candidate: OutreachTargetCandidate) {
   draft.targetRef = candidate.label;
   draft.targetResolutionStatus = 'resolved';
@@ -568,12 +612,34 @@ function clearResolvedTarget() {
 
 const draftResolutionLabel = computed(() => {
   if (draft.targetResolutionStatus === 'resolved') {
-    return `已确认：${draft.targetResolvedLabel || draft.targetRef}`;
+    return `已确认：${resolvedTargetSummary(draft.targetType, draft.targetResolvedType, draft.targetResolvedLabel || draft.targetRef)}`;
   }
   if (draft.targetResolutionStatus === 'ambiguous') {
     return '找到多个候选，待你确认';
   }
   return '未确认';
+});
+
+function activeDirectoryScopeStatus() {
+  const scope = draft.targetType === 'group' ? 'teams' : 'users';
+  return directoryStatus.value.find((item) => item.scope === scope);
+}
+
+const directoryStatusHint = computed(() => {
+  const current = activeDirectoryScopeStatus();
+  if (!current) return '目录状态未知';
+  if (current.status === 'ready') {
+    return current.stale
+      ? `目录已同步 ${current.recordCount} 条，但缓存已过期，后台会继续刷新。`
+      : `目录已就绪，共 ${current.recordCount} 条。`;
+  }
+  if (current.status === 'syncing') {
+    return `目录同步中，当前 ${current.recordCount} 条。`;
+  }
+  if (current.status === 'error') {
+    return `目录同步失败：${current.lastError || 'unknown error'}`;
+  }
+  return '目录尚未同步';
 });
 
 function formatJson(value: unknown) {
@@ -604,7 +670,7 @@ function originLabel(originKind?: string) {
 }
 
 function targetTypeLabel(targetType?: string) {
-  if (targetType === 'private') return '私聊';
+  if (targetType === 'private' || targetType === 'person') return '某个人';
   if (targetType === 'group') return '群组';
   return targetType || '未知目标';
 }
@@ -612,17 +678,75 @@ function targetTypeLabel(targetType?: string) {
 function targetResolutionLabel(targetRef?: string) {
   const normalizedRef = targetRef?.trim().toLowerCase() || '';
   if (!normalizedRef) return '目标待确认';
-  return '原始目标文本';
+  return '原始对象文本';
+}
+
+function resolvedTargetSummary(targetType?: string, resolvedType?: string | null, label?: string) {
+  const resolvedLabel = label || '未知对象';
+  if (targetType === 'group') {
+    return `已确认群组：${resolvedLabel}`;
+  }
+  if (resolvedType === 'user') {
+    return `已确认联系人：${resolvedLabel}`;
+  }
+  if (resolvedType === 'chat') {
+    return `已确认已有私聊：${resolvedLabel}`;
+  }
+  return `已确认对象：${resolvedLabel}`;
 }
 
 function sessionTargetResolutionLabel(session: OutreachSession) {
   if (session.targetResolutionStatus === 'resolved') {
-    return `已确认：${session.targetResolvedLabel || session.targetRef}`;
+    return resolvedTargetSummary(session.targetType, session.targetResolvedType, session.targetResolvedLabel || session.targetRef);
   }
   if (session.targetResolutionStatus === 'ambiguous') {
     return '找到多个候选，待你确认';
   }
   return targetResolutionLabel(session.targetRef);
+}
+
+function candidateTypeLabel(candidate: OutreachTargetCandidate) {
+  if (draft.targetType === 'group') return '群组';
+  if (candidate.kind === 'user') return '联系人';
+  if (candidate.kind === 'chat') return '已有私聊';
+  return '候选对象';
+}
+
+function replySenderDisplay(session: OutreachSession) {
+  const explicitSender = session.replySender?.trim();
+  if (explicitSender) return explicitSender;
+
+  const replyEventSender = session.events
+    ?.find((event) => event.eventType === 'reply_received')
+    ?.payload?.replySender;
+  if (typeof replyEventSender === 'string' && replyEventSender.trim()) {
+    return replyEventSender.trim();
+  }
+
+  if (
+    (session.targetType === 'private' || session.targetType === 'person') &&
+    session.targetResolutionStatus === 'resolved'
+  ) {
+    return session.targetResolvedLabel || session.targetRef || '未知发送者';
+  }
+
+  if ((session.targetType === 'private' || session.targetType === 'person') && session.targetRef?.trim()) {
+    return session.targetRef.trim();
+  }
+
+  return '未知发送者';
+}
+
+function replySenderIsInferred(session: OutreachSession) {
+  const explicitSender = session.replySender?.trim();
+  if (explicitSender) return false;
+  const replyEventSender = session.events
+    ?.find((event) => event.eventType === 'reply_received')
+    ?.payload?.replySender;
+  if (typeof replyEventSender === 'string' && replyEventSender.trim()) {
+    return false;
+  }
+  return session.targetType === 'private' || session.targetType === 'person';
 }
 
 function nextTimeLabel(status: OutreachSessionStatus) {
@@ -852,6 +976,12 @@ function statusClass(status: string) {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.search-action-group {
+  display: inline-flex;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 

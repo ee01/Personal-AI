@@ -104,7 +104,7 @@ const TopicModal = () => {
     // 🆕 每日摘要配置状态
     const [newDigestEnabled, setNewDigestEnabled] = useState(false);
     const [newDigestFrequency, setNewDigestFrequency] = useState<'daily' | 'weekly'>('daily');
-    const [newDigestHour, setNewDigestHour] = useState(18);
+    const [newDigestHour, setNewDigestHour] = useState(8);
     // 新增：通用匹配条件状态
     const [newFilterSender, setNewFilterSender] = useState('');
     const [newFilterGroup, setNewFilterGroup] = useState('');
@@ -1024,7 +1024,7 @@ const TopicModal = () => {
                                                         digestConfig: e.target.checked ? {
                                                             enabled: true,
                                                             frequency: editingTopic.digestConfig?.frequency || 'daily',
-                                                            preferredHour: editingTopic.digestConfig?.preferredHour ?? 18
+                                                            preferredHour: editingTopic.digestConfig?.preferredHour ?? 8
                                                         } : undefined
                                                     })}
                                                 />
@@ -1068,10 +1068,10 @@ const TopicModal = () => {
                                                                 <input
                                                                     type="number"
                                                                     className="delay-hours-input"
-                                                                    value={editingTopic.digestConfig?.preferredHour ?? 18}
+                                                                    value={editingTopic.digestConfig?.preferredHour ?? 8}
                                                                     onChange={e => setEditingTopic({
                                                                         ...editingTopic,
-                                                                        digestConfig: { ...editingTopic.digestConfig!, preferredHour: parseInt(e.target.value) || 18 }
+                                                                        digestConfig: { ...editingTopic.digestConfig!, preferredHour: parseInt(e.target.value) || 8 }
                                                                     })}
                                                                     min="0"
                                                                     max="23"
@@ -1262,7 +1262,7 @@ const TopicModal = () => {
                                     </span>
                                 )}
                                 {topic.digestConfig?.enabled && (
-                                    <span className="digest-indicator" title={`定时摘要 (${topic.digestConfig.frequency === 'daily' ? '每日' : '每周'} ${topic.digestConfig.preferredHour ?? 18}:00)`}>
+                                    <span className="digest-indicator" title={`定时摘要 (${topic.digestConfig.frequency === 'daily' ? '每日' : '每周'} ${topic.digestConfig.preferredHour ?? 8}:00)`}>
                                         📊
                                     </span>
                                 )}
@@ -1446,7 +1446,7 @@ const TopicModal = () => {
                                                         type="number"
                                                         className="delay-hours-input"
                                                         value={newDigestHour}
-                                                        onChange={e => setNewDigestHour(parseInt(e.target.value) || 18)}
+                                                        onChange={e => setNewDigestHour(parseInt(e.target.value) || 8)}
                                                         min="0"
                                                         max="23"
                                                     />

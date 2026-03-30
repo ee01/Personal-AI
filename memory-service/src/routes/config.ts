@@ -10,6 +10,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { getConfig } from '../config.js';
+import { RingCentralClient } from '../integrations/RingCentralClient.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -350,6 +351,33 @@ export async function configRoutes(
       }
 
       writePersistedConfig(persisted, request);
+
+      const ringCentralReady =
+        persisted.outreachEnabled === true &&
+        typeof persisted.ringCentralServerUrl === 'string' &&
+        persisted.ringCentralServerUrl.trim().length > 0 &&
+        typeof persisted.ringCentralClientId === 'string' &&
+        persisted.ringCentralClientId.trim().length > 0 &&
+        typeof persisted.ringCentralClientSecret === 'string' &&
+        persisted.ringCentralClientSecret.trim().length > 0 &&
+        typeof persisted.ringCentralJwt === 'string' &&
+        persisted.ringCentralJwt.trim().length > 0;
+      if (ringCentralReady && request.userContext?.db) {
+        const ringClient = new RingCentralClient(
+          request.userContext.userDataManager,
+          request.userContext.db,
+          request.userId,
+        );
+        void ringClient.syncDirectory({ scopes: ['users', 'teams'], force: true }).catch((error) => {
+          request.log.warn(
+            {
+              userId: request.userId,
+              message: error instanceof Error ? error.message : String(error),
+            },
+            'ringcentral directory sync after config update failed',
+          );
+        });
+      }
 
       // Return the merged result (excluding sensitive keys)
       const appConfig = getConfig();

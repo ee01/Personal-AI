@@ -1,11 +1,21 @@
+import type Database from 'better-sqlite3';
+
+import {
+  RingCentralDirectoryRepository,
+  type RingCentralDirectoryScope,
+  type RingCentralDirectoryScopeState,
+  type RingCentralDirectorySyncStatus,
+} from '../repositories/RingCentralDirectoryRepository.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import { now } from '../utils/time.js';
 
 export interface RingCentralPost {
   id: string;
   chatId: string;
   text: string;
   creatorId?: string;
+  creatorName?: string;
   createdAt?: string;
   raw?: Record<string, unknown>;
 }
@@ -39,6 +49,23 @@ export interface ResolveRingCentralTargetResult {
   query: string;
   resolved?: RingCentralTargetCandidate;
   candidates: RingCentralTargetCandidate[];
+}
+
+export interface RingCentralDirectoryStatus {
+  scope: RingCentralDirectoryScope;
+  status: RingCentralDirectorySyncStatus;
+  lastStartedAt?: number;
+  lastFinishedAt?: number;
+  lastSuccessAt?: number;
+  recordCount: number;
+  lastError?: string;
+  stale: boolean;
+}
+
+export interface RingCentralTargetSearchResponse {
+  items: RingCentralTargetCandidate[];
+  total: number;
+  directoryStatus: RingCentralDirectoryStatus[];
 }
 
 interface StoredRingCentralTargetAlias {
@@ -160,7 +187,11 @@ function buildScore(query: string, ...values: Array<string | undefined>): number
 
 export class RingCentralClient {
   private static readonly DIRECTORY_CACHE_TTL_MS = 10 * 60_000;
+  private static readonly DIRECTORY_SYNC_INTERVAL_SECONDS = 12 * 60 * 60;
+  private static readonly DIRECTORY_SYNC_STALE_GRACE_SECONDS = 30 * 60;
   private static readonly PERSON_CACHE_TTL_MS = 5 * 60_000;
+  private static readonly DIRECTORY_CHAT_PAGE_SIZE = 50;
+  private static readonly DIRECTORY_CHAT_INTER_PAGE_DELAY_MS = 250;
   private static readonly CHAT_SEARCH_MAX_PAGES = 100;
   private static readonly TEAM_SEARCH_MAX_PAGES = 100;
   private static readonly UNNAMED_CHAT_MEMBER_LOOKUP_LIMIT = 40;
@@ -170,21 +201,32 @@ export class RingCentralClient {
   private static readonly currentExtensionIdCache = new Map<string, string>();
   private static readonly currentUserEmailCache = new Map<string, string>();
   private static readonly currentUserEmailPromiseCache = new Map<string, Promise<string>>();
+  private static readonly directoryEntryListCache = new Map<string, TimedCacheEntry<Array<Record<string, unknown>>>>();
+  private static readonly directoryEntryListPromiseCache = new Map<string, Promise<Array<Record<string, unknown>>>>();
   private static readonly extensionListCache = new Map<string, TimedCacheEntry<Array<Record<string, unknown>>>>();
   private static readonly extensionListPromiseCache = new Map<string, Promise<Array<Record<string, unknown>>>>();
   private static readonly teamListCache = new Map<string, TimedCacheEntry<RingCentralChatSummary[]>>();
   private static readonly teamListPromiseCache = new Map<string, Promise<RingCentralChatSummary[]>>();
+  private static readonly teamEndpointPreferenceCache = new Map<string, 'team-messaging' | 'glip'>();
   private static readonly chatListCache = new Map<string, TimedCacheEntry<RingCentralChatSummary[]>>();
   private static readonly chatListPromiseCache = new Map<string, Promise<RingCentralChatSummary[]>>();
   private static readonly chatDetailCache = new Map<string, TimedCacheEntry<RingCentralChatSummary>>();
   private static readonly chatDetailPromiseCache = new Map<string, Promise<RingCentralChatSummary | null>>();
   private static readonly personCache = new Map<string, TimedCacheEntry<Record<string, unknown>>>();
   private static readonly personPromiseCache = new Map<string, Promise<Record<string, unknown> | null>>();
+  private static readonly directorySyncPromiseCache = new Map<string, Promise<RingCentralDirectoryStatus[]>>();
   private tokenState: TokenState | null = null;
   private currentExtensionId: string | null = null;
   private currentUserEmail: string | null = null;
+  private readonly directoryRepo: RingCentralDirectoryRepository | null;
 
-  constructor(private readonly userDataManager?: UserDataManager) {}
+  constructor(
+    private readonly userDataManager?: UserDataManager,
+    private readonly db?: Database.Database,
+    private readonly userId = 'default',
+  ) {
+    this.directoryRepo = db ? new RingCentralDirectoryRepository(db) : null;
+  }
 
   static clearSharedCacheForTests(): void {
     this.tokenCache.clear();
@@ -192,16 +234,20 @@ export class RingCentralClient {
     this.currentExtensionIdCache.clear();
     this.currentUserEmailCache.clear();
     this.currentUserEmailPromiseCache.clear();
+    this.directoryEntryListCache.clear();
+    this.directoryEntryListPromiseCache.clear();
     this.extensionListCache.clear();
     this.extensionListPromiseCache.clear();
     this.teamListCache.clear();
     this.teamListPromiseCache.clear();
+    this.teamEndpointPreferenceCache.clear();
     this.chatListCache.clear();
     this.chatListPromiseCache.clear();
     this.chatDetailCache.clear();
     this.chatDetailPromiseCache.clear();
     this.personCache.clear();
     this.personPromiseCache.clear();
+    this.directorySyncPromiseCache.clear();
   }
 
   private getRuntimeConfig() {
@@ -226,6 +272,127 @@ export class RingCentralClient {
     RingCentralClient.currentExtensionIdCache.delete(cacheKey);
     RingCentralClient.currentUserEmailCache.delete(cacheKey);
     RingCentralClient.currentUserEmailPromiseCache.delete(cacheKey);
+  }
+
+  private getDirectorySyncKey(scopes: RingCentralDirectoryScope[]): string {
+    return `${this.userId}|${this.getCacheKey()}|${scopes.slice().sort().join(',')}`;
+  }
+
+  private buildDirectoryStatus(
+    scope: RingCentralDirectoryScope,
+    state?: RingCentralDirectoryScopeState | null,
+  ): RingCentralDirectoryStatus {
+    const lastSuccessAt = state?.lastSuccessAt;
+    const lastStartedAt = state?.lastStartedAt;
+    const currentTime = now();
+    const syncingTooLong =
+      state?.status === 'syncing' &&
+      lastStartedAt !== undefined &&
+      currentTime - lastStartedAt > RingCentralClient.DIRECTORY_SYNC_STALE_GRACE_SECONDS;
+    const stale =
+      lastSuccessAt === undefined ||
+      currentTime - lastSuccessAt > RingCentralClient.DIRECTORY_SYNC_INTERVAL_SECONDS;
+    return {
+      scope,
+      status: syncingTooLong ? 'error' : state?.status ?? 'idle',
+      lastStartedAt,
+      lastFinishedAt: state?.lastFinishedAt,
+      lastSuccessAt,
+      recordCount: state?.recordCount ?? 0,
+      lastError:
+        syncingTooLong && !state?.lastError
+          ? 'Previous directory sync appears stalled.'
+          : state?.lastError,
+      stale,
+    };
+  }
+
+  private scopesForTargetType(targetType: string): RingCentralDirectoryScope[] {
+    return normalizeSearch(targetType) === 'group' ? ['teams'] : ['users'];
+  }
+
+  private async ensureDirectoryReadyForTargetType(targetType: string): Promise<RingCentralDirectoryStatus[]> {
+    const scopes = this.scopesForTargetType(targetType);
+    const statuses = this.getDirectoryStatus(scopes);
+    const needsBlockingSync = statuses.some((item) => !item.lastSuccessAt);
+    if (needsBlockingSync) {
+      return this.syncDirectory({ scopes, force: true });
+    }
+    if (statuses.some((item) => item.stale)) {
+      void this.syncDirectory({ scopes, force: false });
+    }
+    return this.getDirectoryStatus(scopes);
+  }
+
+  getDirectoryStatus(scopes?: RingCentralDirectoryScope[]): RingCentralDirectoryStatus[] {
+    const repo = this.directoryRepo;
+    const targetScopes: RingCentralDirectoryScope[] =
+      scopes && scopes.length > 0 ? scopes : ['users', 'teams'];
+    if (!repo) {
+      return targetScopes.map((scope) => this.buildDirectoryStatus(scope, null));
+    }
+    return targetScopes.map((scope) => this.buildDirectoryStatus(scope, repo.getScopeState(scope)));
+  }
+
+  async maintainDirectoryCache(): Promise<RingCentralDirectoryStatus[]> {
+    if (!this.directoryRepo || !this.isConfigured()) {
+      return this.getDirectoryStatus();
+    }
+    const statuses = this.getDirectoryStatus();
+    if (statuses.some((item) => item.stale || !item.lastSuccessAt)) {
+      return this.syncDirectory({ scopes: ['users', 'teams'], force: false });
+    }
+    return statuses;
+  }
+
+  async syncDirectory(options?: {
+    scopes?: RingCentralDirectoryScope[];
+    force?: boolean;
+  }): Promise<RingCentralDirectoryStatus[]> {
+    if (!this.directoryRepo || !this.isConfigured()) {
+      return this.getDirectoryStatus(options?.scopes);
+    }
+
+    const requestedScopes = options?.scopes?.length ? options.scopes : (['users', 'teams'] as RingCentralDirectoryScope[]);
+    const scopes: RingCentralDirectoryScope[] = requestedScopes
+      .filter((scope, index, list) => list.indexOf(scope) === index);
+    const force = options?.force === true;
+    const current = this.getDirectoryStatus(scopes);
+    if (!force && current.every((item) => !item.stale && item.status === 'ready')) {
+      return current;
+    }
+
+    const syncKey = this.getDirectorySyncKey(scopes);
+    const inFlight = RingCentralClient.directorySyncPromiseCache.get(syncKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const syncPromise = (async () => {
+      for (const scope of scopes) {
+        this.directoryRepo!.markScopeSyncStarted(scope);
+        try {
+          if (scope === 'users') {
+            const count = await this.syncUsersDirectory();
+            this.directoryRepo!.markScopeSyncSuccess(scope, count);
+          } else {
+            const count = await this.syncTeamsDirectory();
+            this.directoryRepo!.markScopeSyncSuccess(scope, count);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.directoryRepo!.markScopeSyncError(scope, message);
+        }
+      }
+      return this.getDirectoryStatus(scopes);
+    })();
+
+    RingCentralClient.directorySyncPromiseCache.set(syncKey, syncPromise);
+    try {
+      return await syncPromise;
+    } finally {
+      RingCentralClient.directorySyncPromiseCache.delete(syncKey);
+    }
   }
 
   isConfigured(): boolean {
@@ -451,26 +618,67 @@ export class RingCentralClient {
 
     const explicitChatId = extractChatIdFromTargetRef(query);
     if (explicitChatId && ['group', 'private', 'person'].includes(normalizedTargetType)) {
-      const directCandidate = await this.getChatCandidateById(
-        explicitChatId,
-        allowedChatTypesForTargetType(normalizedTargetType),
-      );
-      if (directCandidate) {
-        this.rememberCandidate(normalizedTargetType, directCandidate);
-        return {
-          status: 'resolved',
-          query,
-          resolved: directCandidate,
-          candidates: [directCandidate],
-        };
+      try {
+        const directCandidate = await this.getChatCandidateById(
+          explicitChatId,
+          allowedChatTypesForTargetType(normalizedTargetType),
+        );
+        if (directCandidate) {
+          this.rememberCandidate(normalizedTargetType, directCandidate);
+          return {
+            status: 'resolved',
+            query,
+            resolved: directCandidate,
+            candidates: [directCandidate],
+          };
+        }
+      } catch {
+        // Fall through to explicit chat-id passthrough below.
       }
+
+      const passthroughCandidate: RingCentralTargetCandidate = {
+        kind: 'chat',
+        entityId: explicitChatId,
+        chatId: explicitChatId,
+        label: explicitChatId,
+        subtitle: 'Explicit chat id',
+        score: 95,
+        source: 'chat',
+      };
+      this.rememberCandidate(normalizedTargetType, passthroughCandidate);
+      return {
+        status: 'resolved',
+        query,
+        resolved: passthroughCandidate,
+        candidates: [passthroughCandidate],
+      };
     }
 
-    const liveCandidates =
-      normalizedTargetType === 'group'
-        ? await this.searchGroupCandidates(query, limit)
-        : await this.searchUserCandidates(query, limit);
-    const candidates = this.mergeCandidates([...rememberedCandidates, ...liveCandidates], limit);
+    const hasDirectoryCache = Boolean(this.directoryRepo);
+    if (hasDirectoryCache) {
+      await this.ensureDirectoryReadyForTargetType(normalizedTargetType);
+    }
+    const localDirectoryCandidates = this.searchDirectoryCandidates(normalizedTargetType, query, limit);
+    const directoryStatus = this.getDirectoryStatus(this.scopesForTargetType(normalizedTargetType));
+    const directoryReady = directoryStatus.every(
+      (item) => item.status === 'ready' && !item.stale && item.recordCount > 0,
+    );
+
+    let liveCandidates: RingCentralTargetCandidate[] = [];
+    if (normalizedTargetType === 'group') {
+      if (!hasDirectoryCache && localDirectoryCandidates.length === 0) {
+        liveCandidates = await this.searchGroupCandidates(query, limit);
+      }
+    } else if (!hasDirectoryCache || !directoryReady) {
+      liveCandidates = await this.searchUserCandidates(query, limit, {
+        includeDirectChats: !hasDirectoryCache,
+      });
+    }
+
+    const candidates = this.mergeCandidates(
+      [...rememberedCandidates, ...localDirectoryCandidates, ...liveCandidates],
+      limit,
+    );
 
     if (candidates.length === 0) {
       return { status: 'unresolved', query, candidates: [] };
@@ -496,9 +704,19 @@ export class RingCentralClient {
     };
   }
 
-  async searchTargets(input: ResolveRingCentralTargetInput): Promise<RingCentralTargetCandidate[]> {
+  async searchTargetsDetailed(input: ResolveRingCentralTargetInput): Promise<RingCentralTargetSearchResponse> {
     const result = await this.resolveTarget(input);
-    return result.candidates;
+    const directoryStatus = this.getDirectoryStatus(this.scopesForTargetType(input.targetType));
+    return {
+      items: result.candidates,
+      total: result.candidates.length,
+      directoryStatus,
+    };
+  }
+
+  async searchTargets(input: ResolveRingCentralTargetInput): Promise<RingCentralTargetCandidate[]> {
+    const result = await this.searchTargetsDetailed(input);
+    return result.items;
   }
 
   async listPosts(chatId: string, sinceAt?: number): Promise<RingCentralPost[]> {
@@ -518,20 +736,67 @@ export class RingCentralClient {
       );
     }
     const records = Array.isArray(result.body.records) ? result.body.records : [];
-    return records
-      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-      .map((item) => ({
-        id: typeof item.id === 'string' ? item.id : '',
-        chatId,
-        text: typeof item.text === 'string' ? item.text : '',
-        creatorId:
-          item.creator && typeof item.creator === 'object' && typeof (item.creator as Record<string, unknown>).id === 'string'
-            ? ((item.creator as Record<string, unknown>).id as string)
-            : undefined,
-        createdAt: typeof item.creationTime === 'string' ? item.creationTime : undefined,
-        raw: item,
-      }))
-      .filter((item) => item.id.length > 0);
+    const posts = await Promise.all(
+      records
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        .map(async (item) => {
+          const creator = ensureObject(item.creator);
+          const creatorId = toDisplayString(creator.id, item.creatorId) || undefined;
+          return {
+            id: typeof item.id === 'string' ? item.id : '',
+            chatId,
+            text: typeof item.text === 'string' ? item.text : '',
+            creatorId,
+            creatorName: await this.resolvePostCreatorLabel(creator, creatorId),
+            createdAt: typeof item.creationTime === 'string' ? item.creationTime : undefined,
+            raw: item,
+          };
+        }),
+    );
+    return posts.filter((item) => item.id.length > 0);
+  }
+
+  private getDirectoryUserDisplayName(entityId?: string): string {
+    if (!entityId || !this.directoryRepo) {
+      return '';
+    }
+    const matched = this.directoryRepo
+      .searchUsers(entityId, 10)
+      .find((item) => item.entityId === entityId);
+    return matched?.displayName ?? '';
+  }
+
+  private async resolvePostCreatorLabel(
+    creator: Record<string, unknown>,
+    creatorId?: string,
+  ): Promise<string | undefined> {
+    const inlineLabel = toDisplayString(
+      `${toDisplayString(creator.firstName)} ${toDisplayString(creator.lastName)}`.trim(),
+      toDisplayString(creator.name),
+      toDisplayString(creator.email),
+    );
+    if (inlineLabel) {
+      return inlineLabel;
+    }
+
+    const directoryLabel = this.getDirectoryUserDisplayName(creatorId);
+    if (directoryLabel) {
+      return directoryLabel;
+    }
+
+    if (!creatorId) {
+      return undefined;
+    }
+
+    const person = await this.getPersonById(creatorId).catch(() => null);
+    const resolvedLabel = person
+      ? toDisplayString(
+          `${toDisplayString(person.firstName)} ${toDisplayString(person.lastName)}`.trim(),
+          toDisplayString(person.name),
+          toDisplayString(person.email),
+        )
+      : '';
+    return resolvedLabel || creatorId;
   }
 
   private async resolveChatIdForSend(input: SendRingCentralMessageInput): Promise<string> {
@@ -616,6 +881,189 @@ export class RingCentralClient {
     }
   }
 
+  async listDirectoryUsers(): Promise<Array<{
+    entityId: string;
+    displayName: string;
+    email?: string;
+    extensionNumber?: string;
+    raw: Record<string, unknown>;
+  }>> {
+    try {
+      const directoryRows = await this.listAccountDirectoryEntries();
+      const directoryUsers = directoryRows
+        .map((row) => {
+          const status = toDisplayString(row.status);
+          if (status && status.toLowerCase() !== 'enabled') {
+            return null;
+          }
+          const firstName = toDisplayString(row.firstName);
+          const lastName = toDisplayString(row.lastName);
+          const displayName = toDisplayString(
+            `${firstName} ${lastName}`.trim(),
+            toDisplayString(row.name),
+            toDisplayString(row.email),
+            toDisplayString(row.id),
+          );
+          const entityId = toDisplayString(row.id);
+          if (!entityId || !displayName) {
+            return null;
+          }
+          return {
+            entityId,
+            displayName,
+            email: toDisplayString(row.email) || undefined,
+            extensionNumber: toDisplayString(row.extensionNumber) || undefined,
+            raw: row,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+      if (directoryUsers.length > 0) {
+        return directoryUsers;
+      }
+    } catch {
+      // Fall back to the older extension directory when the company directory is unavailable.
+    }
+
+    const rows = await this.listExtensions();
+    return rows
+      .map((row) => {
+        const contact = ensureObject(row.contact);
+        const firstName = toDisplayString(contact.firstName, row.firstName);
+        const lastName = toDisplayString(contact.lastName, row.lastName);
+        const displayName = toDisplayString(
+          `${firstName} ${lastName}`.trim(),
+          toDisplayString(row.name),
+          toDisplayString(contact.email, row.email),
+          toDisplayString(row.id),
+        );
+        const entityId = toDisplayString(row.id);
+        if (!entityId || !displayName) {
+          return null;
+        }
+        return {
+          entityId,
+          displayName,
+          email: toDisplayString(contact.email, row.email) || undefined,
+          extensionNumber: toDisplayString(row.extensionNumber) || undefined,
+          raw: row,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  }
+
+  private async listAccountDirectoryEntries(): Promise<Array<Record<string, unknown>>> {
+    const cacheKey = this.getCacheKey();
+    const cached = RingCentralClient.directoryEntryListCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.value;
+    }
+    const inFlight = RingCentralClient.directoryEntryListPromiseCache.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+    const requestPromise = (async () => {
+      const records: Array<Record<string, unknown>> = [];
+      const seenIds = new Set<string>();
+      const perPage = 1000;
+      for (let page = 1; page <= 100; page += 1) {
+        const pageRecords = await this.fetchDirectoryEntryPage(perPage, page);
+        for (const row of pageRecords) {
+          const entityId = toDisplayString(row.id);
+          if (!entityId || seenIds.has(entityId)) {
+            continue;
+          }
+          seenIds.add(entityId);
+          records.push(row);
+        }
+        if (pageRecords.length < perPage) {
+          break;
+        }
+      }
+      RingCentralClient.directoryEntryListCache.set(cacheKey, {
+        value: records,
+        expiresAt: Date.now() + RingCentralClient.DIRECTORY_CACHE_TTL_MS,
+      });
+      return records;
+    })();
+    RingCentralClient.directoryEntryListPromiseCache.set(cacheKey, requestPromise);
+    try {
+      return await requestPromise;
+    } finally {
+      RingCentralClient.directoryEntryListPromiseCache.delete(cacheKey);
+    }
+  }
+
+  async listDirectoryTeams(options?: { interPageDelayMs?: number }): Promise<Array<{
+    chatId: string;
+    name: string;
+    description?: string;
+    raw: Record<string, unknown>;
+  }>> {
+    const results = new Map<string, {
+      chatId: string;
+      name: string;
+      description?: string;
+      raw: Record<string, unknown>;
+    }>();
+    const interPageDelayMs =
+      options?.interPageDelayMs ?? RingCentralClient.DIRECTORY_CHAT_INTER_PAGE_DELAY_MS;
+
+    try {
+      const discoverableTeams = await this.listTeamsAcrossPages(
+        RingCentralClient.DIRECTORY_CHAT_PAGE_SIZE,
+        RingCentralClient.TEAM_SEARCH_MAX_PAGES,
+        interPageDelayMs,
+      );
+      for (const team of discoverableTeams) {
+        const chatId = toDisplayString(team.id);
+        const name = toDisplayString(team.name, team.id);
+        if (!chatId || !name) {
+          continue;
+        }
+        results.set(chatId, {
+          chatId,
+          name,
+          description: team.description,
+          raw: {
+            id: team.id,
+            type: team.type,
+            name: team.name,
+            description: team.description,
+            members: team.members,
+          },
+        });
+      }
+    } catch {
+      // Some tenants do not expose the team directory endpoint. Chats remain a fallback source.
+    }
+
+    const chats = await this.listChatsAcrossPages(
+      RingCentralClient.DIRECTORY_CHAT_PAGE_SIZE,
+      RingCentralClient.CHAT_SEARCH_MAX_PAGES,
+      interPageDelayMs,
+    );
+    for (const chat of chats) {
+      const chatType = normalizeSearch(chat.type);
+      if ((chatType !== 'team' && chatType !== 'group') || !chat.name?.trim()) {
+        continue;
+      }
+      results.set(chat.id, {
+        chatId: chat.id,
+        name: toDisplayString(chat.name, chat.id),
+        description: chat.description,
+        raw: {
+          id: chat.id,
+          type: chat.type,
+          name: chat.name,
+          description: chat.description,
+          members: chat.members,
+        },
+      });
+    }
+
+    return Array.from(results.values());
+  }
+
   private async listExtensions(): Promise<Array<Record<string, unknown>>> {
     const cacheKey = this.getCacheKey();
     const cached = RingCentralClient.extensionListCache.get(cacheKey);
@@ -627,18 +1075,29 @@ export class RingCentralClient {
       return inFlight;
     }
     const requestPromise = (async () => {
-      const result = await this.apiRequest(
-        '/restapi/v1.0/account/~/extension?type=User&status=Enabled&recordCount=200',
-        { method: 'GET' },
-      );
-      if (!result.ok) {
-        throw new Error(
-          `RingCentral list extensions failed (${result.status}): ${JSON.stringify(result.body).slice(0, 240)}`,
-        );
+      const records: Array<Record<string, unknown>> = [];
+      const seenIds = new Set<string>();
+      const seenTokens = new Set<string>();
+      let pageToken: string | undefined;
+
+      for (let page = 0; page < 100; page += 1) {
+        const result = await this.fetchExtensionPage(200, pageToken);
+        for (const row of result.records) {
+          const entityId = toDisplayString(row.id);
+          if (!entityId || seenIds.has(entityId)) {
+            continue;
+          }
+          seenIds.add(entityId);
+          records.push(row);
+        }
+        const nextToken = result.nextPageToken;
+        if (!nextToken || seenTokens.has(nextToken)) {
+          break;
+        }
+        seenTokens.add(nextToken);
+        pageToken = nextToken;
       }
-      const records = Array.isArray(result.body.records)
-        ? result.body.records.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-        : [];
+
       RingCentralClient.extensionListCache.set(cacheKey, {
         value: records,
         expiresAt: Date.now() + RingCentralClient.DIRECTORY_CACHE_TTL_MS,
@@ -653,6 +1112,60 @@ export class RingCentralClient {
     }
   }
 
+  private async syncUsersDirectory(): Promise<number> {
+    if (!this.directoryRepo) return 0;
+    const currentTime = now();
+    const records = new Map<string, {
+      entityId: string;
+      displayName: string;
+      email?: string;
+      extensionNumber?: string;
+      searchText: string;
+      raw?: Record<string, unknown>;
+      updatedAt: number;
+    }>();
+
+    for (const item of await this.listDirectoryUsers()) {
+      records.set(item.entityId, {
+        ...item,
+        searchText: [item.displayName, item.email ?? '', item.extensionNumber ?? '', item.entityId].join(' '),
+        updatedAt: currentTime,
+      });
+    }
+
+    const directChats = await this.listChatsAcrossPages(
+      RingCentralClient.DIRECTORY_CHAT_PAGE_SIZE,
+      RingCentralClient.CHAT_SEARCH_MAX_PAGES,
+      RingCentralClient.DIRECTORY_CHAT_INTER_PAGE_DELAY_MS,
+    );
+    for (const chat of directChats) {
+      if (normalizeSearch(chat.type) !== 'direct') {
+        continue;
+      }
+      const label = await this.getChatLabel(chat, true).catch(() => '');
+      if (!label) {
+        continue;
+      }
+      const entityId = `chat:${chat.id}`;
+      records.set(entityId, {
+        entityId,
+        displayName: label,
+        searchText: [label, chat.description ?? '', chat.id].join(' '),
+        raw: {
+          candidateKind: 'chat',
+          chatId: chat.id,
+          chatType: chat.type,
+          subtitle: 'Direct chat',
+          source: 'chat',
+        },
+        updatedAt: currentTime,
+      });
+    }
+
+    this.directoryRepo.replaceUsers(Array.from(records.values()));
+    return records.size;
+  }
+
   private async listChats(recordCount = 200): Promise<RingCentralChatSummary[]> {
     return this.listChatsAcrossPages(recordCount, RingCentralClient.CHAT_SEARCH_MAX_PAGES);
   }
@@ -660,6 +1173,7 @@ export class RingCentralClient {
   private async listChatsAcrossPages(
     recordCount = 100,
     maxPages = RingCentralClient.CHAT_SEARCH_MAX_PAGES,
+    interPageDelayMs = 0,
   ): Promise<RingCentralChatSummary[]> {
     const normalizedRecordCount = Math.max(1, Math.min(recordCount, 200));
     const normalizedMaxPages = Math.max(1, Math.min(maxPages, 100));
@@ -687,12 +1201,15 @@ export class RingCentralClient {
           }
         }
 
-        const nextToken = result.nextPageToken || result.prevPageToken;
+        const nextToken = result.nextPageToken;
         if (!nextToken || seenTokens.has(nextToken)) {
           break;
         }
         seenTokens.add(nextToken);
         pageToken = nextToken;
+        if (interPageDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, interPageDelayMs));
+        }
       }
 
       RingCentralClient.chatListCache.set(cacheKey, {
@@ -712,6 +1229,7 @@ export class RingCentralClient {
   private async listTeamsAcrossPages(
     recordCount = 100,
     maxPages = RingCentralClient.TEAM_SEARCH_MAX_PAGES,
+    interPageDelayMs = 0,
   ): Promise<RingCentralChatSummary[]> {
     const normalizedRecordCount = Math.max(1, Math.min(recordCount, 200));
     const normalizedMaxPages = Math.max(1, Math.min(maxPages, 100));
@@ -739,12 +1257,15 @@ export class RingCentralClient {
           }
         }
 
-        const nextToken = result.prevPageToken || result.nextPageToken;
+        const nextToken = result.nextPageToken;
         if (!nextToken || seenTokens.has(nextToken)) {
           break;
         }
         seenTokens.add(nextToken);
         pageToken = nextToken;
+        if (interPageDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, interPageDelayMs));
+        }
       }
 
       RingCentralClient.teamListCache.set(cacheKey, {
@@ -759,6 +1280,81 @@ export class RingCentralClient {
     } finally {
       RingCentralClient.teamListPromiseCache.delete(cacheKey);
     }
+  }
+
+  private async syncTeamsDirectory(): Promise<number> {
+    if (!this.directoryRepo) return 0;
+    const currentTime = now();
+    const records = (await this.listDirectoryTeams({
+      interPageDelayMs: RingCentralClient.DIRECTORY_CHAT_INTER_PAGE_DELAY_MS,
+    })).map((item) => ({
+      ...item,
+      searchText: [
+        item.name,
+        item.description ?? '',
+        item.chatId,
+      ].join(' '),
+      updatedAt: currentTime,
+    }));
+    this.directoryRepo.replaceTeams(records);
+    return records.length;
+  }
+
+  private async fetchExtensionPage(
+    recordCount: number,
+    pageToken?: string,
+  ): Promise<PagedRingCentralRecords<Record<string, unknown>>> {
+    const params = new URLSearchParams();
+    params.set('type', 'User');
+    params.set('status', 'Enabled');
+    params.set('recordCount', String(Math.max(1, Math.min(recordCount, 200))));
+    if (pageToken) {
+      params.set('pageToken', pageToken);
+    }
+    const result = await this.apiRequest(
+      `/restapi/v1.0/account/~/extension?${params.toString()}`,
+      { method: 'GET' },
+    );
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral list extensions failed (${result.status}): ${JSON.stringify(result.body).slice(0, 240)}`,
+      );
+    }
+    const records = Array.isArray(result.body.records)
+      ? result.body.records.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      : [];
+    const navigation = ensureObject(result.body.navigation);
+    return {
+      records,
+      nextPageToken:
+        typeof navigation.nextPageToken === 'string' ? navigation.nextPageToken : undefined,
+      prevPageToken:
+        typeof navigation.prevPageToken === 'string' ? navigation.prevPageToken : undefined,
+    };
+  }
+
+  private async fetchDirectoryEntryPage(
+    perPage: number,
+    page: number,
+  ): Promise<Array<Record<string, unknown>>> {
+    const params = new URLSearchParams();
+    params.set('type', 'User');
+    params.set('perPage', String(Math.max(1, Math.min(perPage, 1000))));
+    params.set('page', String(Math.max(1, page)));
+    const result = await this.apiRequest(
+      `/restapi/v1.0/account/~/directory/entries?${params.toString()}`,
+      { method: 'GET' },
+    );
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral list directory entries failed (${result.status}): ${JSON.stringify(result.body).slice(0, 240)}`,
+      );
+    }
+    return Array.isArray(result.body.records)
+      ? result.body.records.filter(
+          (item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'),
+        )
+      : [];
   }
 
   private async fetchChatPage(
@@ -812,13 +1408,42 @@ export class RingCentralClient {
     if (pageToken) {
       params.set('pageToken', pageToken);
     }
-    let result = await this.apiRequest(`/team-messaging/v1/teams?${params.toString()}`, {
-      method: 'GET',
-    });
-    if (result.status === 404) {
-      result = await this.apiRequest(`/glip/teams?${params.toString()}`, {
-        method: 'GET',
-      });
+    const cacheKey = this.getCacheKey();
+    const preferred = RingCentralClient.teamEndpointPreferenceCache.get(cacheKey) ?? 'team-messaging';
+    const candidates =
+      preferred === 'glip'
+        ? ['/glip/teams', '/team-messaging/v1/teams']
+        : ['/team-messaging/v1/teams', '/glip/teams'];
+    let result: Awaited<ReturnType<RingCentralClient['apiRequest']>> | null = null;
+    let lastError: Error | null = null;
+    for (const endpoint of candidates) {
+      try {
+        const next = await this.apiRequest(`${endpoint}?${params.toString()}`, {
+          method: 'GET',
+        });
+        if (next.ok) {
+          RingCentralClient.teamEndpointPreferenceCache.set(
+            cacheKey,
+            endpoint === '/glip/teams' ? 'glip' : 'team-messaging',
+          );
+          result = next;
+          break;
+        }
+        if (next.status === 404 && endpoint === '/team-messaging/v1/teams') {
+          continue;
+        }
+        result = next;
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (endpoint === '/team-messaging/v1/teams') {
+          continue;
+        }
+        throw lastError;
+      }
+    }
+    if (!result) {
+      throw lastError ?? new Error('RingCentral list teams failed before receiving a response');
     }
     if (!result.ok) {
       throw new Error(
@@ -973,7 +1598,66 @@ export class RingCentralClient {
     throw new Error('RingCentral could not create or locate a direct conversation for the selected user.');
   }
 
-  private async searchUserCandidates(query: string, limit: number): Promise<RingCentralTargetCandidate[]> {
+  private searchDirectoryCandidates(
+    targetType: string,
+    query: string,
+    limit: number,
+  ): RingCentralTargetCandidate[] {
+    if (!this.directoryRepo) {
+      return [];
+    }
+    if (normalizeSearch(targetType) === 'group') {
+      return this.directoryRepo.searchTeams(query, limit).map((team) => ({
+        kind: 'chat' as const,
+        entityId: team.chatId,
+        chatId: team.chatId,
+        label: team.name,
+        subtitle: 'Directory team',
+        score: buildScore(query, team.name, team.description, team.chatId),
+        source: 'chat' as const,
+      }));
+    }
+    return this.directoryRepo.searchUsers(query, limit).map((user) => ({
+      ...(ensureObject(user.raw).candidateKind === 'chat' &&
+      typeof ensureObject(user.raw).chatId === 'string'
+        ? {
+            kind: 'chat' as const,
+            entityId: String(ensureObject(user.raw).chatId),
+            chatId: String(ensureObject(user.raw).chatId),
+            label: user.displayName,
+            subtitle:
+              toDisplayString(ensureObject(user.raw).subtitle) ||
+              [user.email, user.extensionNumber ? `ext ${user.extensionNumber}` : '']
+                .filter(Boolean)
+                .join(' · ') ||
+              'Direct chat',
+            score: buildScore(
+              query,
+              user.displayName,
+              user.email,
+              user.extensionNumber,
+              String(ensureObject(user.raw).chatId),
+            ),
+            source: 'chat' as const,
+          }
+        : {
+            kind: 'user' as const,
+            entityId: user.entityId,
+            label: user.displayName,
+            subtitle: [user.email, user.extensionNumber ? `ext ${user.extensionNumber}` : '']
+              .filter(Boolean)
+              .join(' · ') || 'Directory user',
+            score: buildScore(query, user.displayName, user.email, user.extensionNumber, user.entityId),
+            source: 'extension' as const,
+          }),
+    }));
+  }
+
+  private async searchUserCandidates(
+    query: string,
+    limit: number,
+    options?: { includeDirectChats?: boolean },
+  ): Promise<RingCentralTargetCandidate[]> {
     const explicitChatId = extractChatIdFromTargetRef(query);
     if (explicitChatId) {
       const directCandidate = await this.getChatCandidateById(
@@ -1008,13 +1692,16 @@ export class RingCentralClient {
       })
       .filter((item) => item.entityId && item.label && item.score > 0);
 
-    const directChats = await this.searchChatCandidates(query, limit, {
-      allowedTypes: new Set(['direct']),
-      includeUnnamedChats: true,
-      maxPages: 3,
-    });
+    if (options?.includeDirectChats) {
+      const directChats = await this.searchChatCandidates(query, limit, {
+        allowedTypes: new Set(['direct']),
+        includeUnnamedChats: true,
+        maxPages: 3,
+      });
+      return this.mergeCandidates([...candidates, ...directChats], limit);
+    }
 
-    return this.mergeCandidates([...candidates, ...directChats], limit);
+    return this.mergeCandidates(candidates, limit);
   }
 
   private async searchGroupCandidates(query: string, limit: number): Promise<RingCentralTargetCandidate[]> {
@@ -1026,28 +1713,24 @@ export class RingCentralClient {
       );
       return directCandidate ? [directCandidate] : [];
     }
-    const teamCandidates = await this.searchTeamCandidates(query, limit);
-    const chatCandidates = await this.searchChatCandidates(query, limit, {
-      allowedTypes: new Set(['team', 'group']),
-      includeUnnamedChats: false,
-      maxPages: RingCentralClient.CHAT_SEARCH_MAX_PAGES,
-    });
-    return this.mergeCandidates([...teamCandidates, ...chatCandidates], limit);
+    return this.searchTeamCandidates(query, limit);
   }
 
   private async searchTeamCandidates(query: string, limit: number): Promise<RingCentralTargetCandidate[]> {
-    const teams = await this.listTeamsAcrossPages(200, RingCentralClient.TEAM_SEARCH_MAX_PAGES);
+    const teams = await this.listDirectoryTeams({
+      interPageDelayMs: RingCentralClient.DIRECTORY_CHAT_INTER_PAGE_DELAY_MS,
+    });
     const candidates: RingCentralTargetCandidate[] = [];
     for (const team of teams) {
-      const label = toDisplayString(team.name, team.id);
-      const score = buildScore(query, label, team.description, team.id);
+      const label = toDisplayString(team.name, team.chatId);
+      const score = buildScore(query, label, team.description, team.chatId);
       if (score <= 0) {
         continue;
       }
       candidates.push({
         kind: 'chat',
-        entityId: team.id,
-        chatId: team.id,
+        entityId: team.chatId,
+        chatId: team.chatId,
         label,
         subtitle: 'Team',
         score,
@@ -1167,7 +1850,11 @@ export class RingCentralClient {
       maxPages: number;
     },
   ): Promise<RingCentralTargetCandidate[]> {
-    const chats = await this.listChatsAcrossPages(200, options.maxPages);
+    const chats = await this.listChatsAcrossPages(
+      RingCentralClient.DIRECTORY_CHAT_PAGE_SIZE,
+      options.maxPages,
+      RingCentralClient.DIRECTORY_CHAT_INTER_PAGE_DELAY_MS,
+    );
     const quickCandidates: RingCentralTargetCandidate[] = [];
     const deferredChats: RingCentralChatSummary[] = [];
     for (const chat of chats) {

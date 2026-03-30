@@ -23,6 +23,7 @@ import {
   DigestTaskRegistration,
   DigestProcessResult
 } from '../types/digestQueue';
+import { normalizeConcernedItemsDigestHour } from '../utils';
 import { notificationService, NotificationData } from './NotificationService';
 import { Logger } from '../utils/logger';
 
@@ -54,6 +55,27 @@ export class DigestQueueService {
   public register(task: DigestTaskRegistration): void {
     this.tasks.set(task.id, task);
     console.log(`📋 DigestQueue: 注册任务 "${task.name}" (${task.id}), 频率: ${this.describeFrequency(task.frequency)}`);
+  }
+
+  /**
+   * 更新已注册任务
+   */
+  public updateTask(taskId: string, patch: Partial<DigestTaskRegistration>): boolean {
+    const current = this.tasks.get(taskId);
+    if (!current) {
+      return false;
+    }
+
+    const nextTask: DigestTaskRegistration = {
+      ...current,
+      ...patch,
+      id: current.id,
+      lastExecutedAt: patch.lastExecutedAt ?? current.lastExecutedAt,
+    };
+
+    this.tasks.set(taskId, nextTask);
+    console.log(`🔄 DigestQueue: 更新任务 "${nextTask.name}" (${taskId}), 频率: ${this.describeFrequency(nextTask.frequency)}`);
+    return true;
   }
 
   /**
@@ -469,13 +491,30 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
  * 应在扩展启动时调用
  */
 export function registerConcernedItemsDigestTask(): void {
+  registerConcernedItemsDigestTaskWithHour(8);
+}
+
+export function registerConcernedItemsDigestTaskWithHour(preferredHour: number): void {
+  const normalizedHour = normalizeConcernedItemsDigestHour(preferredHour, 8);
   digestQueueService.register({
     id: CONCERNED_ITEMS_DIGEST_TASK_ID,
     name: 'ConcernedItems 每日消息摘要',
-    frequency: { type: 'daily', hour: 18 },
+    frequency: { type: 'daily', hour: normalizedHour },
     processor: new ConcernedItemsDigestProcessor(),
     enabled: true
   });
+}
+
+export function updateConcernedItemsDigestTaskSchedule(preferredHour: number): void {
+  const normalizedHour = normalizeConcernedItemsDigestHour(preferredHour, 8);
+  const updated = digestQueueService.updateTask(CONCERNED_ITEMS_DIGEST_TASK_ID, {
+    frequency: { type: 'daily', hour: normalizedHour },
+    enabled: true,
+  });
+
+  if (!updated) {
+    registerConcernedItemsDigestTaskWithHour(normalizedHour);
+  }
 }
 
 /**

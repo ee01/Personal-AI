@@ -41,7 +41,7 @@ export interface TopicItemWithAutoReply {
     digestConfig?: {
         enabled: boolean;
         frequency: 'daily' | 'weekly';
-        preferredHour?: number;  // 默认 18
+        preferredHour?: number;  // 默认 8
     };
     // 自动答复相关
     autoReply?: boolean;

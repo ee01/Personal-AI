@@ -143,6 +143,6 @@ export interface DigestConfig {
   enabled: boolean;
   /** 推送频率 */
   frequency: 'daily' | 'weekly';
-  /** 推送小时（24小时制），默认 18 */
+  /** 推送小时（24小时制），默认 8 */
   preferredHour?: number;
 }

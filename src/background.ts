@@ -1,6 +1,6 @@
 import { analyzeMessagesInBackground } from './messageDealing';
 // embeddings.ts 已废弃 — 后端 memory-service 处理嵌入生成
-import { getEnvConfig } from './utils';
+import { getEnvConfig, normalizeConcernedItemsDigestHour } from './utils';
 import { FETCH_JIRA_TICKETS } from './jira';
 import { getGoogleAuthToken, getGoogleAuthTokenSilently } from './utils/googleAuth';
 import { IntelligentAgent } from './agentThinking';
@@ -25,7 +25,7 @@ import { concernedItemsSyncService } from './services/ConcernedItemsSyncService'
 
 import { Logger } from './utils/logger';
 import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage, registerFollowThreadDigestTask } from './message-reaction/FollowThreadHandler';
-import { registerConcernedItemsDigestTask } from './services/DigestQueueService';
+import { registerConcernedItemsDigestTask, updateConcernedItemsDigestTaskSchedule } from './services/DigestQueueService';
 import { sendPlainBotMessage } from './bot';
 import {
     syncStoredUserIdentityToMemory,
@@ -156,6 +156,10 @@ void syncStoredUserIdentityToMemory().catch((error) => {
     try {
         // 延迟初始化，避免与 onInstalled 冲突
         setTimeout(async () => {
+            const { envConfig } = await chrome.storage.local.get(['envConfig']);
+            updateConcernedItemsDigestTaskSchedule(
+                normalizeConcernedItemsDigestHour(envConfig?.CONCERNED_ITEMS_DIGEST_HOUR, 8)
+            );
             await taskScheduler.startAllTasks();
         }, 5000); // 5秒延迟，确保扩展环境完全就绪
     } catch (error) {
@@ -462,12 +466,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 更新环境配置
     if (request.type === 'UPDATE_ENV_CONFIG') {
         const config = request.config as {
+            CONCERNED_ITEMS_DIGEST_HOUR?: number;
             MEMORY_SERVICE_BASE_URL?: string;
             MEMORY_SERVICE_API_KEY?: string;
             MEMORY_SERVICE_TIMEOUT?: number;
         };
         chrome.storage.local.set({ envConfig: request.config });
         console.log('Updated environment config:', request.config);
+        updateConcernedItemsDigestTaskSchedule(
+            normalizeConcernedItemsDigestHour(config?.CONCERNED_ITEMS_DIGEST_HOUR, 8)
+        );
         // 同步 MemoryServiceClient 配置（从 envConfig 读取，此处做运行时更新）
         (async () => {
             try {

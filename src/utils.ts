@@ -17,6 +17,7 @@ export interface ResolvedBotPushTarget {
 export interface EnvConfigType {
   MESSAGE_ANALYSIS_INTERVAL: number; // 分析消息的频度（分钟）
   MESSAGE_CONTEXT_WINDOW: number;    // 消息上下文窗口：距离此刻的历史消息时间范围（分钟）
+  CONCERNED_ITEMS_DIGEST_HOUR: number; // ConcernedItems 摘要推送时间（小时，0-23）
   SCHEDULED_INTERVAL: number;        // 已废弃，保留用于向后兼容
   ANALYSIS_TYPE: string;
   ANALYZE_BY_GROUP: boolean;
@@ -117,6 +118,18 @@ export function normalizeBotPushTarget(
     return 'none';
   }
   return fallback;
+}
+
+export function normalizeConcernedItemsDigestHour(
+  value: number | string | undefined | null,
+  fallback = 8
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(23, Math.max(0, Math.floor(parsed)));
 }
 
 export function getBotPushTarget(config: EnvConfigType, scenario?: BotPushScenario): ResolvedBotPushTarget {
@@ -266,6 +279,7 @@ export function transformPostLinks(inputString: string) {
 export const defaultEnvConfig: EnvConfigType = {
   MESSAGE_ANALYSIS_INTERVAL: Number(process.env.MESSAGE_ANALYSIS_INTERVAL) || Number(process.env.SCHEDULED_INTERVAL) || 120,
   MESSAGE_CONTEXT_WINDOW: Number(process.env.MESSAGE_CONTEXT_WINDOW) || 125,
+  CONCERNED_ITEMS_DIGEST_HOUR: normalizeConcernedItemsDigestHour(process.env.CONCERNED_ITEMS_DIGEST_HOUR, 8),
   SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120, // 保留用于向后兼容
   ANALYSIS_TYPE: process.env.ANALYSIS_TYPE || "filter",
   LLM_TYPE: process.env.LLM_TYPE || "dify",

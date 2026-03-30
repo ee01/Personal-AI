@@ -213,7 +213,7 @@ export class OutreachEngine {
     this.actionResultRepo = new ActionResultRepository(db);
     this.confirmRequestRepo = new ConfirmRequestRepository(db);
     this.threadService = new ReflectionThreadService(db, userDataManager, userId);
-    this.ringClient = new RingCentralClient(userDataManager);
+    this.ringClient = new RingCentralClient(userDataManager, db, userId);
   }
 
   private getRuntimeConfig() {
@@ -224,6 +224,7 @@ export class OutreachEngine {
     const runtime = this.getRuntimeConfig();
     if (!runtime.outreachEnabled) return;
 
+    await this.ringClient.maintainDirectoryCache();
     await this.dispatchDueTemplates();
     await this.advancePendingSessions();
     await this.syncTerminalReflectionSessions();
@@ -273,8 +274,20 @@ export class OutreachEngine {
     return this.ringClient.searchTargets({ targetType, targetRef: query, limit });
   }
 
-  getSessionDetail(id: string): OutreachSessionDetail | null {
-    const session = this.repo.getSessionById(id);
+  async searchTargetsDetailed(targetType: string, query: string, limit = 8) {
+    return this.ringClient.searchTargetsDetailed({ targetType, targetRef: query, limit });
+  }
+
+  getTargetDirectoryStatus() {
+    return this.ringClient.getDirectoryStatus();
+  }
+
+  async syncTargetDirectory(force = false) {
+    return this.ringClient.syncDirectory({ scopes: ['users', 'teams'], force });
+  }
+
+  async getSessionDetail(id: string): Promise<OutreachSessionDetail | null> {
+    const session = await this.hydrateReplySender(this.repo.getSessionById(id));
     if (!session) return null;
     return {
       session,
@@ -675,21 +688,23 @@ export class OutreachEngine {
       const newestReply = posts.find((post) => post.id !== session.sentPostId && post.text.trim().length > 0);
       if (newestReply) {
         const parsed = classifyReply(newestReply.text, currentTime);
+        const replySender = newestReply.creatorName ?? newestReply.creatorId ?? null;
         this.repo.updateSession(session.id, {
           replyPostId: newestReply.id,
-          replySender: newestReply.creatorId ?? null,
+          replySender,
           replyRawText: newestReply.text,
           replyClassification: parsed.classification,
           replyConfidence: parsed.confidence,
         });
         this.repo.createEvent(session.id, 'reply_received', {
           replyPostId: newestReply.id,
+          replySender,
           classification: parsed.classification,
           confidence: parsed.confidence,
         });
         this.insertOutreachMessage('outreach_reply', session, newestReply.text, {
           postId: newestReply.id,
-          sender: newestReply.creatorId,
+          sender: replySender,
         });
 
         if (parsed.classification === 'answer' || parsed.classification === 'decline') {
@@ -936,6 +951,35 @@ export class OutreachEngine {
         }),
         currentTime,
       );
+  }
+
+  private async hydrateReplySender(
+    session: OutreachSessionRecord | null,
+  ): Promise<OutreachSessionRecord | null> {
+    if (
+      !session ||
+      session.replySender ||
+      !session.replyPostId ||
+      !session.sentChatId ||
+      !this.ringClient.isConfigured()
+    ) {
+      return session;
+    }
+
+    try {
+      const posts = await this.ringClient.listPosts(session.sentChatId, session.createdAt);
+      const reply = posts.find((item) => item.id === session.replyPostId);
+      const replySender = reply?.creatorName ?? reply?.creatorId;
+      if (!replySender) {
+        return session;
+      }
+      return this.repo.updateSession(session.id, { replySender }) ?? {
+        ...session,
+        replySender,
+      };
+    } catch {
+      return session;
+    }
   }
 
   private async createEscalationConfirmRequest(

@@ -71,14 +71,14 @@
           <h3>待触发模板</h3>
           <span class="group-count">{{ visibleTemplates.length }}</span>
         </div>
-        <p class="group-desc">这些模板已同步，但尚未进入实际发送阶段。</p>
+        <p class="group-desc">这些是后续仍会继续触发的模板；如果模板之前已经执行过，那次会话会单独出现在历史记录里。</p>
 
         <div class="session-list">
         <div v-for="item in visibleTemplates" :key="item.template.id" class="session-card template-card">
           <div class="card-head">
             <div>
               <h3>
-                <router-link :to="templateTitleRoute(item)" class="title-link">
+                <router-link :to="templateListRoute(item)" class="title-link">
                   {{ item.template.questionTemplate || item.template.title || '(空问题)' }}
                 </router-link>
               </h3>
@@ -96,12 +96,13 @@
             <span>目标状态 {{ templateTargetResolutionLabel(item) }}</span>
             <span v-if="resolveTemplateNextDispatchAt(item)">计划发送 {{ relativeTime(resolveTemplateNextDispatchAt(item)!) }}</span>
             <span v-else>计划时间未解析</span>
+            <span v-if="item.latestSession">上次执行 {{ relativeTime(item.latestSession.updatedAt || item.latestSession.createdAt) }}</span>
             <span>同步状态 {{ templateSyncStateLabel(item.template.syncState) }}</span>
             <router-link
               v-if="item.latestSession?.id"
               :to="`/outreach/${item.latestSession.id}`"
               class="session-link"
-            >查看最近会话</router-link>
+            >查看上次执行</router-link>
           </div>
         </div>
         </div>
@@ -571,10 +572,7 @@ function templateSyncStateLabel(syncState?: string) {
   return syncState;
 }
 
-function templateTitleRoute(item: OutreachTemplateRuntimeStatusItem) {
-  if (item.latestSession?.id) {
-    return `/outreach/${item.latestSession.id}`;
-  }
+function templateListRoute(item: OutreachTemplateRuntimeStatusItem) {
   return `/outreach?templateId=${encodeURIComponent(item.template.id)}`;
 }
 

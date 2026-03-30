@@ -3594,7 +3594,7 @@ ${content}
       const normalizedTargetRef = formData.Outreach_Target_Ref.trim().toLowerCase();
       const normalizedCurrentUsername = currentUsername.trim().toLowerCase();
       const targetsSelf =
-        (formData.Outreach_Target_Type === 'private' || formData.Outreach_Target_Type === 'person') &&
+        formData.Outreach_Target_Type !== 'group' &&
         (
           normalizedTargetRef === 'user' ||
           normalizedTargetRef === 'me' ||
@@ -5229,31 +5229,31 @@ ${content}
               </h3>
               
               <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>主动询问目标类型 *</label>
+                <label style={dialogStyles.label}>主动询问对象类型 *</label>
                 <div style={dialogStyles.buttonGroup}>
                   <button
                     type="button"
                     style={getButtonStyle(formData.Outreach_Target_Type === 'private')}
                     onClick={() => handleChange('Outreach_Target_Type', 'private')}
                   >
-                    💬 私发对象
+                    👤 某个人
                   </button>
                   <button
                     type="button"
                     style={getButtonStyle(formData.Outreach_Target_Type === 'group')}
                     onClick={() => handleChange('Outreach_Target_Type', 'group')}
                   >
-                    👥 群组对象
+                    👥 某个群
                   </button>
                 </div>
                 <small style={dialogStyles.hint}>
-                  这里用于定义主动询问的目标对象，后续运行态会用到
+                  这里只需要先判断“问某个人”还是“问某个群”。如果选择某个人，系统后续会自动识别成联系人或已有私聊。
                 </small>
               </div>
 
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>
-                  {formData.Outreach_Target_Type === 'group' ? '群组目标 *' : '接收对象 *'}
+                  {formData.Outreach_Target_Type === 'group' ? '群组对象 *' : '目标对象 *'}
                 </label>
                 <input
                   style={dialogStyles.input}
@@ -5266,8 +5266,8 @@ ${content}
                 />
                 <small style={dialogStyles.hint}>
                   {formData.Outreach_Target_Type === 'group'
-                    ? '群组模式只检索群名和群聊目标；支持群名、群聊 chat ID，或直接粘贴 RingCentral 聊天链接；审批时仍可改目标。通过链接或 chat ID 确认过一次后，后续可直接按群名搜。'
-                    : '私聊模式只检索人和私聊目标；支持人名、邮箱、私聊 chat ID，或直接粘贴 RingCentral 聊天链接；如果是 service account 或历史私聊，推荐优先贴链接。确认过一次后，后续可直接按名称搜。'}
+                    ? '群组模式用于“问某个群”。支持群名、群聊 chat ID，或直接粘贴 RingCentral 聊天链接；审批时仍可改目标。通过链接或 chat ID 确认过一次后，后续可直接按群名搜。'
+                    : '某个人模式用于“问某个人”。支持人名、邮箱、私聊 chat ID，或直接粘贴 RingCentral 聊天链接；如果命中的是联系人，系统会自动建立或定位私聊；如果命中的是已有私聊，也会直接使用。'}
                 </small>
               </div>
 

@@ -6,10 +6,12 @@ import {
     defaultEnvConfig,
     EnvConfigType,
     getDefaultEnvConfig,
+    normalizeConcernedItemsDigestHour,
     normalizeBotPushTarget,
 } from './utils';
 import {
     MemoryServiceClient,
+    type OutreachDirectoryStatus,
     type RuntimeConfigResponse,
     type UpdateRuntimeConfigPayload,
 } from './services/MemoryServiceClient';
@@ -69,6 +71,7 @@ const PUSH_TARGET_RULES: Array<{
 
 const sanitizeLocalEnvConfig = (targetConfig: EnvConfigType): EnvConfigType => ({
     ...targetConfig,
+    CONCERNED_ITEMS_DIGEST_HOUR: normalizeConcernedItemsDigestHour(targetConfig.CONCERNED_ITEMS_DIGEST_HOUR, 8),
     OPENCLAW_API_KEY: '',
     OPENCLAW_CLEAR_API_KEY: false,
     RINGCENTRAL_CLIENT_SECRET: '',
@@ -180,6 +183,8 @@ const Options = () => {
     const [isMemoryExporting, setIsMemoryExporting] = useState(false);
     const [isMemoryImporting, setIsMemoryImporting] = useState(false);
     const [replaceMemoryOnImport, setReplaceMemoryOnImport] = useState(false);
+    const [outreachDirectoryStatus, setOutreachDirectoryStatus] = useState<OutreachDirectoryStatus[]>([]);
+    const [outreachDirectoryRefreshing, setOutreachDirectoryRefreshing] = useState(false);
 
     // Weekly Report backend state (synced with memory-service)
     const [weeklyReportCron, setWeeklyReportCron] = useState<string>('0 18 * * 5');
@@ -289,6 +294,7 @@ const Options = () => {
                 setWeeklyReportCron(merged.WEEKLY_REPORT_CRON || '0 18 * * 5');
                 setWeeklyReportMinMessages(Number(merged.WEEKLY_REPORT_MIN_MESSAGES) || 20);
                 loadDreamDigestSettingsFromBackend(merged);
+                loadOutreachDirectoryStatusFromBackend(merged);
             } else {
                 // 如果没有保存过配置，则尝试从 .env 加载
                 loadEnvDefaults();
@@ -311,6 +317,7 @@ const Options = () => {
             setWeeklyReportCron(config.WEEKLY_REPORT_CRON || '0 18 * * 5');
             setWeeklyReportMinMessages(Number(config.WEEKLY_REPORT_MIN_MESSAGES) || 20);
             await loadDreamDigestSettingsFromBackend(config);
+            await loadOutreachDirectoryStatusFromBackend(config);
             setStatus({
                 message: '已从.env文件加载默认配置',
                 type: 'success'
@@ -502,6 +509,61 @@ const Options = () => {
         }
     };
 
+    const loadOutreachDirectoryStatusFromBackend = async (targetConfig: EnvConfigType) => {
+        if (!targetConfig.MEMORY_SERVICE_BASE_URL) return;
+        try {
+            const client = await createMemoryServiceClient(targetConfig);
+            const response = await client.getOutreachDirectoryStatus();
+            setOutreachDirectoryStatus(Array.isArray(response?.items) ? response.items : []);
+        } catch (error) {
+            console.warn('加载主动询问目录状态失败:', error);
+            setOutreachDirectoryStatus([]);
+        }
+    };
+
+    const handleRefreshOutreachDirectory = async () => {
+        try {
+            setOutreachDirectoryRefreshing(true);
+            const client = await createMemoryServiceClient(config);
+            const response = await client.syncOutreachDirectory(true);
+            setOutreachDirectoryStatus(Array.isArray(response?.items) ? response.items : []);
+            setStatus({
+                message: '已触发 RingCentral 目录刷新',
+                type: 'success'
+            });
+        } catch (error) {
+            console.error('刷新主动询问目录失败:', error);
+            setStatus({
+                message: `刷新目录失败: ${(error as Error).message}`,
+                type: 'error'
+            });
+        } finally {
+            setOutreachDirectoryRefreshing(false);
+        }
+    };
+
+    const getOutreachDirectoryScopeStatus = (scope: 'users' | 'teams') =>
+        outreachDirectoryStatus.find(item => item.scope === scope);
+
+    const formatOutreachDirectoryScopeStatus = (scope: 'users' | 'teams') => {
+        const item = getOutreachDirectoryScopeStatus(scope);
+        if (!item) {
+            return '未同步';
+        }
+        const staleText = item.stale ? '（缓存过期）' : '';
+        const errorText = item.lastError ? `：${item.lastError}` : '';
+        if (item.status === 'ready') {
+            return `已就绪，${item.recordCount} 条${staleText}`;
+        }
+        if (item.status === 'syncing') {
+            return `同步中，当前 ${item.recordCount} 条${staleText}`;
+        }
+        if (item.status === 'error') {
+            return `同步失败${staleText}${errorText}`;
+        }
+        return `未同步${staleText}`;
+    };
+
     // 保存配置到 Chrome 存储
     const saveConfig = async () => {
         try {
@@ -636,6 +698,7 @@ const Options = () => {
             const client = await createMemoryServiceClient(config);
             await client.updateRuntimeConfig(payload);
             await loadDreamDigestSettingsFromBackend(config);
+            await loadOutreachDirectoryStatusFromBackend(config);
             setConfig(prev => ({
                 ...prev,
                 OPENCLAW_API_KEY: '',
@@ -792,6 +855,7 @@ const Options = () => {
                 : name === 'SCHEDULED_INTERVAL' ||
                   name === 'MESSAGE_ANALYSIS_INTERVAL' ||
                   name === 'MESSAGE_CONTEXT_WINDOW' ||
+                  name === 'CONCERNED_ITEMS_DIGEST_HOUR' ||
                   name === 'MEMORY_SERVICE_TIMEOUT' ||
                   name === 'DREAM_DIGEST_INTERVAL_DAYS' ||
                   name === 'SELF_REFLECTION_HEARTBEAT_MINUTES' ||
@@ -811,7 +875,7 @@ const Options = () => {
         reader.onload = (event) => {
             try {
                 const importedConfig = JSON.parse(event.target?.result as string);
-                setConfig({ ...defaultEnvConfig, ...importedConfig });
+                setConfig(sanitizeLocalEnvConfig({ ...defaultEnvConfig, ...importedConfig }));
                 setWeeklyReportCron(importedConfig.WEEKLY_REPORT_CRON || defaultEnvConfig.WEEKLY_REPORT_CRON || '0 18 * * 5');
                 setWeeklyReportMinMessages(Number(importedConfig.WEEKLY_REPORT_MIN_MESSAGES) || Number(defaultEnvConfig.WEEKLY_REPORT_MIN_MESSAGES) || 20);
                 setStatus({
@@ -1179,6 +1243,28 @@ const Options = () => {
                     false,
                     '用于冲突/待确认类的决策中心提醒。默认推送给 Me。'
                 )}
+                <div className="form-group">
+                    <label htmlFor="CONCERNED_ITEMS_DIGEST_HOUR">ConcernedItems 摘要推送时间（小时）</label>
+                    <input
+                        type="number"
+                        id="CONCERNED_ITEMS_DIGEST_HOUR"
+                        name="CONCERNED_ITEMS_DIGEST_HOUR"
+                        value={normalizeConcernedItemsDigestHour(config.CONCERNED_ITEMS_DIGEST_HOUR, 8)}
+                        onChange={(e) => {
+                            const value = normalizeConcernedItemsDigestHour(e.target.value, 8);
+                            setConfig(prev => ({
+                                ...prev,
+                                CONCERNED_ITEMS_DIGEST_HOUR: value
+                            }));
+                        }}
+                        min="0"
+                        max="23"
+                        step="1"
+                    />
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                        仅影响在 concerned item 中启用了「使用定时摘要推送」的规则。默认每天 8:00 左右汇总推送。
+                    </small>
+                </div>
             </div>
 
             <div className="form-section">
@@ -1582,6 +1668,33 @@ const Options = () => {
                         />
                         清除后端已保存的 RingCentral JWT（仅当上方 JWT 输入为空时生效）
                     </label>
+                </div>
+                <div className="form-group">
+                    <label>RingCentral 目录缓存状态</label>
+                    <div style={{
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        padding: '12px',
+                        background: '#fafafa',
+                    }}>
+                        <div style={{ marginBottom: '8px' }}>
+                            <strong>联系人目录：</strong>{formatOutreachDirectoryScopeStatus('users')}
+                        </div>
+                        <div style={{ marginBottom: '12px' }}>
+                            <strong>群组目录：</strong>{formatOutreachDirectoryScopeStatus('teams')}
+                        </div>
+                        <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={handleRefreshOutreachDirectory}
+                            disabled={config.OUTREACH_ENABLED !== true || outreachDirectoryRefreshing}
+                        >
+                            {outreachDirectoryRefreshing ? '刷新中...' : '立即刷新 RingCentral 目录'}
+                        </button>
+                        <small style={{ color: '#666', display: 'block', marginTop: '8px' }}>
+                            开启主动询问后，系统会后台同步联系人和群组目录；搜索时会优先使用本地缓存，聊天链接 / chat ID 仍可实时解析。
+                        </small>
+                    </div>
                 </div>
             </div>
 
