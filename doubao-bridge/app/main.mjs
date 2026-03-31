@@ -17,6 +17,7 @@ const packageJson = JSON.parse(
 const appVersion = packageJson.version || app.getVersion();
 
 const appSupportDir = path.join(app.getPath('appData'), 'PersonalAI', 'DoubaoBridge');
+const tempDir = path.join(appSupportDir, 'tmp');
 const logsDir = path.join(app.getPath('home'), 'Library', 'Logs', 'PersonalAI');
 const appLogFile = path.join(logsDir, 'doubao-bridge-app.log');
 const bridgeLogFile = path.join(logsDir, 'doubao-bridge-agent.log');
@@ -41,6 +42,11 @@ const assetsDir = app.isPackaged
 const trayIconPath = path.join(assetsDir, 'tray-icon.png');
 const appIconPath = path.join(assetsDir, 'app-icon.png');
 
+await fs.mkdir(tempDir, { recursive: true }).catch(() => undefined);
+process.env.TMPDIR = tempDir;
+process.env.TMP = tempDir;
+process.env.TEMP = tempDir;
+
 let mainWindow = null;
 let bridgeProcess = null;
 let tray = null;
@@ -52,6 +58,7 @@ function getAppBundlePath() {
 
 async function ensureDirs() {
   await fs.mkdir(appSupportDir, { recursive: true });
+  await fs.mkdir(tempDir, { recursive: true });
   await fs.mkdir(logsDir, { recursive: true });
 }
 
@@ -81,6 +88,9 @@ function getBridgeEnv() {
     ...process.env,
     DOUBAO_BRIDGE_DATA_DIR: path.join(appSupportDir, 'data'),
     DOUBAO_BRIDGE_PROFILE_DIR: path.join(appSupportDir, 'profile'),
+    TMPDIR: tempDir,
+    TMP: tempDir,
+    TEMP: tempDir,
     PLAYWRIGHT_BROWSERS_PATH:
       process.env.PLAYWRIGHT_BROWSERS_PATH || (app.isPackaged ? packagedPlaywrightBrowsersDir : '0'),
   };

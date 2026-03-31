@@ -6,6 +6,17 @@ function normalizeBaseUrl(value?: string): string | undefined {
   return normalized.replace(/\/api\/v1$/i, '');
 }
 
+function isProviderApiPath(path: string): boolean {
+  return path.startsWith('/api/v1/providers/');
+}
+
+function buildProviderApiCompatibilityError(baseUrl: string, path: string): Error {
+  return new Error(
+    `Memory Service at ${baseUrl} does not support Doubao Bridge provider APIs (${path}). ` +
+    'This usually means the backend is outdated or the Base URL points to the wrong service.',
+  );
+}
+
 export interface ProviderSyncJobRecord {
   id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
@@ -74,6 +85,9 @@ export class BridgeMemoryServiceClient {
 
     if (!response.ok) {
       const text = await response.text();
+      if (response.status === 404 && isProviderApiPath(path)) {
+        throw buildProviderApiCompatibilityError(baseUrl, path);
+      }
       throw new Error(text || `Memory service request failed: ${method} ${path} (${response.status})`);
     }
 
@@ -86,10 +100,15 @@ export class BridgeMemoryServiceClient {
 
   async testConnection(): Promise<Record<string, unknown>> {
     const health = await this.request<Record<string, unknown>>('GET', '/api/v1/health');
+    const providerCapabilities = await this.request<Record<string, unknown>>(
+      'GET',
+      '/api/v1/providers/doubao/capabilities',
+    );
     return {
       ok: true,
       baseUrl: normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl),
       health,
+      providerCapabilities,
     };
   }
 

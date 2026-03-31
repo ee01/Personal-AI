@@ -198,7 +198,7 @@ export class BridgeSyncManager {
 
   async runNow(kind: AutoSyncKind): Promise<void> {
     if (kind === 'stable_memory') {
-      await this.syncStableMemory();
+      await this.syncStableMemoryAsMemo();
       this.syncState.stableMemory = Date.now();
       return;
     }
@@ -209,7 +209,7 @@ export class BridgeSyncManager {
       return;
     }
 
-    await this.syncReminders();
+    await this.syncRemindersAsMemo();
     this.syncState.reminderSync = Date.now();
   }
 

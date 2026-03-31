@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright';
 
 import type { BridgeConfig } from './config.js';
@@ -157,7 +159,14 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   async ensureStarted(): Promise<void> {
     if (this.context) return;
 
+    const tempDir = await this.ensurePlaywrightTempDir();
     this.context = await chromium.launchPersistentContext(this.config.profileDir, {
+      env: {
+        ...process.env,
+        TMPDIR: tempDir,
+        TMP: tempDir,
+        TEMP: tempDir,
+      },
       headless: this.config.headless,
       viewport: { width: 1280, height: 900 },
     });
@@ -170,6 +179,15 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
 
     const pages = this.context.pages();
     this.page = pages[0] ?? (await this.context.newPage());
+  }
+
+  private async ensurePlaywrightTempDir(): Promise<string> {
+    const tempDir = path.join(this.config.dataDir, 'tmp', 'playwright');
+    await fs.mkdir(tempDir, { recursive: true });
+    process.env.TMPDIR = tempDir;
+    process.env.TMP = tempDir;
+    process.env.TEMP = tempDir;
+    return tempDir;
   }
 
   status(): BrowserStatus {
