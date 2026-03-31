@@ -1,4 +1,10 @@
-import type { BridgeConfig } from './config.js';
+import type { BridgeRuntimeSettings } from './config.js';
+
+function normalizeBaseUrl(value?: string): string | undefined {
+  const normalized = value?.trim().replace(/\/$/, '') || undefined;
+  if (!normalized) return undefined;
+  return normalized.replace(/\/api\/v1$/i, '');
+}
 
 export interface ProviderSyncJobRecord {
   id: string;
@@ -20,35 +26,47 @@ export interface RenderContextPackageResponse {
 }
 
 export class BridgeMemoryServiceClient {
-  constructor(private readonly config: BridgeConfig) {}
+  constructor(private readonly readSettings: () => BridgeRuntimeSettings) {}
+
+  private getSettings(): BridgeRuntimeSettings {
+    return this.readSettings();
+  }
 
   isEnabled(): boolean {
-    return Boolean(this.config.memoryServiceBaseUrl);
+    const settings = this.getSettings();
+    return Boolean(normalizeBaseUrl(settings.memoryServiceBaseUrl) && settings.memoryServiceUserId);
   }
 
   private buildHeaders(): Record<string, string> {
+    const settings = this.getSettings();
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
     };
 
-    if (this.config.memoryServiceUserId) {
-      headers['X-User-Id'] = this.config.memoryServiceUserId;
+    if (settings.memoryServiceUserId) {
+      headers['X-User-Id'] = settings.memoryServiceUserId;
     }
-    if (this.config.memoryServiceApiKey) {
-      headers.Authorization = `Bearer ${this.config.memoryServiceApiKey}`;
+    if (settings.memoryServiceApiKey) {
+      headers.Authorization = `Bearer ${settings.memoryServiceApiKey}`;
     }
 
     return headers;
   }
 
+  private ensureWriteIdentity(): void {
+    if (!this.getSettings().memoryServiceUserId) {
+      throw new Error('Memory Service User ID is required for sync operations.');
+    }
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    if (!this.config.memoryServiceBaseUrl) {
+    const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
+    if (!baseUrl) {
       throw new Error('MEMORY_SERVICE_BASE_URL is not configured for Doubao Bridge');
     }
 
-    const normalizedBaseUrl = this.config.memoryServiceBaseUrl.replace(/\/$/, '');
-    const response = await fetch(`${normalizedBaseUrl}${path}`, {
+    const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: this.buildHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -66,11 +84,21 @@ export class BridgeMemoryServiceClient {
     return (await response.json()) as T;
   }
 
+  async testConnection(): Promise<Record<string, unknown>> {
+    const health = await this.request<Record<string, unknown>>('GET', '/api/v1/health');
+    return {
+      ok: true,
+      baseUrl: normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl),
+      health,
+    };
+  }
+
   async renderContextPackage(input: {
     provider: string;
     scenario: 'stable_memory' | 'mobile_briefing' | 'reminder_sync';
     deviceContext?: string;
   }): Promise<RenderContextPackageResponse> {
+    this.ensureWriteIdentity();
     return this.request<RenderContextPackageResponse>('POST', '/api/v1/providers/context-packages/render', {
       provider: input.provider,
       scenario: input.scenario,
@@ -91,6 +119,7 @@ export class BridgeMemoryServiceClient {
       completedAt?: number;
     },
   ): Promise<void> {
+    this.ensureWriteIdentity();
     await this.request('POST', `/api/v1/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`, payload);
   }
 }

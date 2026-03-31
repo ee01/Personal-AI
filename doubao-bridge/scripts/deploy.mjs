@@ -9,8 +9,12 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const bridgeRoot = path.resolve(__dirname, '..');
-const pkgPath = path.join(bridgeRoot, 'release', 'Doubao-Bridge-Installer.pkg');
 const localEnvPath = path.join(bridgeRoot, '.env');
+const releaseDir = path.resolve(process.env.DOUBAO_BRIDGE_RELEASE_DIR || path.join(bridgeRoot, 'release'));
+
+function getPkgPath(version) {
+  return path.join(releaseDir, `Doubao-Bridge-${version}-Installer.pkg`);
+}
 
 function fatal(message) {
   throw new Error(message);
@@ -20,6 +24,10 @@ async function run(command, args, options = {}) {
   return execFileAsync(command, args, {
     cwd: bridgeRoot,
     maxBuffer: 10 * 1024 * 1024,
+    env: {
+      ...process.env,
+      PATH: `${path.dirname(process.execPath)}:${process.env.PATH || ''}`,
+    },
     ...options,
   });
 }
@@ -145,7 +153,46 @@ async function deleteAssetIfPresent(repository, release, assetName, token) {
   await apiRequest(repository, 'DELETE', `/releases/assets/${existing.id}`, null, token);
 }
 
+async function deleteAssetsExcept(repository, release, keepAssetNames, token) {
+  const keep = new Set(keepAssetNames);
+  for (const asset of release.assets || []) {
+    if (keep.has(asset.name)) continue;
+    await apiRequest(repository, 'DELETE', `/releases/assets/${asset.id}`, null, token);
+  }
+}
+
+async function listGhReleaseAssets(repository, tagName) {
+  const result = await tryRun('gh', ['release', 'view', tagName, '--repo', repository, '--json', 'assets']);
+  if (!result?.stdout) return [];
+  try {
+    const payload = JSON.parse(result.stdout);
+    return Array.isArray(payload.assets)
+      ? payload.assets.map((asset) => asset?.name).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+async function deleteGhAssetsExcept(repository, tagName, keepAssetNames) {
+  const keep = new Set(keepAssetNames);
+  const assetNames = await listGhReleaseAssets(repository, tagName);
+  for (const assetName of assetNames) {
+    if (keep.has(assetName)) continue;
+    await run('gh', [
+      'release',
+      'delete-asset',
+      tagName,
+      assetName,
+      '--repo',
+      repository,
+      '--yes',
+    ]);
+  }
+}
+
 async function publishWithGhCli(repository, tagName, releaseTitle, releaseNotes, assetPath) {
+  const assetName = path.basename(assetPath);
   const existingRelease = await tryRun('gh', ['release', 'view', tagName, '--repo', repository]);
   if (!existingRelease) {
     await run('gh', [
@@ -164,6 +211,7 @@ async function publishWithGhCli(repository, tagName, releaseTitle, releaseNotes,
     console.log(`Using existing release ${tagName} via gh CLI`);
   }
 
+  await deleteGhAssetsExcept(repository, tagName, [assetName]);
   await run('gh', [
     'release',
     'upload',
@@ -180,6 +228,7 @@ async function main() {
 
   const repository = await getRepository();
   const packageJson = await readJson(path.join(bridgeRoot, 'package.json'));
+  const pkgPath = getPkgPath(packageJson.version);
   const tagName = process.env.GITHUB_RELEASE_TAG || `doubao-bridge-v${packageJson.version}`;
   const releaseTitle = process.env.GITHUB_RELEASE_TITLE || `Doubao Bridge ${packageJson.version}`;
   const releaseNotes = process.env.GITHUB_RELEASE_NOTES || `Automated macOS bundle for Doubao Bridge ${packageJson.version}.`;
@@ -240,6 +289,7 @@ async function main() {
     console.log(`Using existing release ${tagName}`);
   }
 
+  await deleteAssetsExcept(repository, release, [path.basename(pkgPath)], token);
   await deleteAssetIfPresent(repository, release, path.basename(pkgPath), token);
   await uploadAsset(repository, release.id, release.upload_url, pkgPath, token);
 

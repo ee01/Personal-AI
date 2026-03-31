@@ -58,11 +58,11 @@ async function loadLocalEnvFile() {
   }
 }
 
-function parseInstallerIdentities(stdout) {
+function parseIdentities(stdout, pattern) {
   return stdout
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => /Developer ID Installer:/i.test(line))
+    .filter((line) => pattern.test(line))
     .map((line) => {
       const match = line.match(/"(.+?)"/);
       return match?.[1] || line;
@@ -77,7 +77,18 @@ async function main() {
   console.log('');
 
   const findIdentity = await tryRun('security', ['find-identity', '-v', '-p', 'basic']);
-  const installerIdentities = parseInstallerIdentities(findIdentity?.stdout || '');
+  const applicationIdentities = parseIdentities(findIdentity?.stdout || '', /Developer ID Application:/i);
+  const installerIdentities = parseIdentities(findIdentity?.stdout || '', /Developer ID Installer:/i);
+
+  console.log('Developer ID Application certificates');
+  if (applicationIdentities.length === 0) {
+    console.log('- none found on this machine');
+  } else {
+    for (const identity of applicationIdentities) {
+      console.log(`- ${identity}`);
+    }
+  }
+  console.log('');
 
   console.log('Developer ID Installer certificates');
   if (installerIdentities.length === 0) {
@@ -89,10 +100,15 @@ async function main() {
   }
   console.log('');
 
+  const configuredAppIdentity =
+    process.env.APPLE_APPLICATION_SIGNING_IDENTITY ||
+    process.env.APPLE_APP_SIGNING_IDENTITY ||
+    process.env.CSC_NAME;
   const configuredIdentity = process.env.APPLE_INSTALLER_SIGNING_IDENTITY;
   const configuredProfile = process.env.APPLE_NOTARY_KEYCHAIN_PROFILE || process.env.APPLE_NOTARY_PROFILE;
 
   console.log('Configured env');
+  console.log(`- APPLE_APPLICATION_SIGNING_IDENTITY: ${configuredAppIdentity || 'not set'}`);
   console.log(`- APPLE_INSTALLER_SIGNING_IDENTITY: ${configuredIdentity || 'not set'}`);
   console.log(`- APPLE_NOTARY_KEYCHAIN_PROFILE: ${configuredProfile || 'not set'}`);
   console.log('');
@@ -109,10 +125,11 @@ async function main() {
   }
 
   console.log('How to get the certificate name');
-  console.log('1. Join the Apple Developer Program and create/download a Developer ID Installer certificate from Apple Developer.');
+  console.log('1. Join the Apple Developer Program and create/download both Developer ID Application and Developer ID Installer certificates from Apple Developer.');
   console.log('2. Double-click the .cer file to import it into Keychain Access.');
   console.log('3. Re-run: npm --prefix doubao-bridge run macos:signing-info');
-  console.log('4. Copy one of the printed "Developer ID Installer: ..." names into APPLE_INSTALLER_SIGNING_IDENTITY.');
+  console.log('4. Copy one of the printed "Developer ID Application: ..." names into APPLE_APPLICATION_SIGNING_IDENTITY.');
+  console.log('5. Copy one of the printed "Developer ID Installer: ..." names into APPLE_INSTALLER_SIGNING_IDENTITY.');
   console.log('');
 
   console.log('How to create the notary profile');
@@ -128,7 +145,7 @@ async function main() {
   console.log('4. Run: npm --prefix doubao-bridge run package:macos');
   console.log('');
 
-  if (configuredIdentity && configuredProfile) {
+  if (configuredAppIdentity && configuredIdentity && configuredProfile) {
     console.log('Current next step');
     console.log('- Run: npm --prefix doubao-bridge run package:macos');
     console.log('- Then run: npm --prefix doubao-bridge run deploy');

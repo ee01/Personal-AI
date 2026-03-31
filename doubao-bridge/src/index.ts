@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
@@ -8,6 +9,10 @@ import { DoubaoBridgeService } from './bridgeService.js';
 import { createBridgeServer } from './server.js';
 import { BridgeMemoryServiceClient } from './memoryServiceClient.js';
 import { BridgeSyncManager } from './syncManager.js';
+import {
+  applyBridgeSettingsToConfig,
+  BridgeSettingsStore,
+} from './settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,14 +20,29 @@ const __dirname = path.dirname(__filename);
 async function main(): Promise<void> {
   const config = loadConfig();
   const stateFile = path.join(config.dataDir, 'bridge-state.json');
+  const settingsFile = path.join(config.dataDir, 'bridge-settings.json');
+  const packageJsonPath = path.resolve(__dirname, '..', 'package.json');
+  const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { version?: string };
   const store = new StateStore(stateFile);
+  const settingsStore = new BridgeSettingsStore(config, settingsFile);
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+  settingsStore.subscribe((settings) => {
+    applyBridgeSettingsToConfig(config, settings);
+  });
   const browser = new DoubaoBrowserSession(config);
-  const service = new DoubaoBridgeService(config, store, browser);
+  const version = packageJson.version || '0.0.0';
+  const service = new DoubaoBridgeService(config, store, browser, version);
   await service.init();
-  const memoryClient = new BridgeMemoryServiceClient(config);
-  const syncManager = new BridgeSyncManager(config, memoryClient, service);
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(config, settingsStore, memoryClient, service);
 
-  const app = await createBridgeServer(config, service);
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version,
+  });
   const shutdown = async () => {
     syncManager.stop();
     await browser.close();

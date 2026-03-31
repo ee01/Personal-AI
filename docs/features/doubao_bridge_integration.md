@@ -225,13 +225,8 @@ Bridge 内部 binding type：
 
 推荐交付物：
 
-- `Doubao-Bridge-Installer.pkg`
-- 安装后的目录：`/Applications/Doubao Bridge`
-- 前台脚本：`Start Doubao Bridge.command`
-- 后台安装脚本：`Install Background Sync.command`
-- 停止脚本：`Stop Doubao Bridge.command`
-- 卸载后台常驻脚本：`Uninstall Background Sync.command`
-- 日志脚本：`Open Doubao Bridge Logs.command`
+- `/Applications/Doubao Bridge.app`
+- `Doubao-Bridge-<version>-Installer.pkg`
 - GitHub Releases 下载页：<https://github.com/ee01/personal-ai/releases/latest>
 
 开发者打包命令：
@@ -246,7 +241,12 @@ Bridge 内部 binding type：
 - 可选的 `GITHUB_RELEASE_TAG`、`GITHUB_RELEASE_TITLE`、`GITHUB_RELEASE_NOTES`
 - 可选的 `APPLE_INSTALLER_SIGNING_IDENTITY`、`APPLE_NOTARY_KEYCHAIN_PROFILE`
 
-这样用户得到的是“可安装”的 bridge pkg，而不是源码仓库。
+安装后的体验：
+
+- `.pkg` 会把 `Doubao Bridge.app` 安装到 `Applications`
+- app 首次启动后会在后台继续运行
+- 关闭窗口后仍继续同步
+- 只有在 app 中点击“停止后台并退出”才会真正停止
 
 ## Auth Model
 
@@ -267,18 +267,16 @@ Bridge 内部 binding type：
 
 ### Implemented now
 
-- bridge 本机常驻
-- bridge 可选直接轮询 memory-service provider API
-- popup 提供 Doubao 入口
-- bridge 面板支持：
-  - pairing
+- `Doubao Bridge.app` 作为主配置中心
+- extension 中的 `doubao-bridge.html` 退化为安装引导与状态摘要
+- bridge 本机常驻并固定监听 `http://127.0.0.1:46321`
+- app 内支持：
+  - 配置 Memory Service
   - open login
   - create/bind memory sync thread
-  - bind current Doubao tab as mobile context thread
-  - render provider packages from memory-service
-  - send them to bridge
-  - report sync job result back to memory-service
-- bridge daemon 在配置了 `MEMORY_SERVICE_BASE_URL` 后可自动执行：
+  - 自动绑定“手机版对话”
+  - 手动触发 stable memory / briefing / reminder
+- bridge 在满足前置条件后可自动执行：
   - stable memory sync
   - mobile briefing sync
   - reminder sync
@@ -297,7 +295,12 @@ Bridge 内部 binding type：
 
 - 顶部 help/share 旁新增 Doubao icon
 - 点击打开 `doubao-bridge.html`
-- 控制页位于：
+- 该页面只负责：
+  - 下载 app
+  - 检测本机 bridge 状态
+  - 展示只读 checklist
+  - 引导用户去 `Doubao Bridge.app` 完成真实配置
+- 页面实现位于：
   - [src/modals/doubao-bridge.tsx](/Users/Esone/git/personal-ai/src/modals/doubao-bridge.tsx)
   - [src/services/DoubaoBridgeClient.ts](/Users/Esone/git/personal-ai/src/services/DoubaoBridgeClient.ts)
 

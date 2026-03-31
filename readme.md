@@ -51,42 +51,63 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 
 ## 豆包对接
 
-### 初始化
+### 用户主流程
+
+v2 中，`Doubao Bridge.app` 是唯一配置中心；Chrome extension 里的 Doubao 页面只负责安装引导和状态摘要。
+
+最终用户主流程：
+
+1. 从 GitHub Release 下载 `Doubao-Bridge-<version>-Installer.pkg`
+2. 安装后打开 `/Applications/Doubao Bridge.app`
+3. 在 app 内依次完成：
+   - 连接 Memory Service
+   - 登录豆包
+   - 创建/修复长期记忆线程
+   - 绑定手机版对话
+   - 开启自动同步
+4. 看到 app 提示“现在已经可以自动推送记忆”后，关闭窗口即可
+
+行为说明：
+
+- 默认本地服务固定运行在 `http://127.0.0.1:46321`
+- 普通用户不需要配置 bridge 地址和 token
+- 关闭窗口后 app 会继续后台运行
+- `Cmd+Q` 不会停止同步；真正停止请在 app 内点击“停止后台并退出”
+- GitHub Release 面向用户只发布 `.pkg` 安装包，不额外暴露 `.app` 调试产物
+
+### 开发与发布
+
+初始化本地开发：
 
 ```bash
 cd doubao-bridge
 npm install
 npx playwright install chromium
-cp .env.example .env
 ```
 
-初始化后需要做两件事：
-
-1. 在 `doubao-bridge/.env` 中填入 `GITHUB_TOKEN`，如果不想写 token，也可以先执行 `gh auth login`；如果 `origin` 不是 GitHub 仓库，再补 `GITHUB_REPOSITORY`
-2. 启动 bridge，完成 Doubao 登录、长期记忆线程绑定、手机对话绑定
-
-如果要让发布出来的 `.pkg` 在其他 Mac 上尽量不被 Gatekeeper 拦截，再做这一步：
+本地调试 app：
 
 ```bash
-npm --prefix doubao-bridge run macos:signing-info
+npm --prefix doubao-bridge run app:dev
 ```
 
-然后按输出配置：
+打包 `.app` 和 `.pkg`：
 
-1. `APPLE_INSTALLER_SIGNING_IDENTITY`
-2. `APPLE_NOTARY_KEYCHAIN_PROFILE`
+```bash
+npm --prefix doubao-bridge run package:macos
+```
 
-### 发布
+发布到 GitHub Release：
 
 ```bash
 npm --prefix doubao-bridge run deploy
 ```
 
-发布时会自动做这些事：
+如果要让发布出来的 `.pkg` 在其他 Mac 上尽量不被 Gatekeeper 拦截，先检查本机签名/公证准备状态：
 
-1. 生成 macOS installer pkg
-2. 如已配置签名与 notarization，则对 pkg 签名并公证
-3. 上传 pkg 到 GitHub Release
+```bash
+npm --prefix doubao-bridge run macos:signing-info
+```
 
 ## 开发环境设置
 

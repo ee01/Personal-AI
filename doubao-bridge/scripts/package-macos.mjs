@@ -1,31 +1,84 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { packager } from '@electron/packager';
 
 const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const bridgeRoot = path.resolve(__dirname, '..');
-const releaseDir = path.join(bridgeRoot, 'release');
-const bundleRoot = path.join(releaseDir, 'doubao-bridge-macos');
-const bundledBridgeRoot = path.join(bundleRoot, 'bridge');
-const bundledBinRoot = path.join(bundledBridgeRoot, 'bin');
+const releaseDir = path.resolve(process.env.DOUBAO_BRIDGE_RELEASE_DIR || path.join(bridgeRoot, 'release'));
+const builderOutputDir = path.join(releaseDir, 'electron-builder');
+const packagerSourceDir = path.join(releaseDir, 'packager-source');
 const pkgStageRoot = path.join(releaseDir, 'pkg-root');
 const pkgScriptsRoot = path.join(releaseDir, 'pkg-scripts');
-const installDirName = 'Doubao Bridge';
-const installPath = `/Applications/${installDirName}`;
-const pkgOutputPath = path.join(releaseDir, 'Doubao-Bridge-Installer.pkg');
+const pkgComponentPlistPath = path.join(releaseDir, 'pkg-component.plist');
+const macIconsetDir = path.join(releaseDir, 'DoubaoBridge.iconset');
+const macIcnsPath = path.join(releaseDir, 'DoubaoBridge.icns');
+const productName = 'Doubao Bridge';
+const appBundleName = `${productName}.app`;
+const appBundleReleaseCopy = path.join(releaseDir, appBundleName);
+const assetsDir = path.join(bridgeRoot, 'assets');
+const appIconSourcePng = path.join(assetsDir, 'app-icon.png');
+const localPlaywrightBrowsersDir = path.join(
+  bridgeRoot,
+  'node_modules',
+  'playwright-core',
+  '.local-browsers',
+);
+const vendoredPlaywrightBrowsersDir = path.join(releaseDir, 'playwright-browsers');
+
+function installerName(version) {
+  return `Doubao-Bridge-${version}-Installer.pkg`;
+}
+
+async function run(command, args, options = {}) {
+  return execFileAsync(command, args, {
+    cwd: bridgeRoot,
+    maxBuffer: 20 * 1024 * 1024,
+    env: {
+      ...process.env,
+      PATH: `${path.dirname(process.execPath)}:${process.env.PATH || ''}`,
+      COPYFILE_DISABLE: '1',
+    },
+    ...options,
+  });
+}
+
+function getApplicationSigningIdentity() {
+  return (
+    process.env.APPLE_APPLICATION_SIGNING_IDENTITY ||
+    process.env.APPLE_APP_SIGNING_IDENTITY ||
+    process.env.CSC_NAME ||
+    undefined
+  );
+}
+
+async function readPackageJson() {
+  return JSON.parse(await fs.readFile(path.join(bridgeRoot, 'package.json'), 'utf8'));
+}
 
 async function resetDir(dir) {
-  await fs.rm(dir, { recursive: true, force: true });
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   await fs.mkdir(dir, { recursive: true });
 }
 
 async function copy(src, dest) {
-  await fs.cp(src, dest, { recursive: true });
+  const sourceStat = await fs.lstat(src);
+  if (sourceStat.isDirectory()) {
+    await run('/usr/bin/ditto', [src, dest]);
+    return;
+  }
+  if (sourceStat.isSymbolicLink()) {
+    const linkTarget = await fs.readlink(src);
+    await fs.symlink(linkTarget, dest);
+    return;
+  }
+  await fs.copyFile(src, dest);
 }
 
 async function writeExecutable(filePath, contents) {
@@ -33,283 +86,182 @@ async function writeExecutable(filePath, contents) {
   await fs.chmod(filePath, 0o755);
 }
 
-async function run(command, args, options = {}) {
-  return execFileAsync(command, args, {
-    cwd: bridgeRoot,
-    maxBuffer: 10 * 1024 * 1024,
-    ...options,
+async function ensurePackagingTools() {
+  try {
+    await run('/usr/bin/xcrun', ['--find', 'pkgbuild']);
+    await run('/usr/bin/xcrun', ['--find', 'iconutil']);
+    await fs.access('/usr/bin/sips');
+  } catch {
+    throw new Error('pkgbuild, iconutil and sips are required to create the macOS installer package.');
+  }
+}
+
+function resolvePlaywrightCacheDir() {
+  const envPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (envPath && envPath !== '0') {
+    return path.resolve(envPath);
+  }
+  return path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright');
+}
+
+async function ensureLocalPlaywrightBrowsers() {
+  const playwrightCliPath = path.join(bridgeRoot, 'node_modules', 'playwright', 'cli.js');
+  const playwrightCacheDir = resolvePlaywrightCacheDir();
+  await fs.access(playwrightCliPath);
+  await fs.rm(localPlaywrightBrowsersDir, { recursive: true, force: true });
+  await fs.rm(vendoredPlaywrightBrowsersDir, { recursive: true, force: true });
+
+  console.log('Ensuring Playwright Chromium is installed on the build machine...');
+  await run(process.execPath, [playwrightCliPath, 'install', 'chromium'], {
+    env: {
+      ...process.env,
+      PLAYWRIGHT_BROWSERS_PATH: playwrightCacheDir,
+    },
   });
+
+  await fs.mkdir(vendoredPlaywrightBrowsersDir, { recursive: true });
+  const browserEntries = await fs.readdir(playwrightCacheDir, { withFileTypes: true });
+  const requiredPrefixes = ['chromium-', 'ffmpeg-'];
+
+  for (const entry of browserEntries) {
+    if (!requiredPrefixes.some((prefix) => entry.name.startsWith(prefix))) {
+      continue;
+    }
+    await copy(
+      path.join(playwrightCacheDir, entry.name),
+      path.join(vendoredPlaywrightBrowsersDir, entry.name),
+    );
+  }
 }
 
-async function readPackageVersion() {
-  const packageJson = JSON.parse(await fs.readFile(path.join(bridgeRoot, 'package.json'), 'utf8'));
-  return packageJson.version;
+async function preparePackagerSource() {
+  await resetDir(packagerSourceDir);
+  await copy(path.join(bridgeRoot, 'app'), path.join(packagerSourceDir, 'app'));
+  await copy(path.join(bridgeRoot, 'assets'), path.join(packagerSourceDir, 'assets'));
+  await copy(path.join(bridgeRoot, 'dist'), path.join(packagerSourceDir, 'dist'));
+  await copy(path.join(bridgeRoot, 'node_modules'), path.join(packagerSourceDir, 'node_modules'));
+  await fs.copyFile(
+    path.join(bridgeRoot, 'package.json'),
+    path.join(packagerSourceDir, 'package.json'),
+  );
+  await fs.copyFile(
+    path.join(bridgeRoot, 'package-lock.json'),
+    path.join(packagerSourceDir, 'package-lock.json'),
+  );
 }
 
-function makeBootstrapScript() {
-  return `#!/bin/zsh
-set -euo pipefail
+async function buildMacAppIcon() {
+  await fs.access(appIconSourcePng);
+  await resetDir(macIconsetDir);
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BRIDGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SUPPORT_DIR="$HOME/Library/Application Support/PersonalAI/DoubaoBridge"
-LOG_DIR="$HOME/Library/Logs/PersonalAI"
-ENV_FILE="$SUPPORT_DIR/.env"
+  const baseSizes = [16, 32, 128, 256, 512];
+  for (const size of baseSizes) {
+    const normalPath = path.join(macIconsetDir, `icon_${size}x${size}.png`);
+    const retinaPath = path.join(macIconsetDir, `icon_${size}x${size}@2x.png`);
+    await run('/usr/bin/sips', ['-z', String(size), String(size), appIconSourcePng, '--out', normalPath]);
+    await run('/usr/bin/sips', ['-z', String(size * 2), String(size * 2), appIconSourcePng, '--out', retinaPath]);
+  }
 
-mkdir -p "$SUPPORT_DIR" "$LOG_DIR"
-
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-if [ -z "\${NVM_DIR:-}" ]; then
-  export NVM_DIR="$HOME/.nvm"
-fi
-
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-  source "$NVM_DIR/nvm.sh"
-fi
-
-if ! command -v node >/dev/null 2>&1; then
-  echo "Doubao Bridge could not find Node.js 20+ in this shell environment."
-  osascript -e 'display alert "Doubao Bridge could not find Node.js 20+" message "If you use nvm, make sure ~/.nvm/nvm.sh exists and rerun the installed package. Homebrew paths are also checked automatically."'
-  exit 1
-fi
-
-if ! command -v npm >/dev/null 2>&1; then
-  echo "Doubao Bridge could not find npm in this shell environment."
-  osascript -e 'display alert "Doubao Bridge could not find npm" message "If you use nvm, make sure ~/.nvm/nvm.sh exists and rerun the installed package."'
-  exit 1
-fi
-
-cd "$BRIDGE_DIR"
-
-if [ ! -d node_modules ]; then
-  echo "Installing bridge dependencies..."
-  npm install --omit=dev
-fi
-
-if [ ! -f "$SUPPORT_DIR/.playwright-ready" ]; then
-  echo "Installing Playwright Chromium (first run only)..."
-  npx playwright install chromium
-  touch "$SUPPORT_DIR/.playwright-ready"
-fi
-
-export DOUBAO_BRIDGE_DATA_DIR="$SUPPORT_DIR/data"
-export DOUBAO_BRIDGE_PROFILE_DIR="$SUPPORT_DIR/profile"
-
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  source "$ENV_FILE"
-  set +a
-fi
-`;
+  await fs.rm(macIcnsPath, { force: true });
+  await run('/usr/bin/iconutil', ['-c', 'icns', macIconsetDir, '-o', macIcnsPath]);
+  return macIcnsPath;
 }
 
-function makeRunBridgeScript() {
-  return `#!/bin/zsh
-set -euo pipefail
+async function buildElectronApp(version) {
+  await ensureLocalPlaywrightBrowsers();
+  await preparePackagerSource();
+  const targetArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const applicationSigningIdentity = getApplicationSigningIdentity();
+  const appPaths = await packager({
+    dir: packagerSourceDir,
+    out: builderOutputDir,
+    overwrite: true,
+    platform: 'darwin',
+    arch: targetArch,
+    name: productName,
+    executableName: productName,
+    appBundleId: 'com.personalai.doubao-bridge',
+    appCategoryType: 'public.app-category.productivity',
+    appVersion: version,
+    asar: false,
+    prune: true,
+    junk: true,
+    ignore: [
+      /^\/?node_modules\/playwright-core\/\.local-browsers($|\/)/,
+    ],
+    ...(applicationSigningIdentity
+      ? {
+          osxSign: {
+            identity: applicationSigningIdentity,
+          },
+        }
+      : {}),
+  });
+  const appPath = appPaths[0];
+  if (!appPath) {
+    throw new Error('Electron packager did not return a macOS app bundle path.');
+  }
+  if (appPath.endsWith('.app')) {
+    return appPath;
+  }
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/bootstrap.sh"
-
-exec node dist/index.js
-`;
+  const nestedAppPath = path.join(appPath, appBundleName);
+  await fs.access(nestedAppPath);
+  return nestedAppPath;
 }
 
-function makeForegroundCommand() {
-  return `#!/bin/zsh
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-echo "Starting Doubao Bridge in foreground mode."
-echo "Do not close this Terminal window if you want the foreground bridge to keep running."
-echo ""
-"$SCRIPT_DIR/bridge/bin/run-bridge.sh"
-echo ""
-echo "Doubao Bridge exited. Press Enter to close."
-read
-`;
+async function injectVendoredPlaywrightBrowsers(appBundlePath) {
+  const resourcesDir = path.join(appBundlePath, 'Contents', 'Resources');
+  const bundledBrowsersDir = path.join(resourcesDir, 'playwright-browsers');
+  await fs.access(vendoredPlaywrightBrowsersDir);
+  await fs.rm(bundledBrowsersDir, { recursive: true, force: true });
+  await copy(vendoredPlaywrightBrowsersDir, bundledBrowsersDir);
 }
 
-function makeInstallBackgroundCommand() {
-  return `#!/bin/zsh
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="com.personalai.doubao-bridge"
-LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-LAUNCH_AGENT_PATH="$LAUNCH_AGENTS_DIR/$APP_NAME.plist"
-LOG_DIR="$HOME/Library/Logs/PersonalAI"
-
-mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
-
-cat > "$LAUNCH_AGENT_PATH" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>$APP_NAME</string>
-    <key>ProgramArguments</key>
-    <array>
-      <string>/bin/zsh</string>
-      <string>-lc</string>
-      <string>"$SCRIPT_DIR/bridge/bin/run-bridge.sh" >> "$HOME/Library/Logs/PersonalAI/doubao-bridge.log" 2>&1</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>WorkingDirectory</key>
-    <string>$SCRIPT_DIR/bridge</string>
-  </dict>
-</plist>
-PLIST
-
-launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT_PATH" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PATH"
-launchctl kickstart -k "gui/$(id -u)/$APP_NAME" >/dev/null 2>&1 || true
-
-echo "Doubao Bridge background sync installed."
-echo "You can now close this Terminal window."
-read -k 1 "REPLY?Press any key to close..."
-echo
-`;
-}
-
-function makeStopCommand() {
-  return `#!/bin/zsh
-set -euo pipefail
-
-LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/com.personalai.doubao-bridge.plist"
-
-launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT_PATH" >/dev/null 2>&1 || true
-pkill -f 'Doubao Bridge/bridge/dist/index.js' >/dev/null 2>&1 || true
-
-echo "Doubao Bridge stopped."
-read -k 1 "REPLY?Press any key to close..."
-echo
-`;
-}
-
-function makeUninstallBackgroundCommand() {
-  return `#!/bin/zsh
-set -euo pipefail
-
-LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/com.personalai.doubao-bridge.plist"
-
-launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT_PATH" >/dev/null 2>&1 || true
-rm -f "$LAUNCH_AGENT_PATH"
-
-echo "Doubao Bridge background sync uninstalled."
-read -k 1 "REPLY?Press any key to close..."
-echo
-`;
-}
-
-function makeOpenLogsCommand() {
-  return `#!/bin/zsh
-set -euo pipefail
-
-LOG_DIR="$HOME/Library/Logs/PersonalAI"
-LOG_FILE="$LOG_DIR/doubao-bridge.log"
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-open -a TextEdit "$LOG_FILE"
-`;
+async function injectAppIcon(appBundlePath, iconPath) {
+  const resourcesDir = path.join(appBundlePath, 'Contents', 'Resources');
+  await fs.copyFile(iconPath, path.join(resourcesDir, 'electron.icns'));
 }
 
 function makePkgPostinstallScript() {
   return `#!/bin/zsh
 set -euo pipefail
 
-INSTALL_DIR="${installPath}"
+APP_PATH="/Applications/${appBundleName}"
 
-if [ -d "$INSTALL_DIR" ]; then
-  chmod +x "$INSTALL_DIR"/*.command >/dev/null 2>&1 || true
-  chmod +x "$INSTALL_DIR"/bridge/bin/*.sh >/dev/null 2>&1 || true
-  xattr -dr com.apple.quarantine "$INSTALL_DIR" >/dev/null 2>&1 || true
+pkill -f '/Contents/MacOS/${productName}' >/dev/null 2>&1 || true
+sleep 1
+
+if [ -d "$APP_PATH" ]; then
+  xattr -dr com.apple.quarantine "$APP_PATH" >/dev/null 2>&1 || true
+  open -gj "$APP_PATH" --args --background >/dev/null 2>&1 || true
 fi
 
 exit 0
 `;
 }
 
-function makeEnvExample() {
-  return `# Copy this file to:
-# ~/Library/Application Support/PersonalAI/DoubaoBridge/.env
-#
-# Then edit the values and restart Doubao Bridge.
-
-MEMORY_SERVICE_BASE_URL=http://127.0.0.1:3210
-MEMORY_SERVICE_USER_ID=your-user-id
-# MEMORY_SERVICE_API_KEY=
-
-DOUBAO_BRIDGE_AUTO_SYNC=true
-DOUBAO_BRIDGE_PROVIDER=doubao
-
-# Optional cadence overrides
-# DOUBAO_BRIDGE_POLL_INTERVAL_MS=300000
-# DOUBAO_BRIDGE_STABLE_SYNC_INTERVAL_MS=43200000
-# DOUBAO_BRIDGE_MOBILE_SYNC_INTERVAL_MS=14400000
-# DOUBAO_BRIDGE_REMINDER_SYNC_INTERVAL_MS=900000
-`;
-}
-
-function makeUserReadme() {
-  return `# Doubao Bridge for macOS
-
-This package installs Doubao Bridge into:
-
-${installPath}
-
-If you are looking for the latest downloadable release, use:
-
-https://github.com/ee01/personal-ai/releases/latest
-
-## First-time setup
-
-1. Open the installer package and complete installation.
-2. Open ${installPath} in Finder.
-3. Double-click \`Start Doubao Bridge.command\`.
-4. Open the extension popup and use the Doubao Bridge page to pair and log in.
-
-## Background mode
-
-- After installation, open ${installPath}.
-- Double-click \`Install Background Sync.command\`.
-- Use \`Stop Doubao Bridge.command\` to stop the process.
-- Use \`Uninstall Background Sync.command\` to remove the launchd job.
-
-## Logs
-
-- Use \`Open Doubao Bridge Logs.command\`.
-
-## Optional auto-sync config
-
-Copy \`bridge/.env.example\` to:
-
-\`~/Library/Application Support/PersonalAI/DoubaoBridge/.env\`
-
-Then fill in your Memory Service values and restart the bridge.
-`;
-}
-
-async function ensurePackagingTools() {
-  try {
-    await run('/usr/bin/xcrun', ['--find', 'pkgbuild']);
-    await run('/usr/bin/xcrun', ['--find', 'productbuild']);
-  } catch {
-    throw new Error('pkgbuild/productbuild are required to create the macOS installer package.');
-  }
+async function writeNonRelocatableComponentPlist(rootPath) {
+  await fs.rm(pkgComponentPlistPath, { force: true });
+  await run('/usr/bin/pkgbuild', ['--analyze', '--root', rootPath, pkgComponentPlistPath]);
+  const plist = await fs.readFile(pkgComponentPlistPath, 'utf8');
+  const updated = plist.replaceAll(
+    /<key>BundleIsRelocatable<\/key>\s*<true\/>/g,
+    '<key>BundleIsRelocatable</key>\n\t\t<false/>',
+  );
+  await fs.writeFile(pkgComponentPlistPath, updated, 'utf8');
 }
 
 async function buildInstallerPkg(version) {
-  await ensurePackagingTools();
+  const pkgOutputPath = path.join(releaseDir, installerName(version));
   await fs.rm(pkgOutputPath, { force: true });
+  await writeNonRelocatableComponentPlist(pkgStageRoot);
 
   const args = [
     '--root',
     pkgStageRoot,
+    '--component-plist',
+    pkgComponentPlistPath,
     '--identifier',
     'com.personalai.doubao-bridge',
     '--version',
@@ -333,44 +285,42 @@ async function buildInstallerPkg(version) {
     await run('/usr/bin/xcrun', ['notarytool', 'submit', pkgOutputPath, '--keychain-profile', notaryProfile, '--wait']);
     await run('/usr/bin/xcrun', ['stapler', 'staple', pkgOutputPath]);
   }
+
+  return pkgOutputPath;
 }
 
 async function main() {
-  const version = await readPackageVersion();
+  const packageJson = await readPackageJson();
+  const version = packageJson.version || '0.0.0';
   const distDir = path.join(bridgeRoot, 'dist');
   await fs.access(distDir);
-
-  await fs.rm(releaseDir, { recursive: true, force: true });
-  await fs.mkdir(bundledBridgeRoot, { recursive: true });
-  await fs.mkdir(bundledBinRoot, { recursive: true });
+  await ensurePackagingTools();
+  await resetDir(releaseDir);
   await resetDir(pkgStageRoot);
   await resetDir(pkgScriptsRoot);
 
-  await copy(distDir, path.join(bundledBridgeRoot, 'dist'));
-  await copy(path.join(bridgeRoot, 'package.json'), path.join(bundledBridgeRoot, 'package.json'));
-  await copy(path.join(bridgeRoot, 'package-lock.json'), path.join(bundledBridgeRoot, 'package-lock.json'));
+  const appIconPath = await buildMacAppIcon();
+  const appBundleSource = await buildElectronApp(version);
+  await injectAppIcon(appBundleSource, appIconPath);
+  await injectVendoredPlaywrightBrowsers(appBundleSource);
+  await fs.rm(appBundleReleaseCopy, { recursive: true, force: true });
+  await copy(appBundleSource, appBundleReleaseCopy);
+  await fs.access(appBundleReleaseCopy);
 
-  await fs.writeFile(path.join(bundledBridgeRoot, '.env.example'), makeEnvExample(), 'utf8');
-  await fs.writeFile(path.join(bundleRoot, 'README.txt'), makeUserReadme(), 'utf8');
-
-  await writeExecutable(path.join(bundledBinRoot, 'bootstrap.sh'), makeBootstrapScript());
-  await writeExecutable(path.join(bundledBinRoot, 'run-bridge.sh'), makeRunBridgeScript());
-
-  await writeExecutable(path.join(bundleRoot, 'Start Doubao Bridge.command'), makeForegroundCommand());
-  await writeExecutable(path.join(bundleRoot, 'Install Background Sync.command'), makeInstallBackgroundCommand());
-  await writeExecutable(path.join(bundleRoot, 'Stop Doubao Bridge.command'), makeStopCommand());
-  await writeExecutable(path.join(bundleRoot, 'Uninstall Background Sync.command'), makeUninstallBackgroundCommand());
-  await writeExecutable(path.join(bundleRoot, 'Open Doubao Bridge Logs.command'), makeOpenLogsCommand());
+  await fs.mkdir(path.join(pkgStageRoot, 'Applications'), { recursive: true });
+  await copy(appBundleSource, path.join(pkgStageRoot, 'Applications', appBundleName));
   await writeExecutable(path.join(pkgScriptsRoot, 'postinstall'), makePkgPostinstallScript());
 
-  const installedAppRoot = path.join(pkgStageRoot, 'Applications', installDirName);
-  await fs.mkdir(path.dirname(installedAppRoot), { recursive: true });
-  await copy(bundleRoot, installedAppRoot);
+  const pkgOutputPath = await buildInstallerPkg(version);
+  await fs.access(pkgOutputPath);
 
-  await buildInstallerPkg(version);
-
-  console.log(`Created macOS bundle at: ${bundleRoot}`);
+  console.log(`Created app bundle at: ${appBundleReleaseCopy}`);
   console.log(`Created macOS installer package at: ${pkgOutputPath}`);
+  if (process.env.APPLE_APPLICATION_SIGNING_IDENTITY || process.env.APPLE_APP_SIGNING_IDENTITY || process.env.CSC_NAME) {
+    console.log('Application bundle signing was enabled for the Electron app.');
+  } else {
+    console.log('Application bundle signing was skipped. Configure APPLE_APPLICATION_SIGNING_IDENTITY for a fully signed release.');
+  }
   if (process.env.APPLE_INSTALLER_SIGNING_IDENTITY) {
     if (process.env.APPLE_NOTARY_KEYCHAIN_PROFILE || process.env.APPLE_NOTARY_PROFILE) {
       console.log('Installer package was signed and notarized.');
