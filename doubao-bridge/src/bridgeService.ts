@@ -5,6 +5,7 @@ import type {
   BindingType,
   BridgePairResult,
   BridgeServiceStatus,
+  MemoSyncRequest,
   MobileBriefingRequest,
   QueryInjectRequest,
   ReminderSyncRequest,
@@ -14,6 +15,9 @@ import type {
   ThreadBinding,
   ThreadRecord,
 } from './types.js';
+import type { MemoItem } from './memoTypes.js';
+import { smartFormat } from './memoFormatter.js';
+import { convertToMemoItems, convertRemindersToMemoItems } from './memoClassifier.js';
 import { StateStore, type BridgeStateFile } from './persistence.js';
 import type { BrowserSendOptions, BrowserSessionAdapter, BrowserThreadSnapshot } from './browserSession.js';
 
@@ -301,6 +305,34 @@ export class DoubaoBridgeService {
 
   async syncReminders(payload: ReminderSyncRequest): Promise<SyncResult> {
     const transcript = renderReminders(payload);
+    return this.sendToBinding('reminder_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
+  }
+
+  /**
+   * 同步随手记消息
+   * 将消息智能分类后格式化为豆包随手记格式
+   */
+  async syncMemo(payload: MemoSyncRequest): Promise<SyncResult> {
+    const transcript = smartFormat(payload.items, payload.context);
+    return this.sendToBinding('memo_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
+  }
+
+  /**
+   * 同步稳定的长期记忆到随手记
+   * 自动分类并格式化
+   */
+  async syncStableMemoryAsMemo(payload: StableMemorySyncRequest): Promise<SyncResult> {
+    const memoItems = convertToMemoItems(payload.items);
+    const transcript = smartFormat(memoItems, 'stable');
+    return this.sendToBinding('stable_memory', 'memory_sync', transcript, payload.threadId, payload.dryRun);
+  }
+
+  /**
+   * 同步提醒事项到随手记（作为待办）
+   */
+  async syncRemindersAsMemo(payload: ReminderSyncRequest): Promise<SyncResult> {
+    const memoItems = convertRemindersToMemoItems(payload.reminders);
+    const transcript = smartFormat(memoItems, 'reminder');
     return this.sendToBinding('reminder_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
   }
 

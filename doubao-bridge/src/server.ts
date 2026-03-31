@@ -11,6 +11,7 @@ import type {
   BridgeBlockingReason,
   BridgeStatus,
   BridgeSyncReadiness,
+  MemoSyncRequest,
   MobileBriefingRequest,
   QueryInjectRequest,
   ReminderSyncRequest,
@@ -303,6 +304,30 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
   });
 
   app.post<{ Body: ReminderSyncRequest }>('/reminders/sync', async (request) => service.syncReminders(request.body));
+
+  // 随手记同步 API
+  app.post<{ Body: MemoSyncRequest }>('/memo/sync', async (request) => service.syncMemo(request.body));
+
+  // 随手记格式的长期记忆同步
+  app.post<{ Body: StableMemorySyncRequest }>('/memo/stable-memory', async (request) =>
+    service.syncStableMemoryAsMemo(request.body),
+  );
+
+  // 随手记格式的提醒同步
+  app.post<{ Body: ReminderSyncRequest }>('/memo/reminders', async (request) =>
+    service.syncRemindersAsMemo(request.body),
+  );
+
+  // 分类测试 API
+  app.post<{ Body: { text: string } }>('/memo/classify', async (request) => {
+    const { classifyMessage, extractMemoContent } = await import('./memoClassifier.js');
+    const classification = classifyMessage(request.body.text);
+    const metadata = extractMemoContent(request.body.text, classification.type);
+    return {
+      ...classification,
+      metadata,
+    };
+  });
 
   return app;
 }

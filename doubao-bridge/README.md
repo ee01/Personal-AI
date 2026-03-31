@@ -70,9 +70,9 @@ GitHub Release should only publish the `.pkg` installer for end users.
 
 Versioning is driven by `doubao-bridge/package.json.version`, for example:
 
-- release tag: `doubao-bridge-v2.0.1`
-- release title: `Doubao Bridge 2.0.1`
-- installer: `Doubao-Bridge-2.0.1-Installer.pkg`
+- release tag: `doubao-bridge-v2.0.2`
+- release title: `Doubao Bridge 2.0.2`
+- installer: `Doubao-Bridge-2.0.2-Installer.pkg`
 
 ## Runtime Defaults
 
@@ -141,6 +141,11 @@ The bridge exposes these endpoints:
 - `POST /sync/mobile-briefing`
 - `POST /inject/query`
 - `POST /reminders/sync`
+- **Memo API** (随手记智能分类同步)
+  - `POST /memo/sync` - 同步随手记内容
+  - `POST /memo/stable-memory` - 随手记格式的长期记忆同步
+  - `POST /memo/reminders` - 随手记格式的提醒同步
+  - `POST /memo/classify` - 测试文本分类
 
 ## Signing and Notarization
 

@@ -3,6 +3,8 @@ import { BridgeMemoryServiceClient, type ProviderMemoryProduct, type RenderConte
 import { BridgeSettingsStore } from './settings.js';
 import { DoubaoBridgeService } from './bridgeService.js';
 import type { AutoSyncKind } from './types.js';
+import { convertToMemoItems, convertRemindersToMemoItems } from './memoClassifier.js';
+import { smartFormat } from './memoFormatter.js';
 
 interface SyncState {
   stableMemory?: number;
@@ -171,8 +173,9 @@ export class BridgeSyncManager {
       const status = await this.bridgeService.getStatus();
       if (status.authStatus !== 'connected') return;
 
+      // 长期记忆同步 - 使用随手记格式
       if (status.bindings.memory_sync && this.due(this.syncState.stableMemory, settings.stableMemoryIntervalMs)) {
-        await this.syncStableMemory();
+        await this.syncStableMemoryAsMemo();
         this.syncState.stableMemory = Date.now();
       }
 
@@ -181,8 +184,9 @@ export class BridgeSyncManager {
         this.syncState.mobileBriefing = Date.now();
       }
 
+      // 提醒事项同步 - 使用随手记格式（转为待办）
       if (status.bindings.mobile_context && this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)) {
-        await this.syncReminders();
+        await this.syncRemindersAsMemo();
         this.syncState.reminderSync = Date.now();
       }
     } catch (error) {
@@ -257,6 +261,50 @@ export class BridgeSyncManager {
     if (reminders.length === 0) return;
 
     const result = await this.bridgeService.syncReminders({
+      reminders,
+    });
+
+    await this.report(rendered, result.accepted && !result.error ? 'succeeded' : 'failed', startedAt, result.error, result.threadId);
+  }
+
+  /**
+   * 使用随手记格式同步长期记忆
+   * 自动分类并格式化为豆包随手记
+   */
+  async syncStableMemoryAsMemo(): Promise<void> {
+    const startedAt = Date.now();
+    const rendered = await this.memoryClient.renderContextPackage({
+      provider: this.config.provider,
+      scenario: 'stable_memory',
+      deviceContext: 'doubao_bridge_daemon',
+    });
+    if (rendered.packages.length === 0) return;
+
+    const result = await this.bridgeService.syncStableMemoryAsMemo({
+      items: rendered.packages.map((pkg) => ({
+        title: pkg.title,
+        body: pkg.bodyMd,
+      })),
+    });
+
+    await this.report(rendered, result.accepted && !result.error ? 'succeeded' : 'failed', startedAt, result.error, result.threadId);
+  }
+
+  /**
+   * 使用随手记格式同步提醒
+   * 将提醒转换为待办类型
+   */
+  async syncRemindersAsMemo(): Promise<void> {
+    const startedAt = Date.now();
+    const rendered = await this.memoryClient.renderContextPackage({
+      provider: this.config.provider,
+      scenario: 'reminder_sync',
+      deviceContext: 'doubao_bridge_daemon',
+    });
+    const reminders = rendered.packages.flatMap((pkg) => extractReminders(pkg)).slice(0, 8);
+    if (reminders.length === 0) return;
+
+    const result = await this.bridgeService.syncRemindersAsMemo({
       reminders,
     });
 

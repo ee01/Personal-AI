@@ -1,6 +1,6 @@
 export type BridgeAuthStatus = 'unknown' | 'needs_login' | 'connected' | 'error';
 export type BindingType = 'memory_sync' | 'mobile_context';
-export type SyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync';
+export type SyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync' | 'memo_sync';
 export type ThreadKind = 'memory_sync' | 'mobile_context' | 'manual' | 'unknown';
 export type AutoSyncKind = 'stable_memory' | 'mobile_briefing' | 'reminder_sync';
 export type BridgeBlockingReasonCode =
@@ -157,4 +157,30 @@ export interface SendExperimentRequest {
   sendMode?: 'auto' | 'button' | 'enter';
   preSendDelayMs?: number;
   dryRun?: boolean;
+}
+
+// 随手记相关类型
+export type MemoType = 
+  | 'todo' | 'shopping' | 'parking' | 'where' | 'important_date'
+  | 'quote' | 'address' | 'card' | 'number' | 'health' | 'note';
+
+export interface MemoItem {
+  type: MemoType;
+  title: string;
+  content: string;
+  metadata?: {
+    dueDate?: string;
+    location?: string;
+    category?: string;
+    importance?: 'low' | 'medium' | 'high';
+    tags?: string[];
+    source?: string;
+  };
+}
+
+export interface MemoSyncRequest {
+  items: MemoItem[];
+  threadId?: string;
+  dryRun?: boolean;
+  context?: 'stable' | 'briefing' | 'reminder';
 }

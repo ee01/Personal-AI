@@ -21,6 +21,7 @@ const logsDir = path.join(app.getPath('home'), 'Library', 'Logs', 'PersonalAI');
 const appLogFile = path.join(logsDir, 'doubao-bridge-app.log');
 const bridgeLogFile = path.join(logsDir, 'doubao-bridge-agent.log');
 const bridgePidFile = path.join(appSupportDir, 'bridge-agent.pid');
+const uninstallMarkerFile = path.join(appSupportDir, 'uninstall-pending');
 const legacyLaunchAgentFile = path.join(
   app.getPath('home'),
   'Library',
@@ -65,6 +66,14 @@ function syncLoginItem(openAtLogin) {
 
 async function appendLog(filePath, line) {
   await fs.appendFile(filePath, `${new Date().toISOString()} ${line}\n`, 'utf8').catch(() => undefined);
+}
+
+async function cancelPendingUninstall() {
+  const previousMarker = await fs.readFile(uninstallMarkerFile, 'utf8').catch(() => '');
+  if (previousMarker.trim()) {
+    await appendLog(appLogFile, '[info] cancelling pending uninstall because app was reopened');
+  }
+  await fs.rm(uninstallMarkerFile, { force: true }).catch(() => undefined);
 }
 
 function getBridgeEnv() {
@@ -319,22 +328,27 @@ function createTray() {
 async function scheduleUninstallCleanup() {
   await ensureDirs();
   const uninstallScript = path.join(os.tmpdir(), `doubao-bridge-uninstall-${Date.now()}.sh`);
+  const uninstallToken = `uninstall-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const appBundlePath = getAppBundlePath();
   const escapedSupportDir = appSupportDir.replaceAll("'", "'\"'\"'");
   const escapedLogsDir = logsDir.replaceAll("'", "'\"'\"'");
   const escapedAppLogFile = appLogFile.replaceAll("'", "'\"'\"'");
   const escapedBridgeLogFile = bridgeLogFile.replaceAll("'", "'\"'\"'");
+  const escapedUninstallMarkerFile = uninstallMarkerFile.replaceAll("'", "'\"'\"'");
   const escapedLegacyLaunchAgent = legacyLaunchAgentFile.replaceAll("'", "'\"'\"'");
   const escapedAppBundlePath = appBundlePath.replaceAll("'", "'\"'\"'");
+  await fs.writeFile(uninstallMarkerFile, uninstallToken, 'utf8');
   const shellScript = `#!/bin/zsh
 set -euo pipefail
 
 APP_PID="${process.pid}"
+UNINSTALL_TOKEN='${uninstallToken.replaceAll("'", "'\"'\"'")}'
 APP_PATH='${escapedAppBundlePath}'
 SUPPORT_DIR='${escapedSupportDir}'
 LOGS_DIR='${escapedLogsDir}'
 APP_LOG_FILE='${escapedAppLogFile}'
 BRIDGE_LOG_FILE='${escapedBridgeLogFile}'
+UNINSTALL_MARKER='${escapedUninstallMarkerFile}'
 LEGACY_LAUNCH_AGENT='${escapedLegacyLaunchAgent}'
 
 for _ in {1..120}; do
@@ -344,14 +358,23 @@ for _ in {1..120}; do
   sleep 1
 done
 
+if [ "$(cat "$UNINSTALL_MARKER" 2>/dev/null || true)" != "$UNINSTALL_TOKEN" ]; then
+  rm -f '${uninstallScript.replaceAll("'", "'\"'\"'")}' >/dev/null 2>&1 || true
+  exit 0
+fi
+
 launchctl bootout "gui/$(id -u)" "$LEGACY_LAUNCH_AGENT" >/dev/null 2>&1 || true
 rm -f "$LEGACY_LAUNCH_AGENT" >/dev/null 2>&1 || true
 rm -rf "$SUPPORT_DIR" >/dev/null 2>&1 || true
 rm -f "$APP_LOG_FILE" "$BRIDGE_LOG_FILE" >/dev/null 2>&1 || true
 rmdir "$LOGS_DIR" >/dev/null 2>&1 || true
 
-open -R "$APP_PATH" >/dev/null 2>&1 || true
+/usr/bin/osascript -e 'on run argv' -e 'tell application "Finder" to delete POSIX file (item 1 of argv)' -e 'end run' "$APP_PATH" >/dev/null 2>&1 || true
+if [ -e "$APP_PATH" ]; then
+  open -R "$APP_PATH" >/dev/null 2>&1 || true
+fi
 
+rm -f "$UNINSTALL_MARKER" >/dev/null 2>&1 || true
 rm -f '${uninstallScript.replaceAll("'", "'\"'\"'")}' >/dev/null 2>&1 || true
 `;
 
@@ -373,7 +396,7 @@ async function handleUninstall() {
     title: '卸载 Doubao Bridge',
     message: '这会停止后台同步，并删除本地配置、日志和后台服务。',
     detail:
-      '清理完成后会自动在 Finder 中定位 Doubao Bridge.app。最后一步请手动把它拖到废纸篓。',
+      '清理完成后会尝试把 Doubao Bridge.app 移到废纸篓；如果失败，会在 Finder 中定位它供你手动删除。若在卸载完成前重新打开 app，这次卸载会自动取消。',
   });
 
   if (response.response !== 1) {
@@ -551,6 +574,8 @@ app.on('activate', () => {
 });
 
 app.whenReady().then(async () => {
+  await ensureDirs();
+  await cancelPendingUninstall();
   applyMacUiMode();
   syncLoginItem(true);
   createMenu();
