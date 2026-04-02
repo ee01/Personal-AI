@@ -4,7 +4,7 @@ import { contentHash } from '../utils/hashing.js';
 import { daysAgo, formatDateTime, now } from '../utils/time.js';
 import { ProfileManager } from './ProfileManager.js';
 import { RecallEngine } from './RecallEngine.js';
-import { NotificationRepository } from '../repositories/NotificationRepository.js';
+import { NotificationCenterService } from './NotificationCenterService.js';
 import {
   ProviderRepository,
   type ProviderBindingRecord,
@@ -16,12 +16,16 @@ export type ProviderScenario =
   | 'stable_memory'
   | 'mobile_briefing'
   | 'query_answer'
+  | 'todo_sync'
+  | 'notice_sync'
   | 'reminder_sync'
   | 'general';
 export type ProviderMemoryProductKind =
   | 'persona_core'
   | 'voice_mode'
   | 'active_focus_digest'
+  | 'todo_digest'
+  | 'notice_digest'
   | 'reminder_digest'
   | 'query_answer_card';
 
@@ -105,18 +109,6 @@ interface WatchedProjectRow {
   priority: number;
   is_active: number;
   updated_at: number | null;
-}
-
-interface ProposedActionRow {
-  id: string;
-  type: string;
-  title: string;
-  description: string | null;
-  confidence: number;
-  requires_approval: number;
-  state: string;
-  expires_at: number | null;
-  created_at: number;
 }
 
 interface ReflectionArtifactRow {
@@ -415,9 +407,10 @@ function bindingTypeForScenario(scenario: ProviderScenario | string, explicitBin
       return 'memory_sync_thread';
     case 'mobile_briefing':
     case 'query_answer':
-      return 'mobile_context_thread';
+    case 'todo_sync':
+    case 'notice_sync':
     case 'reminder_sync':
-      return 'reminder_channel';
+      return 'mobile_context_thread';
     default:
       return 'mobile_context_thread';
   }
@@ -428,8 +421,10 @@ function transportForKind(kind: ProviderMemoryProductKind): ProviderTransport {
     case 'persona_core':
     case 'voice_mode':
       return 'native_memory';
+    case 'todo_digest':
     case 'reminder_digest':
       return 'reminder';
+    case 'notice_digest':
     case 'active_focus_digest':
     case 'query_answer_card':
     default:
@@ -443,6 +438,8 @@ function stabilityForKind(kind: ProviderMemoryProductKind): 'stable' | 'rolling'
     case 'voice_mode':
       return 'stable';
     case 'active_focus_digest':
+    case 'todo_digest':
+    case 'notice_digest':
     case 'reminder_digest':
       return 'rolling';
     case 'query_answer_card':
@@ -455,6 +452,8 @@ function ttlForKind(kind: ProviderMemoryProductKind): number | undefined {
   switch (kind) {
     case 'active_focus_digest':
       return 6 * 3600;
+    case 'todo_digest':
+    case 'notice_digest':
     case 'reminder_digest':
       return 2 * 3600;
     case 'query_answer_card':
@@ -472,6 +471,10 @@ function titleForKind(kind: ProviderMemoryProductKind): string {
       return 'Voice Mode';
     case 'active_focus_digest':
       return 'Active Focus Digest';
+    case 'todo_digest':
+      return 'Todo Digest';
+    case 'notice_digest':
+      return 'Notice Digest';
     case 'reminder_digest':
       return 'Reminder Digest';
     case 'query_answer_card':
@@ -484,13 +487,17 @@ function defaultKindsForScenario(scenario: ProviderScenario | string): ProviderM
     case 'stable_memory':
       return ['persona_core', 'voice_mode'];
     case 'mobile_briefing':
-      return ['active_focus_digest', 'reminder_digest'];
+      return ['active_focus_digest'];
     case 'query_answer':
       return ['query_answer_card'];
+    case 'todo_sync':
+      return ['todo_digest'];
+    case 'notice_sync':
+      return ['notice_digest'];
     case 'reminder_sync':
       return ['reminder_digest'];
     default:
-      return ['persona_core', 'voice_mode', 'active_focus_digest', 'reminder_digest'];
+      return ['persona_core', 'voice_mode', 'active_focus_digest', 'todo_digest', 'notice_digest'];
   }
 }
 
@@ -511,13 +518,13 @@ function buildCapabilityNotes(provider: string): string[] {
 export class ProviderContextService {
   private readonly profileManager: ProfileManager;
   private readonly recallEngine: RecallEngine;
-  private readonly notificationRepository: NotificationRepository;
+  private readonly notificationCenterService: NotificationCenterService;
   private readonly providerRepository: ProviderRepository;
 
   constructor(private readonly db: Database.Database) {
     this.profileManager = new ProfileManager(db);
     this.recallEngine = new RecallEngine(db);
-    this.notificationRepository = new NotificationRepository(db);
+    this.notificationCenterService = new NotificationCenterService(db);
     this.providerRepository = new ProviderRepository(db);
   }
 
@@ -527,7 +534,7 @@ export class ProviderContextService {
       displayName: provider.charAt(0).toUpperCase() + provider.slice(1),
       supportedTransports: ['native_memory', 'session_context', 'document_context', 'reminder'],
       supportedBindingTypes: ['memory_sync_thread', 'mobile_context_thread', 'reminder_channel'],
-      supportedScenarios: ['stable_memory', 'mobile_briefing', 'query_answer', 'reminder_sync', 'general'],
+      supportedScenarios: ['stable_memory', 'mobile_briefing', 'query_answer', 'todo_sync', 'notice_sync', 'reminder_sync', 'general'],
       syncModel: 'local_bridge',
       notes: buildCapabilityNotes(provider),
     };
@@ -681,8 +688,12 @@ export class ProviderContextService {
         return this.renderVoiceMode(context.provider, context.tokenBudget);
       case 'active_focus_digest':
         return this.renderActiveFocusDigest(context.provider, context.freshnessWindowDays, context.tokenBudget);
+      case 'todo_digest':
+        return this.renderTodoDigest(context.provider, context.tokenBudget);
+      case 'notice_digest':
+        return this.renderNoticeDigest(context.provider, context.tokenBudget);
       case 'reminder_digest':
-        return this.renderReminderDigest(context.provider, context.tokenBudget);
+        return this.renderTodoDigest(context.provider, context.tokenBudget, 'reminder_digest');
       case 'query_answer_card':
         return context.query
           ? this.renderQueryAnswerCard(context.provider, context.query, context.tokenBudget)
@@ -882,58 +893,42 @@ export class ProviderContextService {
     };
   }
 
-  private renderReminderDigest(provider: string, tokenBudget: number): ProviderMemoryProduct {
-    const pendingNotifications = this.notificationRepository.list({ state: 'pending', limit: 8, includeFuture: false });
-    const pendingActions = this.db
-      .prepare(
-        `SELECT id, type, title, description, confidence, requires_approval, state, expires_at, created_at
-         FROM proposed_actions
-         WHERE state = 'pending'
-         ORDER BY created_at DESC
-         LIMIT 8`,
-      )
-      .all() as ProposedActionRow[];
-
-    const notificationLines = pendingNotifications.map((notification) => {
-      const body = notification.body ? ` - ${compactText(notification.body, 120)}` : '';
-      const when = notification.sentAt ? ` @ ${formatDateTime(notification.sentAt)}` : '';
-      return `${notification.title}${when}${body}`;
-    });
-
-    const actionLines = pendingActions.map((action) => {
-      const expiry = action.expires_at ? ` (expires ${formatDateTime(action.expires_at)})` : '';
-      const desc = action.description ? ` - ${compactText(action.description, 120)}` : '';
-      return `${action.type}: ${action.title}${expiry}${desc}`;
-    });
-
-    const bodySections = [
-      '# Reminder Digest',
-      '> Rolling reminder context; keep it short and actionable.',
-      '',
-      '## Pending Notifications',
-      markdownList(notificationLines, 'No pending notifications.'),
-      '',
-      '## Pending Actions',
-      markdownList(actionLines, 'No pending actions.'),
-    ];
-
-    const sourceRefs = [
-      ...pendingNotifications.map((notification) => formatSourceRef('notification', notification.id)),
-      ...pendingActions.map((action) => formatSourceRef('proposed_action', action.id)),
-    ];
-
-    const bodyMd = clampMarkdownByBudget(bodySections.join('\n'), tokenBudget);
+  private renderTodoDigest(
+    provider: string,
+    tokenBudget: number,
+    kind: 'todo_digest' | 'reminder_digest' = 'todo_digest',
+  ): ProviderMemoryProduct {
+    const rendered = this.notificationCenterService.formatTodoDigest(provider, tokenBudget);
+    const bodyMd = clampMarkdownByBudget(rendered.bodyMd, tokenBudget);
     return {
-      id: contentHash(`${provider}:reminder_digest:${bodyMd}`),
-      kind: 'reminder_digest',
-      title: titleForKind('reminder_digest'),
+      id: contentHash(`${provider}:${kind}:${bodyMd}`),
+      kind,
+      title: titleForKind(kind),
       bodyMd,
-      stability: stabilityForKind('reminder_digest'),
-      transport: transportForKind('reminder_digest'),
-      targetBindingType: 'reminder_channel',
-      ttlSeconds: ttlForKind('reminder_digest'),
-      sourceRefs,
-      dedupeKey: contentHash(`${provider}:reminder_digest:${bodyMd}`),
+      stability: stabilityForKind(kind),
+      transport: transportForKind(kind),
+      targetBindingType: 'mobile_context_thread',
+      ttlSeconds: ttlForKind(kind),
+      sourceRefs: rendered.sourceRefs,
+      dedupeKey: contentHash(`${provider}:${kind}:${rendered.dedupeSuffix}:${bodyMd}`),
+      generatedAt: now(),
+    };
+  }
+
+  private renderNoticeDigest(provider: string, tokenBudget: number): ProviderMemoryProduct {
+    const rendered = this.notificationCenterService.formatNoticeDigest(provider, tokenBudget);
+    const bodyMd = clampMarkdownByBudget(rendered.bodyMd, tokenBudget);
+    return {
+      id: contentHash(`${provider}:notice_digest:${bodyMd}`),
+      kind: 'notice_digest',
+      title: titleForKind('notice_digest'),
+      bodyMd,
+      stability: stabilityForKind('notice_digest'),
+      transport: transportForKind('notice_digest'),
+      targetBindingType: 'mobile_context_thread',
+      ttlSeconds: ttlForKind('notice_digest'),
+      sourceRefs: rendered.sourceRefs,
+      dedupeKey: contentHash(`${provider}:notice_digest:${rendered.dedupeSuffix}:${bodyMd}`),
       generatedAt: now(),
     };
   }

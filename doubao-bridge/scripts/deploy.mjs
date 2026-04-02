@@ -13,7 +13,7 @@ const localEnvPath = path.join(bridgeRoot, '.env');
 const releaseDir = path.resolve(process.env.DOUBAO_BRIDGE_RELEASE_DIR || path.join(bridgeRoot, 'release'));
 
 function getPkgPath(version) {
-  return path.join(releaseDir, `Doubao-Bridge-${version}-Installer.pkg`);
+  return path.join(releaseDir, `Personal-AI-${version}-Installer.pkg`);
 }
 
 function fatal(message) {
@@ -230,8 +230,8 @@ async function main() {
   const packageJson = await readJson(path.join(bridgeRoot, 'package.json'));
   const pkgPath = getPkgPath(packageJson.version);
   const tagName = process.env.GITHUB_RELEASE_TAG || `doubao-bridge-v${packageJson.version}`;
-  const releaseTitle = process.env.GITHUB_RELEASE_TITLE || `Doubao Bridge ${packageJson.version}`;
-  const releaseNotes = process.env.GITHUB_RELEASE_NOTES || `Automated macOS bundle for Doubao Bridge ${packageJson.version}.`;
+  const releaseTitle = process.env.GITHUB_RELEASE_TITLE || `Personal AI ${packageJson.version}`;
+  const releaseNotes = process.env.GITHUB_RELEASE_NOTES || `Automated macOS bundle for Personal AI ${packageJson.version}.`;
 
   console.log('Building macOS bundle and installer package...');
   await run('npm', ['run', 'package:macos']);
@@ -303,6 +303,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('Failed to deploy Doubao Bridge:', error);
+  console.error('Failed to deploy Personal AI:', error);
   process.exit(1);
 });

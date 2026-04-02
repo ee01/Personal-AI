@@ -126,6 +126,15 @@ function samePageUrl(left?: string, right?: string): boolean {
   }
 }
 
+function sameThreadTarget(left?: string, right?: string): boolean {
+  const leftThreadId = extractThreadId(left);
+  const rightThreadId = extractThreadId(right);
+  if (leftThreadId && rightThreadId) {
+    return leftThreadId === rightThreadId;
+  }
+  return samePageUrl(left, right);
+}
+
 function randomDelay(minMs: number, maxMs: number): number {
   return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
@@ -359,6 +368,19 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
 
       const snapshot = await this.captureSnapshot();
       const postSend = await this.inspectPostSend(transcript);
+      if (threadUrl && !sameThreadTarget(snapshot.url, threadUrl)) {
+        this.lastError = `Transcript was sent to a different thread than requested (${snapshot.url || 'unknown'})`;
+        return {
+          ...snapshot,
+          sent: false,
+          transportUsed: 'dom',
+          verified: false,
+          challengeDetected: false,
+          messageVisible: postSend.messageVisible,
+          observedBodySnippet: postSend.observedBodySnippet,
+          error: this.lastError,
+        };
+      }
       if (postSend.challengeDetected) {
         this.lastError = `Doubao challenge detected after send (${postSend.observedBodySnippet || 'unknown'})`;
         return {

@@ -5,12 +5,12 @@
 
 import type Database from 'better-sqlite3';
 import { getLLMClient } from '../llm/LLMClient.js';
-import { getBotSender } from '../utils/botSender.js';
 import { now, formatDate } from '../utils/time.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { randomUUID } from 'node:crypto';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import { NotificationCenterService } from './NotificationCenterService.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +43,7 @@ export class WeeklyReporter {
   private userDataManager?: UserDataManager;
   private markdownManager?: MarkdownManager;
   private userId?: string;
+  private notificationCenterService: NotificationCenterService;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
     this.db = db;
@@ -51,6 +52,7 @@ export class WeeklyReporter {
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
     this.userId = userId;
+    this.notificationCenterService = new NotificationCenterService(db);
   }
 
   async generateWeeklyReport(options?: {
@@ -153,12 +155,13 @@ Keep it concise (under 500 words). Write in the same language as the source cont
     await this.markdownManager?.reindexFile(reportPath);
 
     // 6. Insert notification
+    const notificationId = randomUUID();
     this.db.prepare(
       `INSERT INTO notification_records
         (id, channel, type, title, body, payload_json, topic_id, sent_at, created_at)
        VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?, ?, ?)`
     ).run(
-      randomUUID(),
+      notificationId,
       'Weekly Report Ready',
       `Your weekly report for ${dateStr} is ready`,
       JSON.stringify({ reportPath, messageCount: msgCount }),
@@ -166,15 +169,20 @@ Keep it concise (under 500 words). Write in the same language as the source cont
       currentTime, currentTime,
     );
 
-    // 7. Bot push
-    const botSender = getBotSender();
     let botSent = false;
-    if (botSender.isConfigured()) {
-      await botSender.sendMarkdown('Weekly Report', reportText, {
-        mention: false,
-        targetUserId: this.userId,
-      });
+    const botResult = await this.notificationCenterService.deliverNoticeToGlip({
+      sourceRef: `notification:${notificationId}`,
+      title: 'Weekly Report',
+      body: reportText,
+      mention: false,
+      targetUserId: this.userId,
+    });
+    if (botResult.sent) {
       botSent = true;
+    }
+
+    if (!botResult.sent && botResult.error) {
+      console.warn(`[WeeklyReporter] Weekly report bot delivery skipped: ${botResult.error}`);
     }
 
     console.log(`[WeeklyReporter] Report generated: ${reportPath}`);

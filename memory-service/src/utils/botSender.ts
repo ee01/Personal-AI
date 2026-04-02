@@ -10,6 +10,15 @@ import { getConfig, type Config } from '../config.js';
 
 type BotConfig = Pick<Config, 'botApiBaseUrl' | 'botToken' | 'botId' | 'botType' | 'botTeamId' | 'botTargetEmail'>;
 
+export interface BotSendResult {
+  sent: boolean;
+  status?: number;
+  statusText?: string;
+  messageId?: string;
+  responseBody?: string;
+  error?: string;
+}
+
 /** Derive RingCentral email from userId (e.g. esone.qiu -> esone.qiu@ringcentral.com). */
 export function userIdToEmail(userId: string): string {
   return `${userId}@ringcentral.com`;
@@ -32,10 +41,13 @@ export class BotSender {
     title: string,
     body: string,
     options?: { mention?: boolean; targetUserId?: string },
-  ): Promise<void> {
+  ): Promise<BotSendResult> {
     if (!this.isConfigured()) {
       console.warn('[BotSender] Bot not configured, skipping message send');
-      return;
+      return {
+        sent: false,
+        error: 'Bot not configured',
+      };
     }
 
     const mention = options?.mention ?? true;
@@ -65,6 +77,10 @@ export class BotSender {
       console.warn(
         '[BotSender] No target email: pass targetUserId in options or set BOT_TARGET_EMAIL',
       );
+      return {
+        sent: false,
+        error: 'No target email configured',
+      };
     }
 
     try {
@@ -79,17 +95,47 @@ export class BotSender {
         body: JSON.stringify(payload),
       });
 
+      const responseBody = await response.text();
       if (!response.ok) {
-        const body = await response.text();
         console.error(
           `[BotSender] Bot API error: ${response.status} ${response.statusText}`,
-          body ? `\nResponse body: ${body.slice(0, 500)}` : '',
+          responseBody ? `\nResponse body: ${responseBody.slice(0, 500)}` : '',
         );
+        return {
+          sent: false,
+          status: response.status,
+          statusText: response.statusText,
+          responseBody,
+          error: `Bot API error: ${response.status} ${response.statusText}`,
+        };
       } else {
         console.log(`[BotSender] Message sent: "${title}"`);
+        let messageId: string | undefined;
+        try {
+          const parsed = responseBody ? JSON.parse(responseBody) as Record<string, unknown> : null;
+          if (parsed && typeof parsed.id === 'string') {
+            messageId = parsed.id;
+          } else if (parsed && typeof parsed.messageId === 'string') {
+            messageId = parsed.messageId;
+          }
+        } catch {
+          // ignore parse failures, keep raw body only
+        }
+        return {
+          sent: true,
+          status: response.status,
+          statusText: response.statusText,
+          messageId,
+          responseBody,
+        };
       }
     } catch (err) {
-      console.error('[BotSender] Failed to send message:', err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[BotSender] Failed to send message:', message);
+      return {
+        sent: false,
+        error: message,
+      };
     }
   }
 }

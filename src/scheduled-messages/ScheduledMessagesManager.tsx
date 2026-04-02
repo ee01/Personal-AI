@@ -304,15 +304,16 @@ function summarizeOutreachResult(item: OutreachTemplateRuntimeStatusItem): strin
     const summaryCandidate = (session.outcome.summary ||
       session.outcome.reason ||
       session.outcome.answer ||
-      session.outcome.answerText) as string | undefined;
+      session.outcome.answerText ||
+      session.outcome.reply) as string | undefined;
     if (typeof summaryCandidate === 'string' && summaryCandidate.trim().length > 0) {
       return summaryCandidate.trim();
     }
   }
+  if (session.replyRawText?.trim()) return session.replyRawText.trim();
   if (session.replyClassification?.trim()) {
     return formatOutreachReplyClassification(session.replyClassification.trim());
   }
-  if (session.replyRawText?.trim()) return session.replyRawText.trim();
   return undefined;
 }
 

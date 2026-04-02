@@ -20,6 +20,7 @@ class FakeBrowser {
   running = false;
   currentUrl = '';
   threadCounter = 0;
+  sendTranscriptImpl?: (transcript: string, threadUrl?: string) => Promise<BrowserSendResult>;
 
   async ensureStarted(): Promise<void> {
     this.running = true;
@@ -39,6 +40,9 @@ class FakeBrowser {
   }
 
   async sendTranscript(transcript: string, threadUrl?: string): Promise<BrowserSendResult> {
+    if (this.sendTranscriptImpl) {
+      return this.sendTranscriptImpl(transcript, threadUrl);
+    }
     await this.ensureStarted();
     if (threadUrl && /\/(?:chat|thread)\//.test(threadUrl)) {
       this.currentUrl = threadUrl;
@@ -180,7 +184,7 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   assert.equal(reminderSync.statusCode, 200);
   const reminderSyncBody = reminderSync.json() as { accepted: boolean; transcript: string };
   assert.equal(reminderSyncBody.accepted, true);
-  assert.match(reminderSyncBody.transcript, /请在随手记中记录以下提醒/);
+  assert.match(reminderSyncBody.transcript, /请在随手记中记录以下待办事项/);
   assert.doesNotMatch(reminderSyncBody.transcript, /不要长期记住/);
 
   const briefingSync = await app.inject({
@@ -226,7 +230,8 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   assert.equal(memoReminderSync.statusCode, 200);
   const memoReminderBody = memoReminderSync.json() as { accepted: boolean; transcript: string };
   assert.equal(memoReminderBody.accepted, true);
-  assert.match(memoReminderBody.transcript, /请在随手记中记录以下提醒/);
+  assert.match(memoReminderBody.transcript, /请在随手记中记录以下待办事项/);
+  assert.doesNotMatch(memoReminderBody.transcript, /✅/);
   assert.doesNotMatch(memoReminderBody.transcript, /不要长期记住/);
 
   const autoBind = await app.inject({
@@ -347,4 +352,83 @@ test('settings endpoint updates effective sync configuration', async () => {
 
   syncManager.stop();
   await app.close();
+});
+
+test('syncMobileBriefing preserves existing mobile binding when browser lands on a different thread', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'doubao-bridge-test-mobile-binding-'));
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const browser = new FakeBrowser();
+  browser.sendTranscriptImpl = async (_transcript, threadUrl) => ({
+    url: 'https://www.doubao.com/chat/generated-999',
+    title: '存入随手记的长期记忆内容 - 豆包',
+    threadId: 'generated-999',
+    sent: true,
+    verified: true,
+    observedBodySnippet: `requested=${threadUrl ?? 'none'}`,
+  });
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+
+  await service.bindThread('mobile_context', {
+    threadUrl: 'https://www.doubao.com/chat/original-mobile-thread',
+    title: '手机版对话',
+  });
+
+  const result = await service.syncMobileBriefing({
+    title: '自动同步的近期重点',
+    bullets: ['项目 A 卡在接口联调'],
+  });
+  const status = await service.getStatus();
+
+  assert.equal(
+    status.bindings.mobile_context?.threadUrl,
+    'https://www.doubao.com/chat/original-mobile-thread',
+  );
+  assert.equal(status.bindings.mobile_context?.title, '手机版对话');
+  assert.match(result.error || '', /different thread/i);
+});
+
+test('syncMobileBriefing preserves mobile binding title when same thread returns a content-derived title', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'doubao-bridge-test-mobile-title-'));
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const browser = new FakeBrowser();
+  browser.sendTranscriptImpl = async (_transcript, threadUrl) => ({
+    url: threadUrl,
+    title: '存入随手记的长期记忆内容 - 豆包',
+    threadId: 'original-mobile-thread',
+    sent: true,
+    verified: true,
+  });
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+
+  await service.bindThread('mobile_context', {
+    threadUrl: 'https://www.doubao.com/chat/original-mobile-thread',
+    title: '手机版对话',
+  });
+
+  const result = await service.syncMobileBriefing({
+    title: '自动同步的近期重点',
+    bullets: ['本周优先处理发布问题'],
+  });
+  const status = await service.getStatus();
+
+  assert.equal(result.error, undefined);
+  assert.equal(status.bindings.mobile_context?.title, '手机版对话');
+  assert.equal(
+    status.bindings.mobile_context?.threadUrl,
+    'https://www.doubao.com/chat/original-mobile-thread',
+  );
 });

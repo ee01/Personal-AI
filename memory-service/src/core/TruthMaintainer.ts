@@ -15,7 +15,6 @@
 import type Database from 'better-sqlite3';
 import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 import { now } from '../utils/time.js';
-import { getBotSender } from '../utils/botSender.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -755,29 +754,7 @@ export class TruthMaintainer {
     context: string | null;
     priority: string;
   }): Promise<void> {
-    const botSender = getBotSender();
-    if (!botSender.isConfigured()) return;
-
-    const bodyParts = [
-      `有新的待确认决策需要处理。`,
-      '',
-      `问题：${params.question}`,
-    ];
-
-    if (params.context) {
-      bodyParts.push(`上下文：${params.context}`);
-    }
-
-    bodyParts.push(`优先级：${params.priority}`);
-    bodyParts.push(`请求 ID：${params.id}`);
-    bodyParts.push('');
-    bodyParts.push('请打开扩展 Dashboard 的 `#/decisions` 页面处理。');
-
-    await botSender.sendMarkdown(
-      '新的待确认决策',
-      bodyParts.join('\n'),
-      { mention: true, targetUserId: this.userId },
-    );
+    void params;
   }
 
   // -------------------------------------------------------------------------

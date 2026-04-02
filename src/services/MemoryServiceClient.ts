@@ -240,6 +240,26 @@ export interface NotificationRecord {
   createdAt: number;
 }
 
+export interface NotificationCenterEnvelope {
+  sourceRef: string;
+  sourceType: 'notification' | 'proposed_action';
+  sourceId: string;
+  lane: 'todo' | 'notice';
+  priority: 'high' | 'normal';
+  title: string;
+  body?: string;
+  dueAt?: number;
+  createdAt: number;
+  sentAt?: number;
+  type?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface NotificationCenterFeedResponse {
+  items: NotificationCenterEnvelope[];
+  total: number;
+}
+
 // ============================================================================
 // Confirm Request types
 // ============================================================================
@@ -673,6 +693,8 @@ export type ProviderScenario =
   | 'stable_memory'
   | 'mobile_briefing'
   | 'query_answer'
+  | 'todo_sync'
+  | 'notice_sync'
   | 'reminder_sync'
   | 'general';
 
@@ -680,6 +702,8 @@ export type ProviderMemoryProductKind =
   | 'persona_core'
   | 'voice_mode'
   | 'active_focus_digest'
+  | 'todo_digest'
+  | 'notice_digest'
   | 'reminder_digest'
   | 'query_answer_card';
 
@@ -1372,6 +1396,42 @@ export class MemoryServiceClient {
     const qs = params.toString();
     const path = `/notifications${qs ? '?' + qs : ''}`;
     return this.request<NotificationRecord[]>('GET', path);
+  }
+
+  async getNotificationCenterFeed(
+    channel: 'chrome' | 'doubao' | 'glip',
+    lanes: Array<'todo' | 'notice'> = ['todo', 'notice'],
+    limit?: number,
+  ): Promise<NotificationCenterFeedResponse> {
+    const params = new URLSearchParams();
+    params.set('channel', channel);
+    if (lanes.length > 0) {
+      params.set('lanes', lanes.join(','));
+    }
+    if (limit !== undefined) {
+      params.set('limit', String(limit));
+    }
+    return this.request<NotificationCenterFeedResponse>(
+      'GET',
+      `/notification-center/feed?${params.toString()}`,
+    );
+  }
+
+  async reportNotificationCenterDelivery(
+    events: Array<{
+      sourceRef: string;
+      channel: 'chrome' | 'doubao' | 'glip';
+      lane: 'todo' | 'notice';
+      status: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+      externalRef?: string;
+      error?: string;
+    }>,
+  ): Promise<{ ok: boolean; updated: number }> {
+    return this.request<{ ok: boolean; updated: number }>(
+      'POST',
+      '/notification-center/delivery',
+      { events },
+    );
   }
 
   /**

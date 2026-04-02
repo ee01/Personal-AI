@@ -174,7 +174,7 @@ export const MEMO_TYPE_NAMES: Record<MemoType, string> = {
 
 // 类型图标（用于格式化输出）
 export const MEMO_TYPE_ICONS: Record<MemoType, string> = {
-  todo: '✅',
+  todo: '',
   shopping: '🛒',
   parking: '🅿️',
   where: '📍',

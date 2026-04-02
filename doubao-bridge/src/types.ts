@@ -1,6 +1,6 @@
 export type BridgeAuthStatus = 'unknown' | 'needs_login' | 'connected' | 'error';
 export type BindingType = 'memory_sync' | 'mobile_context';
-export type SyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync' | 'memo_sync';
+export type SyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync' | 'todo_sync' | 'notice_sync' | 'memo_sync';
 export type ThreadKind = 'memory_sync' | 'mobile_context' | 'manual' | 'unknown';
 export type AutoSyncKind = 'stable_memory' | 'mobile_briefing' | 'reminder_sync';
 export type BridgeAssistantStatusKind =
@@ -278,6 +278,17 @@ export interface ReminderSyncRequest {
     dueAt?: string;
     note?: string;
     severity?: 'low' | 'medium' | 'high';
+  }>;
+  threadId?: string;
+  dryRun?: boolean;
+}
+
+export interface NoticeSyncRequest {
+  notices: Array<{
+    title: string;
+    body?: string;
+    sentAt?: string;
+    priority?: 'high' | 'normal';
   }>;
   threadId?: string;
   dryRun?: boolean;

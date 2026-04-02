@@ -68,7 +68,7 @@
                 <h2>连接 Memory Service</h2>
                 <span id="step-memory-status" class="step-status step-status-pending">待配置</span>
               </div>
-              <p>这是自动拉取 persona、近期重点和提醒的前提；配置后需要同时提供 Base URL 和 User ID。</p>
+              <p>这是自动拉取 persona、近期重点、待办和通知推送的前提；配置后需要同时提供 Base URL 和 User ID。</p>
             </div>
           </div>
           <form id="settings-form" class="settings-form">
@@ -98,7 +98,7 @@
                 <input id="briefing-hours" type="number" min="1" step="1" />
               </label>
               <label>
-                <span>提醒（分钟）</span>
+                <span>待办/通知（分钟）</span>
                 <input id="reminder-minutes" type="number" min="1" step="1" />
               </label>
             </div>
@@ -153,13 +153,13 @@
                 <h2>绑定手机版对话</h2>
                 <span id="step-mobile-thread-status" class="step-status step-status-pending">待绑定</span>
               </div>
-              <p>优先自动查找标题为“手机版对话”的线程，用来同步近期重点和提醒。</p>
+              <p>优先自动查找标题为“手机版对话”的线程，用来同步近期重点、待办和通知推送。</p>
             </div>
           </div>
           <div class="action-row">
             <button id="mobile-thread-button">自动绑定手机对话</button>
             <button id="run-briefing-button" class="secondary">现在推一次近期重点</button>
-            <button id="run-reminder-button" class="secondary">现在推一次提醒</button>
+            <button id="run-reminder-button" class="secondary">现在推一次待办/通知</button>
           </div>
           <p id="mobile-thread-message" class="inline-message"></p>
         </section>
@@ -175,7 +175,7 @@
               <p>完成前四步后，Personal AI 会默认进入后台自动同步。关闭窗口即可继续运行；真正停掉同步请用下面的按钮。</p>
             </div>
           </div>
-          <p class="step-note">如果你想先验证链路，可以先点“现在推一次”，确认 persona、近期重点和提醒都能成功送到对应线程。平时不需要再额外勾选开启自动同步。</p>
+          <p class="step-note">如果你想先验证链路，可以先点“现在推一次”，确认 persona、近期重点、待办和通知推送都能成功送到对应线程。平时不需要再额外勾选开启自动同步。</p>
           <div class="action-row">
             <button id="stop-button" class="danger">停止后台并退出</button>
           </div>

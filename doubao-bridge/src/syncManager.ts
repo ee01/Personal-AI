@@ -1,10 +1,8 @@
 import type { BridgeConfig } from './config.js';
-import { BridgeMemoryServiceClient, type ProviderMemoryProduct, type RenderContextPackageResponse } from './memoryServiceClient.js';
+import { BridgeMemoryServiceClient, BridgeMemoryServiceHttpError, type ProviderMemoryProduct, type RenderContextPackageResponse } from './memoryServiceClient.js';
 import { BridgeSettingsStore } from './settings.js';
 import { DoubaoBridgeService } from './bridgeService.js';
 import type { AutoSyncKind } from './types.js';
-import { convertToMemoItems, convertRemindersToMemoItems } from './memoClassifier.js';
-import { smartFormat } from './memoFormatter.js';
 
 interface SyncState {
   stableMemory?: number;
@@ -48,18 +46,13 @@ function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
     .filter(Boolean);
 
   const bullets: string[] = [];
-  let section = pkg.title;
 
   for (const line of lines) {
-    if (line.startsWith('#')) {
-      const heading = stripMarkdown(line);
-      if (heading) section = heading;
-      continue;
-    }
+    if (line.startsWith('#')) continue;
     if (line.startsWith('- ') || line.startsWith('* ') || /^\d+\.\s/.test(line)) {
       const value = stripMarkdown(line);
       if (value) {
-        bullets.push(section && section !== pkg.title ? `${section}: ${value}` : value);
+        bullets.push(value);
       }
       if (bullets.length >= limit) break;
     }
@@ -70,8 +63,7 @@ function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
   return lines
     .map((line) => stripMarkdown(line))
     .filter(Boolean)
-    .slice(0, limit)
-    .map((line) => `${pkg.title}: ${line}`);
+    .slice(0, limit);
 }
 
 function extractReminders(pkg: ProviderMemoryProduct, limit = 8) {
@@ -81,11 +73,29 @@ function extractReminders(pkg: ProviderMemoryProduct, limit = 8) {
   }));
 }
 
+function extractNotices(pkg: ProviderMemoryProduct, limit = 8) {
+  return extractBullets(pkg, limit).map((line) => {
+    const separator = line.indexOf(' - ');
+    if (separator >= 0) {
+      return {
+        title: line.slice(0, separator).trim(),
+        body: line.slice(separator + 3).trim() || undefined,
+        priority: 'normal' as const,
+      };
+    }
+    return {
+      title: line,
+      priority: 'normal' as const,
+    };
+  });
+}
+
 export class BridgeSyncManager {
   private timer: NodeJS.Timeout | null = null;
   private syncState: SyncState = {};
   private running = false;
   private settingsUnsubscribe: (() => void) | null = null;
+  private providerScenariosCache?: { value: Set<string>; fetchedAt: number };
 
   constructor(
     private readonly config: BridgeConfig,
@@ -164,6 +174,64 @@ export class BridgeSyncManager {
     return !lastRunAt || Date.now() - lastRunAt >= intervalMs;
   }
 
+  private async getSupportedScenarios(): Promise<Set<string>> {
+    if (this.providerScenariosCache && Date.now() - this.providerScenariosCache.fetchedAt < 60_000) {
+      return this.providerScenariosCache.value;
+    }
+
+    const capabilities = await this.memoryClient.getProviderCapabilities(this.config.provider);
+    const value = new Set(capabilities.supportedScenarios || []);
+    this.providerScenariosCache = {
+      value,
+      fetchedAt: Date.now(),
+    };
+    return value;
+  }
+
+  private async supportsScenario(scenario: string): Promise<boolean> {
+    const supportedScenarios = await this.getSupportedScenarios();
+    return supportedScenarios.has(scenario);
+  }
+
+  private collectSourceRefs(rendered: RenderContextPackageResponse): string[] {
+    return Array.from(
+      new Set(
+        rendered.packages.flatMap((pkg) => pkg.sourceRefs || []).filter(Boolean),
+      ),
+    );
+  }
+
+  private async reportDelivery(
+    rendered: RenderContextPackageResponse,
+    lane: 'todo' | 'notice',
+    status: 'delivered' | 'failed',
+    error?: string,
+  ): Promise<void> {
+    const sourceRefs = this.collectSourceRefs(rendered);
+    if (sourceRefs.length === 0) return;
+
+    try {
+      await this.memoryClient.reportNotificationDelivery(
+        sourceRefs.map((sourceRef) => ({
+          sourceRef,
+          channel: 'doubao',
+          lane,
+          status,
+          error,
+        })),
+      );
+    } catch (deliveryError) {
+      if (
+        deliveryError instanceof BridgeMemoryServiceHttpError &&
+        (deliveryError.status === 404 || deliveryError.status === 501)
+      ) {
+        console.warn('[doubao-bridge] memory-service does not support notification-center delivery reporting yet');
+        return;
+      }
+      throw deliveryError;
+    }
+  }
+
   async tick(): Promise<void> {
     const settings = this.settingsStore.getSettings();
     if (this.running || !settings.autoSync || !this.memoryClient.isEnabled()) return;
@@ -184,9 +252,9 @@ export class BridgeSyncManager {
         this.syncState.mobileBriefing = Date.now();
       }
 
-      // 提醒事项同步 - 使用随手记格式（转为待办）
+      // 待办 / 通知同步
       if (status.bindings.mobile_context && this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)) {
-        await this.syncRemindersAsMemo();
+        await this.syncReminderChannels();
         this.syncState.reminderSync = Date.now();
       }
     } catch (error) {
@@ -209,7 +277,7 @@ export class BridgeSyncManager {
       return;
     }
 
-    await this.syncRemindersAsMemo();
+    await this.syncReminderChannels();
     this.syncState.reminderSync = Date.now();
   }
 
@@ -290,25 +358,66 @@ export class BridgeSyncManager {
     await this.report(rendered, result.accepted && !result.error ? 'succeeded' : 'failed', startedAt, result.error, result.threadId);
   }
 
-  /**
-   * 使用随手记格式同步提醒
-   * 将提醒转换为待办类型
-   */
-  async syncRemindersAsMemo(): Promise<void> {
+  private async syncReminderChannels(): Promise<void> {
+    await this.syncTodosAsMemo();
+    await this.syncNotices();
+  }
+
+  async syncTodosAsMemo(): Promise<void> {
     const startedAt = Date.now();
-    const rendered = await this.memoryClient.renderContextPackage({
-      provider: this.config.provider,
-      scenario: 'reminder_sync',
-      deviceContext: 'doubao_bridge_daemon',
-    });
+    const rendered = await this.renderTodoPackage();
     const reminders = rendered.packages.flatMap((pkg) => extractReminders(pkg)).slice(0, 8);
     if (reminders.length === 0) return;
 
-    const result = await this.bridgeService.syncRemindersAsMemo({
+    const result = await this.bridgeService.syncTodosAsMemo({
       reminders,
     });
 
+    if (result.accepted && !result.error) {
+      await this.reportDelivery(rendered, 'todo', 'delivered');
+    }
+
     await this.report(rendered, result.accepted && !result.error ? 'succeeded' : 'failed', startedAt, result.error, result.threadId);
+  }
+
+  async syncRemindersAsMemo(): Promise<void> {
+    await this.syncTodosAsMemo();
+  }
+
+  async syncNotices(): Promise<void> {
+    const startedAt = Date.now();
+    const supported = await this.supportsScenario('notice_sync');
+    if (!supported) {
+      console.warn('[doubao-bridge] memory-service does not support notice_sync yet, skipping notice push');
+      return;
+    }
+
+    const rendered = await this.memoryClient.renderContextPackage({
+      provider: this.config.provider,
+      scenario: 'notice_sync',
+      deviceContext: 'doubao_bridge_daemon',
+    });
+    const notices = rendered.packages.flatMap((pkg) => extractNotices(pkg)).slice(0, 8);
+    if (notices.length === 0) return;
+
+    const result = await this.bridgeService.syncNotices({
+      notices,
+    });
+
+    if (result.accepted && !result.error) {
+      await this.reportDelivery(rendered, 'notice', 'delivered');
+    }
+
+    await this.report(rendered, result.accepted && !result.error ? 'succeeded' : 'failed', startedAt, result.error, result.threadId);
+  }
+
+  private async renderTodoPackage(): Promise<RenderContextPackageResponse> {
+    const supported = await this.supportsScenario('todo_sync');
+    return this.memoryClient.renderContextPackage({
+      provider: this.config.provider,
+      scenario: supported ? 'todo_sync' : 'reminder_sync',
+      deviceContext: 'doubao_bridge_daemon',
+    });
   }
 
   private async report(

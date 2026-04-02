@@ -219,6 +219,21 @@ export interface NotificationRecord {
   createdAt: number;
 }
 
+export interface NotificationCenterEnvelope {
+  sourceRef: string;
+  sourceType: 'notification' | 'proposed_action';
+  sourceId: string;
+  lane: 'todo' | 'notice';
+  priority: 'high' | 'normal';
+  title: string;
+  body?: string;
+  dueAt?: number;
+  createdAt: number;
+  sentAt?: number;
+  type?: string;
+  payload?: Record<string, unknown>;
+}
+
 // ============ Dual Persona Types ============
 
 export interface ProfileItem {

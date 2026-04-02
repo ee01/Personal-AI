@@ -39,6 +39,7 @@ test('smartFormat uses explicit memo wording for reminder sync', () => {
     'reminder',
   );
 
-  assert.match(transcript, /请在随手记中记录以下提醒/);
+  assert.match(transcript, /请在随手记中记录以下待办事项/);
   assert.doesNotMatch(transcript, /不要长期记住/);
+  assert.doesNotMatch(transcript, /✅/);
 });
