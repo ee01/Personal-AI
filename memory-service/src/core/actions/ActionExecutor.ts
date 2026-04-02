@@ -13,9 +13,8 @@ import {
 } from '../../repositories/ActionRepository.js';
 import { ActionResultRepository } from '../../repositories/ActionResultRepository.js';
 import { ConfirmRequestRepository } from '../../repositories/ConfirmRequestRepository.js';
-import { now } from '../../utils/time.js';
-import { getBotSender } from '../../utils/botSender.js';
 import { getUserRuntimeConfig } from '../../runtimeConfig.js';
+import { now } from '../../utils/time.js';
 import { TruthMaintainer, type PropertyChange } from '../TruthMaintainer.js';
 import { ReflectionThreadService } from '../ReflectionThreadService.js';
 import { OutreachEngine } from '../OutreachEngine.js';
@@ -267,22 +266,9 @@ export class ActionExecutor {
         currentTime,
       );
 
-    const botSender = getBotSender();
-    const shouldPushBot =
-      (action.urgencyScore ?? 0) >= getUserRuntimeConfig(this.userDataManager).reflectionUrgentNotifyThreshold ||
-      action.priority >= 8 ||
-      params.botPush === true;
-    if (shouldPushBot && botSender.isConfigured()) {
-      await botSender.sendMarkdown(
-        String(params.title ?? action.title),
-        String(params.body ?? action.description ?? ''),
-        { mention: action.priority >= 8, targetUserId: this.userId },
-      );
-    }
-
     return {
       notificationId,
-      botPushed: shouldPushBot && botSender.isConfigured(),
+      botPushed: false,
     };
   }
 

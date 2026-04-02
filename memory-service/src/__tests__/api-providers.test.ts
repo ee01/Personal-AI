@@ -27,6 +27,9 @@ describe('Provider API', () => {
     db.prepare('DELETE FROM user_profile_items').run();
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM concerned_items_state').run();
+    db.prepare('DELETE FROM notification_records').run();
+    db.prepare('DELETE FROM proposed_actions').run();
+    db.prepare('DELETE FROM channel_delivery_records').run();
 
     const now = Math.floor(Date.now() / 1000);
 
@@ -103,6 +106,8 @@ describe('Provider API', () => {
     expect(body.provider).toBe('doubao');
     expect(body.supportedBindingTypes).toContain('memory_sync_thread');
     expect(body.supportedScenarios).toContain('mobile_briefing');
+    expect(body.supportedScenarios).toContain('todo_sync');
+    expect(body.supportedScenarios).toContain('notice_sync');
     expect(body.syncModel).toBe('local_bridge');
   });
 
@@ -272,5 +277,93 @@ describe('Provider API', () => {
     expect(body.packages[0].bodyMd).toContain('keywords 随手记, 近期重点');
     expect(body.packages[0].bodyMd).not.toContain('- tp3ppwxlu');
     expect(body.packages[0].bodyMd).not.toContain('- x2c7o07b0');
+  });
+
+  it('renders todo_sync and notice_sync with the new split while keeping reminder_sync as todo alias', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-weekly-1',
+      'Weekly Report Ready',
+      'Your weekly report is ready',
+      now,
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'new_conflict', ?, ?, ?, ?)`,
+    ).run(
+      'notif-conflict-1',
+      'Need a decision',
+      'There is a new conflict to confirm',
+      now,
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 9)`,
+    ).run(
+      'action-1',
+      'Review the rollout notes',
+      'Check the notes before tomorrow morning',
+      now,
+    );
+
+    const todoRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'todo_sync',
+      },
+    });
+
+    expect(todoRes.statusCode).toBe(200);
+    const todoBody = todoRes.json();
+    expect(todoBody.packages).toHaveLength(1);
+    expect(todoBody.packages[0].kind).toBe('todo_digest');
+    expect(todoBody.packages[0].bodyMd).toContain('Need a decision');
+    expect(todoBody.packages[0].bodyMd).toContain('Review the rollout notes');
+    expect(todoBody.packages[0].bodyMd).not.toContain('Weekly Report Ready');
+
+    const noticeRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'notice_sync',
+      },
+    });
+
+    expect(noticeRes.statusCode).toBe(200);
+    const noticeBody = noticeRes.json();
+    expect(noticeBody.packages).toHaveLength(1);
+    expect(noticeBody.packages[0].kind).toBe('notice_digest');
+    expect(noticeBody.packages[0].bodyMd).toContain('Weekly Report Ready');
+    expect(noticeBody.packages[0].bodyMd).not.toContain('Need a decision');
+
+    const reminderAliasRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'reminder_sync',
+      },
+    });
+
+    expect(reminderAliasRes.statusCode).toBe(200);
+    const reminderAliasBody = reminderAliasRes.json();
+    expect(reminderAliasBody.packages).toHaveLength(1);
+    expect(reminderAliasBody.packages[0].kind).toBe('reminder_digest');
+    expect(reminderAliasBody.packages[0].bodyMd).toContain('Need a decision');
+    expect(reminderAliasBody.packages[0].bodyMd).not.toContain('Weekly Report Ready');
   });
 });

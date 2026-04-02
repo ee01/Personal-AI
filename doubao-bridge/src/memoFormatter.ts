@@ -7,15 +7,32 @@
 import type { MemoType, MemoItem } from './memoTypes.js';
 import { MEMO_TYPE_NAMES, MEMO_TYPE_ICONS } from './memoTypes.js';
 
+function formatTypeHeading(type: MemoType): string {
+  const icon = MEMO_TYPE_ICONS[type];
+  const typeName = MEMO_TYPE_NAMES[type];
+  return icon ? `${icon} 【${typeName}】` : `【${typeName}】`;
+}
+
+function formatTypeSummary(type: MemoType, count: number): string {
+  const icon = MEMO_TYPE_ICONS[type];
+  const name = MEMO_TYPE_NAMES[type];
+  return icon ? `${icon} ${name}: ${count} 条` : `${name}: ${count} 条`;
+}
+
+function formatTypeLabel(type: MemoType): string {
+  const icon = MEMO_TYPE_ICONS[type];
+  const name = MEMO_TYPE_NAMES[type];
+  return icon ? `${icon} ${name}` : name;
+}
+
 /**
  * 格式化单个 MemoItem 为豆包消息
  */
 export function formatMemoItem(item: MemoItem): string {
-  const icon = MEMO_TYPE_ICONS[item.type];
   const typeName = MEMO_TYPE_NAMES[item.type];
   
   const lines: string[] = [
-    `${icon} 【${typeName}】`,
+    formatTypeHeading(item.type),
     '',
     `📌 ${item.title}`,
   ];
@@ -84,11 +101,7 @@ export function formatMemoBatch(items: MemoItem[], title?: string): string {
   // 统计信息
   const typeStats = Object.entries(grouped)
     .filter(([, groupItems]) => groupItems.length > 0)
-    .map(([type, groupItems]) => {
-      const icon = MEMO_TYPE_ICONS[type as MemoType];
-      const name = MEMO_TYPE_NAMES[type as MemoType];
-      return `${icon} ${name}: ${groupItems.length} 条`;
-    });
+    .map(([type, groupItems]) => formatTypeSummary(type as MemoType, groupItems.length));
   
   if (typeStats.length > 0) {
     lines.push('📊 类型分布:');
@@ -147,10 +160,7 @@ export function formatCompactMemoList(items: MemoItem[], maxItems = 10): string 
   for (const [type, groupItems] of Object.entries(grouped)) {
     if (!groupItems || groupItems.length === 0) continue;
     
-    const icon = MEMO_TYPE_ICONS[type as MemoType];
-    const name = MEMO_TYPE_NAMES[type as MemoType];
-    
-    lines.push(`${icon} ${name}`);
+    lines.push(formatTypeLabel(type as MemoType));
     for (const item of groupItems) {
       lines.push(`  • ${item.title}`);
     }
@@ -164,17 +174,16 @@ export function formatCompactMemoList(items: MemoItem[], maxItems = 10): string 
  * 格式化提醒事项为待办列表
  */
 export function formatTodoList(items: MemoItem[]): string {
-  const lines: string[] = ['✅ 待办事项:', ''];
+  const lines: string[] = ['待办事项', ''];
   
   const todos = items.filter((item) => item.type === 'todo' || item.type === 'important_date');
   
   for (let i = 0; i < todos.length; i++) {
     const item = todos[i];
-    const icon = MEMO_TYPE_ICONS[item.type];
     const due = item.metadata?.dueDate ? ` [${item.metadata.dueDate}]` : '';
     const importance = item.metadata?.importance === 'high' ? '🔴 ' : '';
-    
-    lines.push(`${i + 1}. ${importance}${icon} ${item.title}${due}`);
+
+    lines.push(`${i + 1}. ${importance}${item.title}${due}`.trimEnd());
   }
   
   if (todos.length === 0) {
@@ -240,13 +249,13 @@ function prependInstruction(instruction: string, content: string): string {
  */
 export function smartFormat(items: MemoItem[], context?: 'stable' | 'briefing' | 'reminder'): string {
   const emptyMessage =
-    context === 'reminder' ? '_暂无提醒需要记录到随手记_' : '_暂无内容需要存入随手记_';
+    context === 'reminder' ? '_暂无待办需要记录到随手记_' : '_暂无内容需要存入随手记_';
   if (items.length === 0) {
     return context === 'briefing' ? '_暂无内容需要同步_' : emptyMessage;
   }
 
   const formatted =
-    items.length === 1
+    items.length === 1 && context !== 'reminder'
       ? formatMemoItem(items[0])
       : (() => {
           switch (context) {
@@ -261,7 +270,7 @@ export function smartFormat(items: MemoItem[], context?: 'stable' | 'briefing' |
               if (todos.length === items.length) {
                 return formatTodoList(items);
               }
-              return formatMemoBatch(items, '⏰ 提醒事项同步');
+              return formatMemoBatch(items, '待办事项同步');
             }
 
             default:
@@ -277,7 +286,7 @@ export function smartFormat(items: MemoItem[], context?: 'stable' | 'briefing' |
       return formatted;
 
     case 'reminder':
-      return prependInstruction('请在随手记中记录以下提醒：', formatted);
+      return prependInstruction('请在随手记中记录以下待办事项，不要加已完成标记：', formatted);
 
     default:
       return prependInstruction('请把以下内容存入随手记：', formatted);

@@ -43,11 +43,25 @@ export interface ProviderSyncJobRecord {
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
 }
 
+export interface ProviderCapabilities {
+  provider: string;
+  supportedScenarios: string[];
+}
+
 export interface ProviderMemoryProduct {
   title: string;
   kind: string;
   bodyMd: string;
   sourceRefs: string[];
+}
+
+export interface NotificationCenterDeliveryEvent {
+  sourceRef: string;
+  channel: 'chrome' | 'doubao' | 'glip';
+  lane: 'todo' | 'notice';
+  status: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  externalRef?: string;
+  error?: string;
 }
 
 export interface RenderContextPackageResponse {
@@ -333,10 +347,7 @@ export class BridgeMemoryServiceClient {
 
   async testConnection(): Promise<Record<string, unknown>> {
     const health = await this.request<Record<string, unknown>>('GET', '/api/v1/health');
-    const providerCapabilities = await this.request<Record<string, unknown>>(
-      'GET',
-      '/api/v1/providers/doubao/capabilities',
-    );
+    const providerCapabilities = await this.getProviderCapabilities('doubao');
     return {
       ok: true,
       baseUrl: normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl),
@@ -345,9 +356,16 @@ export class BridgeMemoryServiceClient {
     };
   }
 
+  async getProviderCapabilities(provider: string): Promise<ProviderCapabilities> {
+    return this.request<ProviderCapabilities>(
+      'GET',
+      `/api/v1/providers/${encodeURIComponent(provider)}/capabilities`,
+    );
+  }
+
   async renderContextPackage(input: {
     provider: string;
-    scenario: 'stable_memory' | 'mobile_briefing' | 'reminder_sync';
+    scenario: 'stable_memory' | 'mobile_briefing' | 'todo_sync' | 'notice_sync' | 'reminder_sync';
     deviceContext?: string;
   }): Promise<RenderContextPackageResponse> {
     this.ensureWriteIdentity();
@@ -373,6 +391,12 @@ export class BridgeMemoryServiceClient {
   ): Promise<void> {
     this.ensureWriteIdentity();
     await this.request('POST', `/api/v1/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`, payload);
+  }
+
+  async reportNotificationDelivery(events: NotificationCenterDeliveryEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    this.ensureWriteIdentity();
+    await this.request('POST', '/api/v1/notification-center/delivery', { events });
   }
 
   async ask(query: string, context?: string, includeEvidence?: boolean): Promise<AskResponse> {

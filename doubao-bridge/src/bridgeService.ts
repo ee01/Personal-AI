@@ -7,6 +7,7 @@ import type {
   BridgeServiceStatus,
   MemoSyncRequest,
   MobileBriefingRequest,
+  NoticeSyncRequest,
   QueryInjectRequest,
   ReminderSyncRequest,
   SendExperimentRequest,
@@ -44,6 +45,15 @@ function extractThreadId(url?: string): string | undefined {
 
 function looksLikeThreadUrl(url?: string): boolean {
   return Boolean(extractThreadId(url));
+}
+
+function sameThreadUrl(left?: string, right?: string): boolean {
+  const leftThreadId = extractThreadId(left);
+  const rightThreadId = extractThreadId(right);
+  if (leftThreadId && rightThreadId) {
+    return leftThreadId === rightThreadId;
+  }
+  return left === right;
 }
 
 function normalizeThreadTitle(title: string | undefined, fallbackTitle: string): string {
@@ -111,13 +121,28 @@ function renderQuery(payload: QueryInjectRequest): string {
 }
 
 function renderReminders(payload: ReminderSyncRequest): string {
-  const lines = ['请在随手记中记录以下提醒：'];
+  const lines = ['请在随手记中记录以下待办事项：'];
   for (const reminder of payload.reminders) {
     const due = reminder.dueAt ? ` [${reminder.dueAt}]` : '';
     const note = reminder.note ? ` - ${reminder.note}` : '';
     lines.push(`- ${reminder.title}${due}${note}`);
   }
-  lines.push('', '请按提醒或待办的方式保存，方便我之后查看。');
+  lines.push('', '请按待办方式保存，不要加已完成标记。');
+  return lines.join('\n');
+}
+
+function renderNotices(payload: NoticeSyncRequest): string {
+  const lines = [
+    '下面是一些通知推送，请不要记录为待办，也不要当作长期记忆。',
+    '请在我下次提问或下一次手机/耳机对话中，按自然口吻提醒我这些信息。',
+    '',
+  ];
+  for (const notice of payload.notices) {
+    const when = notice.sentAt ? ` [${notice.sentAt}]` : '';
+    const body = notice.body ? ` - ${notice.body}` : '';
+    lines.push(`- ${notice.title}${when}${body}`);
+  }
+  lines.push('', '这些内容属于通知推送，而不是待办事项。');
   return lines.join('\n');
 }
 
@@ -321,6 +346,11 @@ export class DoubaoBridgeService {
     return this.sendToBinding('reminder_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
   }
 
+  async syncNotices(payload: NoticeSyncRequest): Promise<SyncResult> {
+    const transcript = renderNotices(payload);
+    return this.sendToBinding('notice_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
+  }
+
   /**
    * 同步随手记消息
    * 将消息智能分类后格式化为豆包随手记格式
@@ -347,6 +377,12 @@ export class DoubaoBridgeService {
     const memoItems = convertRemindersToMemoItems(payload.reminders);
     const transcript = smartFormat(memoItems, 'reminder');
     return this.sendToBinding('reminder_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
+  }
+
+  async syncTodosAsMemo(payload: ReminderSyncRequest): Promise<SyncResult> {
+    const memoItems = convertRemindersToMemoItems(payload.reminders);
+    const transcript = smartFormat(memoItems, 'reminder');
+    return this.sendToBinding('todo_sync', 'mobile_context', transcript, payload.threadId, payload.dryRun);
   }
 
   async sendExperiment(payload: SendExperimentRequest): Promise<SyncResult> {
@@ -395,26 +431,35 @@ export class DoubaoBridgeService {
 
     try {
       const result = await this.browser.sendTranscript(transcript, threadUrl, sendOptions);
-      const resolvedThreadId = result.threadId || threadId;
-      if (result.sent) {
+      const sentToRequestedThread =
+        !threadUrl || !result.url || sameThreadUrl(threadUrl, result.url);
+      const effectiveSent = result.sent && sentToRequestedThread;
+      const effectiveError =
+        result.error ||
+        (!sentToRequestedThread
+          ? 'Transcript was sent to a different thread than the bound mobile conversation'
+          : undefined);
+      const resolvedThreadId = effectiveSent ? result.threadId || threadId : threadId;
+      const preservedTitle = binding?.title || existingRecord?.title;
+      if (effectiveSent) {
         const updatedRecord = this.upsertThreadRecord(
           asThreadRecord(
             targetBindingType,
             {
               id: resolvedThreadId,
               url: result.url || threadUrl,
-              title: result.title || binding?.title,
+              title: preservedTitle || result.title,
               threadId: resolvedThreadId,
             },
-            targetBindingType === 'memory_sync' ? '长期记忆同步线程' : binding?.title || '手机版对话',
+            targetBindingType === 'memory_sync' ? preservedTitle || '长期记忆同步线程' : preservedTitle || '手机版对话',
             existingRecord,
           ),
         );
         this.state.bindings[targetBindingType] = this.bindingFromRecord(targetBindingType, updatedRecord);
       }
       this.state.lastSyncAt = nowIso();
-      this.state.lastError = result.sent ? undefined : result.error || 'Transcript was not sent';
-      this.state.authStatus = result.sent ? 'connected' : this.state.authStatus;
+      this.state.lastError = effectiveSent ? undefined : effectiveError || 'Transcript was not sent';
+      this.state.authStatus = effectiveSent ? 'connected' : this.state.authStatus;
       await this.persist();
 
       return {
@@ -425,7 +470,7 @@ export class DoubaoBridgeService {
         transcript,
         sentAt: nowIso(),
         transportUsed: result.transportUsed,
-        error: result.sent ? undefined : result.error || 'No editable element found on the current Doubao page',
+        error: effectiveSent ? undefined : effectiveError || 'No editable element found on the current Doubao page',
         verified: result.verified,
         challengeDetected: result.challengeDetected,
         messageVisible: result.messageVisible,

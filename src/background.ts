@@ -26,7 +26,6 @@ import { concernedItemsSyncService } from './services/ConcernedItemsSyncService'
 import { Logger } from './utils/logger';
 import { cleanupExpiredFollowThreads, getNextCleanupTime, storeRelatedMessage, registerFollowThreadDigestTask } from './message-reaction/FollowThreadHandler';
 import { registerConcernedItemsDigestTask, updateConcernedItemsDigestTaskSchedule } from './services/DigestQueueService';
-import { sendPlainBotMessage } from './bot';
 import {
     syncStoredUserIdentityToMemory,
     syncUserIdentityToMemory
@@ -35,8 +34,61 @@ import {
 console.log('Background script loaded');
 void concernedItemsSyncService.initialize();
 
-// Map to track backend notification types for click handling
-const backendNotificationTypes = new Map<string, string>();
+interface BackendNotificationMeta {
+    sourceRef: string;
+    lane: 'todo' | 'notice';
+    type?: string;
+    targetHash: string;
+    notificationId?: string;
+}
+
+// Map to track backend notification metadata for click handling
+const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
+
+function isNotificationCenterCompatError(error: any): boolean {
+    return error?.status === 404 || error?.status === 501;
+}
+
+function getBackendTargetHash(type?: string, sourceType?: string): string {
+    if (sourceType === 'proposed_action') {
+        return '/decisions';
+    }
+    if (type === 'dream_digest' || type === 'weekly_report') {
+        return '/dreams';
+    }
+    return '/decisions';
+}
+
+function inferLegacyLane(type?: string): 'todo' | 'notice' {
+    if (type === 'dream_digest' || type === 'weekly_report') {
+        return 'notice';
+    }
+    return 'todo';
+}
+
+async function safeReportChromeDelivery(events: Array<{
+    sourceRef: string;
+    lane: 'todo' | 'notice';
+    status: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+    externalRef?: string;
+    error?: string;
+}>): Promise<void> {
+    if (events.length === 0) return;
+    try {
+        const client = getMemoryServiceClient();
+        await client.reportNotificationCenterDelivery(
+            events.map((event) => ({
+                ...event,
+                channel: 'chrome',
+            })),
+        );
+    } catch (error: any) {
+        if (isNotificationCenterCompatError(error)) {
+            return;
+        }
+        console.debug('safeReportChromeDelivery error:', error);
+    }
+}
 
 interface OutreachTemplateMirrorOverrides {
     targetType?: string;
@@ -1703,16 +1755,29 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
     // 处理后端推送通知 (backend-xxx)
     if (notificationId.startsWith('backend-')) {
         try {
-            const notifType = backendNotificationTypes.get(notificationId) || '';
-            let targetHash = '/dreams';
-            if (notifType === 'dream_digest' || notifType === 'weekly_report') {
-                targetHash = '/dreams';
-            } else {
-                targetHash = '/decisions';
-            }
+            const meta = backendNotificationMeta.get(notificationId);
+            const targetHash = meta?.targetHash || '/decisions';
             const url = chrome.runtime.getURL(`memory-exploring.html#${targetHash}`);
             await chrome.tabs.create({ url });
-            backendNotificationTypes.delete(notificationId);
+
+            if (meta?.sourceRef) {
+                await safeReportChromeDelivery([
+                    {
+                        sourceRef: meta.sourceRef,
+                        lane: meta.lane,
+                        status: 'clicked',
+                        externalRef: notificationId,
+                    },
+                ]);
+
+                if (meta.sourceRef.startsWith('notification:')) {
+                    const client = getMemoryServiceClient();
+                    const notificationRecordId = meta.notificationId || meta.sourceRef.slice('notification:'.length);
+                    await client.acknowledgeNotification(notificationRecordId, 'chrome_notification_opened');
+                }
+            }
+
+            backendNotificationMeta.delete(notificationId);
         } catch (error) {
             console.error('Failed to handle backend notification click:', error);
         }
@@ -1769,6 +1834,53 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
         chrome.notifications.clear(notificationId);
         return;
     }
+
+    if (notificationId.startsWith('backend-')) {
+        const meta = backendNotificationMeta.get(notificationId);
+        try {
+            if (buttonIndex === 0) {
+                const targetHash = meta?.targetHash || '/decisions';
+                const url = chrome.runtime.getURL(`memory-exploring.html#${targetHash}`);
+                await chrome.tabs.create({ url });
+
+                if (meta?.sourceRef) {
+                    await safeReportChromeDelivery([
+                        {
+                            sourceRef: meta.sourceRef,
+                            lane: meta.lane,
+                            status: 'clicked',
+                            externalRef: notificationId,
+                        },
+                    ]);
+                    if (meta.sourceRef.startsWith('notification:')) {
+                        const client = getMemoryServiceClient();
+                        const notificationRecordId = meta.notificationId || meta.sourceRef.slice('notification:'.length);
+                        await client.acknowledgeNotification(notificationRecordId, 'chrome_notification_view_button');
+                    }
+                }
+            } else if (buttonIndex === 1 && meta?.sourceRef) {
+                await safeReportChromeDelivery([
+                    {
+                        sourceRef: meta.sourceRef,
+                        lane: meta.lane,
+                        status: 'dismissed',
+                        externalRef: notificationId,
+                    },
+                ]);
+                if (meta.sourceRef.startsWith('notification:')) {
+                    const client = getMemoryServiceClient();
+                    const notificationRecordId = meta.notificationId || meta.sourceRef.slice('notification:'.length);
+                    await client.dismissNotification(notificationRecordId, 'chrome_notification_dismiss_button');
+                }
+            }
+        } catch (error) {
+            console.error('Failed to handle backend notification button click:', error);
+        } finally {
+            backendNotificationMeta.delete(notificationId);
+            chrome.notifications.clear(notificationId);
+        }
+        return;
+    }
     
     // 处理旧的关注后续通知格式 (followThread_xxx)
     if (notificationId.startsWith('followThread_')) {
@@ -1813,6 +1925,12 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     }
 });
 
+chrome.notifications.onClosed.addListener((notificationId) => {
+    if (notificationId.startsWith('backend-')) {
+        backendNotificationMeta.delete(notificationId);
+    }
+});
+
 // 初始化关注后续清理任务
 chrome.alarms.create('cleanupFollowThreads', {
     when: getNextCleanupTime()
@@ -1831,11 +1949,47 @@ let _lastSeenNotifCreatedAt = 0;
 async function pollBackendNotifications(): Promise<void> {
     try {
         const client = getMemoryServiceClient();
+        try {
+            const feed = await client.getNotificationCenterFeed('chrome', ['todo', 'notice'], 20);
+            for (const item of feed.items) {
+                const notifId = `backend-${item.sourceRef.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+                backendNotificationMeta.set(notifId, {
+                    sourceRef: item.sourceRef,
+                    lane: item.lane,
+                    type: item.type,
+                    targetHash: getBackendTargetHash(item.type, item.sourceType),
+                    notificationId: item.sourceType === 'notification' ? item.sourceId : undefined,
+                });
+                await chrome.notifications.create(notifId, {
+                    type: 'basic',
+                    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+                    title: item.title || 'Personal AI',
+                    message: (item.body || '').slice(0, 200),
+                    priority: item.priority === 'high' ? 2 : 1,
+                    buttons: [
+                        { title: '查看' },
+                        { title: '忽略' },
+                    ],
+                });
+                await safeReportChromeDelivery([
+                    {
+                        sourceRef: item.sourceRef,
+                        lane: item.lane,
+                        status: 'delivered',
+                        externalRef: notifId,
+                    },
+                ]);
+            }
+            return;
+        } catch (feedError: any) {
+            if (!isNotificationCenterCompatError(feedError)) {
+                throw feedError;
+            }
+        }
+
         const pending = await client.getNotifications('pending');
         if (!pending || pending.length === 0) return;
 
-        // Notification types that the backend generates but the extension
-        // doesn't have a client-side processor for.
         const backendOnlyTypes = new Set([
             'dream_digest',
             'weekly_report',
@@ -1848,29 +2002,25 @@ async function pollBackendNotifications(): Promise<void> {
             if (n.createdAt <= _lastSeenNotifCreatedAt) continue;
             _lastSeenNotifCreatedAt = n.createdAt;
 
-            // Show Chrome notification
             const notifId = `backend-${n.id}`;
-            backendNotificationTypes.set(notifId, n.type || '');
-            chrome.notifications.create(notifId, {
+            backendNotificationMeta.set(notifId, {
+                sourceRef: `notification:${n.id}`,
+                lane: inferLegacyLane(n.type),
+                type: n.type,
+                targetHash: getBackendTargetHash(n.type, 'notification'),
+                notificationId: n.id,
+            });
+            await chrome.notifications.create(notifId, {
                 type: 'basic',
                 iconUrl: chrome.runtime.getURL('icons/icon128.png'),
                 title: n.title || 'Personal AI',
                 message: (n.body || '').slice(0, 200),
-                priority: 1,
+                priority: n.type === 'dream_digest' || n.type === 'weekly_report' ? 2 : 1,
+                buttons: [
+                    { title: '查看' },
+                    { title: '忽略' },
+                ],
             });
-
-            if (n.type === 'new_conflict' || n.type === 'truth_conflict') {
-                try {
-                    await sendPlainBotMessage({
-                        message: `\`${n.title || '决策中心提醒'}\`\n${n.body || '有新的待确认事项，请在 Personal AI 的决策中心查看。'}\n\n请在扩展内打开「决策中心」处理。`,
-                        mention: false,
-                        teamName: 'Personal AI 决策中心',
-                        pushScenario: 'decision_center'
-                    });
-                } catch (pushError) {
-                    console.warn('Decision center bot push failed:', pushError);
-                }
-            }
         }
     } catch (err) {
         // Silently ignore — backend may be offline

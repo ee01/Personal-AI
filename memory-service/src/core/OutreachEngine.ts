@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
-import { RingCentralClient } from '../integrations/RingCentralClient.js';
+import { RingCentralClient, type RingCentralPost } from '../integrations/RingCentralClient.js';
 import {
   type QueuedActionRecord,
 } from '../repositories/ActionRepository.js';
@@ -52,6 +52,13 @@ interface UpdateOutreachSessionDraftInput {
   nextCheckAt?: number | null;
 }
 
+interface AggregatedReplyBatch {
+  latestPostId: string;
+  replyPostIds: string[];
+  replySender: string | null;
+  replyText: string;
+}
+
 const TERMINAL_STATUSES = new Set<OutreachSessionStatus>([
   'resolved',
   'no_reply',
@@ -59,6 +66,7 @@ const TERMINAL_STATUSES = new Set<OutreachSessionStatus>([
   'cancelled',
   'failed',
 ]);
+const REPLY_BURST_WINDOW_SECONDS = 5 * 60;
 
 function buildSessionSummary(status: OutreachSessionStatus, question: string): string {
   if (status === 'resolved') return `Outreach resolved: ${question}`;
@@ -245,6 +253,103 @@ function classifyReply(text: string, currentTime: number): ParsedReply {
   return {
     classification: 'answer',
     confidence: 0.7,
+  };
+}
+
+function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
+  if (!post.createdAt) return null;
+  const parsed = Date.parse(post.createdAt);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.floor(parsed / 1000);
+}
+
+function resolveReplySender(post: RingCentralPost): string | null {
+  const sender = post.creatorName?.trim() || post.creatorId?.trim();
+  return sender || null;
+}
+
+function buildReplySenderKey(post: RingCentralPost): string {
+  return (resolveReplySender(post) || '').toLowerCase();
+}
+
+function aggregateReplyBatch(
+  posts: RingCentralPost[],
+  session: OutreachSessionRecord,
+): AggregatedReplyBatch | null {
+  const seenPostIds = new Set<string>();
+  const candidates = posts
+    .filter((post) => {
+      if (!post.id || seenPostIds.has(post.id)) return false;
+      seenPostIds.add(post.id);
+      if (post.id === session.sentPostId) return false;
+      if (post.id === session.replyPostId) return false;
+      return post.text.trim().length > 0;
+    })
+    .map((post, index) => ({
+      post,
+      index,
+      createdAtSeconds: parsePostCreatedAtSeconds(post),
+    }));
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  candidates.sort((left, right) => {
+    if (left.createdAtSeconds !== null && right.createdAtSeconds !== null) {
+      if (left.createdAtSeconds !== right.createdAtSeconds) {
+        return left.createdAtSeconds - right.createdAtSeconds;
+      }
+      return left.index - right.index;
+    }
+    if (left.createdAtSeconds !== null) return -1;
+    if (right.createdAtSeconds !== null) return 1;
+    return left.index - right.index;
+  });
+
+  const latest = candidates[candidates.length - 1];
+  const latestSenderKey = buildReplySenderKey(latest.post);
+  const batch = [latest];
+  let previousCreatedAt = latest.createdAtSeconds;
+
+  for (let index = candidates.length - 2; index >= 0; index -= 1) {
+    const candidate = candidates[index];
+    const candidateSenderKey = buildReplySenderKey(candidate.post);
+    const senderMismatch =
+      (latestSenderKey && candidateSenderKey && latestSenderKey !== candidateSenderKey) ||
+      (!latestSenderKey && candidateSenderKey) ||
+      (latestSenderKey && !candidateSenderKey);
+    if (senderMismatch) {
+      break;
+    }
+
+    if (
+      previousCreatedAt !== null &&
+      candidate.createdAtSeconds !== null &&
+      previousCreatedAt - candidate.createdAtSeconds > REPLY_BURST_WINDOW_SECONDS
+    ) {
+      break;
+    }
+
+    batch.unshift(candidate);
+    if (candidate.createdAtSeconds !== null) {
+      previousCreatedAt = candidate.createdAtSeconds;
+    }
+  }
+
+  const replyPostIds = batch.map((item) => item.post.id);
+  const replyText = batch
+    .map((item) => item.post.text.trim())
+    .filter((value) => value.length > 0)
+    .join('\n');
+  if (!replyText) {
+    return null;
+  }
+
+  return {
+    latestPostId: latest.post.id,
+    replyPostIds,
+    replySender: resolveReplySender(latest.post),
+    replyText,
   };
 }
 
@@ -734,40 +839,51 @@ export class OutreachEngine {
       const posts = await this.ringClient.listPosts(session.sentChatId, session.lastPollAt ?? session.createdAt);
       this.repo.updateSession(session.id, { lastPollAt: currentTime });
 
-      const newestReply = posts.find((post) => post.id !== session.sentPostId && post.text.trim().length > 0);
-      if (newestReply) {
-        const parsed = classifyReply(newestReply.text, currentTime);
-        const replySender = newestReply.creatorName ?? newestReply.creatorId ?? null;
+      const replyBatch = aggregateReplyBatch(posts, session);
+      if (replyBatch) {
+        const parsed = classifyReply(replyBatch.replyText, currentTime);
         this.repo.updateSession(session.id, {
-          replyPostId: newestReply.id,
-          replySender,
-          replyRawText: newestReply.text,
+          replyPostId: replyBatch.latestPostId,
+          replySender: replyBatch.replySender,
+          replyRawText: replyBatch.replyText,
           replyClassification: parsed.classification,
           replyConfidence: parsed.confidence,
         });
         this.repo.createEvent(session.id, 'reply_received', {
-          replyPostId: newestReply.id,
-          replySender,
+          replyPostId: replyBatch.latestPostId,
+          replyPostIds: replyBatch.replyPostIds,
+          replySender: replyBatch.replySender,
+          replyText: replyBatch.replyText,
           classification: parsed.classification,
           confidence: parsed.confidence,
         });
-        this.insertOutreachMessage('outreach_reply', session, newestReply.text, {
-          postId: newestReply.id,
-          sender: replySender,
+        this.insertOutreachMessage('outreach_reply', session, replyBatch.replyText, {
+          postId: replyBatch.latestPostId,
+          postIds: replyBatch.replyPostIds,
+          sender: replyBatch.replySender,
         });
 
         if (parsed.classification === 'answer' || parsed.classification === 'decline') {
-          const summary = await this.buildResolvedOutcomeSummary(session, newestReply.text, parsed.classification);
+          const summary = await this.buildResolvedOutcomeSummary(
+            session,
+            replyBatch.replyText,
+            parsed.classification,
+          );
           this.markTerminal(session.id, 'resolved', {
             classification: parsed.classification,
             confidence: parsed.confidence,
-            reply: newestReply.text,
+            reply: replyBatch.replyText,
             summary,
           });
           return;
         }
         if (parsed.classification === 'defer' && parsed.etaAt) {
-          const summary = buildFallbackOutcomeSummary(session, parsed.classification, newestReply.text, parsed.etaAt);
+          const summary = buildFallbackOutcomeSummary(
+            session,
+            parsed.classification,
+            replyBatch.replyText,
+            parsed.etaAt,
+          );
           this.repo.updateSession(session.id, {
             status: 'deferred',
             waitUntil: parsed.etaAt,
@@ -791,18 +907,26 @@ export class OutreachEngine {
           session.waitUntil &&
           currentTime >= session.waitUntil
         ) {
-          const summary = buildFallbackOutcomeSummary(session, parsed.classification, newestReply.text);
+          const summary = buildFallbackOutcomeSummary(
+            session,
+            parsed.classification,
+            replyBatch.replyText,
+          );
           this.markTerminal(session.id, 'escalated', {
             reason: 'reply_not_actionable',
             classification: parsed.classification,
-            reply: newestReply.text,
+            reply: replyBatch.replyText,
             summary,
           });
           await this.createEscalationConfirmRequest(session, 'reply_not_actionable');
           return;
         }
 
-        const summary = buildFallbackOutcomeSummary(session, parsed.classification, newestReply.text);
+        const summary = buildFallbackOutcomeSummary(
+          session,
+          parsed.classification,
+          replyBatch.replyText,
+        );
         this.repo.updateSession(session.id, {
           nextCheckAt: currentTime + 300,
           outcome: {

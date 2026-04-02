@@ -717,13 +717,16 @@ function candidateTypeLabel(candidate: OutreachTargetCandidate) {
   return '候选对象';
 }
 
+function latestReplyEvent(session: OutreachSession) {
+  const replyEvents = (session.events ?? []).filter((event) => event.eventType === 'reply_received');
+  return replyEvents.length > 0 ? replyEvents[replyEvents.length - 1] : null;
+}
+
 function replySenderDisplay(session: OutreachSession) {
   const explicitSender = session.replySender?.trim();
   if (explicitSender) return explicitSender;
 
-  const replyEventSender = session.events
-    ?.find((event) => event.eventType === 'reply_received')
-    ?.payload?.replySender;
+  const replyEventSender = latestReplyEvent(session)?.payload?.replySender;
   if (typeof replyEventSender === 'string' && replyEventSender.trim()) {
     return replyEventSender.trim();
   }
@@ -745,9 +748,7 @@ function replySenderDisplay(session: OutreachSession) {
 function replySenderIsInferred(session: OutreachSession) {
   const explicitSender = session.replySender?.trim();
   if (explicitSender) return false;
-  const replyEventSender = session.events
-    ?.find((event) => event.eventType === 'reply_received')
-    ?.payload?.replySender;
+  const replyEventSender = latestReplyEvent(session)?.payload?.replySender;
   if (typeof replyEventSender === 'string' && replyEventSender.trim()) {
     return false;
   }

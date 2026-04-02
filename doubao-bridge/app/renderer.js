@@ -154,7 +154,7 @@ function renderNextStep(status) {
     [
       !checklist.memoryServiceConfigured,
       '先连接 Memory Service',
-      '填写 Memory Service Base URL 和 User ID，保存后先点一次“测试连接”，确认自动拉取 persona、近期重点和提醒的来源可用。',
+      '填写 Memory Service Base URL 和 User ID，保存后先点一次“测试连接”，确认自动拉取 persona、近期重点、待办和通知推送的来源可用。',
     ],
     [
       !checklist.doubaoConnected,
@@ -169,7 +169,7 @@ function renderNextStep(status) {
     [
       !checklist.mobileContextBound,
       '绑定手机版对话',
-      '点击“自动绑定手机对话”，让近期重点和提醒注入到你实际会在手机和耳机里继续使用的那条线程。',
+      '点击“自动绑定手机对话”，让近期重点、待办和通知推送注入到你实际会在手机和耳机里继续使用的那条线程。',
     ],
   ];
 
@@ -181,7 +181,7 @@ function renderNextStep(status) {
     }
     if (elements.nextStepCopy) {
       elements.nextStepCopy.textContent =
-        '如果想先验证链路，可以点“现在推一次 persona / 近期重点 / 提醒”。平时关闭窗口即可，后台会继续运行。';
+        '如果想先验证链路，可以点“现在推一次 persona / 近期重点 / 待办通知”。平时关闭窗口即可，后台会继续运行。';
     }
     return;
   }
@@ -453,7 +453,7 @@ elements.runReminderButton.addEventListener('click', () => {
   void withAction(elements.runReminderButton, '推送中...', async () => {
     try {
       await bridgeApi.runNow('reminder_sync');
-      setMessage(elements.mobileThreadMessage, '已手动推送一次提醒到手机对话。', 'success');
+      setMessage(elements.mobileThreadMessage, '已手动推送一次待办/通知到手机对话。', 'success');
       await refreshStatus();
     } catch (error) {
       setMessage(elements.mobileThreadMessage, error instanceof Error ? error.message : '手动推送失败', 'error');

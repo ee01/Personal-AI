@@ -18,11 +18,11 @@ import { ProactivityPolicy, type NotificationCandidate } from './ProactivityPoli
 import { ProfileManager } from './ProfileManager.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
-import { getBotSender } from '../utils/botSender.js';
 import { WorkerCheckpointRepository } from '../repositories/WorkerCheckpointRepository.js';
 import { ReflectionPlanner } from './ReflectionPlanner.js';
 import { ActionExecutor } from './actions/ActionExecutor.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import { NotificationCenterService } from './NotificationCenterService.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -131,6 +131,7 @@ export class HeartbeatLoop {
   private lastHeartbeat: number = 0;
   private userId?: string;
   private checkpointRepo: WorkerCheckpointRepository;
+  private notificationCenterService: NotificationCenterService;
 
   constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
     this.db = db;
@@ -142,6 +143,7 @@ export class HeartbeatLoop {
       : undefined;
     this.userId = userId;
     this.checkpointRepo = new WorkerCheckpointRepository(db);
+    this.notificationCenterService = new NotificationCenterService(db);
   }
 
   // ---- Main entry point ---------------------------------------------------
@@ -228,34 +230,17 @@ export class HeartbeatLoop {
 
       // 7. Deliver approved notifications
       if (approved.length > 0) {
-        this.deliverNotifications(approved);
+        const delivered = this.deliverNotifications(approved);
         actions.push(`delivered ${approved.length} notification(s)`);
-      }
-
-      // 7b. Bot push for dream digest
-      for (const notif of approved) {
-        if (notif.type === 'dream_digest' && notif.payload?.digestBody) {
-          const botSender = getBotSender();
-          if (botSender.isConfigured()) {
-            await botSender.sendMarkdown(
-              'Weekly Dream Digest',
-              notif.payload.digestBody as string,
-              { mention: false, targetUserId: this.userId },
-            );
-          }
-        }
-      }
-
-      // 7c. Bot push for truth conflicts (stale reminders and new conflicts)
-      for (const notif of approved) {
-        if ((notif.type === 'truth_conflict' || notif.type === 'new_conflict') && notif.payload?.confirmRequestId) {
-          const botSender = getBotSender();
-          if (botSender.isConfigured()) {
-            await botSender.sendMarkdown(
-              '需要您的决策',
-              `${notif.body}\n\n前往决策中心查看和处理此冲突。`,
-              { mention: true, targetUserId: this.userId },
-            );
+        for (const item of delivered) {
+          if (item.type === 'dream_digest' && item.payload?.digestBody) {
+            await this.notificationCenterService.deliverNoticeToGlip({
+              sourceRef: `notification:${item.id}`,
+              title: 'Weekly Dream Digest',
+              body: String(item.payload.digestBody),
+              mention: false,
+              targetUserId: this.userId,
+            });
           }
         }
       }
@@ -318,22 +303,23 @@ export class HeartbeatLoop {
       };
     }
 
-    this.deliverNotifications([candidate]);
+    const delivered = this.deliverNotifications([candidate]);
 
     let botSent = false;
-    if (candidate.payload?.digestBody) {
-      const botSender = getBotSender();
-      if (botSender.isConfigured()) {
-        console.log('[DreamDigest] push-now: sending to Bot...');
-        await botSender.sendMarkdown(
-          'Weekly Dream Digest',
-          candidate.payload.digestBody as string,
-          { mention: false, targetUserId: userId ?? this.userId },
-        );
+    if (candidate.payload?.digestBody && delivered[0]) {
+      console.log('[DreamDigest] push-now: sending to Bot...');
+      const botResult = await this.notificationCenterService.deliverNoticeToGlip({
+        sourceRef: `notification:${delivered[0].id}`,
+        title: 'Weekly Dream Digest',
+        body: String(candidate.payload.digestBody),
+        mention: false,
+        targetUserId: userId ?? this.userId,
+      });
+      if (botResult.sent) {
         botSent = true;
         console.log('[DreamDigest] push-now: botSent=true');
-      } else {
-        console.warn('[DreamDigest] push-now: Bot not configured (BOT_API_BASE_URL/BOT_TOKEN/BOT_ID missing)');
+      } else if (botResult.error) {
+        console.warn(`[DreamDigest] push-now: ${botResult.error}`);
       }
     } else {
       console.warn('[DreamDigest] push-now: digestBody empty, skipping Bot send');
@@ -728,8 +714,21 @@ export class HeartbeatLoop {
   /**
    * Insert approved notification candidates into the notification_records table.
    */
-  private deliverNotifications(notifications: NotificationCandidate[]): void {
+  private deliverNotifications(notifications: NotificationCandidate[]): Array<{
+    id: string;
+    type: string;
+    title: string;
+    body: string;
+    payload?: Record<string, unknown>;
+  }> {
     const currentTime = now();
+    const delivered: Array<{
+      id: string;
+      type: string;
+      title: string;
+      body: string;
+      payload?: Record<string, unknown>;
+    }> = [];
 
     const insertStmt = this.db.prepare(
       `INSERT INTO notification_records
@@ -740,8 +739,9 @@ export class HeartbeatLoop {
 
     for (const notif of notifications) {
       try {
+        const notificationId = randomUUID();
         insertStmt.run(
-          randomUUID(),
+          notificationId,
           notif.type,
           notif.title,
           notif.body,
@@ -751,6 +751,13 @@ export class HeartbeatLoop {
           currentTime,
           currentTime,
         );
+        delivered.push({
+          id: notificationId,
+          type: notif.type,
+          title: notif.title,
+          body: notif.body,
+          payload: notif.payload,
+        });
       } catch (err) {
         console.error(
           `[HeartbeatLoop] Failed to deliver notification "${notif.title}":`,
@@ -758,6 +765,8 @@ export class HeartbeatLoop {
         );
       }
     }
+
+    return delivered;
   }
 
   // ---- Step 5: Dream digest (Monday morning) ------------------------------
