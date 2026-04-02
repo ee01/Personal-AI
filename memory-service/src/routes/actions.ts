@@ -11,6 +11,8 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       executionMode?: 'manual' | 'auto';
       threadId?: string;
       actionType?: string;
+      sourceKind?: string;
+      sourceRefId?: string;
       limit?: string;
       offset?: string;
     };
@@ -22,6 +24,8 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       executionMode: request.query.executionMode,
       threadId: request.query.threadId,
       actionType: request.query.actionType,
+      sourceKind: request.query.sourceKind,
+      sourceRefId: request.query.sourceRefId,
       limit: parseInt(request.query.limit ?? '20', 10) || 20,
       offset: parseInt(request.query.offset ?? '0', 10) || 0,
     });

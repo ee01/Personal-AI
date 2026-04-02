@@ -674,6 +674,15 @@ function sessionStageHint(session: OutreachSession) {
     return '对方表示稍后回复，系统会按新的等待时间继续跟进。';
   }
   if (session.status === 'resolved') {
+    const resolutionState = typeof session.outcome?.resolutionState === 'string'
+      ? session.outcome.resolutionState
+      : '';
+    if (resolutionState === 'partial') {
+      return summary || '已经拿到部分可用结果，系统正在继续查证。';
+    }
+    if (resolutionState === 'insufficient') {
+      return summary || '已经收到线索，但仍需继续查证或等待人工判断。';
+    }
     return summary ? `已经拿到可用结果。${summary}` : '已经拿到可用结果。';
   }
   if (session.status === 'no_reply') {
@@ -693,7 +702,7 @@ function sessionStageHint(session: OutreachSession) {
 
 function extractOutcomeSummary(outcome?: Record<string, unknown>) {
   if (!outcome) return '';
-  const candidates = [outcome.summary, outcome.reason, outcome.answer, outcome.answerText, outcome.reply];
+  const candidates = [outcome.resolvedConclusion, outcome.summary, outcome.reason, outcome.answer, outcome.answerText, outcome.reply];
   const found = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
   return typeof found === 'string' ? found.trim() : '';
 }

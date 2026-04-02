@@ -144,6 +144,8 @@ export interface ActionListFilters {
   executionMode?: 'manual' | 'auto';
   threadId?: string;
   actionType?: string;
+  sourceKind?: string;
+  sourceRefId?: string;
   limit?: number;
   offset?: number;
 }
@@ -260,6 +262,14 @@ export class ActionRepository {
     if (filters.actionType) {
       conditions.push('(action_type = ? OR type = ?)');
       params.push(filters.actionType, filters.actionType);
+    }
+    if (filters.sourceKind) {
+      conditions.push('source_kind = ?');
+      params.push(filters.sourceKind);
+    }
+    if (filters.sourceRefId) {
+      conditions.push('source_ref_id = ?');
+      params.push(filters.sourceRefId);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

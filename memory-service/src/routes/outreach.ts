@@ -278,6 +278,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({
       ...detail.session,
       events: detail.events,
+      actions: detail.actions,
     });
   });
 

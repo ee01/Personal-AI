@@ -14,8 +14,17 @@ import { QueryIntentParser } from '../core/QueryIntentParser.js';
 import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
 import { OnlineReflection } from '../core/OnlineReflection.js';
+import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import {
+  EvidenceResolutionPlanner,
+  type CandidateArtifact,
+  type EvidenceResolutionPlan,
+  type EvidenceResolutionPolicy,
+  type EvidenceResolutionState,
+} from '../core/EvidenceResolutionPlanner.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
+import { ActionRepository } from '../repositories/ActionRepository.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import type Database from 'better-sqlite3';
 
@@ -53,7 +62,35 @@ interface AskResponse {
   evidence?: RecallItem[];
   queryTimeMs: number;
   structuredAnswer?: StructuredAskAnswer;
+  resolutionState?: EvidenceResolutionState;
+  missingInfo?: string[];
+  followUpActions?: Array<{
+    id: string;
+    actionType: string;
+    title: string;
+    queueStatus: string;
+    executionMode: string;
+    sourceKind?: string;
+    sourceRefId?: string;
+    result?: Record<string, unknown>;
+    lastError?: string;
+  }>;
+  externalEvidence?: CandidateArtifact[];
 }
+
+interface PreparedAskContext {
+  recalledItems: RecallItem[];
+  intentContext: string;
+  combinedMemoryContext: string;
+  actionOutcome: {
+    followUpActions: NonNullable<AskResponse['followUpActions']>;
+    externalEvidence: CandidateArtifact[];
+    finalResolutionState: EvidenceResolutionState;
+    missingInfo: string[];
+  };
+}
+
+type AskStatusReporter = (message: string) => void | Promise<void>;
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -357,6 +394,249 @@ async function recallForAsk(
   };
 }
 
+function detectExplicitActionIntent(query: string): boolean {
+  return /\b(create|update|modify|edit|submit|file|open)\b|创建|新建|修改|更新|提交|发起|创建一张|建一个/iu.test(
+    query,
+  );
+}
+
+function buildAskResolutionPolicy(query: string): EvidenceResolutionPolicy {
+  const explicitActionIntent = detectExplicitActionIntent(query);
+  return {
+    scene: 'ask',
+    userIntentMode: explicitActionIntent ? 'explicit_action' : 'informational',
+    externalRead: 'auto',
+    externalWrite: explicitActionIntent ? 'approval_required' : 'disabled',
+    allowAskExternalUser: false,
+    allowCreateConfirmRequest: true,
+    syncExecutionBudgetMs: 15_000,
+  };
+}
+
+function buildAskEvidenceItems(items: RecallItem[]) {
+  return items.map((item) => ({
+    sourceKind: item.type,
+    sourceId: item.id,
+    title: item.source ?? item.type,
+    content: item.content,
+    createdAt: item.timestamp,
+    metadata: item.metadata,
+  }));
+}
+
+function formatExternalEvidenceContext(externalEvidence: CandidateArtifact[]): string {
+  if (externalEvidence.length === 0) return '';
+  return externalEvidence
+    .map((artifact, index) => {
+      const parts = [
+        artifact.title ? `title=${artifact.title}` : undefined,
+        artifact.url ? `url=${artifact.url}` : undefined,
+        artifact.content ? `content=${artifact.content}` : undefined,
+      ].filter(Boolean);
+      return `- [${index + 1}] ${parts.join(' | ')}`;
+    })
+    .join('\n');
+}
+
+function normalizeArtifactArray(value: unknown): CandidateArtifact[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map((item) => ({
+      kind: typeof item.kind === 'string' ? item.kind : 'note',
+      title: typeof item.title === 'string' ? item.title : undefined,
+      url: typeof item.url === 'string' ? item.url : undefined,
+      content: typeof item.content === 'string' ? item.content : undefined,
+      metadata:
+        item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? (item.metadata as Record<string, unknown>)
+          : undefined,
+    }));
+}
+
+async function executeAskResolutionAction(
+  db: Database.Database,
+  userDataManager: UserDataManager | null | undefined,
+  userId: string | undefined,
+  requestId: string,
+  query: string,
+  plan: EvidenceResolutionPlan,
+  reportStatus?: AskStatusReporter,
+): Promise<{
+  followUpActions: NonNullable<AskResponse['followUpActions']>;
+  externalEvidence: CandidateArtifact[];
+  finalResolutionState: EvidenceResolutionState;
+  missingInfo: string[];
+}> {
+  if (plan.recommendedAction === 'none') {
+    return {
+      followUpActions: [],
+      externalEvidence: [],
+      finalResolutionState: plan.resolutionState,
+      missingInfo: [...plan.remainingQuestions],
+    };
+  }
+
+  if (reportStatus) {
+    if (plan.recommendedAction === 'delegate_openclaw') {
+      await reportStatus(
+        plan.directFindings.length > 0
+          ? '已提取本地结论，正在调用外部工具补充细节...'
+          : '正在调用外部工具查证...'
+      );
+    } else if (plan.recommendedAction === 'create_confirm_request') {
+      await reportStatus('本地信息不足，正在创建待确认事项...');
+    } else if (plan.recommendedAction === 'ask_external_user') {
+      await reportStatus('本地信息不足，正在准备外部询问...');
+    }
+  }
+
+  const repo = new ActionRepository(db);
+  const executor = new ActionExecutor(db, userDataManager ?? undefined, userId);
+  const baseParams =
+    plan.actionParams && typeof plan.actionParams === 'object' && !Array.isArray(plan.actionParams)
+      ? { ...plan.actionParams }
+      : {};
+  const action = repo.create({
+    actionType: plan.recommendedAction,
+    title:
+      plan.recommendedAction === 'delegate_openclaw'
+        ? `外部查证: ${query.slice(0, 60)}`
+        : `跟进处理: ${query.slice(0, 60)}`,
+    description: plan.summary,
+    params: {
+      ...baseParams,
+      metadata: {
+        ...(baseParams.metadata && typeof baseParams.metadata === 'object' && !Array.isArray(baseParams.metadata)
+          ? (baseParams.metadata as Record<string, unknown>)
+          : {}),
+        askRequestId: requestId,
+        suppressRecoveryNotifications: true,
+      },
+    },
+    executionMode:
+      plan.recommendedAction === 'delegate_openclaw' && baseParams.mode === 'write'
+        ? 'manual'
+        : 'auto',
+    requiresApproval:
+      plan.recommendedAction === 'delegate_openclaw' && baseParams.mode === 'write',
+    queueStatus: 'queued',
+    priority: plan.recommendedAction === 'create_confirm_request' ? 8 : 6,
+    confidence: plan.confidence,
+    sourceKind: 'ask_request',
+    sourceRefId: requestId,
+  });
+
+  const shouldExecuteSync =
+    action.executionMode === 'auto' &&
+    (plan.recommendedAction === 'delegate_openclaw' || plan.recommendedAction === 'create_confirm_request');
+  if (!shouldExecuteSync) {
+    return {
+      followUpActions: [
+        {
+          id: action.id,
+          actionType: action.actionType,
+          title: action.title,
+          queueStatus: action.queueStatus,
+          executionMode: action.executionMode,
+          sourceKind: action.sourceKind,
+          sourceRefId: action.sourceRefId,
+          result: action.result,
+          lastError: action.lastError,
+        },
+      ],
+      externalEvidence: [],
+      finalResolutionState: plan.resolutionState,
+      missingInfo: [...plan.remainingQuestions],
+    };
+  }
+
+  const result = await executor.executeAction(action.id);
+  const updatedPrimary = repo.getById(action.id);
+  const followUpActionIds = Array.isArray(result.result?.followUpActionIds)
+    ? result.result?.followUpActionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const actionRecords = [
+    updatedPrimary,
+    ...followUpActionIds.map((id) => repo.getById(id)),
+  ].filter((item): item is NonNullable<typeof updatedPrimary> => Boolean(item));
+  const followUpActions = actionRecords.map((item) => ({
+    id: item.id,
+    actionType: item.actionType,
+    title: item.title,
+    queueStatus: item.queueStatus,
+    executionMode: item.executionMode,
+    sourceKind: item.sourceKind,
+    sourceRefId: item.sourceRefId,
+    result: item.result,
+    lastError: item.lastError,
+  }));
+  const externalEvidence = normalizeArtifactArray(result.result?.artifacts);
+  const finalResolutionState: EvidenceResolutionState =
+    externalEvidence.length > 0
+      ? plan.directFindings.length > 0
+        ? 'complete'
+        : 'partial'
+      : plan.resolutionState;
+  const missingInfo = externalEvidence.length > 0 ? [] : [...plan.remainingQuestions];
+
+  return {
+    followUpActions,
+    externalEvidence,
+    finalResolutionState,
+    missingInfo,
+  };
+}
+
+async function prepareAskContext(
+  db: Database.Database,
+  userDataManager: UserDataManager | null | undefined,
+  userId: string | undefined,
+  requestId: string,
+  query: string,
+  userContext: string | undefined,
+  includeEvidence: boolean | undefined,
+  reportStatus?: AskStatusReporter,
+): Promise<PreparedAskContext> {
+  await reportStatus?.('正在检索相关记忆...');
+  const { recalledItems, memoryContext, intentContext } = await recallForAsk(
+    db,
+    query,
+    includeEvidence,
+  );
+  await reportStatus?.('正在分析已知信息...');
+  const resolutionPlanner = new EvidenceResolutionPlanner();
+  const initialPlan = await resolutionPlanner.resolve({
+    question: query,
+    context: userContext,
+    evidence: buildAskEvidenceItems(recalledItems),
+    policy: buildAskResolutionPolicy(query),
+  });
+  const actionOutcome = await executeAskResolutionAction(
+    db,
+    userDataManager,
+    userId,
+    requestId,
+    query,
+    initialPlan,
+    reportStatus,
+  );
+  const externalContext = formatExternalEvidenceContext(actionOutcome.externalEvidence);
+  const combinedMemoryContext = externalContext
+    ? `${memoryContext}\n\nExternal evidence:\n${externalContext}`
+    : memoryContext;
+  if (actionOutcome.externalEvidence.length > 0) {
+    await reportStatus?.('已获取外部证据，正在整合上下文...');
+  }
+
+  return {
+    recalledItems,
+    intentContext,
+    combinedMemoryContext,
+    actionOutcome,
+  };
+}
+
 function writeSseEvent(
   reply: { raw: NodeJS.WritableStream & { writeHead?: Function; flushHeaders?: Function; end: Function } },
   event: string,
@@ -436,6 +716,44 @@ export async function askRoutes(
                   confidence: { type: 'number' },
                 },
               },
+              resolutionState: { type: 'string', nullable: true },
+              missingInfo: {
+                type: 'array',
+                nullable: true,
+                items: { type: 'string' },
+              },
+              followUpActions: {
+                type: 'array',
+                nullable: true,
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    actionType: { type: 'string' },
+                    title: { type: 'string' },
+                    queueStatus: { type: 'string' },
+                    executionMode: { type: 'string' },
+                    sourceKind: { type: 'string' },
+                    sourceRefId: { type: 'string' },
+                    result: { type: 'object', additionalProperties: true },
+                    lastError: { type: 'string' },
+                  },
+                },
+              },
+              externalEvidence: {
+                type: 'array',
+                nullable: true,
+                items: {
+                  type: 'object',
+                  properties: {
+                    kind: { type: 'string' },
+                    title: { type: 'string' },
+                    url: { type: 'string' },
+                    content: { type: 'string' },
+                    metadata: { type: 'object', additionalProperties: true },
+                  },
+                },
+              },
             },
           },
         },
@@ -445,16 +763,26 @@ export async function askRoutes(
       const { db, profileManager, userDataManager } = request.userContext;
       const startMs = Date.now();
       const { query, context: userContext, includeEvidence } = request.body;
+      const requestId = randomUUID();
 
       try {
-        const { recalledItems, memoryContext, intentContext } = await recallForAsk(
+        const {
+          recalledItems,
+          intentContext,
+          combinedMemoryContext,
+          actionOutcome,
+        } = await prepareAskContext(
           db,
+          userDataManager,
+          request.userId,
+          requestId,
           query,
+          userContext,
           includeEvidence,
         );
         const fullPrompt = buildPromptEnvelope(
           query,
-          memoryContext,
+          combinedMemoryContext,
           userContext,
           intentContext,
           'Return JSON only. Required key: "answer". Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence". Do not wrap the JSON in prose.',
@@ -475,10 +803,18 @@ export async function askRoutes(
           answer: parsedAnswer.answer,
           queryTimeMs,
           structuredAnswer: parsedAnswer.structuredAnswer,
+          resolutionState: actionOutcome.finalResolutionState,
+          missingInfo: actionOutcome.missingInfo,
         };
 
         if (includeEvidence) {
           response.evidence = recalledItems;
+        }
+        if (actionOutcome.followUpActions.length > 0) {
+          response.followUpActions = actionOutcome.followUpActions;
+        }
+        if (actionOutcome.externalEvidence.length > 0) {
+          response.externalEvidence = actionOutcome.externalEvidence;
         }
 
         const usedItemIds = recalledItems.slice(0, 5).map((item) => item.id);
@@ -527,10 +863,22 @@ export async function askRoutes(
       reply.raw.flushHeaders?.();
 
       try {
-        const { recalledItems, memoryContext, intentContext } = await recallForAsk(
+        writeSseEvent(reply, 'start', { requestId });
+
+        const {
+          recalledItems,
+          intentContext,
+          combinedMemoryContext,
+          actionOutcome,
+        } = await prepareAskContext(
           db,
+          userDataManager,
+          request.userId,
+          requestId,
           query,
+          userContext,
           includeEvidence,
+          (message) => writeSseEvent(reply, 'status', { message }),
         );
         const answerSystemPrompt = buildAugmentedSystemPrompt(
           db,
@@ -546,13 +894,12 @@ export async function askRoutes(
         );
         const answerPrompt = buildPromptEnvelope(
           query,
-          memoryContext,
+          combinedMemoryContext,
           userContext,
           intentContext,
           'Answer the question in markdown only. Do not return JSON.',
         );
-
-        writeSseEvent(reply, 'start', { requestId });
+        writeSseEvent(reply, 'status', { message: '正在生成回答...' });
 
         let streamedAnswer = '';
         const answerResponse = await llmClient.generateStream(
@@ -574,9 +921,10 @@ export async function askRoutes(
 
         let structuredAnswer: StructuredAskAnswer | undefined;
         try {
+          writeSseEvent(reply, 'status', { message: '正在整理结构化要点...' });
           const enrichmentPrompt = buildPromptEnvelope(
             query,
-            memoryContext,
+            combinedMemoryContext,
             userContext,
             intentContext,
             [
@@ -601,9 +949,17 @@ export async function askRoutes(
           answer: finalAnswer,
           queryTimeMs: Date.now() - startMs,
           structuredAnswer,
+          resolutionState: actionOutcome.finalResolutionState,
+          missingInfo: actionOutcome.missingInfo,
         };
         if (includeEvidence) {
           result.evidence = recalledItems;
+        }
+        if (actionOutcome.followUpActions.length > 0) {
+          result.followUpActions = actionOutcome.followUpActions;
+        }
+        if (actionOutcome.externalEvidence.length > 0) {
+          result.externalEvidence = actionOutcome.externalEvidence;
         }
 
         writeSseEvent(reply, 'result', result as unknown as Record<string, unknown>);

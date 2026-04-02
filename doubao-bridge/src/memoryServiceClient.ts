@@ -76,10 +76,31 @@ export interface AskResponse {
     relatedEntities?: Array<{ name: string; type: string; relevance: string }>;
     confidence?: number;
   };
+  resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
+  missingInfo?: string[];
+  followUpActions?: Array<{
+    id: string;
+    actionType: string;
+    title: string;
+    queueStatus: string;
+    executionMode: string;
+    sourceKind?: string;
+    sourceRefId?: string;
+    result?: Record<string, unknown>;
+    lastError?: string;
+  }>;
+  externalEvidence?: Array<{
+    kind: string;
+    title?: string;
+    url?: string;
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }>;
 }
 
 export type AskStreamEvent =
   | { type: 'start'; requestId: string }
+  | { type: 'status'; message: string }
   | { type: 'delta'; text: string }
   | { type: 'answer_done'; answer: string }
   | {
@@ -88,6 +109,10 @@ export type AskStreamEvent =
       evidence?: AskResponse['evidence'];
       queryTimeMs: number;
       structuredAnswer?: AskResponse['structuredAnswer'];
+      resolutionState?: AskResponse['resolutionState'];
+      missingInfo?: AskResponse['missingInfo'];
+      followUpActions?: AskResponse['followUpActions'];
+      externalEvidence?: AskResponse['externalEvidence'];
     }
   | { type: 'error'; message: string };
 

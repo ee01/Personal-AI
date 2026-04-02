@@ -187,11 +187,32 @@ export interface BridgeAssistantAskResponse {
   queryTimeMs: number;
   structuredAnswer?: BridgeStructuredAnswer;
   evidence?: BridgeAssistantEvidenceItem[];
+  resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
+  missingInfo?: string[];
+  followUpActions?: Array<{
+    id: string;
+    actionType: string;
+    title: string;
+    queueStatus: string;
+    executionMode: string;
+    sourceKind?: string;
+    sourceRefId?: string;
+    result?: Record<string, unknown>;
+    lastError?: string;
+  }>;
+  externalEvidence?: Array<{
+    kind: string;
+    title?: string;
+    url?: string;
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }>;
   runtime: BridgeAssistantRuntimeSummary;
 }
 
 export type BridgeAssistantStreamEvent =
   | { type: 'start'; requestId: string }
+  | { type: 'status'; message: string }
   | { type: 'delta'; text: string }
   | { type: 'answer_done'; answer: string }
   | {
@@ -200,6 +221,10 @@ export type BridgeAssistantStreamEvent =
       queryTimeMs: number;
       structuredAnswer?: BridgeStructuredAnswer;
       evidence?: BridgeAssistantEvidenceItem[];
+      resolutionState?: BridgeAssistantAskResponse['resolutionState'];
+      missingInfo?: BridgeAssistantAskResponse['missingInfo'];
+      followUpActions?: BridgeAssistantAskResponse['followUpActions'];
+      externalEvidence?: BridgeAssistantAskResponse['externalEvidence'];
       runtime: BridgeAssistantRuntimeSummary;
     }
   | { type: 'error'; message: string };

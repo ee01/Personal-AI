@@ -87,6 +87,30 @@ describe('OutreachEngine', () => {
     });
   }
 
+  function mockRingCentralListPosts(
+    chatId: string,
+    records: Array<Record<string, unknown>>,
+  ) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.includes(`/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts?`)) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ records }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+  }
+
   it('bridges ask_external_user action execution into an outreach session', async () => {
     const thread = threadRepo.upsertThread({
       topicKey: 'project:outreach',
@@ -218,6 +242,192 @@ describe('OutreachEngine', () => {
     expect(actionResults[0].result_type).toBe('resolved');
     expect(actionResults[0].summary).toBeTruthy();
     expect(actionResults[0].summary).toContain('18:00');
+  });
+
+  it('combines reply bursts, keeps the known answer, and queues external delegation for missing details', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'scheduled_template',
+      targetType: 'private',
+      targetRef: 'sophia.lin',
+      renderedQuestion: 'Gary 的行程表有么？',
+      renderedContext: '想知道 Gary 的行程有没有和 video 项目相关的',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-multi',
+      sentPostId: 'post-seed',
+      replyPostId: 'reply-old',
+      replyRawText: '好',
+      replyClassification: 'unclear',
+      replyConfidence: 0.35,
+      lastPollAt: Math.floor(Date.now() / 1000) - 60,
+      nextCheckAt: Math.floor(Date.now() / 1000) - 5,
+      waitUntil: Math.floor(Date.now() / 1000) + 3600,
+    });
+
+    mockRingCentralListPosts('chat-multi', [
+      {
+        id: 'reply-4',
+        text: '他下周在杭州',
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:10Z',
+      },
+      {
+        id: 'reply-3',
+        text: '你自己看，video相关应该都在下周',
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:05Z',
+      },
+      {
+        id: 'reply-2',
+        text: "[Gary's calendar](https://calendar.example.com/gary)",
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:00Z',
+      },
+      {
+        id: 'reply-old',
+        text: '好',
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:30:00Z',
+      },
+    ]);
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(updatedSession?.status).toBe('resolved');
+    expect(updatedSession?.replyPostId).toBe('reply-4');
+    expect(updatedSession?.replySender).toBe('Sophia (Jinmei) Lin');
+    expect(updatedSession?.replyRawText).toBe(
+      "[Gary's calendar](https://calendar.example.com/gary)\n你自己看，video相关应该都在下周\n他下周在杭州",
+    );
+    expect(updatedSession?.replyClassification).toBe('answer');
+    expect(updatedSession?.outcome?.resolutionState).toBe('partial');
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain('video相关应该都在下周');
+    expect(updatedSession?.outcome?.spawnedActionIds).toHaveLength(1);
+
+    const replyEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'reply_received');
+    expect(replyEvents).toHaveLength(1);
+    expect(replyEvents[0].payload?.replyPostIds).toEqual(['reply-2', 'reply-3', 'reply-4']);
+
+    const replyMessages = db
+      .prepare(`SELECT content FROM messages_raw WHERE source_type = 'outreach_reply' ORDER BY timestamp ASC`)
+      .all() as Array<{ content: string }>;
+    expect(replyMessages).toHaveLength(1);
+    expect(replyMessages[0].content).toContain('video相关应该都在下周');
+
+    const followUpActions = actionRepo.list({
+      sourceKind: 'outreach_session',
+      sourceRefId: session.id,
+      limit: 10,
+    }).items;
+    expect(followUpActions).toHaveLength(1);
+    expect(followUpActions[0].actionType).toBe('delegate_openclaw');
+    expect(followUpActions[0].executionMode).toBe('auto');
+    expect(followUpActions[0].params.mode).toBe('read');
+  });
+
+  it('does not re-process an already recorded reply burst on later polls', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'sophia.lin',
+      renderedQuestion: '请问有更新吗？',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-dedupe',
+      sentPostId: 'post-seed',
+      replyPostId: 'reply-3',
+      replyRawText: '你自己看，video相关应该都在下周',
+      replyClassification: 'answer',
+      replyConfidence: 0.72,
+      lastPollAt: Math.floor(Date.now() / 1000) - 60,
+      nextCheckAt: Math.floor(Date.now() / 1000) - 5,
+      waitUntil: Math.floor(Date.now() / 1000) + 3600,
+    });
+    outreachRepo.createEvent(session.id, 'reply_received', {
+      replyPostId: 'reply-3',
+      replyPostIds: ['reply-2', 'reply-3'],
+      classification: 'answer',
+      confidence: 0.72,
+    });
+
+    mockRingCentralListPosts('chat-dedupe', [
+      {
+        id: 'reply-2',
+        text: "[Gary's calendar](https://calendar.example.com/gary)",
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:00Z',
+      },
+      {
+        id: 'reply-3',
+        text: '你自己看，video相关应该都在下周',
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:05Z',
+      },
+    ]);
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const replyEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'reply_received');
+    expect(replyEvents).toHaveLength(1);
+
+    const replyMessages = db
+      .prepare(`SELECT content FROM messages_raw WHERE source_type = 'outreach_reply'`)
+      .all() as Array<{ content: string }>;
+    expect(replyMessages).toHaveLength(0);
+  });
+
+  it('queues delegation when a reply only provides an external artifact without a direct answer', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'sophia.lin',
+      renderedQuestion: 'Gary 和 video 相关的具体安排是哪几天？',
+      renderedContext: '如果你只有链接，也请先发过来。',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-artifact',
+      sentPostId: 'post-seed',
+      nextCheckAt: Math.floor(Date.now() / 1000) - 5,
+      waitUntil: Math.floor(Date.now() / 1000) + 3600,
+    });
+
+    mockRingCentralListPosts('chat-artifact', [
+      {
+        id: 'reply-artifact-1',
+        text: "[Gary's calendar](https://calendar.example.com/gary)",
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:00Z',
+      },
+    ]);
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(updatedSession?.status).toBe('resolved');
+    expect(updatedSession?.outcome?.resolutionState).toBe('insufficient');
+    expect(updatedSession?.outcome?.recommendedAction).toBe('delegate_openclaw');
+
+    const followUpActions = actionRepo.list({
+      sourceKind: 'outreach_session',
+      sourceRefId: session.id,
+      limit: 10,
+    }).items;
+    expect(followUpActions).toHaveLength(1);
+    expect(followUpActions[0].actionType).toBe('delegate_openclaw');
   });
 
   it('dispatches due scheduled templates and advances next dispatch', async () => {

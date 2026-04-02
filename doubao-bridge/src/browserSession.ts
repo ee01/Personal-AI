@@ -157,19 +157,10 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   async ensureStarted(): Promise<void> {
-    if (this.context) {
-      try {
-        if (this.page && !this.page.isClosed()) {
-          return;
-        }
-
-        const existingPage = this.context.pages().find((page) => !page.isClosed());
-        this.page = existingPage ?? (await this.context.newPage());
-        return;
-      } catch {
-        this.context = null;
-        this.page = null;
-      }
+    const existingPage = this.getLivePage();
+    if (this.context && existingPage) {
+      this.page = existingPage;
+      return;
     }
 
     const tempDir = await this.ensurePlaywrightTempDir();
@@ -194,6 +185,32 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
     this.page = pages[0] ?? (await this.context.newPage());
   }
 
+  private getLivePage(): Page | null {
+    if (this.page && !this.page.isClosed()) {
+      return this.page;
+    }
+
+    if (!this.context) {
+      this.page = null;
+      return null;
+    }
+
+    try {
+      const existingPage = this.context.pages().find((page) => !page.isClosed()) ?? null;
+      if (!existingPage) {
+        this.context = null;
+        this.page = null;
+        return null;
+      }
+      this.page = existingPage;
+      return existingPage;
+    } catch {
+      this.context = null;
+      this.page = null;
+      return null;
+    }
+  }
+
   private async ensurePlaywrightTempDir(): Promise<string> {
     const tempDir = path.join(this.config.dataDir, 'tmp', 'playwright');
     await fs.mkdir(tempDir, { recursive: true });
@@ -204,9 +221,10 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   status(): BrowserStatus {
+    const page = this.getLivePage();
     return {
-      running: !!this.context,
-      currentUrl: this.page?.url(),
+      running: !!page,
+      currentUrl: page?.url(),
       lastError: this.lastError,
     };
   }
@@ -429,21 +447,27 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   async probeAuthStatus(): Promise<'connected' | 'needs_login'> {
-    await this.ensureStarted();
-    if (!this.page) return 'needs_login';
+    const page = this.getLivePage();
+    if (!page) return 'needs_login';
 
-    const url = this.page.url();
-    const composer = await this.findVisibleLocator(COMPOSER_SELECTORS, 1_500);
-    if (composer) {
-      return 'connected';
+    try {
+      const url = page.url();
+      const composer = await this.findVisibleLocator(COMPOSER_SELECTORS, 1_500);
+      if (composer) {
+        return 'connected';
+      }
+
+      const bodyText = (await page.textContent('body').catch(() => '')) || '';
+      const looksLikeLoginPage =
+        /登录|注册|验证码|手机号/.test(bodyText) ||
+        /login|signin|passport/.test(url);
+
+      return looksLikeLoginPage ? 'needs_login' : 'connected';
+    } catch {
+      this.context = null;
+      this.page = null;
+      return 'needs_login';
     }
-
-    const bodyText = (await this.page.textContent('body').catch(() => '')) || '';
-    const looksLikeLoginPage =
-      /登录|注册|验证码|手机号/.test(bodyText) ||
-      /login|signin|passport/.test(url);
-
-    return looksLikeLoginPage ? 'needs_login' : 'connected';
   }
 
   async close(): Promise<void> {

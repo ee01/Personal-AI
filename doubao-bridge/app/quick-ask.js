@@ -368,11 +368,24 @@ function renderMemoryBadge(memorySaveResult) {
 }
 
 function renderAssistantMessage(message) {
-  if (message.pending && !message.text) {
+  if (message.pending && !message.text && !message.statusText) {
     return `
       <div class="message-card assistant-card pending-card">
         <div class="loading-dot" aria-label="加载中">
           <span></span><span></span><span></span>
+        </div>
+      </div>
+    `;
+  }
+
+  if (message.pending && message.statusText && !message.text) {
+    return `
+      <div class="message-card assistant-card pending-card">
+        <div class="pending-status-row">
+          <div class="loading-dot" aria-label="加载中">
+            <span></span><span></span><span></span>
+          </div>
+          <p class="pending-status-copy">${escapeHtml(message.statusText)}</p>
         </div>
       </div>
     `;
@@ -851,12 +864,22 @@ async function submitQuery(rawInput, options = {}) {
           return;
         }
 
+        if (event.type === 'status') {
+          updateMessage(assistantId, {
+            statusText: event.message || '',
+            pending: true,
+            htmlReady: false,
+          });
+          return;
+        }
+
         if (event.type === 'answer_done') {
           flushStreamBuffer();
           updateMessage(assistantId, {
             text: event.answer || '',
             pending: false,
             htmlReady: true,
+            statusText: '',
           });
           if (state.uiState === 'pending') {
             setUiState('streaming');
@@ -875,6 +898,7 @@ async function submitQuery(rawInput, options = {}) {
             structuredAnswer: event.structuredAnswer,
             evidence: event.evidence,
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
+            statusText: '',
           });
           state.turns.push({
             userText: input,
@@ -896,6 +920,7 @@ async function submitQuery(rawInput, options = {}) {
             pending: false,
             htmlReady: true,
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
+            statusText: '',
           });
           setUiState('enriched');
         }
@@ -909,6 +934,7 @@ async function submitQuery(rawInput, options = {}) {
       pending: false,
       htmlReady: true,
       memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
+      statusText: '',
     });
     setUiState('enriched');
     await refreshRuntimeSummary();

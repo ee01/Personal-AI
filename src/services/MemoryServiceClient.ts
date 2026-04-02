@@ -90,6 +90,16 @@ export interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
   queryTimeMs: number;
+  resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
+  missingInfo?: string[];
+  followUpActions?: RuntimeAction[];
+  externalEvidence?: Array<{
+    kind: string;
+    title?: string;
+    url?: string;
+    content?: string;
+    metadata?: Record<string, any>;
+  }>;
   structuredAnswer?: {
     timeline?: Array<{ date: string; event: string }>;
     keyFindings?: string[];
@@ -464,6 +474,7 @@ export interface OutreachSession {
   updatedAt: number;
   resolvedAt?: number;
   events?: OutreachEvent[];
+  actions?: RuntimeAction[];
 }
 
 export interface OutreachSessionListResponse {
@@ -1625,6 +1636,8 @@ export class MemoryServiceClient {
     executionMode?: 'manual' | 'auto';
     threadId?: string;
     actionType?: string;
+    sourceKind?: string;
+    sourceRefId?: string;
     limit?: number;
     offset?: number;
   }): Promise<RuntimeActionListResponse> {
@@ -1633,6 +1646,8 @@ export class MemoryServiceClient {
     if (filters?.executionMode) params.set('executionMode', filters.executionMode);
     if (filters?.threadId) params.set('threadId', filters.threadId);
     if (filters?.actionType) params.set('actionType', filters.actionType);
+    if (filters?.sourceKind) params.set('sourceKind', filters.sourceKind);
+    if (filters?.sourceRefId) params.set('sourceRefId', filters.sourceRefId);
     if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
     if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
 
@@ -1753,6 +1768,7 @@ export class MemoryServiceClient {
       return {
         ...(response.session as OutreachSession),
         events: Array.isArray(response.events) ? response.events : [],
+        actions: Array.isArray(response.actions) ? response.actions : [],
       };
     }
     return response as OutreachSession;

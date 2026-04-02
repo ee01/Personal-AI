@@ -219,6 +219,19 @@
         <div v-else class="muted">暂无结构化结果</div>
       </section>
 
+      <section v-if="detail.actions && detail.actions.length > 0" class="panel">
+        <div class="panel-title">后续查证动作</div>
+        <div class="event-list">
+          <div v-for="action in detail.actions" :key="action.id" class="event-item">
+            <div class="inline-head">
+              <span>{{ action.title }}</span>
+              <span class="muted small">{{ followUpActionStatusLabel(action) }}</span>
+            </div>
+            <p class="summary-text">{{ action.description || action.actionType }}</p>
+          </div>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-title">事件时间线</div>
         <div v-if="events.length === 0" class="muted">暂无事件</div>
@@ -251,6 +264,7 @@ import {
   type OutreachSession,
   type OutreachSessionStatus,
   type OutreachTargetCandidate,
+  type RuntimeAction,
 } from '../../services/MemoryServiceClient';
 
 const client = getMemoryServiceClient();
@@ -790,6 +804,7 @@ function eventTypeLabel(value?: string) {
 function extractOutcomeSummary(outcome: Record<string, unknown> | undefined): string {
   if (!outcome) return '';
   const candidates = [
+    outcome.resolvedConclusion,
     outcome.summary,
     outcome.reason,
     outcome.answer,
@@ -812,6 +827,15 @@ function sessionSummary(session: OutreachSession): string {
       : '对方表示稍后回复，当前继续等待。';
   }
   if (session.status === 'resolved') {
+    const resolutionState = typeof session.outcome?.resolutionState === 'string'
+      ? session.outcome.resolutionState
+      : '';
+    if (resolutionState === 'partial') {
+      return '已拿到部分可用结论，系统正在继续查证更精确的细节。';
+    }
+    if (resolutionState === 'insufficient') {
+      return '已收到线索，但仍需继续查证或等待人工判断。';
+    }
     return session.replyRawText?.trim() || '已收到可用回复，结果已归档。';
   }
   if (session.status === 'no_reply') return '已达到等待与追问上限，仍未收到回复。';
@@ -829,6 +853,16 @@ function statusClass(status: string) {
   if (status === 'pending_approval' || status === 'scheduled') return 'queued';
   if (status === 'escalated' || status === 'failed' || status === 'no_reply') return 'error';
   return '';
+}
+
+function followUpActionStatusLabel(action: RuntimeAction) {
+  if (action.queueStatus === 'succeeded') return '已完成';
+  if (action.queueStatus === 'running') return '执行中';
+  if (action.queueStatus === 'queued') return action.executionMode === 'auto' ? '等待自动执行' : '等待审批';
+  if (action.queueStatus === 'failed') return '执行失败';
+  if (action.queueStatus === 'dead_letter') return '已停止重试';
+  if (action.queueStatus === 'cancelled') return '已取消';
+  return action.queueStatus;
 }
 </script>
 

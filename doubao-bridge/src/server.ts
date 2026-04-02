@@ -365,6 +365,11 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
             return;
           }
 
+          if (event.type === 'status') {
+            writeSseEvent(reply, 'status', { message: event.message });
+            return;
+          }
+
           if (event.type === 'answer_done') {
             writeSseEvent(reply, 'answer_done', { answer: event.answer });
             return;

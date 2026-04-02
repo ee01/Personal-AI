@@ -507,39 +507,47 @@ export class ActionExecutor {
     outcome: DelegationOutcome,
   ): Promise<string[]> {
     const followUps: string[] = [];
-    const notifyAction = this.actionRepo.create({
-      actionType: 'notify_user',
-      title:
-        outcome.status === 'auth_error'
-          ? `外部委派鉴权失败: ${action.title}`
-          : `外部委派缺少能力: ${action.title}`,
-      description: outcome.summary,
-      params: {
+    const actionMetadata =
+      action.params.metadata && typeof action.params.metadata === 'object' && !Array.isArray(action.params.metadata)
+        ? (action.params.metadata as Record<string, unknown>)
+        : {};
+    const suppressRecoveryNotifications = actionMetadata.suppressRecoveryNotifications === true;
+
+    if (!suppressRecoveryNotifications) {
+      const notifyAction = this.actionRepo.create({
+        actionType: 'notify_user',
         title:
           outcome.status === 'auth_error'
-            ? `OpenClaw 鉴权失败: ${action.title}`
-            : `OpenClaw 缺少能力: ${action.title}`,
-        body: outcome.summary,
-        payload: {
-          actionId: action.id,
-          threadId: action.threadId,
-          outcome: outcome.status,
+            ? `外部委派鉴权失败: ${action.title}`
+            : `外部委派缺少能力: ${action.title}`,
+        description: outcome.summary,
+        params: {
+          title:
+            outcome.status === 'auth_error'
+              ? `OpenClaw 鉴权失败: ${action.title}`
+              : `OpenClaw 缺少能力: ${action.title}`,
+          body: outcome.summary,
+          payload: {
+            actionId: action.id,
+            threadId: action.threadId,
+            outcome: outcome.status,
+          },
+          botPush: true,
         },
-        botPush: true,
-      },
-      requiresApproval: false,
-      executionMode: 'auto',
-      priority: Math.max(8, action.priority),
-      threadId: action.threadId,
-      runId: action.runId,
-      sourceKind: 'delegation_recovery',
-      sourceRefId: action.id,
-      queueStatus: 'queued',
-      confidence: action.confidence,
-      utilityScore: action.utilityScore,
-      urgencyScore: 1,
-    });
-    followUps.push(notifyAction.id);
+        requiresApproval: false,
+        executionMode: 'auto',
+        priority: Math.max(8, action.priority),
+        threadId: action.threadId,
+        runId: action.runId,
+        sourceKind: 'delegation_recovery',
+        sourceRefId: action.id,
+        queueStatus: 'queued',
+        confidence: action.confidence,
+        utilityScore: action.utilityScore,
+        urgencyScore: 1,
+      });
+      followUps.push(notifyAction.id);
+    }
 
     const confirmAction = this.actionRepo.create({
       actionType: 'create_confirm_request',

@@ -47,6 +47,7 @@ const elements = {
 };
 
 let refreshTimer;
+let settingsDirty = false;
 
 function formatTime(value) {
   if (!value) return '未发生';
@@ -103,8 +104,17 @@ function validateRuntimeSettings(settings) {
   }
 }
 
-function applyRuntimeSettings(settings) {
+function markSettingsDirty() {
+  settingsDirty = true;
+}
+
+function clearSettingsDirty() {
+  settingsDirty = false;
+}
+
+function applyRuntimeSettings(settings, { force = false } = {}) {
   if (!settings) return;
+  if (settingsDirty && !force) return;
   elements.memoryBaseUrl.value = settings.memoryServiceBaseUrl || '';
   elements.memoryApiKey.value = settings.memoryServiceApiKey || '';
   elements.memoryUserId.value = settings.memoryServiceUserId || '';
@@ -112,6 +122,7 @@ function applyRuntimeSettings(settings) {
   elements.stableHours.value = String(hoursFromMs(settings.stableMemoryIntervalMs || 43_200_000));
   elements.briefingHours.value = String(hoursFromMs(settings.mobileBriefingIntervalMs || 14_400_000));
   elements.reminderMinutes.value = String(minutesFromMs(settings.reminderSyncIntervalMs || 900_000));
+  clearSettingsDirty();
 }
 
 function renderSummary(status) {
@@ -287,7 +298,7 @@ async function saveRuntimeSettings({ silent = false } = {}) {
   const payload = collectRuntimeSettings();
   validateRuntimeSettings(payload);
   const saved = await bridgeApi.updateSettings(payload);
-  applyRuntimeSettings(saved.effective);
+  applyRuntimeSettings(saved.effective, { force: true });
   if (!silent) {
     setMessage(elements.settingsMessage, '配置已保存，后台轮询会立即按新节奏生效。', 'success');
   }
@@ -368,6 +379,19 @@ elements.settingsForm.addEventListener('submit', (event) => {
       setMessage(elements.settingsMessage, error instanceof Error ? error.message : '保存失败', 'error');
     }
   });
+});
+
+[
+  elements.memoryBaseUrl,
+  elements.memoryApiKey,
+  elements.memoryUserId,
+  elements.pollMinutes,
+  elements.stableHours,
+  elements.briefingHours,
+  elements.reminderMinutes,
+].forEach((field) => {
+  field?.addEventListener('input', markSettingsDirty);
+  field?.addEventListener('change', markSettingsDirty);
 });
 
 elements.testMemoryButton.addEventListener('click', () => {

@@ -1,4 +1,10 @@
 import { getConfig } from '../config.js';
+import {
+  EvidenceResolutionPlanner,
+  type EvidenceResolutionActionType,
+  type EvidenceResolutionPlan,
+  type EvidenceResolutionPolicy,
+} from './EvidenceResolutionPlanner.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import type { ReflectionThreadRecord } from '../repositories/ReflectionThreadRepository.js';
@@ -43,7 +49,6 @@ interface WorkerResponse {
   hypothesisAfter?: string;
   discoveries?: string[];
   openQuestions?: string[];
-  actionProposals?: DraftReflectionAction[];
 }
 
 function clampScore(value: number | undefined, fallback: number): number {
@@ -96,6 +101,8 @@ function defaultExecutionModeForAction(
 }
 
 export class ReflectionWorker {
+  private readonly evidencePlanner = new EvidenceResolutionPlanner();
+
   async generate(
     thread: ReflectionThreadRecord,
     evidence: ReflectionEvidenceItem[],
@@ -148,33 +155,11 @@ Return JSON only:
   "summary": "2-4 sentence summary of what changed and what matters next",
   "hypothesisAfter": "updated hypothesis, if any",
   "discoveries": ["short bullet"],
-  "openQuestions": ["short question"],
-      "actionProposals": [
-    {
-      "actionType": "notify_user | create_confirm_request | update_truth_property | delegate_openclaw | ask_external_user",
-      "title": "short title",
-      "description": "why this action matters",
-      "confidence": 0.0,
-      "requiresApproval": true,
-      "executionMode": "manual | auto",
-      "priority": 1,
-      "utilityScore": 0.0,
-      "urgencyScore": 0.0,
-      "riskLevel": "low | medium | high",
-      "params": {}
-    }
-  ]
+  "openQuestions": ["short question"]
 }
 
 Rules:
-- Prefer "delegate_openclaw" before "ask_external_user" when the missing information might already exist in an external system or tool.
-- Use "delegate_openclaw" only for external systems.
-- If actionType is "delegate_openclaw" and params.mode is "write", you must set requiresApproval=true and executionMode="manual".
-- Use "ask_external_user" only when a concrete external owner is already identifiable and the gap is best answered by that person or group over chat.
-- For "ask_external_user", you must include params.targetRef, params.targetType, params.question, and optional params.context.
-- Do not use "ask_external_user" if the target is the user themself, if the target is still ambiguous, or if you only know that "someone should know".
-- If the next step requires the user's judgment, a missing configuration decision, or target clarification, prefer "create_confirm_request".
-- If the system should only inform or remind the user later, prefer "notify_user".`;
+- Focus on what changed, what matters, and which gaps remain.`;
 
     const parsed = await llm.generateJSON<WorkerResponse>(prompt, {
       temperature: 0.3,
@@ -188,9 +173,7 @@ Rules:
 
     const discoveries = uniqStrings(parsed.discoveries ?? []);
     const openQuestions = uniqStrings(parsed.openQuestions ?? []);
-    const actionProposals = (parsed.actionProposals ?? [])
-      .map((action) => this.normalizeAction(action, thread))
-      .filter((action): action is DraftReflectionAction => Boolean(action));
+    const actionProposals = await this.planActions(thread, evidence, summary, openQuestions);
 
     return {
       summary,
@@ -250,6 +233,103 @@ Rules:
       actionProposals,
       markdownBody: this.renderMarkdown(summary, discoveries, openQuestions, actionProposals, evidence),
     };
+  }
+
+  private async planActions(
+    thread: ReflectionThreadRecord,
+    evidence: ReflectionEvidenceItem[],
+    summary: string,
+    openQuestions: string[],
+  ): Promise<DraftReflectionAction[]> {
+    const question =
+      openQuestions[0] ??
+      thread.continueReason ??
+      `${thread.title} 当前最需要补齐的信息是什么？`;
+    const policy = this.buildResolutionPolicy(thread);
+    const plan = await this.evidencePlanner.resolve({
+      question,
+      context: [thread.currentHypothesis, summary].filter(Boolean).join('\n'),
+      evidence: evidence.map((item) => ({
+        sourceKind: item.sourceKind,
+        sourceId: item.sourceId,
+        title: item.title,
+        content: item.snippet,
+        createdAt: item.createdAt,
+        metadata: {
+          role: item.role,
+        },
+      })),
+      policy,
+    });
+    const action = this.buildActionFromResolutionPlan(thread, question, plan);
+    return action ? [action] : [];
+  }
+
+  private buildResolutionPolicy(thread: ReflectionThreadRecord): EvidenceResolutionPolicy {
+    const summarySignals = [
+      thread.title,
+      thread.latestSummary,
+      thread.continueReason,
+      thread.currentHypothesis,
+      ...thread.openQuestions,
+    ]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
+    const explicitActionIntent = /\b(create|update|modify|submit|file)\b|创建|新建|修改|更新|提交|写入/i.test(
+      summarySignals,
+    );
+
+    return {
+      scene: 'reflection',
+      userIntentMode: explicitActionIntent ? 'explicit_action' : 'informational',
+      externalRead: 'auto',
+      externalWrite: explicitActionIntent ? 'approval_required' : 'disabled',
+      allowAskExternalUser: true,
+      allowCreateConfirmRequest: true,
+    };
+  }
+
+  private buildActionFromResolutionPlan(
+    thread: ReflectionThreadRecord,
+    question: string,
+    plan: EvidenceResolutionPlan,
+  ): DraftReflectionAction | null {
+    const actionType = plan.recommendedAction;
+    if (actionType === 'none') return null;
+
+    const description = plan.summary;
+    let title = '';
+    if (actionType === 'delegate_openclaw') {
+      title = `继续外部核实: ${thread.title}`;
+    } else if (actionType === 'ask_external_user') {
+      title = `继续询问外部对象: ${thread.title}`;
+    } else if (actionType === 'create_confirm_request') {
+      title = `需要你决定下一步: ${thread.title}`;
+    } else {
+      title = question.slice(0, 48);
+    }
+
+    return this.normalizeAction(
+      {
+        actionType: actionType as EvidenceResolutionActionType,
+        title,
+        description,
+        params: plan.actionParams,
+        confidence: plan.confidence,
+        priority:
+          actionType === 'create_confirm_request'
+            ? Math.max(7, thread.priority)
+            : thread.priority,
+        utilityScore: thread.salience,
+        urgencyScore:
+          plan.resolutionState === 'partial' || plan.resolutionState === 'insufficient'
+            ? Math.max(0.6, thread.salience)
+            : thread.salience,
+        riskLevel: actionType === 'delegate_openclaw' ? 'low' : 'medium',
+        evidenceRefs: [],
+      },
+      thread,
+    );
   }
 
   private normalizeAction(
