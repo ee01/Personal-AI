@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 
 import { RingCentralClient, type RingCentralPost } from '../integrations/RingCentralClient.js';
 import {
+  ActionRepository,
   type QueuedActionRecord,
 } from '../repositories/ActionRepository.js';
 import { ActionResultRepository } from '../repositories/ActionResultRepository.js';
@@ -21,6 +22,11 @@ import type { UserDataManager } from '../storage/UserDataManager.js';
 import { now } from '../utils/time.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
+import {
+  EvidenceResolutionPlanner,
+  type EvidenceResolutionPlan,
+  type EvidenceResolutionPolicy,
+} from './EvidenceResolutionPlanner.js';
 
 interface ParsedReply {
   classification: 'answer' | 'defer' | 'irrelevant' | 'decline' | 'unclear';
@@ -36,6 +42,7 @@ interface CreateSessionFromActionInput {
 interface OutreachSessionDetail {
   session: OutreachSessionRecord;
   events: ReturnType<OutreachRepository['listEventsBySession']>;
+  actions: ReturnType<ActionRepository['list']>['items'];
 }
 
 interface UpdateOutreachSessionDraftInput {
@@ -68,6 +75,55 @@ const TERMINAL_STATUSES = new Set<OutreachSessionStatus>([
 ]);
 const REPLY_BURST_WINDOW_SECONDS = 5 * 60;
 
+function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
+  if (!post.createdAt) return null;
+  const parsed = Date.parse(post.createdAt);
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+}
+
+function aggregateReplyBatch(
+  posts: RingCentralPost[],
+  session: OutreachSessionRecord,
+  processedReplyPostIds: Set<string>,
+): AggregatedReplyBatch | null {
+  const candidates = posts
+    .filter((post) => post.id !== session.sentPostId)
+    .filter((post) => post.text.trim().length > 0)
+    .filter((post) => !processedReplyPostIds.has(post.id))
+    .sort((a, b) => (parsePostCreatedAtSeconds(a) ?? 0) - (parsePostCreatedAtSeconds(b) ?? 0));
+
+  if (candidates.length === 0) return null;
+
+  const latest = candidates[candidates.length - 1];
+  const anchorSeconds = parsePostCreatedAtSeconds(latest);
+  const anchorSender = latest.creatorId ?? latest.creatorName ?? null;
+  const burst: RingCentralPost[] = [];
+
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const post = candidates[index];
+    const sender = post.creatorId ?? post.creatorName ?? null;
+    const postSeconds = parsePostCreatedAtSeconds(post);
+    const sameSender =
+      Boolean(anchorSender && sender && anchorSender === sender) ||
+      (!anchorSender && !sender);
+    const insideWindow =
+      anchorSeconds == null || postSeconds == null
+        ? true
+        : anchorSeconds - postSeconds <= REPLY_BURST_WINDOW_SECONDS;
+    if (burst.length > 0 && (!sameSender || !insideWindow)) {
+      break;
+    }
+    burst.unshift(post);
+  }
+
+  return {
+    latestPostId: latest.id,
+    replyPostIds: burst.map((item) => item.id),
+    replySender: latest.creatorName ?? latest.creatorId ?? null,
+    replyText: burst.map((item) => item.text.trim()).join('\n'),
+  };
+}
+
 function buildSessionSummary(status: OutreachSessionStatus, question: string): string {
   if (status === 'resolved') return `Outreach resolved: ${question}`;
   if (status === 'no_reply') return `Outreach timed out with no reply: ${question}`;
@@ -80,6 +136,7 @@ function buildSessionSummary(status: OutreachSessionStatus, question: string): s
 function extractOutcomeSummary(outcome: Record<string, unknown> | null | undefined): string | undefined {
   if (!outcome) return undefined;
   const candidates = [
+    outcome.resolvedConclusion,
     outcome.summary,
     outcome.reason,
     outcome.answer,
@@ -256,109 +313,14 @@ function classifyReply(text: string, currentTime: number): ParsedReply {
   };
 }
 
-function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
-  if (!post.createdAt) return null;
-  const parsed = Date.parse(post.createdAt);
-  if (!Number.isFinite(parsed)) return null;
-  return Math.floor(parsed / 1000);
-}
-
-function resolveReplySender(post: RingCentralPost): string | null {
-  const sender = post.creatorName?.trim() || post.creatorId?.trim();
-  return sender || null;
-}
-
-function buildReplySenderKey(post: RingCentralPost): string {
-  return (resolveReplySender(post) || '').toLowerCase();
-}
-
-function aggregateReplyBatch(
-  posts: RingCentralPost[],
-  session: OutreachSessionRecord,
-): AggregatedReplyBatch | null {
-  const seenPostIds = new Set<string>();
-  const candidates = posts
-    .filter((post) => {
-      if (!post.id || seenPostIds.has(post.id)) return false;
-      seenPostIds.add(post.id);
-      if (post.id === session.sentPostId) return false;
-      if (post.id === session.replyPostId) return false;
-      return post.text.trim().length > 0;
-    })
-    .map((post, index) => ({
-      post,
-      index,
-      createdAtSeconds: parsePostCreatedAtSeconds(post),
-    }));
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  candidates.sort((left, right) => {
-    if (left.createdAtSeconds !== null && right.createdAtSeconds !== null) {
-      if (left.createdAtSeconds !== right.createdAtSeconds) {
-        return left.createdAtSeconds - right.createdAtSeconds;
-      }
-      return left.index - right.index;
-    }
-    if (left.createdAtSeconds !== null) return -1;
-    if (right.createdAtSeconds !== null) return 1;
-    return left.index - right.index;
-  });
-
-  const latest = candidates[candidates.length - 1];
-  const latestSenderKey = buildReplySenderKey(latest.post);
-  const batch = [latest];
-  let previousCreatedAt = latest.createdAtSeconds;
-
-  for (let index = candidates.length - 2; index >= 0; index -= 1) {
-    const candidate = candidates[index];
-    const candidateSenderKey = buildReplySenderKey(candidate.post);
-    const senderMismatch =
-      (latestSenderKey && candidateSenderKey && latestSenderKey !== candidateSenderKey) ||
-      (!latestSenderKey && candidateSenderKey) ||
-      (latestSenderKey && !candidateSenderKey);
-    if (senderMismatch) {
-      break;
-    }
-
-    if (
-      previousCreatedAt !== null &&
-      candidate.createdAtSeconds !== null &&
-      previousCreatedAt - candidate.createdAtSeconds > REPLY_BURST_WINDOW_SECONDS
-    ) {
-      break;
-    }
-
-    batch.unshift(candidate);
-    if (candidate.createdAtSeconds !== null) {
-      previousCreatedAt = candidate.createdAtSeconds;
-    }
-  }
-
-  const replyPostIds = batch.map((item) => item.post.id);
-  const replyText = batch
-    .map((item) => item.post.text.trim())
-    .filter((value) => value.length > 0)
-    .join('\n');
-  if (!replyText) {
-    return null;
-  }
-
-  return {
-    latestPostId: latest.post.id,
-    replyPostIds,
-    replySender: resolveReplySender(latest.post),
-    replyText,
-  };
-}
-
 export class OutreachEngine {
   private readonly repo: OutreachRepository;
+  private readonly actionRepo: ActionRepository;
   private readonly actionResultRepo: ActionResultRepository;
   private readonly confirmRequestRepo: ConfirmRequestRepository;
   private readonly threadService: ReflectionThreadService;
   private readonly ringClient: RingCentralClient;
+  private readonly evidencePlanner: EvidenceResolutionPlanner;
 
   constructor(
     private readonly db: Database.Database,
@@ -366,10 +328,12 @@ export class OutreachEngine {
     private readonly userId?: string,
   ) {
     this.repo = new OutreachRepository(db);
+    this.actionRepo = new ActionRepository(db);
     this.actionResultRepo = new ActionResultRepository(db);
     this.confirmRequestRepo = new ConfirmRequestRepository(db);
     this.threadService = new ReflectionThreadService(db, userDataManager, userId);
     this.ringClient = new RingCentralClient(userDataManager, db, userId);
+    this.evidencePlanner = new EvidenceResolutionPlanner();
   }
 
   private getRuntimeConfig() {
@@ -448,6 +412,7 @@ export class OutreachEngine {
     return {
       session,
       events: this.repo.listEventsBySession(id, 200),
+      actions: this.actionRepo.list({ sourceKind: 'outreach_session', sourceRefId: id, limit: 20 }).items,
     };
   }
 
@@ -839,23 +804,26 @@ export class OutreachEngine {
       const posts = await this.ringClient.listPosts(session.sentChatId, session.lastPollAt ?? session.createdAt);
       this.repo.updateSession(session.id, { lastPollAt: currentTime });
 
-      const replyBatch = aggregateReplyBatch(posts, session);
+      const processedReplyPostIds = this.listProcessedReplyPostIds(session.id, session.replyPostId);
+      const replyBatch = aggregateReplyBatch(posts, session, processedReplyPostIds);
       if (replyBatch) {
-        const parsed = classifyReply(replyBatch.replyText, currentTime);
+        const resolution = await this.resolveReplyBatch(session, replyBatch);
         this.repo.updateSession(session.id, {
           replyPostId: replyBatch.latestPostId,
           replySender: replyBatch.replySender,
           replyRawText: replyBatch.replyText,
-          replyClassification: parsed.classification,
-          replyConfidence: parsed.confidence,
+          replyClassification: resolution.legacyClassification,
+          replyConfidence: resolution.confidence,
         });
         this.repo.createEvent(session.id, 'reply_received', {
           replyPostId: replyBatch.latestPostId,
           replyPostIds: replyBatch.replyPostIds,
           replySender: replyBatch.replySender,
           replyText: replyBatch.replyText,
-          classification: parsed.classification,
-          confidence: parsed.confidence,
+          classification: resolution.legacyClassification,
+          confidence: resolution.confidence,
+          resolutionState: resolution.resolutionState,
+          recommendedAction: resolution.recommendedAction,
         });
         this.insertOutreachMessage('outreach_reply', session, replyBatch.replyText, {
           postId: replyBatch.latestPostId,
@@ -863,58 +831,57 @@ export class OutreachEngine {
           sender: replyBatch.replySender,
         });
 
-        if (parsed.classification === 'answer' || parsed.classification === 'decline') {
-          const summary = await this.buildResolvedOutcomeSummary(
-            session,
-            replyBatch.replyText,
-            parsed.classification,
-          );
+        const followUpActions = await this.queueResolutionFollowUpActions(session, resolution, replyBatch);
+        const baseOutcome = this.buildResolutionOutcome(session, replyBatch, resolution, followUpActions);
+
+        if (
+          resolution.resolutionState === 'complete' ||
+          resolution.resolutionState === 'partial' ||
+          resolution.legacyClassification === 'decline' ||
+          followUpActions.length > 0
+        ) {
+          const summary = resolution.resolutionState === 'insufficient'
+            ? (baseOutcome.summary as string)
+            : await this.buildResolvedOutcomeSummary(
+                session,
+                replyBatch.replyText,
+                resolution.legacyClassification === 'decline' ? 'decline' : 'answer',
+                resolution.resolvedConclusion,
+              );
           this.markTerminal(session.id, 'resolved', {
-            classification: parsed.classification,
-            confidence: parsed.confidence,
-            reply: replyBatch.replyText,
+            ...baseOutcome,
             summary,
           });
           return;
         }
-        if (parsed.classification === 'defer' && parsed.etaAt) {
-          const summary = buildFallbackOutcomeSummary(
-            session,
-            parsed.classification,
-            replyBatch.replyText,
-            parsed.etaAt,
-          );
+
+        if (resolution.resolutionState === 'deferred' && resolution.etaAt) {
+          const summary = baseOutcome.summary as string;
           this.repo.updateSession(session.id, {
             status: 'deferred',
-            waitUntil: parsed.etaAt,
-            nextCheckAt: parsed.etaAt,
+            waitUntil: resolution.etaAt,
+            nextCheckAt: resolution.etaAt,
             outcome: {
-              classification: parsed.classification,
-              reason: parsed.reason,
-              etaAt: parsed.etaAt,
+              ...baseOutcome,
               summary,
             },
           });
           this.repo.createEvent(session.id, 'deferred_by_reply', {
-            etaAt: parsed.etaAt,
+            etaAt: resolution.etaAt,
             summary,
           });
           return;
         }
         if (
-          (parsed.classification === 'irrelevant' || parsed.classification === 'unclear') &&
+          (resolution.legacyClassification === 'irrelevant' || resolution.legacyClassification === 'unclear') &&
           session.followupCount >= session.maxFollowup &&
           session.waitUntil &&
           currentTime >= session.waitUntil
         ) {
-          const summary = buildFallbackOutcomeSummary(
-            session,
-            parsed.classification,
-            replyBatch.replyText,
-          );
+          const summary = baseOutcome.summary as string;
           this.markTerminal(session.id, 'escalated', {
             reason: 'reply_not_actionable',
-            classification: parsed.classification,
+            classification: resolution.legacyClassification,
             reply: replyBatch.replyText,
             summary,
           });
@@ -922,16 +889,11 @@ export class OutreachEngine {
           return;
         }
 
-        const summary = buildFallbackOutcomeSummary(
-          session,
-          parsed.classification,
-          replyBatch.replyText,
-        );
+        const summary = baseOutcome.summary as string;
         this.repo.updateSession(session.id, {
           nextCheckAt: currentTime + 300,
           outcome: {
-            classification: parsed.classification,
-            reason: parsed.reason,
+            ...baseOutcome,
             summary,
           },
         });
@@ -972,12 +934,185 @@ export class OutreachEngine {
     }
   }
 
+  private async resolveReplyBatch(
+    session: OutreachSessionRecord,
+    replyBatch: AggregatedReplyBatch,
+  ): Promise<EvidenceResolutionPlan> {
+    const policy: EvidenceResolutionPolicy = {
+      scene: 'outreach',
+      userIntentMode: 'informational',
+      externalRead: 'auto',
+      externalWrite: 'disabled',
+      allowAskExternalUser: false,
+      allowCreateConfirmRequest: true,
+    };
+    const resolved = await this.evidencePlanner.resolve({
+      question: session.renderedQuestion,
+      context: session.renderedContext,
+      evidence: [
+        {
+          sourceKind: 'outreach_reply',
+          sourceId: replyBatch.latestPostId,
+          title: replyBatch.replySender ?? session.targetResolvedLabel ?? session.targetRef,
+          content: replyBatch.replyText,
+          metadata: {
+            replyPostIds: replyBatch.replyPostIds,
+            sender: replyBatch.replySender,
+          },
+        },
+      ],
+      policy,
+    });
+
+    if (
+      resolved.resolutionState === 'deferred' &&
+      resolved.directFindings.length === 0 &&
+      resolved.candidateArtifacts.length === 0
+    ) {
+      return resolved;
+    }
+    if (resolved.legacyClassification === 'defer' && resolved.directFindings.length > 0) {
+      return {
+        ...resolved,
+        legacyClassification: 'answer',
+      };
+    }
+    return resolved;
+  }
+
+  private listProcessedReplyPostIds(sessionId: string, currentReplyPostId?: string): Set<string> {
+    const seen = new Set<string>();
+    if (currentReplyPostId) {
+      seen.add(currentReplyPostId);
+    }
+    const events = this.repo.listEventsBySession(sessionId, 200);
+    for (const event of events) {
+      if (event.eventType !== 'reply_received' || !event.payload) continue;
+      const replyPostId = normalizeString(event.payload.replyPostId);
+      if (replyPostId) seen.add(replyPostId);
+      const replyPostIds = Array.isArray(event.payload.replyPostIds)
+        ? event.payload.replyPostIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        : [];
+      for (const id of replyPostIds) {
+        seen.add(id.trim());
+      }
+    }
+    return seen;
+  }
+
+  private async queueResolutionFollowUpActions(
+    session: OutreachSessionRecord,
+    resolution: EvidenceResolutionPlan,
+    replyBatch: AggregatedReplyBatch,
+  ) {
+    if (resolution.recommendedAction === 'none') return [];
+
+    const baseParams =
+      resolution.actionParams && typeof resolution.actionParams === 'object' && !Array.isArray(resolution.actionParams)
+        ? { ...resolution.actionParams }
+        : {};
+    const params: Record<string, unknown> = {
+      ...baseParams,
+      metadata: {
+        ...(baseParams.metadata && typeof baseParams.metadata === 'object' && !Array.isArray(baseParams.metadata)
+          ? (baseParams.metadata as Record<string, unknown>)
+          : {}),
+        sessionId: session.id,
+        replyPostId: replyBatch.latestPostId,
+      },
+    };
+    const requestedMode = params.mode === 'write' ? 'write' : 'read';
+    const shouldAutoExecute =
+      resolution.recommendedAction === 'delegate_openclaw'
+        ? requestedMode === 'read'
+        : true;
+    const requiresApproval =
+      resolution.recommendedAction === 'delegate_openclaw'
+        ? requestedMode === 'write'
+        : false;
+    const action = this.actionRepo.create({
+      actionType: resolution.recommendedAction,
+      title: this.buildResolutionActionTitle(session, resolution),
+      description: resolution.summary,
+      params,
+      threadId: session.threadId,
+      runId: session.runId,
+      executionMode: shouldAutoExecute ? 'auto' : 'manual',
+      requiresApproval,
+      queueStatus: 'queued',
+      priority:
+        resolution.recommendedAction === 'create_confirm_request'
+          ? 8
+          : 7,
+      sourceKind: 'outreach_session',
+      sourceRefId: session.id,
+      confidence: resolution.confidence,
+      evidenceRefs: [`outreach_session:${session.id}`, `outreach_reply:${replyBatch.latestPostId}`],
+    });
+    return [action];
+  }
+
+  private buildResolutionActionTitle(
+    session: OutreachSessionRecord,
+    resolution: EvidenceResolutionPlan,
+  ): string {
+    if (resolution.recommendedAction === 'delegate_openclaw') {
+      return `继续查证: ${session.renderedQuestion.slice(0, 48)}`;
+    }
+    if (resolution.recommendedAction === 'create_confirm_request') {
+      return `需要确认下一步: ${session.renderedQuestion.slice(0, 48)}`;
+    }
+    if (resolution.recommendedAction === 'ask_external_user') {
+      return `继续询问外部对象: ${session.renderedQuestion.slice(0, 48)}`;
+    }
+    return session.renderedQuestion.slice(0, 48);
+  }
+
+  private buildResolutionOutcome(
+    session: OutreachSessionRecord,
+    replyBatch: AggregatedReplyBatch,
+    resolution: EvidenceResolutionPlan,
+    actions: Array<{ id: string; queueStatus: string }>,
+  ): Record<string, unknown> {
+    const summary =
+      resolution.summary ||
+      buildFallbackOutcomeSummary(
+        session,
+        resolution.legacyClassification === 'decline' ? 'decline' : 'answer',
+        replyBatch.replyText,
+        resolution.etaAt,
+      );
+    return {
+      classification: resolution.legacyClassification,
+      confidence: resolution.confidence,
+      reply: replyBatch.replyText,
+      resolutionState: resolution.resolutionState,
+      directFindings: resolution.directFindings,
+      resolvedConclusion: resolution.resolvedConclusion,
+      remainingQuestions: resolution.remainingQuestions,
+      candidateArtifacts: resolution.candidateArtifacts,
+      recommendedAction: resolution.recommendedAction,
+      spawnedActionIds: actions.map((action) => action.id),
+      followUpActions: actions.map((action) => ({
+        id: action.id,
+        queueStatus: action.queueStatus,
+      })),
+      etaAt: resolution.etaAt,
+      reason: resolution.reason,
+      summary,
+    };
+  }
+
   private async buildResolvedOutcomeSummary(
     session: OutreachSessionRecord,
     replyText: string,
     classification: ParsedReply['classification'],
+    resolvedConclusion?: string,
   ): Promise<string> {
-    const fallback = buildFallbackOutcomeSummary(session, classification, replyText);
+    const fallback =
+      (typeof resolvedConclusion === 'string' && resolvedConclusion.trim().length > 0
+        ? resolvedConclusion.trim()
+        : undefined) ?? buildFallbackOutcomeSummary(session, classification, replyText);
     try {
       const llm = getLLMClient();
       const prompt = [
@@ -1123,7 +1258,10 @@ export class OutreachEngine {
         terminalSyncedAt: now(),
         actionResultId: result.id,
       });
-      if (runtime.reflectionEnabled) {
+      const spawnedActionIds = Array.isArray(session.outcome?.spawnedActionIds)
+        ? session.outcome?.spawnedActionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        : [];
+      if (runtime.reflectionEnabled && spawnedActionIds.length === 0) {
         try {
           await this.threadService.runReflection(session.threadId, {
             runType: 'action_result_followup',
