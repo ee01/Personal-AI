@@ -196,6 +196,22 @@ function safeJsonParse<T>(json: string): T | undefined {
   }
 }
 
+function buildMessageMetadata(msg: MessageRow): Record<string, any> | undefined {
+  const metadata = msg.metadata_json ? safeJsonParse<Record<string, any>>(msg.metadata_json) ?? {} : {};
+  if (msg.sender && !metadata.sender) {
+    metadata.sender = msg.sender;
+  }
+  if (msg.group_name) {
+    if (!metadata.groupName) {
+      metadata.groupName = msg.group_name;
+    }
+    if (!metadata.group_name) {
+      metadata.group_name = msg.group_name;
+    }
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 function matchesTextFilter(value: string | null, filters?: string[]): boolean {
   if (!filters || filters.length === 0) return true;
   if (!value) return false;
@@ -410,7 +426,7 @@ export class RecallEngine {
             timestamp: msg.timestamp,
             source: msg.source_type,
             channels: ['vector'],
-            metadata: msg.metadata_json ? safeJsonParse(msg.metadata_json) : undefined,
+            metadata: buildMessageMetadata(msg),
           });
         }
       }
@@ -680,7 +696,7 @@ export class RecallEngine {
               timestamp: msg.timestamp,
               source: msg.source_type,
               channels: ['graph'],
-              metadata: msg.metadata_json ? safeJsonParse(msg.metadata_json) : undefined,
+              metadata: buildMessageMetadata(msg),
             });
           }
         } catch {
@@ -748,7 +764,7 @@ export class RecallEngine {
           timestamp: msg.timestamp,
           source: msg.source_type,
           channels: ['time'],
-          metadata: msg.metadata_json ? safeJsonParse(msg.metadata_json) : undefined,
+          metadata: buildMessageMetadata(msg),
           recencyScore: recencyInWindow,
         });
       }

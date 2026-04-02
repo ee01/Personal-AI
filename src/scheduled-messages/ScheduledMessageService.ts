@@ -47,6 +47,21 @@ import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 import { normalizeSheetConfig } from './botAutomationConfig';
 import { formatTimelineNextExecutionText } from './timelineFormatting';
 
+const NON_PERSISTED_OUTREACH_FIELDS = new Set([
+  'Outreach_Target_Type',
+  'Outreach_Target_Ref',
+  'Outreach_Result',
+  'Outreach_Context',
+  'Outreach_Max_Followup',
+  'Outreach_Followup_Interval_Hours',
+  'Outreach_Sync_State',
+  'Outreach_Runtime_Status',
+  'Outreach_Last_Session_ID',
+  'Outreach_Last_Result',
+  'Outreach_Last_Updated',
+  'Outreach_Question',
+]);
+
 export class ScheduledMessageService {
   private token: string;
   private config: SheetConfig | null = null;
@@ -396,8 +411,6 @@ export class ScheduledMessageService {
       'Repeat_Count',
       'Timeline_Offset',
       'Exec_Count',
-      'Outreach_Max_Followup',
-      'Outreach_Followup_Interval_Hours',
     ];
 
     numericFields.forEach((field) => {
@@ -415,6 +428,10 @@ export class ScheduledMessageService {
     if (!message.Target_Type && message.Outreach_Target_Type) {
       message.Target_Type = message.Outreach_Target_Type;
     }
+
+    if (!message.Outreach_Result && message.Outreach_Last_Result) {
+      message.Outreach_Result = message.Outreach_Last_Result;
+    }
     
     return message as ScheduledMessage;
   }
@@ -428,6 +445,11 @@ export class ScheduledMessageService {
     
     // 根据 header 顺序构建行数据
     for (const header of headers) {
+      if (NON_PERSISTED_OUTREACH_FIELDS.has(header)) {
+        row.push('');
+        continue;
+      }
+
       const value = (message as any)[header];
       
       // 处理不同类型的字段

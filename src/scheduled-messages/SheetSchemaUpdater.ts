@@ -9,6 +9,21 @@ import { SheetConfig } from './types';
 import { MESSAGES_SCHEMA } from './SheetInitializer';
 import { normalizeSheetConfig } from './botAutomationConfig';
 
+const OBSOLETE_OUTREACH_COLUMNS = [
+  'Outreach_Target_Type',
+  'Outreach_Target_Ref',
+  'Outreach_Result',
+  'Outreach_Context',
+  'Outreach_Max_Followup',
+  'Outreach_Followup_Interval_Hours',
+  'Outreach_Sync_State',
+  'Outreach_Runtime_Status',
+  'Outreach_Last_Session_ID',
+  'Outreach_Last_Result',
+  'Outreach_Last_Updated',
+  'Outreach_Question',
+] as const;
+
 export interface SchemaUpdateResult {
   success: boolean;
   updated: boolean;
@@ -38,13 +53,26 @@ export class SheetSchemaUpdater {
       // 1. 获取当前 Messages 表的表头
       const currentHeaders = await this.getMessagesHeaders();
       console.log('当前表头:', currentHeaders);
+
+      const obsoleteColumns = currentHeaders.filter((col) =>
+        OBSOLETE_OUTREACH_COLUMNS.includes(col as typeof OBSOLETE_OUTREACH_COLUMNS[number]),
+      );
+
+      if (obsoleteColumns.length > 0) {
+        console.log('🧹 发现可清理的废弃 Outreach 列:', obsoleteColumns);
+        await this.removeObsoleteColumns(currentHeaders, obsoleteColumns);
+      }
+
+      const refreshedHeaders = obsoleteColumns.length > 0
+        ? await this.getMessagesHeaders()
+        : currentHeaders;
       
       // 2. 比对找出缺失的列
       const missingColumns = MESSAGES_SCHEMA.columns.filter(
-        col => !currentHeaders.includes(col)
+        col => !refreshedHeaders.includes(col)
       );
       
-      if (missingColumns.length === 0) {
+      if (missingColumns.length === 0 && obsoleteColumns.length === 0) {
         console.log('✅ Sheet 表结构已是最新');
         return {
           success: true,
@@ -56,7 +84,9 @@ export class SheetSchemaUpdater {
       console.log('📝 发现缺失的列:', missingColumns);
       
       // 3. 为缺失的列添加到表末尾
-      await this.addMissingColumns(currentHeaders, missingColumns);
+      if (missingColumns.length > 0) {
+        await this.addMissingColumns(refreshedHeaders, missingColumns);
+      }
       
       // 4. 更新配置中的 sheet_version
       await this.updateSchemaVersion();
@@ -65,7 +95,7 @@ export class SheetSchemaUpdater {
       
       return {
         success: true,
-        updated: true,
+        updated: missingColumns.length > 0 || obsoleteColumns.length > 0,
         addedColumns: missingColumns
       };
       
@@ -77,6 +107,44 @@ export class SheetSchemaUpdater {
         addedColumns: [],
         error: error instanceof Error ? error.message : String(error)
       };
+    }
+  }
+
+  private async removeObsoleteColumns(currentHeaders: string[], obsoleteColumns: string[]): Promise<void> {
+    const messagesSheetId = this.config.messagesSheetId || 0;
+    const indices = obsoleteColumns
+      .map((column) => currentHeaders.indexOf(column))
+      .filter((index) => index >= 0)
+      .sort((a, b) => b - a);
+
+    for (const index of indices) {
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            requests: [{
+              deleteDimension: {
+                range: {
+                  sheetId: messagesSheetId,
+                  dimension: 'COLUMNS',
+                  startIndex: index,
+                  endIndex: index + 1
+                }
+              }
+            }]
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`删除废弃列失败: ${error}`);
+      }
     }
   }
   

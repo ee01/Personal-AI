@@ -216,7 +216,8 @@ describe('OutreachEngine', () => {
       .all(action.id) as Array<{ action_id: string; result_type: string; summary: string }>;
     expect(actionResults).toHaveLength(1);
     expect(actionResults[0].result_type).toBe('resolved');
-    expect(actionResults[0].summary).toContain('Outreach resolved');
+    expect(actionResults[0].summary).toBeTruthy();
+    expect(actionResults[0].summary).toContain('18:00');
   });
 
   it('dispatches due scheduled templates and advances next dispatch', async () => {

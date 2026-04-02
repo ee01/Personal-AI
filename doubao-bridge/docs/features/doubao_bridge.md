@@ -186,7 +186,7 @@ export type MemoType =
 // 长期记忆同步 - 使用随手记格式
 await syncManager.syncStableMemoryAsMemo();
 
-// 移动简报同步 - 保持原样
+// 移动简报同步 - 也使用随手记记录话术
 await syncManager.syncMobileBriefing();
 
 // 提醒事项同步 - 使用随手记格式（转为待办）

@@ -57,16 +57,17 @@ export interface ScheduledMessage {
   Glip_Team_ID?: string;
   Attachment?: string;
   Target_Type?: TargetType;
-  // Outreach 模板字段
+  // Outreach 运行态/表单字段（不再持久化到 Sheet，主要来自 memory-service runtime overlay）
   Outreach_Target_Type?: TargetType;
   Outreach_Target_Ref?: string;
+  Outreach_Result?: string;
   Outreach_Context?: string;
   Outreach_Max_Followup?: number;
   Outreach_Followup_Interval_Hours?: number;
   Outreach_Sync_State?: string;      // 运行/同步状态摘要，供 UI 展示
   Outreach_Runtime_Status?: string;   // 会话状态摘要，供 UI 展示
   Outreach_Last_Session_ID?: string;
-  Outreach_Last_Result?: string;
+  Outreach_Last_Result?: string;      // 兼容旧表头
   Outreach_Last_Updated?: string;
   // AI Report 字段
   AI_Endpoint?: string;    // "POST url" 或 "GET url" 或 "url"
@@ -101,9 +102,10 @@ export interface CreateMessageFormData {
   Glip_User_Name?: string;  // 支持多个人名，用逗号分隔
   Glip_Team_ID?: string;
   Attachment?: string;
-  // Outreach 模板字段
+  // Outreach 表单字段（仅用于提交到 memory-service，不写入 Sheet）
   Outreach_Target_Type?: TargetType;
   Outreach_Target_Ref?: string;
+  Outreach_Result?: string;
   Outreach_Context?: string;
   Outreach_Max_Followup?: number;
   Outreach_Followup_Interval_Hours?: number;

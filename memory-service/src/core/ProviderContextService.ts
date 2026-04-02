@@ -142,6 +142,252 @@ function compactText(text: string, maxLength: number): string {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
+function asRecord(value: unknown): Record<string, any> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, any>;
+}
+
+function toCleanString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized ? normalized : null;
+}
+
+function pickFirstString(record: Record<string, any>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = toCleanString(record[key]);
+    if (value) return value;
+  }
+  return null;
+}
+
+function parseTimestampToSeconds(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value > 1_000_000_000_000) {
+      return Math.floor(value / 1000);
+    }
+    if (value > 10_000_000_000) {
+      return Math.floor(value / 1000);
+    }
+    if (value > 0) {
+      return Math.floor(value);
+    }
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if (/^\d+$/.test(trimmed)) {
+      return parseTimestampToSeconds(Number(trimmed));
+    }
+
+    const parsed = Date.parse(trimmed);
+    if (Number.isFinite(parsed)) {
+      return Math.floor(parsed / 1000);
+    }
+  }
+
+  return null;
+}
+
+function formatConcernedExpiry(value: unknown): string | null {
+  const seconds = parseTimestampToSeconds(value);
+  if (!seconds || seconds <= 0) {
+    return null;
+  }
+  return formatDateTime(seconds);
+}
+
+function formatNotifyMethods(value: unknown): string | null {
+  const raw = toCleanString(value);
+  if (!raw) return null;
+
+  const methods = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (methods.length === 0) {
+    return null;
+  }
+
+  return methods.join(' + ');
+}
+
+function formatDigestSchedule(value: unknown): string | null {
+  const record = asRecord(value);
+  if (!record || record.enabled === false) {
+    return null;
+  }
+
+  const frequency = toCleanString(record.frequency);
+  const preferredHour =
+    typeof record.preferredHour === 'number' && Number.isFinite(record.preferredHour)
+      ? record.preferredHour
+      : null;
+
+  if (!frequency && preferredHour === null) {
+    return null;
+  }
+
+  if (preferredHour === null) {
+    return `digest ${frequency}`;
+  }
+
+  return `digest ${frequency || 'scheduled'} @ ${String(preferredHour).padStart(2, '0')}:00`;
+}
+
+function formatAutoReplyMode(value: unknown): string | null {
+  const record = asRecord(value);
+  if (!record || record.enabled === false) {
+    return null;
+  }
+
+  const parts: string[] = ['auto-reply'];
+  const reviewMode = toCleanString(record.reviewMode);
+  if (reviewMode) {
+    parts.push(reviewMode);
+  }
+  parts.push(record.useAIGenerate ? 'AI' : 'fixed');
+  return parts.join(' ');
+}
+
+function buildConcernedItemLabel(record: Record<string, any>): string {
+  const directLabel = pickFirstString(record, ['text', 'title', 'name']);
+  if (directLabel) {
+    return directLabel;
+  }
+
+  const followConfig = asRecord(record.followConfig);
+  const originalMessage = asRecord(followConfig?.originalMessage);
+  const originalContent = toCleanString(originalMessage?.content);
+  if (originalContent) {
+    return `关注后续：${compactText(originalContent, 96)}`;
+  }
+
+  return pickFirstString(record, ['itemKey', 'item_key', 'id']) || 'Untitled focus';
+}
+
+function formatFollowThreadDetails(record: Record<string, any>): string | null {
+  if (!record.followThread && !record.followConfig) {
+    return null;
+  }
+
+  const followConfig = asRecord(record.followConfig);
+  const originalMessage = asRecord(followConfig?.originalMessage);
+  const details: string[] = [];
+
+  const teamName = toCleanString(originalMessage?.teamName);
+  if (teamName) {
+    details.push(`group ${teamName}`);
+  }
+
+  const sender = toCleanString(originalMessage?.sender);
+  if (sender) {
+    details.push(`source ${sender}`);
+  }
+
+  const originalContent = toCleanString(originalMessage?.content);
+  if (originalContent) {
+    details.push(`track replies to "${compactText(originalContent, 72)}"`);
+  }
+
+  const keywordFilter = Array.isArray(followConfig?.keywordFilter)
+    ? followConfig.keywordFilter
+        .map((item) => toCleanString(item))
+        .filter((item): item is string => Boolean(item))
+    : [];
+  if (keywordFilter.length > 0) {
+    details.push(`keywords ${compactText(keywordFilter.join(', '), 56)}`);
+  }
+
+  const relatedMessages = Array.isArray(followConfig?.relatedMessages)
+    ? followConfig.relatedMessages
+    : [];
+  if (relatedMessages.length > 0) {
+    details.push(`related hits ${relatedMessages.length}`);
+  }
+
+  return details.length > 0 ? details.join('; ') : 'follow thread';
+}
+
+function formatConcernedItem(item: unknown): string {
+  if (!item || typeof item !== 'object') {
+    return compactText(String(item), 180);
+  }
+
+  const record = item as Record<string, any>;
+  const label = buildConcernedItemLabel(record);
+  const narrative: string[] = [];
+  const metadata: string[] = [];
+
+  const summary = pickFirstString(record, ['summary', 'value', 'description']);
+  if (summary && summary !== label) {
+    narrative.push(compactText(summary, 110));
+  }
+
+  const followThreadDetails = formatFollowThreadDetails(record);
+  if (followThreadDetails) {
+    narrative.push(followThreadDetails);
+  }
+
+  const filterSender = toCleanString(record.filterSender);
+  if (filterSender) {
+    metadata.push(`sender ${filterSender}`);
+  }
+
+  const filterGroup = toCleanString(record.filterGroup);
+  if (filterGroup) {
+    metadata.push(`group ${filterGroup}`);
+  }
+
+  if (record.mentionMe) {
+    metadata.push('mention-me');
+  }
+
+  const notifyMethods = formatNotifyMethods(record.notifyMethod);
+  if (notifyMethods) {
+    metadata.push(`notify ${notifyMethods}`);
+  }
+
+  const notifyFrequency = toCleanString(record.notifyFrequency);
+  if (notifyFrequency) {
+    metadata.push(`notify ${notifyFrequency}`);
+  }
+
+  const digestSchedule = formatDigestSchedule(record.digestConfig);
+  if (digestSchedule) {
+    metadata.push(digestSchedule);
+  }
+
+  const autoReplyMode = formatAutoReplyMode(record.autoReplyConfig);
+  if (record.autoReply && !autoReplyMode) {
+    metadata.push('auto-reply');
+  } else if (autoReplyMode) {
+    metadata.push(autoReplyMode);
+  }
+
+  const expiresAt = formatConcernedExpiry(record.expiredAt);
+  if (expiresAt) {
+    metadata.push(`until ${expiresAt}`);
+  }
+
+  let line = compactText(label, 120);
+  if (narrative.length > 0) {
+    line = `${line}: ${compactText(narrative.join(' | '), 180)}`;
+  }
+  if (metadata.length > 0) {
+    line = `${line} [${compactText(metadata.join('; '), 120)}]`;
+  }
+
+  return compactText(line, 280);
+}
+
 function markdownList(items: string[], emptyFallback = 'No data available.'): string {
   if (items.length === 0) {
     return `- ${emptyFallback}`;
@@ -574,15 +820,7 @@ export class ProviderContextService {
       .all() as ReflectionArtifactRow[];
 
     const focusItems = concernedItems
-      .map((item) => {
-        if (item && typeof item === 'object') {
-          const record = item as Record<string, any>;
-          const label = record.title || record.name || record.itemKey || record.item_key || record.id;
-          const detail = record.summary || record.value || record.description || '';
-          return detail ? `${label}: ${compactText(String(detail), 140)}` : compactText(String(label), 140);
-        }
-        return compactText(String(item), 140);
-      })
+      .map((item) => formatConcernedItem(item))
       .slice(0, 8);
 
     const bodySections = [

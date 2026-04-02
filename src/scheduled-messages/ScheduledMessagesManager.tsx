@@ -7,7 +7,7 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { OneClickSetup } from './components/OneClickSetup';
 import { ScheduledMessageService } from './ScheduledMessageService';
-import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData, BotAutomationConfig } from './types';
+import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData, BotAutomationConfig, TargetType } from './types';
 import { AppScriptUpdater, APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR } from './AppScriptUpdater';
 import { SheetSchemaUpdater } from './SheetSchemaUpdater';
 import { JiraRuleUpdater } from './JiraRuleUpdater';
@@ -57,6 +57,8 @@ interface OutreachRuntimeState {
   enabled: boolean;
   ringCentralReady: boolean;
 }
+
+type AddDialogMode = 'default' | 'reminder' | 'outreach';
 
 // react-select 自定义样式
 const selectStyles: StylesConfig<SelectOption, true> = {
@@ -204,19 +206,54 @@ function buildOutreachSessionsUrl(templateId?: string, sessionId?: string): stri
 }
 
 function formatOutreachTarget(message: ScheduledMessage): string {
+  if (message.Target_Type === 'group' && message.Glip_Team_ID && message.Glip_Team_ID.trim()) {
+    return message.Glip_Team_ID.trim();
+  }
+
+  if (message.Target_Type === 'private' && message.Glip_User_Name && message.Glip_User_Name.trim()) {
+    return message.Glip_User_Name.trim();
+  }
+
   if (message.Outreach_Target_Ref && message.Outreach_Target_Ref.trim()) {
     return message.Outreach_Target_Ref.trim();
   }
 
-  if (message.Outreach_Target_Type === 'group' && message.Glip_Team_ID && message.Glip_Team_ID.trim()) {
-    return message.Glip_Team_ID.trim();
-  }
-
-  if (message.Outreach_Target_Type === 'private' && message.Glip_User_Name && message.Glip_User_Name.trim()) {
-    return message.Glip_User_Name.trim();
-  }
-
   return '-';
+}
+
+function getOutreachQuestion(message: ScheduledMessage): string {
+  return message.Content?.trim() || (message as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question?.trim() || '';
+}
+
+function getOutreachResult(message: ScheduledMessage): string {
+  return message.Outreach_Result?.trim() || message.Outreach_Last_Result?.trim() || '';
+}
+
+function normalizeOutreachTargetLabel(targetType: string | undefined, targetRef: string | undefined): string {
+  const raw = targetRef?.trim() || '';
+  if (!raw) {
+    return targetType === 'group' ? '某个群' : '某个人';
+  }
+
+  if (/^https?:\/\//i.test(raw) || /^\d{6,}$/.test(raw)) {
+    return targetType === 'group' ? '某个群' : '某个人';
+  }
+
+  if (targetType === 'group') {
+    return raw;
+  }
+
+  const firstToken = raw.split(/[\s@,，]+/).find((item) => item.trim().length > 0);
+  return firstToken?.trim() || raw;
+}
+
+function buildOutreachTitle(targetType: string | undefined, targetRef: string | undefined, question: string | undefined): string {
+  const targetLabel = normalizeOutreachTargetLabel(targetType, targetRef);
+  const normalizedQuestion = question?.replace(/\s+/g, ' ').trim() || '';
+  const preview = normalizedQuestion.length > 24
+    ? `${normalizedQuestion.slice(0, 24).trim()}…`
+    : normalizedQuestion;
+  return `询问 ${targetLabel}：${preview || '待补充问题'}`;
 }
 
 function formatOutreachSummary(message: ScheduledMessage): string {
@@ -230,12 +267,27 @@ function formatOutreachSummary(message: ScheduledMessage): string {
     parts.push(`会话:${formatOutreachRuntimeStatus(message.Outreach_Runtime_Status)}`);
   }
 
-  if (message.Outreach_Last_Result && message.Outreach_Last_Result.trim()) {
-    const result = message.Outreach_Last_Result.trim();
+  const outreachResult = getOutreachResult(message);
+  if (outreachResult) {
+    const result = outreachResult;
     parts.push(`结果:${result.length > 18 ? `${result.substring(0, 18)}…` : result}`);
   }
 
   return parts.join(' · ');
+}
+
+function buildStatistics(messages: ScheduledMessage[]): Statistics {
+  const today = new Date().toISOString().split('T')[0];
+
+  return {
+    total: messages.length,
+    active: messages.filter(message => message.Status === 'Active').length,
+    paused: messages.filter(message => message.Status === 'Paused').length,
+    completed: messages.filter(message => message.Status === 'Completed').length,
+    done: messages.filter(message => message.Status === 'Done').length,
+    pendingReview: messages.filter(message => message.Status === 'PendingReview').length,
+    executedToday: messages.filter(message => message.Last_Exec && message.Last_Exec.startsWith(today)).length,
+  };
 }
 
 function normalizeOutreachTimestamp(value?: number): string | undefined {
@@ -248,19 +300,39 @@ function summarizeOutreachResult(item: OutreachTemplateRuntimeStatusItem): strin
   const session = item.latestSession;
   if (!session) return undefined;
   if (session.errorMessage?.trim()) return session.errorMessage.trim();
-  if (session.replyClassification?.trim()) {
-    return formatOutreachReplyClassification(session.replyClassification.trim());
-  }
-  if (session.replyRawText?.trim()) return session.replyRawText.trim();
   if (session.outcome && typeof session.outcome === 'object') {
     const summaryCandidate = (session.outcome.summary ||
       session.outcome.reason ||
-      session.outcome.classification) as string | undefined;
+      session.outcome.answer ||
+      session.outcome.answerText) as string | undefined;
     if (typeof summaryCandidate === 'string' && summaryCandidate.trim().length > 0) {
       return summaryCandidate.trim();
     }
   }
+  if (session.replyClassification?.trim()) {
+    return formatOutreachReplyClassification(session.replyClassification.trim());
+  }
+  if (session.replyRawText?.trim()) return session.replyRawText.trim();
   return undefined;
+}
+
+function getScheduledMessageTooltipContent(message: ScheduledMessage): string {
+  if (!isOutreachMessage(message)) {
+    return message.Content || '';
+  }
+
+  const question = getOutreachQuestion(message);
+  const result = getOutreachResult(message);
+  const context = message.Outreach_Context?.trim();
+  if (question && result) {
+    return context
+      ? `${question}\n\n背景：${context}\n\n询问结果：${result}`
+      : `${question}\n\n询问结果：${result}`;
+  }
+  if (question && context) {
+    return `${question}\n\n背景：${context}`;
+  }
+  return question || result || context || '';
 }
 
 function formatOutreachSyncState(value?: string): string {
@@ -322,12 +394,31 @@ async function overlayOutreachRuntimeStatus(messages: ScheduledMessage[]): Promi
       }
 
       const latestSession = runtimeItem.latestSession;
+      const latestResult = summarizeOutreachResult(runtimeItem) || getOutreachResult(message);
       return {
         ...message,
+        Target_Type: (runtimeItem.template.targetType as TargetType | undefined) || message.Target_Type,
+        Glip_User_Name:
+          runtimeItem.template.targetType === 'group'
+            ? message.Glip_User_Name
+            : runtimeItem.template.targetRef || message.Glip_User_Name,
+        Glip_Team_ID:
+          runtimeItem.template.targetType === 'group'
+            ? runtimeItem.template.targetRef || message.Glip_Team_ID
+            : message.Glip_Team_ID,
+        Outreach_Target_Type: (runtimeItem.template.targetType as TargetType | undefined) || message.Outreach_Target_Type,
+        Outreach_Target_Ref: runtimeItem.template.targetRef || message.Outreach_Target_Ref,
+        Outreach_Context: runtimeItem.template.contextTemplate || message.Outreach_Context,
+        Outreach_Max_Followup: runtimeItem.template.maxFollowup ?? message.Outreach_Max_Followup,
+        Outreach_Followup_Interval_Hours:
+          runtimeItem.template.followupIntervalSeconds
+            ? Math.max(1, Math.round(runtimeItem.template.followupIntervalSeconds / 3600))
+            : message.Outreach_Followup_Interval_Hours,
         Outreach_Sync_State: runtimeItem.template.syncState || message.Outreach_Sync_State,
         Outreach_Runtime_Status: latestSession?.status || message.Outreach_Runtime_Status,
         Outreach_Last_Session_ID: latestSession?.id || message.Outreach_Last_Session_ID,
-        Outreach_Last_Result: summarizeOutreachResult(runtimeItem) || message.Outreach_Last_Result,
+        Outreach_Result: latestResult,
+        Outreach_Last_Result: latestResult,
         Outreach_Last_Updated:
           normalizeOutreachTimestamp(latestSession?.updatedAt || runtimeItem.template.updatedAt) ||
           message.Outreach_Last_Updated,
@@ -337,6 +428,43 @@ async function overlayOutreachRuntimeStatus(messages: ScheduledMessage[]): Promi
     console.info('加载 Outreach runtime 状态失败，使用 Sheet 数据兜底:', error);
     return messages;
   }
+}
+
+async function backfillOutreachDoneStatus(
+  messageService: ScheduledMessageService,
+  msgs: ScheduledMessage[],
+): Promise<ScheduledMessage[]> {
+  const candidates = msgs.filter((message) =>
+    isOutreachMessage(message) &&
+    message.Status !== 'Done' &&
+    message.Outreach_Runtime_Status === 'resolved',
+  );
+
+  if (candidates.length === 0) {
+    return msgs;
+  }
+
+  const doneIds = new Set<string>();
+  await Promise.all(
+    candidates.map(async (message) => {
+      try {
+        await messageService.updateMessage(message.ID, { Status: 'Done' });
+        doneIds.add(message.ID);
+      } catch (error) {
+        console.warn(`回写主动询问 ${message.ID} 的 Done 状态失败:`, error);
+      }
+    }),
+  );
+
+  if (doneIds.size === 0) {
+    return msgs;
+  }
+
+  return msgs.map((message) =>
+    doneIds.has(message.ID)
+      ? { ...message, Status: 'Done' }
+      : message,
+  );
 }
 
 function buildBotConfigWarningState(
@@ -378,6 +506,7 @@ function buildBotConfigWarningState(
 const ScheduledMessagesManager: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);  // 🔧 新增：是否需要重新授权
   const [config, setConfig] = useState<SheetConfig | null>(null);
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
@@ -392,6 +521,7 @@ const ScheduledMessagesManager: React.FC = () => {
   });
   const [service, setService] = useState<ScheduledMessageService | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [addDialogMode, setAddDialogMode] = useState<AddDialogMode>('default');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showBotConfigDialog, setShowBotConfigDialog] = useState(false);
   const [botConfigDialogMode, setBotConfigDialogMode] = useState<BotConfigDialogMode>('create');
@@ -407,7 +537,6 @@ const ScheduledMessagesManager: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const [hoveredMessage, setHoveredMessage] = useState<ScheduledMessage | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
-  const [isReminderMode, setIsReminderMode] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [appScriptVersion, setAppScriptVersion] = useState<string>('');
@@ -419,7 +548,7 @@ const ScheduledMessagesManager: React.FC = () => {
   
   useEffect(() => {
     initializeApp();
-    getCurrentUserName();
+    void getCurrentUserName();
     void loadOutreachRuntime();
   }, []);
   
@@ -466,10 +595,12 @@ const ScheduledMessagesManager: React.FC = () => {
         if (token) {
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
-          await loadMessages(messageService);
-          
-          // 加载消息后，验证 Bot 配置是否仍然有效
-          await checkBotConfigValidity(savedConfig, messageService);
+          const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
+
+          // 基础数据到位后先展示页面，其余校验延后到后台
+          setIsLoading(false);
+          void checkBotConfigValidity(savedConfig, initialMessages);
+          return;
         }
       } else {
         setIsInitialized(false);
@@ -514,23 +645,49 @@ const ScheduledMessagesManager: React.FC = () => {
    * @param messageService 消息服务
    * @param skipJiraSync 是否跳过 Jira 状态同步（保存消息后可跳过以提升性能）
    */
-  const loadMessages = async (messageService: ScheduledMessageService, skipJiraSync = false) => {
+  const loadMessages = async (
+    messageService: ScheduledMessageService,
+    skipJiraSync = false,
+    options: { deferEnrichment?: boolean } = {},
+  ): Promise<ScheduledMessage[]> => {
     try {
-      const msgs = await messageService.getAllMessages();
-      
-      // 同步 JiraAutomation 状态（可跳过以提升性能）
-      const jiraSyncedMsgs = skipJiraSync ? msgs : await syncJiraAutomationStatus(msgs, messageService);
-      const updatedMsgs = await overlayOutreachRuntimeStatus(jiraSyncedMsgs);
-      
-      setMessages(updatedMsgs);
-      
-      const stats = await messageService.getStatistics();
-      setStatistics(stats);
+      const { deferEnrichment = false } = options;
+      const baseMessages = await messageService.getAllMessages();
+
+      setMessages(baseMessages);
+      setStatistics(buildStatistics(baseMessages));
+
+      const enrichMessages = async (): Promise<ScheduledMessage[]> => {
+        const jiraSyncedMsgs = skipJiraSync
+          ? baseMessages
+          : await syncJiraAutomationStatus(baseMessages, messageService);
+        const outreachOverlayMsgs = await overlayOutreachRuntimeStatus(jiraSyncedMsgs);
+        const updatedMsgs = await backfillOutreachDoneStatus(messageService, outreachOverlayMsgs);
+
+        setMessages(updatedMsgs);
+        setStatistics(buildStatistics(updatedMsgs));
+        return updatedMsgs;
+      };
+
+      if (deferEnrichment) {
+        setIsBackgroundLoading(true);
+        void enrichMessages()
+          .catch((error) => {
+            console.error('后台补充消息状态失败:', error);
+          })
+          .finally(() => {
+            setIsBackgroundLoading(false);
+          });
+        return baseMessages;
+      }
+
+      return await enrichMessages();
     } catch (error) {
       console.error('加载消息失败:', error);
+      return [];
     }
   };
-  
+
   // projectId 缓存，避免重复请求
   const projectIdCacheRef = useRef<Map<string, string>>(new Map());
   
@@ -673,11 +830,8 @@ const ScheduledMessagesManager: React.FC = () => {
     return hasUpdates ? updatedMsgs : msgs;
   };
   
-  const checkBotConfigValidity = async (savedConfig: SheetConfig, messageService: ScheduledMessageService) => {
+  const checkBotConfigValidity = async (savedConfig: SheetConfig, msgs: ScheduledMessage[]) => {
     try {
-      // 获取所有消息
-      const msgs = await messageService.getAllMessages();
-      
       const normalizedConfig = normalizeSheetConfig(savedConfig);
       const executorRule = getExecutorRule(normalizedConfig);
       const timelineSyncRule = getTimelineSyncRule(normalizedConfig);
@@ -1008,13 +1162,19 @@ const ScheduledMessagesManager: React.FC = () => {
   };
   
   const handleAddMessage = () => {
-    setIsReminderMode(false);
+    setAddDialogMode('default');
     setEditingMessage(null);
     setShowAddDialog(true);
   };
   
   const handleAddReminder = () => {
-    setIsReminderMode(true);
+    setAddDialogMode('reminder');
+    setEditingMessage(null);
+    setShowAddDialog(true);
+  };
+
+  const handleAddOutreach = () => {
+    setAddDialogMode('outreach');
     setEditingMessage(null);
     setShowAddDialog(true);
   };
@@ -1043,7 +1203,7 @@ const ScheduledMessagesManager: React.FC = () => {
     }
     
     // 正常编辑流程
-    setIsReminderMode(false);
+    setAddDialogMode(isOutreachMessage(message) ? 'outreach' : 'default');
     setEditingMessage(message);
     setShowAddDialog(true);
   };
@@ -1253,8 +1413,7 @@ const ScheduledMessagesManager: React.FC = () => {
       
       // 更新 state（跳过 Jira 同步，因为状态刚刚被手动更新）
       setMessages(updatedMessages);
-      const stats = await service.getStatistics();
-      setStatistics(stats);
+      setStatistics(buildStatistics(updatedMessages));
       
       // 关闭弹窗并进入编辑模式
       setShowTakeoverDialog(false);
@@ -1564,9 +1723,23 @@ const ScheduledMessagesManager: React.FC = () => {
     
     setIsSubmitting(true);
     try {
+      const outreachMirrorOverrides = formData.Push_Method === 'Outreach'
+        ? {
+            targetType: formData.Outreach_Target_Type || 'private',
+            targetRef:
+              formData.Outreach_Target_Type === 'group'
+                ? formData.Glip_Team_ID?.trim() || formData.Outreach_Target_Ref?.trim() || ''
+                : formData.Glip_User_Name?.trim() || formData.Outreach_Target_Ref?.trim() || '',
+            contextTemplate: formData.Outreach_Context?.trim(),
+            maxFollowup: formData.Outreach_Max_Followup,
+            followupIntervalHours: formData.Outreach_Followup_Interval_Hours,
+          }
+        : undefined;
+
       if (editingMessage) {
         // 编辑模式：更新消息
         const savedMessage = await service.updateMessage(editingMessage.ID, formData);
+        let outreachSyncError: Error | null = null;
         
         // 如果是 JiraAutomation 类型且 Topic 发生变化，同步更新 Jira Rule 名称
         if (editingMessage.Push_Method === 'JiraAutomation' && 
@@ -1581,25 +1754,43 @@ const ScheduledMessagesManager: React.FC = () => {
           }
         }
 
-        if (isOutreachMessage(editingMessage) && !isOutreachMessage(savedMessage)) {
-          await cancelOutreachTemplateMirror(editingMessage.ID);
-        } else {
-          await syncOutreachTemplateMirror(savedMessage);
+        try {
+          if (isOutreachMessage(editingMessage) && !isOutreachMessage(savedMessage)) {
+            await cancelOutreachTemplateMirror(editingMessage.ID);
+          } else {
+            await syncOutreachTemplateMirror(savedMessage, outreachMirrorOverrides);
+          }
+        } catch (syncError: any) {
+          outreachSyncError = syncError instanceof Error ? syncError : new Error(syncError?.message || '主动询问同步失败');
         }
         
         // 跳过 Jira 状态同步，因为刚保存的消息状态是一致的
         await loadMessages(service, true);
         setShowAddDialog(false);
         setEditingMessage(null);
-        alert('消息更新成功！');
+        if (outreachSyncError) {
+          alert(`消息更新成功，但主动询问同步到 memory service 失败：${outreachSyncError.message}`);
+        } else {
+          alert('消息更新成功！');
+        }
       } else {
         // 新建模式：创建消息
         const savedMessage = await service.createMessage(formData);
-        await syncOutreachTemplateMirror(savedMessage);
+        let outreachSyncError: Error | null = null;
+
+        try {
+          await syncOutreachTemplateMirror(savedMessage, outreachMirrorOverrides);
+        } catch (syncError: any) {
+          outreachSyncError = syncError instanceof Error ? syncError : new Error(syncError?.message || '主动询问同步失败');
+        }
         // 跳过 Jira 状态同步，因为新建的消息不需要同步
         await loadMessages(service, true);
         setShowAddDialog(false);
-        alert('消息创建成功！');
+        if (outreachSyncError) {
+          alert(`消息创建成功，但主动询问同步到 memory service 失败：${outreachSyncError.message}`);
+        } else {
+          alert('消息创建成功！');
+        }
       }
     } catch (error) {
       console.error(editingMessage ? '更新消息失败:' : '创建消息失败:', error);
@@ -1609,7 +1800,16 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
 
-  const syncOutreachTemplateMirror = async (message: ScheduledMessage) => {
+  const syncOutreachTemplateMirror = async (
+    message: ScheduledMessage,
+    overrides?: {
+      targetType?: string;
+      targetRef?: string;
+      contextTemplate?: string;
+      maxFollowup?: number;
+      followupIntervalHours?: number;
+    },
+  ) => {
     if (!isOutreachMessage(message)) {
       return;
     }
@@ -1618,15 +1818,17 @@ const ScheduledMessagesManager: React.FC = () => {
       const response = await chrome.runtime.sendMessage({
         type: 'SYNC_OUTREACH_TEMPLATE_MIRROR',
         data: {
-          message
+          message,
+          overrides,
         }
       });
 
       if (response && response.success === false) {
-        console.info('Outreach template mirror sync skipped:', response.error || 'backend unavailable');
+        throw new Error(response.error || 'backend unavailable');
       }
     } catch (error) {
-      console.info('Outreach template mirror sync unavailable, ignoring:', error);
+      console.warn('Outreach template mirror sync failed:', error);
+      throw error;
     }
   };
 
@@ -1719,7 +1921,10 @@ const ScheduledMessagesManager: React.FC = () => {
   
   const getCurrentUserName = async () => {
     try {
-      const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.getCurrentUserName' });
+      const token = await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.getCurrentUserName' });
+      if (!token) {
+        return;
+      }
       const response = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -1938,9 +2143,9 @@ const ScheduledMessagesManager: React.FC = () => {
           setNeedsReauth(false);
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
-          await loadMessages(messageService);
+          const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
           if (config) {
-            await checkBotConfigValidity(config, messageService);
+            void checkBotConfigValidity(config, initialMessages);
           }
         }
       } catch (error) {
@@ -1982,6 +2187,23 @@ const ScheduledMessagesManager: React.FC = () => {
         <div style={styles.headerActions}>
           <button style={styles.reminderButton} onClick={handleAddReminder} title="快速创建个人提醒">
             ⏰ 提醒我
+          </button>
+          <button
+            style={{
+              ...styles.reminderButton,
+              background: outreachRuntime.enabled && outreachRuntime.ringCentralReady
+                ? 'linear-gradient(135deg, #0ea5e9, #2563eb)'
+                : '#94a3b8',
+              opacity: outreachRuntime.enabled && outreachRuntime.ringCentralReady ? 1 : 0.7,
+              cursor: outreachRuntime.enabled && outreachRuntime.ringCentralReady ? 'pointer' : 'not-allowed',
+            }}
+            onClick={handleAddOutreach}
+            title={outreachRuntime.enabled && outreachRuntime.ringCentralReady
+              ? '创建主动询问模板'
+              : '请先在 Options 中启用主动询问并完成 RingCentral 配置'}
+            disabled={!outreachRuntime.enabled || !outreachRuntime.ringCentralReady}
+          >
+            💬 帮我问
           </button>
           <button style={styles.addButton} onClick={handleAddMessage} title="新增消息">
             ➕ 新增
@@ -2051,6 +2273,9 @@ const ScheduledMessagesManager: React.FC = () => {
           <span style={styles.statusItem}>
             今日已执行: <strong style={{ color: '#007bff' }}>{statistics.executedToday}</strong>
           </span>
+          {isBackgroundLoading && (
+            <span style={styles.statusItem}>后台补充状态中...</span>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           {/* 仅过滤待审核推送 */}
@@ -2166,7 +2391,10 @@ const ScheduledMessagesManager: React.FC = () => {
                     return true;
                   })
                   .map((message) => {
-                    const displayTitle = message.Topic || (message.Content.length > 30 ? message.Content.substring(0, 30) + '...' : message.Content);
+                    const questionPreview = getOutreachQuestion(message);
+                    const displayTitle = message.Topic || (
+                      questionPreview.length > 30 ? `${questionPreview.substring(0, 30)}...` : questionPreview
+                    );
                     return (
                       <tr 
                         key={message.ID} 
@@ -2341,6 +2569,7 @@ const ScheduledMessagesManager: React.FC = () => {
            onSubmit={handleSubmitNewMessage}
            onCancel={() => {
              setShowAddDialog(false);
+             setAddDialogMode('default');
              setEditingMessage(null);
            }}
            isSubmitting={isSubmitting}
@@ -2350,7 +2579,7 @@ const ScheduledMessagesManager: React.FC = () => {
            outreachConfigured={outreachRuntime.enabled && outreachRuntime.ringCentralReady}
            onConfigureBot={(mode) => openBotConfigDialog(mode)}
            onConfigureOutreach={openOptionsPage}
-           isReminderMode={isReminderMode}
+           dialogMode={addDialogMode}
            currentUsername={currentUsername}
            availableCategories={availableCategories}
            editingMessage={editingMessage}
@@ -2511,8 +2740,14 @@ const ScheduledMessagesManager: React.FC = () => {
            left: `${tooltipPosition.x + 15}px`,
            top: `${tooltipPosition.y + 15}px`,
          }}>
-           <div style={styles.tooltipHeader}>消息内容</div>
-           <div style={styles.tooltipContent}>{hoveredMessage.Content}</div>
+           <div style={styles.tooltipHeader}>
+             {isOutreachMessage(hoveredMessage)
+               ? getOutreachResult(hoveredMessage)
+                 ? '主动询问内容与结果'
+                 : '主动询问内容'
+               : '消息内容'}
+           </div>
+           <div style={styles.tooltipContent}>{getScheduledMessageTooltipContent(hoveredMessage)}</div>
          </div>
        )}
     </div>
@@ -2817,7 +3052,7 @@ const AddMessageDialog: React.FC<{
   outreachConfigured: boolean;
   onConfigureBot: (mode?: BotConfigDialogMode) => void;
   onConfigureOutreach: () => void;
-  isReminderMode?: boolean;
+  dialogMode?: AddDialogMode;
   currentUsername?: string;
   availableCategories: SelectOption[];
   editingMessage?: ScheduledMessage | null;
@@ -2830,13 +3065,15 @@ const AddMessageDialog: React.FC<{
   outreachEnabled,
   outreachConfigured,
   onConfigureBot,
-  onConfigureOutreach,
-  isReminderMode = false,
+  onConfigureOutreach: _onConfigureOutreach,
+  dialogMode = 'default',
   currentUsername = '',
   availableCategories,
   editingMessage = null
 }) => {
   const isEditMode = !!editingMessage;
+  const isReminderMode = dialogMode === 'reminder';
+  const isOutreachMode = dialogMode === 'outreach';
   // 格式化时间为 HH:MM 格式（确保两位数）
   const formatTimeToHHMM = (time: string | undefined): string => {
     if (!time) return '';
@@ -2855,18 +3092,21 @@ const AddMessageDialog: React.FC<{
   // 初始化表单数据（编辑模式时使用现有数据）
   const getInitialFormData = (): CreateMessageFormData => {
     if (editingMessage) {
-      const outreachTargetType = editingMessage.Outreach_Target_Type || editingMessage.Target_Type || 'private';
+      const outreachTargetType = editingMessage.Target_Type || editingMessage.Outreach_Target_Type || (editingMessage.Glip_Team_ID ? 'group' : 'private');
       return {
         Topic: editingMessage.Topic || '',
-        Content: editingMessage.Content || '',
+        Content: editingMessage.Content || (editingMessage as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question || '',
         Schedule_Date: editingMessage.Schedule_Date || '',
         Schedule_Time: formatTimeToHHMM(editingMessage.Schedule_Time),
         Push_Method: editingMessage.Push_Method || 'AsMe',
-        Target_Type: editingMessage.Outreach_Target_Type || (editingMessage.Glip_Team_ID ? 'group' : 'private'),
+        Target_Type: editingMessage.Target_Type || (editingMessage.Glip_Team_ID ? 'group' : 'private'),
         Glip_User_Name: editingMessage.Glip_User_Name || '',
         Glip_Team_ID: editingMessage.Glip_Team_ID || '',
         Outreach_Target_Type: outreachTargetType,
-        Outreach_Target_Ref: editingMessage.Outreach_Target_Ref || '',
+        Outreach_Target_Ref: outreachTargetType === 'group'
+          ? (editingMessage.Glip_Team_ID || editingMessage.Outreach_Target_Ref || '')
+          : (editingMessage.Glip_User_Name || editingMessage.Outreach_Target_Ref || ''),
+        Outreach_Result: editingMessage.Outreach_Result || editingMessage.Outreach_Last_Result || '',
         Outreach_Context: editingMessage.Outreach_Context || '',
         Outreach_Max_Followup: typeof editingMessage.Outreach_Max_Followup === 'number'
           ? editingMessage.Outreach_Max_Followup
@@ -2896,12 +3136,13 @@ const AddMessageDialog: React.FC<{
       Content: '',
       Schedule_Date: new Date().toISOString().split('T')[0],
       Schedule_Time: '',
-      Push_Method: 'AsMe',
+      Push_Method: isOutreachMode ? 'Outreach' : 'AsMe',
       Target_Type: 'private',
       Glip_User_Name: '',
       Glip_Team_ID: '',
       Outreach_Target_Type: 'private',
       Outreach_Target_Ref: '',
+      Outreach_Result: '',
       Outreach_Context: '',
       Outreach_Max_Followup: 2,
       Outreach_Followup_Interval_Hours: 24
@@ -2910,6 +3151,13 @@ const AddMessageDialog: React.FC<{
   
   // 初始化用户标签（编辑模式时解析现有用户名）
   const getInitialUserTags = (): string[] => {
+    if (editingMessage && editingMessage.Push_Method === 'Outreach' && (editingMessage.Target_Type || editingMessage.Outreach_Target_Type) !== 'group') {
+      const targetRef = editingMessage.Glip_User_Name?.trim() || editingMessage.Outreach_Target_Ref?.trim();
+      if (targetRef) {
+        return [formatUserName.toDisplayFormat(targetRef)];
+      }
+      return [];
+    }
     if (editingMessage && editingMessage.Glip_User_Name) {
       // esone.qiu+john.doe -> ['Esone Qiu', 'John Doe']
       return editingMessage.Glip_User_Name.split('+').map(name => formatUserName.toDisplayFormat(name));
@@ -3154,6 +3402,22 @@ ${content}
       }
     }
   }, [isReminderMode, isEditMode]);
+
+  React.useEffect(() => {
+    if (isOutreachMode && !isEditMode) {
+      handleChange('Push_Method', 'Outreach');
+      handleChange('Target_Type', 'private');
+      if (!formData.Outreach_Target_Type) {
+        handleChange('Outreach_Target_Type', 'private');
+      }
+      if (formData.Outreach_Max_Followup === undefined) {
+        handleChange('Outreach_Max_Followup', 2);
+      }
+      if (formData.Outreach_Followup_Interval_Hours === undefined) {
+        handleChange('Outreach_Followup_Interval_Hours', 24);
+      }
+    }
+  }, [isOutreachMode, isEditMode]);
   
   // 四个模板的数据缓存（内存中，关闭页面后失效）
   const templateCacheRef = React.useRef<{
@@ -3537,7 +3801,7 @@ ${content}
     }
     
     // 验证必填字段
-    if (!formData.Topic) {
+    if (!isOutreachMode && !formData.Topic) {
       alert('请填写消息主题');
       return;
     }
@@ -3586,12 +3850,21 @@ ${content}
         return;
       }
 
-      if (!formData.Outreach_Target_Ref || !formData.Outreach_Target_Ref.trim()) {
+      const outreachTargetRef = formData.Outreach_Target_Type === 'group'
+        ? formData.Outreach_Target_Ref?.trim() || ''
+        : formatUserName.joinForStorage(userTags.slice(0, 1));
+
+      if (!outreachTargetRef) {
         alert('请填写主动询问目标');
         return;
       }
 
-      const normalizedTargetRef = formData.Outreach_Target_Ref.trim().toLowerCase();
+      if (!formData.Content || !formData.Content.trim()) {
+        alert('请填写询问内容');
+        return;
+      }
+
+      const normalizedTargetRef = outreachTargetRef.trim().toLowerCase();
       const normalizedCurrentUsername = currentUsername.trim().toLowerCase();
       const targetsSelf =
         formData.Outreach_Target_Type !== 'group' &&
@@ -3691,23 +3964,49 @@ ${content}
       }
       // custom 模板：不处理，用户自己负责
     }
+
+    const outreachQuestion = formData.Content?.trim();
+    const outreachTitle = buildOutreachTitle(
+      formData.Outreach_Target_Type,
+      outreachTargetRefValue,
+      outreachQuestion,
+    );
     
     const finalFormData: CreateMessageFormData = {
       ...formData,
+      Topic: formData.Push_Method === 'Outreach' ? outreachTitle : formData.Topic,
+      Content: formData.Push_Method === 'Outreach'
+        ? (formData.Content || '')
+        : formData.Content,
       Target_Type: formData.Push_Method === 'Outreach'
         ? formData.Outreach_Target_Type || 'private'
         : formData.Target_Type,
-      Glip_User_Name: formData.Push_Method === 'AI' || formData.Push_Method === 'Outreach'
-        ? undefined
+      Glip_User_Name: formData.Push_Method === 'Outreach'
+        ? (
+            formData.Outreach_Target_Type === 'group'
+              ? undefined
+              : formatUserName.joinForStorage(userTags.slice(0, 1))
+          )
+        : formData.Push_Method === 'AI'
+          ? undefined
         : formatUserName.joinForStorage(userTags),
       Glip_Team_ID: formData.Push_Method === 'Outreach'
-        ? undefined
+        ? (
+            formData.Outreach_Target_Type === 'group'
+              ? formData.Outreach_Target_Ref?.trim()
+              : undefined
+          )
         : glipTeamId,
       Outreach_Target_Type: formData.Push_Method === 'Outreach'
         ? formData.Outreach_Target_Type || 'private'
         : undefined,
       Outreach_Target_Ref: formData.Push_Method === 'Outreach'
-        ? formData.Outreach_Target_Ref?.trim()
+        ? (formData.Outreach_Target_Type === 'group'
+            ? formData.Outreach_Target_Ref?.trim()
+            : formatUserName.joinForStorage(userTags.slice(0, 1)))
+        : undefined,
+      Outreach_Result: formData.Push_Method === 'Outreach'
+        ? (isEditMode ? editingMessage?.Outreach_Result || editingMessage?.Outreach_Last_Result || '' : '')
         : undefined,
       Outreach_Context: formData.Push_Method === 'Outreach'
         ? formData.Outreach_Context?.trim()
@@ -3742,13 +4041,23 @@ ${content}
   const handleUserTagsChange = (tags: string[]) => {
     setUserTags(tags);
   };
+
+  const outreachTargetRefValue = formData.Outreach_Target_Type === 'group'
+    ? (formData.Outreach_Target_Ref || '')
+    : formatUserName.joinForStorage(userTags.slice(0, 1));
   
   return (
     <div style={dialogStyles.overlay}>
       <div style={dialogStyles.dialog}>
         <div style={dialogStyles.header}>
           <h2 style={dialogStyles.title}>
-            {isEditMode ? '✏️ 编辑定时消息' : isReminderMode ? '⏰ 新增个人提醒' : '➕ 新增定时消息'}
+            {isEditMode
+              ? (isOutreachMode ? '✏️ 编辑主动询问模板' : '✏️ 编辑定时消息')
+              : isReminderMode
+                ? '⏰ 新增个人提醒'
+                : isOutreachMode
+                  ? '💬 新增主动询问'
+                  : '➕ 新增定时消息'}
           </h2>
           <button style={dialogStyles.closeButton} onClick={onCancel}>✕</button>
         </div>
@@ -3771,9 +4080,26 @@ ${content}
               </div>
             </div>
           )}
+
+          {isOutreachMode && (
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: '#eef6ff',
+              borderRadius: '8px',
+              marginBottom: '16px',
+              border: '1px solid #cfe2ff',
+            }}>
+              <div style={{ fontSize: '14px', color: '#1f4e79', lineHeight: '1.6' }}>
+                <strong>💬 主动询问模板</strong>
+                <p style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
+                  这里填写“要问谁、问什么、背景是什么”。Sheet 里只保留原始提问和基础目标信息；上下文、追问策略和结果摘要都以下游 memory-service 为准。
+                </p>
+              </div>
+            </div>
+          )}
           
-          {/* 消息内容（提醒模式始终显示） */}
-          {!(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
+          {/* 消息内容（提醒模式始终显示；主动询问使用独立的问题输入框） */}
+          {!isOutreachMode && !(formData.Push_Method === 'AI' && aiReportTemplate === 'ai-report' && !isReminderMode) && (
             <div style={dialogStyles.formGroup}>
               <label style={dialogStyles.label}>消息内容 *</label>
               <textarea 
@@ -3792,6 +4118,93 @@ ${content}
                   excludeVariables={['{Topic}', '{Content}', '{TeamID}']}
                 />
               )}
+            </div>
+          )}
+
+          {isOutreachMode && (
+            <div style={{...dialogStyles.section, backgroundColor: '#f8fbff', padding: '16px', borderRadius: '8px', border: '1px solid #d7e7ff'}}>
+              <h3 style={{margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#1f4e79'}}>
+                💬 询问对象与内容
+              </h3>
+
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>主动询问对象类型 *</label>
+                <div style={dialogStyles.buttonGroup}>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Outreach_Target_Type === 'private')}
+                    onClick={() => handleChange('Outreach_Target_Type', 'private')}
+                  >
+                    👤 某个人
+                  </button>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Outreach_Target_Type === 'group')}
+                    onClick={() => handleChange('Outreach_Target_Type', 'group')}
+                  >
+                    👥 某个群
+                  </button>
+                </div>
+                <small style={dialogStyles.hint}>
+                  这里只需要先判断“问某个人”还是“问某个群”。如果选择某个人，系统后续会自动识别成联系人或已有私聊。
+                </small>
+              </div>
+
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>
+                  {formData.Outreach_Target_Type === 'group' ? '群组对象 *' : '目标对象 *'}
+                </label>
+                {formData.Outreach_Target_Type === 'group' ? (
+                  <input
+                    style={dialogStyles.input}
+                    type="text"
+                    value={formData.Outreach_Target_Ref || ''}
+                    onChange={(e) => handleChange('Outreach_Target_Ref', e.target.value)}
+                    placeholder="例如：RCV Mobile VT3、54490570758 或聊天链接"
+                  />
+                ) : (
+                  <TagsInput
+                    tags={userTags}
+                    onChange={handleUserTagsChange}
+                    placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
+                    maxTags={1}
+                  />
+                )}
+                <small style={dialogStyles.hint}>
+                  {formData.Outreach_Target_Type === 'group'
+                    ? '群组模式用于“问某个群”。支持群名、群聊 chat ID，或直接粘贴 RingCentral 聊天链接；审批时仍可改目标。通过链接或 chat ID 确认过一次后，后续可直接按群名搜。'
+                    : '某个人模式复用接收人输入框，只能填一个人。支持 Esone Qiu / esone.qiu 这类名字格式，提交后会作为 person 目标发给 memory service；如果需要更稳，也可以继续在审批页改成聊天链接或 chat id。'}
+                </small>
+              </div>
+
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>询问内容 *</label>
+                <textarea
+                  ref={contentTextareaRef}
+                  style={dialogStyles.textarea}
+                  value={formData.Content || ''}
+                  onChange={(e) => handleChange('Content', e.target.value)}
+                  placeholder="输入想让系统帮你问出去的具体问题"
+                  rows={4}
+                />
+                <small style={dialogStyles.hint}>
+                  将自动保存标题：{buildOutreachTitle(formData.Outreach_Target_Type, outreachTargetRefValue, formData.Content)}
+                </small>
+              </div>
+
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>主动询问上下文 *</label>
+                <textarea
+                  style={dialogStyles.textarea}
+                  value={formData.Outreach_Context || ''}
+                  onChange={(e) => handleChange('Outreach_Context', e.target.value)}
+                  placeholder="补充为什么要问、背景是什么、希望拿到什么信息"
+                  rows={4}
+                />
+                <small style={dialogStyles.hint}>
+                  这部分会帮助后续生成更稳定的问题，也方便运行态展示摘要
+                </small>
+              </div>
             </div>
           )}
           
@@ -3901,30 +4314,32 @@ ${content}
           {!isReminderMode && (
             <>
               {/* 消息主题 */}
-              <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>
-                  消息主题 *
-                  {isGeneratingTopic && (
-                    <span style={{ marginLeft: '8px', color: '#007bff', fontSize: '12px', fontWeight: 'normal' }}>
-                      ✨ AI 生成中...
-                    </span>
-                  )}
-                </label>
-                <input 
-                  style={dialogStyles.input}
-                  type="text"
-                  value={formData.Topic}
-                  onChange={(e) => {
-                    handleChange('Topic', e.target.value);
-                    // 用户开始输入时，取消正在进行的自动生成
-                    if (e.target.value.trim()) {
-                      generateTopicRequestIdRef.current++;
-                      setIsGeneratingTopic(false);
-                    }
-                  }}
-                  placeholder={isGeneratingTopic ? "AI 正在生成主题..." : "输入消息主题"}
-                />
-              </div>
+              {!isOutreachMode && (
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>
+                    消息主题 *
+                    {isGeneratingTopic && (
+                      <span style={{ marginLeft: '8px', color: '#007bff', fontSize: '12px', fontWeight: 'normal' }}>
+                        ✨ AI 生成中...
+                      </span>
+                    )}
+                  </label>
+                  <input 
+                    style={dialogStyles.input}
+                    type="text"
+                    value={formData.Topic}
+                    onChange={(e) => {
+                      handleChange('Topic', e.target.value);
+                      // 用户开始输入时，取消正在进行的自动生成
+                      if (e.target.value.trim()) {
+                        generateTopicRequestIdRef.current++;
+                        setIsGeneratingTopic(false);
+                      }
+                    }}
+                    placeholder={isGeneratingTopic ? "AI 正在生成主题..." : "输入消息主题"}
+                  />
+                </div>
+              )}
               
               {/* 触发类型选择 */}
               <div style={dialogStyles.formGroup}>
@@ -4361,7 +4776,7 @@ ${content}
           )}
           
           {/* 非提醒模式：显示完整的推送配置 */}
-          {!isReminderMode && (
+          {!isReminderMode && !isOutreachMode && (
             <>
            {/* 推送方式 */}
            <div style={dialogStyles.formGroup}>
@@ -4404,26 +4819,6 @@ ${content}
                  disabled={!botConfigured}
                >
                  🤖 AI Report
-               </button>
-               <button
-                 type="button"
-                 style={getButtonStyle(formData.Push_Method === 'Outreach', !outreachEnabled || !outreachConfigured)}
-                 onClick={() => {
-                   handleChange('Push_Method', 'Outreach');
-                   handleChange('Target_Type', formData.Outreach_Target_Type || 'private');
-                   if (!formData.Outreach_Target_Type) {
-                     handleChange('Outreach_Target_Type', 'private');
-                   }
-                   if (formData.Outreach_Max_Followup === undefined) {
-                     handleChange('Outreach_Max_Followup', 2);
-                   }
-                   if (formData.Outreach_Followup_Interval_Hours === undefined) {
-                     handleChange('Outreach_Followup_Interval_Hours', 24);
-                   }
-                 }}
-                 disabled={!outreachEnabled || !outreachConfigured}
-               >
-                 💬 帮询问
                </button>
              </div>
              )}
@@ -4486,37 +4881,6 @@ ${content}
                    }}
                  >
                    🔧 配置 Bot 后启用
-                 </button>
-               </div>
-             )}
-             {formData.Push_Method === 'Outreach' && (!outreachEnabled || !outreachConfigured) && (
-               <div style={{
-                 marginTop: '12px',
-                 padding: '12px',
-                 backgroundColor: '#fff3cd',
-                 borderRadius: '6px',
-                 border: '1px solid #ffc107',
-               }}>
-                 <p style={{ margin: '0 0 10px 0', color: '#856404', fontSize: '14px' }}>
-                   {!outreachEnabled
-                     ? '⚠️ 主动询问引擎尚未开启，当前模板不会真正派发。'
-                     : '⚠️ RingCentral 配置尚未完成，当前模板即使同步成功也无法真正发出消息。'}
-                 </p>
-                 <button
-                   type="button"
-                   onClick={onConfigureOutreach}
-                   style={{
-                     padding: '8px 16px',
-                     backgroundColor: '#ffc107',
-                     color: '#000',
-                     border: 'none',
-                     borderRadius: '4px',
-                     cursor: 'pointer',
-                     fontSize: '14px',
-                     fontWeight: 'bold',
-                   }}
-                 >
-                   🔧 前往 Options 配置主动询问
                  </button>
                </div>
              )}
@@ -5221,70 +5585,12 @@ ${content}
             </>
           )}
           
-          {/* Outreach 模板配置 */}
+          {/* Outreach 跟进策略 */}
           {formData.Push_Method === 'Outreach' && (
             <div style={{...dialogStyles.section, backgroundColor: '#f8fbff', padding: '16px', borderRadius: '8px', border: '1px solid #d7e7ff'}}>
               <h3 style={{margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#1f4e79'}}>
-                💬 主动询问模板
+                🔁 跟进策略
               </h3>
-              
-              <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>主动询问对象类型 *</label>
-                <div style={dialogStyles.buttonGroup}>
-                  <button
-                    type="button"
-                    style={getButtonStyle(formData.Outreach_Target_Type === 'private')}
-                    onClick={() => handleChange('Outreach_Target_Type', 'private')}
-                  >
-                    👤 某个人
-                  </button>
-                  <button
-                    type="button"
-                    style={getButtonStyle(formData.Outreach_Target_Type === 'group')}
-                    onClick={() => handleChange('Outreach_Target_Type', 'group')}
-                  >
-                    👥 某个群
-                  </button>
-                </div>
-                <small style={dialogStyles.hint}>
-                  这里只需要先判断“问某个人”还是“问某个群”。如果选择某个人，系统后续会自动识别成联系人或已有私聊。
-                </small>
-              </div>
-
-              <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>
-                  {formData.Outreach_Target_Type === 'group' ? '群组对象 *' : '目标对象 *'}
-                </label>
-                <input
-                  style={dialogStyles.input}
-                  type="text"
-                  value={formData.Outreach_Target_Ref || ''}
-                  onChange={(e) => handleChange('Outreach_Target_Ref', e.target.value)}
-                  placeholder={formData.Outreach_Target_Type === 'group'
-                    ? '例如：RCV Mobile VT3、54490570758 或聊天链接'
-                    : '例如：AI Service、esone.qiu@ringcentral.com、1463750737922 或聊天链接'}
-                />
-                <small style={dialogStyles.hint}>
-                  {formData.Outreach_Target_Type === 'group'
-                    ? '群组模式用于“问某个群”。支持群名、群聊 chat ID，或直接粘贴 RingCentral 聊天链接；审批时仍可改目标。通过链接或 chat ID 确认过一次后，后续可直接按群名搜。'
-                    : '某个人模式用于“问某个人”。支持人名、邮箱、私聊 chat ID，或直接粘贴 RingCentral 聊天链接；如果命中的是联系人，系统会自动建立或定位私聊；如果命中的是已有私聊，也会直接使用。'}
-                </small>
-              </div>
-
-              <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>主动询问上下文 *</label>
-                <textarea
-                  style={dialogStyles.textarea}
-                  value={formData.Outreach_Context || ''}
-                  onChange={(e) => handleChange('Outreach_Context', e.target.value)}
-                  placeholder="补充为什么要问、背景是什么、希望拿到什么信息"
-                  rows={4}
-                />
-                <small style={dialogStyles.hint}>
-                  这部分会帮助后续生成更稳定的问题，也方便运行态展示摘要
-                </small>
-              </div>
-
               <div style={dialogStyles.formRow}>
                 <div style={dialogStyles.formGroup}>
                   <label style={dialogStyles.label}>最大追问次数 *</label>

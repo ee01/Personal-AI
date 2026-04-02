@@ -183,6 +183,11 @@
         </div>
       </section>
 
+      <section v-if="extractOutcomeSummary(detail.outcome)" class="panel summary-highlight-panel">
+        <div class="panel-title">结果摘要</div>
+        <p class="summary-text strong">{{ extractOutcomeSummary(detail.outcome) }}</p>
+      </section>
+
       <section class="panel">
         <div class="panel-title">当前结论</div>
         <p class="summary-text">{{ sessionSummary(detail) }}</p>
@@ -1049,6 +1054,17 @@ function statusClass(status: string) {
   margin: 0;
   color: #cbd5e1;
   line-height: 1.7;
+}
+
+.summary-text.strong {
+  color: #f8fafc;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.summary-highlight-panel {
+  border-color: rgba(96, 165, 250, 0.35);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(30, 64, 175, 0.26));
 }
 
 .event-list {

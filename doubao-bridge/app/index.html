@@ -3,17 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Doubao Bridge</title>
+    <title>Personal AI</title>
     <link rel="stylesheet" href="./app.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">Personal AI / Doubao Bridge</p>
+          <p class="eyebrow">Personal AI</p>
           <h1>让记忆自动推到豆包</h1>
           <p class="hero-copy">
-            按顺序完成连接 Memory Service、登录豆包、绑定线程。完成后，Doubao Bridge 会默认在后台继续自动同步，直到你显式停止它。
+            按顺序完成连接 Memory Service、登录豆包、绑定线程。完成后，Personal AI 会默认在后台继续自动同步，直到你显式停止它。
           </p>
         </div>
         <div class="hero-actions">
@@ -30,7 +30,7 @@
           <div id="next-step-card" class="next-step-card">
             <label>下一步建议</label>
             <strong id="next-step-title">正在检查当前配置...</strong>
-            <p id="next-step-copy">Doubao Bridge 会根据当前缺失的前置条件，提示最值得先完成的动作。</p>
+            <p id="next-step-copy">Personal AI 会根据当前缺失的前置条件，提示最值得先完成的动作。</p>
           </div>
           <div id="blocking-reasons" class="reason-list"></div>
         </article>
@@ -41,6 +41,21 @@
             <div><dt>日志</dt><dd id="meta-log">-</dd></div>
             <div><dt>数据目录</dt><dd id="meta-support">-</dd></div>
           </dl>
+          <p id="meta-shortcut" class="inline-message"></p>
+          <div class="voice-pref-row">
+            <label for="voice-locale">语音识别语言</label>
+            <select id="voice-locale">
+              <option value="zh-CN">中文（简体）</option>
+              <option value="en-US">English (US)</option>
+              <option value="auto">跟随系统语言</option>
+            </select>
+          </div>
+          <div class="action-row helper-actions">
+            <button id="open-input-monitoring-button" class="secondary" type="button">打开输入监控设置</button>
+            <button id="open-accessibility-button" class="secondary" type="button">打开辅助功能设置</button>
+            <button id="open-microphone-button" class="secondary" type="button">打开麦克风设置</button>
+            <button id="refresh-shortcut-button" class="secondary" type="button">重新检查快捷键权限</button>
+          </div>
         </article>
       </section>
 
@@ -157,7 +172,7 @@
                 <h2>开启并保持后台自动同步</h2>
                 <span id="step-background-status" class="step-status step-status-pending">待就绪</span>
               </div>
-              <p>完成前四步后，Doubao Bridge 会默认进入后台自动同步。关闭窗口即可继续运行；真正停掉同步请用下面的按钮。</p>
+              <p>完成前四步后，Personal AI 会默认进入后台自动同步。关闭窗口即可继续运行；真正停掉同步请用下面的按钮。</p>
             </div>
           </div>
           <p class="step-note">如果你想先验证链路，可以先点“现在推一次”，确认 persona、近期重点和提醒都能成功送到对应线程。平时不需要再额外勾选开启自动同步。</p>

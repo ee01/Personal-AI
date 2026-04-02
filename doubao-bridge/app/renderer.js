@@ -13,6 +13,12 @@ const elements = {
   metaVersion: document.getElementById('meta-version'),
   metaLog: document.getElementById('meta-log'),
   metaSupport: document.getElementById('meta-support'),
+  metaShortcut: document.getElementById('meta-shortcut'),
+  voiceLocale: document.getElementById('voice-locale'),
+  openInputMonitoringButton: document.getElementById('open-input-monitoring-button'),
+  openAccessibilityButton: document.getElementById('open-accessibility-button'),
+  openMicrophoneButton: document.getElementById('open-microphone-button'),
+  refreshShortcutButton: document.getElementById('refresh-shortcut-button'),
   settingsForm: document.getElementById('settings-form'),
   memoryBaseUrl: document.getElementById('memory-base-url'),
   memoryApiKey: document.getElementById('memory-api-key'),
@@ -206,6 +212,22 @@ function renderStepStatuses(status) {
   }
 }
 
+function renderShortcutStatus(shortcutStatus) {
+  if (!elements.metaShortcut) return;
+  if (!shortcutStatus?.message) {
+    setMessage(elements.metaShortcut, '');
+    return;
+  }
+
+  const tone =
+    shortcutStatus.usingNativeHelper
+      ? 'success'
+      : shortcutStatus.fallbackEnabled
+        ? 'warn'
+        : 'muted';
+  setMessage(elements.metaShortcut, shortcutStatus.message, tone);
+}
+
 function applyButtonAvailability(status) {
   const checklist = status?.setupChecklist || {};
   const memoryConnected = Boolean(checklist.memoryServiceConfigured);
@@ -226,6 +248,15 @@ async function loadMeta() {
   elements.metaVersion.textContent = meta.version || '-';
   elements.metaLog.textContent = meta.bridgeLogFile || '-';
   elements.metaSupport.textContent = meta.supportDir || '-';
+  renderShortcutStatus(meta.shortcutStatus);
+}
+
+async function loadVoicePreferences() {
+  const preferences = await appShell.getVoicePreferences();
+  elements.voiceLocale.value =
+    typeof preferences?.voiceLocale === 'string' && preferences.voiceLocale.trim()
+      ? preferences.voiceLocale.trim()
+      : 'zh-CN';
 }
 
 async function refreshStatus() {
@@ -269,7 +300,7 @@ async function handleRefresh() {
   } catch (error) {
     renderSummary(null);
     renderNextStep(null);
-    renderBlockingReasons({ blockingReasons: [{ message: error instanceof Error ? error.message : '无法连接 Doubao Bridge', code: 'auth_required' }] });
+    renderBlockingReasons({ blockingReasons: [{ message: error instanceof Error ? error.message : '无法连接 Personal AI', code: 'auth_required' }] });
     renderStepStatuses(null);
   }
 }
@@ -284,6 +315,47 @@ elements.openLogButton.addEventListener('click', () => {
 
 elements.openSupportButton.addEventListener('click', () => {
   void appShell.openSupportDir();
+});
+
+elements.openInputMonitoringButton?.addEventListener('click', () => {
+  void appShell.openInputMonitoringSettings();
+});
+
+elements.openAccessibilityButton?.addEventListener('click', () => {
+  void appShell.openAccessibilitySettings();
+});
+
+elements.openMicrophoneButton?.addEventListener('click', () => {
+  void appShell.openMicrophoneSettings();
+});
+
+elements.refreshShortcutButton?.addEventListener('click', () => {
+  void withAction(elements.refreshShortcutButton, '检查中...', async () => {
+    const payload = await appShell.refreshShortcutHelper();
+    renderShortcutStatus(payload?.shortcutStatus);
+  });
+});
+
+elements.voiceLocale?.addEventListener('change', () => {
+  const select = elements.voiceLocale;
+  select.disabled = true;
+  void appShell
+    .setVoicePreferences({
+      voiceLocale: select.value,
+    })
+    .then((payload) => {
+      select.value =
+        typeof payload?.voiceLocale === 'string' && payload.voiceLocale.trim()
+          ? payload.voiceLocale.trim()
+          : 'zh-CN';
+      setMessage(elements.metaShortcut, '语音识别语言已更新。', 'success');
+    })
+    .catch((error) => {
+      setMessage(elements.metaShortcut, error instanceof Error ? error.message : '更新语音识别语言失败', 'error');
+    })
+    .finally(() => {
+      select.disabled = false;
+    });
 });
 
 elements.settingsForm.addEventListener('submit', (event) => {
@@ -395,7 +467,7 @@ elements.stopButton.addEventListener('click', () => {
   });
 });
 
-void Promise.all([loadMeta(), refreshStatus()]);
+void Promise.all([loadMeta(), refreshStatus(), loadVoicePreferences()]);
 refreshTimer = window.setInterval(() => {
   void refreshStatus();
 }, 12_000);
@@ -404,4 +476,8 @@ window.addEventListener('beforeunload', () => {
   if (refreshTimer) {
     window.clearInterval(refreshTimer);
   }
+});
+
+appShell.onShortcutStatus((payload) => {
+  renderShortcutStatus(payload);
 });

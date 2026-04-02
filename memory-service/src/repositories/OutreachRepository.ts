@@ -431,14 +431,20 @@ export class OutreachRepository {
         input.sheetMessageId ?? null,
         input.title,
         input.questionTemplate,
-        input.contextTemplate ?? null,
+        input.contextTemplate === undefined
+          ? existing?.contextTemplate ?? null
+          : input.contextTemplate ?? null,
         input.targetType,
         input.targetRef,
         JSON.stringify(input.scheduleSpec ?? {}),
         input.enabled === false ? 0 : 1,
-        input.approvalPolicy ?? 'manual_direct',
-        clampNonNegativeInteger(input.maxFollowup, 1),
-        Math.max(1, clampNonNegativeInteger(input.followupIntervalSeconds, 86400)),
+        input.approvalPolicy ?? existing?.approvalPolicy ?? 'manual_direct',
+        input.maxFollowup === undefined
+          ? existing?.maxFollowup ?? 1
+          : clampNonNegativeInteger(input.maxFollowup, 1),
+        input.followupIntervalSeconds === undefined
+          ? existing?.followupIntervalSeconds ?? 86400
+          : Math.max(1, clampNonNegativeInteger(input.followupIntervalSeconds, 86400)),
         input.syncState ?? 'synced',
         input.lastSyncError ?? null,
         existing?.createdAt ?? currentTime,

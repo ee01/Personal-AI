@@ -651,6 +651,7 @@ function isRingCentralReady(config: RuntimeConfigResponse) {
 }
 
 function sessionStageHint(session: OutreachSession) {
+  const summary = extractOutcomeSummary(session.outcome);
   if (session.status === 'pending_approval') {
     if (session.targetResolutionStatus !== 'resolved') {
       return '目标还没有解析成明确的 RingCentral 用户/群组，需先进入详情确认目标。';
@@ -673,13 +674,13 @@ function sessionStageHint(session: OutreachSession) {
     return '对方表示稍后回复，系统会按新的等待时间继续跟进。';
   }
   if (session.status === 'resolved') {
-    return '已经拿到可用结果。';
+    return summary ? `已经拿到可用结果。${summary}` : '已经拿到可用结果。';
   }
   if (session.status === 'no_reply') {
-    return '已经超过追问额度，仍然没有收到回复。';
+    return summary || '已经超过追问额度，仍然没有收到回复。';
   }
   if (session.status === 'escalated') {
-    return '系统判断需要你介入决定下一步。';
+    return summary || '系统判断需要你介入决定下一步。';
   }
   if (session.status === 'failed') {
     return session.errorMessage || '发送或推进过程中失败。';
@@ -688,6 +689,13 @@ function sessionStageHint(session: OutreachSession) {
     return '这条主动询问已被取消。';
   }
   return '状态未知。';
+}
+
+function extractOutcomeSummary(outcome?: Record<string, unknown>) {
+  if (!outcome) return '';
+  const candidates = [outcome.summary, outcome.reason, outcome.answer, outcome.answerText, outcome.reply];
+  const found = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  return typeof found === 'string' ? found.trim() : '';
 }
 </script>
 

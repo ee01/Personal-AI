@@ -165,7 +165,69 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   assert.equal(sync.statusCode, 200);
   const syncBody = sync.json() as { accepted: boolean; transcript: string };
   assert.equal(syncBody.accepted, true);
+  assert.match(syncBody.transcript, /存入随手记/);
   assert.match(syncBody.transcript, /Prefers concise replies/);
+
+  const reminderSync = await app.inject({
+    method: 'POST',
+    url: '/reminders/sync',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      dryRun: true,
+      reminders: [{ title: '明天上午十点周会', dueAt: '2026-04-01T10:00:00' }],
+    },
+  });
+  assert.equal(reminderSync.statusCode, 200);
+  const reminderSyncBody = reminderSync.json() as { accepted: boolean; transcript: string };
+  assert.equal(reminderSyncBody.accepted, true);
+  assert.match(reminderSyncBody.transcript, /请在随手记中记录以下提醒/);
+  assert.doesNotMatch(reminderSyncBody.transcript, /不要长期记住/);
+
+  const briefingSync = await app.inject({
+    method: 'POST',
+    url: '/sync/mobile-briefing',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      dryRun: true,
+      title: '自动同步的近期重点',
+      bullets: ['项目 A 卡在接口联调', '本周优先处理发布问题'],
+    },
+  });
+  assert.equal(briefingSync.statusCode, 200);
+  const briefingSyncBody = briefingSync.json() as { accepted: boolean; transcript: string };
+  assert.equal(briefingSyncBody.accepted, true);
+  assert.match(briefingSyncBody.transcript, /请把以下近期重点记录到随手记/);
+  assert.doesNotMatch(briefingSyncBody.transcript, /当前会话上下文/);
+
+  const memoStableSync = await app.inject({
+    method: 'POST',
+    url: '/memo/stable-memory',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      dryRun: true,
+      items: [{ title: '妈妈生日', body: '帮我记一下生日是 3 月 15 号' }],
+    },
+  });
+  assert.equal(memoStableSync.statusCode, 200);
+  const memoStableBody = memoStableSync.json() as { accepted: boolean; transcript: string };
+  assert.equal(memoStableBody.accepted, true);
+  assert.match(memoStableBody.transcript, /请把以下信息存入随手记/);
+  assert.match(memoStableBody.transcript, /妈妈生日/);
+
+  const memoReminderSync = await app.inject({
+    method: 'POST',
+    url: '/memo/reminders',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      dryRun: true,
+      reminders: [{ title: '交周报', note: '帮我记一下周五前交周报', severity: 'high' }],
+    },
+  });
+  assert.equal(memoReminderSync.statusCode, 200);
+  const memoReminderBody = memoReminderSync.json() as { accepted: boolean; transcript: string };
+  assert.equal(memoReminderBody.accepted, true);
+  assert.match(memoReminderBody.transcript, /请在随手记中记录以下提醒/);
+  assert.doesNotMatch(memoReminderBody.transcript, /不要长期记住/);
 
   const autoBind = await app.inject({
     method: 'POST',

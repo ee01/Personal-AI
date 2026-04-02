@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Doubao Bridge Quick Ask Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f2ebe4;
+        --panel: rgba(251, 249, 246, 0.92);
+        --line: rgba(94, 76, 58, 0.14);
+        --text: #3f3227;
+        --muted: #8b7a6c;
+        --accent: #6c5643;
+        --chip: rgba(255, 255, 255, 0.78);
+        --shadow: 0 24px 70px rgba(38, 27, 14, 0.18);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          ui-rounded,
+          "SF Pro Rounded",
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "Noto Sans SC",
+          sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(255, 255, 255, 0.78), transparent 42%),
+          linear-gradient(180deg, #f7f2ed, var(--bg));
+        color: var(--text);
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 48px 28px 72px;
+      }
+
+      .intro {
+        margin-bottom: 28px;
+      }
+
+      .intro h1 {
+        margin: 0 0 10px;
+        font-size: 32px;
+      }
+
+      .intro p {
+        margin: 0;
+        max-width: 760px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        gap: 24px;
+      }
+
+      .demo-card {
+        padding: 22px;
+        border: 1px solid rgba(255, 255, 255, 0.8);
+        border-radius: 30px;
+        background: rgba(255, 255, 255, 0.34);
+        box-shadow: 0 10px 30px rgba(53, 37, 19, 0.08);
+        backdrop-filter: blur(20px);
+      }
+
+      .demo-card h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+
+      .demo-card p {
+        margin: 0 0 18px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .shell {
+        width: min(760px, 100%);
+        padding: 14px 16px 18px;
+        border-radius: 40px;
+        border: 1px solid rgba(255, 255, 255, 0.88);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), var(--panel));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88), var(--shadow);
+      }
+
+      .shell.expanded {
+        border-radius: 28px;
+      }
+
+      .messages {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .message {
+        max-width: 92%;
+        padding: 14px 16px;
+        border-radius: 22px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        line-height: 1.52;
+      }
+
+      .message.user {
+        margin-left: auto;
+        background: #e8d9ca;
+      }
+
+      .message.status {
+        max-width: none;
+        background: rgba(244, 236, 224, 0.9);
+      }
+
+      .message h3,
+      .message h4 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: var(--accent);
+      }
+
+      .meta-list,
+      .status-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(94, 76, 58, 0.08);
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 0 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(94, 76, 58, 0.14);
+        background: var(--chip);
+        color: var(--accent);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .composer {
+        position: relative;
+        padding: 4px 4px 0;
+      }
+
+      .voice-banner {
+        display: inline-flex;
+        margin: 0 0 10px 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(108, 86, 67, 0.12);
+        color: var(--accent);
+        font-size: 12px;
+      }
+
+      .input {
+        width: 100%;
+        min-height: 56px;
+        padding: 14px 12px 8px;
+        border: 0;
+        background: transparent;
+        font-size: 20px;
+        color: var(--text);
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-top: 8px;
+      }
+
+      .footer-left,
+      .footer-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .circle,
+      .icon,
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(94, 76, 58, 0.14);
+        background: var(--chip);
+        color: var(--accent);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+      }
+
+      .circle {
+        width: 54px;
+        height: 54px;
+        border-radius: 999px;
+        font-size: 34px;
+      }
+
+      .icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        font-size: 16px;
+      }
+
+      .pill {
+        min-height: 40px;
+        padding: 0 14px;
+        border-radius: 999px;
+        font-size: 13px;
+      }
+
+      .mini-grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .notes {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      @media (max-width: 860px) {
+        .page {
+          padding-inline: 18px;
+        }
+
+        .shell {
+          padding-inline: 12px;
+        }
+
+        .input {
+          font-size: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="intro">
+        <h1>Doubao Bridge Quick Ask</h1>
+        <p>
+          这份 demo 把最终 quick ask 方案收敛成一页：收起态像 Spotlight，提问后展开成轻量 chat，
+          状态不跳页，而是在对话流里插入状态卡。
+        </p>
+      </section>
+
+      <section class="grid">
+        <article class="demo-card">
+          <h2>1. Compact 默认待命态</h2>
+          <p>只有输入提示、`+` 和语音按钮，没有模型菜单，没有常驻状态条。</p>
+          <div class="shell">
+            <div class="composer">
+              <div class="input">问我任何你此刻需要的事…</div>
+              <div class="footer">
+                <div class="footer-left">
+                  <div class="circle">+</div>
+                </div>
+                <div class="footer-right">
+                  <div class="icon">🎙</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="demo-card">
+          <h2>2. Compact 带状态胶囊</h2>
+          <p>状态只显示最值得看的那一条；如果还有其他状态，用 `+N` 表示。</p>
+          <div class="shell">
+            <div class="composer">
+              <div class="input">问我任何你此刻需要的事…</div>
+              <div class="footer">
+                <div class="footer-left">
+                  <div class="circle">+</div>
+                  <div class="pill">外部询问等待回复 +2</div>
+                </div>
+                <div class="footer-right">
+                  <div class="icon">🎙</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="notes">点击这颗状态胶囊，不跳设置页，而是展开窗口并把状态插入消息流。</div>
+        </article>
+
+        <article class="demo-card">
+          <h2>3. Expanded 普通问答态</h2>
+          <p>进入展开态后，先看回答，再看 structured answer，不做沉重的 dashboard。</p>
+          <div class="shell expanded">
+            <div class="messages">
+              <div class="message user">最近两周我在推进哪些事情？</div>
+              <div class="message">
+                你最近两周主要集中在 `Doubao Bridge.app` 的 Quick Ask、小窗交互和状态整合三件事上。
+                <div class="meta-list">
+                  <div>
+                    <h4>关键发现</h4>
+                    1. menubar 主入口从配置页转成 quick ask。<br />
+                    2. 会话只在窗口存活期间保留，不做跨次续聊。<br />
+                    3. 结构化结果仍保留时间线和关键发现。
+                  </div>
+                  <div>
+                    <h4>时间线</h4>
+                    2026-03-31：确认 compact 形态、状态胶囊与 status card 方案。
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="composer">
+              <div class="input">继续问：那下一步最值得先做什么？</div>
+              <div class="footer">
+                <div class="footer-left">
+                  <div class="circle">+</div>
+                </div>
+                <div class="footer-right">
+                  <div class="icon">🎙</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="demo-card">
+          <h2>4. Expanded 插入状态卡</h2>
+          <p>状态卡仍然属于对话的一部分。点击状态行，会把建议追问带回输入框。</p>
+          <div class="shell expanded">
+            <div class="messages">
+              <div class="message user">最近我还有什么挂起状态？</div>
+              <div class="message">
+                目前除了主线问答，系统里还有几条需要你决定或等待的运行态。
+              </div>
+              <div class="message status">
+                <h3>当前状态</h3>
+                <div class="status-list">
+                  <div class="status-row">
+                    <div>
+                      <strong>待你确认</strong><br />
+                      有一条用户画像确认请求还没处理。
+                    </div>
+                    <span class="badge">1 条</span>
+                  </div>
+                  <div class="status-row">
+                    <div>
+                      <strong>工具执行中</strong><br />
+                      OpenClaw 正在检查目标页面可交互状态。
+                    </div>
+                    <span class="badge">1 项</span>
+                  </div>
+                  <div class="status-row">
+                    <div>
+                      <strong>外部询问等待回复</strong><br />
+                      等候王峰回复这周部署窗口时间。
+                    </div>
+                    <span class="badge">待回 1 / 待发 1</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="composer">
+              <div class="input">继续问：帮我总结这些状态，我该先处理哪个？</div>
+              <div class="footer">
+                <div class="footer-left">
+                  <div class="circle">+</div>
+                </div>
+                <div class="footer-right">
+                  <div class="icon">🎙</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="demo-card">
+          <h2>5. Voice Listening 态</h2>
+          <p>语音不切换到新页面，仍然在同一个壳里转写，结束后保留文本给用户确认发送。</p>
+          <div class="shell">
+            <div class="composer">
+              <div class="voice-banner">正在听... 再按一次 Option+A 或点麦克风停止</div>
+              <div class="input">记住我更偏好中文、短句和明确的结论…</div>
+              <div class="footer">
+                <div class="footer-left">
+                  <div class="circle">+</div>
+                </div>
+                <div class="footer-right">
+                  <div class="icon">●</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

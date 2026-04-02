@@ -5,6 +5,7 @@
  *             using the user's stored memories as context.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 import type { RecallItem } from '../types/index.js';
@@ -92,6 +93,14 @@ Rules:
 - Omit optional fields when there is no useful data
 - Keep "confidence" between 0 and 1
 - Do not invent evidence that is not supported by the provided context`;
+
+const STREAMING_SYSTEM_PROMPT = `You are a personal AI assistant with access to the user's memory.
+
+Answer only from the provided context. If the context is insufficient, say so clearly.
+
+Respond in concise markdown only.
+Do not return JSON.
+Do not wrap the answer in code fences.`;
 
 /**
  * Load the USER_CORE.md file via the per-user UserDataManager.
@@ -273,6 +282,94 @@ function parseStructuredAnswer(raw: string): {
   }
 }
 
+function buildAugmentedSystemPrompt(
+  db: Database.Database,
+  profileManager: ProfileManager,
+  userDataManager: UserDataManager | null | undefined,
+  basePrompt: string,
+): string {
+  let enhancedPrompt = basePrompt;
+  const agentPersona = loadAgentPersona(profileManager);
+  if (agentPersona) enhancedPrompt += '\n\n' + agentPersona;
+  const userCore = loadUserCore(userDataManager);
+  if (userCore) enhancedPrompt += '\n\n--- User Context ---\n' + userCore;
+  const preferences = loadUserPreferences(db);
+  if (preferences) {
+    enhancedPrompt += '\n\n--- User Preferences (apply these silently when relevant) ---\n' + preferences;
+  }
+  return enhancedPrompt;
+}
+
+function buildPromptEnvelope(
+  query: string,
+  memoryContext: string,
+  userContext: string | undefined,
+  intentContext: string,
+  instruction: string,
+): string {
+  let fullPrompt = `Context:\n${memoryContext}`;
+
+  if (userContext) {
+    fullPrompt += `\n\nAdditional context from user:\n${userContext}`;
+  }
+
+  if (intentContext) {
+    fullPrompt += `\n\nDetected query constraints:\n${intentContext}`;
+  }
+
+  fullPrompt += `\n\nQuestion: ${query}`;
+  fullPrompt += `\n\n${instruction}`;
+  return fullPrompt;
+}
+
+async function recallForAsk(
+  db: Database.Database,
+  query: string,
+  includeEvidence?: boolean,
+): Promise<{
+  parsedIntent: ParsedQueryIntent;
+  recalledItems: RecallItem[];
+  memoryContext: string;
+  intentContext: string;
+}> {
+  const parser = new QueryIntentParser(db);
+  const parsedIntent = parser.parse(query);
+  const recallQueryText = parsedIntent.cleanedQuery || query;
+  const recallEngine = new RecallEngine(db);
+  const recallResult = await recallEngine.recall({
+    query: recallQueryText,
+    topK: parsedIntent.intent === 'profile' || Object.keys(parsedIntent.filters).length > 0 ? 15 : 10,
+    includeMetadata: Boolean(includeEvidence),
+    timeRange: parsedIntent.filters.timeRange,
+    projectFilter: parsedIntent.filters.projectNames?.[0],
+    senderFilter: parsedIntent.filters.senderNames,
+    groupFilter: parsedIntent.filters.groupNames,
+    minImportance: parsedIntent.filters.minImportance,
+    sourceTypes: parsedIntent.filters.sourceTypes,
+  });
+
+  const recalledItems = recallResult.items;
+  return {
+    parsedIntent,
+    recalledItems,
+    memoryContext: formatRecalledContext(recalledItems),
+    intentContext: formatIntentContext(parsedIntent),
+  };
+}
+
+function writeSseEvent(
+  reply: { raw: NodeJS.WritableStream & { writeHead?: Function; flushHeaders?: Function; end: Function } },
+  event: string,
+  payload: Record<string, unknown>,
+) {
+  const enrichedPayload = {
+    type: event,
+    ...payload,
+  };
+  reply.raw.write(`event: ${event}\n`);
+  reply.raw.write(`data: ${JSON.stringify(enrichedPayload)}\n\n`);
+}
+
 // ---------------------------------------------------------------------------
 // Route plugin
 // ---------------------------------------------------------------------------
@@ -304,6 +401,7 @@ export async function askRoutes(
                     score: { type: 'number' },
                     source: { type: 'string' },
                     timestamp: { type: 'number' },
+                    metadata: { type: 'object', additionalProperties: true },
                   },
                 },
               },
@@ -345,58 +443,23 @@ export async function askRoutes(
     },
     async (request, reply) => {
       const { db, profileManager, userDataManager } = request.userContext;
-      const recallEngine = new RecallEngine(db);
       const startMs = Date.now();
       const { query, context: userContext, includeEvidence } = request.body;
 
       try {
-        const parser = new QueryIntentParser(db);
-        const parsedIntent = parser.parse(query);
-        const recallQueryText = parsedIntent.cleanedQuery || query;
-
-        // Step 1: Recall relevant memories
-        const recallResult = await recallEngine.recall({
-          query: recallQueryText,
-          topK: parsedIntent.intent === 'profile' || Object.keys(parsedIntent.filters).length > 0 ? 15 : 10,
-          includeMetadata: Boolean(includeEvidence),
-          timeRange: parsedIntent.filters.timeRange,
-          projectFilter: parsedIntent.filters.projectNames?.[0],
-          senderFilter: parsedIntent.filters.senderNames,
-          groupFilter: parsedIntent.filters.groupNames,
-          minImportance: parsedIntent.filters.minImportance,
-          sourceTypes: parsedIntent.filters.sourceTypes,
-        });
-
-        const recalledItems = recallResult.items;
-
-        // Step 2: Build the LLM prompt with recalled context
-        const memoryContext = formatRecalledContext(recalledItems);
-
-        let fullPrompt = `Context:\n${memoryContext}`;
-
-        if (userContext) {
-          fullPrompt += `\n\nAdditional context from user:\n${userContext}`;
-        }
-
-        const intentContext = formatIntentContext(parsedIntent);
-        if (intentContext) {
-          fullPrompt += `\n\nDetected query constraints:\n${intentContext}`;
-        }
-
-        fullPrompt += `\n\nQuestion: ${query}`;
-        fullPrompt += `\n\nReturn JSON only. Required key: "answer". Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence". Do not wrap the JSON in prose.`;
-
-        // Step 3: Call the LLM (inject agent persona + USER_CORE.md into system prompt)
-        let enhancedPrompt = SYSTEM_PROMPT;
-        const agentPersona = loadAgentPersona(profileManager);
-        if (agentPersona) enhancedPrompt += '\n\n' + agentPersona;
-        const userCore = loadUserCore(userDataManager);
-        if (userCore) enhancedPrompt += '\n\n--- User Context ---\n' + userCore;
-        const preferences = loadUserPreferences(db);
-        if (preferences) {
-          enhancedPrompt += '\n\n--- User Preferences (apply these silently when relevant) ---\n' + preferences;
-        }
-        const systemPrompt = enhancedPrompt;
+        const { recalledItems, memoryContext, intentContext } = await recallForAsk(
+          db,
+          query,
+          includeEvidence,
+        );
+        const fullPrompt = buildPromptEnvelope(
+          query,
+          memoryContext,
+          userContext,
+          intentContext,
+          'Return JSON only. Required key: "answer". Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence". Do not wrap the JSON in prose.',
+        );
+        const systemPrompt = buildAugmentedSystemPrompt(db, profileManager, userDataManager, SYSTEM_PROMPT);
 
         const llmResponse = await llmClient.generate(fullPrompt, {
           systemPrompt,
@@ -437,6 +500,129 @@ export async function askRoutes(
           queryTimeMs,
           error: (err as Error).message,
         });
+      }
+    },
+  );
+
+  app.post<{ Body: AskBody }>(
+    '/ask/stream',
+    {
+      schema: {
+        body: askBodySchema,
+      },
+    },
+    async (request, reply) => {
+      const { db, profileManager, userDataManager } = request.userContext;
+      const startMs = Date.now();
+      const { query, context: userContext, includeEvidence } = request.body;
+      const requestId = randomUUID();
+
+      reply.hijack();
+      reply.raw.writeHead?.(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      reply.raw.flushHeaders?.();
+
+      try {
+        const { recalledItems, memoryContext, intentContext } = await recallForAsk(
+          db,
+          query,
+          includeEvidence,
+        );
+        const answerSystemPrompt = buildAugmentedSystemPrompt(
+          db,
+          profileManager,
+          userDataManager,
+          STREAMING_SYSTEM_PROMPT,
+        );
+        const enrichmentSystemPrompt = buildAugmentedSystemPrompt(
+          db,
+          profileManager,
+          userDataManager,
+          SYSTEM_PROMPT,
+        );
+        const answerPrompt = buildPromptEnvelope(
+          query,
+          memoryContext,
+          userContext,
+          intentContext,
+          'Answer the question in markdown only. Do not return JSON.',
+        );
+
+        writeSseEvent(reply, 'start', { requestId });
+
+        let streamedAnswer = '';
+        const answerResponse = await llmClient.generateStream(
+          answerPrompt,
+          {
+            systemPrompt: answerSystemPrompt,
+            temperature: 0.3,
+            maxTokens: 1400,
+          },
+          async (delta) => {
+            if (!delta) return;
+            streamedAnswer += delta;
+            writeSseEvent(reply, 'delta', { text: delta });
+          },
+        );
+
+        const finalAnswer = (answerResponse.content || streamedAnswer).trim() || streamedAnswer.trim();
+        writeSseEvent(reply, 'answer_done', { answer: finalAnswer });
+
+        let structuredAnswer: StructuredAskAnswer | undefined;
+        try {
+          const enrichmentPrompt = buildPromptEnvelope(
+            query,
+            memoryContext,
+            userContext,
+            intentContext,
+            [
+              'Return JSON only.',
+              'Required key: "answer".',
+              'Set "answer" to the best final markdown answer for the question.',
+              'Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence".',
+              `Existing answer draft:\n${finalAnswer}`,
+            ].join('\n'),
+          );
+          const enrichmentResponse = await llmClient.generate(enrichmentPrompt, {
+            systemPrompt: enrichmentSystemPrompt,
+            temperature: 0.2,
+            maxTokens: 1200,
+          });
+          structuredAnswer = parseStructuredAnswer(enrichmentResponse.content).structuredAnswer;
+        } catch (error) {
+          request.log.warn(error, 'Ask stream enrichment failed');
+        }
+
+        const result: AskResponse = {
+          answer: finalAnswer,
+          queryTimeMs: Date.now() - startMs,
+          structuredAnswer,
+        };
+        if (includeEvidence) {
+          result.evidence = recalledItems;
+        }
+
+        writeSseEvent(reply, 'result', result as unknown as Record<string, unknown>);
+        reply.raw.end();
+
+        const usedItemIds = recalledItems.slice(0, 5).map((item) => item.id);
+        const onlineReflection = new OnlineReflection(db, userDataManager);
+        void onlineReflection.reflect({
+          query,
+          recalledItems,
+          llmResponse: finalAnswer,
+          usedItemIds,
+        });
+      } catch (err) {
+        request.log.error(err, 'Ask stream endpoint failed');
+        writeSseEvent(reply, 'error', {
+          message: (err as Error).message || 'Unable to process the question.',
+        });
+        reply.raw.end();
       }
     },
   );

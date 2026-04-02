@@ -485,6 +485,9 @@ export interface OutreachTemplateRuntimeStatusItem {
     targetRef?: string;
     scheduleSpec?: Record<string, any>;
     enabled?: boolean;
+    approvalPolicy?: string;
+    maxFollowup?: number;
+    followupIntervalSeconds?: number;
     syncState?: string;
     lastSyncError?: string;
     lastSessionId?: string;

@@ -38,6 +38,14 @@ void concernedItemsSyncService.initialize();
 // Map to track backend notification types for click handling
 const backendNotificationTypes = new Map<string, string>();
 
+interface OutreachTemplateMirrorOverrides {
+    targetType?: string;
+    targetRef?: string;
+    contextTemplate?: string;
+    maxFollowup?: number;
+    followupIntervalHours?: number;
+}
+
 function parseOutreachEpochSeconds(raw?: string): number | undefined {
     if (!raw || !raw.trim()) return undefined;
     const normalized = raw.includes('T')
@@ -69,19 +77,29 @@ function buildOutreachScheduleSpec(message: ScheduledMessage): Record<string, un
     return spec;
 }
 
-function resolveOutreachTargetRef(message: ScheduledMessage): string {
+function resolveOutreachTargetRef(
+    message: ScheduledMessage,
+    targetType?: string,
+): string {
     return (
+        (targetType === 'group' ? message.Glip_Team_ID?.trim() : message.Glip_User_Name?.trim()) ||
         message.Outreach_Target_Ref?.trim() ||
-        (message.Outreach_Target_Type === 'group' ? message.Glip_Team_ID?.trim() : message.Glip_User_Name?.trim()) ||
         ''
     );
 }
 
-function buildOutreachTemplatePayload(message: ScheduledMessage) {
-    const targetType = message.Outreach_Target_Type || message.Target_Type || (message.Glip_Team_ID ? 'group' : 'private');
-    const targetRef = resolveOutreachTargetRef(message);
+function buildOutreachTemplatePayload(
+    message: ScheduledMessage,
+    overrides: OutreachTemplateMirrorOverrides = {},
+) {
+    const targetType = overrides.targetType || message.Target_Type || message.Outreach_Target_Type || (message.Glip_Team_ID ? 'group' : 'private');
+    const targetRef = overrides.targetRef?.trim() || resolveOutreachTargetRef(message, targetType);
+    const questionTemplate = message.Content?.trim() || (message as ScheduledMessage & { Outreach_Question?: string }).Outreach_Question?.trim();
     if (!targetRef) {
         throw new Error('Outreach target ref is required');
+    }
+    if (!questionTemplate) {
+        throw new Error('Outreach question is required');
     }
 
     const status = message.Status || 'Active';
@@ -99,28 +117,27 @@ function buildOutreachTemplatePayload(message: ScheduledMessage) {
         sourceRefId: message.ID,
         sheetMessageId: message.ID,
         title: message.Topic,
-        questionTemplate: message.Content,
-        contextTemplate: message.Outreach_Context?.trim(),
+        questionTemplate,
+        contextTemplate: overrides.contextTemplate?.trim(),
         targetType,
         targetRef,
         scheduleSpec: buildOutreachScheduleSpec(message),
         enabled,
         approvalPolicy: 'manual_direct',
-        maxFollowup: Number(message.Outreach_Max_Followup ?? 1),
-        followupIntervalSeconds: Math.max(
-            3600,
-            Number(message.Outreach_Followup_Interval_Hours ?? 24) * 3600,
-        ),
+        maxFollowup: overrides.maxFollowup,
+        followupIntervalSeconds: overrides.followupIntervalHours === undefined
+            ? undefined
+            : Math.max(3600, Number(overrides.followupIntervalHours ?? 24) * 3600),
         syncState,
-        lastSyncError: message.Outreach_Sync_State === 'sync_error'
-            ? message.Outreach_Last_Result || 'Sync error'
-            : undefined,
     };
 }
 
-async function syncOutreachTemplateMirror(message: ScheduledMessage): Promise<void> {
+async function syncOutreachTemplateMirror(
+    message: ScheduledMessage,
+    overrides?: OutreachTemplateMirrorOverrides,
+): Promise<void> {
     const client = getMemoryServiceClient();
-    await client.upsertOutreachTemplate(buildOutreachTemplatePayload(message));
+    await client.upsertOutreachTemplate(buildOutreachTemplatePayload(message, overrides));
 }
 
 async function cancelOutreachTemplateMirror(messageId: string): Promise<void> {
@@ -366,7 +383,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'SYNC_OUTREACH_TEMPLATE_MIRROR') {
         (async () => {
             try {
-                await syncOutreachTemplateMirror(request.data?.message as ScheduledMessage);
+                await syncOutreachTemplateMirror(
+                    request.data?.message as ScheduledMessage,
+                    request.data?.overrides as OutreachTemplateMirrorOverrides | undefined,
+                );
                 sendResponse({ success: true });
             } catch (error: any) {
                 sendResponse({ success: false, error: error?.message || 'sync_failed' });

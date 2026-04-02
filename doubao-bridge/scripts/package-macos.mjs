@@ -19,7 +19,7 @@ const pkgScriptsRoot = path.join(releaseDir, 'pkg-scripts');
 const pkgComponentPlistPath = path.join(releaseDir, 'pkg-component.plist');
 const macIconsetDir = path.join(releaseDir, 'DoubaoBridge.iconset');
 const macIcnsPath = path.join(releaseDir, 'DoubaoBridge.icns');
-const productName = 'Doubao Bridge';
+const productName = 'Personal AI';
 const appBundleName = `${productName}.app`;
 const appBundleReleaseCopy = path.join(releaseDir, appBundleName);
 const assetsDir = path.join(bridgeRoot, 'assets');
@@ -33,7 +33,7 @@ const localPlaywrightBrowsersDir = path.join(
 const vendoredPlaywrightBrowsersDir = path.join(releaseDir, 'playwright-browsers');
 
 function installerName(version) {
-  return `Doubao-Bridge-${version}-Installer.pkg`;
+  return `Personal-AI-${version}-Installer.pkg`;
 }
 
 async function run(command, args, options = {}) {
@@ -223,6 +223,27 @@ async function injectAppIcon(appBundlePath, iconPath) {
   await fs.copyFile(iconPath, path.join(resourcesDir, 'electron.icns'));
 }
 
+async function injectMacUsageDescriptions(appBundlePath) {
+  const plistPath = path.join(appBundlePath, 'Contents', 'Info.plist');
+  let plist = await fs.readFile(plistPath, 'utf8');
+  const entries = [
+    ['NSMicrophoneUsageDescription', 'Personal AI needs microphone access for voice input in Quick Ask.'],
+    ['NSSpeechRecognitionUsageDescription', 'Personal AI needs speech recognition access to transcribe voice input in Quick Ask.'],
+  ];
+
+  for (const [key, value] of entries) {
+    if (plist.includes(`<key>${key}</key>`)) {
+      continue;
+    }
+    plist = plist.replace(
+      '</dict>',
+      `\t<key>${key}</key>\n\t<string>${value}</string>\n</dict>`,
+    );
+  }
+
+  await fs.writeFile(plistPath, plist, 'utf8');
+}
+
 function makePkgPostinstallScript() {
   return `#!/bin/zsh
 set -euo pipefail
@@ -302,6 +323,7 @@ async function main() {
   const appIconPath = await buildMacAppIcon();
   const appBundleSource = await buildElectronApp(version);
   await injectAppIcon(appBundleSource, appIconPath);
+  await injectMacUsageDescriptions(appBundleSource);
   await injectVendoredPlaywrightBrowsers(appBundleSource);
   await fs.rm(appBundleReleaseCopy, { recursive: true, force: true });
   await copy(appBundleSource, appBundleReleaseCopy);
@@ -333,6 +355,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('Failed to package Doubao Bridge macOS installer:', error);
+  console.error('Failed to package Personal AI macOS installer:', error);
   process.exit(1);
 });

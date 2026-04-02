@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { generateMock } = vi.hoisted(() => ({
+const { generateMock, generateStreamMock } = vi.hoisted(() => ({
   generateMock: vi.fn(),
+  generateStreamMock: vi.fn(),
 }));
 
 vi.mock('../llm/LLMClient.js', () => ({
   LLMClient: vi.fn().mockImplementation(() => ({
     generate: generateMock,
+    generateStream: generateStreamMock,
   })),
   getLLMClient: () => ({
     generate: generateMock,
+    generateStream: generateStreamMock,
     generateJSON: generateMock,
   }),
 }));
@@ -45,6 +48,7 @@ describe('Ask API', () => {
 
   beforeEach(() => {
     generateMock.mockReset();
+    generateStreamMock.mockReset();
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM watched_projects').run();
     db.prepare('DELETE FROM entities').run();
@@ -99,6 +103,8 @@ describe('Ask API', () => {
     expect(body.structuredAnswer.keyFindings).toEqual(['Release risk increased.']);
     expect(body.evidence).toHaveLength(1);
     expect(body.evidence[0].id).toBe('ask-john-message');
+    expect(body.evidence[0].metadata?.sender).toBe('John');
+    expect(body.evidence[0].metadata?.groupName).toBe('DevOps');
   });
 
   it('falls back to plain text when the model does not return JSON', async () => {
@@ -119,5 +125,41 @@ describe('Ask API', () => {
 
     expect(body.answer).toContain('I found one relevant memory');
     expect(body.structuredAnswer).toBeUndefined();
+  });
+
+  it('streams the main answer before the final structured result', async () => {
+    generateStreamMock.mockImplementation(async (_prompt, _options, onDelta) => {
+      await onDelta('John mentioned ');
+      await onDelta('that release risk is increasing.');
+      return {
+        content: 'John mentioned that release risk is increasing.',
+      };
+    });
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'John mentioned that release risk is increasing.',
+        keyFindings: ['Release risk increased.'],
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask/stream',
+      payload: {
+        query: '最近三天 John 说过什么？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(res.body).toContain('event: start');
+    expect(res.body).toContain('event: delta');
+    expect(res.body).toContain('event: answer_done');
+    expect(res.body).toContain('event: result');
+    expect(res.body.indexOf('event: delta')).toBeGreaterThan(res.body.indexOf('event: start'));
+    expect(res.body.indexOf('event: answer_done')).toBeGreaterThan(res.body.indexOf('event: delta'));
+    expect(res.body.indexOf('event: result')).toBeGreaterThan(res.body.indexOf('event: answer_done'));
+    expect(res.body).toContain('Release risk increased.');
   });
 });

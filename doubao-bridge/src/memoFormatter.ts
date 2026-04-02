@@ -230,39 +230,56 @@ export function formatImportantDates(items: MemoItem[]): string {
   return lines.join('\n');
 }
 
+function prependInstruction(instruction: string, content: string): string {
+  return [instruction, '', content].join('\n');
+}
+
 /**
  * 智能选择格式化方式
  * 根据内容类型自动选择最合适的格式
  */
 export function smartFormat(items: MemoItem[], context?: 'stable' | 'briefing' | 'reminder'): string {
+  const emptyMessage =
+    context === 'reminder' ? '_暂无提醒需要记录到随手记_' : '_暂无内容需要存入随手记_';
   if (items.length === 0) {
-    return '_暂无内容需要同步_';
+    return context === 'briefing' ? '_暂无内容需要同步_' : emptyMessage;
   }
-  
-  // 单条消息：使用详细格式
-  if (items.length === 1) {
-    return formatMemoItem(items[0]);
-  }
-  
-  // 根据上下文选择格式
+
+  const formatted =
+    items.length === 1
+      ? formatMemoItem(items[0])
+      : (() => {
+          switch (context) {
+            case 'stable':
+              return formatMemoBatch(items, '📚 长期记忆同步');
+
+            case 'briefing':
+              return formatCompactMemoList(items);
+
+            case 'reminder': {
+              const todos = items.filter((i) => i.type === 'todo' || i.type === 'important_date');
+              if (todos.length === items.length) {
+                return formatTodoList(items);
+              }
+              return formatMemoBatch(items, '⏰ 提醒事项同步');
+            }
+
+            default:
+              return formatMemoBatch(items);
+          }
+        })();
+
   switch (context) {
     case 'stable':
-      // 长期记忆：使用批量格式
-      return formatMemoBatch(items, '📚 长期记忆同步');
-    
+      return prependInstruction('请把以下信息存入随手记：', formatted);
+
     case 'briefing':
-      // 移动简报：使用紧凑格式
-      return formatCompactMemoList(items);
-    
+      return formatted;
+
     case 'reminder':
-      // 提醒：优先显示待办
-      const todos = items.filter((i) => i.type === 'todo' || i.type === 'important_date');
-      if (todos.length === items.length) {
-        return formatTodoList(items);
-      }
-      return formatMemoBatch(items, '⏰ 提醒事项同步');
-    
+      return prependInstruction('请在随手记中记录以下提醒：', formatted);
+
     default:
-      return formatMemoBatch(items);
+      return prependInstruction('请把以下内容存入随手记：', formatted);
   }
 }

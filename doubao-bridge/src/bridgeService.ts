@@ -76,22 +76,22 @@ function asThreadRecord(
 }
 
 function renderStableMemory(items: StableMemorySyncRequest['items']): string {
-  const lines = ['请记住以下长期稳定信息，只保留对未来回答有帮助的内容：'];
+  const lines = ['请把以下长期稳定信息存入随手记，并保留对未来回答有帮助的要点：'];
   for (const item of items) {
     lines.push(`- ${item.title}: ${item.body}`);
   }
   lines.push('');
-  lines.push('请简要确认你记住了哪些要点。');
+  lines.push('请简要确认已存入随手记的要点。');
   return lines.join('\n');
 }
 
 function renderBriefing(payload: MobileBriefingRequest): string {
-  const lines = [payload.title, ''];
+  const lines = ['请把以下近期重点记录到随手记：', '', payload.title, ''];
   for (const bullet of payload.bullets) {
     lines.push(`- ${bullet}`);
   }
   lines.push('');
-  lines.push('这只是当前会话上下文，不需要长期记住。');
+  lines.push('请按近期重点的方式保存，方便我之后查看和回顾。');
   return lines.join('\n');
 }
 
@@ -111,14 +111,27 @@ function renderQuery(payload: QueryInjectRequest): string {
 }
 
 function renderReminders(payload: ReminderSyncRequest): string {
-  const lines = ['今日提醒：'];
+  const lines = ['请在随手记中记录以下提醒：'];
   for (const reminder of payload.reminders) {
     const due = reminder.dueAt ? ` [${reminder.dueAt}]` : '';
     const note = reminder.note ? ` - ${reminder.note}` : '';
     lines.push(`- ${reminder.title}${due}${note}`);
   }
-  lines.push('', '请把它们当成当前会话提醒，不要长期记住全部原文。');
+  lines.push('', '请按提醒或待办的方式保存，方便我之后查看。');
   return lines.join('\n');
+}
+
+function normalizeBrowserLifecycleError(message: string): string {
+  if (/Target page, context or browser has been closed/i.test(message)) {
+    return '豆包浏览器窗口已经被关闭了。请先重新点击“打开登录窗口”，确认桥接器浏览器恢复后，再继续创建或绑定线程。';
+  }
+  if (/Browser page not available/i.test(message)) {
+    return '当前没有可用的豆包浏览器页面。请先点击“打开登录窗口”，再继续操作。';
+  }
+  if (/No editable element found/i.test(message)) {
+    return '当前豆包页面里没有找到可输入区域。请先确认桥接器浏览器仍停留在可用的豆包页面。';
+  }
+  return message;
 }
 
 export class DoubaoBridgeService {
@@ -419,7 +432,9 @@ export class DoubaoBridgeService {
         observedBodySnippet: result.observedBodySnippet,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = normalizeBrowserLifecycleError(
+        error instanceof Error ? error.message : String(error),
+      );
       this.state.lastError = message;
       await this.persist();
       return {

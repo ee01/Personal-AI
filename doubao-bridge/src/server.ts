@@ -1,14 +1,24 @@
 import Fastify from 'fastify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import {
+  buildAssistantRuntimeSummary,
+  classifyRememberText,
+} from './assistantRuntime.js';
 import type { BridgeConfig } from './config.js';
-import { BridgeMemoryServiceClient } from './memoryServiceClient.js';
+import {
+  BridgeMemoryServiceClient,
+  BridgeMemoryServiceHttpError,
+} from './memoryServiceClient.js';
 import { applyBridgeSettingsToConfig, BridgeSettingsStore, type BridgeSettingsPayload, type BridgeUserSettings } from './settings.js';
 import type { BridgeSyncManager, BridgeSyncManagerSnapshot } from './syncManager.js';
 import type {
   AutoSyncKind,
+  BridgeAssistantStreamEvent,
   BindingType,
+  BridgeAssistantAskRequest,
   BridgeBlockingReason,
+  BridgeRememberRequest,
   BridgeStatus,
   BridgeSyncReadiness,
   MemoSyncRequest,
@@ -180,6 +190,58 @@ async function buildStatus(
   };
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function writeSseEvent(reply: FastifyReply, event: BridgeAssistantStreamEvent['type'], payload: Record<string, unknown>) {
+  reply.raw.write(`event: ${event}\n`);
+  reply.raw.write(`data: ${JSON.stringify({ type: event, ...payload })}\n\n`);
+}
+
+async function loadAssistantRuntimeSummary(
+  service: DoubaoBridgeService,
+  deps: BridgeServerDependencies,
+) {
+  const status = await buildStatus(service, deps);
+  if (!deps.memoryClient.isEnabled()) {
+    return buildAssistantRuntimeSummary({ status });
+  }
+
+  try {
+    const [
+      confirmRequests,
+      runningActions,
+      queuedActions,
+      outreachSummary,
+      waitingReplySessions,
+      pendingApprovalSessions,
+    ] = await Promise.all([
+      deps.memoryClient.getConfirmRequests('pending', 5),
+      deps.memoryClient.getActions({ queueStatus: 'running', limit: 5 }),
+      deps.memoryClient.getActions({ queueStatus: 'queued', limit: 5 }),
+      deps.memoryClient.getOutreachSummary(),
+      deps.memoryClient.getOutreachSessions({ status: 'waiting_reply', limit: 1 }),
+      deps.memoryClient.getOutreachSessions({ status: 'pending_approval', limit: 1 }),
+    ]);
+
+    return buildAssistantRuntimeSummary({
+      status,
+      confirmRequests,
+      runningActions,
+      queuedActions,
+      outreachSummary,
+      waitingReplySessions,
+      pendingApprovalSessions,
+    });
+  } catch (error) {
+    return buildAssistantRuntimeSummary({
+      status,
+      runtimeErrorMessage: describeError(error),
+    });
+  }
+}
+
 export async function createBridgeServer(config: BridgeConfig, service: DoubaoBridgeService, deps: BridgeServerDependencies) {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
 
@@ -228,6 +290,147 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Memory Service test failed';
       return reply.code(400).send({ ok: false, error: message });
+    }
+  });
+
+  app.get('/assistant/runtime-summary', async () => loadAssistantRuntimeSummary(service, deps));
+
+  app.post<{
+    Body: BridgeAssistantAskRequest;
+  }>('/assistant/ask', async (request, reply) => {
+    if (!deps.memoryClient.isEnabled()) {
+      return reply.code(503).send({
+        error: 'Quick Ask 需要先连接 Memory Service。',
+      });
+    }
+
+    try {
+      const result = await deps.memoryClient.ask(
+        request.body.query,
+        request.body.context,
+        request.body.includeEvidence,
+      );
+      const runtime = await loadAssistantRuntimeSummary(service, deps);
+      return {
+        ...result,
+        runtime,
+      };
+    } catch (error) {
+      return reply.code(503).send({
+        error: describeError(error),
+      });
+    }
+  });
+
+  app.post<{
+    Body: BridgeAssistantAskRequest;
+  }>('/assistant/ask/stream', async (request, reply) => {
+    if (!deps.memoryClient.isEnabled()) {
+      return reply.code(503).send({
+        error: 'Quick Ask 需要先连接 Memory Service。',
+      });
+    }
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    reply.raw.flushHeaders?.();
+
+    try {
+      await deps.memoryClient.streamAsk(
+        request.body.query,
+        request.body.context,
+        request.body.includeEvidence,
+        async (event) => {
+          if (event.type === 'result') {
+            const runtime = await loadAssistantRuntimeSummary(service, deps);
+            writeSseEvent(reply, 'result', {
+              ...event,
+              runtime,
+            });
+            return;
+          }
+
+          if (event.type === 'start') {
+            writeSseEvent(reply, 'start', { requestId: event.requestId });
+            return;
+          }
+
+          if (event.type === 'delta') {
+            writeSseEvent(reply, 'delta', { text: event.text });
+            return;
+          }
+
+          if (event.type === 'answer_done') {
+            writeSseEvent(reply, 'answer_done', { answer: event.answer });
+            return;
+          }
+
+          writeSseEvent(reply, 'error', { message: event.message });
+        },
+      );
+    } catch (error) {
+      writeSseEvent(reply, 'error', {
+        message: describeError(error),
+      });
+    } finally {
+      reply.raw.end();
+    }
+  });
+
+  app.post<{
+    Body: BridgeRememberRequest;
+  }>('/assistant/memory/remember', async (request, reply) => {
+    if (!deps.memoryClient.isEnabled()) {
+      return reply.code(503).send({
+        error: 'Quick Ask 需要先连接 Memory Service。',
+      });
+    }
+
+    const classification = classifyRememberText(request.body.text);
+    try {
+      const created = await deps.memoryClient.createProfileItem({
+        itemType: classification.itemType,
+        itemKey: classification.itemKey,
+        itemValue: classification.itemValue,
+        confidence: 1,
+      });
+      return {
+        items: [
+          {
+            id: created.id,
+            itemType: classification.itemType,
+            itemKey: classification.itemKey,
+            itemValue: classification.itemValue,
+          },
+        ],
+      };
+    } catch (error) {
+      if (error instanceof BridgeMemoryServiceHttpError && error.status === 409) {
+        const payload =
+          error.payload && typeof error.payload === 'object'
+            ? (error.payload as { existingId?: string })
+            : {};
+        return {
+          items: [
+            {
+              id: payload.existingId,
+              itemType: classification.itemType,
+              itemKey: classification.itemKey,
+              itemValue: classification.itemValue,
+              duplicate: true,
+            },
+          ],
+        };
+      }
+
+      return reply.code(503).send({
+        error: describeError(error),
+      });
     }
   });
 

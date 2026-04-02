@@ -1,6 +1,6 @@
 {
   "name": "doubao-bridge",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "description": "Local Doubao bridge for Personal AI memory sync and context injection",
@@ -33,7 +33,7 @@
   },
   "build": {
     "appId": "com.personalai.doubao-bridge",
-    "productName": "Doubao Bridge",
+    "productName": "Personal AI",
     "asar": false,
     "directories": {
       "output": "release/electron-builder"

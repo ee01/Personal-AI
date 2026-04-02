@@ -5,7 +5,18 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  nativeImage,
+  screen,
+  shell,
+} from 'electron';
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +34,28 @@ const appLogFile = path.join(logsDir, 'doubao-bridge-app.log');
 const bridgeLogFile = path.join(logsDir, 'doubao-bridge-agent.log');
 const bridgePidFile = path.join(appSupportDir, 'bridge-agent.pid');
 const uninstallMarkerFile = path.join(appSupportDir, 'uninstall-pending');
+const quickAskStateFile = path.join(appSupportDir, 'quick-ask-window.json');
+const shortcutHelperSourcePath = path.join(__dirname, 'native', 'shortcut-helper.swift');
+const shortcutHelperBinaryPath = path.join(
+  __dirname,
+  'native',
+  'bin',
+  'doubao-bridge-shortcut-helper',
+);
+const speechHelperSourcePath = path.join(__dirname, 'native', 'speech-helper.swift');
+const speechHelperBinaryPath = path.join(
+  __dirname,
+  'native',
+  'bin',
+  'doubao-bridge-speech-helper',
+);
+const keyStateHelperSourcePath = path.join(__dirname, 'native', 'key-state-helper.swift');
+const keyStateHelperBinaryPath = path.join(
+  __dirname,
+  'native',
+  'bin',
+  'doubao-bridge-key-state-helper',
+);
 const legacyLaunchAgentFile = path.join(
   app.getPath('home'),
   'Library',
@@ -48,9 +81,85 @@ process.env.TMP = tempDir;
 process.env.TEMP = tempDir;
 
 let mainWindow = null;
+let askWindow = null;
 let bridgeProcess = null;
 let tray = null;
 let allowQuit = false;
+let shortcutHelperProcess = null;
+let shortcutHelperBuffer = '';
+let shortcutFallbackRegistered = false;
+let speechHelperProcess = null;
+let speechHelperBuffer = '';
+let pendingShortcutGesture = null;
+let askWindowAnchor = null;
+let askWindowStateSaveTimer = null;
+let voiceLocalePreference = 'zh-CN';
+let shortcutStatus = {
+  usingNativeHelper: false,
+  fallbackEnabled: false,
+  permissionGranted: true,
+  mainProcessPermissionGranted: true,
+  message:
+    process.platform === 'darwin'
+      ? '短按 Option+A 打开或关闭窗口；按住不放约 320ms 可切换到语音输入。'
+      : '当前仅支持短按 Option+A 打开或关闭窗口。',
+};
+
+const ASK_WINDOW_WIDTH = 540;
+const ASK_WINDOW_COMPACT_HEIGHT = 146;
+const ASK_WINDOW_VOICE_HEIGHT = 214;
+const ASK_WINDOW_MIN_EXPANDED_HEIGHT = 428;
+const ASK_WINDOW_DEFAULT_EXPANDED_HEIGHT = 500;
+const ASK_WINDOW_VERTICAL_MARGIN = 64;
+
+function normalizeVoiceLocale(value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) return 'zh-CN';
+  if (normalized === 'auto') return 'auto';
+  return normalized;
+}
+
+function getVoicePreferences() {
+  return {
+    voiceLocale: voiceLocalePreference,
+  };
+}
+
+function setVoiceLocalePreference(value) {
+  voiceLocalePreference = normalizeVoiceLocale(value);
+  scheduleSaveQuickAskWindowState();
+  return getVoicePreferences();
+}
+
+function sendToWindow(targetWindow, channel, payload) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+
+  const dispatch = () => {
+    if (!targetWindow.isDestroyed()) {
+      targetWindow.webContents.send(channel, payload);
+    }
+  };
+
+  if (targetWindow.webContents.isLoadingMainFrame()) {
+    targetWindow.webContents.once('did-finish-load', dispatch);
+    return;
+  }
+
+  dispatch();
+}
+
+function broadcastShortcutStatus() {
+  sendToWindow(mainWindow, 'bridge-app:shortcut-status', shortcutStatus);
+  sendToWindow(askWindow, 'quick-ask:shortcut-status', shortcutStatus);
+}
+
+function updateShortcutStatus(patch) {
+  shortcutStatus = {
+    ...shortcutStatus,
+    ...patch,
+  };
+  broadcastShortcutStatus();
+}
 
 function getAppBundlePath() {
   return path.dirname(path.dirname(path.dirname(process.execPath)));
@@ -81,6 +190,47 @@ async function cancelPendingUninstall() {
     await appendLog(appLogFile, '[info] cancelling pending uninstall because app was reopened');
   }
   await fs.rm(uninstallMarkerFile, { force: true }).catch(() => undefined);
+}
+
+async function loadQuickAskWindowState() {
+  try {
+    const raw = await fs.readFile(quickAskStateFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (
+      Number.isFinite(parsed?.x) &&
+      Number.isFinite(parsed?.y)
+    ) {
+      askWindowAnchor = {
+        x: Number(parsed.x),
+        y: Number(parsed.y),
+      };
+    }
+    voiceLocalePreference = normalizeVoiceLocale(parsed?.voiceLocale);
+  } catch {
+    askWindowAnchor = null;
+    voiceLocalePreference = 'zh-CN';
+  }
+}
+
+async function saveQuickAskWindowState() {
+  await fs.writeFile(
+    quickAskStateFile,
+    JSON.stringify({
+      ...(askWindowAnchor || {}),
+      voiceLocale: voiceLocalePreference,
+    }),
+    'utf8',
+  ).catch(() => undefined);
+}
+
+function scheduleSaveQuickAskWindowState() {
+  if (askWindowStateSaveTimer) {
+    clearTimeout(askWindowStateSaveTimer);
+  }
+  askWindowStateSaveTimer = setTimeout(() => {
+    askWindowStateSaveTimer = null;
+    void saveQuickAskWindowState();
+  }, 120);
 }
 
 function getBridgeEnv() {
@@ -268,6 +418,517 @@ function showMainWindow() {
   }
 }
 
+function getAskWindowBounds(height = ASK_WINDOW_COMPACT_HEIGHT) {
+  const currentDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const workArea = currentDisplay.workArea;
+  const width = Math.min(ASK_WINDOW_WIDTH, workArea.width - 32);
+  const safeHeight = Math.max(
+    ASK_WINDOW_COMPACT_HEIGHT,
+    Math.min(height, workArea.height - ASK_WINDOW_VERTICAL_MARGIN),
+  );
+  const fallbackX = Math.round(workArea.x + (workArea.width - width) / 2);
+  const fallbackCompactTop = Math.round(
+    workArea.y + Math.max(18, Math.min(28, workArea.height * 0.045)),
+  );
+  const desiredX = askWindowAnchor?.x ?? fallbackX;
+  const desiredCompactTop = askWindowAnchor?.y ?? fallbackCompactTop;
+  const x = Math.max(workArea.x + 16, Math.min(desiredX, workArea.x + workArea.width - width - 16));
+  const compactTop = Math.max(
+    workArea.y + 12,
+    Math.min(desiredCompactTop, workArea.y + workArea.height - ASK_WINDOW_COMPACT_HEIGHT - 12),
+  );
+  const anchoredBottom = compactTop + ASK_WINDOW_COMPACT_HEIGHT;
+  const y = Math.max(workArea.y + 14, anchoredBottom - safeHeight);
+  return {
+    x,
+    y,
+    width,
+    height: safeHeight,
+  };
+}
+
+function applyAskWindowBounds(height, animate = true) {
+  if (!askWindow || askWindow.isDestroyed()) return;
+  askWindow.setBounds(getAskWindowBounds(height), animate);
+}
+
+function focusAskComposer() {
+  sendToWindow(askWindow, 'quick-ask:focus-input');
+}
+
+function clearPendingShortcutGesture() {
+  if (!pendingShortcutGesture) return;
+  clearTimeout(pendingShortcutGesture.timer);
+  pendingShortcutGesture = null;
+}
+
+function resolvePendingShortcutGesture() {
+  if (!pendingShortcutGesture) return;
+  const gesture = pendingShortcutGesture;
+  clearTimeout(gesture.timer);
+  pendingShortcutGesture = null;
+  if (gesture.actionOnTap === 'hide') {
+    void appendLog(appLogFile, '[info] shortcut gesture resolved as hide-on-tap');
+    hideAskWindow();
+    return;
+  }
+  void appendLog(appLogFile, '[info] shortcut gesture resolved as text mode');
+  setTimeout(() => {
+    focusAskComposer();
+  }, 20);
+}
+
+async function readShortcutHoldState() {
+  if (process.platform !== 'darwin') {
+    return { aDown: false, optionDown: false };
+  }
+
+  try {
+    const helperPath = await ensureKeyStateHelperBinary();
+    if (!helperPath) {
+      return { aDown: false, optionDown: false };
+    }
+    const { stdout } = await execFileAsync(helperPath, []);
+    const parsed = JSON.parse(stdout);
+    return {
+      aDown: Boolean(parsed?.aDown),
+      optionDown: Boolean(parsed?.optionDown),
+    };
+  } catch (error) {
+    void appendLog(
+      appLogFile,
+      `[warn] failed to read current shortcut key state: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { aDown: false, optionDown: false };
+  }
+}
+
+async function triggerPendingShortcutHold() {
+  if (!pendingShortcutGesture) return;
+  const gesture = pendingShortcutGesture;
+  clearTimeout(gesture.timer);
+  pendingShortcutGesture = null;
+
+  const keyState = await readShortcutHoldState();
+  if (keyState.aDown && keyState.optionDown) {
+    await appendLog(appLogFile, '[info] shortcut promoted to voice mode after confirmed A+Option hold');
+    sendToWindow(askWindow, 'quick-ask:native-shortcut', { type: 'enter-voice' });
+    return;
+  }
+
+  await appendLog(
+    appLogFile,
+    `[info] hold threshold reached but key state did not qualify (aDown=${keyState.aDown ? 'yes' : 'no'}, optionDown=${keyState.optionDown ? 'yes' : 'no'})`,
+  );
+  pendingShortcutGesture = gesture;
+  resolvePendingShortcutGesture();
+}
+
+function beginPendingShortcutGesture(actionOnTap = askWindow?.isVisible() ? 'hide' : 'show') {
+  clearPendingShortcutGesture();
+  if (actionOnTap === 'show') {
+    showAskWindow({ focus: true, focusInput: false });
+  } else if (askWindow && !askWindow.isDestroyed()) {
+    askWindow.focus();
+  }
+  pendingShortcutGesture = {
+    actionOnTap,
+    timer: setTimeout(() => {
+      void triggerPendingShortcutHold();
+    }, 320),
+  };
+}
+
+function resetAskSession() {
+  sendToWindow(askWindow, 'quick-ask:reset-session');
+}
+
+function rememberAskWindowAnchor(bounds) {
+  if (!bounds) return;
+  askWindowAnchor = {
+    x: bounds.x,
+    y: bounds.y + (bounds.height - ASK_WINDOW_COMPACT_HEIGHT),
+  };
+  scheduleSaveQuickAskWindowState();
+}
+
+function createAskWindow() {
+  if (askWindow && !askWindow.isDestroyed()) return askWindow;
+
+  askWindow = new BrowserWindow({
+    ...getAskWindowBounds(),
+    show: false,
+    frame: false,
+    transparent: true,
+    roundedCorners: true,
+    hasShadow: true,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    backgroundColor: '#00000000',
+    title: 'Personal AI Quick Ask',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  askWindow.setAlwaysOnTop(true, 'floating');
+  askWindow.loadFile(path.join(__dirname, 'quick-ask.html'));
+  askWindow.webContents.once('did-finish-load', () => {
+    broadcastShortcutStatus();
+  });
+  askWindow.webContents.on('before-input-event', (_event, input) => {
+    if (!pendingShortcutGesture || input.type !== 'keyUp') return;
+    const key = typeof input.key === 'string' ? input.key.toLowerCase() : '';
+    const code = typeof input.code === 'string' ? input.code : '';
+    if (
+      key === 'a' ||
+      key === 'alt' ||
+      code === 'KeyA' ||
+      code === 'AltLeft' ||
+      code === 'AltRight'
+    ) {
+      resolvePendingShortcutGesture();
+    }
+  });
+  askWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  askWindow.on('will-move', (_event, newBounds) => {
+    rememberAskWindowAnchor(newBounds);
+  });
+
+  askWindow.on('hide', () => {
+    clearPendingShortcutGesture();
+    applyAskWindowBounds(ASK_WINDOW_COMPACT_HEIGHT, false);
+    void shutdownSpeechHelper();
+    sendToWindow(askWindow, 'quick-ask:prepare-hide');
+  });
+
+  askWindow.on('closed', () => {
+    clearPendingShortcutGesture();
+    void shutdownSpeechHelper();
+    askWindow = null;
+  });
+
+  return askWindow;
+}
+
+function showAskWindow({ focus = true, focusInput = true } = {}) {
+  const window = createAskWindow();
+  applyAskWindowBounds(window.isVisible() ? window.getBounds().height : ASK_WINDOW_COMPACT_HEIGHT, false);
+  window.show();
+  if (focus) {
+    window.focus();
+    if (focusInput) {
+      setTimeout(() => {
+        focusAskComposer();
+      }, 30);
+    }
+  }
+}
+
+function hideAskWindow() {
+  if (!askWindow || askWindow.isDestroyed()) return;
+  clearPendingShortcutGesture();
+  askWindow.hide();
+}
+
+function toggleAskWindow() {
+  if (askWindow?.isVisible()) {
+    hideAskWindow();
+    return;
+  }
+  showAskWindow();
+}
+
+async function ensureShortcutHelperBinary() {
+  if (process.platform !== 'darwin') return null;
+
+  if (app.isPackaged) {
+    return shortcutHelperBinaryPath;
+  }
+
+  const sourceStat = await fs.stat(shortcutHelperSourcePath).catch(() => null);
+  if (!sourceStat) return null;
+
+  const binaryStat = await fs.stat(shortcutHelperBinaryPath).catch(() => null);
+  if (binaryStat && binaryStat.mtimeMs >= sourceStat.mtimeMs) {
+    return shortcutHelperBinaryPath;
+  }
+
+  await fs.mkdir(path.dirname(shortcutHelperBinaryPath), { recursive: true });
+  await execFileAsync('/usr/bin/xcrun', [
+    'swiftc',
+    '-O',
+    '-framework',
+    'Carbon',
+    shortcutHelperSourcePath,
+    '-o',
+    shortcutHelperBinaryPath,
+  ]);
+  await fs.chmod(shortcutHelperBinaryPath, 0o755);
+  return shortcutHelperBinaryPath;
+}
+
+async function ensureSpeechHelperBinary() {
+  if (process.platform !== 'darwin') return null;
+
+  if (app.isPackaged) {
+    return speechHelperBinaryPath;
+  }
+
+  const sourceStat = await fs.stat(speechHelperSourcePath).catch(() => null);
+  if (!sourceStat) return null;
+
+  const binaryStat = await fs.stat(speechHelperBinaryPath).catch(() => null);
+  if (binaryStat && binaryStat.mtimeMs >= sourceStat.mtimeMs) {
+    return speechHelperBinaryPath;
+  }
+
+  await fs.mkdir(path.dirname(speechHelperBinaryPath), { recursive: true });
+  await execFileAsync('/usr/bin/xcrun', [
+    'swiftc',
+    '-O',
+    '-framework',
+    'Speech',
+    '-framework',
+    'AVFoundation',
+    speechHelperSourcePath,
+    '-o',
+    speechHelperBinaryPath,
+  ]);
+  await fs.chmod(speechHelperBinaryPath, 0o755);
+  return speechHelperBinaryPath;
+}
+
+async function ensureKeyStateHelperBinary() {
+  if (process.platform !== 'darwin') return null;
+
+  if (app.isPackaged) {
+    return keyStateHelperBinaryPath;
+  }
+
+  const sourceStat = await fs.stat(keyStateHelperSourcePath).catch(() => null);
+  if (!sourceStat) return null;
+
+  const binaryStat = await fs.stat(keyStateHelperBinaryPath).catch(() => null);
+  if (binaryStat && binaryStat.mtimeMs >= sourceStat.mtimeMs) {
+    return keyStateHelperBinaryPath;
+  }
+
+  await fs.mkdir(path.dirname(keyStateHelperBinaryPath), { recursive: true });
+  await execFileAsync('/usr/bin/xcrun', [
+    'swiftc',
+    '-O',
+    '-framework',
+    'ApplicationServices',
+    keyStateHelperSourcePath,
+    '-o',
+    keyStateHelperBinaryPath,
+  ]);
+  await fs.chmod(keyStateHelperBinaryPath, 0o755);
+  return keyStateHelperBinaryPath;
+}
+
+function handleShortcutTap() {
+  void appendLog(appLogFile, '[info] shortcut tap detected');
+  beginPendingShortcutGesture(askWindow?.isVisible() ? 'hide' : 'show');
+}
+
+async function registerFallbackShortcut(message) {
+  if (shortcutFallbackRegistered) return;
+
+  const registered = globalShortcut.register('Alt+A', () => {
+    handleShortcutTap();
+  });
+
+  if (!registered) {
+    await appendLog(appLogFile, '[warn] failed to register fallback shortcut Alt+A');
+    updateShortcutStatus({
+      usingNativeHelper: false,
+      fallbackEnabled: false,
+      message: message || 'Option+A 快捷键注册失败。',
+    });
+    return;
+  }
+
+  shortcutFallbackRegistered = true;
+  await appendLog(appLogFile, '[info] registered Electron globalShortcut Alt+A');
+  updateShortcutStatus({
+    usingNativeHelper: false,
+    fallbackEnabled: false,
+    permissionGranted: true,
+    mainProcessPermissionGranted: true,
+    message:
+      message ||
+      '短按 Option+A 打开或关闭窗口；按住不放约 320ms 可切换到语音输入。',
+  });
+}
+
+async function stopShortcutHelper() {
+  if (!shortcutHelperProcess) return;
+  shortcutHelperProcess.removeAllListeners();
+  shortcutHelperProcess.stdout?.removeAllListeners();
+  shortcutHelperProcess.stderr?.removeAllListeners();
+  shortcutHelperProcess.kill('SIGTERM');
+  shortcutHelperProcess = null;
+  shortcutHelperBuffer = '';
+}
+
+function sendVoiceEvent(payload) {
+  sendToWindow(askWindow, 'quick-ask:voice-event', payload);
+}
+
+function handleSpeechHelperPayload(payload) {
+  if (!payload || typeof payload !== 'object') return;
+
+  if (payload.type === 'error') {
+    void appendLog(
+      appLogFile,
+      `[voice-helper:error] ${payload.code || 'unknown'} ${payload.message || 'unknown error'}`,
+    );
+  } else if (payload.type === 'ready') {
+    void appendLog(
+      appLogFile,
+      `[voice-helper:ready] microphone=${payload.microphoneStatus || 'unknown'} speech=${payload.speechStatus || 'unknown'}`,
+    );
+  }
+
+  sendVoiceEvent(payload);
+}
+
+function sendSpeechHelperCommand(command) {
+  if (!speechHelperProcess || speechHelperProcess.killed || !speechHelperProcess.stdin?.writable) {
+    throw new Error('Speech helper is not running');
+  }
+  speechHelperProcess.stdin.write(`${JSON.stringify(command)}\n`);
+}
+
+async function ensureSpeechHelperProcess() {
+  if (process.platform !== 'darwin') {
+    throw new Error('Native voice input is only supported on macOS');
+  }
+
+  if (speechHelperProcess && !speechHelperProcess.killed) {
+    return speechHelperProcess;
+  }
+
+  const helperPath = await ensureSpeechHelperBinary();
+  if (!helperPath) {
+    throw new Error('Speech helper binary is missing');
+  }
+
+  speechHelperProcess = spawn(helperPath, [], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  speechHelperBuffer = '';
+
+  speechHelperProcess.stdout?.on('data', (chunk) => {
+    speechHelperBuffer += String(chunk);
+    let newlineIndex = speechHelperBuffer.indexOf('\n');
+    while (newlineIndex >= 0) {
+      const line = speechHelperBuffer.slice(0, newlineIndex).trim();
+      speechHelperBuffer = speechHelperBuffer.slice(newlineIndex + 1);
+      if (line) {
+        try {
+          handleSpeechHelperPayload(JSON.parse(line));
+        } catch (error) {
+          void appendLog(
+            appLogFile,
+            `[warn] failed to parse speech helper payload: ${line} (${error instanceof Error ? error.message : String(error)})`,
+          );
+        }
+      }
+      newlineIndex = speechHelperBuffer.indexOf('\n');
+    }
+  });
+
+  speechHelperProcess.stderr?.on('data', (chunk) => {
+    void appendLog(appLogFile, `[speech-helper] ${String(chunk).trim()}`);
+  });
+
+  speechHelperProcess.on('exit', (code, signal) => {
+    void appendLog(
+      appLogFile,
+      `[speech-helper:exit] code=${code ?? 'null'} signal=${signal ?? 'null'}`,
+    );
+    speechHelperProcess = null;
+    speechHelperBuffer = '';
+  });
+
+  return speechHelperProcess;
+}
+
+async function startSpeechSession(locale) {
+  await ensureSpeechHelperProcess();
+  sendSpeechHelperCommand({
+    command: 'start',
+    locale: typeof locale === 'string' && locale.trim() ? locale.trim() : undefined,
+  });
+}
+
+async function stopSpeechSession() {
+  if (!speechHelperProcess || speechHelperProcess.killed) return;
+  sendSpeechHelperCommand({ command: 'stop' });
+}
+
+async function cancelSpeechSession() {
+  if (!speechHelperProcess || speechHelperProcess.killed) return;
+  sendSpeechHelperCommand({ command: 'cancel' });
+}
+
+async function shutdownSpeechHelper() {
+  if (!speechHelperProcess) return;
+  const processToStop = speechHelperProcess;
+  speechHelperProcess = null;
+  speechHelperBuffer = '';
+
+  if (processToStop.stdin?.writable) {
+    try {
+      processToStop.stdin.write(`${JSON.stringify({ command: 'shutdown' })}\n`);
+    } catch {
+      // Ignore and force kill below.
+    }
+  }
+
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      processToStop.kill('SIGTERM');
+      resolve();
+    }, 300);
+    processToStop.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+function handleShortcutHelperPayload(payload) {
+  void appendLog(
+    appLogFile,
+    `[info] shortcut helper payload ignored in current mode: ${JSON.stringify(payload)}`,
+  );
+}
+
+async function startShortcutHelper() {
+  globalShortcut.unregisterAll();
+  shortcutFallbackRegistered = false;
+  await stopShortcutHelper();
+  await registerFallbackShortcut(
+    process.platform === 'darwin'
+      ? '短按 Option+A 打开或关闭窗口；按住不放约 320ms 可切换到语音输入。'
+      : '当前仅支持短按 Option+A 打开或关闭窗口。',
+  );
+}
+
 function applyMacUiMode() {
   if (process.platform !== 'darwin') return;
   app.setActivationPolicy(backgroundMode ? 'accessory' : 'regular');
@@ -291,7 +952,11 @@ function syncWindowPresence(showWindow) {
 function createTrayMenu() {
   return Menu.buildFromTemplate([
     {
-      label: 'Open Doubao Bridge',
+      label: 'Open Quick Ask',
+      click: () => showAskWindow(),
+    },
+    {
+      label: 'Open Personal AI Settings',
       click: () => showMainWindow(),
     },
     {
@@ -302,7 +967,7 @@ function createTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: 'Uninstall Doubao Bridge...',
+      label: 'Uninstall Personal AI...',
       click: () => {
         void handleUninstall();
       },
@@ -328,10 +993,13 @@ function createTray() {
   trayImage.setTemplateImage?.(true);
 
   tray = new Tray(trayImage);
-  tray.setToolTip('Doubao Bridge');
-  tray.setContextMenu(createTrayMenu());
+  tray.setToolTip('Personal AI');
+  const trayMenu = createTrayMenu();
   tray.on('click', () => {
-    showMainWindow();
+    toggleAskWindow();
+  });
+  tray.on('right-click', () => {
+    tray.popUpContextMenu(trayMenu);
   });
 }
 
@@ -403,10 +1071,10 @@ async function handleUninstall() {
     buttons: ['取消', '卸载'],
     defaultId: 1,
     cancelId: 0,
-    title: '卸载 Doubao Bridge',
+    title: '卸载 Personal AI',
     message: '这会停止后台同步，并删除本地配置、日志和后台服务。',
     detail:
-      '清理完成后会尝试把 Doubao Bridge.app 移到废纸篓；如果失败，会在 Finder 中定位它供你手动删除。若在卸载完成前重新打开 app，这次卸载会自动取消。',
+      '清理完成后会尝试把 Personal AI.app 移到废纸篓；如果失败，会在 Finder 中定位它供你手动删除。若在卸载完成前重新打开 app，这次卸载会自动取消。',
   });
 
   if (response.response !== 1) {
@@ -420,18 +1088,43 @@ async function handleUninstall() {
   app.quit();
 }
 
+async function openSystemSettingsPane(fragment) {
+  if (process.platform !== 'darwin') {
+    return { ok: false, reason: 'unsupported_platform' };
+  }
+
+  const url = `x-apple.systempreferences:com.apple.preference.security?${fragment}`;
+  try {
+    await shell.openExternal(url);
+    return { ok: true };
+  } catch {
+    const result = await execFileAsync('/usr/bin/open', [url]).catch(() => null);
+    return { ok: Boolean(result) };
+  }
+}
+
 function createMenu() {
   const appMenu = {
-    label: 'Doubao Bridge',
+    label: 'Personal AI',
     submenu: [
       {
-        label: 'Open Doubao Bridge',
+        label: 'Open Quick Ask',
+        accelerator: 'Alt+A',
+        click: () => showAskWindow(),
+      },
+      {
+        label: 'Open Personal AI Settings',
+        accelerator: 'CmdOrCtrl+,',
         click: () => showMainWindow(),
       },
       {
         label: 'Hide Window',
         accelerator: 'CmdOrCtrl+W',
         click: () => {
+          if (askWindow?.isFocused()) {
+            hideAskWindow();
+            return;
+          }
           syncWindowPresence(false);
           mainWindow?.hide();
         },
@@ -447,7 +1140,7 @@ function createMenu() {
         label: 'Advanced',
         submenu: [
           {
-            label: 'Uninstall Doubao Bridge...',
+            label: 'Uninstall Personal AI...',
             click: () => {
               void handleUninstall();
             },
@@ -475,7 +1168,11 @@ function createMenu() {
           label: 'Window',
           submenu: [
             {
-              label: 'Open Doubao Bridge',
+              label: 'Open Quick Ask',
+              click: () => showAskWindow(),
+            },
+            {
+              label: 'Open Personal AI Settings',
               click: () => showMainWindow(),
             },
             { role: 'minimize' },
@@ -496,7 +1193,7 @@ function createWindow() {
     height: 860,
     minWidth: 920,
     minHeight: 760,
-    title: 'Doubao Bridge',
+    title: 'Personal AI',
     icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -506,6 +1203,9 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.webContents.once('did-finish-load', () => {
+    broadcastShortcutStatus();
+  });
   mainWindow.on('show', () => {
     syncWindowPresence(true);
   });
@@ -531,6 +1231,7 @@ ipcMain.handle('bridge-app:get-meta', async () => {
     logsDir,
     bridgeLogFile,
     appLogFile,
+    shortcutStatus,
   };
 });
 
@@ -557,6 +1258,138 @@ ipcMain.handle('bridge-app:show-window', async () => {
   return { ok: true };
 });
 
+ipcMain.handle('bridge-app:open-external', async (_event, url) => {
+  if (typeof url === 'string' && url.trim()) {
+    await shell.openExternal(url);
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('bridge-app:open-accessibility-settings', async () => {
+  return openSystemSettingsPane('Privacy_Accessibility');
+});
+
+ipcMain.handle('bridge-app:open-input-monitoring-settings', async () => {
+  return openSystemSettingsPane('Privacy_ListenEvent');
+});
+
+ipcMain.handle('bridge-app:open-microphone-settings', async () => {
+  return openSystemSettingsPane('Privacy_Microphone');
+});
+
+ipcMain.handle('bridge-app:refresh-shortcut-helper', async () => {
+  await stopShortcutHelper();
+  await startShortcutHelper();
+  return { ok: true, shortcutStatus };
+});
+
+ipcMain.handle('bridge-app:get-voice-preferences', async () => {
+  return getVoicePreferences();
+});
+
+ipcMain.handle('bridge-app:set-voice-preferences', async (_event, payload) => {
+  return setVoiceLocalePreference(payload?.voiceLocale);
+});
+
+ipcMain.handle('quick-ask:hide', async () => {
+  hideAskWindow();
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:open-settings', async () => {
+  hideAskWindow();
+  showMainWindow();
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:open-full-bridge', async () => {
+  hideAskWindow();
+  showMainWindow();
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:new-session', async () => {
+  if (askWindow && !askWindow.isDestroyed()) {
+    applyAskWindowBounds(ASK_WINDOW_COMPACT_HEIGHT);
+    resetAskSession();
+    focusAskComposer();
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:get-preferences', async () => {
+  return getVoicePreferences();
+});
+
+ipcMain.handle('quick-ask:voice-start', async (_event, payload) => {
+  await startSpeechSession(payload?.locale);
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:voice-stop', async () => {
+  await stopSpeechSession();
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:voice-cancel', async () => {
+  await cancelSpeechSession();
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:resolve-shortcut-gesture', async () => {
+  resolvePendingShortcutGesture();
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:log', async (_event, payload) => {
+  const level =
+    typeof payload?.level === 'string' && payload.level.trim() ? payload.level.trim() : 'info';
+  const message =
+    typeof payload?.message === 'string' && payload.message.trim()
+      ? payload.message.trim()
+      : 'unknown quick ask event';
+  await appendLog(appLogFile, `[quick-ask:${level}] ${message}`);
+  return { ok: true };
+});
+
+ipcMain.handle('quick-ask:set-layout', async (_event, payload) => {
+  if (!askWindow || askWindow.isDestroyed()) return { ok: false };
+
+  const mode =
+    typeof payload?.mode === 'string' && payload.mode
+      ? payload.mode
+      : 'compact';
+  const requestedHeight = Number(payload?.height);
+  const maxHeight =
+    screen.getDisplayMatching(askWindow.getBounds()).workArea.height - ASK_WINDOW_VERTICAL_MARGIN;
+  const compactLikeMode = mode === 'compact' || mode === 'idle-compact';
+  const voiceMode = mode === 'voice-listening' || mode === 'voice-ready';
+  const nextHeight =
+    compactLikeMode
+      ? Math.max(
+          ASK_WINDOW_COMPACT_HEIGHT,
+          Math.min(
+            Number.isFinite(requestedHeight) ? requestedHeight : ASK_WINDOW_COMPACT_HEIGHT,
+            maxHeight,
+          ),
+        )
+      : voiceMode
+        ? Math.max(
+            ASK_WINDOW_VOICE_HEIGHT,
+            Math.min(Number.isFinite(requestedHeight) ? requestedHeight : ASK_WINDOW_VOICE_HEIGHT, maxHeight),
+          )
+        : Math.max(
+          ASK_WINDOW_MIN_EXPANDED_HEIGHT,
+          Math.min(
+            Number.isFinite(requestedHeight) ? requestedHeight : ASK_WINDOW_DEFAULT_EXPANDED_HEIGHT,
+            maxHeight,
+          ),
+        );
+
+  applyAskWindowBounds(nextHeight);
+  return { ok: true, height: nextHeight };
+});
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
@@ -572,7 +1405,14 @@ app.on('before-quit', (event) => {
   if (allowQuit) return;
   event.preventDefault();
   syncWindowPresence(false);
+  hideAskWindow();
   mainWindow?.hide();
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  void stopShortcutHelper();
+  void shutdownSpeechHelper();
 });
 
 app.on('window-all-closed', () => {
@@ -585,11 +1425,13 @@ app.on('activate', () => {
 
 app.whenReady().then(async () => {
   await ensureDirs();
+  await loadQuickAskWindowState();
   await cancelPendingUninstall();
   applyMacUiMode();
   syncLoginItem(true);
   createMenu();
   createTray();
+  await startShortcutHelper();
   try {
     await ensureBridgeProcess();
   } catch (error) {
@@ -601,5 +1443,5 @@ app.whenReady().then(async () => {
   } else {
     syncWindowPresence(false);
   }
-  await appendLog(appLogFile, `Doubao Bridge app started (background=${backgroundMode ? 'yes' : 'no'})`);
+  await appendLog(appLogFile, `Personal AI app started (background=${backgroundMode ? 'yes' : 'no'})`);
 });

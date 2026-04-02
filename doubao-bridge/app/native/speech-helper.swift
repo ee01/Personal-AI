@@ -1,0 +1,387 @@
+import AVFoundation
+import Foundation
+import Speech
+
+private struct IncomingCommand: Codable {
+  let command: String
+  let locale: String?
+}
+
+private struct OutgoingEvent: Codable {
+  let type: String
+  let text: String?
+  let isFinal: Bool?
+  let level: Double?
+  let code: String?
+  let message: String?
+  let microphoneStatus: String?
+  let speechStatus: String?
+  let reason: String?
+}
+
+final class SpeechHelper {
+  private var recognizer: SFSpeechRecognizer?
+  private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+  private var recognitionTask: SFSpeechRecognitionTask?
+  private let audioEngine = AVAudioEngine()
+  private var stdinBuffer = ""
+  private var latestTranscript = ""
+  private var lastStopReason = "completed"
+  private var stopTimer: DispatchSourceTimer?
+  private var sessionActive = false
+  private var stopEmittedForSession = false
+
+  func run() {
+    FileHandle.standardInput.readabilityHandler = { [weak self] handle in
+      guard let self else { return }
+      let data = handle.availableData
+      if data.isEmpty {
+        return
+      }
+      self.stdinBuffer += String(decoding: data, as: UTF8.self)
+      self.consumeInputBuffer()
+    }
+
+    emit(
+      type: "ready",
+      microphoneStatus: microphoneStatusString(),
+      speechStatus: speechStatusString()
+    )
+    RunLoop.current.run()
+  }
+
+  private func consumeInputBuffer() {
+    while let newlineIndex = stdinBuffer.firstIndex(of: "\n") {
+      let line = String(stdinBuffer[..<newlineIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+      stdinBuffer = String(stdinBuffer[stdinBuffer.index(after: newlineIndex)...])
+      if line.isEmpty {
+        continue
+      }
+      handle(line: line)
+    }
+  }
+
+  private func handle(line: String) {
+    guard let data = line.data(using: .utf8) else {
+      emit(type: "error", code: "invalid_input", message: "Unable to decode command input")
+      return
+    }
+
+    do {
+      let command = try JSONDecoder().decode(IncomingCommand.self, from: data)
+      switch command.command {
+      case "start":
+        requestPermissionsAndStart(localeIdentifier: command.locale)
+      case "stop":
+        stopListening(reason: "completed")
+      case "cancel":
+        cancelListening(reason: "cancelled")
+      case "shutdown":
+        shutdown()
+      default:
+        emit(type: "error", code: "unknown_command", message: "Unknown speech command: \(command.command)")
+      }
+    } catch {
+      emit(type: "error", code: "invalid_json", message: "Unable to parse speech command JSON")
+    }
+  }
+
+  private func requestPermissionsAndStart(localeIdentifier: String?) {
+    requestMicrophoneAccess { [weak self] microphoneGranted, microphoneStatus in
+      guard let self else { return }
+      self.requestSpeechAccess { speechGranted, speechStatus in
+        guard microphoneGranted && speechGranted else {
+          let code = !microphoneGranted ? "microphone_denied" : "speech_denied"
+          let message = !microphoneGranted
+            ? "Microphone permission is required"
+            : "Speech Recognition permission is required"
+          self.emit(
+            type: "error",
+            code: code,
+            message: message,
+            microphoneStatus: microphoneStatus,
+            speechStatus: speechStatus
+          )
+          return
+        }
+
+        do {
+          try self.startRecognition(localeIdentifier: localeIdentifier)
+        } catch {
+          self.emit(
+            type: "error",
+            code: "speech_start_failed",
+            message: error.localizedDescription,
+            microphoneStatus: microphoneStatus,
+            speechStatus: speechStatus
+          )
+        }
+      }
+    }
+  }
+
+  private func startRecognition(localeIdentifier: String?) throws {
+    cancelListening(reason: nil, emitStopped: false)
+
+    let locale = Locale(identifier: localeIdentifier?.isEmpty == false ? localeIdentifier! : Locale.preferredLanguages.first ?? "zh-CN")
+    guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer() else {
+      throw NSError(domain: "DoubaoBridgeSpeechHelper", code: 1, userInfo: [
+        NSLocalizedDescriptionKey: "Speech recognizer is unavailable for this locale",
+      ])
+    }
+
+    if !recognizer.isAvailable {
+      throw NSError(domain: "DoubaoBridgeSpeechHelper", code: 2, userInfo: [
+        NSLocalizedDescriptionKey: "Speech recognizer is currently unavailable",
+      ])
+    }
+
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    request.shouldReportPartialResults = true
+
+    latestTranscript = ""
+    lastStopReason = "completed"
+    stopEmittedForSession = false
+    request.taskHint = .dictation
+
+    let inputNode = audioEngine.inputNode
+    let recordingFormat = inputNode.outputFormat(forBus: 0)
+    inputNode.removeTap(onBus: 0)
+    inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+      guard let self else { return }
+      request.append(buffer)
+      self.emitAmplitude(buffer)
+    }
+
+    audioEngine.prepare()
+    try audioEngine.start()
+
+    self.recognizer = recognizer
+    recognitionRequest = request
+    sessionActive = true
+
+    recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+      guard let self else { return }
+      guard self.sessionActive else { return }
+
+      if let result {
+        self.latestTranscript = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.emit(type: "transcript", text: self.latestTranscript, isFinal: result.isFinal)
+        if result.isFinal {
+          self.finishSession(reason: self.lastStopReason, emitStopped: true)
+          return
+        }
+      }
+
+      if let error {
+        let nsError = error as NSError
+        let code = "speech_error_\(nsError.code)"
+        self.emit(type: "error", code: code, message: nsError.localizedDescription)
+        self.finishSession(reason: "error", emitStopped: !self.latestTranscript.isEmpty)
+      }
+    }
+
+    emit(
+      type: "started",
+      microphoneStatus: microphoneStatusString(),
+      speechStatus: speechStatusString()
+    )
+  }
+
+  private func stopListening(reason: String) {
+    guard sessionActive else {
+      emit(type: "stopped", text: latestTranscript, isFinal: true, reason: reason)
+      return
+    }
+
+    lastStopReason = reason
+    recognitionRequest?.endAudio()
+    if audioEngine.isRunning {
+      audioEngine.stop()
+    }
+    audioEngine.inputNode.removeTap(onBus: 0)
+
+    cancelStopTimer()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now() + .milliseconds(900))
+    timer.setEventHandler { [weak self] in
+      guard let self else { return }
+      self.finishSession(reason: reason, emitStopped: true)
+    }
+    stopTimer = timer
+    timer.resume()
+  }
+
+  private func cancelListening(reason: String?, emitStopped: Bool = true) {
+    cancelStopTimer()
+    if sessionActive {
+      if audioEngine.isRunning {
+        audioEngine.stop()
+      }
+      audioEngine.inputNode.removeTap(onBus: 0)
+      recognitionRequest?.endAudio()
+      recognitionTask?.cancel()
+    }
+    finishSession(reason: reason ?? "cancelled", emitStopped: emitStopped)
+  }
+
+  private func finishSession(reason: String, emitStopped: Bool) {
+    guard sessionActive || (emitStopped && !stopEmittedForSession) else {
+      return
+    }
+
+    cancelStopTimer()
+    sessionActive = false
+
+    if audioEngine.isRunning {
+      audioEngine.stop()
+    }
+    audioEngine.inputNode.removeTap(onBus: 0)
+    recognitionRequest?.endAudio()
+    recognitionRequest = nil
+    recognitionTask?.cancel()
+    recognitionTask = nil
+    recognizer = nil
+
+    if emitStopped && !stopEmittedForSession {
+      stopEmittedForSession = true
+      emit(type: "stopped", text: latestTranscript, isFinal: true, reason: reason)
+    }
+    emit(type: "amplitude", level: 0.14)
+  }
+
+  private func shutdown() {
+    cancelListening(reason: "shutdown", emitStopped: false)
+    FileHandle.standardInput.readabilityHandler = nil
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) {
+      exit(0)
+    }
+  }
+
+  private func cancelStopTimer() {
+    stopTimer?.cancel()
+    stopTimer = nil
+  }
+
+  private func emitAmplitude(_ buffer: AVAudioPCMBuffer) {
+    guard let channelData = buffer.floatChannelData else {
+      return
+    }
+    let frameLength = Int(buffer.frameLength)
+    guard buffer.format.channelCount > 0, frameLength > 0 else {
+      return
+    }
+
+    var sum: Float = 0
+    let samples = channelData[0]
+    for index in 0..<frameLength {
+      let sample = samples[index]
+      sum += sample * sample
+    }
+
+    let rms = sqrt(sum / Float(frameLength))
+    let normalized = max(0.08, min(1.0, Double(rms) * 7.5))
+    emit(type: "amplitude", level: normalized)
+  }
+
+  private func requestMicrophoneAccess(completion: @escaping (Bool, String) -> Void) {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+      completion(true, "authorized")
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .audio) { granted in
+        DispatchQueue.main.async {
+          completion(granted, granted ? "authorized" : "denied")
+        }
+      }
+    case .restricted:
+      completion(false, "restricted")
+    case .denied:
+      completion(false, "denied")
+    @unknown default:
+      completion(false, "unknown")
+    }
+  }
+
+  private func requestSpeechAccess(completion: @escaping (Bool, String) -> Void) {
+    switch SFSpeechRecognizer.authorizationStatus() {
+    case .authorized:
+      completion(true, "authorized")
+    case .notDetermined:
+      SFSpeechRecognizer.requestAuthorization { status in
+        DispatchQueue.main.async {
+          completion(status == .authorized, self.speechStatusString())
+        }
+      }
+    case .denied:
+      completion(false, "denied")
+    case .restricted:
+      completion(false, "restricted")
+    @unknown default:
+      completion(false, "unknown")
+    }
+  }
+
+  private func microphoneStatusString() -> String {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+      return "authorized"
+    case .notDetermined:
+      return "not_determined"
+    case .restricted:
+      return "restricted"
+    case .denied:
+      return "denied"
+    @unknown default:
+      return "unknown"
+    }
+  }
+
+  private func speechStatusString() -> String {
+    switch SFSpeechRecognizer.authorizationStatus() {
+    case .authorized:
+      return "authorized"
+    case .notDetermined:
+      return "not_determined"
+    case .restricted:
+      return "restricted"
+    case .denied:
+      return "denied"
+    @unknown default:
+      return "unknown"
+    }
+  }
+
+  private func emit(
+    type: String,
+    text: String? = nil,
+    isFinal: Bool? = nil,
+    level: Double? = nil,
+    code: String? = nil,
+    message: String? = nil,
+    microphoneStatus: String? = nil,
+    speechStatus: String? = nil,
+    reason: String? = nil
+  ) {
+    let event = OutgoingEvent(
+      type: type,
+      text: text,
+      isFinal: isFinal,
+      level: level,
+      code: code,
+      message: message,
+      microphoneStatus: microphoneStatus,
+      speechStatus: speechStatus,
+      reason: reason
+    )
+
+    guard let data = try? JSONEncoder().encode(event) else {
+      return
+    }
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data([0x0a]))
+  }
+}
+
+let helper = SpeechHelper()
+helper.run()

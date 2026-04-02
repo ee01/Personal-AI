@@ -3,6 +3,12 @@ export type BindingType = 'memory_sync' | 'mobile_context';
 export type SyncKind = 'stable_memory' | 'mobile_briefing' | 'query_inject' | 'reminder_sync' | 'memo_sync';
 export type ThreadKind = 'memory_sync' | 'mobile_context' | 'manual' | 'unknown';
 export type AutoSyncKind = 'stable_memory' | 'mobile_briefing' | 'reminder_sync';
+export type BridgeAssistantStatusKind =
+  | 'setup_blocker'
+  | 'confirm_request'
+  | 'running_action'
+  | 'waiting_reply'
+  | 'queued_action';
 export type BridgeBlockingReasonCode =
   | 'auto_sync_disabled'
   | 'memory_service_not_configured'
@@ -110,6 +116,109 @@ export interface BridgeSyncReadiness {
   reasons: BridgeBlockingReason[];
   intervalMs: number;
   lastRunAt?: string;
+}
+
+export interface BridgeAssistantEvidenceItem {
+  id?: string;
+  type?: 'message' | 'chunk' | 'entity';
+  content: string;
+  score?: number;
+  source?: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BridgeStructuredTimelineItem {
+  date: string;
+  event: string;
+}
+
+export interface BridgeStructuredRelatedEntity {
+  name: string;
+  type: string;
+  relevance: string;
+}
+
+export interface BridgeStructuredAnswer {
+  timeline?: BridgeStructuredTimelineItem[];
+  keyFindings?: string[];
+  insights?: string[];
+  relatedEntities?: BridgeStructuredRelatedEntity[];
+  confidence?: number;
+}
+
+export interface BridgeAssistantStatusPill {
+  kind: BridgeAssistantStatusKind;
+  label: string;
+  count: number;
+  priority: number;
+}
+
+export interface BridgeAssistantStatusItem {
+  kind: BridgeAssistantStatusKind;
+  title: string;
+  summary: string;
+  count?: number;
+  badgeLabel?: string;
+  actionHint?: string;
+  priority: number;
+}
+
+export interface BridgeAssistantRuntimeSummary {
+  pendingConfirmCount: number;
+  queuedActionCount: number;
+  runningActionCount: number;
+  waitingReplyCount: number;
+  pendingApprovalCount: number;
+  escalatedCount: number;
+  topStatus?: BridgeAssistantStatusPill;
+  items: BridgeAssistantStatusItem[];
+  fetchedAt: string;
+}
+
+export interface BridgeAssistantAskRequest {
+  query: string;
+  context?: string;
+  includeEvidence?: boolean;
+}
+
+export interface BridgeAssistantAskResponse {
+  answer: string;
+  queryTimeMs: number;
+  structuredAnswer?: BridgeStructuredAnswer;
+  evidence?: BridgeAssistantEvidenceItem[];
+  runtime: BridgeAssistantRuntimeSummary;
+}
+
+export type BridgeAssistantStreamEvent =
+  | { type: 'start'; requestId: string }
+  | { type: 'delta'; text: string }
+  | { type: 'answer_done'; answer: string }
+  | {
+      type: 'result';
+      answer: string;
+      queryTimeMs: number;
+      structuredAnswer?: BridgeStructuredAnswer;
+      evidence?: BridgeAssistantEvidenceItem[];
+      runtime: BridgeAssistantRuntimeSummary;
+    }
+  | { type: 'error'; message: string };
+
+export interface BridgeRememberRequest {
+  text: string;
+  sessionId?: string;
+}
+
+export interface BridgeRememberItem {
+  id?: string;
+  itemType: string;
+  itemKey: string;
+  itemValue: string;
+  duplicate?: boolean;
+}
+
+export interface BridgeRememberResponse {
+  items: BridgeRememberItem[];
 }
 
 export interface StableMemoryItem {

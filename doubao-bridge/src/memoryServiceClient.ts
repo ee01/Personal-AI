@@ -17,6 +17,27 @@ function buildProviderApiCompatibilityError(baseUrl: string, path: string): Erro
   );
 }
 
+async function readResponsePayload(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export class BridgeMemoryServiceHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly payload?: unknown,
+  ) {
+    super(message);
+    this.name = 'BridgeMemoryServiceHttpError';
+  }
+}
+
 export interface ProviderSyncJobRecord {
   id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
@@ -34,6 +55,95 @@ export interface RenderContextPackageResponse {
   scenario: string;
   packages: ProviderMemoryProduct[];
   syncJob?: ProviderSyncJobRecord;
+}
+
+export interface AskResponse {
+  answer: string;
+  evidence?: Array<{
+    id?: string;
+    type?: 'message' | 'chunk' | 'entity';
+    content: string;
+    score?: number;
+    source?: string;
+    timestamp?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  queryTimeMs: number;
+  structuredAnswer?: {
+    timeline?: Array<{ date: string; event: string }>;
+    keyFindings?: string[];
+    insights?: string[];
+    relatedEntities?: Array<{ name: string; type: string; relevance: string }>;
+    confidence?: number;
+  };
+}
+
+export type AskStreamEvent =
+  | { type: 'start'; requestId: string }
+  | { type: 'delta'; text: string }
+  | { type: 'answer_done'; answer: string }
+  | {
+      type: 'result';
+      answer: string;
+      evidence?: AskResponse['evidence'];
+      queryTimeMs: number;
+      structuredAnswer?: AskResponse['structuredAnswer'];
+    }
+  | { type: 'error'; message: string };
+
+export interface ConfirmRequestListResponse {
+  items: Array<{
+    id: string;
+    question: string;
+    context?: string;
+    options?: Array<{ label: string; value: string }>;
+    category?: string;
+    priority: string;
+    state: string;
+    createdAt: number;
+  }>;
+  total: number;
+  limit: number;
+  state: string;
+}
+
+export interface RuntimeActionListResponse {
+  items: Array<{
+    id: string;
+    title: string;
+    actionType: string;
+    queueStatus: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter';
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface OutreachSummaryResponse {
+  upcomingCount: number;
+  waitingReplyCount: number;
+  escalatedCount: number;
+  pendingApprovalCount: number;
+}
+
+export interface OutreachSessionListResponse {
+  items: Array<{
+    id: string;
+    status:
+      | 'pending_approval'
+      | 'scheduled'
+      | 'waiting_reply'
+      | 'deferred'
+      | 'resolved'
+      | 'no_reply'
+      | 'escalated'
+      | 'cancelled'
+      | 'failed';
+    renderedQuestion: string;
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export class BridgeMemoryServiceClient {
@@ -84,11 +194,20 @@ export class BridgeMemoryServiceClient {
     });
 
     if (!response.ok) {
-      const text = await response.text();
+      const payload = await readResponsePayload(response);
       if (response.status === 404 && isProviderApiPath(path)) {
         throw buildProviderApiCompatibilityError(baseUrl, path);
       }
-      throw new Error(text || `Memory service request failed: ${method} ${path} (${response.status})`);
+      const errorMessage =
+        (payload &&
+        typeof payload === 'object' &&
+        'error' in payload &&
+        typeof (payload as { error?: unknown }).error === 'string'
+          ? (payload as { error: string }).error
+          : typeof payload === 'string'
+            ? payload
+            : '') || `Memory service request failed: ${method} ${path} (${response.status})`;
+      throw new BridgeMemoryServiceHttpError(errorMessage, response.status, payload);
     }
 
     if (response.status === 204) {
@@ -96,6 +215,120 @@ export class BridgeMemoryServiceClient {
     }
 
     return (await response.json()) as T;
+  }
+
+  private parseSseBlock(block: string): AskStreamEvent | null {
+    const lines = block.split(/\r?\n/);
+    let event = 'message';
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (!line || line.startsWith(':')) continue;
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim() || 'message';
+        continue;
+      }
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+
+    const rawData = dataLines.join('\n');
+    if (!rawData) return null;
+
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(rawData);
+    } catch {
+      payload = null;
+    }
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return null;
+    }
+
+    const typedPayload = payload as Record<string, unknown>;
+
+    if (!typedPayload.type) {
+      return {
+        ...typedPayload,
+        type: event as AskStreamEvent['type'],
+      } as AskStreamEvent;
+    }
+
+    return typedPayload as AskStreamEvent;
+  }
+
+  private async streamRequest(
+    path: string,
+    body: unknown,
+    onEvent: (event: AskStreamEvent) => void | Promise<void>,
+  ): Promise<void> {
+    const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
+    if (!baseUrl) {
+      throw new Error('MEMORY_SERVICE_BASE_URL is not configured for Doubao Bridge');
+    }
+
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        ...this.buildHeaders(),
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const payload = await readResponsePayload(response);
+      const errorMessage =
+        (payload &&
+        typeof payload === 'object' &&
+        'error' in payload &&
+        typeof (payload as { error?: unknown }).error === 'string'
+          ? (payload as { error: string }).error
+          : typeof payload === 'string'
+            ? payload
+            : '') || `Memory service stream request failed: POST ${path} (${response.status})`;
+      throw new BridgeMemoryServiceHttpError(errorMessage, response.status, payload);
+    }
+
+    if (!response.body) {
+      throw new Error(`Memory service stream ${path} returned no response body.`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+      let delimiterIndex = buffer.search(/\r?\n\r?\n/);
+      while (delimiterIndex >= 0) {
+        const rawBlock = buffer.slice(0, delimiterIndex).trim();
+        const separatorLength = buffer[delimiterIndex] === '\r' ? 4 : 2;
+        buffer = buffer.slice(delimiterIndex + separatorLength);
+        if (rawBlock) {
+          const payload = this.parseSseBlock(rawBlock);
+          if (payload) {
+            await onEvent(payload);
+          }
+        }
+        delimiterIndex = buffer.search(/\r?\n\r?\n/);
+      }
+
+      if (done) {
+        const trailing = buffer.trim();
+        if (trailing) {
+          const payload = this.parseSseBlock(trailing);
+          if (payload) {
+            await onEvent(payload);
+          }
+        }
+        break;
+      }
+    }
   }
 
   async testConnection(): Promise<Record<string, unknown>> {
@@ -140,5 +373,91 @@ export class BridgeMemoryServiceClient {
   ): Promise<void> {
     this.ensureWriteIdentity();
     await this.request('POST', `/api/v1/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`, payload);
+  }
+
+  async ask(query: string, context?: string, includeEvidence?: boolean): Promise<AskResponse> {
+    return this.request<AskResponse>('POST', '/api/v1/ask', {
+      query,
+      context,
+      includeEvidence,
+    });
+  }
+
+  async streamAsk(
+    query: string,
+    context: string | undefined,
+    includeEvidence: boolean | undefined,
+    onEvent: (event: AskStreamEvent) => void | Promise<void>,
+  ): Promise<void> {
+    await this.streamRequest(
+      '/api/v1/ask/stream',
+      {
+        query,
+        context,
+        includeEvidence,
+      },
+      onEvent,
+    );
+  }
+
+  async getConfirmRequests(state?: string, limit?: number): Promise<ConfirmRequestListResponse> {
+    const params = new URLSearchParams();
+    if (state) params.set('state', state);
+    if (limit !== undefined) params.set('limit', String(limit));
+    const qs = params.toString();
+    return this.request<ConfirmRequestListResponse>(
+      'GET',
+      `/api/v1/confirm-requests${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getActions(filters?: {
+    queueStatus?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all';
+    executionMode?: 'manual' | 'auto';
+    threadId?: string;
+    actionType?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<RuntimeActionListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.queueStatus) params.set('queueStatus', filters.queueStatus);
+    if (filters?.executionMode) params.set('executionMode', filters.executionMode);
+    if (filters?.threadId) params.set('threadId', filters.threadId);
+    if (filters?.actionType) params.set('actionType', filters.actionType);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    const qs = params.toString();
+    return this.request<RuntimeActionListResponse>('GET', `/api/v1/actions${qs ? `?${qs}` : ''}`);
+  }
+
+  async getOutreachSummary(): Promise<OutreachSummaryResponse> {
+    return this.request<OutreachSummaryResponse>('GET', '/api/v1/outreach/summary');
+  }
+
+  async getOutreachSessions(filters?: {
+    status?: 'pending_approval' | 'scheduled' | 'waiting_reply' | 'deferred' | 'resolved' | 'no_reply' | 'escalated' | 'cancelled' | 'failed' | 'all';
+    limit?: number;
+    offset?: number;
+  }): Promise<OutreachSessionListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    const qs = params.toString();
+    return this.request<OutreachSessionListResponse>(
+      'GET',
+      `/api/v1/outreach/sessions${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async createProfileItem(body: {
+    itemType: string;
+    itemKey: string;
+    itemValue: string;
+    evidenceRefs?: unknown[];
+    confidence?: number;
+  }): Promise<{ id?: string; itemType?: string; itemKey?: string; itemValue?: string }> {
+    this.ensureWriteIdentity();
+    return this.request('POST', '/api/v1/profile/items', body);
   }
 }

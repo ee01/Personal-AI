@@ -157,7 +157,20 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   async ensureStarted(): Promise<void> {
-    if (this.context) return;
+    if (this.context) {
+      try {
+        if (this.page && !this.page.isClosed()) {
+          return;
+        }
+
+        const existingPage = this.context.pages().find((page) => !page.isClosed());
+        this.page = existingPage ?? (await this.context.newPage());
+        return;
+      } catch {
+        this.context = null;
+        this.page = null;
+      }
+    }
 
     const tempDir = await this.ensurePlaywrightTempDir();
     this.context = await chromium.launchPersistentContext(this.config.profileDir, {

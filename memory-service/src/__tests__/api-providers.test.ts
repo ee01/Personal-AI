@@ -26,6 +26,7 @@ describe('Provider API', () => {
     db.prepare('DELETE FROM provider_bindings').run();
     db.prepare('DELETE FROM user_profile_items').run();
     db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM concerned_items_state').run();
 
     const now = Math.floor(Date.now() / 1000);
 
@@ -199,5 +200,77 @@ describe('Provider API', () => {
     const reportBody = reportRes.json();
     expect(reportBody.job.status).toBe('succeeded');
     expect(reportBody.job.externalThreadId).toBe('thread-mobile-1');
+  });
+
+  it('renders mobile briefing concerned items with readable labels and expanded details', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const contentUpdatedAt = Date.now();
+    const concernedItems = [
+      {
+        id: 'tp3ppwxlu',
+        text: '关注 Doubao Bridge 线程绑定异常',
+        filterGroup: 'mobile-ops',
+        notifyMethod: 'bot,chrome',
+        notifyFrequency: 'merged',
+        digestConfig: {
+          enabled: true,
+          frequency: 'daily',
+          preferredHour: 9,
+        },
+      },
+      {
+        id: 'x2c7o07b0',
+        followThread: true,
+        followConfig: {
+          originalMessage: {
+            postId: 'post-1',
+            teamId: 'team-1',
+            teamName: '手机版对话',
+            sender: 'Esone',
+            content: '豆包最近没有把近期重点正确记到随手记里',
+            datetime: '2026-03-30T08:30:00.000Z',
+            messageUrl: 'https://example.com/post-1',
+          },
+          createdAt: '2026-03-30T08:30:00.000Z',
+          keywordFilter: ['随手记', '近期重点'],
+          relatedMessages: [],
+        },
+        notifyMethod: 'bot',
+      },
+    ];
+
+    db.prepare(
+      `INSERT INTO concerned_items_state
+        (singleton_id, items_json, version, updated_at, content_updated_at, updated_by_device)
+       VALUES (1, ?, 1, ?, ?, ?)`,
+    ).run(
+      JSON.stringify(concernedItems),
+      now,
+      contentUpdatedAt,
+      'provider-test-device',
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'mobile_briefing',
+        includeKinds: ['active_focus_digest'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.packages).toHaveLength(1);
+    expect(body.packages[0].kind).toBe('active_focus_digest');
+    expect(body.packages[0].bodyMd).toContain('关注 Doubao Bridge 线程绑定异常');
+    expect(body.packages[0].bodyMd).toContain('group mobile-ops');
+    expect(body.packages[0].bodyMd).toContain('notify bot + chrome');
+    expect(body.packages[0].bodyMd).toContain('digest daily @ 09:00');
+    expect(body.packages[0].bodyMd).toContain('track replies to "豆包最近没有把近期重点正确记到随手记里"');
+    expect(body.packages[0].bodyMd).toContain('keywords 随手记, 近期重点');
+    expect(body.packages[0].bodyMd).not.toContain('- tp3ppwxlu');
+    expect(body.packages[0].bodyMd).not.toContain('- x2c7o07b0');
   });
 });

@@ -19,6 +19,7 @@ import {
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { now } from '../utils/time.js';
+import { getLLMClient } from '../llm/LLMClient.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
 
 interface ParsedReply {
@@ -66,6 +67,56 @@ function buildSessionSummary(status: OutreachSessionStatus, question: string): s
   if (status === 'failed') return `Outreach failed to dispatch: ${question}`;
   if (status === 'cancelled') return `Outreach cancelled: ${question}`;
   return `Outreach status ${status}: ${question}`;
+}
+
+function extractOutcomeSummary(outcome: Record<string, unknown> | null | undefined): string | undefined {
+  if (!outcome) return undefined;
+  const candidates = [
+    outcome.summary,
+    outcome.reason,
+    outcome.answer,
+    outcome.answerText,
+    outcome.reply,
+  ];
+  const found = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  return typeof found === 'string' ? found.trim() : undefined;
+}
+
+function formatTimestampAsLocale(value: number): string {
+  const ms = value > 1_000_000_000_000 ? value : value * 1000;
+  return new Date(ms).toLocaleString('zh-CN', {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function buildFallbackOutcomeSummary(
+  session: OutreachSessionRecord,
+  classification: ParsedReply['classification'],
+  replyText?: string,
+  etaAt?: number,
+): string {
+  const target = session.targetResolvedLabel ?? session.targetRef;
+  const reply = replyText?.trim();
+  if (classification === 'answer') {
+    return reply ? `${target} 已回复：${reply}` : `${target} 已给出可用回复。`;
+  }
+  if (classification === 'decline') {
+    return reply ? `${target} 明确表示无法提供信息：${reply}` : `${target} 明确拒绝了这次询问。`;
+  }
+  if (classification === 'defer') {
+    if (etaAt) {
+      return `${target} 表示稍后回复，预计 ${formatTimestampAsLocale(etaAt)} 前后再跟进。`;
+    }
+    return `${target} 表示稍后回复，系统将继续等待。`;
+  }
+  if (classification === 'unclear' || classification === 'irrelevant') {
+    return reply ? `${target} 已回复，但当前还不足以直接使用：${reply}` : `${target} 已回复，但内容暂时不可直接使用。`;
+  }
+  return reply ? `${target} 回复：${reply}` : `已收到来自 ${target} 的回复。`;
 }
 
 function normalizeString(value: unknown): string | undefined {
@@ -598,9 +649,7 @@ export class OutreachEngine {
     }
 
     try {
-      const text = session.renderedContext
-        ? `${session.renderedQuestion}\n\nContext:\n${session.renderedContext}`
-        : session.renderedQuestion;
+      const text = session.renderedQuestion;
       const sent = await this.ringClient.sendMessage({
         targetType: session.targetType,
         targetRef: session.targetRef,
@@ -708,14 +757,17 @@ export class OutreachEngine {
         });
 
         if (parsed.classification === 'answer' || parsed.classification === 'decline') {
+          const summary = await this.buildResolvedOutcomeSummary(session, newestReply.text, parsed.classification);
           this.markTerminal(session.id, 'resolved', {
             classification: parsed.classification,
             confidence: parsed.confidence,
             reply: newestReply.text,
+            summary,
           });
           return;
         }
         if (parsed.classification === 'defer' && parsed.etaAt) {
+          const summary = buildFallbackOutcomeSummary(session, parsed.classification, newestReply.text, parsed.etaAt);
           this.repo.updateSession(session.id, {
             status: 'deferred',
             waitUntil: parsed.etaAt,
@@ -724,10 +776,12 @@ export class OutreachEngine {
               classification: parsed.classification,
               reason: parsed.reason,
               etaAt: parsed.etaAt,
+              summary,
             },
           });
           this.repo.createEvent(session.id, 'deferred_by_reply', {
             etaAt: parsed.etaAt,
+            summary,
           });
           return;
         }
@@ -737,20 +791,24 @@ export class OutreachEngine {
           session.waitUntil &&
           currentTime >= session.waitUntil
         ) {
+          const summary = buildFallbackOutcomeSummary(session, parsed.classification, newestReply.text);
           this.markTerminal(session.id, 'escalated', {
             reason: 'reply_not_actionable',
             classification: parsed.classification,
             reply: newestReply.text,
+            summary,
           });
           await this.createEscalationConfirmRequest(session, 'reply_not_actionable');
           return;
         }
 
+        const summary = buildFallbackOutcomeSummary(session, parsed.classification, newestReply.text);
         this.repo.updateSession(session.id, {
           nextCheckAt: currentTime + 300,
           outcome: {
             classification: parsed.classification,
             reason: parsed.reason,
+            summary,
           },
         });
         return;
@@ -765,6 +823,7 @@ export class OutreachEngine {
         this.markTerminal(session.id, 'no_reply', {
           reason: 'timeout_without_reply',
           followupCount: session.followupCount,
+          summary: '已达到等待与追问上限，仍未收到有效回复。',
         });
         await this.createEscalationConfirmRequest(session, 'timeout_without_reply');
         return;
@@ -786,6 +845,38 @@ export class OutreachEngine {
         errorCode: 'polling_failed',
         message,
       });
+    }
+  }
+
+  private async buildResolvedOutcomeSummary(
+    session: OutreachSessionRecord,
+    replyText: string,
+    classification: ParsedReply['classification'],
+  ): Promise<string> {
+    const fallback = buildFallbackOutcomeSummary(session, classification, replyText);
+    try {
+      const llm = getLLMClient();
+      const prompt = [
+        '请用中文总结一次主动询问的结果，输出一句简短结果摘要。',
+        '要求：',
+        '- 只输出摘要正文，不要标题，不要项目符号。',
+        '- 控制在 50 个汉字以内。',
+        '- 如果对方已经明确给出答案，就直接概括答案。',
+        '- 如果对方拒绝或暂时无法提供信息，直接说明结论。',
+        '',
+        `问题：${session.renderedQuestion}`,
+        `上下文：${session.renderedContext ?? '无'}`,
+        `回复：${replyText}`,
+      ].join('\n');
+      const response = await llm.generate(prompt, {
+        temperature: 0.1,
+        maxTokens: 80,
+        systemPrompt: '你负责为主动询问结果生成简短、准确、可展示的摘要。',
+      });
+      const summary = response.content.trim().replace(/\s+/g, ' ');
+      return summary || fallback;
+    } catch {
+      return fallback;
     }
   }
 
@@ -892,7 +983,7 @@ export class OutreachEngine {
         threadId: session.threadId,
         runId: session.runId,
         resultType: session.status,
-        summary: buildSessionSummary(session.status, session.renderedQuestion),
+        summary: extractOutcomeSummary(session.outcome) ?? buildSessionSummary(session.status, session.renderedQuestion),
         payload: {
           status: session.status,
           targetType: session.targetType,

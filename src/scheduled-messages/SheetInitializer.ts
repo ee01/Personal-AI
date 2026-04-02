@@ -14,20 +14,19 @@ import { InitializationResult, SheetConfig } from './types';
  * - v2.1: 添加 Category 列
  * - v2.2: 添加 Automation_Link 列（支持 Jira Automation Rule 引用）
  * - v2.3: 添加 Repeat_Days 列（支持一周多天或月份多日期）
- * - v2.4: 添加 Outreach 模板字段（支持主动询问模板）
+ * - v2.4: 添加 Outreach 模板字段（后续废弃，保留迁移说明）
+ * - v2.5: 添加 Outreach_Question 列（已废弃）
+ * - v2.6: 改为 Content 保存提问原文，新增 Outreach_Result 保存结果摘要（已废弃）
+ * - v2.7: Outreach 模板改为只复用 Content / Glip_User_Name / Glip_Team_ID / Target_Type，运行态和上下文下沉到 memory-service
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.4',
+  version: '2.7',
   columns: [
     'ID', 'Topic', 'Content', 'Schedule_Date', 'Schedule_Time',
     'End_Date', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Count', 'Repeat_Days',
     'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset',
     'Push_Method', 'Glip_User_Name', 'Glip_Team_ID',
     'Attachment',
-    'Outreach_Target_Type', 'Outreach_Target_Ref', 'Outreach_Context',
-    'Outreach_Max_Followup', 'Outreach_Followup_Interval_Hours',
-    'Outreach_Sync_State', 'Outreach_Runtime_Status', 'Outreach_Last_Session_ID',
-    'Outreach_Last_Result', 'Outreach_Last_Updated',
     'AI_Endpoint', 'AI_Headers', 'AI_Body',
     'Category', 'Automation_Link', 'Status', 'Last_Exec', 'Next_Exec',
     'Exec_Count', 'Exec_Log'
@@ -410,16 +409,6 @@ export class SheetInitializer {
       'sync.service',                 // Glip_User_Name
       '',                             // Glip_Team_ID
       '',                             // Attachment
-      '',                             // Outreach_Target_Type
-      '',                             // Outreach_Target_Ref
-      '',                             // Outreach_Context
-      '',                             // Outreach_Max_Followup
-      '',                             // Outreach_Followup_Interval_Hours
-      '',                             // Outreach_Sync_State
-      '',                             // Outreach_Runtime_Status
-      '',                             // Outreach_Last_Session_ID
-      '',                             // Outreach_Last_Result
-      '',                             // Outreach_Last_Updated
       '',                             // AI_Endpoint
       '',                             // AI_Headers
       '',                             // AI_Body
