@@ -72,6 +72,7 @@ export interface BridgeStatus extends BridgeServiceStatus {
   appVersion: string;
   memoryServiceConfigured: boolean;
   autoSyncEnabled: boolean;
+  memoryGrowth?: BridgeMemoryGrowthSummary;
   blockingReasons: BridgeBlockingReason[];
   syncReadiness: Record<'stableMemory' | 'mobileBriefing' | 'reminderSync', BridgeSyncReadiness>;
   syncState: {
@@ -116,6 +117,13 @@ export interface BridgeSyncReadiness {
   reasons: BridgeBlockingReason[];
   intervalMs: number;
   lastRunAt?: string;
+}
+
+export interface BridgeMemoryGrowthSummary {
+  windowDays: number;
+  recentMessageCount: number;
+  lowMessageThreshold: number;
+  belowThreshold: boolean;
 }
 
 export interface BridgeAssistantEvidenceItem {
@@ -171,6 +179,7 @@ export interface BridgeAssistantRuntimeSummary {
   waitingReplyCount: number;
   pendingApprovalCount: number;
   escalatedCount: number;
+  memoryGrowth?: BridgeMemoryGrowthSummary;
   topStatus?: BridgeAssistantStatusPill;
   items: BridgeAssistantStatusItem[];
   fetchedAt: string;

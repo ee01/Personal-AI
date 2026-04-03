@@ -188,6 +188,7 @@ export function buildAssistantRuntimeSummary(input: AssistantRuntimeBuildInput):
     waitingReplyCount: input.outreachSummary?.waitingReplyCount || 0,
     pendingApprovalCount: input.outreachSummary?.pendingApprovalCount || 0,
     escalatedCount: input.outreachSummary?.escalatedCount || 0,
+    memoryGrowth: input.status.memoryGrowth,
     topStatus,
     items,
     fetchedAt: new Date().toISOString(),

@@ -645,6 +645,31 @@ a,
   color: var(--qa-muted);
 }
 
+.message-tail-hint {
+  margin-top: 13px;
+  padding: 12px 13px;
+  border-radius: 16px;
+  border: 1px solid rgba(74, 95, 117, 0.12);
+  background: rgba(244, 248, 252, 0.82);
+}
+
+.message-tail-hint p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(39, 50, 63, 0.82);
+}
+
+.message-tail-hint a {
+  color: var(--qa-accent-strong);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.message-tail-hint a:hover {
+  text-decoration: underline;
+}
+
 .evidence-list {
   display: grid;
   gap: 8px;

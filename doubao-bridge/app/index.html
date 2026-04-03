@@ -180,6 +180,29 @@
             <button id="stop-button" class="danger">停止后台并退出</button>
           </div>
         </section>
+
+        <section class="wizard-card">
+          <div class="step-head">
+            <span class="step-index">6</span>
+            <div>
+              <div class="step-title-row">
+                <h2>安装 Chrome extension 并开启静默消息分析</h2>
+                <span id="step-extension-status" class="step-status step-status-pending">推荐</span>
+              </div>
+              <p>这是可选增强项，不影响桥接器自动同步；但安装后打开 extension 弹窗里的“静默消息分析”，能持续补充日常消息上下文，让 ask 更懂你。</p>
+            </div>
+          </div>
+          <div class="step-support-grid">
+            <div class="step-support-card">
+              <label>最近 90 天消息数</label>
+              <strong id="extension-memory-count">待统计</strong>
+              <p id="extension-memory-copy">连接 Memory Service 后会展示最近 90 天进入记忆系统的消息数。</p>
+            </div>
+          </div>
+          <div class="action-row">
+            <button id="install-extension-button" type="button" class="secondary">安装 Chrome extension</button>
+          </div>
+        </section>
       </main>
     </div>
 

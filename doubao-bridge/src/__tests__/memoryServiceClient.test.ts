@@ -71,3 +71,45 @@ test('renderContextPackage surfaces a compatibility error when provider routes a
     globalThis.fetch = originalFetch;
   }
 });
+
+test('getStats requests the memory service stats endpoint', async () => {
+  const client = createClient();
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    calls.push(url);
+    return new Response(
+      JSON.stringify({
+        messages: { total: 10, today: 1, thisWeek: 4, last90Days: 9 },
+        entities: { total: 0, byType: {} },
+        chunks: { total: 0 },
+        relationships: { total: 0 },
+        watchedProjects: { active: 0 },
+        notifications: { pending: 0, sentToday: 0 },
+        confirmRequests: { pending: 0 },
+        memory: {
+          temporary: 0,
+          working: 0,
+          consolidated: 0,
+          core: 0,
+          forgotten: 0,
+          archived: 0,
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const stats = await client.getStats();
+    assert.equal(stats.messages.last90Days, 9);
+    assert.deepEqual(calls, ['http://127.0.0.1:3210/api/v1/stats']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

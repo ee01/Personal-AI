@@ -1,5 +1,7 @@
 const bridgeApi = window.bridgeApi;
 const appShell = window.appShell;
+const CHROME_EXTENSION_URL =
+  'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authuser=0&hl=zh-CN';
 
 const elements = {
   refreshButton: document.getElementById('refresh-button'),
@@ -39,11 +41,15 @@ const elements = {
   runReminderButton: document.getElementById('run-reminder-button'),
   mobileThreadMessage: document.getElementById('mobile-thread-message'),
   stopButton: document.getElementById('stop-button'),
+  installExtensionButton: document.getElementById('install-extension-button'),
   stepMemoryStatus: document.getElementById('step-memory-status'),
   stepLoginStatus: document.getElementById('step-login-status'),
   stepMemoryThreadStatus: document.getElementById('step-memory-thread-status'),
   stepMobileThreadStatus: document.getElementById('step-mobile-thread-status'),
   stepBackgroundStatus: document.getElementById('step-background-status'),
+  stepExtensionStatus: document.getElementById('step-extension-status'),
+  extensionMemoryCount: document.getElementById('extension-memory-count'),
+  extensionMemoryCopy: document.getElementById('extension-memory-copy'),
 };
 
 let refreshTimer;
@@ -66,6 +72,10 @@ function hoursFromMs(value) {
 
 function minutesFromMs(value) {
   return Math.max(1, Math.round(value / 60_000));
+}
+
+function formatMessageCount(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value}` : '待统计';
 }
 
 function setMessage(element, text, tone = 'muted') {
@@ -221,6 +231,43 @@ function renderStepStatuses(status) {
     element.textContent = ok ? readyText : pendingText;
     element.className = `step-status ${ok ? 'step-status-ready' : 'step-status-pending'}`;
   }
+
+  const memoryGrowth = status?.memoryGrowth;
+  if (!elements.stepExtensionStatus || !elements.extensionMemoryCount || !elements.extensionMemoryCopy) {
+    return;
+  }
+
+  if (!checklist.memoryServiceConfigured) {
+    elements.stepExtensionStatus.textContent = '推荐';
+    elements.stepExtensionStatus.className = 'step-status step-status-pending';
+    elements.extensionMemoryCount.textContent = '待统计';
+    elements.extensionMemoryCopy.textContent =
+      '先连接 Memory Service，随后这里会展示最近 90 天进入记忆系统的消息数。';
+    return;
+  }
+
+  if (!memoryGrowth || typeof memoryGrowth.recentMessageCount !== 'number') {
+    elements.stepExtensionStatus.textContent = '推荐';
+    elements.stepExtensionStatus.className = 'step-status step-status-pending';
+    elements.extensionMemoryCount.textContent = '统计中';
+    elements.extensionMemoryCopy.textContent =
+      '已连接 Memory Service，但最近 90 天消息数暂时不可用。你仍然可以先安装 extension 并在弹窗里开启静默消息分析。';
+    return;
+  }
+
+  elements.extensionMemoryCount.textContent = formatMessageCount(memoryGrowth.recentMessageCount);
+  if (memoryGrowth.belowThreshold) {
+    elements.stepExtensionStatus.textContent = '建议开启';
+    elements.stepExtensionStatus.className = 'step-status step-status-pending';
+    elements.extensionMemoryCopy.textContent =
+      `最近 ${memoryGrowth.windowDays} 天只有 ${memoryGrowth.recentMessageCount} 条消息进入记忆系统。安装 extension 后在弹窗里开启“静默消息分析”，可以持续补充 ask 所依赖的日常上下文。`;
+    return;
+  }
+
+  elements.stepExtensionStatus.textContent = '可选优化';
+  elements.stepExtensionStatus.className = 'step-status step-status-ready';
+  elements.extensionMemoryCopy.textContent =
+    `最近 ${memoryGrowth.windowDays} 天已经累计 ${memoryGrowth.recentMessageCount} 条消息。若还想继续补充日常上下文，仍可安装 extension 并开启“静默消息分析”。`;
 }
 
 function renderShortcutStatus(shortcutStatus) {
@@ -326,6 +373,10 @@ elements.openLogButton.addEventListener('click', () => {
 
 elements.openSupportButton.addEventListener('click', () => {
   void appShell.openSupportDir();
+});
+
+elements.installExtensionButton?.addEventListener('click', () => {
+  void appShell.openExternal(CHROME_EXTENSION_URL);
 });
 
 elements.openInputMonitoringButton?.addEventListener('click', () => {

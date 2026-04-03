@@ -48,6 +48,8 @@ const HEIGHTS = {
 const STREAM_FLUSH_MS = 42;
 const ENRICHMENT_DELAY_MS = 150;
 const DRAFT_STORAGE_KEY = 'doubao-bridge.quick-ask.draft';
+const CHROME_EXTENSION_URL =
+  'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authuser=0&hl=zh-CN';
 
 const state = {
   uiState: 'idle-compact',
@@ -367,6 +369,35 @@ function renderMemoryBadge(memorySaveResult) {
   return `<div class="memory-badge${extraClass}">${escapeHtml(label)}</div>`;
 }
 
+function renderLowMemoryTail(memoryGrowth) {
+  if (!memoryGrowth?.belowThreshold) return '';
+
+  const windowDays =
+    typeof memoryGrowth.windowDays === 'number' && Number.isFinite(memoryGrowth.windowDays)
+      ? memoryGrowth.windowDays
+      : 90;
+  const recentMessageCount =
+    typeof memoryGrowth.recentMessageCount === 'number' && Number.isFinite(memoryGrowth.recentMessageCount)
+      ? memoryGrowth.recentMessageCount
+      : null;
+
+  const lead =
+    recentMessageCount === null
+      ? `最近 ${windowDays} 天进入记忆系统的消息还比较少。`
+      : `最近 ${windowDays} 天只有 ${recentMessageCount} 条消息进入记忆系统。`;
+
+  return `
+    <section class="message-tail-hint">
+      <p>
+        ${escapeHtml(lead)}
+        想让它更懂你的日常上下文，可以
+        <a href="${escapeHtml(CHROME_EXTENSION_URL)}" data-external-link="${escapeHtml(CHROME_EXTENSION_URL)}">安装 Chrome extension</a>
+        ，然后在扩展弹窗里开启“静默消息分析”。
+      </p>
+    </section>
+  `;
+}
+
 function renderAssistantMessage(message) {
   if (message.pending && !message.text && !message.statusText) {
     return `
@@ -401,6 +432,7 @@ function renderAssistantMessage(message) {
       ${bodyHtml}
       ${message.htmlReady ? renderStructuredAnswer(message.structuredAnswer) : ''}
       ${message.htmlReady ? renderEvidence(message.evidence) : ''}
+      ${message.htmlReady ? renderLowMemoryTail(message.runtime?.memoryGrowth) : ''}
     </div>
   `;
 }
@@ -897,6 +929,7 @@ async function submitQuery(rawInput, options = {}) {
             htmlReady: true,
             structuredAnswer: event.structuredAnswer,
             evidence: event.evidence,
+            runtime: event.runtime,
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
             statusText: '',
           });

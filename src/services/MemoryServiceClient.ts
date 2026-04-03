@@ -637,7 +637,7 @@ export interface HealthResponse {
 }
 
 export interface StatsResponse {
-  messages: { total: number; today: number; thisWeek: number };
+  messages: { total: number; today: number; thisWeek: number; last90Days?: number };
   entities: { total: number; byType: Record<string, number> };
   chunks: { total: number };
   relationships: { total: number };

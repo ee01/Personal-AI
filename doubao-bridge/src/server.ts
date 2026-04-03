@@ -18,6 +18,7 @@ import type {
   BindingType,
   BridgeAssistantAskRequest,
   BridgeBlockingReason,
+  BridgeMemoryGrowthSummary,
   BridgeRememberRequest,
   BridgeStatus,
   BridgeSyncReadiness,
@@ -61,6 +62,8 @@ interface BridgeServerDependencies {
 
 type SyncReadinessKey = 'stableMemory' | 'mobileBriefing' | 'reminderSync';
 type RunNowRequestKind = AutoSyncKind | 'stableMemory' | 'mobileBriefing' | 'reminderSync';
+const LOW_MESSAGE_THRESHOLD = 50;
+const MEMORY_GROWTH_WINDOW_DAYS = 90;
 
 function normalizeAutoSyncKind(kind: RunNowRequestKind): AutoSyncKind {
   if (kind === 'stableMemory') return 'stable_memory';
@@ -146,6 +149,29 @@ function filterReadiness(
   };
 }
 
+async function loadMemoryGrowthSummary(
+  memoryClient: BridgeMemoryServiceClient,
+): Promise<BridgeMemoryGrowthSummary | undefined> {
+  if (!memoryClient.isEnabled()) return undefined;
+
+  try {
+    const stats = await memoryClient.getStats();
+    const recentMessageCount = stats.messages.last90Days;
+    if (typeof recentMessageCount !== 'number' || Number.isNaN(recentMessageCount)) {
+      return undefined;
+    }
+
+    return {
+      windowDays: MEMORY_GROWTH_WINDOW_DAYS,
+      recentMessageCount,
+      lowMessageThreshold: LOW_MESSAGE_THRESHOLD,
+      belowThreshold: recentMessageCount < LOW_MESSAGE_THRESHOLD,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function buildStatus(
   service: DoubaoBridgeService,
   deps: BridgeServerDependencies,
@@ -154,6 +180,7 @@ async function buildStatus(
   const syncSnapshot = deps.syncManager.getSnapshot();
   const settingsPayload = deps.settingsStore.getPayload();
   const blockingReasons = buildBlockingReasons(settingsPayload.effective, baseStatus);
+  const memoryGrowth = await loadMemoryGrowthSummary(deps.memoryClient);
 
   return {
     ...baseStatus,
@@ -162,6 +189,7 @@ async function buildStatus(
       settingsPayload.effective.memoryServiceBaseUrl && settingsPayload.effective.memoryServiceUserId,
     ),
     autoSyncEnabled: settingsPayload.effective.autoSync,
+    memoryGrowth,
     blockingReasons,
     syncReadiness: {
       stableMemory: filterReadiness('stableMemory', blockingReasons, syncSnapshot.tasks.stableMemory),

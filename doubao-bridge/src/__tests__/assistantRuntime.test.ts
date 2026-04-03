@@ -25,6 +25,12 @@ function createStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus {
       mobileBriefing: { ready: true, reasons: [], intervalMs: 1 },
       reminderSync: { ready: true, reasons: [], intervalMs: 1 },
     },
+    memoryGrowth: {
+      windowDays: 90,
+      recentMessageCount: 24,
+      lowMessageThreshold: 50,
+      belowThreshold: true,
+    },
     syncState: {
       timerActive: true,
       running: false,
@@ -106,4 +112,5 @@ test('buildAssistantRuntimeSummary picks top status by defined priority', () => 
   assert.equal(summary.topStatus?.kind, 'setup_blocker');
   assert.equal(summary.items[0]?.kind, 'setup_blocker');
   assert.equal(summary.items.length >= 3, true);
+  assert.equal(summary.memoryGrowth?.belowThreshold, true);
 });

@@ -185,6 +185,43 @@ export interface OutreachSessionListResponse {
   offset: number;
 }
 
+export interface MemoryServiceStatsResponse {
+  messages: {
+    total: number;
+    today: number;
+    thisWeek: number;
+    last90Days?: number;
+  };
+  entities: {
+    total: number;
+    byType: Record<string, number>;
+  };
+  chunks: {
+    total: number;
+  };
+  relationships: {
+    total: number;
+  };
+  watchedProjects: {
+    active: number;
+  };
+  notifications: {
+    pending: number;
+    sentToday: number;
+  };
+  confirmRequests: {
+    pending: number;
+  };
+  memory: {
+    temporary: number;
+    working: number;
+    consolidated: number;
+    core: number;
+    forgotten: number;
+    archived: number;
+  };
+}
+
 export class BridgeMemoryServiceClient {
   constructor(private readonly readSettings: () => BridgeRuntimeSettings) {}
 
@@ -497,6 +534,10 @@ export class BridgeMemoryServiceClient {
       'GET',
       `/api/v1/outreach/sessions${qs ? `?${qs}` : ''}`,
     );
+  }
+
+  async getStats(): Promise<MemoryServiceStatsResponse> {
+    return this.request<MemoryServiceStatsResponse>('GET', '/api/v1/stats');
   }
 
   async createProfileItem(body: {

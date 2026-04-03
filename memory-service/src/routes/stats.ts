@@ -36,6 +36,7 @@ interface StatsResponse {
     total: number;
     today: number;
     thisWeek: number;
+    last90Days: number;
   };
   entities: {
     total: number;
@@ -89,6 +90,7 @@ export async function statsRoutes(
                   total: { type: 'number' },
                   today: { type: 'number' },
                   thisWeek: { type: 'number' },
+                  last90Days: { type: 'number' },
                 },
               },
               entities: {
@@ -149,6 +151,7 @@ export async function statsRoutes(
       const { db } = request.userContext;
       const todayStart = now() - (now() % 86400); // midnight UTC today (epoch seconds)
       const weekStart = daysAgo(7);
+      const last90DaysStart = daysAgo(90);
 
       // ---- Messages ----
       const messagesTotal =
@@ -157,6 +160,8 @@ export async function statsRoutes(
         (db.prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?').get(todayStart) as CountRow).count;
       const messagesThisWeek =
         (db.prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?').get(weekStart) as CountRow).count;
+      const messagesLast90Days =
+        (db.prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?').get(last90DaysStart) as CountRow).count;
 
       // ---- Entities ----
       const entitiesTotal =
@@ -220,6 +225,7 @@ export async function statsRoutes(
           total: messagesTotal,
           today: messagesToday,
           thisWeek: messagesThisWeek,
+          last90Days: messagesLast90Days,
         },
         entities: {
           total: entitiesTotal,

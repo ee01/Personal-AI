@@ -59,6 +59,7 @@ describe('Health & Stats API', () => {
     expect(body.messages).toHaveProperty('total');
     expect(body.messages).toHaveProperty('today');
     expect(body.messages).toHaveProperty('thisWeek');
+    expect(body.messages).toHaveProperty('last90Days');
     expect(body).toHaveProperty('entities');
     expect(body.entities).toHaveProperty('total');
     expect(body.entities).toHaveProperty('byType');

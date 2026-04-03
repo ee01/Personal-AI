@@ -75,6 +75,12 @@ export interface DoubaoBridgeStatus {
   lastError?: string;
   memoryServiceConfigured?: boolean;
   autoSyncEnabled?: boolean;
+  memoryGrowth?: {
+    windowDays: number;
+    recentMessageCount: number;
+    lowMessageThreshold: number;
+    belowThreshold: boolean;
+  };
   blockingReasons?: Array<{
     code: string;
     message: string;
