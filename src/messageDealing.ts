@@ -1,5 +1,5 @@
 import { callLLMJsonAPI } from './llm';
-import { getEnvConfig, showToast } from './utils';
+import { EnvConfigType, getEnvConfig, normalizeBotPushTarget, showToast } from './utils';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
@@ -24,6 +24,58 @@ import {
 import { extractRuleIdsFromMatchedRule } from './utils/ruleTextBuilder';
 import { buildMessageFilterSystemPrompt } from './prompts';
 import { enqueueConcernedItemDigest } from './services/DigestQueueService';
+
+type PushTargetConfigKey =
+	| 'MESSAGE_ANALYSIS_PUSH_TARGET'
+	| 'FOLLOW_UP_PUSH_TARGET'
+	| 'DREAM_INSIGHT_PUSH_TARGET'
+	| 'WEEKLY_REPORT_PUSH_TARGET'
+	| 'DECISION_CENTER_PUSH_TARGET';
+
+type PushGroupConfigKey =
+	| 'MESSAGE_ANALYSIS_PUSH_GROUP_ID'
+	| 'FOLLOW_UP_PUSH_GROUP_ID'
+	| 'DREAM_INSIGHT_PUSH_GROUP_ID'
+	| 'WEEKLY_REPORT_PUSH_GROUP_ID'
+	| 'DECISION_CENTER_PUSH_GROUP_ID';
+
+const ANALYSIS_EXCLUDED_PUSH_GROUP_CONFIGS: Array<{
+	label: string;
+	targetKey: PushTargetConfigKey;
+	groupKey: PushGroupConfigKey;
+	allowNone?: boolean;
+}> = [
+	{ label: '消息分析推送', targetKey: 'MESSAGE_ANALYSIS_PUSH_TARGET', groupKey: 'MESSAGE_ANALYSIS_PUSH_GROUP_ID' },
+	{ label: '关注后续推送', targetKey: 'FOLLOW_UP_PUSH_TARGET', groupKey: 'FOLLOW_UP_PUSH_GROUP_ID' },
+	{ label: '决策中心推送', targetKey: 'DECISION_CENTER_PUSH_TARGET', groupKey: 'DECISION_CENTER_PUSH_GROUP_ID' },
+	{ label: '梦境重放报表推送', targetKey: 'DREAM_INSIGHT_PUSH_TARGET', groupKey: 'DREAM_INSIGHT_PUSH_GROUP_ID', allowNone: true },
+	{ label: '周报推送', targetKey: 'WEEKLY_REPORT_PUSH_TARGET', groupKey: 'WEEKLY_REPORT_PUSH_GROUP_ID', allowNone: true },
+];
+
+function getExcludedPushGroupIds(envConfig: EnvConfigType): string[] {
+	const excludedGroupIds = new Set<string>();
+	const configuredPushGroups: string[] = [];
+
+	for (const rule of ANALYSIS_EXCLUDED_PUSH_GROUP_CONFIGS) {
+		const targetMode = normalizeBotPushTarget(
+			envConfig[rule.targetKey],
+			Boolean(rule.allowNone),
+			'me'
+		);
+		const groupId = String(envConfig[rule.groupKey] || '').trim();
+
+		if (targetMode === 'group' && groupId) {
+			excludedGroupIds.add(groupId);
+			configuredPushGroups.push(`${rule.label}:${groupId}`);
+		}
+	}
+
+	if (configuredPushGroups.length > 0) {
+		console.log('检测到以下推送群组，将在消息分析时自动跳过以避免重复推送:', configuredPushGroups);
+	}
+
+	return Array.from(excludedGroupIds);
+}
 
 
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
@@ -70,6 +122,7 @@ export async function analyzeMessages (data: any[], username: string, isSchedule
 export async function analyzeMessagesInBackground (data: any[], username: string, isScheduledTask = false) {
     // 获取环境配置
     const envConfig = await getEnvConfig();
+	const excludedPushGroupIds = new Set(getExcludedPushGroupIds(envConfig));
 		
 	// 检查是否定时任务被终止 - 使用辅助函数
 	const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
@@ -91,7 +144,22 @@ export async function analyzeMessagesInBackground (data: any[], username: string
 		{id: '4', text:'任何明确 @我 的消息，或者提到我的名字的消息', expiredAt: 0, notifyMethod: 'bot'},
 	];
 
-	data = data.filter(item => item.type === 'message')
+	const messageItems = data.filter(item => item.type === 'message');
+	const excludedItems = excludedPushGroupIds.size === 0
+		? []
+		: messageItems.filter(item => excludedPushGroupIds.has(String(item.groupId || '').trim()));
+	if (excludedItems.length > 0) {
+		console.log(
+			`已过滤 ${excludedItems.length} 个推送落地群组，避免 bot 回流消息被重复分析:`,
+			excludedItems.map(item => ({
+				groupId: item.groupId,
+				groupName: item.groupName
+			}))
+		);
+	}
+	data = excludedPushGroupIds.size === 0
+		? messageItems
+		: messageItems.filter(item => !excludedPushGroupIds.has(String(item.groupId || '').trim()));
 	// 插入调试数据
 	// data.unshift({
 	//   groupName: 'Recording Test',

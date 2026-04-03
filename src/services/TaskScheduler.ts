@@ -118,6 +118,10 @@ export class TaskScheduler {
     return TaskScheduler.instance;
   }
 
+  private isConcernedItemsSyncEnabled(): boolean {
+    return this.tasks.get('memory_sync')?.enabled ?? false;
+  }
+
   /**
    * 初始化任务定义
    */
@@ -160,9 +164,9 @@ export class TaskScheduler {
     // 从 storage 恢复任务状态
     await this.restoreTaskStates();
 
-    if (this.tasks.get('message_analysis')?.enabled) {
+    if (this.isConcernedItemsSyncEnabled()) {
       try {
-        await concernedItemsSyncService.syncOnSilentAnalysisStart();
+        await concernedItemsSyncService.syncOnStartup();
       } catch (error) {
         console.warn('ConcernedItems startup sync skipped:', error);
       }
@@ -651,8 +655,8 @@ export class TaskScheduler {
    */
   private async executeMemorySync(): Promise<void> {
     try {
-      if (!this.tasks.get('message_analysis')?.enabled) {
-        console.log('🔄 concernedItems 同步跳过（静默分析未启用）');
+      if (!this.isConcernedItemsSyncEnabled()) {
+        console.log('🔄 concernedItems 同步跳过（记忆系统同步未启用）');
         return;
       }
 
@@ -886,9 +890,9 @@ export class TaskScheduler {
 
     task.enabled = enabled;
     if (enabled) {
-      if (taskId === 'message_analysis') {
+      if (taskId === 'memory_sync') {
         try {
-          await concernedItemsSyncService.syncOnSilentAnalysisStart();
+          await concernedItemsSyncService.syncOnStartup();
         } catch (error) {
           console.warn('ConcernedItems enable sync skipped:', error);
         }

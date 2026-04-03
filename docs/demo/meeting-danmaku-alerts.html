@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Radar — 会中弹幕提醒系统 Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-dark: #0f1117;
+    --surface: #1a1d27;
+    --surface-2: #242836;
+    --surface-3: #2e3340;
+    --border: #2e3340;
+    --text: #e4e7ef;
+    --text-dim: #8b8fa3;
+    --text-muted: #5a5e72;
+    --accent: #6c5ce7;
+    --accent-light: #a29bfe;
+    --accent-glow: rgba(108,92,231,0.35);
+    --p0-color: #ff6b6b;
+    --p0-bg: rgba(255,107,107,0.12);
+    --p0-border: rgba(255,107,107,0.4);
+    --p1-color: #ffd43b;
+    --p1-bg: rgba(255,212,59,0.10);
+    --p1-border: rgba(255,212,59,0.35);
+    --p2-color: #69db7c;
+    --p2-bg: rgba(105,219,124,0.08);
+    --p2-border: rgba(105,219,124,0.25);
+    --panel-width: 360px;
+    --rec-red: #ff4757;
+    --icon-pink: #ff4d6a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-dark);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+  }
+
+  /* ── Meeting Video Area ── */
+  .meeting-area {
+    flex: 1;
+    position: relative;
+    background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+    overflow: hidden;
+  }
+
+  .video-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 4px;
+    height: calc(100% - 64px);
+    padding: 4px;
+  }
+
+  .video-tile {
+    background: var(--surface);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .video-tile::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, rgba(108,92,231,0.06) 0%, transparent 70%);
+  }
+
+  .avatar {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; font-weight: 700;
+    background: linear-gradient(135deg, var(--accent) 0%, #a29bfe 100%);
+    margin-bottom: 10px;
+    box-shadow: 0 4px 20px var(--accent-glow);
+  }
+
+  .participant-name { font-size: 14px; font-weight: 500; color: var(--text-dim); }
+
+  .speaking-indicator {
+    position: absolute;
+    bottom: 12px; left: 12px;
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(8px);
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .video-tile.speaking .speaking-indicator { opacity: 1; }
+  .video-tile.speaking { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  .sound-bars { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
+  .sound-bars span {
+    width: 3px; background: var(--accent); border-radius: 2px;
+    animation: soundbar 0.6s ease-in-out infinite alternate;
+  }
+  .sound-bars span:nth-child(1) { height: 4px; animation-delay: 0s; }
+  .sound-bars span:nth-child(2) { height: 10px; animation-delay: 0.15s; }
+  .sound-bars span:nth-child(3) { height: 6px; animation-delay: 0.3s; }
+  .sound-bars span:nth-child(4) { height: 12px; animation-delay: 0.1s; }
+  @keyframes soundbar { to { height: 14px; } }
+
+  /* ── Meeting Bottom Bar ── */
+  .meeting-bar {
+    height: 64px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    gap: 16px; padding: 0 24px;
+  }
+  .bar-btn {
+    height: 40px; padding: 0 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.2s;
+  }
+  .bar-btn:hover { background: var(--border); color: var(--text); }
+  .bar-btn.danger { background: rgba(255,71,87,0.15); border-color: var(--rec-red); color: var(--rec-red); }
+
+  /* ── Danmaku Overlay (P1/P2 only) ── */
+  .danmaku-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: calc(100% - 64px);
+    pointer-events: none;
+    z-index: 100;
+    overflow: hidden;
+  }
+
+  .danmaku-item {
+    position: absolute;
+    white-space: nowrap;
+    padding: 6px 16px 6px 12px;
+    border-radius: 20px;
+    font-size: 14px; font-weight: 500;
+    display: flex; align-items: center; gap: 8px;
+    backdrop-filter: blur(12px);
+    pointer-events: auto;
+    cursor: default;
+    transform: translateX(100%);
+    animation: danmaku-slide var(--duration, 8s) linear forwards;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.3);
+  }
+  .danmaku-item:hover { animation-play-state: paused; transform: scale(1.05); }
+  .danmaku-item .icon { font-size: 16px; flex-shrink: 0; }
+
+  .danmaku-item.p1 {
+    background: var(--p1-bg); border: 1px solid var(--p1-border); color: var(--p1-color);
+  }
+  .danmaku-item.p2 {
+    background: var(--p2-bg); border: 1px solid var(--p2-border); color: var(--p2-color);
+    font-size: 13px; opacity: 0.85;
+  }
+
+  @keyframes danmaku-slide {
+    0% { transform: translateX(100vw); }
+    100% { transform: translateX(-120%); }
+  }
+
+  /* ══════════════════════════════════════════
+     P0 PINNED CENTER ALERTS
+     ══════════════════════════════════════════ */
+  .p0-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 300;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+    pointer-events: none;
+    max-height: 60%;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .p0-container::-webkit-scrollbar { display: none; }
+
+  .p0-alert {
+    pointer-events: auto;
+    padding: 14px 20px 14px 16px;
+    border-radius: 14px;
+    background: rgba(20,16,32,0.92);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1.5px solid var(--p0-border);
+    box-shadow: 0 8px 40px rgba(255,107,107,0.25), 0 0 60px rgba(255,107,107,0.08);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    max-width: 520px;
+    min-width: 360px;
+    animation: p0-enter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both, p0-breathe 2s ease-in-out infinite 0.4s;
+    cursor: default;
+    position: relative;
+    transition: all 0.3s;
+  }
+  .p0-alert:hover {
+    box-shadow: 0 8px 48px rgba(255,107,107,0.35), 0 0 80px rgba(255,107,107,0.12);
+    transform: scale(1.02);
+  }
+
+  @keyframes p0-enter {
+    from { opacity: 0; transform: translateY(-16px) scale(0.92); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes p0-breathe {
+    0%, 100% { border-color: rgba(255,107,107,0.4); }
+    50% { border-color: rgba(255,107,107,0.7); }
+  }
+
+  .p0-alert .p0-icon {
+    font-size: 22px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .p0-alert .p0-body { flex: 1; }
+  .p0-alert .p0-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--p0-color);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .p0-alert .p0-label .ago {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .p0-alert .p0-text {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.45;
+  }
+  .p0-alert .p0-close {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.05);
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    margin-top: 2px;
+  }
+  .p0-alert .p0-close:hover {
+    background: rgba(255,107,107,0.2);
+    border-color: var(--p0-color);
+    color: var(--p0-color);
+  }
+
+  .p0-alert.dismissing {
+    animation: p0-dismiss 0.3s ease-in forwards;
+  }
+  @keyframes p0-dismiss {
+    to { opacity: 0; transform: scale(0.9) translateY(-8px); height: 0; min-width: 0; padding: 0; margin: 0; border-width: 0; }
+  }
+
+  /* ══════════════════════════════════════════
+     FLOATING RADAR ICON  (entry point)
+     ══════════════════════════════════════════ */
+  .radar-fab {
+    position: absolute;
+    bottom: 80px;
+    right: 20px;
+    z-index: 500;
+    width: 52px; height: 52px;
+    border-radius: 16px;
+    background: rgba(20,16,32,0.85);
+    backdrop-filter: blur(16px);
+    border: 1.5px solid rgba(108,92,231,0.4);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 20px rgba(108,92,231,0.15);
+  }
+  .radar-fab:hover {
+    transform: scale(1.1);
+    border-color: var(--accent);
+    box-shadow: 0 6px 32px rgba(0,0,0,0.5), 0 0 30px rgba(108,92,231,0.3);
+  }
+  .radar-fab.has-alert {
+    border-color: var(--p0-color);
+    animation: fab-pulse 2s ease-in-out infinite;
+  }
+  @keyframes fab-pulse {
+    0%, 100% { box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 20px rgba(255,107,107,0.15); }
+    50% { box-shadow: 0 4px 32px rgba(0,0,0,0.5), 0 0 35px rgba(255,107,107,0.35); }
+  }
+
+  .radar-fab img {
+    width: 30px; height: 30px;
+    filter: drop-shadow(0 0 4px rgba(255,77,106,0.4));
+    transition: transform 0.3s;
+  }
+  .radar-fab:hover img { transform: rotate(-8deg) scale(1.1); }
+
+  /* Notification badge on icon */
+  .radar-fab .fab-badge {
+    position: absolute;
+    top: -4px; right: -4px;
+    min-width: 18px; height: 18px;
+    border-radius: 9px;
+    background: var(--p0-color);
+    color: white;
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 4px;
+    box-shadow: 0 2px 8px rgba(255,71,87,0.5);
+    animation: badge-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    display: none; /* hidden unless has alerts */
+  }
+  .radar-fab.has-alert .fab-badge { display: flex; }
+
+  @keyframes badge-pop {
+    from { transform: scale(0); }
+    to { transform: scale(1); }
+  }
+
+  /* Recording ring around icon */
+  .radar-fab .rec-ring {
+    position: absolute;
+    inset: -3px;
+    border-radius: 18px;
+    border: 2px solid transparent;
+    border-top-color: var(--rec-red);
+    animation: rec-spin 2s linear infinite;
+  }
+  @keyframes rec-spin { to { transform: rotate(360deg); } }
+
+  /* ── Hover Tooltip (current topic + status) ── */
+  .radar-tooltip {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    right: 0;
+    width: 280px;
+    background: rgba(20,18,36,0.95);
+    backdrop-filter: blur(20px) saturate(1.5);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 0;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(6px);
+    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .radar-fab:hover .radar-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .tooltip-header {
+    padding: 10px 14px;
+    background: linear-gradient(135deg, rgba(108,92,231,0.15) 0%, rgba(162,155,254,0.06) 100%);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tooltip-header .rec-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--rec-red);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .tooltip-header .rec-text {
+    font-size: 11px; font-weight: 600; color: var(--rec-red);
+  }
+  .tooltip-header .rec-time {
+    font-size: 11px; color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+  }
+
+  .tooltip-topic {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tooltip-topic .label {
+    font-size: 10px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 3px;
+  }
+  .tooltip-topic .value {
+    font-size: 13px; font-weight: 600;
+    color: var(--text);
+  }
+  .tooltip-topic .sub {
+    font-size: 11px; color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  .tooltip-stats {
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .tooltip-stat {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .tooltip-stat .stat-label {
+    font-size: 10px; color: var(--text-muted);
+  }
+  .tooltip-stat .stat-value {
+    font-size: 14px; font-weight: 700;
+  }
+
+  .tooltip-actions-bar {
+    padding: 8px 14px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 6px;
+  }
+  .tooltip-action-btn {
+    flex: 1;
+    padding: 6px 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 11px; font-weight: 500;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.2s;
+  }
+  .tooltip-action-btn:hover {
+    background: rgba(108,92,231,0.15);
+    border-color: var(--accent);
+    color: var(--accent-light);
+  }
+
+  /* ══════════════════════════════════════════
+     SIDE PANEL (default collapsed)
+     ══════════════════════════════════════════ */
+  .side-panel {
+    width: var(--panel-width);
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transform: translateX(100%);
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    z-index: 400;
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .side-panel.open { transform: translateX(0); }
+
+  .panel-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .panel-logo {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .panel-logo img { width: 100%; height: 100%; }
+
+  .panel-title {
+    font-size: 14px; font-weight: 700;
+    background: linear-gradient(135deg, #e4e7ef 0%, #a29bfe 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    flex: 1;
+  }
+
+  .panel-close {
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+  }
+  .panel-close:hover { background: var(--surface-2); color: var(--text); }
+
+  .panel-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+  }
+  .panel-tab {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .panel-tab:hover { color: var(--text); }
+  .panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .panel-tab .badge {
+    position: absolute; top: 6px; right: 4px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--p0-color);
+  }
+
+  /* Catch-up button */
+  .catchup-btn {
+    margin: 12px 16px;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, rgba(108,92,231,0.15) 0%, rgba(162,155,254,0.10) 100%);
+    border: 1px solid rgba(108,92,231,0.3);
+    border-radius: 12px;
+    color: var(--text); font-size: 13px; font-weight: 600;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    transition: all 0.3s;
+  }
+  .catchup-btn:hover {
+    background: linear-gradient(135deg, rgba(108,92,231,0.25) 0%, rgba(162,155,254,0.18) 100%);
+    box-shadow: 0 2px 16px var(--accent-glow);
+    transform: translateY(-1px);
+  }
+  .catchup-btn .shortcut {
+    margin-left: auto;
+    font-size: 11px; color: var(--text-dim);
+    background: var(--surface-2);
+    padding: 2px 8px; border-radius: 6px;
+    font-weight: 500;
+  }
+
+  .current-topic-card {
+    padding: 12px 14px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    margin: 0 16px 12px;
+    border-left: 3px solid var(--accent);
+  }
+  .current-topic-card .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .current-topic-card .value { font-size: 14px; font-weight: 600; }
+
+  .panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .alert-feed { display: flex; flex-direction: column; gap: 8px; }
+
+  .alert-card {
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    animation: card-in 0.4s ease-out;
+    transition: all 0.2s;
+  }
+  .alert-card:hover { border-color: var(--accent); transform: translateX(2px); }
+  @keyframes card-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .alert-card .card-header {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+  }
+  .alert-card .priority-tag {
+    font-size: 10px; font-weight: 700;
+    padding: 2px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .priority-tag.p0 { background: var(--p0-bg); color: var(--p0-color); border: 1px solid var(--p0-border); }
+  .priority-tag.p1 { background: var(--p1-bg); color: var(--p1-color); border: 1px solid var(--p1-border); }
+  .priority-tag.p2 { background: var(--p2-bg); color: var(--p2-color); border: 1px solid var(--p2-border); }
+
+  .alert-card .time { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+  .alert-card .content { font-size: 13px; line-height: 1.5; color: var(--text); }
+
+  .panel-status {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .rec-status { display: flex; align-items: center; gap: 6px; color: var(--rec-red); font-weight: 600; }
+  .rec-dot-s { width: 8px; height: 8px; border-radius: 50%; background: var(--rec-red); animation: blink 1.2s ease-in-out infinite; }
+
+  /* ── Demo Controls (top left) ── */
+  .controls-overlay {
+    position: absolute;
+    top: 16px; left: 16px;
+    z-index: 200;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .control-btn {
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(26,29,39,0.85);
+    backdrop-filter: blur(12px);
+    color: var(--text);
+    font-size: 11px; font-weight: 500;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 5px;
+    transition: all 0.2s;
+  }
+  .control-btn:hover { background: var(--surface-2); border-color: var(--accent); }
+
+  .demo-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+    padding-left: 2px;
+  }
+
+  /* ── Legend (bottom left) ── */
+  .legend {
+    position: absolute;
+    bottom: 80px; left: 16px;
+    z-index: 200;
+    background: rgba(26,29,39,0.9);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 11px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .legend-title { font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-bottom: 2px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* ── Catch-up Modal ── */
+  .catchup-modal {
+    position: fixed;
+    inset: 0; z-index: 1000;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(6px);
+  }
+  .catchup-modal.visible { display: flex; }
+
+  .catchup-card {
+    width: 480px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    animation: modal-in 0.3s ease-out;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+  }
+  @keyframes modal-in {
+    from { opacity: 0; transform: translateY(20px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .catchup-card .modal-header {
+    padding: 16px 20px;
+    background: linear-gradient(135deg, rgba(108,92,231,0.12) 0%, rgba(162,155,254,0.06) 100%);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .catchup-card .modal-header h3 { font-size: 16px; font-weight: 700; }
+
+  .modal-close-btn {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 8px; border: none;
+    background: var(--surface-2); color: var(--text-dim);
+    font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-close-btn:hover { background: var(--border); color: var(--text); }
+
+  .catchup-card .modal-body {
+    padding: 20px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+
+  .catchup-section {
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--surface-2);
+  }
+  .catchup-section .section-title {
+    font-size: 12px; font-weight: 600; color: var(--text-dim);
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .catchup-section .section-content { font-size: 14px; line-height: 1.6; }
+
+  .time-pills { display: flex; gap: 8px; padding: 0 20px 16px; }
+  .time-pill {
+    padding: 6px 14px; border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim); font-size: 12px;
+    font-weight: 500; cursor: pointer;
+    transition: all 0.2s;
+  }
+  .time-pill:hover, .time-pill.active {
+    background: rgba(108,92,231,0.2);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Meeting Video Area ── -->
+<div class="meeting-area" id="meetingArea">
+  <div class="video-grid">
+    <div class="video-tile speaking" id="tile-alex">
+      <div class="avatar">A</div>
+      <span class="participant-name">Alex Chen</span>
+      <div class="speaking-indicator">
+        <div class="sound-bars"><span></span><span></span><span></span><span></span></div>
+        Speaking
+      </div>
+    </div>
+    <div class="video-tile" id="tile-esone">
+      <div class="avatar" style="background:linear-gradient(135deg,#00b894,#55efc4);">E</div>
+      <span class="participant-name">Esone Qiu (You)</span>
+      <div class="speaking-indicator">
+        <div class="sound-bars"><span></span><span></span><span></span><span></span></div>
+        Speaking
+      </div>
+    </div>
+    <div class="video-tile" id="tile-sarah">
+      <div class="avatar" style="background:linear-gradient(135deg,#e17055,#fab1a0);">S</div>
+      <span class="participant-name">Sarah Wang</span>
+      <div class="speaking-indicator">
+        <div class="sound-bars"><span></span><span></span><span></span><span></span></div>
+        Speaking
+      </div>
+    </div>
+    <div class="video-tile" id="tile-mike">
+      <div class="avatar" style="background:linear-gradient(135deg,#0984e3,#74b9ff);">M</div>
+      <span class="participant-name">Mike Liu</span>
+      <div class="speaking-indicator">
+        <div class="sound-bars"><span></span><span></span><span></span><span></span></div>
+        Speaking
+      </div>
+    </div>
+  </div>
+
+  <!-- P1/P2 Danmaku Overlay -->
+  <div class="danmaku-overlay" id="danmakuOverlay"></div>
+
+  <!-- P0 Pinned Center Container -->
+  <div class="p0-container" id="p0Container"></div>
+
+  <!-- Floating Radar Icon -->
+  <div class="radar-fab" id="radarFab" onclick="togglePanel()">
+    <div class="rec-ring"></div>
+    <img src="icon48.png" alt="Meeting Radar">
+    <span class="fab-badge" id="fabBadge">0</span>
+
+    <!-- Hover Tooltip -->
+    <div class="radar-tooltip" id="radarTooltip">
+      <div class="tooltip-header">
+        <div class="rec-dot"></div>
+        <span class="rec-text">REC</span>
+        <span class="rec-time" id="tooltipTime">00:32:15</span>
+      </div>
+      <div class="tooltip-topic">
+        <div class="label">当前话题</div>
+        <div class="value" id="tooltipTopic">Q2 技术评审排期</div>
+        <div class="sub" id="tooltipTopicSub">持续 3 分钟 · Alex 主讲</div>
+      </div>
+      <div class="tooltip-stats">
+        <div class="tooltip-stat">
+          <span class="stat-label">行动项</span>
+          <span class="stat-value" style="color:var(--p1-color);" id="tooltipActions">2</span>
+        </div>
+        <div class="tooltip-stat">
+          <span class="stat-label">提及你</span>
+          <span class="stat-value" style="color:var(--p0-color);" id="tooltipMentions">1</span>
+        </div>
+        <div class="tooltip-stat">
+          <span class="stat-label">话题数</span>
+          <span class="stat-value" style="color:var(--accent-light);">3</span>
+        </div>
+        <div class="tooltip-stat">
+          <span class="stat-label">参会者</span>
+          <span class="stat-value" style="color:var(--p2-color);">4</span>
+        </div>
+      </div>
+      <div class="tooltip-actions-bar">
+        <div class="tooltip-action-btn" onclick="event.stopPropagation();showCatchup()">⚡ Catch Up</div>
+        <div class="tooltip-action-btn" onclick="event.stopPropagation();togglePanel()">📋 面板</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo Controls -->
+  <div class="controls-overlay">
+    <div class="demo-label">Demo 控制</div>
+    <button class="control-btn" onclick="fireDanmaku('p0')">🔴 P0 — 定格提醒</button>
+    <button class="control-btn" onclick="fireDanmaku('p1')">🟡 P1 — 弹幕</button>
+    <button class="control-btn" onclick="fireDanmaku('p2')">🟢 P2 — 弹幕</button>
+    <button class="control-btn" onclick="fireAllDemo()" style="background:rgba(108,92,231,0.2);border-color:var(--accent);">🎬 播放完整 Demo</button>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-title">提醒分级</div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:var(--p0-color);"></div>
+      <span>P0 紧急 — 居中定格，手动关闭</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:var(--p1-color);"></div>
+      <span>P1 关注 — 弹幕飘过</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:var(--p2-color);"></div>
+      <span>P2 信息 — 轻量弹幕</span>
+    </div>
+  </div>
+
+  <!-- Bottom Bar -->
+  <div class="meeting-bar">
+    <button class="bar-btn">🎤 Mute</button>
+    <button class="bar-btn">📷 Camera</button>
+    <button class="bar-btn">🖥 Share</button>
+    <button class="bar-btn">💬 Chat</button>
+    <button class="bar-btn">👥 4 People</button>
+    <button class="bar-btn danger">📞 Leave</button>
+  </div>
+</div>
+
+<!-- ── Side Panel ── -->
+<div class="side-panel" id="sidePanel">
+  <div class="panel-header">
+    <div class="panel-logo"><img src="icon48.png" alt=""></div>
+    <span class="panel-title">Meeting Radar</span>
+    <button class="panel-close" onclick="togglePanel()">✕</button>
+  </div>
+
+  <div class="panel-tabs">
+    <div class="panel-tab active">实时 <div class="badge"></div></div>
+    <div class="panel-tab">时间线</div>
+    <div class="panel-tab">行动项</div>
+    <div class="panel-tab">设置</div>
+  </div>
+
+  <button class="catchup-btn" onclick="showCatchup()">
+    ⚡ 刚错过了什么？
+    <span class="shortcut">⌘⇧C</span>
+  </button>
+
+  <div class="current-topic-card">
+    <div class="label">当前话题</div>
+    <div class="value" id="currentTopic">Q2 技术评审排期</div>
+  </div>
+
+  <div class="panel-content">
+    <div class="alert-feed" id="alertFeed"></div>
+  </div>
+
+  <div class="panel-status">
+    <div class="rec-status"><div class="rec-dot-s"></div>REC</div>
+    <span id="recTime">00:32:15</span>
+    <span style="margin-left:auto;">🎤 ON</span>
+  </div>
+</div>
+
+<!-- ── Catch-up Modal ── -->
+<div class="catchup-modal" id="catchupModal">
+  <div class="catchup-card">
+    <div class="modal-header">
+      <span style="font-size:20px;">⚡</span>
+      <h3>你刚错过了什么</h3>
+      <button class="modal-close-btn" onclick="hideCatchup()">✕</button>
+    </div>
+    <div class="time-pills">
+      <span class="time-pill active">过去 5 分钟</span>
+      <span class="time-pill">10 分钟</span>
+      <span class="time-pill">15 分钟</span>
+      <span class="time-pill">自上次查看</span>
+    </div>
+    <div class="modal-body">
+      <div class="catchup-section">
+        <div class="section-title">🎯 关键决议</div>
+        <div class="section-content">Q2 预算确认为 200w，技术评审时间定为下周三</div>
+      </div>
+      <div class="catchup-section">
+        <div class="section-title">👤 提到了你</div>
+        <div class="section-content">Alex: "让 Esone 负责 Meeting Radar 技术评审"</div>
+      </div>
+      <div class="catchup-section">
+        <div class="section-title">📌 新行动项 (2)</div>
+        <div class="section-content">
+          1. Esone — 准备技术评审文档 (DDL: 下周二)<br>
+          2. Sarah — 确认设计资源排期
+        </div>
+      </div>
+      <div class="catchup-section">
+        <div class="section-title">🔄 话题变化</div>
+        <div class="section-content">预算讨论 → 排期安排 → 技术评审分工</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── State ──
+  let panelOpen = false;
+  let p0Count = 0;
+  const p0Alerts = []; // track active P0s with timestamps
+
+  const lanes = [0, 0, 0, 0, 0, 0];
+
+  // ── Messages ──
+  const messages = {
+    p0: [
+      { icon: '🚨', text: 'Alex 提到了你: "让 Esone 负责这块的技术评审"' },
+      { icon: '📋', text: '新任务分配给你: 准备 Q2 技术评审文档，下周二前完成' },
+      { icon: '⛔', text: '阻塞项: API 接口定义未确认，需要你来决定' },
+      { icon: '🎯', text: 'Sarah 直接点名: "Esone，这个方案你怎么看？"' },
+    ],
+    p1: [
+      { icon: '🔑', text: '关键词命中: "Chrome Extension" 被提及 3 次' },
+      { icon: '📊', text: '话题切换: 从"预算讨论"转到"排期安排"' },
+      { icon: '⏰', text: '会议已进行 30 分钟，进入下半场' },
+      { icon: '💡', text: '关键词命中: "Meeting Radar" 被讨论' },
+      { icon: '🔄', text: '话题切换: 进入"技术评审"议题' },
+    ],
+    p2: [
+      { icon: '📝', text: '摘要更新: Q2 预算 200w 已确认，评审排期讨论中' },
+      { icon: '✅', text: '行动项候选: Mike 承诺本周五前交设计稿' },
+      { icon: '📝', text: '摘要更新: 会议过半，已覆盖 3/5 个议题' },
+      { icon: '✅', text: '行动项候选: Sarah 确认下周一前完成资源评估' },
+    ],
+  };
+
+  // ── Toggle Side Panel ──
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    document.getElementById('sidePanel').classList.toggle('open', panelOpen);
+  }
+
+  // ── P0: Pinned Center Alert ──
+  function createP0Alert(msgObj) {
+    const container = document.getElementById('p0Container');
+    const el = document.createElement('div');
+    el.className = 'p0-alert';
+    const createdAt = Date.now();
+
+    el.innerHTML = `
+      <span class="p0-icon">${msgObj.icon}</span>
+      <div class="p0-body">
+        <div class="p0-label">
+          🔴 紧急
+          <span class="ago" data-created="${createdAt}">刚刚</span>
+        </div>
+        <div class="p0-text">${msgObj.text}</div>
+      </div>
+      <button class="p0-close" onclick="dismissP0(this)" title="关闭">✕</button>
+    `;
+
+    container.appendChild(el);
+    p0Count++;
+    updateFabBadge();
+
+    // Also add to side panel
+    addAlertCard('p0', msgObj);
+
+    // Track for timer
+    p0Alerts.push({ el, createdAt });
+  }
+
+  function dismissP0(btn) {
+    const alert = btn.closest('.p0-alert');
+    alert.classList.add('dismissing');
+    setTimeout(() => {
+      alert.remove();
+      p0Count = Math.max(0, p0Count - 1);
+      updateFabBadge();
+      // Remove from tracking
+      const idx = p0Alerts.findIndex(a => a.el === alert);
+      if (idx !== -1) p0Alerts.splice(idx, 1);
+    }, 300);
+  }
+
+  function updateFabBadge() {
+    const badge = document.getElementById('fabBadge');
+    const fab = document.getElementById('radarFab');
+    badge.textContent = p0Count;
+    fab.classList.toggle('has-alert', p0Count > 0);
+  }
+
+  // Update "ago" timers for P0 alerts
+  setInterval(() => {
+    const now = Date.now();
+    p0Alerts.forEach(({ el, createdAt }) => {
+      const agoEl = el.querySelector('.ago');
+      if (!agoEl) return;
+      const diffSec = Math.floor((now - createdAt) / 1000);
+      if (diffSec < 5) {
+        agoEl.textContent = '刚刚';
+      } else if (diffSec < 60) {
+        agoEl.textContent = `${diffSec}'' ago`;
+      } else {
+        const m = Math.floor(diffSec / 60);
+        const s = diffSec % 60;
+        agoEl.textContent = `${m}'${String(s).padStart(2,'0')}'' ago`;
+      }
+    });
+  }, 1000);
+
+  // ── P1/P2: Danmaku ──
+  function getAvailableLane() {
+    const now = Date.now();
+    const laneH = 48;
+    let best = 0, oldest = Infinity;
+    for (let i = 0; i < lanes.length; i++) {
+      if (now - lanes[i] > 3000) { lanes[i] = now; return i * laneH + 16; }
+      if (lanes[i] < oldest) { oldest = lanes[i]; best = i; }
+    }
+    lanes[best] = now;
+    return best * laneH + 16;
+  }
+
+  function createDanmaku(priority, msgObj) {
+    const overlay = document.getElementById('danmakuOverlay');
+    const el = document.createElement('div');
+    el.className = `danmaku-item ${priority}`;
+    const dur = priority === 'p1' ? 8 : 7;
+    el.style.setProperty('--duration', `${dur}s`);
+    el.style.top = getAvailableLane() + 'px';
+    el.innerHTML = `<span class="icon">${msgObj.icon}</span>${msgObj.text}`;
+    overlay.appendChild(el);
+
+    addAlertCard(priority, msgObj);
+    el.addEventListener('animationend', () => el.remove());
+    setTimeout(() => { if (el.parentNode) el.remove(); }, (dur + 1) * 1000);
+  }
+
+  // ── Side panel feed ──
+  function addAlertCard(priority, msgObj) {
+    const feed = document.getElementById('alertFeed');
+    const card = document.createElement('div');
+    card.className = 'alert-card';
+    const now = new Date();
+    const ts = now.toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const labels = { p0:'紧急', p1:'关注', p2:'信息' };
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="priority-tag ${priority}">${labels[priority]}</span>
+        <span class="time">${ts}</span>
+      </div>
+      <div class="content">${msgObj.icon} ${msgObj.text}</div>
+    `;
+    feed.insertBefore(card, feed.firstChild);
+    while (feed.children.length > 25) feed.removeChild(feed.lastChild);
+  }
+
+  // ── Fire ──
+  function fireDanmaku(priority) {
+    const pool = messages[priority];
+    const msg = pool[Math.floor(Math.random() * pool.length)];
+    if (priority === 'p0') {
+      createP0Alert(msg);
+    } else {
+      createDanmaku(priority, msg);
+    }
+  }
+
+  // ── Full Demo ──
+  function fireAllDemo() {
+    const seq = [
+      { d: 0,    p:'p2', i:0 },
+      { d: 1200, p:'p1', i:0 },
+      { d: 2800, p:'p2', i:1 },
+      { d: 4000, p:'p0', i:0 },  // P0 #1
+      { d: 5500, p:'p1', i:1 },
+      { d: 7000, p:'p2', i:2 },
+      { d: 8200, p:'p1', i:2 },
+      { d: 9800, p:'p0', i:1 },  // P0 #2
+      { d: 11000,p:'p1', i:3 },
+      { d: 12500,p:'p2', i:3 },
+      { d: 14000,p:'p0', i:2 },  // P0 #3
+      { d: 15500,p:'p1', i:4 },
+    ];
+
+    // Topic updates
+    setTimeout(() => updateTopic('排期安排', '持续 2 分钟 · Sarah 主讲'), 3000);
+    setTimeout(() => updateTopic('技术评审分工', '持续 1 分钟 · Alex 主讲'), 9000);
+
+    // Speaker cycling
+    setTimeout(() => switchSpeaker('tile-sarah'), 3500);
+    setTimeout(() => switchSpeaker('tile-mike'), 7000);
+    setTimeout(() => switchSpeaker('tile-alex'), 11000);
+
+    seq.forEach(item => {
+      setTimeout(() => {
+        const msg = messages[item.p][item.i];
+        if (item.p === 'p0') {
+          createP0Alert(msg);
+        } else {
+          createDanmaku(item.p, msg);
+        }
+      }, item.d);
+    });
+  }
+
+  function updateTopic(topic, sub) {
+    document.getElementById('currentTopic').textContent = topic;
+    document.getElementById('tooltipTopic').textContent = topic;
+    document.getElementById('tooltipTopicSub').textContent = sub;
+  }
+
+  function switchSpeaker(tileId) {
+    document.querySelectorAll('.video-tile').forEach(t => t.classList.remove('speaking'));
+    document.getElementById(tileId).classList.add('speaking');
+  }
+
+  // ── Catch-up ──
+  function showCatchup() { document.getElementById('catchupModal').classList.add('visible'); }
+  function hideCatchup() { document.getElementById('catchupModal').classList.remove('visible'); }
+
+  // ── Timer ──
+  let seconds = 32 * 60 + 15;
+  setInterval(() => {
+    seconds++;
+    const h = String(Math.floor(seconds / 3600)).padStart(2,'0');
+    const m = String(Math.floor((seconds % 3600) / 60)).padStart(2,'0');
+    const s = String(seconds % 60).padStart(2,'0');
+    const t = `${h}:${m}:${s}`;
+    document.getElementById('recTime').textContent = t;
+    document.getElementById('tooltipTime').textContent = t;
+  }, 1000);
+
+  // ── Auto speaker cycle ──
+  const tiles = ['tile-alex','tile-esone','tile-sarah','tile-mike'];
+  let spkIdx = 0;
+  setInterval(() => { spkIdx = (spkIdx + 1) % tiles.length; switchSpeaker(tiles[spkIdx]); }, 8000);
+
+  // ── Keyboard ──
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey||e.ctrlKey) && e.shiftKey && e.key === 'c') { e.preventDefault(); showCatchup(); }
+    if (e.key === 'Escape') hideCatchup();
+  });
+
+  // ── Time pills ──
+  document.querySelectorAll('.time-pill').forEach(p => {
+    p.addEventListener('click', () => {
+      document.querySelectorAll('.time-pill').forEach(q => q.classList.remove('active'));
+      p.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

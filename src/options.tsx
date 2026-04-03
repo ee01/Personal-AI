@@ -1056,7 +1056,7 @@ const Options = () => {
                             placeholder="输入 RingCentral 群组 ID"
                         />
                         <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-                            仅在选择「自定义群组」时生效。
+                            仅在选择「自定义群组」时生效。配置后，该群组会自动从消息分析输入中排除，避免推送回流导致重复分析。
                         </small>
                     </div>
                 )}

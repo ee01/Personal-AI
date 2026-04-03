@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Radar — 会议全貌 Panorama View</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d14;
+    --surface: #141720;
+    --surface-2: #1c2030;
+    --surface-3: #252a3a;
+    --border: #2a2f42;
+    --text: #e8eaf0;
+    --text-dim: #7c819a;
+    --text-muted: #4e5268;
+    --accent: #6c5ce7;
+    --accent-light: #a29bfe;
+    --gradient-start: #6c5ce7;
+    --gradient-end: #a29bfe;
+    --p0: #ff6b6b;
+    --p1: #ffd43b;
+    --p2: #69db7c;
+    --blue: #74b9ff;
+    --orange: #ffa502;
+    --teal: #00cec9;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ── Top Header ── */
+  .page-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(11,13,20,0.85);
+    backdrop-filter: blur(16px) saturate(1.8);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    box-shadow: 0 2px 16px rgba(108,92,231,0.4);
+  }
+
+  .header-info h1 {
+    font-size: 16px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--text), var(--accent-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .header-meta {
+    display: flex; gap: 16px;
+    font-size: 12px; color: var(--text-dim);
+    margin-top: 2px;
+  }
+  .header-meta span { display: flex; align-items: center; gap: 4px; }
+
+  .header-actions {
+    margin-left: auto;
+    display: flex; gap: 8px;
+  }
+  .header-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.2s;
+  }
+  .header-btn:hover { background: var(--surface-3); color: var(--text); border-color: var(--accent); }
+  .header-btn.primary {
+    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+    border-color: transparent;
+    color: white;
+  }
+  .header-btn.primary:hover { opacity: 0.9; box-shadow: 0 2px 16px rgba(108,92,231,0.4); }
+
+  /* ── Stats Strip ── */
+  .stats-strip {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s;
+  }
+  .stat-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 3px;
+  }
+  .stat-card:nth-child(1)::before { background: linear-gradient(90deg, var(--accent), var(--accent-light)); }
+  .stat-card:nth-child(2)::before { background: linear-gradient(90deg, var(--teal), #55efc4); }
+  .stat-card:nth-child(3)::before { background: linear-gradient(90deg, var(--orange), #ffd43b); }
+  .stat-card:nth-child(4)::before { background: linear-gradient(90deg, var(--p0), #fab1a0); }
+  .stat-card:nth-child(5)::before { background: linear-gradient(90deg, var(--blue), #81ecec); }
+
+  .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 24px; font-weight: 800; margin: 4px 0 2px; }
+  .stat-sub { font-size: 11px; color: var(--text-muted); }
+
+  /* ── Main Layout ── */
+  .main-layout {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 0;
+    min-height: calc(100vh - 180px);
+  }
+
+  .main-content {
+    padding: 24px 32px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+
+  /* ── Section Headers ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .section-header h2 {
+    font-size: 15px;
+    font-weight: 700;
+  }
+  .section-header .count {
+    font-size: 11px;
+    background: var(--surface-3);
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: var(--text-dim);
+  }
+
+  /* ── Energy Curve / Heatmap ── */
+  .energy-section {
+    margin-bottom: 32px;
+  }
+
+  .energy-chart {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .energy-canvas-wrap {
+    position: relative;
+    height: 120px;
+    margin-bottom: 8px;
+  }
+
+  canvas#energyCanvas {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+  }
+
+  .energy-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .heatmap-row {
+    display: flex;
+    gap: 2px;
+    margin-top: 12px;
+  }
+  .heatmap-cell {
+    flex: 1;
+    height: 28px;
+    border-radius: 4px;
+    position: relative;
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+  .heatmap-cell:hover {
+    transform: scaleY(1.3);
+    z-index: 1;
+  }
+  .heatmap-cell:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    white-space: nowrap;
+    color: var(--text);
+  }
+
+  .heatmap-legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .heatmap-legend-gradient {
+    width: 80px; height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, rgba(108,92,231,0.1), rgba(108,92,231,0.4), var(--accent), var(--p0));
+  }
+
+  /* ── Timeline ── */
+  .timeline-section { margin-bottom: 32px; }
+
+  .timeline {
+    position: relative;
+    padding-left: 32px;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 11px; top: 8px;
+    width: 2px;
+    height: calc(100% - 16px);
+    background: linear-gradient(180deg, var(--accent), var(--border));
+    border-radius: 2px;
+  }
+
+  .timeline-item {
+    position: relative;
+    margin-bottom: 20px;
+    animation: tl-in 0.5s ease-out both;
+  }
+  .timeline-item:nth-child(1) { animation-delay: 0.1s; }
+  .timeline-item:nth-child(2) { animation-delay: 0.2s; }
+  .timeline-item:nth-child(3) { animation-delay: 0.3s; }
+  .timeline-item:nth-child(4) { animation-delay: 0.4s; }
+  .timeline-item:nth-child(5) { animation-delay: 0.5s; }
+
+  @keyframes tl-in {
+    from { opacity: 0; transform: translateX(-12px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .timeline-dot {
+    position: absolute;
+    left: -27px; top: 14px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 2px solid;
+    background: var(--bg);
+  }
+
+  .timeline-item.topic .timeline-dot { border-color: var(--accent); box-shadow: 0 0 8px rgba(108,92,231,0.4); }
+  .timeline-item.action .timeline-dot { border-color: var(--orange); box-shadow: 0 0 8px rgba(255,165,2,0.3); }
+  .timeline-item.decision .timeline-dot { border-color: var(--teal); box-shadow: 0 0 8px rgba(0,206,201,0.3); }
+  .timeline-item.mention .timeline-dot { border-color: var(--p0); box-shadow: 0 0 8px rgba(255,107,107,0.3); background: rgba(255,107,107,0.2); }
+  .timeline-item.screenshot .timeline-dot { border-color: var(--blue); box-shadow: 0 0 8px rgba(116,185,255,0.3); }
+
+  .timeline-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    transition: all 0.25s;
+    cursor: default;
+  }
+  .timeline-card:hover {
+    border-color: var(--accent);
+    transform: translateX(4px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .timeline-card .card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .type-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .type-badge.topic { background: rgba(108,92,231,0.15); color: var(--accent-light); }
+  .type-badge.action { background: rgba(255,165,2,0.15); color: var(--orange); }
+  .type-badge.decision { background: rgba(0,206,201,0.15); color: var(--teal); }
+  .type-badge.mention { background: rgba(255,107,107,0.15); color: var(--p0); }
+  .type-badge.screenshot { background: rgba(116,185,255,0.15); color: var(--blue); }
+
+  .timeline-card .timestamp {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .timeline-card .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .timeline-card .card-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  .timeline-card .speaker-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    background: var(--surface-3);
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  /* Screenshot thumbnail in timeline */
+  .screenshot-thumb {
+    margin-top: 8px;
+    width: 100%;
+    height: 120px;
+    background: var(--surface-3);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    border: 1px solid var(--border);
+    position: relative;
+  }
+  .screenshot-thumb .placeholder-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .screenshot-thumb .placeholder-content .icon { font-size: 28px; opacity: 0.5; }
+
+  /* ── Right Sidebar ── */
+  .sidebar {
+    padding: 24px 20px;
+    overflow-y: auto;
+    max-height: calc(100vh - 180px);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .sidebar-section {
+    margin-bottom: 28px;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+  }
+
+  /* ── Participants ── */
+  .participant-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .participant-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    transition: all 0.2s;
+  }
+  .participant-row:hover {
+    border-color: var(--accent);
+    transform: translateX(2px);
+  }
+
+  .participant-avatar {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .participant-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .participant-info .name { font-size: 13px; font-weight: 600; }
+  .participant-info .role { font-size: 11px; color: var(--text-muted); }
+
+  .speak-bar-mini {
+    width: 60px; height: 16px;
+    border-radius: 4px;
+    background: var(--surface-3);
+    overflow: hidden;
+    position: relative;
+  }
+  .speak-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-light));
+    transition: width 1s ease;
+  }
+  .speak-pct {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: 4px;
+    width: 30px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Action Items (sidebar) ── */
+  .action-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .action-item {
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: all 0.2s;
+  }
+  .action-item:hover {
+    border-color: var(--orange);
+    transform: translateX(2px);
+  }
+  .action-item .action-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .action-item .action-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .action-item .action-status {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .status-pending { background: rgba(255,165,2,0.15); color: var(--orange); }
+  .status-done { background: rgba(105,219,124,0.15); color: var(--p2); }
+
+  /* ── Key Decisions (sidebar) ── */
+  .decision-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .decision-item {
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--teal);
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    transition: all 0.2s;
+  }
+  .decision-item:hover {
+    border-color: var(--teal);
+    transform: translateX(2px);
+  }
+  .decision-item .dec-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* ── Footer ── */
+  .page-footer {
+    padding: 16px 32px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .page-footer .powered {
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  .feedback-btns {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+  }
+  .feedback-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 4px;
+    transition: all 0.2s;
+  }
+  .feedback-btn:hover { border-color: var(--accent); color: var(--text); }
+  .feedback-btn.confirm:hover { border-color: var(--p2); color: var(--p2); }
+  .feedback-btn.reject:hover { border-color: var(--p0); color: var(--p0); }
+
+  /* ── Scrollbar ── */
+  .main-content::-webkit-scrollbar,
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .main-content::-webkit-scrollbar-thumb,
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ── Animations ── */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .stat-card { animation: fadeInUp 0.5s ease-out both; }
+  .stat-card:nth-child(1) { animation-delay: 0.05s; }
+  .stat-card:nth-child(2) { animation-delay: 0.1s; }
+  .stat-card:nth-child(3) { animation-delay: 0.15s; }
+  .stat-card:nth-child(4) { animation-delay: 0.2s; }
+  .stat-card:nth-child(5) { animation-delay: 0.25s; }
+
+  .participant-row, .action-item, .decision-item {
+    animation: fadeInUp 0.4s ease-out both;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Entry Context Banner ── -->
+<div style="background:linear-gradient(90deg,rgba(108,92,231,0.12),rgba(162,155,254,0.06));border-bottom:1px solid rgba(108,92,231,0.2);padding:8px 32px;display:flex;align-items:center;gap:10px;font-size:12px;color:#8b8fa3;">
+  <span style="font-size:14px;">📋</span>
+  <span><b style="color:#a29bfe;">会后结果页</b> — 会议结束后由 Meeting Radar Side Panel 自动生成，点击 Side Panel 底部「查看完整报告」或从扩展 Popup 历史记录入口打开</span>
+  <span style="margin-left:auto;padding:3px 10px;border-radius:6px;background:rgba(105,219,124,0.12);color:#69db7c;font-weight:600;font-size:11px;">✅ 已同步</span>
+</div>
+
+<!-- ── Header ── -->
+<header class="page-header">
+  <div class="logo">📡</div>
+  <div class="header-info">
+    <h1>Q2 Planning Review — Sprint 7</h1>
+    <div class="header-meta">
+      <span>📅 2026-04-03</span>
+      <span>🕐 10:00 - 11:05</span>
+      <span>👥 4 人参会</span>
+      <span>⏱️ 65 分钟</span>
+    </div>
+  </div>
+  <div class="header-actions">
+    <button class="header-btn" onclick="alert('Share to RingCentral Team Messaging')">📤 分享到 RC</button>
+    <button class="header-btn">📋 导出</button>
+    <button class="header-btn primary">▶️ 回放录制</button>
+  </div>
+</header>
+
+<!-- ── Stats ── -->
+<div class="stats-strip">
+  <div class="stat-card">
+    <div class="stat-label">会议时长</div>
+    <div class="stat-value">65<span style="font-size:14px;color:var(--text-dim);font-weight:500;">min</span></div>
+    <div class="stat-sub">有效讨论 58 分钟</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">话题覆盖</div>
+    <div class="stat-value">5<span style="font-size:14px;color:var(--text-dim);font-weight:500;">/5</span></div>
+    <div class="stat-sub">全部议题已讨论</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">行动项</div>
+    <div class="stat-value">6</div>
+    <div class="stat-sub">4 待处理 · 2 已确认</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">关键决议</div>
+    <div class="stat-value">3</div>
+    <div class="stat-sub">全部已记录</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">提及你</div>
+    <div class="stat-value">7<span style="font-size:14px;color:var(--text-dim);font-weight:500;">次</span></div>
+    <div class="stat-sub">3 次任务分配</div>
+  </div>
+</div>
+
+<!-- ── Main Content ── -->
+<div class="main-layout">
+  <div class="main-content">
+
+    <!-- Energy / Heatmap -->
+    <div class="energy-section">
+      <div class="section-header">
+        <span>📊</span>
+        <h2>会议能量曲线 & 发言热力图</h2>
+      </div>
+      <div class="energy-chart">
+        <div class="energy-canvas-wrap">
+          <canvas id="energyCanvas"></canvas>
+        </div>
+        <div class="energy-labels">
+          <span>10:00</span><span>10:10</span><span>10:20</span><span>10:30</span><span>10:40</span><span>10:50</span><span>11:00</span><span>11:05</span>
+        </div>
+        <div class="heatmap-row" id="heatmapRow"></div>
+        <div class="heatmap-legend">
+          <span>安静</span>
+          <div class="heatmap-legend-gradient"></div>
+          <span>激烈讨论</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="timeline-section">
+      <div class="section-header">
+        <span>🗂️</span>
+        <h2>会议时间线</h2>
+        <span class="count">12 事件</span>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <!-- Topic 1 -->
+        <div class="timeline-item topic">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge topic">话题</span>
+              <span class="timestamp">10:00</span>
+            </div>
+            <div class="card-title">会议开场 & 议程确认</div>
+            <div class="card-desc">Alex 介绍今日议程：预算确认、排期评审、技术方案评审、资源分配、跟进事项</div>
+            <span class="speaker-tag">👤 Alex Chen</span>
+          </div>
+        </div>
+
+        <!-- Topic 2 -->
+        <div class="timeline-item topic">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge topic">话题</span>
+              <span class="timestamp">10:05</span>
+            </div>
+            <div class="card-title">Q2 预算讨论</div>
+            <div class="card-desc">Mike 展示预算方案，总额 200 万。团队对云服务费用占比存在讨论。</div>
+            <span class="speaker-tag">👤 Mike Liu</span>
+          </div>
+        </div>
+
+        <!-- Decision -->
+        <div class="timeline-item decision">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge decision">决议</span>
+              <span class="timestamp">10:15</span>
+            </div>
+            <div class="card-title">✅ Q2 预算确认为 200 万</div>
+            <div class="card-desc">全员同意，云服务预留 40%，人力成本 45%，弹性预算 15%</div>
+          </div>
+        </div>
+
+        <!-- Screenshot -->
+        <div class="timeline-item screenshot">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge screenshot">共享画面</span>
+              <span class="timestamp">10:18</span>
+            </div>
+            <div class="card-title">排期甘特图展示</div>
+            <div class="card-desc">Sarah 分享 Sprint 7-12 排期甘特图</div>
+            <div class="screenshot-thumb">
+              <div class="placeholder-content">
+                <span class="icon">📊</span>
+                <span>Sprint 甘特图截图</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Topic →  排期评审 -->
+        <div class="timeline-item topic">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge topic">话题</span>
+              <span class="timestamp">10:20</span>
+            </div>
+            <div class="card-title">排期评审 & Sprint 规划</div>
+            <div class="card-desc">讨论 Sprint 7 交付内容、Meeting Radar Phase 1 排期、QA 资源瓶颈</div>
+            <span class="speaker-tag">👤 Sarah Wang</span>
+          </div>
+        </div>
+
+        <!-- Mention -->
+        <div class="timeline-item mention">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge mention">提及你</span>
+              <span class="timestamp">10:28</span>
+            </div>
+            <div class="card-title">🎯 Alex: "让 Esone 负责 Meeting Radar 的技术评审"</div>
+            <div class="card-desc">Alex 建议你作为 Meeting Radar 的技术 Lead，下周三前完成技术评审并出评审文档</div>
+            <span class="speaker-tag">👤 Alex Chen</span>
+          </div>
+        </div>
+
+        <!-- Action -->
+        <div class="timeline-item action">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge action">行动项</span>
+              <span class="timestamp">10:30</span>
+            </div>
+            <div class="card-title">📋 Esone: 准备 Meeting Radar 技术评审文档</div>
+            <div class="card-desc">DDL: 下周二 (04-08) | 包含：架构设计、技术选型、风险评估</div>
+            <span class="speaker-tag">📌 已分配给你</span>
+          </div>
+        </div>
+
+        <!-- Topic -->
+        <div class="timeline-item topic">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge topic">话题</span>
+              <span class="timestamp">10:35</span>
+            </div>
+            <div class="card-title">技术方案评审</div>
+            <div class="card-desc">讨论 Chrome Extension MV3 架构、tabCapture 限制、录制 offscreen 方案可行性</div>
+            <span class="speaker-tag">👤 Esone Qiu</span>
+          </div>
+        </div>
+
+        <!-- Screenshot -->
+        <div class="timeline-item screenshot">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge screenshot">共享画面</span>
+              <span class="timestamp">10:38</span>
+            </div>
+            <div class="card-title">架构设计图分享</div>
+            <div class="card-desc">Esone 分享 Meeting Radar 技术架构图，展示 content script → offscreen → side panel 数据流</div>
+            <div class="screenshot-thumb">
+              <div class="placeholder-content">
+                <span class="icon">🏗️</span>
+                <span>技术架构图截图</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Decision -->
+        <div class="timeline-item decision">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge decision">决议</span>
+              <span class="timestamp">10:45</span>
+            </div>
+            <div class="card-title">✅ Meeting Radar Phase 1 方案通过</div>
+            <div class="card-desc">技术方案评审通过，Sprint 8 开始开发，Sprint 10 内部灰度</div>
+          </div>
+        </div>
+
+        <!-- Topic -->
+        <div class="timeline-item topic">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge topic">话题</span>
+              <span class="timestamp">10:50</span>
+            </div>
+            <div class="card-title">跟进事项 & 总结</div>
+            <div class="card-desc">确认所有行动项 Owner 和 DDL，约定下次 check-in 时间</div>
+            <span class="speaker-tag">👤 Alex Chen</span>
+          </div>
+        </div>
+
+        <!-- Action -->
+        <div class="timeline-item action">
+          <div class="timeline-dot"></div>
+          <div class="timeline-card">
+            <div class="card-top">
+              <span class="type-badge action">行动项</span>
+              <span class="timestamp">11:00</span>
+            </div>
+            <div class="card-title">📋 Sarah: 确认 QA 资源排期</div>
+            <div class="card-desc">DDL: 下周一 (04-07) | 与 QA Lead 确认 Sprint 8 测试资源</div>
+            <span class="speaker-tag">👤 Sarah Wang</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Sidebar ── -->
+  <div class="sidebar">
+
+    <!-- Participants -->
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        <span>👥</span> 参会者发言分布
+      </div>
+      <div class="participant-list">
+        <div class="participant-row">
+          <div class="participant-avatar" style="background: linear-gradient(135deg, var(--accent), var(--accent-light));">A</div>
+          <div class="participant-info">
+            <div class="name">Alex Chen</div>
+            <div class="role">主持人</div>
+          </div>
+          <div class="speak-bar-mini"><div class="speak-bar-fill" style="width:35%"></div></div>
+          <span class="speak-pct">35%</span>
+        </div>
+        <div class="participant-row">
+          <div class="participant-avatar" style="background: linear-gradient(135deg, #00b894, #55efc4);">E</div>
+          <div class="participant-info">
+            <div class="name">Esone Qiu</div>
+            <div class="role">技术 Lead</div>
+          </div>
+          <div class="speak-bar-mini"><div class="speak-bar-fill" style="width:28%"></div></div>
+          <span class="speak-pct">28%</span>
+        </div>
+        <div class="participant-row">
+          <div class="participant-avatar" style="background: linear-gradient(135deg, #e17055, #fab1a0);">S</div>
+          <div class="participant-info">
+            <div class="name">Sarah Wang</div>
+            <div class="role">PM</div>
+          </div>
+          <div class="speak-bar-mini"><div class="speak-bar-fill" style="width:22%"></div></div>
+          <span class="speak-pct">22%</span>
+        </div>
+        <div class="participant-row">
+          <div class="participant-avatar" style="background: linear-gradient(135deg, #0984e3, #74b9ff);">M</div>
+          <div class="participant-info">
+            <div class="name">Mike Liu</div>
+            <div class="role">财务</div>
+          </div>
+          <div class="speak-bar-mini"><div class="speak-bar-fill" style="width:15%"></div></div>
+          <span class="speak-pct">15%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Items -->
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        <span>📋</span> 行动项总览
+      </div>
+      <div class="action-list">
+        <div class="action-item">
+          <div class="action-title">
+            <span>📌</span>
+            准备 Meeting Radar 技术评审文档
+          </div>
+          <div class="action-meta">
+            <span>👤 Esone</span>
+            <span>📅 04-08</span>
+            <span class="action-status status-pending">待处理</span>
+          </div>
+        </div>
+        <div class="action-item">
+          <div class="action-title">
+            <span>📌</span>
+            确认 QA 资源排期
+          </div>
+          <div class="action-meta">
+            <span>👤 Sarah</span>
+            <span>📅 04-07</span>
+            <span class="action-status status-pending">待处理</span>
+          </div>
+        </div>
+        <div class="action-item">
+          <div class="action-title">
+            <span>📌</span>
+            输出 Meeting Radar 设计规范
+          </div>
+          <div class="action-meta">
+            <span>👤 Esone</span>
+            <span>📅 04-10</span>
+            <span class="action-status status-pending">待处理</span>
+          </div>
+        </div>
+        <div class="action-item">
+          <div class="action-title">
+            <span>📌</span>
+            提交 Q2 预算明细到财务系统
+          </div>
+          <div class="action-meta">
+            <span>👤 Mike</span>
+            <span>📅 04-05</span>
+            <span class="action-status status-done">已确认</span>
+          </div>
+        </div>
+        <div class="action-item">
+          <div class="action-title">
+            <span>📌</span>
+            准备 Sprint 8 Kickoff 材料
+          </div>
+          <div class="action-meta">
+            <span>👤 Alex</span>
+            <span>📅 04-09</span>
+            <span class="action-status status-pending">待处理</span>
+          </div>
+        </div>
+        <div class="action-item">
+          <div class="action-title">
+            <span>📌</span>
+            更新项目 Confluence 文档
+          </div>
+          <div class="action-meta">
+            <span>👤 Sarah</span>
+            <span>📅 04-11</span>
+            <span class="action-status status-done">已确认</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Decisions -->
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        <span>⚖️</span> 关键决议
+      </div>
+      <div class="decision-list">
+        <div class="decision-item">
+          ✅ Q2 预算确认为 200 万（云服务 40%、人力 45%、弹性 15%）
+          <div class="dec-time">📍 10:15</div>
+        </div>
+        <div class="decision-item">
+          ✅ Meeting Radar Phase 1 技术方案通过，Sprint 8 启动开发
+          <div class="dec-time">📍 10:45</div>
+        </div>
+        <div class="decision-item">
+          ✅ 技术评审定于下周三，由 Esone 主导
+          <div class="dec-time">📍 10:55</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Footer ── -->
+<footer class="page-footer">
+  <div class="powered">
+    <div class="logo" style="width:20px;height:20px;border-radius:6px;font-size:10px;">📡</div>
+    <span>Generated by Meeting Radar</span>
+  </div>
+  <span>•</span>
+  <span>基于会议录制和 AI 分析自动生成</span>
+  <div class="feedback-btns">
+    <button class="feedback-btn confirm" onclick="alert('感谢确认！')">✅ 内容准确</button>
+    <button class="feedback-btn reject" onclick="alert('已记录反馈')">❌ 需要修正</button>
+  </div>
+</footer>
+
+<script>
+  // ── Energy Curve (Canvas) ──
+  const canvas = document.getElementById('energyCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function drawEnergyCurve() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const w = rect.width;
+    const h = rect.height;
+
+    // Energy data points (65 minutes, sampled every minute)
+    const energyData = [
+      0.15, 0.20, 0.25, 0.30, 0.35, // 10:00-10:04 opening
+      0.40, 0.55, 0.65, 0.72, 0.80, 0.85, 0.78, 0.70, 0.60, 0.55, // 10:05-10:14 budget discussion
+      0.50, 0.45, 0.40, // 10:15-10:17 decision + transition
+      0.35, 0.40, 0.50, 0.60, 0.65, 0.78, 0.82, 0.75, 0.70, 0.65, // 10:18-10:27 sprint review
+      0.85, 0.92, 0.95, // 10:28-10:30 mention peak!
+      0.80, 0.75, 0.70, 0.65, // 10:31-10:34
+      0.70, 0.75, 0.80, 0.85, 0.90, 0.88, 0.92, 0.85, 0.80, 0.78, 0.72, // 10:35-10:45 technical review
+      0.65, 0.60, 0.55, 0.50, 0.48, // 10:46-10:50
+      0.55, 0.60, 0.65, 0.58, 0.50, 0.45, 0.40, 0.35, 0.30, 0.25, // 10:51-11:00
+      0.20, 0.18, 0.15, 0.12, 0.10 // 11:01-11:05 wrap up
+    ];
+
+    const padY = 16;
+    const usableH = h - padY * 2;
+
+    // Draw gradient fill
+    const gradient = ctx.createLinearGradient(0, padY, 0, h);
+    gradient.addColorStop(0, 'rgba(108,92,231,0.3)');
+    gradient.addColorStop(1, 'rgba(108,92,231,0)');
+
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+
+    const stepX = w / (energyData.length - 1);
+    for (let i = 0; i < energyData.length; i++) {
+      const x = i * stepX;
+      const y = padY + usableH * (1 - energyData[i]);
+      if (i === 0) {
+        ctx.lineTo(x, y);
+      } else {
+        const prevX = (i - 1) * stepX;
+        const prevY = padY + usableH * (1 - energyData[i - 1]);
+        const cpx = (prevX + x) / 2;
+        ctx.bezierCurveTo(cpx, prevY, cpx, y, x, y);
+      }
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Draw line
+    const lineGrad = ctx.createLinearGradient(0, 0, w, 0);
+    lineGrad.addColorStop(0, '#6c5ce7');
+    lineGrad.addColorStop(0.45, '#a29bfe');
+    lineGrad.addColorStop(0.5, '#ff6b6b');
+    lineGrad.addColorStop(0.55, '#a29bfe');
+    lineGrad.addColorStop(1, '#6c5ce7');
+
+    ctx.beginPath();
+    for (let i = 0; i < energyData.length; i++) {
+      const x = i * stepX;
+      const y = padY + usableH * (1 - energyData[i]);
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        const prevX = (i - 1) * stepX;
+        const prevY = padY + usableH * (1 - energyData[i - 1]);
+        const cpx = (prevX + x) / 2;
+        ctx.bezierCurveTo(cpx, prevY, cpx, y, x, y);
+      }
+    }
+    ctx.strokeStyle = lineGrad;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Highlight peak points
+    const peaks = [
+      { idx: 10, label: '预算讨论高峰' },
+      { idx: 30, label: '🎯 提及你！' },
+      { idx: 40, label: '技术评审' },
+    ];
+    peaks.forEach(peak => {
+      const x = peak.idx * stepX;
+      const y = padY + usableH * (1 - energyData[peak.idx]);
+
+      // Glow
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      const glowColors = peak.idx === 30 ? 'rgba(255,107,107,0.3)' : 'rgba(108,92,231,0.3)';
+      ctx.fillStyle = glowColors;
+      ctx.fill();
+
+      // Dot
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = peak.idx === 30 ? '#ff6b6b' : '#a29bfe';
+      ctx.fill();
+
+      // Label
+      ctx.fillStyle = '#8b8fa3';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(peak.label, x, y - 14);
+    });
+  }
+
+  // ── Heatmap ──
+  function buildHeatmap() {
+    const row = document.getElementById('heatmapRow');
+    const heatData = [
+      0.15, 0.25, 0.35, 0.55, 0.75, 0.85, 0.70, 0.55, 0.40, 0.45,
+      0.60, 0.75, 0.82, 0.95, 0.80, 0.70, 0.85, 0.92, 0.85, 0.80,
+      0.72, 0.65, 0.55, 0.48, 0.55, 0.60, 0.50, 0.40, 0.30, 0.20,
+      0.15, 0.10
+    ];
+
+    const timeLabels = [];
+    for (let i = 0; i < 32; i++) {
+      const total = 600 + i * 2;
+      const h = Math.floor(total / 60);
+      const m = total % 60;
+      timeLabels.push(`${h}:${String(m).padStart(2, '0')}`);
+    }
+
+    heatData.forEach((v, i) => {
+      const cell = document.createElement('div');
+      cell.className = 'heatmap-cell';
+
+      // Color interpolation
+      let r, g, b, a;
+      if (v < 0.5) {
+        r = 108; g = 92; b = 231; a = v * 0.6;
+      } else if (v < 0.8) {
+        const t = (v - 0.5) / 0.3;
+        r = Math.round(108 + t * (255 - 108));
+        g = Math.round(92 + t * (165 - 92));
+        b = Math.round(231 + t * (2 - 231));
+        a = 0.4 + t * 0.3;
+      } else {
+        const t = (v - 0.8) / 0.2;
+        r = Math.round(255 - t * (255 - 255));
+        g = Math.round(165 - t * (165 - 107));
+        b = Math.round(2 + t * (107 - 2));
+        a = 0.7 + t * 0.3;
+      }
+      cell.style.background = `rgba(${r},${g},${b},${a})`;
+      cell.setAttribute('data-tooltip', `${timeLabels[i]} — 活跃度 ${Math.round(v * 100)}%`);
+      row.appendChild(cell);
+    });
+  }
+
+  // ── Animated entry for timeline ──
+  function animateTimeline() {
+    const items = document.querySelectorAll('.timeline-item');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.animationPlayState = 'running';
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1 });
+
+    items.forEach(item => {
+      item.style.animationPlayState = 'paused';
+      observer.observe(item);
+    });
+  }
+
+  // ── Animate speaking bars on load ──
+  function animateSpeakBars() {
+    document.querySelectorAll('.speak-bar-fill').forEach(bar => {
+      const target = bar.style.width;
+      bar.style.width = '0';
+      setTimeout(() => { bar.style.width = target; }, 300);
+    });
+  }
+
+  // ── Init ──
+  window.addEventListener('load', () => {
+    drawEnergyCurve();
+    buildHeatmap();
+    animateTimeline();
+    animateSpeakBars();
+  });
+
+  window.addEventListener('resize', drawEnergyCurve);
+</script>
+</body>
+</html>

@@ -1,0 +1,160 @@
+# RingCentral 会议副驾 v1 方案
+
+## Summary
+- 目标产品：在 `https://v.ringcentral.com/conf/on/:meetingId` 检测到会议后，进入"自动检测 + 一键开始"模式；开始后由扩展持续录制、转写、会中分析、会后上传并生成结果页。
+- 可行性结论：
+  - `会议页识别`、`会中状态观察`、`一键启动录制`、`持续录制`、`滚动转写`、`截图分析`、`提醒/总结/行动项` 都可在 Chrome Extension 内落地。
+  - `纯扩展静默自动录制` 不可做。Chrome `tabCapture` 只能在用户触发扩展后开始，因此 v1 落点定为"自动检测到会议后，用户点击扩展 action / popup 一次开始"。
+  - `会后独立服务分析` 当前 API 只接 `videoUrl`/服务端文件路径，不够浏览器直接上传；v1 需要补一个上传型接口。
+- 借鉴的产品体验：
+  - 飞书妙记：会后不是"长文本"，而是"可快速浏览的结构化结果页 + 待办 + 可复用知识资产"。
+  - 腾讯会议 AI 小助手：会中低打扰提醒、实时问答、当前几分钟主题总结、会后自动保存。
+  - 讯飞听见：术语/说话人/章节/智能溯源，把摘要结论反链回原始证据。
+  - Otter.ai：My Action Items 跨会议聚合、AI Chat 实时问答、Slide/Screenshot 分析。
+  - Read AI：会议上下文与邮件/Slack/日历串联，跨频道搜索。
+  - Jamie：隐私优先 (privacy-first)，无 bot 本地录音方案。
+- 推荐功能名：
+  - `Meeting Radar`（推荐，和现有 Radar 语义一致）
+  - `Ring Radar`
+  - `会中雷达`
+  - `会议副驾`
+  - `TalkTrace`
+
+## Implementation Changes
+- 扩展入口与权限：
+  - 更新 [src/manifest.json](/Users/Esone/git/personal-ai/src/manifest.json) 增加 `tabCapture`、`offscreen`、`sidePanel` 权限，并新增 `https://v.ringcentral.com/*` 专用 content script。
+  - 更新 [webpack.common.cjs](/Users/Esone/git/personal-ai/webpack.common.cjs) 增加 `meeting-sidepanel`、`meeting-offscreen`、`contentScriptRingCentralMeeting` 等 entry。
+  - 更新 [src/background.ts](/Users/Esone/git/personal-ai/src/background.ts) 增加 meeting session registry、action badge、capture lifecycle、upload poller。
+  - 更新 [src/popup.tsx](/Users/Esone/git/personal-ai/src/popup.tsx) 增加"会议副驾"手动入口、状态卡片、开始/停止按钮。
+- 会中运行时：
+  - 新增 `contentScriptRingCentralMeeting`，专门监听 `v.ringcentral.com/conf/on/:meetingId`，用 `URL + DOM` 双信号判断会议存在、结束、录制中、AI Notes/字幕状态。
+  - 已验证页面里可稳定观测到 `Leave meeting`、`Participants`、`Chat`、`Notes`、`RecordingMark`、`TranscriptionIndicator`、`ai-notes-sidebar-enabled` 等信号；不要依赖 brittle class 做唯一判断，URL 与 aria-label 优先。
+  - `chrome.action` 设为 meeting tab 上一键启动：点击 action 后直接创建 offscreen document、调用 `tabCapture.getMediaStreamId()`、启动录制。
+- 会中 UI 入口与交互（**v1 核心 UX**）：
+  - **浮动 Radar 图标**（`icon48.png` 扩展图标）：在会议页面右下角注入浮动悬浮按钮，作为 Meeting Radar 的唯一入口。
+    - 图标外围显示录制状态旋转环（红色弧线持续旋转），表示正在录制。
+    - 当有未关闭的 P0 紧急提醒时，图标边框变红 + 呼吸灯动效 + 右上角红色徽标展示未读 P0 数量。
+    - **Hover 信息面板**：鼠标悬浮图标时，上方展开信息卡片，包含：
+      - 录制状态与时长（`REC 00:32:15`）
+      - 当前话题标题（取 timeline 最新一条 chapter 标题）+ 话题持续时间 + 当前主讲人
+      - 关键统计：行动项数 / 提及你次数 / 话题数 / 参会者数
+      - 快捷操作按钮：`Catch Up`（打开错过内容弹窗）、`面板`（展开 Side Panel）
+    - 点击图标：展开/收起 Side Panel。
+  - **Side Panel 默认收起**：不像传统 side panel 自动打开占据屏幕空间，默认收起不干扰会议视图，通过点击浮动图标或 hover 面板内快捷按钮打开。
+    - Panel 内保持 Tab 架构：`实时` / `时间线` / `行动项` / `设置`
+    - 顶部保留 `刚错过了什么？` 快捷入口（快捷键 `Cmd+Shift+C`）
+    - 底部状态栏显示录制状态、时长、麦克风状态
+- 会中提醒分级体系（**三级提醒**）：
+  - **P0 紧急**（被点名 / 被分配任务 / 阻塞性决议）：
+    - 视觉表现：**居中定格卡片**，不自动消失，用户必须手动点击关闭。
+    - 卡片显示红色紧急标签 + 消息内容 + 已停留时间（`刚刚` -> `12'' ago` -> `1'30'' ago`），呼吸动效边框。
+    - 多条 P0 **垂直堆叠排列**（居中区域内上下排列），不会互相遮挡，容器可滚动。
+    - 同步推送到 Side Panel feed + 浮动图标红色徽标计数。
+  - **P1 关注**（关键词命中 / 话题切换 / 会议进度节点）：
+    - 视觉表现：**弹幕飘过**，黄色半透明标签从右向左飘过会议画面上方，`8s` 后自然消失。
+    - 同步写入 Side Panel feed。
+  - **P2 信息**（周期摘要更新 / 行动项候选更新）：
+    - 视觉表现：**轻量弹幕**，绿色低透明度标签飘过，`7s` 后消失。
+    - 同步写入 Side Panel feed。
+- 实时分析引擎：
+  - 新增 `MeetingRealtimeAnalyzer`：维护滚动 transcript buffer、视觉帧摘要、topic timeline、action candidates、mention watchlist hits。
+  - `gpt-5.3-codex` 周期分析：
+    - 每 `30-60s` 更新"当前几分钟话题摘要"，推送到浮动图标 hover 面板
+    - 维护主题时间线节点（chapter），最新 chapter 标题实时显示在 hover 面板
+    - 提炼行动项 `owner / due / next step`
+    - 检测用户名字、别名、关注关键词命中并按分级推送提醒
+  - 截图不走 `tabs.captureVisibleTab` 主链路，改为从已捕获的 tab stream 采样帧；只在"屏幕内容变化明显 / 检测到共享 / 到达最小间隔"时送图分析，控制成本与干扰。
+  - 新增一个"我刚错过了什么"即时查询动作，基于最近 `5/10/15` 分钟或"自上次查看"的 transcript 和视觉上下文生成 catch-up 卡片。触发方式：hover 面板快捷按钮 / Side Panel 顶部按钮 / 快捷键 `Cmd+Shift+C`。
+- 录制与转写：
+  - offscreen document 负责 `getUserMedia(streamId)`、`MediaRecorder(video/webm)`、音频回放桥接，避免录制后用户听不到会议声音。
+  - 录制 chunk 按 `5s` 切片，落 IndexedDB；会后组装 `webm` 上传。v1 不在浏览器侧做 `mp4` 转码，服务端负责兼容或转码。
+  - 实时转写用 `whisper-1` 微批方案：每 `8-12s` 音频分段上传一次，保留 `1-2s` overlap 做拼接纠错；预期延迟 `10-20s`，不承诺"逐词级实时"。
+  - speaker diarization 不作为 v1 承诺能力；如 RingCentral 页面已有字幕/AI notes 且能读到说话人，可作为辅助增强，不作为主链路依赖。
+  - 支持术语表 / 热词表配置（`MEETING_HOTWORDS`），提升项目专有名词识别准确率。
+  - Transcript chunk 增加 `language` 字段，为未来多语言会议做准备。
+- 会后服务集成：
+  - 现有服务保留 `/api/v3/generate_digest` 作为 URL 版；为扩展新增上传型接口，推荐定义：
+    - `POST /api/v4/meetings/digest` `multipart/form-data`
+    - 字段：`id`、`sessionName`、`meetingUrl`、`videoFile(video/webm)`、`transcriptFile(jsonl|vtt)`、`screenshotsZip`、`output(webpage|pdf)`、`needClips`
+    - 响应：`202 { taskId, id, status }`
+    - 轮询：`GET /api/v4/meetings/{id}` -> `{ id, status, resultUrl, resultType, clipsUrl?, message }`
+  - 默认会后产物选 `output=webpage`，因为比 PDF 更适合章节跳转、行动项复核、时间线浏览；`needClips=false` 作为默认，短视频/章节页作为 phase 2 打开。
+  - 扩展会后上传内容至少包括：最终视频、结构化 transcript、关键帧摘要；服务失败时保留本地任务记录并允许重传。
+  - **会后结果页（Panorama View）** 为独立 `webpage` 页面，在会议结束后自动生成：
+    - 入口：Side Panel 底部「查看完整报告」链接 / Popup 历史记录入口 / 扩展右键菜单
+    - 内容：会议能量曲线 + 发言热力图 + 结构化时间线（话题/决议/行动项/提及你/共享画面截图）+ 参会者发言占比 + 行动项总览 + 关键决议 + 反馈按钮
+    - 支持一键分享到 RingCentral Team Messaging（利用现有消息能力），action item owner 可收到 @人 通知
+    - 页面内嵌 `内容准确` / `需要修正` 反馈按钮
+- 配置与选项：
+  - 在 options 中新增 meeting 配置组：`MEETING_FEATURE_ENABLED`、`MEETING_AUTO_DETECT`、`MEETING_MANUAL_MODE`、`MEETING_NAME_ALIASES`、`MEETING_PROVIDER_BASE_URL`、`MEETING_PROVIDER_API_KEY`、`MEETING_TRANSCRIBE_MODEL`、`MEETING_ANALYSIS_MODEL`、`MEETING_SUMMARY_INTERVAL_SEC`、`MEETING_SCREENSHOT_INTERVAL_SEC`、`MEETING_HOTWORDS`、`MEETING_PRIVACY_NOTICE_TEXT`。
+  - 默认值：
+    - 自动检测开启
+    - 手动触发入口同时保留在 popup
+    - Side Panel 默认收起，通过浮动图标操作
+    - 会中分级提醒：P0 居中定格 / P1 弹幕飘过 / P2 静默更新
+    - 会后默认生成 `webpage` 全景结果页
+    - 会议开始录制时显示隐私声明（可配置文本）
+
+## Public APIs / Data Shapes
+- 扩展内部新增类型：
+  - `MeetingSession`：`meetingId`、`tabId`、`status`、`startedAt`、`endedAt`、`captureState`、`uploadState`
+  - `TranscriptChunk`：`seq`、`startMs`、`endMs`、`text`、`speaker?`、`confidence?`、`language?`
+  - `MeetingInsight`：`summary`、`timelineItems[]`、`actions[]`、`mentionAlerts[]`、`visualMoments[]`
+  - `MeetingAlertLevel`：`P0_URGENT` | `P1_ATTENTION` | `P2_INFO`
+- 服务接口默认采用 `v4`，避免复用当前 `pdfUrl` 这种对 `webpage` 输出语义不准确的字段名；统一改成 `resultUrl` / `resultType`。
+- v1 transcript 落地格式默认 `jsonl`，每行一个 chunk，便于实时追加、重跑分析、故障恢复。
+
+## Test Plan
+- 会议识别：
+  - 打开、刷新、关闭、跳转离开 `v.ringcentral.com/conf/on/:id`
+  - 已入会、待入会、会议已结束、标签页关闭
+- 录制链路：
+  - action 一键启动成功
+  - 用户拒绝/取消权限
+  - 录制中切后台标签、切窗口、会议页刷新
+  - 结束后正常 stop、异常 stop、浏览器重启恢复
+- 会中 UI 链路：
+  - 浮动图标正确注入、hover 面板正确展示当前话题
+  - 点击图标展开/收起 Side Panel
+  - P0 定格居中、多条堆叠不遮挡、手动关闭正常
+  - P0 停留时间正确递增显示
+  - P1/P2 弹幕不遮挡会议控制栏
+  - Catch-up 弹窗正确显示最近 N 分钟摘要
+- 分析链路：
+  - `whisper-1` chunk 拼接无明显重复/截断
+  - 名字提醒只在命中 watchlist 时触发，P0 级别正确
+  - 主题摘要/时间线/action item 至少每轮稳定刷新
+  - 共享画面变化时截图分析能生成新节点，不变化时不重复浪费 token
+- 上传链路：
+  - 服务 `202 -> PROCESSING -> COMPLETED`
+  - 上传失败、轮询失败、服务 `FAILED`、用户手动重传
+  - 结果页 URL 回写到 side panel / popup 状态卡片
+  - 会后全景页正确渲染能量曲线、时间线、行动项
+- 回归：
+  - 不影响现有 [src/background.ts](/Users/Esone/git/personal-ai/src/background.ts) 中 RingCentral 消息能力
+  - 不影响现有 popup 其他按钮和 options 配置逻辑
+
+## Assumptions
+- 平台限定为桌面 Chrome MV3，最低按 `Chrome 116+` 设计。
+- 纯扩展 v1 接受"自动检测 + 用户点击一次开始"，不追求静默自动录制。
+- 你的 OpenAI-compatible 提供商同时支持 `whisper-1` 和 `gpt-5.3-codex`，并允许浏览器侧调用。
+- 独立服务会补上传型 `v4` 接口，并接受 `video/webm`；如服务内部只吃 `mp4`，转码放服务端做。
+- v1 先把"录制、转写、点名提醒、滚动摘要、行动项、会后 digest 上传"做稳；`说话人精确归属`、`章节短视频`、`自动跟进任务同步` 作为后续 phase。
+
+## Visual Design References
+- 会中弹幕提醒 Demo：[meeting-danmaku-alerts.html](/Users/Esone/git/personal-ai/docs/demo/meeting-danmaku-alerts.html)
+- 会后全景结果页 Demo：[meeting-panorama-view.html](/Users/Esone/git/personal-ai/docs/demo/meeting-panorama-view.html)
+
+## References
+- Chrome `tabCapture`: [developer.chrome.com/docs/extensions/reference/api/tabCapture](https://developer.chrome.com/docs/extensions/reference/api/tabCapture)
+- Chrome screen capture/offscreen pattern: [developer.chrome.com/docs/extensions/how-to/web-platform/screen-capture](https://developer.chrome.com/docs/extensions/how-to/web-platform/screen-capture)
+- Chrome `offscreen`: [developer.chrome.com/docs/extensions/reference/api/offscreen](https://developer.chrome.com/docs/extensions/reference/api/offscreen)
+- Chrome `sidePanel`: [developer.chrome.com/docs/extensions/reference/api/sidePanel](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
+- Chrome `captureVisibleTab`: [developer.chrome.com/docs/extensions/reference/api/tabs](https://developer.chrome.com/docs/extensions/reference/api/tabs)
+- RingCentral captions/transcript: [support.ringcentral.com/.../using-closed-captions-ringcentral-video-desktop-web.html](https://support.ringcentral.com/es/es/shared/content/app/using-closed-captions-ringcentral-video-desktop-web.html)
+- 腾讯会议 AI 小助手 Pro: [meeting.tencent.com/ai/index.html](https://meeting.tencent.com/ai/index.html)
+- 飞书妙记/智能会议纪要参考: [feishu.cn/product/minutes](https://www.feishu.cn/product/minutes)
+- 讯飞听见参考: [iflyrec.com](https://www.iflyrec.com/)
+- Otter.ai: [otter.ai](https://otter.ai)
+- Read AI: [read.ai](https://read.ai)
+- 你提供的独立服务 API: [http://10.32.45.219:9527/api.html](http://10.32.45.219:9527/api.html)

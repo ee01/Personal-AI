@@ -131,7 +131,7 @@ export class ConcernedItemsSyncService {
     this.initialized = true;
   }
 
-  async syncOnSilentAnalysisStart(): Promise<void> {
+  async syncOnStartup(): Promise<void> {
     await this.initialize();
     await this.bootstrapSnapshotState();
     await this.flushConfigPush();
@@ -142,6 +142,10 @@ export class ConcernedItemsSyncService {
     } catch (error) {
       console.warn('ConcernedItems startup sync failed:', error);
     }
+  }
+
+  async syncOnSilentAnalysisStart(): Promise<void> {
+    await this.syncOnStartup();
   }
 
   async runPeriodicSync(): Promise<void> {
