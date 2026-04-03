@@ -31,7 +31,7 @@ To really stop syncing, open the app again and click `停止后台并退出`.
 ## Developer Setup
 
 ```bash
-cd /Users/Esone/git/personal-ai/doubao-bridge
+cd /Users/Esone/git/personal-ai/app
 npm install
 cp .env.example .env
 ```
@@ -48,7 +48,9 @@ npm run macos:signing-info
 npm run deploy
 ```
 
-`npm run deploy` reads `doubao-bridge/.env` first, then falls back to shell environment variables. If no token is found, it tries `gh auth token`, and finally falls back to `gh release` commands when `gh` is installed and already authenticated.
+From the repo root, you can also use `npm run build:app` and `npm run deploy:app`.
+
+`npm run deploy` reads `app/.env` first, then falls back to shell environment variables. If no token is found, it tries `gh auth token`, and finally falls back to `gh release` commands when `gh` is installed and already authenticated.
 
 ## Release Configuration
 
@@ -62,13 +64,13 @@ Required variables:
 Local packaging writes:
 
 ```text
-doubao-bridge/release/Doubao Bridge.app
-doubao-bridge/release/Doubao-Bridge-<version>-Installer.pkg
+app/release/Doubao Bridge.app
+app/release/Doubao-Bridge-<version>-Installer.pkg
 ```
 
 GitHub Release should only publish the `.pkg` installer for end users.
 
-Versioning is driven by `doubao-bridge/package.json.version`, for example:
+Versioning is driven by `app/package.json.version`, for example:
 
 - release tag: `doubao-bridge-v2.0.2`
 - release title: `Doubao Bridge 2.0.2`
@@ -158,7 +160,7 @@ npm run macos:signing-info
 ```
 
 2. Import both `Developer ID Application` and `Developer ID Installer` certificates into Keychain Access.
-3. Copy the exact names into `doubao-bridge/.env`:
+3. Copy the exact names into `app/.env`:
 
 ```env
 APPLE_APPLICATION_SIGNING_IDENTITY=Developer ID Application: Your Name (TEAMID)
@@ -174,7 +176,7 @@ xcrun notarytool store-credentials "personal-ai-notary" \
   --password "app-specific-password"
 ```
 
-5. Put `APPLE_NOTARY_KEYCHAIN_PROFILE=personal-ai-notary` into `doubao-bridge/.env`.
+5. Put `APPLE_NOTARY_KEYCHAIN_PROFILE=personal-ai-notary` into `app/.env`.
 6. Re-run:
 
 ```bash

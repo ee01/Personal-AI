@@ -127,7 +127,7 @@ async function main() {
   console.log('How to get the certificate name');
   console.log('1. Join the Apple Developer Program and create/download both Developer ID Application and Developer ID Installer certificates from Apple Developer.');
   console.log('2. Double-click the .cer file to import it into Keychain Access.');
-  console.log('3. Re-run: npm --prefix doubao-bridge run macos:signing-info');
+  console.log('3. Re-run: npm --prefix app run macos:signing-info');
   console.log('4. Copy one of the printed "Developer ID Application: ..." names into APPLE_APPLICATION_SIGNING_IDENTITY.');
   console.log('5. Copy one of the printed "Developer ID Installer: ..." names into APPLE_INSTALLER_SIGNING_IDENTITY.');
   console.log('');
@@ -141,14 +141,14 @@ async function main() {
   console.log('     --team-id "YOURTEAMID" \\');
   console.log('     --password "app-specific-password"');
   console.log('');
-  console.log('3. Put APPLE_NOTARY_KEYCHAIN_PROFILE=personal-ai-notary into doubao-bridge/.env');
-  console.log('4. Run: npm --prefix doubao-bridge run package:macos');
+  console.log('3. Put APPLE_NOTARY_KEYCHAIN_PROFILE=personal-ai-notary into app/.env');
+  console.log('4. Run: npm run build:app');
   console.log('');
 
   if (configuredAppIdentity && configuredIdentity && configuredProfile) {
     console.log('Current next step');
-    console.log('- Run: npm --prefix doubao-bridge run package:macos');
-    console.log('- Then run: npm --prefix doubao-bridge run deploy');
+    console.log('- Run: npm run build:app');
+    console.log('- Then run: npm run deploy:app');
   }
 }
 

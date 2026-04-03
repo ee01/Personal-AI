@@ -231,10 +231,10 @@ Bridge 内部 binding type：
 
 开发者打包命令：
 
-- `npm --prefix doubao-bridge run package:macos`
-- `npm --prefix doubao-bridge run deploy`
+- `npm run build:app`
+- `npm run deploy:app`
 
-`deploy` 优先读取 `doubao-bridge/.env`，其次使用 `gh auth token` / `gh release`。可配置：
+`deploy` 优先读取 `app/.env`，其次使用 `gh auth token` / `gh release`。可配置：
 
 - `GITHUB_TOKEN` 或 `GH_TOKEN`
 - `GITHUB_REPOSITORY`（如果无法从 `origin` 推断）
@@ -329,8 +329,8 @@ Bridge 内部 binding type：
 
 ### Local bridge
 
-- `npm --prefix doubao-bridge run build`
-- `npm --prefix doubao-bridge test`
+- `npm --prefix app run build`
+- `npm --prefix app test`
 
 重点覆盖：
 
@@ -341,7 +341,7 @@ Bridge 内部 binding type：
 ### Manual smoke test
 
 1. 启动 `memory-service`
-2. 启动 `doubao-bridge`
+2. 启动 `app`
 前台模式可直接双击 `Start Doubao Bridge.command`
 后台模式可直接双击 `Install Background Sync.command`
 3. 打开 extension popup 中的 Doubao Bridge 页面
@@ -357,8 +357,8 @@ Bridge 内部 binding type：
 ## Files Added in This Slice
 
 - [docs/features/doubao_bridge_integration.md](/Users/Esone/git/personal-ai/docs/features/doubao_bridge_integration.md)
-- [doubao-bridge/src/server.ts](/Users/Esone/git/personal-ai/doubao-bridge/src/server.ts)
-- [doubao-bridge/src/bridgeService.ts](/Users/Esone/git/personal-ai/doubao-bridge/src/bridgeService.ts)
+- [app/src/server.ts](/Users/Esone/git/personal-ai/app/src/server.ts)
+- [app/src/bridgeService.ts](/Users/Esone/git/personal-ai/app/src/bridgeService.ts)
 - [memory-service/src/routes/providers.ts](/Users/Esone/git/personal-ai/memory-service/src/routes/providers.ts)
 - [memory-service/src/core/ProviderContextService.ts](/Users/Esone/git/personal-ai/memory-service/src/core/ProviderContextService.ts)
 - [memory-service/src/repositories/ProviderRepository.ts](/Users/Esone/git/personal-ai/memory-service/src/repositories/ProviderRepository.ts)

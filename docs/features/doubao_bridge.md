@@ -160,7 +160,7 @@ Doubao Bridge 支持三类定时同步：
 - `reminder_sync`
   - 每 `15` 分钟同步一次
 
-这些默认值来源于 `doubao-bridge/.env` 或代码默认值，但普通用户应在 `Doubao Bridge.app` 中修改，而不是手改 `.env`。
+这些默认值来源于 `app/.env` 或代码默认值，但普通用户应在 `Doubao Bridge.app` 中修改，而不是手改 `.env`。
 
 ---
 
@@ -388,12 +388,12 @@ GitHub Release 主入口：
 
 本地打包产物通常会同时生成：
 
-- `doubao-bridge/release/Doubao Bridge.app`
-- `doubao-bridge/release/Doubao-Bridge-<version>-Installer.pkg`
+- `app/release/Doubao Bridge.app`
+- `app/release/Doubao-Bridge-<version>-Installer.pkg`
 
 但对最终用户来说，推荐只下载 `.pkg`。
 
-版本号由 [doubao-bridge/package.json](/Users/Esone/git/personal-ai/doubao-bridge/package.json) 的 `version` 驱动，例如当前为 `2.0.2`。
+版本号由 [app/package.json](/Users/Esone/git/personal-ai/app/package.json) 的 `version` 驱动，例如当前为 `2.0.2`。
 
 ---
 
@@ -469,13 +469,13 @@ Doubao Bridge 本机默认监听：
 
 - 旧的集成方案文档：[docs/features/doubao_bridge_integration.md](/Users/Esone/git/personal-ai/docs/features/doubao_bridge_integration.md)
 - app 入口与打包：
-  - [doubao-bridge/app/main.mjs](/Users/Esone/git/personal-ai/doubao-bridge/app/main.mjs)
-  - [doubao-bridge/app/renderer.js](/Users/Esone/git/personal-ai/doubao-bridge/app/renderer.js)
-  - [doubao-bridge/scripts/package-macos.mjs](/Users/Esone/git/personal-ai/doubao-bridge/scripts/package-macos.mjs)
-  - [doubao-bridge/scripts/deploy.mjs](/Users/Esone/git/personal-ai/doubao-bridge/scripts/deploy.mjs)
+  - [app/app/main.mjs](/Users/Esone/git/personal-ai/app/app/main.mjs)
+  - [app/app/renderer.js](/Users/Esone/git/personal-ai/app/app/renderer.js)
+  - [app/scripts/package-macos.mjs](/Users/Esone/git/personal-ai/app/scripts/package-macos.mjs)
+  - [app/scripts/deploy.mjs](/Users/Esone/git/personal-ai/app/scripts/deploy.mjs)
 - 发送与桥接核心：
-  - [doubao-bridge/src/browserSession.ts](/Users/Esone/git/personal-ai/doubao-bridge/src/browserSession.ts)
-  - [doubao-bridge/src/bridgeService.ts](/Users/Esone/git/personal-ai/doubao-bridge/src/bridgeService.ts)
-  - [doubao-bridge/src/server.ts](/Users/Esone/git/personal-ai/doubao-bridge/src/server.ts)
+  - [app/src/browserSession.ts](/Users/Esone/git/personal-ai/app/src/browserSession.ts)
+  - [app/src/bridgeService.ts](/Users/Esone/git/personal-ai/app/src/bridgeService.ts)
+  - [app/src/server.ts](/Users/Esone/git/personal-ai/app/src/server.ts)
 - extension 状态页：
   - [src/modals/doubao-bridge.tsx](/Users/Esone/git/personal-ai/src/modals/doubao-bridge.tsx)

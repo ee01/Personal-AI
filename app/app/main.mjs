@@ -552,6 +552,22 @@ function rememberAskWindowAnchor(bounds) {
   scheduleSaveQuickAskWindowState();
 }
 
+function isToggleDevToolsShortcut(input) {
+  if (input.type !== 'keyDown') return false;
+  const key = typeof input.key === 'string' ? input.key.toLowerCase() : '';
+  const code = typeof input.code === 'string' ? input.code : '';
+  return Boolean(input.meta && input.alt && (key === 'i' || code === 'KeyI'));
+}
+
+function toggleDevToolsForWindow(targetWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  if (targetWindow.webContents.isDevToolsOpened()) {
+    targetWindow.webContents.closeDevTools();
+    return;
+  }
+  targetWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+}
+
 function createAskWindow() {
   if (askWindow && !askWindow.isDestroyed()) return askWindow;
 
@@ -582,7 +598,12 @@ function createAskWindow() {
   askWindow.webContents.once('did-finish-load', () => {
     broadcastShortcutStatus();
   });
-  askWindow.webContents.on('before-input-event', (_event, input) => {
+  askWindow.webContents.on('before-input-event', (event, input) => {
+    if (isToggleDevToolsShortcut(input)) {
+      event.preventDefault();
+      toggleDevToolsForWindow(askWindow);
+      return;
+    }
     if (!pendingShortcutGesture || input.type !== 'keyUp') return;
     const key = typeof input.key === 'string' ? input.key.toLowerCase() : '';
     const code = typeof input.code === 'string' ? input.code : '';
@@ -1137,6 +1158,19 @@ function createMenu() {
         },
       },
       {
+        label: 'Toggle Developer Tools',
+        accelerator: 'CmdOrCtrl+Alt+I',
+        click: (_menuItem, browserWindow) => {
+          const targetWindow =
+            browserWindow ||
+            (askWindow?.isFocused() ? askWindow : null) ||
+            (mainWindow?.isFocused() ? mainWindow : null) ||
+            mainWindow ||
+            askWindow;
+          toggleDevToolsForWindow(targetWindow);
+        },
+      },
+      {
         label: 'Advanced',
         submenu: [
           {
@@ -1205,6 +1239,11 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.webContents.once('did-finish-load', () => {
     broadcastShortcutStatus();
+  });
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (!isToggleDevToolsShortcut(input)) return;
+    event.preventDefault();
+    toggleDevToolsForWindow(mainWindow);
   });
   mainWindow.on('show', () => {
     syncWindowPresence(true);

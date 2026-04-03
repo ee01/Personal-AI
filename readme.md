@@ -80,7 +80,7 @@ v2 中，`Doubao Bridge.app` 是唯一配置中心；Chrome extension 里的 Dou
 初始化本地开发：
 
 ```bash
-cd doubao-bridge
+cd app
 npm install
 npx playwright install chromium
 ```
@@ -88,25 +88,25 @@ npx playwright install chromium
 本地调试 app：
 
 ```bash
-npm --prefix doubao-bridge run app:dev
+npm --prefix app run app:dev
 ```
 
 打包 `.app` 和 `.pkg`：
 
 ```bash
-npm --prefix doubao-bridge run package:macos
+npm run build:app
 ```
 
 发布到 GitHub Release：
 
 ```bash
-npm --prefix doubao-bridge run deploy
+npm run deploy:app
 ```
 
 如果要让发布出来的 `.pkg` 在其他 Mac 上尽量不被 Gatekeeper 拦截，先检查本机签名/公证准备状态：
 
 ```bash
-npm --prefix doubao-bridge run macos:signing-info
+npm --prefix app run macos:signing-info
 ```
 
 ## 开发环境设置
