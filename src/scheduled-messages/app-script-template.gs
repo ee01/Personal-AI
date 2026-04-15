@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.6.0';
-var APP_SCRIPT_LAST_UPDATED = '2026-03-18';
+var APP_SCRIPT_VERSION = '2.6.1';
+var APP_SCRIPT_LAST_UPDATED = '2026-04-03';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
 // Timeline Sync Rule 默认每天运行一次，这里给缓存留出冗余窗口，避免偶发延迟导致全天失效
@@ -87,7 +87,7 @@ function determineMessageType(rowData) {
  * 执行定时消息（统一处理所有类型）
  * 
  * 支持的消息类型：
- * - Timeline: 基于项目进度的消息（由 Jira 处理，AsMe 方式跳过）
+ * - Timeline: 基于项目进度的消息（AsMe 方式从 Script Properties 缓存读取 release info）
  * - Periodic: 周期性重复消息
  * - OneTime: 一次性消息
  */
@@ -108,6 +108,8 @@ function executeScheduledMessages() {
   const headers = data[0];
   const now = new Date();
   const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  let timelineReleaseInfo = null;
+  let timelineReleaseInfoLoaded = false;
   
   Logger.log(`开始执行定时任务，当前时间: ${Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
   
@@ -118,12 +120,7 @@ function executeScheduledMessages() {
     
     // 自动判断消息类型
     const messageType = determineMessageType(rowData);
-    
-    // 跳过 Timeline 消息（需要通过 Jira 获取内网 release info）
-    if (messageType === 'Timeline') {
-      continue;
-    }
-    
+
     // 基本过滤条件
     if (rowData.Status !== 'Active') continue;
     if (rowData.Push_Method !== 'AsMe') continue; // Bot 和 AI 由 Jira 处理
@@ -131,8 +128,35 @@ function executeScheduledMessages() {
     try {
       // 步骤 1: 先判断日期是否匹配
       let dateMatches = false;
+      let messageToSend = rowData;
       
-      if (messageType === 'Periodic') {
+      if (messageType === 'Timeline') {
+        if (!timelineReleaseInfoLoaded) {
+          timelineReleaseInfo = readReleaseInfoFromCache();
+          timelineReleaseInfoLoaded = true;
+          if (timelineReleaseInfo && Object.keys(timelineReleaseInfo).length > 0) {
+            Logger.log(`[AsMe Timeline] 从缓存读取 releaseInfo，项目: ${Object.keys(timelineReleaseInfo).join(', ')}`);
+          } else {
+            Logger.log('[AsMe Timeline] 未找到可用的 timeline 缓存，跳过 Timeline 消息');
+          }
+        }
+
+        const hasReleaseInfo = timelineReleaseInfo && Object.keys(timelineReleaseInfo).length > 0;
+        if (!hasReleaseInfo) {
+          continue;
+        }
+
+        const targetDate = getTimelineTargetDate(rowData, timelineReleaseInfo);
+        dateMatches = targetDate && isSameDate(now, targetDate);
+
+        if (dateMatches && rowData.Timeline_Project && timelineReleaseInfo[rowData.Timeline_Project]) {
+          const projectInfo = timelineReleaseInfo[rowData.Timeline_Project];
+          messageToSend = Object.assign({}, rowData, {
+            Topic: replaceProjectVariablesInText(rowData.Topic || '', projectInfo),
+            Content: replaceProjectVariablesInText(rowData.Content || '', projectInfo)
+          });
+        }
+      } else if (messageType === 'Periodic') {
         // Periodic 消息：使用周期性日期判断逻辑
         dateMatches = checkPeriodicSchedule(rowData, now);
       } else {
@@ -150,9 +174,9 @@ function executeScheduledMessages() {
         Logger.log(`准备执行消息: ${rowData.ID} - ${rowData.Topic} (类型: ${messageType})`);
         
         // 发送 Email
-        const emailResult = sendEmailToGlip(rowData);
+        const emailResult = sendEmailToGlip(messageToSend);
         
-        // 更新执行记录（传递实际发送的内容，即使 AsMe 不支持变量替换）
+        // 更新执行记录（传递实际发送的内容，便于日志记录替换后的变量）
         const sentContent = emailResult.success ? {
           topic: emailResult.sentTopic,
           content: emailResult.sentContent
@@ -324,6 +348,7 @@ function checkPeriodicSchedule(rowData, now) {
 
 /**
  * 发送邮件到 Glip
+ * rowData 可以是原始行数据，也可以是已替换 Timeline 变量后的副本
  * @returns {object} { success: boolean, sentTopic?: string, sentContent?: string, error?: string }
  */
 function sendEmailToGlip(rowData) {
@@ -354,8 +379,7 @@ function sendEmailToGlip(rowData) {
       }
     }
     
-    // AsMe 推送不处理 Timeline 消息（Timeline 需要通过 Jira 获取内网 release info）
-    // 所以这里不需要替换项目进度变量，但记录实际发送的内容到日志
+    // Timeline 变量如有需要，应在调用方基于缓存先完成替换
     let topic = rowData.Topic.toString();
     let content = rowData.Content.toString();
     
@@ -1715,6 +1739,7 @@ function replaceProjectVariablesInText(text, projectInfo) {
   
   let result = text;
   result = result.replaceAll('{currentRelease}', projectInfo.currentRelease || '');
+  result = result.replaceAll('{nextRelease}', projectInfo.nextRelease || '');
   result = result.replaceAll('{currentPhase}', projectInfo.currentPhase || '');
   result = result.replaceAll('{currentPhaseStartDate}', projectInfo.currentPhaseStartDate || '');
   result = result.replaceAll('{currentPhaseStartedWorkdays}', projectInfo.currentPhaseStartedWorkdays || '0');

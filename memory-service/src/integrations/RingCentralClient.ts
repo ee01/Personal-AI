@@ -28,6 +28,12 @@ export interface RingCentralChatSummary {
   members?: string[];
 }
 
+export interface RingCentralActorIdentity {
+  extensionId?: string;
+  email?: string;
+  displayName?: string;
+}
+
 export interface RingCentralTargetCandidate {
   kind: 'user' | 'chat';
   entityId: string;
@@ -200,6 +206,7 @@ export class RingCentralClient {
   private static readonly tokenPromiseCache = new Map<string, Promise<TokenState>>();
   private static readonly currentExtensionIdCache = new Map<string, string>();
   private static readonly currentUserEmailCache = new Map<string, string>();
+  private static readonly currentUserDisplayNameCache = new Map<string, string>();
   private static readonly currentUserEmailPromiseCache = new Map<string, Promise<string>>();
   private static readonly directoryEntryListCache = new Map<string, TimedCacheEntry<Array<Record<string, unknown>>>>();
   private static readonly directoryEntryListPromiseCache = new Map<string, Promise<Array<Record<string, unknown>>>>();
@@ -218,6 +225,7 @@ export class RingCentralClient {
   private tokenState: TokenState | null = null;
   private currentExtensionId: string | null = null;
   private currentUserEmail: string | null = null;
+  private currentUserDisplayName: string | null = null;
   private readonly directoryRepo: RingCentralDirectoryRepository | null;
 
   constructor(
@@ -233,6 +241,7 @@ export class RingCentralClient {
     this.tokenPromiseCache.clear();
     this.currentExtensionIdCache.clear();
     this.currentUserEmailCache.clear();
+    this.currentUserDisplayNameCache.clear();
     this.currentUserEmailPromiseCache.clear();
     this.directoryEntryListCache.clear();
     this.directoryEntryListPromiseCache.clear();
@@ -267,10 +276,12 @@ export class RingCentralClient {
     this.tokenState = null;
     this.currentExtensionId = null;
     this.currentUserEmail = null;
+    this.currentUserDisplayName = null;
     RingCentralClient.tokenCache.delete(cacheKey);
     RingCentralClient.tokenPromiseCache.delete(cacheKey);
     RingCentralClient.currentExtensionIdCache.delete(cacheKey);
     RingCentralClient.currentUserEmailCache.delete(cacheKey);
+    RingCentralClient.currentUserDisplayNameCache.delete(cacheKey);
     RingCentralClient.currentUserEmailPromiseCache.delete(cacheKey);
   }
 
@@ -754,6 +765,52 @@ export class RingCentralClient {
         }),
     );
     return posts.filter((item) => item.id.length > 0);
+  }
+
+  async getCurrentActorIdentity(): Promise<RingCentralActorIdentity> {
+    const cacheKey = this.getCacheKey();
+    const cachedDisplayName = this.currentUserDisplayName ?? RingCentralClient.currentUserDisplayNameCache.get(cacheKey) ?? '';
+    if ((this.currentExtensionId || RingCentralClient.currentExtensionIdCache.get(cacheKey)) && cachedDisplayName) {
+      return {
+        extensionId: this.currentExtensionId ?? RingCentralClient.currentExtensionIdCache.get(cacheKey) ?? undefined,
+        email: this.currentUserEmail ?? RingCentralClient.currentUserEmailCache.get(cacheKey) ?? undefined,
+        displayName: cachedDisplayName || undefined,
+      };
+    }
+
+    const result = await this.apiRequest('/restapi/v1.0/account/~/extension/~', { method: 'GET' });
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral current extension lookup failed (${result.status}): ${JSON.stringify(result.body).slice(0, 240)}`,
+      );
+    }
+    const body = ensureObject(result.body);
+    const contact = ensureObject(body.contact);
+    const extensionId = typeof body.id === 'string' ? body.id : '';
+    const email = toDisplayString(contact.email, body.email);
+    const displayName = toDisplayString(
+      `${toDisplayString(contact.firstName)} ${toDisplayString(contact.lastName)}`.trim(),
+      toDisplayString(body.name),
+      email,
+      extensionId,
+    );
+    this.currentExtensionId = extensionId || null;
+    this.currentUserEmail = email || null;
+    this.currentUserDisplayName = displayName || null;
+    if (extensionId) {
+      RingCentralClient.currentExtensionIdCache.set(cacheKey, extensionId);
+    }
+    if (email) {
+      RingCentralClient.currentUserEmailCache.set(cacheKey, email);
+    }
+    if (displayName) {
+      RingCentralClient.currentUserDisplayNameCache.set(cacheKey, displayName);
+    }
+    return {
+      extensionId: extensionId || undefined,
+      email: email || undefined,
+      displayName: displayName || undefined,
+    };
   }
 
   private getDirectoryUserDisplayName(entityId?: string): string {

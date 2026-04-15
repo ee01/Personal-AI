@@ -41,6 +41,6 @@ describe('getUserRuntimeConfig', () => {
     expect(config.openClawEnabled).toBe(true);
     expect(config.openClawBaseUrl).toBe('https://openclaw.example.com');
     expect(config.openClawApiKey).toBe('test-openclaw-key');
-    expect(config.openClawTimeoutMs).toBe(45000);
+    expect(config.openClawTimeoutMs).toBe(300000);
   });
 });

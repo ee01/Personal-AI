@@ -377,6 +377,18 @@ function normalizeRecommendedAction(
   return fallback;
 }
 
+function shouldPreferArtifactDelegation(
+  input: EvidenceResolutionInput,
+  resolutionState: EvidenceResolutionState,
+  candidateArtifacts: CandidateArtifact[],
+): boolean {
+  return (
+    candidateArtifacts.length > 0 &&
+    (resolutionState === 'partial' || resolutionState === 'insufficient') &&
+    (input.policy.externalRead === 'auto' || input.policy.externalRead === 'suggest')
+  );
+}
+
 export class EvidenceResolutionPlanner {
   async resolve(input: EvidenceResolutionInput): Promise<EvidenceResolutionPlan> {
     const heuristic = this.resolveHeuristically(input);
@@ -484,14 +496,22 @@ export class EvidenceResolutionPlanner {
         recommendedAction = input.policy.allowCreateConfirmRequest ? 'create_confirm_request' : 'none';
       }
     }
+    if (shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)) {
+      recommendedAction = 'delegate_openclaw';
+    }
 
     let normalizedActionParams = actionParams;
     if (recommendedAction === 'delegate_openclaw') {
-      const mode = normalizedActionParams?.mode === 'write' ? 'write' : 'read';
+      const mode = shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)
+        ? 'read'
+        : normalizedActionParams?.mode === 'write'
+          ? 'write'
+          : 'read';
       normalizedActionParams = {
         ...buildDelegateActionParams(input, directFindings, remainingQuestions, candidateArtifacts, mode),
         ...(normalizedActionParams ?? {}),
       };
+      normalizedActionParams.mode = mode;
     } else if (recommendedAction === 'create_confirm_request') {
       normalizedActionParams = {
         ...buildConfirmRequestParams(
@@ -607,11 +627,7 @@ export class EvidenceResolutionPlanner {
       reason = 'ack_without_answer';
     }
 
-    if (
-      (resolutionState === 'partial' || resolutionState === 'insufficient') &&
-      candidateArtifacts.length > 0 &&
-      (input.policy.externalRead === 'auto' || input.policy.externalRead === 'suggest')
-    ) {
+    if (shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)) {
       recommendedAction = 'delegate_openclaw';
     } else if (
       resolutionState === 'insufficient' &&

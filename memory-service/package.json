@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "vitest",
+    "test:meeting-memory": "vitest --run src/__tests__/api-recall.test.ts src/__tests__/api-meetings.test.ts src/__tests__/api-ask.test.ts",
     "test:coverage": "vitest --coverage",
     "migrate": "tsx src/storage/migrate.ts",
     "migrate:multiuser": "tsx scripts/migrate-to-multiuser.ts"

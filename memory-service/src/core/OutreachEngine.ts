@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
-import { RingCentralClient, type RingCentralPost } from '../integrations/RingCentralClient.js';
+import {
+  RingCentralClient,
+  type RingCentralActorIdentity,
+  type RingCentralPost,
+} from '../integrations/RingCentralClient.js';
 import {
   ActionRepository,
   type QueuedActionRecord,
@@ -24,9 +28,14 @@ import { getLLMClient } from '../llm/LLMClient.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
 import {
   EvidenceResolutionPlanner,
+  type CandidateArtifact,
   type EvidenceResolutionPlan,
   type EvidenceResolutionPolicy,
 } from './EvidenceResolutionPlanner.js';
+import type {
+  DelegationArtifact,
+  DelegationOutcome,
+} from '../integrations/OpenClawDelegationService.js';
 
 interface ParsedReply {
   classification: 'answer' | 'defer' | 'irrelevant' | 'decline' | 'unclear';
@@ -81,15 +90,46 @@ function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
 }
 
+function normalizeIdentityValue(value: string | null | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isSelfAuthoredPost(
+  post: RingCentralPost,
+  selfActor: RingCentralActorIdentity | null,
+): boolean {
+  if (!selfActor) return false;
+  const creatorId = normalizeIdentityValue(post.creatorId);
+  const creatorName = normalizeIdentityValue(post.creatorName);
+  const selfExtensionId = normalizeIdentityValue(selfActor.extensionId);
+  const selfEmail = normalizeIdentityValue(selfActor.email);
+  const selfDisplayName = normalizeIdentityValue(selfActor.displayName);
+
+  if (creatorId && selfExtensionId && creatorId === selfExtensionId) {
+    return true;
+  }
+  if (creatorName && selfEmail && creatorName === selfEmail) {
+    return true;
+  }
+  if (creatorName && selfDisplayName && creatorName === selfDisplayName) {
+    return true;
+  }
+  return false;
+}
+
 function aggregateReplyBatch(
   posts: RingCentralPost[],
   session: OutreachSessionRecord,
   processedReplyPostIds: Set<string>,
+  selfActor: RingCentralActorIdentity | null,
 ): AggregatedReplyBatch | null {
   const candidates = posts
     .filter((post) => post.id !== session.sentPostId)
     .filter((post) => post.text.trim().length > 0)
     .filter((post) => !processedReplyPostIds.has(post.id))
+    .filter((post) => !isSelfAuthoredPost(post, selfActor))
     .sort((a, b) => (parsePostCreatedAtSeconds(a) ?? 0) - (parsePostCreatedAtSeconds(b) ?? 0));
 
   if (candidates.length === 0) return null;
@@ -131,6 +171,83 @@ function buildSessionSummary(status: OutreachSessionStatus, question: string): s
   if (status === 'failed') return `Outreach failed to dispatch: ${question}`;
   if (status === 'cancelled') return `Outreach cancelled: ${question}`;
   return `Outreach status ${status}: ${question}`;
+}
+
+function uniqStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim()),
+    ),
+  );
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqStrings(
+    value.map((item) => (typeof item === 'string' ? item : undefined)),
+  );
+}
+
+function stringifyStructuredValue(value: unknown, limit = 1600): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'string') {
+    return value.trim().slice(0, limit) || undefined;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized) return undefined;
+    return serialized.slice(0, limit);
+  } catch {
+    return undefined;
+  }
+}
+
+function delegationArtifactToCandidateArtifact(artifact: DelegationArtifact): CandidateArtifact {
+  return {
+    kind: artifact.kind || 'external_evidence',
+    title: artifact.title,
+    content: artifact.content,
+    sourceKind: 'delegate_openclaw',
+    metadata:
+      artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+        ? { ...artifact.metadata }
+        : undefined,
+  };
+}
+
+function mergeCandidateArtifacts(...groups: Array<unknown>): CandidateArtifact[] {
+  const merged: CandidateArtifact[] = [];
+  const seen = new Set<string>();
+
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const item of group) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const artifact = item as CandidateArtifact;
+      const key = [
+        artifact.kind ?? '',
+        artifact.title ?? '',
+        artifact.url ?? '',
+        artifact.content ?? '',
+      ].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(artifact);
+    }
+  }
+
+  return merged.slice(0, 12);
 }
 
 function extractOutcomeSummary(outcome: Record<string, unknown> | null | undefined): string | undefined {
@@ -186,6 +303,29 @@ function buildFallbackOutcomeSummary(
 
 function normalizeString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function stripDelegationFailureSuffix(value: unknown): string | undefined {
+  let current = normalizeString(value);
+  while (current) {
+    const markerIndex = current.lastIndexOf('；但外部查证暂未成功：');
+    if (markerIndex < 0) {
+      return current;
+    }
+    current = normalizeString(current.slice(0, markerIndex));
+  }
+  return undefined;
+}
+
+function stripDelegationFailureFields(outcome: Record<string, unknown>): Record<string, unknown> {
+  const {
+    delegationFailureStatus: _delegationFailureStatus,
+    delegationFailureSummary: _delegationFailureSummary,
+    delegationRecoveryActionIds: _delegationRecoveryActionIds,
+    delegationRecoveryPrompt: _delegationRecoveryPrompt,
+    ...rest
+  } = outcome;
+  return rest;
 }
 
 function isSelfDirectedTarget(targetType: string, targetRef: string): boolean {
@@ -414,6 +554,204 @@ export class OutreachEngine {
       events: this.repo.listEventsBySession(id, 200),
       actions: this.actionRepo.list({ sourceKind: 'outreach_session', sourceRefId: id, limit: 20 }).items,
     };
+  }
+
+  async syncDelegationResultToSession(
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+  ): Promise<void> {
+    if (action.sourceKind !== 'outreach_session' || !action.sourceRefId) {
+      return;
+    }
+    const session = this.repo.getSessionById(action.sourceRefId);
+    if (!session) return;
+
+    const existingOutcome =
+      session.outcome && typeof session.outcome === 'object' && !Array.isArray(session.outcome)
+        ? session.outcome
+        : {};
+    const baseOutcome = stripDelegationFailureFields(existingOutcome);
+    const replyText =
+      firstNonEmptyString(session.replyRawText, String(baseOutcome.reply ?? '')) ?? '';
+    const evidence = this.buildDelegationSynthesisEvidence(session, action, outcome);
+    const synthesis = await this.evidencePlanner.resolve({
+      question: session.renderedQuestion,
+      context: session.renderedContext,
+      evidence,
+      policy: {
+        scene: 'outreach',
+        userIntentMode: 'informational',
+        externalRead: 'disabled',
+        externalWrite: 'disabled',
+        allowAskExternalUser: false,
+        allowCreateConfirmRequest: false,
+      },
+    });
+
+    const resolutionState =
+      synthesis.resolutionState === 'insufficient'
+        ? (baseOutcome.resolutionState === 'complete' ? 'complete' : 'partial')
+        : synthesis.resolutionState;
+    const directFindings = uniqStrings([
+      ...readStringArray(baseOutcome.directFindings),
+      ...synthesis.directFindings,
+      synthesis.directFindings.length === 0 ? outcome.summary : undefined,
+    ]);
+    const resolvedConclusion =
+      firstNonEmptyString(
+        synthesis.resolvedConclusion,
+        outcome.summary,
+        stripDelegationFailureSuffix(baseOutcome.resolvedConclusion),
+      ) ?? outcome.summary;
+    const remainingQuestions =
+      resolutionState === 'complete'
+        ? []
+        : readStringArray(synthesis.remainingQuestions);
+    const candidateArtifacts = mergeCandidateArtifacts(
+      baseOutcome.candidateArtifacts,
+      synthesis.candidateArtifacts,
+      outcome.artifacts.map((artifact) => delegationArtifactToCandidateArtifact(artifact)),
+    );
+    const confidence = Math.max(session.replyConfidence ?? 0, synthesis.confidence, 0.78);
+    const classification = directFindings.length > 0 || resolvedConclusion
+      ? 'answer'
+      : synthesis.legacyClassification;
+    const followUpActions = this.actionRepo
+      .list({ sourceKind: 'outreach_session', sourceRefId: session.id, limit: 20 })
+      .items
+      .map((item) => ({
+        id: item.id,
+        queueStatus: item.queueStatus,
+      }));
+    const summary =
+      resolutionState === 'complete' || resolutionState === 'partial'
+        ? await this.buildResolvedOutcomeSummary(
+            session,
+            replyText,
+            classification === 'decline' ? 'decline' : 'answer',
+            resolvedConclusion,
+          )
+        : synthesis.summary || outcome.summary;
+    const mergedOutcome: Record<string, unknown> = {
+      ...baseOutcome,
+      classification,
+      confidence,
+      reply: replyText,
+      resolutionState,
+      directFindings,
+      resolvedConclusion,
+      remainingQuestions,
+      candidateArtifacts,
+      recommendedAction: baseOutcome.recommendedAction ?? action.actionType,
+      spawnedActionIds: uniqStrings([
+        ...readStringArray(baseOutcome.spawnedActionIds),
+        action.id,
+      ]),
+      followUpActions,
+      reason: firstNonEmptyString(synthesis.reason, String(baseOutcome.reason ?? '')),
+      summary,
+      externalSummary: outcome.summary,
+      externalEvidence: outcome.artifacts.map((artifact) => ({
+        kind: artifact.kind,
+        title: artifact.title,
+        content: artifact.content,
+        metadata: artifact.metadata,
+      })),
+      externalPayload:
+        outcome.payload && typeof outcome.payload === 'object' && !Array.isArray(outcome.payload)
+          ? outcome.payload
+          : undefined,
+    };
+
+    this.repo.updateSession(session.id, {
+      status: 'resolved',
+      replyClassification: classification,
+      replyConfidence: confidence,
+      outcome: mergedOutcome,
+      nextCheckAt: null,
+      errorCode: null,
+      errorMessage: null,
+      resolvedAt: now(),
+    });
+    this.repo.createEvent(session.id, 'resolved', mergedOutcome);
+  }
+
+  async syncDelegationFailureToSession(
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+    result?: Record<string, unknown>,
+  ): Promise<void> {
+    if (action.sourceKind !== 'outreach_session' || !action.sourceRefId) {
+      return;
+    }
+    const session = this.repo.getSessionById(action.sourceRefId);
+    if (!session) return;
+
+    const existingOutcome =
+      session.outcome && typeof session.outcome === 'object' && !Array.isArray(session.outcome)
+        ? session.outcome
+        : {};
+    const baseResolvedConclusion = firstNonEmptyString(
+      stripDelegationFailureSuffix(existingOutcome.resolvedConclusion),
+      stripDelegationFailureSuffix(existingOutcome.summary),
+    );
+    const recoveryActionIds = Array.isArray(result?.followUpActionIds)
+      ? result?.followUpActionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    const remainingQuestions = uniqStrings([
+      ...readStringArray(existingOutcome.remainingQuestions),
+      typeof outcome.payload?.question === 'string' ? outcome.payload.question : undefined,
+    ]);
+    const followUpActions = this.actionRepo
+      .list({ sourceKind: 'outreach_session', sourceRefId: session.id, limit: 20 })
+      .items
+      .map((item) => ({
+        id: item.id,
+        queueStatus: item.queueStatus,
+      }));
+    const summary = baseResolvedConclusion
+      ? `${baseResolvedConclusion}；但外部查证暂未成功：${outcome.summary}`
+      : outcome.summary;
+    const mergedOutcome: Record<string, unknown> = {
+      ...existingOutcome,
+      classification: existingOutcome.classification ?? session.replyClassification ?? 'answer',
+      confidence: Math.max(session.replyConfidence ?? 0, action.confidence, 0.72),
+      reply: session.replyRawText ?? existingOutcome.reply,
+      resolutionState:
+        existingOutcome.resolutionState === 'complete' || existingOutcome.resolutionState === 'partial'
+          ? existingOutcome.resolutionState
+          : 'partial',
+      directFindings: readStringArray(existingOutcome.directFindings),
+      resolvedConclusion: summary,
+      remainingQuestions,
+      recommendedAction: existingOutcome.recommendedAction ?? action.actionType,
+      spawnedActionIds: uniqStrings([
+        ...readStringArray(existingOutcome.spawnedActionIds),
+        action.id,
+      ]),
+      followUpActions,
+      reason: outcome.summary,
+      summary,
+      delegationFailureStatus: outcome.status,
+      delegationFailureSummary: outcome.summary,
+      delegationRecoveryActionIds: recoveryActionIds,
+      delegationRecoveryPrompt:
+        outcome.payload && typeof outcome.payload === 'object' && !Array.isArray(outcome.payload)
+          ? outcome.payload
+          : undefined,
+    };
+
+    this.repo.updateSession(session.id, {
+      status: 'resolved',
+      replyClassification:
+        typeof mergedOutcome.classification === 'string' ? mergedOutcome.classification : session.replyClassification,
+      replyConfidence:
+        typeof mergedOutcome.confidence === 'number' ? mergedOutcome.confidence : session.replyConfidence,
+      outcome: mergedOutcome,
+      nextCheckAt: null,
+      resolvedAt: now(),
+    });
+    this.repo.createEvent(session.id, 'resolved', mergedOutcome);
   }
 
   updateSessionDraft(
@@ -802,10 +1140,11 @@ export class OutreachEngine {
 
     try {
       const posts = await this.ringClient.listPosts(session.sentChatId, session.lastPollAt ?? session.createdAt);
+      const selfActor = await this.ringClient.getCurrentActorIdentity().catch(() => null);
       this.repo.updateSession(session.id, { lastPollAt: currentTime });
 
       const processedReplyPostIds = this.listProcessedReplyPostIds(session.id, session.replyPostId);
-      const replyBatch = aggregateReplyBatch(posts, session, processedReplyPostIds);
+      const replyBatch = aggregateReplyBatch(posts, session, processedReplyPostIds, selfActor);
       if (replyBatch) {
         const resolution = await this.resolveReplyBatch(session, replyBatch);
         this.repo.updateSession(session.id, {
@@ -978,6 +1317,73 @@ export class OutreachEngine {
       };
     }
     return resolved;
+  }
+
+  private buildDelegationSynthesisEvidence(
+    session: OutreachSessionRecord,
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+  ): Array<{
+    sourceKind: string;
+    sourceId?: string;
+    title?: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }> {
+    const evidence: Array<{
+      sourceKind: string;
+      sourceId?: string;
+      title?: string;
+      content: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
+
+    if (session.replyRawText?.trim()) {
+      evidence.push({
+        sourceKind: 'outreach_reply',
+        sourceId: session.replyPostId ?? undefined,
+        title: session.replySender ?? session.targetResolvedLabel ?? session.targetRef,
+        content: session.replyRawText.trim(),
+        metadata: {
+          sessionId: session.id,
+        },
+      });
+    }
+
+    const payloadSnippet = stringifyStructuredValue(outcome.payload);
+    evidence.push({
+      sourceKind: 'delegate_openclaw',
+      sourceId: action.id,
+      title: action.title,
+      content: [outcome.summary, payloadSnippet].filter(Boolean).join('\n'),
+      metadata: {
+        actionId: action.id,
+        targetSystem:
+          typeof action.params?.targetSystem === 'string'
+            ? action.params.targetSystem
+            : undefined,
+      },
+    });
+
+    for (const [index, artifact] of outcome.artifacts.entries()) {
+      const metadataSnippet = stringifyStructuredValue(artifact.metadata, 600);
+      const content = [artifact.title, artifact.content, metadataSnippet]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join('\n');
+      if (!content) continue;
+      evidence.push({
+        sourceKind: 'delegate_openclaw_artifact',
+        sourceId: `${action.id}:${index}`,
+        title: artifact.title,
+        content,
+        metadata:
+          artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+            ? { ...artifact.metadata }
+            : undefined,
+      });
+    }
+
+    return evidence;
   }
 
   private listProcessedReplyPostIds(sessionId: string, currentReplyPostId?: string): Set<string> {

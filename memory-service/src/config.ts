@@ -173,7 +173,7 @@ export function getConfig(): Readonly<Config> {
     openClawEnabled: process.env.OPENCLAW_ENABLED === 'true',
     openClawBaseUrl: process.env.OPENCLAW_BASE_URL || '',
     openClawApiKey: process.env.OPENCLAW_API_KEY || '',
-    openClawTimeoutMs: parseInt(process.env.OPENCLAW_TIMEOUT_MS || '600000', 10),
+    openClawTimeoutMs: Math.max(300000, parseInt(process.env.OPENCLAW_TIMEOUT_MS || '600000', 10)),
 
     // Outreach
     outreachEnabled: process.env.OUTREACH_ENABLED === 'true',

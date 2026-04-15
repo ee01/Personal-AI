@@ -52,6 +52,7 @@ export interface ProviderMemoryProduct {
   title: string;
   kind: string;
   bodyMd: string;
+  itemCount?: number;
   sourceRefs: string[];
 }
 

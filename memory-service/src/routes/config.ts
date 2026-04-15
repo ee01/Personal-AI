@@ -12,6 +12,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { getConfig } from '../config.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 
+const MIN_OPENCLAW_TIMEOUT_MS = 5 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -181,7 +183,7 @@ const updateConfigBodySchema = {
     openClawEnabled: { type: 'boolean' as const },
     openClawBaseUrl: { type: 'string' as const },
     openClawApiKey: { type: 'string' as const },
-    openClawTimeoutMs: { type: 'number' as const, minimum: 1000 },
+    openClawTimeoutMs: { type: 'number' as const, minimum: MIN_OPENCLAW_TIMEOUT_MS },
     clearOpenClawApiKey: { type: 'boolean' as const },
     outreachEnabled: { type: 'boolean' as const },
     outreachIntervalMs: { type: 'number' as const, minimum: 1000 },
@@ -307,7 +309,7 @@ export async function configRoutes(
         }
       }
       if (updates.openClawTimeoutMs !== undefined) {
-        persisted.openClawTimeoutMs = Math.max(1000, Math.floor(updates.openClawTimeoutMs));
+        persisted.openClawTimeoutMs = Math.max(MIN_OPENCLAW_TIMEOUT_MS, Math.floor(updates.openClawTimeoutMs));
       }
       if (updates.clearOpenClawApiKey === true) {
         delete persisted.openClawApiKey;

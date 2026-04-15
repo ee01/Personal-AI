@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Pilot - Live Meeting Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #071019;
+    --surface: rgba(10, 18, 28, 0.86);
+    --surface-2: rgba(15, 25, 39, 0.92);
+    --line: rgba(148, 163, 184, 0.16);
+    --text: #eef6ff;
+    --muted: rgba(221, 232, 245, 0.68);
+    --accent: #4ade80;
+    --accent-2: #60a5fa;
+    --warning: #fbbf24;
+    --danger: #fb7185;
+    --violet: #a78bfa;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "IBM Plex Sans", sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(circle at top left, rgba(96, 165, 250, 0.18), transparent 24%),
+      radial-gradient(circle at top right, rgba(167, 139, 250, 0.16), transparent 24%),
+      linear-gradient(180deg, #050b12 0%, #09111c 100%);
+  }
+
+  .page {
+    padding: 24px;
+    display: grid;
+    gap: 16px;
+  }
+
+  .hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 22px 24px;
+    border-radius: 26px;
+    background: linear-gradient(135deg, rgba(96, 165, 250, 0.12), rgba(10, 18, 28, 0.96));
+    border: 1px solid var(--line);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+  }
+
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #93c5fd;
+    margin-bottom: 10px;
+  }
+
+  .hero h1 {
+    margin: 0;
+    font-size: 30px;
+  }
+
+  .hero p {
+    margin: 10px 0 0;
+    max-width: 780px;
+    color: var(--muted);
+    line-height: 1.65;
+  }
+
+  .status-stack {
+    min-width: 240px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .pill {
+    padding: 10px 12px;
+    border-radius: 999px;
+    background: rgba(74, 222, 128, 0.12);
+    border: 1px solid rgba(74, 222, 128, 0.28);
+    color: #bbf7d0;
+    font-size: 12px;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr) 320px;
+    gap: 16px;
+  }
+
+  .panel {
+    border-radius: 24px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.26);
+    padding: 18px;
+  }
+
+  .section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: #bfdbfe;
+    margin-bottom: 14px;
+  }
+
+  .stepper {
+    display: grid;
+    gap: 12px;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px;
+    border-radius: 18px;
+    background: rgba(148, 163, 184, 0.06);
+    border: 1px solid transparent;
+  }
+
+  .step.active {
+    background: rgba(96, 165, 250, 0.12);
+    border-color: rgba(96, 165, 250, 0.28);
+  }
+
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    margin-top: 6px;
+    background: rgba(148, 163, 184, 0.5);
+  }
+
+  .step.active .dot {
+    background: var(--accent);
+    box-shadow: 0 0 16px rgba(74, 222, 128, 0.6);
+  }
+
+  .step strong {
+    display: block;
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+
+  .step span {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .chapter-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+
+  .chapter-header h2 {
+    margin: 0;
+    font-size: 24px;
+  }
+
+  .chip {
+    border-radius: 999px;
+    padding: 8px 12px;
+    background: rgba(167, 139, 250, 0.12);
+    border: 1px solid rgba(167, 139, 250, 0.28);
+    color: #ddd6fe;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .chapter-summary {
+    color: var(--muted);
+    line-height: 1.7;
+    margin-bottom: 18px;
+  }
+
+  .chapter-views {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .subcard {
+    border-radius: 18px;
+    padding: 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+  }
+
+  .subcard h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+  }
+
+  .subcard ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--muted);
+    line-height: 1.7;
+    font-size: 13px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  th, td {
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    text-align: left;
+  }
+
+  th { color: #dbeafe; font-weight: 600; }
+
+  .alert-stack, .meta-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .alert {
+    border-radius: 18px;
+    padding: 14px 15px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(148, 163, 184, 0.08);
+  }
+
+  .alert.p0 {
+    background: rgba(251, 113, 133, 0.12);
+    border-color: rgba(251, 113, 133, 0.34);
+  }
+
+  .alert.p1 {
+    background: rgba(251, 191, 36, 0.12);
+    border-color: rgba(251, 191, 36, 0.3);
+  }
+
+  .alert h4 {
+    margin: 0 0 8px;
+    font-size: 13px;
+  }
+
+  .alert p, .meta-item p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+
+  .meta-item {
+    border-radius: 18px;
+    padding: 14px 15px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+  }
+
+  .meta-item strong {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  @media (max-width: 1120px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+    .chapter-views {
+      grid-template-columns: 1fr;
+    }
+    .hero {
+      flex-direction: column;
+    }
+    .status-stack {
+      min-width: 0;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Meeting Pilot / Live Meeting Map</div>
+        <h1>BE release and ETA review</h1>
+        <p>这是会中打开的“会议全貌”视图。它不追求展示全部历史，而是稳定描述当前 chapter、当前结构、当前提醒、当前 digest 状态，让 host 和参会者都能快速判断现在讨论到了哪里。</p>
+      </div>
+      <div class="status-stack">
+        <div class="pill">Recording · 00:23:12</div>
+        <div class="pill" style="background:rgba(96,165,250,0.12);border-color:rgba(96,165,250,0.28);color:#bfdbfe;">Speaker · Alex</div>
+        <div class="pill" style="background:rgba(167,139,250,0.12);border-color:rgba(167,139,250,0.28);color:#ddd6fe;">Sharer · Esone Qiu (You)</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <aside class="panel">
+        <div class="section-title">Chapter Stepper</div>
+        <div class="stepper">
+          <div class="step">
+            <div class="dot"></div>
+            <div>
+              <strong>1. Opening context</strong>
+              <span>确认这次 review 的范围、依赖状态和本次想拿到的结论。</span>
+            </div>
+          </div>
+          <div class="step active">
+            <div class="dot"></div>
+            <div>
+              <strong>2. BE release and ETA</strong>
+              <span>当前 chapter。团队正在围绕 shared checklist 讨论 owner、ETA、blocker。</span>
+            </div>
+          </div>
+          <div class="step">
+            <div class="dot"></div>
+            <div>
+              <strong>3. Action handoff</strong>
+              <span>下一个 chapter 预计进入 action owner 和 follow-up 归属。</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="panel">
+        <div class="section-title">Current Chapter</div>
+        <div class="chapter-header">
+          <div>
+            <h2>BE release and ETA</h2>
+            <div class="chapter-summary">Alex 正在带着大家看一张 shared release checklist。Bella 提醒需要滚动到 blocker 区域。Meeting Pilot 当前推断这段讨论最适合用 `Outline + Table` 组合呈现，而不是脑图。</div>
+          </div>
+          <div class="chip">View mode · outline + table</div>
+        </div>
+
+        <div class="chapter-views">
+          <section class="subcard">
+            <h3>Outline</h3>
+            <ul>
+              <li>当前关心的问题是 BE release 是否已经有稳定 ETA。</li>
+              <li>Shared screen 上的 checklist 暗示 blocker 仍然没有完全清空。</li>
+              <li>团队当前倾向于先确认 owner 和 dependency，再给出 rollout window。</li>
+              <li>你正在 share screen，因此“scroll / open link / switch tab”类请求会升级成强提醒。</li>
+            </ul>
+          </section>
+
+          <section class="subcard">
+            <h3>Structured Table</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Owner</th>
+                  <th>Status</th>
+                  <th>ETA</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>BE release window</td>
+                  <td>Alex</td>
+                  <td>Open</td>
+                  <td>No final ETA</td>
+                </tr>
+                <tr>
+                  <td>Checklist blocker review</td>
+                  <td>Esone</td>
+                  <td>In progress</td>
+                  <td>Today</td>
+                </tr>
+                <tr>
+                  <td>QA dependency check</td>
+                  <td>Bella</td>
+                  <td>Pending</td>
+                  <td>After meeting</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </div>
+      </main>
+
+      <aside class="panel">
+        <div class="section-title">Alerts and Context</div>
+        <div class="alert-stack">
+          <div class="alert p0">
+            <h4>P0 · Shared-screen request</h4>
+            <p>Bella: “Could you scroll to the blocker section?” 你当前正在 share screen，这类操作请求应立即触发强提醒。</p>
+          </div>
+          <div class="alert p1">
+            <h4>P1 · Memory match</h4>
+            <p>命中历史记忆：上周关于 BE release 的记录提到“尚未给出 ETA，但目标是在 Friday 前落地”。</p>
+          </div>
+        </div>
+
+        <div class="section-title" style="margin-top:18px;">Right Rail</div>
+        <div class="meta-list">
+          <div class="meta-item">
+            <strong>Actions</strong>
+            <p>会后检查 blocker checklist，并把最新 ETA 结论同步到 release note。</p>
+          </div>
+          <div class="meta-item">
+            <strong>Digest</strong>
+            <p>Status: processing。当前录制停止后会自动上传视频，并轮询 digest 结果页。</p>
+          </div>
+          <div class="meta-item">
+            <strong>Memory refresh</strong>
+            <p>Last refresh: 23s ago。当前 recall 输入不是 transcript-only，而是 transcript summary + visual observation + meeting metadata。</p>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </div>
+</body>
+</html>

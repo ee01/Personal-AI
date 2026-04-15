@@ -38,7 +38,7 @@ const ingestPayloadItemSchema = {
     content: { type: 'string' as const, minLength: 1 },
     sourceType: {
       type: 'string' as const,
-      enum: ['glip', 'jira', 'web', 'manual', 'system'],
+      enum: ['glip', 'jira', 'web', 'manual', 'system', 'meeting'],
     },
     sender: { type: 'string' as const },
     groupId: { type: 'string' as const },

@@ -58,6 +58,8 @@ interface OutreachRuntimeState {
   ringCentralReady: boolean;
 }
 
+const OUTREACH_OPTIONS_HASH = 'outreach-config';
+
 type AddDialogMode = 'default' | 'reminder' | 'outreach';
 
 // react-select 自定义样式
@@ -546,6 +548,7 @@ const ScheduledMessagesManager: React.FC = () => {
     enabled: false,
     ringCentralReady: false,
   });
+  const [outreachRuntimeLoaded, setOutreachRuntimeLoaded] = useState(false);
   
   useEffect(() => {
     initializeApp();
@@ -632,6 +635,8 @@ const ScheduledMessagesManager: React.FC = () => {
         enabled: false,
         ringCentralReady: false,
       });
+    } finally {
+      setOutreachRuntimeLoaded(true);
     }
   };
 
@@ -639,6 +644,13 @@ const ScheduledMessagesManager: React.FC = () => {
     if (chrome?.runtime?.openOptionsPage) {
       void chrome.runtime.openOptionsPage();
     }
+  };
+
+  const openOutreachOptionsPage = () => {
+    const url = chrome?.runtime?.getURL
+      ? chrome.runtime.getURL(`options.html#${OUTREACH_OPTIONS_HASH}`)
+      : `options.html#${OUTREACH_OPTIONS_HASH}`;
+    window.open(url, '_blank');
   };
   
   /**
@@ -2121,6 +2133,15 @@ const ScheduledMessagesManager: React.FC = () => {
     const url = buildOutreachSessionsUrl(message.ID, message.Outreach_Last_Session_ID);
     window.open(url, '_blank');
   };
+
+  const showOutreachConfigWarning =
+    outreachRuntimeLoaded && (!outreachRuntime.enabled || !outreachRuntime.ringCentralReady);
+  const outreachConfigWarningTitle = !outreachRuntime.enabled
+    ? '主动询问引擎尚未开启'
+    : 'RingCentral 配置尚未完成';
+  const outreachConfigWarningDescription = !outreachRuntime.enabled
+    ? '“帮我问”和主动询问模板依赖主动询问引擎。请先到 Options 开启，再继续使用。'
+    : '“帮我问”需要 RingCentral Server URL、Client ID、Client Secret 和 JWT。补齐后才能创建和派发主动询问。';
   
   if (isLoading) {
     return (
@@ -2245,6 +2266,26 @@ const ScheduledMessagesManager: React.FC = () => {
             onClick={() => openBotConfigDialog(botConfigWarningState.dialogMode)}
           >
             {botConfigWarningState.status === 'missing_timeline_sync_rule' ? '🔧 立即升级' : '🔧 重新配置'}
+          </button>
+        </div>
+      )}
+
+      {showOutreachConfigWarning && (
+        <div style={styles.warningBanner}>
+          <div style={styles.warningContent}>
+            <span style={styles.warningIcon}>💬</span>
+            <div style={styles.warningText}>
+              <strong>{outreachConfigWarningTitle}</strong>
+              <p style={styles.warningDescription}>
+                {outreachConfigWarningDescription}
+              </p>
+            </div>
+          </div>
+          <button
+            style={styles.warningButton}
+            onClick={openOutreachOptionsPage}
+          >
+            🔧 前往主动询问配置
           </button>
         </div>
       )}
@@ -2763,6 +2804,7 @@ const VariableSelector: React.FC<{
   // 项目变量列表（用于检测是否插入了项目变量）- 预留扩展用
   const _projectVariables = [
     '{currentRelease}',
+    '{nextRelease}',
     '{currentPhase}',
     '{currentPhaseStartDate}',
     '{currentPhaseStartedWorkdays}',
@@ -2776,6 +2818,7 @@ const VariableSelector: React.FC<{
     { key: '{Content}', label: '消息内容' },
     { key: '{TeamID}', label: '群组 ID' },
     { key: '{currentRelease}', label: '当前 Release', isProjectVar: true },
+    { key: '{nextRelease}', label: '下个 Release', isProjectVar: true },
     { key: '{currentPhase}', label: '当前 Phase', isProjectVar: true },
     { key: '{currentPhaseStartDate}', label: '当前 Phase 日期', isProjectVar: true },
     { key: '{currentPhaseStartedWorkdays}', label: '已过天数', isProjectVar: true },
@@ -3690,6 +3733,7 @@ ${content}
   const isProjectVariable = (variable: string) => {
     const projectVariables = [
       '{currentRelease}',
+      '{nextRelease}',
       '{currentPhase}',
       '{currentPhaseStartDate}',
       '{currentPhaseStartedWorkdays}',
@@ -3709,6 +3753,7 @@ ${content}
     
     const projectVariables = [
       '{currentRelease}',
+      '{nextRelease}',
       '{currentPhase}',
       '{currentPhaseStartDate}',
       '{currentPhaseStartedWorkdays}',
@@ -3809,15 +3854,13 @@ ${content}
     
     // 验证触发方式
     if (isTimelineTrigger) {
-      const requiresTimelineSync = formData.Push_Method !== 'AsMe';
-
       // Timeline 触发验证：必须先配置执行 rule
       if (!botConfigured) {
         alert('Timeline 触发功能需要先配置 Bot 推送（需要通过 Jira Automation 规则访问 Release 信息）');
         return;
       }
 
-      if (requiresTimelineSync && !timelineBotConfigured) {
+      if (!timelineBotConfigured) {
         alert('Timeline 触发功能需要先补齐 Timeline Sync Rule，相关消息才能按项目 Milestone 触发。');
         return;
       }
@@ -4408,7 +4451,7 @@ ${content}
           {isTimelineTrigger && (
             <div style={{...dialogStyles.section, backgroundColor: '#f0f7ff', padding: '16px', borderRadius: '8px', marginBottom: '16px'}}>
               {/* Timeline 模式 Bot 配置检查 */}
-              {(!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)) && (
+              {(!botConfigured || !timelineBotConfigured) && (
                 <div style={{
                   padding: '12px',
                   backgroundColor: '#fff3cd',
@@ -4419,7 +4462,7 @@ ${content}
                   <p style={{ margin: '0 0 10px 0', color: '#856404', fontSize: '14px' }}>
                     {!botConfigured
                       ? '⚠️ Timeline 触发功能需要先配置 Bot 推送才能使用（需要通过 Jira Automation 规则访问 Release 信息）'
-                      : '⚠️ 当前缺少 Timeline Sync Rule，Timeline Bot/AI 消息不会按项目 Milestone 触发，请先补齐配置。'}
+                      : '⚠️ 当前缺少 Timeline Sync Rule，Timeline 消息（包括 AsMe）不会按项目 Milestone 触发，请先补齐配置。'}
                   </p>
                   <button
                     type="button"
@@ -4450,7 +4493,7 @@ ${content}
                     value={getTimelineProjectOption(formData.Timeline_Project)}
                     onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Project', option.value)}
                     styles={singleSelectStyles}
-                    isDisabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
+                    isDisabled={!botConfigured || !timelineBotConfigured}
                     isSearchable={false}
                   />
                   <small style={dialogStyles.hint}>
@@ -4479,7 +4522,7 @@ ${content}
                     }}
                     onChange={(option: SingleValue<SelectOption>) => option && handleChange('Timeline_Milestone', option.value)}
                     styles={singleSelectStyles}
-                    isDisabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
+                    isDisabled={!botConfigured || !timelineBotConfigured}
                     isSearchable={false}
                   />
                 </div>
@@ -4495,7 +4538,7 @@ ${content}
                     max="30"
                     value={formData.Timeline_Offset ?? 0}
                     onChange={(e) => handleChange('Timeline_Offset', parseInt(e.target.value))}
-                    disabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
+                    disabled={!botConfigured || !timelineBotConfigured}
                   />
                   <small style={dialogStyles.hint}>
                     负数=之前，0=当天，正数=之后。例如：-1 表示 Milestone 前1天，1 表示后1天
@@ -4510,7 +4553,7 @@ ${content}
                     value={formData.Schedule_Time || ''}
                     onChange={(e) => handleChange('Schedule_Time', e.target.value)}
                     placeholder="09:00"
-                    disabled={!botConfigured || (formData.Push_Method !== 'AsMe' && !timelineBotConfigured)}
+                    disabled={!botConfigured || !timelineBotConfigured}
                   />
                   <small style={dialogStyles.hint}>留空则每日早上 9 点左右推送</small>
                 </div>

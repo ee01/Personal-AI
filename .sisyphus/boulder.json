@@ -1,0 +1,49 @@
+{
+  "active_plan": "/Users/Esone/git/personal-ai/.sisyphus/plans/opencode-global-mcp-playwright-webpage.md",
+  "started_at": "2026-04-10T09:57:34.507Z",
+  "session_ids": [
+    "ses_289468743ffeXRhg5ddesIcjQE"
+  ],
+  "session_origins": {
+    "ses_289468743ffeXRhg5ddesIcjQE": "direct"
+  },
+  "plan_name": "opencode-global-mcp-playwright-webpage",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Snapshot existing global config and select the authoritative target file",
+      "session_id": "ses_2892c23d6ffeOWRa4EoLJtDj3K",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T09:58:40.796Z"
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "Add the `playwright` MCP entry to the global OpenCode config",
+      "session_id": "ses_28929800affe9WOfBzmnfqB403",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T10:01:25.644Z"
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "Validate both MCP definitions through OpenCode CLI and confirm rollback readiness",
+      "session_id": "ses_2892783f1ffe1sGslFTOGXcBBI",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T10:04:02.869Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "ses_28926350fffeIlrdhBZ1jjAH0b",
+      "agent": "oracle",
+      "updated_at": "2026-04-10T10:05:17.618Z"
+    }
+  }
+}

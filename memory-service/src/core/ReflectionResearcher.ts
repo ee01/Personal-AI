@@ -1,6 +1,9 @@
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { ReflectionEvidenceItem } from './ReflectionWorker.js';
-import type { ReflectionThreadRecord, ReflectionRunRecord } from '../repositories/ReflectionThreadRepository.js';
+import type {
+  ReflectionThreadRecord,
+  ReflectionRunRecord,
+} from '../repositories/ReflectionThreadRepository.js';
 import type { RecallQuery } from '../types/index.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 
@@ -45,7 +48,10 @@ function clampTopK(value: number | undefined): number {
 function uniqStrings(values: unknown): string[] | undefined {
   if (!Array.isArray(values)) return undefined;
   const items = values
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .filter(
+      (item): item is string =>
+        typeof item === 'string' && item.trim().length > 0,
+    )
     .map((item) => item.trim());
   return items.length > 0 ? Array.from(new Set(items)) : undefined;
 }
@@ -77,7 +83,10 @@ export class ReflectionResearcher {
     const llm = getLLMClient();
     const evidenceText = evidence
       .slice(0, 8)
-      .map((item, index) => `${index + 1}. [${item.sourceKind}/${item.role}] ${item.title}\n${item.snippet}`)
+      .map(
+        (item, index) =>
+          `${index + 1}. [${item.sourceKind}/${item.role}] ${item.title}\n${item.snippet}`,
+      )
       .join('\n\n');
     const runsText = recentRuns
       .slice(0, 3)
@@ -129,28 +138,40 @@ Rules:
     });
 
     return (parsed.local_queries ?? [])
-      .filter((item) => typeof item.query === 'string' && item.query.trim().length > 0)
+      .filter(
+        (item) =>
+          typeof item.query === 'string' && item.query.trim().length > 0,
+      )
       .slice(0, 3)
       .map((item) => ({
         query: item.query!.trim(),
         topK: clampTopK(item.topK),
-        purpose: typeof item.purpose === 'string' && item.purpose.trim().length > 0
-          ? item.purpose.trim()
-          : 'Support the next reflection step with local evidence.',
+        purpose:
+          typeof item.purpose === 'string' && item.purpose.trim().length > 0
+            ? item.purpose.trim()
+            : 'Support the next reflection step with local evidence.',
         timeRange:
           item.timeRange && typeof item.timeRange === 'object'
             ? {
-                start: Number.isFinite(item.timeRange.start) ? item.timeRange.start : undefined,
-                end: Number.isFinite(item.timeRange.end) ? item.timeRange.end : undefined,
+                start: Number.isFinite(item.timeRange.start)
+                  ? item.timeRange.start
+                  : undefined,
+                end: Number.isFinite(item.timeRange.end)
+                  ? item.timeRange.end
+                  : undefined,
               }
             : undefined,
         projectFilter:
-          typeof item.projectFilter === 'string' && item.projectFilter.trim().length > 0
+          typeof item.projectFilter === 'string' &&
+          item.projectFilter.trim().length > 0
             ? item.projectFilter.trim()
             : undefined,
         senderFilter: uniqStrings(item.senderFilter),
         groupFilter: uniqStrings(item.groupFilter),
-        sourceTypes: Array.isArray(item.sourceTypes) ? item.sourceTypes : undefined,
+        sourceTypes:
+          Array.isArray(item.sourceTypes) && item.sourceTypes.length > 0
+            ? item.sourceTypes
+            : ['glip', 'jira', 'web', 'manual', 'system'],
       }));
   }
 }

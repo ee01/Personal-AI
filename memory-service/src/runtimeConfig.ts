@@ -37,6 +37,8 @@ export interface UserRuntimeConfig {
   ringCentralJwt: string;
 }
 
+const MIN_OPENCLAW_TIMEOUT_MS = 5 * 60 * 1000;
+
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
@@ -155,10 +157,10 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
         ? persisted.openClawApiKey
         : appConfig.openClawApiKey,
     openClawTimeoutMs: Math.max(
-      1000,
+      MIN_OPENCLAW_TIMEOUT_MS,
       normalizePositiveInteger(
         persisted.openClawTimeoutMs,
-        Math.max(1000, appConfig.openClawTimeoutMs),
+        Math.max(MIN_OPENCLAW_TIMEOUT_MS, appConfig.openClawTimeoutMs),
       ),
     ),
     outreachEnabled: normalizeBoolean(persisted.outreachEnabled, appConfig.outreachEnabled),

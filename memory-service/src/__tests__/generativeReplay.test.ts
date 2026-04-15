@@ -1,4 +1,23 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const recallMock = vi.fn();
+
+vi.mock('../core/RecallEngine.js', () => ({
+  RecallEngine: vi.fn().mockImplementation(() => ({
+    recall: recallMock,
+  })),
+}));
+
+vi.mock('../llm/LLMClient.js', () => ({
+  getLLMClient: () => ({
+    generateJSON: vi.fn().mockResolvedValue({
+      narrative: 'dream narrative',
+      newRelationships: [],
+      insights: [],
+      risks: [],
+    }),
+  }),
+}));
 
 import { GenerativeReplay } from '../core/GenerativeReplay.js';
 import { getTestDb } from './setup.js';
@@ -7,6 +26,8 @@ describe('GenerativeReplay', () => {
   const db = getTestDb();
 
   beforeEach(() => {
+    recallMock.mockReset();
+    recallMock.mockResolvedValue({ items: [], totalFound: 0, channels: [] });
     db.prepare('DELETE FROM memory_metadata').run();
     db.prepare('DELETE FROM relationships').run();
     db.prepare('DELETE FROM entities').run();
@@ -19,25 +40,103 @@ describe('GenerativeReplay', () => {
       `INSERT INTO entities
         (id, type, name, importance, mention_count, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
-    ).run('entity-project-orbit', 'Project', 'Project Orbit', 0.9, 4, currentTime, currentTime);
+    ).run(
+      'entity-project-orbit',
+      'Project',
+      'Project Orbit',
+      0.9,
+      4,
+      currentTime,
+      currentTime,
+    );
 
     db.prepare(
       `INSERT INTO memory_metadata
         (target_type, target_id, salience_score, importance, frequency, recency_boost, consolidation_level, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run('message', 'demo-msg-1', 5.0, 0.9, 3, 1.2, 'temporary', currentTime, currentTime);
+    ).run(
+      'message',
+      'demo-msg-1',
+      5.0,
+      0.9,
+      3,
+      1.2,
+      'temporary',
+      currentTime,
+      currentTime,
+    );
 
     db.prepare(
       `INSERT INTO memory_metadata
         (target_type, target_id, salience_score, importance, frequency, recency_boost, consolidation_level, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run('entity', 'entity-project-orbit', 0.95, 0.9, 2, 1.1, 'working', currentTime, currentTime);
+    ).run(
+      'entity',
+      'entity-project-orbit',
+      0.95,
+      0.9,
+      2,
+      1.1,
+      'working',
+      currentTime,
+      currentTime,
+    );
 
     const replay = new GenerativeReplay(db);
-    const topics = (replay as any).selectSalientTopics() as Array<{ target_id: string; entity_name: string }>;
+    const topics = (replay as any).selectSalientTopics() as Array<{
+      target_id: string;
+      entity_name: string;
+    }>;
 
     expect(topics).toHaveLength(1);
     expect(topics[0].target_id).toBe('entity-project-orbit');
     expect(topics[0].entity_name).toBe('Project Orbit');
+  });
+
+  it('excludes meeting records from default dream recall', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO entities
+        (id, type, name, importance, mention_count, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
+    ).run(
+      'entity-topic-1',
+      'Topic',
+      'Meeting Pilot',
+      0.9,
+      4,
+      currentTime,
+      currentTime,
+    );
+
+    db.prepare(
+      `INSERT INTO memory_metadata
+        (target_type, target_id, salience_score, importance, frequency, recency_boost, consolidation_level, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'entity',
+      'entity-topic-1',
+      1.2,
+      0.9,
+      2,
+      1.1,
+      'working',
+      currentTime,
+      currentTime,
+    );
+
+    const replay = new GenerativeReplay(db);
+    const result = await replay.runWeeklyDreaming();
+
+    expect(recallMock).toHaveBeenCalled();
+    expect(recallMock.mock.calls[0][0].sourceTypes).toEqual([
+      'glip',
+      'jira',
+      'web',
+      'manual',
+      'system',
+    ]);
+    expect(result.totalTopics).toBe(1);
   });
 });

@@ -1,0 +1,5 @@
+"playwright" True
+"type": "local" True
+"@playwright/mcp@latest" True
+"enabled": true True
+"timeout": 10000 True

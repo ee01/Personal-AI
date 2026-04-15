@@ -34,7 +34,15 @@ const recallBodySchema = {
       type: 'array' as const,
       items: {
         type: 'string' as const,
-        enum: ['Person', 'Project', 'Task', 'Organization', 'Document', 'Technology', 'Topic'],
+        enum: [
+          'Person',
+          'Project',
+          'Task',
+          'Organization',
+          'Document',
+          'Technology',
+          'Topic',
+        ],
       },
     },
     projectFilter: { type: 'string' as const },
@@ -53,13 +61,16 @@ const recallBodySchema = {
       type: 'array' as const,
       items: { type: 'string' as const },
     },
+    presentationHint: {
+      type: 'string' as const,
+      enum: ['default', 'compact', 'meeting_pilot'],
+    },
+    previewMaxLength: { type: 'number' as const, minimum: 16, maximum: 280 },
   },
   additionalProperties: false,
 };
 
-export async function recallRoutes(
-  app: FastifyInstance,
-): Promise<void> {
+export async function recallRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: RecallQuery }>(
     '/recall',
     {
@@ -77,8 +88,13 @@ export async function recallRoutes(
                     id: { type: 'string' },
                     type: { type: 'string' },
                     content: { type: 'string' },
+                    displayTitle: { type: 'string' },
+                    displayText: { type: 'string' },
+                    previewText: { type: 'string' },
                     score: { type: 'number' },
                     source: { type: 'string' },
+                    sourceUrl: { type: 'string' },
+                    sourceTitle: { type: 'string' },
                     timestamp: { type: 'number' },
                     metadata: { type: 'object' },
                   },

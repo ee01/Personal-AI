@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Personal AI",
   "description": "Your personal AI assistant that helps analyze messages and provide insights",
-  "version": "8.2.0",
+  "version": "8.3.0",
   "permissions": [
     "tabs",
     "storage",
@@ -14,7 +14,10 @@
     "identity",
     "clipboardWrite",
     "cookies",
-    "notifications"
+    "notifications",
+    "sidePanel",
+    "offscreen",
+    "tabCapture"
   ],
   "content_scripts": [
     {
@@ -24,6 +27,16 @@
         "https://app.ringcentral.com/*"
       ],
       "js": ["contentScriptGlip.js"]
+    },
+    {
+      "matches": [
+        "https://v.ringcentral.com/conf/on/*"
+      ],
+      "js": [
+        "contentScriptRingCentralMeeting.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     },
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],
@@ -81,6 +94,9 @@
     "default_popup": "popup.html",
     "default_title": "Personal AI"
   },
+  "side_panel": {
+    "default_path": "meeting-sidepanel.html"
+  },
   "commands": {
     "open-memory-interface": {
       "suggested_key": {
@@ -92,14 +108,15 @@
   },
   "options_page": "options.html",
   "host_permissions": [
-    "*://*/*"
+    "*://*/*",
+    "https://v.ringcentral.com/*"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "share-modal.html", "share-modal.js", "doubao-bridge.html", "doubao-bridge.js", "auth-logs.html", "auth-logs.js", "app-script-template.gs", "previews/Personal AI - fetch jira.png", "previews/Personal AI - import jira automation.png", "previews/Personal AI - ask.png", "previews/Personal AI - messages filter.png", "previews/Personal AI - design link.png", "previews/Personal AI - scheduled messages.png"],
+    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "share-modal.html", "share-modal.js", "doubao-bridge.html", "doubao-bridge.js", "auth-logs.html", "auth-logs.js", "meeting-sidepanel.html", "meeting-sidepanel.js", "app-script-template.gs", "glipNativePopoutPage.js", "previews/Personal AI - fetch jira.png", "previews/Personal AI - import jira automation.png", "previews/Personal AI - ask.png", "previews/Personal AI - messages filter.png", "previews/Personal AI - design link.png", "previews/Personal AI - scheduled messages.png"],
     "matches": ["<all_urls>"]
   }],
   "icons": {

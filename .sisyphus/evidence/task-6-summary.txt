@@ -1,0 +1,77 @@
+TASK 6: MCP VALIDATION VIA OPENCODE CLI
+========================================
+
+OBJECTIVE
+---------
+Validate both MCP definitions through the OpenCode CLI and confirm backup is available for rollback.
+
+EXECUTION SUMMARY
+-----------------
+
+✅ STEP 1: MCP List Validation
+Command: /Users/Esone/.opencode/bin/opencode mcp list
+Result: SUCCESS
+- playwright: RECOGNIZED, status=connected (enabled)
+- webpage-mcp: RECOGNIZED, status=disabled (as designed)
+- Both entries display correct command arrays
+- OpenCode CLI successfully parsed both MCP entries from config
+
+✅ STEP 2: Playwright Debug Validation
+Command: /Users/Esone/.opencode/bin/opencode mcp debug playwright
+Result: SUCCESS (exit code 0)
+- Message: "MCP server playwright is not a remote server"
+- Interpretation: Correctly identified as local server (not remote OAuth)
+- No errors or warnings
+
+✅ STEP 3: Backup File Verification
+Location: ~/.config/opencode/opencode.jsonc.bak-20260410175818
+Result: EXISTS and RESTORABLE
+- File size: 465 bytes
+- Permissions: rw-r--r-- (readable and writable by owner)
+- Timestamp: Apr 10 17:58 (matches implementation time)
+- Rollback procedure: cp ~/.config/opencode/opencode.jsonc.bak-20260410175818 ~/.config/opencode/opencode.jsonc
+
+EVIDENCE FILES CREATED
+----------------------
+1. .sisyphus/evidence/task-6-mcp-list.txt (317 bytes)
+   - Raw output from `opencode mcp list`
+   - Shows both playwright (connected) and webpage-mcp (disabled)
+
+2. .sisyphus/evidence/task-6-playwright-debug.txt (145 bytes)
+   - Raw output from `opencode mcp debug playwright`
+   - Exit code: 0 (success)
+
+3. .sisyphus/evidence/task-6-playwright-debug-exit.txt (2 bytes)
+   - Exit code: 0
+
+4. .sisyphus/evidence/task-6-backup-check.txt (548 bytes)
+   - Backup file verification and rollback procedure
+
+VALIDATION CHECKLIST
+--------------------
+✅ Evidence file task-6-mcp-list.txt contains output from `opencode mcp list` showing `playwright` is listed
+✅ Evidence file task-6-playwright-debug.txt contains output from `opencode mcp debug playwright`
+✅ Evidence file task-6-playwright-debug-exit.txt contains the exit code (0)
+✅ Evidence file task-6-backup-check.txt confirms the backup file exists and is restorable
+✅ `webpage-mcp` is disabled so `opencode mcp debug webpage-mcp` is NOT expected to succeed — documented clearly
+✅ `playwright` is recognized by OpenCode CLI as a connected MCP server
+✅ Backup file is available for rollback at ~/.config/opencode/opencode.jsonc.bak-20260410175818
+
+CONCLUSION
+----------
+✅ ALL VALIDATIONS PASSED
+
+Both MCP definitions are:
+1. Properly configured in ~/.config/opencode/opencode.jsonc
+2. Successfully recognized by OpenCode CLI
+3. Correctly validated (playwright enabled, webpage-mcp disabled)
+4. Backed up and restorable
+
+READY FOR: Final Verification Wave (F1-F4)
+
+NOTES
+-----
+- webpage-mcp is intentionally disabled (Chrome Native Messaging bridge, not stdio MCP)
+- playwright is fully enabled and validated as a working local MCP server
+- Backup strategy with timestamped filenames enables safe rollback if needed
+- All evidence files are preserved for audit trail

@@ -26,6 +26,7 @@ import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { now } from '../utils/time.js';
 import { toSlug } from '../utils/slug.js';
 import { parseQueryTimeRange } from '../utils/queryTime.js';
+import { buildRecallPresentation } from '../utils/recallPresentation.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -39,6 +40,8 @@ interface RecallCandidate {
   embedding?: number[];
   timestamp?: number;
   source?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
   channels: string[];
   metadata?: Record<string, any>;
   entity?: Entity;
@@ -56,6 +59,8 @@ interface MessageRow {
   id: string;
   content: string;
   source_type: SourceType;
+  source_url: string | null;
+  source_title: string | null;
   timestamp: number;
   sender: string | null;
   group_name: string | null;
@@ -120,7 +125,7 @@ interface MemoryMetaRow {
 
 const MMR_LAMBDA = 0.7;
 const RECENCY_WEIGHT = 0.15;
-const SALIENCE_WEIGHT = 0.10;
+const SALIENCE_WEIGHT = 0.1;
 const SALIENCE_REINFORCE_BOOST = 0.02;
 const DEFAULT_TOP_K = 10;
 const VEC_OVER_FETCH_FACTOR = 3; // fetch more from each channel to allow MMR pruning
@@ -171,7 +176,9 @@ function entityRowToEntity(row: EntityRow): Entity {
     id: row.id,
     type: row.type,
     name: row.name,
-    aliases: row.aliases_json ? safeJsonParse<string[]>(row.aliases_json) : undefined,
+    aliases: row.aliases_json
+      ? safeJsonParse<string[]>(row.aliases_json)
+      : undefined,
     description: row.description ?? undefined,
     importance: row.importance,
     accessCount: row.access_count,
@@ -196,8 +203,18 @@ function safeJsonParse<T>(json: string): T | undefined {
   }
 }
 
-function buildMessageMetadata(msg: MessageRow): Record<string, any> | undefined {
-  const metadata = msg.metadata_json ? safeJsonParse<Record<string, any>>(msg.metadata_json) ?? {} : {};
+function buildMessageMetadata(
+  msg: MessageRow,
+): Record<string, any> | undefined {
+  const metadata = msg.metadata_json
+    ? (safeJsonParse<Record<string, any>>(msg.metadata_json) ?? {})
+    : {};
+  if (msg.source_url && !metadata.sourceUrl) {
+    metadata.sourceUrl = msg.source_url;
+  }
+  if (msg.source_title && !metadata.sourceTitle) {
+    metadata.sourceTitle = msg.source_title;
+  }
   if (msg.sender && !metadata.sender) {
     metadata.sender = msg.sender;
   }
@@ -234,7 +251,9 @@ function matchesProjectFilter(
   const normalizedFilter = normalizeProjectKey(projectFilter);
   if (!normalizedFilter) return true;
 
-  return rawProjectValues.some((value) => normalizeProjectKey(value) === normalizedFilter);
+  return rawProjectValues.some(
+    (value) => normalizeProjectKey(value) === normalizedFilter,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +287,10 @@ export class RecallEngine {
         const client = await EmbeddingClient.getInstance();
         queryEmbedding = await client.embed(query.query);
       } catch (err) {
-        console.warn('[RecallEngine] Embedding generation failed, skipping vector channel:', err);
+        console.warn(
+          '[RecallEngine] Embedding generation failed, skipping vector channel:',
+          err,
+        );
       }
     }
 
@@ -331,21 +353,35 @@ export class RecallEngine {
     this.enrichWithSalience(merged);
 
     // Apply optional salience filter
-    const filtered = query.minSalience != null
-      ? merged.filter((c) => (c.salienceScore ?? 0) >= query.minSalience!)
-      : merged;
+    const filtered =
+      query.minSalience != null
+        ? merged.filter((c) => (c.salienceScore ?? 0) >= query.minSalience!)
+        : merged;
 
     // MMR reranking
     const ranked = this.mmrRerank(filtered, topK);
 
     // Build final RecallItems
     const items: RecallItem[] = ranked.map((c) => {
+      const presentation = buildRecallPresentation({
+        content: c.content,
+        query: query.query,
+        source: c.source,
+        sourceTitle: c.sourceTitle,
+        presentationHint: query.presentationHint,
+        previewMaxLength: query.previewMaxLength,
+      });
       const item: RecallItem = {
         id: c.id,
         type: c.type,
         content: c.content,
+        displayTitle: presentation.displayTitle,
+        displayText: presentation.displayText,
+        previewText: presentation.previewText,
         score: c.score,
         source: c.source,
+        sourceUrl: c.sourceUrl,
+        sourceTitle: c.sourceTitle,
         timestamp: c.timestamp,
         entity: c.entity,
       };
@@ -402,6 +438,7 @@ export class RecallEngine {
         const msgs = this.db
           .prepare(
             `SELECT id, content, source_type, timestamp, sender, group_name,
+                    source_url, source_title,
                     matched_projects_json,
                     metadata_json, importance, entities_json
              FROM messages_raw
@@ -425,6 +462,8 @@ export class RecallEngine {
             embedding: queryEmbedding, // placeholder for similarity calc
             timestamp: msg.timestamp,
             source: msg.source_type,
+            sourceUrl: msg.source_url ?? undefined,
+            sourceTitle: msg.source_title ?? undefined,
             channels: ['vector'],
             metadata: buildMessageMetadata(msg),
           });
@@ -463,9 +502,18 @@ export class RecallEngine {
           const chunk = chunkMap.get(row.chunk_id);
           if (!chunk) continue;
 
-          if (!matchesProjectFilter(query.projectFilter, [chunk.related_project ?? ''])) continue;
+          if (
+            !matchesProjectFilter(query.projectFilter, [
+              chunk.related_project ?? '',
+            ])
+          )
+            continue;
           if (query.sourceTypes?.length && !chunk.source_type) continue;
-          if (query.sourceTypes?.length && !query.sourceTypes.includes(chunk.source_type!)) continue;
+          if (
+            query.sourceTypes?.length &&
+            !query.sourceTypes.includes(chunk.source_type!)
+          )
+            continue;
 
           const score = 1 / (1 + row.distance);
           candidates.push({
@@ -476,7 +524,10 @@ export class RecallEngine {
             timestamp: chunk.created_at,
             source: chunk.source_type ?? undefined,
             channels: ['vector'],
-            metadata: { filePath: chunk.file_path, relatedProject: chunk.related_project },
+            metadata: {
+              filePath: chunk.file_path,
+              relatedProject: chunk.related_project,
+            },
           });
         }
       }
@@ -532,9 +583,18 @@ export class RecallEngine {
         const chunk = chunkMap.get(row.rowid);
         if (!chunk) continue;
 
-        if (!matchesProjectFilter(query.projectFilter, [chunk.related_project ?? ''])) continue;
+        if (
+          !matchesProjectFilter(query.projectFilter, [
+            chunk.related_project ?? '',
+          ])
+        )
+          continue;
         if (query.sourceTypes?.length && !chunk.source_type) continue;
-        if (query.sourceTypes?.length && !query.sourceTypes.includes(chunk.source_type!)) continue;
+        if (
+          query.sourceTypes?.length &&
+          !query.sourceTypes.includes(chunk.source_type!)
+        )
+          continue;
 
         // Normalize: best rank -> score ~1, worst -> score ~0
         const score = Math.abs(row.rank) / maxAbsRank;
@@ -547,7 +607,10 @@ export class RecallEngine {
           timestamp: chunk.created_at,
           source: chunk.source_type ?? undefined,
           channels: ['fts'],
-          metadata: { filePath: chunk.file_path, relatedProject: chunk.related_project },
+          metadata: {
+            filePath: chunk.file_path,
+            relatedProject: chunk.related_project,
+          },
         });
       }
     } catch (err) {
@@ -570,7 +633,10 @@ export class RecallEngine {
 
     try {
       // Step 1: Find matching entities via keyword matching
-      const matchedEntities = this.findMatchingEntities(queryText, query.entityTypes);
+      const matchedEntities = this.findMatchingEntities(
+        queryText,
+        query.entityTypes,
+      );
       if (matchedEntities.length === 0) return candidates;
 
       const entityIds = matchedEntities.map((e) => e.id);
@@ -629,7 +695,9 @@ export class RecallEngine {
       }
 
       // Step 3: 2-hop relationships
-      const oneHopIds = Array.from(oneHopEntityIds).filter((id) => !entityIds.includes(id));
+      const oneHopIds = Array.from(oneHopEntityIds).filter(
+        (id) => !entityIds.includes(id),
+      );
       if (oneHopIds.length > 0) {
         const ph = oneHopIds.map(() => '?').join(', ');
         const rels2 = this.db
@@ -648,7 +716,11 @@ export class RecallEngine {
             : rel.from_entity_id;
 
           // Skip if already included as a seed or 1-hop entity
-          if (entityIds.includes(otherEntityId) || oneHopEntityIds.has(otherEntityId)) continue;
+          if (
+            entityIds.includes(otherEntityId) ||
+            oneHopEntityIds.has(otherEntityId)
+          )
+            continue;
 
           const relEnt = this.loadEntity(otherEntityId);
           if (relEnt) {
@@ -676,6 +748,7 @@ export class RecallEngine {
           const mentionMsgs = this.db
             .prepare(
               `SELECT id, content, source_type, timestamp, sender, group_name,
+                      source_url, source_title,
                       matched_projects_json,
                       metadata_json, importance, entities_json
                FROM messages_raw
@@ -683,7 +756,10 @@ export class RecallEngine {
                ORDER BY timestamp DESC
                LIMIT ?`,
             )
-            .all(`%"${entId}"%`, Math.ceil(limit / entityIds.length)) as MessageRow[];
+            .all(
+              `%"${entId}"%`,
+              Math.ceil(limit / entityIds.length),
+            ) as MessageRow[];
 
           for (const msg of mentionMsgs) {
             if (!this.passesFilters(msg, query)) continue;
@@ -695,6 +771,8 @@ export class RecallEngine {
               score: msg.importance * 0.8, // slightly discount graph-sourced messages
               timestamp: msg.timestamp,
               source: msg.source_type,
+              sourceUrl: msg.source_url ?? undefined,
+              sourceTitle: msg.source_title ?? undefined,
               channels: ['graph'],
               metadata: buildMessageMetadata(msg),
             });
@@ -722,12 +800,13 @@ export class RecallEngine {
     const candidates: RecallCandidate[] = [];
 
     // Use explicit time range from query, or parse from query text
-    const range = query.timeRange?.start != null || query.timeRange?.end != null
-      ? {
-          start: query.timeRange!.start ?? 0,
-          end: query.timeRange!.end ?? now(),
-        }
-      : parseQueryTimeRange(queryText);
+    const range =
+      query.timeRange?.start != null || query.timeRange?.end != null
+        ? {
+            start: query.timeRange!.start ?? 0,
+            end: query.timeRange!.end ?? now(),
+          }
+        : parseQueryTimeRange(queryText);
 
     if (!range) return candidates;
 
@@ -735,6 +814,7 @@ export class RecallEngine {
       const msgs = this.db
         .prepare(
           `SELECT id, content, source_type, timestamp, sender, group_name,
+                  source_url, source_title,
                   matched_projects_json,
                   metadata_json, importance, entities_json
            FROM messages_raw
@@ -763,6 +843,8 @@ export class RecallEngine {
           score,
           timestamp: msg.timestamp,
           source: msg.source_type,
+          sourceUrl: msg.source_url ?? undefined,
+          sourceTitle: msg.source_title ?? undefined,
           channels: ['time'],
           metadata: buildMessageMetadata(msg),
           recencyScore: recencyInWindow,
@@ -783,7 +865,9 @@ export class RecallEngine {
    * Merge candidates from all channels. When duplicates exist (same id),
    * keep the highest score and accumulate channel attributions.
    */
-  private mergeAndDeduplicate(candidates: RecallCandidate[]): RecallCandidate[] {
+  private mergeAndDeduplicate(
+    candidates: RecallCandidate[],
+  ): RecallCandidate[] {
     const map = new Map<string, RecallCandidate>();
 
     for (const c of candidates) {
@@ -802,7 +886,10 @@ export class RecallEngine {
           existing.score = c.score;
         }
         // Give a bonus for appearing in multiple channels
-        existing.score = Math.min(1.0, existing.score + 0.05 * (existing.channels.length - 1));
+        existing.score = Math.min(
+          1.0,
+          existing.score + 0.05 * (existing.channels.length - 1),
+        );
         // Preserve embedding if newly available
         if (c.embedding && !existing.embedding) {
           existing.embedding = c.embedding;
@@ -812,7 +899,11 @@ export class RecallEngine {
           existing.entity = c.entity;
         }
         // Keep best recencyScore
-        if (c.recencyScore != null && (existing.recencyScore == null || c.recencyScore > existing.recencyScore)) {
+        if (
+          c.recencyScore != null &&
+          (existing.recencyScore == null ||
+            c.recencyScore > existing.recencyScore)
+        ) {
           existing.recencyScore = c.recencyScore;
         }
       }
@@ -864,7 +955,10 @@ export class RecallEngine {
    *
    * MMR_score = lambda * relevance - (1 - lambda) * max_similarity_to_selected
    */
-  private mmrRerank(candidates: RecallCandidate[], topK: number): RecallCandidate[] {
+  private mmrRerank(
+    candidates: RecallCandidate[],
+    topK: number,
+  ): RecallCandidate[] {
     if (candidates.length <= 1) return candidates;
 
     // Compute composite relevance for each candidate
@@ -872,7 +966,8 @@ export class RecallEngine {
     for (const c of candidates) {
       const recency = c.recencyScore ?? 0;
       const salience = c.salienceScore ?? 0;
-      const relevance = c.score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience;
+      const relevance =
+        c.score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience;
       relevanceMap.set(c.id, relevance);
     }
 
@@ -902,7 +997,8 @@ export class RecallEngine {
         }
         // If no embedding, skip diversity penalty (maxSimToSelected stays 0)
 
-        const mmrScore = MMR_LAMBDA * relevance - (1 - MMR_LAMBDA) * maxSimToSelected;
+        const mmrScore =
+          MMR_LAMBDA * relevance - (1 - MMR_LAMBDA) * maxSimToSelected;
 
         if (mmrScore > bestMmrScore) {
           bestMmrScore = mmrScore;
@@ -964,7 +1060,10 @@ export class RecallEngine {
       runAll();
     } catch (err) {
       // Non-critical: log but do not throw
-      console.warn('[RecallEngine] Failed to reinforce accessed memories:', err);
+      console.warn(
+        '[RecallEngine] Failed to reinforce accessed memories:',
+        err,
+      );
     }
   }
 
@@ -976,7 +1075,10 @@ export class RecallEngine {
    * Match entities by name/alias keyword overlap with the query.
    * Phase 2 uses simple keyword matching; Phase 3 will use LLM extraction.
    */
-  private findMatchingEntities(queryText: string, entityTypes?: EntityType[]): Entity[] {
+  private findMatchingEntities(
+    queryText: string,
+    entityTypes?: EntityType[],
+  ): Entity[] {
     const queryLower = queryText.toLowerCase();
     const queryTokens = queryLower
       .split(/[^\p{L}\p{N}_-]+/u)
@@ -1024,7 +1126,9 @@ export class RecallEngine {
           (token) =>
             nameLower.includes(token) ||
             token.includes(nameLower) ||
-            aliasesLower.some((alias) => alias.includes(token) || token.includes(alias)),
+            aliasesLower.some(
+              (alias) => alias.includes(token) || token.includes(alias),
+            ),
         );
 
         if (directPhraseMatch || tokenMatch) {
@@ -1070,23 +1174,40 @@ export class RecallEngine {
   private passesFilters(msg: MessageRow, query: RecallQuery): boolean {
     // Time range filter
     if (query.timeRange) {
-      if (query.timeRange.start != null && msg.timestamp < query.timeRange.start) return false;
-      if (query.timeRange.end != null && msg.timestamp > query.timeRange.end) return false;
+      if (
+        query.timeRange.start != null &&
+        msg.timestamp < query.timeRange.start
+      )
+        return false;
+      if (query.timeRange.end != null && msg.timestamp > query.timeRange.end)
+        return false;
     }
 
     if (!matchesTextFilter(msg.sender, query.senderFilter)) return false;
     if (!matchesTextFilter(msg.group_name, query.groupFilter)) return false;
 
-    if (query.minImportance != null && msg.importance < query.minImportance) return false;
+    if (query.minImportance != null && msg.importance < query.minImportance)
+      return false;
 
-    if (query.sourceTypes?.length && !query.sourceTypes.includes(msg.source_type)) return false;
+    if (
+      query.sourceTypes?.length &&
+      !query.sourceTypes.includes(msg.source_type)
+    )
+      return false;
 
     if (query.projectFilter) {
-      const matchedProjects = safeJsonParse<string[]>(msg.matched_projects_json ?? '') ?? [];
-      const entityMatches = safeJsonParse<Array<{ name?: string; id?: string }>>(msg.entities_json ?? '') ?? [];
+      const matchedProjects =
+        safeJsonParse<string[]>(msg.matched_projects_json ?? '') ?? [];
+      const entityMatches =
+        safeJsonParse<Array<{ name?: string; id?: string }>>(
+          msg.entities_json ?? '',
+        ) ?? [];
       const projectCandidates = [
         ...matchedProjects,
-        ...entityMatches.flatMap((entity) => [entity.name ?? '', entity.id ?? '']),
+        ...entityMatches.flatMap((entity) => [
+          entity.name ?? '',
+          entity.id ?? '',
+        ]),
       ];
 
       if (!matchesProjectFilter(query.projectFilter, projectCandidates)) {

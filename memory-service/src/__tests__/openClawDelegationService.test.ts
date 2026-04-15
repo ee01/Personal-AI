@@ -313,4 +313,161 @@ describe('OpenClawDelegationService', () => {
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
+
+  it('synthesizes a verifiable artifact from structured delegation results when OpenClaw omits one', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 600000,
+      }),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: '已从外部日历中找到与 video 相关的行程。',
+            artifacts: [],
+            payload: {
+              videoRelatedEvents: [
+                {
+                  date: '2026-04-09',
+                  time: '09:30-10:30',
+                  title: 'RCV project review',
+                  relevant: true,
+                },
+                {
+                  date: '2026-04-09',
+                  time: '18:00-20:00',
+                  title: 'Dinner with Video team',
+                  relevant: true,
+                },
+              ],
+            },
+          }),
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'action-1',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '请确认 Gary 行程表中哪些日程与 video 项目相关。',
+      mode: 'read',
+      targetSystem: 'calendar',
+      metadata: {
+        candidateArtifacts: [
+          {
+            kind: 'link',
+            title: "Gary's calendar",
+            url: 'https://calendar.example.com/gary',
+          },
+        ],
+      },
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toContain('video');
+    expect(outcome.artifacts).toHaveLength(1);
+    expect(outcome.artifacts[0].metadata?.sourceSystem).toBe('calendar');
+    expect(outcome.artifacts[0].metadata?.entityKey).toBe('https://calendar.example.com/gary');
+    expect(outcome.artifacts[0].metadata?.verification).toBe('delegated_structured_result');
+    expect(outcome.artifacts[0].metadata?.observedFields).toEqual(
+      expect.arrayContaining(['date', 'time', 'title', 'relevant']),
+    );
+    expect(outcome.artifacts[0].content).toContain('RCV project review');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('repairs a truncated JSON envelope when the returned content is otherwise verifiable', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 5000,
+      }),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output: [
+            {
+              type: 'message',
+              content: [
+                {
+                  type: 'output_text',
+                  text: [
+                    '```json',
+                    '{',
+                    '  "status": "success",',
+                    '  "summary": "已核实 Gary 在 4/9 有一场明确的 video 项目会议。",',
+                    '  "artifacts": [',
+                    '    {',
+                    '      "kind": "event",',
+                    '      "title": "RCV project review",',
+                    '      "content": "时间：2026-04-09 09:30-10:30",',
+                    '      "metadata": {',
+                    '        "sourceSystem": "Google Calendar",',
+                    '        "entityId": "evt-1",',
+                    '        "verification": "calendar_api_verified",',
+                    '        "observedFields": ["summary", "start", "end"]',
+                    '      }',
+                    '    }',
+                    '  ],',
+                    '  "payload": {',
+                    '    "video_project_events": [',
+                    '      {',
+                    '        "date": "2026-04-09",',
+                    '        "title": "RCV project review"',
+                    '      }',
+                    '    ]',
+                    '  ',
+                  ].join('\n'),
+                },
+              ],
+            },
+          ],
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'action-1',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '请核实 Gary 和 video 相关的具体日程',
+      mode: 'read',
+      targetSystem: 'calendar',
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toContain('4/9');
+    expect(outcome.artifacts[0]?.metadata?.sourceSystem).toBe('Google Calendar');
+    expect(Array.isArray(outcome.payload?.video_project_events)).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
 });

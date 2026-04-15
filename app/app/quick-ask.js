@@ -40,13 +40,17 @@ const HEIGHTS = {
   compact: 148,
   compactWithBanner: 188,
   voice: 214,
-  streamingMin: 428,
-  enrichedMin: 474,
-  max: 660,
+  streaming: 432,
+  enriched: 500,
 };
 
 const STREAM_FLUSH_MS = 42;
 const ENRICHMENT_DELAY_MS = 150;
+const SESSION_EXPIRY_MS = 5 * 60 * 60 * 1000;
+const HISTORY_LOAD_BATCH_SIZE = 1;
+const AUTO_SCROLL_THRESHOLD_PX = 36;
+const HISTORY_LOAD_THRESHOLD_PX = 18;
+const STREAMING_TAIL_CHARS = 14;
 const DRAFT_STORAGE_KEY = 'doubao-bridge.quick-ask.draft';
 const CHROME_EXTENSION_URL =
   'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authuser=0&hl=zh-CN';
@@ -54,8 +58,12 @@ const CHROME_EXTENSION_URL =
 const state = {
   uiState: 'idle-compact',
   runtime: null,
-  messages: [],
-  turns: [],
+  currentSessionMessages: [],
+  currentTurns: [],
+  currentSessionStartedAt: 0,
+  currentSessionUpdatedAt: 0,
+  historySessions: [],
+  loadedHistoryCount: 0,
   draft: '',
   requestActive: false,
   shortcutStatus: null,
@@ -67,6 +75,8 @@ const state = {
   voiceDraft: '',
   voicePhase: 'idle',
   voiceLocale: 'zh-CN',
+  autoScrollPinned: true,
+  loadingHistory: false,
 };
 
 function createId(prefix) {
@@ -127,7 +137,7 @@ function isStandaloneRememberRequest(text) {
 }
 
 function buildAskContext() {
-  const segments = state.turns
+  const segments = state.currentTurns
     .slice(-4)
     .map((turn) => {
       const parts = [];
@@ -223,11 +233,7 @@ function desiredHeight() {
     return elements.shortcutBanner.hidden ? HEIGHTS.compact : HEIGHTS.compactWithBanner;
   }
 
-  const minHeight = state.uiState === 'enriched' ? HEIGHTS.enrichedMin : HEIGHTS.streamingMin;
-  return Math.max(
-    minHeight,
-    Math.min(document.documentElement.scrollHeight + 10, HEIGHTS.max),
-  );
+  return state.uiState === 'enriched' ? HEIGHTS.enriched : HEIGHTS.streaming;
 }
 
 let layoutFrame = null;
@@ -245,8 +251,170 @@ function scheduleLayoutSync() {
     } catch {
       return;
     }
-    if (isExpandedState()) {
-      elements.conversationPanel.scrollTop = elements.conversationPanel.scrollHeight;
+  });
+}
+
+function cloneValue(value) {
+  if (typeof globalThis.structuredClone === 'function') {
+    return globalThis.structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function hasCurrentSessionMessages() {
+  return state.currentSessionMessages.length > 0;
+}
+
+function getCurrentSessionLastActivityAt() {
+  return state.currentSessionUpdatedAt || state.currentSessionMessages.at(-1)?.createdAt || 0;
+}
+
+function isCurrentSessionExpired(referenceTime = Date.now()) {
+  const lastActivityAt = getCurrentSessionLastActivityAt();
+  return Boolean(lastActivityAt) && referenceTime - lastActivityAt >= SESSION_EXPIRY_MS;
+}
+
+function touchCurrentSession(timestamp = Date.now()) {
+  if (!state.currentSessionStartedAt) {
+    state.currentSessionStartedAt = timestamp;
+  }
+  state.currentSessionUpdatedAt = timestamp;
+}
+
+function ensureCurrentSession() {
+  if (!state.currentSessionStartedAt) {
+    touchCurrentSession();
+  }
+}
+
+function clearCurrentSession() {
+  state.currentSessionMessages = [];
+  state.currentTurns = [];
+  state.currentSessionStartedAt = 0;
+  state.currentSessionUpdatedAt = 0;
+  state.loadedHistoryCount = 0;
+  state.autoScrollPinned = true;
+}
+
+function archiveCurrentSession() {
+  if (!hasCurrentSessionMessages()) {
+    clearCurrentSession();
+    return false;
+  }
+
+  state.historySessions.push({
+    id: createId('session'),
+    startedAt: state.currentSessionStartedAt || state.currentSessionMessages[0]?.createdAt || Date.now(),
+    updatedAt: getCurrentSessionLastActivityAt() || Date.now(),
+    messages: cloneValue(state.currentSessionMessages),
+    turns: cloneValue(state.currentTurns),
+  });
+  clearCurrentSession();
+  return true;
+}
+
+function expireCurrentSessionIfNeeded() {
+  if (state.requestActive || !isCurrentSessionExpired()) return false;
+  return archiveCurrentSession();
+}
+
+function resolveExpandedState() {
+  if (state.requestActive) {
+    const streamMessage = state.currentSessionMessages.find((message) => message.id === state.streamMessageId);
+    return streamMessage?.text ? 'streaming' : 'pending';
+  }
+  return 'enriched';
+}
+
+function formatSessionDividerLabel(timestamp) {
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
+  if (diffMinutes < 60) {
+    return `${diffMinutes} mins ago`;
+  }
+  const diffHours = Math.max(1, Math.round(diffMinutes / 60));
+  if (diffHours < 24) {
+    return `${diffHours} hrs ago`;
+  }
+  const diffDays = Math.max(1, Math.round(diffHours / 24));
+  if (diffDays < 7) {
+    return `${diffDays} days ago`;
+  }
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function renderStreamingCopy(text) {
+  const rawText = typeof text === 'string' ? text : '';
+  if (!rawText) {
+    return '<div class="streaming-copy"><span class="streaming-tail">&nbsp;</span></div>';
+  }
+
+  const lastLineBreak = rawText.lastIndexOf('\n');
+  if (lastLineBreak >= 0) {
+    const head = rawText.slice(0, lastLineBreak + 1);
+    const tail = rawText.slice(lastLineBreak + 1);
+    return `<div class="streaming-copy">${escapeHtml(head)}<span class="streaming-tail">${escapeHtml(tail || ' ')}</span></div>`;
+  }
+
+  const splitIndex = Math.max(0, rawText.length - STREAMING_TAIL_CHARS);
+  const head = rawText.slice(0, splitIndex);
+  const tail = rawText.slice(splitIndex);
+  return `<div class="streaming-copy">${escapeHtml(head)}<span class="streaming-tail">${escapeHtml(tail || ' ')}</span></div>`;
+}
+
+function getVisibleSessions() {
+  const visibleHistory =
+    state.loadedHistoryCount > 0
+      ? state.historySessions.slice(-state.loadedHistoryCount)
+      : [];
+  const sessions = [...visibleHistory];
+
+  if (hasCurrentSessionMessages()) {
+    sessions.push({
+      id: 'current-session',
+      startedAt: state.currentSessionStartedAt || state.currentSessionMessages[0]?.createdAt || Date.now(),
+      updatedAt: getCurrentSessionLastActivityAt() || Date.now(),
+      messages: state.currentSessionMessages,
+      turns: state.currentTurns,
+      current: true,
+    });
+  }
+
+  return sessions;
+}
+
+function isConversationPinnedToBottom() {
+  const { scrollTop, scrollHeight, clientHeight } = elements.conversationPanel;
+  return scrollHeight - (scrollTop + clientHeight) <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function scrollConversationToBottom() {
+  elements.conversationPanel.scrollTop = elements.conversationPanel.scrollHeight;
+}
+
+function syncConversationScroll({ preserveTop, keepBottom } = {}) {
+  window.requestAnimationFrame(() => {
+    if (!isExpandedState()) return;
+
+    if (preserveTop) {
+      if (preserveTop.kind === 'prepend') {
+        const nextHeight = elements.conversationPanel.scrollHeight;
+        elements.conversationPanel.scrollTop =
+          preserveTop.scrollTop + (nextHeight - preserveTop.scrollHeight);
+        return;
+      }
+      elements.conversationPanel.scrollTop = preserveTop.scrollTop;
+      return;
+    }
+
+    if (keepBottom) {
+      scrollConversationToBottom();
+      return;
     }
   });
 }
@@ -424,7 +592,7 @@ function renderAssistantMessage(message) {
 
   const bodyHtml = message.htmlReady
     ? markdownToHtml(message.text || '')
-    : `<div class="streaming-copy">${escapeHtml(message.text || '').replace(/\n/g, '<br>')}</div>`;
+    : renderStreamingCopy(message.text || '');
 
   return `
     <div class="message-card assistant-card ${message.htmlReady ? '' : 'streaming-card'}">
@@ -473,26 +641,56 @@ function renderStatusMessage(message) {
   `;
 }
 
-function renderMessages() {
+function renderMessages(renderOptions = {}) {
   if (!isExpandedState()) {
     elements.conversationPanel.innerHTML = '';
     scheduleLayoutSync();
     return;
   }
 
-  elements.conversationPanel.innerHTML = state.messages
-    .map((message) => {
-      if (message.role === 'user') {
-        return `<div class="message-row role-user">${renderUserMessage(message)}</div>`;
-      }
-      if (message.role === 'status') {
-        return `<div class="message-row role-status">${renderStatusMessage(message)}</div>`;
-      }
-      return `<div class="message-row role-assistant">${renderAssistantMessage(message)}</div>`;
+  const preserveTop =
+    renderOptions.preserveTop ||
+    (state.autoScrollPinned
+      ? null
+      : {
+          kind: 'steady',
+          scrollTop: elements.conversationPanel.scrollTop,
+          scrollHeight: elements.conversationPanel.scrollHeight,
+        });
+
+  const visibleSessions = getVisibleSessions();
+  const sessionsHtml = visibleSessions
+    .map((session) => {
+      const divider =
+        session.current && visibleSessions.length === 1
+          ? ''
+          : `
+        <div class="session-divider" data-session-id="${escapeHtml(session.id)}">
+          <span>----- ${escapeHtml(formatSessionDividerLabel(session.startedAt))} -----</span>
+        </div>
+      `;
+      const messageRows = session.messages
+        .map((message) => {
+          if (message.role === 'user') {
+            return `<div class="message-row role-user">${renderUserMessage(message)}</div>`;
+          }
+          if (message.role === 'status') {
+            return `<div class="message-row role-status">${renderStatusMessage(message)}</div>`;
+          }
+          return `<div class="message-row role-assistant">${renderAssistantMessage(message)}</div>`;
+        })
+        .join('');
+
+      return `<section class="session-block">${divider}${messageRows}</section>`;
     })
     .join('');
 
+  elements.conversationPanel.innerHTML = sessionsHtml;
   scheduleLayoutSync();
+  syncConversationScroll({
+    keepBottom: state.autoScrollPinned,
+    preserveTop,
+  });
 }
 
 function setRuntime(runtime) {
@@ -518,24 +716,35 @@ async function refreshRuntimeSummary() {
 }
 
 function pushMessage(message) {
-  state.messages.push(message);
+  const timestamp =
+    typeof message?.createdAt === 'number' && Number.isFinite(message.createdAt)
+      ? message.createdAt
+      : Date.now();
+  ensureCurrentSession();
+  state.currentSessionMessages.push({
+    ...message,
+    createdAt: timestamp,
+  });
+  touchCurrentSession(timestamp);
   renderMessages();
 }
 
 function updateMessage(messageId, patch) {
-  const message = state.messages.find((item) => item.id === messageId);
+  const message = state.currentSessionMessages.find((item) => item.id === messageId);
   if (!message) return;
   Object.assign(message, patch);
+  touchCurrentSession();
   renderMessages();
 }
 
 function flushStreamBuffer() {
   if (!state.streamMessageId || !state.streamBuffer) return;
-  const message = state.messages.find((item) => item.id === state.streamMessageId);
+  const message = state.currentSessionMessages.find((item) => item.id === state.streamMessageId);
   if (message) {
     message.text = `${message.text || ''}${state.streamBuffer}`;
     message.pending = false;
   }
+  touchCurrentSession();
   state.streamBuffer = '';
   if (state.streamFlushTimer) {
     window.clearTimeout(state.streamFlushTimer);
@@ -556,9 +765,10 @@ function queueStreamDelta(delta) {
 function insertStatusCard(runtime = state.runtime, manual = false) {
   if (!runtime?.items?.length) return;
   if (!manual) {
-    const trailingStatus = state.messages[state.messages.length - 1];
+    const trailingStatus = state.currentSessionMessages[state.currentSessionMessages.length - 1];
     if (trailingStatus?.role === 'status' && trailingStatus.autoRuntime) {
       trailingStatus.runtime = runtime;
+      touchCurrentSession();
       renderMessages();
       return;
     }
@@ -683,7 +893,8 @@ class VoiceController {
     setDraft(draft);
     state.voiceDraft = draft;
     state.voicePhase = 'idle';
-    setUiState(state.messages.length > 0 ? 'enriched' : 'idle-compact');
+    expireCurrentSessionIfNeeded();
+    setUiState(hasCurrentSessionMessages() ? resolveExpandedState() : 'idle-compact');
     renderVoiceSheet();
     focusComposer();
   }
@@ -798,19 +1009,22 @@ async function enterVoiceMode() {
 }
 
 function resetSession() {
+  if (state.requestActive) {
+    showNotice('当前回答还在生成，先等这条回答结束再开新对话。');
+    return;
+  }
   if (state.streamFlushTimer) {
     window.clearTimeout(state.streamFlushTimer);
   }
   state.streamMessageId = null;
   state.streamBuffer = '';
   state.streamFlushTimer = null;
-  state.messages = [];
-  state.turns = [];
-  state.requestActive = false;
+  archiveCurrentSession();
   state.notice = '';
   voiceController.reset();
   state.voiceDraft = '';
   state.voicePhase = 'idle';
+  state.autoScrollPinned = true;
   setDraft('');
   setUiState('idle-compact');
   renderShortcutBanner();
@@ -819,10 +1033,49 @@ function resetSession() {
   void refreshRuntimeSummary();
 }
 
+function handleWindowShown(payload = {}) {
+  expireCurrentSessionIfNeeded();
+  state.loadedHistoryCount = 0;
+  state.autoScrollPinned = true;
+
+  if (hasCurrentSessionMessages()) {
+    setUiState(resolveExpandedState());
+  } else {
+    setUiState('idle-compact');
+  }
+
+  renderMessages();
+  if (payload.focusInput !== false && !isVoiceState()) {
+    focusComposer();
+  }
+}
+
+function loadOlderSession() {
+  if (state.loadingHistory) return;
+  if (!isExpandedState()) return;
+  if (state.loadedHistoryCount >= state.historySessions.length) return;
+
+  const scrollState = {
+    kind: 'prepend',
+    scrollTop: elements.conversationPanel.scrollTop,
+    scrollHeight: elements.conversationPanel.scrollHeight,
+  };
+  state.loadingHistory = true;
+  state.loadedHistoryCount = Math.min(
+    state.historySessions.length,
+    state.loadedHistoryCount + HISTORY_LOAD_BATCH_SIZE,
+  );
+  renderMessages({ preserveTop: scrollState });
+  window.requestAnimationFrame(() => {
+    state.loadingHistory = false;
+  });
+}
+
 async function submitQuery(rawInput, options = {}) {
   const input = rawInput.trim();
   if (!input || state.requestActive) return;
 
+  expireCurrentSessionIfNeeded();
   const askContext = buildAskContext();
 
   const rememberRequested = isRememberRequest(input);
@@ -842,6 +1095,7 @@ async function submitQuery(rawInput, options = {}) {
 
   if (standaloneRemember) {
     setDraft('');
+    state.autoScrollPinned = true;
     setUiState('enriched');
     pushMessage({
       id: createId('assistant'),
@@ -857,6 +1111,7 @@ async function submitQuery(rawInput, options = {}) {
 
   setDraft('');
   state.requestActive = true;
+  state.autoScrollPinned = true;
   setUiState('pending');
   pushMessage({
     id: createId('user'),
@@ -933,10 +1188,11 @@ async function submitQuery(rawInput, options = {}) {
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
             statusText: '',
           });
-          state.turns.push({
+          state.currentTurns.push({
             userText: input,
             assistantText: event.answer || '',
           });
+          touchCurrentSession();
           setRuntime(event.runtime || null);
           if (event.runtime?.items?.length) {
             insertStatusCard(event.runtime);
@@ -996,7 +1252,15 @@ elements.composer.addEventListener('keydown', async (event) => {
 });
 
 document.addEventListener('keydown', async (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+  const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+
+  if ((event.metaKey || event.ctrlKey) && key === 'n' && !event.shiftKey) {
+    event.preventDefault();
+    await quickAsk.newSession();
+    return;
+  }
+
+  if ((event.metaKey || event.ctrlKey) && key === ',') {
     event.preventDefault();
     await quickAsk.openSettings();
     return;
@@ -1037,6 +1301,8 @@ elements.statusPill.addEventListener('click', async () => {
     await quickAsk.openSettings();
     return;
   }
+  expireCurrentSessionIfNeeded();
+  state.autoScrollPinned = true;
   setUiState('enriched');
   insertStatusCard(state.runtime, true);
 });
@@ -1081,9 +1347,19 @@ elements.conversationPanel.addEventListener('click', async (event) => {
   }
 });
 
+elements.conversationPanel.addEventListener('scroll', () => {
+  if (!isExpandedState()) return;
+
+  state.autoScrollPinned = isConversationPinnedToBottom();
+  if (elements.conversationPanel.scrollTop <= HISTORY_LOAD_THRESHOLD_PX) {
+    loadOlderSession();
+  }
+});
+
 window.addEventListener('resize', () => {
   autoResizeComposer();
   scheduleLayoutSync();
+  syncConversationScroll({ keepBottom: state.autoScrollPinned });
 });
 
 quickAsk.onNativeShortcutEvent(async (payload) => {
@@ -1103,6 +1379,10 @@ quickAsk.onShortcutStatus((payload) => {
 
 quickAsk.onResetSession(() => {
   resetSession();
+});
+
+quickAsk.onWindowShown((payload) => {
+  handleWindowShown(payload);
 });
 
 quickAsk.onPrepareHide(() => {

@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright';
 
 import type { BridgeConfig } from './config.js';
+
+const execFileAsync = promisify(execFile);
 
 export interface BrowserStatus {
   running: boolean;
@@ -92,6 +96,10 @@ const CHALLENGE_PATTERNS = [
   /继续使用前请验证/,
 ];
 
+const SINGLETON_ARTIFACTS = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'] as const;
+
+type PersistentContextLauncher = typeof chromium.launchPersistentContext;
+
 function normalizeUrl(baseUrl: string, href: string): string {
   try {
     return new URL(href, baseUrl).toString();
@@ -148,8 +156,12 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   private page: Page | null = null;
   private lastError?: string;
   private operationTail: Promise<void> = Promise.resolve();
+  private startupPromise: Promise<void> | null = null;
 
-  constructor(private readonly config: BridgeConfig) {}
+  constructor(
+    private readonly config: BridgeConfig,
+    private readonly launchPersistentContext: PersistentContextLauncher = chromium.launchPersistentContext.bind(chromium),
+  ) {}
 
   private async withPageLock<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.operationTail;
@@ -166,32 +178,36 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   async ensureStarted(): Promise<void> {
+    if (!this.startupPromise) {
+      this.startupPromise = this.ensureStartedInternal().finally(() => {
+        this.startupPromise = null;
+      });
+    }
+    await this.startupPromise;
+  }
+
+  private async ensureStartedInternal(): Promise<void> {
     const existingPage = this.getLivePage();
     if (this.context && existingPage) {
       this.page = existingPage;
       return;
     }
 
-    const tempDir = await this.ensurePlaywrightTempDir();
-    this.context = await chromium.launchPersistentContext(this.config.profileDir, {
-      env: {
-        ...process.env,
-        TMPDIR: tempDir,
-        TMP: tempDir,
-        TEMP: tempDir,
-      },
-      headless: this.config.headless,
-      viewport: { width: 1280, height: 900 },
-    });
-    try {
-      const origin = new URL(this.config.doubaoBaseUrl).origin;
-      await this.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
-    } catch {
-      // Permission grant is best-effort. Fallbacks below do not depend on it.
+    if (this.context) {
+      const reopenedPage = await this.tryOpenPageInExistingContext();
+      if (reopenedPage) {
+        this.page = reopenedPage;
+        return;
+      }
+      await this.disposeContext();
     }
 
+    const tempDir = await this.ensurePlaywrightTempDir();
+    this.context = await this.launchPersistentContextWithRecovery(tempDir);
+    await this.grantClipboardPermissions();
+
     const pages = this.context.pages();
-    this.page = pages[0] ?? (await this.context.newPage());
+    this.page = pages.find((page) => !page.isClosed()) ?? (await this.context.newPage());
   }
 
   private getLivePage(): Page | null {
@@ -207,7 +223,6 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
     try {
       const existingPage = this.context.pages().find((page) => !page.isClosed()) ?? null;
       if (!existingPage) {
-        this.context = null;
         this.page = null;
         return null;
       }
@@ -493,9 +508,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
   }
 
   async close(): Promise<void> {
-    await this.context?.close();
-    this.context = null;
-    this.page = null;
+    await this.disposeContext();
   }
 
   private async captureSnapshot(fallbackTitle?: string): Promise<BrowserThreadSnapshot> {
@@ -680,5 +693,171 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
         await navigator.clipboard.writeText(text);
       }, value)
       .catch(() => undefined);
+  }
+
+  private async launchPersistentContextWithRecovery(tempDir: string): Promise<BrowserContext> {
+    const launchOptions = {
+      env: {
+        ...process.env,
+        TMPDIR: tempDir,
+        TMP: tempDir,
+        TEMP: tempDir,
+      },
+      headless: this.config.headless,
+      viewport: { width: 1280, height: 900 },
+    } as const;
+
+    try {
+      return await this.launchPersistentContext(this.config.profileDir, launchOptions);
+    } catch (error) {
+      const recovered = await this.recoverProfileDirectoryLock(error);
+      if (!recovered) {
+        throw error;
+      }
+      return await this.launchPersistentContext(this.config.profileDir, launchOptions);
+    }
+  }
+
+  private async grantClipboardPermissions(): Promise<void> {
+    if (!this.context) return;
+    try {
+      const origin = new URL(this.config.doubaoBaseUrl).origin;
+      await this.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+    } catch {
+      // Permission grant is best-effort. Fallbacks below do not depend on it.
+    }
+  }
+
+  private async tryOpenPageInExistingContext(): Promise<Page | null> {
+    if (!this.context) return null;
+
+    try {
+      return await this.context.newPage();
+    } catch {
+      return null;
+    }
+  }
+
+  private async disposeContext(): Promise<void> {
+    const context = this.context;
+    this.context = null;
+    this.page = null;
+    await context?.close().catch(() => undefined);
+  }
+
+  private isProfileInUseError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /ProcessSingleton|SingletonLock|profile is already in use/i.test(message);
+  }
+
+  private async recoverProfileDirectoryLock(error: unknown): Promise<boolean> {
+    if (!this.isProfileInUseError(error)) {
+      return false;
+    }
+
+    const terminatedPids = await this.terminateProfileProcesses();
+    const cleanedArtifacts = await this.cleanupSingletonArtifacts();
+    if (terminatedPids.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    return terminatedPids.length > 0 || cleanedArtifacts;
+  }
+
+  private async terminateProfileProcesses(): Promise<number[]> {
+    const pids = await this.findProfileProcessPids();
+    const terminated: number[] = [];
+    for (const pid of pids) {
+      if (await this.terminatePid(pid)) {
+        terminated.push(pid);
+      }
+    }
+    return terminated;
+  }
+
+  private async findProfileProcessPids(): Promise<number[]> {
+    const pids = new Set<number>();
+    const singletonPid = await this.readSingletonLockPid();
+    if (singletonPid) {
+      pids.add(singletonPid);
+    }
+
+    try {
+      const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+      for (const rawLine of stdout.split('\n')) {
+        const line = rawLine.trim();
+        if (!line || !line.includes(`--user-data-dir=${this.config.profileDir}`)) continue;
+
+        const match = line.match(/^(\d+)\s+/);
+        const pid = match ? Number(match[1]) : NaN;
+        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
+          pids.add(pid);
+        }
+      }
+    } catch {
+      // Best-effort; lock cleanup below still handles stale singleton symlinks.
+    }
+
+    return Array.from(pids);
+  }
+
+  private async readSingletonLockPid(): Promise<number | undefined> {
+    try {
+      const linkTarget = await fs.readlink(path.join(this.config.profileDir, 'SingletonLock'));
+      const match = linkTarget.match(/-(\d+)$/);
+      const pid = match ? Number(match[1]) : NaN;
+      return Number.isFinite(pid) && pid > 0 ? pid : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async terminatePid(pid: number): Promise<boolean> {
+    if (!pid || pid === process.pid) return false;
+
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      return false;
+    }
+
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (!this.isProcessAlive(pid)) {
+        return true;
+      }
+    }
+
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      return !this.isProcessAlive(pid);
+    }
+
+    return true;
+  }
+
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async cleanupSingletonArtifacts(): Promise<boolean> {
+    let cleaned = false;
+    for (const name of SINGLETON_ARTIFACTS) {
+      const artifactPath = path.join(this.config.profileDir, name);
+      try {
+        await fs.lstat(artifactPath);
+        await fs.rm(artifactPath, { force: true });
+        cleaned = true;
+      } catch {
+        // Ignore filesystem races here; the follow-up launch attempt is authoritative.
+      }
+    }
+    return cleaned;
   }
 }

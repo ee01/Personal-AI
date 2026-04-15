@@ -1,0 +1,8 @@
+total 56
+-rw-r--r--@  1 Esone  staff   711 Mar  5 15:18 bun.lock
+drwxr-xr-x@ 13 Esone  staff   416 Apr  9 17:20 node_modules
+-rw-r--r--@  1 Esone  staff  1471 Apr  9 17:18 oh-my-openagent.json
+-rw-r--r--@  1 Esone  staff   465 Apr  9 17:18 opencode.jsonc
+-rw-r--r--@  1 Esone  staff   465 Apr 10 17:58 opencode.jsonc.bak-20260410175818
+-rw-r--r--@  1 Esone  staff  4339 Apr  9 17:20 package-lock.json
+-rw-r--r--@  1 Esone  staff   109 Apr 10 17:23 package.json

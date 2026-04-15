@@ -1,0 +1,80 @@
+<div class="memory-rule-shell">
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Memory Service</p>
+      <h1>记忆入口规则</h1>
+      <p class="sub">把消息匹配成记忆、关联和自动动作</p>
+    </div>
+    <div class="status-row">
+      <span class="pill ok">后台记忆采集 已开启</span>
+      <span class="pill ok">Memory 已连接</span>
+      <span class="pill warn">OpenClaw 未配置</span>
+    </div>
+  </header>
+
+  <section class="overview-card">
+    <div class="flow">消息 → 命中规则 → 写入记忆 → 关联后续 / 提醒 / 动作队列</div>
+    <button>新建规则</button>
+  </section>
+
+  <section class="rule-list">
+    <article class="rule-card active">
+      <div class="rule-main">
+        <h3>请假 / PTO 相关消息</h3>
+        <p>识别 leave chat 中由我发起的请假消息，抽取时间并生成后续动作。</p>
+        <div class="chips">
+          <span>群组: leave chat</span>
+          <span>发送者: 我</span>
+          <span>入库记忆</span>
+          <span>动作队列</span>
+          <span>OpenClaw</span>
+        </div>
+      </div>
+      <div class="rule-side">
+        <div>最近命中 3 次</div>
+        <div>待执行动作 2 个</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="editor">
+    <div class="panel left">
+      <h2>1. 匹配什么消息</h2>
+      <label>自然语言描述</label>
+      <textarea placeholder="例如：识别和请假、出差、PTO、离岗有关的消息"></textarea>
+
+      <div class="grid">
+        <label>发送者<input placeholder="不限 / 我 / 某人" /></label>
+        <label>群组<input placeholder="不限 / leave chat / 某群组" /></label>
+      </div>
+
+      <label>规则有效期<input placeholder="长期有效 / 30 天" /></label>
+    </div>
+
+    <div class="panel middle">
+      <h2>2. 命中后沉淀什么</h2>
+      <label><input type="checkbox" checked /> 写入记忆</label>
+      <label><input type="checkbox" /> 持续关注后续讨论</label>
+      <label><input type="checkbox" /> 生成即时提醒或摘要</label>
+
+      <h2>3. 命中后做什么</h2>
+      <label><input type="checkbox" checked /> 执行自动化动作</label>
+      <textarea placeholder="用自然语言描述动作，例如：抽取请假时间；在开始前创建状态变更动作；结束后恢复原状态"></textarea>
+
+      <div class="callout warn">
+        OpenClaw 未配置。你现在可以先保存规则，动作会处于“待激活”；也可以先去设置完成 OpenClaw 对接。
+      </div>
+    </div>
+
+    <aside class="panel right">
+      <h2>执行预览</h2>
+      <ul>
+        <li>命中后先写入一条“时间事件”记忆</li>
+        <li>创建 1-N 个 RuntimeAction</li>
+        <li>需要延迟执行的动作由 Memory Service 调度</li>
+        <li>到点后再委派给 OpenClaw / 其他执行器</li>
+      </ul>
+      <button>保存规则</button>
+    </aside>
+  </section>
+</div>

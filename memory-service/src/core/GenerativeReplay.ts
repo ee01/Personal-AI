@@ -137,7 +137,10 @@ export class GenerativeReplay {
         const dream = await this.dreamAboutTopic(topic);
         dreams.push(dream);
       } catch (err) {
-        console.error(`[GenerativeReplay] Dream failed for topic "${topic.entity_name}":`, err);
+        console.error(
+          `[GenerativeReplay] Dream failed for topic "${topic.entity_name}":`,
+          err,
+        );
       }
     }
 
@@ -183,7 +186,9 @@ export class GenerativeReplay {
       )
       .all(cutoff, TOP_SALIENT_LIMIT) as SalientEntityRow[];
 
-    return rows.filter((r) => r.entity_name != null && r.entity_name.length > 0);
+    return rows.filter(
+      (r) => r.entity_name != null && r.entity_name.length > 0,
+    );
   }
 
   // =========================================================================
@@ -200,6 +205,7 @@ export class GenerativeReplay {
     const recallResult = await recallEngine.recall({
       query: topicName,
       topK: RECALL_TOP_K,
+      sourceTypes: ['glip', 'jira', 'web', 'manual', 'system'],
     });
 
     const memories = recallResult.items;
@@ -210,7 +216,10 @@ export class GenerativeReplay {
     // 2b. Get related entities from relationships table
     const relatedEntities = this.getRelatedEntities(topic.target_id);
     const entitiesList = relatedEntities
-      .map((e) => `- ${e.name} (${e.type})${e.description ? ': ' + e.description : ''}`)
+      .map(
+        (e) =>
+          `- ${e.name} (${e.type})${e.description ? ': ' + e.description : ''}`,
+      )
       .join('\n');
 
     // 2c. Build dream prompt
@@ -274,7 +283,10 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
       try {
         this.insertDreamRelationship(rel, currentTime);
       } catch (err) {
-        console.warn(`[GenerativeReplay] Failed to insert relationship ${rel.from} -> ${rel.to}:`, err);
+        console.warn(
+          `[GenerativeReplay] Failed to insert relationship ${rel.from} -> ${rel.to}:`,
+          err,
+        );
       }
     }
 
@@ -288,7 +300,10 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
         forgettingEngine.reinforceMemory(targetType, memory.id);
         reinforced++;
       } catch (err) {
-        console.warn(`[GenerativeReplay] Failed to reinforce memory ${memory.id}:`, err);
+        console.warn(
+          `[GenerativeReplay] Failed to reinforce memory ${memory.id}:`,
+          err,
+        );
       }
     }
 
@@ -336,9 +351,10 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
 
       const relatedIds = new Set<string>();
       for (const rel of relRows) {
-        const otherId = rel.from_entity_id === entityId
-          ? rel.to_entity_id
-          : rel.from_entity_id;
+        const otherId =
+          rel.from_entity_id === entityId
+            ? rel.to_entity_id
+            : rel.from_entity_id;
         relatedIds.add(otherId);
       }
 
@@ -370,11 +386,15 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
   ): void {
     // Resolve entity IDs by name (case-insensitive)
     const fromEntity = this.db
-      .prepare(`SELECT id FROM entities WHERE LOWER(name) = LOWER(?) AND status = 'active' LIMIT 1`)
+      .prepare(
+        `SELECT id FROM entities WHERE LOWER(name) = LOWER(?) AND status = 'active' LIMIT 1`,
+      )
       .get(rel.from) as { id: string } | undefined;
 
     const toEntity = this.db
-      .prepare(`SELECT id FROM entities WHERE LOWER(name) = LOWER(?) AND status = 'active' LIMIT 1`)
+      .prepare(
+        `SELECT id FROM entities WHERE LOWER(name) = LOWER(?) AND status = 'active' LIMIT 1`,
+      )
       .get(rel.to) as { id: string } | undefined;
 
     if (!fromEntity || !toEntity) {

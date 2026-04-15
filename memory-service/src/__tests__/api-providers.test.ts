@@ -330,6 +330,7 @@ describe('Provider API', () => {
     const todoBody = todoRes.json();
     expect(todoBody.packages).toHaveLength(1);
     expect(todoBody.packages[0].kind).toBe('todo_digest');
+    expect(todoBody.packages[0].itemCount).toBe(2);
     expect(todoBody.packages[0].bodyMd).toContain('Need a decision');
     expect(todoBody.packages[0].bodyMd).toContain('Review the rollout notes');
     expect(todoBody.packages[0].bodyMd).not.toContain('Weekly Report Ready');
@@ -347,6 +348,7 @@ describe('Provider API', () => {
     const noticeBody = noticeRes.json();
     expect(noticeBody.packages).toHaveLength(1);
     expect(noticeBody.packages[0].kind).toBe('notice_digest');
+    expect(noticeBody.packages[0].itemCount).toBe(1);
     expect(noticeBody.packages[0].bodyMd).toContain('Weekly Report Ready');
     expect(noticeBody.packages[0].bodyMd).not.toContain('Need a decision');
 
@@ -363,7 +365,42 @@ describe('Provider API', () => {
     const reminderAliasBody = reminderAliasRes.json();
     expect(reminderAliasBody.packages).toHaveLength(1);
     expect(reminderAliasBody.packages[0].kind).toBe('reminder_digest');
+    expect(reminderAliasBody.packages[0].itemCount).toBe(2);
     expect(reminderAliasBody.packages[0].bodyMd).toContain('Need a decision');
     expect(reminderAliasBody.packages[0].bodyMd).not.toContain('Weekly Report Ready');
+  });
+
+  it('returns itemCount 0 for empty todo and notice digests', async () => {
+    const todoRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'todo_sync',
+      },
+    });
+
+    expect(todoRes.statusCode).toBe(200);
+    const todoBody = todoRes.json();
+    expect(todoBody.packages).toHaveLength(1);
+    expect(todoBody.packages[0].itemCount).toBe(0);
+    expect(todoBody.packages[0].sourceRefs).toEqual([]);
+    expect(todoBody.packages[0].bodyMd).toContain('No pending todos.');
+
+    const noticeRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'notice_sync',
+      },
+    });
+
+    expect(noticeRes.statusCode).toBe(200);
+    const noticeBody = noticeRes.json();
+    expect(noticeBody.packages).toHaveLength(1);
+    expect(noticeBody.packages[0].itemCount).toBe(0);
+    expect(noticeBody.packages[0].sourceRefs).toEqual([]);
+    expect(noticeBody.packages[0].bodyMd).toContain('No new notices.');
   });
 });

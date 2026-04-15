@@ -30,8 +30,12 @@ import {
     syncStoredUserIdentityToMemory,
     syncUserIdentityToMemory
 } from './services/UserIdentitySyncService';
+import { initMeetingPilotBackgroundRuntime } from './meeting-shell/background';
 
 console.log('Background script loaded');
+void initMeetingPilotBackgroundRuntime().catch((error) => {
+  console.error('Meeting Pilot runtime failed to initialize:', error);
+});
 void concernedItemsSyncService.initialize();
 
 interface BackendNotificationMeta {
@@ -44,6 +48,57 @@ interface BackendNotificationMeta {
 
 // Map to track backend notification metadata for click handling
 const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
+const GLIP_POPUP_DEFAULT_WIDTH = 1100;
+const GLIP_POPUP_DEFAULT_HEIGHT = 900;
+
+function waitForDelay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForTabReady(tabId: number): Promise<void> {
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === 'complete') {
+            await waitForDelay(1000);
+            return;
+        }
+    } catch (error) {
+        console.warn('waitForTabReady: 读取标签页状态失败，改为等待 onUpdated', error);
+    }
+
+    await waitForTabLoad(tabId);
+}
+
+async function openGlipPopupWindow(
+    url: string,
+    options: { width?: number; height?: number; focused?: boolean } = {}
+): Promise<{ windowId: number; tabId: number }> {
+    const popupWindow = await chrome.windows.create({
+        url,
+        type: 'popup',
+        width: options.width ?? GLIP_POPUP_DEFAULT_WIDTH,
+        height: options.height ?? GLIP_POPUP_DEFAULT_HEIGHT,
+        focused: options.focused ?? true
+    });
+
+    const windowId = popupWindow.id;
+    if (windowId == null) {
+        throw new Error('glip_popup_window_missing_id');
+    }
+
+    let tabId = popupWindow.tabs?.[0]?.id;
+    if (!tabId) {
+        const tabs = await chrome.tabs.query({ windowId });
+        tabId = tabs[0]?.id;
+    }
+
+    if (!tabId) {
+        throw new Error('glip_popup_tab_missing_id');
+    }
+
+    await waitForTabReady(tabId);
+    return { windowId, tabId };
+}
 
 function isNotificationCenterCompatError(error: any): boolean {
     return error?.status === 404 || error?.status === 501;
@@ -613,6 +668,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ url: tab?.url });
         });
         return true; // 保持消息通道开放
+    }
+
+    if (request.type === 'OPEN_GLIP_POPUP_WINDOW' || request.type === 'OPEN_GLIP_TEMP_WINDOW') {
+        (async () => {
+            try {
+                const { url, width, height, focused } = request.data || {};
+                if (!url) {
+                    throw new Error('glip_popup_url_missing');
+                }
+
+                const popupInfo = await openGlipPopupWindow(url, {
+                    width,
+                    height,
+                    focused
+                });
+
+                sendResponse({
+                    success: true,
+                    ...popupInfo
+                });
+            } catch (error: any) {
+                console.error('❌ 打开 Glip popup window 失败:', error);
+                sendResponse({ success: false, error: error?.message || 'open_glip_popup_failed' });
+            }
+        })();
+        return true;
     }
 
     // 处理分析幻灯片项目的请求

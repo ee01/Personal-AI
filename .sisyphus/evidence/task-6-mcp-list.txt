@@ -1,0 +1,11 @@
+[0m
+[90m┌[39m  MCP Servers
+[90m│[39m
+[34m●[39m  ✓ playwright [90mconnected
+[90m│[39m      [90mnpx -y @playwright/mcp@latest
+[90m│[39m
+[34m●[39m  ○ webpage-mcp [90mdisabled
+[90m│[39m      [90mnpx -y -p webpage-mcp@latest webpage-mcp-stdio
+[90m│[39m
+[90m└[39m  2 server(s)
+

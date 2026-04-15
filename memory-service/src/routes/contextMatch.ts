@@ -10,11 +10,14 @@
 import type { FastifyInstance } from 'fastify';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { getConfig } from '../config.js';
+import { buildRecallPresentation } from '../utils/recallPresentation.js';
 
 interface ContextMatchBody {
   title: string;
   keywords?: string | string[];
   snippet?: string;
+  presentationHint?: 'default' | 'compact' | 'meeting_pilot';
+  previewMaxLength?: number;
 }
 
 interface ChunkRow {
@@ -28,7 +31,13 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
     '/context-match',
     async (request, reply) => {
       try {
-        const { title, keywords, snippet } = request.body ?? {};
+        const {
+          title,
+          keywords,
+          snippet,
+          presentationHint,
+          previewMaxLength,
+        } = request.body ?? {};
 
         if (!title) {
           return reply.send({ match: null });
@@ -78,7 +87,16 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
         const chunkMap = new Map(chunks.map((c) => [c.chunk_id, c]));
 
         // Find best match from reflection threads / reflections / dreams paths
-        let bestMatch: { content: string; source: string; score: number } | null = null;
+        let bestMatch:
+          | {
+              content: string;
+              source: string;
+              score: number;
+              displayTitle?: string;
+              displayText: string;
+              previewText: string;
+            }
+          | null = null;
 
         for (const row of vecRows) {
           const chunk = chunkMap.get(row.chunk_id);
@@ -95,10 +113,20 @@ export async function contextMatchRoutes(app: FastifyInstance): Promise<void> {
           if (score < config.contextMatchThreshold) continue;
 
           if (!bestMatch || score > bestMatch.score) {
+            const presentation = buildRecallPresentation({
+              content: chunk.content,
+              query: queryText,
+              source: chunk.file_path,
+              presentationHint,
+              previewMaxLength,
+            });
             bestMatch = {
               content: chunk.content,
               source: chunk.file_path,
               score,
+              displayTitle: presentation.displayTitle,
+              displayText: presentation.displayText,
+              previewText: presentation.previewText,
             };
           }
         }

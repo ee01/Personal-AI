@@ -20,7 +20,7 @@
         <div class="setup-title">{{ setupBannerTitle }}</div>
         <p class="setup-text">{{ setupBannerText }}</p>
       </div>
-      <button class="setup-btn" @click="openOptionsPage">前往 Options 配置</button>
+      <button class="setup-btn" @click="openOptionsPage">前往主动询问配置</button>
     </div>
 
     <div class="filters">
@@ -461,9 +461,10 @@ async function cancelSession(id: string) {
 }
 
 function openOptionsPage() {
-  if (chrome?.runtime?.openOptionsPage) {
-    void chrome.runtime.openOptionsPage();
-  }
+  const url = chrome?.runtime?.getURL
+    ? chrome.runtime.getURL('options.html#outreach-config')
+    : 'options.html#outreach-config';
+  window.open(url, '_blank');
 }
 
 function relativeTime(ts: number) {
@@ -585,10 +586,36 @@ function resolveTemplateNextDispatchAt(item: OutreachTemplateRuntimeStatusItem):
   const scheduleTime = typeof item.template.scheduleSpec?.scheduleTime === 'string'
     ? item.template.scheduleSpec.scheduleTime
     : '09:00';
+  const repeatEvery = Number(item.template.scheduleSpec?.repeatEvery);
+  const repeatUnit = typeof item.template.scheduleSpec?.repeatUnit === 'string'
+    ? item.template.scheduleSpec.repeatUnit
+    : '';
   if (!scheduleDate) return null;
   const date = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
   if (Number.isNaN(date.getTime())) return null;
-  return Math.floor(date.getTime() / 1000);
+  const baseline = Math.floor(Date.now() / 1000);
+
+  if (Number.isFinite(repeatEvery) && repeatEvery > 0 && repeatUnit) {
+    const candidate = new Date(date.getTime());
+    while (Math.floor(candidate.getTime() / 1000) <= baseline) {
+      if (repeatUnit === 'Day') {
+        candidate.setDate(candidate.getDate() + repeatEvery);
+      } else if (repeatUnit === 'Week') {
+        candidate.setDate(candidate.getDate() + repeatEvery * 7);
+      } else if (repeatUnit === 'Month') {
+        candidate.setMonth(candidate.getMonth() + repeatEvery);
+      } else if (repeatUnit === 'Year') {
+        candidate.setFullYear(candidate.getFullYear() + repeatEvery);
+      } else {
+        break;
+      }
+    }
+    const nextAt = Math.floor(candidate.getTime() / 1000);
+    return nextAt > baseline ? nextAt : null;
+  }
+
+  const nextAt = Math.floor(date.getTime() / 1000);
+  return nextAt > baseline ? nextAt : null;
 }
 
 function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {

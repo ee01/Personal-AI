@@ -5,6 +5,10 @@ import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
 import { getGoogleAuthToken } from './utils/googleAuth';
 import { getTaskEnabled } from './services/TaskScheduler';
+import {
+    extractMeetingIdFromUrl,
+    MeetingPilotSessionSnapshot,
+} from './meeting-shell/protocol';
 
 const WIKI_URL = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
 const DOUBAO_ICON_URL = typeof chrome !== 'undefined' && chrome.runtime?.getURL
@@ -21,12 +25,31 @@ const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () =
     </div>
 );
 
+function isMeetingPilotCaptureActive(
+    session: MeetingPilotSessionSnapshot | null,
+): boolean {
+    return Boolean(
+        session &&
+        ['armed', 'recording', 'uploading', 'completed'].includes(
+            session.capture?.kind || '',
+        ),
+    );
+}
+
 const Popup = () => {
     const [isScheduleActive, setIsScheduleActive] = useState(false);
     const [envConfig, setEnvConfig] = useState<any>(null);
     const [isGoogleSheets, setIsGoogleSheets] = useState(false);
     const [isGoogleSlides, setIsGoogleSlides] = useState(false);
-    const [isRingCentral, setIsRingCentral] = useState(false);
+    const [isRingCentralMeeting, setIsRingCentralMeeting] = useState(false);
+    const [activeRingCentralTab, setActiveRingCentralTab] = useState<{
+        id: number;
+        url?: string;
+        title?: string;
+    } | null>(null);
+    const [meetingPilotSession, setMeetingPilotSession] =
+        useState<MeetingPilotSessionSnapshot | null>(null);
+    const [isMeetingPilotBusy, setIsMeetingPilotBusy] = useState(false);
     const [isExpandingEpic, setIsExpandingEpic] = useState(false);
     const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
     
@@ -45,11 +68,58 @@ const Popup = () => {
             if (tab?.url?.includes('docs.google.com/presentation')) {
                 setIsGoogleSlides(true);
             }
-            if (tab?.url?.includes('app.ringcentral.com')) {
-                setIsRingCentral(true);
+            if (
+                tab?.id &&
+                (tab.url?.includes('app.ringcentral.com') || tab.url?.includes('v.ringcentral.com/conf/on/'))
+            ) {
+                setActiveRingCentralTab({
+                    id: tab.id,
+                    url: tab.url,
+                    title: tab.title,
+                });
+            }
+            if (tab?.url?.includes('v.ringcentral.com/conf/on/')) {
+                setIsRingCentralMeeting(true);
             }
         })();
     }, []);
+
+    useEffect(() => {
+        if (!activeRingCentralTab?.id) {
+            setMeetingPilotSession(null);
+            return;
+        }
+
+        const refreshMeetingPilotSession = async () => {
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    type: 'MEETING_PILOT_GET_STATE',
+                    tabId: activeRingCentralTab.id,
+                }) as { activeSession?: MeetingPilotSessionSnapshot } | undefined;
+                setMeetingPilotSession(response?.activeSession || null);
+            } catch (error) {
+                console.warn('Failed to refresh Meeting Pilot session in popup:', error);
+            }
+        };
+
+        void refreshMeetingPilotSession();
+
+        const handleMessage = (message: any) => {
+            if (message.type !== 'MEETING_PILOT_SESSION_SNAPSHOT') {
+                return;
+            }
+            const snapshot = message.snapshot as MeetingPilotSessionSnapshot | undefined;
+            if (!snapshot || snapshot.tabId !== activeRingCentralTab.id) {
+                return;
+            }
+            setMeetingPilotSession(snapshot);
+        };
+
+        chrome.runtime.onMessage.addListener(handleMessage);
+        return () => {
+            chrome.runtime.onMessage.removeListener(handleMessage);
+        };
+    }, [activeRingCentralTab?.id]);
 
     useEffect(() => {
         (async () => {
@@ -69,8 +139,72 @@ const Popup = () => {
         });
     };
 
-    const handleOpenRadar = () => {
-        sendMessageToActiveTab({type: 'RADAR-POC-OPEN-PANEL'}, 'RADAR-POC-OPEN-PANEL');
+    const pushMeetingPilotSnapshotToTab = async (
+        snapshot: MeetingPilotSessionSnapshot | null | undefined,
+    ) => {
+        if (!snapshot || !activeRingCentralTab?.id) {
+            return;
+        }
+        try {
+            await chrome.tabs.sendMessage(activeRingCentralTab.id, {
+                type: 'MEETING_PILOT_SESSION_SNAPSHOT',
+                snapshot,
+            });
+        } catch (error) {
+            console.warn('Failed to sync Meeting Pilot snapshot back to meeting tab:', error);
+        }
+    };
+
+    const handleOpenRadar = async () => {
+        if (!activeRingCentralTab?.id) {
+            sendMessageToActiveTab({type: 'RADAR-POC-OPEN-PANEL'}, 'RADAR-POC-OPEN-PANEL');
+            return;
+        }
+
+        if (isMeetingPilotBusy) {
+            return;
+        }
+
+        setIsMeetingPilotBusy(true);
+        try {
+            if (isMeetingPilotCaptureActive(meetingPilotSession)) {
+                await pushMeetingPilotSnapshotToTab(meetingPilotSession);
+                await chrome.runtime.sendMessage({
+                    type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
+                    tabId: activeRingCentralTab.id,
+                });
+                window.close();
+                return;
+            }
+
+            const meetingId = extractMeetingIdFromUrl(activeRingCentralTab.url);
+            if (!meetingId) {
+                return;
+            }
+
+            const response = await chrome.runtime.sendMessage({
+                type: 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
+                tabId: activeRingCentralTab.id,
+                meetingId,
+                url: activeRingCentralTab.url,
+                title: activeRingCentralTab.title || 'RingCentral meeting',
+                source: 'popup-start',
+            }) as {
+                success?: boolean;
+                session?: MeetingPilotSessionSnapshot;
+            } | undefined;
+
+            if (response?.session) {
+                setMeetingPilotSession(response.session);
+                await pushMeetingPilotSnapshotToTab(response.session);
+            }
+
+            if (response?.success) {
+                window.close();
+            }
+        } finally {
+            setIsMeetingPilotBusy(false);
+        }
     };
 
     const openTopicWindow = () => {
@@ -382,12 +516,17 @@ const Popup = () => {
                 配置感兴趣的话题
             </button>
 
-            {isRingCentral && (
+            {isRingCentralMeeting && (
                 <button 
                     onClick={handleOpenRadar}
                     className="radar-button"
+                    disabled={isMeetingPilotBusy}
                 >
-                    Open Radar Sidebar
+                    {isMeetingPilotBusy
+                        ? '处理中...'
+                        : isMeetingPilotCaptureActive(meetingPilotSession)
+                            ? '打开会议全貌'
+                            : '开启会议全貌'}
                 </button>
             )}
             

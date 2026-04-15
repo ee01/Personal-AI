@@ -1,0 +1,7 @@
+[0m
+[90m┌[39m  MCP OAuth Debug
+[90m│[39m
+[31m■[39m  MCP server playwright is not a remote server
+[90m│[39m
+[90m└[39m  Done
+

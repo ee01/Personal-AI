@@ -178,3 +178,92 @@ test('runNow falls back to reminder_sync when todo_sync is not supported', async
     'bridge:todo-memo',
   ]);
 });
+
+test('runNow skips placeholder todo and notice digests when itemCount is 0', async () => {
+  const calls: string[] = [];
+  const reportedJobs: Array<{
+    provider: string;
+    id: string;
+    payload: {
+      status: string;
+      errorMessage?: string;
+      result?: Record<string, unknown>;
+    };
+  }> = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    getProviderCapabilities: async () => ({
+      provider: 'doubao',
+      supportedScenarios: ['stable_memory', 'mobile_briefing', 'todo_sync', 'notice_sync', 'reminder_sync'],
+    }),
+    renderContextPackage: async ({ scenario }: { scenario: string }) => {
+      calls.push(`render:${scenario}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [
+          {
+            title: scenario === 'notice_sync' ? 'Notice Digest' : 'Todo Digest',
+            kind: scenario === 'notice_sync' ? 'notice_digest' : 'todo_digest',
+            bodyMd: scenario === 'notice_sync' ? '- No new notices.' : '- No pending todos.',
+            itemCount: 0,
+            sourceRefs: [],
+          },
+        ],
+        syncJob: {
+          id: `job-${scenario}`,
+          status: 'queued',
+        },
+      };
+    },
+    reportSyncJob: async (provider: string, id: string, payload: any) => {
+      reportedJobs.push({ provider, id, payload });
+    },
+    reportNotificationDelivery: async () => undefined,
+  };
+  const bridgeService = {
+    syncTodosAsMemo: async () => {
+      calls.push('bridge:todo-memo');
+      return { accepted: true, kind: 'todo_sync', targetBindingType: 'mobile_context', transcript: '', sentAt: new Date().toISOString() };
+    },
+    syncNotices: async () => {
+      calls.push('bridge:notice');
+      return { accepted: true, kind: 'notice_sync', targetBindingType: 'mobile_context', transcript: '', sentAt: new Date().toISOString() };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  await manager.runNow('reminder_sync');
+
+  assert.deepEqual(calls, [
+    'render:todo_sync',
+    'render:notice_sync',
+  ]);
+  assert.deepEqual(
+    reportedJobs.map((job) => ({
+      id: job.id,
+      status: job.payload.status,
+      errorMessage: job.payload.errorMessage,
+    })),
+    [
+      {
+        id: 'job-todo_sync',
+        status: 'skipped',
+        errorMessage: 'No pending todos to sync',
+      },
+      {
+        id: 'job-notice_sync',
+        status: 'skipped',
+        errorMessage: 'No notices to sync',
+      },
+    ],
+  );
+});

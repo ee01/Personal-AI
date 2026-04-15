@@ -91,7 +91,7 @@
 | 去重检查 | ✅ | ❌ | ✅ |
 | 自动生成 ID | ✅ | ❌ | ✅ |
 | AI 消息处理 | ✅ | ❌ | ✅ |
-| AsMe Timeline支持 | ✅（不安全） | ❌ | ❌（正确） |
+| AsMe Timeline支持 | ✅（不安全） | ❌ | ✅（Script Properties 缓存） |
 
 ## 🔍 核心函数
 
@@ -262,7 +262,7 @@ https://script.google.com/.../exec?action=getBotMessageCurrentTime
 - ✅ 整合中转函数：移除 `findMessageWithTimelineSupport`
 - ✅ 补充缺失逻辑：自动生成 ID + AI 消息处理
 - ✅ Timeline 参数传递（不调用内网 API）
-- ✅ 修复 AsMe 推送的 Timeline 处理（不再调用内网 API）
+- ✅ 修复 AsMe 推送的 Timeline 处理（通过 Script Properties 缓存，不再调用内网 API）
 - ✅ **统一匹配逻辑**：Timeline 和 Time-based 消息共享三匹配模式
 - ✅ **代码极简化**：移除外部 `if (isTimeline)` 判断，函数内部自动识别
 - ✅ **删除冗余函数**：`checkTimelineTrigger` 被拆分到三个 `shouldExecute` 函数中
@@ -342,4 +342,3 @@ function shouldExecuteNow(rowData, now, messageType, releaseInfo, currentDate) {
 ## 📅 修改日期
 
 2025-11-12
-

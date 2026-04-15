@@ -1,0 +1,4 @@
+plugin True
+$schema True
+disabled_providers True
+provider True

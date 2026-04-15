@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,7 +31,9 @@ vi.mock('../llm/LLMClient.js', () => ({
 
 vi.mock('../llm/EmbeddingClient.js', () => ({
   EmbeddingClient: {
-    getInstance: vi.fn().mockRejectedValue(new Error('Embedding not available in tests')),
+    getInstance: vi
+      .fn()
+      .mockRejectedValue(new Error('Embedding not available in tests')),
     isLoaded: vi.fn().mockReturnValue(false),
     getModelName: vi.fn().mockReturnValue('mock-model'),
   },
@@ -33,6 +43,7 @@ import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { UserContextManager } from '../core/UserContextManager.js';
+import { RecallEngine } from '../core/RecallEngine.js';
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
@@ -94,18 +105,38 @@ describe('Ask API', () => {
     const currentTime = Math.floor(Date.now() / 1000);
     db.prepare(
       `INSERT INTO messages_raw
-        (id, content, source_type, sender, group_name, timestamp, importance, sentiment, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, content, source_type, source_url, source_title, sender, group_name, timestamp, importance, sentiment, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       'ask-john-message',
       'John said the release risks are increasing and we should adjust the timeline.',
       'glip',
+      'https://memory.example.com/messages/ask-john-message',
+      'John release risk note',
       'John',
       'DevOps',
       currentTime - 86400,
       0.92,
       'neutral',
       currentTime - 86400,
+    );
+
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_name, timestamp, importance, sentiment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-meeting-memory',
+      '在 Q2 预算评审会议中，团队决定由 Esone 主导技术评审，并在下周二前提交文档。',
+      'meeting',
+      'https://memory.example.com/meetings/ask-meeting-memory',
+      'Q2 Planning Review — Archived Meeting',
+      'meeting-pilot',
+      'Q2 Planning Review',
+      currentTime - 7200,
+      0.95,
+      'neutral',
+      currentTime - 7200,
     );
   });
 
@@ -114,7 +145,10 @@ describe('Ask API', () => {
       content: JSON.stringify({
         answer: 'John mentioned that release risk is increasing.',
         timeline: [
-          { date: 'yesterday', event: 'John warned that release risk is increasing.' },
+          {
+            date: 'yesterday',
+            event: 'John warned that release risk is increasing.',
+          },
         ],
         keyFindings: ['Release risk increased.'],
         insights: ['The team may need to adjust the delivery timeline.'],
@@ -137,16 +171,29 @@ describe('Ask API', () => {
     expect(body.answer).toContain('release risk');
     expect(body.structuredAnswer).toBeDefined();
     expect(body.structuredAnswer.timeline[0].event).toContain('release risk');
-    expect(body.structuredAnswer.keyFindings).toEqual(['Release risk increased.']);
+    expect(body.structuredAnswer.keyFindings).toEqual([
+      'Release risk increased.',
+    ]);
     expect(body.evidence).toHaveLength(1);
     expect(body.evidence[0].id).toBe('ask-john-message');
+    expect(body.evidence[0].sourceUrl).toBe(
+      'https://memory.example.com/messages/ask-john-message',
+    );
+    expect(body.evidence[0].sourceTitle).toBe('John release risk note');
     expect(body.evidence[0].metadata?.sender).toBe('John');
     expect(body.evidence[0].metadata?.groupName).toBe('DevOps');
+    expect(body.evidence[0].metadata?.sourceUrl).toBe(
+      'https://memory.example.com/messages/ask-john-message',
+    );
+    expect(body.evidence[0].metadata?.sourceTitle).toBe(
+      'John release risk note',
+    );
   });
 
   it('falls back to plain text when the model does not return JSON', async () => {
     generateMock.mockResolvedValue({
-      content: 'I found one relevant memory, but not enough detail for a richer structure.',
+      content:
+        'I found one relevant memory, but not enough detail for a richer structure.',
     });
 
     const res = await app.inject({
@@ -164,14 +211,69 @@ describe('Ask API', () => {
     expect(body.structuredAnswer).toBeUndefined();
   });
 
-  it('streams the main answer before the final structured result', async () => {
-    generateStreamMock.mockImplementation(async (_prompt, _options, onDelta) => {
-      await onDelta('John mentioned ');
-      await onDelta('that release risk is increasing.');
-      return {
-        content: 'John mentioned that release risk is increasing.',
-      };
+  it('includes archived meeting records in /ask by default when relevant', async () => {
+    db.prepare(`DELETE FROM messages_raw WHERE source_type = 'glip'`).run();
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ask-meeting-memory',
+            type: 'message',
+            content:
+              '在 Q2 预算评审会议中，团队决定由 Esone 主导技术评审，并在下周二前提交文档。',
+            score: 0.95,
+            source: 'meeting',
+            sourceUrl: 'https://memory.example.com/meetings/ask-meeting-memory',
+            sourceTitle: 'Q2 Planning Review — Archived Meeting',
+            timestamp: Math.floor(Date.now() / 1000) - 7200,
+            metadata: { sourceType: 'meeting' },
+          },
+        ],
+        totalFound: 1,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: '会议里确认由 Esone 主导技术评审，并在下周二前提交文档。',
+        keyFindings: ['Esone 是技术评审 owner。'],
+      }),
     });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'Meeting Pilot technical review owner in Q2 planning review',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.answer).toContain('Esone');
+    expect(recallSpy).toHaveBeenCalled();
+    expect(recallSpy.mock.calls[0][0].sourceTypes).toBeUndefined();
+    expect(body.evidence).toHaveLength(1);
+    expect(body.evidence[0].source).toBe('meeting');
+    expect(body.evidence[0].id).toBe('ask-meeting-memory');
+    expect(body.evidence[0].sourceUrl).toBe(
+      'https://memory.example.com/meetings/ask-meeting-memory',
+    );
+    recallSpy.mockRestore();
+  });
+
+  it('streams the main answer before the final structured result', async () => {
+    generateStreamMock.mockImplementation(
+      async (_prompt, _options, onDelta) => {
+        await onDelta('John mentioned ');
+        await onDelta('that release risk is increasing.');
+        return {
+          content: 'John mentioned that release risk is increasing.',
+        };
+      },
+    );
     generateMock.mockResolvedValue({
       content: JSON.stringify({
         answer: 'John mentioned that release risk is increasing.',
@@ -195,10 +297,18 @@ describe('Ask API', () => {
     expect(res.body).toContain('event: delta');
     expect(res.body).toContain('event: answer_done');
     expect(res.body).toContain('event: result');
-    expect(res.body.indexOf('event: status')).toBeGreaterThan(res.body.indexOf('event: start'));
-    expect(res.body.indexOf('event: delta')).toBeGreaterThan(res.body.indexOf('event: status'));
-    expect(res.body.indexOf('event: answer_done')).toBeGreaterThan(res.body.indexOf('event: delta'));
-    expect(res.body.indexOf('event: result')).toBeGreaterThan(res.body.indexOf('event: answer_done'));
+    expect(res.body.indexOf('event: status')).toBeGreaterThan(
+      res.body.indexOf('event: start'),
+    );
+    expect(res.body.indexOf('event: delta')).toBeGreaterThan(
+      res.body.indexOf('event: status'),
+    );
+    expect(res.body.indexOf('event: answer_done')).toBeGreaterThan(
+      res.body.indexOf('event: delta'),
+    );
+    expect(res.body.indexOf('event: result')).toBeGreaterThan(
+      res.body.indexOf('event: answer_done'),
+    );
     expect(res.body).toContain('Release risk increased.');
   });
 
@@ -228,7 +338,8 @@ describe('Ask API', () => {
       })
       .mockResolvedValueOnce({
         content: JSON.stringify({
-          answer: '根据本地线索和外部日历，video 相关安排集中在下周，其中 4/8-4/11 在杭州。',
+          answer:
+            '根据本地线索和外部日历，video 相关安排集中在下周，其中 4/8-4/11 在杭州。',
           keyFindings: ['video 相关安排集中在下周。', '4/8-4/11 在杭州。'],
           confidence: 0.88,
         }),
@@ -337,13 +448,15 @@ describe('Ask API', () => {
         }),
       });
 
-    generateStreamMock.mockImplementation(async (_prompt, _options, onDelta) => {
-      await onDelta('video 相关安排集中在下周，');
-      await onDelta('其中 4/8-4/11 在杭州。');
-      return {
-        content: 'video 相关安排集中在下周，其中 4/8-4/11 在杭州。',
-      };
-    });
+    generateStreamMock.mockImplementation(
+      async (_prompt, _options, onDelta) => {
+        await onDelta('video 相关安排集中在下周，');
+        await onDelta('其中 4/8-4/11 在杭州。');
+        return {
+          content: 'video 相关安排集中在下周，其中 4/8-4/11 在杭州。',
+        };
+      },
+    );
 
     fetchMock.mockResolvedValue({
       ok: true,
@@ -371,7 +484,9 @@ describe('Ask API', () => {
         }),
     });
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ask-stream-openclaw-'));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'ask-stream-openclaw-'),
+    );
     const userContextManager = new UserContextManager(tempDir);
     const configured = await buildApp({ userContextManager });
     await configured.app.ready();
@@ -406,14 +521,19 @@ describe('Ask API', () => {
         .map((event) => String(event.message ?? ''));
       const resultEvent = events.find((event) => event.type === 'result');
 
-      expect(statusMessages.some((message) => message.includes('正在调用外部工具'))).toBe(true);
+      expect(
+        statusMessages.some((message) => message.includes('正在调用外部工具')),
+      ).toBe(true);
       expect(resultEvent).toBeDefined();
       expect(resultEvent?.answer).toContain('杭州');
       expect(resultEvent?.resolutionState).toBe('complete');
       expect(Array.isArray(resultEvent?.externalEvidence)).toBe(true);
       expect((resultEvent?.externalEvidence as unknown[])?.length).toBe(1);
       expect(Array.isArray(resultEvent?.followUpActions)).toBe(true);
-      expect((resultEvent?.followUpActions as Array<Record<string, unknown>>)[0]?.actionType).toBe('delegate_openclaw');
+      expect(
+        (resultEvent?.followUpActions as Array<Record<string, unknown>>)[0]
+          ?.actionType,
+      ).toBe('delegate_openclaw');
     } finally {
       await configured.app.close();
       userContextManager.closeAll();

@@ -226,6 +226,7 @@ export class NotificationCenterService {
     bodyMd: string;
     sourceRefs: string[];
     dedupeSuffix: string;
+    itemCount: number;
   } {
     const items = this.listFeed({
       channel: provider === 'doubao' ? 'doubao' : 'chrome',
@@ -254,6 +255,7 @@ export class NotificationCenterService {
       bodyMd: bodyMd.length <= Math.max(400, tokenBudget * 4) ? bodyMd : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
       sourceRefs: items.map((item) => item.sourceRef),
       dedupeSuffix: items.map((item) => item.sourceRef).join('|'),
+      itemCount: items.length,
     };
   }
 
@@ -261,6 +263,7 @@ export class NotificationCenterService {
     bodyMd: string;
     sourceRefs: string[];
     dedupeSuffix: string;
+    itemCount: number;
   } {
     const items = this.listFeed({
       channel: provider === 'doubao' ? 'doubao' : 'chrome',
@@ -286,6 +289,7 @@ export class NotificationCenterService {
       bodyMd: bodyMd.length <= Math.max(400, tokenBudget * 4) ? bodyMd : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
       sourceRefs: items.map((item) => item.sourceRef),
       dedupeSuffix: items.map((item) => item.sourceRef).join('|'),
+      itemCount: items.length,
     };
   }
 }

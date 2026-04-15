@@ -2,72 +2,128 @@
   <div id="memory-app">
     <!-- AI 搜索动画 -->
     <AISearchAnimation :show="store.isAISearching" />
-    
+
     <div class="memory-container">
       <!-- 侧边栏 -->
       <div class="sidebar">
         <div class="sidebar-header">
           <div class="logo">🧠 记忆查询系统</div>
         </div>
-        
+
         <div class="entity-types">
-          <router-link to="/" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">🏠</div>
             <div class="entity-name">首页概览</div>
           </router-link>
-          
-          <router-link to="/timeline" class="entity-type" active-class="router-link-active">
+
+          <router-link
+            to="/timeline"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">⏰</div>
             <div class="entity-name">时间轴</div>
           </router-link>
-          
-          <router-link to="/user-profile" class="entity-type" active-class="router-link-active">
+
+          <router-link
+            to="/meetings"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">📡</div>
+            <div class="entity-name">会议记录</div>
+            <div v-if="meetingCount > 0" class="entity-count">
+              {{ meetingCount }}
+            </div>
+          </router-link>
+
+          <router-link
+            to="/user-profile"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">👤</div>
             <div class="entity-name">用户画像</div>
           </router-link>
 
-          <router-link to="/follow-threads" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/follow-threads"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">👁</div>
             <div class="entity-name">关注后续</div>
             <div class="entity-count">{{ followThreadCount }}</div>
           </router-link>
 
-          <router-link to="/dreams" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/dreams"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">🌙</div>
             <div class="entity-name">梦境重放</div>
           </router-link>
 
-          <router-link to="/reflection-threads" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/reflection-threads"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">🧠</div>
             <div class="entity-name">自我反思</div>
-            <div v-if="activeReflectionCount > 0" class="entity-count">{{ activeReflectionCount }}</div>
+            <div v-if="activeReflectionCount > 0" class="entity-count">
+              {{ activeReflectionCount }}
+            </div>
           </router-link>
 
-          <router-link to="/decisions" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/decisions"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">⚖️</div>
             <div class="entity-name">决策中心</div>
-            <div v-if="pendingDecisionCount > 0" class="entity-count">{{ pendingDecisionCount }}</div>
+            <div v-if="pendingDecisionCount > 0" class="entity-count">
+              {{ pendingDecisionCount }}
+            </div>
           </router-link>
 
-          <router-link to="/actions" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/actions"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">⚙️</div>
             <div class="entity-name">动作队列</div>
-            <div v-if="queuedActionCount > 0" class="entity-count">{{ queuedActionCount }}</div>
+            <div v-if="queuedActionCount > 0" class="entity-count">
+              {{ queuedActionCount }}
+            </div>
           </router-link>
 
-          <router-link to="/outreach" class="entity-type" active-class="router-link-active">
+          <router-link
+            to="/outreach"
+            class="entity-type"
+            active-class="router-link-active"
+          >
             <div class="entity-icon">📡</div>
             <div class="entity-name">主动询问</div>
-            <div v-if="outreachSessionCount > 0" class="entity-count">{{ outreachSessionCount }}</div>
+            <div v-if="outreachSessionCount > 0" class="entity-count">
+              {{ outreachSessionCount }}
+            </div>
           </router-link>
 
           <hr class="sidebar-divider" />
-          
-          <router-link 
-            v-for="entityType in entityTypes" 
+
+          <router-link
+            v-for="entityType in entityTypes"
             :key="entityType.type"
             :to="`/entity/${entityType.type}`"
-            class="entity-type" 
+            class="entity-type"
             active-class="router-link-active"
           >
             <div class="entity-icon">{{ entityType.icon }}</div>
@@ -83,9 +139,9 @@
         <div class="search-header">
           <div class="search-box">
             <div class="search-icon">🔍</div>
-            <input 
-              type="text" 
-              class="search-input" 
+            <input
+              type="text"
+              class="search-input"
               placeholder="搜索任何内容、实体或关键词（按 Enter 搜索）..."
               v-model="searchQuery"
               @input="handleSearchInput"
@@ -128,6 +184,7 @@ const route = useRoute();
 const entityTypes = computed(() => store.entityTypes);
 const searchQuery = ref('');
 const followThreadCount = ref(0);
+const meetingCount = ref(0);
 const pendingDecisionCount = ref(0);
 const activeReflectionCount = ref(0);
 const queuedActionCount = ref(0);
@@ -146,14 +203,44 @@ async function loadFollowThreadCount() {
     const result = await chrome.storage.local.get('concernedItems');
     const items = result.concernedItems || [];
     followThreadCount.value = items.filter(
-      (item: any) => item.followThread && item.followConfig
+      (item: any) => item.followThread && item.followConfig,
     ).length;
   } catch (error) {
     console.error('加载关注后续数量失败:', error);
   }
 }
 
-function handleStorageChange(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) {
+async function loadMeetingCount() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_MEETINGS',
+      limit: 1,
+      offset: 0,
+    });
+    if (response?.success) {
+      meetingCount.value = Number(
+        response?.data?.total || response?.total || 0,
+      );
+      return;
+    }
+  } catch (error) {
+    console.warn('通过消息通道加载会议数量失败，尝试直接请求:', error);
+  }
+
+  try {
+    const client = getMemoryServiceClient();
+    const result = await client.getMeetings(1, 0);
+    meetingCount.value = Number(result.total || 0);
+  } catch (error) {
+    console.error('加载会议记录数量失败:', error);
+    meetingCount.value = 0;
+  }
+}
+
+function handleStorageChange(
+  changes: { [key: string]: chrome.storage.StorageChange },
+  areaName: string,
+) {
   if (areaName === 'local' && changes.concernedItems) {
     void loadFollowThreadCount();
   }
@@ -162,6 +249,7 @@ function handleStorageChange(changes: { [key: string]: chrome.storage.StorageCha
 // 加载关注后续数量
 onMounted(async () => {
   await loadFollowThreadCount();
+  await loadMeetingCount();
   chrome.storage.onChanged.addListener(handleStorageChange);
 });
 
@@ -222,7 +310,9 @@ async function loadOutreachSummaryCount() {
   }
 }
 
-function countPendingOutreachTemplates(items: OutreachTemplateRuntimeStatusItem[]): number {
+function countPendingOutreachTemplates(
+  items: OutreachTemplateRuntimeStatusItem[],
+): number {
   return items.filter((item) => isPendingTemplate(item)).length;
 }
 
@@ -232,20 +322,29 @@ function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
   if (template.enabled === false) return false;
   if (template.syncState && template.syncState !== 'synced') return false;
   if (!nextDispatchAt) return false;
-  return !item.latestSession || TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status);
+  return (
+    !item.latestSession ||
+    TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status)
+  );
 }
 
-function resolveTemplateNextDispatchAt(item: OutreachTemplateRuntimeStatusItem): number | null {
+function resolveTemplateNextDispatchAt(
+  item: OutreachTemplateRuntimeStatusItem,
+): number | null {
   const raw = item.template.scheduleSpec?.nextDispatchAt;
   if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
-  const scheduleDate = typeof item.template.scheduleSpec?.scheduleDate === 'string'
-    ? item.template.scheduleSpec.scheduleDate
-    : '';
-  const scheduleTime = typeof item.template.scheduleSpec?.scheduleTime === 'string'
-    ? item.template.scheduleSpec.scheduleTime
-    : '09:00';
+  const scheduleDate =
+    typeof item.template.scheduleSpec?.scheduleDate === 'string'
+      ? item.template.scheduleSpec.scheduleDate
+      : '';
+  const scheduleTime =
+    typeof item.template.scheduleSpec?.scheduleTime === 'string'
+      ? item.template.scheduleSpec.scheduleTime
+      : '09:00';
   if (!scheduleDate) return null;
-  const date = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
+  const date = new Date(
+    `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
+  );
   if (Number.isNaN(date.getTime())) return null;
   return Math.floor(date.getTime() / 1000);
 }
@@ -270,9 +369,9 @@ const handleSearch = () => {
 
 const performSearch = () => {
   if (searchQuery.value.trim().length < 2) return;
-  
+
   const path = router.currentRoute.value.path;
-  
+
   // 判断搜索模式
   // 1. 如果在搜索结果页再次搜索，保留原来的搜索模式
   if (path === '/search' && store.searchContext.mode) {
@@ -283,7 +382,11 @@ const performSearch = () => {
     } else if (store.searchContext.mode === 'entity') {
       // 原来是实体向量搜索，继续用实体向量搜索
       const entityType = store.searchContext.entityType;
-      console.log('[搜索] 保持实体向量搜索模式:', searchQuery.value, entityType);
+      console.log(
+        '[搜索] 保持实体向量搜索模式:',
+        searchQuery.value,
+        entityType,
+      );
       store.performEntityVectorSearch(searchQuery.value, entityType);
     }
   } else if (path === '/' || path === '/user-profile' || path === '/timeline') {
@@ -300,11 +403,11 @@ const performSearch = () => {
     console.log('[搜索] 执行通用向量搜索:', searchQuery.value);
     store.performEntityVectorSearch(searchQuery.value);
   }
-  
+
   // 跳转到搜索结果页
-  router.push({ 
-    path: '/search', 
-    query: { q: searchQuery.value } 
+  router.push({
+    path: '/search',
+    query: { q: searchQuery.value },
   });
 };
 
@@ -330,7 +433,13 @@ onMounted(() => {
 
 body {
   font-size: 1rem;
-  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    'SF Pro Display',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
   background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
   color: #ffffff;
   overflow-x: hidden;
@@ -340,7 +449,13 @@ body {
 .memory-container {
   display: flex;
   min-height: 100vh;
-  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    'SF Pro Display',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
   background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
   color: #ffffff;
   overflow-x: hidden;
@@ -493,11 +608,13 @@ body {
 }
 
 /* 页面过渡动画 */
-.fade-enter-active, .fade-leave-active {
+.fade-enter-active,
+.fade-leave-active {
   transition: opacity 0.3s ease;
 }
 
-.fade-enter-from, .fade-leave-to {
+.fade-enter-from,
+.fade-leave-to {
   opacity: 0;
 }
 
@@ -507,7 +624,11 @@ body {
 }
 
 .greeting-card {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.1),
+    rgba(147, 51, 234, 0.1)
+  );
   border: 1px solid rgba(59, 130, 246, 0.2);
   border-radius: 1rem;
   padding: 2rem;
@@ -1483,7 +1604,12 @@ body {
 
 .context-divider {
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.3), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(148, 163, 184, 0.3),
+    transparent
+  );
   margin: 1rem 0;
 }
 
@@ -1666,7 +1792,11 @@ body {
   text-align: center;
   margin-bottom: 2rem;
   padding: 2rem;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.1),
+    rgba(147, 51, 234, 0.1)
+  );
   border: 1px solid rgba(59, 130, 246, 0.2);
   border-radius: 1rem;
   backdrop-filter: blur(10px);

@@ -456,6 +456,10 @@ function focusAskComposer() {
   sendToWindow(askWindow, 'quick-ask:focus-input');
 }
 
+function notifyAskWindowShown(payload = {}) {
+  sendToWindow(askWindow, 'quick-ask:window-shown', payload);
+}
+
 function clearPendingShortcutGesture() {
   if (!pendingShortcutGesture) return;
   clearTimeout(pendingShortcutGesture.timer);
@@ -559,6 +563,13 @@ function isToggleDevToolsShortcut(input) {
   return Boolean(input.meta && input.alt && (key === 'i' || code === 'KeyI'));
 }
 
+function isNewSessionShortcut(input) {
+  if (input.type !== 'keyDown') return false;
+  const key = typeof input.key === 'string' ? input.key.toLowerCase() : '';
+  const code = typeof input.code === 'string' ? input.code : '';
+  return Boolean((input.meta || input.control) && !input.shift && (key === 'n' || code === 'KeyN'));
+}
+
 function toggleDevToolsForWindow(targetWindow) {
   if (!targetWindow || targetWindow.isDestroyed()) return;
   if (targetWindow.webContents.isDevToolsOpened()) {
@@ -604,6 +615,11 @@ function createAskWindow() {
       toggleDevToolsForWindow(askWindow);
       return;
     }
+    if (isNewSessionShortcut(input)) {
+      event.preventDefault();
+      resetAskSession();
+      return;
+    }
     if (!pendingShortcutGesture || input.type !== 'keyUp') return;
     const key = typeof input.key === 'string' ? input.key.toLowerCase() : '';
     const code = typeof input.code === 'string' ? input.code : '';
@@ -646,13 +662,9 @@ function showAskWindow({ focus = true, focusInput = true } = {}) {
   const window = createAskWindow();
   applyAskWindowBounds(window.isVisible() ? window.getBounds().height : ASK_WINDOW_COMPACT_HEIGHT, false);
   window.show();
+  notifyAskWindowShown({ focusInput });
   if (focus) {
     window.focus();
-    if (focusInput) {
-      setTimeout(() => {
-        focusAskComposer();
-      }, 30);
-    }
   }
 }
 
@@ -1349,9 +1361,8 @@ ipcMain.handle('quick-ask:open-full-bridge', async () => {
 
 ipcMain.handle('quick-ask:new-session', async () => {
   if (askWindow && !askWindow.isDestroyed()) {
-    applyAskWindowBounds(ASK_WINDOW_COMPACT_HEIGHT);
+    applyAskWindowBounds(ASK_WINDOW_COMPACT_HEIGHT, false);
     resetAskSession();
-    focusAskComposer();
   }
   return { ok: true };
 });
@@ -1425,7 +1436,7 @@ ipcMain.handle('quick-ask:set-layout', async (_event, payload) => {
           ),
         );
 
-  applyAskWindowBounds(nextHeight);
+  applyAskWindowBounds(nextHeight, false);
   return { ok: true, height: nextHeight };
 });
 

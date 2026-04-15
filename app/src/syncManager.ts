@@ -66,6 +66,13 @@ function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
     .slice(0, limit);
 }
 
+function packageHasItems(pkg: ProviderMemoryProduct): boolean {
+  if (typeof pkg.itemCount === 'number') {
+    return pkg.itemCount > 0;
+  }
+  return Array.isArray(pkg.sourceRefs) && pkg.sourceRefs.length > 0;
+}
+
 function extractReminders(pkg: ProviderMemoryProduct, limit = 8) {
   return extractBullets(pkg, limit).map((title) => ({
     title,
@@ -366,7 +373,13 @@ export class BridgeSyncManager {
   async syncTodosAsMemo(): Promise<void> {
     const startedAt = Date.now();
     const rendered = await this.renderTodoPackage();
-    const reminders = rendered.packages.flatMap((pkg) => extractReminders(pkg)).slice(0, 8);
+    const actionablePackages = rendered.packages.filter((pkg) => packageHasItems(pkg));
+    if (actionablePackages.length === 0) {
+      await this.reportSkipped(rendered, startedAt, 'No pending todos to sync');
+      return;
+    }
+
+    const reminders = actionablePackages.flatMap((pkg) => extractReminders(pkg)).slice(0, 8);
     if (reminders.length === 0) return;
 
     const result = await this.bridgeService.syncTodosAsMemo({
@@ -397,7 +410,13 @@ export class BridgeSyncManager {
       scenario: 'notice_sync',
       deviceContext: 'doubao_bridge_daemon',
     });
-    const notices = rendered.packages.flatMap((pkg) => extractNotices(pkg)).slice(0, 8);
+    const actionablePackages = rendered.packages.filter((pkg) => packageHasItems(pkg));
+    if (actionablePackages.length === 0) {
+      await this.reportSkipped(rendered, startedAt, 'No notices to sync');
+      return;
+    }
+
+    const notices = actionablePackages.flatMap((pkg) => extractNotices(pkg)).slice(0, 8);
     if (notices.length === 0) return;
 
     const result = await this.bridgeService.syncNotices({
@@ -417,6 +436,25 @@ export class BridgeSyncManager {
       provider: this.config.provider,
       scenario: supported ? 'todo_sync' : 'reminder_sync',
       deviceContext: 'doubao_bridge_daemon',
+    });
+  }
+
+  private async reportSkipped(
+    rendered: RenderContextPackageResponse,
+    startedAt: number,
+    reason: string,
+  ): Promise<void> {
+    if (!rendered.syncJob?.id) return;
+
+    await this.memoryClient.reportSyncJob(rendered.provider, rendered.syncJob.id, {
+      status: 'skipped',
+      errorMessage: reason,
+      result: {
+        packageKinds: rendered.packages.map((pkg) => pkg.kind),
+        reason,
+      },
+      startedAt,
+      completedAt: Date.now(),
     });
   }
 

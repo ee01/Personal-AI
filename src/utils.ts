@@ -16,9 +16,9 @@ export interface ResolvedBotPushTarget {
 // 环境配置类型定义
 export interface EnvConfigType {
   MESSAGE_ANALYSIS_INTERVAL: number; // 分析消息的频度（分钟）
-  MESSAGE_CONTEXT_WINDOW: number;    // 消息上下文窗口：距离此刻的历史消息时间范围（分钟）
+  MESSAGE_CONTEXT_WINDOW: number; // 消息上下文窗口：距离此刻的历史消息时间范围（分钟）
   CONCERNED_ITEMS_DIGEST_HOUR: number; // ConcernedItems 摘要推送时间（小时，0-23）
-  SCHEDULED_INTERVAL: number;        // 已废弃，保留用于向后兼容
+  SCHEDULED_INTERVAL: number; // 已废弃，保留用于向后兼容
   ANALYSIS_TYPE: string;
   ANALYZE_BY_GROUP: boolean;
   LLM_TYPE: string;
@@ -45,30 +45,30 @@ export interface EnvConfigType {
   ENABLE_BOT?: boolean;
   LLM_REVIEW_BEFORE_SEND: boolean;
   ENABLE_CHROMA: boolean;
-  CHROMA_API_URL: string;  // 保留用于兼容旧配置
-  CHROMA_HOST: string;     // 新增：Chroma 主机地址
+  CHROMA_API_URL: string; // 保留用于兼容旧配置
+  CHROMA_HOST: string; // 新增：Chroma 主机地址
   CHROMA_PORT: number;
-  CHROMA_SSL: boolean;     // 新增：是否使用 SSL
+  CHROMA_SSL: boolean; // 新增：是否使用 SSL
   CHROMA_COLLECTION_NAME: string;
   // JIRA相关配置
   JIRA_BASE_URL?: string;
   JIRA_USERNAME?: string;
   JIRA_API_TOKEN?: string;
-  DESIGN_JIRA_PROJECT?: string;       // Jira Design项目前缀（如 UX）
+  DESIGN_JIRA_PROJECT?: string; // Jira Design项目前缀（如 UX）
   DEPENDENCIES_JIRA_PROJECT?: string; // Jira外部依赖项目前缀（如 RCV）
   // 消息交互功能开关
-  ENABLE_AUTO_REPLY: boolean;    // 启用自动答复功能
-  ENABLE_SNOOZE: boolean;        // 启用稍后处理功能
+  ENABLE_AUTO_REPLY: boolean; // 启用自动答复功能
+  ENABLE_SNOOZE: boolean; // 启用稍后处理功能
   // 消息过滤配置
-  FILTER_OWN_MESSAGES: boolean;  // 是否过滤自己发送的消息
+  FILTER_OWN_MESSAGES: boolean; // 是否过滤自己发送的消息
   // 记忆系统 (Memory Service)
-  MEMORY_SERVICE_BASE_URL: string;  // 记忆服务 API 地址，如 http://localhost:3210/api/v1
-  MEMORY_SERVICE_API_KEY?: string;  // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
-  MEMORY_SERVICE_TIMEOUT?: number;  // 请求超时（毫秒），默认 30000
+  MEMORY_SERVICE_BASE_URL: string; // 记忆服务 API 地址，如 http://localhost:3210/api/v1
+  MEMORY_SERVICE_API_KEY?: string; // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
+  MEMORY_SERVICE_TIMEOUT?: number; // 请求超时（毫秒），默认 30000
   // 自动周报 (Weekly Report)
-  WEEKLY_REPORT_ENABLED: string;        // 'true' | 'false'
-  WEEKLY_REPORT_CRON: string;           // cron 表达式，默认 '0 18 * * 5'（每周五 18:00）
-  WEEKLY_REPORT_MIN_MESSAGES: number;   // 最少消息数阈值，默认 20
+  WEEKLY_REPORT_ENABLED: string; // 'true' | 'false'
+  WEEKLY_REPORT_CRON: string; // cron 表达式，默认 '0 18 * * 5'（每周五 18:00）
+  WEEKLY_REPORT_MIN_MESSAGES: number; // 最少消息数阈值，默认 20
   MESSAGE_ANALYSIS_PUSH_TARGET?: BotPushTargetMode;
   MESSAGE_ANALYSIS_PUSH_GROUP_ID?: string;
   FOLLOW_UP_PUSH_TARGET?: BotPushTargetMode;
@@ -101,12 +101,30 @@ export interface EnvConfigType {
   RINGCENTRAL_CLEAR_JWT?: boolean;
   RINGCENTRAL_CLIENT_SECRET_CONFIGURED?: boolean;
   RINGCENTRAL_JWT_CONFIGURED?: boolean;
+  MEETING_PILOT_ENABLED: boolean;
+  MEETING_PILOT_FLOATING_ICON_VISIBLE: boolean;
+  MEETING_MINUTES_API_URL: string;
+  MEETING_FEATURE_ENABLED: boolean;
+  MEETING_DANMAKU_SPEED: 'fast' | 'medium' | 'slow';
+  MEETING_AUTO_DETECT: boolean;
+  MEETING_ENTRY_MODE: 'auto' | 'manual';
+  MEETING_DIGEST_API_BASE_URL: string;
+  MEETING_PROVIDER_BASE_URL: string;
+  MEETING_PROVIDER_API_KEY?: string;
+  MEETING_TRANSCRIBE_MODEL: string;
+  MEETING_ANALYSIS_MODEL: string;
+  MEETING_NAME_ALIASES: string;
+  MEETING_HOTWORDS: string;
+  MEETING_SUMMARY_INTERVAL_SEC: number;
+  MEETING_SCREENSHOT_INTERVAL_SEC: number;
+  MEETING_MEMORY_CONTEXT_ENABLED: boolean;
+  MEETING_PRIVACY_NOTICE_TEXT: string;
 }
 
 export function normalizeBotPushTarget(
   value: string | undefined | null,
   allowNone = false,
-  fallback: BotPushTargetMode = 'me'
+  fallback: BotPushTargetMode = 'me',
 ): BotPushTargetMode {
   if (value === 'group' || value === 'team') {
     return 'group';
@@ -122,7 +140,7 @@ export function normalizeBotPushTarget(
 
 export function normalizeConcernedItemsDigestHour(
   value: number | string | undefined | null,
-  fallback = 8
+  fallback = 8,
 ): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -132,7 +150,10 @@ export function normalizeConcernedItemsDigestHour(
   return Math.min(23, Math.max(0, Math.floor(parsed)));
 }
 
-export function getBotPushTarget(config: EnvConfigType, scenario?: BotPushScenario): ResolvedBotPushTarget {
+export function getBotPushTarget(
+  config: EnvConfigType,
+  scenario?: BotPushScenario,
+): ResolvedBotPushTarget {
   const fallbackMode = config.BOT_TYPE === 'team' ? 'group' : 'me';
   const fallbackTeamId = config.TEAM_ID || '';
 
@@ -140,33 +161,53 @@ export function getBotPushTarget(config: EnvConfigType, scenario?: BotPushScenar
     switch (scenario) {
       case 'message_analysis':
         return {
-          mode: normalizeBotPushTarget(config.MESSAGE_ANALYSIS_PUSH_TARGET, false, fallbackMode),
-          teamId: config.MESSAGE_ANALYSIS_PUSH_GROUP_ID || fallbackTeamId
+          mode: normalizeBotPushTarget(
+            config.MESSAGE_ANALYSIS_PUSH_TARGET,
+            false,
+            fallbackMode,
+          ),
+          teamId: config.MESSAGE_ANALYSIS_PUSH_GROUP_ID || fallbackTeamId,
         };
       case 'follow_up':
         return {
-          mode: normalizeBotPushTarget(config.FOLLOW_UP_PUSH_TARGET, false, fallbackMode),
-          teamId: config.FOLLOW_UP_PUSH_GROUP_ID || fallbackTeamId
+          mode: normalizeBotPushTarget(
+            config.FOLLOW_UP_PUSH_TARGET,
+            false,
+            fallbackMode,
+          ),
+          teamId: config.FOLLOW_UP_PUSH_GROUP_ID || fallbackTeamId,
         };
       case 'dream_insight':
         return {
-          mode: normalizeBotPushTarget(config.DREAM_INSIGHT_PUSH_TARGET, true, fallbackMode),
-          teamId: config.DREAM_INSIGHT_PUSH_GROUP_ID || fallbackTeamId
+          mode: normalizeBotPushTarget(
+            config.DREAM_INSIGHT_PUSH_TARGET,
+            true,
+            fallbackMode,
+          ),
+          teamId: config.DREAM_INSIGHT_PUSH_GROUP_ID || fallbackTeamId,
         };
       case 'weekly_report':
         return {
-          mode: normalizeBotPushTarget(config.WEEKLY_REPORT_PUSH_TARGET, true, fallbackMode),
-          teamId: config.WEEKLY_REPORT_PUSH_GROUP_ID || fallbackTeamId
+          mode: normalizeBotPushTarget(
+            config.WEEKLY_REPORT_PUSH_TARGET,
+            true,
+            fallbackMode,
+          ),
+          teamId: config.WEEKLY_REPORT_PUSH_GROUP_ID || fallbackTeamId,
         };
       case 'decision_center':
         return {
-          mode: normalizeBotPushTarget(config.DECISION_CENTER_PUSH_TARGET, false, fallbackMode),
-          teamId: config.DECISION_CENTER_PUSH_GROUP_ID || fallbackTeamId
+          mode: normalizeBotPushTarget(
+            config.DECISION_CENTER_PUSH_TARGET,
+            false,
+            fallbackMode,
+          ),
+          teamId: config.DECISION_CENTER_PUSH_GROUP_ID || fallbackTeamId,
         };
       default:
         return {
           mode: normalizeBotPushTarget(config.BOT_TYPE, false, fallbackMode),
-          teamId: fallbackTeamId
+          teamId: fallbackTeamId,
         };
     }
   })();
@@ -179,45 +220,45 @@ export function getBotPushTarget(config: EnvConfigType, scenario?: BotPushScenar
     return {
       mode: 'group',
       apiType: 'team',
-      teamId: scenarioConfig.teamId
+      teamId: scenarioConfig.teamId,
     };
   }
 
   return {
     mode: 'me',
-    apiType: 'user'
+    apiType: 'user',
   };
 }
 
 export function formatDate(dateString: string | number) {
-    const date = new Date(dateString);
-    
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-  
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  const date = new Date(dateString);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 export function uniqBy(array: any[], key: string) {
-    const seen = new Set();
-    return array.filter(item => {
-      const keyValue = item[key];
-      if (seen.has(keyValue)) {
-        return false;
-      }
-      seen.add(keyValue);
-      return true;
-    });
+  const seen = new Set();
+  return array.filter((item) => {
+    const keyValue = item[key];
+    if (seen.has(keyValue)) {
+      return false;
+    }
+    seen.add(keyValue);
+    return true;
+  });
 }
 
 export function showToast(message: string, type: string, onClose?: () => void) {
   // 获取或创建容器元素
   const container = document.getElementById('radar-poc-result');
-  if (!container) return
+  if (!container) return;
 
   // 移除现有的 Toast 元素
   const existingToast = container.querySelector('.radar-poc-toast');
@@ -260,76 +301,124 @@ export function showToast(message: string, type: string, onClose?: () => void) {
 
 export function transformGroupLinks(inputString: string) {
   const groupLinkPattern = /\[group:(.+):(\d+)\]/g;
-  const transformedString = inputString.replace(groupLinkPattern, (match, groupName, groupId) => {
-    return `[${groupName}](/messages/${groupId})`;
-  });
+  const transformedString = inputString.replace(
+    groupLinkPattern,
+    (match, groupName, groupId) => {
+      return `[${groupName}](/messages/${groupId})`;
+    },
+  );
   return transformedString;
 }
 
 export function transformPostLinks(inputString: string) {
   const postLinkPattern = /\[post:(\d+)\]/g;
   let index = 1;
-  const transformedString = inputString.replace(postLinkPattern, (match, postId) => {
-    return `[[${index++}]](/l${window.location.pathname}/${postId})`;
-  });
+  const transformedString = inputString.replace(
+    postLinkPattern,
+    (match, postId) => {
+      return `[[${index++}]](/l${window.location.pathname}/${postId})`;
+    },
+  );
   return transformedString;
+}
+
+export function normalizeEnvConfigShape(
+  config: Partial<EnvConfigType>,
+): EnvConfigType {
+  const normalizedMeetingPilotEnabled =
+    typeof config.MEETING_PILOT_ENABLED === 'boolean'
+      ? config.MEETING_PILOT_ENABLED
+      : typeof config.MEETING_FEATURE_ENABLED === 'boolean'
+        ? config.MEETING_FEATURE_ENABLED
+        : defaultEnvConfig.MEETING_PILOT_ENABLED;
+  const normalizedMeetingPilotFloatingIconVisible =
+    typeof config.MEETING_PILOT_FLOATING_ICON_VISIBLE === 'boolean'
+      ? config.MEETING_PILOT_FLOATING_ICON_VISIBLE
+      : defaultEnvConfig.MEETING_PILOT_FLOATING_ICON_VISIBLE;
+
+  const normalizedMinutesApiUrl =
+    String(
+      config.MEETING_MINUTES_API_URL ||
+        config.MEETING_DIGEST_API_BASE_URL ||
+        '',
+    ).trim() || defaultEnvConfig.MEETING_MINUTES_API_URL;
+
+  return {
+    ...defaultEnvConfig,
+    ...config,
+    MEETING_PILOT_ENABLED: normalizedMeetingPilotEnabled,
+    MEETING_PILOT_FLOATING_ICON_VISIBLE:
+      normalizedMeetingPilotFloatingIconVisible,
+    MEETING_FEATURE_ENABLED: normalizedMeetingPilotEnabled,
+    MEETING_MINUTES_API_URL: normalizedMinutesApiUrl,
+    MEETING_DIGEST_API_BASE_URL: normalizedMinutesApiUrl,
+  };
 }
 
 // 默认环境配置
 export const defaultEnvConfig: EnvConfigType = {
-  MESSAGE_ANALYSIS_INTERVAL: Number(process.env.MESSAGE_ANALYSIS_INTERVAL) || Number(process.env.SCHEDULED_INTERVAL) || 120,
+  MESSAGE_ANALYSIS_INTERVAL:
+    Number(process.env.MESSAGE_ANALYSIS_INTERVAL) ||
+    Number(process.env.SCHEDULED_INTERVAL) ||
+    120,
   MESSAGE_CONTEXT_WINDOW: Number(process.env.MESSAGE_CONTEXT_WINDOW) || 125,
-  CONCERNED_ITEMS_DIGEST_HOUR: normalizeConcernedItemsDigestHour(process.env.CONCERNED_ITEMS_DIGEST_HOUR, 8),
+  CONCERNED_ITEMS_DIGEST_HOUR: normalizeConcernedItemsDigestHour(
+    process.env.CONCERNED_ITEMS_DIGEST_HOUR,
+    8,
+  ),
   SCHEDULED_INTERVAL: Number(process.env.SCHEDULED_INTERVAL) || 120, // 保留用于向后兼容
-  ANALYSIS_TYPE: process.env.ANALYSIS_TYPE || "filter",
-  LLM_TYPE: process.env.LLM_TYPE || "dify",
-  ANALYZE_BY_GROUP: process.env.ANALYZE_BY_GROUP === "true",
-  OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-  OLLAMA_MODEL: process.env.OLLAMA_MODEL || "deepseek-r1",
-  OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || "llama3.1",
-  OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || "llama3.1",
-  DIFY_API_KEY: process.env.DIFY_API_KEY || "",
-  DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || "",
-  DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || "",
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-  OPENAI_MODEL: process.env.OPENAI_MODEL || "",
-  OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || "",
-  OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || "",
-  GROQ_API_KEY: process.env.GROQ_API_KEY || "",
-  GROQ_MODEL: process.env.GROQ_MODEL || "",
-  GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || "",
-  BOT_API_BASE_URL: process.env.BOT_API_BASE_URL || "https://botman.int.rclabenv.com/v2",
-  BOT_TOKEN: process.env.BOT_TOKEN || "",
-  BOT_ID: process.env.BOT_ID || "4700372020@37439510.bot.glip.net",
-  BOT_TYPE: process.env.BOT_TYPE || "user",
-  TEAM_ID: process.env.TEAM_ID || "",
+  ANALYSIS_TYPE: process.env.ANALYSIS_TYPE || 'filter',
+  LLM_TYPE: process.env.LLM_TYPE || 'dify',
+  ANALYZE_BY_GROUP: process.env.ANALYZE_BY_GROUP === 'true',
+  OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+  OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'deepseek-r1',
+  OLLAMA_REVIEW_MODEL: process.env.OLLAMA_REVIEW_MODEL || 'llama3.1',
+  OLLAMA_QUERY_MODEL: process.env.OLLAMA_QUERY_MODEL || 'llama3.1',
+  DIFY_API_KEY: process.env.DIFY_API_KEY || '',
+  DIFY_REVIEW_API_KEY: process.env.DIFY_REVIEW_API_KEY || '',
+  DIFY_API_BASE_URL: process.env.DIFY_API_BASE_URL || '',
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  OPENAI_MODEL: process.env.OPENAI_MODEL || '',
+  OPENAI_REVIEW_MODEL: process.env.OPENAI_REVIEW_MODEL || '',
+  OPENAI_API_BASE_URL: process.env.OPENAI_API_BASE_URL || '',
+  GROQ_API_KEY: process.env.GROQ_API_KEY || '',
+  GROQ_MODEL: process.env.GROQ_MODEL || '',
+  GROQ_REVIEW_MODEL: process.env.GROQ_REVIEW_MODEL || '',
+  BOT_API_BASE_URL:
+    process.env.BOT_API_BASE_URL || 'https://botman.int.rclabenv.com/v2',
+  BOT_TOKEN: process.env.BOT_TOKEN || '',
+  BOT_ID: process.env.BOT_ID || '4700372020@37439510.bot.glip.net',
+  BOT_TYPE: process.env.BOT_TYPE || 'user',
+  TEAM_ID: process.env.TEAM_ID || '',
   // ENABLE_BOT 已废弃，使用每个 concernedItem 的 notifyMethod 替代
   ENABLE_BOT: undefined,
-  LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === "true",
-  ENABLE_CHROMA: process.env.ENABLE_CHROMA === "true",
-  CHROMA_API_URL: process.env.CHROMA_API_URL || "http://localhost:8000",  // 保留用于兼容
-  CHROMA_HOST: process.env.CHROMA_HOST || "localhost",
+  LLM_REVIEW_BEFORE_SEND: process.env.LLM_REVIEW_BEFORE_SEND === 'true',
+  ENABLE_CHROMA: process.env.ENABLE_CHROMA === 'true',
+  CHROMA_API_URL: process.env.CHROMA_API_URL || 'http://localhost:8000', // 保留用于兼容
+  CHROMA_HOST: process.env.CHROMA_HOST || 'localhost',
   CHROMA_PORT: Number(process.env.CHROMA_PORT) || 8000,
-  CHROMA_SSL: process.env.CHROMA_SSL === "true",
-  CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || "",
-  JIRA_BASE_URL: process.env.JIRA_BASE_URL || "https://jira.ringcentral.com",
-  JIRA_USERNAME: process.env.JIRA_USERNAME || "",
-  JIRA_API_TOKEN: process.env.JIRA_API_TOKEN || "",
-  DESIGN_JIRA_PROJECT: process.env.DESIGN_JIRA_PROJECT || "UX*",
-  DEPENDENCIES_JIRA_PROJECT: process.env.DEPENDENCIES_JIRA_PROJECT || "RCV",
+  CHROMA_SSL: process.env.CHROMA_SSL === 'true',
+  CHROMA_COLLECTION_NAME: process.env.CHROMA_COLLECTION_NAME || '',
+  JIRA_BASE_URL: process.env.JIRA_BASE_URL || 'https://jira.ringcentral.com',
+  JIRA_USERNAME: process.env.JIRA_USERNAME || '',
+  JIRA_API_TOKEN: process.env.JIRA_API_TOKEN || '',
+  DESIGN_JIRA_PROJECT: process.env.DESIGN_JIRA_PROJECT || 'UX*',
+  DEPENDENCIES_JIRA_PROJECT: process.env.DEPENDENCIES_JIRA_PROJECT || 'RCV',
   // 消息交互功能开关（默认全部启用）
-  ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== "false",
-  ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== "false",
+  ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== 'false',
+  ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== 'false',
   // 消息过滤配置（默认开启过滤）
-  FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== "false",
+  FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== 'false',
   // 记忆系统 (Memory Service)
-  MEMORY_SERVICE_BASE_URL: process.env.MEMORY_SERVICE_BASE_URL || "http://localhost:3210/api/v1",
-  MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || "",
+  MEMORY_SERVICE_BASE_URL:
+    process.env.MEMORY_SERVICE_BASE_URL || 'http://localhost:3210/api/v1',
+  MEMORY_SERVICE_API_KEY: process.env.MEMORY_SERVICE_API_KEY || '',
   MEMORY_SERVICE_TIMEOUT: Number(process.env.MEMORY_SERVICE_TIMEOUT) || 30_000,
   // 自动周报 (Weekly Report)
-  WEEKLY_REPORT_ENABLED: process.env.WEEKLY_REPORT_ENABLED || "true",
-  WEEKLY_REPORT_CRON: process.env.WEEKLY_REPORT_CRON || "0 18 * * 5",
-  WEEKLY_REPORT_MIN_MESSAGES: Number(process.env.WEEKLY_REPORT_MIN_MESSAGES) || 20,
+  WEEKLY_REPORT_ENABLED: process.env.WEEKLY_REPORT_ENABLED || 'true',
+  WEEKLY_REPORT_CRON: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
+  WEEKLY_REPORT_MIN_MESSAGES:
+    Number(process.env.WEEKLY_REPORT_MIN_MESSAGES) || 20,
   MESSAGE_ANALYSIS_PUSH_TARGET: 'me',
   MESSAGE_ANALYSIS_PUSH_GROUP_ID: '',
   FOLLOW_UP_PUSH_TARGET: 'me',
@@ -340,31 +429,94 @@ export const defaultEnvConfig: EnvConfigType = {
   WEEKLY_REPORT_PUSH_GROUP_ID: '',
   DECISION_CENTER_PUSH_TARGET: 'me',
   DECISION_CENTER_PUSH_GROUP_ID: '',
-  DREAM_DIGEST_SCHEDULE_TYPE: (
+  DREAM_DIGEST_SCHEDULE_TYPE:
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' ||
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'monthly'
-  ) ? process.env.DREAM_DIGEST_SCHEDULE_TYPE : 'every_x_days',
-  DREAM_DIGEST_INTERVAL_DAYS: Math.max(1, Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1),
-  SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED === "true",
-  SELF_REFLECTION_HEARTBEAT_MINUTES: Math.max(1, Number(process.env.REFLECTION_HEARTBEAT_MINUTES) || 15),
-  OPENCLAW_ENABLED: process.env.OPENCLAW_ENABLED === "true",
-  OPENCLAW_BASE_URL: process.env.OPENCLAW_BASE_URL || "",
-  OPENCLAW_TIMEOUT_MS: Math.max(1000, Number(process.env.OPENCLAW_TIMEOUT_MS) || 600000),
-  OPENCLAW_API_KEY: "",
+      ? process.env.DREAM_DIGEST_SCHEDULE_TYPE
+      : 'every_x_days',
+  DREAM_DIGEST_INTERVAL_DAYS: Math.max(
+    1,
+    Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1,
+  ),
+  SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED === 'true',
+  SELF_REFLECTION_HEARTBEAT_MINUTES: Math.max(
+    1,
+    Number(process.env.REFLECTION_HEARTBEAT_MINUTES) || 15,
+  ),
+  OPENCLAW_ENABLED: process.env.OPENCLAW_ENABLED === 'true',
+  OPENCLAW_BASE_URL: process.env.OPENCLAW_BASE_URL || '',
+  OPENCLAW_TIMEOUT_MS: Math.max(
+    1000,
+    Number(process.env.OPENCLAW_TIMEOUT_MS) || 600000,
+  ),
+  OPENCLAW_API_KEY: '',
   OPENCLAW_CLEAR_API_KEY: false,
   OPENCLAW_API_KEY_CONFIGURED: Boolean(process.env.OPENCLAW_API_KEY),
-  OUTREACH_ENABLED: process.env.OUTREACH_ENABLED === "true",
-  OUTREACH_INTERVAL_MS: Math.max(1000, Number(process.env.OUTREACH_INTERVAL_MS) || 60000),
-  OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION: process.env.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION !== "false",
-  OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL: process.env.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL === "true",
-  RINGCENTRAL_SERVER_URL: process.env.RINGCENTRAL_SERVER_URL || "",
-  RINGCENTRAL_CLIENT_ID: process.env.RINGCENTRAL_CLIENT_ID || "",
-  RINGCENTRAL_CLIENT_SECRET: "",
-  RINGCENTRAL_JWT: "",
+  OUTREACH_ENABLED: process.env.OUTREACH_ENABLED === 'true',
+  OUTREACH_INTERVAL_MS: Math.max(
+    1000,
+    Number(process.env.OUTREACH_INTERVAL_MS) || 60000,
+  ),
+  OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION:
+    process.env.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION !== 'false',
+  OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL:
+    process.env.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL === 'true',
+  RINGCENTRAL_SERVER_URL: process.env.RINGCENTRAL_SERVER_URL || '',
+  RINGCENTRAL_CLIENT_ID: process.env.RINGCENTRAL_CLIENT_ID || '',
+  RINGCENTRAL_CLIENT_SECRET: '',
+  RINGCENTRAL_JWT: '',
   RINGCENTRAL_CLEAR_CLIENT_SECRET: false,
   RINGCENTRAL_CLEAR_JWT: false,
-  RINGCENTRAL_CLIENT_SECRET_CONFIGURED: Boolean(process.env.RINGCENTRAL_CLIENT_SECRET),
+  RINGCENTRAL_CLIENT_SECRET_CONFIGURED: Boolean(
+    process.env.RINGCENTRAL_CLIENT_SECRET,
+  ),
   RINGCENTRAL_JWT_CONFIGURED: Boolean(process.env.RINGCENTRAL_JWT),
+  MEETING_PILOT_ENABLED:
+    process.env.MEETING_PILOT_ENABLED !== 'false' &&
+    process.env.MEETING_FEATURE_ENABLED !== 'false',
+  MEETING_PILOT_FLOATING_ICON_VISIBLE:
+    process.env.MEETING_PILOT_FLOATING_ICON_VISIBLE !== 'false',
+  MEETING_MINUTES_API_URL:
+    process.env.MEETING_MINUTES_API_URL ||
+    process.env.MEETING_DIGEST_API_BASE_URL ||
+    'https://10.32.45.219:9527',
+  MEETING_FEATURE_ENABLED: process.env.MEETING_FEATURE_ENABLED !== 'false',
+  MEETING_AUTO_DETECT: process.env.MEETING_AUTO_DETECT !== 'false',
+  MEETING_ENTRY_MODE:
+    process.env.MEETING_ENTRY_MODE === 'manual' ? 'manual' : 'auto',
+  MEETING_DIGEST_API_BASE_URL:
+    process.env.MEETING_DIGEST_API_BASE_URL || 'https://10.32.45.219:9527',
+  MEETING_PROVIDER_BASE_URL:
+    process.env.MEETING_PROVIDER_BASE_URL ||
+    process.env.OPENAI_API_BASE_URL ||
+    '',
+  MEETING_PROVIDER_API_KEY:
+    process.env.MEETING_PROVIDER_API_KEY || process.env.OPENAI_API_KEY || '',
+  MEETING_TRANSCRIBE_MODEL: process.env.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
+  MEETING_ANALYSIS_MODEL:
+    process.env.MEETING_ANALYSIS_MODEL ||
+    process.env.OPENAI_MODEL ||
+    'gpt-5.3-codex',
+  MEETING_NAME_ALIASES: process.env.MEETING_NAME_ALIASES || '',
+  MEETING_HOTWORDS: process.env.MEETING_HOTWORDS || '',
+  MEETING_DANMAKU_SPEED:
+    process.env.MEETING_DANMAKU_SPEED === 'fast' ||
+    process.env.MEETING_DANMAKU_SPEED === 'slow'
+      ? process.env.MEETING_DANMAKU_SPEED
+      : 'medium',
+  MEETING_SUMMARY_INTERVAL_SEC: Math.max(
+    15,
+    Number(process.env.MEETING_SUMMARY_INTERVAL_SEC) || 45,
+  ),
+  MEETING_SCREENSHOT_INTERVAL_SEC: Math.max(
+    10,
+    Number(process.env.MEETING_SCREENSHOT_INTERVAL_SEC) || 18,
+  ),
+  MEETING_MEMORY_CONTEXT_ENABLED:
+    process.env.MEETING_MEMORY_CONTEXT_ENABLED !== 'false',
+  MEETING_PRIVACY_NOTICE_TEXT:
+    process.env.MEETING_PRIVACY_NOTICE_TEXT ||
+    'Meeting Pilot 正在录制、转写并生成会中提醒。',
 };
 
 // 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
@@ -372,23 +524,22 @@ export async function getEnvConfig(): Promise<EnvConfigType> {
   try {
     const { envConfig } = await chrome.storage.local.get(['envConfig']);
     if (envConfig) {
-      // 将存储的配置与默认配置合并，确保新增的配置项也会被包含
-      return { ...defaultEnvConfig, ...envConfig };
+      return normalizeEnvConfigShape(envConfig);
     }
   } catch (error) {
     console.error('获取配置失败:', error);
   }
-  
+
   // 如果获取失败或没有保存的配置，返回默认值
-  return defaultEnvConfig;
+  return normalizeEnvConfigShape(defaultEnvConfig);
 }
 
 export function getDefaultEnvConfig(): EnvConfigType {
-  return defaultEnvConfig;
+  return normalizeEnvConfigShape(defaultEnvConfig);
 }
 
 export async function getUserInfo() {
-  const { userinfo } = await chrome.storage.local.get(['userinfo'])
+  const { userinfo } = await chrome.storage.local.get(['userinfo']);
   return userinfo;
 }
 
@@ -401,7 +552,7 @@ export function parseChromaConfig(config: EnvConfigType) {
     return {
       host: config.CHROMA_HOST,
       port: config.CHROMA_PORT,
-      ssl: config.CHROMA_SSL
+      ssl: config.CHROMA_SSL,
     };
   }
 
@@ -411,8 +562,12 @@ export function parseChromaConfig(config: EnvConfigType) {
       const url = new URL(config.CHROMA_API_URL);
       return {
         host: url.hostname,
-        port: url.port ? parseInt(url.port) : (url.protocol === 'https:' ? 443 : 8000),
-        ssl: url.protocol === 'https:'
+        port: url.port
+          ? parseInt(url.port)
+          : url.protocol === 'https:'
+            ? 443
+            : 8000,
+        ssl: url.protocol === 'https:',
       };
     } catch (error) {
       console.warn('解析 CHROMA_API_URL 失败:', error);
@@ -420,7 +575,7 @@ export function parseChromaConfig(config: EnvConfigType) {
       return {
         host: 'localhost',
         port: config.CHROMA_PORT || 8000,
-        ssl: false
+        ssl: false,
       };
     }
   }
@@ -429,6 +584,6 @@ export function parseChromaConfig(config: EnvConfigType) {
   return {
     host: config.CHROMA_HOST || 'localhost',
     port: config.CHROMA_PORT || 8000,
-    ssl: config.CHROMA_SSL || false
+    ssl: config.CHROMA_SSL || false,
   };
 }

@@ -9,6 +9,7 @@ import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { ReflectionThreadRepository } from '../repositories/ReflectionThreadRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
+import { OutreachRepository } from '../repositories/OutreachRepository.js';
 import { getTestDb } from './setup.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
 
@@ -18,6 +19,7 @@ describe('ActionExecutor', () => {
   const threadRepo = new ReflectionThreadRepository(db);
   const actionRepo = new ActionRepository(db);
   const confirmRequestRepo = new ConfirmRequestRepository(db);
+  const outreachRepo = new OutreachRepository(db);
   const originalRunReflection = ReflectionThreadService.prototype.runReflection;
   let userDataManager: UserDataManager;
   let tempDir: string;
@@ -36,6 +38,9 @@ describe('ActionExecutor', () => {
     db.prepare('DELETE FROM reflection_threads').run();
     db.prepare('DELETE FROM confirm_requests').run();
     db.prepare('DELETE FROM notification_records').run();
+    db.prepare('DELETE FROM outreach_events').run();
+    db.prepare('DELETE FROM outreach_sessions').run();
+    db.prepare('DELETE FROM messages_raw').run();
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'action-executor-'));
     userDataManager = new UserDataManager();
@@ -158,6 +163,307 @@ describe('ActionExecutor', () => {
 
     const updatedThread = threadRepo.getThreadById(thread.id);
     expect(updatedThread?.continueReason).toBe('new action result available');
+  });
+
+  it('syncs successful delegate_openclaw results back into outreach sessions', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'scheduled_template',
+      channel: 'ringcentral',
+      targetType: 'private',
+      targetRef: 'Sophia (Jinmei) Lin',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'sophia.lin',
+      targetResolvedLabel: 'Sophia (Jinmei) Lin',
+      targetResolvedChatId: 'chat-123',
+      renderedQuestion: 'Gary 的行程表有么？',
+      renderedContext: '想知道 Gary 的行程有没有和 video项目相关的',
+      status: 'resolved',
+      sentChatId: 'chat-123',
+      sentPostId: 'post-question',
+      replyPostId: 'post-sophia',
+      replySender: 'Sophia (Jinmei) Lin',
+      replyRawText: [
+        "[__Gary's calendar__](https://calendar.google.com/calendar/u/0?cid=test)",
+        '1. 4/1-4/8: XMN',
+        '2. 4/8-4/11: HZ',
+        '你自己看，video相关应该都在下周',
+        '他下周在杭州',
+      ].join('\n'),
+      replyClassification: 'answer',
+      replyConfidence: 0.75,
+      outcome: {
+        classification: 'answer',
+        confidence: 0.75,
+        resolutionState: 'partial',
+        directFindings: ['video相关应该都在下周', '他下周在杭州'],
+        resolvedConclusion: 'video相关应该都在下周，Gary 下周在杭州。',
+        remainingQuestions: ['需要从外部线索中核实更精确的时间或细节。'],
+        candidateArtifacts: [
+          {
+            kind: 'link',
+            title: "Gary's calendar",
+            url: 'https://calendar.google.com/calendar/u/0?cid=test',
+          },
+        ],
+        recommendedAction: 'delegate_openclaw',
+        spawnedActionIds: [],
+        followUpActions: [],
+        delegationFailureStatus: 'error',
+        delegationFailureSummary: '旧的失败信息',
+        summary: '已拿到部分可用结论，系统正在继续查证更精确的细节。',
+      },
+    });
+
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '继续查证 Gary 的 calendar',
+      description: '核实 Gary 下周与 video 相关的具体安排。',
+      params: {
+        task: '请核实 Gary 下周与 video 相关的具体行程。',
+        mode: 'read',
+        targetSystem: 'calendar',
+        metadata: {
+          sessionId: session.id,
+          replyPostId: 'post-sophia',
+        },
+      },
+      sourceKind: 'outreach_session',
+      sourceRefId: session.id,
+      executionMode: 'auto',
+      queueStatus: 'queued',
+      confidence: 0.82,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: 'Gary 在 4/9 有 2 个与 video 直接相关的安排：09:30-10:30 RCV project review；18:00-20:00 Dinner with Video team。',
+            artifacts: [
+              {
+                kind: 'calendar_event',
+                title: 'RCV project review',
+                content: '2026-04-09 09:30-10:30，RCV project review',
+                metadata: {
+                  sourceSystem: 'Google Calendar',
+                  entityId: 'evt-1',
+                  verification: 'API直查',
+                  observedFields: ['date', 'time', 'title'],
+                  observedAt: '2026-04-08T03:47:39.000Z',
+                },
+              },
+              {
+                kind: 'calendar_event',
+                title: 'Dinner with Video team',
+                content: '2026-04-09 18:00-20:00，Dinner with Video team',
+                metadata: {
+                  sourceSystem: 'Google Calendar',
+                  entityId: 'evt-2',
+                  verification: 'API直查',
+                  observedFields: ['date', 'time', 'title'],
+                  observedAt: '2026-04-08T03:47:39.000Z',
+                },
+              },
+            ],
+            payload: {
+              totalEvents: 10,
+              videoRelated: 2,
+            },
+          }),
+        }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(result.queueStatus).toBe('succeeded');
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(updatedSession?.status).toBe('resolved');
+    expect(updatedSession?.replyClassification).toBe('answer');
+    expect(updatedSession?.outcome?.resolutionState).toMatch(/complete|partial/);
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain('4/9');
+    expect(String(updatedSession?.outcome?.externalSummary)).toContain('Dinner with Video team');
+    expect(Array.isArray(updatedSession?.outcome?.externalEvidence)).toBe(true);
+    expect(updatedSession?.outcome?.spawnedActionIds).toContain(action.id);
+    expect(updatedSession?.outcome?.delegationFailureStatus).toBeUndefined();
+    expect(updatedSession?.outcome?.delegationFailureSummary).toBeUndefined();
+    expect(updatedSession?.outcome?.followUpActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: action.id,
+          queueStatus: 'succeeded',
+        }),
+      ]),
+    );
+
+    const resolvedEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'resolved');
+    expect(resolvedEvents.length).toBeGreaterThanOrEqual(1);
+    expect(String(resolvedEvents[resolvedEvents.length - 1]?.payload?.externalSummary)).toContain('RCV project review');
+  });
+
+  it('syncs failed delegate_openclaw results back into outreach sessions', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'scheduled_template',
+      channel: 'ringcentral',
+      targetType: 'private',
+      targetRef: 'Sophia (Jinmei) Lin',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'sophia.lin',
+      targetResolvedLabel: 'Sophia (Jinmei) Lin',
+      targetResolvedChatId: 'chat-123',
+      renderedQuestion: 'Gary 的行程表有么？',
+      renderedContext: '想知道 Gary 的行程有没有和 video项目相关的',
+      status: 'resolved',
+      sentChatId: 'chat-123',
+      sentPostId: 'post-question',
+      replyPostId: 'post-sophia',
+      replySender: 'Sophia (Jinmei) Lin',
+      replyRawText: '他下周在杭州，video相关应该都在下周。',
+      replyClassification: 'answer',
+      replyConfidence: 0.75,
+      outcome: {
+        classification: 'answer',
+        confidence: 0.75,
+        resolutionState: 'partial',
+        directFindings: ['他下周在杭州', 'video相关应该都在下周。'],
+        resolvedConclusion: 'Gary 下周在杭州，video 相关安排大概率也在下周。',
+        remainingQuestions: ['需要从外部线索中核实更精确的时间或细节。'],
+        recommendedAction: 'delegate_openclaw',
+        spawnedActionIds: [],
+        followUpActions: [],
+        summary: '已拿到部分可用结论，系统正在继续查证更精确的细节。',
+      },
+    });
+
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '继续查证 Gary 的 calendar',
+      description: '核实 Gary 下周与 video 相关的具体安排。',
+      params: {
+        task: '请核实 Gary 下周与 video 相关的具体行程。',
+        mode: 'read',
+        targetSystem: 'calendar',
+      },
+      sourceKind: 'outreach_session',
+      sourceRefId: session.id,
+      executionMode: 'auto',
+      queueStatus: 'queued',
+      confidence: 0.82,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'capability_missing',
+            summary: '无法直接访问 Gary 的 Google Calendar，需要额外认证。',
+            payload: {
+              question: '需要访问 Gary 的 Google Calendar 权限才能核实具体 video 项目日程。',
+            },
+          }),
+        }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(result.queueStatus).toBe('failed');
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(updatedSession?.status).toBe('resolved');
+    expect(updatedSession?.outcome?.resolutionState).toBe('partial');
+    expect(String(updatedSession?.outcome?.delegationFailureSummary)).toContain('Google Calendar');
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain('外部查证暂未成功');
+    expect(updatedSession?.outcome?.followUpActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: action.id,
+          queueStatus: 'failed',
+        }),
+      ]),
+    );
+
+    const resolvedEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'resolved');
+    expect(resolvedEvents.length).toBeGreaterThanOrEqual(1);
+    expect(String(resolvedEvents[resolvedEvents.length - 1]?.payload?.delegationFailureSummary)).toContain('Google Calendar');
+  });
+
+  it('does not repeatedly append the same delegation failure suffix into outreach conclusions', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'scheduled_template',
+      channel: 'ringcentral',
+      targetType: 'private',
+      targetRef: 'Sophia (Jinmei) Lin',
+      renderedQuestion: 'Gary 的行程表有么？',
+      renderedContext: '想知道 Gary 的行程有没有和 video项目相关的',
+      status: 'resolved',
+      sentChatId: 'chat-123',
+      sentPostId: 'post-question',
+      replyPostId: 'post-sophia',
+      replySender: 'Sophia (Jinmei) Lin',
+      replyRawText: '他下周在杭州，video相关应该都在下周。',
+      replyClassification: 'answer',
+      replyConfidence: 0.75,
+      outcome: {
+        classification: 'answer',
+        confidence: 0.75,
+        resolutionState: 'partial',
+        directFindings: ['他下周在杭州', 'video相关应该都在下周。'],
+        resolvedConclusion: 'Gary 下周在杭州，video 相关安排大概率也在下周。；但外部查证暂未成功：旧错误',
+        remainingQuestions: ['需要从外部线索中核实更精确的时间或细节。'],
+        recommendedAction: 'delegate_openclaw',
+        spawnedActionIds: [],
+        followUpActions: [],
+      },
+    });
+
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '继续查证 Gary 的 calendar',
+      description: '核实 Gary 下周与 video 相关的具体安排。',
+      params: {
+        task: '请核实 Gary 下周与 video 相关的具体行程。',
+        mode: 'read',
+        targetSystem: 'calendar',
+      },
+      sourceKind: 'outreach_session',
+      sourceRefId: session.id,
+      executionMode: 'auto',
+      queueStatus: 'queued',
+      confidence: 0.82,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'capability_missing',
+            summary: '无法直接访问 Gary 的 Google Calendar，需要额外认证。',
+          }),
+        }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    await executor.executeAction(action.id);
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toBe(
+      'Gary 下周在杭州，video 相关安排大概率也在下周。；但外部查证暂未成功：无法直接访问 Gary 的 Google Calendar，需要额外认证。',
+    );
   });
 
   it('creates confirm request and notification follow-ups for capability_missing delegation outcome', async () => {

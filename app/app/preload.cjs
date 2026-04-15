@@ -219,6 +219,7 @@ contextBridge.exposeInMainWorld('quickAsk', {
   onVoiceEvent: (callback) => onChannel('quick-ask:voice-event', callback),
   onShortcutStatus: (callback) => onChannel('quick-ask:shortcut-status', callback),
   onResetSession: (callback) => onChannel('quick-ask:reset-session', callback),
+  onWindowShown: (callback) => onChannel('quick-ask:window-shown', callback),
   onPrepareHide: (callback) => onChannel('quick-ask:prepare-hide', callback),
   onFocusInput: (callback) => onChannel('quick-ask:focus-input', callback),
 });

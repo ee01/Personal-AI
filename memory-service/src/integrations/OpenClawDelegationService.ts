@@ -49,6 +49,11 @@ interface Envelope {
   options?: Array<{ label?: string; value?: string }>;
 }
 
+interface StructuredObservation {
+  path: string;
+  values: Record<string, string | number | boolean>;
+}
+
 function getMetadataString(
   metadata: Record<string, unknown> | undefined,
   keys: string[],
@@ -135,8 +140,90 @@ function safeJsonCandidateParse<T>(raw: string | undefined): T | undefined {
   try {
     return JSON.parse(cleanJsonCandidate(raw)) as T;
   } catch {
-    return undefined;
+    const repaired = repairJsonCandidate(cleanJsonCandidate(raw));
+    if (!repaired) return undefined;
+    return safeJsonParse<T>(repaired);
   }
+}
+
+function trimTrailingJsonNoise(raw: string): string {
+  return raw
+    .replace(/(?:```)+\s*$/g, '')
+    .replace(/[,\s:]+$/g, '')
+    .trimEnd();
+}
+
+function closeOpenJsonStructures(raw: string): string {
+  let candidate = trimTrailingJsonNoise(raw);
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (const char of candidate) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      if (inString) escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === '{' || char === '[') {
+      stack.push(char);
+      continue;
+    }
+    if (char === '}' && stack[stack.length - 1] === '{') {
+      stack.pop();
+      continue;
+    }
+    if (char === ']' && stack[stack.length - 1] === '[') {
+      stack.pop();
+    }
+  }
+
+  if (escaped) {
+    candidate = candidate.slice(0, -1);
+  }
+  if (inString) {
+    candidate += '"';
+  }
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    candidate += stack[index] === '{' ? '}' : ']';
+  }
+  return candidate;
+}
+
+function repairJsonCandidate(raw: string): string | undefined {
+  const cleaned = raw.trim();
+  if (!cleaned) return undefined;
+
+  const direct = closeOpenJsonStructures(cleaned);
+  if (safeJsonParse(direct)) {
+    return direct;
+  }
+
+  let candidate = cleaned;
+  for (let attempt = 0; attempt < 24 && candidate.length > 0; attempt += 1) {
+    const nextCut = Math.max(
+      candidate.lastIndexOf('\n'),
+      candidate.lastIndexOf(','),
+      candidate.lastIndexOf('{'),
+      candidate.lastIndexOf('['),
+    );
+    if (nextCut <= 0) break;
+    candidate = candidate.slice(0, nextCut).trimEnd();
+    const repaired = closeOpenJsonStructures(candidate);
+    if (safeJsonParse(repaired)) {
+      return repaired;
+    }
+  }
+
+  return undefined;
 }
 
 function coerceArtifacts(raw: unknown): DelegationArtifact[] {
@@ -152,6 +239,209 @@ function coerceArtifacts(raw: unknown): DelegationArtifact[] {
           ? (item.metadata as Record<string, unknown>)
           : undefined,
     }));
+}
+
+function isScalarObservationValue(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  );
+}
+
+function collectStructuredObservations(
+  value: unknown,
+  path = 'payload',
+  sink: StructuredObservation[] = [],
+): StructuredObservation[] {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      collectStructuredObservations(item, `${path}[${index}]`, sink);
+    });
+    return sink;
+  }
+  if (!value || typeof value !== 'object') {
+    return sink;
+  }
+
+  const record = value as Record<string, unknown>;
+  const scalarEntries = Object.entries(record).filter(([, entryValue]) => isScalarObservationValue(entryValue));
+  if (scalarEntries.length >= 2) {
+    sink.push({
+      path,
+      values: Object.fromEntries(
+        scalarEntries.map(([key, entryValue]) => [key, entryValue as string | number | boolean]),
+      ),
+    });
+  }
+
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (entryValue && typeof entryValue === 'object') {
+      collectStructuredObservations(entryValue, `${path}.${key}`, sink);
+    }
+  }
+  return sink;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function getPayloadEntityRef(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  return firstNonEmptyString(
+    payload.entityId,
+    payload.entityKey,
+    payload.recordId,
+    payload.resourceId,
+    payload.ticketId,
+    payload.ticketKey,
+    payload.issueKey,
+    payload.jiraKey,
+    payload.calendarId,
+    payload.target,
+    payload.url,
+    payload.link,
+  );
+}
+
+function getMetadataCandidateArtifacts(metadata: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
+  if (!metadata) return [];
+  const raw = metadata.candidateArtifacts;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+}
+
+function inferDelegationEntityRef(
+  input: DelegationRequest,
+  artifacts: DelegationArtifact[],
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  const metadata = input.metadata;
+  const candidateArtifacts = getMetadataCandidateArtifacts(metadata);
+  return firstNonEmptyString(
+    getPayloadEntityRef(payload),
+    ...artifacts.flatMap((artifact) => [
+      artifact.metadata?.entityId,
+      artifact.metadata?.entityKey,
+      artifact.metadata?.recordId,
+      artifact.metadata?.resourceId,
+      artifact.metadata?.ticketId,
+      artifact.metadata?.ticketKey,
+      artifact.metadata?.issueKey,
+      artifact.title,
+    ]),
+    ...candidateArtifacts.flatMap((artifact) => [
+      artifact.entityId,
+      artifact.entityKey,
+      artifact.resourceId,
+      artifact.ticketId,
+      artifact.ticketKey,
+      artifact.issueKey,
+      artifact.url,
+      artifact.title,
+    ]),
+    metadata?.target,
+    metadata?.targetRef,
+  );
+}
+
+function inferDelegationSourceSystem(
+  input: DelegationRequest,
+  payload: Record<string, unknown> | undefined,
+  artifacts: DelegationArtifact[],
+): string | undefined {
+  return firstNonEmptyString(
+    input.targetSystem,
+    payload?.sourceSystem,
+    payload?.targetSystem,
+    ...artifacts.flatMap((artifact) => [
+      artifact.metadata?.sourceSystem,
+      artifact.metadata?.targetSystem,
+      artifact.metadata?.system,
+    ]),
+  );
+}
+
+function summarizeObservation(observation: StructuredObservation): string {
+  return Object.entries(observation.values)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' | ');
+}
+
+function enrichArtifactsWithDelegationContext(
+  artifacts: DelegationArtifact[],
+  input: DelegationRequest,
+  payload: Record<string, unknown> | undefined,
+  outputText: string,
+  summary: string | undefined,
+): DelegationArtifact[] {
+  const observations = collectStructuredObservations(payload);
+  const sourceSystem = inferDelegationSourceSystem(input, payload, artifacts);
+  const entityRef = inferDelegationEntityRef(input, artifacts, payload);
+  const observedFields = Array.from(
+    new Set(observations.flatMap((observation) => Object.keys(observation.values))),
+  ).slice(0, 16);
+  const observedAt = new Date(now() * 1000).toISOString();
+
+  const enrichedArtifacts = artifacts.map((artifact) => {
+    const metadata = artifact.metadata ?? {};
+    const nextMetadata: Record<string, unknown> = { ...metadata };
+    if (!nextMetadata.sourceSystem && sourceSystem) nextMetadata.sourceSystem = sourceSystem;
+    if (!nextMetadata.entityId && !nextMetadata.entityKey && entityRef) nextMetadata.entityKey = entityRef;
+    if (!nextMetadata.verification && sourceSystem && entityRef && observedFields.length > 0) {
+      nextMetadata.verification = 'delegated_structured_result';
+    }
+    if (!Array.isArray(nextMetadata.observedFields) && observedFields.length > 0) {
+      nextMetadata.observedFields = observedFields;
+    }
+    if (!nextMetadata.observedAt && observedFields.length > 0) {
+      nextMetadata.observedAt = observedAt;
+    }
+    return {
+      ...artifact,
+      metadata: Object.keys(nextMetadata).length > 0 ? nextMetadata : undefined,
+    };
+  });
+
+  if (hasVerifiableArtifact(enrichedArtifacts, input)) {
+    return enrichedArtifacts;
+  }
+
+  if (!sourceSystem || !entityRef || observations.length === 0) {
+    return enrichedArtifacts;
+  }
+
+  const contentLines = [
+    summary?.trim(),
+    ...observations.slice(0, 6).map((observation, index) => `${index + 1}. ${summarizeObservation(observation)}`),
+    !summary?.trim() && outputText.trim().length > 0 ? outputText.trim() : undefined,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+  if (contentLines.length === 0) {
+    return enrichedArtifacts;
+  }
+
+  return [
+    ...enrichedArtifacts,
+    {
+      kind: 'delegation_result',
+      title: summary?.trim() || `Delegated ${sourceSystem} result`,
+      content: contentLines.join('\n'),
+      metadata: {
+        sourceSystem,
+        entityKey: entityRef,
+        verification: 'delegated_structured_result',
+        observedFields,
+        observedAt,
+      },
+    },
+  ];
 }
 
 function extractOutputText(raw: Record<string, unknown>): string {
@@ -340,7 +630,15 @@ export class OpenClawDelegationService {
         };
       }
 
-      const artifacts = coerceArtifacts(envelope.artifacts);
+      const artifacts = normalizedStatus === 'success'
+        ? enrichArtifactsWithDelegationContext(
+            coerceArtifacts(envelope.artifacts),
+            input,
+            envelope.payload,
+            outputText,
+            envelope.summary,
+          )
+        : coerceArtifacts(envelope.artifacts);
       if (normalizedStatus === 'success' && !hasVerifiableArtifact(artifacts, input)) {
         return {
           status: 'error',

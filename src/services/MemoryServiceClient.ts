@@ -17,8 +17,8 @@ const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 export interface MemoryServiceConfig {
   baseUrl: string;
   apiKey?: string;
-  timeout?: number;  // ms, default 30000
-  userId?: string;   // multi-user isolation, default 'default'
+  timeout?: number; // ms, default 30000
+  userId?: string; // multi-user isolation, default 'default'
 }
 
 // ============================================================================
@@ -27,7 +27,7 @@ export interface MemoryServiceConfig {
 
 export interface IngestPayload {
   content: string;
-  sourceType: 'glip' | 'jira' | 'web' | 'manual' | 'system';
+  sourceType: 'glip' | 'jira' | 'web' | 'manual' | 'system' | 'meeting';
   sender?: string;
   groupId?: string;
   groupName?: string;
@@ -67,6 +67,8 @@ export interface RecallOptions {
   groupFilter?: string[];
   minImportance?: number;
   sourceTypes?: string[];
+  presentationHint?: 'default' | 'compact' | 'meeting_pilot';
+  previewMaxLength?: number;
 }
 
 export interface RecallResult {
@@ -80,10 +82,73 @@ export interface RecallItem {
   id: string;
   type: 'message' | 'chunk' | 'entity';
   content: string;
+  displayTitle?: string;
+  displayText?: string;
+  previewText?: string;
   score: number;
   source?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
+}
+
+export interface MeetingRecord {
+  meetingId: string;
+  title: string;
+  date: number;
+  lastEventAt: number;
+  participants: string[];
+  pdfUrl?: string;
+  digestId?: string;
+}
+
+export interface MeetingRecordDetail extends MeetingRecord {
+  summary?: string;
+  latestObservationText?: string;
+  actionItems?: Array<{
+    id: string;
+    title: string;
+    owner: string;
+    deadline?: string;
+    status: 'pending' | 'done';
+  }>;
+  decisions?: Array<{
+    id: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  chapters?: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    startLabel?: string;
+    actionCount?: number;
+    decisionCount?: number;
+  }>;
+  timelineEvents?: Array<{
+    id: string;
+    type: 'topic' | 'decision' | 'action' | 'mention' | 'screen';
+    title: string;
+    description: string;
+    timestamp?: string;
+    speaker?: string;
+    chapterId?: string;
+  }>;
+  participantStances?: Array<{
+    participant: string;
+    topic: string;
+    stance: '主导' | '支持' | '中立' | '质疑' | '反对';
+    keyQuote: string;
+    timeRange?: string;
+  }>;
+}
+
+export interface MeetingRecordListResponse {
+  items: MeetingRecord[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface AskResponse {
@@ -397,7 +462,13 @@ export interface RuntimeAction {
   result?: Record<string, any>;
   sourceKind?: string;
   sourceRefId?: string;
-  queueStatus: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter';
+  queueStatus:
+    | 'queued'
+    | 'running'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled'
+    | 'dead_letter';
   utilityScore?: number;
   urgencyScore?: number;
   outreachSessionId?: string;
@@ -637,7 +708,12 @@ export interface HealthResponse {
 }
 
 export interface StatsResponse {
-  messages: { total: number; today: number; thisWeek: number; last90Days?: number };
+  messages: {
+    total: number;
+    today: number;
+    thisWeek: number;
+    last90Days?: number;
+  };
   entities: { total: number; byType: Record<string, number> };
   chunks: { total: number };
   relationships: { total: number };
@@ -687,7 +763,11 @@ export interface MemoryBackupImportResponse {
 // Provider integration types
 // ============================================================================
 
-export type ProviderTransport = 'native_memory' | 'session_context' | 'document_context' | 'reminder';
+export type ProviderTransport =
+  | 'native_memory'
+  | 'session_context'
+  | 'document_context'
+  | 'reminder';
 
 export type ProviderScenario =
   | 'stable_memory'
@@ -785,7 +865,13 @@ export interface ProviderSyncJobRecord {
   bindingType: string;
   bindingId?: string;
   title?: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
+  status:
+    | 'queued'
+    | 'running'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled'
+    | 'skipped';
   request: Record<string, any>;
   response?: Record<string, any>;
   result?: Record<string, any>;
@@ -910,6 +996,7 @@ export class MemoryServiceClient {
   private timeout: number;
   private userId: string;
   private configLoaded = false;
+  private _configLoadPromise: Promise<void> | null = null;
   private _userIdResolvePromise: Promise<void> | null = null;
 
   constructor(config?: Partial<MemoryServiceConfig>) {
@@ -920,7 +1007,9 @@ export class MemoryServiceClient {
 
     // If no explicit config provided, try to load from chrome.storage.local
     if (!config?.baseUrl) {
-      this.loadConfigFromStorage();
+      this._configLoadPromise = this.loadConfigFromStorage();
+    } else {
+      this.configLoaded = true;
     }
   }
 
@@ -929,34 +1018,62 @@ export class MemoryServiceClient {
    * - baseUrl, apiKey, timeout: from envConfig (MEMORY_SERVICE_*)
    * - userId: from userinfo.username
    */
-  private loadConfigFromStorage(): void {
+  private loadConfigFromStorage(): Promise<void> {
+    if (this.configLoaded) {
+      return Promise.resolve();
+    }
+
     try {
       if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
-        chrome.storage.local.get(
-          ['envConfig', 'userinfo'],
-          (result: { envConfig?: Record<string, any>; userinfo?: { username?: string } }) => {
-            const env = result.envConfig;
-            if (env?.MEMORY_SERVICE_BASE_URL) {
-              this.baseUrl = env.MEMORY_SERVICE_BASE_URL;
-            }
-            if (env?.MEMORY_SERVICE_API_KEY != null && env.MEMORY_SERVICE_API_KEY !== '') {
-              this.apiKey = env.MEMORY_SERVICE_API_KEY;
-            }
-            if (env?.MEMORY_SERVICE_TIMEOUT != null) {
-              const t = Number(env.MEMORY_SERVICE_TIMEOUT);
-              if (!Number.isNaN(t)) this.timeout = t;
-            }
-            const username = result.userinfo?.username?.trim();
-            if (username && USER_ID_PATTERN.test(username)) {
-              this.userId = username;
-            }
-            this.configLoaded = true;
-          },
-        );
+        return new Promise((resolve) => {
+          chrome.storage.local.get(
+            ['envConfig', 'userinfo'],
+            (result: {
+              envConfig?: Record<string, any>;
+              userinfo?: { username?: string };
+            }) => {
+              const env = result.envConfig;
+              if (env?.MEMORY_SERVICE_BASE_URL) {
+                this.baseUrl = env.MEMORY_SERVICE_BASE_URL;
+              }
+              if (
+                env?.MEMORY_SERVICE_API_KEY != null &&
+                env.MEMORY_SERVICE_API_KEY !== ''
+              ) {
+                this.apiKey = env.MEMORY_SERVICE_API_KEY;
+              }
+              if (env?.MEMORY_SERVICE_TIMEOUT != null) {
+                const t = Number(env.MEMORY_SERVICE_TIMEOUT);
+                if (!Number.isNaN(t)) this.timeout = t;
+              }
+              const username = result.userinfo?.username?.trim();
+              if (username && USER_ID_PATTERN.test(username)) {
+                this.userId = username;
+              }
+              this.configLoaded = true;
+              resolve();
+            },
+          );
+        });
       }
     } catch {
       // chrome.storage not available — use defaults
     }
+
+    this.configLoaded = true;
+    return Promise.resolve();
+  }
+
+  private async ensureConfigLoaded(): Promise<void> {
+    if (this.configLoaded) {
+      return;
+    }
+
+    if (!this._configLoadPromise) {
+      this._configLoadPromise = this.loadConfigFromStorage();
+    }
+
+    await this._configLoadPromise;
   }
 
   /**
@@ -994,12 +1111,13 @@ export class MemoryServiceClient {
     path: string,
     body?: any,
   ): Promise<T> {
+    await this.ensureConfigLoaded();
     await this.ensureUserIdResolved();
 
     const url = `${this.baseUrl}${path}`;
 
     const headers: Record<string, string> = {
-      'Accept': 'application/json',
+      Accept: 'application/json',
       'X-User-Id': this.userId,
     };
 
@@ -1026,13 +1144,17 @@ export class MemoryServiceClient {
 
       if (!response.ok) {
         const errorBody = await this.parseErrorResponse(response);
-        const message = errorBody?.error || errorBody?.message || response.statusText;
+        const message =
+          errorBody?.error || errorBody?.message || response.statusText;
         throw new MemoryServiceError(response.status, message, errorBody);
       }
 
       // Handle empty responses (204 No Content, etc.)
       const contentType = response.headers.get('content-type');
-      if (response.status === 204 || !contentType?.includes('application/json')) {
+      if (
+        response.status === 204 ||
+        !contentType?.includes('application/json')
+      ) {
         return undefined as unknown as T;
       }
 
@@ -1104,14 +1226,16 @@ export class MemoryServiceClient {
 
       if (!response.ok) {
         const errorBody = await this.parseErrorResponse(response);
-        const message = errorBody?.error || errorBody?.message || response.statusText;
+        const message =
+          errorBody?.error || errorBody?.message || response.statusText;
         throw new MemoryServiceError(response.status, message, errorBody);
       }
 
       const blob = await response.blob();
       const fileName =
-        parseContentDispositionFilename(response.headers.get('content-disposition')) ||
-        `personal-ai-memory-${this.userId}.zip`;
+        parseContentDispositionFilename(
+          response.headers.get('content-disposition'),
+        ) || `personal-ai-memory-${this.userId}.zip`;
 
       return {
         blob,
@@ -1172,7 +1296,8 @@ export class MemoryServiceClient {
 
       if (!response.ok) {
         const errorBody = await this.parseErrorResponse(response);
-        const message = errorBody?.error || errorBody?.message || response.statusText;
+        const message =
+          errorBody?.error || errorBody?.message || response.statusText;
         throw new MemoryServiceError(response.status, message, errorBody);
       }
 
@@ -1245,6 +1370,28 @@ export class MemoryServiceClient {
     });
   }
 
+  async getMeetings(
+    limit?: number,
+    offset?: number,
+  ): Promise<MeetingRecordListResponse> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (offset !== undefined) params.set('offset', String(offset));
+
+    const query = params.toString();
+    return this.request<MeetingRecordListResponse>(
+      'GET',
+      `/meetings${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async getMeetingDetail(meetingId: string): Promise<MeetingRecordDetail> {
+    return this.request<MeetingRecordDetail>(
+      'GET',
+      `/meetings/${encodeURIComponent(meetingId)}`,
+    );
+  }
+
   // --------------------------------------------------------------------------
   // Entities
   // --------------------------------------------------------------------------
@@ -1273,7 +1420,10 @@ export class MemoryServiceClient {
    * Get a single entity with its current active properties.
    */
   async getEntityDetail(id: string): Promise<EntityDetailResponse> {
-    return this.request<EntityDetailResponse>('GET', `/entities/${encodeURIComponent(id)}`);
+    return this.request<EntityDetailResponse>(
+      'GET',
+      `/entities/${encodeURIComponent(id)}`,
+    );
   }
 
   /**
@@ -1283,7 +1433,11 @@ export class MemoryServiceClient {
     id: string,
     key?: string,
     includeSuperseded?: boolean,
-  ): Promise<{ entityId: string; properties: EntityProperty[]; total: number }> {
+  ): Promise<{
+    entityId: string;
+    properties: EntityProperty[];
+    total: number;
+  }> {
     const params = new URLSearchParams();
     if (key) params.set('key', key);
     if (includeSuperseded) params.set('includeSuperseded', 'true');
@@ -1296,9 +1450,11 @@ export class MemoryServiceClient {
   /**
    * Get the property change timeline for an entity.
    */
-  async getEntityTimeline(
-    id: string,
-  ): Promise<{ entityId: string; timeline: EntityTimelineEntry[]; total: number }> {
+  async getEntityTimeline(id: string): Promise<{
+    entityId: string;
+    timeline: EntityTimelineEntry[];
+    total: number;
+  }> {
     return this.request('GET', `/entities/${encodeURIComponent(id)}/timeline`);
   }
 
@@ -1308,7 +1464,12 @@ export class MemoryServiceClient {
   async getEntityRelationships(
     id: string,
     depth?: number,
-  ): Promise<{ entityId: string; relationships: EntityRelationship[]; depth: number; total: number }> {
+  ): Promise<{
+    entityId: string;
+    relationships: EntityRelationship[];
+    depth: number;
+    total: number;
+  }> {
     const params = new URLSearchParams();
     if (depth !== undefined) params.set('depth', String(depth));
 
@@ -1336,7 +1497,9 @@ export class MemoryServiceClient {
   /**
    * Create a new watched project.
    */
-  async addWatchedProject(project: CreateWatchedProjectPayload): Promise<WatchedProject> {
+  async addWatchedProject(
+    project: CreateWatchedProjectPayload,
+  ): Promise<WatchedProject> {
     return this.request<WatchedProject>('POST', '/projects/watched', project);
   }
 
@@ -1355,7 +1518,9 @@ export class MemoryServiceClient {
    */
   async updateWatchedProject(
     id: string,
-    updates: Partial<Pick<WatchedProject, 'name' | 'description' | 'aliases' | 'priority'>> & {
+    updates: Partial<
+      Pick<WatchedProject, 'name' | 'description' | 'aliases' | 'priority'>
+    > & {
       autoCaptureRules?: object;
       trackedProperties?: string[];
     },
@@ -1370,8 +1535,13 @@ export class MemoryServiceClient {
   /**
    * Soft-delete a watched project (sets is_active = false).
    */
-  async deleteWatchedProject(id: string): Promise<{ id: string; deleted: boolean }> {
-    return this.request('DELETE', `/projects/watched/${encodeURIComponent(id)}`);
+  async deleteWatchedProject(
+    id: string,
+  ): Promise<{ id: string; deleted: boolean }> {
+    return this.request(
+      'DELETE',
+      `/projects/watched/${encodeURIComponent(id)}`,
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -1437,7 +1607,10 @@ export class MemoryServiceClient {
   /**
    * Acknowledge a notification (mark as clicked).
    */
-  async acknowledgeNotification(id: string, detail?: string): Promise<NotificationRecord> {
+  async acknowledgeNotification(
+    id: string,
+    detail?: string,
+  ): Promise<NotificationRecord> {
     return this.request<NotificationRecord>(
       'POST',
       `/notifications/${encodeURIComponent(id)}/action`,
@@ -1448,7 +1621,10 @@ export class MemoryServiceClient {
   /**
    * Dismiss a notification.
    */
-  async dismissNotification(id: string, detail?: string): Promise<NotificationRecord> {
+  async dismissNotification(
+    id: string,
+    detail?: string,
+  ): Promise<NotificationRecord> {
     return this.request<NotificationRecord>(
       'POST',
       `/notifications/${encodeURIComponent(id)}/action`,
@@ -1527,7 +1703,9 @@ export class MemoryServiceClient {
     return this.request<RuntimeConfigResponse>('GET', '/config');
   }
 
-  async updateRuntimeConfig(payload: UpdateRuntimeConfigPayload): Promise<RuntimeConfigResponse> {
+  async updateRuntimeConfig(
+    payload: UpdateRuntimeConfigPayload,
+  ): Promise<RuntimeConfigResponse> {
     return this.request<RuntimeConfigResponse>('PUT', '/config', payload);
   }
 
@@ -1535,7 +1713,9 @@ export class MemoryServiceClient {
   // Provider Integrations
   // --------------------------------------------------------------------------
 
-  async getProviderCapabilities(provider: string): Promise<ProviderCapabilities> {
+  async getProviderCapabilities(
+    provider: string,
+  ): Promise<ProviderCapabilities> {
     return this.request<ProviderCapabilities>(
       'GET',
       `/providers/${encodeURIComponent(provider)}/capabilities`,
@@ -1585,8 +1765,10 @@ export class MemoryServiceClient {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
     if (filters?.bindingType) params.set('bindingType', filters.bindingType);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
 
     const qs = params.toString();
     return this.request<ProviderSyncJobListResponse>(
@@ -1629,8 +1811,10 @@ export class MemoryServiceClient {
   }): Promise<ReflectionThreadListResponse> {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
     if (filters?.search) params.set('search', filters.search);
 
     const qs = params.toString();
@@ -1640,7 +1824,9 @@ export class MemoryServiceClient {
     );
   }
 
-  async getReflectionThread(id: string): Promise<ReflectionThreadDetailResponse> {
+  async getReflectionThread(
+    id: string,
+  ): Promise<ReflectionThreadDetailResponse> {
     return this.request<ReflectionThreadDetailResponse>(
       'GET',
       `/reflection-threads/${encodeURIComponent(id)}`,
@@ -1650,7 +1836,11 @@ export class MemoryServiceClient {
   async revisitReflectionThread(
     id: string,
     force = true,
-  ): Promise<{ thread: ReflectionThread; run: ReflectionRun; actions: RuntimeAction[] }> {
+  ): Promise<{
+    thread: ReflectionThread;
+    run: ReflectionRun;
+    actions: RuntimeAction[];
+  }> {
     return this.request(
       'POST',
       `/reflection-threads/${encodeURIComponent(id)}/revisit`,
@@ -1680,7 +1870,9 @@ export class MemoryServiceClient {
     );
   }
 
-  async resumeReflectionThread(id: string): Promise<{ thread: ReflectionThread }> {
+  async resumeReflectionThread(
+    id: string,
+  ): Promise<{ thread: ReflectionThread }> {
     return this.request(
       'POST',
       `/reflection-threads/${encodeURIComponent(id)}/resume`,
@@ -1692,7 +1884,14 @@ export class MemoryServiceClient {
   // --------------------------------------------------------------------------
 
   async getActions(filters?: {
-    queueStatus?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all';
+    queueStatus?:
+      | 'queued'
+      | 'running'
+      | 'succeeded'
+      | 'failed'
+      | 'cancelled'
+      | 'dead_letter'
+      | 'all';
     executionMode?: 'manual' | 'auto';
     threadId?: string;
     actionType?: string;
@@ -1703,13 +1902,16 @@ export class MemoryServiceClient {
   }): Promise<RuntimeActionListResponse> {
     const params = new URLSearchParams();
     if (filters?.queueStatus) params.set('queueStatus', filters.queueStatus);
-    if (filters?.executionMode) params.set('executionMode', filters.executionMode);
+    if (filters?.executionMode)
+      params.set('executionMode', filters.executionMode);
     if (filters?.threadId) params.set('threadId', filters.threadId);
     if (filters?.actionType) params.set('actionType', filters.actionType);
     if (filters?.sourceKind) params.set('sourceKind', filters.sourceKind);
     if (filters?.sourceRefId) params.set('sourceRefId', filters.sourceRefId);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
 
     const qs = params.toString();
     return this.request<RuntimeActionListResponse>(
@@ -1719,21 +1921,16 @@ export class MemoryServiceClient {
   }
 
   async retryAction(id: string): Promise<{ action: RuntimeAction }> {
-    return this.request(
-      'POST',
-      `/actions/${encodeURIComponent(id)}/retry`,
-    );
+    return this.request('POST', `/actions/${encodeURIComponent(id)}/retry`);
   }
 
   async cancelAction(
     id: string,
     reason?: string,
   ): Promise<{ action: RuntimeAction }> {
-    return this.request(
-      'POST',
-      `/actions/${encodeURIComponent(id)}/cancel`,
-      { reason },
-    );
+    return this.request('POST', `/actions/${encodeURIComponent(id)}/cancel`, {
+      reason,
+    });
   }
 
   async executeAction(id: string): Promise<{
@@ -1743,10 +1940,7 @@ export class MemoryServiceClient {
     result?: Record<string, any>;
     error?: string;
   }> {
-    return this.request(
-      'POST',
-      `/actions/${encodeURIComponent(id)}/execute`,
-    );
+    return this.request('POST', `/actions/${encodeURIComponent(id)}/execute`);
   }
 
   // --------------------------------------------------------------------------
@@ -1792,8 +1986,13 @@ export class MemoryServiceClient {
     return this.request('POST', '/outreach/templates/upsert', body);
   }
 
-  async cancelOutreachTemplate(id: string): Promise<{ template: Record<string, any> }> {
-    return this.request('POST', `/outreach/templates/${encodeURIComponent(id)}/cancel`);
+  async cancelOutreachTemplate(
+    id: string,
+  ): Promise<{ template: Record<string, any> }> {
+    return this.request(
+      'POST',
+      `/outreach/templates/${encodeURIComponent(id)}/cancel`,
+    );
   }
 
   async getOutreachSessions(filters?: {
@@ -1809,8 +2008,10 @@ export class MemoryServiceClient {
     if (filters?.originKind) params.set('originKind', filters.originKind);
     if (filters?.templateId) params.set('templateId', filters.templateId);
     if (filters?.threadId) params.set('threadId', filters.threadId);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
 
     const qs = params.toString();
     return this.request<OutreachSessionListResponse>(
@@ -1838,30 +2039,40 @@ export class MemoryServiceClient {
     targetType: string,
     query: string,
     limit = 8,
-  ): Promise<{ items: OutreachTargetCandidate[]; total: number; directoryStatus?: OutreachDirectoryStatus[] }> {
+  ): Promise<{
+    items: OutreachTargetCandidate[];
+    total: number;
+    directoryStatus?: OutreachDirectoryStatus[];
+  }> {
     const params = new URLSearchParams();
     params.set('targetType', targetType);
     params.set('query', query);
     params.set('limit', String(limit));
-    return this.request(
-      'GET',
-      `/outreach/targets/search?${params.toString()}`,
-    );
+    return this.request('GET', `/outreach/targets/search?${params.toString()}`);
   }
 
-  async getOutreachDirectoryStatus(): Promise<{ items: OutreachDirectoryStatus[] }> {
+  async getOutreachDirectoryStatus(): Promise<{
+    items: OutreachDirectoryStatus[];
+  }> {
     return this.request('GET', '/outreach/directory/status');
   }
 
-  async syncOutreachDirectory(force = false): Promise<{ items: OutreachDirectoryStatus[] }> {
+  async syncOutreachDirectory(
+    force = false,
+  ): Promise<{ items: OutreachDirectoryStatus[] }> {
     const params = new URLSearchParams();
     if (force) {
       params.set('force', 'true');
     }
-    return this.request('POST', `/outreach/directory/sync${params.toString() ? `?${params.toString()}` : ''}`);
+    return this.request(
+      'POST',
+      `/outreach/directory/sync${params.toString() ? `?${params.toString()}` : ''}`,
+    );
   }
 
-  async approveOutreachSession(id: string): Promise<{ session: OutreachSession }> {
+  async approveOutreachSession(
+    id: string,
+  ): Promise<{ session: OutreachSession }> {
     return this.request(
       'POST',
       `/outreach/sessions/${encodeURIComponent(id)}/approve`,
@@ -1902,7 +2113,9 @@ export class MemoryServiceClient {
     );
   }
 
-  async retryOutreachSession(id: string): Promise<{ session: OutreachSession }> {
+  async retryOutreachSession(
+    id: string,
+  ): Promise<{ session: OutreachSession }> {
     return this.request(
       'POST',
       `/outreach/sessions/${encodeURIComponent(id)}/retry`,
@@ -1928,9 +2141,12 @@ export class MemoryServiceClient {
     if (filters?.type) params.set('type', filters.type);
     if (filters?.status) params.set('status', filters.status);
     if (filters?.key) params.set('key', filters.key);
-    if (filters?.confirmedOnly !== undefined) params.set('confirmedOnly', String(filters.confirmedOnly));
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.confirmedOnly !== undefined)
+      params.set('confirmedOnly', String(filters.confirmedOnly));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
 
     const qs = params.toString();
     const path = `/profile/items${qs ? '?' + qs : ''}`;
@@ -1953,12 +2169,15 @@ export class MemoryServiceClient {
   /**
    * Update an existing profile item.
    */
-  async updateProfileItem(id: string, body: {
-    itemValue?: string;
-    confidence?: number;
-    salienceScore?: number;
-    status?: string;
-  }): Promise<any> {
+  async updateProfileItem(
+    id: string,
+    body: {
+      itemValue?: string;
+      confidence?: number;
+      salienceScore?: number;
+      status?: string;
+    },
+  ): Promise<any> {
     return this.request(
       'PUT',
       `/profile/items/${encodeURIComponent(id)}`,
@@ -1969,7 +2188,9 @@ export class MemoryServiceClient {
   /**
    * Delete a profile item.
    */
-  async deleteProfileItem(id: string): Promise<{ id: string; deleted: boolean }> {
+  async deleteProfileItem(
+    id: string,
+  ): Promise<{ id: string; deleted: boolean }> {
     return this.request('DELETE', `/profile/items/${encodeURIComponent(id)}`);
   }
 
@@ -2038,8 +2259,10 @@ export class MemoryServiceClient {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
     if (filters?.dimension) params.set('dimension', filters.dimension);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
 
     const qs = params.toString();
     const path = `/profile/opinions${qs ? '?' + qs : ''}`;
@@ -2155,13 +2378,20 @@ export class MemoryServiceClient {
   // --------------------------------------------------------------------------
 
   async getConcernedItemsSnapshot(): Promise<ConcernedItemsSnapshotResponse> {
-    return this.request<ConcernedItemsSnapshotResponse>('GET', '/concerned-items');
+    return this.request<ConcernedItemsSnapshotResponse>(
+      'GET',
+      '/concerned-items',
+    );
   }
 
   async putConcernedItemsSnapshot(
     payload: PutConcernedItemsSnapshotPayload,
   ): Promise<ConcernedItemsSnapshotResponse> {
-    return this.request<ConcernedItemsSnapshotResponse>('PUT', '/concerned-items', payload);
+    return this.request<ConcernedItemsSnapshotResponse>(
+      'PUT',
+      '/concerned-items',
+      payload,
+    );
   }
 
   async postFollowThreadHit(
@@ -2180,7 +2410,8 @@ export class MemoryServiceClient {
     if (filters?.followItemIds && filters.followItemIds.length > 0) {
       params.set('followItemIds', filters.followItemIds.join(','));
     }
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
 
     const qs = params.toString();
     return this.request<FollowThreadHitListResponse>(
@@ -2259,7 +2490,10 @@ export class MemoryServiceClient {
    * List files in a user data subdirectory (dreams, reflections, reports).
    */
   async listUserFiles(subdir: string): Promise<string[]> {
-    const result = await this.request<{ files: string[] }>('GET', `/user-files/${encodeURIComponent(subdir)}`);
+    const result = await this.request<{ files: string[] }>(
+      'GET',
+      `/user-files/${encodeURIComponent(subdir)}`,
+    );
     return result.files;
   }
 
@@ -2268,7 +2502,10 @@ export class MemoryServiceClient {
    */
   async readUserFile(subdir: string, filename: string): Promise<string | null> {
     try {
-      const result = await this.request<{ filename: string; content: string }>('GET', `/user-files/${encodeURIComponent(subdir)}/${encodeURIComponent(filename)}`);
+      const result = await this.request<{ filename: string; content: string }>(
+        'GET',
+        `/user-files/${encodeURIComponent(subdir)}/${encodeURIComponent(filename)}`,
+      );
       return result.content;
     } catch {
       return null;

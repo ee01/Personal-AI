@@ -18,6 +18,7 @@ interface ConcernedItemsSyncState {
   lastSnapshotSyncAt?: string;
   contentUpdatedAt?: string;
   lastHitSyncAt?: string;
+  lastSyncedBaseUrl?: string;
   configDirty?: boolean;
 }
 
@@ -261,23 +262,52 @@ export class ConcernedItemsSyncService {
 
   private async bootstrapSnapshotState(): Promise<void> {
     const state = await this.getSyncState();
-    if ((state.snapshotVersion ?? 0) > 0 && state.contentUpdatedAt) {
-      return;
-    }
-
+    const client = getMemoryServiceClient();
+    const currentBaseUrl = client.getBaseUrl();
     const result = await chrome.storage.local.get(CONCERNED_ITEMS_KEY);
     const concernedItems: TopicItemWithAutoReply[] = result[CONCERNED_ITEMS_KEY] || [];
     const snapshotItems = stripRuntimeFields(concernedItems);
-    const client = getMemoryServiceClient();
+
+    if (
+      (state.snapshotVersion ?? 0) > 0
+      && state.contentUpdatedAt
+      && state.lastSyncedBaseUrl === currentBaseUrl
+    ) {
+      return;
+    }
 
     try {
       const remote = await client.getConcernedItemsSnapshot();
+      const localContentUpdatedAt = getComparableContentUpdatedAt(
+        state.contentUpdatedAt,
+        state.lastSnapshotSyncAt,
+      );
+      const remoteContentUpdatedAt = getComparableContentUpdatedAt(
+        remote.contentUpdatedAt,
+        remote.updatedAt,
+      );
+      const hasLegacySyncedState = !state.lastSyncedBaseUrl
+        && (state.snapshotVersion ?? 0) > 0
+        && Boolean(state.contentUpdatedAt);
+      const syncTargetChanged = state.lastSyncedBaseUrl
+        && state.lastSyncedBaseUrl !== currentBaseUrl;
+
+      if (
+        (syncTargetChanged || hasLegacySyncedState)
+        && snapshotItems.length > 0
+        && localContentUpdatedAt > remoteContentUpdatedAt
+      ) {
+        await this.markConfigDirty(state.contentUpdatedAt || new Date().toISOString());
+        return;
+      }
+
       if ((remote.version ?? 0) > 0) {
         await this.applyRemoteSnapshot(remote);
         await this.setSyncState({
           configDirty: false,
           snapshotVersion: remote.version,
           lastSnapshotSyncAt: remote.updatedAt || new Date().toISOString(),
+          lastSyncedBaseUrl: currentBaseUrl,
           contentUpdatedAt: remote.contentUpdatedAt || remote.updatedAt || new Date().toISOString(),
         });
         return;
@@ -319,6 +349,7 @@ export class ConcernedItemsSyncService {
         configDirty: false,
         snapshotVersion: response.version,
         lastSnapshotSyncAt: response.updatedAt || new Date().toISOString(),
+        lastSyncedBaseUrl: client.getBaseUrl(),
         contentUpdatedAt: response.contentUpdatedAt || contentUpdatedAt,
       });
     } catch (error) {
@@ -331,6 +362,7 @@ export class ConcernedItemsSyncService {
           configDirty: false,
           snapshotVersion: current?.version ?? state.snapshotVersion,
           lastSnapshotSyncAt: current?.updatedAt || state.lastSnapshotSyncAt,
+          lastSyncedBaseUrl: client.getBaseUrl(),
           contentUpdatedAt: current?.contentUpdatedAt || state.contentUpdatedAt,
         });
         return;
@@ -370,6 +402,7 @@ export class ConcernedItemsSyncService {
       configDirty: false,
       snapshotVersion: remote.version,
       lastSnapshotSyncAt: remote.updatedAt || new Date().toISOString(),
+      lastSyncedBaseUrl: client.getBaseUrl(),
       contentUpdatedAt: remote.contentUpdatedAt || remote.updatedAt || new Date().toISOString(),
     });
   }

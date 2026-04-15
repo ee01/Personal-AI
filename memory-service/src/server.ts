@@ -53,6 +53,7 @@ import { followThreadHitRoutes } from './routes/followThreadHits.js';
 import { outreachRoutes } from './routes/outreach.js';
 import { notificationCenterRoutes } from './routes/notificationCenter.js';
 import { providerRoutes } from './routes/providers.js';
+import { meetingRoutes } from './routes/meetings.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -114,7 +115,8 @@ export async function buildApp(
     openapi: {
       info: {
         title: 'Personal AI Memory Service',
-        description: 'API for the Personal AI memory and knowledge graph backend',
+        description:
+          'API for the Personal AI memory and knowledge graph backend',
         version: '0.1.0',
       },
     },
@@ -182,6 +184,7 @@ export async function buildApp(
       await instance.register(followThreadHitRoutes);
       await instance.register(notificationCenterRoutes);
       await instance.register(providerRoutes);
+      await instance.register(meetingRoutes);
     },
     { prefix: '/api/v1' },
   );
@@ -222,7 +225,9 @@ async function main(): Promise<void> {
   try {
     await app.listen({ port: config.port, host: config.host });
     console.log(`[server] Listening on http://${config.host}:${config.port}`);
-    console.log(`[server] Swagger docs at http://${config.host}:${config.port}/docs`);
+    console.log(
+      `[server] Swagger docs at http://${config.host}:${config.port}/docs`,
+    );
   } catch (err) {
     app.log.error(err);
     process.exit(1);

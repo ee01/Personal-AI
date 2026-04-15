@@ -56,6 +56,7 @@ export interface ProviderMemoryProduct {
   kind: ProviderMemoryProductKind;
   title: string;
   bodyMd: string;
+  itemCount?: number;
   stability: 'stable' | 'rolling' | 'ephemeral';
   transport: ProviderTransport;
   targetBindingType: string;
@@ -905,6 +906,7 @@ export class ProviderContextService {
       kind,
       title: titleForKind(kind),
       bodyMd,
+      itemCount: rendered.itemCount,
       stability: stabilityForKind(kind),
       transport: transportForKind(kind),
       targetBindingType: 'mobile_context_thread',
@@ -923,6 +925,7 @@ export class ProviderContextService {
       kind: 'notice_digest',
       title: titleForKind('notice_digest'),
       bodyMd,
+      itemCount: rendered.itemCount,
       stability: stabilityForKind('notice_digest'),
       transport: transportForKind('notice_digest'),
       targetBindingType: 'mobile_context_thread',

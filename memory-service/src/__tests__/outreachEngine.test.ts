@@ -100,6 +100,21 @@ describe('OutreachEngine', () => {
           text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
         };
       }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            id: 'self-ext-1',
+            name: 'Esone Qiu',
+            contact: {
+              firstName: 'Esone',
+              lastName: 'Qiu',
+              email: 'test-user@ringcentral.com',
+            },
+          }),
+        };
+      }
       if (url.includes(`/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts?`)) {
         return {
           ok: true,
@@ -385,6 +400,68 @@ describe('OutreachEngine', () => {
       .prepare(`SELECT content FROM messages_raw WHERE source_type = 'outreach_reply'`)
       .all() as Array<{ content: string }>;
     expect(replyMessages).toHaveLength(0);
+  });
+
+  it('ignores self-authored follow-up posts when picking the latest external reply', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'sophia.lin',
+      renderedQuestion: 'Gary 的行程表有么？',
+      renderedContext: '想知道 Gary 的行程有没有和 video 项目相关的',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-ignore-self',
+      sentPostId: 'post-seed',
+      lastPollAt: Math.floor(Date.now() / 1000) - 60,
+      nextCheckAt: Math.floor(Date.now() / 1000) - 5,
+      waitUntil: Math.floor(Date.now() / 1000) + 3600,
+    });
+
+    mockRingCentralListPosts('chat-ignore-self', [
+      {
+        id: 'reply-self-1',
+        text: '哈哈，别慌，最差 google sheet 还有历史记录功能',
+        creator: { name: 'Esone Qiu' },
+        creationTime: '2026-04-01T02:43:10Z',
+      },
+      {
+        id: 'reply-4',
+        text: '他下周在杭州',
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:10Z',
+      },
+      {
+        id: 'reply-3',
+        text: '你自己看，video相关应该都在下周',
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:05Z',
+      },
+      {
+        id: 'reply-2',
+        text: "[Gary's calendar](https://calendar.example.com/gary)",
+        creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
+        creationTime: '2026-04-01T02:42:00Z',
+      },
+    ]);
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(updatedSession?.replyPostId).toBe('reply-4');
+    expect(updatedSession?.replySender).toBe('Sophia (Jinmei) Lin');
+    expect(updatedSession?.replyRawText).toContain('video相关应该都在下周');
+    expect(updatedSession?.replyRawText).not.toContain('哈哈，别慌');
+    expect(updatedSession?.outcome?.recommendedAction).toBe('delegate_openclaw');
+
+    const replyEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'reply_received');
+    expect(replyEvents).toHaveLength(1);
+    expect(replyEvents[0].payload?.replyPostIds).toEqual(['reply-2', 'reply-3', 'reply-4']);
   });
 
   it('queues delegation when a reply only provides an external artifact without a direct answer', async () => {

@@ -50,9 +50,64 @@ let currentCard: HTMLElement | null = null;
 let hoverTimeout: ReturnType<typeof setTimeout> | null = null;
 let isHoveringCard = false;
 let isHoveringTrigger = false;
+const copyButtonResetTimers = new WeakMap<HTMLButtonElement, number>();
 
 // JIRA Base URL (从环境配置获取)
 let JIRA_BASE_URL = 'https://jira.ringcentral.com';
+const GLIP_POPUP_DEFAULT_WIDTH = 1100;
+const GLIP_POPUP_DEFAULT_HEIGHT = 900;
+const GLIP_NATIVE_POPOUT_BRIDGE_SOURCE = 'personal-ai-glip-native-popout-bridge';
+const GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID = 'pai-glip-native-popout-page-script';
+const GLIP_NATIVE_POPOUT_BRIDGE_ATTR = 'data-pai-glip-native-popout-bridge';
+const GLIP_NATIVE_POPOUT_REQUEST = 'PAI_GLIP_NATIVE_POPOUT_REQUEST';
+const GLIP_NATIVE_POPOUT_RESPONSE = 'PAI_GLIP_NATIVE_POPOUT_RESPONSE';
+const GLIP_NATIVE_POPOUT_READY = 'PAI_GLIP_NATIVE_POPOUT_READY';
+const GLIP_NATIVE_POPOUT_REQUEST_TIMEOUT_MS = 10000;
+
+interface GlipLinkTarget {
+  kind: 'group' | 'message';
+  groupId: string;
+  postId?: string;
+  url: string;
+  label: string;
+}
+
+interface GlipNativePopoutRequestMessage {
+  source: string;
+  target: 'page';
+  type: typeof GLIP_NATIVE_POPOUT_REQUEST;
+  requestId: string;
+  payload: {
+    groupId: string;
+    popOutConversationFirstLevel?: boolean;
+  };
+}
+
+interface GlipNativePopoutResponseMessage {
+  source: string;
+  target: 'content-script';
+  type: typeof GLIP_NATIVE_POPOUT_RESPONSE;
+  requestId: string;
+  success: boolean;
+  error?: string;
+}
+
+interface GlipNativePopoutReadyMessage {
+  source: string;
+  target: 'content-script';
+  type: typeof GLIP_NATIVE_POPOUT_READY;
+}
+
+const processedGlipLinks = new WeakSet<HTMLElement>();
+const pendingGlipNativePopoutRequests = new Map<
+  string,
+  {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeoutId: number;
+  }
+>();
+let glipNativePopoutBridgeListenerAttached = false;
 
 // 初始化时获取 JIRA Base URL
 async function initJiraBaseUrl() {
@@ -137,6 +192,143 @@ function getPriorityColor(priority: string): string {
   return '#6b778c';
 }
 
+function buildJiraTicketLinkHtml(ticket: JiraTicketDetail): string {
+  return `<a href="${escapeHtml(ticket.url)}">${escapeHtml(ticket.key)}</a>`;
+}
+
+function buildJiraTicketSummaryHtml(ticket: JiraTicketDetail): string {
+  return `${buildJiraTicketLinkHtml(ticket)} ${escapeHtml(ticket.summary)}`;
+}
+
+function buildJiraTicketLinkText(ticket: JiraTicketDetail): string {
+  return `${ticket.key} (${ticket.url})`;
+}
+
+function buildJiraTicketSummaryText(ticket: JiraTicketDetail): string {
+  return `${ticket.key} ${ticket.summary} (${ticket.url})`;
+}
+
+function getCopyIconSvg(): string {
+  return `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+  `;
+}
+
+function getSuccessIconSvg(): string {
+  return `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5"></path>
+    </svg>
+  `;
+}
+
+function getErrorIconSvg(): string {
+  return `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="m15 9-6 6"></path>
+      <path d="m9 9 6 6"></path>
+    </svg>
+  `;
+}
+
+async function copyRichTextToClipboard(html: string, text: string): Promise<void> {
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    const item = new ClipboardItem({
+      'text/html': new Blob([html], { type: 'text/html' }),
+      'text/plain': new Blob([text], { type: 'text/plain' })
+    });
+    await navigator.clipboard.write([item]);
+    return;
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    throw new Error('Clipboard API unavailable');
+  }
+
+  await navigator.clipboard.writeText(text);
+}
+
+function setCopyButtonVisualState(button: HTMLButtonElement, status: 'idle' | 'success' | 'error') {
+  const defaultLabel = button.dataset.defaultLabel || button.getAttribute('aria-label') || '';
+  button.dataset.defaultLabel = defaultLabel;
+
+  button.classList.remove('is-success', 'is-error');
+
+  if (status === 'success') {
+    button.classList.add('is-success');
+    button.innerHTML = getSuccessIconSvg();
+    button.setAttribute('aria-label', `${defaultLabel} 已复制`);
+    button.title = `${defaultLabel} 已复制`;
+    return;
+  }
+
+  if (status === 'error') {
+    button.classList.add('is-error');
+    button.innerHTML = getErrorIconSvg();
+    button.setAttribute('aria-label', `${defaultLabel} 失败`);
+    button.title = `${defaultLabel} 失败`;
+    return;
+  }
+
+  button.innerHTML = getCopyIconSvg();
+  button.setAttribute('aria-label', defaultLabel);
+  button.title = defaultLabel;
+}
+
+function flashCopyButtonState(button: HTMLButtonElement, status: 'success' | 'error') {
+  setCopyButtonVisualState(button, status);
+
+  const existingTimer = copyButtonResetTimers.get(button);
+  if (existingTimer) {
+    window.clearTimeout(existingTimer);
+  }
+
+  const timer = window.setTimeout(() => {
+    setCopyButtonVisualState(button, 'idle');
+    copyButtonResetTimers.delete(button);
+  }, 1500);
+
+  copyButtonResetTimers.set(button, timer);
+}
+
+function bindJiraCardCopyActions(card: HTMLElement, ticket: JiraTicketDetail) {
+  const copyActions: Record<string, { html: string; text: string }> = {
+    link: {
+      html: buildJiraTicketLinkHtml(ticket),
+      text: buildJiraTicketLinkText(ticket)
+    },
+    summary: {
+      html: buildJiraTicketSummaryHtml(ticket),
+      text: buildJiraTicketSummaryText(ticket)
+    }
+  };
+
+  card.querySelectorAll<HTMLButtonElement>('.jira-card-copy-icon-btn').forEach(button => {
+    setCopyButtonVisualState(button, 'idle');
+
+    button.addEventListener('click', async event => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const action = button.dataset.copyAction;
+      if (!action || !copyActions[action]) return;
+
+      try {
+        const payload = copyActions[action];
+        await copyRichTextToClipboard(payload.html, payload.text);
+        flashCopyButtonState(button, 'success');
+      } catch (error) {
+        console.error('复制 Jira ticket 内容失败:', error);
+        flashCopyButtonState(button, 'error');
+      }
+    });
+  });
+}
+
 // 创建悬浮卡片
 function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): HTMLElement {
   const card = document.createElement('div');
@@ -152,6 +344,9 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
       <div class="jira-card-key-row">
         <span class="jira-card-type" title="${ticket.issuetype}">${getIssueTypeIcon(ticket.issuetype)}</span>
         <span class="jira-card-key-text">${ticket.key}</span>
+        <button type="button" class="jira-card-copy-icon-btn" data-copy-action="link" aria-label="复制带链接 ID" title="复制带链接 ID">
+          ${getCopyIconSvg()}
+        </button>
         <span class="jira-card-status" style="background: ${statusColors.bg}; color: ${statusColors.text};">${ticket.status}</span>
         <a href="${ticket.url}" target="_blank" class="jira-card-open-icon" title="在 JIRA 中打开">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -161,7 +356,12 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
           </svg>
         </a>
       </div>
-      <div class="jira-card-summary" title="${escapeHtml(ticket.summary)}">${escapeHtml(ticket.summary)}</div>
+      <div class="jira-card-summary-row">
+        <div class="jira-card-summary" title="${escapeHtml(ticket.summary)}">${escapeHtml(ticket.summary)}</div>
+        <button type="button" class="jira-card-copy-icon-btn jira-card-copy-icon-btn-summary" data-copy-action="summary" aria-label="复制 Ticket Summary" title="复制 Ticket Summary">
+          ${getCopyIconSvg()}
+        </button>
+      </div>
     </div>
     
     <div class="jira-card-body">
@@ -226,6 +426,7 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
   
   // 定位卡片（先添加到 DOM 再定位）
   document.body.appendChild(card);
+  bindJiraCardCopyActions(card, ticket);
   positionCardFixed(card, triggerElement);
   
   // 添加鼠标事件
@@ -530,6 +731,8 @@ function injectJiraCardStyles() {
     }
     
     .jira-card-summary {
+      flex: 1;
+      min-width: 0;
       font-size: 14px;
       font-weight: 500;
       color: #172b4d;
@@ -539,6 +742,12 @@ function injectJiraCardStyles() {
       display: -webkit-box;
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
+    }
+
+    .jira-card-summary-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
     }
     
     .jira-card-body {
@@ -622,6 +831,42 @@ function injectJiraCardStyles() {
       border-radius: 3px;
       font-size: 11px;
       color: #0747a6;
+    }
+
+    
+    .jira-card-copy-icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #6b778c;
+      padding: 0;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .jira-card-copy-icon-btn:hover {
+      background: #ebecf0;
+      color: #0052cc;
+    }
+
+    .jira-card-copy-icon-btn.is-success {
+      background: #e3fcef;
+      color: #006644;
+    }
+
+    .jira-card-copy-icon-btn.is-error {
+      background: #ffebe6;
+      color: #bf2600;
+    }
+
+    .jira-card-copy-icon-btn-summary {
+      margin-top: 1px;
     }
     
     .jira-card-footer {
@@ -798,6 +1043,488 @@ function initJiraLinkProcessor() {
   });
 }
 
+// =====================================================
+// Glip 群组链接 Popout 功能
+// =====================================================
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getGlipBadgeIconUrl(): string {
+  return chrome.runtime.getURL('icons/icon48.png');
+}
+
+function buildGlipGroupUrl(groupId: string): string {
+  return new URL(`/messages/${groupId}`, window.location.origin).toString();
+}
+
+function getGlipPopoutIconSvg(): string {
+  return `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M14 5h5v5"></path>
+      <path d="M10 14L19 5"></path>
+      <path d="M19 14v5h-5"></path>
+      <path d="M5 10V5h5"></path>
+    </svg>
+  `;
+}
+
+function injectGlipLinkStyles() {
+  if (document.getElementById('pai-glip-link-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'pai-glip-link-styles';
+  style.textContent = `
+    .pai-glip-link-wrapper {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 100%;
+      vertical-align: middle;
+    }
+
+    .pai-glip-link-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    .pai-glip-link-icon {
+      width: 14px;
+      height: 14px;
+      display: block;
+      border-radius: 3px;
+    }
+
+    .pai-glip-link-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #b42318;
+      cursor: pointer;
+      opacity: 0.85;
+      transition: background 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .pai-glip-link-button:hover {
+      opacity: 1;
+      background: rgba(217, 45, 32, 0.12);
+      transform: translateY(-1px);
+    }
+
+    .pai-glip-link-button:disabled {
+      cursor: wait;
+      opacity: 0.55;
+      transform: none;
+    }
+
+    .pai-glip-link-button svg,
+    .pai-glip-link-badge svg {
+      display: block;
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
+function isGlipLinkContext(element: HTMLElement): boolean {
+  return Boolean(element.closest('.conversation-card-wrapper[data-id]'));
+}
+
+function isExcludedGlipLinkElement(element: HTMLElement): boolean {
+  if (!isGlipLinkContext(element)) {
+    return true;
+  }
+
+  if (element.closest('.pai-glip-link-wrapper')) {
+    return true;
+  }
+
+  return Boolean(
+    element.closest(
+      [
+        '.jira-ticket-hover-card',
+        '[data-jira-card="true"]',
+        '#radar-poc-container',
+        '[contenteditable="true"]',
+        'textarea',
+        'input',
+        '[role="textbox"]',
+        '.message-editor'
+      ].join(', ')
+    )
+  );
+}
+
+function parseGlipMessageUrl(rawUrl: string): GlipLinkTarget | null {
+  try {
+    const parsed = new URL(rawUrl, window.location.origin);
+    if (parsed.hostname !== 'app.ringcentral.com') {
+      return null;
+    }
+
+    const match = parsed.pathname.match(/^\/(?:l\/)?messages\/(\d+)(?:\/(\d+))?\/?$/);
+    if (!match) {
+      return null;
+    }
+
+    const [, groupId, postId] = match;
+    const label = parsed.pathname.includes('/l/messages/') || postId
+      ? '查看原消息'
+      : groupId;
+
+    return {
+      kind: postId ? 'message' : 'group',
+      groupId,
+      postId,
+      url: parsed.toString(),
+      label
+    };
+  } catch (error) {
+    console.warn('解析 Glip 链接失败:', rawUrl, error);
+    return null;
+  }
+}
+
+function parseGlipAnchorTarget(anchor: HTMLAnchorElement): GlipLinkTarget | null {
+  const target = parseGlipMessageUrl(anchor.href);
+  if (!target) {
+    return null;
+  }
+
+  const label = anchor.textContent?.trim();
+  if (label) {
+    target.label = label;
+  }
+
+  return target;
+}
+
+function parseGlipMentionTarget(mention: HTMLSpanElement): GlipLinkTarget | null {
+  const groupId = mention.dataset.id?.trim();
+  if (!groupId || !/^\d+$/.test(groupId)) {
+    return null;
+  }
+
+  const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(groupId)
+    : groupId;
+  const personSelectors = [
+    `[data-uid="GLIP_PERSON.${escapedId}"]`,
+    `[data-cid="GLIP_PERSON.${escapedId}"]`,
+    `[data-test-automation-value="GLIP_PERSON.${escapedId}"]`
+  ];
+
+  if (personSelectors.some(selector => Boolean(document.querySelector(selector)))) {
+    return null;
+  }
+
+  const mentionText = mention.textContent?.trim() || '';
+  const hasSidebarConversation = Boolean(document.querySelector(`[data-group-id="${escapedId}"]`));
+  const groupEmojiSignals = ['❤️', '💛', '💚', '💙', '💜', '🧡', '🖤', '🤍', '🤎'];
+  const hasGroupSignal = hasSidebarConversation
+    || /^team:/i.test(mentionText)
+    || mentionText.includes(',')
+    || groupEmojiSignals.some(signal => mentionText.includes(signal));
+
+  if (!hasGroupSignal) {
+    return null;
+  }
+
+  return {
+    kind: 'group',
+    groupId,
+    url: buildGlipGroupUrl(groupId),
+    label: mentionText || groupId
+  };
+}
+
+async function waitForCondition(
+  check: () => boolean,
+  timeout = 5000,
+  interval = 80
+): Promise<void> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeout) {
+    if (check()) {
+      return;
+    }
+    await delay(interval);
+  }
+
+  throw new Error('glip_native_popout_condition_timeout');
+}
+
+function createGlipNativePopoutRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `glip-popout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isGlipNativePopoutBridgeReady(): boolean {
+  return document.documentElement.getAttribute(GLIP_NATIVE_POPOUT_BRIDGE_ATTR) === 'ready';
+}
+
+function attachGlipNativePopoutBridgeListener() {
+  if (glipNativePopoutBridgeListenerAttached) {
+    return;
+  }
+
+  window.addEventListener('message', (event: MessageEvent) => {
+    if (event.source !== window) {
+      return;
+    }
+
+    const message = event.data as GlipNativePopoutResponseMessage | GlipNativePopoutReadyMessage | undefined;
+    if (
+      !message ||
+      message.source !== GLIP_NATIVE_POPOUT_BRIDGE_SOURCE ||
+      message.target !== 'content-script'
+    ) {
+      return;
+    }
+
+    if (message.type === GLIP_NATIVE_POPOUT_READY) {
+      document.documentElement.setAttribute(GLIP_NATIVE_POPOUT_BRIDGE_ATTR, 'ready');
+      return;
+    }
+
+    if (message.type !== GLIP_NATIVE_POPOUT_RESPONSE) {
+      return;
+    }
+
+    const pendingRequest = pendingGlipNativePopoutRequests.get(message.requestId);
+    if (!pendingRequest) {
+      return;
+    }
+
+    pendingGlipNativePopoutRequests.delete(message.requestId);
+    window.clearTimeout(pendingRequest.timeoutId);
+
+    if (message.success) {
+      pendingRequest.resolve();
+      return;
+    }
+
+    pendingRequest.reject(new Error(message.error || 'glip_native_popout_failed'));
+  });
+
+  glipNativePopoutBridgeListenerAttached = true;
+}
+
+async function ensureGlipNativePopoutBridge(): Promise<void> {
+  attachGlipNativePopoutBridgeListener();
+
+  if (isGlipNativePopoutBridgeReady()) {
+    return;
+  }
+
+  let script = document.getElementById(GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID) as HTMLScriptElement | null;
+  if (!script) {
+    script = document.createElement('script');
+    script.id = GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID;
+    script.src = chrome.runtime.getURL('glipNativePopoutPage.js');
+    script.async = false;
+
+    await new Promise<void>((resolve, reject) => {
+      script!.addEventListener('load', () => resolve(), { once: true });
+      script!.addEventListener('error', () => reject(new Error('glip_native_popout_script_load_failed')), {
+        once: true
+      });
+      (document.head || document.documentElement).appendChild(script!);
+    });
+  }
+
+  if (isGlipNativePopoutBridgeReady()) {
+    return;
+  }
+
+  await waitForCondition(() => isGlipNativePopoutBridgeReady(), 5000, 60);
+}
+
+async function requestGlipNativeGroupPopout(
+  groupId: string,
+  popOutConversationFirstLevel = false
+): Promise<void> {
+  await ensureGlipNativePopoutBridge();
+
+  const requestId = createGlipNativePopoutRequestId();
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      pendingGlipNativePopoutRequests.delete(requestId);
+      reject(new Error('glip_native_popout_timeout'));
+    }, GLIP_NATIVE_POPOUT_REQUEST_TIMEOUT_MS);
+
+    pendingGlipNativePopoutRequests.set(requestId, {
+      resolve,
+      reject,
+      timeoutId
+    });
+
+    const message: GlipNativePopoutRequestMessage = {
+      source: GLIP_NATIVE_POPOUT_BRIDGE_SOURCE,
+      target: 'page',
+      type: GLIP_NATIVE_POPOUT_REQUEST,
+      requestId,
+      payload: {
+        groupId,
+        popOutConversationFirstLevel
+      }
+    };
+
+    window.postMessage(message, window.location.origin);
+  });
+}
+
+async function openGlipPopupWindow(url: string): Promise<void> {
+  const response = await chrome.runtime.sendMessage({
+    type: 'OPEN_GLIP_POPUP_WINDOW',
+    data: {
+      url,
+      width: GLIP_POPUP_DEFAULT_WIDTH,
+      height: GLIP_POPUP_DEFAULT_HEIGHT
+    }
+  });
+
+  if (!response?.success) {
+    throw new Error(response?.error || 'open_glip_popup_failed');
+  }
+}
+
+async function handleGlipPopout(target: GlipLinkTarget): Promise<void> {
+  if (target.kind === 'message') {
+    await openGlipPopupWindow(target.url);
+    return;
+  }
+
+  await requestGlipNativeGroupPopout(target.groupId);
+}
+
+function processGlipLink(targetElement: HTMLElement, target: GlipLinkTarget) {
+  if (processedGlipLinks.has(targetElement) || isExcludedGlipLinkElement(targetElement)) {
+    return;
+  }
+
+  processedGlipLinks.add(targetElement);
+
+  const wrapper = document.createElement('span');
+  wrapper.className = 'pai-glip-link-wrapper';
+  wrapper.setAttribute('data-pai-glip-link', target.kind);
+
+  const badge = document.createElement('span');
+  badge.className = 'pai-glip-link-badge';
+  badge.title = 'Personal AI';
+  const badgeIcon = document.createElement('img');
+  badgeIcon.src = getGlipBadgeIconUrl();
+  badgeIcon.alt = 'Personal AI';
+  badgeIcon.className = 'pai-glip-link-icon';
+  badge.appendChild(badgeIcon);
+
+  const popoutButton = document.createElement('button');
+  popoutButton.type = 'button';
+  popoutButton.className = 'pai-glip-link-button';
+  popoutButton.title = `Pop out ${target.label}`;
+  popoutButton.setAttribute('aria-label', `Pop out ${target.label}`);
+  popoutButton.innerHTML = getGlipPopoutIconSvg();
+  popoutButton.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (popoutButton.disabled) {
+      return;
+    }
+
+    popoutButton.disabled = true;
+
+    try {
+      await handleGlipPopout(target);
+    } catch (error) {
+      console.error('Glip Popout 失败:', target, error);
+    } finally {
+      window.setTimeout(() => {
+        popoutButton.disabled = false;
+      }, 300);
+    }
+  });
+
+  targetElement.parentNode?.insertBefore(wrapper, targetElement);
+  wrapper.appendChild(badge);
+  wrapper.appendChild(targetElement);
+  wrapper.appendChild(popoutButton);
+}
+
+function scanAndProcessGlipLinks(container?: Element) {
+  const root = container || document.body;
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const selector = 'span[role="link"][data-id], a[href*="/messages/"], a[href*="/l/messages/"]';
+  const candidates = new Set<HTMLElement>();
+
+  if (root.matches(selector)) {
+    candidates.add(root as HTMLElement);
+  }
+
+  root.querySelectorAll<HTMLElement>(selector).forEach(element => {
+    candidates.add(element);
+  });
+
+  candidates.forEach(element => {
+    if (element instanceof HTMLAnchorElement) {
+      const target = parseGlipAnchorTarget(element);
+      if (target) {
+        processGlipLink(element, target);
+      }
+      return;
+    }
+
+    if (element instanceof HTMLSpanElement) {
+      const target = parseGlipMentionTarget(element);
+      if (target) {
+        processGlipLink(element, target);
+      }
+    }
+  });
+}
+
+function initGlipLinkProcessor() {
+  injectGlipLinkStyles();
+  void ensureGlipNativePopoutBridge().catch(error => {
+    console.warn('预热 Glip Native Popout Bridge 失败:', error);
+  });
+  scanAndProcessGlipLinks();
+
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach(mutation => {
+      mutation.addedNodes.forEach(node => {
+        if (node instanceof Element) {
+          scanAndProcessGlipLinks(node);
+        }
+      });
+    });
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
 // 获取消息交互功能配置
 async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
   try {
@@ -834,11 +1561,13 @@ async function setupMessageReaction() {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(initJiraLinkProcessor, 1000);
+    setTimeout(initGlipLinkProcessor, 1200);
     setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
     setTimeout(initFollowThreadVisuals, 2000);  // 初始化关注后续视觉标识
   });
 } else {
   setTimeout(initJiraLinkProcessor, 1000);
+  setTimeout(initGlipLinkProcessor, 1200);
   setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
   setTimeout(initFollowThreadVisuals, 2000);  // 初始化关注后续视觉标识
 }

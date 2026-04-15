@@ -1,7 +1,20 @@
 // ============ Core Domain Types ============
 
-export type EntityType = 'Person' | 'Project' | 'Task' | 'Organization' | 'Document' | 'Technology' | 'Topic';
-export type SourceType = 'glip' | 'jira' | 'web' | 'manual' | 'system';
+export type EntityType =
+  | 'Person'
+  | 'Project'
+  | 'Task'
+  | 'Organization'
+  | 'Document'
+  | 'Technology'
+  | 'Topic';
+export type SourceType =
+  | 'glip'
+  | 'jira'
+  | 'web'
+  | 'manual'
+  | 'system'
+  | 'meeting';
 export type RecallSourceType =
   | SourceType
   | 'daily_log'
@@ -11,17 +24,51 @@ export type RecallSourceType =
   | 'entity_profile'
   | 'markdown'
   | 'user_core';
-export type ConsolidationLevel = 'temporary' | 'working' | 'consolidated' | 'core';
-export type ActionState = 'pending' | 'approved' | 'executed' | 'dismissed' | 'expired';
+export type ConsolidationLevel =
+  | 'temporary'
+  | 'working'
+  | 'consolidated'
+  | 'core';
+export type ActionState =
+  | 'pending'
+  | 'approved'
+  | 'executed'
+  | 'dismissed'
+  | 'expired';
 export type ConfirmState = 'pending' | 'answered' | 'snoozed' | 'expired';
-export type AuthorityLevel = 'official' | 'team_lead' | 'peer' | 'self' | 'inferred';
+export type AuthorityLevel =
+  | 'official'
+  | 'team_lead'
+  | 'peer'
+  | 'self'
+  | 'inferred';
 export type PropertyAction = 'set' | 'update' | 'retract' | 'confirm';
 export type EntityStatus = 'active' | 'archived' | 'merged';
-export type ProfileItemType = 'fact' | 'preference' | 'habit' | 'interest' | 'constraint';
+export type ProfileItemType =
+  | 'fact'
+  | 'preference'
+  | 'habit'
+  | 'interest'
+  | 'constraint';
 export type ProfileSourceKind = 'explicit' | 'inferred' | 'system';
-export type ProfileItemStatus = 'active' | 'superseded' | 'retracted' | 'archived';
-export type SocialRelationType = 'colleague' | 'manager' | 'report' | 'friend' | 'client' | 'vendor';
-export type OpinionDimension = 'trust' | 'like' | 'collaboration' | 'competence' | 'risk';
+export type ProfileItemStatus =
+  | 'active'
+  | 'superseded'
+  | 'retracted'
+  | 'archived';
+export type SocialRelationType =
+  | 'colleague'
+  | 'manager'
+  | 'report'
+  | 'friend'
+  | 'client'
+  | 'vendor';
+export type OpinionDimension =
+  | 'trust'
+  | 'like'
+  | 'collaboration'
+  | 'competence'
+  | 'risk';
 export type OpinionStatus = 'pending_confirm' | 'active' | 'retracted';
 export type AgentProfileKind = 'identity' | 'soul' | 'policy';
 
@@ -100,6 +147,61 @@ export interface MessageRaw {
   metadata?: Record<string, any>;
   createdAt: number;
   updatedAt?: number;
+}
+
+export interface MeetingRecord {
+  meetingId: string;
+  title: string;
+  date: number;
+  lastEventAt: number;
+  participants: string[];
+  pdfUrl?: string;
+  digestId?: string;
+  summary?: string;
+  topicCount?: number;
+  actionItemCount?: number;
+  decisionCount?: number;
+}
+
+export interface MeetingRecordDetail extends MeetingRecord {
+  summary?: string;
+  latestObservationText?: string;
+  actionItems?: Array<{
+    id: string;
+    title: string;
+    owner: string;
+    deadline?: string;
+    status: 'pending' | 'done';
+  }>;
+  decisions?: Array<{
+    id: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  chapters?: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    startLabel?: string;
+    actionCount?: number;
+    decisionCount?: number;
+  }>;
+  timelineEvents?: Array<{
+    id: string;
+    type: 'topic' | 'decision' | 'action' | 'mention' | 'screen';
+    title: string;
+    description: string;
+    timestamp?: string;
+    speaker?: string;
+    chapterId?: string;
+  }>;
+  participantStances?: Array<{
+    participant: string;
+    topic: string;
+    stance: '主导' | '支持' | '中立' | '质疑' | '反对';
+    keyQuote: string;
+    timeRange?: string;
+  }>;
 }
 
 export interface Chunk {
@@ -338,8 +440,8 @@ export interface IngestResult {
 
 export interface RecallQuery {
   query: string;
-  topK?: number;           // default 10
-  channels?: ('vector' | 'fts' | 'graph' | 'time')[];  // default all
+  topK?: number; // default 10
+  channels?: ('vector' | 'fts' | 'graph' | 'time')[]; // default all
   timeRange?: { start?: number; end?: number };
   entityTypes?: EntityType[];
   projectFilter?: string;
@@ -349,6 +451,8 @@ export interface RecallQuery {
   groupFilter?: string[];
   minImportance?: number;
   sourceTypes?: RecallSourceType[];
+  presentationHint?: 'default' | 'compact' | 'meeting_pilot';
+  previewMaxLength?: number;
 }
 
 export interface RecallResult {
@@ -362,8 +466,13 @@ export interface RecallItem {
   id: string;
   type: 'message' | 'chunk' | 'entity';
   content: string;
+  displayTitle?: string;
+  displayText?: string;
+  previewText?: string;
   score: number;
   source?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
   entity?: Entity;
@@ -388,7 +497,10 @@ export interface HealthResponse {
 // ============ Multi-User / Fastify Extensions ============
 
 import 'fastify';
-import type { UserContext, UserContextManager } from '../core/UserContextManager.js';
+import type {
+  UserContext,
+  UserContextManager,
+} from '../core/UserContextManager.js';
 
 declare module 'fastify' {
   interface FastifyInstance {

@@ -271,7 +271,10 @@ function parseStructuredAnswer(raw: string): {
 
     if (Array.isArray(parsed.timeline)) {
       const timeline = parsed.timeline
-        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
         .map((item) => ({
           date: String(item.date ?? ''),
           event: String(item.event ?? ''),
@@ -281,38 +284,52 @@ function parseStructuredAnswer(raw: string): {
     }
 
     if (Array.isArray(parsed.keyFindings)) {
-      const keyFindings = parsed.keyFindings.map((item) => String(item)).filter(Boolean);
+      const keyFindings = parsed.keyFindings
+        .map((item) => String(item))
+        .filter(Boolean);
       if (keyFindings.length > 0) structuredAnswer.keyFindings = keyFindings;
     }
 
     if (Array.isArray(parsed.insights)) {
-      const insights = parsed.insights.map((item) => String(item)).filter(Boolean);
+      const insights = parsed.insights
+        .map((item) => String(item))
+        .filter(Boolean);
       if (insights.length > 0) structuredAnswer.insights = insights;
     }
 
     if (Array.isArray(parsed.relatedEntities)) {
       const relatedEntities = parsed.relatedEntities
-        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
         .map((item) => ({
           name: String(item.name ?? ''),
           type: String(item.type ?? ''),
           relevance: String(item.relevance ?? ''),
         }))
         .filter((item) => item.name && item.type && item.relevance);
-      if (relatedEntities.length > 0) structuredAnswer.relatedEntities = relatedEntities;
+      if (relatedEntities.length > 0)
+        structuredAnswer.relatedEntities = relatedEntities;
     }
 
-    if (typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1) {
+    if (
+      typeof parsed.confidence === 'number' &&
+      parsed.confidence >= 0 &&
+      parsed.confidence <= 1
+    ) {
       structuredAnswer.confidence = parsed.confidence;
     }
 
-    const answer = typeof parsed.answer === 'string' && parsed.answer.trim()
-      ? parsed.answer.trim()
-      : raw;
+    const answer =
+      typeof parsed.answer === 'string' && parsed.answer.trim()
+        ? parsed.answer.trim()
+        : raw;
 
     return {
       answer,
-      structuredAnswer: Object.keys(structuredAnswer).length > 0 ? structuredAnswer : undefined,
+      structuredAnswer:
+        Object.keys(structuredAnswer).length > 0 ? structuredAnswer : undefined,
     };
   } catch {
     return { answer: raw };
@@ -332,7 +349,9 @@ function buildAugmentedSystemPrompt(
   if (userCore) enhancedPrompt += '\n\n--- User Context ---\n' + userCore;
   const preferences = loadUserPreferences(db);
   if (preferences) {
-    enhancedPrompt += '\n\n--- User Preferences (apply these silently when relevant) ---\n' + preferences;
+    enhancedPrompt +=
+      '\n\n--- User Preferences (apply these silently when relevant) ---\n' +
+      preferences;
   }
   return enhancedPrompt;
 }
@@ -375,7 +394,11 @@ async function recallForAsk(
   const recallEngine = new RecallEngine(db);
   const recallResult = await recallEngine.recall({
     query: recallQueryText,
-    topK: parsedIntent.intent === 'profile' || Object.keys(parsedIntent.filters).length > 0 ? 15 : 10,
+    topK:
+      parsedIntent.intent === 'profile' ||
+      Object.keys(parsedIntent.filters).length > 0
+        ? 15
+        : 10,
     includeMetadata: Boolean(includeEvidence),
     timeRange: parsedIntent.filters.timeRange,
     projectFilter: parsedIntent.filters.projectNames?.[0],
@@ -417,14 +440,17 @@ function buildAskEvidenceItems(items: RecallItem[]) {
   return items.map((item) => ({
     sourceKind: item.type,
     sourceId: item.id,
-    title: item.source ?? item.type,
+    title: item.sourceTitle ?? item.source ?? item.type,
+    url: item.sourceUrl,
     content: item.content,
     createdAt: item.timestamp,
     metadata: item.metadata,
   }));
 }
 
-function formatExternalEvidenceContext(externalEvidence: CandidateArtifact[]): string {
+function formatExternalEvidenceContext(
+  externalEvidence: CandidateArtifact[],
+): string {
   if (externalEvidence.length === 0) return '';
   return externalEvidence
     .map((artifact, index) => {
@@ -441,14 +467,19 @@ function formatExternalEvidenceContext(externalEvidence: CandidateArtifact[]): s
 function normalizeArtifactArray(value: unknown): CandidateArtifact[] {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === 'object',
+    )
     .map((item) => ({
       kind: typeof item.kind === 'string' ? item.kind : 'note',
       title: typeof item.title === 'string' ? item.title : undefined,
       url: typeof item.url === 'string' ? item.url : undefined,
       content: typeof item.content === 'string' ? item.content : undefined,
       metadata:
-        item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+        item.metadata &&
+        typeof item.metadata === 'object' &&
+        !Array.isArray(item.metadata)
           ? (item.metadata as Record<string, unknown>)
           : undefined,
     }));
@@ -482,7 +513,7 @@ async function executeAskResolutionAction(
       await reportStatus(
         plan.directFindings.length > 0
           ? '已提取本地结论，正在调用外部工具补充细节...'
-          : '正在调用外部工具查证...'
+          : '正在调用外部工具查证...',
       );
     } else if (plan.recommendedAction === 'create_confirm_request') {
       await reportStatus('本地信息不足，正在创建待确认事项...');
@@ -494,7 +525,9 @@ async function executeAskResolutionAction(
   const repo = new ActionRepository(db);
   const executor = new ActionExecutor(db, userDataManager ?? undefined, userId);
   const baseParams =
-    plan.actionParams && typeof plan.actionParams === 'object' && !Array.isArray(plan.actionParams)
+    plan.actionParams &&
+    typeof plan.actionParams === 'object' &&
+    !Array.isArray(plan.actionParams)
       ? { ...plan.actionParams }
       : {};
   const action = repo.create({
@@ -507,7 +540,9 @@ async function executeAskResolutionAction(
     params: {
       ...baseParams,
       metadata: {
-        ...(baseParams.metadata && typeof baseParams.metadata === 'object' && !Array.isArray(baseParams.metadata)
+        ...(baseParams.metadata &&
+        typeof baseParams.metadata === 'object' &&
+        !Array.isArray(baseParams.metadata)
           ? (baseParams.metadata as Record<string, unknown>)
           : {}),
         askRequestId: requestId,
@@ -515,11 +550,13 @@ async function executeAskResolutionAction(
       },
     },
     executionMode:
-      plan.recommendedAction === 'delegate_openclaw' && baseParams.mode === 'write'
+      plan.recommendedAction === 'delegate_openclaw' &&
+      baseParams.mode === 'write'
         ? 'manual'
         : 'auto',
     requiresApproval:
-      plan.recommendedAction === 'delegate_openclaw' && baseParams.mode === 'write',
+      plan.recommendedAction === 'delegate_openclaw' &&
+      baseParams.mode === 'write',
     queueStatus: 'queued',
     priority: plan.recommendedAction === 'create_confirm_request' ? 8 : 6,
     confidence: plan.confidence,
@@ -529,7 +566,8 @@ async function executeAskResolutionAction(
 
   const shouldExecuteSync =
     action.executionMode === 'auto' &&
-    (plan.recommendedAction === 'delegate_openclaw' || plan.recommendedAction === 'create_confirm_request');
+    (plan.recommendedAction === 'delegate_openclaw' ||
+      plan.recommendedAction === 'create_confirm_request');
   if (!shouldExecuteSync) {
     return {
       followUpActions: [
@@ -554,7 +592,10 @@ async function executeAskResolutionAction(
   const result = await executor.executeAction(action.id);
   const updatedPrimary = repo.getById(action.id);
   const followUpActionIds = Array.isArray(result.result?.followUpActionIds)
-    ? result.result?.followUpActionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    ? result.result?.followUpActionIds.filter(
+        (value): value is string =>
+          typeof value === 'string' && value.trim().length > 0,
+      )
     : [];
   const actionRecords = [
     updatedPrimary,
@@ -578,7 +619,8 @@ async function executeAskResolutionAction(
         ? 'complete'
         : 'partial'
       : plan.resolutionState;
-  const missingInfo = externalEvidence.length > 0 ? [] : [...plan.remainingQuestions];
+  const missingInfo =
+    externalEvidence.length > 0 ? [] : [...plan.remainingQuestions];
 
   return {
     followUpActions,
@@ -621,7 +663,9 @@ async function prepareAskContext(
     initialPlan,
     reportStatus,
   );
-  const externalContext = formatExternalEvidenceContext(actionOutcome.externalEvidence);
+  const externalContext = formatExternalEvidenceContext(
+    actionOutcome.externalEvidence,
+  );
   const combinedMemoryContext = externalContext
     ? `${memoryContext}\n\nExternal evidence:\n${externalContext}`
     : memoryContext;
@@ -638,7 +682,13 @@ async function prepareAskContext(
 }
 
 function writeSseEvent(
-  reply: { raw: NodeJS.WritableStream & { writeHead?: Function; flushHeaders?: Function; end: Function } },
+  reply: {
+    raw: NodeJS.WritableStream & {
+      writeHead?: Function;
+      flushHeaders?: Function;
+      end: Function;
+    };
+  },
   event: string,
   payload: Record<string, unknown>,
 ) {
@@ -654,9 +704,7 @@ function writeSseEvent(
 // Route plugin
 // ---------------------------------------------------------------------------
 
-export async function askRoutes(
-  app: FastifyInstance,
-): Promise<void> {
+export async function askRoutes(app: FastifyInstance): Promise<void> {
   const config = getConfig();
   const llmClient = new LLMClient(config);
 
@@ -680,6 +728,8 @@ export async function askRoutes(
                     content: { type: 'string' },
                     score: { type: 'number' },
                     source: { type: 'string' },
+                    sourceUrl: { type: 'string' },
+                    sourceTitle: { type: 'string' },
                     timestamp: { type: 'number' },
                     metadata: { type: 'object', additionalProperties: true },
                   },
@@ -787,7 +837,12 @@ export async function askRoutes(
           intentContext,
           'Return JSON only. Required key: "answer". Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence". Do not wrap the JSON in prose.',
         );
-        const systemPrompt = buildAugmentedSystemPrompt(db, profileManager, userDataManager, SYSTEM_PROMPT);
+        const systemPrompt = buildAugmentedSystemPrompt(
+          db,
+          profileManager,
+          userDataManager,
+          SYSTEM_PROMPT,
+        );
 
         const llmResponse = await llmClient.generate(fullPrompt, {
           systemPrompt,
@@ -832,7 +887,8 @@ export async function askRoutes(
 
         const queryTimeMs = Date.now() - startMs;
         return reply.status(500).send({
-          answer: 'Sorry, I was unable to process your question. Please try again later.',
+          answer:
+            'Sorry, I was unable to process your question. Please try again later.',
           queryTimeMs,
           error: (err as Error).message,
         });
@@ -916,7 +972,9 @@ export async function askRoutes(
           },
         );
 
-        const finalAnswer = (answerResponse.content || streamedAnswer).trim() || streamedAnswer.trim();
+        const finalAnswer =
+          (answerResponse.content || streamedAnswer).trim() ||
+          streamedAnswer.trim();
         writeSseEvent(reply, 'answer_done', { answer: finalAnswer });
 
         let structuredAnswer: StructuredAskAnswer | undefined;
@@ -935,12 +993,17 @@ export async function askRoutes(
               `Existing answer draft:\n${finalAnswer}`,
             ].join('\n'),
           );
-          const enrichmentResponse = await llmClient.generate(enrichmentPrompt, {
-            systemPrompt: enrichmentSystemPrompt,
-            temperature: 0.2,
-            maxTokens: 1200,
-          });
-          structuredAnswer = parseStructuredAnswer(enrichmentResponse.content).structuredAnswer;
+          const enrichmentResponse = await llmClient.generate(
+            enrichmentPrompt,
+            {
+              systemPrompt: enrichmentSystemPrompt,
+              temperature: 0.2,
+              maxTokens: 1200,
+            },
+          );
+          structuredAnswer = parseStructuredAnswer(
+            enrichmentResponse.content,
+          ).structuredAnswer;
         } catch (error) {
           request.log.warn(error, 'Ask stream enrichment failed');
         }
@@ -962,7 +1025,11 @@ export async function askRoutes(
           result.externalEvidence = actionOutcome.externalEvidence;
         }
 
-        writeSseEvent(reply, 'result', result as unknown as Record<string, unknown>);
+        writeSseEvent(
+          reply,
+          'result',
+          result as unknown as Record<string, unknown>,
+        );
         reply.raw.end();
 
         const usedItemIds = recalledItems.slice(0, 5).map((item) => item.id);

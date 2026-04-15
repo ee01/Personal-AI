@@ -1,0 +1,3 @@
+"webpage-mcp" True
+"webpage-mcp@latest" True
+"webpage-mcp-stdio" True

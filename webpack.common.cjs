@@ -9,9 +9,17 @@ const NodeProtocolResolverPlugin = require('./node-protocol-resolver.cjs');
 
 // 处理 manifest 模板
 const processManifestTemplate = (env) => {
-  const manifestTemplate = fs.readFileSync(path.resolve(__dirname, 'src/manifest.json'), 'utf8');
-  const manifestContent = manifestTemplate.replace('{{GOOGLE_CLIENT_ID}}', env.GOOGLE_CLIENT_ID).replaceAll('{{ICON_NAME}}', env.ICON_NAME || 'icon');
-  fs.writeFileSync(path.resolve(__dirname, 'static/manifest.json'), manifestContent);
+  const manifestTemplate = fs.readFileSync(
+    path.resolve(__dirname, 'src/manifest.json'),
+    'utf8',
+  );
+  const manifestContent = manifestTemplate
+    .replace('{{GOOGLE_CLIENT_ID}}', env.GOOGLE_CLIENT_ID)
+    .replaceAll('{{ICON_NAME}}', env.ICON_NAME || 'icon');
+  fs.writeFileSync(
+    path.resolve(__dirname, 'static/manifest.json'),
+    manifestContent,
+  );
 };
 
 module.exports = (env) => {
@@ -22,15 +30,22 @@ module.exports = (env) => {
     entry: {
       background: './src/background.ts',
       contentScriptGlip: './src/contentScriptGlip.tsx',
+      glipNativePopoutPage: './src/glipNativePopoutPage.ts',
       contentScriptGoogleSheet: './src/contentScriptGoogleSheet.tsx',
       contentScriptGoogleSlide: './src/contentScriptGoogleSlide.tsx',
       contentScriptJira: './src/contentScriptJira.ts',
       contentScriptJiraAutomation: './src/contentScriptJiraAutomation.ts',
       contentScriptWebIntelligence: './src/contentScriptWebIntelligence.ts',
       contentScriptRPA: './src/contentScriptRPA.ts',
+      contentScriptRingCentralMeeting:
+        './src/meeting-shell/contentScriptRingCentralMeeting.ts',
       popup: './src/popup.tsx',
       'doubao-bridge': './src/modals/doubao-bridge-entry.tsx',
       options: './src/options.tsx',
+      'meeting-sidepanel': './src/meeting-shell/meetingSidePanel.tsx',
+      'meeting-live-map': './src/meeting-shell/meetingLiveMap.tsx',
+      'meeting-panorama': './src/meeting-shell/meetingPanorama.tsx',
+      'meeting-offscreen': './src/meeting-shell/meetingOffscreen.ts',
       agentThinking: './src/agentThinking.ts',
       agentVisualizer: './src/agent-visualizer.tsx',
       'topic-modal': './src/modals/topic-modal.tsx',
@@ -43,7 +58,8 @@ module.exports = (env) => {
       'analyzers/tableAnalyzer': './src/analyzers/tableAnalyzer.ts',
       'analyzers/textAnalyzer': './src/analyzers/textAnalyzer.ts',
       'memory-exploring': './src/modals/memory-exploring-entry.ts',
-      'scheduled-messages': './src/scheduled-messages/ScheduledMessagesManager.tsx',
+      'scheduled-messages':
+        './src/scheduled-messages/ScheduledMessagesManager.tsx',
       'auth-logs': './src/auth-logs.tsx',
     },
     module: {
@@ -55,48 +71,46 @@ module.exports = (env) => {
         },
         {
           test: /\.vue$/,
-          loader: 'vue-loader'
+          loader: 'vue-loader',
         },
         {
           test: /\.css$/,
-          use: ['vue-style-loader', 'css-loader']
+          use: ['vue-style-loader', 'css-loader'],
         },
       ],
     },
     resolve: {
       extensions: ['.ts', '.js', '.tsx', '.jsx', '.vue'],
       fallback: {
-        "fs": false,
-        "path": require.resolve("path-browserify"),
-        "crypto": require.resolve("crypto-browserify"),
-        "stream": require.resolve("stream-browserify"),
-        "buffer": require.resolve("buffer/"),
-        "process": require.resolve("process/browser.js"),
-        "process/browser": require.resolve("process/browser.js"),
-        "node:process": require.resolve("process/browser.js"),
-        "node:path": require.resolve("path-browserify"),
-        "node:crypto": require.resolve("crypto-browserify"),
-        "node:stream": require.resolve("stream-browserify"),
-        "node:buffer": require.resolve("buffer/"),
-        "node:fs": false,
-        "node:util": require.resolve("util/"),
-        "node:url": require.resolve("url/")
+        fs: false,
+        path: require.resolve('path-browserify'),
+        crypto: require.resolve('crypto-browserify'),
+        stream: require.resolve('stream-browserify'),
+        buffer: require.resolve('buffer/'),
+        process: require.resolve('process/browser.js'),
+        'process/browser': require.resolve('process/browser.js'),
+        'node:process': require.resolve('process/browser.js'),
+        'node:path': require.resolve('path-browserify'),
+        'node:crypto': require.resolve('crypto-browserify'),
+        'node:stream': require.resolve('stream-browserify'),
+        'node:buffer': require.resolve('buffer/'),
+        'node:fs': false,
+        'node:util': require.resolve('util/'),
+        'node:url': require.resolve('url/'),
       },
-      plugins: [
-        new NodeProtocolResolverPlugin()
-      ]
+      plugins: [new NodeProtocolResolverPlugin()],
     },
     output: {
       filename: '[name].js',
       path: path.resolve(__dirname, 'dist'),
       clean: true,
-      publicPath: '/'
+      publicPath: '/',
     },
     plugins: [
       new VueLoaderPlugin(),
       // 忽略 chromadb 的可选嵌入模块（我们使用自己的嵌入方案）
       new webpack.IgnorePlugin({
-        resourceRegExp: /^@chroma-core\/default-embed$/
+        resourceRegExp: /^@chroma-core\/default-embed$/,
       }),
       // 处理 node: 协议导入的插件
       new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
@@ -110,7 +124,10 @@ module.exports = (env) => {
         patterns: [
           { from: 'static' },
           // { from: 'docs/demo', to: 'demo' }, // No compliance with MV3 policy
-          { from: 'src/scheduled-messages/app-script-template.gs', to: 'app-script-template.gs' }
+          {
+            from: 'src/scheduled-messages/app-script-template.gs',
+            to: 'app-script-template.gs',
+          },
         ],
       }),
       new webpack.ProvidePlugin({
@@ -118,19 +135,26 @@ module.exports = (env) => {
         process: 'process/browser.js',
       }),
       new webpack.ProvidePlugin({
-        SlideAnalyzerFactoryImpl: ['./src/analyzers/analyzerFactory', 'SlideAnalyzerFactoryImpl'],
-        LLMContentAnalyzer: ['./src/analyzers/llmAnalyzer', 'LLMContentAnalyzer']
+        SlideAnalyzerFactoryImpl: [
+          './src/analyzers/analyzerFactory',
+          'SlideAnalyzerFactoryImpl',
+        ],
+        LLMContentAnalyzer: [
+          './src/analyzers/llmAnalyzer',
+          'LLMContentAnalyzer',
+        ],
       }),
       // 定义 Vue 特性标志
       new webpack.DefinePlugin({
+        __DEV__: JSON.stringify(process.env.NODE_ENV !== 'production'),
         __VUE_OPTIONS_API__: JSON.stringify(true),
         __VUE_PROD_DEVTOOLS__: JSON.stringify(false),
-        __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: JSON.stringify(false)
-      })
+        __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: JSON.stringify(false),
+      }),
     ],
     optimization: {
       splitChunks: false,
-      runtimeChunk: false
+      runtimeChunk: false,
     },
   };
 };

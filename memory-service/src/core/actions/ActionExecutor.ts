@@ -32,6 +32,7 @@ interface DispatchOutcome {
   result: Record<string, unknown>;
   queueStatus?: Extract<ActionQueueStatus, 'failed' | 'dead_letter'>;
   errorMessage?: string;
+  delegationOutcome?: DelegationOutcome;
 }
 
 function safeJsonValue(value: unknown): Record<string, unknown> {
@@ -177,6 +178,10 @@ export class ActionExecutor {
           outcome.errorMessage ?? 'Action execution failed',
           outcome.queueStatus === 'dead_letter',
         ) ?? action;
+        if (outcome.delegationOutcome) {
+          const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
+          await engine.syncDelegationFailureToSession(updated, outcome.delegationOutcome, outcome.result);
+        }
         if (updated.threadId) {
           this.threadService.refreshThreadDocument(updated.threadId);
         }
@@ -190,6 +195,10 @@ export class ActionExecutor {
       }
 
       const updated = this.actionRepo.markSucceeded(action.id, attemptId, outcome.result) ?? action;
+      if (outcome.delegationOutcome) {
+        const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
+        await engine.syncDelegationResultToSession(updated, outcome.delegationOutcome);
+      }
       if (updated.threadId) {
         this.threadService.refreshThreadDocument(updated.threadId);
       }
@@ -410,6 +419,7 @@ export class ActionExecutor {
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
+        delegationOutcome: outcome,
       };
     }
 
@@ -423,6 +433,7 @@ export class ActionExecutor {
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
+        delegationOutcome: outcome,
         queueStatus: 'failed',
         errorMessage: outcome.summary,
       };
@@ -438,6 +449,7 @@ export class ActionExecutor {
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
+        delegationOutcome: outcome,
         queueStatus: 'failed',
         errorMessage: outcome.summary,
       };
@@ -450,6 +462,7 @@ export class ActionExecutor {
         transcriptPath: outcome.transcriptPath,
         payload: outcome.payload,
       },
+      delegationOutcome: outcome,
       queueStatus: action.retryCount >= 2 ? 'dead_letter' : 'failed',
       errorMessage: outcome.summary,
     };

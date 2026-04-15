@@ -84,9 +84,9 @@ button {
   overflow: hidden;
   -webkit-app-region: drag;
   transition:
-    border-radius 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    border-radius 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .quick-ask-frame::before,
@@ -137,8 +137,8 @@ button {
 .voice-sheet,
 .composer-panel {
   transition:
-    opacity 120ms ease,
-    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    opacity 90ms ease,
+    transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .conversation-panel {
@@ -148,6 +148,9 @@ button {
   padding: 8px 4px 12px;
   scrollbar-width: thin;
   -webkit-app-region: no-drag;
+  opacity: 0;
+  transform: translateY(10px);
+  overflow-anchor: none;
 }
 
 .quick-ask-shell[data-state="pending"] .conversation-panel,
@@ -155,7 +158,9 @@ button {
 .quick-ask-shell[data-state="enriched"] .conversation-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .quick-ask-shell[data-state="idle-compact"] .composer-panel {
@@ -169,6 +174,8 @@ button {
   width: min(100%, 360px);
   margin-left: auto;
   margin-right: auto;
+  transform: translateY(0);
+  opacity: 1;
 }
 
 .quick-ask-shell[data-state^="voice"] .composer-panel {
@@ -475,6 +482,26 @@ a,
   width: 100%;
 }
 
+.session-block {
+  display: grid;
+  gap: 14px;
+}
+
+.session-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 0 2px;
+  color: rgba(74, 95, 117, 0.7);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-divider span {
+  padding: 0 10px;
+}
+
 .role-user {
   justify-content: flex-end;
 }
@@ -522,12 +549,19 @@ a,
 
 .streaming-card {
   background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 12px 26px rgba(41, 55, 72, 0.08);
 }
 
 .streaming-copy {
   white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.55;
+  word-break: break-word;
+}
+
+.streaming-tail {
+  opacity: 0.42;
+  animation: streaming-tail-fade 780ms ease-in-out infinite alternate;
 }
 
 .pending-card {
@@ -791,5 +825,14 @@ a,
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes streaming-tail-fade {
+  from {
+    opacity: 0.22;
+  }
+  to {
+    opacity: 0.58;
   }
 }

@@ -37,7 +37,7 @@ describe('Config API', () => {
         openClawEnabled: true,
         openClawBaseUrl: 'https://openclaw.example.com',
         openClawApiKey: 'secret-key',
-        openClawTimeoutMs: 45000,
+        openClawTimeoutMs: 300000,
       },
     });
 
@@ -45,7 +45,7 @@ describe('Config API', () => {
     const putBody = putRes.json();
     expect(putBody.openClawEnabled).toBe(true);
     expect(putBody.openClawBaseUrl).toBe('https://openclaw.example.com');
-    expect(putBody.openClawTimeoutMs).toBe(45000);
+    expect(putBody.openClawTimeoutMs).toBe(300000);
     expect(putBody.openClawApiKeyConfigured).toBe(true);
     expect(putBody.openClawApiKey).toBeUndefined();
 
