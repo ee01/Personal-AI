@@ -15,6 +15,7 @@ import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
 import { OnlineReflection } from '../core/OnlineReflection.js';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import { resolveDelegateOpenClawPolicy } from '../core/actions/delegateOpenClawPolicy.js';
 import {
   EvidenceResolutionPlanner,
   type CandidateArtifact,
@@ -530,6 +531,15 @@ async function executeAskResolutionAction(
     !Array.isArray(plan.actionParams)
       ? { ...plan.actionParams }
       : {};
+  const delegatePolicy =
+    plan.recommendedAction === 'delegate_openclaw'
+      ? resolveDelegateOpenClawPolicy({
+          params: baseParams,
+          defaultExecutionMode:
+            baseParams.mode === 'write' ? 'manual' : 'auto',
+          defaultRequiresApproval: baseParams.mode === 'write',
+        })
+      : null;
   const action = repo.create({
     actionType: plan.recommendedAction,
     title:
@@ -549,14 +559,8 @@ async function executeAskResolutionAction(
         suppressRecoveryNotifications: true,
       },
     },
-    executionMode:
-      plan.recommendedAction === 'delegate_openclaw' &&
-      baseParams.mode === 'write'
-        ? 'manual'
-        : 'auto',
-    requiresApproval:
-      plan.recommendedAction === 'delegate_openclaw' &&
-      baseParams.mode === 'write',
+    executionMode: delegatePolicy?.executionMode ?? 'auto',
+    requiresApproval: delegatePolicy?.requiresApproval ?? false,
     queueStatus: 'queued',
     priority: plan.recommendedAction === 'create_confirm_request' ? 8 : 6,
     confidence: plan.confidence,

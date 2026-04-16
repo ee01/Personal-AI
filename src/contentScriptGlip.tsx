@@ -8,6 +8,7 @@ import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 import { getLocalStorageItem, getCurrentUserInfo } from './storage';
 import { initMessageReaction, MessageReactionConfig } from './message-reaction';
+import { isManualConcernedItem } from './watchRules';
 
 // =====================================================
 // Jira Ticket 悬浮卡片功能
@@ -42,7 +43,10 @@ interface JiraTicketDetail {
 
 // 缓存已处理过的链接和 ticket 数据
 const processedLinks = new WeakSet<HTMLElement>();
-const ticketCache = new Map<string, { data: JiraTicketDetail | null; timestamp: number; loading?: boolean }>();
+const ticketCache = new Map<
+  string,
+  { data: JiraTicketDetail | null; timestamp: number; loading?: boolean }
+>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
 // 当前显示的卡片和悬浮状态
@@ -56,7 +60,8 @@ const copyButtonResetTimers = new WeakMap<HTMLButtonElement, number>();
 let JIRA_BASE_URL = 'https://jira.ringcentral.com';
 const GLIP_POPUP_DEFAULT_WIDTH = 1100;
 const GLIP_POPUP_DEFAULT_HEIGHT = 900;
-const GLIP_NATIVE_POPOUT_BRIDGE_SOURCE = 'personal-ai-glip-native-popout-bridge';
+const GLIP_NATIVE_POPOUT_BRIDGE_SOURCE =
+  'personal-ai-glip-native-popout-bridge';
 const GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID = 'pai-glip-native-popout-page-script';
 const GLIP_NATIVE_POPOUT_BRIDGE_ATTR = 'data-pai-glip-native-popout-bridge';
 const GLIP_NATIVE_POPOUT_REQUEST = 'PAI_GLIP_NATIVE_POPOUT_REQUEST';
@@ -122,7 +127,9 @@ async function initJiraBaseUrl() {
 }
 
 // 从 background script 获取 Jira ticket 详情
-async function fetchJiraTicketDetail(ticketKey: string): Promise<JiraTicketDetail | null> {
+async function fetchJiraTicketDetail(
+  ticketKey: string,
+): Promise<JiraTicketDetail | null> {
   // 检查缓存
   const cached = ticketCache.get(ticketKey);
   if (cached) {
@@ -136,14 +143,17 @@ async function fetchJiraTicketDetail(ticketKey: string): Promise<JiraTicketDetai
   try {
     const response = await chrome.runtime.sendMessage({
       type: 'FETCH_JIRA_TICKET_DETAIL',
-      ticketKey
+      ticketKey,
     });
 
     if (response?.success && response.data) {
-      ticketCache.set(ticketKey, { data: response.data, timestamp: Date.now() });
+      ticketCache.set(ticketKey, {
+        data: response.data,
+        timestamp: Date.now(),
+      });
       return response.data;
     }
-    
+
     // 缓存失败结果（避免重复请求）
     ticketCache.set(ticketKey, { data: null, timestamp: Date.now() });
     return null;
@@ -158,8 +168,10 @@ function formatJiraDate(dateString: string): string {
   if (!dateString) return '';
   const date = new Date(dateString);
   const now = new Date();
-  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-  
+  const diffDays = Math.floor(
+    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
+  );
+
   if (diffDays === 0) return '今天';
   if (diffDays === 1) return '昨天';
   if (diffDays < 7) return `${diffDays}天前`;
@@ -184,8 +196,10 @@ function getStatusColor(statusCategory: string): { bg: string; text: string } {
 // 获取优先级颜色
 function getPriorityColor(priority: string): string {
   const lowerPriority = priority?.toLowerCase() || '';
-  if (lowerPriority.includes('highest') || lowerPriority.includes('blocker')) return '#d73a49';
-  if (lowerPriority.includes('high') || lowerPriority.includes('critical')) return '#ff5630';
+  if (lowerPriority.includes('highest') || lowerPriority.includes('blocker'))
+    return '#d73a49';
+  if (lowerPriority.includes('high') || lowerPriority.includes('critical'))
+    return '#ff5630';
   if (lowerPriority.includes('medium')) return '#ffab00';
   if (lowerPriority.includes('low')) return '#36b37e';
   if (lowerPriority.includes('lowest')) return '#6b778c';
@@ -235,11 +249,14 @@ function getErrorIconSvg(): string {
   `;
 }
 
-async function copyRichTextToClipboard(html: string, text: string): Promise<void> {
+async function copyRichTextToClipboard(
+  html: string,
+  text: string,
+): Promise<void> {
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
     const item = new ClipboardItem({
       'text/html': new Blob([html], { type: 'text/html' }),
-      'text/plain': new Blob([text], { type: 'text/plain' })
+      'text/plain': new Blob([text], { type: 'text/plain' }),
     });
     await navigator.clipboard.write([item]);
     return;
@@ -252,8 +269,12 @@ async function copyRichTextToClipboard(html: string, text: string): Promise<void
   await navigator.clipboard.writeText(text);
 }
 
-function setCopyButtonVisualState(button: HTMLButtonElement, status: 'idle' | 'success' | 'error') {
-  const defaultLabel = button.dataset.defaultLabel || button.getAttribute('aria-label') || '';
+function setCopyButtonVisualState(
+  button: HTMLButtonElement,
+  status: 'idle' | 'success' | 'error',
+) {
+  const defaultLabel =
+    button.dataset.defaultLabel || button.getAttribute('aria-label') || '';
   button.dataset.defaultLabel = defaultLabel;
 
   button.classList.remove('is-success', 'is-error');
@@ -279,7 +300,10 @@ function setCopyButtonVisualState(button: HTMLButtonElement, status: 'idle' | 's
   button.title = defaultLabel;
 }
 
-function flashCopyButtonState(button: HTMLButtonElement, status: 'success' | 'error') {
+function flashCopyButtonState(
+  button: HTMLButtonElement,
+  status: 'success' | 'error',
+) {
   setCopyButtonVisualState(button, status);
 
   const existingTimer = copyButtonResetTimers.get(button);
@@ -299,46 +323,51 @@ function bindJiraCardCopyActions(card: HTMLElement, ticket: JiraTicketDetail) {
   const copyActions: Record<string, { html: string; text: string }> = {
     link: {
       html: buildJiraTicketLinkHtml(ticket),
-      text: buildJiraTicketLinkText(ticket)
+      text: buildJiraTicketLinkText(ticket),
     },
     summary: {
       html: buildJiraTicketSummaryHtml(ticket),
-      text: buildJiraTicketSummaryText(ticket)
-    }
+      text: buildJiraTicketSummaryText(ticket),
+    },
   };
 
-  card.querySelectorAll<HTMLButtonElement>('.jira-card-copy-icon-btn').forEach(button => {
-    setCopyButtonVisualState(button, 'idle');
+  card
+    .querySelectorAll<HTMLButtonElement>('.jira-card-copy-icon-btn')
+    .forEach((button) => {
+      setCopyButtonVisualState(button, 'idle');
 
-    button.addEventListener('click', async event => {
-      event.preventDefault();
-      event.stopPropagation();
+      button.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
 
-      const action = button.dataset.copyAction;
-      if (!action || !copyActions[action]) return;
+        const action = button.dataset.copyAction;
+        if (!action || !copyActions[action]) return;
 
-      try {
-        const payload = copyActions[action];
-        await copyRichTextToClipboard(payload.html, payload.text);
-        flashCopyButtonState(button, 'success');
-      } catch (error) {
-        console.error('复制 Jira ticket 内容失败:', error);
-        flashCopyButtonState(button, 'error');
-      }
+        try {
+          const payload = copyActions[action];
+          await copyRichTextToClipboard(payload.html, payload.text);
+          flashCopyButtonState(button, 'success');
+        } catch (error) {
+          console.error('复制 Jira ticket 内容失败:', error);
+          flashCopyButtonState(button, 'error');
+        }
+      });
     });
-  });
 }
 
 // 创建悬浮卡片
-function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): HTMLElement {
+function createJiraCard(
+  ticket: JiraTicketDetail,
+  triggerElement: HTMLElement,
+): HTMLElement {
   const card = document.createElement('div');
   card.className = 'jira-ticket-hover-card';
   card.setAttribute('data-jira-card', 'true'); // 标记为 jira 卡片，用于避免重复处理
-  
+
   const statusColors = getStatusColor(ticket.statusCategory);
   const priorityColor = getPriorityColor(ticket.priority);
   const iconUrl = chrome.runtime.getURL('icons/icon32.png');
-  
+
   card.innerHTML = `
     <div class="jira-card-header">
       <div class="jira-card-key-row">
@@ -388,34 +417,62 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
           <span class="jira-card-meta-label">更新时间</span>
           <span class="jira-card-meta-value">${formatJiraDate(ticket.updated)}</span>
         </div>
-        ${ticket.duedate ? `
+        ${
+          ticket.duedate
+            ? `
         <div class="jira-card-meta-item">
           <span class="jira-card-meta-label">截止日期</span>
           <span class="jira-card-meta-value ${isOverdue(ticket.duedate) ? 'overdue' : ''}">${new Date(ticket.duedate).toLocaleDateString('zh-CN')}</span>
         </div>
-        ` : ''}
-        ${ticket.sprint ? `
+        `
+            : ''
+        }
+        ${
+          ticket.sprint
+            ? `
         <div class="jira-card-meta-item">
           <span class="jira-card-meta-label">Sprint</span>
           <span class="jira-card-meta-value">${escapeHtml(ticket.sprint)}</span>
         </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
       
-      ${ticket.labels.length > 0 ? `
+      ${
+        ticket.labels.length > 0
+          ? `
       <div class="jira-card-labels">
-        ${ticket.labels.slice(0, 3).map(label => `<span class="jira-card-label">${escapeHtml(label)}</span>`).join('')}
+        ${ticket.labels
+          .slice(0, 3)
+          .map(
+            (label) =>
+              `<span class="jira-card-label">${escapeHtml(label)}</span>`,
+          )
+          .join('')}
         ${ticket.labels.length > 3 ? `<span class="jira-card-label-more">+${ticket.labels.length - 3}</span>` : ''}
       </div>
-      ` : ''}
+      `
+          : ''
+      }
       
-      ${ticket.components.length > 0 ? `
+      ${
+        ticket.components.length > 0
+          ? `
       <div class="jira-card-components">
         <span class="jira-card-meta-label">组件:</span>
-        ${ticket.components.slice(0, 2).map(comp => `<span class="jira-card-component">${escapeHtml(comp)}</span>`).join('')}
+        ${ticket.components
+          .slice(0, 2)
+          .map(
+            (comp) =>
+              `<span class="jira-card-component">${escapeHtml(comp)}</span>`,
+          )
+          .join('')}
         ${ticket.components.length > 2 ? `<span class="jira-card-label-more">+${ticket.components.length - 2}</span>` : ''}
       </div>
-      ` : ''}
+      `
+          : ''
+      }
     </div>
     
     <div class="jira-card-footer">
@@ -423,12 +480,12 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
       <span class="jira-card-author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank">Esone</a></span>
     </div>
   `;
-  
+
   // 定位卡片（先添加到 DOM 再定位）
   document.body.appendChild(card);
   bindJiraCardCopyActions(card, ticket);
   positionCardFixed(card, triggerElement);
-  
+
   // 添加鼠标事件
   card.addEventListener('mouseenter', () => {
     isHoveringCard = true;
@@ -437,12 +494,12 @@ function createJiraCard(ticket: JiraTicketDetail, triggerElement: HTMLElement): 
       hoverTimeout = null;
     }
   });
-  
+
   card.addEventListener('mouseleave', () => {
     isHoveringCard = false;
     scheduleHideCard();
   });
-  
+
   return card;
 }
 
@@ -451,28 +508,28 @@ function positionCardFixed(card: HTMLElement, trigger: HTMLElement) {
   const triggerRect = trigger.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  
+
   // 先设置为不可见来获取尺寸
   card.style.visibility = 'hidden';
   card.style.position = 'fixed';
-  
+
   // 获取卡片尺寸
   const cardRect = card.getBoundingClientRect();
-  
+
   let left = triggerRect.left;
   let top = triggerRect.bottom + 8;
-  
+
   // 水平方向调整
   if (left + cardRect.width > viewportWidth - 20) {
     left = viewportWidth - cardRect.width - 20;
   }
   if (left < 20) left = 20;
-  
+
   // 垂直方向调整
   if (top + cardRect.height > viewportHeight - 20) {
     top = triggerRect.top - cardRect.height - 8;
   }
-  
+
   // 设置固定位置
   card.style.left = `${left}px`;
   card.style.top = `${top}px`;
@@ -480,11 +537,14 @@ function positionCardFixed(card: HTMLElement, trigger: HTMLElement) {
 }
 
 // 创建加载中卡片
-function createLoadingCard(ticketKey: string, triggerElement: HTMLElement): HTMLElement {
+function createLoadingCard(
+  ticketKey: string,
+  triggerElement: HTMLElement,
+): HTMLElement {
   const card = document.createElement('div');
   card.className = 'jira-ticket-hover-card jira-card-loading';
   card.setAttribute('data-jira-card', 'true');
-  
+
   card.innerHTML = `
     <div class="jira-card-header">
       <div class="jira-card-key-row">
@@ -494,28 +554,31 @@ function createLoadingCard(ticketKey: string, triggerElement: HTMLElement): HTML
       <div class="jira-card-loading-text">正在获取 Ticket 信息...</div>
     </div>
   `;
-  
+
   document.body.appendChild(card);
   positionCardFixed(card, triggerElement);
-  
+
   card.addEventListener('mouseenter', () => {
     isHoveringCard = true;
   });
-  
+
   card.addEventListener('mouseleave', () => {
     isHoveringCard = false;
     scheduleHideCard();
   });
-  
+
   return card;
 }
 
 // 创建错误卡片
-function createErrorCard(ticketKey: string, triggerElement: HTMLElement): HTMLElement {
+function createErrorCard(
+  ticketKey: string,
+  triggerElement: HTMLElement,
+): HTMLElement {
   const card = document.createElement('div');
   card.className = 'jira-ticket-hover-card jira-card-error';
   card.setAttribute('data-jira-card', 'true');
-  
+
   card.innerHTML = `
     <div class="jira-card-header">
       <div class="jira-card-key-row">
@@ -525,14 +588,14 @@ function createErrorCard(ticketKey: string, triggerElement: HTMLElement): HTMLEl
       <div class="jira-card-error-hint">请检查网络连接或登录 JIRA</div>
     </div>
   `;
-  
+
   document.body.appendChild(card);
   positionCardFixed(card, triggerElement);
-  
+
   card.addEventListener('mouseleave', () => {
     hideCard();
   });
-  
+
   return card;
 }
 
@@ -540,10 +603,14 @@ function createErrorCard(ticketKey: string, triggerElement: HTMLElement): HTMLEl
 async function showJiraCard(ticketKey: string, triggerElement: HTMLElement) {
   // 隐藏现有卡片
   hideCard();
-  
+
   // 检查缓存
   const cached = ticketCache.get(ticketKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_DURATION && !cached.loading) {
+  if (
+    cached &&
+    Date.now() - cached.timestamp < CACHE_DURATION &&
+    !cached.loading
+  ) {
     if (cached.data) {
       currentCard = createJiraCard(cached.data, triggerElement);
     } else {
@@ -551,21 +618,21 @@ async function showJiraCard(ticketKey: string, triggerElement: HTMLElement) {
     }
     return;
   }
-  
+
   // 显示加载中状态
   currentCard = createLoadingCard(ticketKey, triggerElement);
-  
+
   // 获取 ticket 详情
   const ticket = await fetchJiraTicketDetail(ticketKey);
-  
+
   // 如果卡片已经被隐藏或替换，不再更新
   if (!currentCard || !currentCard.classList.contains('jira-card-loading')) {
     return;
   }
-  
+
   // 移除加载卡片
   currentCard.remove();
-  
+
   if (ticket) {
     currentCard = createJiraCard(ticket, triggerElement);
   } else {
@@ -626,7 +693,7 @@ function isOverdue(duedate: string): boolean {
 // 注入 Jira 悬浮卡片样式
 function injectJiraCardStyles() {
   if (document.getElementById('jira-hover-card-styles')) return;
-  
+
   const style = document.createElement('style');
   style.id = 'jira-hover-card-styles';
   style.textContent = `
@@ -934,29 +1001,32 @@ function injectJiraCardStyles() {
       margin-top: 4px;
     }
   `;
-  
+
   document.head.appendChild(style);
 }
 
 // 处理单个 Jira 链接
 function processJiraLink(linkElement: HTMLAnchorElement) {
   if (processedLinks.has(linkElement)) return;
-  
+
   // 跳过卡片内部的链接（避免重复处理）
-  if (linkElement.closest('.jira-ticket-hover-card') || linkElement.closest('[data-jira-card="true"]')) {
+  if (
+    linkElement.closest('.jira-ticket-hover-card') ||
+    linkElement.closest('[data-jira-card="true"]')
+  ) {
     return;
   }
-  
+
   processedLinks.add(linkElement);
-  
+
   const href = linkElement.href;
-  
+
   // 提取 ticket key
   const match = href.match(/\/browse\/([A-Z]+-\d+)/i);
   if (!match) return;
-  
+
   const ticketKey = match[1].toUpperCase();
-  
+
   // 创建图标
   const iconUrl = chrome.runtime.getURL('icons/icon32.png');
   const icon = document.createElement('img');
@@ -964,16 +1034,16 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
   icon.className = 'jira-link-icon';
   icon.title = `查看 ${ticketKey} 详情`;
   icon.alt = `JIRA: `;
-  
+
   // 创建一个包装器来统一处理 hover 事件
   const wrapper = document.createElement('span');
   wrapper.className = 'jira-link-wrapper';
   linkElement.parentNode?.insertBefore(wrapper, linkElement);
-  
+
   // 在链接前面插入图标
   wrapper.appendChild(icon);
   wrapper.appendChild(linkElement);
-  
+
   // 添加悬浮事件
   const handleMouseEnter = () => {
     isHoveringTrigger = true;
@@ -988,12 +1058,12 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
       }
     }, 300);
   };
-  
+
   const handleMouseLeave = () => {
     isHoveringTrigger = false;
     scheduleHideCard();
   };
-  
+
   wrapper.addEventListener('mouseenter', handleMouseEnter);
   wrapper.addEventListener('mouseleave', handleMouseLeave);
 }
@@ -1001,16 +1071,22 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
 // 扫描并处理页面中的 Jira 链接
 function scanAndProcessJiraLinks(container?: Element) {
   const root = container || document.body;
-  
+
   // 跳过卡片容器本身
-  if (root instanceof HTMLElement && (root.classList.contains('jira-ticket-hover-card') || root.hasAttribute('data-jira-card'))) {
+  if (
+    root instanceof HTMLElement &&
+    (root.classList.contains('jira-ticket-hover-card') ||
+      root.hasAttribute('data-jira-card'))
+  ) {
     return;
   }
-  
+
   // 查找所有指向 JIRA 的链接（排除卡片内的链接）
-  const jiraLinks = root.querySelectorAll(`a[href*="${JIRA_BASE_URL}/browse/"]:not(.jira-ticket-hover-card a):not([data-jira-card] a)`);
-  
-  jiraLinks.forEach(link => {
+  const jiraLinks = root.querySelectorAll(
+    `a[href*="${JIRA_BASE_URL}/browse/"]:not(.jira-ticket-hover-card a):not([data-jira-card] a)`,
+  );
+
+  jiraLinks.forEach((link) => {
     processJiraLink(link as HTMLAnchorElement);
   });
 }
@@ -1019,26 +1095,26 @@ function scanAndProcessJiraLinks(container?: Element) {
 function initJiraLinkProcessor() {
   // 注入样式
   injectJiraCardStyles();
-  
+
   // 初始化 JIRA Base URL
   initJiraBaseUrl().then(() => {
     // 初始扫描
     scanAndProcessJiraLinks();
-    
+
     // 监听 DOM 变化，处理动态加载的消息
     const observer = new MutationObserver((mutations) => {
-      mutations.forEach(mutation => {
-        mutation.addedNodes.forEach(node => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
           if (node instanceof Element) {
             scanAndProcessJiraLinks(node);
           }
         });
       });
     });
-    
+
     observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
     });
   });
 }
@@ -1048,7 +1124,7 @@ function initJiraLinkProcessor() {
 // =====================================================
 
 function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getGlipBadgeIconUrl(): string {
@@ -1161,9 +1237,9 @@ function isExcludedGlipLinkElement(element: HTMLElement): boolean {
         'textarea',
         'input',
         '[role="textbox"]',
-        '.message-editor'
-      ].join(', ')
-    )
+        '.message-editor',
+      ].join(', '),
+    ),
   );
 }
 
@@ -1174,22 +1250,25 @@ function parseGlipMessageUrl(rawUrl: string): GlipLinkTarget | null {
       return null;
     }
 
-    const match = parsed.pathname.match(/^\/(?:l\/)?messages\/(\d+)(?:\/(\d+))?\/?$/);
+    const match = parsed.pathname.match(
+      /^\/(?:l\/)?messages\/(\d+)(?:\/(\d+))?\/?$/,
+    );
     if (!match) {
       return null;
     }
 
     const [, groupId, postId] = match;
-    const label = parsed.pathname.includes('/l/messages/') || postId
-      ? '查看原消息'
-      : groupId;
+    const label =
+      parsed.pathname.includes('/l/messages/') || postId
+        ? '查看原消息'
+        : groupId;
 
     return {
       kind: postId ? 'message' : 'group',
       groupId,
       postId,
       url: parsed.toString(),
-      label
+      label,
     };
   } catch (error) {
     console.warn('解析 Glip 链接失败:', rawUrl, error);
@@ -1197,7 +1276,9 @@ function parseGlipMessageUrl(rawUrl: string): GlipLinkTarget | null {
   }
 }
 
-function parseGlipAnchorTarget(anchor: HTMLAnchorElement): GlipLinkTarget | null {
+function parseGlipAnchorTarget(
+  anchor: HTMLAnchorElement,
+): GlipLinkTarget | null {
   const target = parseGlipMessageUrl(anchor.href);
   if (!target) {
     return null;
@@ -1211,32 +1292,52 @@ function parseGlipAnchorTarget(anchor: HTMLAnchorElement): GlipLinkTarget | null
   return target;
 }
 
-function parseGlipMentionTarget(mention: HTMLSpanElement): GlipLinkTarget | null {
+function parseGlipMentionTarget(
+  mention: HTMLSpanElement,
+): GlipLinkTarget | null {
   const groupId = mention.dataset.id?.trim();
   if (!groupId || !/^\d+$/.test(groupId)) {
     return null;
   }
 
-  const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-    ? CSS.escape(groupId)
-    : groupId;
+  const escapedId =
+    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(groupId)
+      : groupId;
   const personSelectors = [
     `[data-uid="GLIP_PERSON.${escapedId}"]`,
     `[data-cid="GLIP_PERSON.${escapedId}"]`,
-    `[data-test-automation-value="GLIP_PERSON.${escapedId}"]`
+    `[data-test-automation-value="GLIP_PERSON.${escapedId}"]`,
   ];
 
-  if (personSelectors.some(selector => Boolean(document.querySelector(selector)))) {
+  if (
+    personSelectors.some((selector) =>
+      Boolean(document.querySelector(selector)),
+    )
+  ) {
     return null;
   }
 
   const mentionText = mention.textContent?.trim() || '';
-  const hasSidebarConversation = Boolean(document.querySelector(`[data-group-id="${escapedId}"]`));
-  const groupEmojiSignals = ['❤️', '💛', '💚', '💙', '💜', '🧡', '🖤', '🤍', '🤎'];
-  const hasGroupSignal = hasSidebarConversation
-    || /^team:/i.test(mentionText)
-    || mentionText.includes(',')
-    || groupEmojiSignals.some(signal => mentionText.includes(signal));
+  const hasSidebarConversation = Boolean(
+    document.querySelector(`[data-group-id="${escapedId}"]`),
+  );
+  const groupEmojiSignals = [
+    '❤️',
+    '💛',
+    '💚',
+    '💙',
+    '💜',
+    '🧡',
+    '🖤',
+    '🤍',
+    '🤎',
+  ];
+  const hasGroupSignal =
+    hasSidebarConversation ||
+    /^team:/i.test(mentionText) ||
+    mentionText.includes(',') ||
+    groupEmojiSignals.some((signal) => mentionText.includes(signal));
 
   if (!hasGroupSignal) {
     return null;
@@ -1246,14 +1347,14 @@ function parseGlipMentionTarget(mention: HTMLSpanElement): GlipLinkTarget | null
     kind: 'group',
     groupId,
     url: buildGlipGroupUrl(groupId),
-    label: mentionText || groupId
+    label: mentionText || groupId,
   };
 }
 
 async function waitForCondition(
   check: () => boolean,
   timeout = 5000,
-  interval = 80
+  interval = 80,
 ): Promise<void> {
   const startTime = Date.now();
 
@@ -1268,7 +1369,10 @@ async function waitForCondition(
 }
 
 function createGlipNativePopoutRequestId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return crypto.randomUUID();
   }
 
@@ -1276,7 +1380,10 @@ function createGlipNativePopoutRequestId(): string {
 }
 
 function isGlipNativePopoutBridgeReady(): boolean {
-  return document.documentElement.getAttribute(GLIP_NATIVE_POPOUT_BRIDGE_ATTR) === 'ready';
+  return (
+    document.documentElement.getAttribute(GLIP_NATIVE_POPOUT_BRIDGE_ATTR) ===
+    'ready'
+  );
 }
 
 function attachGlipNativePopoutBridgeListener() {
@@ -1289,7 +1396,10 @@ function attachGlipNativePopoutBridgeListener() {
       return;
     }
 
-    const message = event.data as GlipNativePopoutResponseMessage | GlipNativePopoutReadyMessage | undefined;
+    const message = event.data as
+      | GlipNativePopoutResponseMessage
+      | GlipNativePopoutReadyMessage
+      | undefined;
     if (
       !message ||
       message.source !== GLIP_NATIVE_POPOUT_BRIDGE_SOURCE ||
@@ -1299,7 +1409,10 @@ function attachGlipNativePopoutBridgeListener() {
     }
 
     if (message.type === GLIP_NATIVE_POPOUT_READY) {
-      document.documentElement.setAttribute(GLIP_NATIVE_POPOUT_BRIDGE_ATTR, 'ready');
+      document.documentElement.setAttribute(
+        GLIP_NATIVE_POPOUT_BRIDGE_ATTR,
+        'ready',
+      );
       return;
     }
 
@@ -1307,7 +1420,9 @@ function attachGlipNativePopoutBridgeListener() {
       return;
     }
 
-    const pendingRequest = pendingGlipNativePopoutRequests.get(message.requestId);
+    const pendingRequest = pendingGlipNativePopoutRequests.get(
+      message.requestId,
+    );
     if (!pendingRequest) {
       return;
     }
@@ -1320,7 +1435,9 @@ function attachGlipNativePopoutBridgeListener() {
       return;
     }
 
-    pendingRequest.reject(new Error(message.error || 'glip_native_popout_failed'));
+    pendingRequest.reject(
+      new Error(message.error || 'glip_native_popout_failed'),
+    );
   });
 
   glipNativePopoutBridgeListenerAttached = true;
@@ -1333,7 +1450,9 @@ async function ensureGlipNativePopoutBridge(): Promise<void> {
     return;
   }
 
-  let script = document.getElementById(GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID) as HTMLScriptElement | null;
+  let script = document.getElementById(
+    GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID,
+  ) as HTMLScriptElement | null;
   if (!script) {
     script = document.createElement('script');
     script.id = GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID;
@@ -1342,9 +1461,13 @@ async function ensureGlipNativePopoutBridge(): Promise<void> {
 
     await new Promise<void>((resolve, reject) => {
       script!.addEventListener('load', () => resolve(), { once: true });
-      script!.addEventListener('error', () => reject(new Error('glip_native_popout_script_load_failed')), {
-        once: true
-      });
+      script!.addEventListener(
+        'error',
+        () => reject(new Error('glip_native_popout_script_load_failed')),
+        {
+          once: true,
+        },
+      );
       (document.head || document.documentElement).appendChild(script!);
     });
   }
@@ -1358,7 +1481,7 @@ async function ensureGlipNativePopoutBridge(): Promise<void> {
 
 async function requestGlipNativeGroupPopout(
   groupId: string,
-  popOutConversationFirstLevel = false
+  popOutConversationFirstLevel = false,
 ): Promise<void> {
   await ensureGlipNativePopoutBridge();
 
@@ -1372,7 +1495,7 @@ async function requestGlipNativeGroupPopout(
     pendingGlipNativePopoutRequests.set(requestId, {
       resolve,
       reject,
-      timeoutId
+      timeoutId,
     });
 
     const message: GlipNativePopoutRequestMessage = {
@@ -1382,8 +1505,8 @@ async function requestGlipNativeGroupPopout(
       requestId,
       payload: {
         groupId,
-        popOutConversationFirstLevel
-      }
+        popOutConversationFirstLevel,
+      },
     };
 
     window.postMessage(message, window.location.origin);
@@ -1396,8 +1519,8 @@ async function openGlipPopupWindow(url: string): Promise<void> {
     data: {
       url,
       width: GLIP_POPUP_DEFAULT_WIDTH,
-      height: GLIP_POPUP_DEFAULT_HEIGHT
-    }
+      height: GLIP_POPUP_DEFAULT_HEIGHT,
+    },
   });
 
   if (!response?.success) {
@@ -1415,7 +1538,10 @@ async function handleGlipPopout(target: GlipLinkTarget): Promise<void> {
 }
 
 function processGlipLink(targetElement: HTMLElement, target: GlipLinkTarget) {
-  if (processedGlipLinks.has(targetElement) || isExcludedGlipLinkElement(targetElement)) {
+  if (
+    processedGlipLinks.has(targetElement) ||
+    isExcludedGlipLinkElement(targetElement)
+  ) {
     return;
   }
 
@@ -1473,18 +1599,19 @@ function scanAndProcessGlipLinks(container?: Element) {
     return;
   }
 
-  const selector = 'span[role="link"][data-id], a[href*="/messages/"], a[href*="/l/messages/"]';
+  const selector =
+    'span[role="link"][data-id], a[href*="/messages/"], a[href*="/l/messages/"]';
   const candidates = new Set<HTMLElement>();
 
   if (root.matches(selector)) {
     candidates.add(root as HTMLElement);
   }
 
-  root.querySelectorAll<HTMLElement>(selector).forEach(element => {
+  root.querySelectorAll<HTMLElement>(selector).forEach((element) => {
     candidates.add(element);
   });
 
-  candidates.forEach(element => {
+  candidates.forEach((element) => {
     if (element instanceof HTMLAnchorElement) {
       const target = parseGlipAnchorTarget(element);
       if (target) {
@@ -1504,14 +1631,14 @@ function scanAndProcessGlipLinks(container?: Element) {
 
 function initGlipLinkProcessor() {
   injectGlipLinkStyles();
-  void ensureGlipNativePopoutBridge().catch(error => {
+  void ensureGlipNativePopoutBridge().catch((error) => {
     console.warn('预热 Glip Native Popout Bridge 失败:', error);
   });
   scanAndProcessGlipLinks();
 
   const observer = new MutationObserver((mutations) => {
-    mutations.forEach(mutation => {
-      mutation.addedNodes.forEach(node => {
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
         if (node instanceof Element) {
           scanAndProcessGlipLinks(node);
         }
@@ -1521,7 +1648,7 @@ function initGlipLinkProcessor() {
 
   observer.observe(document.body, {
     childList: true,
-    subtree: true
+    subtree: true,
   });
 }
 
@@ -1531,14 +1658,14 @@ async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
     const result = await chrome.storage.local.get(['envConfig']);
     const config = result.envConfig || {};
     return {
-      enableSnooze: config.ENABLE_SNOOZE !== false,      // 默认启用
-      enableAutoReply: config.ENABLE_AUTO_REPLY !== false  // 默认启用
+      enableSnooze: config.ENABLE_SNOOZE !== false, // 默认启用
+      enableAutoReply: config.ENABLE_AUTO_REPLY !== false, // 默认启用
     };
   } catch (error) {
     console.log('获取消息交互配置失败，使用默认值');
     return {
       enableSnooze: true,
-      enableAutoReply: true
+      enableAutoReply: true,
     };
   }
 }
@@ -1547,13 +1674,13 @@ async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
 async function setupMessageReaction() {
   const config = await getMessageReactionConfig();
   console.log('🔔 消息交互功能配置:', config);
-  
+
   // 如果两个功能都禁用，跳过初始化
   if (!config.enableSnooze && !config.enableAutoReply) {
     console.log('🔔 稍后处理和自动答复功能都已禁用，不显示工具栏');
     return;
   }
-  
+
   initMessageReaction(config);
 }
 
@@ -1562,147 +1689,175 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(initJiraLinkProcessor, 1000);
     setTimeout(initGlipLinkProcessor, 1200);
-    setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
-    setTimeout(initFollowThreadVisuals, 2000);  // 初始化关注后续视觉标识
+    setTimeout(setupMessageReaction, 1500); // 初始化消息交互功能
+    setTimeout(initFollowThreadVisuals, 2000); // 初始化关注后续视觉标识
   });
 } else {
   setTimeout(initJiraLinkProcessor, 1000);
   setTimeout(initGlipLinkProcessor, 1200);
-  setTimeout(setupMessageReaction, 1500);  // 初始化消息交互功能
-  setTimeout(initFollowThreadVisuals, 2000);  // 初始化关注后续视觉标识
+  setTimeout(setupMessageReaction, 1500); // 初始化消息交互功能
+  setTimeout(initFollowThreadVisuals, 2000); // 初始化关注后续视觉标识
 }
-
 
 // Insert the CSS styles into the DOM
 function insertRadarPocCss(styles: string, id: string) {
-    // 检查是否已存在具有指定 ID 的样式表
-    if (document.getElementById(id)) {
-      return; // 如果已存在，直接返回
-    }
-  
-    // 如果不存在，创建并插入新的样式表
-    const styleSheet = document.createElement("style");
-    styleSheet.type = "text/css";
-    styleSheet.id = id; // 设置唯一的 ID
-    styleSheet.innerText = styles;
-    document.head.appendChild(styleSheet);
+  // 检查是否已存在具有指定 ID 的样式表
+  if (document.getElementById(id)) {
+    return; // 如果已存在，直接返回
+  }
+
+  // 如果不存在，创建并插入新的样式表
+  const styleSheet = document.createElement('style');
+  styleSheet.type = 'text/css';
+  styleSheet.id = id; // 设置唯一的 ID
+  styleSheet.innerText = styles;
+  document.head.appendChild(styleSheet);
 }
 
 function bootstrap() {
-    insertRadarPocCss(MARKDOWN_STYLE, 'radar-poc-markdown-style');
-    insertRadarPocCss(CONTENT_STYLE, 'radar-poc-content-style');
+  insertRadarPocCss(MARKDOWN_STYLE, 'radar-poc-markdown-style');
+  insertRadarPocCss(CONTENT_STYLE, 'radar-poc-content-style');
 
-    const appMainSection = document.getElementById('app-main-section');
-    const containerDiv = `<div id="radar-poc-container"></div>`; 
-    appMainSection.insertAdjacentHTML('beforeend', containerDiv);
-    const container = appMainSection.querySelector('#radar-poc-container');
-    const vm = new ViewModel();
+  const appMainSection = document.getElementById('app-main-section');
+  const containerDiv = `<div id="radar-poc-container"></div>`;
+  appMainSection.insertAdjacentHTML('beforeend', containerDiv);
+  const container = appMainSection.querySelector('#radar-poc-container');
+  const vm = new ViewModel();
 
-    ReactDOM.render(
-        // @ts-ignore
-        <App vm={vm} />,
-        container
-    );
+  ReactDOM.render(
+    // @ts-ignore
+    <App vm={vm} />,
+    container,
+  );
 }
 
 // Main listener
 // 注意：只有当 contentScript 实际处理某个消息类型时才返回 true
 // 如果不处理，应该返回 false 或 undefined，让其他监听器（如 background.ts）处理
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('收到消息:', message, '发送者:', sender);
+  console.log('收到消息:', message, '发送者:', sender);
 
-    if (!message || !message.type) {
-        console.warn('收到无效消息格式');
-        return false; // 不处理，让其他监听器处理
-    }
+  if (!message || !message.type) {
+    console.warn('收到无效消息格式');
+    return false; // 不处理，让其他监听器处理
+  }
 
-    const { type } = message;
+  const { type } = message;
 
-    if (type === 'GET_USER_INFO') {
-        console.log('处理 GET_USER_INFO 消息');
-        const userInfo = getUserInfoInRCTab();
-        console.log('获取到的用户信息:', userInfo);
-        sendResponse({ success: true, data: {
-            fullName: userInfo.fullName,
-            username: userInfo.username,
-            userEmail: userInfo.email,
-            extensionId: userInfo.extensionId,
-        } });
-        return true;
-    }
+  if (type === 'GET_USER_INFO') {
+    console.log('处理 GET_USER_INFO 消息');
+    const userInfo = getUserInfoInRCTab();
+    console.log('获取到的用户信息:', userInfo);
+    sendResponse({
+      success: true,
+      data: {
+        fullName: userInfo.fullName,
+        username: userInfo.username,
+        userEmail: userInfo.email,
+        extensionId: userInfo.extensionId,
+      },
+    });
+    return true;
+  }
 
-    if (type === 'RADAR-POC-OPEN-PANEL') {
-        console.log('处理 RADAR-POC-OPEN-PANEL 消息');
-        bootstrap();
-        sendResponse({ status: 'done', type });
-        return true; // 添加 return true
-    }
+  if (type === 'RADAR-POC-OPEN-PANEL') {
+    console.log('处理 RADAR-POC-OPEN-PANEL 消息');
+    bootstrap();
+    sendResponse({ status: 'done', type });
+    return true; // 添加 return true
+  }
 
-    if (type === 'FETCH_USER_MESSAGES') {
-        console.log('处理 FETCH_USER_MESSAGES 消息，参数:', message);
-        const { startTime } = message;
-        const configStr = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
-        const config = configStr ? JSON.parse(configStr) : {
-            selectGroupNames: "",
-            enableMessage: true,
-            enableSms: false,
-            enableVoicemail: false,
-            enableCallTranscript: false,
-            enableCalendar: false,
-            enableCandidateQuestions: false,
-            selectFolderGroupIds: "",
-            username: "",
-            extensionId: "",
-            apiKey: "",
-            model: "4o"
+  if (type === 'FETCH_USER_MESSAGES') {
+    console.log('处理 FETCH_USER_MESSAGES 消息，参数:', message);
+    const { startTime } = message;
+    const configStr = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
+    const config = configStr
+      ? JSON.parse(configStr)
+      : {
+          selectGroupNames: '',
+          enableMessage: true,
+          enableSms: false,
+          enableVoicemail: false,
+          enableCallTranscript: false,
+          enableCalendar: false,
+          enableCandidateQuestions: false,
+          selectFolderGroupIds: '',
+          username: '',
+          extensionId: '',
+          apiKey: '',
+          model: '4o',
         };
-        
-        // 确保必要的参数存在
-        if (!startTime) {
-            console.error('缺少必要的参数:', { startTime, config });
-            sendResponse({ success: false, error: '缺少必要的参数' });
-            return true;
-        }
 
-        // 执行数据获取
-        console.log('执行数据获取', startTime, config);
-        fetchUserData(startTime, config)
-            .then(data => {
-                console.log('数据获取成功:', data);
-                sendResponse({ success: true, data });
-            })
-            .catch(error => {
-                console.error('数据获取失败:', error);
-                sendResponse({ success: false, error: error.message });
-            });
-        return true; // 保持消息通道开启
+    // 确保必要的参数存在
+    if (!startTime) {
+      console.error('缺少必要的参数:', { startTime, config });
+      sendResponse({ success: false, error: '缺少必要的参数' });
+      return true;
     }
 
-    // 不处理的消息类型，返回 false 让其他监听器（如 background.ts）处理
-    return false;
+    // 执行数据获取
+    console.log('执行数据获取', startTime, config);
+    fetchUserData(startTime, config)
+      .then((data) => {
+        console.log('数据获取成功:', data);
+        sendResponse({ success: true, data });
+      })
+      .catch((error) => {
+        console.error('数据获取失败:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true; // 保持消息通道开启
+  }
+
+  // 不处理的消息类型，返回 false 让其他监听器（如 background.ts）处理
+  return false;
 });
 
 function getUserInfoInRCTab() {
-    const accountUD = getLocalStorageItem('global.account.UD', '');
-    const accountInfoList = getLocalStorageItem('global.account.ACCOUNT_SESSION_DATA_LIST', {});
-  
-    const accountInfo = accountUD ? accountInfoList[accountUD] : accountInfoList.find((item:any) => item.displayName != '');
-    console.log('accountInfoList', accountInfoList, accountInfo);
-    if (accountInfo) return {
+  const accountUD = getLocalStorageItem('global.account.UD', '');
+  const accountInfoList = getLocalStorageItem(
+    'global.account.ACCOUNT_SESSION_DATA_LIST',
+    {},
+  );
+
+  const accountInfo = accountUD
+    ? accountInfoList[accountUD]
+    : accountInfoList.find((item: any) => item.displayName != '');
+  console.log('accountInfoList', accountInfoList, accountInfo);
+  if (accountInfo)
+    return {
       extensionId: accountInfo.extensionId,
       email: accountInfo.email,
       fullName: accountInfo.displayName,
-      username: accountInfo.email ? accountInfo.email.trim().split('@')[0] : accountInfo.displayName.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
-    }
-  
-    const userInfo = getCurrentUserInfo();
-    return {
-      extensionId: userInfo.extensionId,
-      fullName: userInfo.username,
-      username: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, ''),
-      email: userInfo.username.trim().split(' ').join('.').toLowerCase().replace(/[^a-z0-9_\-.]/g, '') + '@ringcentral.com'
+      username: accountInfo.email
+        ? accountInfo.email.trim().split('@')[0]
+        : accountInfo.displayName
+            .trim()
+            .split(' ')
+            .join('.')
+            .toLowerCase()
+            .replace(/[^a-z0-9_\-.]/g, ''),
     };
-  }
+
+  const userInfo = getCurrentUserInfo();
+  return {
+    extensionId: userInfo.extensionId,
+    fullName: userInfo.username,
+    username: userInfo.username
+      .trim()
+      .split(' ')
+      .join('.')
+      .toLowerCase()
+      .replace(/[^a-z0-9_\-.]/g, ''),
+    email:
+      userInfo.username
+        .trim()
+        .split(' ')
+        .join('.')
+        .toLowerCase()
+        .replace(/[^a-z0-9_\-.]/g, '') + '@ringcentral.com',
+  };
+}
 
 // ==================== 关注后续视觉标识功能 ====================
 
@@ -2181,7 +2336,7 @@ async function getFollowThreadItems(): Promise<any[]> {
   try {
     // eslint-disable-next-line no-undef
     const result = await chrome.storage.local.get('concernedItems');
-    const items = result.concernedItems || [];
+    const items = (result.concernedItems || []).filter(isManualConcernedItem);
     return items.filter((item: any) => item.followThread && item.followConfig);
   } catch (error) {
     console.error('❌ 获取关注后续项失败:', error);
@@ -2197,7 +2352,7 @@ function getRelationTypeText(type: string): string {
     thread_reply: '线程回复',
     mention: '@提及',
     quote: '引用',
-    semantic: '语义相关'
+    semantic: '语义相关',
   };
   return map[type] || type;
 }
@@ -2210,7 +2365,7 @@ function getRelationTypeIcon(type: string): string {
     thread_reply: '💬',
     mention: '@',
     quote: '📝',
-    semantic: '🔗'
+    semantic: '🔗',
   };
   return map[type] || '🔗';
 }
@@ -2231,13 +2386,15 @@ function truncateText(text: string, maxLength: number): string {
  */
 function calculateTimeElementWidth(card: Element): number {
   // 查找时间元素: .conversation-card-head__right 下的 [data-name="time"]
-  const timeElement = card.querySelector('.conversation-card-head__right [data-name="time"]');
+  const timeElement = card.querySelector(
+    '.conversation-card-head__right [data-name="time"]',
+  );
   if (timeElement) {
     const timeWidth = timeElement.getBoundingClientRect().width;
     // 时间宽度 + 一些间距（8px 右边距 + 8px 与时间的间隔）
     return Math.ceil(timeWidth) + 16;
   }
-  
+
   // 备选：直接获取 .conversation-card-head__right 的宽度
   const rightSection = card.querySelector('.conversation-card-head__right');
   if (rightSection) {
@@ -2245,7 +2402,7 @@ function calculateTimeElementWidth(card: Element): number {
     // 右侧区域宽度 + 间距
     return Math.ceil(rightWidth) + 8;
   }
-  
+
   // 默认值
   return 120;
 }
@@ -2257,18 +2414,18 @@ function positionTooltip(tooltip: HTMLElement, triggerElement: HTMLElement) {
   // 获取触发元素和视口信息
   const triggerRect = triggerElement.getBoundingClientRect();
   const viewportHeight = window.innerHeight;
-  
+
   // 临时显示 tooltip 以获取其高度
   tooltip.style.visibility = 'hidden';
   tooltip.style.opacity = '1';
   const tooltipRect = tooltip.getBoundingClientRect();
   tooltip.style.visibility = '';
   tooltip.style.opacity = '';
-  
+
   // 计算下方和上方的可用空间
   const spaceBelow = viewportHeight - triggerRect.bottom;
   const spaceAbove = triggerRect.top;
-  
+
   // 决定显示位置（需要额外 50px 的缓冲空间）
   if (spaceBelow >= tooltipRect.height + 50) {
     // 下方空间足够，显示在下方
@@ -2298,7 +2455,9 @@ async function decorateFollowThreadMessages() {
   if (followItems.length === 0) return;
 
   // 获取所有消息卡片
-  const messageCards = Array.from(document.querySelectorAll('.conversation-card-wrapper[data-id]'));
+  const messageCards = Array.from(
+    document.querySelectorAll('.conversation-card-wrapper[data-id]'),
+  );
 
   for (const card of messageCards) {
     const postId = card.getAttribute('data-id');
@@ -2306,7 +2465,9 @@ async function decorateFollowThreadMessages() {
 
     // 移除已有的装饰，避免重复
     card.classList.remove('follow-thread-original', 'follow-thread-related');
-    const existingTooltip = card.querySelector('.follow-thread-tooltip, .follow-thread-related-tooltip');
+    const existingTooltip = card.querySelector(
+      '.follow-thread-tooltip, .follow-thread-related-tooltip',
+    );
     if (existingTooltip) {
       existingTooltip.remove();
     }
@@ -2321,7 +2482,7 @@ async function decorateFollowThreadMessages() {
 
     // 检查是否是原消息
     const originalItem = followItems.find(
-      (item: any) => item.followConfig?.originalMessage.postId === postId
+      (item: any) => item.followConfig?.originalMessage.postId === postId,
     );
 
     if (originalItem) {
@@ -2358,11 +2519,14 @@ async function decorateFollowThreadMessages() {
       // 创建丰富的浮出层
       const tooltip = document.createElement('div');
       tooltip.className = 'follow-thread-tooltip';
-      
+
       // 构建关联消息列表
       let relatedListHtml = '';
       if (relatedMessages.length > 0) {
-        relatedListHtml = relatedMessages.slice(0, 5).map((msg: any) => `
+        relatedListHtml = relatedMessages
+          .slice(0, 5)
+          .map(
+            (msg: any) => `
           <div class="tooltip-related-item">
             <span class="tooltip-related-type">${getRelationTypeIcon(msg.relationType)}</span>
             <div class="tooltip-related-info">
@@ -2370,8 +2534,10 @@ async function decorateFollowThreadMessages() {
               <div class="tooltip-related-summary">${escapeHtml(truncateText(msg.summary || '暂无摘要', 60))}</div>
             </div>
           </div>
-        `).join('');
-        
+        `,
+          )
+          .join('');
+
         if (relatedMessages.length > 5) {
           relatedListHtml += `<div class="tooltip-no-related">还有 ${relatedMessages.length - 5} 条关联消息...</div>`;
         }
@@ -2394,17 +2560,17 @@ async function decorateFollowThreadMessages() {
         </div>
       `;
       card.appendChild(tooltip);
-      
+
       // 智能定位 tooltip
       positionTooltip(tooltip, eyeIcon);
-      
+
       continue;
     }
 
     // 检查是否是关联消息
     for (const item of followItems) {
       const relatedMsg = item.followConfig?.relatedMessages.find(
-        (msg: any) => msg.postId === postId
+        (msg: any) => msg.postId === postId,
       );
 
       if (relatedMsg) {
@@ -2427,18 +2593,25 @@ async function decorateFollowThreadMessages() {
         const allRelatedMessages = item.followConfig.relatedMessages || [];
 
         // 构建其他关联消息列表（排除当前消息）
-        const otherRelated = allRelatedMessages.filter((m: any) => m.postId !== postId);
+        const otherRelated = allRelatedMessages.filter(
+          (m: any) => m.postId !== postId,
+        );
         let otherRelatedHtml = '';
         if (otherRelated.length > 0) {
           otherRelatedHtml = `
             <div class="tooltip-all-related">
               <div class="tooltip-section-label">其他关联消息 (${otherRelated.length})</div>
-              ${otherRelated.slice(0, 5).map((m: any) => `
+              ${otherRelated
+                .slice(0, 5)
+                .map(
+                  (m: any) => `
                 <div class="tooltip-related-compact">
                   <span class="tooltip-related-compact-icon">${getRelationTypeIcon(m.relationType)}</span>
                   <span class="tooltip-related-compact-text">${escapeHtml(m.sender)}: ${escapeHtml(truncateText(m.summary || '暂无摘要', 120))}</span>
                 </div>
-              `).join('')}
+              `,
+                )
+                .join('')}
               ${otherRelated.length > 5 ? `<div class="tooltip-related-compact" style="color: #9ca3af; padding: 8px 0; text-align: center; font-size: 10px;">还有 ${otherRelated.length - 5} 条...</div>` : ''}
             </div>
           `;
@@ -2465,10 +2638,10 @@ async function decorateFollowThreadMessages() {
           </div>
         `;
         card.appendChild(tooltip);
-        
+
         // 智能定位 tooltip
         positionTooltip(tooltip, badge);
-        
+
         break;
       }
     }
@@ -2585,16 +2758,18 @@ export function initFollowThreadVisuals() {
   // 监听 body 的子节点变化
   bodyObserver.observe(document.body, {
     childList: true,
-    subtree: true
+    subtree: true,
   });
 
   // 8. 监听消息列表容器
   const setupConversationObserver = () => {
-    const conversationList = document.querySelector('.conversation-list-content, .conversation-list, [class*="conversation"]');
+    const conversationList = document.querySelector(
+      '.conversation-list-content, .conversation-list, [class*="conversation"]',
+    );
     if (conversationList) {
       observer.observe(conversationList, {
         childList: true,
-        subtree: true
+        subtree: true,
       });
       console.log('✅ MutationObserver 已启动，监听新消息');
       return true;

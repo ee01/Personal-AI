@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>动作队列</h2>
-        <p>查看自我反思与梦境重放系统产出的执行动作。</p>
+        <p>{{ pageDescription }}</p>
       </div>
 
       <div class="filters">
@@ -102,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -117,10 +117,35 @@ const actions = ref<RuntimeAction[]>([]);
 const outreachByActionId = ref<Record<string, OutreachSession>>({});
 const queueStatus = ref<'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all'>('all');
 const executionMode = ref<'manual' | 'auto' | ''>('');
+const sourceRefIdFilter = computed(() =>
+  typeof route.query.sourceRefId === 'string' ? route.query.sourceRefId : '',
+);
+const sourceKindFilter = computed(() =>
+  typeof route.query.sourceKind === 'string' ? route.query.sourceKind : '',
+);
+const sourceTitleFilter = computed(() =>
+  typeof route.query.sourceTitle === 'string' ? route.query.sourceTitle : '',
+);
+const pageDescription = computed(() => {
+  if (sourceTitleFilter.value) {
+    return `查看规则「${sourceTitleFilter.value}」关联的执行动作。`;
+  }
+  if (sourceRefIdFilter.value) {
+    return `查看来源 ${sourceRefIdFilter.value} 关联的执行动作。`;
+  }
+  return '查看自我反思、主动询问与记忆规则产出的执行动作。';
+});
 
 onMounted(() => {
   void loadActions();
 });
+
+watch(
+  () => route.fullPath,
+  () => {
+    void loadActions();
+  },
+);
 
 async function loadActions() {
   loading.value = true;
@@ -129,11 +154,29 @@ async function loadActions() {
     const response = await client.getActions({
       queueStatus: queueStatus.value,
       executionMode: executionMode.value || undefined,
+      sourceKind: sourceKindFilter.value || undefined,
+      sourceRefId: sourceRefIdFilter.value || undefined,
       limit: 50,
     });
-    const filteredItems = actionId
-      ? response.items.filter((item) => item.id === actionId)
-      : response.items;
+    const filteredItems = response.items.filter((item) => {
+      if (actionId && item.id !== actionId) return false;
+      if (
+        sourceRefIdFilter.value &&
+        item.sourceRefId !== sourceRefIdFilter.value &&
+        item.params?.sourceRefId !== sourceRefIdFilter.value &&
+        item.params?.ruleRef !== sourceRefIdFilter.value
+      ) {
+        return false;
+      }
+      if (
+        sourceKindFilter.value &&
+        item.sourceKind !== sourceKindFilter.value &&
+        item.params?.sourceKind !== sourceKindFilter.value
+      ) {
+        return false;
+      }
+      return true;
+    });
     actions.value = filteredItems;
     await hydrateOutreachSessions(filteredItems);
   } catch (error) {

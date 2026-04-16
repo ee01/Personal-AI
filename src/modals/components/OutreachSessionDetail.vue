@@ -1,32 +1,42 @@
 <template>
   <div class="outreach-detail-page">
     <div class="page-head">
-      <button class="back-btn" @click="router.push('/outreach')">← 返回主动询问列表</button>
+      <button class="back-btn" @click="router.push('/outreach')">
+        ← 返回主动询问列表
+      </button>
       <div class="action-bar">
         <button
           v-if="detail?.status === 'pending_approval'"
           class="primary-btn"
           :disabled="busy || editing || !canApprove(detail)"
           @click="approveSession"
-        >{{ canApprove(detail) ? '批准发送' : '目标未确认，暂不能批准' }}</button>
+        >
+          {{ canApprove(detail) ? '批准发送' : '目标未确认，暂不能批准' }}
+        </button>
         <button
           v-if="detail && canEdit(detail.status) && !editing"
           class="ghost-btn"
           :disabled="busy"
           @click="startEdit"
-        >编辑目标与时间</button>
+        >
+          编辑目标与时间
+        </button>
         <button
           v-if="detail && canRetry(detail.status)"
           class="ghost-btn"
           :disabled="busy || editing"
           @click="retrySession"
-        >重试</button>
+        >
+          重试
+        </button>
         <button
           v-if="detail && canCancel(detail.status)"
           class="danger-btn"
           :disabled="busy || editing"
           @click="cancelSession"
-        >取消</button>
+        >
+          取消
+        </button>
       </div>
     </div>
 
@@ -47,45 +57,73 @@
             <p>{{ detail.renderedContext || '无上下文信息' }}</p>
           </div>
           <div class="hero-metrics">
-            <span class="metric-pill" :class="statusClass(detail.status)">状态 {{ statusLabel(detail.status) }}</span>
-            <span class="metric-pill">{{ originLabel(detail.originKind) }}</span>
-            <span class="metric-pill">追问 {{ detail.followupCount }}/{{ detail.maxFollowup }}</span>
+            <span class="metric-pill" :class="statusClass(detail.status)"
+              >状态 {{ statusLabel(detail.status) }}</span
+            >
+            <span class="metric-pill">{{
+              originLabel(detail.originKind)
+            }}</span>
+            <span
+              v-if="currentEvidenceSnapshot().stateLabel"
+              class="metric-pill queued"
+              >{{ currentEvidenceSnapshot().stateLabel }}</span
+            >
+            <span class="metric-pill"
+              >追问 {{ detail.followupCount }}/{{ detail.maxFollowup }}</span
+            >
           </div>
         </div>
 
         <div class="hero-meta">
-          <span>目标 {{ targetTypeLabel(detail.targetType) }} / {{ detail.targetRef }}</span>
+          <span
+            >目标 {{ targetTypeLabel(detail.targetType) }} /
+            {{ detail.targetRef }}</span
+          >
           <span>目标状态 {{ sessionTargetResolutionLabel(detail) }}</span>
-          <span v-if="detail.nextCheckAt">{{ nextTimeLabel(detail.status) }} {{ relativeTime(detail.nextCheckAt) }}</span>
-          <span v-if="detail.waitUntil">等待至 {{ relativeTime(detail.waitUntil) }}</span>
+          <span v-if="detail.nextCheckAt"
+            >{{ nextTimeLabel(detail.status) }}
+            {{ relativeTime(detail.nextCheckAt) }}</span
+          >
+          <span v-if="detail.waitUntil"
+            >等待至 {{ relativeTime(detail.waitUntil) }}</span
+          >
           <router-link
             v-if="detail.threadId"
             :to="`/reflection-threads/${detail.threadId}`"
             class="page-link"
-          >查看线程</router-link>
+            >查看线程</router-link
+          >
           <router-link
             v-if="detail.actionId"
             :to="`/actions?actionId=${encodeURIComponent(detail.actionId)}`"
             class="page-link"
-          >查看动作</router-link>
+            >查看动作</router-link
+          >
           <router-link
             v-if="detail.templateId"
             :to="`/outreach?templateId=${encodeURIComponent(detail.templateId)}`"
             class="page-link"
-          >查看模板会话</router-link>
+            >查看模板会话</router-link
+          >
         </div>
       </section>
 
       <section v-if="detail && canEdit(detail.status)" class="panel">
         <div class="panel-title-row">
           <div class="panel-title">发送前调整</div>
-          <span class="muted small">待审批或已排程时可修改目标、问题和计划发送时间。</span>
+          <span class="muted small"
+            >待审批或已排程时可修改目标、问题和计划发送时间。</span
+          >
         </div>
 
         <div v-if="editing" class="edit-grid">
           <label class="field-block">
             <span>询问对象类型</span>
-            <select v-model="draft.targetType" class="field-input" @change="handleTargetTypeChange">
+            <select
+              v-model="draft.targetType"
+              class="field-input"
+              @change="handleTargetTypeChange"
+            >
               <option value="private">某个人</option>
               <option value="group">群组</option>
             </select>
@@ -96,36 +134,55 @@
               v-model="draft.targetRef"
               class="field-input"
               type="text"
-              :placeholder="draft.targetType === 'group'
-                ? '输入群名、群聊 chat ID 或 RingCentral 聊天链接'
-                : '输入人名、邮箱、私聊 chat ID 或 RingCentral 聊天链接'"
+              :placeholder="
+                draft.targetType === 'group'
+                  ? '输入群名、群聊 chat ID 或 RingCentral 聊天链接'
+                  : '输入人名、邮箱、私聊 chat ID 或 RingCentral 聊天链接'
+              "
               @input="handleTargetInput"
             />
             <span class="muted small">
-              {{ draft.targetType === 'group'
-                ? '群组模式用于“问某个群”。支持群名、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。通过链接或 chat ID 确认过一次后，系统会记住这个群名。'
-                : '某个人模式用于“问某个人”。你只需要输入人名、邮箱，或直接贴已有私聊链接/chat ID；系统会自动判断是命中联系人，还是命中已有私聊。若是 service account 或较早的私聊，直接贴聊天链接会更稳。' }}
+              {{
+                draft.targetType === 'group'
+                  ? '群组模式用于“问某个群”。支持群名、纯数字 chat ID，以及 `https://app.ringcentral.com/l/messages/...` 这类聊天链接。通过链接或 chat ID 确认过一次后，系统会记住这个群名。'
+                  : '某个人模式用于“问某个人”。你只需要输入人名、邮箱，或直接贴已有私聊链接/chat ID；系统会自动判断是命中联系人，还是命中已有私聊。若是 service account 或较早的私聊，直接贴聊天链接会更稳。'
+              }}
             </span>
           </label>
           <div class="field-block full-span">
             <div class="search-row">
               <span class="muted small">
-                {{ searchingTargets ? '正在检索候选...' : `当前解析状态：${draftResolutionLabel}` }}
+                {{
+                  searchingTargets
+                    ? '正在检索候选...'
+                    : `当前解析状态：${draftResolutionLabel}`
+                }}
               </span>
               <div class="search-action-group">
-                <button class="ghost-btn" :disabled="busy || syncingDirectory" @click="refreshDirectory">
+                <button
+                  class="ghost-btn"
+                  :disabled="busy || syncingDirectory"
+                  @click="refreshDirectory"
+                >
                   {{ syncingDirectory ? '刷新目录中...' : '刷新目录' }}
                 </button>
-                <button class="ghost-btn" :disabled="busy || searchingTargets" @click="searchTargets(true)">
+                <button
+                  class="ghost-btn"
+                  :disabled="busy || searchingTargets"
+                  @click="searchTargets(true)"
+                >
                   重新检索
                 </button>
               </div>
             </div>
-            <div class="muted small" style="margin-top: 6px;">
+            <div class="muted small" style="margin-top: 6px">
               {{ directoryStatusHint }}
             </div>
             <p v-if="searchError" class="field-error">{{ searchError }}</p>
-            <div v-if="draft.targetCandidates.length > 0" class="candidate-list">
+            <div
+              v-if="draft.targetCandidates.length > 0"
+              class="candidate-list"
+            >
               <button
                 v-for="candidate in draft.targetCandidates"
                 :key="`${candidate.kind}:${candidate.entityId}`"
@@ -135,7 +192,11 @@
               >
                 <strong>{{ candidate.label }}</strong>
                 <span class="muted small">
-                  {{ candidateTypeLabel(candidate) }}<template v-if="candidate.subtitle"> · {{ candidate.subtitle }}</template> · 匹配度 {{ candidate.score }}
+                  {{ candidateTypeLabel(candidate)
+                  }}<template v-if="candidate.subtitle">
+                    · {{ candidate.subtitle }}</template
+                  >
+                  · 匹配度 {{ candidate.score }}
                 </span>
               </button>
             </div>
@@ -168,24 +229,44 @@
           </label>
           <div class="field-block">
             <span>说明</span>
-            <p class="muted">留空表示批准后立即发送；如果当前已排程，留空则改为尽快发送。问某个人时不需要先分辨“联系人”还是“已有私聊”，选候选即可。</p>
+            <p class="muted">
+              留空表示批准后立即发送；如果当前已排程，留空则改为尽快发送。问某个人时不需要先分辨“联系人”还是“已有私聊”，选候选即可。
+            </p>
           </div>
           <div class="edit-actions full-span">
-            <button class="primary-btn" :disabled="busy" @click="saveDraft">保存调整</button>
-            <button class="ghost-btn" :disabled="busy" @click="cancelEdit">取消编辑</button>
+            <button class="primary-btn" :disabled="busy" @click="saveDraft">
+              保存调整
+            </button>
+            <button class="ghost-btn" :disabled="busy" @click="cancelEdit">
+              取消编辑
+            </button>
           </div>
         </div>
 
         <div v-else class="summary-text">
-          <p>当前对象：{{ targetTypeLabel(detail.targetType) }} / {{ detail.targetRef }}</p>
+          <p>
+            当前对象：{{ targetTypeLabel(detail.targetType) }} /
+            {{ detail.targetRef }}
+          </p>
           <p>目标解析：{{ sessionTargetResolutionLabel(detail) }}</p>
-          <p>计划发送：{{ detail.nextCheckAt ? relativeTime(detail.nextCheckAt) : '批准后立即发送' }}</p>
+          <p>
+            计划发送：{{
+              detail.nextCheckAt
+                ? relativeTime(detail.nextCheckAt)
+                : '批准后立即发送'
+            }}
+          </p>
         </div>
       </section>
 
-      <section v-if="extractOutcomeSummary(detail.outcome)" class="panel summary-highlight-panel">
+      <section
+        v-if="extractOutcomeSummary(detail.outcome)"
+        class="panel summary-highlight-panel"
+      >
         <div class="panel-title">结果摘要</div>
-        <p class="summary-text strong">{{ extractOutcomeSummary(detail.outcome) }}</p>
+        <p class="summary-text strong">
+          {{ extractOutcomeSummary(detail.outcome) }}
+        </p>
       </section>
 
       <section class="panel">
@@ -193,12 +274,66 @@
         <p class="summary-text">{{ sessionSummary(detail) }}</p>
       </section>
 
+      <section v-if="currentEvidenceSnapshot().hasEvidence" class="panel">
+        <div class="panel-title">证据面板</div>
+        <div class="evidence-metrics">
+          <span
+            v-if="currentEvidenceSnapshot().phaseLabel"
+            class="metric-pill queued"
+            >命中阶段 {{ currentEvidenceSnapshot().phaseLabel }}</span
+          >
+          <span v-if="currentEvidenceSnapshot().source" class="metric-pill"
+            >命中来源 {{ currentEvidenceSnapshot().source }}</span
+          >
+        </div>
+        <p v-if="currentEvidenceSnapshot().summary" class="summary-text">
+          {{ currentEvidenceSnapshot().summary }}
+        </p>
+        <div v-if="currentEvidenceSnapshot().relatedMessage" class="reply-box">
+          <div class="box-title">对应消息</div>
+          <p>{{ currentEvidenceSnapshot().relatedMessage }}</p>
+          <div
+            v-if="currentEvidenceSnapshot().relatedMessageId"
+            class="muted small"
+          >
+            消息 ID: {{ currentEvidenceSnapshot().relatedMessageId }}
+          </div>
+        </div>
+      </section>
+
+      <section
+        v-if="detail.evidence && detail.evidence.length > 0"
+        class="panel"
+      >
+        <div class="panel-title">结构化证据明细</div>
+        <div class="event-list">
+          <div
+            v-for="item in detail.evidence"
+            :key="`${item.sourceKind}:${item.sourceId || item.title || item.content}`"
+            class="event-item"
+          >
+            <div class="inline-head">
+              <span>{{ item.title || item.sourceKind }}</span>
+              <span class="muted small">{{ item.sourceId || 'no-id' }}</span>
+            </div>
+            <p class="summary-text">{{ item.content }}</p>
+            <pre
+              v-if="item.metadata && Object.keys(item.metadata).length > 0"
+              class="json-block"
+              >{{ formatJson(item.metadata) }}</pre
+            >
+          </div>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-title">回复内容</div>
         <div v-if="detail.replyRawText" class="reply-box">
           <div class="inline-head">
             <span>{{ replySenderDisplay(detail) }}</span>
-            <span class="muted small">{{ replyClassificationLabel(detail.replyClassification) }}</span>
+            <span class="muted small">{{
+              replyClassificationLabel(detail.replyClassification)
+            }}</span>
           </div>
           <p>{{ detail.replyRawText }}</p>
           <div v-if="replySenderIsInferred(detail)" class="muted small">
@@ -213,7 +348,10 @@
 
       <section class="panel">
         <div class="panel-title">结构化结果</div>
-        <div v-if="detail.outcome && Object.keys(detail.outcome).length > 0" class="json-panel">
+        <div
+          v-if="detail.outcome && Object.keys(detail.outcome).length > 0"
+          class="json-panel"
+        >
           <pre>{{ formatJson(detail.outcome) }}</pre>
         </div>
         <div v-else class="muted">暂无结构化结果</div>
@@ -222,12 +360,20 @@
       <section v-if="detail.actions && detail.actions.length > 0" class="panel">
         <div class="panel-title">后续查证动作</div>
         <div class="event-list">
-          <div v-for="action in detail.actions" :key="action.id" class="event-item">
+          <div
+            v-for="action in detail.actions"
+            :key="action.id"
+            class="event-item"
+          >
             <div class="inline-head">
               <span>{{ action.title }}</span>
-              <span class="muted small">{{ followUpActionStatusLabel(action) }}</span>
+              <span class="muted small">{{
+                followUpActionStatusLabel(action)
+              }}</span>
             </div>
-            <p class="summary-text">{{ action.description || action.actionType }}</p>
+            <p class="summary-text">
+              {{ action.description || action.actionType }}
+            </p>
           </div>
         </div>
       </section>
@@ -239,23 +385,42 @@
           <div v-for="event in events" :key="event.id" class="event-item">
             <div class="inline-head">
               <span>{{ eventTypeLabel(event.eventType) }}</span>
-              <span class="muted small">{{ relativeTime(event.createdAt) }}</span>
+              <span class="muted small">{{
+                relativeTime(event.createdAt)
+              }}</span>
             </div>
-            <pre v-if="event.payload && Object.keys(event.payload).length > 0" class="json-block">{{ formatJson(event.payload) }}</pre>
+            <pre
+              v-if="event.payload && Object.keys(event.payload).length > 0"
+              class="json-block"
+              >{{ formatJson(event.payload) }}</pre
+            >
           </div>
         </div>
       </section>
 
-      <section v-if="detail.errorMessage || detail.errorCode" class="panel error-panel">
+      <section
+        v-if="detail.errorMessage || detail.errorCode"
+        class="panel error-panel"
+      >
         <div class="panel-title">错误信息</div>
-        <p>{{ detail.errorCode || 'error' }}: {{ detail.errorMessage || 'unknown error' }}</p>
+        <p>
+          {{ detail.errorCode || 'error' }}:
+          {{ detail.errorMessage || 'unknown error' }}
+        </p>
       </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -266,6 +431,10 @@ import {
   type OutreachTargetCandidate,
   type RuntimeAction,
 } from '../../services/MemoryServiceClient';
+import {
+  getLatestReplyEvent,
+  getOutreachEvidenceSnapshot,
+} from './outreachEvidence';
 
 const client = getMemoryServiceClient();
 const route = useRoute();
@@ -282,7 +451,10 @@ const detail = ref<OutreachSession | null>(null);
 const draft = reactive({
   targetType: 'private',
   targetRef: '',
-  targetResolutionStatus: 'unresolved' as 'unresolved' | 'ambiguous' | 'resolved',
+  targetResolutionStatus: 'unresolved' as
+    | 'unresolved'
+    | 'ambiguous'
+    | 'resolved',
   targetResolvedType: '',
   targetResolvedId: '',
   targetResolvedLabel: '',
@@ -295,7 +467,9 @@ const draft = reactive({
 
 const events = computed<OutreachEvent[]>(() => {
   const list = detail.value?.events ?? [];
-  return [...list].sort((a, b) => normalizeTimestamp(b.createdAt) - normalizeTimestamp(a.createdAt));
+  return [...list].sort(
+    (a, b) => normalizeTimestamp(b.createdAt) - normalizeTimestamp(a.createdAt),
+  );
 });
 
 let targetSearchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -329,7 +503,9 @@ async function loadDetail() {
       client.getOutreachDirectoryStatus(),
     ]);
     detail.value = session;
-    directoryStatus.value = Array.isArray(directory?.items) ? directory.items : [];
+    directoryStatus.value = Array.isArray(directory?.items)
+      ? directory.items
+      : [];
     resetDraft(detail.value);
   } catch (error) {
     console.error('Failed to load outreach session detail:', error);
@@ -391,7 +567,10 @@ async function cancelSession() {
   if (!window.confirm('确认取消这个主动询问会话吗？')) return;
   busy.value = true;
   try {
-    await client.cancelOutreachSession(detail.value.id, 'Cancelled from outreach detail UI');
+    await client.cancelOutreachSession(
+      detail.value.id,
+      'Cancelled from outreach detail UI',
+    );
     await loadDetail();
   } finally {
     busy.value = false;
@@ -422,13 +601,17 @@ async function saveDraft() {
   const normalizedTargetRef = draft.targetRef.trim().toLowerCase();
   if (
     draft.targetType !== 'group' &&
-    (normalizedTargetRef === 'user' || normalizedTargetRef === 'me' || normalizedTargetRef === 'self')
+    (normalizedTargetRef === 'user' ||
+      normalizedTargetRef === 'me' ||
+      normalizedTargetRef === 'self')
   ) {
     window.alert('主动询问只用于对外询问，不应把当前用户作为目标。');
     return;
   }
   if (draft.targetResolutionStatus !== 'resolved') {
-    window.alert('请先通过 RingCentral 检索并确认目标，确认后才能保存可审批的主动询问。');
+    window.alert(
+      '请先通过 RingCentral 检索并确认目标，确认后才能保存可审批的主动询问。',
+    );
     return;
   }
 
@@ -475,7 +658,12 @@ function canRetry(status: OutreachSessionStatus) {
 }
 
 function canCancel(status: OutreachSessionStatus) {
-  return status === 'pending_approval' || status === 'scheduled' || status === 'waiting_reply' || status === 'deferred';
+  return (
+    status === 'pending_approval' ||
+    status === 'scheduled' ||
+    status === 'waiting_reply' ||
+    status === 'deferred'
+  );
 }
 
 function canEdit(status: OutreachSessionStatus) {
@@ -522,12 +710,15 @@ function parseDateTimeLocal(value: string): number | null {
 function resetDraft(session: OutreachSession | null) {
   draft.targetType = session?.targetType === 'group' ? 'group' : 'private';
   draft.targetRef = session?.targetRef || '';
-  draft.targetResolutionStatus = session?.targetResolutionStatus || 'unresolved';
+  draft.targetResolutionStatus =
+    session?.targetResolutionStatus || 'unresolved';
   draft.targetResolvedType = session?.targetResolvedType || '';
   draft.targetResolvedId = session?.targetResolvedId || '';
   draft.targetResolvedLabel = session?.targetResolvedLabel || '';
   draft.targetResolvedChatId = session?.targetResolvedChatId || '';
-  draft.targetCandidates = Array.isArray(session?.targetCandidates) ? [...session!.targetCandidates!] : [];
+  draft.targetCandidates = Array.isArray(session?.targetCandidates)
+    ? [...session!.targetCandidates!]
+    : [];
   draft.renderedQuestion = session?.renderedQuestion || '';
   draft.renderedContext = session?.renderedContext || '';
   draft.nextCheckAtInput = toDateTimeLocal(session?.nextCheckAt);
@@ -546,30 +737,39 @@ async function searchTargets(manual = true) {
   }
   if (isSystemPseudoTarget(query)) {
     clearResolvedTarget();
-    searchError.value = '`sync.service` 是定时消息里的系统伪目标，不是实际的 RingCentral 用户/群组，不能直接用于主动询问。';
+    searchError.value =
+      '`sync.service` 是定时消息里的系统伪目标，不是实际的 RingCentral 用户/群组，不能直接用于主动询问。';
     return;
   }
   const currentSearch = ++targetSearchSequence;
   searchingTargets.value = true;
   searchError.value = '';
   try {
-    const response = await client.searchOutreachTargets(draft.targetType, query, 8);
+    const response = await client.searchOutreachTargets(
+      draft.targetType,
+      query,
+      8,
+    );
     if (currentSearch !== targetSearchSequence) {
       return;
     }
-    directoryStatus.value = Array.isArray(response.directoryStatus) ? response.directoryStatus : directoryStatus.value;
+    directoryStatus.value = Array.isArray(response.directoryStatus)
+      ? response.directoryStatus
+      : directoryStatus.value;
     draft.targetCandidates = response.items;
     if (response.items.length === 0) {
       clearResolvedTarget();
       const scopeStatus = activeDirectoryScopeStatus();
-      const syncHint = scopeStatus?.status === 'syncing'
-        ? '目录仍在同步中，你也可以稍后再试。'
-        : scopeStatus?.status === 'error'
-          ? '目录同步失败，建议先去 Options 刷新目录，或直接粘贴聊天链接 / chat ID。'
-          : '';
-      searchError.value = draft.targetType === 'group'
-        ? `未找到与 “${query}” 匹配的群组目标。请确认当前已切到群组模式；也可以直接粘贴群聊链接或 chat ID。${syncHint ? ` ${syncHint}` : ''}`
-        : `未找到与 “${query}” 匹配的人员或私聊目标。某个人模式不会检索群名；如果你要找群，请切到群组模式。若是 service account 或历史私聊，建议直接粘贴聊天链接。${syncHint ? ` ${syncHint}` : ''}`;
+      const syncHint =
+        scopeStatus?.status === 'syncing'
+          ? '目录仍在同步中，你也可以稍后再试。'
+          : scopeStatus?.status === 'error'
+            ? '目录同步失败，建议先去 Options 刷新目录，或直接粘贴聊天链接 / chat ID。'
+            : '';
+      searchError.value =
+        draft.targetType === 'group'
+          ? `未找到与 “${query}” 匹配的群组目标。请确认当前已切到群组模式；也可以直接粘贴群聊链接或 chat ID。${syncHint ? ` ${syncHint}` : ''}`
+          : `未找到与 “${query}” 匹配的人员或私聊目标。某个人模式不会检索群名；如果你要找群，请切到群组模式。若是 service account 或历史私聊，建议直接粘贴聊天链接。${syncHint ? ` ${syncHint}` : ''}`;
       return;
     }
     if (response.items.length === 1 && response.items[0].score >= 90) {
@@ -599,7 +799,9 @@ async function refreshDirectory() {
   syncingDirectory.value = true;
   try {
     const response = await client.syncOutreachDirectory(true);
-    directoryStatus.value = Array.isArray(response?.items) ? response.items : [];
+    directoryStatus.value = Array.isArray(response?.items)
+      ? response.items
+      : [];
     if (draft.targetRef.trim().length >= 2) {
       await searchTargets(false);
     }
@@ -684,7 +886,8 @@ function statusLabel(status: string) {
 
 function originLabel(originKind?: string) {
   if (originKind === 'reflection_action') return '自我反思';
-  if (originKind === 'scheduled_template' || originKind === 'manual_action') return '手动/定时';
+  if (originKind === 'scheduled_template' || originKind === 'manual_action')
+    return '手动/定时';
   return '未知来源';
 }
 
@@ -700,7 +903,11 @@ function targetResolutionLabel(targetRef?: string) {
   return '原始对象文本';
 }
 
-function resolvedTargetSummary(targetType?: string, resolvedType?: string | null, label?: string) {
+function resolvedTargetSummary(
+  targetType?: string,
+  resolvedType?: string | null,
+  label?: string,
+) {
   const resolvedLabel = label || '未知对象';
   if (targetType === 'group') {
     return `已确认群组：${resolvedLabel}`;
@@ -716,7 +923,11 @@ function resolvedTargetSummary(targetType?: string, resolvedType?: string | null
 
 function sessionTargetResolutionLabel(session: OutreachSession) {
   if (session.targetResolutionStatus === 'resolved') {
-    return resolvedTargetSummary(session.targetType, session.targetResolvedType, session.targetResolvedLabel || session.targetRef);
+    return resolvedTargetSummary(
+      session.targetType,
+      session.targetResolvedType,
+      session.targetResolvedLabel || session.targetRef,
+    );
   }
   if (session.targetResolutionStatus === 'ambiguous') {
     return '找到多个候选，待你确认';
@@ -732,8 +943,22 @@ function candidateTypeLabel(candidate: OutreachTargetCandidate) {
 }
 
 function latestReplyEvent(session: OutreachSession) {
-  const replyEvents = (session.events ?? []).filter((event) => event.eventType === 'reply_received');
-  return replyEvents.length > 0 ? replyEvents[replyEvents.length - 1] : null;
+  return getLatestReplyEvent(session);
+}
+
+function currentEvidenceSnapshot() {
+  return detail.value
+    ? getOutreachEvidenceSnapshot(detail.value)
+    : {
+        hasEvidence: false,
+        stateLabel: '',
+        phaseKey: '',
+        phaseLabel: '',
+        source: '',
+        summary: '',
+        relatedMessage: '',
+        relatedMessageId: '',
+      };
 }
 
 function replySenderDisplay(session: OutreachSession) {
@@ -752,7 +977,10 @@ function replySenderDisplay(session: OutreachSession) {
     return session.targetResolvedLabel || session.targetRef || '未知发送者';
   }
 
-  if ((session.targetType === 'private' || session.targetType === 'person') && session.targetRef?.trim()) {
+  if (
+    (session.targetType === 'private' || session.targetType === 'person') &&
+    session.targetRef?.trim()
+  ) {
     return session.targetRef.trim();
   }
 
@@ -802,7 +1030,9 @@ function eventTypeLabel(value?: string) {
   return value || '未知事件';
 }
 
-function extractOutcomeSummary(outcome: Record<string, unknown> | undefined): string {
+function extractOutcomeSummary(
+  outcome: Record<string, unknown> | undefined,
+): string {
   if (!outcome) return '';
   const candidates = [
     outcome.resolvedConclusion,
@@ -812,25 +1042,30 @@ function extractOutcomeSummary(outcome: Record<string, unknown> | undefined): st
     outcome.answerText,
     outcome.reply,
   ];
-  const found = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  const found = candidates.find(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
   return typeof found === 'string' ? found.trim() : '';
 }
 
 function sessionSummary(session: OutreachSession): string {
   const outcomeSummary = extractOutcomeSummary(session.outcome);
   if (outcomeSummary) return outcomeSummary;
-  if (session.status === 'pending_approval') return '等待人工审批。批准后系统才会正式发出询问。';
+  if (session.status === 'pending_approval')
+    return '等待人工审批。批准后系统才会正式发出询问。';
   if (session.status === 'scheduled') return '会话已创建，等待到达发送时间。';
-  if (session.status === 'waiting_reply') return '询问已发出，系统正在等待对方回复。';
+  if (session.status === 'waiting_reply')
+    return '询问已发出，系统正在等待对方回复。';
   if (session.status === 'deferred') {
     return session.waitUntil
       ? `对方表示稍后回复，当前等待到 ${relativeTime(session.waitUntil)}。`
       : '对方表示稍后回复，当前继续等待。';
   }
   if (session.status === 'resolved') {
-    const resolutionState = typeof session.outcome?.resolutionState === 'string'
-      ? session.outcome.resolutionState
-      : '';
+    const resolutionState =
+      typeof session.outcome?.resolutionState === 'string'
+        ? session.outcome.resolutionState
+        : '';
     if (resolutionState === 'partial') {
       return '已拿到部分可用结论，系统正在继续查证更精确的细节。';
     }
@@ -839,8 +1074,10 @@ function sessionSummary(session: OutreachSession): string {
     }
     return session.replyRawText?.trim() || '已收到可用回复，结果已归档。';
   }
-  if (session.status === 'no_reply') return '已达到等待与追问上限，仍未收到回复。';
-  if (session.status === 'escalated') return '系统无法自动继续，已升级等待人工判断。';
+  if (session.status === 'no_reply')
+    return '已达到等待与追问上限，仍未收到回复。';
+  if (session.status === 'escalated')
+    return '系统无法自动继续，已升级等待人工判断。';
   if (session.status === 'cancelled') return '该主动询问已被取消。';
   if (session.status === 'failed') {
     return session.errorMessage?.trim() || '发送或轮询过程中发生错误。';
@@ -852,14 +1089,16 @@ function statusClass(status: string) {
   if (status === 'resolved') return 'ok';
   if (status === 'waiting_reply' || status === 'deferred') return 'waiting';
   if (status === 'pending_approval' || status === 'scheduled') return 'queued';
-  if (status === 'escalated' || status === 'failed' || status === 'no_reply') return 'error';
+  if (status === 'escalated' || status === 'failed' || status === 'no_reply')
+    return 'error';
   return '';
 }
 
 function followUpActionStatusLabel(action: RuntimeAction) {
   if (action.queueStatus === 'succeeded') return '已完成';
   if (action.queueStatus === 'running') return '执行中';
-  if (action.queueStatus === 'queued') return action.executionMode === 'auto' ? '等待自动执行' : '等待审批';
+  if (action.queueStatus === 'queued')
+    return action.executionMode === 'auto' ? '等待自动执行' : '等待审批';
   if (action.queueStatus === 'failed') return '执行失败';
   if (action.queueStatus === 'dead_letter') return '已停止重试';
   if (action.queueStatus === 'cancelled') return '已取消';
@@ -950,6 +1189,13 @@ function followUpActionStatusLabel(action: RuntimeAction) {
   color: #94a3b8;
   font-size: 0.83rem;
   flex-wrap: wrap;
+}
+
+.evidence-metrics {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
 }
 
 .metric-pill {
@@ -1099,7 +1345,11 @@ function followUpActionStatusLabel(action: RuntimeAction) {
 
 .summary-highlight-panel {
   border-color: rgba(96, 165, 250, 0.35);
-  background: linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(30, 64, 175, 0.26));
+  background: linear-gradient(
+    135deg,
+    rgba(30, 41, 59, 0.96),
+    rgba(30, 64, 175, 0.26)
+  );
 }
 
 .event-list {

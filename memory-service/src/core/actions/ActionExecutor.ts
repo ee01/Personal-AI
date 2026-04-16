@@ -369,11 +369,11 @@ export class ActionExecutor {
   private async delegateOpenClaw(action: QueuedActionRecord): Promise<DispatchOutcome> {
     const params = safeJsonValue(action.params);
     const mode = params.mode === 'write' ? 'write' : 'read';
-    if (mode === 'write' && (action.executionMode !== 'manual' || !action.requiresApproval)) {
+    if (action.requiresApproval && action.executionMode === 'auto') {
       return {
         result: {
           status: 'error',
-          summary: 'OpenClaw 写操作必须以手动审批动作执行。',
+          summary: '需要审批的 OpenClaw 动作不能以自动模式执行。',
           payload: {
             mode,
             executionMode: action.executionMode,
@@ -381,7 +381,7 @@ export class ActionExecutor {
           },
         },
         queueStatus: 'failed',
-        errorMessage: 'OpenClaw 写操作必须以手动审批动作执行。',
+        errorMessage: '需要审批的 OpenClaw 动作不能以自动模式执行。',
       };
     }
 

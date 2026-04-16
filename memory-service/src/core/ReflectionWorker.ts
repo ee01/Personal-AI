@@ -5,6 +5,7 @@ import {
   type EvidenceResolutionPlan,
   type EvidenceResolutionPolicy,
 } from './EvidenceResolutionPlanner.js';
+import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import type { ReflectionThreadRecord } from '../repositories/ReflectionThreadRepository.js';
@@ -345,7 +346,6 @@ Rules:
       action.actionType.trim() === 'delegate_openclaw' && typeof params.mode === 'string'
         ? params.mode.trim().toLowerCase()
         : undefined;
-    const isWriteDelegation = requestedMode === 'write';
     const normalizedActionType = action.actionType.trim();
     const explicitExecutionMode = normalizeExecutionMode(action.executionMode);
 
@@ -359,16 +359,23 @@ Rules:
 
     const shouldForceAutoInternalAction =
       INTERNAL_AUTO_ACTION_TYPES.has(normalizedActionType) && explicitExecutionMode !== 'manual';
-    const executionMode = isWriteDelegation
-      ? 'manual'
-      : shouldForceAutoInternalAction
-        ? 'auto'
-        : explicitExecutionMode ?? defaultExecutionModeForAction(normalizedActionType, params);
-    const requiresApproval = isWriteDelegation
-      ? true
-      : shouldForceAutoInternalAction
-        ? false
-        : action.requiresApproval ?? executionMode !== 'auto';
+    const defaultExecutionMode = shouldForceAutoInternalAction
+      ? 'auto'
+      : explicitExecutionMode ?? defaultExecutionModeForAction(normalizedActionType, params);
+    const defaultRequiresApproval = shouldForceAutoInternalAction
+      ? false
+      : action.requiresApproval ?? defaultExecutionMode !== 'auto';
+    const delegatePolicy = normalizedActionType === 'delegate_openclaw'
+      ? resolveDelegateOpenClawPolicy({
+          params,
+          requestedExecutionMode: explicitExecutionMode,
+          requestedRequiresApproval: action.requiresApproval,
+          defaultExecutionMode,
+          defaultRequiresApproval,
+        })
+      : null;
+    const executionMode = delegatePolicy?.executionMode ?? defaultExecutionMode;
+    const requiresApproval = delegatePolicy?.requiresApproval ?? defaultRequiresApproval;
 
     return {
       actionType: normalizedActionType,

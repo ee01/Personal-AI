@@ -3,15 +3,27 @@
     <div class="page-header">
       <div>
         <h2>主动询问</h2>
-        <p>查看待触发模板、已发出会话、等待回复和已完成的主动询问。</p>
+        <p>
+          查看待触发模板、已发出会话、等待回复和已完成的主动询问。系统内部观察规则采集到的证据会在这里按会话展示。
+        </p>
       </div>
 
       <div class="summary-row">
-        <span class="summary-pill">待触发模板 {{ visibleTemplates.length }}</span>
-        <span class="summary-pill">已排程待发出 {{ queuedSessions.length }}</span>
-        <span class="summary-pill">等待回复 {{ summary.waitingReplyCount }}</span>
-        <span class="summary-pill danger">已升级 {{ summary.escalatedCount }}</span>
-        <span class="summary-pill warn">待审批 {{ summary.pendingApprovalCount }}</span>
+        <span class="summary-pill"
+          >待触发模板 {{ visibleTemplates.length }}</span
+        >
+        <span class="summary-pill"
+          >已排程待发出 {{ queuedSessions.length }}</span
+        >
+        <span class="summary-pill"
+          >等待回复 {{ summary.waitingReplyCount }}</span
+        >
+        <span class="summary-pill danger"
+          >已升级 {{ summary.escalatedCount }}</span
+        >
+        <span class="summary-pill warn"
+          >待审批 {{ summary.pendingApprovalCount }}</span
+        >
       </div>
     </div>
 
@@ -20,7 +32,17 @@
         <div class="setup-title">{{ setupBannerTitle }}</div>
         <p class="setup-text">{{ setupBannerText }}</p>
       </div>
-      <button class="setup-btn" @click="openOptionsPage">前往主动询问配置</button>
+      <button class="setup-btn" @click="openOptionsPage">
+        前往主动询问配置
+      </button>
+    </div>
+
+    <div class="info-banner">
+      <div class="info-banner-title">系统观察规则不会进入记忆入口规则列表</div>
+      <p class="info-banner-text">
+        帮我问 / 自我反思等内部观察命中会在主动询问 session
+        中展示为证据状态，而不会写成用户可编辑的记忆入口规则。
+      </p>
     </div>
 
     <div class="filters">
@@ -61,7 +83,10 @@
       <p>加载主动询问会话中...</p>
     </div>
 
-    <div v-else-if="sessions.length === 0 && visibleTemplates.length === 0" class="empty-state">
+    <div
+      v-else-if="sessions.length === 0 && visibleTemplates.length === 0"
+      class="empty-state"
+    >
       <p>暂无主动询问会话。</p>
     </div>
 
@@ -71,40 +96,81 @@
           <h3>待触发模板</h3>
           <span class="group-count">{{ visibleTemplates.length }}</span>
         </div>
-        <p class="group-desc">这些是后续仍会继续触发的模板；如果模板之前已经执行过，那次会话会单独出现在历史记录里。</p>
+        <p class="group-desc">
+          这些是后续仍会继续触发的模板；如果模板之前已经执行过，那次会话会单独出现在历史记录里。
+        </p>
 
         <div class="session-list">
-        <div v-for="item in visibleTemplates" :key="item.template.id" class="session-card template-card">
-          <div class="card-head">
-            <div>
-              <h3>
-                <router-link :to="templateListRoute(item)" class="title-link">
-                  {{ item.template.questionTemplate || item.template.title || '(空问题)' }}
-                </router-link>
-              </h3>
-              <p class="context-text">{{ item.template.contextTemplate || '模板已同步，等待触发。' }}</p>
+          <div
+            v-for="item in visibleTemplates"
+            :key="item.template.id"
+            class="session-card template-card"
+          >
+            <div class="card-head">
+              <div>
+                <h3>
+                  <router-link :to="templateListRoute(item)" class="title-link">
+                    {{
+                      item.template.questionTemplate ||
+                      item.template.title ||
+                      '(空问题)'
+                    }}
+                  </router-link>
+                </h3>
+                <p class="context-text">
+                  {{
+                    item.template.contextTemplate || '模板已同步，等待触发。'
+                  }}
+                </p>
+              </div>
+              <div class="head-badges">
+                <span class="badge queued">待触发模板</span>
+                <span class="badge muted">{{
+                  templateSyncStateLabel(item.template.syncState)
+                }}</span>
+              </div>
             </div>
-            <div class="head-badges">
-              <span class="badge queued">待触发模板</span>
-              <span class="badge muted">{{ templateSyncStateLabel(item.template.syncState) }}</span>
-            </div>
-          </div>
 
-          <div class="card-meta">
-            <span>将发送给 {{ formatTarget(item.template.targetType, item.template.targetRef) }}</span>
-            <span>目标类型 {{ targetTypeLabel(item.template.targetType) }}</span>
-            <span>目标状态 {{ templateTargetResolutionLabel(item) }}</span>
-            <span v-if="resolveTemplateNextDispatchAt(item)">计划发送 {{ relativeTime(resolveTemplateNextDispatchAt(item)!) }}</span>
-            <span v-else>计划时间未解析</span>
-            <span v-if="item.latestSession">上次执行 {{ relativeTime(item.latestSession.updatedAt || item.latestSession.createdAt) }}</span>
-            <span>同步状态 {{ templateSyncStateLabel(item.template.syncState) }}</span>
-            <router-link
-              v-if="item.latestSession?.id"
-              :to="`/outreach/${item.latestSession.id}`"
-              class="session-link"
-            >查看上次执行</router-link>
+            <div class="card-meta">
+              <span
+                >将发送给
+                {{
+                  formatTarget(
+                    item.template.targetType,
+                    item.template.targetRef,
+                  )
+                }}</span
+              >
+              <span
+                >目标类型 {{ targetTypeLabel(item.template.targetType) }}</span
+              >
+              <span>目标状态 {{ templateTargetResolutionLabel(item) }}</span>
+              <span v-if="resolveTemplateNextDispatchAt(item)"
+                >计划发送
+                {{ relativeTime(resolveTemplateNextDispatchAt(item)!) }}</span
+              >
+              <span v-else>计划时间未解析</span>
+              <span v-if="item.latestSession"
+                >上次执行
+                {{
+                  relativeTime(
+                    item.latestSession.updatedAt ||
+                      item.latestSession.createdAt,
+                  )
+                }}</span
+              >
+              <span
+                >同步状态
+                {{ templateSyncStateLabel(item.template.syncState) }}</span
+              >
+              <router-link
+                v-if="item.latestSession?.id"
+                :to="`/outreach/${item.latestSession.id}`"
+                class="session-link"
+                >查看上次执行</router-link
+              >
+            </div>
           </div>
-        </div>
         </div>
       </section>
 
@@ -113,21 +179,41 @@
           <h3>待审批</h3>
           <span class="group-count">{{ approvalSessions.length }}</span>
         </div>
-        <p class="group-desc">这些询问已经找到了目标对象，但还没有正式发出。点标题或详情可修改目标对象与计划发送时间。</p>
+        <p class="group-desc">
+          这些询问已经找到了目标对象，但还没有正式发出。点标题或详情可修改目标对象与计划发送时间。
+        </p>
         <div class="session-list">
-          <div v-for="session in approvalSessions" :key="session.id" class="session-card">
+          <div
+            v-for="session in approvalSessions"
+            :key="session.id"
+            class="session-card"
+          >
             <div class="card-head">
               <div>
                 <h3>
-                  <router-link :to="`/outreach/${session.id}`" class="title-link">
+                  <router-link
+                    :to="`/outreach/${session.id}`"
+                    class="title-link"
+                  >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
                 </h3>
-                <p class="context-text">{{ session.renderedContext || '无上下文' }}</p>
+                <p class="context-text">
+                  {{ session.renderedContext || '无上下文' }}
+                </p>
               </div>
               <div class="head-badges">
-                <span class="badge" :class="statusClass(session.status)">{{ statusLabel(session.status) }}</span>
-                <span class="badge muted">{{ originLabel(session.originKind) }}</span>
+                <span class="badge" :class="statusClass(session.status)">{{
+                  statusLabel(session.status)
+                }}</span>
+                <span class="badge muted">{{
+                  originLabel(session.originKind)
+                }}</span>
+                <span
+                  v-if="evidenceSnapshot(session).stateLabel"
+                  class="badge evidence"
+                  >{{ evidenceSnapshot(session).stateLabel }}</span
+                >
               </div>
             </div>
 
@@ -135,22 +221,85 @@
               <strong>当前阶段：</strong>{{ sessionStageHint(session) }}
             </div>
 
+            <div
+              v-if="evidenceSnapshot(session).hasEvidence"
+              class="evidence-box"
+            >
+              <div class="evidence-head">
+                <span class="evidence-title">证据状态</span>
+                <span
+                  v-if="evidenceSnapshot(session).phaseLabel"
+                  class="evidence-pill"
+                  >{{ evidenceSnapshot(session).phaseLabel }}</span
+                >
+                <span
+                  v-if="evidenceSnapshot(session).source"
+                  class="evidence-pill muted"
+                  >{{ evidenceSnapshot(session).source }}</span
+                >
+              </div>
+              <p
+                v-if="evidenceSnapshot(session).summary"
+                class="evidence-summary"
+              >
+                {{ evidenceSnapshot(session).summary }}
+              </p>
+              <p
+                v-if="
+                  evidenceSnapshot(session).relatedMessage &&
+                  evidenceSnapshot(session).relatedMessage !==
+                    evidenceSnapshot(session).summary
+                "
+                class="evidence-related"
+              >
+                {{ evidenceSnapshot(session).relatedMessage }}
+              </p>
+            </div>
+
             <div class="card-meta">
-              <span>将发送给 {{ formatTarget(session.targetType, session.targetRef) }}</span>
+              <span
+                >将发送给
+                {{ formatTarget(session.targetType, session.targetRef) }}</span
+              >
               <span>目标类型 {{ targetTypeLabel(session.targetType) }}</span>
               <span>目标状态 {{ sessionTargetResolutionLabel(session) }}</span>
               <span>创建于 {{ relativeTime(session.createdAt) }}</span>
-              <span>追问 {{ session.followupCount }}/{{ session.maxFollowup }}</span>
-              <router-link v-if="session.threadId" :to="`/reflection-threads/${session.threadId}`" class="session-link">查看线程</router-link>
-              <router-link :to="`/outreach/${session.id}`" class="session-link">查看详情</router-link>
+              <span
+                >追问 {{ session.followupCount }}/{{
+                  session.maxFollowup
+                }}</span
+              >
+              <router-link
+                v-if="session.threadId"
+                :to="`/reflection-threads/${session.threadId}`"
+                class="session-link"
+                >查看线程</router-link
+              >
+              <router-link :to="`/outreach/${session.id}`" class="session-link"
+                >查看详情</router-link
+              >
             </div>
 
             <div class="card-actions">
-              <button class="inline-btn primary" :disabled="Boolean(busyById[session.id]) || !canApproveSession(session)" @click="approveSession(session.id)">
+              <button
+                class="inline-btn primary"
+                :disabled="
+                  Boolean(busyById[session.id]) || !canApproveSession(session)
+                "
+                @click="approveSession(session.id)"
+              >
                 {{ canApproveSession(session) ? '批准发送' : '先确认目标' }}
               </button>
-              <button class="inline-btn ghost" :disabled="Boolean(busyById[session.id])" @click="cancelSession(session.id)">取消</button>
-              <router-link :to="`/outreach/${session.id}`" class="inline-link">进入详情编辑</router-link>
+              <button
+                class="inline-btn ghost"
+                :disabled="Boolean(busyById[session.id])"
+                @click="cancelSession(session.id)"
+              >
+                取消
+              </button>
+              <router-link :to="`/outreach/${session.id}`" class="inline-link"
+                >进入详情编辑</router-link
+              >
             </div>
           </div>
         </div>
@@ -161,21 +310,41 @@
           <h3>已排程待发出</h3>
           <span class="group-count">{{ queuedSessions.length }}</span>
         </div>
-        <p class="group-desc">这些会话已完成审批或无需审批，但还没有真正发出询问。</p>
+        <p class="group-desc">
+          这些会话已完成审批或无需审批，但还没有真正发出询问。
+        </p>
         <div class="session-list">
-          <div v-for="session in queuedSessions" :key="session.id" class="session-card">
+          <div
+            v-for="session in queuedSessions"
+            :key="session.id"
+            class="session-card"
+          >
             <div class="card-head">
               <div>
                 <h3>
-                  <router-link :to="`/outreach/${session.id}`" class="title-link">
+                  <router-link
+                    :to="`/outreach/${session.id}`"
+                    class="title-link"
+                  >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
                 </h3>
-                <p class="context-text">{{ session.renderedContext || '无上下文' }}</p>
+                <p class="context-text">
+                  {{ session.renderedContext || '无上下文' }}
+                </p>
               </div>
               <div class="head-badges">
-                <span class="badge" :class="statusClass(session.status)">{{ statusLabel(session.status) }}</span>
-                <span class="badge muted">{{ originLabel(session.originKind) }}</span>
+                <span class="badge" :class="statusClass(session.status)">{{
+                  statusLabel(session.status)
+                }}</span>
+                <span class="badge muted">{{
+                  originLabel(session.originKind)
+                }}</span>
+                <span
+                  v-if="evidenceSnapshot(session).stateLabel"
+                  class="badge evidence"
+                  >{{ evidenceSnapshot(session).stateLabel }}</span
+                >
               </div>
             </div>
 
@@ -183,14 +352,61 @@
               <strong>当前阶段：</strong>{{ sessionStageHint(session) }}
             </div>
 
+            <div
+              v-if="evidenceSnapshot(session).hasEvidence"
+              class="evidence-box"
+            >
+              <div class="evidence-head">
+                <span class="evidence-title">证据状态</span>
+                <span
+                  v-if="evidenceSnapshot(session).phaseLabel"
+                  class="evidence-pill"
+                  >{{ evidenceSnapshot(session).phaseLabel }}</span
+                >
+                <span
+                  v-if="evidenceSnapshot(session).source"
+                  class="evidence-pill muted"
+                  >{{ evidenceSnapshot(session).source }}</span
+                >
+              </div>
+              <p
+                v-if="evidenceSnapshot(session).summary"
+                class="evidence-summary"
+              >
+                {{ evidenceSnapshot(session).summary }}
+              </p>
+              <p
+                v-if="
+                  evidenceSnapshot(session).relatedMessage &&
+                  evidenceSnapshot(session).relatedMessage !==
+                    evidenceSnapshot(session).summary
+                "
+                class="evidence-related"
+              >
+                {{ evidenceSnapshot(session).relatedMessage }}
+              </p>
+            </div>
+
             <div class="card-meta">
-              <span>将发送给 {{ formatTarget(session.targetType, session.targetRef) }}</span>
+              <span
+                >将发送给
+                {{ formatTarget(session.targetType, session.targetRef) }}</span
+              >
               <span>目标类型 {{ targetTypeLabel(session.targetType) }}</span>
               <span>目标状态 {{ sessionTargetResolutionLabel(session) }}</span>
-              <span v-if="session.nextCheckAt">计划发送 {{ relativeTime(session.nextCheckAt) }}</span>
+              <span v-if="session.nextCheckAt"
+                >计划发送 {{ relativeTime(session.nextCheckAt) }}</span
+              >
               <span v-else>等待引擎恢复后发送</span>
-              <router-link v-if="session.threadId" :to="`/reflection-threads/${session.threadId}`" class="session-link">查看线程</router-link>
-              <router-link :to="`/outreach/${session.id}`" class="session-link">查看详情/修改</router-link>
+              <router-link
+                v-if="session.threadId"
+                :to="`/reflection-threads/${session.threadId}`"
+                class="session-link"
+                >查看线程</router-link
+              >
+              <router-link :to="`/outreach/${session.id}`" class="session-link"
+                >查看详情/修改</router-link
+              >
             </div>
           </div>
         </div>
@@ -201,21 +417,41 @@
           <h3>等待对方回复</h3>
           <span class="group-count">{{ waitingSessions.length }}</span>
         </div>
-        <p class="group-desc">这些询问已经发出，正在等待对方回复或按对方 ETA 延期。</p>
+        <p class="group-desc">
+          这些询问已经发出，正在等待对方回复或按对方 ETA 延期。
+        </p>
         <div class="session-list">
-          <div v-for="session in waitingSessions" :key="session.id" class="session-card">
+          <div
+            v-for="session in waitingSessions"
+            :key="session.id"
+            class="session-card"
+          >
             <div class="card-head">
               <div>
                 <h3>
-                  <router-link :to="`/outreach/${session.id}`" class="title-link">
+                  <router-link
+                    :to="`/outreach/${session.id}`"
+                    class="title-link"
+                  >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
                 </h3>
-                <p class="context-text">{{ session.renderedContext || '无上下文' }}</p>
+                <p class="context-text">
+                  {{ session.renderedContext || '无上下文' }}
+                </p>
               </div>
               <div class="head-badges">
-                <span class="badge" :class="statusClass(session.status)">{{ statusLabel(session.status) }}</span>
-                <span class="badge muted">{{ originLabel(session.originKind) }}</span>
+                <span class="badge" :class="statusClass(session.status)">{{
+                  statusLabel(session.status)
+                }}</span>
+                <span class="badge muted">{{
+                  originLabel(session.originKind)
+                }}</span>
+                <span
+                  v-if="evidenceSnapshot(session).stateLabel"
+                  class="badge evidence"
+                  >{{ evidenceSnapshot(session).stateLabel }}</span
+                >
               </div>
             </div>
 
@@ -223,15 +459,68 @@
               <strong>当前阶段：</strong>{{ sessionStageHint(session) }}
             </div>
 
+            <div
+              v-if="evidenceSnapshot(session).hasEvidence"
+              class="evidence-box"
+            >
+              <div class="evidence-head">
+                <span class="evidence-title">证据状态</span>
+                <span
+                  v-if="evidenceSnapshot(session).phaseLabel"
+                  class="evidence-pill"
+                  >{{ evidenceSnapshot(session).phaseLabel }}</span
+                >
+                <span
+                  v-if="evidenceSnapshot(session).source"
+                  class="evidence-pill muted"
+                  >{{ evidenceSnapshot(session).source }}</span
+                >
+              </div>
+              <p
+                v-if="evidenceSnapshot(session).summary"
+                class="evidence-summary"
+              >
+                {{ evidenceSnapshot(session).summary }}
+              </p>
+              <p
+                v-if="
+                  evidenceSnapshot(session).relatedMessage &&
+                  evidenceSnapshot(session).relatedMessage !==
+                    evidenceSnapshot(session).summary
+                "
+                class="evidence-related"
+              >
+                {{ evidenceSnapshot(session).relatedMessage }}
+              </p>
+            </div>
+
             <div class="card-meta">
-              <span>发送给 {{ formatTarget(session.targetType, session.targetRef) }}</span>
+              <span
+                >发送给
+                {{ formatTarget(session.targetType, session.targetRef) }}</span
+              >
               <span>目标类型 {{ targetTypeLabel(session.targetType) }}</span>
               <span>目标状态 {{ sessionTargetResolutionLabel(session) }}</span>
-              <span v-if="session.waitUntil">等待至 {{ relativeTime(session.waitUntil) }}</span>
-              <span v-if="session.nextCheckAt">下次检查 {{ relativeTime(session.nextCheckAt) }}</span>
-              <span>追问 {{ session.followupCount }}/{{ session.maxFollowup }}</span>
-              <router-link v-if="session.threadId" :to="`/reflection-threads/${session.threadId}`" class="session-link">查看线程</router-link>
-              <router-link :to="`/outreach/${session.id}`" class="session-link">查看详情</router-link>
+              <span v-if="session.waitUntil"
+                >等待至 {{ relativeTime(session.waitUntil) }}</span
+              >
+              <span v-if="session.nextCheckAt"
+                >下次检查 {{ relativeTime(session.nextCheckAt) }}</span
+              >
+              <span
+                >追问 {{ session.followupCount }}/{{
+                  session.maxFollowup
+                }}</span
+              >
+              <router-link
+                v-if="session.threadId"
+                :to="`/reflection-threads/${session.threadId}`"
+                class="session-link"
+                >查看线程</router-link
+              >
+              <router-link :to="`/outreach/${session.id}`" class="session-link"
+                >查看详情</router-link
+              >
             </div>
 
             <div v-if="session.replyRawText" class="reply-box">
@@ -249,19 +538,37 @@
         </div>
         <p class="group-desc">已完成、失败、无回复或已取消的主动询问会话。</p>
         <div class="session-list">
-          <div v-for="session in historySessions" :key="session.id" class="session-card">
+          <div
+            v-for="session in historySessions"
+            :key="session.id"
+            class="session-card"
+          >
             <div class="card-head">
               <div>
                 <h3>
-                  <router-link :to="`/outreach/${session.id}`" class="title-link">
+                  <router-link
+                    :to="`/outreach/${session.id}`"
+                    class="title-link"
+                  >
                     {{ session.renderedQuestion || '(空问题)' }}
                   </router-link>
                 </h3>
-                <p class="context-text">{{ session.renderedContext || '无上下文' }}</p>
+                <p class="context-text">
+                  {{ session.renderedContext || '无上下文' }}
+                </p>
               </div>
               <div class="head-badges">
-                <span class="badge" :class="statusClass(session.status)">{{ statusLabel(session.status) }}</span>
-                <span class="badge muted">{{ originLabel(session.originKind) }}</span>
+                <span class="badge" :class="statusClass(session.status)">{{
+                  statusLabel(session.status)
+                }}</span>
+                <span class="badge muted">{{
+                  originLabel(session.originKind)
+                }}</span>
+                <span
+                  v-if="evidenceSnapshot(session).stateLabel"
+                  class="badge evidence"
+                  >{{ evidenceSnapshot(session).stateLabel }}</span
+                >
               </div>
             </div>
 
@@ -269,13 +576,61 @@
               <strong>当前阶段：</strong>{{ sessionStageHint(session) }}
             </div>
 
+            <div
+              v-if="evidenceSnapshot(session).hasEvidence"
+              class="evidence-box"
+            >
+              <div class="evidence-head">
+                <span class="evidence-title">证据状态</span>
+                <span
+                  v-if="evidenceSnapshot(session).phaseLabel"
+                  class="evidence-pill"
+                  >{{ evidenceSnapshot(session).phaseLabel }}</span
+                >
+                <span
+                  v-if="evidenceSnapshot(session).source"
+                  class="evidence-pill muted"
+                  >{{ evidenceSnapshot(session).source }}</span
+                >
+              </div>
+              <p
+                v-if="evidenceSnapshot(session).summary"
+                class="evidence-summary"
+              >
+                {{ evidenceSnapshot(session).summary }}
+              </p>
+              <p
+                v-if="
+                  evidenceSnapshot(session).relatedMessage &&
+                  evidenceSnapshot(session).relatedMessage !==
+                    evidenceSnapshot(session).summary
+                "
+                class="evidence-related"
+              >
+                {{ evidenceSnapshot(session).relatedMessage }}
+              </p>
+            </div>
+
             <div class="card-meta">
-              <span>发送给 {{ formatTarget(session.targetType, session.targetRef) }}</span>
+              <span
+                >发送给
+                {{ formatTarget(session.targetType, session.targetRef) }}</span
+              >
               <span>目标类型 {{ targetTypeLabel(session.targetType) }}</span>
               <span>目标状态 {{ sessionTargetResolutionLabel(session) }}</span>
-              <span>最后更新 {{ relativeTime(session.updatedAt || session.createdAt) }}</span>
-              <router-link v-if="session.threadId" :to="`/reflection-threads/${session.threadId}`" class="session-link">查看线程</router-link>
-              <router-link :to="`/outreach/${session.id}`" class="session-link">查看详情</router-link>
+              <span
+                >最后更新
+                {{ relativeTime(session.updatedAt || session.createdAt) }}</span
+              >
+              <router-link
+                v-if="session.threadId"
+                :to="`/reflection-threads/${session.threadId}`"
+                class="session-link"
+                >查看线程</router-link
+              >
+              <router-link :to="`/outreach/${session.id}`" class="session-link"
+                >查看详情</router-link
+              >
             </div>
 
             <div v-if="session.replyRawText" class="reply-box">
@@ -283,7 +638,10 @@
               <p>{{ session.replyRawText }}</p>
             </div>
 
-            <div v-if="session.outcome && Object.keys(session.outcome).length > 0" class="result-box">
+            <div
+              v-if="session.outcome && Object.keys(session.outcome).length > 0"
+              class="result-box"
+            >
               <div class="box-title">结构化结果</div>
               <pre>{{ formatJson(session.outcome) }}</pre>
             </div>
@@ -305,6 +663,7 @@ import {
   type OutreachTemplateRuntimeStatusItem,
   type RuntimeConfigResponse,
 } from '../../services/MemoryServiceClient';
+import { getOutreachEvidenceSnapshot } from './outreachEvidence';
 
 declare const chrome: any;
 
@@ -330,24 +689,38 @@ const TERMINAL_OUTREACH_STATUSES = new Set([
   'cancelled',
   'failed',
 ]);
-const approvalSessions = computed(() => sessions.value.filter((session) => session.status === 'pending_approval'));
-const queuedSessions = computed(() => sessions.value.filter((session) => session.status === 'scheduled'));
+const approvalSessions = computed(() =>
+  sessions.value.filter((session) => session.status === 'pending_approval'),
+);
+const queuedSessions = computed(() =>
+  sessions.value.filter((session) => session.status === 'scheduled'),
+);
 const waitingSessions = computed(() =>
-  sessions.value.filter((session) => session.status === 'waiting_reply' || session.status === 'deferred'),
+  sessions.value.filter(
+    (session) =>
+      session.status === 'waiting_reply' || session.status === 'deferred',
+  ),
 );
 const historySessions = computed(() =>
   sessions.value.filter((session) =>
-    ['resolved', 'no_reply', 'escalated', 'cancelled', 'failed'].includes(session.status),
+    ['resolved', 'no_reply', 'escalated', 'cancelled', 'failed'].includes(
+      session.status,
+    ),
   ),
 );
 const visibleTemplates = computed(() =>
   sortTemplatesForDisplay(
-    templateItems.value.filter((item) => matchesTemplateFilters(item) && isPendingTemplate(item)),
+    templateItems.value.filter(
+      (item) => matchesTemplateFilters(item) && isPendingTemplate(item),
+    ),
   ),
 );
 const showSetupBanner = computed(() => {
   if (!runtimeConfig.value) return false;
-  return !runtimeConfig.value.outreachEnabled || !isRingCentralReady(runtimeConfig.value);
+  return (
+    !runtimeConfig.value.outreachEnabled ||
+    !isRingCentralReady(runtimeConfig.value)
+  );
 });
 const setupBannerTitle = computed(() => {
   if (!runtimeConfig.value?.outreachEnabled) return '主动询问引擎尚未开启';
@@ -372,9 +745,12 @@ onMounted(() => {
 
 function hydrateFilters() {
   status.value = normalizeStatus(route.query.status);
-  originKind.value = typeof route.query.originKind === 'string' ? route.query.originKind : '';
-  templateId.value = typeof route.query.templateId === 'string' ? route.query.templateId : '';
-  threadId.value = typeof route.query.threadId === 'string' ? route.query.threadId : '';
+  originKind.value =
+    typeof route.query.originKind === 'string' ? route.query.originKind : '';
+  templateId.value =
+    typeof route.query.templateId === 'string' ? route.query.templateId : '';
+  threadId.value =
+    typeof route.query.threadId === 'string' ? route.query.threadId : '';
 }
 
 function normalizeStatus(value: unknown): OutreachSessionStatus | 'all' {
@@ -410,18 +786,20 @@ function applyFilters() {
 async function loadData() {
   loading.value = true;
   try {
-    const [configData, summaryData, templateData, listData] = await Promise.all([
-      client.getRuntimeConfig(),
-      client.getOutreachSummary(),
-      client.getOutreachTemplateRuntimeStatus(undefined, 100),
-      client.getOutreachSessions({
-        status: status.value,
-        originKind: originKind.value || undefined,
-        templateId: templateId.value || undefined,
-        threadId: threadId.value || undefined,
-        limit: 50,
-      }),
-    ]);
+    const [configData, summaryData, templateData, listData] = await Promise.all(
+      [
+        client.getRuntimeConfig(),
+        client.getOutreachSummary(),
+        client.getOutreachTemplateRuntimeStatus(undefined, 100),
+        client.getOutreachSessions({
+          status: status.value,
+          originKind: originKind.value || undefined,
+          templateId: templateId.value || undefined,
+          threadId: threadId.value || undefined,
+          limit: 50,
+        }),
+      ],
+    );
     runtimeConfig.value = configData;
     summary.value = summaryData;
     templateItems.value = templateData.items;
@@ -496,8 +874,10 @@ function formatJson(value: unknown) {
 
 function statusClass(statusValue: string) {
   if (statusValue === 'resolved') return 'resolved';
-  if (statusValue === 'waiting_reply' || statusValue === 'deferred') return 'waiting';
-  if (statusValue === 'pending_approval' || statusValue === 'scheduled') return 'queued';
+  if (statusValue === 'waiting_reply' || statusValue === 'deferred')
+    return 'waiting';
+  if (statusValue === 'pending_approval' || statusValue === 'scheduled')
+    return 'queued';
   if (statusValue === 'escalated' || statusValue === 'failed') return 'error';
   if (statusValue === 'no_reply') return 'warn';
   return 'muted';
@@ -518,20 +898,26 @@ function statusLabel(statusValue: string) {
 
 function originLabel(originKind?: string) {
   if (originKind === 'reflection_action') return '自我反思';
-  if (originKind === 'scheduled_template' || originKind === 'manual_action') return '手动/定时';
+  if (originKind === 'scheduled_template' || originKind === 'manual_action')
+    return '手动/定时';
   return originKind || '未知来源';
 }
 
 function formatTarget(targetType?: string, targetRef?: string) {
   const normalizedRef = targetRef?.trim();
   if (!normalizedRef) return '未指定目标';
-  if ((targetType === 'person' || targetType === 'private') && normalizedRef === 'user') {
+  if (
+    (targetType === 'person' || targetType === 'private') &&
+    normalizedRef === 'user'
+  ) {
     return '当前用户';
   }
   return normalizedRef;
 }
 
-function templateTargetResolutionLabel(item: OutreachTemplateRuntimeStatusItem) {
+function templateTargetResolutionLabel(
+  item: OutreachTemplateRuntimeStatusItem,
+) {
   if (item.latestSession?.targetResolutionStatus === 'resolved') {
     return `已确认：${item.latestSession.targetResolvedLabel || item.latestSession.targetRef}`;
   }
@@ -577,21 +963,28 @@ function templateListRoute(item: OutreachTemplateRuntimeStatusItem) {
   return `/outreach?templateId=${encodeURIComponent(item.template.id)}`;
 }
 
-function resolveTemplateNextDispatchAt(item: OutreachTemplateRuntimeStatusItem): number | null {
+function resolveTemplateNextDispatchAt(
+  item: OutreachTemplateRuntimeStatusItem,
+): number | null {
   const raw = item.template.scheduleSpec?.nextDispatchAt;
   if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
-  const scheduleDate = typeof item.template.scheduleSpec?.scheduleDate === 'string'
-    ? item.template.scheduleSpec.scheduleDate
-    : '';
-  const scheduleTime = typeof item.template.scheduleSpec?.scheduleTime === 'string'
-    ? item.template.scheduleSpec.scheduleTime
-    : '09:00';
+  const scheduleDate =
+    typeof item.template.scheduleSpec?.scheduleDate === 'string'
+      ? item.template.scheduleSpec.scheduleDate
+      : '';
+  const scheduleTime =
+    typeof item.template.scheduleSpec?.scheduleTime === 'string'
+      ? item.template.scheduleSpec.scheduleTime
+      : '09:00';
   const repeatEvery = Number(item.template.scheduleSpec?.repeatEvery);
-  const repeatUnit = typeof item.template.scheduleSpec?.repeatUnit === 'string'
-    ? item.template.scheduleSpec.repeatUnit
-    : '';
+  const repeatUnit =
+    typeof item.template.scheduleSpec?.repeatUnit === 'string'
+      ? item.template.scheduleSpec.repeatUnit
+      : '';
   if (!scheduleDate) return null;
-  const date = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
+  const date = new Date(
+    `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
+  );
   if (Number.isNaN(date.getTime())) return null;
   const baseline = Math.floor(Date.now() / 1000);
 
@@ -624,14 +1017,20 @@ function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
   if (template.enabled === false) return false;
   if (template.syncState && template.syncState !== 'synced') return false;
   if (!nextDispatchAt) return false;
-  return !item.latestSession || TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status);
+  return (
+    !item.latestSession ||
+    TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status)
+  );
 }
 
-function matchesTemplateFilters(item: OutreachTemplateRuntimeStatusItem): boolean {
+function matchesTemplateFilters(
+  item: OutreachTemplateRuntimeStatusItem,
+): boolean {
   if (status.value !== 'all' && status.value !== 'scheduled') return false;
   if (originKind.value && originKind.value !== 'manual') return false;
   if (threadId.value.trim()) return false;
-  if (templateId.value.trim() && item.template.id !== templateId.value.trim()) return false;
+  if (templateId.value.trim() && item.template.id !== templateId.value.trim())
+    return false;
   return true;
 }
 
@@ -658,7 +1057,8 @@ function sortSessionsForDisplay(items: OutreachSession[]): OutreachSession[] {
 
   return [...items].sort((a, b) => {
     if (status.value === 'all') {
-      const statusDiff = (priority.get(a.status) ?? 99) - (priority.get(b.status) ?? 99);
+      const statusDiff =
+        (priority.get(a.status) ?? 99) - (priority.get(b.status) ?? 99);
       if (statusDiff !== 0) {
         return statusDiff;
       }
@@ -671,10 +1071,12 @@ function sortSessionsForDisplay(items: OutreachSession[]): OutreachSession[] {
 }
 
 function isRingCentralReady(config: RuntimeConfigResponse) {
-  return Boolean(config.ringCentralServerUrl?.trim()) &&
+  return (
+    Boolean(config.ringCentralServerUrl?.trim()) &&
     Boolean(config.ringCentralClientId?.trim()) &&
     Boolean(config.ringCentralClientSecretConfigured) &&
-    Boolean(config.ringCentralJwtConfigured);
+    Boolean(config.ringCentralJwtConfigured)
+  );
 }
 
 function sessionStageHint(session: OutreachSession) {
@@ -701,9 +1103,10 @@ function sessionStageHint(session: OutreachSession) {
     return '对方表示稍后回复，系统会按新的等待时间继续跟进。';
   }
   if (session.status === 'resolved') {
-    const resolutionState = typeof session.outcome?.resolutionState === 'string'
-      ? session.outcome.resolutionState
-      : '';
+    const resolutionState =
+      typeof session.outcome?.resolutionState === 'string'
+        ? session.outcome.resolutionState
+        : '';
     if (resolutionState === 'partial') {
       return summary || '已经拿到部分可用结果，系统正在继续查证。';
     }
@@ -729,9 +1132,22 @@ function sessionStageHint(session: OutreachSession) {
 
 function extractOutcomeSummary(outcome?: Record<string, unknown>) {
   if (!outcome) return '';
-  const candidates = [outcome.resolvedConclusion, outcome.summary, outcome.reason, outcome.answer, outcome.answerText, outcome.reply];
-  const found = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  const candidates = [
+    outcome.resolvedConclusion,
+    outcome.summary,
+    outcome.reason,
+    outcome.answer,
+    outcome.answerText,
+    outcome.reply,
+  ];
+  const found = candidates.find(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
   return typeof found === 'string' ? found.trim() : '';
+}
+
+function evidenceSnapshot(session: OutreachSession) {
+  return getOutreachEvidenceSnapshot(session);
 }
 </script>
 
@@ -814,6 +1230,26 @@ function extractOutcomeSummary(outcome?: Record<string, unknown>) {
   background: #f59e0b;
   color: #111827;
   font-weight: 600;
+}
+
+.info-banner {
+  margin-bottom: 1rem;
+  padding: 0.95rem 1.05rem;
+  border-radius: 1rem;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(129, 140, 248, 0.24);
+}
+
+.info-banner-title {
+  font-weight: 700;
+  color: #c4b5fd;
+  margin-bottom: 0.35rem;
+}
+
+.info-banner-text {
+  margin: 0;
+  color: #ddd6fe;
+  line-height: 1.55;
 }
 
 .filters {
@@ -930,6 +1366,54 @@ function extractOutcomeSummary(outcome?: Record<string, unknown>) {
   line-height: 1.5;
 }
 
+.evidence-box {
+  margin-top: 0.8rem;
+  padding: 0.9rem 1rem;
+  border-radius: 0.95rem;
+  background: rgba(15, 23, 42, 0.54);
+  border: 1px solid rgba(96, 165, 250, 0.16);
+}
+
+.evidence-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+
+.evidence-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #bfdbfe;
+}
+
+.evidence-pill {
+  padding: 0.2rem 0.56rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+  font-size: 0.74rem;
+}
+
+.evidence-pill.muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.evidence-summary,
+.evidence-related {
+  margin: 0;
+  color: #e2e8f0;
+  line-height: 1.55;
+}
+
+.evidence-related {
+  margin-top: 0.45rem;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+}
+
 .badge {
   padding: 0.18rem 0.58rem;
   border-radius: 999px;
@@ -939,6 +1423,11 @@ function extractOutcomeSummary(outcome?: Record<string, unknown>) {
 .badge.muted {
   background: rgba(148, 163, 184, 0.16);
   color: #cbd5e1;
+}
+
+.badge.evidence {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
 }
 
 .badge.queued {

@@ -6,6 +6,10 @@ import {
 } from './MemoryServiceClient';
 import type { TopicItemWithAutoReply } from '../message-reaction';
 import type { RelatedMessageMeta } from '../types/followThread';
+import {
+  isManualConcernedItem,
+  mergeManualConcernedItemsPreservingSystem,
+} from '../watchRules';
 
 const CONCERNED_ITEMS_KEY = 'concernedItems';
 const SYNC_STATE_KEY = 'concernedItemsSyncState';
@@ -51,7 +55,9 @@ function getComparableContentUpdatedAt(
   return parseTimestampMs(value) ?? parseTimestampMs(fallback) ?? 0;
 }
 
-function stripRuntimeFields(items: TopicItemWithAutoReply[]): TopicItemWithAutoReply[] {
+function stripRuntimeFields(
+  items: TopicItemWithAutoReply[],
+): TopicItemWithAutoReply[] {
   return items.map((item) => {
     const nextItem: TopicItemWithAutoReply = clone(item);
     if (nextItem.followConfig) {
@@ -96,7 +102,9 @@ function mergeRuntimeFields(
   });
 }
 
-function makeHitKey(hit: Pick<FollowThreadHitEvent, 'followItemId' | 'postId'>): string {
+function makeHitKey(
+  hit: Pick<FollowThreadHitEvent, 'followItemId' | 'postId'>,
+): string {
   return `${hit.followItemId}::${hit.postId}`;
 }
 
@@ -173,8 +181,11 @@ export class ConcernedItemsSyncService {
     };
 
     const result = await chrome.storage.local.get(PENDING_HITS_KEY);
-    const pendingHits: PendingFollowThreadHit[] = result[PENDING_HITS_KEY] || [];
-    const existingIndex = pendingHits.findIndex((item) => makeHitKey(item) === makeHitKey(payload));
+    const pendingHits: PendingFollowThreadHit[] =
+      result[PENDING_HITS_KEY] || [];
+    const existingIndex = pendingHits.findIndex(
+      (item) => makeHitKey(item) === makeHitKey(payload),
+    );
 
     if (existingIndex >= 0) {
       pendingHits[existingIndex] = payload;
@@ -198,8 +209,12 @@ export class ConcernedItemsSyncService {
       return;
     }
 
-    const oldSnapshot = stripRuntimeFields(changes[CONCERNED_ITEMS_KEY].oldValue || []);
-    const newSnapshot = stripRuntimeFields(changes[CONCERNED_ITEMS_KEY].newValue || []);
+    const oldSnapshot = stripRuntimeFields(
+      changes[CONCERNED_ITEMS_KEY].oldValue || [],
+    );
+    const newSnapshot = stripRuntimeFields(
+      changes[CONCERNED_ITEMS_KEY].newValue || [],
+    );
 
     if (stableSerialize(oldSnapshot) === stableSerialize(newSnapshot)) {
       return;
@@ -243,7 +258,9 @@ export class ConcernedItemsSyncService {
     return result[SYNC_STATE_KEY] || {};
   }
 
-  private async setSyncState(patch: Partial<ConcernedItemsSyncState>): Promise<ConcernedItemsSyncState> {
+  private async setSyncState(
+    patch: Partial<ConcernedItemsSyncState>,
+  ): Promise<ConcernedItemsSyncState> {
     const current = await this.getSyncState();
     const next = {
       ...current,
@@ -265,13 +282,15 @@ export class ConcernedItemsSyncService {
     const client = getMemoryServiceClient();
     const currentBaseUrl = client.getBaseUrl();
     const result = await chrome.storage.local.get(CONCERNED_ITEMS_KEY);
-    const concernedItems: TopicItemWithAutoReply[] = result[CONCERNED_ITEMS_KEY] || [];
+    const concernedItems: TopicItemWithAutoReply[] = (
+      result[CONCERNED_ITEMS_KEY] || []
+    ).filter(isManualConcernedItem);
     const snapshotItems = stripRuntimeFields(concernedItems);
 
     if (
-      (state.snapshotVersion ?? 0) > 0
-      && state.contentUpdatedAt
-      && state.lastSyncedBaseUrl === currentBaseUrl
+      (state.snapshotVersion ?? 0) > 0 &&
+      state.contentUpdatedAt &&
+      state.lastSyncedBaseUrl === currentBaseUrl
     ) {
       return;
     }
@@ -286,18 +305,21 @@ export class ConcernedItemsSyncService {
         remote.contentUpdatedAt,
         remote.updatedAt,
       );
-      const hasLegacySyncedState = !state.lastSyncedBaseUrl
-        && (state.snapshotVersion ?? 0) > 0
-        && Boolean(state.contentUpdatedAt);
-      const syncTargetChanged = state.lastSyncedBaseUrl
-        && state.lastSyncedBaseUrl !== currentBaseUrl;
+      const hasLegacySyncedState =
+        !state.lastSyncedBaseUrl &&
+        (state.snapshotVersion ?? 0) > 0 &&
+        Boolean(state.contentUpdatedAt);
+      const syncTargetChanged =
+        state.lastSyncedBaseUrl && state.lastSyncedBaseUrl !== currentBaseUrl;
 
       if (
-        (syncTargetChanged || hasLegacySyncedState)
-        && snapshotItems.length > 0
-        && localContentUpdatedAt > remoteContentUpdatedAt
+        (syncTargetChanged || hasLegacySyncedState) &&
+        snapshotItems.length > 0 &&
+        localContentUpdatedAt > remoteContentUpdatedAt
       ) {
-        await this.markConfigDirty(state.contentUpdatedAt || new Date().toISOString());
+        await this.markConfigDirty(
+          state.contentUpdatedAt || new Date().toISOString(),
+        );
         return;
       }
 
@@ -308,16 +330,24 @@ export class ConcernedItemsSyncService {
           snapshotVersion: remote.version,
           lastSnapshotSyncAt: remote.updatedAt || new Date().toISOString(),
           lastSyncedBaseUrl: currentBaseUrl,
-          contentUpdatedAt: remote.contentUpdatedAt || remote.updatedAt || new Date().toISOString(),
+          contentUpdatedAt:
+            remote.contentUpdatedAt ||
+            remote.updatedAt ||
+            new Date().toISOString(),
         });
         return;
       }
 
       if (snapshotItems.length > 0) {
-        await this.markConfigDirty(state.contentUpdatedAt || new Date().toISOString());
+        await this.markConfigDirty(
+          state.contentUpdatedAt || new Date().toISOString(),
+        );
       } else if (!state.contentUpdatedAt) {
         await this.setSyncState({
-          contentUpdatedAt: remote.contentUpdatedAt || remote.updatedAt || new Date().toISOString(),
+          contentUpdatedAt:
+            remote.contentUpdatedAt ||
+            remote.updatedAt ||
+            new Date().toISOString(),
         });
       }
     } catch (error) {
@@ -332,7 +362,9 @@ export class ConcernedItemsSyncService {
     }
 
     const result = await chrome.storage.local.get(CONCERNED_ITEMS_KEY);
-    const concernedItems: TopicItemWithAutoReply[] = result[CONCERNED_ITEMS_KEY] || [];
+    const concernedItems: TopicItemWithAutoReply[] = (
+      result[CONCERNED_ITEMS_KEY] || []
+    ).filter(isManualConcernedItem);
     const snapshotItems = stripRuntimeFields(concernedItems);
     const client = getMemoryServiceClient();
     const contentUpdatedAt = state.contentUpdatedAt || new Date().toISOString();
@@ -354,7 +386,9 @@ export class ConcernedItemsSyncService {
       });
     } catch (error) {
       if (error instanceof MemoryServiceError && error.status === 409) {
-        const current = error.body?.current as ConcernedItemsSnapshotResponse | undefined;
+        const current = error.body?.current as
+          | ConcernedItemsSnapshotResponse
+          | undefined;
         if (current) {
           await this.applyRemoteSnapshot(current);
         }
@@ -368,7 +402,10 @@ export class ConcernedItemsSyncService {
         return;
       }
 
-      console.warn('ConcernedItems config push failed, will retry later:', error);
+      console.warn(
+        'ConcernedItems config push failed, will retry later:',
+        error,
+      );
     }
   }
 
@@ -393,7 +430,10 @@ export class ConcernedItemsSyncService {
       return;
     }
 
-    if ((remote.version ?? 0) === (state.snapshotVersion ?? 0) && !state.configDirty) {
+    if (
+      (remote.version ?? 0) === (state.snapshotVersion ?? 0) &&
+      !state.configDirty
+    ) {
       return;
     }
 
@@ -403,15 +443,22 @@ export class ConcernedItemsSyncService {
       snapshotVersion: remote.version,
       lastSnapshotSyncAt: remote.updatedAt || new Date().toISOString(),
       lastSyncedBaseUrl: client.getBaseUrl(),
-      contentUpdatedAt: remote.contentUpdatedAt || remote.updatedAt || new Date().toISOString(),
+      contentUpdatedAt:
+        remote.contentUpdatedAt || remote.updatedAt || new Date().toISOString(),
     });
   }
 
-  private async applyRemoteSnapshot(remote: ConcernedItemsSnapshotResponse): Promise<void> {
+  private async applyRemoteSnapshot(
+    remote: ConcernedItemsSnapshotResponse,
+  ): Promise<void> {
     const result = await chrome.storage.local.get(CONCERNED_ITEMS_KEY);
-    const localItems: TopicItemWithAutoReply[] = result[CONCERNED_ITEMS_KEY] || [];
+    const localItems: TopicItemWithAutoReply[] =
+      result[CONCERNED_ITEMS_KEY] || [];
     const remoteItems = (remote.items || []) as TopicItemWithAutoReply[];
-    const mergedItems = mergeRuntimeFields(localItems, remoteItems);
+    const mergedItems = mergeManualConcernedItemsPreservingSystem(
+      localItems,
+      mergeRuntimeFields(localItems.filter(isManualConcernedItem), remoteItems),
+    );
 
     if (stableSerialize(localItems) === stableSerialize(mergedItems)) {
       return;
@@ -429,7 +476,8 @@ export class ConcernedItemsSyncService {
 
   private async flushPendingHits(): Promise<void> {
     const result = await chrome.storage.local.get(PENDING_HITS_KEY);
-    const pendingHits: PendingFollowThreadHit[] = result[PENDING_HITS_KEY] || [];
+    const pendingHits: PendingFollowThreadHit[] =
+      result[PENDING_HITS_KEY] || [];
 
     if (pendingHits.length === 0) {
       return;
@@ -442,8 +490,14 @@ export class ConcernedItemsSyncService {
       try {
         await client.postFollowThreadHit(hit);
       } catch (error) {
-        console.warn('Follow-thread hit flush failed, keeping in queue:', error);
-        remainingHits.push(hit, ...pendingHits.slice(pendingHits.indexOf(hit) + 1));
+        console.warn(
+          'Follow-thread hit flush failed, keeping in queue:',
+          error,
+        );
+        remainingHits.push(
+          hit,
+          ...pendingHits.slice(pendingHits.indexOf(hit) + 1),
+        );
         break;
       }
     }
@@ -454,7 +508,9 @@ export class ConcernedItemsSyncService {
   private async pullFollowThreadHits(): Promise<void> {
     const syncState = await this.getSyncState();
     const result = await chrome.storage.local.get(CONCERNED_ITEMS_KEY);
-    const concernedItems: TopicItemWithAutoReply[] = result[CONCERNED_ITEMS_KEY] || [];
+    const concernedItems: TopicItemWithAutoReply[] = (
+      result[CONCERNED_ITEMS_KEY] || []
+    ).filter(isManualConcernedItem);
     const followItemIds = concernedItems
       .filter((item) => item.followThread && item.followConfig)
       .map((item) => item.id);
@@ -474,7 +530,9 @@ export class ConcernedItemsSyncService {
       return;
     }
 
-    const itemsById = new Map(concernedItems.map((item) => [item.id, clone(item)]));
+    const itemsById = new Map(
+      concernedItems.map((item) => [item.id, clone(item)]),
+    );
     let changed = false;
 
     for (const hit of response.items) {
@@ -495,7 +553,8 @@ export class ConcernedItemsSyncService {
       }
 
       item.followConfig.relatedMessages.push(toRelatedMessageMeta(hit));
-      item.followConfig.lastCheckedAt = hit.createdAt || new Date().toISOString();
+      item.followConfig.lastCheckedAt =
+        hit.createdAt || new Date().toISOString();
       changed = true;
     }
 
@@ -503,7 +562,9 @@ export class ConcernedItemsSyncService {
       this.applyingRemoteSnapshot = true;
       try {
         await chrome.storage.local.set({
-          [CONCERNED_ITEMS_KEY]: concernedItems.map((item) => itemsById.get(item.id) || item),
+          [CONCERNED_ITEMS_KEY]: concernedItems.map(
+            (item) => itemsById.get(item.id) || item,
+          ),
         });
       } finally {
         setTimeout(() => {
@@ -518,4 +579,5 @@ export class ConcernedItemsSyncService {
   }
 }
 
-export const concernedItemsSyncService = ConcernedItemsSyncService.getInstance();
+export const concernedItemsSyncService =
+  ConcernedItemsSyncService.getInstance();

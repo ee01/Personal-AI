@@ -675,7 +675,7 @@ describe('ActionExecutor', () => {
     expect(requests).toEqual([{ id: 'cr-existing', priority: 'high' }]);
   });
 
-  it('rejects delegate_openclaw write actions unless they remain manual approvals', async () => {
+  it('executes due auto delegate_openclaw write actions when approval is not required', async () => {
     const thread = threadRepo.upsertThread({
       topicKey: 'project:orbit',
       title: '项目反思: Orbit',
@@ -698,13 +698,67 @@ describe('ActionExecutor', () => {
       executionMode: 'auto',
       requiresApproval: false,
       queueStatus: 'queued',
+      scheduledAt: Math.floor(Date.now() / 1000) - 1,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: 'Jira 发布状态已更新为 blocked。',
+            artifacts: [
+              {
+                kind: 'external_evidence',
+                title: 'Jira 更新结果',
+                content: 'Orbit 发布状态已改为 blocked。',
+                metadata: {
+                  sourceSystem: 'jira',
+                  entityKey: 'ORB-123',
+                  verification: 'jira_api',
+                  operation: 'update_status',
+                  changedFields: ['status'],
+                  updatedAt: '2026-04-16T03:00:00Z',
+                },
+              },
+            ],
+            payload: { targetSystem: 'jira', status: 'blocked' },
+          }),
+        }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const [result] = await executor.runDueActions(10);
+
+    expect(result.queueStatus).toBe('succeeded');
+    expect(result.result?.status).toBe('success');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const updated = actionRepo.getById(action.id);
+    expect(updated?.queueStatus).toBe('succeeded');
+  });
+
+  it('rejects delegate_openclaw actions that still require approval when forced into auto execution', async () => {
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '异常的自动审批配置',
+      description: '验证安全兜底',
+      params: {
+        task: '请直接写入外部系统。',
+        mode: 'write',
+        targetSystem: 'jira',
+      },
+      executionMode: 'auto',
+      requiresApproval: true,
+      queueStatus: 'queued',
     });
 
     const executor = new ActionExecutor(db, userDataManager, 'test-user');
     const result = await executor.executeAction(action.id);
 
     expect(result.queueStatus).toBe('failed');
-    expect(result.error).toContain('手动审批');
+    expect(result.error).toContain('需要审批');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

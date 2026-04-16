@@ -307,6 +307,7 @@ export class ActionRepository {
          FROM proposed_actions
          WHERE queue_status = 'queued'
            AND execution_mode = 'auto'
+           AND requires_approval = 0
            AND (scheduled_at IS NULL OR scheduled_at <= ?)
          ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC
          LIMIT ?`,

@@ -1,6 +1,15 @@
 import { callLLMJsonAPI } from './llm';
 import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { getMemoryServiceClient } from './services/MemoryServiceClient';
+import { buildMessageFilterSystemPrompt } from './prompts';
+import { getEnvConfig } from './utils';
+import {
+  getFirstManualItemFromMatchedRules,
+  isManualConcernedItem,
+  loadRuntimeWatchRules,
+  resolveMatchedWatchRules,
+} from './watchRules';
+import type { TopicItemWithAutoReply } from './message-reaction/AutoReplyHandler';
 
 // Agent配置接口
 interface AgentConfig {
@@ -23,16 +32,19 @@ interface AgentTool {
 interface MessageProcessResult {
   isRelevant: boolean;
   shouldStore: boolean;
-  shouldNotify: boolean;           // 新增：是否需要发送通知
-  confidence: number;              // 新增：置信度
-  summary: string;                 // 新增：消息摘要
-  matchedRule?: string;            // 新增：匹配的规则
-  messageContext?: {               // 新增：消息上下文信息
-    groupId?: string;              // 群组ID (team_id)
-    groupName?: string;            // 群组名称 (team_name)
-    messageContent?: string;       // 消息内容 (message_content)
-    sender?: string;               // 发送者 (sender)
-    datetime?: string;             // 发送时间 (datetime)
+  shouldNotify: boolean; // 新增：是否需要发送通知
+  confidence: number; // 新增：置信度
+  summary: string; // 新增：消息摘要
+  matchedRule?: string; // 新增：匹配的规则
+  matchedRuleRefs?: string[];
+  matchedRuleIds?: number[];
+  messageContext?: {
+    // 新增：消息上下文信息
+    groupId?: string; // 群组ID (team_id)
+    groupName?: string; // 群组名称 (team_name)
+    messageContent?: string; // 消息内容 (message_content)
+    sender?: string; // 发送者 (sender)
+    datetime?: string; // 发送时间 (datetime)
   };
   enrichedData?: any;
   actions?: any[];
@@ -45,8 +57,11 @@ const availableTools: Record<string, AgentTool> = {
     name: '实体提取工具',
     description: '从消息中提取人物、时间、地点、项目等实体信息',
     execute: async (params) => {
-      return await extractEntitiesFromMessage(params.message_content || params.content, params.metadata);
-    }
+      return await extractEntitiesFromMessage(
+        params.message_content || params.content,
+        params.metadata,
+      );
+    },
   },
   relationshipAnalysis: {
     name: '关系分析工具',
@@ -54,11 +69,11 @@ const availableTools: Record<string, AgentTool> = {
     execute: async (params) => {
       const people = params.entities?.people || [];
       if (people.length < 2) return { relationships: [] };
-      
+
       // 构建关系分析提示
       const relationshipPrompt = `
       分析以下人物之间可能的关系:
-      ${people.map((p: {name: string}) => p.name).join(', ')}
+      ${people.map((p: { name: string }) => p.name).join(', ')}
       
       消息上下文:
       ${params.message_content || params.content}
@@ -78,10 +93,13 @@ const availableTools: Record<string, AgentTool> = {
         ]
       }
       `;
-      
-      const relationshipData = await callLLMJsonAPI({prompt: relationshipPrompt, type: 'query'});
+
+      const relationshipData = await callLLMJsonAPI({
+        prompt: relationshipPrompt,
+        type: 'query',
+      });
       return relationshipData || { relationships: [] };
-    }
+    },
   },
   historySearch: {
     name: '历史消息搜索工具',
@@ -89,9 +107,10 @@ const availableTools: Record<string, AgentTool> = {
     execute: async (params) => {
       const searchQuery = `与"${params.person || ''}"相关的最近消息`;
 
-      const timeRange = params.time_range && params.time_range.start && params.time_range.end
-        ? { start: params.time_range.start, end: params.time_range.end }
-        : undefined;
+      const timeRange =
+        params.time_range && params.time_range.start && params.time_range.end
+          ? { start: params.time_range.start, end: params.time_range.end }
+          : undefined;
 
       try {
         const client = getMemoryServiceClient();
@@ -107,25 +126,25 @@ const availableTools: Record<string, AgentTool> = {
         return {
           question: searchQuery,
           results: {
-            ids: items.map(m => m.id),
-            documents: items.map(m => m.content),
-            metadatas: items.map(m => ({
+            ids: items.map((m) => m.id),
+            documents: items.map((m) => m.content),
+            metadatas: items.map((m) => ({
               sender: m.metadata?.sender,
               groupName: m.metadata?.groupName,
               datetime: m.metadata?.datetime,
-              summary: m.metadata?.summary
+              summary: m.metadata?.summary,
             })),
-            distances: items.map(m => 1 - (m.score || 0))
-          }
+            distances: items.map((m) => 1 - (m.score || 0)),
+          },
         };
       } catch (error) {
         console.error('历史消息搜索失败:', error);
         return {
           question: searchQuery,
-          results: { ids: [], documents: [], metadatas: [], distances: [] }
+          results: { ids: [], documents: [], metadatas: [], distances: [] },
         };
       }
-    }
+    },
   },
   relevanceJudgment: {
     name: '重要性判断工具',
@@ -140,12 +159,12 @@ const availableTools: Record<string, AgentTool> = {
           client.getEntities('Person'),
           client.getEntities('Project'),
         ]);
-        knownPeople = (peopleRes.items || []).map(e => e.name);
-        knownProjects = (projectsRes.items || []).map(e => e.name);
+        knownPeople = (peopleRes.items || []).map((e) => e.name);
+        knownProjects = (projectsRes.items || []).map((e) => e.name);
       } catch (error) {
         console.error('获取已知人物/项目失败:', error);
       }
-      
+
       // 构建重要性判断提示
       const relevancePrompt = `
       分析以下消息的重要性:
@@ -174,9 +193,9 @@ const availableTools: Record<string, AgentTool> = {
         "tags": ["相关标签"]
       }
       `;
-      
-      return await callLLMJsonAPI({prompt: relevancePrompt, type: 'query'});
-    }
+
+      return await callLLMJsonAPI({ prompt: relevancePrompt, type: 'query' });
+    },
   },
   externalServiceQuery: {
     name: '外部服务查询工具',
@@ -188,10 +207,10 @@ const availableTools: Record<string, AgentTool> = {
         return {
           success: true,
           data: {
-            status: "进行中",
-            assignee: "某人员",
-            description: "这是一个模拟的Jira任务"
-          }
+            status: '进行中',
+            assignee: '某人员',
+            description: '这是一个模拟的Jira任务',
+          },
         };
       }
       if (params.service === 'wiki' && params.topic) {
@@ -199,13 +218,13 @@ const availableTools: Record<string, AgentTool> = {
         return {
           success: true,
           data: {
-            content: "这是关于该主题的Wiki内容",
-            lastUpdated: new Date().toISOString()
-          }
+            content: '这是关于该主题的Wiki内容',
+            lastUpdated: new Date().toISOString(),
+          },
         };
       }
-      return { success: false, message: "不支持的服务或缺少参数" };
-    }
+      return { success: false, message: '不支持的服务或缺少参数' };
+    },
   },
   replyAdviser: {
     name: '回复建议工具',
@@ -236,71 +255,114 @@ const availableTools: Record<string, AgentTool> = {
         "reason": "建议原因"
       }
       `;
-      
-      return await callLLMJsonAPI({prompt: replyPrompt, type: 'query'});
-    }
+
+      return await callLLMJsonAPI({ prompt: replyPrompt, type: 'query' });
+    },
   },
   concernedItemMatcher: {
     name: '关注项匹配工具',
     description: '检查消息是否匹配用户关注的话题并生成通知',
     execute: async (params) => {
-      // 获取关注项配置
-      const { concernedItems } = await chrome.storage.local.get('concernedItems');
-      const items = concernedItems || [];
-      
+      const { concernedItems = [], userinfo } = await chrome.storage.local.get([
+        'concernedItems',
+        'userinfo',
+      ]);
+      const items = (concernedItems as TopicItemWithAutoReply[]).filter(
+        isManualConcernedItem,
+      );
+
       if (items.length === 0) {
         return {
           shouldNotify: false,
+          shouldStore: false,
           matchedRule: '',
+          matchedRuleRefs: [],
+          matchedRuleIds: [],
           summary: '',
-          confidence: 0
+          confidence: 0,
         };
       }
-      
-      // 构建匹配分析提示
-      const matchPrompt = `
-      分析以下消息是否符合用户关注的话题:
-      
-      消息内容: ${params.message_content || params.content}
-      发送者: ${params.sender}
-      群组: ${params.team_name || ''}
-      用户名: ${params.username || ''}
-      
-      关注项规则:
-      ${items.map((item: any, i: number) => `${i + 1}. ${item.text}`).join('\n')}
-      
-      请判断:
-      1. 消息是否匹配任何关注项 (true/false)
-      2. 如果匹配，返回匹配的规则原文
-      3. 生成消息摘要
-      4. 判断置信度 (0-1)
-      5. 是否需要推送通知 (true/false)
-      
-      以JSON格式返回:
-      {
-        "shouldNotify": true/false,
-        "matchedRule": "匹配的规则原文",
-        "summary": "消息摘要和上下文分析",
-        "confidence": 0.8,
-        "reason": "匹配原因"
+
+      const envConfig = await getEnvConfig();
+      const runtimeWatchRules = await loadRuntimeWatchRules(items);
+      const systemPrompt = buildMessageFilterSystemPrompt({
+        concernedItems: runtimeWatchRules,
+        username: params.username || userinfo?.fullName || '',
+        envConfig,
+      });
+      const xmlMessage = `<message_group team_name="${params.team_name || ''}" team_id="${params.team_id || ''}">\n  <standalone>\n    <message sender="${params.sender || ''}" datetime="${params.datetime || new Date().toISOString()}" post_id="${params.post_id || ''}">${escapeXml(params.message_content || params.content || '')}</message>\n  </standalone>\n</message_group>`;
+      const userPrompt = `
+我的名字是：<current_user_name>${params.username || userinfo?.fullName || ''}</current_user_name>
+
+---- 这是我收到的最近聊条消息开始 ----
+${xmlMessage}
+---- 这是我收到的最近聊条消息结束 ----
+`;
+
+      const matchResult = await callLLMJsonAPI({
+        system_prompt: systemPrompt,
+        user_prompt: userPrompt,
+        type: 'query',
+      });
+
+      const firstMatch = Array.isArray(matchResult?.data)
+        ? matchResult.data[0]
+        : null;
+      if (!firstMatch) {
+        return {
+          shouldNotify: false,
+          shouldStore: false,
+          matchedRule: '',
+          matchedRuleRefs: [],
+          matchedRuleIds: [],
+          summary: '无法分析消息内容',
+          confidence: 0,
+        };
       }
-      `;
-      
-      const matchResult = await callLLMJsonAPI({prompt: matchPrompt, type: 'query'});
-      return matchResult || {
-        shouldNotify: false,
-        matchedRule: '',
-        summary: '无法分析消息内容',
-        confidence: 0
+
+      const resolvedMatch = resolveMatchedWatchRules({
+        watchRules: runtimeWatchRules,
+        matchedRule: firstMatch.matched_rule,
+        matchedRuleRefs: Array.isArray(firstMatch.matched_rule_refs)
+          ? firstMatch.matched_rule_refs
+          : [],
+        matchedRuleIds: Array.isArray(firstMatch.matched_rule_ids)
+          ? firstMatch.matched_rule_ids
+          : [],
+      });
+      const matchedManualItem = getFirstManualItemFromMatchedRules(
+        resolvedMatch.watchRules,
+      );
+
+      return {
+        shouldNotify: Boolean(matchedManualItem?.notifyMethod),
+        shouldStore: resolvedMatch.watchRules.length > 0,
+        matchedRule: firstMatch.matched_rule || '',
+        matchedRuleRefs: resolvedMatch.matchedRuleRefs,
+        matchedRuleIds: resolvedMatch.matchedRuleIds,
+        summary: firstMatch.summary || firstMatch.filter_reason || '',
+        confidence:
+          typeof firstMatch.confidence === 'number'
+            ? firstMatch.confidence
+            : 0.7,
       };
-    }
-  }
+    },
+  },
 };
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 // Agent调度器
 class AgentCoordinator {
   private agents: AgentConfig[] = [];
-  
+
   constructor() {
     // 初始化默认agents
     this.agents = [
@@ -310,7 +372,7 @@ class AgentCoordinator {
         description: '负责从消息中识别和提取实体',
         enabled: true,
         priority: 100,
-        tools: ['entityExtraction']
+        tools: ['entityExtraction'],
       },
       {
         id: 'relationshipAnalyzer',
@@ -318,7 +380,7 @@ class AgentCoordinator {
         description: '分析实体之间的关系',
         enabled: true,
         priority: 90,
-        tools: ['relationshipAnalysis', 'historySearch']
+        tools: ['relationshipAnalysis', 'historySearch'],
       },
       {
         id: 'relevanceJudge',
@@ -326,7 +388,7 @@ class AgentCoordinator {
         description: '评估消息的重要性并决定是否存储',
         enabled: true,
         priority: 80,
-        tools: ['relevanceJudgment', 'historySearch']
+        tools: ['relevanceJudgment', 'historySearch'],
       },
       {
         id: 'externalInfoFetcher',
@@ -334,7 +396,7 @@ class AgentCoordinator {
         description: '从Jira、Wiki等外部服务获取相关信息',
         enabled: true,
         priority: 70,
-        tools: ['externalServiceQuery']
+        tools: ['externalServiceQuery'],
       },
       {
         id: 'responseAdviser',
@@ -342,7 +404,7 @@ class AgentCoordinator {
         description: '生成回复建议',
         enabled: true,
         priority: 60,
-        tools: ['replyAdviser']
+        tools: ['replyAdviser'],
       },
       {
         id: 'notificationJudge',
@@ -350,11 +412,11 @@ class AgentCoordinator {
         description: '检查消息是否匹配关注项并决定是否发送通知',
         enabled: true,
         priority: 95, // 高优先级，在实体识别后立即执行
-        tools: ['concernedItemMatcher']
-      }
+        tools: ['concernedItemMatcher'],
+      },
     ];
   }
-  
+
   // 获取Agent配置
   async getAgents(): Promise<AgentConfig[]> {
     try {
@@ -367,7 +429,7 @@ class AgentCoordinator {
     }
     return this.agents;
   }
-  
+
   // 添加自定义Agent
   async addAgent(agent: AgentConfig): Promise<boolean> {
     try {
@@ -381,39 +443,43 @@ class AgentCoordinator {
       return false;
     }
   }
-  
+
   // 执行Agent调度流程
   async processMessage(message: any): Promise<MessageProcessResult> {
     const agents = await this.getAgents();
     // 按优先级排序
     const sortedAgents = agents
-      .filter(agent => agent.enabled)
+      .filter((agent) => agent.enabled)
       .sort((a, b) => b.priority - a.priority);
-    
+
     console.log(`开始处理消息，启用了 ${sortedAgents.length} 个Agent`);
-    
+
     // 初始化处理结果
     const result: MessageProcessResult = {
       isRelevant: false,
       shouldStore: false,
-      shouldNotify: false,               // 新增字段
-      confidence: 0,                     // 新增字段
-      summary: '',                       // 新增字段
-      matchedRule: '',                   // 新增字段
-      messageContext: {                  // 新增字段：填充消息上下文
+      shouldNotify: false, // 新增字段
+      confidence: 0, // 新增字段
+      summary: '', // 新增字段
+      matchedRule: '', // 新增字段
+      matchedRuleRefs: [],
+      matchedRuleIds: [],
+      messageContext: {
+        // 新增字段：填充消息上下文
         groupId: message.team_id || message.groupId,
         groupName: message.team_name || message.groupName,
-        messageContent: message.message_content || message.content || message.text,
+        messageContent:
+          message.message_content || message.content || message.text,
         sender: message.sender || message.creator,
-        datetime: message.datetime || message.time
+        datetime: message.datetime || message.time,
       },
       enrichedData: {},
-      actions: []
+      actions: [],
     };
-    
+
     // 存储每个Agent的处理结果
     const agentResults: Record<string, any> = {};
-    
+
     // 逐个运行Agent
     for (const agent of sortedAgents) {
       console.log(`运行Agent: ${agent.name}`);
@@ -422,9 +488,9 @@ class AgentCoordinator {
         const context = {
           ...message,
           ...result.enrichedData,
-          previousResults: agentResults
+          previousResults: agentResults,
         };
-        
+
         // 执行该Agent可用的工具
         const toolResults: Record<string, any> = {};
         for (const toolName of agent.tools) {
@@ -434,39 +500,56 @@ class AgentCoordinator {
             toolResults[toolName] = await tool.execute(context);
           }
         }
-        
+
         // 存储该Agent的处理结果
         agentResults[agent.id] = toolResults;
-        
+
         // 合并结果
         if (toolResults.entityExtraction) {
           result.enrichedData.entities = toolResults.entityExtraction;
         }
-        
+
         if (toolResults.relationshipAnalysis) {
-          result.enrichedData.relationships = toolResults.relationshipAnalysis.relationships;
+          result.enrichedData.relationships =
+            toolResults.relationshipAnalysis.relationships;
         }
-        
+
         if (toolResults.relevanceJudgment) {
-          result.isRelevant = toolResults.relevanceJudgment.isImportant || false;
-          result.shouldStore = toolResults.relevanceJudgment.shouldStore || false;
-          result.enrichedData.priority = toolResults.relevanceJudgment.priority || 'medium';
+          result.isRelevant =
+            toolResults.relevanceJudgment.isImportant || false;
+          result.shouldStore =
+            result.shouldStore ||
+            toolResults.relevanceJudgment.shouldStore ||
+            false;
+          result.enrichedData.priority =
+            toolResults.relevanceJudgment.priority || 'medium';
           result.enrichedData.tags = toolResults.relevanceJudgment.tags || [];
         }
-        
+
         if (toolResults.externalServiceQuery?.success) {
-          result.enrichedData.externalData = toolResults.externalServiceQuery.data;
+          result.enrichedData.externalData =
+            toolResults.externalServiceQuery.data;
         }
-        
+
         if (toolResults.replyAdviser) {
-          result.replyAdvice = toolResults.replyAdviser.needsReply 
-            ? toolResults.replyAdviser.replyText 
+          result.replyAdvice = toolResults.replyAdviser.needsReply
+            ? toolResults.replyAdviser.replyText
             : '';
         }
-        
+
         if (toolResults.concernedItemMatcher) {
-          result.shouldNotify = toolResults.concernedItemMatcher.shouldNotify || false;
-          result.matchedRule = toolResults.concernedItemMatcher.matchedRule || '';
+          result.shouldNotify =
+            toolResults.concernedItemMatcher.shouldNotify || false;
+          result.shouldStore =
+            result.shouldStore ||
+            toolResults.concernedItemMatcher.shouldStore ||
+            false;
+          result.matchedRule =
+            toolResults.concernedItemMatcher.matchedRule || '';
+          result.matchedRuleRefs =
+            toolResults.concernedItemMatcher.matchedRuleRefs || [];
+          result.matchedRuleIds =
+            toolResults.concernedItemMatcher.matchedRuleIds || [];
           result.summary = toolResults.concernedItemMatcher.summary || '';
           result.confidence = toolResults.concernedItemMatcher.confidence || 0;
         }
@@ -474,7 +557,7 @@ class AgentCoordinator {
         console.error(`Agent "${agent.name}" 执行失败:`, error);
       }
     }
-    
+
     console.log('所有Agent处理完成，最终结果:', result);
     return result;
   }
@@ -484,12 +567,14 @@ class AgentCoordinator {
 const agentCoordinator = new AgentCoordinator();
 
 // 主入口函数：处理新消息
-export async function processNewMessage(message: any): Promise<MessageProcessResult> {
+export async function processNewMessage(
+  message: any,
+): Promise<MessageProcessResult> {
   console.log('Agent系统接收到新消息:', message);
-  
+
   // 调用Agent协调器处理消息，传递完整的消息上下文
   const processResult = await agentCoordinator.processMessage(message);
-  
+
   // 🆕 如果消息需要存储到向量数据库（通过 MemoryServiceClient HTTP 后端）
   if (processResult.shouldStore) {
     try {
@@ -503,27 +588,33 @@ export async function processNewMessage(message: any): Promise<MessageProcessRes
         timestamp: new Date(message.datetime).getTime() || Date.now(),
         metadata: {
           datetime: message.datetime || new Date().toISOString(),
-          matchedRules: [message.matched_rule],
+          matchedRules: processResult.matchedRule
+            ? [processResult.matchedRule]
+            : [],
+          matchedRuleRefs: processResult.matchedRuleRefs || [],
           summary: message.summary || '',
           replyAdvice: processResult.replyAdvice || message.reply_advice || '',
           groupUrl: message.team_url,
           contextMessages: [], // agentWorkflow 模式下暂无上下文
-          ...processResult.enrichedData
-        }
+          ...processResult.enrichedData,
+        },
       });
 
-      console.log(`✅ 消息和实体关联存储完成 [agentWorkflow]: ${ingestResult.id}`, {
-        status: ingestResult.status,
-        entitiesExtracted: ingestResult.entitiesExtracted,
-        matchedProjects: ingestResult.matchedProjects
-      });
+      console.log(
+        `✅ 消息和实体关联存储完成 [agentWorkflow]: ${ingestResult.id}`,
+        {
+          status: ingestResult.status,
+          entitiesExtracted: ingestResult.entitiesExtracted,
+          matchedProjects: ingestResult.matchedProjects,
+        },
+      );
     } catch (error) {
       console.error('🚨 agentWorkflow存储消息失败:', error);
     }
   }
-  
+
   return processResult;
 }
 
 // 公开协调器实例以供配置
-export { agentCoordinator }; 
+export { agentCoordinator };

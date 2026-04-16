@@ -46,7 +46,9 @@ interface TargetSearchCacheEntry {
   payload: {
     items: Awaited<ReturnType<OutreachEngine['searchTargets']>>;
     total: number;
-    directoryStatus: Awaited<ReturnType<OutreachEngine['getTargetDirectoryStatus']>>;
+    directoryStatus: Awaited<
+      ReturnType<OutreachEngine['getTargetDirectoryStatus']>
+    >;
   };
 }
 
@@ -81,7 +83,9 @@ function deriveUpstreamStatus(message: string): number | undefined {
   const match = message.match(/\((\d{3})\)/);
   if (!match) return undefined;
   const status = Number(match[1]);
-  return Number.isFinite(status) && status >= 400 && status < 600 ? status : undefined;
+  return Number.isFinite(status) && status >= 400 && status < 600
+    ? status
+    : undefined;
 }
 
 export async function outreachRoutes(app: FastifyInstance): Promise<void> {
@@ -128,12 +132,13 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   }>('/outreach/templates/runtime-status', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
-    const ids = typeof request.query.ids === 'string'
-      ? request.query.ids
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean)
-      : undefined;
+    const ids =
+      typeof request.query.ids === 'string'
+        ? request.query.ids
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : undefined;
     const items = engine.listTemplateRuntimeStatus(
       parseInt(request.query.limit ?? '100', 10) || 100,
       ids,
@@ -163,7 +168,9 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   }>('/outreach/directory/sync', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
-    const items = await engine.syncTargetDirectory(request.query.force === 'true');
+    const items = await engine.syncTargetDirectory(
+      request.query.force === 'true',
+    );
     return reply.status(200).send({ items });
   });
 
@@ -176,8 +183,12 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   }>('/outreach/targets/search', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
-    const targetType = typeof request.query.targetType === 'string' ? request.query.targetType : 'private';
-    const query = typeof request.query.query === 'string' ? request.query.query.trim() : '';
+    const targetType =
+      typeof request.query.targetType === 'string'
+        ? request.query.targetType
+        : 'private';
+    const query =
+      typeof request.query.query === 'string' ? request.query.query.trim() : '';
     if (!query) {
       return reply.status(200).send({ items: [], total: 0 });
     }
@@ -200,7 +211,11 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send(cached.payload);
     }
     try {
-      const response = await engine.searchTargetsDetailed(targetType, query, normalizedLimit);
+      const response = await engine.searchTargetsDetailed(
+        targetType,
+        query,
+        normalizedLimit,
+      );
       const payload = {
         items: response.items,
         total: response.total,
@@ -263,7 +278,18 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       limit: parseInt(request.query.limit ?? '20', 10) || 20,
       offset: parseInt(request.query.offset ?? '0', 10) || 0,
     });
-    return reply.status(200).send(result);
+    const items = await Promise.all(
+      result.items.map(async (session) => {
+        const detail = await engine.getSessionDetail(session.id);
+        return detail
+          ? { ...detail.session, evidence: detail.evidence }
+          : session;
+      }),
+    );
+    return reply.status(200).send({
+      ...result,
+      items,
+    });
   });
 
   app.get<{
@@ -279,6 +305,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       ...detail.session,
       events: detail.events,
       actions: detail.actions,
+      evidence: detail.evidence,
     });
   });
 
@@ -300,7 +327,10 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   }>('/outreach/sessions/:id/cancel', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
-    const session = engine.cancelSession(request.params.id, request.body?.reason);
+    const session = engine.cancelSession(
+      request.params.id,
+      request.body?.reason,
+    );
     if (!session) {
       return reply.status(404).send({ error: 'Outreach session not found' });
     }
@@ -314,7 +344,10 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
     try {
-      const session = engine.updateSessionDraft(request.params.id, request.body ?? {});
+      const session = engine.updateSessionDraft(
+        request.params.id,
+        request.body ?? {},
+      );
       if (!session) {
         return reply.status(404).send({ error: 'Outreach session not found' });
       }

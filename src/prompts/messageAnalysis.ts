@@ -1,25 +1,26 @@
 /**
  * 消息分析相关的 Prompt 模板
- * 
+ *
  * 用于消息过滤、规则匹配、总结等场景
  */
 
 import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildRuleText } from '../utils/ruleTextBuilder';
 import { EnvConfigType } from '../utils';
+import type { WatchRule } from '../watchRules';
 
 /**
  * 构建消息过滤系统 Prompt
  * 用于按关注规则过滤消息
  */
 export function buildMessageFilterSystemPrompt(params: {
-    concernedItems: TopicItemWithAutoReply[];
-    username: string;
-    envConfig: EnvConfigType;
+  concernedItems: Array<TopicItemWithAutoReply | WatchRule>;
+  username: string;
+  envConfig: EnvConfigType;
 }): string {
-    const { concernedItems, envConfig } = params;
-    
-    return `
+  const { concernedItems, envConfig } = params;
+
+  return `
 你是一个很细心的项目经理，请认真阅读并分析以上消息，并按照以下要求返回数据。
 
 ## 消息结构说明
@@ -48,7 +49,24 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
 ### 第一步：规则匹配
 请仔细阅读 <message_group> 里的每条消息（包括 <thread> 中的 <root>/<reply> 和 <standalone> 中的 <message>），判断是否符合以下规则之一${envConfig.ANALYZE_BY_GROUP ? '' : '。如果没有则跳过并查看下一个 message_group'}：
     - 规则0: 排除发送者是"SM AI undefined"的消息，排除发送者是自己的消息
-    ${concernedItems.map((item:any, i:number) => `- 规则${i+1} [RULE_ID:${i}]: ${buildRuleText(item as TopicItemWithAutoReply)}`).join('\n  ')}
+    ${concernedItems
+      .map((item, i) => {
+        const manualRuleIndex =
+          'source' in item
+            ? item.source === 'manual'
+              ? concernedItems
+                  .slice(0, i + 1)
+                  .filter(
+                    (currentItem): currentItem is WatchRule =>
+                      'source' in currentItem &&
+                      currentItem.source === 'manual',
+                  ).length - 1
+              : undefined
+            : i;
+        const ruleRef = 'source' in item ? item.ruleRef : `manual:${item.id}`;
+        return `- 规则${i + 1}: ${buildRuleText(item, true, manualRuleIndex, ruleRef)}`;
+      })
+      .join('\n  ')}
 
 ### 第二步：提取匹配消息的字段
 对符合规则的消息，提取以下字段：
@@ -59,7 +77,8 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
 
 ### 第三步：生成分析字段
 对每条匹配的消息，生成以下字段：
-    - matched_rule_ids: 【重要】符合的规则 ID 数组，使用 [RULE_ID:X] 中的 X 值
+    - matched_rule_refs: 【重要】符合的稳定规则引用数组，使用规则定义中的 [RULE_REF:xxx] 中的 xxx 值
+    - matched_rule_ids: 兼容字段，仅当命中带 [RULE_ID:X] 的手动规则时返回对应数字 X
     - matched_rule: 符合的规则原文内容（备用参考）
     - filter_reason: 选择这条消息的原因（中文）
     - summary: 结合 <thread> 的上下文（包括 root 和其他 reply）总结为什么 sender 会发出这个消息。如果是 <standalone> 消息，分析它是否可能是对附近 <thread> 的隐式回应
@@ -80,6 +99,7 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
         "message_content": "{消息原文}",
         "sender": "{sender}",
         "post_id": "{post_id}",  // 必填：消息的全局唯一标识符
+        "matched_rule_refs": ["manual:topic-1"],
         "matched_rule_ids": [0],
         "matched_rule": "符合的规则内容",
         "filter_reason": "过滤原因",
@@ -126,9 +146,10 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
 1. 请严格按照 JSON 格式返回，不要添加任何其他内容
 2. 如果某个字段不适用，请设为空字符串或空数组，不要省略该字段
 3. post_id 字段是必填项，务必从原消息中提取
-4. matchedRuleIds 必须是数字数组，如 [0, 2]，不是字符串数组
-5. 对于"关注后续讨论"规则，务必填写 follow_thread_info 字段
-6. actions 数组：如果没有任务则为空数组 []，有任务时必须包含 id, summary, priority, deadline, status, assignee 字段
+    4. matched_rule_refs 必须优先返回稳定字符串数组，如 ["manual:topic-1", "outreach:session-1"]
+    5. matched_rule_ids 只是兼容字段；只有手动规则带了 [RULE_ID:X] 时才返回，如 [0, 2]
+    6. 对于"关注后续讨论"规则，务必填写 follow_thread_info 字段
+    7. actions 数组：如果没有任务则为空数组 []，有任务时必须包含 id, summary, priority, deadline, status, assignee 字段
 `.trim();
 }
 
@@ -137,21 +158,45 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
  * 用于在发送通知前审核消息是否符合规则
  */
 export function buildLLMReviewPrompt(params: {
-    sender: string;
-    teamName: string;
-    messageContent: string;
-    summary: string;
-    userName: string;
-    concernedItems: TopicItemWithAutoReply[];
+  sender: string;
+  teamName: string;
+  messageContent: string;
+  summary: string;
+  userName: string;
+  concernedItems: Array<TopicItemWithAutoReply | WatchRule>;
 }): string {
-    const { sender, teamName, messageContent, summary, userName, concernedItems } = params;
-    
-    return `本条消息是由 ${sender} 在群 ${teamName} 中发送的，内容如下：
+  const {
+    sender,
+    teamName,
+    messageContent,
+    summary,
+    userName,
+    concernedItems,
+  } = params;
+
+  return `本条消息是由 ${sender} 在群 ${teamName} 中发送的，内容如下：
 <message_content>${messageContent}</message_content>
 这是上下文的总结：<summary>${summary}</summary>
 
 请审核以上消息是否符合这些过滤规则中的任意一条（我的名字是 ${userName}）：
-${concernedItems.map((item, i) => `- 规则${i + 1}: ${buildRuleText(item)}`).join('\n')}
+    ${concernedItems
+      .map((item, i) => {
+        const manualRuleIndex =
+          'source' in item
+            ? item.source === 'manual'
+              ? concernedItems
+                  .slice(0, i + 1)
+                  .filter(
+                    (currentItem): currentItem is WatchRule =>
+                      'source' in currentItem &&
+                      currentItem.source === 'manual',
+                  ).length - 1
+              : undefined
+            : i;
+        const ruleRef = 'source' in item ? item.ruleRef : `manual:${item.id}`;
+        return `- 规则${i + 1}: ${buildRuleText(item, true, manualRuleIndex, ruleRef)}`;
+      })
+      .join('\n')}
 
 如果符合规则，请直接返回符合的规则原文，符合多条规则用换行隔开，不要包含其他内容。如果不符合任何规则，请返回"不通过"。`;
 }

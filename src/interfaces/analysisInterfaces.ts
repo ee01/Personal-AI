@@ -3,7 +3,8 @@
  * 包含所有与分析相关的接口类型
  */
 
-import { JiraTicket } from "../types";
+import { JiraTicket } from '../types';
+import type { WatchRule } from '../watchRules';
 
 /**
  * 思考步骤接口
@@ -12,16 +13,16 @@ import { JiraTicket } from "../types";
 export interface ThoughtStep {
   /** 步骤时间戳 */
   timestamp: number;
-  
+
   /** 思考内容 */
   thought: string;
-  
+
   /** 执行的行动 */
   action: string;
-  
+
   /** 使用的工具 */
   toolUsed?: string;
-  
+
   /** 工具执行结果 */
   result?: any;
 }
@@ -33,28 +34,28 @@ export interface ThoughtStep {
 export interface BaseAnalysisResult {
   /** 分析结果的可信度，0-1之间 */
   confidence: number;
-  
+
   /** 分析内容的简短摘要 */
   summary: string;
-  
+
   /** 元数据信息，包含分析过程相关统计信息 */
   metaData?: {
     /** LLM调用次数 */
     llmCallCount: number;
-    
+
     /** LLM调用消耗的tokens数量 */
     llmCallTokens: number;
-    
+
     /** 使用的工具列表 */
     usedTools: string[];
-    
+
     /** 分析结束时间戳 */
     timestamp: number;
-    
+
     /** 其他扩展元数据 */
     [key: string]: any;
   };
-  
+
   /** 其他可选属性 */
   [key: string]: any;
 }
@@ -66,61 +67,67 @@ export interface BaseAnalysisResult {
 export interface MessageAnalysisResult extends BaseAnalysisResult {
   /** 标识结果类型为消息分析 */
   type: 'message';
-  
+
   /** 消息是否重要 */
   isImportant: boolean;
-  
+
   /** 是否应该存储该消息 */
   shouldStore: boolean;
-  
+
   /** 是否应该发送通知 */
   shouldNotify: boolean;
-  
+
   /** 存储消息的原因列表 */
   reasonsToStore: string[];
-  
+
   /** 通知优先级 */
   notificationPriority?: 'high' | 'medium' | 'low';
-  
+
   /** 回复建议 */
   replyAdvice?: string;
-  
+
   /** 思考过程记录 */
   thoughtProcess?: ThoughtStep[];
 
   /** 消息ID（post_id）- 全局唯一标识符 */
   postId: string;
-  
+
   /** 群组索引 */
   groupIndex?: number;
-  
+
   /** 群组ID */
   groupId?: string;
-  
+
   /** 群组名称 */
   groupName?: string;
-  
+
   /** 消息上下文信息 */
   messageContext?: {
     /** 群组ID */
     groupId?: string;
-    
+
     /** 群组名称 */
     groupName?: string;
-    
+
     /** 消息内容 */
     messageContent?: string;
-    
+
     /** 发送者 */
     sender?: string;
-    
+
     /** 发送时间 */
     datetime?: string;
-    
+
     /** 消息ID（post_id） */
     postId?: string;
   };
-  
+
+  /** 匹配的稳定规则引用 */
+  matchedRuleRefs?: string[];
+
+  /** 兼容字段：仅对带 RULE_ID 的手动规则有效 */
+  matchedRuleIds?: number[];
+
   /** 提取的实体信息 */
   entities?: {
     people?: Array<{
@@ -145,7 +152,7 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
     }>;
     [key: string]: any;
   };
-  
+
   /** 实体间关系 */
   relationships?: Array<{
     source: string;
@@ -153,7 +160,7 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
     type: string;
     context?: string;
   }>;
-  
+
   /** 建议的行动项 */
   actions?: Array<{
     type: string;
@@ -162,19 +169,23 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
     assignee?: string;
     deadline?: string;
   }>;
-  
+
   /** 情感分析结果 */
   sentiment?: 'positive' | 'negative' | 'neutral';
-  
+
   /** 消息分类 */
   category?: string[];
-  
+
   /** 关注后续讨论信息（仅当匹配"关注后续讨论"规则时填写） */
   followThreadInfo?: {
     /** 被关注的原消息 post_id */
     originalPostId: string;
     /** 与原消息的关系类型 */
-    relationType: 'direct_reply' | 'same_thread' | 'semantic_related' | 'mention';
+    relationType:
+      | 'direct_reply'
+      | 'same_thread'
+      | 'semantic_related'
+      | 'mention';
     /** 相关度评分 (0-1) */
     relevanceScore?: number;
   };
@@ -187,24 +198,24 @@ export interface MessageAnalysisResult extends BaseAnalysisResult {
 export interface ProjectAnalysisResult extends BaseAnalysisResult {
   /** 标识结果类型为项目分析 */
   type: 'project';
-  
+
   /** 项目ID */
   projectId: string;
-  
+
   /** 项目名称 */
   projectName: string;
-  
+
   /** 项目风险等级 */
   riskLevel: 'critical' | 'high' | 'normal' | 'low';
-  
+
   /** Jira数据（单个工单，旧版兼容） */
   jiraData?: Record<string, any>;
-  
+
   /** Jira数据（多个工单，新版格式） */
   jiraIssues?: {
     [key: string]: JiraTicket;
   };
-  
+
   /** 里程碑状态 */
   milestones?: Array<{
     name: string;
@@ -213,7 +224,7 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
     completionPercentage?: number;
     owner?: string;
   }>;
-  
+
   /** 项目的关键问题 */
   issues?: Array<{
     id: string;
@@ -223,7 +234,7 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
     owner?: string;
     description?: string;
   }>;
-  
+
   /** 改进建议 */
   suggestions: {
     status?: string;
@@ -241,7 +252,7 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
     actionItemsReason?: string;
     followUp?: string[];
   };
-  
+
   /** 项目依赖关系 */
   dependencies?: Array<{
     projectId: string;
@@ -258,7 +269,7 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
 export interface MeetingAnalysisResult extends BaseAnalysisResult {
   /** 标识结果类型为会议分析 */
   type: 'meeting';
-  
+
   /** 讨论的主题列表 */
   topics: Array<{
     title: string;
@@ -267,7 +278,7 @@ export interface MeetingAnalysisResult extends BaseAnalysisResult {
     participants?: string[];
     sentiment?: 'positive' | 'negative' | 'neutral';
   }>;
-  
+
   /** 会议中做出的决策 */
   decisions: Array<{
     topic: string;
@@ -275,7 +286,7 @@ export interface MeetingAnalysisResult extends BaseAnalysisResult {
     rationale?: string;
     stakeholders?: string[];
   }>;
-  
+
   /** 会议产生的行动项 */
   actionItems: Array<{
     description: string;
@@ -284,7 +295,7 @@ export interface MeetingAnalysisResult extends BaseAnalysisResult {
     priority?: 'high' | 'medium' | 'low';
     status?: 'pending' | 'in_progress' | 'completed';
   }>;
-  
+
   /** 需要跟进的项目 */
   followups?: Array<{
     topic: string;
@@ -292,7 +303,7 @@ export interface MeetingAnalysisResult extends BaseAnalysisResult {
     owner?: string;
     deadline?: string;
   }>;
-  
+
   /** 会议效率评估 */
   efficiency?: {
     rating: number; // 1-10分
@@ -308,30 +319,30 @@ export interface MeetingAnalysisResult extends BaseAnalysisResult {
 export interface DocumentAnalysisResult extends BaseAnalysisResult {
   /** 标识结果类型为文档分析 */
   type: 'document';
-  
+
   /** 文档标题 */
   title: string;
-  
+
   /** 文档类型 */
   documentType: 'specification' | 'report' | 'email' | 'contract' | 'other';
-  
+
   /** 主要章节摘要 */
   sections: Array<{
     title: string;
     summary: string;
     importance: 'high' | 'medium' | 'low';
   }>;
-  
+
   /** 关键点列表 */
   keyPoints: string[];
-  
+
   /** 问题和不明确之处 */
   issues?: Array<{
     description: string;
     location?: string;
     severity: 'critical' | 'high' | 'medium' | 'low';
   }>;
-  
+
   /** 相关实体参考 */
   references?: Array<{
     entity: string;
@@ -346,7 +357,7 @@ export interface DocumentAnalysisResult extends BaseAnalysisResult {
  */
 export interface WebpageAnalysisResult extends BaseAnalysisResult {
   type: 'webpage';
-  
+
   /** 网页基本信息 */
   pageInfo: {
     title: string;
@@ -354,19 +365,19 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
     domain: string;
     extractedAt: number;
   };
-  
+
   /** Chrome AI 预分析结果 */
   chromeAIAnalysis?: {
     relevance: number;
     reasoning: string;
     initialEntities: Record<string, any>;
   };
-  
+
   /** 智能分析结果 */
   contentRelevance: number; // 0-1, 与项目管理的相关性
   shouldStore: boolean;
   shouldNotify: boolean;
-  
+
   /** 提取的实体信息 */
   extractedEntities: {
     projects?: string[];
@@ -377,7 +388,7 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
     organizations?: string[];
     topics?: string[];
   };
-  
+
   /** 关联分析 */
   relatedProjects?: Array<{
     projectId: string;
@@ -385,18 +396,24 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
     relevanceScore: number;
     relationshipType: 'direct' | 'dependency' | 'reference' | 'similar';
   }>;
-  
+
   relatedMemories?: Array<{
     memoryId: string;
     summary: string;
     relevanceScore: number;
     type: 'message' | 'project' | 'document' | 'webpage';
   }>;
-  
+
   /** 分类结果 */
-  contentCategory: 'project_update' | 'technical_doc' | 'meeting_notes' | 'planning' | 'announcement' | 'general';
+  contentCategory:
+    | 'project_update'
+    | 'technical_doc'
+    | 'meeting_notes'
+    | 'planning'
+    | 'announcement'
+    | 'general';
   tags: string[];
-  
+
   /** 存储建议 */
   storageRecommendation: {
     priority: 'high' | 'medium' | 'low';
@@ -404,10 +421,14 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
     importanceScore: number;
     retentionReason?: string;
   };
-  
+
   /** 行动建议 */
   actionSuggestions?: Array<{
-    type: 'notify_team' | 'update_project' | 'schedule_follow_up' | 'create_task';
+    type:
+      | 'notify_team'
+      | 'update_project'
+      | 'schedule_follow_up'
+      | 'create_task';
     description: string;
     priority: 'urgent' | 'important' | 'normal';
     suggestedDate?: Date;
@@ -422,11 +443,11 @@ export interface WebpageAnalysisInput {
   title: string;
   url: string;
   domain?: string;
-  
+
   /** 页面内容 */
   mainContent: string;
   metadata?: Record<string, any>;
-  
+
   /** Chrome AI 预分析结果 */
   chromeAIResult?: {
     relevance: number;
@@ -437,7 +458,7 @@ export interface WebpageAnalysisInput {
     keyInsights?: string[];
     actionableItems?: string[];
   };
-  
+
   /** 用户上下文 */
   userContext?: {
     currentProjects?: string[];
@@ -459,7 +480,7 @@ export interface GenericAnalysisResult extends BaseAnalysisResult {
  * 分析结果联合类型
  * 表示所有可能的分析结果类型
  */
-export type AnalysisResult = 
+export type AnalysisResult =
   | MessageAnalysisResult
   | ProjectAnalysisResult
   | MeetingAnalysisResult
@@ -474,28 +495,28 @@ export type AnalysisResult =
 export interface AnalysisConfig {
   /** 分析类型 */
   type: 'message' | 'project' | 'meeting' | 'document' | 'webpage' | 'generic';
-  
+
   /** 分析深度 */
   analysisDepth?: 'quick' | 'normal' | 'deep';
-  
+
   /** 最大行动次数 */
   maxActions?: number;
-  
+
   /** 首选工具列表 */
   preferredTools?: string[];
-  
+
   /** 自定义提示模板 */
   customPrompts?: {
     /** 初始分析提示 */
     analysis?: string;
-    
+
     /** 思考提示 */
     thinking?: string;
-    
+
     /** 总结提示 */
     summary?: string;
   };
-  
+
   /** 额外配置 */
   [key: string]: any;
 }
@@ -507,7 +528,7 @@ export interface AnalysisConfig {
 export interface AnalysisContext {
   /** 当前用户 */
   currentUser?: string;
-  
+
   /** 群组信息 */
   groupInfo?: {
     id: string;
@@ -516,10 +537,10 @@ export interface AnalysisContext {
     type?: 'team' | 'department' | 'project';
     index?: number;
   };
-  
+
   /** 关注规则列表 */
-  concernedRules?: {text: string}[];
-  
+  concernedRules?: WatchRule[];
+
   /** 用户偏好 */
   userPreferences?: {
     notificationLevel?: 'all' | 'important' | 'critical';
@@ -527,7 +548,7 @@ export interface AnalysisContext {
     responseStyle?: 'detailed' | 'concise';
     [key: string]: any;
   };
-  
+
   /** 系统状态 */
   systemState?: {
     availableApps: string[];
@@ -538,13 +559,12 @@ export interface AnalysisContext {
       summary: string;
     }>;
   };
-  
+
   /** 额外上下文 */
   [key: string]: any;
-} 
+}
 
-
-/* 
+/*
  * 项目输入接口
  * 用于分析项目状态和风险
  */
@@ -574,6 +594,6 @@ export interface ProjectInput {
       assignee: string;
       duedate: string;
       [key: string]: any;
-    }
+    };
   };
 }

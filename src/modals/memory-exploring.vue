@@ -8,6 +8,11 @@
       <div class="sidebar">
         <div class="sidebar-header">
           <div class="logo">🧠 记忆查询系统</div>
+          <p class="sidebar-note">
+            记忆入口规则只展示你手动创建的规则；帮我问 /
+            自我反思等系统内部观察会在主动询问里展示证据，不计入这里的
+            FollowThreads。
+          </p>
         </div>
 
         <div class="entity-types">
@@ -56,7 +61,10 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">👁</div>
-            <div class="entity-name">关注后续</div>
+            <div class="entity-labels">
+              <div class="entity-name">关注后续</div>
+              <div class="entity-subnote">仅统计手动规则</div>
+            </div>
             <div class="entity-count">{{ followThreadCount }}</div>
           </router-link>
 
@@ -111,7 +119,10 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">📡</div>
-            <div class="entity-name">主动询问</div>
+            <div class="entity-labels">
+              <div class="entity-name">主动询问</div>
+              <div class="entity-subnote">系统证据在这里看</div>
+            </div>
             <div v-if="outreachSessionCount > 0" class="entity-count">
               {{ outreachSessionCount }}
             </div>
@@ -201,7 +212,13 @@ const TERMINAL_OUTREACH_STATUSES = new Set([
 async function loadFollowThreadCount() {
   try {
     const result = await chrome.storage.local.get('concernedItems');
-    const items = result.concernedItems || [];
+    const items = (result.concernedItems || []).filter((item: any) => {
+      if (item?.source && item.source !== 'manual') return false;
+      if (typeof item?.id === 'string' && item.id.startsWith('outreach:')) {
+        return false;
+      }
+      return true;
+    });
     followThreadCount.value = items.filter(
       (item: any) => item.followThread && item.followConfig,
     ).length;
@@ -484,6 +501,13 @@ body {
   border-bottom: 1px solid rgba(148, 163, 184, 0.1);
 }
 
+.sidebar-note {
+  margin-top: 0.85rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
 .logo {
   font-size: 1.5rem;
   font-weight: 700;
@@ -532,6 +556,17 @@ body {
 .entity-name {
   font-weight: 500;
   flex: 1;
+}
+
+.entity-labels {
+  flex: 1;
+  min-width: 0;
+}
+
+.entity-subnote {
+  margin-top: 0.15rem;
+  color: #94a3b8;
+  font-size: 0.7rem;
 }
 
 .entity-count {

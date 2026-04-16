@@ -300,9 +300,10 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
       <div class="ff" style="flex:3;">
         <label>用自然语言描述匹配后要做的事（系统会映射为 OpenClaw 任务）</label>
         <textarea placeholder="例如：从消息中提取请假的开始和结束日期。在请假开始前 3 小时把我的 Glip 状态改为 PTO on xxx~xxx，请假结束后再改回 Available。&#10;&#10;留空 = 不创建自动化动作。"></textarea>
+        <label class="chk" style="margin-top:.75rem;"><input type="checkbox" checked /> 操作无需批准</label>
       </div>
     </div>
-    <div class="hint">系统会将描述拆解为一个或多个 <strong>RuntimeAction</strong>，可以是立即执行或定时执行。所有定时任务统一由 memory-service 管理和调度，OpenClaw 负责到时执行。</div>
+    <div class="hint">系统会将描述拆解为一个或多个 <strong>RuntimeAction</strong>，可以是立即执行或定时执行。所有定时任务统一由 memory-service 管理和调度，OpenClaw 负责到时执行；默认按计划自动执行，只有你明确要求时才进入待批准状态。</div>
 
     <div class="form-foot">
       <button class="btn p" onclick="toggleAdd()">保存规则</button>

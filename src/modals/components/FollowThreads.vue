@@ -1,7 +1,12 @@
 <template>
   <div class="follow-threads-container">
     <div class="header">
-      <h2>👁 关注后续</h2>
+      <div>
+        <h2>👁 关注后续</h2>
+        <p class="page-subtitle">
+          这里只展示你手动规则里显式开启的关注后续。系统内部观察不会出现在这里。
+        </p>
+      </div>
       <div class="controls">
         <select v-model="statusFilter" class="filter-select">
           <option value="all">全部</option>
@@ -16,6 +21,21 @@
       </div>
     </div>
 
+    <div class="info-banner">
+      <div class="info-banner-title">FollowThreads 只统计手动规则</div>
+      <p class="info-banner-text">
+        帮我问 /
+        自我反思等系统内部规则产生的后续跟踪会在主动询问页面展示证据状态，不会写进这里的列表或计数。
+      </p>
+    </div>
+
+    <div class="summary-row">
+      <span class="summary-pill">手动规则 {{ items.length }}</span>
+      <span class="summary-pill">进行中 {{ activeCount }}</span>
+      <span class="summary-pill warn">已过期 {{ expiredCount }}</span>
+      <span class="summary-pill info">关联消息 {{ relatedHitCount }}</span>
+    </div>
+
     <div v-if="loading" class="loading">
       <div class="spinner"></div>
       <p>加载中...</p>
@@ -23,8 +43,10 @@
 
     <div v-else-if="filteredItems.length === 0" class="empty-state">
       <div class="empty-icon">👁</div>
-      <p>暂无关注项</p>
-      <p class="hint">在消息旁点击"关注后续"按钮来添加关注</p>
+      <p>暂无手动关注项</p>
+      <p class="hint">
+        在消息旁点击“关注后续”创建手动规则；系统内部跟踪不会显示在这里。
+      </p>
     </div>
 
     <div v-else class="follow-list">
@@ -38,13 +60,19 @@
           <div class="item-info">
             <h3 class="item-title">{{ item.text }}</h3>
             <div class="item-meta">
-              <span class="sender">{{ item.followConfig.originalMessage.sender }}</span>
+              <span class="sender">{{
+                item.followConfig.originalMessage.sender
+              }}</span>
               <span class="separator">•</span>
-              <span class="team">{{ item.followConfig.originalMessage.teamName }}</span>
+              <span class="team">{{
+                item.followConfig.originalMessage.teamName
+              }}</span>
               <span class="separator">•</span>
               <span class="status-badge" :class="{ expired: isExpired(item) }">
                 {{ isExpired(item) ? '已过期' : '进行中' }}
               </span>
+              <span class="separator">•</span>
+              <span class="rule-ref">manual:{{ item.id }}</span>
             </div>
           </div>
           <div class="item-actions">
@@ -69,15 +97,25 @@
         <div class="item-stats">
           <div class="stat">
             <span class="stat-label">关联消息</span>
-            <span class="stat-value">{{ item.followConfig.relatedMessages.length }}</span>
+            <span class="stat-value">{{
+              item.followConfig.relatedMessages.length
+            }}</span>
           </div>
           <div class="stat">
             <span class="stat-label">通知方式</span>
-            <span class="stat-value">{{ getNotifyMethodText(item.notifyMethod || 'bot') }}</span>
+            <span class="stat-value">{{
+              getNotifyMethodText(item.notifyMethod || 'bot')
+            }}</span>
           </div>
           <div class="stat">
             <span class="stat-label">到期时间</span>
-            <span class="stat-value">{{ formatExpireTime(item.expiredAt) }}</span>
+            <span class="stat-value">{{
+              formatExpireTime(item.expiredAt)
+            }}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">最新关联</span>
+            <span class="stat-value">{{ latestRelatedTime(item) }}</span>
           </div>
         </div>
 
@@ -99,9 +137,11 @@
         <div class="timeline-section">
           <div class="timeline-header" @click="toggleTimeline(item.id)">
             <span class="timeline-title">
-              关联消息时间线 ({{ item.followConfig.relatedMessages.length }})
+              命中时间线 ({{ item.followConfig.relatedMessages.length }})
             </span>
-            <span class="toggle-icon">{{ expandedItems.has(item.id) ? '▼' : '▶' }}</span>
+            <span class="toggle-icon">{{
+              expandedItems.has(item.id) ? '▼' : '▶'
+            }}</span>
           </div>
 
           <div v-if="expandedItems.has(item.id)" class="timeline">
@@ -114,8 +154,12 @@
               <div class="timeline-content">
                 <div class="timeline-meta">
                   <span class="timeline-sender">{{ msg.sender }}</span>
-                  <span class="timeline-type">{{ getRelationTypeText(msg.relationType) }}</span>
-                  <span class="timeline-time">{{ formatTime(msg.datetime) }}</span>
+                  <span class="timeline-type">{{
+                    getRelationTypeText(msg.relationType)
+                  }}</span>
+                  <span class="timeline-time">{{
+                    formatTime(msg.datetime)
+                  }}</span>
                 </div>
                 <div v-if="msg.summary" class="timeline-summary">
                   {{ msg.summary }}
@@ -123,7 +167,10 @@
               </div>
             </div>
 
-            <div v-if="item.followConfig.relatedMessages.length === 0" class="timeline-empty">
+            <div
+              v-if="item.followConfig.relatedMessages.length === 0"
+              class="timeline-empty"
+            >
               暂无关联消息
             </div>
           </div>
@@ -143,7 +190,7 @@ declare const chrome: any;
 interface FollowThreadItem {
   id: string;
   text: string;
-  expiredAt: number;  // rule 的过期时间
+  expiredAt: number; // rule 的过期时间
   // 🆕 通用通知配置（移到外层）
   notifyMethod?: 'bot' | 'chrome' | 'both';
   notifyFrequency?: 'immediate' | 'merged';
@@ -191,11 +238,17 @@ async function loadFollowThreads() {
   try {
     loading.value = true;
     const result = await chrome.storage.local.get('concernedItems');
-    const allItems = result.concernedItems || [];
+    const allItems = (result.concernedItems || []).filter((item: any) => {
+      if (item?.source && item.source !== 'manual') return false;
+      if (typeof item?.id === 'string' && item.id.startsWith('outreach:')) {
+        return false;
+      }
+      return true;
+    });
 
     // 筛选出有 followThread 配置的项
     items.value = allItems.filter(
-      (item: any) => item.followThread && item.followConfig
+      (item: any) => item.followThread && item.followConfig,
     );
   } catch (error) {
     console.error('❌ 加载关注项失败:', error);
@@ -204,7 +257,10 @@ async function loadFollowThreads() {
   }
 }
 
-function handleStorageChange(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) {
+function handleStorageChange(
+  changes: { [key: string]: chrome.storage.StorageChange },
+  areaName: string,
+) {
   if (areaName === 'local' && changes.concernedItems) {
     void loadFollowThreads();
   }
@@ -215,9 +271,9 @@ const filteredItems = computed(() => {
 
   // 状态过滤
   if (statusFilter.value === 'active') {
-    filtered = filtered.filter(item => !isExpired(item));
+    filtered = filtered.filter((item) => !isExpired(item));
   } else if (statusFilter.value === 'expired') {
-    filtered = filtered.filter(item => isExpired(item));
+    filtered = filtered.filter((item) => isExpired(item));
   }
 
   // 排序
@@ -225,22 +281,35 @@ const filteredItems = computed(() => {
     filtered = [...filtered].sort(
       (a, b) =>
         new Date(b.followConfig.createdAt).getTime() -
-        new Date(a.followConfig.createdAt).getTime()
+        new Date(a.followConfig.createdAt).getTime(),
     );
   } else if (sortBy.value === 'expires') {
-    filtered = [...filtered].sort(
-      (a, b) => a.expiredAt - b.expiredAt
-    );
+    filtered = [...filtered].sort((a, b) => a.expiredAt - b.expiredAt);
   } else if (sortBy.value === 'related') {
     filtered = [...filtered].sort(
       (a, b) =>
         b.followConfig.relatedMessages.length -
-        a.followConfig.relatedMessages.length
+        a.followConfig.relatedMessages.length,
     );
   }
 
   return filtered;
 });
+
+const activeCount = computed(
+  () => items.value.filter((item) => !isExpired(item)).length,
+);
+
+const expiredCount = computed(
+  () => items.value.filter((item) => isExpired(item)).length,
+);
+
+const relatedHitCount = computed(() =>
+  items.value.reduce(
+    (total, item) => total + item.followConfig.relatedMessages.length,
+    0,
+  ),
+);
 
 function isExpired(item: FollowThreadItem): boolean {
   // 🆕 使用外层 expiredAt
@@ -284,11 +353,21 @@ function formatTime(dateStr: string): string {
   }
 }
 
+function latestRelatedTime(item: FollowThreadItem): string {
+  const relatedMessages = item.followConfig.relatedMessages;
+  if (!relatedMessages.length) return '暂无';
+  const timestamps = relatedMessages
+    .map((message) => new Date(message.datetime).getTime())
+    .filter((value) => !Number.isNaN(value));
+  if (!timestamps.length) return '暂无';
+  return formatTime(new Date(Math.max(...timestamps)).toISOString());
+}
+
 function getNotifyMethodText(method: string): string {
   const map: Record<string, string> = {
     bot: 'Bot推送',
     chrome: 'Chrome通知',
-    both: '两者都推送'
+    both: '两者都推送',
   };
   return map[method] || method;
 }
@@ -298,7 +377,7 @@ function getRelationTypeText(type: string): string {
     thread_reply: '线程回复',
     mention: '@提及',
     quote: '引用',
-    semantic: '语义相关'
+    semantic: '语义相关',
   };
   return map[type] || type;
 }
@@ -319,7 +398,8 @@ async function extendFollow(item: FollowThreadItem) {
 
     if (index !== -1) {
       // 🆕 只需更新外层 expiredAt（延长7天）
-      allItems[index].expiredAt = allItems[index].expiredAt + 7 * 24 * 60 * 60 * 1000;
+      allItems[index].expiredAt =
+        allItems[index].expiredAt + 7 * 24 * 60 * 60 * 1000;
 
       await chrome.storage.local.set({ concernedItems: allItems });
       await loadFollowThreads();
@@ -358,19 +438,27 @@ async function cancelFollow(item: FollowThreadItem) {
   padding: 20px;
   max-width: 1200px;
   margin: 0 auto;
+  animation: fadeInUp 0.5s ease-out;
 }
 
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .header h2 {
   margin: 0;
   font-size: 24px;
-  color: #333;
+  color: #f8fafc;
+}
+
+.page-subtitle {
+  margin-top: 8px;
+  color: #94a3b8;
+  line-height: 1.55;
 }
 
 .controls {
@@ -379,12 +467,58 @@ async function cancelFollow(item: FollowThreadItem) {
 }
 
 .filter-select {
-  padding: 6px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
+  padding: 8px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
   font-size: 14px;
   cursor: pointer;
+}
+
+.info-banner {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.24);
+}
+
+.info-banner-title {
+  font-weight: 700;
+  color: #ddd6fe;
+  margin-bottom: 6px;
+}
+
+.info-banner-text {
+  margin: 0;
+  color: #c4b5fd;
+  line-height: 1.55;
+}
+
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.summary-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.16);
+  color: #7dd3fc;
+  font-size: 13px;
+}
+
+.summary-pill.warn {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+}
+
+.summary-pill.info {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
 }
 
 .loading {
@@ -393,27 +527,31 @@ async function cancelFollow(item: FollowThreadItem) {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #666;
+  color: #94a3b8;
 }
 
 .spinner {
   width: 40px;
   height: 40px;
-  border: 4px solid #f3f3f3;
-  border-top: 4px solid #9c27b0;
+  border: 4px solid rgba(56, 189, 248, 0.18);
+  border-top: 4px solid #38bdf8;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .empty-state {
   text-align: center;
   padding: 60px 20px;
-  color: #666;
+  color: #94a3b8;
 }
 
 .empty-icon {
@@ -427,7 +565,7 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .hint {
   font-size: 14px;
-  color: #999;
+  color: #64748b;
 }
 
 .follow-list {
@@ -437,20 +575,21 @@ async function cancelFollow(item: FollowThreadItem) {
 }
 
 .follow-item {
-  background: white;
-  border: 2px solid #e1bee7;
-  border-radius: 12px;
-  padding: 16px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(196, 181, 253, 0.18);
+  border-radius: 16px;
+  padding: 18px;
   transition: all 0.2s ease;
 }
 
 .follow-item:hover {
-  box-shadow: 0 4px 12px rgba(156, 39, 176, 0.15);
+  box-shadow: 0 12px 32px rgba(76, 29, 149, 0.18);
+  border-color: rgba(167, 139, 250, 0.3);
 }
 
 .follow-item.expired {
   opacity: 0.7;
-  border-color: #ddd;
+  border-color: rgba(148, 163, 184, 0.2);
 }
 
 .item-header {
@@ -466,40 +605,46 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .item-title {
   margin: 0 0 8px 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
-  color: #333;
+  color: #f8fafc;
 }
 
 .item-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
-  color: #666;
+  color: #94a3b8;
 }
 
 .sender {
   font-weight: 500;
-  color: #9c27b0;
+  color: #c4b5fd;
 }
 
 .separator {
-  color: #ddd;
+  color: rgba(148, 163, 184, 0.4);
+}
+
+.rule-ref {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #7dd3fc;
 }
 
 .status-badge {
   padding: 2px 8px;
-  background: #e8f5e9;
-  color: #2e7d32;
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
   border-radius: 12px;
   font-size: 12px;
   font-weight: 500;
 }
 
 .status-badge.expired {
-  background: #ffebee;
-  color: #c62828;
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
 }
 
 .item-actions {
@@ -509,39 +654,41 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .btn-secondary,
 .btn-danger {
-  padding: 6px 12px;
+  padding: 7px 12px;
   border: none;
-  border-radius: 6px;
+  border-radius: 10px;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .btn-secondary {
-  background: #f5f5f5;
-  color: #666;
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
 }
 
 .btn-secondary:hover {
-  background: #e0e0e0;
+  background: rgba(59, 130, 246, 0.22);
 }
 
 .btn-danger {
-  background: #ffebee;
-  color: #c62828;
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
 }
 
 .btn-danger:hover {
-  background: #ffcdd2;
+  background: rgba(239, 68, 68, 0.26);
 }
 
 .item-stats {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
   margin-bottom: 12px;
   padding: 12px;
-  background: #faf5ff;
-  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.52);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
 }
 
 .stat {
@@ -552,33 +699,33 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .stat-label {
   font-size: 12px;
-  color: #999;
+  color: #94a3b8;
 }
 
 .stat-value {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: #f8fafc;
 }
 
 .original-message {
   padding: 12px;
-  background: white;
-  border: 1px solid #e1bee7;
-  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.46);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  border-radius: 12px;
   margin-bottom: 12px;
 }
 
 .message-label {
   font-size: 12px;
   font-weight: 600;
-  color: #9c27b0;
+  color: #c4b5fd;
   margin-bottom: 6px;
 }
 
 .message-content {
   font-size: 13px;
-  color: #333;
+  color: #e2e8f0;
   line-height: 1.5;
   margin-bottom: 8px;
   max-height: 60px;
@@ -587,7 +734,7 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .message-link {
   font-size: 12px;
-  color: #9c27b0;
+  color: #7dd3fc;
   text-decoration: none;
 }
 
@@ -596,7 +743,7 @@ async function cancelFollow(item: FollowThreadItem) {
 }
 
 .timeline-section {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
   padding-top: 12px;
 }
 
@@ -611,17 +758,17 @@ async function cancelFollow(item: FollowThreadItem) {
 }
 
 .timeline-header:hover {
-  background: #f5f5f5;
+  background: rgba(30, 41, 59, 0.5);
 }
 
 .timeline-title {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: #f8fafc;
 }
 
 .toggle-icon {
-  color: #999;
+  color: #94a3b8;
   font-size: 12px;
 }
 
@@ -644,9 +791,9 @@ async function cancelFollow(item: FollowThreadItem) {
   top: 18px;
   width: 10px;
   height: 10px;
-  background: #9c27b0;
+  background: #8b5cf6;
   border-radius: 50%;
-  border: 2px solid white;
+  border: 2px solid #0f172a;
 }
 
 .timeline-content {
@@ -664,31 +811,44 @@ async function cancelFollow(item: FollowThreadItem) {
 
 .timeline-sender {
   font-weight: 600;
-  color: #9c27b0;
+  color: #c4b5fd;
 }
 
 .timeline-type {
   padding: 2px 6px;
-  background: #f3e5f5;
-  color: #7b1fa2;
+  background: rgba(139, 92, 246, 0.18);
+  color: #ddd6fe;
   border-radius: 4px;
   font-size: 11px;
 }
 
 .timeline-time {
-  color: #999;
+  color: #94a3b8;
 }
 
 .timeline-summary {
   font-size: 13px;
-  color: #666;
+  color: #cbd5e1;
   line-height: 1.4;
 }
 
 .timeline-empty {
   padding: 20px;
   text-align: center;
-  color: #999;
+  color: #94a3b8;
   font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .header,
+  .item-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .controls,
+  .item-actions {
+    flex-wrap: wrap;
+  }
 }
 </style>

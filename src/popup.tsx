@@ -6,535 +6,598 @@ import { getEnvConfig } from './utils';
 import { getGoogleAuthToken } from './utils/googleAuth';
 import { getTaskEnabled } from './services/TaskScheduler';
 import {
-    extractMeetingIdFromUrl,
-    MeetingPilotSessionSnapshot,
+  extractMeetingIdFromUrl,
+  MeetingPilotSessionSnapshot,
 } from './meeting-shell/protocol';
 
-const WIKI_URL = 'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
-const DOUBAO_ICON_URL = typeof chrome !== 'undefined' && chrome.runtime?.getURL
+const WIKI_URL =
+  'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
+const DOUBAO_ICON_URL =
+  typeof chrome !== 'undefined' && chrome.runtime?.getURL
     ? chrome.runtime.getURL('icons/connect-doubao.png')
     : '';
 
-const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
-    <div className="toggle-container">
-        <span className="toggle-label">{label}</span>
-        <label className="toggle-switch">
-            <input type="checkbox" checked={checked} onChange={onChange} />
-            <span className="toggle-slider"></span>
-        </label>
-    </div>
+const Toggle = ({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+}) => (
+  <div className="toggle-container">
+    <span className="toggle-label">{label}</span>
+    <label className="toggle-switch">
+      <input type="checkbox" checked={checked} onChange={onChange} />
+      <span className="toggle-slider"></span>
+    </label>
+  </div>
 );
 
 function isMeetingPilotCaptureActive(
-    session: MeetingPilotSessionSnapshot | null,
+  session: MeetingPilotSessionSnapshot | null,
 ): boolean {
-    return Boolean(
-        session &&
-        ['armed', 'recording', 'uploading', 'completed'].includes(
-            session.capture?.kind || '',
-        ),
-    );
+  return Boolean(
+    session &&
+    ['armed', 'recording', 'uploading', 'completed'].includes(
+      session.capture?.kind || '',
+    ),
+  );
 }
 
 const Popup = () => {
-    const [isScheduleActive, setIsScheduleActive] = useState(false);
-    const [envConfig, setEnvConfig] = useState<any>(null);
-    const [isGoogleSheets, setIsGoogleSheets] = useState(false);
-    const [isGoogleSlides, setIsGoogleSlides] = useState(false);
-    const [isRingCentralMeeting, setIsRingCentralMeeting] = useState(false);
-    const [activeRingCentralTab, setActiveRingCentralTab] = useState<{
-        id: number;
-        url?: string;
-        title?: string;
-    } | null>(null);
-    const [meetingPilotSession, setMeetingPilotSession] =
-        useState<MeetingPilotSessionSnapshot | null>(null);
-    const [isMeetingPilotBusy, setIsMeetingPilotBusy] = useState(false);
-    const [isExpandingEpic, setIsExpandingEpic] = useState(false);
-    const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
-    
+  const [isScheduleActive, setIsScheduleActive] = useState(false);
+  const [envConfig, setEnvConfig] = useState<any>(null);
+  const [isGoogleSheets, setIsGoogleSheets] = useState(false);
+  const [isGoogleSlides, setIsGoogleSlides] = useState(false);
+  const [isRingCentralMeeting, setIsRingCentralMeeting] = useState(false);
+  const [activeRingCentralTab, setActiveRingCentralTab] = useState<{
+    id: number;
+    url?: string;
+    title?: string;
+  } | null>(null);
+  const [meetingPilotSession, setMeetingPilotSession] =
+    useState<MeetingPilotSessionSnapshot | null>(null);
+  const [isMeetingPilotBusy, setIsMeetingPilotBusy] = useState(false);
+  const [isExpandingEpic, setIsExpandingEpic] = useState(false);
+  const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
 
-    useEffect(() => {
-        (async () => {
-            // 获取定时任务状态 - 使用辅助函数
-            const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
-            setIsScheduleActive(messageAnalysisEnabled);
+  useEffect(() => {
+    (async () => {
+      // 获取定时任务状态 - 使用辅助函数
+      const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
+      setIsScheduleActive(messageAnalysisEnabled);
 
-            // 检查当前标签页是否是 Google Sheets 或 Google Slides
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tab?.url?.includes('docs.google.com/spreadsheets')) {
-                setIsGoogleSheets(true);
-            }
-            if (tab?.url?.includes('docs.google.com/presentation')) {
-                setIsGoogleSlides(true);
-            }
-            if (
-                tab?.id &&
-                (tab.url?.includes('app.ringcentral.com') || tab.url?.includes('v.ringcentral.com/conf/on/'))
-            ) {
-                setActiveRingCentralTab({
-                    id: tab.id,
-                    url: tab.url,
-                    title: tab.title,
-                });
-            }
-            if (tab?.url?.includes('v.ringcentral.com/conf/on/')) {
-                setIsRingCentralMeeting(true);
-            }
-        })();
-    }, []);
-
-    useEffect(() => {
-        if (!activeRingCentralTab?.id) {
-            setMeetingPilotSession(null);
-            return;
-        }
-
-        const refreshMeetingPilotSession = async () => {
-            try {
-                const response = await chrome.runtime.sendMessage({
-                    type: 'MEETING_PILOT_GET_STATE',
-                    tabId: activeRingCentralTab.id,
-                }) as { activeSession?: MeetingPilotSessionSnapshot } | undefined;
-                setMeetingPilotSession(response?.activeSession || null);
-            } catch (error) {
-                console.warn('Failed to refresh Meeting Pilot session in popup:', error);
-            }
-        };
-
-        void refreshMeetingPilotSession();
-
-        const handleMessage = (message: any) => {
-            if (message.type !== 'MEETING_PILOT_SESSION_SNAPSHOT') {
-                return;
-            }
-            const snapshot = message.snapshot as MeetingPilotSessionSnapshot | undefined;
-            if (!snapshot || snapshot.tabId !== activeRingCentralTab.id) {
-                return;
-            }
-            setMeetingPilotSession(snapshot);
-        };
-
-        chrome.runtime.onMessage.addListener(handleMessage);
-        return () => {
-            chrome.runtime.onMessage.removeListener(handleMessage);
-        };
-    }, [activeRingCentralTab?.id]);
-
-    useEffect(() => {
-        (async () => {
-            const envConfigData = await getEnvConfig();
-            setEnvConfig(envConfigData);
-        })();
-    }, []);
-
-    const toggleSchedule = () => {
-        const newState = !isScheduleActive;
-        setIsScheduleActive(newState);
-        chrome.runtime.sendMessage({
-            type: 'CONTROL_TASK',
-            taskId: 'message_analysis',
-            action: 'toggle',
-            enabled: newState
+      // 检查当前标签页是否是 Google Sheets 或 Google Slides
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (tab?.url?.includes('docs.google.com/spreadsheets')) {
+        setIsGoogleSheets(true);
+      }
+      if (tab?.url?.includes('docs.google.com/presentation')) {
+        setIsGoogleSlides(true);
+      }
+      if (
+        tab?.id &&
+        (tab.url?.includes('app.ringcentral.com') ||
+          tab.url?.includes('v.ringcentral.com/conf/on/'))
+      ) {
+        setActiveRingCentralTab({
+          id: tab.id,
+          url: tab.url,
+          title: tab.title,
         });
+      }
+      if (tab?.url?.includes('v.ringcentral.com/conf/on/')) {
+        setIsRingCentralMeeting(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!activeRingCentralTab?.id) {
+      setMeetingPilotSession(null);
+      return;
+    }
+
+    const refreshMeetingPilotSession = async () => {
+      try {
+        const response = (await chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_GET_STATE',
+          tabId: activeRingCentralTab.id,
+        })) as { activeSession?: MeetingPilotSessionSnapshot } | undefined;
+        setMeetingPilotSession(response?.activeSession || null);
+      } catch (error) {
+        console.warn(
+          'Failed to refresh Meeting Pilot session in popup:',
+          error,
+        );
+      }
     };
 
-    const pushMeetingPilotSnapshotToTab = async (
-        snapshot: MeetingPilotSessionSnapshot | null | undefined,
-    ) => {
-        if (!snapshot || !activeRingCentralTab?.id) {
-            return;
-        }
-        try {
-            await chrome.tabs.sendMessage(activeRingCentralTab.id, {
-                type: 'MEETING_PILOT_SESSION_SNAPSHOT',
-                snapshot,
-            });
-        } catch (error) {
-            console.warn('Failed to sync Meeting Pilot snapshot back to meeting tab:', error);
-        }
+    void refreshMeetingPilotSession();
+
+    const handleMessage = (message: any) => {
+      if (message.type !== 'MEETING_PILOT_SESSION_SNAPSHOT') {
+        return;
+      }
+      const snapshot = message.snapshot as
+        | MeetingPilotSessionSnapshot
+        | undefined;
+      if (!snapshot || snapshot.tabId !== activeRingCentralTab.id) {
+        return;
+      }
+      setMeetingPilotSession(snapshot);
     };
 
-    const handleOpenRadar = async () => {
-        if (!activeRingCentralTab?.id) {
-            sendMessageToActiveTab({type: 'RADAR-POC-OPEN-PANEL'}, 'RADAR-POC-OPEN-PANEL');
-            return;
-        }
-
-        if (isMeetingPilotBusy) {
-            return;
-        }
-
-        setIsMeetingPilotBusy(true);
-        try {
-            if (isMeetingPilotCaptureActive(meetingPilotSession)) {
-                await pushMeetingPilotSnapshotToTab(meetingPilotSession);
-                await chrome.runtime.sendMessage({
-                    type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
-                    tabId: activeRingCentralTab.id,
-                });
-                window.close();
-                return;
-            }
-
-            const meetingId = extractMeetingIdFromUrl(activeRingCentralTab.url);
-            if (!meetingId) {
-                return;
-            }
-
-            const response = await chrome.runtime.sendMessage({
-                type: 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
-                tabId: activeRingCentralTab.id,
-                meetingId,
-                url: activeRingCentralTab.url,
-                title: activeRingCentralTab.title || 'RingCentral meeting',
-                source: 'popup-start',
-            }) as {
-                success?: boolean;
-                session?: MeetingPilotSessionSnapshot;
-            } | undefined;
-
-            if (response?.session) {
-                setMeetingPilotSession(response.session);
-                await pushMeetingPilotSnapshotToTab(response.session);
-            }
-
-            if (response?.success) {
-                window.close();
-            }
-        } finally {
-            setIsMeetingPilotBusy(false);
-        }
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
     };
+  }, [activeRingCentralTab?.id]);
 
-    const openTopicWindow = () => {
-        chrome.windows.create({
-            url: 'topic-modal.html',
-            type: 'popup',
-            width: 500,
-            height: 800,
-            focused: true
+  useEffect(() => {
+    (async () => {
+      const envConfigData = await getEnvConfig();
+      setEnvConfig(envConfigData);
+    })();
+  }, []);
+
+  const toggleSchedule = () => {
+    const newState = !isScheduleActive;
+    setIsScheduleActive(newState);
+    chrome.runtime.sendMessage({
+      type: 'CONTROL_TASK',
+      taskId: 'message_analysis',
+      action: 'toggle',
+      enabled: newState,
+    });
+  };
+
+  const pushMeetingPilotSnapshotToTab = async (
+    snapshot: MeetingPilotSessionSnapshot | null | undefined,
+  ) => {
+    if (!snapshot || !activeRingCentralTab?.id) {
+      return;
+    }
+    try {
+      await chrome.tabs.sendMessage(activeRingCentralTab.id, {
+        type: 'MEETING_PILOT_SESSION_SNAPSHOT',
+        snapshot,
+      });
+    } catch (error) {
+      console.warn(
+        'Failed to sync Meeting Pilot snapshot back to meeting tab:',
+        error,
+      );
+    }
+  };
+
+  const handleOpenRadar = async () => {
+    if (!activeRingCentralTab?.id) {
+      sendMessageToActiveTab(
+        { type: 'RADAR-POC-OPEN-PANEL' },
+        'RADAR-POC-OPEN-PANEL',
+      );
+      return;
+    }
+
+    if (isMeetingPilotBusy) {
+      return;
+    }
+
+    setIsMeetingPilotBusy(true);
+    try {
+      if (isMeetingPilotCaptureActive(meetingPilotSession)) {
+        await pushMeetingPilotSnapshotToTab(meetingPilotSession);
+        await chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
+          tabId: activeRingCentralTab.id,
         });
-    };
-    
-    const _openProjectDashboard = () => {
-        chrome.windows.create({
-            url: 'project-dashboard.html',
-            type: 'popup',
-            width: 1200,
-            height: 900,
-            focused: true
-        });
-    };
-    
-    const openMemoryInterface = () => {
-        chrome.tabs.create({
-            url: chrome.runtime.getURL('memory-exploring.html'),
-            active: true
-        });
-    };
-    
-    const openPromptConfigWindow = () => {
-        chrome.windows.create({
-            url: 'prompt-config.html',
-            type: 'popup',
-            width: 900,
-            height: 800,
-            focused: true
-        });
-    };
-    
-    const openScheduledMessagesManager = () => {
-        chrome.windows.create({
-            url: 'scheduled-messages.html',
-            type: 'popup',
-            width: 1280,
-            height: 700,
-            focused: true
-        });
-    };
-    
-    // Help 图标点击处理
-    const handleOpenHelp = () => {
-        chrome.tabs.create({ url: WIKI_URL, active: true });
-    };
-    
-    // Share 图标点击处理 - 打开独立窗口
-    const handleOpenShare = () => {
-        chrome.windows.create({
-            url: 'share-modal.html',
-            type: 'popup',
-            width: 560,
-            height: 680,
-            focused: true
-        });
-    };
+        window.close();
+        return;
+      }
 
-    const handleOpenDoubaoBridge = () => {
-        chrome.windows.create({
-            url: chrome.runtime.getURL('doubao-bridge.html'),
-            type: 'popup',
-            width: 900,
-            height: 920,
-            focused: true,
-        });
-    };
-    
-    const analyzeSlidesProjects = async () => {
-        try {
-            setIsAnalyzingSlides(true);
-            // 先获取OAuth token
-            const token = await getGoogleAuthToken({ caller: 'popup.analyzeSlidesProjects' });
-            if (!token) {
-                console.error('无法获取Google认证，请检查账号授权');
-                alert('无法获取Google认证，请检查账号授权');
-                // 可以在界面上显示错误消息
-                setIsAnalyzingSlides(false);
-                return;
-            }
+      const meetingId = extractMeetingIdFromUrl(activeRingCentralTab.url);
+      if (!meetingId) {
+        return;
+      }
 
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                const activeTab = tabs[0];
-                if (activeTab?.id) {
-                    chrome.tabs.sendMessage(activeTab.id, { 
-                        type: 'ANALYZE_SLIDES_PROJECTS',
-                        token
-                    }, (_response) => {
-                        // 当收到响应时关闭loading状态
-                        setIsAnalyzingSlides(false);
-                    });
-                } else {
-                    setIsAnalyzingSlides(false);
-                }
-            });
-        } catch (error) {
-            console.error('获取认证失败:', error);
-            // 可以在界面上显示错误消息
-            setIsAnalyzingSlides(false);
-        }
-    };
+      const response = (await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
+        tabId: activeRingCentralTab.id,
+        meetingId,
+        url: activeRingCentralTab.url,
+        title: activeRingCentralTab.title || 'RingCentral meeting',
+        source: 'popup-start',
+      })) as
+        | {
+            success?: boolean;
+            session?: MeetingPilotSessionSnapshot;
+          }
+        | undefined;
 
-    // 计算分析时间间隔的小时数
-    const getIntervalHours = () => {
-        if (envConfig) {
-            return (Number(envConfig.SCHEDULED_INTERVAL) / 60).toFixed(1);
-        }
-        return '2.0'; // 默认值
-    };
+      if (response?.session) {
+        setMeetingPilotSession(response.session);
+        await pushMeetingPilotSnapshotToTab(response.session);
+      }
 
-    const openJiraQueryDialog = async () => {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (response?.success) {
+        window.close();
+      }
+    } finally {
+      setIsMeetingPilotBusy(false);
+    }
+  };
+
+  const openTopicWindow = () => {
+    chrome.windows.create({
+      url: 'topic-modal.html',
+      type: 'popup',
+      width: 980,
+      height: 920,
+      focused: true,
+    });
+  };
+
+  const _openProjectDashboard = () => {
+    chrome.windows.create({
+      url: 'project-dashboard.html',
+      type: 'popup',
+      width: 1200,
+      height: 900,
+      focused: true,
+    });
+  };
+
+  const openMemoryInterface = () => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('memory-exploring.html'),
+      active: true,
+    });
+  };
+
+  const openPromptConfigWindow = () => {
+    chrome.windows.create({
+      url: 'prompt-config.html',
+      type: 'popup',
+      width: 900,
+      height: 800,
+      focused: true,
+    });
+  };
+
+  const openScheduledMessagesManager = () => {
+    chrome.windows.create({
+      url: 'scheduled-messages.html',
+      type: 'popup',
+      width: 1280,
+      height: 700,
+      focused: true,
+    });
+  };
+
+  // Help 图标点击处理
+  const handleOpenHelp = () => {
+    chrome.tabs.create({ url: WIKI_URL, active: true });
+  };
+
+  // Share 图标点击处理 - 打开独立窗口
+  const handleOpenShare = () => {
+    chrome.windows.create({
+      url: 'share-modal.html',
+      type: 'popup',
+      width: 560,
+      height: 680,
+      focused: true,
+    });
+  };
+
+  const handleOpenDoubaoBridge = () => {
+    chrome.windows.create({
+      url: chrome.runtime.getURL('doubao-bridge.html'),
+      type: 'popup',
+      width: 900,
+      height: 920,
+      focused: true,
+    });
+  };
+
+  const analyzeSlidesProjects = async () => {
+    try {
+      setIsAnalyzingSlides(true);
+      // 先获取OAuth token
+      const token = await getGoogleAuthToken({
+        caller: 'popup.analyzeSlidesProjects',
+      });
+      if (!token) {
+        console.error('无法获取Google认证，请检查账号授权');
+        alert('无法获取Google认证，请检查账号授权');
+        // 可以在界面上显示错误消息
+        setIsAnalyzingSlides(false);
+        return;
+      }
+
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const activeTab = tabs[0];
-        
-        if (activeTab?.id && activeTab.url) {
-            const tabId = activeTab.id;
-            const token = await getGoogleAuthToken({ caller: 'popup.openJiraQueryDialog' });
-            
-            chrome.tabs.sendMessage(tabId, {
-                type: 'OPEN_JIRA_QUERY_DIALOG',
-                url: activeTab.url,
-                sheetToken: token
-            }, (_response) => {
-                // close the popup window
-                window.close();
-            });
+        if (activeTab?.id) {
+          chrome.tabs.sendMessage(
+            activeTab.id,
+            {
+              type: 'ANALYZE_SLIDES_PROJECTS',
+              token,
+            },
+            (_response) => {
+              // 当收到响应时关闭loading状态
+              setIsAnalyzingSlides(false);
+            },
+          );
         } else {
-            console.error("无法获取活动标签页 ID 或 URL");
+          setIsAnalyzingSlides(false);
         }
+      });
+    } catch (error) {
+      console.error('获取认证失败:', error);
+      // 可以在界面上显示错误消息
+      setIsAnalyzingSlides(false);
+    }
+  };
+
+  // 计算分析时间间隔的小时数
+  const getIntervalHours = () => {
+    if (envConfig) {
+      return (Number(envConfig.SCHEDULED_INTERVAL) / 60).toFixed(1);
+    }
+    return '2.0'; // 默认值
+  };
+
+  const openJiraQueryDialog = async () => {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs[0];
+
+    if (activeTab?.id && activeTab.url) {
+      const tabId = activeTab.id;
+      const token = await getGoogleAuthToken({
+        caller: 'popup.openJiraQueryDialog',
+      });
+
+      chrome.tabs.sendMessage(
+        tabId,
+        {
+          type: 'OPEN_JIRA_QUERY_DIALOG',
+          url: activeTab.url,
+          sheetToken: token,
+        },
+        (_response) => {
+          // close the popup window
+          window.close();
+        },
+      );
+    } else {
+      console.error('无法获取活动标签页 ID 或 URL');
+    }
+  };
+
+  const expandEpicTickets = async () => {
+    setIsExpandingEpic(true);
+
+    try {
+      const tabs = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      const activeTab = tabs[0];
+
+      if (activeTab?.id && activeTab.url) {
+        const tabId = activeTab.id;
+        const token = await getGoogleAuthToken({
+          caller: 'popup.expandEpicTickets',
+        });
+
+        if (token) {
+          chrome.tabs.sendMessage(
+            tabId,
+            {
+              type: 'EXPAND_EPIC_TICKETS',
+              url: activeTab.url,
+              sheetToken: token,
+            },
+            (_response) => {
+              setIsExpandingEpic(false);
+            },
+          );
+        } else {
+          console.error('获取到的 token 无效');
+          setIsExpandingEpic(false);
+        }
+      } else {
+        console.error('无法获取活动标签页 ID 或 URL');
+        setIsExpandingEpic(false);
+      }
+    } catch (error) {
+      console.error('expandEpicTickets 失败:', error);
+      setIsExpandingEpic(false);
+    }
+  };
+
+  // 监听内容脚本发来的请求
+  // ⚠️ 重要：不能使用 async 函数作为消息监听器！
+  // async 函数会返回 Promise，这会干扰 Chrome 的消息传递机制
+  useEffect(() => {
+    const handleMessage = (
+      message: any,
+      _sender: chrome.runtime.MessageSender,
+      _sendResponse: (response?: any) => void,
+    ) => {
+      // 只处理 REQUEST_SLIDES_ANALYSIS 消息
+      if (message.type !== 'REQUEST_SLIDES_ANALYSIS') {
+        // 不处理的消息，返回 false 让其他监听器处理
+        return false;
+      }
+
+      // 使用 IIFE 处理异步操作
+      (async () => {
+        // 获取当前标签页
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const activeTab = tabs[0];
+
+        if (
+          activeTab?.id &&
+          activeTab.url?.includes('docs.google.com/presentation')
+        ) {
+          // 获取token并发送回内容脚本
+          const token = await getGoogleAuthToken({
+            caller: 'popup.handleSlidesAnalysis',
+          });
+          if (token) {
+            chrome.tabs.sendMessage(activeTab.id, {
+              type: 'ANALYZE_SLIDES_PROJECTS',
+              token,
+            });
+          } else {
+            console.error('获取Google认证失败');
+          }
+        }
+      })();
+
+      // 这个消息不需要响应，但我们处理了它
+      return true;
     };
 
-    const expandEpicTickets = async () => {
-        setIsExpandingEpic(true);
-        
-        try {
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            const activeTab = tabs[0];
-            
-            if (activeTab?.id && activeTab.url) {
-                const tabId = activeTab.id;
-                const token = await getGoogleAuthToken({ caller: 'popup.expandEpicTickets' });
-                
-                if (token) {
-                    chrome.tabs.sendMessage(tabId, {
-                        type: 'EXPAND_EPIC_TICKETS',
-                        url: activeTab.url,
-                        sheetToken: token
-                    }, (_response) => {
-                        setIsExpandingEpic(false);
-                    });
-                } else {
-                    console.error('获取到的 token 无效');
-                    setIsExpandingEpic(false);
-                }
-            } else {
-                console.error("无法获取活动标签页 ID 或 URL");
-                setIsExpandingEpic(false);
-            }
-        } catch (error) {
-            console.error('expandEpicTickets 失败:', error);
-            setIsExpandingEpic(false);
-        }
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
     };
+  }, []);
 
-    // 监听内容脚本发来的请求
-    // ⚠️ 重要：不能使用 async 函数作为消息监听器！
-    // async 函数会返回 Promise，这会干扰 Chrome 的消息传递机制
-    useEffect(() => {
-        const handleMessage = (message: any, _sender: chrome.runtime.MessageSender, _sendResponse: (response?: any) => void) => {
-            // 只处理 REQUEST_SLIDES_ANALYSIS 消息
-            if (message.type !== 'REQUEST_SLIDES_ANALYSIS') {
-                // 不处理的消息，返回 false 让其他监听器处理
-                return false;
-            }
-            
-            // 使用 IIFE 处理异步操作
-            (async () => {
-                // 获取当前标签页
-                const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-                const activeTab = tabs[0];
-                
-                if (activeTab?.id && activeTab.url?.includes('docs.google.com/presentation')) {
-                    // 获取token并发送回内容脚本
-                    const token = await getGoogleAuthToken({ caller: 'popup.handleSlidesAnalysis' });
-                    if (token) {
-                        chrome.tabs.sendMessage(activeTab.id, { 
-                            type: 'ANALYZE_SLIDES_PROJECTS',
-                            token
-                        });
-                    } else {
-                        console.error('获取Google认证失败');
-                    }
-                }
-            })();
-            
-            // 这个消息不需要响应，但我们处理了它
-            return true;
-        };
-        
-        chrome.runtime.onMessage.addListener(handleMessage);
-        return () => {
-            chrome.runtime.onMessage.removeListener(handleMessage);
-        };
-    }, []);
-
-    return (
-        <div className="popup-container">
-            {/* 顶部工具栏：包含开关和图标 */}
-            <div className="header-toolbar">
-                <Toggle 
-                    checked={isScheduleActive}
-                    onChange={toggleSchedule}
-                    label={`每隔 ${getIntervalHours()} 小时静默消息分析`}
-                />
-                <div className="header-icons">
-                    <button 
-                        className="header-icon-btn" 
-                        onClick={handleOpenHelp}
-                        title="查看帮助文档"
-                    >
-                        ❓
-                    </button>
-                    <button 
-                        className="header-icon-btn"
-                        onClick={handleOpenShare}
-                        title="分享给同事"
-                    >
-                        ↗️
-                    </button>
-                    <button
-                        className="header-icon-btn doubao-icon-btn"
-                        onClick={handleOpenDoubaoBridge}
-                        title="Doubao Bridge"
-                    >
-                        {DOUBAO_ICON_URL ? (
-                            <img className="doubao-icon-image" src={DOUBAO_ICON_URL} alt="Doubao" />
-                        ) : (
-                            '豆'
-                        )}
-                    </button>
-                </div>
-            </div>
-
-            {isGoogleSheets && (
-                <>
-                    <button 
-                        onClick={openJiraQueryDialog}
-                        className="jira-button"
-                    >
-                        抓取 Jira Tickets 到 Sheet
-                    </button>
-                    <button 
-                        onClick={expandEpicTickets}
-                        className="jira-button expand-button"
-                        disabled={isExpandingEpic}
-                    >
-                        {isExpandingEpic ? (
-                            <span className="loading-text">正在查找 Epic 子任务...</span>
-                        ) : (
-                            '展开 Epic 下面所有的 tickets'
-                        )}
-                    </button>
-                </>
+  return (
+    <div className="popup-container">
+      {/* 顶部工具栏：包含开关和图标 */}
+      <div className="header-toolbar">
+        <Toggle
+          checked={isScheduleActive}
+          onChange={toggleSchedule}
+          label={`每隔 ${getIntervalHours()} 小时静默消息分析`}
+        />
+        <div className="header-icons">
+          <button
+            className="header-icon-btn"
+            onClick={handleOpenHelp}
+            title="查看帮助文档"
+          >
+            ❓
+          </button>
+          <button
+            className="header-icon-btn"
+            onClick={handleOpenShare}
+            title="分享给同事"
+          >
+            ↗️
+          </button>
+          <button
+            className="header-icon-btn doubao-icon-btn"
+            onClick={handleOpenDoubaoBridge}
+            title="Doubao Bridge"
+          >
+            {DOUBAO_ICON_URL ? (
+              <img
+                className="doubao-icon-image"
+                src={DOUBAO_ICON_URL}
+                alt="Doubao"
+              />
+            ) : (
+              '豆'
             )}
-            
-            {isGoogleSlides && (
-                <div className="slides-button-group">
-                    <button 
-                        onClick={analyzeSlidesProjects}
-                        className="slides-button main-button"
-                        disabled={isAnalyzingSlides}
-                    >
-                        {isAnalyzingSlides ? (
-                            <span className="loading-text">正在分析 Slide 项目信息...</span>
-                        ) : (
-                            '分析 Slide 项目信息并更新'
-                        )}
-                    </button>
-                    <button 
-                        onClick={openPromptConfigWindow}
-                        className="slides-button config-button"
-                        title="配置自定义提示词和用户上下文"
-                    >
-                        ⚙️
-                    </button>
-                </div>
+          </button>
+        </div>
+      </div>
+
+      {isGoogleSheets && (
+        <>
+          <button onClick={openJiraQueryDialog} className="jira-button">
+            抓取 Jira Tickets 到 Sheet
+          </button>
+          <button
+            onClick={expandEpicTickets}
+            className="jira-button expand-button"
+            disabled={isExpandingEpic}
+          >
+            {isExpandingEpic ? (
+              <span className="loading-text">正在查找 Epic 子任务...</span>
+            ) : (
+              '展开 Epic 下面所有的 tickets'
             )}
+          </button>
+        </>
+      )}
 
-            <button onClick={openMemoryInterface} className="memory-button">
-                🧠 实体记忆查询
-            </button>
+      {isGoogleSlides && (
+        <div className="slides-button-group">
+          <button
+            onClick={analyzeSlidesProjects}
+            className="slides-button main-button"
+            disabled={isAnalyzingSlides}
+          >
+            {isAnalyzingSlides ? (
+              <span className="loading-text">正在分析 Slide 项目信息...</span>
+            ) : (
+              '分析 Slide 项目信息并更新'
+            )}
+          </button>
+          <button
+            onClick={openPromptConfigWindow}
+            className="slides-button config-button"
+            title="配置自定义提示词和用户上下文"
+          >
+            ⚙️
+          </button>
+        </div>
+      )}
 
-            {/* <button onClick={openProjectDashboard} className="dashboard-button">
+      <button onClick={openMemoryInterface} className="memory-button">
+        🧠 实体记忆查询
+      </button>
+
+      {/* <button onClick={openProjectDashboard} className="dashboard-button">
                 📊 项目进度仪表盘
             </button> */}
-            
-            <button onClick={openScheduledMessagesManager} className="scheduled-button">
-                ⏰ 定时消息管理
-            </button>
-            
-            <button onClick={openTopicWindow} className="message-button">
-                配置感兴趣的话题
-            </button>
 
-            {isRingCentralMeeting && (
-                <button 
-                    onClick={handleOpenRadar}
-                    className="radar-button"
-                    disabled={isMeetingPilotBusy}
-                >
-                    {isMeetingPilotBusy
-                        ? '处理中...'
-                        : isMeetingPilotCaptureActive(meetingPilotSession)
-                            ? '打开会议全貌'
-                            : '开启会议全貌'}
-                </button>
-            )}
-            
-            {/* <button onClick={openOptionsPage}>
+      <button
+        onClick={openScheduledMessagesManager}
+        className="scheduled-button"
+      >
+        ⏰ 定时消息管理
+      </button>
+
+      <button onClick={openTopicWindow} className="message-button">
+        📋 管理记忆入口
+      </button>
+
+      {isRingCentralMeeting && (
+        <button
+          onClick={handleOpenRadar}
+          className="radar-button"
+          disabled={isMeetingPilotBusy}
+        >
+          {isMeetingPilotBusy
+            ? '处理中...'
+            : isMeetingPilotCaptureActive(meetingPilotSession)
+              ? '打开会议全貌'
+              : '开启会议全貌'}
+        </button>
+      )}
+
+      {/* <button onClick={openOptionsPage}>
                 设置
             </button> */}
 
-            <style>{`
+      <style>{`
                 .popup-container {
                     padding-bottom: 8px; /* Add padding at the bottom */
                     min-width: 300px;
@@ -724,13 +787,17 @@ const Popup = () => {
                     box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
                  }
 
-                 .message-button { /* Example specific style if needed */
-                    background-color: #ff9900; /* Example orange */
-                    color: white;
-                 }
-                 .message-button:hover {
-                    background-color: #e68a00;
-                 }
+                 .message-button {
+                    background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+                     color: white;
+                     font-weight: 600;
+                     box-shadow: 0 2px 8px rgba(20, 184, 166, 0.28);
+                     transition: all 0.3s ease;
+                  }
+                  .message-button:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(20, 184, 166, 0.38);
+                  }
                  
                  .scheduled-button {
                     background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -780,13 +847,15 @@ const Popup = () => {
                     justify-content: center;
                  }
             `}</style>
-        </div>
-    );
+    </div>
+  );
 };
 
 ReactDOM.render(
-    <React.StrictMode> {/* Added StrictMode */}
-        <Popup />
-    </React.StrictMode>,
-    document.getElementById('popup-root')
+  <React.StrictMode>
+    {' '}
+    {/* Added StrictMode */}
+    <Popup />
+  </React.StrictMode>,
+  document.getElementById('popup-root'),
 );

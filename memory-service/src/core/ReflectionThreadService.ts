@@ -19,6 +19,7 @@ import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { RecallEngine } from './RecallEngine.js';
+import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 
 interface MessageSignalRow {
   id: string;
@@ -513,8 +514,22 @@ export class ReflectionThreadService {
       markdownSnapshotPath: threadPath,
     });
 
-    const createdActions = generated.actionProposals.map((proposal, index) =>
-      this.actionRepo.create({
+    const createdActions = generated.actionProposals.map((proposal, index) => {
+      const delegatePolicy = proposal.actionType === 'delegate_openclaw'
+        ? resolveDelegateOpenClawPolicy({
+            params:
+              proposal.params &&
+              typeof proposal.params === 'object' &&
+              !Array.isArray(proposal.params)
+                ? (proposal.params as Record<string, unknown>)
+                : {},
+            requestedExecutionMode: proposal.executionMode,
+            requestedRequiresApproval: proposal.requiresApproval,
+            defaultExecutionMode: proposal.executionMode,
+            defaultRequiresApproval: proposal.requiresApproval,
+          })
+        : null;
+      return this.actionRepo.create({
         actionType: proposal.actionType,
         title: proposal.title,
         description: proposal.description,
@@ -535,32 +550,22 @@ export class ReflectionThreadService {
           ...(proposal.evidenceRefs ?? []),
           ...combinedEvidence.slice(0, 5).map((item) => `${item.sourceKind}:${item.sourceId}`),
         ]),
-        requiresApproval:
-          proposal.actionType === 'delegate_openclaw' &&
-          typeof proposal.params?.mode === 'string' &&
-          proposal.params.mode.trim().toLowerCase() === 'write'
-            ? true
-            : proposal.requiresApproval,
+        requiresApproval: delegatePolicy?.requiresApproval ?? proposal.requiresApproval,
         state: 'pending',
         source: 'reflection_worker',
         threadId: thread.id,
         runId: run.id,
-        executionMode:
-          proposal.actionType === 'delegate_openclaw' &&
-          typeof proposal.params?.mode === 'string' &&
-          proposal.params.mode.trim().toLowerCase() === 'write'
-            ? 'manual'
-            : proposal.executionMode,
+        executionMode: delegatePolicy?.executionMode ?? proposal.executionMode,
         priority: proposal.priority,
         idempotencyKey: `${thread.topicKey}:${run.id}:${proposal.actionType}:${index}`,
         scheduledAt: proposal.scheduledAt,
         sourceKind: 'reflection_run',
         sourceRefId: run.id,
-        queueStatus: proposal.requiresApproval ? 'queued' : proposal.executionMode === 'auto' ? 'queued' : 'queued',
+        queueStatus: 'queued',
         utilityScore: proposal.utilityScore,
         urgencyScore: proposal.urgencyScore,
-      }),
-    );
+      });
+    });
 
     if (createdActions.length > 0) {
       this.repo.updateRunActions(

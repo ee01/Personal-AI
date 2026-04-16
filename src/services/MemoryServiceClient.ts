@@ -481,6 +481,39 @@ export interface RuntimeActionListResponse {
   offset: number;
 }
 
+export interface MessageRuleAutomationPlanRequest {
+  ruleRef: string;
+  ruleText?: string;
+  automationPrompt: string;
+  requiresApproval?: boolean;
+  message: {
+    postId?: string;
+    sender?: string;
+    groupId?: string;
+    groupName?: string;
+    content: string;
+    timestamp?: number;
+  };
+  match?: {
+    matchedRule?: string;
+    summary?: string;
+    confidence?: number;
+  };
+}
+
+export interface MessageRuleAutomationPlanResponse {
+  deduped: boolean;
+  skippedReason?: string;
+  actions: RuntimeAction[];
+  detectedWindow?: {
+    startAt: number;
+    endAt: number;
+    startActionAt: number;
+    restoreActionAt: number;
+    label: string;
+  };
+}
+
 export type OutreachSessionStatus =
   | 'pending_approval'
   | 'scheduled'
@@ -515,6 +548,15 @@ export interface OutreachTargetCandidate {
   subtitle?: string;
   score: number;
   source: 'extension' | 'chat';
+}
+
+export interface OutreachEvidenceItem {
+  sourceKind: string;
+  sourceId?: string;
+  title?: string;
+  content: string;
+  createdAt?: number;
+  metadata?: Record<string, any>;
 }
 
 export interface OutreachDirectoryStatus {
@@ -552,6 +594,7 @@ export interface OutreachSession {
   maxFollowup: number;
   waitUntil?: number;
   nextCheckAt?: number;
+  sentChatId?: string;
   sentPostId?: string;
   replyPostId?: string;
   replySender?: string;
@@ -566,6 +609,7 @@ export interface OutreachSession {
   resolvedAt?: number;
   events?: OutreachEvent[];
   actions?: RuntimeAction[];
+  evidence?: OutreachEvidenceItem[];
 }
 
 export interface OutreachSessionListResponse {
@@ -1943,6 +1987,12 @@ export class MemoryServiceClient {
     return this.request('POST', `/actions/${encodeURIComponent(id)}/execute`);
   }
 
+  async planMessageRuleAutomation(
+    body: MessageRuleAutomationPlanRequest,
+  ): Promise<MessageRuleAutomationPlanResponse> {
+    return this.request('POST', '/message-rules/plan', body);
+  }
+
   // --------------------------------------------------------------------------
   // Outreach Sessions
   // --------------------------------------------------------------------------
@@ -1997,6 +2047,7 @@ export class MemoryServiceClient {
 
   async getOutreachSessions(filters?: {
     status?: OutreachSessionStatus | 'all';
+    statuses?: OutreachSessionStatus[];
     originKind?: string;
     templateId?: string;
     threadId?: string;
@@ -2005,6 +2056,9 @@ export class MemoryServiceClient {
   }): Promise<OutreachSessionListResponse> {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
+    if (filters?.statuses && filters.statuses.length > 0) {
+      params.set('statuses', filters.statuses.join(','));
+    }
     if (filters?.originKind) params.set('originKind', filters.originKind);
     if (filters?.templateId) params.set('templateId', filters.templateId);
     if (filters?.threadId) params.set('threadId', filters.threadId);
@@ -2030,6 +2084,7 @@ export class MemoryServiceClient {
         ...(response.session as OutreachSession),
         events: Array.isArray(response.events) ? response.events : [],
         actions: Array.isArray(response.actions) ? response.actions : [],
+        evidence: Array.isArray(response.evidence) ? response.evidence : [],
       };
     }
     return response as OutreachSession;

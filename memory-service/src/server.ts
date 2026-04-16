@@ -50,6 +50,7 @@ import { reflectionThreadRoutes } from './routes/reflectionThreads.js';
 import { actionRoutes } from './routes/actions.js';
 import { concernedItemsRoutes } from './routes/concernedItems.js';
 import { followThreadHitRoutes } from './routes/followThreadHits.js';
+import { messageRuleRoutes } from './routes/messageRules.js';
 import { outreachRoutes } from './routes/outreach.js';
 import { notificationCenterRoutes } from './routes/notificationCenter.js';
 import { providerRoutes } from './routes/providers.js';
@@ -179,6 +180,7 @@ export async function buildApp(
       await instance.register(weeklyReportRoutes);
       await instance.register(reflectionThreadRoutes);
       await instance.register(actionRoutes);
+      await instance.register(messageRuleRoutes);
       await instance.register(outreachRoutes);
       await instance.register(concernedItemsRoutes);
       await instance.register(followThreadHitRoutes);

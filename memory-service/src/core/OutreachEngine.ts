@@ -36,6 +36,7 @@ import type {
   DelegationArtifact,
   DelegationOutcome,
 } from '../integrations/OpenClawDelegationService.js';
+import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 
 interface ParsedReply {
   classification: 'answer' | 'defer' | 'irrelevant' | 'decline' | 'unclear';
@@ -52,6 +53,14 @@ interface OutreachSessionDetail {
   session: OutreachSessionRecord;
   events: ReturnType<OutreachRepository['listEventsBySession']>;
   actions: ReturnType<ActionRepository['list']>['items'];
+  evidence: Array<{
+    sourceKind: string;
+    sourceId?: string;
+    title?: string;
+    content: string;
+    createdAt?: number;
+    metadata?: Record<string, unknown>;
+  }>;
 }
 
 interface UpdateOutreachSessionDraftInput {
@@ -90,7 +99,9 @@ function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
 }
 
-function normalizeIdentityValue(value: string | null | undefined): string | undefined {
+function normalizeIdentityValue(
+  value: string | null | undefined,
+): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : undefined;
@@ -130,7 +141,11 @@ function aggregateReplyBatch(
     .filter((post) => post.text.trim().length > 0)
     .filter((post) => !processedReplyPostIds.has(post.id))
     .filter((post) => !isSelfAuthoredPost(post, selfActor))
-    .sort((a, b) => (parsePostCreatedAtSeconds(a) ?? 0) - (parsePostCreatedAtSeconds(b) ?? 0));
+    .sort(
+      (a, b) =>
+        (parsePostCreatedAtSeconds(a) ?? 0) -
+        (parsePostCreatedAtSeconds(b) ?? 0),
+    );
 
   if (candidates.length === 0) return null;
 
@@ -164,10 +179,15 @@ function aggregateReplyBatch(
   };
 }
 
-function buildSessionSummary(status: OutreachSessionStatus, question: string): string {
+function buildSessionSummary(
+  status: OutreachSessionStatus,
+  question: string,
+): string {
   if (status === 'resolved') return `Outreach resolved: ${question}`;
-  if (status === 'no_reply') return `Outreach timed out with no reply: ${question}`;
-  if (status === 'escalated') return `Outreach escalated for manual decision: ${question}`;
+  if (status === 'no_reply')
+    return `Outreach timed out with no reply: ${question}`;
+  if (status === 'escalated')
+    return `Outreach escalated for manual decision: ${question}`;
   if (status === 'failed') return `Outreach failed to dispatch: ${question}`;
   if (status === 'cancelled') return `Outreach cancelled: ${question}`;
   return `Outreach status ${status}: ${question}`;
@@ -177,7 +197,10 @@ function uniqStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(
     new Set(
       values
-        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
         .map((value) => value.trim()),
     ),
   );
@@ -199,7 +222,10 @@ function readStringArray(value: unknown): string[] {
   );
 }
 
-function stringifyStructuredValue(value: unknown, limit = 1600): string | undefined {
+function stringifyStructuredValue(
+  value: unknown,
+  limit = 1600,
+): string | undefined {
   if (value == null) return undefined;
   if (typeof value === 'string') {
     return value.trim().slice(0, limit) || undefined;
@@ -213,20 +239,26 @@ function stringifyStructuredValue(value: unknown, limit = 1600): string | undefi
   }
 }
 
-function delegationArtifactToCandidateArtifact(artifact: DelegationArtifact): CandidateArtifact {
+function delegationArtifactToCandidateArtifact(
+  artifact: DelegationArtifact,
+): CandidateArtifact {
   return {
     kind: artifact.kind || 'external_evidence',
     title: artifact.title,
     content: artifact.content,
     sourceKind: 'delegate_openclaw',
     metadata:
-      artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+      artifact.metadata &&
+      typeof artifact.metadata === 'object' &&
+      !Array.isArray(artifact.metadata)
         ? { ...artifact.metadata }
         : undefined,
   };
 }
 
-function mergeCandidateArtifacts(...groups: Array<unknown>): CandidateArtifact[] {
+function mergeCandidateArtifacts(
+  ...groups: Array<unknown>
+): CandidateArtifact[] {
   const merged: CandidateArtifact[] = [];
   const seen = new Set<string>();
 
@@ -250,7 +282,9 @@ function mergeCandidateArtifacts(...groups: Array<unknown>): CandidateArtifact[]
   return merged.slice(0, 12);
 }
 
-function extractOutcomeSummary(outcome: Record<string, unknown> | null | undefined): string | undefined {
+function extractOutcomeSummary(
+  outcome: Record<string, unknown> | null | undefined,
+): string | undefined {
   if (!outcome) return undefined;
   const candidates = [
     outcome.resolvedConclusion,
@@ -260,7 +294,9 @@ function extractOutcomeSummary(outcome: Record<string, unknown> | null | undefin
     outcome.answerText,
     outcome.reply,
   ];
-  const found = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  const found = candidates.find(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
   return typeof found === 'string' ? found.trim() : undefined;
 }
 
@@ -287,7 +323,9 @@ function buildFallbackOutcomeSummary(
     return reply ? `${target} 已回复：${reply}` : `${target} 已给出可用回复。`;
   }
   if (classification === 'decline') {
-    return reply ? `${target} 明确表示无法提供信息：${reply}` : `${target} 明确拒绝了这次询问。`;
+    return reply
+      ? `${target} 明确表示无法提供信息：${reply}`
+      : `${target} 明确拒绝了这次询问。`;
   }
   if (classification === 'defer') {
     if (etaAt) {
@@ -296,13 +334,45 @@ function buildFallbackOutcomeSummary(
     return `${target} 表示稍后回复，系统将继续等待。`;
   }
   if (classification === 'unclear' || classification === 'irrelevant') {
-    return reply ? `${target} 已回复，但当前还不足以直接使用：${reply}` : `${target} 已回复，但内容暂时不可直接使用。`;
+    return reply
+      ? `${target} 已回复，但当前还不足以直接使用：${reply}`
+      : `${target} 已回复，但内容暂时不可直接使用。`;
   }
   return reply ? `${target} 回复：${reply}` : `已收到来自 ${target} 的回复。`;
 }
 
 function normalizeString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function sanitizeEvidenceMetadata(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const allowed: Record<string, unknown> = {};
+  const allowList = [
+    'sourceSystem',
+    'answerResolutionPhase',
+    'phase',
+    'hitSource',
+    'ruleRef',
+    'replyClassification',
+    'replyConfidence',
+  ];
+
+  for (const key of allowList) {
+    if (record[key] !== undefined) {
+      allowed[key] = record[key];
+    }
+  }
+
+  return Object.keys(allowed).length > 0 ? allowed : undefined;
 }
 
 function stripDelegationFailureSuffix(value: unknown): string | undefined {
@@ -317,7 +387,9 @@ function stripDelegationFailureSuffix(value: unknown): string | undefined {
   return undefined;
 }
 
-function stripDelegationFailureFields(outcome: Record<string, unknown>): Record<string, unknown> {
+function stripDelegationFailureFields(
+  outcome: Record<string, unknown>,
+): Record<string, unknown> {
   const {
     delegationFailureStatus: _delegationFailureStatus,
     delegationFailureSummary: _delegationFailureSummary,
@@ -331,10 +403,18 @@ function stripDelegationFailureFields(outcome: Record<string, unknown>): Record<
 function isSelfDirectedTarget(targetType: string, targetRef: string): boolean {
   const normalizedTargetType = targetType.trim().toLowerCase();
   const normalizedTargetRef = targetRef.trim().toLowerCase();
-  if (normalizedTargetRef === 'user' || normalizedTargetRef === 'me' || normalizedTargetRef === 'self') {
-    return normalizedTargetType === 'private' || normalizedTargetType === 'person';
+  if (
+    normalizedTargetRef === 'user' ||
+    normalizedTargetRef === 'me' ||
+    normalizedTargetRef === 'self'
+  ) {
+    return (
+      normalizedTargetType === 'private' || normalizedTargetType === 'person'
+    );
   }
-  return normalizedTargetType === 'person' && normalizedTargetRef === 'current-user';
+  return (
+    normalizedTargetType === 'person' && normalizedTargetRef === 'current-user'
+  );
 }
 
 function isResolvedTargetStatus(status: string | undefined): boolean {
@@ -352,7 +432,9 @@ function parseNextDispatch(
   const repeatUnit = normalizeString(scheduleSpec.repeatUnit);
 
   if (scheduleDate) {
-    const seed = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
+    const seed = new Date(
+      `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
+    );
     if (!Number.isNaN(seed.getTime())) {
       const candidate = new Date(seed.getTime());
       if (Number.isFinite(repeatEvery) && repeatEvery > 0 && repeatUnit) {
@@ -389,7 +471,10 @@ function parseNextDispatch(
   return null;
 }
 
-function parseEtaFromText(text: string, currentTime: number): number | undefined {
+function parseEtaFromText(
+  text: string,
+  currentTime: number,
+): number | undefined {
   const lower = text.toLowerCase();
   const dayMatch = lower.match(/(\d+)\s*(day|days|天)/);
   if (dayMatch) {
@@ -416,9 +501,17 @@ function classifyReply(text: string, currentTime: number): ParsedReply {
   const lower = normalized.toLowerCase();
 
   if (!normalized) {
-    return { classification: 'unclear', confidence: 0.2, reason: 'empty_reply' };
+    return {
+      classification: 'unclear',
+      confidence: 0.2,
+      reason: 'empty_reply',
+    };
   }
-  if (/not now|later|稍后|晚点|以后|下周|tomorrow|明天|\d+\s*(day|days|天|hour|hours|小时)/.test(lower)) {
+  if (
+    /not now|later|稍后|晚点|以后|下周|tomorrow|明天|\d+\s*(day|days|天|hour|hours|小时)/.test(
+      lower,
+    )
+  ) {
     return {
       classification: 'defer',
       confidence: 0.75,
@@ -471,7 +564,11 @@ export class OutreachEngine {
     this.actionRepo = new ActionRepository(db);
     this.actionResultRepo = new ActionResultRepository(db);
     this.confirmRequestRepo = new ConfirmRequestRepository(db);
-    this.threadService = new ReflectionThreadService(db, userDataManager, userId);
+    this.threadService = new ReflectionThreadService(
+      db,
+      userDataManager,
+      userId,
+    );
     this.ringClient = new RingCentralClient(userDataManager, db, userId);
     this.evidencePlanner = new EvidenceResolutionPlanner();
   }
@@ -506,14 +603,14 @@ export class OutreachEngine {
   }
 
   listTemplateRuntimeStatus(limit = 100, ids?: string[]) {
-    const templates = ids && ids.length > 0
-      ? this.repo.listTemplateRuntimeStatus(ids)
-      : this.repo.listTemplates(limit);
+    const templates =
+      ids && ids.length > 0
+        ? this.repo.listTemplateRuntimeStatus(ids)
+        : this.repo.listTemplates(limit);
     return templates.map((template) => {
       const latestSession = template.lastSessionId
         ? this.repo.getSessionById(template.lastSessionId)
-        : this.repo
-            .listSessions({ templateId: template.id, limit: 1 })
+        : this.repo.listSessions({ templateId: template.id, limit: 1 })
             .items[0];
       return {
         template,
@@ -531,11 +628,19 @@ export class OutreachEngine {
   }
 
   async searchTargets(targetType: string, query: string, limit = 8) {
-    return this.ringClient.searchTargets({ targetType, targetRef: query, limit });
+    return this.ringClient.searchTargets({
+      targetType,
+      targetRef: query,
+      limit,
+    });
   }
 
   async searchTargetsDetailed(targetType: string, query: string, limit = 8) {
-    return this.ringClient.searchTargetsDetailed({ targetType, targetRef: query, limit });
+    return this.ringClient.searchTargetsDetailed({
+      targetType,
+      targetRef: query,
+      limit,
+    });
   }
 
   getTargetDirectoryStatus() {
@@ -549,10 +654,16 @@ export class OutreachEngine {
   async getSessionDetail(id: string): Promise<OutreachSessionDetail | null> {
     const session = await this.hydrateReplySender(this.repo.getSessionById(id));
     if (!session) return null;
+    const actions = this.actionRepo.list({
+      sourceKind: 'outreach_session',
+      sourceRefId: id,
+      limit: 20,
+    }).items;
     return {
       session,
       events: this.repo.listEventsBySession(id, 200),
-      actions: this.actionRepo.list({ sourceKind: 'outreach_session', sourceRefId: id, limit: 20 }).items,
+      actions,
+      evidence: this.buildSessionEvidence(session),
     };
   }
 
@@ -567,13 +678,22 @@ export class OutreachEngine {
     if (!session) return;
 
     const existingOutcome =
-      session.outcome && typeof session.outcome === 'object' && !Array.isArray(session.outcome)
+      session.outcome &&
+      typeof session.outcome === 'object' &&
+      !Array.isArray(session.outcome)
         ? session.outcome
         : {};
     const baseOutcome = stripDelegationFailureFields(existingOutcome);
     const replyText =
-      firstNonEmptyString(session.replyRawText, String(baseOutcome.reply ?? '')) ?? '';
-    const evidence = this.buildDelegationSynthesisEvidence(session, action, outcome);
+      firstNonEmptyString(
+        session.replyRawText,
+        String(baseOutcome.reply ?? ''),
+      ) ?? '';
+    const evidence = this.buildDelegationSynthesisEvidence(
+      session,
+      action,
+      outcome,
+    );
     const synthesis = await this.evidencePlanner.resolve({
       question: session.renderedQuestion,
       context: session.renderedContext,
@@ -590,7 +710,9 @@ export class OutreachEngine {
 
     const resolutionState =
       synthesis.resolutionState === 'insufficient'
-        ? (baseOutcome.resolutionState === 'complete' ? 'complete' : 'partial')
+        ? baseOutcome.resolutionState === 'complete'
+          ? 'complete'
+          : 'partial'
         : synthesis.resolutionState;
     const directFindings = uniqStrings([
       ...readStringArray(baseOutcome.directFindings),
@@ -610,16 +732,26 @@ export class OutreachEngine {
     const candidateArtifacts = mergeCandidateArtifacts(
       baseOutcome.candidateArtifacts,
       synthesis.candidateArtifacts,
-      outcome.artifacts.map((artifact) => delegationArtifactToCandidateArtifact(artifact)),
+      outcome.artifacts.map((artifact) =>
+        delegationArtifactToCandidateArtifact(artifact),
+      ),
     );
-    const confidence = Math.max(session.replyConfidence ?? 0, synthesis.confidence, 0.78);
-    const classification = directFindings.length > 0 || resolvedConclusion
-      ? 'answer'
-      : synthesis.legacyClassification;
+    const confidence = Math.max(
+      session.replyConfidence ?? 0,
+      synthesis.confidence,
+      0.78,
+    );
+    const classification =
+      directFindings.length > 0 || resolvedConclusion
+        ? 'answer'
+        : synthesis.legacyClassification;
     const followUpActions = this.actionRepo
-      .list({ sourceKind: 'outreach_session', sourceRefId: session.id, limit: 20 })
-      .items
-      .map((item) => ({
+      .list({
+        sourceKind: 'outreach_session',
+        sourceRefId: session.id,
+        limit: 20,
+      })
+      .items.map((item) => ({
         id: item.id,
         queueStatus: item.queueStatus,
       }));
@@ -648,7 +780,10 @@ export class OutreachEngine {
         action.id,
       ]),
       followUpActions,
-      reason: firstNonEmptyString(synthesis.reason, String(baseOutcome.reason ?? '')),
+      reason: firstNonEmptyString(
+        synthesis.reason,
+        String(baseOutcome.reason ?? ''),
+      ),
       summary,
       externalSummary: outcome.summary,
       externalEvidence: outcome.artifacts.map((artifact) => ({
@@ -658,7 +793,9 @@ export class OutreachEngine {
         metadata: artifact.metadata,
       })),
       externalPayload:
-        outcome.payload && typeof outcome.payload === 'object' && !Array.isArray(outcome.payload)
+        outcome.payload &&
+        typeof outcome.payload === 'object' &&
+        !Array.isArray(outcome.payload)
           ? outcome.payload
           : undefined,
     };
@@ -688,7 +825,9 @@ export class OutreachEngine {
     if (!session) return;
 
     const existingOutcome =
-      session.outcome && typeof session.outcome === 'object' && !Array.isArray(session.outcome)
+      session.outcome &&
+      typeof session.outcome === 'object' &&
+      !Array.isArray(session.outcome)
         ? session.outcome
         : {};
     const baseResolvedConclusion = firstNonEmptyString(
@@ -696,16 +835,24 @@ export class OutreachEngine {
       stripDelegationFailureSuffix(existingOutcome.summary),
     );
     const recoveryActionIds = Array.isArray(result?.followUpActionIds)
-      ? result?.followUpActionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      ? result?.followUpActionIds.filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
       : [];
     const remainingQuestions = uniqStrings([
       ...readStringArray(existingOutcome.remainingQuestions),
-      typeof outcome.payload?.question === 'string' ? outcome.payload.question : undefined,
+      typeof outcome.payload?.question === 'string'
+        ? outcome.payload.question
+        : undefined,
     ]);
     const followUpActions = this.actionRepo
-      .list({ sourceKind: 'outreach_session', sourceRefId: session.id, limit: 20 })
-      .items
-      .map((item) => ({
+      .list({
+        sourceKind: 'outreach_session',
+        sourceRefId: session.id,
+        limit: 20,
+      })
+      .items.map((item) => ({
         id: item.id,
         queueStatus: item.queueStatus,
       }));
@@ -714,11 +861,19 @@ export class OutreachEngine {
       : outcome.summary;
     const mergedOutcome: Record<string, unknown> = {
       ...existingOutcome,
-      classification: existingOutcome.classification ?? session.replyClassification ?? 'answer',
-      confidence: Math.max(session.replyConfidence ?? 0, action.confidence, 0.72),
+      classification:
+        existingOutcome.classification ??
+        session.replyClassification ??
+        'answer',
+      confidence: Math.max(
+        session.replyConfidence ?? 0,
+        action.confidence,
+        0.72,
+      ),
       reply: session.replyRawText ?? existingOutcome.reply,
       resolutionState:
-        existingOutcome.resolutionState === 'complete' || existingOutcome.resolutionState === 'partial'
+        existingOutcome.resolutionState === 'complete' ||
+        existingOutcome.resolutionState === 'partial'
           ? existingOutcome.resolutionState
           : 'partial',
       directFindings: readStringArray(existingOutcome.directFindings),
@@ -736,7 +891,9 @@ export class OutreachEngine {
       delegationFailureSummary: outcome.summary,
       delegationRecoveryActionIds: recoveryActionIds,
       delegationRecoveryPrompt:
-        outcome.payload && typeof outcome.payload === 'object' && !Array.isArray(outcome.payload)
+        outcome.payload &&
+        typeof outcome.payload === 'object' &&
+        !Array.isArray(outcome.payload)
           ? outcome.payload
           : undefined,
     };
@@ -744,9 +901,13 @@ export class OutreachEngine {
     this.repo.updateSession(session.id, {
       status: 'resolved',
       replyClassification:
-        typeof mergedOutcome.classification === 'string' ? mergedOutcome.classification : session.replyClassification,
+        typeof mergedOutcome.classification === 'string'
+          ? mergedOutcome.classification
+          : session.replyClassification,
       replyConfidence:
-        typeof mergedOutcome.confidence === 'number' ? mergedOutcome.confidence : session.replyConfidence,
+        typeof mergedOutcome.confidence === 'number'
+          ? mergedOutcome.confidence
+          : session.replyConfidence,
       outcome: mergedOutcome,
       nextCheckAt: null,
       resolvedAt: now(),
@@ -760,11 +921,17 @@ export class OutreachEngine {
   ): OutreachSessionRecord | null {
     const session = this.repo.getSessionById(id);
     if (!session) return null;
-    if (session.status !== 'pending_approval' && session.status !== 'scheduled') {
-      throw new Error('Only pending approval or scheduled outreach sessions can be edited.');
+    if (
+      session.status !== 'pending_approval' &&
+      session.status !== 'scheduled'
+    ) {
+      throw new Error(
+        'Only pending approval or scheduled outreach sessions can be edited.',
+      );
     }
 
-    const nextTargetType = normalizeString(input.targetType) ?? session.targetType;
+    const nextTargetType =
+      normalizeString(input.targetType) ?? session.targetType;
     const nextTargetRef = normalizeString(input.targetRef) ?? session.targetRef;
     if (isSelfDirectedTarget(nextTargetType, nextTargetRef)) {
       throw new Error('Outreach sessions cannot target the current user.');
@@ -783,50 +950,51 @@ export class OutreachEngine {
     const updated = this.repo.updateSession(id, {
       targetType: nextTargetType,
       targetRef: nextTargetRef,
-      targetResolutionStatus:
-        explicitResolutionProvided
-          ? input.targetResolutionStatus ?? 'unresolved'
-          : targetChanged
-            ? 'unresolved'
-            : session.targetResolutionStatus,
-      targetResolvedType:
-        explicitResolutionProvided
-          ? input.targetResolvedType ?? null
-          : targetChanged
-            ? null
-            : session.targetResolvedType ?? null,
-      targetResolvedId:
-        explicitResolutionProvided
-          ? input.targetResolvedId ?? null
-          : targetChanged
-            ? null
-            : session.targetResolvedId ?? null,
-      targetResolvedLabel:
-        explicitResolutionProvided
-          ? input.targetResolvedLabel ?? null
-          : targetChanged
-            ? null
-            : session.targetResolvedLabel ?? null,
-      targetResolvedChatId:
-        explicitResolutionProvided
-          ? input.targetResolvedChatId ?? null
-          : targetChanged
-            ? null
-            : session.targetResolvedChatId ?? null,
-      targetCandidates:
-        explicitResolutionProvided
-          ? (input.targetCandidates as unknown as Array<Record<string, unknown>> | null | undefined) ?? null
-          : targetChanged
-            ? null
-            : (session.targetCandidates as unknown as Array<Record<string, unknown>> | null | undefined) ?? null,
-      renderedQuestion: normalizeString(input.renderedQuestion) ?? session.renderedQuestion,
+      targetResolutionStatus: explicitResolutionProvided
+        ? (input.targetResolutionStatus ?? 'unresolved')
+        : targetChanged
+          ? 'unresolved'
+          : session.targetResolutionStatus,
+      targetResolvedType: explicitResolutionProvided
+        ? (input.targetResolvedType ?? null)
+        : targetChanged
+          ? null
+          : (session.targetResolvedType ?? null),
+      targetResolvedId: explicitResolutionProvided
+        ? (input.targetResolvedId ?? null)
+        : targetChanged
+          ? null
+          : (session.targetResolvedId ?? null),
+      targetResolvedLabel: explicitResolutionProvided
+        ? (input.targetResolvedLabel ?? null)
+        : targetChanged
+          ? null
+          : (session.targetResolvedLabel ?? null),
+      targetResolvedChatId: explicitResolutionProvided
+        ? (input.targetResolvedChatId ?? null)
+        : targetChanged
+          ? null
+          : (session.targetResolvedChatId ?? null),
+      targetCandidates: explicitResolutionProvided
+        ? ((input.targetCandidates as unknown as
+            | Array<Record<string, unknown>>
+            | null
+            | undefined) ?? null)
+        : targetChanged
+          ? null
+          : ((session.targetCandidates as unknown as
+              | Array<Record<string, unknown>>
+              | null
+              | undefined) ?? null),
+      renderedQuestion:
+        normalizeString(input.renderedQuestion) ?? session.renderedQuestion,
       renderedContext:
         input.renderedContext === undefined
-          ? session.renderedContext ?? null
-          : normalizeString(input.renderedContext) ?? null,
+          ? (session.renderedContext ?? null)
+          : (normalizeString(input.renderedContext) ?? null),
       nextCheckAt:
         input.nextCheckAt === undefined
-          ? session.nextCheckAt ?? null
+          ? (session.nextCheckAt ?? null)
           : input.nextCheckAt,
     });
 
@@ -846,7 +1014,9 @@ export class OutreachEngine {
     if (!session) return null;
     if (session.status !== 'pending_approval') return session;
     if (!isResolvedTargetStatus(session.targetResolutionStatus)) {
-      throw new Error('Target is not confirmed yet. Please resolve the RingCentral user/group before approving.');
+      throw new Error(
+        'Target is not confirmed yet. Please resolve the RingCentral user/group before approving.',
+      );
     }
     const currentTime = now();
     const nextCheckAt =
@@ -878,7 +1048,12 @@ export class OutreachEngine {
       errorCode: reason ? 'cancelled_by_user' : null,
       errorMessage: reason ?? null,
     });
-    this.repo.createEvent(id, 'cancelled', reason ? { reason } : undefined, reason);
+    this.repo.createEvent(
+      id,
+      'cancelled',
+      reason ? { reason } : undefined,
+      reason,
+    );
     return updated;
   }
 
@@ -907,14 +1082,18 @@ export class OutreachEngine {
     return updated;
   }
 
-  async createSessionFromAction(input: CreateSessionFromActionInput): Promise<OutreachSessionRecord> {
+  async createSessionFromAction(
+    input: CreateSessionFromActionInput,
+  ): Promise<OutreachSessionRecord> {
     const existing = this.repo.getSessionByActionId(input.action.id);
     if (existing) return existing;
 
     const action = input.action;
     const params = action.params ?? {};
     const targetObject =
-      params.target && typeof params.target === 'object' && !Array.isArray(params.target)
+      params.target &&
+      typeof params.target === 'object' &&
+      !Array.isArray(params.target)
         ? (params.target as Record<string, unknown>)
         : {};
     const targetType =
@@ -932,7 +1111,9 @@ export class OutreachEngine {
       throw new Error('ask_external_user action missing targetRef/chatId');
     }
     if (isSelfDirectedTarget(targetType, targetRef)) {
-      throw new Error('Self-directed ask_external_user should not create outreach sessions.');
+      throw new Error(
+        'Self-directed ask_external_user should not create outreach sessions.',
+      );
     }
 
     const question =
@@ -966,7 +1147,9 @@ export class OutreachEngine {
       requiresApproval,
       maxFollowup: Number(params.maxFollowup ?? params.max_followup ?? 1),
       followupIntervalSeconds: Number(
-        params.followupIntervalSeconds ?? params.followup_interval_seconds ?? 86400,
+        params.followupIntervalSeconds ??
+          params.followup_interval_seconds ??
+          86400,
       ),
       nextCheckAt: requiresApproval ? null : now(),
     });
@@ -1018,17 +1201,24 @@ export class OutreachEngine {
         targetCandidates: resolved.targetCandidates?.length ?? 0,
       });
 
-      const nextDispatch = parseNextDispatch(template.scheduleSpec, currentTime);
+      const nextDispatch = parseNextDispatch(
+        template.scheduleSpec,
+        currentTime,
+      );
       this.repo.markTemplateDispatch(template.id, nextDispatch, session.id);
 
-      if (!resolved.requiresApproval && resolved.status !== 'pending_approval') {
+      if (
+        !resolved.requiresApproval &&
+        resolved.status !== 'pending_approval'
+      ) {
         await this.dispatchSession(resolved);
       }
     }
   }
 
   private async dispatchSession(session: OutreachSessionRecord): Promise<void> {
-    if (session.status === 'pending_approval' || session.status === 'cancelled') return;
+    if (session.status === 'pending_approval' || session.status === 'cancelled')
+      return;
     const currentTime = now();
     if (!isResolvedTargetStatus(session.targetResolutionStatus)) {
       this.repo.updateSession(session.id, {
@@ -1122,7 +1312,9 @@ export class OutreachEngine {
     }
   }
 
-  private async handleWaitingSession(session: OutreachSessionRecord): Promise<void> {
+  private async handleWaitingSession(
+    session: OutreachSessionRecord,
+  ): Promise<void> {
     const currentTime = now();
     if (!session.sentChatId) {
       this.repo.updateSession(session.id, {
@@ -1139,12 +1331,25 @@ export class OutreachEngine {
     }
 
     try {
-      const posts = await this.ringClient.listPosts(session.sentChatId, session.lastPollAt ?? session.createdAt);
-      const selfActor = await this.ringClient.getCurrentActorIdentity().catch(() => null);
+      const posts = await this.ringClient.listPosts(
+        session.sentChatId,
+        session.lastPollAt ?? session.createdAt,
+      );
+      const selfActor = await this.ringClient
+        .getCurrentActorIdentity()
+        .catch(() => null);
       this.repo.updateSession(session.id, { lastPollAt: currentTime });
 
-      const processedReplyPostIds = this.listProcessedReplyPostIds(session.id, session.replyPostId);
-      const replyBatch = aggregateReplyBatch(posts, session, processedReplyPostIds, selfActor);
+      const processedReplyPostIds = this.listProcessedReplyPostIds(
+        session.id,
+        session.replyPostId,
+      );
+      const replyBatch = aggregateReplyBatch(
+        posts,
+        session,
+        processedReplyPostIds,
+        selfActor,
+      );
       if (replyBatch) {
         const resolution = await this.resolveReplyBatch(session, replyBatch);
         this.repo.updateSession(session.id, {
@@ -1164,14 +1369,28 @@ export class OutreachEngine {
           resolutionState: resolution.resolutionState,
           recommendedAction: resolution.recommendedAction,
         });
-        this.insertOutreachMessage('outreach_reply', session, replyBatch.replyText, {
-          postId: replyBatch.latestPostId,
-          postIds: replyBatch.replyPostIds,
-          sender: replyBatch.replySender,
-        });
+        this.insertOutreachMessage(
+          'outreach_reply',
+          session,
+          replyBatch.replyText,
+          {
+            postId: replyBatch.latestPostId,
+            postIds: replyBatch.replyPostIds,
+            sender: replyBatch.replySender,
+          },
+        );
 
-        const followUpActions = await this.queueResolutionFollowUpActions(session, resolution, replyBatch);
-        const baseOutcome = this.buildResolutionOutcome(session, replyBatch, resolution, followUpActions);
+        const followUpActions = await this.queueResolutionFollowUpActions(
+          session,
+          resolution,
+          replyBatch,
+        );
+        const baseOutcome = this.buildResolutionOutcome(
+          session,
+          replyBatch,
+          resolution,
+          followUpActions,
+        );
 
         if (
           resolution.resolutionState === 'complete' ||
@@ -1179,14 +1398,17 @@ export class OutreachEngine {
           resolution.legacyClassification === 'decline' ||
           followUpActions.length > 0
         ) {
-          const summary = resolution.resolutionState === 'insufficient'
-            ? (baseOutcome.summary as string)
-            : await this.buildResolvedOutcomeSummary(
-                session,
-                replyBatch.replyText,
-                resolution.legacyClassification === 'decline' ? 'decline' : 'answer',
-                resolution.resolvedConclusion,
-              );
+          const summary =
+            resolution.resolutionState === 'insufficient'
+              ? (baseOutcome.summary as string)
+              : await this.buildResolvedOutcomeSummary(
+                  session,
+                  replyBatch.replyText,
+                  resolution.legacyClassification === 'decline'
+                    ? 'decline'
+                    : 'answer',
+                  resolution.resolvedConclusion,
+                );
           this.markTerminal(session.id, 'resolved', {
             ...baseOutcome,
             summary,
@@ -1212,7 +1434,8 @@ export class OutreachEngine {
           return;
         }
         if (
-          (resolution.legacyClassification === 'irrelevant' || resolution.legacyClassification === 'unclear') &&
+          (resolution.legacyClassification === 'irrelevant' ||
+            resolution.legacyClassification === 'unclear') &&
           session.followupCount >= session.maxFollowup &&
           session.waitUntil &&
           currentTime >= session.waitUntil
@@ -1224,7 +1447,10 @@ export class OutreachEngine {
             reply: replyBatch.replyText,
             summary,
           });
-          await this.createEscalationConfirmRequest(session, 'reply_not_actionable');
+          await this.createEscalationConfirmRequest(
+            session,
+            'reply_not_actionable',
+          );
           return;
         }
 
@@ -1250,7 +1476,10 @@ export class OutreachEngine {
           followupCount: session.followupCount,
           summary: '已达到等待与追问上限，仍未收到有效回复。',
         });
-        await this.createEscalationConfirmRequest(session, 'timeout_without_reply');
+        await this.createEscalationConfirmRequest(
+          session,
+          'timeout_without_reply',
+        );
         return;
       }
 
@@ -1292,7 +1521,10 @@ export class OutreachEngine {
         {
           sourceKind: 'outreach_reply',
           sourceId: replyBatch.latestPostId,
-          title: replyBatch.replySender ?? session.targetResolvedLabel ?? session.targetRef,
+          title:
+            replyBatch.replySender ??
+            session.targetResolvedLabel ??
+            session.targetRef,
           content: replyBatch.replyText,
           metadata: {
             replyPostIds: replyBatch.replyPostIds,
@@ -1310,7 +1542,10 @@ export class OutreachEngine {
     ) {
       return resolved;
     }
-    if (resolved.legacyClassification === 'defer' && resolved.directFindings.length > 0) {
+    if (
+      resolved.legacyClassification === 'defer' &&
+      resolved.directFindings.length > 0
+    ) {
       return {
         ...resolved,
         legacyClassification: 'answer',
@@ -1342,7 +1577,10 @@ export class OutreachEngine {
       evidence.push({
         sourceKind: 'outreach_reply',
         sourceId: session.replyPostId ?? undefined,
-        title: session.replySender ?? session.targetResolvedLabel ?? session.targetRef,
+        title:
+          session.replySender ??
+          session.targetResolvedLabel ??
+          session.targetRef,
         content: session.replyRawText.trim(),
         metadata: {
           sessionId: session.id,
@@ -1368,7 +1606,10 @@ export class OutreachEngine {
     for (const [index, artifact] of outcome.artifacts.entries()) {
       const metadataSnippet = stringifyStructuredValue(artifact.metadata, 600);
       const content = [artifact.title, artifact.content, metadataSnippet]
-        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
         .join('\n');
       if (!content) continue;
       evidence.push({
@@ -1377,7 +1618,9 @@ export class OutreachEngine {
         title: artifact.title,
         content,
         metadata:
-          artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+          artifact.metadata &&
+          typeof artifact.metadata === 'object' &&
+          !Array.isArray(artifact.metadata)
             ? { ...artifact.metadata }
             : undefined,
       });
@@ -1386,7 +1629,110 @@ export class OutreachEngine {
     return evidence;
   }
 
-  private listProcessedReplyPostIds(sessionId: string, currentReplyPostId?: string): Set<string> {
+  private buildSessionEvidence(session: OutreachSessionRecord): Array<{
+    sourceKind: string;
+    sourceId?: string;
+    title?: string;
+    content: string;
+    createdAt?: number;
+    metadata?: Record<string, unknown>;
+  }> {
+    const evidence: Array<{
+      sourceKind: string;
+      sourceId?: string;
+      title?: string;
+      content: string;
+      createdAt?: number;
+      metadata?: Record<string, unknown>;
+    }> = [];
+
+    if (session.replyRawText?.trim()) {
+      evidence.push({
+        sourceKind: 'outreach_reply',
+        sourceId: session.replyPostId,
+        title:
+          session.replySender ??
+          session.targetResolvedLabel ??
+          session.targetRef,
+        content: session.replyRawText.trim(),
+        createdAt: session.updatedAt,
+        metadata: {
+          replyClassification: session.replyClassification,
+          replyConfidence: session.replyConfidence,
+        },
+      });
+    }
+
+    const outcome =
+      session.outcome &&
+      typeof session.outcome === 'object' &&
+      !Array.isArray(session.outcome)
+        ? session.outcome
+        : undefined;
+
+    const externalEvidence = Array.isArray(outcome?.externalEvidence)
+      ? outcome.externalEvidence
+      : [];
+    for (const [index, item] of externalEvidence.entries()) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        continue;
+      }
+      const content = [
+        typeof item.content === 'string' ? item.content.trim() : '',
+        typeof item.url === 'string' ? item.url.trim() : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      if (!content) {
+        continue;
+      }
+
+      evidence.push({
+        sourceKind:
+          typeof item.kind === 'string' ? item.kind : 'external_evidence',
+        sourceId: `external:${session.id}:${index}`,
+        title: typeof item.title === 'string' ? item.title : undefined,
+        content,
+        createdAt: session.updatedAt,
+        metadata: sanitizeEvidenceMetadata(item.metadata),
+      });
+    }
+
+    const candidateArtifacts = Array.isArray(outcome?.candidateArtifacts)
+      ? outcome.candidateArtifacts
+      : [];
+    for (const [index, item] of candidateArtifacts.entries()) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        continue;
+      }
+      const content = [
+        typeof item.content === 'string' ? item.content.trim() : '',
+        typeof item.url === 'string' ? item.url.trim() : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      if (!content) {
+        continue;
+      }
+
+      evidence.push({
+        sourceKind:
+          typeof item.kind === 'string' ? item.kind : 'candidate_artifact',
+        sourceId: `candidate:${session.id}:${index}`,
+        title: typeof item.title === 'string' ? item.title : undefined,
+        content,
+        createdAt: session.updatedAt,
+        metadata: sanitizeEvidenceMetadata(item.metadata),
+      });
+    }
+
+    return evidence;
+  }
+
+  private listProcessedReplyPostIds(
+    sessionId: string,
+    currentReplyPostId?: string,
+  ): Set<string> {
     const seen = new Set<string>();
     if (currentReplyPostId) {
       seen.add(currentReplyPostId);
@@ -1397,7 +1743,10 @@ export class OutreachEngine {
       const replyPostId = normalizeString(event.payload.replyPostId);
       if (replyPostId) seen.add(replyPostId);
       const replyPostIds = Array.isArray(event.payload.replyPostIds)
-        ? event.payload.replyPostIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        ? event.payload.replyPostIds.filter(
+            (value): value is string =>
+              typeof value === 'string' && value.trim().length > 0,
+          )
         : [];
       for (const id of replyPostIds) {
         seen.add(id.trim());
@@ -1414,13 +1763,17 @@ export class OutreachEngine {
     if (resolution.recommendedAction === 'none') return [];
 
     const baseParams =
-      resolution.actionParams && typeof resolution.actionParams === 'object' && !Array.isArray(resolution.actionParams)
+      resolution.actionParams &&
+      typeof resolution.actionParams === 'object' &&
+      !Array.isArray(resolution.actionParams)
         ? { ...resolution.actionParams }
         : {};
     const params: Record<string, unknown> = {
       ...baseParams,
       metadata: {
-        ...(baseParams.metadata && typeof baseParams.metadata === 'object' && !Array.isArray(baseParams.metadata)
+        ...(baseParams.metadata &&
+        typeof baseParams.metadata === 'object' &&
+        !Array.isArray(baseParams.metadata)
           ? (baseParams.metadata as Record<string, unknown>)
           : {}),
         sessionId: session.id,
@@ -1428,14 +1781,14 @@ export class OutreachEngine {
       },
     };
     const requestedMode = params.mode === 'write' ? 'write' : 'read';
-    const shouldAutoExecute =
+    const delegatePolicy =
       resolution.recommendedAction === 'delegate_openclaw'
-        ? requestedMode === 'read'
-        : true;
-    const requiresApproval =
-      resolution.recommendedAction === 'delegate_openclaw'
-        ? requestedMode === 'write'
-        : false;
+        ? resolveDelegateOpenClawPolicy({
+            params,
+            defaultExecutionMode: requestedMode === 'write' ? 'manual' : 'auto',
+            defaultRequiresApproval: requestedMode === 'write',
+          })
+        : null;
     const action = this.actionRepo.create({
       actionType: resolution.recommendedAction,
       title: this.buildResolutionActionTitle(session, resolution),
@@ -1443,17 +1796,18 @@ export class OutreachEngine {
       params,
       threadId: session.threadId,
       runId: session.runId,
-      executionMode: shouldAutoExecute ? 'auto' : 'manual',
-      requiresApproval,
+      executionMode: delegatePolicy?.executionMode ?? 'auto',
+      requiresApproval: delegatePolicy?.requiresApproval ?? false,
       queueStatus: 'queued',
       priority:
-        resolution.recommendedAction === 'create_confirm_request'
-          ? 8
-          : 7,
+        resolution.recommendedAction === 'create_confirm_request' ? 8 : 7,
       sourceKind: 'outreach_session',
       sourceRefId: session.id,
       confidence: resolution.confidence,
-      evidenceRefs: [`outreach_session:${session.id}`, `outreach_reply:${replyBatch.latestPostId}`],
+      evidenceRefs: [
+        `outreach_session:${session.id}`,
+        `outreach_reply:${replyBatch.latestPostId}`,
+      ],
     });
     return [action];
   }
@@ -1516,9 +1870,11 @@ export class OutreachEngine {
     resolvedConclusion?: string,
   ): Promise<string> {
     const fallback =
-      (typeof resolvedConclusion === 'string' && resolvedConclusion.trim().length > 0
+      (typeof resolvedConclusion === 'string' &&
+      resolvedConclusion.trim().length > 0
         ? resolvedConclusion.trim()
-        : undefined) ?? buildFallbackOutcomeSummary(session, classification, replyText);
+        : undefined) ??
+      buildFallbackOutcomeSummary(session, classification, replyText);
     try {
       const llm = getLLMClient();
       const prompt = [
@@ -1545,7 +1901,9 @@ export class OutreachEngine {
     }
   }
 
-  private async resolveSessionTarget(session: OutreachSessionRecord): Promise<OutreachSessionRecord> {
+  private async resolveSessionTarget(
+    session: OutreachSessionRecord,
+  ): Promise<OutreachSessionRecord> {
     const resolution = await this.ringClient.resolveTarget({
       targetType: session.targetType,
       targetRef: session.targetRef,
@@ -1558,10 +1916,12 @@ export class OutreachEngine {
       targetResolvedId: resolution.resolved?.entityId ?? null,
       targetResolvedLabel: resolution.resolved?.label ?? null,
       targetResolvedChatId: resolution.resolved?.chatId ?? null,
-      targetCandidates: resolution.candidates as unknown as Array<Record<string, unknown>>,
+      targetCandidates: resolution.candidates as unknown as Array<
+        Record<string, unknown>
+      >,
       status: needsReview ? 'pending_approval' : session.status,
       requiresApproval: needsReview ? true : session.requiresApproval,
-      nextCheckAt: needsReview ? null : session.nextCheckAt ?? null,
+      nextCheckAt: needsReview ? null : (session.nextCheckAt ?? null),
     });
     return updated ?? session;
   }
@@ -1620,7 +1980,10 @@ export class OutreachEngine {
 
   private markTerminal(
     sessionId: string,
-    status: Extract<OutreachSessionStatus, 'resolved' | 'no_reply' | 'escalated'>,
+    status: Extract<
+      OutreachSessionStatus,
+      'resolved' | 'no_reply' | 'escalated'
+    >,
     outcome: Record<string, unknown>,
   ): void {
     const currentTime = now();
@@ -1648,7 +2011,9 @@ export class OutreachEngine {
         threadId: session.threadId,
         runId: session.runId,
         resultType: session.status,
-        summary: extractOutcomeSummary(session.outcome) ?? buildSessionSummary(session.status, session.renderedQuestion),
+        summary:
+          extractOutcomeSummary(session.outcome) ??
+          buildSessionSummary(session.status, session.renderedQuestion),
         payload: {
           status: session.status,
           targetType: session.targetType,
@@ -1665,7 +2030,10 @@ export class OutreachEngine {
         actionResultId: result.id,
       });
       const spawnedActionIds = Array.isArray(session.outcome?.spawnedActionIds)
-        ? session.outcome?.spawnedActionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        ? session.outcome?.spawnedActionIds.filter(
+            (value): value is string =>
+              typeof value === 'string' && value.trim().length > 0,
+          )
         : [];
       if (runtime.reflectionEnabled && spawnedActionIds.length === 0) {
         try {
@@ -1726,16 +2094,21 @@ export class OutreachEngine {
     }
 
     try {
-      const posts = await this.ringClient.listPosts(session.sentChatId, session.createdAt);
+      const posts = await this.ringClient.listPosts(
+        session.sentChatId,
+        session.createdAt,
+      );
       const reply = posts.find((item) => item.id === session.replyPostId);
       const replySender = reply?.creatorName ?? reply?.creatorId;
       if (!replySender) {
         return session;
       }
-      return this.repo.updateSession(session.id, { replySender }) ?? {
-        ...session,
-        replySender,
-      };
+      return (
+        this.repo.updateSession(session.id, { replySender }) ?? {
+          ...session,
+          replySender,
+        }
+      );
     } catch {
       return session;
     }

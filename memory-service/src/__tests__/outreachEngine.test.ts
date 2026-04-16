@@ -73,10 +73,15 @@ describe('OutreachEngine', () => {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
         };
       }
-      if (url.includes(`/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`)) {
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`,
+        )
+      ) {
         return {
           ok: true,
           status: 200,
@@ -97,25 +102,31 @@ describe('OutreachEngine', () => {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
         };
       }
       if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({
-            id: 'self-ext-1',
-            name: 'Esone Qiu',
-            contact: {
-              firstName: 'Esone',
-              lastName: 'Qiu',
-              email: 'test-user@ringcentral.com',
-            },
-          }),
+          text: async () =>
+            JSON.stringify({
+              id: 'self-ext-1',
+              name: 'Esone Qiu',
+              contact: {
+                firstName: 'Esone',
+                lastName: 'Qiu',
+                email: 'test-user@ringcentral.com',
+              },
+            }),
         };
       }
-      if (url.includes(`/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts?`)) {
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts?`,
+        )
+      ) {
         return {
           ok: true,
           status: 200,
@@ -168,7 +179,9 @@ describe('OutreachEngine', () => {
     expect(session?.sentPostId).toBe('post-123');
 
     const messages = db
-      .prepare(`SELECT source_type, content FROM messages_raw WHERE source_type = 'outreach_question'`)
+      .prepare(
+        `SELECT source_type, content FROM messages_raw WHERE source_type = 'outreach_question'`,
+      )
       .all() as Array<{ source_type: string; content: string }>;
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toContain('测试窗口是否已经锁定');
@@ -219,10 +232,15 @@ describe('OutreachEngine', () => {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
         };
       }
-      if (url.includes(`/team-messaging/v1/chats/${encodeURIComponent('chat-abc')}/posts?`)) {
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-abc')}/posts?`,
+        )
+      ) {
         return {
           ok: true,
           status: 200,
@@ -251,8 +269,14 @@ describe('OutreachEngine', () => {
     expect(updatedSession?.replyClassification).toBe('answer');
 
     const actionResults = db
-      .prepare('SELECT action_id, result_type, summary FROM action_results WHERE action_id = ?')
-      .all(action.id) as Array<{ action_id: string; result_type: string; summary: string }>;
+      .prepare(
+        'SELECT action_id, result_type, summary FROM action_results WHERE action_id = ?',
+      )
+      .all(action.id) as Array<{
+      action_id: string;
+      result_type: string;
+      summary: string;
+    }>;
     expect(actionResults).toHaveLength(1);
     expect(actionResults[0].result_type).toBe('resolved');
     expect(actionResults[0].summary).toBeTruthy();
@@ -320,17 +344,25 @@ describe('OutreachEngine', () => {
     );
     expect(updatedSession?.replyClassification).toBe('answer');
     expect(updatedSession?.outcome?.resolutionState).toBe('partial');
-    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain('video相关应该都在下周');
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain(
+      'video相关应该都在下周',
+    );
     expect(updatedSession?.outcome?.spawnedActionIds).toHaveLength(1);
 
     const replyEvents = outreachRepo
       .listEventsBySession(session.id, 20)
       .filter((event) => event.eventType === 'reply_received');
     expect(replyEvents).toHaveLength(1);
-    expect(replyEvents[0].payload?.replyPostIds).toEqual(['reply-2', 'reply-3', 'reply-4']);
+    expect(replyEvents[0].payload?.replyPostIds).toEqual([
+      'reply-2',
+      'reply-3',
+      'reply-4',
+    ]);
 
     const replyMessages = db
-      .prepare(`SELECT content FROM messages_raw WHERE source_type = 'outreach_reply' ORDER BY timestamp ASC`)
+      .prepare(
+        `SELECT content FROM messages_raw WHERE source_type = 'outreach_reply' ORDER BY timestamp ASC`,
+      )
       .all() as Array<{ content: string }>;
     expect(replyMessages).toHaveLength(1);
     expect(replyMessages[0].content).toContain('video相关应该都在下周');
@@ -397,7 +429,9 @@ describe('OutreachEngine', () => {
     expect(replyEvents).toHaveLength(1);
 
     const replyMessages = db
-      .prepare(`SELECT content FROM messages_raw WHERE source_type = 'outreach_reply'`)
+      .prepare(
+        `SELECT content FROM messages_raw WHERE source_type = 'outreach_reply'`,
+      )
       .all() as Array<{ content: string }>;
     expect(replyMessages).toHaveLength(0);
   });
@@ -455,13 +489,19 @@ describe('OutreachEngine', () => {
     expect(updatedSession?.replySender).toBe('Sophia (Jinmei) Lin');
     expect(updatedSession?.replyRawText).toContain('video相关应该都在下周');
     expect(updatedSession?.replyRawText).not.toContain('哈哈，别慌');
-    expect(updatedSession?.outcome?.recommendedAction).toBe('delegate_openclaw');
+    expect(updatedSession?.outcome?.recommendedAction).toBe(
+      'delegate_openclaw',
+    );
 
     const replyEvents = outreachRepo
       .listEventsBySession(session.id, 20)
       .filter((event) => event.eventType === 'reply_received');
     expect(replyEvents).toHaveLength(1);
-    expect(replyEvents[0].payload?.replyPostIds).toEqual(['reply-2', 'reply-3', 'reply-4']);
+    expect(replyEvents[0].payload?.replyPostIds).toEqual([
+      'reply-2',
+      'reply-3',
+      'reply-4',
+    ]);
   });
 
   it('queues delegation when a reply only provides an external artifact without a direct answer', async () => {
@@ -496,7 +536,9 @@ describe('OutreachEngine', () => {
     const updatedSession = outreachRepo.getSessionById(session.id);
     expect(updatedSession?.status).toBe('resolved');
     expect(updatedSession?.outcome?.resolutionState).toBe('insufficient');
-    expect(updatedSession?.outcome?.recommendedAction).toBe('delegate_openclaw');
+    expect(updatedSession?.outcome?.recommendedAction).toBe(
+      'delegate_openclaw',
+    );
 
     const followUpActions = actionRepo.list({
       sourceKind: 'outreach_session',
@@ -536,13 +578,18 @@ describe('OutreachEngine', () => {
     const engine = new OutreachEngine(db, userDataManager, 'test-user');
     await engine.runSchedulerCycle();
 
-    const sessions = outreachRepo.listSessions({ templateId: 'template-1', limit: 10 }).items;
+    const sessions = outreachRepo.listSessions({
+      templateId: 'template-1',
+      limit: 10,
+    }).items;
     expect(sessions).toHaveLength(1);
     expect(sessions[0].status).toBe('waiting_reply');
     expect(sessions[0].followupIntervalSeconds).toBe(7200);
 
     const template = outreachRepo.getTemplateById('template-1');
-    expect(Number(template?.scheduleSpec.nextDispatchAt)).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    expect(Number(template?.scheduleSpec.nextDispatchAt)).toBeGreaterThan(
+      Math.floor(Date.now() / 1000),
+    );
   });
 
   it('allows editing a pending approval session and respects a future send time on approval', async () => {
@@ -631,10 +678,15 @@ describe('OutreachEngine', () => {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
         };
       }
-      if (url.includes('/team-messaging/v1/chats/chat-backfill/posts?recordCount=50')) {
+      if (
+        url.includes(
+          '/team-messaging/v1/chats/chat-backfill/posts?recordCount=50',
+        )
+      ) {
         return {
           ok: true,
           status: 200,
@@ -664,5 +716,72 @@ describe('OutreachEngine', () => {
 
     const refreshed = outreachRepo.getSessionById(session.id);
     expect(refreshed?.replySender).toBe('AI Service');
+  });
+
+  it('returns structured outreach evidence on session detail lookup', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'chat-evidence',
+      renderedQuestion: '当前 release 风险有没有外部证据？',
+      renderedContext: '如果有链接也请带上。',
+      status: 'resolved',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-evidence',
+      sentPostId: 'post-seed',
+      replyPostId: 'reply-1',
+      replySender: 'Sophia (Jinmei) Lin',
+      replyRawText: '风险主要在 video 相关发布窗口。',
+      replyClassification: 'answer',
+      replyConfidence: 0.82,
+      outcome: {
+        resolutionState: 'partial',
+        externalEvidence: [
+          {
+            kind: 'link',
+            title: 'Release checklist',
+            url: 'https://docs.example.com/release-checklist',
+            content: 'video 发布依赖项还未全部完成',
+            metadata: {
+              sourceSystem: 'google_workspace',
+            },
+          },
+        ],
+        candidateArtifacts: [
+          {
+            kind: 'reference',
+            title: 'release calendar',
+            url: 'https://calendar.example.com/release',
+            metadata: {
+              sourceSystem: 'calendar',
+            },
+          },
+        ],
+      },
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    const detail = await engine.getSessionDetail(session.id);
+
+    expect(detail?.evidence).toHaveLength(3);
+    expect(detail?.evidence[0]).toMatchObject({
+      sourceKind: 'outreach_reply',
+      sourceId: 'reply-1',
+      title: 'Sophia (Jinmei) Lin',
+      content: '风险主要在 video 相关发布窗口。',
+    });
+    expect(detail?.evidence[1]).toMatchObject({
+      sourceKind: 'link',
+      title: 'Release checklist',
+    });
+    expect(detail?.evidence[1]?.content).toContain(
+      'https://docs.example.com/release-checklist',
+    );
+    expect(detail?.evidence[2]).toMatchObject({
+      sourceKind: 'reference',
+      title: 'release calendar',
+    });
   });
 });
