@@ -137,6 +137,37 @@ describe('OutreachEngine', () => {
     });
   }
 
+  function insertGlipMessage(params: {
+    id: string;
+    content: string;
+    sender?: string;
+    groupId?: string;
+    groupName?: string;
+    timestamp?: number;
+    metadata?: Record<string, unknown>;
+  }) {
+    const timestamp = params.timestamp ?? Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, sender, group_id, group_name, timestamp, metadata_json, created_at)
+       VALUES (?, ?, 'glip', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      params.id,
+      params.content,
+      params.sender ?? null,
+      params.groupId ?? null,
+      params.groupName ?? null,
+      timestamp,
+      JSON.stringify({
+        sender: params.sender,
+        groupId: params.groupId,
+        groupName: params.groupName,
+        ...(params.metadata ?? {}),
+      }),
+      timestamp,
+    );
+  }
+
   it('bridges ask_external_user action execution into an outreach session', async () => {
     const thread = threadRepo.upsertThread({
       topicKey: 'project:outreach',
@@ -590,6 +621,209 @@ describe('OutreachEngine', () => {
     expect(Number(template?.scheduleSpec.nextDispatchAt)).toBeGreaterThan(
       Math.floor(Date.now() / 1000),
     );
+  });
+
+  it('resolves a scheduled session before dispatch when target chat history already contains the answer', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'chat-precheck',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedId: 'chat-precheck',
+      targetResolvedLabel: 'Release Team',
+      targetResolvedChatId: 'chat-precheck',
+      renderedQuestion: '当前 blocker 预计什么时候恢复？',
+      renderedContext: '如果今天无法恢复，请同步最新 ETA。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 600,
+      nextCheckAt: Math.floor(Date.now() / 1000) - 5,
+    });
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'self-ext-1',
+              name: 'Esone Qiu',
+              contact: {
+                firstName: 'Esone',
+                lastName: 'Qiu',
+                email: 'test-user@ringcentral.com',
+              },
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-precheck')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'pre-answer-1',
+                  text: '当前 blocker 预计今天 18:00 前恢复。',
+                  creator: { id: 'user-42', name: 'Release Owner' },
+                  creationTime: new Date((currentTs - 120) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-precheck')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(sendCalled).toBe(false);
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_dispatch');
+    expect(updated?.outcome?.hitSource).toBe('target_channel_history');
+    expect(String(updated?.outcome?.relatedMessage)).toContain('18:00');
+
+    const eventTypes = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .map((event) => event.eventType);
+    expect(eventTypes).toContain('resolved_without_dispatch');
+  });
+
+  it('skips followup when global memory already contains the answer', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    insertGlipMessage({
+      id: 'memory-answer-1',
+      content: '当前 blocker 预计今天 18:00 前恢复。',
+      sender: 'Release Owner',
+      groupId: 'other-chat',
+      groupName: 'Other Team',
+      timestamp: currentTs - 120,
+    });
+
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'chat-followup',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedId: 'chat-followup',
+      targetResolvedLabel: 'Release Team',
+      targetResolvedChatId: 'chat-followup',
+      renderedQuestion: '当前 blocker 预计什么时候恢复？',
+      renderedContext: '如果今天无法恢复，请同步最新 ETA。',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-followup',
+      sentPostId: 'post-seed',
+      followupCount: 0,
+      createdAt: currentTs - 600,
+      nextCheckAt: currentTs - 5,
+      waitUntil: currentTs - 1,
+    });
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'self-ext-1',
+              name: 'Esone Qiu',
+              contact: {
+                firstName: 'Esone',
+                lastName: 'Qiu',
+                email: 'test-user@ringcentral.com',
+              },
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-followup')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ records: [] }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-followup')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(sendCalled).toBe(false);
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.followupCount).toBe(0);
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_followup');
+    expect(updated?.outcome?.hitSource).toBe('global_memory');
+
+    const eventTypes = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .map((event) => event.eventType);
+    expect(eventTypes).toContain('followup_skipped_by_answer');
   });
 
   it('allows editing a pending approval session and respects a future send time on approval', async () => {

@@ -61,7 +61,7 @@ export function getOutreachEvidenceSnapshot(
       (session.replyRawText?.trim() ? 'direct_reply' : ''),
   );
 
-  const source =
+  const source = normalizeSourceLabel(
     pickString(
       outcome,
       [
@@ -89,7 +89,8 @@ export function getOutreachEvidenceSnapshot(
     readString(evidenceMeta, 'hitSource') ||
     primaryEvidence?.title ||
     primaryEvidence?.sourceKind ||
-    '';
+    '',
+  );
 
   const summary =
     pickString(
@@ -227,6 +228,15 @@ function phaseDisplayLabel(phaseKey: string): string {
   if (phaseKey === 'before_followup') return '追问前命中';
   if (phaseKey === 'direct_reply') return '直接回复';
   return phaseKey;
+}
+
+function normalizeSourceLabel(raw: string): string {
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.includes('target_channel_history')) return '目标群最近会话';
+  if (normalized.includes('global_memory')) return '其他群 / 全局记忆';
+  if (normalized.includes('direct_reply')) return '直接回复';
+  return raw;
 }
 
 function evidenceStateLabel(

@@ -25,6 +25,7 @@ import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { now } from '../utils/time.js';
 import { getLLMClient } from '../llm/LLMClient.js';
+import { RecallEngine } from './RecallEngine.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
 import {
   EvidenceResolutionPlanner,
@@ -84,6 +85,34 @@ interface AggregatedReplyBatch {
   replyText: string;
 }
 
+type OutreachAnswerResolutionPhase =
+  | 'before_dispatch'
+  | 'before_followup'
+  | 'direct_reply';
+type OutreachAnswerHitSource =
+  | 'direct_reply'
+  | 'target_channel_history'
+  | 'global_memory';
+
+interface OutreachAnswerEvidenceItem {
+  sourceKind: OutreachAnswerHitSource;
+  sourceId?: string;
+  title?: string;
+  content: string;
+  createdAt?: number;
+  metadata?: Record<string, unknown>;
+}
+
+interface OutreachAnswerResolutionHit {
+  phase: OutreachAnswerResolutionPhase;
+  hitSource: OutreachAnswerHitSource;
+  relatedMessage?: string;
+  relatedMessageId?: string;
+  evidence: OutreachAnswerEvidenceItem[];
+  resolution: EvidenceResolutionPlan;
+  summary: string;
+}
+
 const TERMINAL_STATUSES = new Set<OutreachSessionStatus>([
   'resolved',
   'no_reply',
@@ -92,6 +121,7 @@ const TERMINAL_STATUSES = new Set<OutreachSessionStatus>([
   'failed',
 ]);
 const REPLY_BURST_WINDOW_SECONDS = 5 * 60;
+const OUTREACH_HISTORY_FALLBACK_WINDOW_SECONDS = 24 * 60 * 60;
 
 function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
   if (!post.createdAt) return null;
@@ -554,6 +584,7 @@ export class OutreachEngine {
   private readonly threadService: ReflectionThreadService;
   private readonly ringClient: RingCentralClient;
   private readonly evidencePlanner: EvidenceResolutionPlanner;
+  private readonly recallEngine: RecallEngine;
 
   constructor(
     private readonly db: Database.Database,
@@ -571,6 +602,7 @@ export class OutreachEngine {
     );
     this.ringClient = new RingCentralClient(userDataManager, db, userId);
     this.evidencePlanner = new EvidenceResolutionPlanner();
+    this.recallEngine = new RecallEngine(db);
   }
 
   private getRuntimeConfig() {
@@ -1247,6 +1279,15 @@ export class OutreachEngine {
     }
 
     try {
+      const preDispatchHit = await this.runAnswerResolutionPrecheck(
+        session,
+        'before_dispatch',
+      );
+      if (preDispatchHit) {
+        this.finalizeAnswerResolutionPrecheck(session, preDispatchHit);
+        return;
+      }
+
       const text = session.renderedQuestion;
       const sent = await this.ringClient.sendMessage({
         targetType: session.targetType,
@@ -1467,6 +1508,14 @@ export class OutreachEngine {
 
       if (session.waitUntil && currentTime >= session.waitUntil) {
         if (session.followupCount < session.maxFollowup) {
+          const beforeFollowupHit = await this.runAnswerResolutionPrecheck(
+            session,
+            'before_followup',
+          );
+          if (beforeFollowupHit) {
+            this.finalizeAnswerResolutionPrecheck(session, beforeFollowupHit);
+            return;
+          }
           await this.sendFollowup(session);
           return;
         }
@@ -1500,6 +1549,388 @@ export class OutreachEngine {
         message,
       });
     }
+  }
+
+  private getAnswerResolutionBaselineAt(
+    session: OutreachSessionRecord,
+    phase: OutreachAnswerResolutionPhase,
+    currentTime: number,
+  ): number {
+    const fallbackStart =
+      currentTime - OUTREACH_HISTORY_FALLBACK_WINDOW_SECONDS;
+    if (phase === 'before_dispatch') {
+      const templateCreatedAt = session.templateId
+        ? this.repo.getTemplateById(session.templateId)?.createdAt
+        : undefined;
+      const baseline = templateCreatedAt ?? session.createdAt;
+      return Number.isFinite(baseline) && baseline > 0
+        ? baseline
+        : fallbackStart;
+    }
+
+    const latestOutboundEvent = this.repo
+      .listEventsBySession(session.id, 50)
+      .filter(
+        (event) =>
+          event.eventType === 'dispatched' ||
+          event.eventType === 'followup_sent',
+      )
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    const baseline = latestOutboundEvent?.createdAt ?? session.createdAt;
+    return Number.isFinite(baseline) && baseline > 0
+      ? baseline
+      : fallbackStart;
+  }
+
+  private getAnswerResolutionChatIds(session: OutreachSessionRecord): string[] {
+    return uniqStrings([
+      session.sentChatId,
+      session.targetResolvedChatId,
+      session.targetType === 'group' ? session.targetRef : undefined,
+    ]);
+  }
+
+  private async collectTargetChannelAnswerEvidence(
+    session: OutreachSessionRecord,
+    phase: OutreachAnswerResolutionPhase,
+    currentTime: number,
+  ): Promise<OutreachAnswerEvidenceItem[]> {
+    const chatId = this.getAnswerResolutionChatIds(session)[0];
+    if (!chatId) return [];
+
+    const baselineAt = this.getAnswerResolutionBaselineAt(
+      session,
+      phase,
+      currentTime,
+    );
+    const posts = await this.ringClient.listPosts(chatId, baselineAt);
+    if (posts.length === 0) return [];
+
+    const selfActor = await this.ringClient
+      .getCurrentActorIdentity()
+      .catch(() => null);
+    const processedReplyPostIds =
+      phase === 'before_followup'
+        ? this.listProcessedReplyPostIds(session.id, session.replyPostId)
+        : new Set<string>();
+
+    const normalized = posts
+      .map((post) => ({
+        post,
+        createdAt: parsePostCreatedAtSeconds(post),
+      }))
+      .filter(({ post }) => post.text.trim().length > 0)
+      .filter(({ post }) => !isSelfAuthoredPost(post, selfActor))
+      .filter(
+        ({ post, createdAt }) =>
+          (createdAt == null || createdAt >= baselineAt) &&
+          (createdAt == null || createdAt <= currentTime) &&
+          post.id !== session.sentPostId &&
+          !processedReplyPostIds.has(post.id),
+      )
+      .sort(
+        (a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0),
+      )
+      .slice(-8);
+
+    return normalized.map(({ post, createdAt }) => ({
+      sourceKind: 'target_channel_history',
+      sourceId: post.id,
+      title:
+        firstNonEmptyString(
+          post.creatorName,
+          session.targetResolvedLabel,
+          session.targetRef,
+        ) ?? '目标会话历史',
+      content: post.text.trim(),
+      createdAt: createdAt ?? currentTime,
+      metadata: {
+        sourceSystem: 'outreach_answer_resolution',
+        answerResolutionPhase: phase,
+        hitSource: 'target_channel_history',
+      },
+    }));
+  }
+
+  private async collectGlobalMemoryAnswerEvidence(
+    session: OutreachSessionRecord,
+    phase: OutreachAnswerResolutionPhase,
+    currentTime: number,
+  ): Promise<OutreachAnswerEvidenceItem[]> {
+    const baselineAt = this.getAnswerResolutionBaselineAt(
+      session,
+      phase,
+      currentTime,
+    );
+    const query = uniqStrings([
+      session.renderedQuestion,
+      session.renderedContext,
+      session.targetResolvedLabel,
+      session.targetRef,
+    ]).join('\n');
+    if (!query) return [];
+
+    const senderFilter =
+      session.targetType === 'private'
+        ? uniqStrings([session.targetResolvedLabel, session.targetRef])
+        : undefined;
+    const targetChatIds = new Set(
+      this.getAnswerResolutionChatIds(session).map((item) =>
+        item.toLowerCase(),
+      ),
+    );
+
+    const recall = await this.recallEngine.recall({
+      query,
+      topK: 12,
+      channels: ['fts', 'time'],
+      timeRange: {
+        start: baselineAt,
+        end: currentTime,
+      },
+      senderFilter,
+      sourceTypes: ['glip'],
+      includeMetadata: true,
+    });
+
+    return recall.items
+      .filter((item) => item.type === 'message')
+      .filter((item) => item.content.trim().length > 0)
+      .filter((item) => {
+        const metadata =
+          item.metadata &&
+          typeof item.metadata === 'object' &&
+          !Array.isArray(item.metadata)
+            ? (item.metadata as Record<string, unknown>)
+            : undefined;
+        const groupId = firstNonEmptyString(
+          normalizeString(metadata?.groupId),
+          normalizeString(metadata?.teamId),
+          normalizeString(metadata?.group_id),
+        );
+        return !groupId || !targetChatIds.has(groupId.toLowerCase());
+      })
+      .slice(0, 8)
+      .map((item) => {
+        const metadata =
+          item.metadata &&
+          typeof item.metadata === 'object' &&
+          !Array.isArray(item.metadata)
+            ? (item.metadata as Record<string, unknown>)
+            : undefined;
+        const sender = firstNonEmptyString(
+          normalizeString(metadata?.sender),
+          normalizeString(metadata?.sourceAuthor),
+          session.targetResolvedLabel,
+          session.targetRef,
+        );
+        const groupName = firstNonEmptyString(
+          normalizeString(metadata?.groupName),
+          normalizeString(metadata?.group_name),
+        );
+        const title = [sender, groupName].filter(Boolean).join(' @ ');
+
+        return {
+          sourceKind: 'global_memory' as const,
+          sourceId: item.id,
+          title: title || '全局记忆',
+          content: item.content.trim(),
+          createdAt: item.timestamp,
+          metadata: {
+            sourceSystem: 'outreach_answer_resolution',
+            answerResolutionPhase: phase,
+            hitSource: 'global_memory',
+          },
+        };
+      });
+  }
+
+  private shouldResolveFromAnswerResolution(
+    resolution: EvidenceResolutionPlan,
+  ): boolean {
+    return (
+      resolution.resolutionState === 'complete' ||
+      resolution.resolutionState === 'partial' ||
+      resolution.legacyClassification === 'decline'
+    );
+  }
+
+  private buildAnswerResolutionOutcome(params: {
+    session: OutreachSessionRecord;
+    resolution: EvidenceResolutionPlan;
+    phase: OutreachAnswerResolutionPhase;
+    hitSource: OutreachAnswerHitSource;
+    summary: string;
+    relatedMessage?: string;
+    relatedMessageId?: string;
+    replyText?: string;
+    actions?: Array<{ id: string; queueStatus: string }>;
+    externalEvidence?: Array<{
+      kind: string;
+      title?: string;
+      content: string;
+      metadata?: Record<string, unknown>;
+    }>;
+  }): Record<string, unknown> {
+    const actions = params.actions ?? [];
+    return {
+      classification: params.resolution.legacyClassification,
+      confidence: params.resolution.confidence,
+      reply: params.replyText ?? params.relatedMessage ?? '',
+      resolutionState: params.resolution.resolutionState,
+      directFindings: params.resolution.directFindings,
+      resolvedConclusion: params.resolution.resolvedConclusion,
+      remainingQuestions: params.resolution.remainingQuestions,
+      candidateArtifacts: params.resolution.candidateArtifacts,
+      recommendedAction: params.resolution.recommendedAction,
+      spawnedActionIds: actions.map((action) => action.id),
+      followUpActions: actions.map((action) => ({
+        id: action.id,
+        queueStatus: action.queueStatus,
+      })),
+      etaAt: params.resolution.etaAt,
+      reason: params.resolution.reason,
+      summary: params.summary,
+      answerResolutionPhase: params.phase,
+      hitSource: params.hitSource,
+      evidenceSummary: params.summary,
+      relatedMessage: params.relatedMessage,
+      relatedMessageId: params.relatedMessageId,
+      externalEvidence: params.externalEvidence ?? [],
+    };
+  }
+
+  private async runAnswerResolutionPrecheck(
+    session: OutreachSessionRecord,
+    phase: Exclude<OutreachAnswerResolutionPhase, 'direct_reply'>,
+  ): Promise<OutreachAnswerResolutionHit | null> {
+    const currentTime = now();
+    const baselineAt = this.getAnswerResolutionBaselineAt(
+      session,
+      phase,
+      currentTime,
+    );
+    this.repo.createEvent(session.id, 'answer_precheck_started', {
+      phase,
+      baselineAt,
+    });
+
+    const evidence: OutreachAnswerEvidenceItem[] = [];
+    try {
+      evidence.push(
+        ...(await this.collectTargetChannelAnswerEvidence(
+          session,
+          phase,
+          currentTime,
+        )),
+      );
+    } catch (error) {
+      console.warn('outreach target channel precheck failed:', error);
+    }
+
+    try {
+      evidence.push(
+        ...(await this.collectGlobalMemoryAnswerEvidence(
+          session,
+          phase,
+          currentTime,
+        )),
+      );
+    } catch (error) {
+      console.warn('outreach global memory precheck failed:', error);
+    }
+
+    if (evidence.length === 0) {
+      return null;
+    }
+
+    const resolution = await this.evidencePlanner.resolve({
+      question: session.renderedQuestion,
+      context: session.renderedContext,
+      evidence,
+      policy: {
+        scene: 'outreach',
+        userIntentMode: 'informational',
+        externalRead: 'disabled',
+        externalWrite: 'disabled',
+        allowAskExternalUser: false,
+        allowCreateConfirmRequest: false,
+      },
+    });
+
+    if (!this.shouldResolveFromAnswerResolution(resolution)) {
+      return null;
+    }
+
+    const primaryEvidence = evidence[0];
+    const summary = await this.buildResolvedOutcomeSummary(
+      session,
+      primaryEvidence.content,
+      resolution.legacyClassification === 'decline' ? 'decline' : 'answer',
+      resolution.resolvedConclusion,
+    );
+
+    return {
+      phase,
+      hitSource: primaryEvidence.sourceKind,
+      relatedMessage: primaryEvidence.content,
+      relatedMessageId: primaryEvidence.sourceId,
+      evidence,
+      resolution,
+      summary,
+    };
+  }
+
+  private finalizeAnswerResolutionPrecheck(
+    session: OutreachSessionRecord,
+    hit: OutreachAnswerResolutionHit,
+  ): void {
+    if (
+      hit.evidence.some((item) => item.sourceKind === 'target_channel_history')
+    ) {
+      this.repo.createEvent(session.id, 'answer_hit_target_channel', {
+        phase: hit.phase,
+        relatedMessageId: hit.relatedMessageId ?? null,
+      });
+    }
+    if (hit.evidence.some((item) => item.sourceKind === 'global_memory')) {
+      this.repo.createEvent(session.id, 'answer_hit_global_memory', {
+        phase: hit.phase,
+        relatedMessageId: hit.relatedMessageId ?? null,
+      });
+    }
+
+    const outcome = this.buildAnswerResolutionOutcome({
+      session,
+      resolution: hit.resolution,
+      phase: hit.phase,
+      hitSource: hit.hitSource,
+      summary: hit.summary,
+      relatedMessage: hit.relatedMessage,
+      relatedMessageId: hit.relatedMessageId,
+      externalEvidence: hit.evidence.map((item) => ({
+        kind: item.sourceKind,
+        title: item.title,
+        content: item.content,
+        metadata: item.metadata,
+      })),
+    });
+
+    if (hit.phase === 'before_dispatch') {
+      this.repo.createEvent(session.id, 'resolved_without_dispatch', {
+        phase: hit.phase,
+        hitSource: hit.hitSource,
+        relatedMessageId: hit.relatedMessageId ?? null,
+      });
+    } else {
+      this.repo.createEvent(session.id, 'followup_skipped_by_answer', {
+        phase: hit.phase,
+        hitSource: hit.hitSource,
+        relatedMessageId: hit.relatedMessageId ?? null,
+      });
+    }
+
+    this.markTerminal(session.id, 'resolved', outcome);
   }
 
   private async resolveReplyBatch(
@@ -1848,25 +2279,17 @@ export class OutreachEngine {
         replyBatch.replyText,
         resolution.etaAt,
       );
-    return {
-      classification: resolution.legacyClassification,
-      confidence: resolution.confidence,
-      reply: replyBatch.replyText,
-      resolutionState: resolution.resolutionState,
-      directFindings: resolution.directFindings,
-      resolvedConclusion: resolution.resolvedConclusion,
-      remainingQuestions: resolution.remainingQuestions,
-      candidateArtifacts: resolution.candidateArtifacts,
-      recommendedAction: resolution.recommendedAction,
-      spawnedActionIds: actions.map((action) => action.id),
-      followUpActions: actions.map((action) => ({
-        id: action.id,
-        queueStatus: action.queueStatus,
-      })),
-      etaAt: resolution.etaAt,
-      reason: resolution.reason,
+    return this.buildAnswerResolutionOutcome({
+      session,
+      resolution,
+      phase: 'direct_reply',
+      hitSource: 'direct_reply',
       summary,
-    };
+      relatedMessage: replyBatch.replyText,
+      relatedMessageId: replyBatch.latestPostId,
+      replyText: replyBatch.replyText,
+      actions,
+    });
   }
 
   private async buildResolvedOutcomeSummary(

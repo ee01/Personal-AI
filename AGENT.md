@@ -25,6 +25,7 @@ When you modify TypeScript/JavaScript files in `src/`:
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
 | `npm start` | Development build with watch mode | After code changes (default) |
+| `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the remote memory service | Only after local verification is complete and you need real-environment validation |
 
 ### Chrome Extension E2E Validation
 
@@ -77,6 +78,33 @@ If `node` / `npm` is not on PATH in the Codex shell, prepend the local nvm path 
 ```bash
 export PATH="$HOME/.nvm/versions/node/v24.13.0/bin:$PATH"
 ```
+
+## Memory Service Deploy And Real Validation
+
+When the change is primarily in `memory-service/` and local verification is already complete, you may deploy the latest local memory-service code to the real server and validate against real data.
+
+Recommended flow:
+
+1. Complete local verification first
+   - Run targeted tests and/or `npm --prefix memory-service run build`
+   - For extension-facing flows, finish the relevant local Playwright / extension E2E validation first
+2. Deploy with `npm run deploy:memory` from the repo root
+   - This syncs the local working tree `memory-service/` and repo-root `docker-compose.yml` to `rcadmin@10.32.56.212:/Users/rcadmin/personal-ai`
+   - It preserves remote `memory-service/.env` and `memory-service/data/`
+   - It rebuilds and restarts the remote `memory-service` container
+3. After deploy, real-environment checks may target `http://10.32.56.212:3210`
+   - Use `X-User-Id: esone.qiu` when checking APIs against the real user dataset
+   - Example read-only checks:
+     - `GET /health`
+     - `GET /api/v1/confirm-requests?...`
+     - other read-only memory-service endpoints needed by the feature
+
+Important constraints:
+
+- `npm run deploy:memory` deploys the **local working tree**, not just committed Git history
+- This is useful when the latest verified fix has not been committed yet
+- Because deploy uses file sync, the remote Git worktree can become dirty; do not assume a later `git pull` on the server will be clean unless those same changes are committed upstream
+- Prefer read-only API checks against `10.32.56.212` unless the task explicitly requires mutating real data
 
 ## Code Conventions
 

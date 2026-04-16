@@ -2,6 +2,7 @@ import {
   getMemoryServiceClient,
   type OutreachSession,
   type OutreachSessionStatus,
+  type OutreachTemplateRuntimeStatusItem,
 } from './services/MemoryServiceClient';
 import type { TopicItemWithAutoReply } from './message-reaction/AutoReplyHandler';
 
@@ -29,9 +30,12 @@ export interface OutreachWatchRule extends WatchRuleBase {
   source: 'outreach';
   kind: 'outreach_answer_resolution';
   system: true;
+  runtimeScope: 'template' | 'session';
   sessionId?: string;
   templateId?: string;
   sessionStatus?: OutreachSessionStatus;
+  templateSyncState?: string;
+  baselineAt?: number;
   targetType: string;
   targetRef: string;
   targetLabel?: string;
@@ -114,16 +118,19 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function buildOutreachWatchRuleText(session: OutreachSession): string {
-  const targetLabel = session.targetResolvedLabel || session.targetRef;
+function buildOutreachWatchRuleText(params: {
+  question: string;
+  targetLabel: string;
+  phase: 'before_dispatch' | 'active_session';
+}): string {
   const phaseHint =
-    session.status === 'pending_approval' || session.status === 'scheduled'
+    params.phase === 'before_dispatch'
       ? '如果消息已经给出这次主动询问想要的答案，可以视为发送前命中。'
       : '如果消息是在回应这次主动询问，或提供了相关证据/线索，请匹配本规则。';
 
   return [
-    `【主动询问答复】目标对象是 ${targetLabel}。`,
-    `这条规则对应一个进行中的主动询问：${session.renderedQuestion}`,
+    `【主动询问答复】目标对象是 ${params.targetLabel}。`,
+    `这条规则对应一个进行中的主动询问：${params.question}`,
     phaseHint,
     '可匹配直接回答、补充说明、外部证据链接、需要继续查证的线索，或表示稍后回复/无法回答的反馈。',
   ]
@@ -176,10 +183,19 @@ export function buildOutreachWatchRules(
         source: 'outreach',
         kind: 'outreach_answer_resolution',
         system: true,
-        text: buildOutreachWatchRuleText(session),
+        runtimeScope: 'session',
+        text: buildOutreachWatchRuleText({
+          question: session.renderedQuestion,
+          targetLabel: session.targetResolvedLabel || session.targetRef,
+          phase:
+            session.status === 'pending_approval' || session.status === 'scheduled'
+              ? 'before_dispatch'
+              : 'active_session',
+        }),
         sessionId: session.id,
         templateId: session.templateId,
         sessionStatus: session.status,
+        baselineAt: session.createdAt,
         targetType: session.targetType,
         targetRef: session.targetRef,
         targetLabel: session.targetResolvedLabel || session.targetRef,
@@ -193,12 +209,73 @@ export function buildOutreachWatchRules(
     .filter((rule): rule is OutreachWatchRule => rule !== null);
 }
 
+function isSyncedOutreachTemplate(
+  item: OutreachTemplateRuntimeStatusItem,
+): boolean {
+  return (
+    item.template.enabled !== false &&
+    item.template.syncState === 'synced' &&
+    Boolean(item.template.questionTemplate?.trim()) &&
+    Boolean(item.template.targetRef?.trim())
+  );
+}
+
+export function buildOutreachWatchRulesFromRuntimeStatus(
+  items: OutreachTemplateRuntimeStatusItem[],
+): OutreachWatchRule[] {
+  return items
+    .map((item) => {
+      const activeSession =
+        item.latestSession && isOutreachAnswerResolutionSession(item.latestSession)
+          ? item.latestSession
+          : null;
+      if (activeSession) {
+        const [rule] = buildOutreachWatchRules([activeSession]);
+        return rule ?? null;
+      }
+
+      if (!isSyncedOutreachTemplate(item)) {
+        return null;
+      }
+
+      const templateId = item.template.id;
+      const targetLabel = item.template.targetRef || '未知目标';
+
+      return {
+        ruleRef: `outreach:template:${templateId}`,
+        source: 'outreach',
+        kind: 'outreach_answer_resolution',
+        system: true,
+        runtimeScope: 'template',
+        text: buildOutreachWatchRuleText({
+          question:
+            item.template.questionTemplate || item.template.title || '待补充问题',
+          targetLabel,
+          phase: 'before_dispatch',
+        }),
+        templateId,
+        templateSyncState: item.template.syncState,
+        baselineAt: item.template.createdAt,
+        targetType: item.template.targetType || 'group',
+        targetRef: item.template.targetRef || '',
+        targetLabel,
+        renderedQuestion:
+          item.template.questionTemplate || item.template.title || '',
+        renderedContext: item.template.contextTemplate,
+      } satisfies OutreachWatchRule;
+    })
+    .filter((rule): rule is OutreachWatchRule => rule !== null);
+}
+
 export function buildRuntimeWatchRules(params: {
   manualItems: TopicItemWithAutoReply[];
   outreachSessions?: OutreachSession[];
+  outreachRuntimeItems?: OutreachTemplateRuntimeStatusItem[];
 }): WatchRule[] {
   const manualRules = buildManualWatchRules(params.manualItems);
-  const outreachRules = buildOutreachWatchRules(params.outreachSessions || []);
+  const outreachRules = params.outreachRuntimeItems
+    ? buildOutreachWatchRulesFromRuntimeStatus(params.outreachRuntimeItems)
+    : buildOutreachWatchRules(params.outreachSessions || []);
   return [...manualRules, ...outreachRules];
 }
 
@@ -207,14 +284,13 @@ export async function loadRuntimeWatchRules(
 ): Promise<WatchRule[]> {
   try {
     const client = getMemoryServiceClient();
-    const response = await client.getOutreachSessions({
-      statuses: ACTIVE_OUTREACH_SESSION_STATUSES,
-      limit: 200,
-      offset: 0,
-    });
+    const response = await client.getOutreachTemplateRuntimeStatus(
+      undefined,
+      200,
+    );
     return buildRuntimeWatchRules({
       manualItems,
-      outreachSessions: response.items || [],
+      outreachRuntimeItems: response.items || [],
     });
   } catch (error) {
     console.warn(

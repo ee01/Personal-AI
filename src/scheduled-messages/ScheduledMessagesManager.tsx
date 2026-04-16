@@ -298,6 +298,12 @@ function normalizeOutreachTimestamp(value?: number): string | undefined {
   return new Date(ms).toISOString();
 }
 
+function hasUpcomingOutreachDispatch(message: ScheduledMessage): boolean {
+  if (!message.Next_Exec) return false;
+  const parsed = Date.parse(message.Next_Exec);
+  return Number.isFinite(parsed) && parsed > Date.now();
+}
+
 function summarizeOutreachResult(item: OutreachTemplateRuntimeStatusItem): string | undefined {
   const session = item.latestSession;
   if (!session) return undefined;
@@ -398,6 +404,9 @@ async function overlayOutreachRuntimeStatus(messages: ScheduledMessage[]): Promi
 
       const latestSession = runtimeItem.latestSession;
       const latestResult = summarizeOutreachResult(runtimeItem) || getOutreachResult(message);
+      const nextDispatchAt = normalizeOutreachTimestamp(
+        Number(runtimeItem.template.scheduleSpec?.nextDispatchAt) || undefined,
+      );
       return {
         ...message,
         Target_Type: (runtimeItem.template.targetType as TargetType | undefined) || message.Target_Type,
@@ -422,6 +431,7 @@ async function overlayOutreachRuntimeStatus(messages: ScheduledMessage[]): Promi
         Outreach_Last_Session_ID: latestSession?.id || message.Outreach_Last_Session_ID,
         Outreach_Result: latestResult,
         Outreach_Last_Result: latestResult,
+        Next_Exec: nextDispatchAt || message.Next_Exec,
         Outreach_Last_Updated:
           normalizeOutreachTimestamp(latestSession?.updatedAt || runtimeItem.template.updatedAt) ||
           message.Outreach_Last_Updated,
@@ -440,7 +450,8 @@ async function backfillOutreachDoneStatus(
   const candidates = msgs.filter((message) =>
     isOutreachMessage(message) &&
     message.Status !== 'Done' &&
-    message.Outreach_Runtime_Status === 'resolved',
+    message.Outreach_Runtime_Status === 'resolved' &&
+    !hasUpcomingOutreachDispatch(message),
   );
 
   if (candidates.length === 0) {
