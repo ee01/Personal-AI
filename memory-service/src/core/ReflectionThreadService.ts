@@ -4,10 +4,23 @@ import { toSlug } from '../utils/slug.js';
 import type Database from 'better-sqlite3';
 
 import type { ReflectionInput, ReflectionOutput } from './OnlineReflection.js';
-import { ReflectionWorker, type DraftReflectionAction, type ReflectionEvidenceItem } from './ReflectionWorker.js';
-import { ReflectionResearcher, type LocalResearchQuery } from './ReflectionResearcher.js';
-import { ActionRepository, type QueuedActionRecord } from '../repositories/ActionRepository.js';
-import { ActionResultRepository, type ActionResultRecord } from '../repositories/ActionResultRepository.js';
+import {
+  ReflectionWorker,
+  type DraftReflectionAction,
+  type ReflectionEvidenceItem,
+} from './ReflectionWorker.js';
+import {
+  ReflectionResearcher,
+  type LocalResearchQuery,
+} from './ReflectionResearcher.js';
+import {
+  ActionRepository,
+  type QueuedActionRecord,
+} from '../repositories/ActionRepository.js';
+import {
+  ActionResultRepository,
+  type ActionResultRecord,
+} from '../repositories/ActionResultRepository.js';
 import {
   ReflectionThreadRepository,
   type ReflectionThreadRecord,
@@ -120,7 +133,9 @@ export class ReflectionThreadService {
       : undefined;
   }
 
-  listThreads(filters: Parameters<ReflectionThreadRepository['listThreads']>[0]) {
+  listThreads(
+    filters: Parameters<ReflectionThreadRepository['listThreads']>[0],
+  ) {
     return this.repo.listThreads(filters);
   }
 
@@ -155,7 +170,13 @@ export class ReflectionThreadService {
     runs: ReflectionRunRecord[];
     actions: QueuedActionRecord[];
     actionResults: ActionResultRecord[];
-    links: Array<TopicMemoryLinkRecord & { preview?: string; previewTitle?: string; previewTimestamp?: number }>;
+    links: Array<
+      TopicMemoryLinkRecord & {
+        preview?: string;
+        previewTitle?: string;
+        previewTimestamp?: number;
+      }
+    >;
     dreamRuns: DreamRunRecord[];
   } | null {
     const thread = this.repo.getThreadById(threadId);
@@ -175,7 +196,9 @@ export class ReflectionThreadService {
   }
 
   private getReflectionHeartbeatSeconds(): number {
-    return getUserRuntimeConfig(this.userDataManager).reflectionHeartbeatMinutes * 60;
+    return (
+      getUserRuntimeConfig(this.userDataManager).reflectionHeartbeatMinutes * 60
+    );
   }
 
   listActionResults(threadId: string, limit = 20): ActionResultRecord[] {
@@ -221,10 +244,12 @@ export class ReflectionThreadService {
       openQuestions,
       latestSummary: summary,
       nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
-      continueReason: 'Online reflection detected reusable insight from a user interaction.',
+      continueReason:
+        'Online reflection detected reusable insight from a user interaction.',
     });
 
-    const defaultPath = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
+    const defaultPath =
+      thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
     if (!thread.latestMarkdownPath) {
       thread = this.repo.upsertThread({
         topicKey: thread.topicKey,
@@ -247,7 +272,10 @@ export class ReflectionThreadService {
       hypothesisBefore: thread.currentHypothesis,
       hypothesisAfter: output.userPreferences[0] ?? thread.currentHypothesis,
       discoveries: [
-        ...output.newFacts.map((fact) => `${fact.entity}.${fact.key} = ${fact.value} (${fact.confidence.toFixed(2)})`),
+        ...output.newFacts.map(
+          (fact) =>
+            `${fact.entity}.${fact.key} = ${fact.value} (${fact.confidence.toFixed(2)})`,
+        ),
         ...output.userPreferences.map((pref) => `Preference: ${pref}`),
       ],
       openQuestions,
@@ -262,7 +290,8 @@ export class ReflectionThreadService {
       openQuestions,
       nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
       lastReflectedAt: now(),
-      continueReason: 'Online reflection produced facts, preferences, or improvements worth revisiting.',
+      continueReason:
+        'Online reflection produced facts, preferences, or improvements worth revisiting.',
     });
 
     this.syncThreadDocument(thread.id);
@@ -273,7 +302,9 @@ export class ReflectionThreadService {
     };
   }
 
-  ingestConfirmRequest(confirmRequestId: string): ReflectionThreadRecord | null {
+  ingestConfirmRequest(
+    confirmRequestId: string,
+  ): ReflectionThreadRecord | null {
     const row = this.db
       .prepare(
         `SELECT id, question, context, priority, related_entity_id, created_at
@@ -284,7 +315,11 @@ export class ReflectionThreadService {
     if (!row) return null;
 
     const entityTitle = row.related_entity_id
-      ? (this.db.prepare('SELECT id, name, type FROM entities WHERE id = ?').get(row.related_entity_id) as EntityRow | undefined)?.name
+      ? (
+          this.db
+            .prepare('SELECT id, name, type FROM entities WHERE id = ?')
+            .get(row.related_entity_id) as EntityRow | undefined
+        )?.name
       : undefined;
     const title = entityTitle
       ? `决策跟进: ${entityTitle}`
@@ -302,7 +337,8 @@ export class ReflectionThreadService {
       openQuestions: [row.question],
       latestSummary: row.question,
       nextReflectionAt: now(),
-      continueReason: 'A confirm request needs human decision or further evidence.',
+      continueReason:
+        'A confirm request needs human decision or further evidence.',
     });
 
     this.repo.addLink(thread.id, 'confirm_request', row.id, 1, 'trigger');
@@ -320,7 +356,9 @@ export class ReflectionThreadService {
     if (!row) return null;
 
     const projectIds = this.parseJsonArray<string>(row.matched_projects_json);
-    const entityHints = this.parseJsonArray<{ id?: string; name?: string }>(row.entities_json);
+    const entityHints = this.parseJsonArray<{ id?: string; name?: string }>(
+      row.entities_json,
+    );
 
     let topicKey = `message:${row.id}`;
     let title = `消息追踪: ${row.content.slice(0, 42)}`;
@@ -336,7 +374,9 @@ export class ReflectionThreadService {
     } else if (entityHints.length > 0) {
       const firstEntity = entityHints[0];
       const name = firstEntity?.name ?? 'Unknown';
-      topicKey = firstEntity?.id ? `entity:${firstEntity.id}` : `entity-name:${toSlug(name)}`;
+      topicKey = firstEntity?.id
+        ? `entity:${firstEntity.id}`
+        : `entity-name:${toSlug(name)}`;
       title = `实体反思: ${name}`;
     }
 
@@ -350,14 +390,23 @@ export class ReflectionThreadService {
       sourceRefId: row.id,
       latestSummary: row.content.slice(0, 180),
       nextReflectionAt: now(),
-      continueReason: 'A high-importance message was captured and queued for reflection.',
+      continueReason:
+        'A high-importance message was captured and queued for reflection.',
     });
 
-    this.repo.addLink(thread.id, 'message', row.id, Math.max(0.5, row.importance), 'trigger');
+    this.repo.addLink(
+      thread.id,
+      'message',
+      row.id,
+      Math.max(0.5, row.importance),
+      'trigger',
+    );
     return thread;
   }
 
-  ingestEntityPropertySignal(propertyId: number): ReflectionThreadRecord | null {
+  ingestEntityPropertySignal(
+    propertyId: number,
+  ): ReflectionThreadRecord | null {
     const row = this.db
       .prepare(
         `SELECT id, entity_id, property_key, property_value, confidence, source_context, tx_start
@@ -376,18 +425,30 @@ export class ReflectionThreadService {
       topicKey: `entity_property:${row.entity_id}:${row.property_key}`,
       title: `事实跟进: ${entityName} · ${row.property_key}`,
       status: 'active',
-      priority: Math.max(5, Math.min(10, Math.round((row.confidence || 0.6) * 10))),
+      priority: Math.max(
+        5,
+        Math.min(10, Math.round((row.confidence || 0.6) * 10)),
+      ),
       salience: clampSalience(row.confidence),
       sourceType: 'entity_property',
       sourceRefId: String(row.id),
       currentHypothesis: `${entityName}.${row.property_key} -> ${row.property_value}`,
-      openQuestions: [`${entityName} 的 ${row.property_key} 是否还会继续变化？`],
+      openQuestions: [
+        `${entityName} 的 ${row.property_key} 是否还会继续变化？`,
+      ],
       latestSummary: `${entityName} 的 ${row.property_key} 更新为 ${row.property_value}`,
       nextReflectionAt: now(),
-      continueReason: 'A truth/property change was observed and needs follow-up.',
+      continueReason:
+        'A truth/property change was observed and needs follow-up.',
     });
 
-    this.repo.addLink(thread.id, 'entity_property', String(row.id), Math.max(0.5, row.confidence), 'trigger');
+    this.repo.addLink(
+      thread.id,
+      'entity_property',
+      String(row.id),
+      Math.max(0.5, row.confidence),
+      'trigger',
+    );
     return thread;
   }
 
@@ -413,10 +474,17 @@ export class ReflectionThreadService {
       openQuestions: [`${row.item_key} 是否已经成为稳定偏好？`],
       latestSummary: `${row.item_key}: ${row.item_value}`,
       nextReflectionAt: now(),
-      continueReason: 'A high-salience user profile update should be revisited.',
+      continueReason:
+        'A high-salience user profile update should be revisited.',
     });
 
-    this.repo.addLink(thread.id, 'profile_item', row.id, Math.max(0.5, row.salience_score), 'trigger');
+    this.repo.addLink(
+      thread.id,
+      'profile_item',
+      row.id,
+      Math.max(0.5, row.salience_score),
+      'trigger',
+    );
     return thread;
   }
 
@@ -443,7 +511,8 @@ export class ReflectionThreadService {
       sourceRefId: input.sourceRefId,
       latestSummary: input.summary,
       nextReflectionAt: now() + 6 * 3600,
-      continueReason: 'Weekly dream replay surfaced insights or risks to revisit.',
+      continueReason:
+        'Weekly dream replay surfaced insights or risks to revisit.',
     });
 
     const dreamRun = this.repo.createDreamRun({
@@ -486,8 +555,15 @@ export class ReflectionThreadService {
     const triggerType = options.triggerType ?? 'manual';
     const evidence = this.collectEvidence(thread, 40);
     const recentRuns = this.repo.listRuns(thread.id, 5);
-    const researchQueries = await this.researcher.plan(thread, evidence, recentRuns);
-    const researchEvidence = await this.executeResearchQueries(thread, researchQueries);
+    const researchQueries = await this.researcher.plan(
+      thread,
+      evidence,
+      recentRuns,
+    );
+    const researchEvidence = await this.executeResearchQueries(
+      thread,
+      researchQueries,
+    );
     const combinedEvidence = this.mergeEvidence(evidence, researchEvidence);
     const generated = await this.worker.generate(
       thread,
@@ -495,13 +571,16 @@ export class ReflectionThreadService {
       triggerType,
     );
 
-    const threadPath = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
+    const threadPath =
+      thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
     const latestRun = this.repo.getLatestRun(thread.id);
     const run = this.repo.createRun({
       threadId: thread.id,
       runType: options.runType ?? 'continuous_reflection',
       triggerType,
-      inputRefs: combinedEvidence.map((item) => `${item.sourceKind}:${item.sourceId}`),
+      inputRefs: combinedEvidence.map(
+        (item) => `${item.sourceKind}:${item.sourceId}`,
+      ),
       previousRunId: latestRun?.id,
       summary: generated.summary,
       hypothesisBefore: thread.currentHypothesis,
@@ -515,42 +594,49 @@ export class ReflectionThreadService {
     });
 
     const createdActions = generated.actionProposals.map((proposal, index) => {
-      const delegatePolicy = proposal.actionType === 'delegate_openclaw'
-        ? resolveDelegateOpenClawPolicy({
-            params:
-              proposal.params &&
-              typeof proposal.params === 'object' &&
-              !Array.isArray(proposal.params)
-                ? (proposal.params as Record<string, unknown>)
-                : {},
-            requestedExecutionMode: proposal.executionMode,
-            requestedRequiresApproval: proposal.requiresApproval,
-            defaultExecutionMode: proposal.executionMode,
-            defaultRequiresApproval: proposal.requiresApproval,
-          })
-        : null;
+      const delegatePolicy =
+        proposal.actionType === 'delegate_openclaw'
+          ? resolveDelegateOpenClawPolicy({
+              params:
+                proposal.params &&
+                typeof proposal.params === 'object' &&
+                !Array.isArray(proposal.params)
+                  ? (proposal.params as Record<string, unknown>)
+                  : {},
+              requestedExecutionMode: proposal.executionMode,
+              requestedRequiresApproval: proposal.requiresApproval,
+              defaultExecutionMode: proposal.executionMode,
+              defaultRequiresApproval: proposal.requiresApproval,
+            })
+          : null;
       return this.actionRepo.create({
         actionType: proposal.actionType,
         title: proposal.title,
         description: proposal.description,
-        params: proposal.actionType === 'notify_user'
-          ? {
-              ...(proposal.params ?? {}),
-              payload: {
-                ...(proposal.params?.payload as Record<string, unknown> | undefined),
-                threadId: thread.id,
-                runId: run.id,
-                userId: this.userId,
-              },
-            }
-          : proposal.params,
+        params:
+          proposal.actionType === 'notify_user'
+            ? {
+                ...(proposal.params ?? {}),
+                payload: {
+                  ...(proposal.params?.payload as
+                    | Record<string, unknown>
+                    | undefined),
+                  threadId: thread.id,
+                  runId: run.id,
+                  userId: this.userId,
+                },
+              }
+            : proposal.params,
         riskLevel: proposal.riskLevel,
         confidence: proposal.confidence,
         evidenceRefs: uniqStrings([
           ...(proposal.evidenceRefs ?? []),
-          ...combinedEvidence.slice(0, 5).map((item) => `${item.sourceKind}:${item.sourceId}`),
+          ...combinedEvidence
+            .slice(0, 5)
+            .map((item) => `${item.sourceKind}:${item.sourceId}`),
         ]),
-        requiresApproval: delegatePolicy?.requiresApproval ?? proposal.requiresApproval,
+        requiresApproval:
+          delegatePolicy?.requiresApproval ?? proposal.requiresApproval,
         state: 'pending',
         source: 'reflection_worker',
         threadId: thread.id,
@@ -629,11 +715,18 @@ export class ReflectionThreadService {
     return updated;
   }
 
-  markThreadWaitingForConfirmRequest(threadId: string): ReflectionThreadRecord | null {
-    return this.deferHeartbeatReflection(threadId, 'waiting_for_confirm_request');
+  markThreadWaitingForConfirmRequest(
+    threadId: string,
+  ): ReflectionThreadRecord | null {
+    return this.deferHeartbeatReflection(
+      threadId,
+      'waiting_for_confirm_request',
+    );
   }
 
-  markThreadWaitingForOutreach(threadId: string): ReflectionThreadRecord | null {
+  markThreadWaitingForOutreach(
+    threadId: string,
+  ): ReflectionThreadRecord | null {
     return this.deferHeartbeatReflection(threadId, 'waiting_for_outreach');
   }
 
@@ -683,7 +776,13 @@ export class ReflectionThreadService {
   }
 
   recordActionResult(result: ActionResultRecord): void {
-    this.repo.addLink(result.threadId, 'action_result', result.id, 1, 'evidence');
+    this.repo.addLink(
+      result.threadId,
+      'action_result',
+      result.id,
+      1,
+      'evidence',
+    );
     this.repo.updateThreadAfterRun(result.threadId, {
       nextReflectionAt: now(),
       continueReason: 'new action result available',
@@ -691,20 +790,31 @@ export class ReflectionThreadService {
     this.syncThreadDocument(result.threadId);
   }
 
-  pauseThread(threadId: string, reason?: string): ReflectionThreadRecord | null {
+  pauseThread(
+    threadId: string,
+    reason?: string,
+  ): ReflectionThreadRecord | null {
     const thread = this.repo.setThreadStatus(threadId, 'paused', reason, null);
     if (thread) this.syncThreadDocument(threadId);
     return thread;
   }
 
-  closeThread(threadId: string, reason?: string): ReflectionThreadRecord | null {
+  closeThread(
+    threadId: string,
+    reason?: string,
+  ): ReflectionThreadRecord | null {
     const thread = this.repo.setThreadStatus(threadId, 'closed', reason, null);
     if (thread) this.syncThreadDocument(threadId);
     return thread;
   }
 
   resumeThread(threadId: string): ReflectionThreadRecord | null {
-    const thread = this.repo.setThreadStatus(threadId, 'active', undefined, now());
+    const thread = this.repo.setThreadStatus(
+      threadId,
+      'active',
+      undefined,
+      now(),
+    );
     if (thread) this.syncThreadDocument(threadId);
     return thread;
   }
@@ -713,19 +823,30 @@ export class ReflectionThreadService {
     this.syncThreadDocument(threadId);
   }
 
-  private buildOnlineSummary(input: ReflectionInput, output: ReflectionOutput): string {
+  private buildOnlineSummary(
+    input: ReflectionInput,
+    output: ReflectionOutput,
+  ): string {
     const parts: string[] = [];
     if (output.newFacts.length > 0) {
-      parts.push(`Extracted ${output.newFacts.length} new fact(s) from the ask interaction.`);
+      parts.push(
+        `Extracted ${output.newFacts.length} new fact(s) from the ask interaction.`,
+      );
     }
     if (output.userPreferences.length > 0) {
-      parts.push(`Detected ${output.userPreferences.length} implicit preference(s).`);
+      parts.push(
+        `Detected ${output.userPreferences.length} implicit preference(s).`,
+      );
     }
     if (output.improvements.length > 0) {
-      parts.push(`Identified ${output.improvements.length} follow-up improvement(s).`);
+      parts.push(
+        `Identified ${output.improvements.length} follow-up improvement(s).`,
+      );
     }
     if (parts.length === 0) {
-      parts.push(`The ask interaction "${input.query.slice(0, 80)}" was marked for future revisit.`);
+      parts.push(
+        `The ask interaction "${input.query.slice(0, 80)}" was marked for future revisit.`,
+      );
     }
     return parts.join(' ');
   }
@@ -734,7 +855,10 @@ export class ReflectionThreadService {
     return `reflection-threads/${toSlug(thread.title).slice(0, 48) || 'reflection-thread'}-${thread.id.slice(0, 8)}.md`;
   }
 
-  private collectEvidence(thread: ReflectionThreadRecord, limit = 20): ReflectionEvidenceItem[] {
+  private collectEvidence(
+    thread: ReflectionThreadRecord,
+    limit = 20,
+  ): ReflectionEvidenceItem[] {
     return this.repo.listLinks(thread.id, limit).map((link) => {
       const hydrated = this.hydrateLink(link);
       return {
@@ -770,13 +894,24 @@ export class ReflectionThreadService {
       });
 
       for (const item of result.items) {
-        const sourceKind = item.type === 'chunk' ? 'chunk' : item.type === 'entity' ? 'entity' : 'message';
+        const sourceKind =
+          item.type === 'chunk'
+            ? 'chunk'
+            : item.type === 'entity'
+              ? 'entity'
+              : 'message';
         const key = `${sourceKind}:${item.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
 
         if (sourceKind === 'message' || sourceKind === 'chunk') {
-          this.repo.addLink(thread.id, sourceKind, item.id, Math.max(0.55, item.score), 'research');
+          this.repo.addLink(
+            thread.id,
+            sourceKind,
+            item.id,
+            Math.max(0.55, item.score),
+            'research',
+          );
         }
 
         evidenceItems.push({
@@ -793,7 +928,9 @@ export class ReflectionThreadService {
     return evidenceItems;
   }
 
-  private hasPendingConfirmRequestForThread(thread: ReflectionThreadRecord): boolean {
+  private hasPendingConfirmRequestForThread(
+    thread: ReflectionThreadRecord,
+  ): boolean {
     if (thread.sourceType === 'confirm_request' && thread.sourceRefId) {
       const sourcePending = this.db
         .prepare(
@@ -801,6 +938,7 @@ export class ReflectionThreadService {
            FROM confirm_requests
            WHERE id = ?
              AND state = 'pending'
+             AND COALESCE(routing, 'decision') = 'decision'
            LIMIT 1`,
         )
         .get(thread.sourceRefId) as { id: string } | undefined;
@@ -817,7 +955,8 @@ export class ReflectionThreadService {
            AND a.action_type = 'create_confirm_request'
            AND a.queue_status = 'succeeded'
            AND cr.state = 'pending'
-         LIMIT 1`,
+           AND COALESCE(cr.routing, 'decision') = 'decision'
+          LIMIT 1`,
       )
       .get(thread.id) as { id: string } | undefined;
     return Boolean(linkedPending);
@@ -836,7 +975,9 @@ export class ReflectionThreadService {
     return Boolean(row);
   }
 
-  private getPendingActionBlockingReason(threadId: string): ReflectionWaitingReason | null {
+  private getPendingActionBlockingReason(
+    threadId: string,
+  ): ReflectionWaitingReason | null {
     const rows = this.db
       .prepare(
         `SELECT action_type, execution_mode, requires_approval
@@ -888,7 +1029,9 @@ export class ReflectionThreadService {
     if (link.sourceKind === 'message') {
       const row = this.db
         .prepare('SELECT content, created_at FROM messages_raw WHERE id = ?')
-        .get(link.sourceId) as { content: string; created_at: number } | undefined;
+        .get(link.sourceId) as
+        | { content: string; created_at: number }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '消息线索',
@@ -899,12 +1042,18 @@ export class ReflectionThreadService {
 
     if (link.sourceKind === 'confirm_request') {
       const row = this.db
-        .prepare('SELECT question, context, created_at FROM confirm_requests WHERE id = ?')
-        .get(link.sourceId) as { question: string; context: string | null; created_at: number } | undefined;
+        .prepare(
+          'SELECT question, context, created_at FROM confirm_requests WHERE id = ?',
+        )
+        .get(link.sourceId) as
+        | { question: string; context: string | null; created_at: number }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '待确认问题',
-        preview: row.context ? `${row.question} | ${row.context}` : row.question,
+        preview: row.context
+          ? `${row.question} | ${row.context}`
+          : row.question,
         previewTimestamp: row.created_at,
       };
     }
@@ -917,12 +1066,14 @@ export class ReflectionThreadService {
            LEFT JOIN entities e ON e.id = ep.entity_id
            WHERE ep.id = ?`,
         )
-        .get(link.sourceId) as {
-          property_key: string;
-          property_value: string;
-          tx_start: number;
-          entity_name: string | null;
-        } | undefined;
+        .get(link.sourceId) as
+        | {
+            property_key: string;
+            property_value: string;
+            tx_start: number;
+            entity_name: string | null;
+          }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '事实变化',
@@ -938,7 +1089,9 @@ export class ReflectionThreadService {
            FROM user_profile_items
            WHERE id = ?`,
         )
-        .get(link.sourceId) as { item_key: string; item_value: string; updated_at: number } | undefined;
+        .get(link.sourceId) as
+        | { item_key: string; item_value: string; updated_at: number }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '用户画像',
@@ -950,7 +1103,9 @@ export class ReflectionThreadService {
     if (link.sourceKind === 'dream_run') {
       const row = this.db
         .prepare('SELECT summary, created_at FROM dream_runs WHERE id = ?')
-        .get(link.sourceId) as { summary: string | null; created_at: number } | undefined;
+        .get(link.sourceId) as
+        | { summary: string | null; created_at: number }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '梦境重放',
@@ -962,7 +1117,9 @@ export class ReflectionThreadService {
     if (link.sourceKind === 'chunk') {
       const row = this.db
         .prepare('SELECT content, created_at FROM chunks WHERE chunk_id = ?')
-        .get(Number(link.sourceId)) as { content: string; created_at: number } | undefined;
+        .get(Number(link.sourceId)) as
+        | { content: string; created_at: number }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '记忆片段',
@@ -978,7 +1135,9 @@ export class ReflectionThreadService {
            FROM action_results
            WHERE id = ?`,
         )
-        .get(link.sourceId) as { summary: string; created_at: number } | undefined;
+        .get(link.sourceId) as
+        | { summary: string; created_at: number }
+        | undefined;
       if (!row) return {};
       return {
         previewTitle: '外部委派结果',
@@ -997,7 +1156,10 @@ export class ReflectionThreadService {
     const path = thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
     const runs = this.repo.listRuns(thread.id, 20);
     const dreams = this.repo.listDreamRuns({ threadId: thread.id, limit: 10 });
-    const actions = this.actionRepo.list({ threadId: thread.id, limit: 20 }).items;
+    const actions = this.actionRepo.list({
+      threadId: thread.id,
+      limit: 20,
+    }).items;
     const actionResults = this.actionResultRepo.listByThread(thread.id, 20);
     const links = this.repo.listLinks(thread.id, 20).map((link) => ({
       ...link,
@@ -1012,8 +1174,12 @@ export class ReflectionThreadService {
     lines.push(`- Priority: ${thread.priority}`);
     lines.push(`- Salience: ${thread.salience.toFixed(2)}`);
     lines.push(`- Reflection Count: ${thread.reflectionCount}`);
-    if (thread.lastReflectedAt) lines.push(`- Last Reflected: ${formatDateTime(thread.lastReflectedAt)}`);
-    if (thread.nextReflectionAt) lines.push(`- Next Reflection: ${formatDateTime(thread.nextReflectionAt)}`);
+    if (thread.lastReflectedAt)
+      lines.push(`- Last Reflected: ${formatDateTime(thread.lastReflectedAt)}`);
+    if (thread.nextReflectionAt)
+      lines.push(
+        `- Next Reflection: ${formatDateTime(thread.nextReflectionAt)}`,
+      );
     lines.push('');
 
     lines.push('## Current Hypothesis');
@@ -1035,7 +1201,9 @@ export class ReflectionThreadService {
     lines.push('## Evidence Links');
     if (links.length > 0) {
       for (const link of links) {
-        lines.push(`- [${link.sourceKind}/${link.role}] ${link.previewTitle ?? link.sourceId}: ${link.preview ?? '(no preview)'}`);
+        lines.push(
+          `- [${link.sourceKind}/${link.role}] ${link.previewTitle ?? link.sourceId}: ${link.preview ?? '(no preview)'}`,
+        );
       }
     } else {
       lines.push('- None');
@@ -1045,7 +1213,9 @@ export class ReflectionThreadService {
     lines.push('## Dream Replays');
     if (dreams.length > 0) {
       for (const dream of dreams) {
-        lines.push(`- ${formatDateTime(dream.createdAt)}: ${dream.summary ?? 'Dream replay generated.'}`);
+        lines.push(
+          `- ${formatDateTime(dream.createdAt)}: ${dream.summary ?? 'Dream replay generated.'}`,
+        );
       }
     } else {
       lines.push('- None');
@@ -1055,7 +1225,9 @@ export class ReflectionThreadService {
     lines.push('## Action Results');
     if (actionResults.length > 0) {
       for (const result of actionResults) {
-        lines.push(`- ${formatDateTime(result.createdAt)} [${result.resultType}] ${result.summary}`);
+        lines.push(
+          `- ${formatDateTime(result.createdAt)} [${result.resultType}] ${result.summary}`,
+        );
       }
     } else {
       lines.push('- None');
@@ -1065,7 +1237,9 @@ export class ReflectionThreadService {
     lines.push('## Action Queue');
     if (actions.length > 0) {
       for (const action of actions) {
-        lines.push(`- [${action.queueStatus}] ${action.actionType}: ${action.title}`);
+        lines.push(
+          `- [${action.queueStatus}] ${action.actionType}: ${action.title}`,
+        );
       }
     } else {
       lines.push('- None');
@@ -1076,7 +1250,9 @@ export class ReflectionThreadService {
     if (runs.length > 0) {
       for (const run of runs) {
         lines.push('');
-        lines.push(`### ${formatDateTime(run.createdAt)} · ${run.runType}/${run.triggerType ?? 'unknown'}`);
+        lines.push(
+          `### ${formatDateTime(run.createdAt)} · ${run.runType}/${run.triggerType ?? 'unknown'}`,
+        );
         lines.push(run.summary);
         lines.push('');
         lines.push('#### Discoveries');
@@ -1096,7 +1272,9 @@ export class ReflectionThreadService {
         lines.push('#### Actions');
         if (run.actions.length > 0) {
           for (const action of run.actions) {
-            lines.push(`- ${(action.title as string | undefined) ?? JSON.stringify(action)}`);
+            lines.push(
+              `- ${(action.title as string | undefined) ?? JSON.stringify(action)}`,
+            );
           }
         } else {
           lines.push('- None');

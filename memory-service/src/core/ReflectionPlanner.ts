@@ -38,7 +38,10 @@ export class ReflectionPlanner {
   async runHeartbeat(): Promise<ReflectionPlannerResult> {
     const runtimeConfig = getUserRuntimeConfig(this.userDataManager);
     if (!runtimeConfig.reflectionEnabled) {
-      const checkpoint = this.checkpoints.getTimestamp(`reflection-planner:${this.userId ?? 'default'}:cursor`, 0);
+      const checkpoint = this.checkpoints.getTimestamp(
+        `reflection-planner:${this.userId ?? 'default'}:cursor`,
+        0,
+      );
       return {
         threadsTouched: 0,
         runsCreated: 0,
@@ -80,7 +83,9 @@ export class ReflectionPlanner {
         .prepare(
           `SELECT id
            FROM confirm_requests
-           WHERE created_at > ? AND state = 'pending'
+           WHERE created_at > ?
+             AND state = 'pending'
+             AND COALESCE(routing, 'decision') = 'decision'
            ORDER BY created_at ASC
            LIMIT ?`,
         )
@@ -138,7 +143,9 @@ export class ReflectionPlanner {
 
       const dueThreads = this.service.listDueThreads(topicLimit);
       for (const thread of dueThreads) {
-        const blockingReason = this.service.getHeartbeatBlockingReason(thread.id);
+        const blockingReason = this.service.getHeartbeatBlockingReason(
+          thread.id,
+        );
         if (blockingReason) {
           this.service.deferHeartbeatReflection(thread.id, blockingReason);
           continue;

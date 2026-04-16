@@ -72,9 +72,7 @@ interface StatsResponse {
 // Route plugin
 // ---------------------------------------------------------------------------
 
-export async function statsRoutes(
-  app: FastifyInstance,
-): Promise<void> {
+export async function statsRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/stats',
     {
@@ -97,7 +95,10 @@ export async function statsRoutes(
                 type: 'object',
                 properties: {
                   total: { type: 'number' },
-                  byType: { type: 'object', additionalProperties: { type: 'number' } },
+                  byType: {
+                    type: 'object',
+                    additionalProperties: { type: 'number' },
+                  },
                 },
               },
               chunks: {
@@ -154,18 +155,37 @@ export async function statsRoutes(
       const last90DaysStart = daysAgo(90);
 
       // ---- Messages ----
-      const messagesTotal =
-        (db.prepare('SELECT COUNT(*) AS count FROM messages_raw').get() as CountRow).count;
-      const messagesToday =
-        (db.prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?').get(todayStart) as CountRow).count;
-      const messagesThisWeek =
-        (db.prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?').get(weekStart) as CountRow).count;
-      const messagesLast90Days =
-        (db.prepare('SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?').get(last90DaysStart) as CountRow).count;
+      const messagesTotal = (
+        db
+          .prepare('SELECT COUNT(*) AS count FROM messages_raw')
+          .get() as CountRow
+      ).count;
+      const messagesToday = (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?',
+          )
+          .get(todayStart) as CountRow
+      ).count;
+      const messagesThisWeek = (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?',
+          )
+          .get(weekStart) as CountRow
+      ).count;
+      const messagesLast90Days = (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS count FROM messages_raw WHERE timestamp >= ?',
+          )
+          .get(last90DaysStart) as CountRow
+      ).count;
 
       // ---- Entities ----
-      const entitiesTotal =
-        (db.prepare('SELECT COUNT(*) AS count FROM entities').get() as CountRow).count;
+      const entitiesTotal = (
+        db.prepare('SELECT COUNT(*) AS count FROM entities').get() as CountRow
+      ).count;
 
       const entityTypeRows = db
         .prepare('SELECT type, COUNT(*) AS count FROM entities GROUP BY type')
@@ -177,26 +197,50 @@ export async function statsRoutes(
       }
 
       // ---- Chunks ----
-      const chunksTotal =
-        (db.prepare('SELECT COUNT(*) AS count FROM chunks').get() as CountRow).count;
+      const chunksTotal = (
+        db.prepare('SELECT COUNT(*) AS count FROM chunks').get() as CountRow
+      ).count;
 
       // ---- Relationships ----
-      const relationshipsTotal =
-        (db.prepare('SELECT COUNT(*) AS count FROM relationships').get() as CountRow).count;
+      const relationshipsTotal = (
+        db
+          .prepare('SELECT COUNT(*) AS count FROM relationships')
+          .get() as CountRow
+      ).count;
 
       // ---- Watched Projects ----
-      const watchedActive =
-        (db.prepare('SELECT COUNT(*) AS count FROM watched_projects WHERE is_active = 1').get() as CountRow).count;
+      const watchedActive = (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS count FROM watched_projects WHERE is_active = 1',
+          )
+          .get() as CountRow
+      ).count;
 
       // ---- Notifications ----
-      const notificationsPending =
-        (db.prepare('SELECT COUNT(*) AS count FROM notification_records WHERE sent_at IS NULL').get() as CountRow).count;
-      const notificationsSentToday =
-        (db.prepare('SELECT COUNT(*) AS count FROM notification_records WHERE sent_at >= ?').get(todayStart) as CountRow).count;
+      const notificationsPending = (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS count FROM notification_records WHERE sent_at IS NULL',
+          )
+          .get() as CountRow
+      ).count;
+      const notificationsSentToday = (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS count FROM notification_records WHERE sent_at >= ?',
+          )
+          .get(todayStart) as CountRow
+      ).count;
 
       // ---- Confirm Requests ----
-      const confirmPending =
-        (db.prepare("SELECT COUNT(*) AS count FROM confirm_requests WHERE state = 'pending'").get() as CountRow).count;
+      const confirmPending = (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM confirm_requests WHERE state = 'pending' AND COALESCE(routing, 'decision') = 'decision'",
+          )
+          .get() as CountRow
+      ).count;
 
       // ---- Memory Metadata by consolidation level ----
       const memoryLevelRows = db
@@ -212,13 +256,23 @@ export async function statsRoutes(
 
       // Count "forgotten" as entities with status 'archived' in entities table
       // (memory_metadata does not have a 'forgotten' level natively)
-      const forgottenCount =
-        (db.prepare("SELECT COUNT(*) AS count FROM entities WHERE status = 'archived'").get() as CountRow).count;
+      const forgottenCount = (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM entities WHERE status = 'archived'",
+          )
+          .get() as CountRow
+      ).count;
 
       // Count "archived" from memory_metadata where there is no recent access
       // For Phase 4, we approximate "archived" as entities with status = 'merged'
-      const archivedCount =
-        (db.prepare("SELECT COUNT(*) AS count FROM entities WHERE status = 'merged'").get() as CountRow).count;
+      const archivedCount = (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM entities WHERE status = 'merged'",
+          )
+          .get() as CountRow
+      ).count;
 
       const response: StatsResponse = {
         messages: {

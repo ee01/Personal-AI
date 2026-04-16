@@ -340,12 +340,27 @@ export interface ConfirmRequest {
   relatedPropertyId?: number;
   priority: string;
   state: string;
+  routing?: 'decision' | 'watch';
+  reasonCode?:
+    | 'authority_required'
+    | 'approval_required'
+    | 'future_monitoring'
+    | 'owner_eta_gap'
+    | 'artifact_gap'
+    | 'time_sensitive_blocker';
+  sourceAnchor?: string;
+  gapType?:
+    | 'future_monitoring'
+    | 'owner_eta'
+    | 'artifact_check'
+    | 'decision_blocker';
   userAnswer?: string;
   answeredAt?: number;
   snoozeUntil?: number;
   snoozeCount: number;
   expiresAt?: number;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export interface ConfirmRequestListResponse {
@@ -353,6 +368,7 @@ export interface ConfirmRequestListResponse {
   total: number;
   limit: number;
   state: string;
+  queue?: 'decision' | 'watch' | 'all';
 }
 
 // ============================================================================
@@ -1714,10 +1730,12 @@ export class MemoryServiceClient {
   async getConfirmRequests(
     state?: string,
     limit?: number,
+    queue?: 'decision' | 'watch' | 'all',
   ): Promise<ConfirmRequestListResponse> {
     const params = new URLSearchParams();
     if (state) params.set('state', state);
     if (limit !== undefined) params.set('limit', String(limit));
+    if (queue) params.set('queue', queue);
 
     const qs = params.toString();
     const path = `/confirm-requests${qs ? '?' + qs : ''}`;
@@ -1736,6 +1754,17 @@ export class MemoryServiceClient {
       'POST',
       `/confirm-requests/${encodeURIComponent(id)}/answer`,
       { answer, detail },
+    );
+  }
+
+  async transitionConfirmRequestState(
+    id: string,
+    state: 'pending' | 'snoozed' | 'expired',
+  ): Promise<{ status: string; confirmRequest: ConfirmRequest }> {
+    return this.request(
+      'POST',
+      `/confirm-requests/${encodeURIComponent(id)}/state`,
+      { state },
     );
   }
 

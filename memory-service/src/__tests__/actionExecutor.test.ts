@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,7 +63,10 @@ describe('ActionExecutor', () => {
       }),
     );
 
-    vi.spyOn(ReflectionThreadService.prototype, 'runReflection').mockImplementation(async function (threadId) {
+    vi.spyOn(
+      ReflectionThreadService.prototype,
+      'runReflection',
+    ).mockImplementation(async function (threadId) {
       const detail = this.getThreadDetail(threadId);
       if (!detail) {
         throw new Error(`Reflection thread "${threadId}" not found`);
@@ -147,17 +158,24 @@ describe('ActionExecutor', () => {
     expect(result.queueStatus).toBe('succeeded');
     expect(result.result?.status).toBe('success');
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://openclaw.example.com/v1/responses');
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://openclaw.example.com/v1/responses',
+    );
 
     const actionResults = db
       .prepare('SELECT * FROM action_results WHERE action_id = ?')
-      .all(action.id) as Array<{ summary: string; transcript_path: string | null }>;
+      .all(action.id) as Array<{
+      summary: string;
+      transcript_path: string | null;
+    }>;
     expect(actionResults).toHaveLength(1);
     expect(actionResults[0].summary).toContain('联调阶段');
     expect(actionResults[0].transcript_path).toBeTruthy();
 
     const links = db
-      .prepare(`SELECT * FROM topic_memory_links WHERE thread_id = ? AND source_kind = 'action_result'`)
+      .prepare(
+        `SELECT * FROM topic_memory_links WHERE thread_id = ? AND source_kind = 'action_result'`,
+      )
       .all(thread.id) as Array<{ source_id: string }>;
     expect(links).toHaveLength(1);
 
@@ -242,7 +260,8 @@ describe('ActionExecutor', () => {
         JSON.stringify({
           output_text: JSON.stringify({
             status: 'success',
-            summary: 'Gary 在 4/9 有 2 个与 video 直接相关的安排：09:30-10:30 RCV project review；18:00-20:00 Dinner with Video team。',
+            summary:
+              'Gary 在 4/9 有 2 个与 video 直接相关的安排：09:30-10:30 RCV project review；18:00-20:00 Dinner with Video team。',
             artifacts: [
               {
                 kind: 'calendar_event',
@@ -285,9 +304,15 @@ describe('ActionExecutor', () => {
     const updatedSession = outreachRepo.getSessionById(session.id);
     expect(updatedSession?.status).toBe('resolved');
     expect(updatedSession?.replyClassification).toBe('answer');
-    expect(updatedSession?.outcome?.resolutionState).toMatch(/complete|partial/);
-    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain('4/9');
-    expect(String(updatedSession?.outcome?.externalSummary)).toContain('Dinner with Video team');
+    expect(updatedSession?.outcome?.resolutionState).toMatch(
+      /complete|partial/,
+    );
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain(
+      '4/9',
+    );
+    expect(String(updatedSession?.outcome?.externalSummary)).toContain(
+      'Dinner with Video team',
+    );
     expect(Array.isArray(updatedSession?.outcome?.externalEvidence)).toBe(true);
     expect(updatedSession?.outcome?.spawnedActionIds).toContain(action.id);
     expect(updatedSession?.outcome?.delegationFailureStatus).toBeUndefined();
@@ -305,7 +330,11 @@ describe('ActionExecutor', () => {
       .listEventsBySession(session.id, 20)
       .filter((event) => event.eventType === 'resolved');
     expect(resolvedEvents.length).toBeGreaterThanOrEqual(1);
-    expect(String(resolvedEvents[resolvedEvents.length - 1]?.payload?.externalSummary)).toContain('RCV project review');
+    expect(
+      String(
+        resolvedEvents[resolvedEvents.length - 1]?.payload?.externalSummary,
+      ),
+    ).toContain('RCV project review');
   });
 
   it('syncs failed delegate_openclaw results back into outreach sessions', async () => {
@@ -368,7 +397,8 @@ describe('ActionExecutor', () => {
             status: 'capability_missing',
             summary: '无法直接访问 Gary 的 Google Calendar，需要额外认证。',
             payload: {
-              question: '需要访问 Gary 的 Google Calendar 权限才能核实具体 video 项目日程。',
+              question:
+                '需要访问 Gary 的 Google Calendar 权限才能核实具体 video 项目日程。',
             },
           }),
         }),
@@ -382,8 +412,12 @@ describe('ActionExecutor', () => {
     const updatedSession = outreachRepo.getSessionById(session.id);
     expect(updatedSession?.status).toBe('resolved');
     expect(updatedSession?.outcome?.resolutionState).toBe('partial');
-    expect(String(updatedSession?.outcome?.delegationFailureSummary)).toContain('Google Calendar');
-    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain('外部查证暂未成功');
+    expect(String(updatedSession?.outcome?.delegationFailureSummary)).toContain(
+      'Google Calendar',
+    );
+    expect(String(updatedSession?.outcome?.resolvedConclusion)).toContain(
+      '外部查证暂未成功',
+    );
     expect(updatedSession?.outcome?.followUpActions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -397,7 +431,12 @@ describe('ActionExecutor', () => {
       .listEventsBySession(session.id, 20)
       .filter((event) => event.eventType === 'resolved');
     expect(resolvedEvents.length).toBeGreaterThanOrEqual(1);
-    expect(String(resolvedEvents[resolvedEvents.length - 1]?.payload?.delegationFailureSummary)).toContain('Google Calendar');
+    expect(
+      String(
+        resolvedEvents[resolvedEvents.length - 1]?.payload
+          ?.delegationFailureSummary,
+      ),
+    ).toContain('Google Calendar');
   });
 
   it('does not repeatedly append the same delegation failure suffix into outreach conclusions', async () => {
@@ -421,7 +460,8 @@ describe('ActionExecutor', () => {
         confidence: 0.75,
         resolutionState: 'partial',
         directFindings: ['他下周在杭州', 'video相关应该都在下周。'],
-        resolvedConclusion: 'Gary 下周在杭州，video 相关安排大概率也在下周。；但外部查证暂未成功：旧错误',
+        resolvedConclusion:
+          'Gary 下周在杭州，video 相关安排大概率也在下周。；但外部查证暂未成功：旧错误',
         remainingQuestions: ['需要从外部线索中核实更精确的时间或细节。'],
         recommendedAction: 'delegate_openclaw',
         spawnedActionIds: [],
@@ -510,19 +550,31 @@ describe('ActionExecutor', () => {
     expect(result.error).toContain('未配置 Jira');
 
     const confirmRequests = db
-      .prepare(`SELECT * FROM confirm_requests WHERE category = 'openclaw_delegation'`)
-      .all() as Array<{ question: string; options_json: string; evidence_refs_json: string }>;
+      .prepare(
+        `SELECT * FROM confirm_requests WHERE category = 'openclaw_delegation'`,
+      )
+      .all() as Array<{
+      question: string;
+      options_json: string;
+      evidence_refs_json: string;
+    }>;
     expect(confirmRequests).toHaveLength(1);
     expect(confirmRequests[0].question).toContain('是否重试');
     expect(confirmRequests[0].evidence_refs_json).toContain(action.id);
 
     const notifications = db
-      .prepare(`SELECT * FROM notification_records WHERE channel = 'reflection_action'`)
+      .prepare(
+        `SELECT * FROM notification_records WHERE channel = 'reflection_action'`,
+      )
       .all() as Array<{ title: string; body: string }>;
     expect(notifications).toHaveLength(2);
-    expect(notifications.some((item) => item.title.includes('缺少能力'))).toBe(true);
+    expect(notifications.some((item) => item.title.includes('缺少能力'))).toBe(
+      true,
+    );
     expect(notifications.some((item) => item.body.includes('Jira'))).toBe(true);
-    expect(notifications.some((item) => item.title.includes('需要确认'))).toBe(true);
+    expect(notifications.some((item) => item.title.includes('需要确认'))).toBe(
+      true,
+    );
 
     const followUpActions = db
       .prepare(
@@ -532,8 +584,14 @@ describe('ActionExecutor', () => {
       )
       .all() as Array<{ action_type: string; queue_status: string }>;
     expect(followUpActions.length).toBeGreaterThanOrEqual(2);
-    expect(followUpActions.some((item) => item.action_type === 'notify_user')).toBe(true);
-    expect(followUpActions.some((item) => item.action_type === 'create_confirm_request')).toBe(true);
+    expect(
+      followUpActions.some((item) => item.action_type === 'notify_user'),
+    ).toBe(true);
+    expect(
+      followUpActions.some(
+        (item) => item.action_type === 'create_confirm_request',
+      ),
+    ).toBe(true);
   });
 
   it('alerts immediately when a high-priority confirm request is created', async () => {
@@ -581,10 +639,15 @@ describe('ActionExecutor', () => {
 
     const confirmRequests = db
       .prepare(`SELECT * FROM confirm_requests WHERE id = ?`)
-      .all(String(result.result?.confirmRequestId)) as Array<{ priority: string; question: string }>;
+      .all(String(result.result?.confirmRequestId)) as Array<{
+      priority: string;
+      question: string;
+    }>;
     expect(confirmRequests).toHaveLength(1);
     expect(confirmRequests[0].priority).toBe('high');
-    expect(confirmRequests[0].question).toContain('是否将 Orbit 的发布时间顺延一天');
+    expect(confirmRequests[0].question).toContain(
+      '是否将 Orbit 的发布时间顺延一天',
+    );
 
     const alertAction = db
       .prepare(`SELECT * FROM proposed_actions WHERE id = ?`)
@@ -599,7 +662,10 @@ describe('ActionExecutor', () => {
 
     const notifications = db
       .prepare(`SELECT * FROM notification_records WHERE payload_json LIKE ?`)
-      .all(`%${String(result.result?.confirmRequestId)}%`) as Array<{ title: string; body: string }>;
+      .all(`%${String(result.result?.confirmRequestId)}%`) as Array<{
+      title: string;
+      body: string;
+    }>;
     expect(notifications).toHaveLength(1);
     expect(notifications[0].title).toContain('需要确认');
   });
@@ -670,9 +736,42 @@ describe('ActionExecutor', () => {
     expect(result.result?.alertActionId).toBeUndefined();
 
     const requests = db
-      .prepare(`SELECT id, priority FROM confirm_requests ORDER BY created_at ASC`)
+      .prepare(
+        `SELECT id, priority FROM confirm_requests ORDER BY created_at ASC`,
+      )
       .all() as Array<{ id: string; priority: string }>;
     expect(requests).toEqual([{ id: 'cr-existing', priority: 'high' }]);
+  });
+
+  it('falls back to action source anchor when creating confirm requests', async () => {
+    const action = actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: '需要确认下一步',
+      description: '请确认是否继续跟进。',
+      params: {
+        question: '是否继续跟进 Orbit?',
+        context: '当前信息仍不足。',
+        category: 'evidence_resolution',
+        reasonCode: 'owner_eta_gap',
+        gapType: 'owner_eta',
+        routing: 'watch',
+      },
+      sourceKind: 'ask_request',
+      sourceRefId: 'ask-123',
+      executionMode: 'auto',
+      queueStatus: 'queued',
+      priority: 7,
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+    const created = confirmRequestRepo.getById(
+      String(result.result?.confirmRequestId),
+    );
+
+    expect(created?.sourceAnchor).toBe('ask:ask-123');
+    expect(created?.routing).toBe('watch');
+    expect(created?.state).toBe('snoozed');
   });
 
   it('executes due auto delegate_openclaw write actions when approval is not required', async () => {
@@ -884,13 +983,17 @@ describe('ActionExecutor', () => {
 
     const confirmRequest = db
       .prepare(`SELECT question, category FROM confirm_requests WHERE id = ?`)
-      .get(String(result.result?.confirmRequestId)) as { question: string; category: string } | undefined;
+      .get(String(result.result?.confirmRequestId)) as
+      | { question: string; category: string }
+      | undefined;
     expect(confirmRequest?.category).toBe('outreach_setup');
     expect(confirmRequest?.question).toContain('主动询问引擎尚未开启');
 
-    const sessionCount = (db
-      .prepare(`SELECT COUNT(*) AS count FROM outreach_sessions`)
-      .get() as { count: number }).count;
+    const sessionCount = (
+      db.prepare(`SELECT COUNT(*) AS count FROM outreach_sessions`).get() as {
+        count: number;
+      }
+    ).count;
     expect(sessionCount).toBe(0);
   });
 
@@ -947,13 +1050,17 @@ describe('ActionExecutor', () => {
 
     const confirmRequest = db
       .prepare(`SELECT question, category FROM confirm_requests WHERE id = ?`)
-      .get(String(result.result?.confirmRequestId)) as { question: string; category: string } | undefined;
+      .get(String(result.result?.confirmRequestId)) as
+      | { question: string; category: string }
+      | undefined;
     expect(confirmRequest?.category).toBe('outreach_target_review');
     expect(confirmRequest?.question).toContain('目标是你自己');
 
-    const sessionCount = (db
-      .prepare(`SELECT COUNT(*) AS count FROM outreach_sessions`)
-      .get() as { count: number }).count;
+    const sessionCount = (
+      db.prepare(`SELECT COUNT(*) AS count FROM outreach_sessions`).get() as {
+        count: number;
+      }
+    ).count;
     expect(sessionCount).toBe(0);
   });
 });

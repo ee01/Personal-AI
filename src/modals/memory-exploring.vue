@@ -254,6 +254,17 @@ async function loadMeetingCount() {
   }
 }
 
+async function loadPendingDecisionCount() {
+  try {
+    const client = getMemoryServiceClient();
+    const res = await client.getConfirmRequests('pending', 1, 'decision');
+    pendingDecisionCount.value = res.total;
+  } catch (error) {
+    console.error('加载待决策数量失败:', error);
+    pendingDecisionCount.value = 0;
+  }
+}
+
 function handleStorageChange(
   changes: { [key: string]: chrome.storage.StorageChange },
   areaName: string,
@@ -280,13 +291,7 @@ onUnmounted(() => {
 
 // 加载待决策数量
 onMounted(async () => {
-  try {
-    const client = getMemoryServiceClient();
-    const res = await client.getConfirmRequests('pending', 1);
-    pendingDecisionCount.value = res.total;
-  } catch (error) {
-    console.error('加载待决策数量失败:', error);
-  }
+  await loadPendingDecisionCount();
 });
 
 onMounted(async () => {

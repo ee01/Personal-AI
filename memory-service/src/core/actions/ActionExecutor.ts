@@ -80,7 +80,9 @@ function normalizeOutreachIntent(action: QueuedActionRecord): {
 } {
   const params = safeJsonValue(action.params);
   const targetObject =
-    params.target && typeof params.target === 'object' && !Array.isArray(params.target)
+    params.target &&
+    typeof params.target === 'object' &&
+    !Array.isArray(params.target)
       ? (params.target as Record<string, unknown>)
       : {};
   const targetType =
@@ -112,13 +114,22 @@ function normalizeOutreachIntent(action: QueuedActionRecord): {
   };
 }
 
-function isSelfDirectedOutreach(targetType: string, targetRef: string): boolean {
+function isSelfDirectedOutreach(
+  targetType: string,
+  targetRef: string,
+): boolean {
   const normalizedTargetType = targetType.trim().toLowerCase();
   const normalizedTargetRef = targetRef.trim().toLowerCase();
-  if (normalizedTargetRef === 'user' || normalizedTargetRef === 'me' || normalizedTargetRef === 'self') {
+  if (
+    normalizedTargetRef === 'user' ||
+    normalizedTargetRef === 'me' ||
+    normalizedTargetRef === 'self'
+  ) {
     return true;
   }
-  return normalizedTargetType === 'person' && normalizedTargetRef === 'current-user';
+  return (
+    normalizedTargetType === 'person' && normalizedTargetRef === 'current-user'
+  );
 }
 
 export class ActionExecutor {
@@ -138,8 +149,15 @@ export class ActionExecutor {
     this.actionResultRepo = new ActionResultRepository(db);
     this.confirmRequestRepo = new ConfirmRequestRepository(db);
     this.openClaw = new OpenClawClient(userDataManager);
-    this.delegationService = new OpenClawDelegationService(userDataManager, userId);
-    this.threadService = new ReflectionThreadService(db, userDataManager, userId);
+    this.delegationService = new OpenClawDelegationService(
+      userDataManager,
+      userId,
+    );
+    this.threadService = new ReflectionThreadService(
+      db,
+      userDataManager,
+      userId,
+    );
   }
 
   async runDueActions(limit = 10): Promise<ActionExecutionResult[]> {
@@ -159,7 +177,10 @@ export class ActionExecutor {
       throw new Error(`Action "${actionId}" not found`);
     }
 
-    if (action.queueStatus === 'cancelled' || action.queueStatus === 'succeeded') {
+    if (
+      action.queueStatus === 'cancelled' ||
+      action.queueStatus === 'succeeded'
+    ) {
       return {
         actionId: action.id,
         actionType: action.actionType,
@@ -171,16 +192,28 @@ export class ActionExecutor {
     const attemptId = this.actionRepo.markRunning(action.id);
     try {
       const outcome = await this.dispatch(action);
-      if (outcome.queueStatus === 'failed' || outcome.queueStatus === 'dead_letter') {
-        const updated = this.actionRepo.markFailed(
-          action.id,
-          attemptId,
-          outcome.errorMessage ?? 'Action execution failed',
-          outcome.queueStatus === 'dead_letter',
-        ) ?? action;
+      if (
+        outcome.queueStatus === 'failed' ||
+        outcome.queueStatus === 'dead_letter'
+      ) {
+        const updated =
+          this.actionRepo.markFailed(
+            action.id,
+            attemptId,
+            outcome.errorMessage ?? 'Action execution failed',
+            outcome.queueStatus === 'dead_letter',
+          ) ?? action;
         if (outcome.delegationOutcome) {
-          const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
-          await engine.syncDelegationFailureToSession(updated, outcome.delegationOutcome, outcome.result);
+          const engine = new OutreachEngine(
+            this.db,
+            this.userDataManager,
+            this.userId,
+          );
+          await engine.syncDelegationFailureToSession(
+            updated,
+            outcome.delegationOutcome,
+            outcome.result,
+          );
         }
         if (updated.threadId) {
           this.threadService.refreshThreadDocument(updated.threadId);
@@ -194,10 +227,19 @@ export class ActionExecutor {
         };
       }
 
-      const updated = this.actionRepo.markSucceeded(action.id, attemptId, outcome.result) ?? action;
+      const updated =
+        this.actionRepo.markSucceeded(action.id, attemptId, outcome.result) ??
+        action;
       if (outcome.delegationOutcome) {
-        const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
-        await engine.syncDelegationResultToSession(updated, outcome.delegationOutcome);
+        const engine = new OutreachEngine(
+          this.db,
+          this.userDataManager,
+          this.userId,
+        );
+        await engine.syncDelegationResultToSession(
+          updated,
+          outcome.delegationOutcome,
+        );
       }
       if (updated.threadId) {
         this.threadService.refreshThreadDocument(updated.threadId);
@@ -210,12 +252,13 @@ export class ActionExecutor {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const updated = this.actionRepo.markFailed(
-        action.id,
-        attemptId,
-        message,
-        action.retryCount >= 2,
-      ) ?? action;
+      const updated =
+        this.actionRepo.markFailed(
+          action.id,
+          attemptId,
+          message,
+          action.retryCount >= 2,
+        ) ?? action;
       if (updated.threadId) {
         this.threadService.refreshThreadDocument(updated.threadId);
       }
@@ -251,7 +294,9 @@ export class ActionExecutor {
     throw new Error(`Unsupported action type: ${action.actionType}`);
   }
 
-  private async notifyUser(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+  private async notifyUser(
+    action: QueuedActionRecord,
+  ): Promise<Record<string, unknown>> {
     const params = safeJsonValue(action.params);
     const notificationId = randomUUID();
     const currentTime = now();
@@ -268,8 +313,14 @@ export class ActionExecutor {
         String(params.title ?? action.title),
         String(params.body ?? action.description ?? ''),
         JSON.stringify(params.payload ?? { actionId: action.id }),
-        String((params.payload as Record<string, unknown> | undefined)?.threadId ?? action.threadId ?? action.id),
-        typeof params.relatedEntityId === 'string' ? params.relatedEntityId : null,
+        String(
+          (params.payload as Record<string, unknown> | undefined)?.threadId ??
+            action.threadId ??
+            action.id,
+        ),
+        typeof params.relatedEntityId === 'string'
+          ? params.relatedEntityId
+          : null,
         action.utilityScore ?? null,
         currentTime,
         currentTime,
@@ -281,29 +332,72 @@ export class ActionExecutor {
     };
   }
 
-  private async createConfirmRequest(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+  private async createConfirmRequest(
+    action: QueuedActionRecord,
+  ): Promise<Record<string, unknown>> {
     const params = safeJsonValue(action.params);
     const currentTime = now();
-    const priorityLabel = normalizePriorityLabel(params.priority, action.priority);
+    const priorityLabel = normalizePriorityLabel(
+      params.priority,
+      action.priority,
+    );
+    const fallbackSourceAnchor =
+      typeof params.sourceAnchor === 'string' &&
+      params.sourceAnchor.trim().length > 0
+        ? params.sourceAnchor.trim()
+        : action.sourceKind === 'ask_request' && action.sourceRefId
+          ? `ask:${action.sourceRefId}`
+          : action.sourceKind === 'outreach_session' && action.sourceRefId
+            ? `outreach:${action.sourceRefId}`
+            : action.threadId
+              ? `thread:${action.threadId}`
+              : null;
     const confirmRequestInput = {
-      id: typeof params.confirmRequestId === 'string' ? params.confirmRequestId : undefined,
+      id:
+        typeof params.confirmRequestId === 'string'
+          ? params.confirmRequestId
+          : undefined,
       question: String(params.question ?? action.title),
-      context: typeof params.context === 'string' ? params.context : action.description ?? null,
-      options: Array.isArray(params.options) ? (params.options as Array<{ label: string; value: string }>) : [],
+      context:
+        typeof params.context === 'string'
+          ? params.context
+          : (action.description ?? null),
+      options: Array.isArray(params.options)
+        ? (params.options as Array<{ label: string; value: string }>)
+        : [],
       evidenceRefs: uniqStrings([
         ...action.evidenceRefs,
         ...(Array.isArray(params.evidenceRefs)
-          ? params.evidenceRefs.filter((item): item is string => typeof item === 'string')
+          ? params.evidenceRefs.filter(
+              (item): item is string => typeof item === 'string',
+            )
           : []),
       ]),
-      category: typeof params.category === 'string' ? params.category : 'reflection',
-      relatedEntityId: typeof params.relatedEntityId === 'string' ? params.relatedEntityId : null,
-      relatedPropertyId: typeof params.relatedPropertyId === 'number' ? params.relatedPropertyId : null,
+      category:
+        typeof params.category === 'string' ? params.category : 'reflection',
+      relatedEntityId:
+        typeof params.relatedEntityId === 'string'
+          ? params.relatedEntityId
+          : null,
+      relatedPropertyId:
+        typeof params.relatedPropertyId === 'number'
+          ? params.relatedPropertyId
+          : null,
       priority: priorityLabel,
+      routing: (params.routing === 'watch' ? 'watch' : 'decision') as
+        | 'watch'
+        | 'decision',
+      reasonCode:
+        typeof params.reasonCode === 'string' ? params.reasonCode : null,
+      sourceAnchor: fallbackSourceAnchor,
+      gapType: typeof params.gapType === 'string' ? params.gapType : null,
       createdAt: currentTime,
     };
     const reusedFromThread = action.threadId
-      ? this.confirmRequestRepo.reusePendingForOriginThread(action.threadId, confirmRequestInput)
+      ? this.confirmRequestRepo.reusePendingForOriginThread(
+          action.threadId,
+          confirmRequestInput,
+        )
       : null;
     const { record: confirmRequest, created } = reusedFromThread
       ? { record: reusedFromThread, created: false }
@@ -311,20 +405,25 @@ export class ActionExecutor {
     const confirmRequestId = confirmRequest.id;
 
     let alertActionId: string | undefined;
-    if (created && priorityLabel === 'high') {
+    if (
+      created &&
+      priorityLabel === 'high' &&
+      confirmRequest.routing !== 'watch'
+    ) {
       const notifyAction = this.actionRepo.create({
         actionType: 'notify_user',
         title: `待确认: ${String(params.question ?? action.title)}`,
         description:
           typeof params.context === 'string' && params.context.trim().length > 0
             ? params.context.trim()
-            : action.description ?? '有一个高优先级待确认项需要你处理。',
+            : (action.description ?? '有一个高优先级待确认项需要你处理。'),
         params: {
           title: `需要确认: ${String(params.question ?? action.title)}`,
           body:
-            typeof params.context === 'string' && params.context.trim().length > 0
+            typeof params.context === 'string' &&
+            params.context.trim().length > 0
               ? params.context.trim()
-              : action.description ?? '请在决策中心查看并处理该确认请求。',
+              : (action.description ?? '请在决策中心查看并处理该确认请求。'),
           payload: {
             confirmRequestId,
             threadId: action.threadId,
@@ -348,7 +447,7 @@ export class ActionExecutor {
       await this.executeAction(notifyAction.id);
     }
 
-    if (action.threadId) {
+    if (action.threadId && confirmRequest.routing !== 'watch') {
       this.threadService.markThreadWaitingForConfirmRequest(action.threadId);
     }
 
@@ -359,14 +458,20 @@ export class ActionExecutor {
     };
   }
 
-  private async updateTruthProperty(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+  private async updateTruthProperty(
+    action: QueuedActionRecord,
+  ): Promise<Record<string, unknown>> {
     const params = safeJsonValue(action.params);
     const truthMaintainer = new TruthMaintainer(this.db);
-    await truthMaintainer.processPropertyChange(params as unknown as PropertyChange);
+    await truthMaintainer.processPropertyChange(
+      params as unknown as PropertyChange,
+    );
     return { updated: true };
   }
 
-  private async delegateOpenClaw(action: QueuedActionRecord): Promise<DispatchOutcome> {
+  private async delegateOpenClaw(
+    action: QueuedActionRecord,
+  ): Promise<DispatchOutcome> {
     const params = safeJsonValue(action.params);
     const mode = params.mode === 'write' ? 'write' : 'read';
     if (action.requiresApproval && action.executionMode === 'auto') {
@@ -392,7 +497,8 @@ export class ActionExecutor {
           : [action.title, action.description].filter(Boolean).join('\n\n'),
       mode,
       targetSystem:
-        typeof params.targetSystem === 'string' && params.targetSystem.trim().length > 0
+        typeof params.targetSystem === 'string' &&
+        params.targetSystem.trim().length > 0
           ? params.targetSystem.trim()
           : undefined,
       threadId: action.threadId ?? String(params.threadId ?? action.id),
@@ -404,7 +510,9 @@ export class ActionExecutor {
           ? params.agentId.trim()
           : undefined,
       metadata:
-        params.metadata && typeof params.metadata === 'object' && !Array.isArray(params.metadata)
+        params.metadata &&
+        typeof params.metadata === 'object' &&
+        !Array.isArray(params.metadata)
           ? (params.metadata as Record<string, unknown>)
           : undefined,
     });
@@ -423,8 +531,14 @@ export class ActionExecutor {
       };
     }
 
-    if (outcome.status === 'capability_missing' || outcome.status === 'auth_error') {
-      const followUpActionIds = await this.enqueueDelegationRecovery(action, outcome);
+    if (
+      outcome.status === 'capability_missing' ||
+      outcome.status === 'auth_error'
+    ) {
+      const followUpActionIds = await this.enqueueDelegationRecovery(
+        action,
+        outcome,
+      );
       return {
         result: {
           status: outcome.status,
@@ -440,7 +554,10 @@ export class ActionExecutor {
     }
 
     if (outcome.status === 'need_human_decision') {
-      const confirmActionId = await this.enqueueHumanDecisionRequest(action, outcome);
+      const confirmActionId = await this.enqueueHumanDecisionRequest(
+        action,
+        outcome,
+      );
       return {
         result: {
           status: outcome.status,
@@ -507,10 +624,13 @@ export class ActionExecutor {
   ): Promise<string[]> {
     const followUps: string[] = [];
     const actionMetadata =
-      action.params.metadata && typeof action.params.metadata === 'object' && !Array.isArray(action.params.metadata)
+      action.params.metadata &&
+      typeof action.params.metadata === 'object' &&
+      !Array.isArray(action.params.metadata)
         ? (action.params.metadata as Record<string, unknown>)
         : {};
-    const suppressRecoveryNotifications = actionMetadata.suppressRecoveryNotifications === true;
+    const suppressRecoveryNotifications =
+      actionMetadata.suppressRecoveryNotifications === true;
 
     if (!suppressRecoveryNotifications) {
       const notifyAction = this.actionRepo.create({
@@ -595,10 +715,19 @@ export class ActionExecutor {
     const payload = safeJsonValue(outcome.payload);
     const options = Array.isArray(payload.options)
       ? payload.options
-          .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+          .filter(
+            (item): item is Record<string, unknown> =>
+              !!item && typeof item === 'object',
+          )
           .map((item) => ({
-            label: typeof item.label === 'string' ? item.label : String(item.value ?? 'option'),
-            value: typeof item.value === 'string' ? item.value : String(item.label ?? 'option'),
+            label:
+              typeof item.label === 'string'
+                ? item.label
+                : String(item.value ?? 'option'),
+            value:
+              typeof item.value === 'string'
+                ? item.value
+                : String(item.label ?? 'option'),
           }))
       : [
           { label: '继续', value: 'continue' },
@@ -611,7 +740,8 @@ export class ActionExecutor {
       description: outcome.summary,
       params: {
         question:
-          typeof payload.question === 'string' && payload.question.trim().length > 0
+          typeof payload.question === 'string' &&
+          payload.question.trim().length > 0
             ? payload.question.trim()
             : `处理「${action.title}」前需要你的判断。`,
         context: outcome.summary,
@@ -637,7 +767,9 @@ export class ActionExecutor {
     return confirmAction.id;
   }
 
-  private async queryExternalTool(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+  private async queryExternalTool(
+    action: QueuedActionRecord,
+  ): Promise<Record<string, unknown>> {
     const params = safeJsonValue(action.params);
     const rawQuery = safeJsonValue(params.query);
     const query: Record<string, string | number | boolean> = {};
@@ -665,15 +797,25 @@ export class ActionExecutor {
     };
   }
 
-  private async askExternalUser(action: QueuedActionRecord): Promise<Record<string, unknown>> {
+  private async askExternalUser(
+    action: QueuedActionRecord,
+  ): Promise<Record<string, unknown>> {
     const intent = normalizeOutreachIntent(action);
     if (isSelfDirectedOutreach(intent.targetType, intent.targetRef)) {
-      return this.createOutreachFallbackConfirmRequest(action, 'self_target', intent);
+      return this.createOutreachFallbackConfirmRequest(
+        action,
+        'self_target',
+        intent,
+      );
     }
 
     const runtime = getUserRuntimeConfig(this.userDataManager);
     if (!runtime.outreachEnabled) {
-      return this.createOutreachFallbackConfirmRequest(action, 'disabled', intent);
+      return this.createOutreachFallbackConfirmRequest(
+        action,
+        'disabled',
+        intent,
+      );
     }
 
     const ringCentralReady =
@@ -682,10 +824,18 @@ export class ActionExecutor {
       Boolean(runtime.ringCentralClientSecret) &&
       Boolean(runtime.ringCentralJwt);
     if (!ringCentralReady) {
-      return this.createOutreachFallbackConfirmRequest(action, 'missing_config', intent);
+      return this.createOutreachFallbackConfirmRequest(
+        action,
+        'missing_config',
+        intent,
+      );
     }
 
-    const engine = new OutreachEngine(this.db, this.userDataManager, this.userId);
+    const engine = new OutreachEngine(
+      this.db,
+      this.userDataManager,
+      this.userId,
+    );
     const session = await engine.createSessionFromAction({ action });
 
     if (action.threadId) {
@@ -714,10 +864,9 @@ export class ActionExecutor {
     const prompt =
       reason === 'self_target'
         ? '这条询问的目标是你自己，不会进入主动询问引擎。是否改为由你手动处理，或转入决策中心继续判断？'
-        :
-      reason === 'disabled'
-        ? `主动询问引擎尚未开启：是否先去 Options 开启后，再向 ${targetRef} 发起询问？`
-        : `主动询问依赖的 RingCentral 配置未完成：是否先去 Options 补齐配置后，再向 ${targetRef} 发起询问？`;
+        : reason === 'disabled'
+          ? `主动询问引擎尚未开启：是否先去 Options 开启后，再向 ${targetRef} 发起询问？`
+          : `主动询问依赖的 RingCentral 配置未完成：是否先去 Options 补齐配置后，再向 ${targetRef} 发起询问？`;
     const context =
       `原计划目标：${targetType} / ${targetRef}\n` +
       `原计划问题：${question}\n` +
@@ -733,13 +882,19 @@ export class ActionExecutor {
       params: {
         question: prompt,
         context,
-        category: reason === 'self_target' ? 'outreach_target_review' : 'outreach_setup',
+        category:
+          reason === 'self_target'
+            ? 'outreach_target_review'
+            : 'outreach_setup',
         priority: 'high',
         options:
           reason === 'self_target'
             ? [
                 { label: '我手动处理', value: 'handle_manually' },
-                { label: '放入决策中心继续判断', value: 'review_in_decision_center' },
+                {
+                  label: '放入决策中心继续判断',
+                  value: 'review_in_decision_center',
+                },
                 { label: '忽略这次询问', value: 'skip' },
               ]
             : [
@@ -761,10 +916,9 @@ export class ActionExecutor {
       summary:
         reason === 'self_target'
           ? 'Self-directed ask converted into confirm request instead of outreach session'
-          :
-        reason === 'disabled'
-          ? 'Outreach engine disabled; created confirm request instead of session'
-          : 'RingCentral config missing; created confirm request instead of session',
+          : reason === 'disabled'
+            ? 'Outreach engine disabled; created confirm request instead of session'
+            : 'RingCentral config missing; created confirm request instead of session',
       confirmRequestId: confirmResult.confirmRequestId,
       targetType,
       targetRef,
@@ -772,8 +926,14 @@ export class ActionExecutor {
     };
   }
 
-  private buildSessionKey(action: QueuedActionRecord, params: Record<string, unknown>): string {
-    if (typeof params.sessionKey === 'string' && params.sessionKey.trim().length > 0) {
+  private buildSessionKey(
+    action: QueuedActionRecord,
+    params: Record<string, unknown>,
+  ): string {
+    if (
+      typeof params.sessionKey === 'string' &&
+      params.sessionKey.trim().length > 0
+    ) {
       return params.sessionKey.trim();
     }
     return `reflection-thread:${action.threadId ?? action.id}`;

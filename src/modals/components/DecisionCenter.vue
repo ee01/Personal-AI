@@ -1,82 +1,238 @@
 <template>
   <div class="decision-center">
-    <h2 class="section-title">⚖ 决策中心 ({{ pendingRequests.length }})</h2>
+    <div class="header-row">
+      <div>
+        <h2 class="section-title">⚖ 决策中心 ({{ decisionTotal }})</h2>
+        <p class="section-subtitle">
+          仅统计真正待拍板的 decision 项，观察项收纳在下方待观察池。
+        </p>
+      </div>
+      <button class="refresh-btn" :disabled="loading" @click="loadQueues()">
+        刷新
+      </button>
+    </div>
 
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <p>加载中...</p>
     </div>
 
-    <div v-else-if="pendingRequests.length === 0" class="empty-state">
-      <span>✅</span>
-      <p>暂无待处理决策</p>
-    </div>
-
-    <TransitionGroup v-else name="card" tag="div" class="decision-list">
-      <div
-        v-for="req in pendingRequests"
-        :key="req.id"
-        class="decision-card"
-      >
-        <div class="card-top">
-          <span
-            class="priority-badge"
-            :class="priorityClass(req.priority)"
-          >{{ priorityLabel(req.priority) }}</span>
-          <span v-if="req.category" class="category-tag">{{ req.category }}</span>
-          <span class="created-time">{{ relativeTime(req.createdAt) }}</span>
+    <template v-else>
+      <section class="lane-section">
+        <div class="lane-header">
+          <div>
+            <h3 class="lane-title">需你拍板</h3>
+            <p class="lane-note">
+              只展示 queue=decision 且 state=pending 的确认项。
+            </p>
+          </div>
+          <span class="lane-count">{{ decisionTotal }}</span>
         </div>
 
-        <h3 class="question-text">{{ req.question }}</h3>
-        <p v-if="req.context" class="context-text">{{ req.context }}</p>
-
-        <div v-if="cardErrors[req.id]" class="card-error">
-          {{ cardErrors[req.id] }}
+        <div v-if="decisionRequests.length === 0" class="empty-state compact">
+          <span>✅</span>
+          <p>暂无待处理决策</p>
         </div>
 
-        <div class="detail-toggle" @click="toggleDetail(req.id)">
-          {{ showDetail[req.id] ? '收起备注 ▲' : '添加备注 ▼' }}
-        </div>
-        <textarea
-          v-if="showDetail[req.id]"
-          v-model="detailTexts[req.id]"
-          class="detail-input"
-          placeholder="可选：补充说明..."
-          rows="2"
-        />
+        <TransitionGroup v-else name="card" tag="div" class="decision-list">
+          <div
+            v-for="req in decisionRequests"
+            :key="req.id"
+            class="decision-card"
+          >
+            <div class="card-top">
+              <span
+                class="priority-badge"
+                :class="priorityClass(req.priority)"
+                >{{ priorityLabel(req.priority) }}</span
+              >
+              <span class="reason-badge">{{ reasonLabel(req) }}</span>
+              <span v-if="req.category" class="category-tag">{{
+                req.category
+              }}</span>
+              <span class="created-time">{{
+                relativeTime(req.createdAt)
+              }}</span>
+            </div>
 
-        <div class="action-buttons">
-          <template v-if="req.options && req.options.length > 0">
-            <button
-              v-for="opt in req.options"
-              :key="opt.value"
-              class="option-btn"
-              :disabled="submitting[req.id]"
-              @click="submitAnswer(req.id, opt.value)"
+            <h3 class="question-text">{{ req.question }}</h3>
+            <p v-if="req.context" class="context-text">{{ req.context }}</p>
+
+            <div class="meta-row">
+              <span>来源 {{ routeLabel(req) }}</span>
+              <span v-if="req.updatedAt"
+                >最近更新 {{ relativeTime(req.updatedAt) }}</span
+              >
+            </div>
+
+            <div v-if="cardErrors[req.id]" class="card-error">
+              {{ cardErrors[req.id] }}
+            </div>
+
+            <div class="detail-toggle" @click="toggleDetail(req.id)">
+              {{ showDetail[req.id] ? '收起备注 ▲' : '添加备注 ▼' }}
+            </div>
+            <textarea
+              v-if="showDetail[req.id]"
+              v-model="detailTexts[req.id]"
+              class="detail-input"
+              placeholder="可选：补充说明..."
+              rows="2"
+            />
+
+            <div class="action-buttons">
+              <template v-if="req.options && req.options.length > 0">
+                <button
+                  v-for="opt in req.options"
+                  :key="opt.value"
+                  class="option-btn"
+                  :disabled="submitting[req.id]"
+                  @click="submitAnswer(req.id, opt.value)"
+                >
+                  {{ opt.label }}
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  class="option-btn yes"
+                  :disabled="submitting[req.id]"
+                  @click="submitAnswer(req.id, 'yes')"
+                >
+                  是
+                </button>
+                <button
+                  class="option-btn no"
+                  :disabled="submitting[req.id]"
+                  @click="submitAnswer(req.id, 'no')"
+                >
+                  否
+                </button>
+              </template>
+            </div>
+          </div>
+        </TransitionGroup>
+      </section>
+
+      <section class="lane-section watch-section">
+        <button class="watch-toggle" @click="watchCollapsed = !watchCollapsed">
+          <div>
+            <h3 class="lane-title">待观察</h3>
+            <p class="lane-note">queue=watch 的观察项，不计入主标题数字。</p>
+          </div>
+          <div class="watch-toggle-side">
+            <span class="lane-count muted">{{ watchTotal }}</span>
+            <span class="watch-chevron">{{ watchCollapsed ? '▼' : '▲' }}</span>
+          </div>
+        </button>
+
+        <div v-if="!watchCollapsed" class="watch-content">
+          <div
+            v-if="watchRequests.length === 0"
+            class="empty-state compact muted-empty"
+          >
+            <span>👁</span>
+            <p>当前没有待观察项</p>
+          </div>
+
+          <div v-else class="decision-list watch-groups">
+            <div
+              v-for="group in watchGroups"
+              :key="group.key"
+              class="watch-group"
             >
-              {{ opt.label }}
-            </button>
-          </template>
-          <template v-else>
-            <button
-              class="option-btn yes"
-              :disabled="submitting[req.id]"
-              @click="submitAnswer(req.id, 'yes')"
-            >是</button>
-            <button
-              class="option-btn no"
-              :disabled="submitting[req.id]"
-              @click="submitAnswer(req.id, 'no')"
-            >否</button>
-          </template>
+              <div class="watch-group-header">
+                <div>
+                  <div class="watch-group-title">{{ group.title }}</div>
+                  <div class="watch-group-subtitle">
+                    {{ group.items.length }} 个相关观察项
+                  </div>
+                </div>
+                <button
+                  v-if="group.items.length > 1"
+                  class="group-toggle"
+                  @click="toggleWatchGroup(group.key)"
+                >
+                  {{ expandedWatchGroups[group.key] ? '收起' : '展开' }}
+                </button>
+              </div>
+
+              <TransitionGroup name="card" tag="div" class="decision-list">
+                <div
+                  v-for="req in visibleWatchItems(group)"
+                  :key="req.id"
+                  class="decision-card watch-card"
+                >
+                  <div class="card-top">
+                    <span
+                      class="priority-badge"
+                      :class="priorityClass(req.priority)"
+                      >{{ priorityLabel(req.priority) }}</span
+                    >
+                    <span class="reason-badge watch">{{
+                      reasonLabel(req)
+                    }}</span>
+                    <span v-if="req.category" class="category-tag">{{
+                      req.category
+                    }}</span>
+                    <span class="created-time">{{
+                      relativeTime(req.createdAt)
+                    }}</span>
+                  </div>
+
+                  <h3 class="question-text">{{ req.question }}</h3>
+                  <p v-if="req.context" class="context-text">
+                    {{ req.context }}
+                  </p>
+
+                  <div class="meta-row">
+                    <span>来源 {{ routeLabel(req) }}</span>
+                    <span v-if="req.snoozeCount > 0"
+                      >已观察 {{ req.snoozeCount }} 次</span
+                    >
+                    <span v-if="req.updatedAt"
+                      >最近更新 {{ relativeTime(req.updatedAt) }}</span
+                    >
+                  </div>
+
+                  <div v-if="cardErrors[req.id]" class="card-error">
+                    {{ cardErrors[req.id] }}
+                  </div>
+
+                  <div class="action-buttons">
+                    <button
+                      class="option-btn"
+                      :disabled="submitting[req.id]"
+                      @click="transitionWatchRequest(req.id, 'pending')"
+                    >
+                      立即查证
+                    </button>
+                    <button
+                      class="option-btn quiet"
+                      :disabled="submitting[req.id]"
+                      @click="transitionWatchRequest(req.id, 'snoozed')"
+                    >
+                      继续观察
+                    </button>
+                    <button
+                      class="option-btn no"
+                      :disabled="submitting[req.id]"
+                      @click="transitionWatchRequest(req.id, 'expired')"
+                    >
+                      结束追踪
+                    </button>
+                  </div>
+                </div>
+              </TransitionGroup>
+            </div>
+          </div>
         </div>
-      </div>
-    </TransitionGroup>
+      </section>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
 import {
   getMemoryServiceClient,
   type ConfirmRequest,
@@ -85,26 +241,67 @@ import {
 const client = getMemoryServiceClient();
 
 const loading = ref(true);
-const pendingRequests = ref<ConfirmRequest[]>([]);
+const decisionTotal = ref(0);
+const watchTotal = ref(0);
+const decisionRequests = ref<ConfirmRequest[]>([]);
+const watchRequests = ref<ConfirmRequest[]>([]);
+const watchCollapsed = ref(true);
+const expandedWatchGroups = reactive<Record<string, boolean>>({});
 const showDetail = reactive<Record<string, boolean>>({});
 const detailTexts = reactive<Record<string, string>>({});
 const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
 
 onMounted(async () => {
-  await fetchPending();
+  await loadQueues();
 });
 
-async function fetchPending() {
-  loading.value = true;
+async function loadQueues(showLoading = true) {
+  if (showLoading) loading.value = true;
   try {
-    const res = await client.getConfirmRequests('pending', 50);
-    pendingRequests.value = res.items;
+    const [decisionRes, watchSnoozedRes, watchPendingRes] = await Promise.all([
+      client.getConfirmRequests('pending', 50, 'decision'),
+      client.getConfirmRequests('snoozed', 50, 'watch'),
+      client.getConfirmRequests('pending', 50, 'watch'),
+    ]);
+    decisionTotal.value = decisionRes.total;
+    watchTotal.value = watchSnoozedRes.total + watchPendingRes.total;
+    decisionRequests.value = decisionRes.items;
+    watchRequests.value = [...watchPendingRes.items, ...watchSnoozedRes.items];
   } catch (e: any) {
     console.error('Failed to load confirm requests', e);
+    decisionTotal.value = 0;
+    watchTotal.value = 0;
+    decisionRequests.value = [];
+    watchRequests.value = [];
   } finally {
-    loading.value = false;
+    if (showLoading) loading.value = false;
   }
+}
+
+const watchGroups = computed(() => {
+  const groups = new Map<string, ConfirmRequest[]>();
+  for (const req of watchRequests.value) {
+    const key =
+      req.sourceAnchor ||
+      `${req.gapType || req.reasonCode || 'watch'}:${req.category || 'unknown'}`;
+    const list = groups.get(key) ?? [];
+    list.push(req);
+    groups.set(key, list);
+  }
+  return Array.from(groups.entries()).map(([key, items]) => ({
+    key,
+    title: items[0]?.sourceAnchor || routeLabel(items[0]),
+    items: [...items].sort((a, b) => b.createdAt - a.createdAt),
+  }));
+});
+
+function toggleWatchGroup(key: string) {
+  expandedWatchGroups[key] = !expandedWatchGroups[key];
+}
+
+function visibleWatchItems(group: { key: string; items: ConfirmRequest[] }) {
+  return expandedWatchGroups[group.key] ? group.items : group.items.slice(0, 1);
 }
 
 function toggleDetail(id: string) {
@@ -117,9 +314,29 @@ async function submitAnswer(id: string, answer: string) {
   try {
     const detail = detailTexts[id]?.trim() || undefined;
     await client.answerConfirmRequest(id, answer, detail);
-    pendingRequests.value = pendingRequests.value.filter((r) => r.id !== id);
+    decisionRequests.value = decisionRequests.value.filter((r) => r.id !== id);
   } catch (e: any) {
     cardErrors[id] = e.message || '提交失败，请重试';
+  } finally {
+    submitting[id] = false;
+  }
+}
+
+async function transitionWatchRequest(
+  id: string,
+  state: 'pending' | 'snoozed' | 'expired',
+) {
+  submitting[id] = true;
+  delete cardErrors[id];
+  try {
+    await client.transitionConfirmRequestState(id, state);
+    await loadQueues(false);
+  } catch (e: any) {
+    if (state === 'snoozed') {
+      await loadQueues(false);
+      return;
+    }
+    cardErrors[id] = e.message || '操作失败，请重试';
   } finally {
     submitting[id] = false;
   }
@@ -135,6 +352,26 @@ function priorityLabel(p: string) {
   if (p === 'high') return '高';
   if (p === 'low') return '低';
   return '普通';
+}
+
+function reasonLabel(req: ConfirmRequest) {
+  const labels: Record<string, string> = {
+    authority_required: '需要你定夺',
+    approval_required: '需要审批',
+    future_monitoring: '持续观察',
+    owner_eta_gap: '负责人 / ETA 缺口',
+    artifact_gap: '等待更多证据',
+    time_sensitive_blocker: '时效阻塞',
+  };
+  if (req.reasonCode && labels[req.reasonCode]) return labels[req.reasonCode];
+  if (req.category) return req.category;
+  return req.routing === 'watch' ? '观察项' : '待确认';
+}
+
+function routeLabel(req: ConfirmRequest) {
+  if (req.reasonCode) return reasonLabel(req);
+  if (req.category) return `分类 ${req.category}`;
+  return req.routing === 'watch' ? '等待更多证据' : '需要你选方向';
 }
 
 function relativeTime(ts: number) {
@@ -154,10 +391,82 @@ function relativeTime(ts: number) {
   animation: fadeInUp 0.6s ease-out;
 }
 
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
 .section-title {
   font-size: 1.5rem;
   font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.section-subtitle {
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.refresh-btn {
+  border: none;
+  border-radius: 0.8rem;
+  padding: 0.72rem 1rem;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+  color: white;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lane-section {
   margin-bottom: 1.5rem;
+}
+
+.lane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.lane-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+
+.lane-note {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.lane-count {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.lane-count.muted {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
 }
 
 .decision-list {
@@ -178,6 +487,51 @@ function relativeTime(ts: number) {
 .decision-card:hover {
   border-color: rgba(59, 130, 246, 0.3);
   box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+}
+
+.watch-card {
+  background: rgba(15, 23, 42, 0.45);
+  border-color: rgba(148, 163, 184, 0.08);
+}
+
+.watch-groups {
+  gap: 1.25rem;
+}
+
+.watch-group {
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.18);
+}
+
+.watch-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.watch-group-title {
+  color: #e2e8f0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.watch-group-subtitle {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+.group-toggle {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
 }
 
 .card-top {
@@ -209,6 +563,20 @@ function relativeTime(ts: number) {
   color: #94a3b8;
 }
 
+.reason-badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 1rem;
+  background: rgba(14, 165, 233, 0.16);
+  color: #67e8f9;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.reason-badge.watch {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
 .category-tag {
   padding: 0.2rem 0.6rem;
   background: rgba(147, 51, 234, 0.2);
@@ -235,6 +603,15 @@ function relativeTime(ts: number) {
   color: #cbd5e1;
   font-size: 0.875rem;
   line-height: 1.5;
+  margin-bottom: 0.75rem;
+}
+
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
   margin-bottom: 0.75rem;
 }
 
@@ -316,6 +693,17 @@ function relativeTime(ts: number) {
   border-color: rgba(34, 197, 94, 0.5);
 }
 
+.option-btn.quiet {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.option-btn.quiet:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.16);
+  border-color: rgba(148, 163, 184, 0.32);
+}
+
 .option-btn.no {
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.3);
@@ -325,6 +713,59 @@ function relativeTime(ts: number) {
 .option-btn.no:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.2);
   border-color: rgba(239, 68, 68, 0.5);
+}
+
+.watch-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 1.25rem;
+}
+
+.watch-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 1rem 1.1rem;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease;
+}
+
+.watch-toggle:hover {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.56);
+}
+
+.watch-toggle-side {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.watch-chevron {
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.watch-content {
+  margin-top: 1rem;
+}
+
+.empty-state.compact {
+  padding: 2rem 1.5rem;
+}
+
+.muted-empty {
+  border: 1px dashed rgba(148, 163, 184, 0.14);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.25);
 }
 
 /* TransitionGroup animations */

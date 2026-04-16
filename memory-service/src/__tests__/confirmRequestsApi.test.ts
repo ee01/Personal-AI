@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -305,13 +314,15 @@ describe('Confirm Requests API', () => {
       executionMode: 'auto',
       queueStatus: 'queued',
     });
-    context.db.prepare(
-      `UPDATE proposed_actions
+    context.db
+      .prepare(
+        `UPDATE proposed_actions
        SET queue_status = 'succeeded',
            state = 'executed',
            result_json = ?
        WHERE id = ?`,
-    ).run(JSON.stringify({ confirmRequestId: 'cr-wake-1' }), action.id);
+      )
+      .run(JSON.stringify({ confirmRequestId: 'cr-wake-1' }), action.id);
 
     context.db
       .prepare(
@@ -345,9 +356,148 @@ describe('Confirm Requests API', () => {
 
     const updatedSourceThread = threadRepo.getThreadById(sourceThread.id);
     const updatedOriginThread = threadRepo.getThreadById(originThread.id);
-    expect((updatedSourceThread?.nextReflectionAt ?? 0)).toBeLessThan(currentTime + 10);
-    expect((updatedOriginThread?.nextReflectionAt ?? 0)).toBeLessThan(currentTime + 10);
-    expect(updatedSourceThread?.continueReason).toBe('confirm request answered');
-    expect(updatedOriginThread?.continueReason).toBe('confirm request answered');
+    expect(updatedSourceThread?.nextReflectionAt ?? 0).toBeLessThan(
+      currentTime + 10,
+    );
+    expect(updatedOriginThread?.nextReflectionAt ?? 0).toBeLessThan(
+      currentTime + 10,
+    );
+    expect(updatedSourceThread?.continueReason).toBe(
+      'confirm request answered',
+    );
+    expect(updatedOriginThread?.continueReason).toBe(
+      'confirm request answered',
+    );
+  });
+
+  it('filters confirm requests by queue and excludes watch items from decision queue', async () => {
+    const context = userContextManager.getContext('confirm-retry-user');
+    const currentTime = Math.floor(Date.now() / 1000);
+
+    context.db
+      .prepare(
+        `INSERT INTO confirm_requests
+        (id, question, options_json, evidence_refs_json, category, priority, state, routing, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'cr-decision-1',
+        'Should we proceed with Orbit migration?',
+        JSON.stringify([{ label: 'Proceed', value: 'proceed' }]),
+        JSON.stringify([]),
+        'reflection',
+        'high',
+        'pending',
+        'decision',
+        currentTime,
+        currentTime,
+      );
+
+    context.db
+      .prepare(
+        `INSERT INTO confirm_requests
+        (id, question, options_json, evidence_refs_json, category, priority, state, routing, reason_code, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'cr-watch-1',
+        'Will AI Notes Edit BE change next week?',
+        JSON.stringify([{ label: '继续观察', value: 'continue' }]),
+        JSON.stringify([]),
+        'evidence_resolution',
+        'normal',
+        'snoozed',
+        'watch',
+        'future_monitoring',
+        currentTime,
+        currentTime,
+      );
+
+    const decisionResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/confirm-requests?queue=decision&state=pending',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+    });
+    expect(decisionResponse.statusCode).toBe(200);
+    expect(decisionResponse.json().items.map((item: any) => item.id)).toEqual([
+      'cr-decision-1',
+    ]);
+
+    const watchResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/confirm-requests?queue=watch&state=snoozed',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+    });
+    expect(watchResponse.statusCode).toBe(200);
+    expect(watchResponse.json().items.map((item: any) => item.id)).toEqual([
+      'cr-watch-1',
+    ]);
+  });
+
+  it('transitions watch item state through the state endpoint and rejects answer endpoint', async () => {
+    const context = userContextManager.getContext('confirm-retry-user');
+    const currentTime = Math.floor(Date.now() / 1000);
+
+    context.db
+      .prepare(
+        `INSERT INTO confirm_requests
+        (id, question, options_json, evidence_refs_json, category, priority, state, routing, reason_code, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'cr-watch-transition',
+        'Who owns Orbit now?',
+        JSON.stringify([{ label: '继续观察', value: 'continue' }]),
+        JSON.stringify([]),
+        'evidence_resolution',
+        'normal',
+        'snoozed',
+        'watch',
+        'owner_eta_gap',
+        currentTime,
+        currentTime,
+      );
+
+    const answerResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/cr-watch-transition/answer',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { answer: 'continue' },
+    });
+    expect(answerResponse.statusCode).toBe(400);
+
+    const stateResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/cr-watch-transition/state',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { state: 'pending' },
+    });
+    expect(stateResponse.statusCode).toBe(200);
+    expect(stateResponse.json().confirmRequest.state).toBe('pending');
+    expect(stateResponse.json().queuedActionId).toBeTruthy();
+
+    const queuedAction = context.db
+      .prepare(
+        `SELECT action_type, source_kind, source_ref_id FROM proposed_actions WHERE id = ?`,
+      )
+      .get(stateResponse.json().queuedActionId) as {
+      action_type: string;
+      source_kind: string | null;
+      source_ref_id: string | null;
+    };
+    expect(queuedAction).toMatchObject({
+      action_type: 'delegate_openclaw',
+      source_kind: 'confirm_request_watch',
+      source_ref_id: 'cr-watch-transition',
+    });
+
+    const resnoozeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/cr-watch-transition/state',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { state: 'snoozed' },
+    });
+    expect(resnoozeResponse.statusCode).toBe(200);
+    expect(resnoozeResponse.json().confirmRequest.state).toBe('snoozed');
   });
 });

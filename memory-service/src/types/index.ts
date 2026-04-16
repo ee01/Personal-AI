@@ -35,7 +35,25 @@ export type ActionState =
   | 'executed'
   | 'dismissed'
   | 'expired';
-export type ConfirmState = 'pending' | 'answered' | 'snoozed' | 'expired';
+export type ConfirmState =
+  | 'pending'
+  | 'answered'
+  | 'snoozed'
+  | 'expired'
+  | 'deduplicated';
+export type ConfirmRouting = 'decision' | 'watch';
+export type ConfirmReasonCode =
+  | 'authority_required'
+  | 'approval_required'
+  | 'future_monitoring'
+  | 'owner_eta_gap'
+  | 'artifact_gap'
+  | 'time_sensitive_blocker';
+export type ConfirmGapType =
+  | 'future_monitoring'
+  | 'owner_eta'
+  | 'artifact_check'
+  | 'decision_blocker';
 export type AuthorityLevel =
   | 'official'
   | 'team_lead'
@@ -296,12 +314,17 @@ export interface ConfirmRequest {
   relatedPropertyId?: number;
   priority: string;
   state: ConfirmState;
+  routing?: ConfirmRouting;
+  reasonCode?: ConfirmReasonCode;
+  sourceAnchor?: string;
+  gapType?: ConfirmGapType;
   userAnswer?: string;
   answeredAt?: number;
   snoozeUntil?: number;
   snoozeCount: number;
   expiresAt?: number;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export interface NotificationRecord {

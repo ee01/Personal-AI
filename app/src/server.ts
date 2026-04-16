@@ -10,8 +10,16 @@ import {
   BridgeMemoryServiceClient,
   BridgeMemoryServiceHttpError,
 } from './memoryServiceClient.js';
-import { applyBridgeSettingsToConfig, BridgeSettingsStore, type BridgeSettingsPayload, type BridgeUserSettings } from './settings.js';
-import type { BridgeSyncManager, BridgeSyncManagerSnapshot } from './syncManager.js';
+import {
+  applyBridgeSettingsToConfig,
+  BridgeSettingsStore,
+  type BridgeSettingsPayload,
+  type BridgeUserSettings,
+} from './settings.js';
+import type {
+  BridgeSyncManager,
+  BridgeSyncManagerSnapshot,
+} from './syncManager.js';
 import type {
   AutoSyncKind,
   BridgeAssistantStreamEvent,
@@ -31,7 +39,9 @@ import type {
 } from './types.js';
 import { DoubaoBridgeService } from './bridgeService.js';
 
-function readToken(request: Pick<FastifyRequest, 'headers'>): string | undefined {
+function readToken(
+  request: Pick<FastifyRequest, 'headers'>,
+): string | undefined {
   const value = request.headers['x-bridge-token'];
   return Array.isArray(value) ? value[0] : value;
 }
@@ -61,7 +71,11 @@ interface BridgeServerDependencies {
 }
 
 type SyncReadinessKey = 'stableMemory' | 'mobileBriefing' | 'reminderSync';
-type RunNowRequestKind = AutoSyncKind | 'stableMemory' | 'mobileBriefing' | 'reminderSync';
+type RunNowRequestKind =
+  | AutoSyncKind
+  | 'stableMemory'
+  | 'mobileBriefing'
+  | 'reminderSync';
 const LOW_MESSAGE_THRESHOLD = 50;
 const MEMORY_GROWTH_WINDOW_DAYS = 90;
 
@@ -72,10 +86,13 @@ function normalizeAutoSyncKind(kind: RunNowRequestKind): AutoSyncKind {
   return kind;
 }
 
-function uniqueReasons(reasons: BridgeBlockingReason[]): BridgeBlockingReason[] {
+function uniqueReasons(
+  reasons: BridgeBlockingReason[],
+): BridgeBlockingReason[] {
   return reasons.filter(
     (reason, index) =>
-      reasons.findIndex((candidate) => candidate.code === reason.code) === index,
+      reasons.findIndex((candidate) => candidate.code === reason.code) ===
+      index,
   );
 }
 
@@ -139,7 +156,9 @@ function filterReadiness(
   reasons: BridgeBlockingReason[],
   taskSnapshot: BridgeSyncManagerSnapshot['tasks'][SyncReadinessKey],
 ): BridgeSyncReadiness {
-  const kindReasons = reasons.filter((reason) => reason.syncKinds.includes(kind));
+  const kindReasons = reasons.filter((reason) =>
+    reason.syncKinds.includes(kind),
+  );
 
   return {
     ready: kindReasons.length === 0,
@@ -157,7 +176,10 @@ async function loadMemoryGrowthSummary(
   try {
     const stats = await memoryClient.getStats();
     const recentMessageCount = stats.messages.last90Days;
-    if (typeof recentMessageCount !== 'number' || Number.isNaN(recentMessageCount)) {
+    if (
+      typeof recentMessageCount !== 'number' ||
+      Number.isNaN(recentMessageCount)
+    ) {
       return undefined;
     }
 
@@ -179,22 +201,38 @@ async function buildStatus(
   const baseStatus = await service.getStatus();
   const syncSnapshot = deps.syncManager.getSnapshot();
   const settingsPayload = deps.settingsStore.getPayload();
-  const blockingReasons = buildBlockingReasons(settingsPayload.effective, baseStatus);
+  const blockingReasons = buildBlockingReasons(
+    settingsPayload.effective,
+    baseStatus,
+  );
   const memoryGrowth = await loadMemoryGrowthSummary(deps.memoryClient);
 
   return {
     ...baseStatus,
     appVersion: deps.version,
     memoryServiceConfigured: Boolean(
-      settingsPayload.effective.memoryServiceBaseUrl && settingsPayload.effective.memoryServiceUserId,
+      settingsPayload.effective.memoryServiceBaseUrl &&
+      settingsPayload.effective.memoryServiceUserId,
     ),
     autoSyncEnabled: settingsPayload.effective.autoSync,
     memoryGrowth,
     blockingReasons,
     syncReadiness: {
-      stableMemory: filterReadiness('stableMemory', blockingReasons, syncSnapshot.tasks.stableMemory),
-      mobileBriefing: filterReadiness('mobileBriefing', blockingReasons, syncSnapshot.tasks.mobileBriefing),
-      reminderSync: filterReadiness('reminderSync', blockingReasons, syncSnapshot.tasks.reminderSync),
+      stableMemory: filterReadiness(
+        'stableMemory',
+        blockingReasons,
+        syncSnapshot.tasks.stableMemory,
+      ),
+      mobileBriefing: filterReadiness(
+        'mobileBriefing',
+        blockingReasons,
+        syncSnapshot.tasks.mobileBriefing,
+      ),
+      reminderSync: filterReadiness(
+        'reminderSync',
+        blockingReasons,
+        syncSnapshot.tasks.reminderSync,
+      ),
     },
     syncState: syncSnapshot,
     settings: {
@@ -203,12 +241,14 @@ async function buildStatus(
       autoSync: settingsPayload.effective.autoSync,
       pollIntervalMs: settingsPayload.effective.pollIntervalMs,
       stableMemoryIntervalMs: settingsPayload.effective.stableMemoryIntervalMs,
-      mobileBriefingIntervalMs: settingsPayload.effective.mobileBriefingIntervalMs,
+      mobileBriefingIntervalMs:
+        settingsPayload.effective.mobileBriefingIntervalMs,
       reminderSyncIntervalMs: settingsPayload.effective.reminderSyncIntervalMs,
     },
     setupChecklist: {
       memoryServiceConfigured: Boolean(
-        settingsPayload.effective.memoryServiceBaseUrl && settingsPayload.effective.memoryServiceUserId,
+        settingsPayload.effective.memoryServiceBaseUrl &&
+        settingsPayload.effective.memoryServiceUserId,
       ),
       autoSyncEnabled: settingsPayload.effective.autoSync,
       doubaoConnected: baseStatus.authStatus === 'connected',
@@ -222,7 +262,11 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function writeSseEvent(reply: FastifyReply, event: BridgeAssistantStreamEvent['type'], payload: Record<string, unknown>) {
+function writeSseEvent(
+  reply: FastifyReply,
+  event: BridgeAssistantStreamEvent['type'],
+  payload: Record<string, unknown>,
+) {
   reply.raw.write(`event: ${event}\n`);
   reply.raw.write(`data: ${JSON.stringify({ type: event, ...payload })}\n\n`);
 }
@@ -245,12 +289,18 @@ async function loadAssistantRuntimeSummary(
       waitingReplySessions,
       pendingApprovalSessions,
     ] = await Promise.all([
-      deps.memoryClient.getConfirmRequests('pending', 5),
+      deps.memoryClient.getConfirmRequests('pending', 5, 'decision'),
       deps.memoryClient.getActions({ queueStatus: 'running', limit: 5 }),
       deps.memoryClient.getActions({ queueStatus: 'queued', limit: 5 }),
       deps.memoryClient.getOutreachSummary(),
-      deps.memoryClient.getOutreachSessions({ status: 'waiting_reply', limit: 1 }),
-      deps.memoryClient.getOutreachSessions({ status: 'pending_approval', limit: 1 }),
+      deps.memoryClient.getOutreachSessions({
+        status: 'waiting_reply',
+        limit: 1,
+      }),
+      deps.memoryClient.getOutreachSessions({
+        status: 'pending_approval',
+        limit: 1,
+      }),
     ]);
 
     return buildAssistantRuntimeSummary({
@@ -270,7 +320,11 @@ async function loadAssistantRuntimeSummary(
   }
 }
 
-export async function createBridgeServer(config: BridgeConfig, service: DoubaoBridgeService, deps: BridgeServerDependencies) {
+export async function createBridgeServer(
+  config: BridgeConfig,
+  service: DoubaoBridgeService,
+  deps: BridgeServerDependencies,
+) {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
 
   app.addHook('onRequest', createAuthHook(service));
@@ -296,7 +350,8 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
     try {
       return await service.openLogin();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to open Doubao login';
+      const message =
+        error instanceof Error ? error.message : 'Unable to open Doubao login';
       return reply.code(400).send({ error: message });
     }
   });
@@ -316,12 +371,15 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
     try {
       return await deps.memoryClient.testConnection();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Memory Service test failed';
+      const message =
+        error instanceof Error ? error.message : 'Memory Service test failed';
       return reply.code(400).send({ ok: false, error: message });
     }
   });
 
-  app.get('/assistant/runtime-summary', async () => loadAssistantRuntimeSummary(service, deps));
+  app.get('/assistant/runtime-summary', async () =>
+    loadAssistantRuntimeSummary(service, deps),
+  );
 
   app.post<{
     Body: BridgeAssistantAskRequest;
@@ -443,7 +501,10 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
         ],
       };
     } catch (error) {
-      if (error instanceof BridgeMemoryServiceHttpError && error.status === 409) {
+      if (
+        error instanceof BridgeMemoryServiceHttpError &&
+        error.status === 409
+      ) {
         const payload =
           error.payload && typeof error.payload === 'object'
             ? (error.payload as { existingId?: string })
@@ -473,7 +534,10 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
     try {
       return await service.createMemorySyncThread();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to create memory-sync thread';
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to create memory-sync thread';
       return reply.code(400).send({ error: message });
     }
   });
@@ -482,19 +546,31 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
     Body: { title?: string };
   }>('/threads/auto-bind-mobile', async (request, reply) => {
     try {
-      const binding = await service.bindMobileContextByTitle(request.body?.title || '手机版对话');
+      const binding = await service.bindMobileContextByTitle(
+        request.body?.title || '手机版对话',
+      );
       if (!binding) {
-        return reply.code(404).send({ error: 'Mobile-context thread not found' });
+        return reply
+          .code(404)
+          .send({ error: 'Mobile-context thread not found' });
       }
       return binding;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to bind mobile-context thread';
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to bind mobile-context thread';
       return reply.code(400).send({ error: message });
     }
   });
 
   app.post<{
-    Body: { bindingType: BindingType; threadId?: string; threadUrl?: string; title?: string };
+    Body: {
+      bindingType: BindingType;
+      threadId?: string;
+      threadUrl?: string;
+      title?: string;
+    };
   }>('/threads/bind', async (request) =>
     service.bindThread(request.body.bindingType, {
       id: request.body.threadId,
@@ -504,12 +580,14 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
     }),
   );
 
-  app.post<{ Body: StableMemorySyncRequest }>('/sync/stable-memory', async (request) =>
-    service.syncStableMemory(request.body),
+  app.post<{ Body: StableMemorySyncRequest }>(
+    '/sync/stable-memory',
+    async (request) => service.syncStableMemory(request.body),
   );
 
-  app.post<{ Body: MobileBriefingRequest }>('/sync/mobile-briefing', async (request) =>
-    service.syncMobileBriefing(request.body),
+  app.post<{ Body: MobileBriefingRequest }>(
+    '/sync/mobile-briefing',
+    async (request) => service.syncMobileBriefing(request.body),
   );
 
   app.post<{
@@ -523,30 +601,42 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
         kind,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Run-now sync failed';
+      const message =
+        error instanceof Error ? error.message : 'Run-now sync failed';
       return reply.code(400).send({ ok: false, error: message });
     }
   });
 
-  app.post<{ Body: QueryInjectRequest }>('/inject/query', async (request) => service.injectQuery(request.body));
+  app.post<{ Body: QueryInjectRequest }>('/inject/query', async (request) =>
+    service.injectQuery(request.body),
+  );
 
-  app.post<{ Body: SendExperimentRequest }>('/debug/send-experiment', async (request, reply) => {
-    try {
-      return await service.sendExperiment(request.body);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Experiment send failed';
-      return reply.code(400).send({ accepted: false, error: message });
-    }
-  });
+  app.post<{ Body: SendExperimentRequest }>(
+    '/debug/send-experiment',
+    async (request, reply) => {
+      try {
+        return await service.sendExperiment(request.body);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Experiment send failed';
+        return reply.code(400).send({ accepted: false, error: message });
+      }
+    },
+  );
 
-  app.post<{ Body: ReminderSyncRequest }>('/reminders/sync', async (request) => service.syncReminders(request.body));
+  app.post<{ Body: ReminderSyncRequest }>('/reminders/sync', async (request) =>
+    service.syncReminders(request.body),
+  );
 
   // 随手记同步 API
-  app.post<{ Body: MemoSyncRequest }>('/memo/sync', async (request) => service.syncMemo(request.body));
+  app.post<{ Body: MemoSyncRequest }>('/memo/sync', async (request) =>
+    service.syncMemo(request.body),
+  );
 
   // 随手记格式的长期记忆同步
-  app.post<{ Body: StableMemorySyncRequest }>('/memo/stable-memory', async (request) =>
-    service.syncStableMemoryAsMemo(request.body),
+  app.post<{ Body: StableMemorySyncRequest }>(
+    '/memo/stable-memory',
+    async (request) => service.syncStableMemoryAsMemo(request.body),
   );
 
   // 随手记格式的提醒同步
@@ -556,7 +646,8 @@ export async function createBridgeServer(config: BridgeConfig, service: DoubaoBr
 
   // 分类测试 API
   app.post<{ Body: { text: string } }>('/memo/classify', async (request) => {
-    const { classifyMessage, extractMemoContent } = await import('./memoClassifier.js');
+    const { classifyMessage, extractMemoContent } =
+      await import('./memoClassifier.js');
     const classification = classifyMessage(request.body.text);
     const metadata = extractMemoContent(request.body.text, classification.type);
     return {

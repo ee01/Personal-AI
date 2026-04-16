@@ -71,9 +71,16 @@ function isSelfOrUnknownOutreachTarget(targetRef: unknown): boolean {
   if (typeof targetRef !== 'string') return true;
   const normalized = targetRef.trim().toLowerCase();
   if (!normalized) return true;
-  return ['me', 'myself', 'self', 'user', 'current_user', 'current user', '我', '自己'].includes(
-    normalized,
-  );
+  return [
+    'me',
+    'myself',
+    'self',
+    'user',
+    'current_user',
+    'current user',
+    '我',
+    '自己',
+  ].includes(normalized);
 }
 
 const INTERNAL_AUTO_ACTION_TYPES = new Set([
@@ -130,22 +137,25 @@ export class ReflectionWorker {
     triggerType: string,
   ): Promise<GeneratedReflection> {
     const llm = getLLMClient();
-    const evidenceText = evidence.length > 0
-      ? evidence
-          .slice(0, 10)
-          .map((item, index) => {
-            const ts = item.createdAt ? formatDateTime(item.createdAt) : 'unknown';
-            return `${index + 1}. [${item.sourceKind}/${item.role}] ${item.title} @ ${ts}\n${item.snippet}`;
-          })
-          .join('\n\n')
-      : 'No external evidence attached.';
+    const evidenceText =
+      evidence.length > 0
+        ? evidence
+            .slice(0, 10)
+            .map((item, index) => {
+              const ts = item.createdAt
+                ? formatDateTime(item.createdAt)
+                : 'unknown';
+              return `${index + 1}. [${item.sourceKind}/${item.role}] ${item.title} @ ${ts}\n${item.snippet}`;
+            })
+            .join('\n\n')
+        : 'No external evidence attached.';
 
     const prompt = `You are maintaining a continuous reflection thread for a personal AI memory system.
 
 Thread title: ${thread.title}
 Topic key: ${thread.topicKey}
 Current hypothesis: ${thread.currentHypothesis ?? 'None'}
-Existing open questions: ${(thread.openQuestions.length > 0 ? thread.openQuestions.join(' | ') : 'None')}
+Existing open questions: ${thread.openQuestions.length > 0 ? thread.openQuestions.join(' | ') : 'None'}
 Trigger type: ${triggerType}
 
 Evidence:
@@ -174,15 +184,27 @@ Rules:
 
     const discoveries = uniqStrings(parsed.discoveries ?? []);
     const openQuestions = uniqStrings(parsed.openQuestions ?? []);
-    const actionProposals = await this.planActions(thread, evidence, summary, openQuestions);
+    const actionProposals = await this.planActions(
+      thread,
+      evidence,
+      summary,
+      openQuestions,
+    );
 
     return {
       summary,
-      hypothesisAfter: parsed.hypothesisAfter?.trim() || thread.currentHypothesis,
+      hypothesisAfter:
+        parsed.hypothesisAfter?.trim() || thread.currentHypothesis,
       discoveries,
       openQuestions,
       actionProposals,
-      markdownBody: this.renderMarkdown(summary, discoveries, openQuestions, actionProposals, evidence),
+      markdownBody: this.renderMarkdown(
+        summary,
+        discoveries,
+        openQuestions,
+        actionProposals,
+        evidence,
+      ),
     };
   }
 
@@ -192,18 +214,27 @@ Rules:
     triggerType: string,
   ): GeneratedReflection {
     const evidencePreview = evidence.slice(0, 3);
-    const discoveries = evidencePreview.map((item) => `${item.title}: ${item.snippet.slice(0, 140)}`);
+    const discoveries = evidencePreview.map(
+      (item) => `${item.title}: ${item.snippet.slice(0, 140)}`,
+    );
     const openQuestions = uniqStrings([
       ...thread.openQuestions,
-      evidencePreview.length > 0 ? `Should ${thread.title} trigger a concrete follow-up action?` : undefined,
+      evidencePreview.length > 0
+        ? `Should ${thread.title} trigger a concrete follow-up action?`
+        : undefined,
     ]).slice(0, 5);
 
-    const summary = evidencePreview.length > 0
-      ? `${thread.title} was revisited by ${triggerType}. ${evidencePreview.length} recent evidence item(s) were attached, with the newest signal pointing to "${evidencePreview[0].title}".`
-      : `${thread.title} was revisited by ${triggerType}, but there was no fresh evidence beyond the existing thread state.`;
+    const summary =
+      evidencePreview.length > 0
+        ? `${thread.title} was revisited by ${triggerType}. ${evidencePreview.length} recent evidence item(s) were attached, with the newest signal pointing to "${evidencePreview[0].title}".`
+        : `${thread.title} was revisited by ${triggerType}, but there was no fresh evidence beyond the existing thread state.`;
 
     const actionProposals: DraftReflectionAction[] = [];
-    if (thread.sourceType === 'confirm_request' || thread.priority >= 8 || thread.salience >= getConfig().reflectionUrgentNotifyThreshold) {
+    if (
+      thread.sourceType === 'confirm_request' ||
+      thread.priority >= 8 ||
+      thread.salience >= getConfig().reflectionUrgentNotifyThreshold
+    ) {
       actionProposals.push({
         actionType: 'notify_user',
         title: `自我反思提示: ${thread.title}`,
@@ -232,7 +263,13 @@ Rules:
       discoveries,
       openQuestions,
       actionProposals,
-      markdownBody: this.renderMarkdown(summary, discoveries, openQuestions, actionProposals, evidence),
+      markdownBody: this.renderMarkdown(
+        summary,
+        discoveries,
+        openQuestions,
+        actionProposals,
+        evidence,
+      ),
     };
   }
 
@@ -266,7 +303,9 @@ Rules:
     return action ? [action] : [];
   }
 
-  private buildResolutionPolicy(thread: ReflectionThreadRecord): EvidenceResolutionPolicy {
+  private buildResolutionPolicy(
+    thread: ReflectionThreadRecord,
+  ): EvidenceResolutionPolicy {
     const summarySignals = [
       thread.title,
       thread.latestSummary,
@@ -274,15 +313,21 @@ Rules:
       thread.currentHypothesis,
       ...thread.openQuestions,
     ]
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .filter(
+        (value): value is string =>
+          typeof value === 'string' && value.trim().length > 0,
+      )
       .join('\n');
-    const explicitActionIntent = /\b(create|update|modify|submit|file)\b|创建|新建|修改|更新|提交|写入/i.test(
-      summarySignals,
-    );
+    const explicitActionIntent =
+      /\b(create|update|modify|submit|file)\b|创建|新建|修改|更新|提交|写入/i.test(
+        summarySignals,
+      );
 
     return {
       scene: 'reflection',
-      userIntentMode: explicitActionIntent ? 'explicit_action' : 'informational',
+      userIntentMode: explicitActionIntent
+        ? 'explicit_action'
+        : 'informational',
       externalRead: 'auto',
       externalWrite: explicitActionIntent ? 'approval_required' : 'disabled',
       allowAskExternalUser: true,
@@ -315,7 +360,16 @@ Rules:
         actionType: actionType as EvidenceResolutionActionType,
         title,
         description,
-        params: plan.actionParams,
+        params:
+          actionType === 'create_confirm_request'
+            ? {
+                ...(plan.actionParams ?? {}),
+                sourceAnchor:
+                  typeof plan.actionParams?.sourceAnchor === 'string'
+                    ? plan.actionParams.sourceAnchor
+                    : `thread:${thread.id}`,
+              }
+            : plan.actionParams,
         confidence: plan.confidence,
         priority:
           actionType === 'create_confirm_request'
@@ -323,7 +377,8 @@ Rules:
             : thread.priority,
         utilityScore: thread.salience,
         urgencyScore:
-          plan.resolutionState === 'partial' || plan.resolutionState === 'insufficient'
+          plan.resolutionState === 'partial' ||
+          plan.resolutionState === 'insufficient'
             ? Math.max(0.6, thread.salience)
             : thread.salience,
         riskLevel: actionType === 'delegate_openclaw' ? 'low' : 'medium',
@@ -339,43 +394,56 @@ Rules:
   ): DraftReflectionAction | null {
     if (!action.actionType?.trim() || !action.title?.trim()) return null;
 
-    const params = action.params && typeof action.params === 'object' && !Array.isArray(action.params)
-      ? action.params
-      : {};
+    const params =
+      action.params &&
+      typeof action.params === 'object' &&
+      !Array.isArray(action.params)
+        ? action.params
+        : {};
     const requestedMode =
-      action.actionType.trim() === 'delegate_openclaw' && typeof params.mode === 'string'
+      action.actionType.trim() === 'delegate_openclaw' &&
+      typeof params.mode === 'string'
         ? params.mode.trim().toLowerCase()
         : undefined;
     const normalizedActionType = action.actionType.trim();
     const explicitExecutionMode = normalizeExecutionMode(action.executionMode);
 
     if (normalizedActionType === 'ask_external_user') {
-      const targetRef = params.targetRef ?? params.target_ref ?? params.targetId ?? params.chatId;
-      const question = typeof params.question === 'string' ? params.question.trim() : '';
+      const targetRef =
+        params.targetRef ??
+        params.target_ref ??
+        params.targetId ??
+        params.chatId;
+      const question =
+        typeof params.question === 'string' ? params.question.trim() : '';
       if (isSelfOrUnknownOutreachTarget(targetRef) || !question) {
         return null;
       }
     }
 
     const shouldForceAutoInternalAction =
-      INTERNAL_AUTO_ACTION_TYPES.has(normalizedActionType) && explicitExecutionMode !== 'manual';
+      INTERNAL_AUTO_ACTION_TYPES.has(normalizedActionType) &&
+      explicitExecutionMode !== 'manual';
     const defaultExecutionMode = shouldForceAutoInternalAction
       ? 'auto'
-      : explicitExecutionMode ?? defaultExecutionModeForAction(normalizedActionType, params);
+      : (explicitExecutionMode ??
+        defaultExecutionModeForAction(normalizedActionType, params));
     const defaultRequiresApproval = shouldForceAutoInternalAction
       ? false
-      : action.requiresApproval ?? defaultExecutionMode !== 'auto';
-    const delegatePolicy = normalizedActionType === 'delegate_openclaw'
-      ? resolveDelegateOpenClawPolicy({
-          params,
-          requestedExecutionMode: explicitExecutionMode,
-          requestedRequiresApproval: action.requiresApproval,
-          defaultExecutionMode,
-          defaultRequiresApproval,
-        })
-      : null;
+      : (action.requiresApproval ?? defaultExecutionMode !== 'auto');
+    const delegatePolicy =
+      normalizedActionType === 'delegate_openclaw'
+        ? resolveDelegateOpenClawPolicy({
+            params,
+            requestedExecutionMode: explicitExecutionMode,
+            requestedRequiresApproval: action.requiresApproval,
+            defaultExecutionMode,
+            defaultRequiresApproval,
+          })
+        : null;
     const executionMode = delegatePolicy?.executionMode ?? defaultExecutionMode;
-    const requiresApproval = delegatePolicy?.requiresApproval ?? defaultRequiresApproval;
+    const requiresApproval =
+      delegatePolicy?.requiresApproval ?? defaultRequiresApproval;
 
     return {
       actionType: normalizedActionType,
@@ -385,7 +453,10 @@ Rules:
       confidence: clampScore(action.confidence, 0.6),
       requiresApproval,
       executionMode,
-      priority: Math.max(1, Math.min(Math.round(action.priority ?? thread.priority), 10)),
+      priority: Math.max(
+        1,
+        Math.min(Math.round(action.priority ?? thread.priority), 10),
+      ),
       utilityScore: clampScore(action.utilityScore, thread.salience),
       urgencyScore: clampScore(action.urgencyScore, thread.salience),
       riskLevel: action.riskLevel ?? 'low',
@@ -401,18 +472,32 @@ Rules:
     actions: DraftReflectionAction[],
     evidence: ReflectionEvidenceItem[],
   ): string {
-    const discoveriesMd = discoveries.length > 0
-      ? discoveries.map((item) => `- ${item}`).join('\n')
-      : '- None';
-    const questionsMd = openQuestions.length > 0
-      ? openQuestions.map((item) => `- ${item}`).join('\n')
-      : '- None';
-    const actionsMd = actions.length > 0
-      ? actions.map((action) => `- [${action.actionType}] ${action.title}${action.description ? `: ${action.description}` : ''}`).join('\n')
-      : '- None';
-    const evidenceMd = evidence.length > 0
-      ? evidence.map((item) => `- **${item.title}** (${item.sourceKind}/${item.role})${item.createdAt ? ` @ ${formatDateTime(item.createdAt)}` : ''}: ${item.snippet}`).join('\n')
-      : '- None';
+    const discoveriesMd =
+      discoveries.length > 0
+        ? discoveries.map((item) => `- ${item}`).join('\n')
+        : '- None';
+    const questionsMd =
+      openQuestions.length > 0
+        ? openQuestions.map((item) => `- ${item}`).join('\n')
+        : '- None';
+    const actionsMd =
+      actions.length > 0
+        ? actions
+            .map(
+              (action) =>
+                `- [${action.actionType}] ${action.title}${action.description ? `: ${action.description}` : ''}`,
+            )
+            .join('\n')
+        : '- None';
+    const evidenceMd =
+      evidence.length > 0
+        ? evidence
+            .map(
+              (item) =>
+                `- **${item.title}** (${item.sourceKind}/${item.role})${item.createdAt ? ` @ ${formatDateTime(item.createdAt)}` : ''}: ${item.snippet}`,
+            )
+            .join('\n')
+        : '- None';
 
     return `## Summary
 ${summary}

@@ -531,12 +531,17 @@ async function executeAskResolutionAction(
     !Array.isArray(plan.actionParams)
       ? { ...plan.actionParams }
       : {};
+  if (
+    plan.recommendedAction === 'create_confirm_request' &&
+    typeof baseParams.sourceAnchor !== 'string'
+  ) {
+    baseParams.sourceAnchor = `ask:${requestId}`;
+  }
   const delegatePolicy =
     plan.recommendedAction === 'delegate_openclaw'
       ? resolveDelegateOpenClawPolicy({
           params: baseParams,
-          defaultExecutionMode:
-            baseParams.mode === 'write' ? 'manual' : 'auto',
+          defaultExecutionMode: baseParams.mode === 'write' ? 'manual' : 'auto',
           defaultRequiresApproval: baseParams.mode === 'write',
         })
       : null;

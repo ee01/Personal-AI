@@ -19,12 +19,17 @@ export interface ConfirmRequestRecord {
   relatedPropertyId?: number;
   priority: 'low' | 'normal' | 'high';
   state: string;
+  routing?: 'decision' | 'watch';
+  reasonCode?: string;
+  sourceAnchor?: string;
+  gapType?: string;
   userAnswer?: string;
   answeredAt?: number;
   snoozeUntil?: number;
   snoozeCount: number;
   expiresAt?: number;
   createdAt: number;
+  updatedAt?: number;
   dedupeKey?: string;
 }
 
@@ -39,12 +44,17 @@ interface ConfirmRequestRow {
   related_property_id: number | null;
   priority: string | null;
   state: string;
+  routing: string | null;
+  reason_code: string | null;
+  source_anchor: string | null;
+  gap_type: string | null;
   user_answer: string | null;
   answered_at: number | null;
   snooze_until: number | null;
   snooze_count: number | null;
   expires_at: number | null;
   created_at: number;
+  updated_at: number | null;
   dedupe_key: string | null;
 }
 
@@ -59,12 +69,17 @@ export interface CreateConfirmRequestInput {
   relatedPropertyId?: number | null;
   priority?: string;
   state?: string;
+  routing?: 'decision' | 'watch';
+  reasonCode?: string | null;
+  sourceAnchor?: string | null;
+  gapType?: string | null;
   userAnswer?: string | null;
   answeredAt?: number | null;
   snoozeUntil?: number | null;
   snoozeCount?: number;
   expiresAt?: number | null;
   createdAt?: number;
+  updatedAt?: number;
   dedupeKey?: string;
 }
 
@@ -88,6 +103,8 @@ interface ConfirmRequestSemanticShape {
   category?: string | null;
   relatedEntityId?: string | null;
   relatedPropertyId?: number | null;
+  sourceAnchor?: string | null;
+  gapType?: string | null;
 }
 
 const PRIORITY_RANK: Record<'low' | 'normal' | 'high', number> = {
@@ -115,7 +132,9 @@ function uniqStrings(values: Array<string | undefined | null>): string[] {
   );
 }
 
-function normalizePriorityLabel(priority?: string | null): 'low' | 'normal' | 'high' {
+function normalizePriorityLabel(
+  priority?: string | null,
+): 'low' | 'normal' | 'high' {
   if (priority === 'high') return 'high';
   if (priority === 'low') return 'low';
   return 'normal';
@@ -153,13 +172,18 @@ function mergeOptions(
   return merged;
 }
 
-function chooseRicherText(left?: string | null, right?: string | null): string | undefined {
+function chooseRicherText(
+  left?: string | null,
+  right?: string | null,
+): string | undefined {
   const normalizedLeft = typeof left === 'string' ? left.trim() : '';
   const normalizedRight = typeof right === 'string' ? right.trim() : '';
   if (!normalizedLeft && !normalizedRight) return undefined;
   if (!normalizedLeft) return normalizedRight;
   if (!normalizedRight) return normalizedLeft;
-  return normalizedLeft.length >= normalizedRight.length ? normalizedLeft : normalizedRight;
+  return normalizedLeft.length >= normalizedRight.length
+    ? normalizedLeft
+    : normalizedRight;
 }
 
 function normalizeIntentText(value?: string | null): string {
@@ -210,22 +234,48 @@ function normalizeIntentText(value?: string | null): string {
 
 function normalizeOptionsForKey(options: ConfirmRequestOption[]): string {
   return mergeOptions([], options)
-    .map((option) => `${normalizeIntentText(option.value)}:${normalizeIntentText(option.label)}`)
+    .map(
+      (option) =>
+        `${normalizeIntentText(option.value)}:${normalizeIntentText(option.label)}`,
+    )
     .filter((value) => value !== ':')
     .sort()
     .join('|');
 }
 
+function normalizeAnchorPart(value?: string | null): string {
+  return normalizeIntentText(value ?? '');
+}
+
 export function buildConfirmRequestDedupeKey(
   input: ConfirmRequestSemanticShape,
 ): string {
-  return createHash('sha1').update(buildConfirmRequestSemanticRaw(input, true)).digest('hex');
+  const sourceAnchor = normalizeAnchorPart(input.sourceAnchor);
+  const gapType = normalizeAnchorPart(input.gapType);
+  if (sourceAnchor && gapType) {
+    return createHash('sha1')
+      .update(`anchor:${sourceAnchor}|gap:${gapType}`)
+      .digest('hex');
+  }
+  return createHash('sha1')
+    .update(buildConfirmRequestSemanticRaw(input, true))
+    .digest('hex');
 }
 
 export function buildConfirmRequestQuestionKey(
   input: ConfirmRequestSemanticShape,
 ): string {
-  return createHash('sha1').update(buildConfirmRequestSemanticRaw(input, false)).digest('hex');
+  return createHash('sha1')
+    .update(
+      JSON.stringify({
+        category: normalizeIntentText(input.category ?? 'reflection'),
+        relatedEntityId: normalizeIntentText(input.relatedEntityId ?? ''),
+        relatedPropertyId: input.relatedPropertyId ?? null,
+        question: normalizeIntentText(input.question),
+        options: normalizeOptionsForKey(input.options ?? []),
+      }),
+    )
+    .digest('hex');
 }
 
 function buildConfirmRequestSemanticRaw(
@@ -236,8 +286,12 @@ function buildConfirmRequestSemanticRaw(
     category: normalizeIntentText(input.category ?? 'reflection'),
     relatedEntityId: normalizeIntentText(input.relatedEntityId ?? ''),
     relatedPropertyId: input.relatedPropertyId ?? null,
+    sourceAnchor: normalizeAnchorPart(input.sourceAnchor ?? ''),
+    gapType: normalizeAnchorPart(input.gapType ?? ''),
     question: normalizeIntentText(input.question),
-    ...(includeContext ? { context: normalizeIntentText(input.context ?? '') } : {}),
+    ...(includeContext
+      ? { context: normalizeIntentText(input.context ?? '') }
+      : {}),
     options: normalizeOptionsForKey(input.options ?? []),
   });
   return raw;
@@ -258,12 +312,20 @@ export class ConfirmRequestRepository {
       relatedPropertyId: row.related_property_id ?? undefined,
       priority: normalizePriorityLabel(row.priority),
       state: row.state,
+      routing:
+        row.routing === 'decision' || row.routing === 'watch'
+          ? row.routing
+          : undefined,
+      reasonCode: row.reason_code ?? undefined,
+      sourceAnchor: row.source_anchor ?? undefined,
+      gapType: row.gap_type ?? undefined,
       userAnswer: row.user_answer ?? undefined,
       answeredAt: row.answered_at ?? undefined,
       snoozeUntil: row.snooze_until ?? undefined,
       snoozeCount: row.snooze_count ?? 0,
       expiresAt: row.expires_at ?? undefined,
       createdAt: row.created_at,
+      updatedAt: row.updated_at ?? undefined,
       dedupeKey: row.dedupe_key ?? undefined,
     };
   }
@@ -277,9 +339,145 @@ export class ConfirmRequestRepository {
 
   listByState(state: string): ConfirmRequestRecord[] {
     const rows = this.db
-      .prepare('SELECT * FROM confirm_requests WHERE state = ? ORDER BY created_at ASC')
+      .prepare(
+        'SELECT * FROM confirm_requests WHERE state = ? ORDER BY created_at ASC',
+      )
       .all(state) as ConfirmRequestRow[];
     return rows.map((row) => this.rowToRecord(row));
+  }
+
+  listByRouting(
+    routing: 'decision' | 'watch',
+    state?: string,
+  ): ConfirmRequestRecord[] {
+    const rows = state
+      ? (this.db
+          .prepare(
+            routing === 'decision'
+              ? "SELECT * FROM confirm_requests WHERE COALESCE(routing, 'decision') = 'decision' AND state = ? ORDER BY created_at ASC"
+              : 'SELECT * FROM confirm_requests WHERE routing = ? AND state = ? ORDER BY created_at ASC',
+          )
+          .all(
+            ...(routing === 'decision' ? [state] : [routing, state]),
+          ) as ConfirmRequestRow[])
+      : (this.db
+          .prepare(
+            routing === 'decision'
+              ? "SELECT * FROM confirm_requests WHERE COALESCE(routing, 'decision') = 'decision' ORDER BY created_at ASC"
+              : 'SELECT * FROM confirm_requests WHERE routing = ? ORDER BY created_at ASC',
+          )
+          .all(
+            ...(routing === 'decision' ? [] : [routing]),
+          ) as ConfirmRequestRow[]);
+    return rows.map((row) => this.rowToRecord(row));
+  }
+
+  countByRoutingAndState(routing: 'decision' | 'watch', state: string): number {
+    const row = this.db
+      .prepare(
+        routing === 'decision'
+          ? "SELECT COUNT(*) AS count FROM confirm_requests WHERE COALESCE(routing, 'decision') = 'decision' AND state = ?"
+          : 'SELECT COUNT(*) AS count FROM confirm_requests WHERE routing = ? AND state = ?',
+      )
+      .get(...(routing === 'decision' ? [state] : [routing, state])) as {
+      count: number;
+    };
+    return row.count;
+  }
+
+  transitionState(
+    id: string,
+    fromState: string,
+    toState: 'pending' | 'snoozed' | 'expired',
+    overrides: {
+      snoozeUntil?: number | null;
+      expiresAt?: number | null;
+      updatedAt?: number;
+      snoozeCount?: number;
+    } = {},
+  ): ConfirmRequestRecord | null {
+    const updatedAt = overrides.updatedAt ?? now();
+    const result = this.db
+      .prepare(
+        `UPDATE confirm_requests
+         SET state = ?,
+             snooze_until = ?,
+             expires_at = ?,
+             snooze_count = COALESCE(?, snooze_count),
+             updated_at = ?
+         WHERE id = ? AND state = ?`,
+      )
+      .run(
+        toState,
+        overrides.snoozeUntil ?? null,
+        overrides.expiresAt ?? null,
+        overrides.snoozeCount ?? null,
+        updatedAt,
+        id,
+        fromState,
+      );
+    if (result.changes === 0) return null;
+    return this.getById(id);
+  }
+
+  processWatchLifecycle(currentTime = now()): {
+    resnoozed: number;
+    expired: number;
+  } {
+    const expireResult = this.db
+      .prepare(
+        `UPDATE confirm_requests
+         SET state = 'expired',
+             snooze_until = NULL,
+             updated_at = ?
+         WHERE routing = 'watch'
+           AND state = 'snoozed'
+           AND priority != 'high'
+           AND expires_at IS NOT NULL
+           AND expires_at <= ?`,
+      )
+      .run(currentTime, currentTime);
+
+    const dueRows = this.db
+      .prepare(
+        `SELECT id, snooze_count
+         FROM confirm_requests
+         WHERE routing = 'watch'
+           AND state = 'snoozed'
+           AND priority != 'high'
+           AND snooze_until IS NOT NULL
+           AND snooze_until <= ?
+           AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .all(currentTime, currentTime) as Array<{
+      id: string;
+      snooze_count: number | null;
+    }>;
+
+    const bump = this.db.transaction(() => {
+      for (const row of dueRows) {
+        this.db
+          .prepare(
+            `UPDATE confirm_requests
+             SET snooze_until = ?,
+                 snooze_count = ?,
+                 updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            currentTime + 72 * 3600,
+            (row.snooze_count ?? 0) + 1,
+            currentTime,
+            row.id,
+          );
+      }
+    });
+    bump();
+
+    return {
+      resnoozed: dueRows.length,
+      expired: expireResult.changes,
+    };
   }
 
   createOrReusePending(
@@ -287,9 +485,15 @@ export class ConfirmRequestRepository {
   ): CreateOrReusePendingConfirmRequestResult {
     const normalizedInput = this.normalizeCreateInput(input);
     const dedupeKey = normalizedInput.dedupeKey;
-    const existing = this.findPendingByDedupeKey(dedupeKey) ?? this.findPendingBySemantic(normalizedInput);
+    const existing =
+      this.findPendingByDedupeKey(dedupeKey) ??
+      this.findPendingBySemantic(normalizedInput);
     if (existing) {
-      const merged = this.mergePendingRequest(existing.id, normalizedInput, dedupeKey);
+      const merged = this.mergePendingRequest(
+        existing.id,
+        normalizedInput,
+        dedupeKey,
+      );
       return {
         record: merged,
         created: false,
@@ -303,9 +507,9 @@ export class ConfirmRequestRepository {
         .prepare(
           `INSERT INTO confirm_requests
             (id, question, context, options_json, evidence_refs_json, category, related_entity_id,
-             related_property_id, priority, state, user_answer, answered_at, snooze_until,
-             snooze_count, expires_at, created_at, dedupe_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             related_property_id, priority, state, routing, reason_code, source_anchor, gap_type,
+             user_answer, answered_at, snooze_until, snooze_count, expires_at, created_at, updated_at, dedupe_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -318,12 +522,17 @@ export class ConfirmRequestRepository {
           normalizedInput.relatedPropertyId ?? null,
           normalizedInput.priority,
           normalizedInput.state,
+          normalizedInput.routing,
+          normalizedInput.reasonCode ?? null,
+          normalizedInput.sourceAnchor ?? null,
+          normalizedInput.gapType ?? null,
           normalizedInput.userAnswer ?? null,
           normalizedInput.answeredAt ?? null,
           normalizedInput.snoozeUntil ?? null,
           normalizedInput.snoozeCount,
           normalizedInput.expiresAt ?? null,
           normalizedInput.createdAt,
+          normalizedInput.updatedAt,
           dedupeKey,
         );
     } catch (error) {
@@ -336,7 +545,11 @@ export class ConfirmRequestRepository {
       }
       const collided = this.findPendingByDedupeKey(dedupeKey);
       if (!collided) throw error;
-      const merged = this.mergePendingRequest(collided.id, normalizedInput, dedupeKey);
+      const merged = this.mergePendingRequest(
+        collided.id,
+        normalizedInput,
+        dedupeKey,
+      );
       return {
         record: merged,
         created: false,
@@ -358,14 +571,25 @@ export class ConfirmRequestRepository {
     const normalizedInput = this.normalizeCreateInput(input);
     const existing = this.findPendingByOriginThread(threadId, normalizedInput);
     if (!existing) return null;
-    return this.mergePendingRequest(existing.id, normalizedInput, existing.dedupeKey ?? normalizedInput.dedupeKey);
+    return this.mergePendingRequest(
+      existing.id,
+      normalizedInput,
+      existing.dedupeKey ?? normalizedInput.dedupeKey,
+    );
   }
 
   dedupePendingRequests(): ConfirmRequestDedupeSummary {
-    const pending = this.listByState('pending');
+    const pending = this.db
+      .prepare(
+        `SELECT * FROM confirm_requests
+         WHERE state IN ('pending', 'snoozed')
+         ORDER BY created_at ASC`,
+      )
+      .all() as ConfirmRequestRow[];
     const groups = new Map<string, ConfirmRequestRecord[]>();
-    for (const record of pending) {
-      const dedupeKey = record.dedupeKey ?? buildConfirmRequestDedupeKey(record);
+    for (const record of pending.map((row) => this.rowToRecord(row))) {
+      const dedupeKey =
+        record.dedupeKey ?? buildConfirmRequestDedupeKey(record);
       const list = groups.get(dedupeKey) ?? [];
       list.push(record);
       groups.set(dedupeKey, list);
@@ -383,7 +607,13 @@ export class ConfirmRequestRepository {
         this.mergePendingGroup(dedupeKey, items, summary);
       }
 
-      const remainingPending = this.listByState('pending');
+      const remainingPending = this.db
+        .prepare(
+          `SELECT * FROM confirm_requests
+           WHERE state IN ('pending', 'snoozed')
+           ORDER BY created_at ASC`,
+        )
+        .all() as ConfirmRequestRow[];
       const threadGroups = new Map<string, ConfirmRequestRecord[]>();
       const threadLinks = this.db
         .prepare(
@@ -391,14 +621,19 @@ export class ConfirmRequestRepository {
            FROM confirm_requests cr
            JOIN proposed_actions a
              ON cr.id = json_extract(a.result_json, '$.confirmRequestId')
-           WHERE cr.state = 'pending'
-             AND a.action_type = 'create_confirm_request'
-             AND a.queue_status = 'succeeded'
-             AND a.thread_id IS NOT NULL
+            WHERE cr.state IN ('pending', 'snoozed')
+              AND a.action_type = 'create_confirm_request'
+              AND a.queue_status = 'succeeded'
+              AND a.thread_id IS NOT NULL
            ORDER BY cr.created_at ASC`,
         )
         .all() as Array<{ confirm_request_id: string; thread_id: string }>;
-      const pendingById = new Map(remainingPending.map((item) => [item.id, item]));
+      const pendingById = new Map(
+        remainingPending.map((row) => {
+          const item = this.rowToRecord(row);
+          return [item.id, item] as const;
+        }),
+      );
       for (const link of threadLinks) {
         const record = pendingById.get(link.confirm_request_id);
         if (!record) continue;
@@ -431,7 +666,9 @@ export class ConfirmRequestRepository {
         const dedupeKey = buildConfirmRequestDedupeKey(record);
         if (row.dedupe_key === dedupeKey) continue;
         this.db
-          .prepare('UPDATE confirm_requests SET dedupe_key = ? WHERE id = ?')
+          .prepare(
+            'UPDATE confirm_requests SET dedupe_key = ?, updated_at = COALESCE(updated_at, created_at) WHERE id = ?',
+          )
           .run(dedupeKey, row.id);
         changed += 1;
       }
@@ -441,27 +678,72 @@ export class ConfirmRequestRepository {
   }
 
   private normalizeCreateInput(input: CreateConfirmRequestInput) {
+    const createdAt = input.createdAt ?? now();
+    const routing = input.routing === 'watch' ? 'watch' : 'decision';
+    const defaultState = routing === 'watch' ? 'snoozed' : 'pending';
     return {
       id: input.id,
       question: input.question.trim(),
-      context: typeof input.context === 'string' && input.context.trim().length > 0 ? input.context.trim() : undefined,
+      context:
+        typeof input.context === 'string' && input.context.trim().length > 0
+          ? input.context.trim()
+          : undefined,
       options: mergeOptions([], input.options ?? []),
       evidenceRefs: uniqStrings(input.evidenceRefs ?? []),
-      category: typeof input.category === 'string' && input.category.trim().length > 0 ? input.category.trim() : undefined,
+      category:
+        typeof input.category === 'string' && input.category.trim().length > 0
+          ? input.category.trim()
+          : undefined,
       relatedEntityId:
-        typeof input.relatedEntityId === 'string' && input.relatedEntityId.trim().length > 0
+        typeof input.relatedEntityId === 'string' &&
+        input.relatedEntityId.trim().length > 0
           ? input.relatedEntityId.trim()
           : undefined,
       relatedPropertyId:
-        typeof input.relatedPropertyId === 'number' ? input.relatedPropertyId : undefined,
+        typeof input.relatedPropertyId === 'number'
+          ? input.relatedPropertyId
+          : undefined,
       priority: normalizePriorityLabel(input.priority),
-      state: input.state ?? 'pending',
-      userAnswer: typeof input.userAnswer === 'string' && input.userAnswer.trim().length > 0 ? input.userAnswer.trim() : undefined,
-      answeredAt: typeof input.answeredAt === 'number' ? input.answeredAt : undefined,
-      snoozeUntil: typeof input.snoozeUntil === 'number' ? input.snoozeUntil : undefined,
-      snoozeCount: typeof input.snoozeCount === 'number' ? input.snoozeCount : 0,
-      expiresAt: typeof input.expiresAt === 'number' ? input.expiresAt : undefined,
-      createdAt: input.createdAt ?? now(),
+      state: input.state ?? defaultState,
+      routing,
+      reasonCode:
+        typeof input.reasonCode === 'string' &&
+        input.reasonCode.trim().length > 0
+          ? input.reasonCode.trim()
+          : undefined,
+      sourceAnchor:
+        typeof input.sourceAnchor === 'string' &&
+        input.sourceAnchor.trim().length > 0
+          ? input.sourceAnchor.trim()
+          : undefined,
+      gapType:
+        typeof input.gapType === 'string' && input.gapType.trim().length > 0
+          ? input.gapType.trim()
+          : undefined,
+      userAnswer:
+        typeof input.userAnswer === 'string' &&
+        input.userAnswer.trim().length > 0
+          ? input.userAnswer.trim()
+          : undefined,
+      answeredAt:
+        typeof input.answeredAt === 'number' ? input.answeredAt : undefined,
+      snoozeUntil:
+        typeof input.snoozeUntil === 'number'
+          ? input.snoozeUntil
+          : routing === 'watch'
+            ? createdAt + 72 * 3600
+            : undefined,
+      snoozeCount:
+        typeof input.snoozeCount === 'number' ? input.snoozeCount : 0,
+      expiresAt:
+        typeof input.expiresAt === 'number'
+          ? input.expiresAt
+          : routing === 'watch'
+            ? createdAt + 14 * 24 * 3600
+            : undefined,
+      createdAt,
+      updatedAt:
+        typeof input.updatedAt === 'number' ? input.updatedAt : createdAt,
       dedupeKey:
         input.dedupeKey && input.dedupeKey.trim().length > 0
           ? input.dedupeKey.trim()
@@ -472,6 +754,8 @@ export class ConfirmRequestRepository {
               category: input.category,
               relatedEntityId: input.relatedEntityId,
               relatedPropertyId: input.relatedPropertyId,
+              sourceAnchor: input.sourceAnchor,
+              gapType: input.gapType,
             }),
     };
   }
@@ -487,25 +771,46 @@ export class ConfirmRequestRepository {
     }
 
     const mergedContext = chooseRicherText(existing.context, input.context);
+    const mergedQuestion =
+      chooseRicherText(existing.question, input.question) ?? existing.question;
     const mergedOptions = mergeOptions(existing.options, input.options);
-    const mergedEvidenceRefs = uniqStrings([...existing.evidenceRefs, ...input.evidenceRefs]);
+    const mergedEvidenceRefs = uniqStrings([
+      ...existing.evidenceRefs,
+      ...input.evidenceRefs,
+    ]);
     const mergedPriority = strongerPriority(existing.priority, input.priority);
+    const mergedUpdatedAt = Math.max(
+      existing.updatedAt ?? existing.createdAt,
+      input.updatedAt ?? input.createdAt,
+    );
 
     this.db
       .prepare(
         `UPDATE confirm_requests
-         SET context = ?,
-             options_json = ?,
-             evidence_refs_json = ?,
-             priority = ?,
-             dedupe_key = ?
-         WHERE id = ?`,
+         SET question = ?,
+             context = ?,
+              options_json = ?,
+              evidence_refs_json = ?,
+              priority = ?,
+              reason_code = COALESCE(reason_code, ?),
+              source_anchor = COALESCE(source_anchor, ?),
+              gap_type = COALESCE(gap_type, ?),
+              routing = COALESCE(routing, ?),
+              updated_at = ?,
+              dedupe_key = ?
+          WHERE id = ?`,
       )
       .run(
+        mergedQuestion,
         mergedContext ?? null,
         JSON.stringify(mergedOptions),
         JSON.stringify(mergedEvidenceRefs),
         mergedPriority,
+        input.reasonCode ?? null,
+        input.sourceAnchor ?? null,
+        input.gapType ?? null,
+        input.routing,
+        mergedUpdatedAt,
         dedupeKey,
         existingId,
       );
@@ -513,12 +818,14 @@ export class ConfirmRequestRepository {
     return this.getById(existingId)!;
   }
 
-  private findPendingByDedupeKey(dedupeKey: string): ConfirmRequestRecord | null {
+  private findPendingByDedupeKey(
+    dedupeKey: string,
+  ): ConfirmRequestRecord | null {
     const row = this.db
       .prepare(
         `SELECT *
          FROM confirm_requests
-         WHERE state = 'pending'
+         WHERE state IN ('pending', 'snoozed')
            AND dedupe_key = ?
          ORDER BY created_at ASC
          LIMIT 1`,
@@ -534,14 +841,15 @@ export class ConfirmRequestRepository {
       .prepare(
         `SELECT *
          FROM confirm_requests
-         WHERE state = 'pending'
+         WHERE state IN ('pending', 'snoozed')
          ORDER BY created_at ASC`,
       )
       .all() as ConfirmRequestRow[];
 
     for (const row of rows) {
       const candidate = this.rowToRecord(row);
-      const candidateKey = candidate.dedupeKey ?? buildConfirmRequestDedupeKey(candidate);
+      const candidateKey =
+        candidate.dedupeKey ?? buildConfirmRequestDedupeKey(candidate);
       if (candidateKey === input.dedupeKey) {
         return candidate;
       }
@@ -559,7 +867,7 @@ export class ConfirmRequestRepository {
          FROM confirm_requests cr
          JOIN proposed_actions a
            ON cr.id = json_extract(a.result_json, '$.confirmRequestId')
-         WHERE cr.state = 'pending'
+         WHERE cr.state IN ('pending', 'snoozed')
            AND a.action_type = 'create_confirm_request'
            AND a.queue_status = 'succeeded'
            AND a.thread_id = ?
@@ -592,6 +900,10 @@ export class ConfirmRequestRepository {
       (priority, item) => strongerPriority(priority, item.priority),
       canonical.priority,
     );
+    const mergedQuestion = duplicates.reduce(
+      (question, item) => chooseRicherText(question, item.question) ?? question,
+      canonical.question,
+    );
     const mergedContext = duplicates.reduce(
       (context, item) => chooseRicherText(context, item.context),
       canonical.context,
@@ -601,25 +913,34 @@ export class ConfirmRequestRepository {
       canonical.options,
     );
     const mergedEvidence = duplicates.reduce(
-      (evidenceRefs, item) => uniqStrings([...evidenceRefs, ...item.evidenceRefs]),
+      (evidenceRefs, item) =>
+        uniqStrings([...evidenceRefs, ...item.evidenceRefs]),
       canonical.evidenceRefs,
+    );
+    const mergedUpdatedAt = Math.max(
+      canonical.updatedAt ?? canonical.createdAt,
+      ...duplicates.map((item) => item.updatedAt ?? item.createdAt),
     );
 
     this.db
       .prepare(
         `UPDATE confirm_requests
-         SET context = ?,
+         SET question = ?,
+             context = ?,
              options_json = ?,
              evidence_refs_json = ?,
              priority = ?,
-             dedupe_key = ?
-         WHERE id = ?`,
+               updated_at = ?,
+               dedupe_key = ?
+          WHERE id = ?`,
       )
       .run(
+        mergedQuestion ?? canonical.question,
         mergedContext ?? null,
         JSON.stringify(mergedOptions),
         JSON.stringify(mergedEvidence),
         mergedPriority,
+        mergedUpdatedAt,
         dedupeKey,
         canonical.id,
       );
@@ -643,11 +964,13 @@ export class ConfirmRequestRepository {
            SET state = 'deduplicated',
                user_answer = ?,
                answered_at = ?,
-               dedupe_key = ?
-           WHERE id = ?`,
+               updated_at = ?,
+                dedupe_key = ?
+            WHERE id = ?`,
         )
         .run(
           `Merged into confirm request ${canonical.id}`,
+          now(),
           now(),
           dedupeKey,
           duplicate.id,
@@ -655,7 +978,10 @@ export class ConfirmRequestRepository {
     }
   }
 
-  private remapActionResults(fromConfirmRequestId: string, toConfirmRequestId: string): void {
+  private remapActionResults(
+    fromConfirmRequestId: string,
+    toConfirmRequestId: string,
+  ): void {
     const actions = this.db
       .prepare(
         `SELECT id, result_json
@@ -663,10 +989,16 @@ export class ConfirmRequestRepository {
          WHERE action_type = 'create_confirm_request'
            AND json_extract(result_json, '$.confirmRequestId') = ?`,
       )
-      .all(fromConfirmRequestId) as Array<{ id: string; result_json: string | null }>;
+      .all(fromConfirmRequestId) as Array<{
+      id: string;
+      result_json: string | null;
+    }>;
 
     for (const action of actions) {
-      const result = safeJsonParse<Record<string, unknown>>(action.result_json, {});
+      const result = safeJsonParse<Record<string, unknown>>(
+        action.result_json,
+        {},
+      );
       result.confirmRequestId = toConfirmRequestId;
       this.db
         .prepare('UPDATE proposed_actions SET result_json = ? WHERE id = ?')

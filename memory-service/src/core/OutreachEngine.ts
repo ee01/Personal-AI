@@ -1780,6 +1780,12 @@ export class OutreachEngine {
         replyPostId: replyBatch.latestPostId,
       },
     };
+    if (
+      resolution.recommendedAction === 'create_confirm_request' &&
+      typeof params.sourceAnchor !== 'string'
+    ) {
+      params.sourceAnchor = `outreach:${session.id}`;
+    }
     const requestedMode = params.mode === 'write' ? 'write' : 'read';
     const delegatePolicy =
       resolution.recommendedAction === 'delegate_openclaw'

@@ -14,11 +14,15 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { now } from '../utils/time.js';
 import { contentHash } from '../utils/hashing.js';
-import { ProactivityPolicy, type NotificationCandidate } from './ProactivityPolicy.js';
+import {
+  ProactivityPolicy,
+  type NotificationCandidate,
+} from './ProactivityPolicy.js';
 import { ProfileManager } from './ProfileManager.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { WorkerCheckpointRepository } from '../repositories/WorkerCheckpointRepository.js';
+import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 import { ReflectionPlanner } from './ReflectionPlanner.js';
 import { ActionExecutor } from './actions/ActionExecutor.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
@@ -133,7 +137,11 @@ export class HeartbeatLoop {
   private checkpointRepo: WorkerCheckpointRepository;
   private notificationCenterService: NotificationCenterService;
 
-  constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
+  constructor(
+    db: Database.Database,
+    userDataManager?: UserDataManager,
+    userId?: string,
+  ) {
     this.db = db;
     this.policy = new ProactivityPolicy(db);
     this.profileManager = new ProfileManager(db);
@@ -165,7 +173,9 @@ export class HeartbeatLoop {
       if (newMessages.length > 0) {
         const microUpdates = await this.microConsolidate(newMessages);
         updated += microUpdates;
-        actions.push(`micro-consolidated ${newMessages.length} messages (${microUpdates} updates)`);
+        actions.push(
+          `micro-consolidated ${newMessages.length} messages (${microUpdates} updates)`,
+        );
       }
 
       // 1b. Check if user profile needs a snapshot refresh
@@ -175,10 +185,27 @@ export class HeartbeatLoop {
       }
 
       // 2. Check pending truth conflicts
+      const confirmRepo = new ConfirmRequestRepository(this.db);
+      const watchLifecycle = confirmRepo.processWatchLifecycle(checkedAt);
+      if (watchLifecycle.resnoozed > 0 || watchLifecycle.expired > 0) {
+        actions.push(
+          `watch lifecycle resnoozed ${watchLifecycle.resnoozed}, expired ${watchLifecycle.expired}`,
+        );
+      }
+      const dedupeSummary = confirmRepo.dedupePendingRequests();
+      if (dedupeSummary.mergedRequests > 0) {
+        actions.push(
+          `confirm dedupe merged ${dedupeSummary.mergedRequests} request(s) across ${dedupeSummary.duplicateGroups} group(s)`,
+        );
+      }
+
+      // 2. Check pending truth conflicts
       const conflictCandidates = this.checkPendingConflicts();
       if (conflictCandidates.length > 0) {
         allCandidates.push(...conflictCandidates);
-        actions.push(`found ${conflictCandidates.length} stale truth conflict(s)`);
+        actions.push(
+          `found ${conflictCandidates.length} stale truth conflict(s)`,
+        );
       }
 
       // 2b. Check new confirm requests (created since last heartbeat)
@@ -210,16 +237,28 @@ export class HeartbeatLoop {
       }
 
       // 5b. Continuous reflection planner/worker
-      const reflectionPlanner = new ReflectionPlanner(this.db, this.userDataManager, this.userId);
+      const reflectionPlanner = new ReflectionPlanner(
+        this.db,
+        this.userDataManager,
+        this.userId,
+      );
       const reflectionResult = await reflectionPlanner.runHeartbeat();
-      if (!reflectionResult.skipped && (reflectionResult.threadsTouched > 0 || reflectionResult.runsCreated > 0)) {
+      if (
+        !reflectionResult.skipped &&
+        (reflectionResult.threadsTouched > 0 ||
+          reflectionResult.runsCreated > 0)
+      ) {
         actions.push(
           `reflection planner touched ${reflectionResult.threadsTouched} thread(s), created ${reflectionResult.runsCreated} run(s), queued ${reflectionResult.actionsQueued} action(s)`,
         );
       }
 
       // 5c. Execute due auto actions from reflection/action runtime
-      const actionExecutor = new ActionExecutor(this.db, this.userDataManager, this.userId);
+      const actionExecutor = new ActionExecutor(
+        this.db,
+        this.userDataManager,
+        this.userId,
+      );
       const actionResults = await actionExecutor.runDueActions(10);
       if (actionResults.length > 0) {
         actions.push(`executed ${actionResults.length} queued action(s)`);
@@ -294,7 +333,9 @@ export class HeartbeatLoop {
     });
 
     if (!candidate) {
-      console.log('[DreamDigest] push-now: no candidate (no dream content or userDataManager)');
+      console.log(
+        '[DreamDigest] push-now: no candidate (no dream content or userDataManager)',
+      );
       return {
         generated: false,
         delivered: false,
@@ -308,13 +349,14 @@ export class HeartbeatLoop {
     let botSent = false;
     if (candidate.payload?.digestBody && delivered[0]) {
       console.log('[DreamDigest] push-now: sending to Bot...');
-      const botResult = await this.notificationCenterService.deliverNoticeToGlip({
-        sourceRef: `notification:${delivered[0].id}`,
-        title: 'Weekly Dream Digest',
-        body: String(candidate.payload.digestBody),
-        mention: false,
-        targetUserId: userId ?? this.userId,
-      });
+      const botResult =
+        await this.notificationCenterService.deliverNoticeToGlip({
+          sourceRef: `notification:${delivered[0].id}`,
+          title: 'Weekly Dream Digest',
+          body: String(candidate.payload.digestBody),
+          mention: false,
+          targetUserId: userId ?? this.userId,
+        });
       if (botResult.sent) {
         botSent = true;
         console.log('[DreamDigest] push-now: botSent=true');
@@ -322,7 +364,9 @@ export class HeartbeatLoop {
         console.warn(`[DreamDigest] push-now: ${botResult.error}`);
       }
     } else {
-      console.warn('[DreamDigest] push-now: digestBody empty, skipping Bot send');
+      console.warn(
+        '[DreamDigest] push-now: digestBody empty, skipping Bot send',
+      );
     }
 
     return {
@@ -389,10 +433,18 @@ export class HeartbeatLoop {
 
           for (const ent of entities) {
             if (ent.id) {
-              const result = updateEntityStmt.run(currentTime, currentTime, ent.id);
+              const result = updateEntityStmt.run(
+                currentTime,
+                currentTime,
+                ent.id,
+              );
               updates += result.changes;
             } else {
-              const result = updateEntityByNameStmt.run(currentTime, currentTime, ent.name);
+              const result = updateEntityByNameStmt.run(
+                currentTime,
+                currentTime,
+                ent.name,
+              );
               updates += result.changes;
             }
           }
@@ -427,7 +479,9 @@ export class HeartbeatLoop {
   private async checkProfileDirty(): Promise<boolean> {
     try {
       const syncState = this.db
-        .prepare("SELECT profile_dirty, last_snapshot_at FROM profile_sync_state WHERE id = 'singleton'")
+        .prepare(
+          "SELECT profile_dirty, last_snapshot_at FROM profile_sync_state WHERE id = 'singleton'",
+        )
         .get() as SyncStateRow | undefined;
 
       if (!syncState || syncState.profile_dirty !== 1) {
@@ -520,7 +574,9 @@ export class HeartbeatLoop {
       .prepare(
         `SELECT id, question, context, related_entity_id, state, created_at
          FROM confirm_requests
-         WHERE state = 'pending' AND created_at < ?
+         WHERE state = 'pending'
+           AND COALESCE(routing, 'decision') = 'decision'
+           AND created_at < ?
          ORDER BY created_at ASC`,
       )
       .all(oneDayAgo) as ConfirmRequestRow[];
@@ -548,7 +604,9 @@ export class HeartbeatLoop {
       .prepare(
         `SELECT id, question, context, related_entity_id, state, created_at
          FROM confirm_requests
-         WHERE state = 'pending' AND created_at > ?
+         WHERE state = 'pending'
+           AND COALESCE(routing, 'decision') = 'decision'
+           AND created_at > ?
          ORDER BY created_at ASC`,
       )
       .all(this.lastHeartbeat) as ConfirmRequestRow[];
@@ -593,7 +651,8 @@ export class HeartbeatLoop {
       // Significance heuristic: normalize count and scale by priority
       // priority is 1-10, higher = more important
       const normalizedPriority = Math.min(project.priority / 10, 1);
-      const significance = Math.min(matchCount * 0.2, 1) * (0.5 + 0.5 * normalizedPriority);
+      const significance =
+        Math.min(matchCount * 0.2, 1) * (0.5 + 0.5 * normalizedPriority);
 
       if (significance >= 0.6) {
         candidates.push({
@@ -793,12 +852,18 @@ export class HeartbeatLoop {
       return null;
     }
 
-    if (!options?.ignoreScheduleWindow && !this.isDreamDigestWindow(nowDate, runtimeConfig)) {
+    if (
+      !options?.ignoreScheduleWindow &&
+      !this.isDreamDigestWindow(nowDate, runtimeConfig)
+    ) {
       return null;
     }
 
     if (!options?.ignoreIdempotency) {
-      const periodStart = this.getDreamDigestPeriodStart(nowDate, runtimeConfig);
+      const periodStart = this.getDreamDigestPeriodStart(
+        nowDate,
+        runtimeConfig,
+      );
       const existing = this.db
         .prepare(
           `SELECT id
@@ -829,8 +894,12 @@ export class HeartbeatLoop {
       .map((content) => {
         const titleMatch =
           content.match(/# Dream: (.+)/) || content.match(/^# (.+)$/m);
-        const narrativeMatch = content.match(/## Narrative\n([\s\S]*?)(?=\n## |$)/);
-        const insightsMatch = content.match(/## Insights\n([\s\S]*?)(?=\n## |$)/);
+        const narrativeMatch = content.match(
+          /## Narrative\n([\s\S]*?)(?=\n## |$)/,
+        );
+        const insightsMatch = content.match(
+          /## Insights\n([\s\S]*?)(?=\n## |$)/,
+        );
         const title = titleMatch?.[1]?.trim() || 'Untitled';
         const narrative = narrativeMatch?.[1]?.trim().slice(0, 200) || '';
         const insights = insightsMatch?.[1]?.trim() || '';
@@ -865,7 +934,10 @@ export class HeartbeatLoop {
     };
   }
 
-  private isDreamDigestWindow(nowDate: Date, cfg: DreamDigestRuntimeConfig): boolean {
+  private isDreamDigestWindow(
+    nowDate: Date,
+    cfg: DreamDigestRuntimeConfig,
+  ): boolean {
     // Shared delivery window: 08:00 <= hour < 10:00 local time.
     if (nowDate.getHours() < 8 || nowDate.getHours() >= 10) {
       return false;
@@ -887,9 +959,20 @@ export class HeartbeatLoop {
     return true; // weekly
   }
 
-  private getDreamDigestPeriodStart(nowDate: Date, cfg: DreamDigestRuntimeConfig): number {
+  private getDreamDigestPeriodStart(
+    nowDate: Date,
+    cfg: DreamDigestRuntimeConfig,
+  ): number {
     if (cfg.scheduleType === 'monthly') {
-      const start = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1, 0, 0, 0, 0);
+      const start = new Date(
+        nowDate.getFullYear(),
+        nowDate.getMonth(),
+        1,
+        0,
+        0,
+        0,
+        0,
+      );
       return Math.floor(start.getTime() / 1000);
     }
 
@@ -921,7 +1004,9 @@ export class HeartbeatLoop {
     const weekStart = this.getMondayStart(date);
     const epochMonday = new Date(1970, 0, 5);
     epochMonday.setHours(0, 0, 0, 0);
-    return Math.floor((weekStart.getTime() - epochMonday.getTime()) / (7 * 24 * 3600 * 1000));
+    return Math.floor(
+      (weekStart.getTime() - epochMonday.getTime()) / (7 * 24 * 3600 * 1000),
+    );
   }
 
   // ---- Utility helpers ----------------------------------------------------
@@ -937,7 +1022,11 @@ export class HeartbeatLoop {
   private parseDateValue(value: string): number | null {
     // Try as numeric epoch (seconds)
     const numeric = Number(value);
-    if (!Number.isNaN(numeric) && numeric > 1_000_000_000 && numeric < 10_000_000_000) {
+    if (
+      !Number.isNaN(numeric) &&
+      numeric > 1_000_000_000 &&
+      numeric < 10_000_000_000
+    ) {
       return numeric;
     }
 

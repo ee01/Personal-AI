@@ -1,15 +1,44 @@
 import { getLLMClient } from '../llm/LLMClient.js';
 
 export type EvidenceResolutionScene = 'outreach' | 'ask' | 'reflection';
-export type EvidenceResolutionState = 'complete' | 'partial' | 'insufficient' | 'deferred';
+export type EvidenceResolutionState =
+  | 'complete'
+  | 'partial'
+  | 'insufficient'
+  | 'deferred';
 export type EvidenceResolutionActionType =
   | 'delegate_openclaw'
   | 'ask_external_user'
   | 'create_confirm_request'
   | 'none';
-export type LegacyReplyClassification = 'answer' | 'defer' | 'irrelevant' | 'decline' | 'unclear';
-export type ExternalAccessMode = 'disabled' | 'suggest' | 'auto' | 'approval_required';
+export type LegacyReplyClassification =
+  | 'answer'
+  | 'defer'
+  | 'irrelevant'
+  | 'decline'
+  | 'unclear';
+export type ExternalAccessMode =
+  | 'disabled'
+  | 'suggest'
+  | 'auto'
+  | 'approval_required';
 export type UserIntentMode = 'informational' | 'explicit_action';
+export type EvidenceResolutionDisposition =
+  | 'decision'
+  | 'auto_verify'
+  | 'watch';
+export type EvidenceResolutionReasonCode =
+  | 'authority_required'
+  | 'approval_required'
+  | 'future_monitoring'
+  | 'owner_eta_gap'
+  | 'artifact_gap'
+  | 'time_sensitive_blocker';
+export type EvidenceResolutionGapType =
+  | 'future_monitoring'
+  | 'owner_eta'
+  | 'artifact_check'
+  | 'decision_blocker';
 
 export interface EvidenceResolutionPolicy {
   scene: EvidenceResolutionScene;
@@ -52,6 +81,10 @@ export interface EvidenceResolutionPlan {
   resolvedConclusion?: string;
   remainingQuestions: string[];
   candidateArtifacts: CandidateArtifact[];
+  disposition: EvidenceResolutionDisposition;
+  reasonCode?: EvidenceResolutionReasonCode;
+  sourceAnchor?: string;
+  gapType?: EvidenceResolutionGapType;
   recommendedAction: EvidenceResolutionActionType;
   actionParams?: Record<string, unknown>;
   confidence: number;
@@ -67,6 +100,10 @@ interface PlannerLlmResponse {
   resolvedConclusion?: string;
   remainingQuestions?: string[];
   candidateArtifacts?: CandidateArtifact[];
+  disposition?: EvidenceResolutionDisposition;
+  reasonCode?: EvidenceResolutionReasonCode;
+  sourceAnchor?: string;
+  gapType?: EvidenceResolutionGapType;
   recommendedAction?: EvidenceResolutionActionType;
   actionParams?: Record<string, unknown>;
   confidence?: number;
@@ -75,14 +112,26 @@ interface PlannerLlmResponse {
   reason?: string;
 }
 
-const DIRECT_CUE_PATTERN = /应该|已|目前|现在|在|完成|安排|计划|relevant|related|status|eta|预计|下周|tomorrow|today|完成了|会在|将在/i;
-const PURE_DEFER_PATTERN = /^(稍后|晚点|之后|以后|回头|later|tomorrow|next week|明天|下周)(回复|再说|告知|同步)?[。.!?]*$/i;
-const DEFER_CUE_PATTERN = /(稍后|晚点|之后|以后|回头|later|tomorrow|next week|明天|下周|\d+\s*(day|days|天|hour|hours|小时))/i;
-const DECLINE_PATTERN = /(不能|无法|不方便|拒绝|不行|没法|cannot|can't|unable|decline|拒绝提供)/i;
-const ACK_PATTERN = /^(ok|thanks|收到|好的|明白|嗯|嗯嗯|知道了|got it)[。.!?]*$/i;
-const LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/ig;
-const URL_PATTERN = /(https?:\/\/[^\s)]+)/ig;
-const GENERIC_ARTIFACT_PATTERN = /\b(calendar|doc|docs|sheet|spreadsheet|link|ticket|issue)\b|日历|文档|表格|链接|工单|页面/iu;
+const DIRECT_CUE_PATTERN =
+  /应该|已|目前|现在|在|完成|安排|计划|relevant|related|status|eta|预计|下周|tomorrow|today|完成了|会在|将在/i;
+const PURE_DEFER_PATTERN =
+  /^(稍后|晚点|之后|以后|回头|later|tomorrow|next week|明天|下周)(回复|再说|告知|同步)?[。.!?]*$/i;
+const DEFER_CUE_PATTERN =
+  /(稍后|晚点|之后|以后|回头|later|tomorrow|next week|明天|下周|\d+\s*(day|days|天|hour|hours|小时))/i;
+const DECLINE_PATTERN =
+  /(不能|无法|不方便|拒绝|不行|没法|cannot|can't|unable|decline|拒绝提供)/i;
+const ACK_PATTERN =
+  /^(ok|thanks|收到|好的|明白|嗯|嗯嗯|知道了|got it)[。.!?]*$/i;
+const LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
+const URL_PATTERN = /(https?:\/\/[^\s)]+)/gi;
+const GENERIC_ARTIFACT_PATTERN =
+  /\b(calendar|doc|docs|sheet|spreadsheet|link|ticket|issue)\b|日历|文档|表格|链接|工单|页面/iu;
+const FUTURE_MONITORING_PATTERN =
+  /会不会|是否会|未来|接下来|有没有计划|是否有计划|迁移|重命名|调整|变化|变更|roadmap|plan|rename|migrate|change/iu;
+const OWNER_ETA_PATTERN =
+  /负责人|owner|eta|时间表|上线时间|何时|什么时候|进展|deadline|due date|排期/iu;
+const APPROVAL_PATTERN =
+  /审批|批准|授权|approval|approve|permission|决定怎么做|帮我决定|should we|是否要|选方向/iu;
 
 function uniqStrings(values: Array<string | undefined | null>): string[] {
   return Array.from(
@@ -104,8 +153,11 @@ function collapseWhitespace(value: string): string {
 }
 
 function extractTerms(value: string): string[] {
-  const matches = value.match(/[a-z0-9][a-z0-9._:-]{1,}|[\u4e00-\u9fff]{2,}/giu) ?? [];
-  return uniqStrings(matches.map((item) => item.toLowerCase())).filter((item) => item.length >= 2);
+  const matches =
+    value.match(/[a-z0-9][a-z0-9._:-]{1,}|[\u4e00-\u9fff]{2,}/giu) ?? [];
+  return uniqStrings(matches.map((item) => item.toLowerCase())).filter(
+    (item) => item.length >= 2,
+  );
 }
 
 function overlapScore(line: string, terms: string[]): number {
@@ -122,13 +174,19 @@ function looksLikePureArtifactLine(line: string): boolean {
   if (!trimmed) return false;
   if (/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/i.test(trimmed)) return true;
   if (/^https?:\/\//i.test(trimmed)) return true;
-  if (/^[^\n]{1,120}$/.test(trimmed) && GENERIC_ARTIFACT_PATTERN.test(trimmed) && !DIRECT_CUE_PATTERN.test(trimmed)) {
+  if (
+    /^[^\n]{1,120}$/.test(trimmed) &&
+    GENERIC_ARTIFACT_PATTERN.test(trimmed) &&
+    !DIRECT_CUE_PATTERN.test(trimmed)
+  ) {
     return true;
   }
   return false;
 }
 
-function extractCandidateArtifacts(evidence: EvidenceResolutionEvidenceItem[]): CandidateArtifact[] {
+function extractCandidateArtifacts(
+  evidence: EvidenceResolutionEvidenceItem[],
+): CandidateArtifact[] {
   const artifacts: CandidateArtifact[] = [];
   const seen = new Set<string>();
 
@@ -192,21 +250,39 @@ function extractCandidateArtifacts(evidence: EvidenceResolutionEvidenceItem[]): 
   return artifacts.slice(0, 8);
 }
 
-function inferTargetSystemHint(artifacts: CandidateArtifact[]): string | undefined {
+function inferTargetSystemHint(
+  artifacts: CandidateArtifact[],
+): string | undefined {
   const combined = artifacts
     .flatMap((artifact) => [artifact.url, artifact.title, artifact.content])
-    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === 'string' && value.trim().length > 0,
+    )
     .join('\n')
     .toLowerCase();
 
   if (!combined) return undefined;
-  if (combined.includes('atlassian') || combined.includes('jira') || combined.includes('ticket') || combined.includes('issue')) {
+  if (
+    combined.includes('atlassian') ||
+    combined.includes('jira') ||
+    combined.includes('ticket') ||
+    combined.includes('issue')
+  ) {
     return 'jira';
   }
-  if (combined.includes('calendar') || combined.includes('gcal') || combined.includes('google calendar')) {
+  if (
+    combined.includes('calendar') ||
+    combined.includes('gcal') ||
+    combined.includes('google calendar')
+  ) {
     return 'calendar';
   }
-  if (combined.includes('docs.google.com') || combined.includes('spreadsheet') || combined.includes('sheet')) {
+  if (
+    combined.includes('docs.google.com') ||
+    combined.includes('spreadsheet') ||
+    combined.includes('sheet')
+  ) {
     return 'google_workspace';
   }
   if (combined.includes('ringcentral')) {
@@ -215,7 +291,10 @@ function inferTargetSystemHint(artifacts: CandidateArtifact[]): string | undefin
   return 'web';
 }
 
-function buildRemainingQuestion(question: string, artifacts: CandidateArtifact[]): string {
+function buildRemainingQuestion(
+  question: string,
+  artifacts: CandidateArtifact[],
+): string {
   if (artifacts.length > 0) {
     return '需要从外部线索中核实更精确的时间或细节。';
   }
@@ -223,6 +302,37 @@ function buildRemainingQuestion(question: string, artifacts: CandidateArtifact[]
     return `当前证据仍不足以完整回答“${question.trim()}”。`;
   }
   return '当前证据仍不足以完整回答问题。';
+}
+
+function inferSourceAnchor(input: EvidenceResolutionInput): string | undefined {
+  for (const item of input.evidence) {
+    const metadata =
+      item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+    if (
+      typeof metadata.askRequestId === 'string' &&
+      metadata.askRequestId.trim()
+    ) {
+      return `ask:${metadata.askRequestId.trim()}`;
+    }
+    if (typeof metadata.sessionId === 'string' && metadata.sessionId.trim()) {
+      return `outreach:${metadata.sessionId.trim()}`;
+    }
+    if (
+      item.sourceKind === 'outreach_reply' &&
+      typeof item.sourceId === 'string' &&
+      item.sourceId.trim()
+    ) {
+      return `outreach:${item.sourceId.trim()}`;
+    }
+    if (
+      item.sourceKind === 'ask_request' &&
+      typeof item.sourceId === 'string' &&
+      item.sourceId.trim()
+    ) {
+      return `ask:${item.sourceId.trim()}`;
+    }
+  }
+  return undefined;
 }
 
 function parseEtaFromText(text: string): number | undefined {
@@ -267,8 +377,12 @@ function buildDelegateActionParams(
     `场景: ${input.policy.scene}`,
     input.question.trim() ? `原问题: ${input.question.trim()}` : undefined,
     input.context?.trim() ? `上下文: ${input.context.trim()}` : undefined,
-    directFindings.length > 0 ? `已知结论: ${directFindings.join('；')}` : undefined,
-    remainingQuestions.length > 0 ? `待核实问题: ${remainingQuestions.join('；')}` : undefined,
+    directFindings.length > 0
+      ? `已知结论: ${directFindings.join('；')}`
+      : undefined,
+    remainingQuestions.length > 0
+      ? `待核实问题: ${remainingQuestions.join('；')}`
+      : undefined,
     candidateArtifacts.length > 0
       ? `候选线索:\n${candidateArtifacts
           .map((artifact, index) => {
@@ -302,9 +416,15 @@ function buildConfirmRequestParams(
   input: EvidenceResolutionInput,
   summary: string,
   remainingQuestions: string[],
+  disposition: EvidenceResolutionDisposition,
+  reasonCode?: EvidenceResolutionReasonCode,
+  gapType?: EvidenceResolutionGapType,
+  sourceAnchor?: string,
 ): Record<string, unknown> {
   return {
-    question: remainingQuestions[0] ?? `如何继续处理“${input.question.trim() || '当前问题'}”？`,
+    question:
+      remainingQuestions[0] ??
+      `如何继续处理“${input.question.trim() || '当前问题'}”？`,
     context: summary,
     options: [
       { label: '继续查证', value: 'continue' },
@@ -313,6 +433,10 @@ function buildConfirmRequestParams(
     ],
     category: 'evidence_resolution',
     priority: 'normal',
+    routing: disposition === 'watch' ? 'watch' : 'decision',
+    reasonCode,
+    gapType,
+    sourceAnchor,
   };
 }
 
@@ -377,6 +501,87 @@ function normalizeRecommendedAction(
   return fallback;
 }
 
+function normalizeDisposition(
+  value: unknown,
+  fallback: EvidenceResolutionDisposition,
+): EvidenceResolutionDisposition {
+  if (value === 'decision' || value === 'auto_verify' || value === 'watch') {
+    return value;
+  }
+  return fallback;
+}
+
+function inferDisposition(
+  input: EvidenceResolutionInput,
+  resolutionState: EvidenceResolutionState,
+  candidateArtifacts: CandidateArtifact[],
+): {
+  disposition: EvidenceResolutionDisposition;
+  reasonCode?: EvidenceResolutionReasonCode;
+  gapType?: EvidenceResolutionGapType;
+} {
+  const combinedQuestion = [input.question, input.context ?? '']
+    .filter(Boolean)
+    .join('\n');
+
+  if (
+    candidateArtifacts.length > 0 &&
+    (input.policy.externalRead === 'auto' ||
+      input.policy.externalRead === 'suggest') &&
+    (resolutionState === 'insufficient' || resolutionState === 'partial')
+  ) {
+    return {
+      disposition: 'auto_verify',
+      reasonCode: 'artifact_gap',
+      gapType: 'artifact_check',
+    };
+  }
+
+  if (
+    APPROVAL_PATTERN.test(combinedQuestion) ||
+    input.policy.userIntentMode === 'explicit_action'
+  ) {
+    return {
+      disposition: 'decision',
+      reasonCode:
+        input.policy.externalWrite === 'approval_required'
+          ? 'approval_required'
+          : 'authority_required',
+      gapType: 'decision_blocker',
+    };
+  }
+
+  if (FUTURE_MONITORING_PATTERN.test(combinedQuestion)) {
+    return {
+      disposition: 'watch',
+      reasonCode: 'future_monitoring',
+      gapType: 'future_monitoring',
+    };
+  }
+
+  if (OWNER_ETA_PATTERN.test(combinedQuestion)) {
+    return {
+      disposition: 'watch',
+      reasonCode: 'owner_eta_gap',
+      gapType: 'owner_eta',
+    };
+  }
+
+  if (resolutionState === 'insufficient' || resolutionState === 'partial') {
+    return {
+      disposition: 'watch',
+      reasonCode: 'owner_eta_gap',
+      gapType: 'owner_eta',
+    };
+  }
+
+  return {
+    disposition: 'decision',
+    reasonCode: 'authority_required',
+    gapType: 'decision_blocker',
+  };
+}
+
 function shouldPreferArtifactDelegation(
   input: EvidenceResolutionInput,
   resolutionState: EvidenceResolutionState,
@@ -385,12 +590,15 @@ function shouldPreferArtifactDelegation(
   return (
     candidateArtifacts.length > 0 &&
     (resolutionState === 'partial' || resolutionState === 'insufficient') &&
-    (input.policy.externalRead === 'auto' || input.policy.externalRead === 'suggest')
+    (input.policy.externalRead === 'auto' ||
+      input.policy.externalRead === 'suggest')
   );
 }
 
 export class EvidenceResolutionPlanner {
-  async resolve(input: EvidenceResolutionInput): Promise<EvidenceResolutionPlan> {
+  async resolve(
+    input: EvidenceResolutionInput,
+  ): Promise<EvidenceResolutionPlan> {
     const heuristic = this.resolveHeuristically(input);
     try {
       const llm = getLLMClient();
@@ -455,12 +663,21 @@ export class EvidenceResolutionPlanner {
     parsed: PlannerLlmResponse,
     fallback: EvidenceResolutionPlan,
   ): EvidenceResolutionPlan {
-    const directFindings = uniqStrings(parsed.directFindings ?? fallback.directFindings);
-    const candidateArtifacts = Array.isArray(parsed.candidateArtifacts) && parsed.candidateArtifacts.length > 0
-      ? parsed.candidateArtifacts.slice(0, 8)
-      : fallback.candidateArtifacts;
-    const remainingQuestions = uniqStrings(parsed.remainingQuestions ?? fallback.remainingQuestions);
-    const legacyClassification = normalizeLegacyClassification(parsed.legacyClassification, fallback.legacyClassification);
+    const directFindings = uniqStrings(
+      parsed.directFindings ?? fallback.directFindings,
+    );
+    const candidateArtifacts =
+      Array.isArray(parsed.candidateArtifacts) &&
+      parsed.candidateArtifacts.length > 0
+        ? parsed.candidateArtifacts.slice(0, 8)
+        : fallback.candidateArtifacts;
+    const remainingQuestions = uniqStrings(
+      parsed.remainingQuestions ?? fallback.remainingQuestions,
+    );
+    const legacyClassification = normalizeLegacyClassification(
+      parsed.legacyClassification,
+      fallback.legacyClassification,
+    );
     const resolutionState =
       parsed.resolutionState === 'complete' ||
       parsed.resolutionState === 'partial' ||
@@ -468,47 +685,94 @@ export class EvidenceResolutionPlanner {
       parsed.resolutionState === 'deferred'
         ? parsed.resolutionState
         : fallback.resolutionState;
-    let recommendedAction = normalizeRecommendedAction(parsed.recommendedAction, fallback.recommendedAction);
+    let recommendedAction = normalizeRecommendedAction(
+      parsed.recommendedAction,
+      fallback.recommendedAction,
+    );
     const actionParams =
-      parsed.actionParams && typeof parsed.actionParams === 'object' && !Array.isArray(parsed.actionParams)
+      parsed.actionParams &&
+      typeof parsed.actionParams === 'object' &&
+      !Array.isArray(parsed.actionParams)
         ? { ...parsed.actionParams }
         : fallback.actionParams;
+    const inferredDisposition = inferDisposition(
+      input,
+      resolutionState,
+      candidateArtifacts,
+    );
+    const inferredSourceAnchor = inferSourceAnchor(input);
+    const disposition = normalizeDisposition(
+      parsed.disposition,
+      fallback.disposition ?? inferredDisposition.disposition,
+    );
 
-    if (recommendedAction === 'ask_external_user' && !input.policy.allowAskExternalUser) {
-      recommendedAction = input.policy.allowCreateConfirmRequest ? 'create_confirm_request' : 'none';
+    if (
+      recommendedAction === 'ask_external_user' &&
+      !input.policy.allowAskExternalUser
+    ) {
+      recommendedAction = input.policy.allowCreateConfirmRequest
+        ? 'create_confirm_request'
+        : 'none';
     }
-    if (recommendedAction === 'create_confirm_request' && !input.policy.allowCreateConfirmRequest) {
+    if (
+      recommendedAction === 'create_confirm_request' &&
+      !input.policy.allowCreateConfirmRequest
+    ) {
       recommendedAction = 'none';
     }
     if (recommendedAction === 'delegate_openclaw') {
       const mode = actionParams?.mode === 'write' ? 'write' : 'read';
       if (mode === 'write' && input.policy.externalWrite === 'disabled') {
         recommendedAction =
-          input.policy.externalRead === 'auto' || input.policy.externalRead === 'suggest'
+          input.policy.externalRead === 'auto' ||
+          input.policy.externalRead === 'suggest'
             ? 'delegate_openclaw'
             : input.policy.allowCreateConfirmRequest
               ? 'create_confirm_request'
               : 'none';
         if (recommendedAction === 'delegate_openclaw') {
-          Object.assign(actionParams ?? {}, buildDelegateActionParams(input, directFindings, remainingQuestions, candidateArtifacts, 'read'));
+          Object.assign(
+            actionParams ?? {},
+            buildDelegateActionParams(
+              input,
+              directFindings,
+              remainingQuestions,
+              candidateArtifacts,
+              'read',
+            ),
+          );
         }
       } else if (mode === 'read' && input.policy.externalRead === 'disabled') {
-        recommendedAction = input.policy.allowCreateConfirmRequest ? 'create_confirm_request' : 'none';
+        recommendedAction = input.policy.allowCreateConfirmRequest
+          ? 'create_confirm_request'
+          : 'none';
       }
     }
-    if (shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)) {
+    if (
+      shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)
+    ) {
       recommendedAction = 'delegate_openclaw';
     }
 
     let normalizedActionParams = actionParams;
     if (recommendedAction === 'delegate_openclaw') {
-      const mode = shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)
+      const mode = shouldPreferArtifactDelegation(
+        input,
+        resolutionState,
+        candidateArtifacts,
+      )
         ? 'read'
         : normalizedActionParams?.mode === 'write'
           ? 'write'
           : 'read';
       normalizedActionParams = {
-        ...buildDelegateActionParams(input, directFindings, remainingQuestions, candidateArtifacts, mode),
+        ...buildDelegateActionParams(
+          input,
+          directFindings,
+          remainingQuestions,
+          candidateArtifacts,
+          mode,
+        ),
         ...(normalizedActionParams ?? {}),
       };
       normalizedActionParams.mode = mode;
@@ -518,21 +782,38 @@ export class EvidenceResolutionPlanner {
           input,
           parsed.summary?.trim() || fallback.summary,
           remainingQuestions,
+          disposition,
+          parsed.reasonCode ??
+            fallback.reasonCode ??
+            inferredDisposition.reasonCode,
+          parsed.gapType ?? fallback.gapType ?? inferredDisposition.gapType,
+          typeof parsed.sourceAnchor === 'string' &&
+            parsed.sourceAnchor.trim().length > 0
+            ? parsed.sourceAnchor.trim()
+            : (fallback.sourceAnchor ?? inferredSourceAnchor),
         ),
         ...(normalizedActionParams ?? {}),
       };
     }
 
-    const resolvedConclusion = collapseWhitespace(
-      typeof parsed.resolvedConclusion === 'string' && parsed.resolvedConclusion.trim().length > 0
-        ? parsed.resolvedConclusion
-        : fallback.resolvedConclusion ?? '',
-    ) || undefined;
+    const resolvedConclusion =
+      collapseWhitespace(
+        typeof parsed.resolvedConclusion === 'string' &&
+          parsed.resolvedConclusion.trim().length > 0
+          ? parsed.resolvedConclusion
+          : (fallback.resolvedConclusion ?? ''),
+      ) || undefined;
     const etaAt = resolutionState === 'deferred' ? fallback.etaAt : undefined;
     const summary = collapseWhitespace(
       typeof parsed.summary === 'string' && parsed.summary.trim().length > 0
         ? parsed.summary
-        : buildSummary(resolutionState, resolvedConclusion, remainingQuestions, legacyClassification, etaAt),
+        : buildSummary(
+            resolutionState,
+            resolvedConclusion,
+            remainingQuestions,
+            legacyClassification,
+            etaAt,
+          ),
     );
 
     return {
@@ -541,20 +822,38 @@ export class EvidenceResolutionPlanner {
       resolvedConclusion,
       remainingQuestions,
       candidateArtifacts,
+      disposition,
+      reasonCode:
+        parsed.reasonCode ??
+        fallback.reasonCode ??
+        inferredDisposition.reasonCode,
+      sourceAnchor:
+        typeof parsed.sourceAnchor === 'string' &&
+        parsed.sourceAnchor.trim().length > 0
+          ? parsed.sourceAnchor.trim()
+          : (fallback.sourceAnchor ?? inferredSourceAnchor),
+      gapType:
+        parsed.gapType ?? fallback.gapType ?? inferredDisposition.gapType,
       recommendedAction,
       actionParams: normalizedActionParams,
       confidence: clampConfidence(parsed.confidence, fallback.confidence),
       legacyClassification,
       summary: summary || fallback.summary,
-      reason: typeof parsed.reason === 'string' && parsed.reason.trim().length > 0
-        ? parsed.reason.trim()
-        : fallback.reason,
+      reason:
+        typeof parsed.reason === 'string' && parsed.reason.trim().length > 0
+          ? parsed.reason.trim()
+          : fallback.reason,
       etaAt,
     };
   }
 
-  private resolveHeuristically(input: EvidenceResolutionInput): EvidenceResolutionPlan {
-    const combinedText = input.evidence.map((item) => item.content).join('\n').trim();
+  private resolveHeuristically(
+    input: EvidenceResolutionInput,
+  ): EvidenceResolutionPlan {
+    const combinedText = input.evidence
+      .map((item) => item.content)
+      .join('\n')
+      .trim();
     const candidateArtifacts = extractCandidateArtifacts(input.evidence);
     const lines = uniqStrings(
       input.evidence.flatMap((item) =>
@@ -564,12 +863,16 @@ export class EvidenceResolutionPlanner {
           .filter(Boolean),
       ),
     );
-    const terms = extractTerms([input.question, input.context ?? ''].filter(Boolean).join('\n'));
+    const terms = extractTerms(
+      [input.question, input.context ?? ''].filter(Boolean).join('\n'),
+    );
 
     const decline = DECLINE_PATTERN.test(combinedText);
-    const pureDefer = combinedText.length > 0 &&
+    const pureDefer =
+      combinedText.length > 0 &&
       (PURE_DEFER_PATTERN.test(collapseWhitespace(combinedText)) ||
-        (DEFER_CUE_PATTERN.test(combinedText) && !DIRECT_CUE_PATTERN.test(combinedText)));
+        (DEFER_CUE_PATTERN.test(combinedText) &&
+          !DIRECT_CUE_PATTERN.test(combinedText)));
 
     const scoredLines = lines
       .map((line) => {
@@ -577,7 +880,8 @@ export class EvidenceResolutionPlanner {
         const ackOnly = ACK_PATTERN.test(line);
         let score = overlapScore(line, terms);
         if (DIRECT_CUE_PATTERN.test(line)) score += 2;
-        if (DEFER_CUE_PATTERN.test(line) && !PURE_DEFER_PATTERN.test(line)) score += 1;
+        if (DEFER_CUE_PATTERN.test(line) && !PURE_DEFER_PATTERN.test(line))
+          score += 1;
         if (artifactOnly) score -= 3;
         if (ackOnly) score -= 4;
         if (DECLINE_PATTERN.test(line)) score -= 2;
@@ -595,6 +899,14 @@ export class EvidenceResolutionPlanner {
     let resolutionState: EvidenceResolutionState = 'insufficient';
     let legacyClassification: LegacyReplyClassification = 'unclear';
     let recommendedAction: EvidenceResolutionActionType = 'none';
+    const inferredDisposition = inferDisposition(
+      input,
+      resolutionState,
+      candidateArtifacts,
+    );
+    const inferredSourceAnchor = inferSourceAnchor(input);
+    let disposition: EvidenceResolutionDisposition =
+      inferredDisposition.disposition;
     let remainingQuestions: string[] = [];
     let etaAt: number | undefined;
     let reason = 'fallback_heuristic';
@@ -603,7 +915,9 @@ export class EvidenceResolutionPlanner {
       legacyClassification = decline ? 'decline' : 'answer';
       if (candidateArtifacts.length > 0) {
         resolutionState = 'partial';
-        remainingQuestions = [buildRemainingQuestion(input.question, candidateArtifacts)];
+        remainingQuestions = [
+          buildRemainingQuestion(input.question, candidateArtifacts),
+        ];
       } else {
         resolutionState = 'complete';
       }
@@ -619,31 +933,56 @@ export class EvidenceResolutionPlanner {
     } else if (candidateArtifacts.length > 0) {
       legacyClassification = 'unclear';
       resolutionState = 'insufficient';
-      remainingQuestions = [buildRemainingQuestion(input.question, candidateArtifacts)];
+      remainingQuestions = [
+        buildRemainingQuestion(input.question, candidateArtifacts),
+      ];
       reason = 'artifact_requires_followup';
-    } else if (combinedText && ACK_PATTERN.test(collapseWhitespace(combinedText))) {
+    } else if (
+      combinedText &&
+      ACK_PATTERN.test(collapseWhitespace(combinedText))
+    ) {
       legacyClassification = 'irrelevant';
       resolutionState = 'insufficient';
       reason = 'ack_without_answer';
     }
 
-    if (shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)) {
+    if (
+      shouldPreferArtifactDelegation(input, resolutionState, candidateArtifacts)
+    ) {
       recommendedAction = 'delegate_openclaw';
+      disposition = 'auto_verify';
     } else if (
       resolutionState === 'insufficient' &&
       input.policy.allowCreateConfirmRequest
     ) {
       recommendedAction = 'create_confirm_request';
+      disposition = inferredDisposition.disposition;
     }
 
     const actionParams =
       recommendedAction === 'delegate_openclaw'
-        ? buildDelegateActionParams(input, directFindings, remainingQuestions, candidateArtifacts, 'read')
+        ? buildDelegateActionParams(
+            input,
+            directFindings,
+            remainingQuestions,
+            candidateArtifacts,
+            'read',
+          )
         : recommendedAction === 'create_confirm_request'
           ? buildConfirmRequestParams(
               input,
-              buildSummary(resolutionState, resolvedConclusion, remainingQuestions, legacyClassification, etaAt),
+              buildSummary(
+                resolutionState,
+                resolvedConclusion,
+                remainingQuestions,
+                legacyClassification,
+                etaAt,
+              ),
               remainingQuestions,
+              disposition,
+              inferredDisposition.reasonCode,
+              inferredDisposition.gapType,
+              inferredSourceAnchor,
             )
           : undefined;
 
@@ -653,6 +992,10 @@ export class EvidenceResolutionPlanner {
       resolvedConclusion,
       remainingQuestions,
       candidateArtifacts,
+      disposition,
+      reasonCode: inferredDisposition.reasonCode,
+      sourceAnchor: inferredSourceAnchor,
+      gapType: inferredDisposition.gapType,
       recommendedAction,
       actionParams,
       confidence:
@@ -664,7 +1007,13 @@ export class EvidenceResolutionPlanner {
               ? 0.75
               : 0.55,
       legacyClassification,
-      summary: buildSummary(resolutionState, resolvedConclusion, remainingQuestions, legacyClassification, etaAt),
+      summary: buildSummary(
+        resolutionState,
+        resolvedConclusion,
+        remainingQuestions,
+        legacyClassification,
+        etaAt,
+      ),
       reason,
       etaAt,
     };

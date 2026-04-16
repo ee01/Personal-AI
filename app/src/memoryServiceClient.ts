@@ -10,10 +10,13 @@ function isProviderApiPath(path: string): boolean {
   return path.startsWith('/api/v1/providers/');
 }
 
-function buildProviderApiCompatibilityError(baseUrl: string, path: string): Error {
+function buildProviderApiCompatibilityError(
+  baseUrl: string,
+  path: string,
+): Error {
   return new Error(
     `Memory Service at ${baseUrl} does not support Doubao Bridge provider APIs (${path}). ` +
-    'This usually means the backend is outdated or the Base URL points to the wrong service.',
+      'This usually means the backend is outdated or the Base URL points to the wrong service.',
   );
 }
 
@@ -40,7 +43,13 @@ export class BridgeMemoryServiceHttpError extends Error {
 
 export interface ProviderSyncJobRecord {
   id: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
+  status:
+    | 'queued'
+    | 'running'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled'
+    | 'skipped';
 }
 
 export interface ProviderCapabilities {
@@ -140,11 +149,27 @@ export interface ConfirmRequestListResponse {
     category?: string;
     priority: string;
     state: string;
+    routing?: 'decision' | 'watch';
+    reasonCode?:
+      | 'authority_required'
+      | 'approval_required'
+      | 'future_monitoring'
+      | 'owner_eta_gap'
+      | 'artifact_gap'
+      | 'time_sensitive_blocker';
+    sourceAnchor?: string;
+    gapType?:
+      | 'future_monitoring'
+      | 'owner_eta'
+      | 'artifact_check'
+      | 'decision_blocker';
     createdAt: number;
+    updatedAt?: number;
   }>;
   total: number;
   limit: number;
   state: string;
+  queue?: 'decision' | 'watch' | 'all';
 }
 
 export interface RuntimeActionListResponse {
@@ -152,7 +177,13 @@ export interface RuntimeActionListResponse {
     id: string;
     title: string;
     actionType: string;
-    queueStatus: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter';
+    queueStatus:
+      | 'queued'
+      | 'running'
+      | 'succeeded'
+      | 'failed'
+      | 'cancelled'
+      | 'dead_letter';
   }>;
   total: number;
   limit: number;
@@ -232,7 +263,10 @@ export class BridgeMemoryServiceClient {
 
   isEnabled(): boolean {
     const settings = this.getSettings();
-    return Boolean(normalizeBaseUrl(settings.memoryServiceBaseUrl) && settings.memoryServiceUserId);
+    return Boolean(
+      normalizeBaseUrl(settings.memoryServiceBaseUrl) &&
+      settings.memoryServiceUserId,
+    );
   }
 
   private buildHeaders(): Record<string, string> {
@@ -254,14 +288,22 @@ export class BridgeMemoryServiceClient {
 
   private ensureWriteIdentity(): void {
     if (!this.getSettings().memoryServiceUserId) {
-      throw new Error('Memory Service User ID is required for sync operations.');
+      throw new Error(
+        'Memory Service User ID is required for sync operations.',
+      );
     }
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
     const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
     if (!baseUrl) {
-      throw new Error('MEMORY_SERVICE_BASE_URL is not configured for Doubao Bridge');
+      throw new Error(
+        'MEMORY_SERVICE_BASE_URL is not configured for Doubao Bridge',
+      );
     }
 
     const response = await fetch(`${baseUrl}${path}`, {
@@ -283,8 +325,13 @@ export class BridgeMemoryServiceClient {
           ? (payload as { error: string }).error
           : typeof payload === 'string'
             ? payload
-            : '') || `Memory service request failed: ${method} ${path} (${response.status})`;
-      throw new BridgeMemoryServiceHttpError(errorMessage, response.status, payload);
+            : '') ||
+        `Memory service request failed: ${method} ${path} (${response.status})`;
+      throw new BridgeMemoryServiceHttpError(
+        errorMessage,
+        response.status,
+        payload,
+      );
     }
 
     if (response.status === 204) {
@@ -343,7 +390,9 @@ export class BridgeMemoryServiceClient {
   ): Promise<void> {
     const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
     if (!baseUrl) {
-      throw new Error('MEMORY_SERVICE_BASE_URL is not configured for Doubao Bridge');
+      throw new Error(
+        'MEMORY_SERVICE_BASE_URL is not configured for Doubao Bridge',
+      );
     }
 
     const response = await fetch(`${baseUrl}${path}`, {
@@ -365,12 +414,19 @@ export class BridgeMemoryServiceClient {
           ? (payload as { error: string }).error
           : typeof payload === 'string'
             ? payload
-            : '') || `Memory service stream request failed: POST ${path} (${response.status})`;
-      throw new BridgeMemoryServiceHttpError(errorMessage, response.status, payload);
+            : '') ||
+        `Memory service stream request failed: POST ${path} (${response.status})`;
+      throw new BridgeMemoryServiceHttpError(
+        errorMessage,
+        response.status,
+        payload,
+      );
     }
 
     if (!response.body) {
-      throw new Error(`Memory service stream ${path} returned no response body.`);
+      throw new Error(
+        `Memory service stream ${path} returned no response body.`,
+      );
     }
 
     const reader = response.body.getReader();
@@ -409,7 +465,10 @@ export class BridgeMemoryServiceClient {
   }
 
   async testConnection(): Promise<Record<string, unknown>> {
-    const health = await this.request<Record<string, unknown>>('GET', '/api/v1/health');
+    const health = await this.request<Record<string, unknown>>(
+      'GET',
+      '/api/v1/health',
+    );
     const providerCapabilities = await this.getProviderCapabilities('doubao');
     return {
       ok: true,
@@ -419,7 +478,9 @@ export class BridgeMemoryServiceClient {
     };
   }
 
-  async getProviderCapabilities(provider: string): Promise<ProviderCapabilities> {
+  async getProviderCapabilities(
+    provider: string,
+  ): Promise<ProviderCapabilities> {
     return this.request<ProviderCapabilities>(
       'GET',
       `/api/v1/providers/${encodeURIComponent(provider)}/capabilities`,
@@ -428,16 +489,25 @@ export class BridgeMemoryServiceClient {
 
   async renderContextPackage(input: {
     provider: string;
-    scenario: 'stable_memory' | 'mobile_briefing' | 'todo_sync' | 'notice_sync' | 'reminder_sync';
+    scenario:
+      | 'stable_memory'
+      | 'mobile_briefing'
+      | 'todo_sync'
+      | 'notice_sync'
+      | 'reminder_sync';
     deviceContext?: string;
   }): Promise<RenderContextPackageResponse> {
     this.ensureWriteIdentity();
-    return this.request<RenderContextPackageResponse>('POST', '/api/v1/providers/context-packages/render', {
-      provider: input.provider,
-      scenario: input.scenario,
-      deviceContext: input.deviceContext ?? 'doubao_bridge_daemon',
-      createSyncJob: true,
-    });
+    return this.request<RenderContextPackageResponse>(
+      'POST',
+      '/api/v1/providers/context-packages/render',
+      {
+        provider: input.provider,
+        scenario: input.scenario,
+        deviceContext: input.deviceContext ?? 'doubao_bridge_daemon',
+        createSyncJob: true,
+      },
+    );
   }
 
   async reportSyncJob(
@@ -453,16 +523,28 @@ export class BridgeMemoryServiceClient {
     },
   ): Promise<void> {
     this.ensureWriteIdentity();
-    await this.request('POST', `/api/v1/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`, payload);
+    await this.request(
+      'POST',
+      `/api/v1/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`,
+      payload,
+    );
   }
 
-  async reportNotificationDelivery(events: NotificationCenterDeliveryEvent[]): Promise<void> {
+  async reportNotificationDelivery(
+    events: NotificationCenterDeliveryEvent[],
+  ): Promise<void> {
     if (events.length === 0) return;
     this.ensureWriteIdentity();
-    await this.request('POST', '/api/v1/notification-center/delivery', { events });
+    await this.request('POST', '/api/v1/notification-center/delivery', {
+      events,
+    });
   }
 
-  async ask(query: string, context?: string, includeEvidence?: boolean): Promise<AskResponse> {
+  async ask(
+    query: string,
+    context?: string,
+    includeEvidence?: boolean,
+  ): Promise<AskResponse> {
     return this.request<AskResponse>('POST', '/api/v1/ask', {
       query,
       context,
@@ -487,10 +569,15 @@ export class BridgeMemoryServiceClient {
     );
   }
 
-  async getConfirmRequests(state?: string, limit?: number): Promise<ConfirmRequestListResponse> {
+  async getConfirmRequests(
+    state?: string,
+    limit?: number,
+    queue?: 'decision' | 'watch' | 'all',
+  ): Promise<ConfirmRequestListResponse> {
     const params = new URLSearchParams();
     if (state) params.set('state', state);
     if (limit !== undefined) params.set('limit', String(limit));
+    if (queue) params.set('queue', queue);
     const qs = params.toString();
     return this.request<ConfirmRequestListResponse>(
       'GET',
@@ -499,7 +586,14 @@ export class BridgeMemoryServiceClient {
   }
 
   async getActions(filters?: {
-    queueStatus?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all';
+    queueStatus?:
+      | 'queued'
+      | 'running'
+      | 'succeeded'
+      | 'failed'
+      | 'cancelled'
+      | 'dead_letter'
+      | 'all';
     executionMode?: 'manual' | 'auto';
     threadId?: string;
     actionType?: string;
@@ -508,28 +602,49 @@ export class BridgeMemoryServiceClient {
   }): Promise<RuntimeActionListResponse> {
     const params = new URLSearchParams();
     if (filters?.queueStatus) params.set('queueStatus', filters.queueStatus);
-    if (filters?.executionMode) params.set('executionMode', filters.executionMode);
+    if (filters?.executionMode)
+      params.set('executionMode', filters.executionMode);
     if (filters?.threadId) params.set('threadId', filters.threadId);
     if (filters?.actionType) params.set('actionType', filters.actionType);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
     const qs = params.toString();
-    return this.request<RuntimeActionListResponse>('GET', `/api/v1/actions${qs ? `?${qs}` : ''}`);
+    return this.request<RuntimeActionListResponse>(
+      'GET',
+      `/api/v1/actions${qs ? `?${qs}` : ''}`,
+    );
   }
 
   async getOutreachSummary(): Promise<OutreachSummaryResponse> {
-    return this.request<OutreachSummaryResponse>('GET', '/api/v1/outreach/summary');
+    return this.request<OutreachSummaryResponse>(
+      'GET',
+      '/api/v1/outreach/summary',
+    );
   }
 
   async getOutreachSessions(filters?: {
-    status?: 'pending_approval' | 'scheduled' | 'waiting_reply' | 'deferred' | 'resolved' | 'no_reply' | 'escalated' | 'cancelled' | 'failed' | 'all';
+    status?:
+      | 'pending_approval'
+      | 'scheduled'
+      | 'waiting_reply'
+      | 'deferred'
+      | 'resolved'
+      | 'no_reply'
+      | 'escalated'
+      | 'cancelled'
+      | 'failed'
+      | 'all';
     limit?: number;
     offset?: number;
   }): Promise<OutreachSessionListResponse> {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
-    if (filters?.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
     const qs = params.toString();
     return this.request<OutreachSessionListResponse>(
       'GET',
@@ -547,7 +662,12 @@ export class BridgeMemoryServiceClient {
     itemValue: string;
     evidenceRefs?: unknown[];
     confidence?: number;
-  }): Promise<{ id?: string; itemType?: string; itemKey?: string; itemValue?: string }> {
+  }): Promise<{
+    id?: string;
+    itemType?: string;
+    itemKey?: string;
+    itemValue?: string;
+  }> {
     this.ensureWriteIdentity();
     return this.request('POST', '/api/v1/profile/items', body);
   }

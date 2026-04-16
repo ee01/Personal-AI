@@ -56,7 +56,10 @@ describe('ConfirmRequestRepository', () => {
     expect(second.created).toBe(false);
     expect(second.record.id).toBe('cr-1');
     expect(second.record.priority).toBe('high');
-    expect(second.record.evidenceRefs).toEqual(['message:orbit-1', 'message:orbit-2']);
+    expect(second.record.evidenceRefs).toEqual([
+      'message:orbit-1',
+      'message:orbit-2',
+    ]);
 
     const rows = db
       .prepare(`SELECT id, state, dedupe_key FROM confirm_requests`)
@@ -167,16 +170,133 @@ describe('ConfirmRequestRepository', () => {
     expect(duplicate?.dedupeKey).toBe(canonical?.dedupeKey);
 
     const updatedAction = db
-      .prepare(`SELECT json_extract(result_json, '$.confirmRequestId') AS confirm_request_id FROM proposed_actions WHERE id = ?`)
+      .prepare(
+        `SELECT json_extract(result_json, '$.confirmRequestId') AS confirm_request_id FROM proposed_actions WHERE id = ?`,
+      )
       .get(followupAction.id) as { confirm_request_id: string | null };
     expect(updatedAction.confirm_request_id).toBe('cr-old');
 
     const duplicateThread = db
-      .prepare(`SELECT status, closure_reason FROM reflection_threads WHERE source_ref_id = 'cr-new'`)
+      .prepare(
+        `SELECT status, closure_reason FROM reflection_threads WHERE source_ref_id = 'cr-new'`,
+      )
       .get() as { status: string; closure_reason: string | null } | undefined;
     expect(duplicateThread).toMatchObject({
       status: 'closed',
       closure_reason: 'duplicate confirm request merged',
     });
+  });
+
+  it('creates watch items as snoozed and dedupes by source anchor plus gap type', () => {
+    const first = repo.createOrReusePending({
+      id: 'watch-1',
+      question: 'AI Notes Edit BE 会不会改发布时间？',
+      context: '当前只有零散线索，需要继续观察。',
+      category: 'evidence_resolution',
+      routing: 'watch',
+      reasonCode: 'future_monitoring',
+      sourceAnchor: 'thread:orbit-1',
+      gapType: 'future_monitoring',
+      createdAt: 100,
+    });
+    const second = repo.createOrReusePending({
+      id: 'watch-2',
+      question: 'AI Notes Edit BE 是否还有新的发布时间计划？',
+      context: '同一主题的另一种问法。',
+      category: 'evidence_resolution',
+      routing: 'watch',
+      reasonCode: 'future_monitoring',
+      sourceAnchor: 'thread:orbit-1',
+      gapType: 'future_monitoring',
+      createdAt: 120,
+    });
+
+    expect(first.created).toBe(true);
+    expect(first.record.state).toBe('snoozed');
+    expect(first.record.routing).toBe('watch');
+    expect(first.record.snoozeUntil).toBe(100 + 72 * 3600);
+    expect(first.record.expiresAt).toBe(100 + 14 * 24 * 3600);
+
+    expect(second.created).toBe(false);
+    expect(second.record.id).toBe('watch-1');
+    expect(second.record.state).toBe('snoozed');
+  });
+
+  it('transitions watch item states explicitly', () => {
+    repo.createOrReusePending({
+      id: 'watch-transition',
+      question: '谁是 Orbit 的负责人？',
+      category: 'evidence_resolution',
+      routing: 'watch',
+      reasonCode: 'owner_eta_gap',
+      sourceAnchor: 'ask:req-1',
+      gapType: 'owner_eta',
+      createdAt: 200,
+    });
+
+    const pending = repo.transitionState(
+      'watch-transition',
+      'snoozed',
+      'pending',
+    );
+    expect(pending?.state).toBe('pending');
+
+    const snoozedAgain = repo.transitionState(
+      'watch-transition',
+      'pending',
+      'snoozed',
+      {
+        snoozeUntil: 500,
+        expiresAt: 900,
+      },
+    );
+    expect(snoozedAgain?.state).toBe('snoozed');
+    expect(snoozedAgain?.snoozeUntil).toBe(500);
+
+    const expired = repo.transitionState(
+      'watch-transition',
+      'snoozed',
+      'expired',
+    );
+    expect(expired?.state).toBe('expired');
+  });
+
+  it('automatically resnoozes and expires watch items during lifecycle processing', () => {
+    repo.createOrReusePending({
+      id: 'watch-due',
+      question: 'Orbit 下周会不会变化？',
+      category: 'evidence_resolution',
+      routing: 'watch',
+      reasonCode: 'future_monitoring',
+      sourceAnchor: 'thread:orbit',
+      gapType: 'future_monitoring',
+      createdAt: 100,
+      snoozeUntil: 110,
+      expiresAt: 1000,
+    });
+    repo.createOrReusePending({
+      id: 'watch-expire',
+      question: 'Orbit 的 owner 是谁？',
+      category: 'evidence_resolution',
+      routing: 'watch',
+      reasonCode: 'owner_eta_gap',
+      sourceAnchor: 'thread:orbit-owner',
+      gapType: 'owner_eta',
+      createdAt: 100,
+      snoozeUntil: 120,
+      expiresAt: 130,
+    });
+
+    const result = repo.processWatchLifecycle(200);
+    expect(result.resnoozed).toBe(1);
+    expect(result.expired).toBe(1);
+
+    const resnoozed = repo.getById('watch-due');
+    expect(resnoozed?.state).toBe('snoozed');
+    expect(resnoozed?.snoozeUntil).toBe(200 + 72 * 3600);
+    expect(resnoozed?.snoozeCount).toBe(1);
+
+    const expired = repo.getById('watch-expire');
+    expect(expired?.state).toBe('expired');
   });
 });
