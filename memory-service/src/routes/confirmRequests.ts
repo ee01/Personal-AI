@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { TruthMaintainer } from '../core/TruthMaintainer.js';
+import { reclassifyLegacyEvidenceResolutionConfirmRequests } from '../core/ConfirmRequestRoutingBackfill.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 
@@ -370,5 +371,25 @@ export async function confirmRequestRoutes(
     return reply
       .status(200)
       .send({ status: 'updated', confirmRequest: updated, queuedActionId });
+  });
+
+  app.post<{
+    Body: { dryRun?: boolean; force?: boolean; limit?: number };
+  }>('/confirm-requests/reclassify-legacy', async (request, reply) => {
+    const { db } = request.userContext;
+    const summary = reclassifyLegacyEvidenceResolutionConfirmRequests(db, {
+      dryRun: request.body?.dryRun ?? false,
+      force: request.body?.force ?? false,
+      limit:
+        typeof request.body?.limit === 'number' &&
+        Number.isFinite(request.body.limit)
+          ? Math.max(1, Math.min(request.body.limit, 1000))
+          : undefined,
+    });
+
+    return reply.status(200).send({
+      status: summary.dryRun ? 'dry_run_complete' : 'reclassified',
+      summary,
+    });
   });
 }

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   memory-service:
     build: ./memory-service
@@ -12,7 +10,13 @@ services:
       - ./memory-service/.env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3210/health"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3210/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

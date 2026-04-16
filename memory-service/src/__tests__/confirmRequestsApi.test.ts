@@ -500,4 +500,168 @@ describe('Confirm Requests API', () => {
     expect(resnoozeResponse.statusCode).toBe(200);
     expect(resnoozeResponse.json().confirmRequest.state).toBe('snoozed');
   });
+
+  it('reclassifies legacy evidence-resolution confirm requests through the admin endpoint', async () => {
+    const context = userContextManager.getContext('confirm-retry-user');
+    const currentTime = Math.floor(Date.now() / 1000);
+
+    context.db
+      .prepare(
+        `INSERT INTO confirm_requests
+        (id, question, context, options_json, evidence_refs_json, category, priority, state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'cr-legacy-1',
+        'AI Notes Edit BE 的具体进展情况是什么？',
+        '目前未检索到直接信息，建议向负责人确认后续安排。',
+        JSON.stringify([{ label: '继续查证', value: 'continue' }]),
+        JSON.stringify([]),
+        'evidence_resolution',
+        'normal',
+        'pending',
+        currentTime,
+        currentTime,
+      );
+    context.db
+      .prepare(
+        `INSERT INTO confirm_requests
+        (id, question, context, options_json, evidence_refs_json, category, priority, state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'cr-legacy-2',
+        'AI Notes edit功能BE的具体开发计划、负责人及时间表尚未明确。',
+        '整体项目在推进，但 edit 相关 BE 负责人和时间表仍缺失。',
+        JSON.stringify([{ label: '继续查证', value: 'continue' }]),
+        JSON.stringify([]),
+        'evidence_resolution',
+        'normal',
+        'pending',
+        currentTime + 1,
+        currentTime + 1,
+      );
+
+    const dryRunResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/reclassify-legacy',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { dryRun: true, limit: 10 },
+    });
+    expect(dryRunResponse.statusCode).toBe(200);
+    expect(dryRunResponse.json().summary.scanned).toBeGreaterThanOrEqual(1);
+    expect(dryRunResponse.json().summary.updated).toBe(0);
+
+    const applyResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/reclassify-legacy',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { dryRun: false, limit: 10 },
+    });
+    expect(applyResponse.statusCode).toBe(200);
+    expect(applyResponse.json().summary.updated).toBeGreaterThanOrEqual(1);
+
+    const reclassified = context.db
+      .prepare(
+        `SELECT routing, state, reason_code, source_anchor, gap_type
+         FROM confirm_requests
+         WHERE id = ?`,
+      )
+      .get('cr-legacy-1') as {
+      routing: string | null;
+      state: string;
+      reason_code: string | null;
+      source_anchor: string | null;
+      gap_type: string | null;
+    };
+    expect(reclassified).toMatchObject({
+      routing: 'watch',
+      state: 'snoozed',
+      reason_code: 'owner_eta_gap',
+      gap_type: 'owner_eta',
+    });
+    expect(reclassified.source_anchor).toMatch(/^topic:/);
+
+    const deduped = context.db
+      .prepare(`SELECT state, source_anchor FROM confirm_requests WHERE id = ?`)
+      .get('cr-legacy-2') as {
+      state: string;
+      source_anchor: string | null;
+    };
+    expect(deduped.source_anchor).toBe(reclassified.source_anchor);
+    expect(deduped.state).toBe('deduplicated');
+  });
+
+  it('prefers entity_property anchors over entity anchors during legacy reclassification', async () => {
+    const context = userContextManager.getContext('confirm-retry-user');
+    const currentTime = Math.floor(Date.now() / 1000) + 100;
+
+    const insertLegacy = context.db.prepare(
+      `INSERT INTO confirm_requests
+      (id, question, context, options_json, evidence_refs_json, category, priority, state, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertLegacy.run(
+      'cr-legacy-property-1',
+      'Alpha 项目的 owner 和上线时间是什么？',
+      '目前缺少 owner 和发布时间。',
+      JSON.stringify([{ label: '继续查证', value: 'continue' }]),
+      JSON.stringify(['entity:project-alpha', 'entity_property:9001']),
+      'evidence_resolution',
+      'normal',
+      'pending',
+      currentTime,
+      currentTime,
+    );
+    insertLegacy.run(
+      'cr-legacy-property-2',
+      'Alpha 项目的 owner 和排期是否已经明确？',
+      '该项目另一个属性仍缺少 owner 和排期。',
+      JSON.stringify([{ label: '继续查证', value: 'continue' }]),
+      JSON.stringify(['entity:project-alpha', 'entity_property:9002']),
+      'evidence_resolution',
+      'normal',
+      'pending',
+      currentTime + 1,
+      currentTime + 1,
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/reclassify-legacy',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { dryRun: false, limit: 20 },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const rows = context.db
+      .prepare(
+        `SELECT id, state, source_anchor, gap_type
+         FROM confirm_requests
+         WHERE id IN ('cr-legacy-property-1', 'cr-legacy-property-2')
+         ORDER BY id ASC`,
+      )
+      .all() as Array<{
+      id: string;
+      state: string;
+      source_anchor: string | null;
+      gap_type: string | null;
+    }>;
+
+    expect(rows).toEqual([
+      {
+        id: 'cr-legacy-property-1',
+        state: 'snoozed',
+        source_anchor: 'entity_property:9001',
+        gap_type: 'owner_eta',
+      },
+      {
+        id: 'cr-legacy-property-2',
+        state: 'snoozed',
+        source_anchor: 'entity_property:9002',
+        gap_type: 'owner_eta',
+      },
+    ]);
+  });
 });
