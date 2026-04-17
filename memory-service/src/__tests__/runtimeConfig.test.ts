@@ -12,6 +12,8 @@ describe('getUserRuntimeConfig', () => {
     expect(config.openClawEnabled).toBe(false);
     expect(config.openClawBaseUrl).toBeDefined();
     expect(config.openClawTimeoutMs).toBe(600000);
+    expect(config.outreachResultPushTarget).toBe('me');
+    expect(config.outreachResultPushGroupId).toBe('');
   });
 
   it('applies per-user reflection and dream push overrides from config.json', () => {
@@ -23,6 +25,8 @@ describe('getUserRuntimeConfig', () => {
           reflectionHeartbeatMinutes: 42,
           dreamDigestPushTarget: 'none',
           weeklyReportPushTarget: 'none',
+          outreachResultPushTarget: 'group',
+          outreachResultPushGroupId: 'group-42',
           openClawEnabled: true,
           openClawBaseUrl: 'https://openclaw.example.com',
           openClawApiKey: 'test-openclaw-key',
@@ -38,6 +42,8 @@ describe('getUserRuntimeConfig', () => {
     expect(config.dreamDigestEnabled).toBe(false);
     expect(config.dreamDigestPushTarget).toBe('none');
     expect(config.weeklyReportEnabled).toBe(false);
+    expect(config.outreachResultPushTarget).toBe('group');
+    expect(config.outreachResultPushGroupId).toBe('group-42');
     expect(config.openClawEnabled).toBe(true);
     expect(config.openClawBaseUrl).toBe('https://openclaw.example.com');
     expect(config.openClawApiKey).toBe('test-openclaw-key');

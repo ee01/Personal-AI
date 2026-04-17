@@ -309,7 +309,9 @@ function summarizeOutreachResult(item: OutreachTemplateRuntimeStatusItem): strin
   if (!session) return undefined;
   if (session.errorMessage?.trim()) return session.errorMessage.trim();
   if (session.outcome && typeof session.outcome === 'object') {
-    const summaryCandidate = (session.outcome.summary ||
+    const summaryCandidate = (session.outcome.resolvedConclusion ||
+      session.outcome.summary ||
+      session.outcome.evidenceSummary ||
       session.outcome.reason ||
       session.outcome.answer ||
       session.outcome.answerText ||
@@ -332,16 +334,10 @@ function getScheduledMessageTooltipContent(message: ScheduledMessage): string {
 
   const question = getOutreachQuestion(message);
   const result = getOutreachResult(message);
-  const context = message.Outreach_Context?.trim();
   if (question && result) {
-    return context
-      ? `${question}\n\n背景：${context}\n\n询问结果：${result}`
-      : `${question}\n\n询问结果：${result}`;
+    return `${question}\n\n询问结果：${result}`;
   }
-  if (question && context) {
-    return `${question}\n\n背景：${context}`;
-  }
-  return question || result || context || '';
+  return question || (result ? `询问结果：${result}` : '');
 }
 
 function formatOutreachSyncState(value?: string): string {
@@ -681,19 +677,29 @@ const ScheduledMessagesManager: React.FC = () => {
       setMessages(baseMessages);
       setStatistics(buildStatistics(baseMessages));
 
-      const enrichMessages = async (): Promise<ScheduledMessage[]> => {
-        const jiraSyncedMsgs = skipJiraSync
-          ? baseMessages
-          : await syncJiraAutomationStatus(baseMessages, messageService);
-        const outreachOverlayMsgs = await overlayOutreachRuntimeStatus(jiraSyncedMsgs);
-        const updatedMsgs = await backfillOutreachDoneStatus(messageService, outreachOverlayMsgs);
+      const applyOutreachOverlay = async (
+        seedMessages: ScheduledMessage[],
+      ): Promise<ScheduledMessage[]> => {
+        const outreachOverlayMsgs = await overlayOutreachRuntimeStatus(seedMessages);
+        const updatedMsgs = await backfillOutreachDoneStatus(
+          messageService,
+          outreachOverlayMsgs,
+        );
 
         setMessages(updatedMsgs);
         setStatistics(buildStatistics(updatedMsgs));
         return updatedMsgs;
       };
 
+      const enrichMessages = async (): Promise<ScheduledMessage[]> => {
+        const jiraSyncedMsgs = skipJiraSync
+          ? baseMessages
+          : await syncJiraAutomationStatus(baseMessages, messageService);
+        return await applyOutreachOverlay(jiraSyncedMsgs);
+      };
+
       if (deferEnrichment) {
+        const outreachFirstPass = await applyOutreachOverlay(baseMessages);
         setIsBackgroundLoading(true);
         void enrichMessages()
           .catch((error) => {
@@ -702,7 +708,7 @@ const ScheduledMessagesManager: React.FC = () => {
           .finally(() => {
             setIsBackgroundLoading(false);
           });
-        return baseMessages;
+        return outreachFirstPass;
       }
 
       return await enrichMessages();
@@ -2965,34 +2971,43 @@ const TagsInput: React.FC<{
 }> = ({ tags, onChange, placeholder, maxTags, disabled }) => {
   const [inputValue, setInputValue] = useState('');
   const [error, setError] = useState('');
+
+  const commitInputValue = () => {
+    const trimmedValue = inputValue.trim();
+    if (!trimmedValue) {
+      setError('');
+      return;
+    }
+
+    // 验证格式
+    if (!formatUserName.validate(trimmedValue)) {
+      setError('请输入完整的姓名（如：Esone Qiu 或 esone.qiu）');
+      return;
+    }
+
+    if (maxTags && tags.length >= maxTags) {
+      setError(`最多只能添加 ${maxTags} 个`);
+      return;
+    }
+
+    // 转换为显示格式
+    const displayName = formatUserName.toDisplayFormat(trimmedValue);
+
+    // 检查是否已存在（避免重复）
+    if (tags.includes(displayName)) {
+      setError('该用户已添加');
+      return;
+    }
+
+    onChange([...tags, displayName]);
+    setInputValue('');
+    setError('');
+  };
   
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && inputValue.trim()) {
       e.preventDefault();
-      
-      // 验证格式
-      if (!formatUserName.validate(inputValue)) {
-        setError('请输入完整的姓名（如：Esone Qiu 或 esone.qiu）');
-        return;
-      }
-      
-      if (maxTags && tags.length >= maxTags) {
-        setError(`最多只能添加 ${maxTags} 个`);
-        return;
-      }
-      
-      // 转换为显示格式
-      const displayName = formatUserName.toDisplayFormat(inputValue);
-      
-      // 检查是否已存在（避免重复）
-      if (tags.includes(displayName)) {
-        setError('该用户已添加');
-        return;
-      }
-      
-      onChange([...tags, displayName]);
-      setInputValue('');
-      setError('');
+      commitInputValue();
     } else if (e.key === 'Backspace' && !inputValue && tags.length > 0) {
       onChange(tags.slice(0, -1));
       setError('');
@@ -3002,6 +3017,10 @@ const TagsInput: React.FC<{
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
     if (error) setError(''); // 清除错误提示
+  };
+
+  const handleInputBlur = () => {
+    commitInputValue();
   };
   
   const removeTag = (indexToRemove: number) => {
@@ -3054,6 +3073,7 @@ const TagsInput: React.FC<{
           value={inputValue}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
+          onBlur={handleInputBlur}
           placeholder={tags.length === 0 ? placeholder : ''}
           disabled={disabled}
           style={{
@@ -4221,7 +4241,7 @@ ${content}
                   <TagsInput
                     tags={userTags}
                     onChange={handleUserTagsChange}
-                    placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
+                    placeholder="输入人名后按 Enter 或直接移开焦点添加，例如：Esone Qiu 或 esone.qiu"
                     maxTags={1}
                   />
                 )}
@@ -5564,10 +5584,10 @@ ${content}
                     <TagsInput
                       tags={aiReportMentionList}
                       onChange={setAiReportMentionList}
-                      placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
+                      placeholder="输入人名后按 Enter 或直接移开焦点添加，例如：Esone Qiu 或 esone.qiu"
                     />
                     <small style={dialogStyles.hint}>
-                      支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 添加
+                      支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 或直接移开焦点即可添加
                     </small>
                   </div>
                   
@@ -5706,11 +5726,11 @@ ${content}
                   <TagsInput
                     tags={userTags}
                     onChange={handleUserTagsChange}
-                    placeholder="输入人名后按 Enter 添加，例如：Esone Qiu 或 esone.qiu"
+                    placeholder="输入人名后按 Enter 或直接移开焦点添加，例如：Esone Qiu 或 esone.qiu"
                     maxTags={formData.Push_Method === 'Bot' ? 1 : undefined}
                   />
                   <small style={dialogStyles.hint}>
-                    支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 添加
+                    支持格式：<strong>Esone Qiu</strong> 或 <strong>esone.qiu</strong>，按 Enter 或直接移开焦点即可添加
                   </small>
                 </div>
               )}

@@ -653,7 +653,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -743,6 +743,14 @@ onMounted(() => {
   void loadData();
 });
 
+watch(
+  () => route.fullPath,
+  () => {
+    hydrateFilters();
+    void loadData();
+  },
+);
+
 function hydrateFilters() {
   status.value = normalizeStatus(route.query.status);
   originKind.value =
@@ -780,7 +788,6 @@ function applyFilters() {
   if (threadId.value.trim()) query.threadId = threadId.value.trim();
 
   void router.replace({ path: '/outreach', query });
-  void loadData();
 }
 
 async function loadData() {

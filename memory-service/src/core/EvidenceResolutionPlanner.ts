@@ -155,9 +155,17 @@ function collapseWhitespace(value: string): string {
 function extractTerms(value: string): string[] {
   const matches =
     value.match(/[a-z0-9][a-z0-9._:-]{1,}|[\u4e00-\u9fff]{2,}/giu) ?? [];
-  return uniqStrings(matches.map((item) => item.toLowerCase())).filter(
-    (item) => item.length >= 2,
-  );
+  const expanded: string[] = [];
+  for (const match of matches) {
+    const normalized = match.toLowerCase();
+    expanded.push(normalized);
+    if (/^[\u4e00-\u9fff]{3,}$/u.test(match)) {
+      for (let index = 0; index <= match.length - 2; index += 1) {
+        expanded.push(match.slice(index, index + 2));
+      }
+    }
+  }
+  return uniqStrings(expanded).filter((item) => item.length >= 2);
 }
 
 function overlapScore(line: string, terms: string[]): number {

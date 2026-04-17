@@ -147,6 +147,63 @@ describe('Message Rule Automation API', () => {
     expect(queued).toHaveLength(3);
   });
 
+  it('creates a generic delegate action for known linked-action families', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/message-rules/plan',
+      payload: {
+        ruleRef: 'manual:jira-rule',
+        ruleText: '消息命中后同步 Jira 工单',
+        automationPrompt:
+          '从消息中识别 Jira / ticket 编号，把关键信息整理成 comment 追加到对应工单。',
+        message: {
+          postId: 'post-jira-1',
+          sender: 'Alice',
+          groupId: 'proj-chat',
+          groupName: 'Project Chat',
+          content: '请帮我给 RCV-1234 补一条 comment，说明本周修复已经完成。',
+        },
+        match: {
+          matchedRule: '[RULE_REF:manual:jira-rule]',
+          summary: '匹配到 Jira 更新消息',
+          confidence: 0.91,
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.deduped).toBe(false);
+    expect(body.skippedReason).toBeUndefined();
+    expect(body.actions).toHaveLength(2);
+
+    const repo = new ActionRepository(db);
+    const queued = repo.list({
+      sourceKind: 'message_rule',
+      sourceRefId: 'manual:jira-rule',
+      limit: 10,
+    }).items;
+    expect(queued).toHaveLength(2);
+    expect(queued.some((item) => item.actionType === 'notify_user')).toBe(true);
+
+    const delegated = queued.find(
+      (item) => item.actionType === 'delegate_openclaw',
+    );
+    expect(delegated).toBeTruthy();
+    expect(delegated?.params.targetSystem).toBe('jira');
+    const metadata =
+      delegated &&
+      delegated.params &&
+      typeof delegated.params === 'object' &&
+      'metadata' in delegated.params &&
+      delegated.params.metadata &&
+      typeof delegated.params.metadata === 'object' &&
+      'actionFamily' in delegated.params.metadata
+        ? delegated.params.metadata.actionFamily
+        : undefined;
+    expect(metadata).toBe('jira_comment');
+  });
+
   it('returns skippedReason when the automation prompt is unsupported or cannot parse dates', async () => {
     const res = await app.inject({
       method: 'POST',

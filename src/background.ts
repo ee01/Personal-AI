@@ -44,6 +44,7 @@ import {
   storeRelatedMessage,
   registerFollowThreadDigestTask,
 } from './message-reaction/FollowThreadHandler';
+import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionEntry';
 import {
   registerConcernedItemsDigestTask,
   updateConcernedItemsDigestTaskSchedule,
@@ -1754,6 +1755,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // 打开联动操作配置界面（从消息悬浮菜单触发）
+  if (request.type === 'OPEN_LINKED_ACTION_CONFIG') {
+    (async () => {
+      try {
+        console.log('🔗 打开联动操作配置界面...', request.data);
+
+        if (request.data) {
+          await chrome.storage.local.set({
+            pendingLinkedActionConfig: buildPendingLinkedActionConfig(
+              request.data,
+            ),
+          });
+        }
+
+        const url = chrome.runtime.getURL('topic-modal.html');
+        await chrome.windows.create({
+          url,
+          type: 'popup',
+          width: 920,
+          height: 720,
+        });
+        sendResponse({ success: true });
+      } catch (error: any) {
+        console.error('❌ 打开联动操作配置界面失败:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
+  }
+
   // RPA: 获取 JIRA 当前用户信息（使用 jira.ts 的通用方法）
   if (request.type === 'RPA_GET_JIRA_CURRENT_USER') {
     (async () => {
@@ -2188,7 +2219,7 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
 
         if (followItem && followItem.followConfig) {
           const teamId = followItem.followConfig.originalMessage.teamId;
-          const messageUrl = `https://app.ringcentral.com/l/messages/${teamId}/${relatedPostId}`;
+          const messageUrl = `https://app.ringcentral.com/messages/${teamId}/${relatedPostId}`;
           await chrome.tabs.create({ url: messageUrl });
         }
       } catch (error) {
@@ -2307,7 +2338,7 @@ chrome.notifications.onButtonClicked.addListener(
             if (followItem && followItem.followConfig) {
               const teamId = followItem.followConfig.originalMessage.teamId;
               const relatedPostId = parts[2];
-              const messageUrl = `https://app.ringcentral.com/l/messages/${teamId}/${relatedPostId}`;
+              const messageUrl = `https://app.ringcentral.com/messages/${teamId}/${relatedPostId}`;
               await chrome.tabs.create({ url: messageUrl });
             }
           } catch (error) {

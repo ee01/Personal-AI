@@ -20,3 +20,8 @@ export {
 export {
     buildAutoReplyPrompt
 } from './autoReply';
+
+// 联动操作建议相关
+export {
+    buildLinkedActionSuggestionPrompt
+} from './linkedAction';

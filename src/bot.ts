@@ -86,7 +86,7 @@ export async function sendBotMessage(messageData: MessageData): Promise<void> {
     
     // 构建消息链接
     const messageLink = messageData.post_id && messageData.team_id 
-        ? `https://app.ringcentral.com/l/messages/${messageData.team_id}/${messageData.post_id}`
+        ? `https://app.ringcentral.com/messages/${messageData.team_id}/${messageData.post_id}`
         : `https://app.ringcentral.com/messages/${messageData.team_id}`;
     
     // 构建关注后续的原消息预览（如果有）

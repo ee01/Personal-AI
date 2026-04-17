@@ -5,8 +5,10 @@ import path from 'node:path';
 
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
+import { getTestDb } from './setup.js';
 
 describe('RingCentralClient', () => {
+  const db = getTestDb();
   const fetchMock = vi.fn();
   let userDataManager: UserDataManager;
   let tempDir: string;
@@ -15,6 +17,9 @@ describe('RingCentralClient', () => {
     RingCentralClient.clearSharedCacheForTests();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockReset();
+    db.prepare('DELETE FROM rc_directory_users').run();
+    db.prepare('DELETE FROM rc_directory_teams').run();
+    db.prepare('DELETE FROM rc_directory_sync_state').run();
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ringcentral-client-'));
     userDataManager = new UserDataManager();
@@ -133,6 +138,71 @@ describe('RingCentralClient', () => {
     expect(result.resolved?.label).toBe('RCV Mobile VT3');
   });
 
+  it('enriches remembered private user aliases with an existing direct chat id', async () => {
+    userDataManager.writeFile(
+      'agent/ringcentral-target-aliases.json',
+      JSON.stringify([
+        {
+          targetType: 'private',
+          kind: 'user',
+          entityId: '3997606020',
+          label: 'Tom Chen',
+          subtitle: 'tom.chen@ringcentral.com · ext 8886',
+          source: 'extension',
+          updatedAt: Date.now(),
+        },
+      ]),
+    );
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: '1325046020' }),
+        };
+      }
+      if (url.includes('/team-messaging/v1/chats?recordCount=50')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: '1365354487810',
+                  type: 'Direct',
+                  members: [{ id: '1325046020' }, { id: '3997606020' }],
+                },
+              ],
+              navigation: {},
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const client = new RingCentralClient(userDataManager);
+    const result = await client.resolveTarget({
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      limit: 8,
+    });
+
+    expect(result.status).toBe('resolved');
+    expect(result.resolved?.entityId).toBe('3997606020');
+    expect(result.resolved?.chatId).toBe('1365354487810');
+    expect(result.candidates[0]?.chatId).toBe('1365354487810');
+  });
+
   it('supports searching direct chats by participant name and group chats across pagination', async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -234,6 +304,77 @@ describe('RingCentralClient', () => {
       limit: 5,
     });
     expect(groupResults.some((item) => item.chatId === '54490570758' && item.label === 'RCV Mobile VT3')).toBe(true);
+  });
+
+  it('enriches directory-resolved private users with an existing direct chat id', async () => {
+    const updatedAt = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO rc_directory_users
+        (entity_id, display_name, email, extension_number, search_text, raw_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      '3997606020',
+      'Tom Chen',
+      'tom.chen@ringcentral.com',
+      '8886',
+      'tom chen tom.chen@ringcentral.com 8886 3997606020',
+      null,
+      updatedAt,
+    );
+    db.prepare(
+      `INSERT INTO rc_directory_sync_state
+        (scope, status, last_started_at, last_finished_at, last_success_at, record_count, last_error)
+       VALUES ('users', 'ready', ?, ?, ?, 1, NULL),
+              ('teams', 'ready', ?, ?, ?, 1, NULL)`,
+    ).run(updatedAt, updatedAt, updatedAt, updatedAt, updatedAt, updatedAt);
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: '1325046020' }),
+        };
+      }
+      if (url.includes('/team-messaging/v1/chats?recordCount=50')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: '1365354487810',
+                  type: 'Direct',
+                  members: [{ id: '1325046020' }, { id: '3997606020' }],
+                },
+              ],
+              navigation: {},
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const client = new RingCentralClient(userDataManager, db);
+    const result = await client.resolveTarget({
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      limit: 8,
+    });
+
+    expect(result.status).toBe('resolved');
+    expect(result.resolved?.entityId).toBe('3997606020');
+    expect(result.resolved?.chatId).toBe('1365354487810');
+    expect(result.candidates[0]?.chatId).toBe('1365354487810');
   });
 
   it('supports searching teams by group name via teams directory pagination', async () => {

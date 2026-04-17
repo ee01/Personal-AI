@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { OutreachEngine } from '../core/OutreachEngine.js';
+import { NotificationCenterService } from '../core/NotificationCenterService.js';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
@@ -219,6 +220,7 @@ describe('OutreachEngine', () => {
   });
 
   it('marks reflection outreach resolved and writes action_result after reply arrives', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
     const thread = threadRepo.upsertThread({
       topicKey: 'project:outreach-reply',
       title: '项目反思: Outreach Reply',
@@ -253,8 +255,10 @@ describe('OutreachEngine', () => {
       followupIntervalSeconds: 3600,
       sentChatId: 'chat-abc',
       sentPostId: 'post-seed',
+      lastPollAt: currentTs - 60,
       nextCheckAt: Math.floor(Date.now() / 1000) - 5,
       waitUntil: Math.floor(Date.now() / 1000) + 3600,
+      createdAt: currentTs - 120,
     });
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
@@ -282,7 +286,7 @@ describe('OutreachEngine', () => {
                   id: 'reply-1',
                   text: '预计今天 18:00 前完成并同步给你。',
                   creator: { id: 'user-42' },
-                  creationTime: '2026-03-19T07:00:00Z',
+                  creationTime: new Date((currentTs - 30) * 1000).toISOString(),
                 },
               ],
             }),
@@ -315,6 +319,7 @@ describe('OutreachEngine', () => {
   });
 
   it('combines reply bursts, keeps the known answer, and queues external delegation for missing details', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
     const session = outreachRepo.createSession({
       originKind: 'scheduled_template',
       targetType: 'private',
@@ -341,25 +346,25 @@ describe('OutreachEngine', () => {
         id: 'reply-4',
         text: '他下周在杭州',
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:10Z',
+        creationTime: new Date((currentTs - 10) * 1000).toISOString(),
       },
       {
         id: 'reply-3',
         text: '你自己看，video相关应该都在下周',
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:05Z',
+        creationTime: new Date((currentTs - 15) * 1000).toISOString(),
       },
       {
         id: 'reply-2',
         text: "[Gary's calendar](https://calendar.example.com/gary)",
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:00Z',
+        creationTime: new Date((currentTs - 20) * 1000).toISOString(),
       },
       {
         id: 'reply-old',
         text: '好',
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:30:00Z',
+        creationTime: new Date((currentTs - 900) * 1000).toISOString(),
       },
     ]);
 
@@ -467,7 +472,53 @@ describe('OutreachEngine', () => {
     expect(replyMessages).toHaveLength(0);
   });
 
+  it('ignores historical posts older than the latest outbound message when polling replies', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      renderedQuestion: 'Calendar 中的头像是哪里传的？',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-ignore-history',
+      sentPostId: 'post-seed',
+      nextCheckAt: currentTs - 5,
+      waitUntil: currentTs + 3600,
+      createdAt: currentTs - 30,
+    });
+    outreachRepo.createEvent(session.id, 'dispatched', {
+      chatId: 'chat-ignore-history',
+      postId: 'post-seed',
+    });
+
+    mockRingCentralListPosts('chat-ignore-history', [
+      {
+        id: 'reply-old',
+        text: 'okta吧，没什么印象',
+        creator: { id: 'user-42', name: 'Tom Chen' },
+        creationTime: new Date((currentTs - 8 * 3600) * 1000).toISOString(),
+      },
+    ]);
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updatedSession = outreachRepo.getSessionById(session.id);
+    expect(updatedSession?.status).toBe('waiting_reply');
+    expect(updatedSession?.replyPostId).toBeUndefined();
+    expect(updatedSession?.replyRawText).toBeUndefined();
+
+    const replyEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'reply_received');
+    expect(replyEvents).toHaveLength(0);
+  });
+
   it('ignores self-authored follow-up posts when picking the latest external reply', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
     const session = outreachRepo.createSession({
       originKind: 'manual_action',
       targetType: 'private',
@@ -490,25 +541,25 @@ describe('OutreachEngine', () => {
         id: 'reply-self-1',
         text: '哈哈，别慌，最差 google sheet 还有历史记录功能',
         creator: { name: 'Esone Qiu' },
-        creationTime: '2026-04-01T02:43:10Z',
+        creationTime: new Date((currentTs - 5) * 1000).toISOString(),
       },
       {
         id: 'reply-4',
         text: '他下周在杭州',
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:10Z',
+        creationTime: new Date((currentTs - 10) * 1000).toISOString(),
       },
       {
         id: 'reply-3',
         text: '你自己看，video相关应该都在下周',
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:05Z',
+        creationTime: new Date((currentTs - 15) * 1000).toISOString(),
       },
       {
         id: 'reply-2',
         text: "[Gary's calendar](https://calendar.example.com/gary)",
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:00Z',
+        creationTime: new Date((currentTs - 20) * 1000).toISOString(),
       },
     ]);
 
@@ -536,6 +587,7 @@ describe('OutreachEngine', () => {
   });
 
   it('queues delegation when a reply only provides an external artifact without a direct answer', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
     const session = outreachRepo.createSession({
       originKind: 'manual_action',
       targetType: 'private',
@@ -548,8 +600,10 @@ describe('OutreachEngine', () => {
       followupIntervalSeconds: 3600,
       sentChatId: 'chat-artifact',
       sentPostId: 'post-seed',
+      lastPollAt: currentTs - 60,
       nextCheckAt: Math.floor(Date.now() / 1000) - 5,
       waitUntil: Math.floor(Date.now() / 1000) + 3600,
+      createdAt: currentTs - 120,
     });
 
     mockRingCentralListPosts('chat-artifact', [
@@ -557,7 +611,7 @@ describe('OutreachEngine', () => {
         id: 'reply-artifact-1',
         text: "[Gary's calendar](https://calendar.example.com/gary)",
         creator: { id: 'user-42', name: 'Sophia (Jinmei) Lin' },
-        creationTime: '2026-04-01T02:42:00Z',
+        creationTime: new Date((currentTs - 20) * 1000).toISOString(),
       },
     ]);
 
@@ -723,6 +777,532 @@ describe('OutreachEngine', () => {
     expect(eventTypes).toContain('resolved_without_dispatch');
   });
 
+  it('suppresses dispatch when the same chat already contains a recent Q&A before template creation', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'user-42',
+      targetResolvedLabel: 'Tom Chen',
+      targetResolvedChatId: 'chat-preanswered',
+      renderedQuestion: 'Calendar 中的头像是哪里传的？',
+      renderedContext: '如果已经有答复，不要再重复发问。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 30,
+      nextCheckAt: currentTs - 5,
+    });
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'self-ext-1',
+              name: 'Esone Qiu',
+              contact: {
+                firstName: 'Esone',
+                lastName: 'Qiu',
+                email: 'test-user@ringcentral.com',
+              },
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-preanswered')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'question-old',
+                  text: '你这个图在哪里传的，为什么只有你有头像',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 2 * 24 * 3600) * 1000).toISOString(),
+                },
+                {
+                  id: 'answer-old',
+                  text: 'okta吧，没什么印象',
+                  creator: { id: 'user-42', name: 'Tom Chen' },
+                  creationTime: new Date((currentTs - (2 * 24 * 3600 - 3600)) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-preanswered')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(sendCalled).toBe(false);
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_dispatch');
+    expect(updated?.outcome?.hitSource).toBe('target_channel_history');
+    expect(String(updated?.outcome?.relatedMessage)).toContain('okta');
+
+    const eventTypes = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .map((event) => event.eventType);
+    expect(eventTypes).toContain('resolved_without_dispatch');
+  });
+
+  it('pushes the resolved outreach result through bot delivery when configured', async () => {
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        outreachEnabled: true,
+        outreachIntervalMs: 60000,
+        outreachRequireApprovalForReflection: false,
+        outreachRequireApprovalForManual: false,
+        outreachResultPushTarget: 'group',
+        outreachResultPushGroupId: 'outreach-result-group',
+        reflectionEnabled: false,
+        ringCentralServerUrl: 'https://platform.ringcentral.example.com',
+        ringCentralClientId: 'client-id',
+        ringCentralClientSecret: 'client-secret',
+        ringCentralJwt: 'jwt-token',
+      }),
+    );
+
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'user-42',
+      targetResolvedLabel: 'Tom Chen',
+      targetResolvedChatId: 'chat-result-push',
+      renderedQuestion: '在哪里可以配置的meeting自动 record？',
+      renderedContext: '需要知道 RCV meeting 自动录制入口。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 30,
+      nextCheckAt: currentTs - 5,
+    });
+
+    const deliverSpy = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({
+        sent: true,
+        messageId: 'bot-message-1',
+      });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ message: 'service unavailable' }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-result-push')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'question-old',
+                  text: '那个自动 record 的设置你知道哪里么？',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 7200) * 1000).toISOString(),
+                },
+                {
+                  id: 'answer-old',
+                  text: 'meeting setting里面，PMI的auto recording没有单独入口设置',
+                  creator: { id: 'user-42', name: 'Tom Chen' },
+                  creationTime: new Date((currentTs - 7140) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(deliverSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceRef: `outreach:${session.id}:result`,
+        title: '主动询问结果',
+        targetGroupId: 'outreach-result-group',
+      }),
+    );
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain('问题：在哪里可以配置的meeting自动 record？');
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain('结果：');
+
+    const eventTypes = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .map((event) => event.eventType);
+    expect(eventTypes).toContain('result_notified');
+  });
+
+  it('suppresses dispatch in a private chat even when actor identity lookup is unavailable', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'user-42',
+      targetResolvedLabel: 'Tom Chen',
+      targetResolvedChatId: 'chat-preanswered-no-identity',
+      renderedQuestion: '在哪里可以配置的自动 record？',
+      renderedContext: '如果已经有答复，不要再重复发问。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 30,
+      nextCheckAt: currentTs - 5,
+    });
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ message: 'service unavailable' }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-preanswered-no-identity')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'question-old',
+                  text: '那个自动 record 的设置你知道哪里么？我看看能不能改为只有 pmi 自动 record',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 7200) * 1000).toISOString(),
+                },
+                {
+                  id: 'answer-old',
+                  text: '在sw',
+                  creator: { id: 'user-42', name: 'Tom Chen' },
+                  creationTime: new Date((currentTs - 7140) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-preanswered-no-identity')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(sendCalled).toBe(false);
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_dispatch');
+    expect(updated?.outcome?.hitSource).toBe('target_channel_history');
+    expect(String(updated?.outcome?.relatedMessage)).toContain('在sw');
+  });
+
+  it('derives a private conversation chat id before dispatch so target-history precheck can suppress sending', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      renderedQuestion: '在哪里可以配置的meeting自动 record？',
+      renderedContext: '需要知道哪里可以配置RCV meeting 在启动会议的时候会自动 record。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 30,
+      nextCheckAt: currentTs - 5,
+    });
+
+    vi.spyOn(RingCentralClient.prototype, 'resolveTarget').mockResolvedValue({
+      status: 'resolved',
+      query: 'tom.chen',
+      resolved: {
+        kind: 'user',
+        entityId: 'user-42',
+        label: 'Tom Chen',
+        subtitle: 'tom.chen@ringcentral.com · ext 8886',
+        source: 'extension',
+        score: 92,
+      },
+      candidates: [
+        {
+          kind: 'user',
+          entityId: 'user-42',
+          label: 'Tom Chen',
+          subtitle: 'tom.chen@ringcentral.com · ext 8886',
+          source: 'extension',
+          score: 92,
+        },
+      ],
+    });
+    const resolveDirectConversationChatIdSpy = vi
+      .spyOn(RingCentralClient.prototype, 'resolveDirectConversationChatId')
+      .mockResolvedValue('chat-derived-before-dispatch');
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ message: 'service unavailable' }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-derived-before-dispatch')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'question-old',
+                  text: '那个自动 record 的设置你知道哪里么？我看看能不能改为只有 pmi 自动 record',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 7200) * 1000).toISOString(),
+                },
+                {
+                  id: 'answer-old',
+                  text: 'PMI的auto recording没有单独入口设置',
+                  creator: { id: 'user-42', name: 'Tom Chen' },
+                  creationTime: new Date((currentTs - 7140) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-derived-before-dispatch')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    const resolved = await (engine as any).resolveSessionTarget(session);
+    await (engine as any).dispatchSession(resolved);
+
+    expect(resolveDirectConversationChatIdSpy).toHaveBeenCalledWith('user-42');
+    expect(sendCalled).toBe(false);
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(updated?.targetResolvedChatId).toBe('chat-derived-before-dispatch');
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_dispatch');
+    expect(updated?.outcome?.hitSource).toBe('target_channel_history');
+  });
+
+  it('retries before-dispatch precheck once before sending when the first target history fetch misses', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'user-42',
+      targetResolvedLabel: 'Tom Chen',
+      targetResolvedChatId: 'chat-dispatch-retry',
+      renderedQuestion: '在哪里可以配置的meeting自动 record？',
+      renderedContext: '如果已经有答复，不要再重复发问。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 30,
+      nextCheckAt: currentTs - 5,
+    });
+
+    let sendCalled = false;
+    let postFetchCount = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ message: 'service unavailable' }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-dispatch-retry')}/posts?`,
+        )
+      ) {
+        postFetchCount += 1;
+        const records =
+          postFetchCount === 1
+            ? []
+            : [
+                {
+                  id: 'question-old',
+                  text: '那个自动 record 的设置你知道哪里么？我看看能不能改为只有 pmi 自动 record',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 7200) * 1000).toISOString(),
+                },
+                {
+                  id: 'answer-old',
+                  text: 'PMI的auto recording没有单独入口设置',
+                  creator: { id: 'user-42', name: 'Tom Chen' },
+                  creationTime: new Date((currentTs - 7140) * 1000).toISOString(),
+                },
+              ];
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ records }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-dispatch-retry')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(postFetchCount).toBe(2);
+    expect(sendCalled).toBe(false);
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_dispatch');
+    expect(updated?.outcome?.hitSource).toBe('target_channel_history');
+
+    const startEvents = outreachRepo
+      .listEventsBySession(session.id, 20)
+      .filter((event) => event.eventType === 'answer_precheck_started');
+    expect(startEvents).toHaveLength(2);
+    expect(startEvents[1]?.payload?.trigger).toBe('dispatch_retry');
+  });
+
   it('skips followup when global memory already contains the answer', async () => {
     const currentTs = Math.floor(Date.now() / 1000);
     insertGlipMessage({
@@ -824,6 +1404,116 @@ describe('OutreachEngine', () => {
       .listEventsBySession(session.id, 20)
       .map((event) => event.eventType);
     expect(eventTypes).toContain('followup_skipped_by_answer');
+  });
+
+  it('recovers a waiting reply session when the original pre-dispatch answer was missed', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'private',
+      targetRef: 'tom.chen',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'user',
+      targetResolvedId: 'user-42',
+      targetResolvedLabel: 'Tom Chen',
+      targetResolvedChatId: 'chat-waiting-guard',
+      renderedQuestion: '在哪里可以配置的自动 record？',
+      renderedContext: '如果已经有答复，不要再继续等待。',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-waiting-guard',
+      sentPostId: 'post-current',
+      followupCount: 0,
+      createdAt: currentTs - 300,
+      nextCheckAt: currentTs - 5,
+      waitUntil: currentTs + 3600,
+    });
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ message: 'service unavailable' }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-waiting-guard')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'question-old',
+                  text: '那个自动 record 的设置你知道哪里么？我看看能不能改为只有 pmi 自动 record',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 7200) * 1000).toISOString(),
+                },
+                {
+                  id: 'answer-old',
+                  text: '在sw',
+                  creator: { id: 'user-42', name: 'Tom Chen' },
+                  creationTime: new Date((currentTs - 7140) * 1000).toISOString(),
+                },
+                {
+                  id: 'post-current',
+                  text: '在哪里可以配置的自动 record？',
+                  creator: { name: 'Esone Qiu' },
+                  creationTime: new Date((currentTs - 120) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-waiting-guard')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-should-not-send' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(sendCalled).toBe(false);
+    expect(updated?.status).toBe('resolved');
+    expect(updated?.outcome?.answerResolutionPhase).toBe('before_dispatch');
+    expect(updated?.outcome?.hitSource).toBe('target_channel_history');
+
+    const events = outreachRepo.listEventsBySession(session.id, 20);
+    expect(events.map((event) => event.eventType)).toContain(
+      'followup_skipped_by_answer',
+    );
+    const recoveredEvent = events.find(
+      (event) => event.eventType === 'followup_skipped_by_answer',
+    );
+    expect(recoveredEvent?.payload?.recoveredAfterDispatch).toBe(true);
   });
 
   it('allows editing a pending approval session and respects a future send time on approval', async () => {

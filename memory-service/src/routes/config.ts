@@ -52,6 +52,8 @@ interface UpdatableConfig {
   outreachIntervalMs?: number;
   outreachRequireApprovalForReflection?: boolean;
   outreachRequireApprovalForManual?: boolean;
+  outreachResultPushTarget?: 'me' | 'group' | 'user' | 'team';
+  outreachResultPushGroupId?: string;
   ringCentralServerUrl?: string;
   ringCentralClientId?: string;
   ringCentralClientSecret?: string;
@@ -189,6 +191,11 @@ const updateConfigBodySchema = {
     outreachIntervalMs: { type: 'number' as const, minimum: 1000 },
     outreachRequireApprovalForReflection: { type: 'boolean' as const },
     outreachRequireApprovalForManual: { type: 'boolean' as const },
+    outreachResultPushTarget: {
+      type: 'string' as const,
+      enum: ['me', 'group', 'user', 'team'],
+    },
+    outreachResultPushGroupId: { type: 'string' as const },
     ringCentralServerUrl: { type: 'string' as const },
     ringCentralClientId: { type: 'string' as const },
     ringCentralClientSecret: { type: 'string' as const },
@@ -326,6 +333,16 @@ export async function configRoutes(
       }
       if (updates.outreachRequireApprovalForManual !== undefined) {
         persisted.outreachRequireApprovalForManual = updates.outreachRequireApprovalForManual;
+      }
+      if (updates.outreachResultPushTarget !== undefined) {
+        persisted.outreachResultPushTarget = normalizePushTarget(
+          updates.outreachResultPushTarget,
+          false,
+        );
+      }
+      if (updates.outreachResultPushGroupId !== undefined) {
+        persisted.outreachResultPushGroupId =
+          updates.outreachResultPushGroupId.trim();
       }
       if (updates.ringCentralServerUrl !== undefined) {
         persisted.ringCentralServerUrl = updates.ringCentralServerUrl.trim();

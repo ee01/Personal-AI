@@ -1439,7 +1439,10 @@ class OllamaChat {
 
 // ==================== 自动答复相关函数 ====================
 
-import { buildAutoReplyPrompt } from './prompts';
+import {
+  buildAutoReplyPrompt,
+  buildLinkedActionSuggestionPrompt,
+} from './prompts';
 
 /**
  * 生成自动答复内容
@@ -1466,6 +1469,38 @@ export async function generateAutoReply(messageContext: {
         console.error('生成自动答复失败:', error);
         throw error;
     }
+}
+
+/**
+ * 生成联动操作建议文本
+ * @param params 建议生成上下文
+ * @returns 一条可编辑的联动操作建议
+ */
+export async function generateLinkedActionSuggestionText(params: {
+  seedPrompt: string;
+  sourceType: 'history' | 'sample';
+  sourceLabel: string;
+  contextLine: string;
+  configSignalLine?: string;
+}): Promise<string> {
+  const prompt = buildLinkedActionSuggestionPrompt(params);
+
+  try {
+    const response = await handleLLMRequest({
+      prompt,
+      type: 'linked_action',
+    });
+    const cleanedResponse = response
+      .replace(/<think>[\s\S]*?<\/think>/g, '')
+      .trim();
+    if (!cleanedResponse) {
+      throw new Error('empty_linked_action_suggestion');
+    }
+    return cleanedResponse;
+  } catch (error) {
+    console.error('生成联动操作建议失败:', error);
+    throw error;
+  }
 }
 
 /**

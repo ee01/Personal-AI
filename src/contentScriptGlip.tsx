@@ -60,6 +60,7 @@ const copyButtonResetTimers = new WeakMap<HTMLButtonElement, number>();
 let JIRA_BASE_URL = 'https://jira.ringcentral.com';
 const GLIP_POPUP_DEFAULT_WIDTH = 1100;
 const GLIP_POPUP_DEFAULT_HEIGHT = 900;
+const GLIP_MESSAGE_POPUP_WIDTH = 759;
 const GLIP_NATIVE_POPOUT_BRIDGE_SOURCE =
   'personal-ai-glip-native-popout-bridge';
 const GLIP_NATIVE_POPOUT_PAGE_SCRIPT_ID = 'pai-glip-native-popout-page-script';
@@ -67,14 +68,19 @@ const GLIP_NATIVE_POPOUT_BRIDGE_ATTR = 'data-pai-glip-native-popout-bridge';
 const GLIP_NATIVE_POPOUT_REQUEST = 'PAI_GLIP_NATIVE_POPOUT_REQUEST';
 const GLIP_NATIVE_POPOUT_RESPONSE = 'PAI_GLIP_NATIVE_POPOUT_RESPONSE';
 const GLIP_NATIVE_POPOUT_READY = 'PAI_GLIP_NATIVE_POPOUT_READY';
+const GLIP_MESSAGE_TARGET_REQUEST = 'PAI_GLIP_MESSAGE_TARGET_REQUEST';
+const GLIP_MESSAGE_TARGET_RESPONSE = 'PAI_GLIP_MESSAGE_TARGET_RESPONSE';
+const GLIP_MESSAGE_TARGET_ELEMENT_ATTR = 'data-pai-glip-message-target-id';
 const GLIP_NATIVE_POPOUT_REQUEST_TIMEOUT_MS = 10000;
+const GLIP_MESSAGE_TARGET_REQUEST_TIMEOUT_MS = 3000;
 
 interface GlipLinkTarget {
   kind: 'group' | 'message';
   groupId: string;
   postId?: string;
-  url: string;
+  url?: string;
   label: string;
+  resolutionStrategy?: 'forwarded-message-view-message';
 }
 
 interface GlipNativePopoutRequestMessage {
@@ -103,11 +109,47 @@ interface GlipNativePopoutReadyMessage {
   type: typeof GLIP_NATIVE_POPOUT_READY;
 }
 
+interface GlipMessageTargetRequestMessage {
+  source: string;
+  target: 'page';
+  type: typeof GLIP_MESSAGE_TARGET_REQUEST;
+  requestId: string;
+  payload: {
+    elementId: string;
+  };
+}
+
+interface GlipMessageTargetResponseMessage {
+  source: string;
+  target: 'content-script';
+  type: typeof GLIP_MESSAGE_TARGET_RESPONSE;
+  requestId: string;
+  success: boolean;
+  payload?: {
+    groupId: string;
+    postId: string;
+    url: string;
+  };
+  error?: string;
+}
+
 const processedGlipLinks = new WeakSet<HTMLElement>();
 const pendingGlipNativePopoutRequests = new Map<
   string,
   {
     resolve: () => void;
+    reject: (error: Error) => void;
+    timeoutId: number;
+  }
+>();
+const pendingGlipMessageTargetRequests = new Map<
+  string,
+  {
+    resolve: (payload: {
+      groupId: string;
+      postId: string;
+      url: string;
+    }) => void;
     reject: (error: Error) => void;
     timeoutId: number;
   }
@@ -1135,6 +1177,20 @@ function buildGlipGroupUrl(groupId: string): string {
   return new URL(`/messages/${groupId}`, window.location.origin).toString();
 }
 
+function buildGlipMessageUrl(groupId: string, postId: string): string {
+  return new URL(
+    `/messages/${groupId}/${postId}`,
+    window.location.origin,
+  ).toString();
+}
+
+function buildPreferredGlipTargetUrl(
+  groupId: string,
+  postId?: string,
+): string {
+  return postId ? buildGlipMessageUrl(groupId, postId) : buildGlipGroupUrl(groupId);
+}
+
 function getGlipPopoutIconSvg(): string {
   return `
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1267,7 +1323,8 @@ function parseGlipMessageUrl(rawUrl: string): GlipLinkTarget | null {
       kind: postId ? 'message' : 'group',
       groupId,
       postId,
-      url: parsed.toString(),
+      // 统一改写到纯 Web 路径，避免 /l/messages 触发 app 启动拦截页。
+      url: buildPreferredGlipTargetUrl(groupId, postId),
       label,
     };
   } catch (error) {
@@ -1280,16 +1337,48 @@ function parseGlipAnchorTarget(
   anchor: HTMLAnchorElement,
 ): GlipLinkTarget | null {
   const target = parseGlipMessageUrl(anchor.href);
-  if (!target) {
-    return null;
+  if (target) {
+    const label = anchor.textContent?.trim();
+    if (label) {
+      target.label = label;
+    }
+
+    return target;
   }
 
-  const label = anchor.textContent?.trim();
-  if (label) {
-    target.label = label;
+  if (
+    anchor.dataset.testAutomationId === 'forwarded-message-view-message'
+  ) {
+    const paragraph = anchor.closest('p');
+    const mentionCandidates = paragraph
+      ? Array.from(
+          paragraph.querySelectorAll<HTMLSpanElement>(
+            'span[role="link"][data-id]',
+          ),
+        )
+      : [];
+
+    for (const mention of mentionCandidates) {
+      const mentionTarget = parseGlipMentionTarget(mention);
+      if (!mentionTarget) {
+        continue;
+      }
+
+      const label =
+        anchor.textContent?.trim() ||
+        anchor.getAttribute('aria-label')?.trim() ||
+        mentionTarget.label;
+
+      return {
+        kind: 'message',
+        groupId: mentionTarget.groupId,
+        label,
+        resolutionStrategy: 'forwarded-message-view-message',
+      };
+    }
   }
 
-  return target;
+  return null;
 }
 
 function parseGlipMentionTarget(
@@ -1399,6 +1488,7 @@ function attachGlipNativePopoutBridgeListener() {
     const message = event.data as
       | GlipNativePopoutResponseMessage
       | GlipNativePopoutReadyMessage
+      | GlipMessageTargetResponseMessage
       | undefined;
     if (
       !message ||
@@ -1417,6 +1507,27 @@ function attachGlipNativePopoutBridgeListener() {
     }
 
     if (message.type !== GLIP_NATIVE_POPOUT_RESPONSE) {
+      if (message.type !== GLIP_MESSAGE_TARGET_RESPONSE) {
+        return;
+      }
+
+      const pendingMessageTargetRequest =
+        pendingGlipMessageTargetRequests.get(message.requestId);
+      if (!pendingMessageTargetRequest) {
+        return;
+      }
+
+      pendingGlipMessageTargetRequests.delete(message.requestId);
+      window.clearTimeout(pendingMessageTargetRequest.timeoutId);
+
+      if (message.success && message.payload) {
+        pendingMessageTargetRequest.resolve(message.payload);
+        return;
+      }
+
+      pendingMessageTargetRequest.reject(
+        new Error(message.error || 'glip_message_target_resolution_failed'),
+      );
       return;
     }
 
@@ -1513,13 +1624,61 @@ async function requestGlipNativeGroupPopout(
   });
 }
 
-async function openGlipPopupWindow(url: string): Promise<void> {
+function markGlipMessageTargetElement(element: HTMLElement): string {
+  const existingId = element.getAttribute(GLIP_MESSAGE_TARGET_ELEMENT_ATTR);
+  if (existingId) {
+    return existingId;
+  }
+
+  const nextId = createGlipNativePopoutRequestId();
+  element.setAttribute(GLIP_MESSAGE_TARGET_ELEMENT_ATTR, nextId);
+  return nextId;
+}
+
+async function requestGlipMessageTargetResolution(
+  element: HTMLElement,
+): Promise<{ groupId: string; postId: string; url: string }> {
+  await ensureGlipNativePopoutBridge();
+
+  const requestId = createGlipNativePopoutRequestId();
+  const elementId = markGlipMessageTargetElement(element);
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      pendingGlipMessageTargetRequests.delete(requestId);
+      reject(new Error('glip_message_target_resolution_timeout'));
+    }, GLIP_MESSAGE_TARGET_REQUEST_TIMEOUT_MS);
+
+    pendingGlipMessageTargetRequests.set(requestId, {
+      resolve,
+      reject,
+      timeoutId,
+    });
+
+    const message: GlipMessageTargetRequestMessage = {
+      source: GLIP_NATIVE_POPOUT_BRIDGE_SOURCE,
+      target: 'page',
+      type: GLIP_MESSAGE_TARGET_REQUEST,
+      requestId,
+      payload: {
+        elementId,
+      },
+    };
+
+    window.postMessage(message, window.location.origin);
+  });
+}
+
+async function openGlipPopupWindow(
+  url: string,
+  options: { width?: number; height?: number } = {},
+): Promise<void> {
   const response = await chrome.runtime.sendMessage({
     type: 'OPEN_GLIP_POPUP_WINDOW',
     data: {
       url,
-      width: GLIP_POPUP_DEFAULT_WIDTH,
-      height: GLIP_POPUP_DEFAULT_HEIGHT,
+      width: options.width ?? GLIP_POPUP_DEFAULT_WIDTH,
+      height: options.height ?? GLIP_POPUP_DEFAULT_HEIGHT,
     },
   });
 
@@ -1528,9 +1687,61 @@ async function openGlipPopupWindow(url: string): Promise<void> {
   }
 }
 
-async function handleGlipPopout(target: GlipLinkTarget): Promise<void> {
+async function resolveGlipMessageTarget(
+  target: GlipLinkTarget,
+  targetElement?: HTMLElement,
+): Promise<GlipLinkTarget> {
+  if (target.kind !== 'message') {
+    return target;
+  }
+
+  if (target.postId) {
+    return {
+      ...target,
+      url: buildGlipMessageUrl(target.groupId, target.postId),
+    };
+  }
+
+  if (
+    target.resolutionStrategy !== 'forwarded-message-view-message' ||
+    !(targetElement instanceof HTMLAnchorElement)
+  ) {
+    return target;
+  }
+
+  try {
+    const resolvedTarget =
+      await requestGlipMessageTargetResolution(targetElement);
+    return {
+      ...target,
+      groupId: resolvedTarget.groupId,
+      postId: resolvedTarget.postId,
+      url: buildGlipMessageUrl(
+        resolvedTarget.groupId,
+        resolvedTarget.postId,
+      ),
+    };
+  } catch (error) {
+    console.warn('解析 Glip 指定消息跳转失败，降级为群组链接:', error);
+    return {
+      ...target,
+      url: target.url || buildGlipGroupUrl(target.groupId),
+    };
+  }
+}
+
+async function handleGlipPopout(
+  target: GlipLinkTarget,
+  targetElement?: HTMLElement,
+): Promise<void> {
   if (target.kind === 'message') {
-    await openGlipPopupWindow(target.url);
+    const resolvedTarget = await resolveGlipMessageTarget(target, targetElement);
+    await openGlipPopupWindow(
+      resolvedTarget.url || buildGlipGroupUrl(resolvedTarget.groupId),
+      {
+        width: GLIP_MESSAGE_POPUP_WIDTH,
+      },
+    );
     return;
   }
 
@@ -1577,7 +1788,7 @@ function processGlipLink(targetElement: HTMLElement, target: GlipLinkTarget) {
     popoutButton.disabled = true;
 
     try {
-      await handleGlipPopout(target);
+      await handleGlipPopout(target, targetElement);
     } catch (error) {
       console.error('Glip Popout 失败:', target, error);
     } finally {
@@ -1600,7 +1811,7 @@ function scanAndProcessGlipLinks(container?: Element) {
   }
 
   const selector =
-    'span[role="link"][data-id], a[href*="/messages/"], a[href*="/l/messages/"]';
+    'span[role="link"][data-id], a[href*="/messages/"], a[href*="/l/messages/"], a[data-test-automation-id="forwarded-message-view-message"]';
   const candidates = new Set<HTMLElement>();
 
   if (root.matches(selector)) {
@@ -1659,13 +1870,17 @@ async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
     const config = result.envConfig || {};
     return {
       enableSnooze: config.ENABLE_SNOOZE !== false, // 默认启用
+      enableFollowThread: config.ENABLE_FOLLOW_THREAD !== false, // 默认启用
       enableAutoReply: config.ENABLE_AUTO_REPLY !== false, // 默认启用
+      enableLinkedAction: config.ENABLE_LINKED_ACTION !== false, // 默认启用
     };
   } catch (error) {
     console.log('获取消息交互配置失败，使用默认值');
     return {
       enableSnooze: true,
+      enableFollowThread: true,
       enableAutoReply: true,
+      enableLinkedAction: true,
     };
   }
 }
@@ -1675,9 +1890,14 @@ async function setupMessageReaction() {
   const config = await getMessageReactionConfig();
   console.log('🔔 消息交互功能配置:', config);
 
-  // 如果两个功能都禁用，跳过初始化
-  if (!config.enableSnooze && !config.enableAutoReply) {
-    console.log('🔔 稍后处理和自动答复功能都已禁用，不显示工具栏');
+  // 如果四个功能都禁用，跳过初始化
+  if (
+    !config.enableSnooze &&
+    !config.enableFollowThread &&
+    !config.enableAutoReply &&
+    !config.enableLinkedAction
+  ) {
+    console.log('🔔 消息交互功能都已禁用，不显示工具栏');
     return;
   }
 
@@ -2678,7 +2898,7 @@ export function initFollowThreadVisuals() {
 
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
-        for (const node of mutation.addedNodes) {
+        for (const node of Array.from(mutation.addedNodes)) {
           if (node instanceof HTMLElement) {
             // 检测新消息卡片
             if (
@@ -2737,7 +2957,7 @@ export function initFollowThreadVisuals() {
   const bodyObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
-        for (const node of mutation.addedNodes) {
+        for (const node of Array.from(mutation.addedNodes)) {
           if (node instanceof HTMLElement) {
             // 检测主要内容区域被替换
             if (

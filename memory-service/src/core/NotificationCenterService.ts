@@ -184,6 +184,7 @@ export class NotificationCenterService {
     body: string;
     mention?: boolean;
     targetUserId?: string;
+    targetGroupId?: string;
   }): Promise<BotSendResult> {
     const botSender = getBotSender();
     if (!botSender.isConfigured()) {
@@ -206,6 +207,7 @@ export class NotificationCenterService {
     const result = await botSender.sendMarkdown(input.title, input.body, {
       mention: input.mention,
       targetUserId: input.targetUserId,
+      targetGroupId: input.targetGroupId,
     });
 
     this.recordDelivery([

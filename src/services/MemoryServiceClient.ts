@@ -709,6 +709,8 @@ export interface RuntimeConfigResponse {
   outreachIntervalMs?: number;
   outreachRequireApprovalForReflection?: boolean;
   outreachRequireApprovalForManual?: boolean;
+  outreachResultPushTarget?: 'me' | 'group' | 'user' | 'team';
+  outreachResultPushGroupId?: string;
   ringCentralServerUrl?: string;
   ringCentralClientId?: string;
   ringCentralClientSecretConfigured?: boolean;
@@ -739,6 +741,8 @@ export interface UpdateRuntimeConfigPayload {
   outreachIntervalMs?: number;
   outreachRequireApprovalForReflection?: boolean;
   outreachRequireApprovalForManual?: boolean;
+  outreachResultPushTarget?: 'me' | 'group' | 'user' | 'team';
+  outreachResultPushGroupId?: string;
   ringCentralServerUrl?: string;
   ringCentralClientId?: string;
   ringCentralClientSecret?: string;

@@ -162,7 +162,7 @@ export async function extractMessageInfo(messageElement: HTMLElement): Promise<M
     
     // 构建消息链接
     const messageLink = postId && groupId 
-      ? `https://app.ringcentral.com/l/messages/${groupId}/${postId}`
+      ? `https://app.ringcentral.com/messages/${groupId}/${postId}`
       : window.location.href;
     
     // 不再压缩空白字符,保留原始格式(包括换行符)
@@ -377,4 +377,3 @@ export function showErrorToast(message: string) {
     setTimeout(() => toast.remove(), 300);
   }, 4000);
 }
-

@@ -40,7 +40,11 @@ export class BotSender {
   async sendMarkdown(
     title: string,
     body: string,
-    options?: { mention?: boolean; targetUserId?: string },
+    options?: {
+      mention?: boolean;
+      targetUserId?: string;
+      targetGroupId?: string;
+    },
   ): Promise<BotSendResult> {
     if (!this.isConfigured()) {
       console.warn('[BotSender] Bot not configured, skipping message send');
@@ -53,16 +57,19 @@ export class BotSender {
     const mention = options?.mention ?? true;
     const targetEmail =
       options?.targetUserId ? userIdToEmail(options.targetUserId) : this.config.botTargetEmail;
+    const explicitTargetGroupId = options?.targetGroupId?.trim();
+    const useTeamTarget = Boolean(explicitTargetGroupId) || this.config.botType === 'team';
+    const targetTeamId = explicitTargetGroupId || this.config.botTeamId;
 
     const formattedMessage = `**${title}**\n\n${body}`;
-    const url = `${this.config.botApiBaseUrl}/${this.config.botType}/message`;
+    const url = `${this.config.botApiBaseUrl}/${useTeamTarget ? 'team' : 'user'}/message`;
 
-    const payload = this.config.botType === 'team'
+    const payload = useTeamTarget
       ? {
           mentionList: mention && targetEmail ? [targetEmail] : [],
           isTeamMention: false,
           teamName: '',
-          teamId: this.config.botTeamId,
+          teamId: targetTeamId,
           message: formattedMessage,
           skipMentionCheck: !mention,
         }
@@ -73,7 +80,17 @@ export class BotSender {
           message: formattedMessage,
         };
 
-    if (this.config.botType === 'user' && !targetEmail) {
+    if (useTeamTarget && !targetTeamId) {
+      console.warn(
+        '[BotSender] No target team id: pass targetGroupId in options or set BOT_TEAM_ID',
+      );
+      return {
+        sent: false,
+        error: 'No target team id configured',
+      };
+    }
+
+    if (!useTeamTarget && !targetEmail) {
       console.warn(
         '[BotSender] No target email: pass targetUserId in options or set BOT_TARGET_EMAIL',
       );

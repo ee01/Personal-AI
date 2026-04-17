@@ -78,6 +78,8 @@ export interface Config {
   outreachIntervalMs: number;
   outreachRequireApprovalForReflection: boolean;
   outreachRequireApprovalForManual: boolean;
+  outreachBeforeDispatchTargetChannelLookbackSeconds: number;
+  outreachBeforeDispatchGlobalMemoryLookbackSeconds: number;
   ringCentralServerUrl: string;
   ringCentralClientId: string;
   ringCentralClientSecret: string;
@@ -182,6 +184,22 @@ export function getConfig(): Readonly<Config> {
       process.env.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION !== 'false',
     outreachRequireApprovalForManual:
       process.env.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL === 'true',
+    outreachBeforeDispatchTargetChannelLookbackSeconds: Math.max(
+      60,
+      parseInt(
+        process.env
+          .OUTREACH_BEFORE_DISPATCH_TARGET_CHANNEL_LOOKBACK_SECONDS || `${7 * 24 * 60 * 60}`,
+        10,
+      ),
+    ),
+    outreachBeforeDispatchGlobalMemoryLookbackSeconds: Math.max(
+      60,
+      parseInt(
+        process.env
+          .OUTREACH_BEFORE_DISPATCH_GLOBAL_MEMORY_LOOKBACK_SECONDS || `${3 * 24 * 60 * 60}`,
+        10,
+      ),
+    ),
     ringCentralServerUrl: process.env.RINGCENTRAL_SERVER_URL || '',
     ringCentralClientId: process.env.RINGCENTRAL_CLIENT_ID || '',
     ringCentralClientSecret: process.env.RINGCENTRAL_CLIENT_SECRET || '',

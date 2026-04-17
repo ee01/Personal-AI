@@ -309,7 +309,7 @@ export class NotificationService {
   private async sendBotNotification(data: NotificationData): Promise<void> {
     // 构建消息链接
     const messageLink = data.postId && data.teamId 
-      ? `https://app.ringcentral.com/l/messages/${data.teamId}/${data.postId}`
+      ? `https://app.ringcentral.com/messages/${data.teamId}/${data.postId}`
       : `https://app.ringcentral.com/messages/${data.teamId}`;
     
     // 构建关注后续的原消息预览（如果有）
@@ -363,7 +363,7 @@ ${replySection}
   private async sendChromeNotification(data: NotificationData): Promise<void> {
     // 构建消息链接
     const messageLink = data.postId && data.teamId 
-      ? `https://app.ringcentral.com/l/messages/${data.teamId}/${data.postId}`
+      ? `https://app.ringcentral.com/messages/${data.teamId}/${data.postId}`
       : `https://app.ringcentral.com/messages/${data.teamId}`;
     
     // 构建通知标题

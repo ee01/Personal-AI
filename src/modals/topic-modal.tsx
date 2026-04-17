@@ -19,6 +19,14 @@ import {
   mergeManualConcernedItemsPreservingSystem,
   partitionConcernedItems,
 } from '../watchRules';
+import {
+  buildLinkedActionDraftPrefill,
+  type PendingLinkedActionConfig,
+  generateLinkedActionSuggestion,
+  getFallbackLinkedActionPrompt,
+  isPendingLinkedActionConfigFresh,
+  shouldAutoRequestLinkedActionSuggestion,
+} from './linkedActionHelpers';
 
 // 自动答复配置接口
 interface AutoReplyConfig {
@@ -166,10 +174,39 @@ const TopicModal = () => {
     lastAnalyzedTime: string;
   } | null>(null);
   const [isSilentAnalysisEnabled, setIsSilentAnalysisEnabled] = useState(false);
-  const [automationActionSummaryByRuleRef, setAutomationActionSummaryByRuleRef] =
-    useState<Record<string, AutomationActionSummary>>({});
-  const [isAutomationActionSummaryLoading, setIsAutomationActionSummaryLoading] =
-    useState(false);
+  const [
+    automationActionSummaryByRuleRef,
+    setAutomationActionSummaryByRuleRef,
+  ] = useState<Record<string, AutomationActionSummary>>({});
+  const [
+    isAutomationActionSummaryLoading,
+    setIsAutomationActionSummaryLoading,
+  ] = useState(false);
+  const [newRuleSource, setNewRuleSource] = useState<
+    'manual' | 'autoReply' | 'followThread' | 'linkedAction'
+  >('manual');
+  const [pendingLinkedActionConfig, setPendingLinkedActionConfig] =
+    useState<PendingLinkedActionConfig | null>(null);
+  const [linkedActionSuggestionStatus, setLinkedActionSuggestionStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'failed'>('idle');
+  const [linkedActionSuggestionSource, setLinkedActionSuggestionSource] =
+    useState('');
+  const [linkedActionSuggestionError, setLinkedActionSuggestionError] =
+    useState('');
+  const [linkedActionSuggestionFallback, setLinkedActionSuggestionFallback] =
+    useState('');
+
+  const linkedActionConfigSignals = {
+    openClawEnabled: Boolean(
+      envConfig?.OPENCLAW_ENABLED && envConfig?.OPENCLAW_BASE_URL?.trim(),
+    ),
+    jiraConfigured: Boolean(
+      envConfig?.JIRA_BASE_URL?.trim() &&
+      envConfig?.JIRA_USERNAME?.trim() &&
+      envConfig?.JIRA_API_TOKEN?.trim(),
+    ),
+    memoryServiceAvailable: Boolean(envConfig?.MEMORY_SERVICE_BASE_URL?.trim()),
+  };
 
   useEffect(() => {
     loadTopics();
@@ -189,6 +226,106 @@ const TopicModal = () => {
     })();
   }, []);
 
+  const resetNewRuleForm = (
+    source: 'manual' | 'autoReply' | 'followThread' | 'linkedAction' = 'manual',
+  ) => {
+    setNewRuleSource(source);
+    setPendingLinkedActionConfig(null);
+    setLinkedActionSuggestionStatus('idle');
+    setLinkedActionSuggestionSource('');
+    setLinkedActionSuggestionError('');
+    setLinkedActionSuggestionFallback('');
+    setNewTopic('');
+    setNewExpiry('30');
+    setNewMentionMe(false);
+    setNewFilterSender('');
+    setNewFilterGroup('');
+    setNewNotifyMethod('bot');
+    setNewNotifyFrequency('immediate');
+    setNewDigestEnabled(false);
+    setNewDigestFrequency('daily');
+    setNewDigestHour(18);
+    setNewAutomationPrompt('');
+    setNewAutomationRequiresApproval(false);
+    setNewAutoReply(false);
+    setNewAutoReplyConfig({
+      enabled: false,
+      replyContent: '',
+      useAIGenerate: true,
+      reviewMode: 'delayed',
+      delayHours: 1,
+    });
+    setNewFollowThread(false);
+    setNewFollowConfig(null);
+  };
+
+  const loadLinkedActionHistory = async (): Promise<TopicItem[]> => {
+    const result = await chrome.storage.local.get('concernedItems');
+    const storedItems: any[] = Array.isArray(result.concernedItems)
+      ? (result.concernedItems as any[])
+      : [];
+    const { manualItems } = partitionConcernedItems(storedItems);
+
+    return [...(manualItems as TopicItem[])]
+      .filter((topic) => Boolean(topic.automationPrompt?.trim()))
+      .reverse();
+  };
+
+  const getDraftLinkedActionContext = (): PendingLinkedActionConfig | null => {
+    if (pendingLinkedActionConfig) {
+      return pendingLinkedActionConfig;
+    }
+
+    const content = newTopic.trim();
+    if (!content && !newFilterSender.trim() && !newFilterGroup.trim()) {
+      return null;
+    }
+
+    return {
+      sender: newFilterSender.trim() || undefined,
+      groupName: newFilterGroup.trim() || undefined,
+      content,
+    };
+  };
+
+  const requestLinkedActionSuggestion = async (force = false) => {
+    const context = getDraftLinkedActionContext();
+    if (!context) {
+      return;
+    }
+
+    if (!force && newAutomationPrompt.trim()) {
+      return;
+    }
+
+    setLinkedActionSuggestionStatus('loading');
+    setLinkedActionSuggestionSource('');
+    setLinkedActionSuggestionError('');
+    setLinkedActionSuggestionFallback('');
+
+    try {
+      const suggestion = await generateLinkedActionSuggestion({
+        context,
+        historyTopics: await loadLinkedActionHistory(),
+        configSignals: linkedActionConfigSignals,
+      });
+      setNewAutomationPrompt(suggestion.prompt);
+      setLinkedActionSuggestionStatus('ready');
+      setLinkedActionSuggestionSource(suggestion.sourceLabel);
+      setLinkedActionSuggestionFallback('');
+    } catch (error) {
+      console.error('生成关联操作建议失败:', error);
+      setLinkedActionSuggestionStatus('failed');
+      setLinkedActionSuggestionSource('');
+      setLinkedActionSuggestionError(
+        '建议生成失败，请稍后重试，或先使用兜底样例。',
+      );
+      setLinkedActionSuggestionFallback(
+        getFallbackLinkedActionPrompt(context, linkedActionConfigSignals),
+      );
+    }
+  };
+
   // 检查是否有从消息悬浮菜单传来的自动答复配置请求
   useEffect(() => {
     (async () => {
@@ -198,6 +335,7 @@ const TopicModal = () => {
         // 检查是否是最近5分钟内的请求
         if (Date.now() - config.timestamp < 5 * 60 * 1000) {
           console.log('🤖 检测到自动答复配置请求:', config);
+          resetNewRuleForm('autoReply');
 
           // 自动填充表单 - 使用新的数据结构
           // text 存储内容描述，filterSender/filterGroup 存储匹配条件
@@ -252,6 +390,7 @@ const TopicModal = () => {
         // 检查是否是最近5分钟内的请求
         if (Date.now() - config.timestamp < 5 * 60 * 1000) {
           console.log('👁 检测到关注后续配置请求:', config);
+          resetNewRuleForm('followThread');
 
           // 自动填充表单
           // 🆕 预先生成规则主体文本，类似自动答复的做法
@@ -286,6 +425,37 @@ const TopicModal = () => {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    (async () => {
+      const result = await chrome.storage.local.get(
+        'pendingLinkedActionConfig',
+      );
+      if (result.pendingLinkedActionConfig) {
+        const config =
+          result.pendingLinkedActionConfig as PendingLinkedActionConfig & {
+            timestamp?: number;
+          };
+        if (isPendingLinkedActionConfigFresh(config)) {
+          console.log('🔗 检测到联动操作配置请求:', config);
+          resetNewRuleForm('linkedAction');
+          setPendingLinkedActionConfig(config);
+          const prefill = buildLinkedActionDraftPrefill(config);
+          setNewTopic(prefill.topicText);
+          setNewFilterSender(prefill.filterSender);
+          setNewFilterGroup(prefill.filterGroup);
+          setNewNotifyMethod(prefill.notifyMethod);
+          setNewMentionMe(prefill.mentionMe);
+          setNewAutoReply(prefill.autoReply);
+          setNewFollowThread(prefill.followThread);
+          setNewDigestEnabled(prefill.digestEnabled);
+          setShowAddForm(true);
+        }
+
+        await chrome.storage.local.remove('pendingLinkedActionConfig');
+      }
+    })();
+  }, [envConfig]);
 
   useEffect(() => {
     // 初始化时获取进度
@@ -346,8 +516,11 @@ const TopicModal = () => {
     const result = await chrome.storage.local.get('concernedItems');
     if (result.concernedItems) {
       let needsMigration = false;
+      const storedItems: any[] = Array.isArray(result.concernedItems)
+        ? (result.concernedItems as any[])
+        : [];
       const { manualItems: manualTopics, systemItems } =
-        partitionConcernedItems(result.concernedItems);
+        partitionConcernedItems(storedItems);
       const topicsWithIds = manualTopics.map((topic: TopicItem) => {
         const migrated: TopicItem & { pushToGlip?: boolean } = {
           ...topic,
@@ -393,9 +566,12 @@ const TopicModal = () => {
 
   const saveTopics = async (newTopics: TopicItem[]) => {
     const result = await chrome.storage.local.get('concernedItems');
+    const storedItems: any[] = Array.isArray(result.concernedItems)
+      ? (result.concernedItems as any[])
+      : [];
     await chrome.storage.local.set({
       concernedItems: mergeManualConcernedItemsPreservingSystem(
-        result.concernedItems || [],
+        storedItems,
         newTopics,
       ),
     });
@@ -519,28 +695,7 @@ const TopicModal = () => {
     const savedFollowThread = newFollowThread;
 
     // 重置表单
-    setNewTopic('');
-    setNewExpiry('30');
-    setNewMentionMe(false);
-    setNewFilterSender('');
-    setNewFilterGroup('');
-    setNewNotifyMethod('bot');
-    setNewNotifyFrequency('immediate');
-    setNewDigestEnabled(false);
-    setNewDigestFrequency('daily');
-    setNewDigestHour(18);
-    setNewAutomationPrompt('');
-    setNewAutomationRequiresApproval(false);
-    setNewAutoReply(false);
-    setNewAutoReplyConfig({
-      enabled: false,
-      replyContent: '',
-      useAIGenerate: true,
-      reviewMode: 'delayed',
-      delayHours: 1,
-    });
-    setNewFollowThread(false);
-    setNewFollowConfig(null);
+    resetNewRuleForm();
     setShowAddForm(false);
 
     // 如果保存的是自动答复或关注后续，检查静默消息分析是否启用
@@ -824,7 +979,7 @@ const TopicModal = () => {
         throw new Error(response?.error || 'Unknown error');
       }
 
-      const userData = response.data;
+      const userData = Array.isArray(response.data) ? response.data : [];
       await analyzeMessages(userData, userinfo.fullName);
     } catch (error) {
       console.error('Error sending data to Ollama:', error);
@@ -914,6 +1069,26 @@ const TopicModal = () => {
     Boolean(topic.automationPrompt?.trim()),
   );
 
+  useEffect(() => {
+    if (
+      shouldAutoRequestLinkedActionSuggestion({
+        showAddForm,
+        newRuleSource,
+        linkedActionSuggestionStatus,
+        newAutomationPrompt,
+      })
+    ) {
+      void requestLinkedActionSuggestion(true);
+    }
+  }, [
+    linkedActionSuggestionStatus,
+    newAutomationPrompt,
+    newRuleSource,
+    openClawConfigured,
+    pendingLinkedActionConfig,
+    showAddForm,
+  ]);
+
   const summarizeRuntimeActions = (
     actions: RuntimeAction[],
     total: number,
@@ -992,10 +1167,16 @@ const TopicModal = () => {
             });
             return [
               ruleRef,
-              summarizeRuntimeActions(response.items || [], response.total || 0),
+              summarizeRuntimeActions(
+                response.items || [],
+                response.total || 0,
+              ),
             ] as const;
           } catch (error) {
-            console.warn(`Failed to load action summary for ${ruleRef}:`, error);
+            console.warn(
+              `Failed to load action summary for ${ruleRef}:`,
+              error,
+            );
             return [
               ruleRef,
               {
@@ -1093,7 +1274,7 @@ const TopicModal = () => {
       chips.push('✓ 关注后续');
     }
     if (topic.automationPrompt?.trim()) {
-      chips.push('✓ 自动化动作');
+      chips.push('✓ 关联操作');
     }
     return chips;
   };
@@ -1103,11 +1284,11 @@ const TopicModal = () => {
     const requiresApproval = topic.automationRequiresApproval === true;
     return openClawConfigured
       ? requiresApproval
-        ? 'OpenClaw 已连接；规则命中后会生成 RuntimeAction，但执行外部写操作前仍需你批准。'
-        : 'OpenClaw 已连接；规则命中后会生成 RuntimeAction，并按计划自动执行外部写操作。'
+        ? 'OpenClaw 已连接；这条关联操作命中后会生成 RuntimeAction，但执行外部写操作前仍需你批准。'
+        : 'OpenClaw 已连接；这条关联操作命中后会生成 RuntimeAction，并按计划自动执行外部写操作。'
       : requiresApproval
-        ? 'OpenClaw 未配置；规则命中后仍可生成动作计划，但当前无法进入需批准的外部执行。'
-        : 'OpenClaw 未配置；规则命中后仍可生成动作计划，但外部写操作当前无法自动执行。';
+        ? 'OpenClaw 未配置；这条关联操作会先跟规则一起保存，但当前无法进入需批准的外部执行。'
+        : 'OpenClaw 未配置；这条关联操作会先跟规则一起保存，外部写操作当前无法自动执行。';
   };
 
   const getAutomationActionSummary = (topic: TopicItem) =>
@@ -1222,7 +1403,8 @@ const TopicModal = () => {
           <div className="warning-content">
             <span className="warning-icon">⚡</span>
             <span className="warning-text">
-              当前有规则配置了自动化动作，但 OpenClaw 还没连接。动作描述会先和规则一起保存；连接后才具备被后端自动化规划器消费的前提。
+              当前有规则配置了关联操作，但 OpenClaw
+              还没连接。动作描述会先和规则一起保存；连接后才具备被后端自动化规划器消费的前提。
             </span>
             <button className="warning-action-btn" onClick={openOptionsPage}>
               前往连接 OpenClaw
@@ -1250,7 +1432,13 @@ const TopicModal = () => {
       )}
 
       <div className="toolbar">
-        <button className="primary-btn" onClick={() => setShowAddForm(true)}>
+        <button
+          className="primary-btn"
+          onClick={() => {
+            resetNewRuleForm();
+            setShowAddForm(true);
+          }}
+        >
           ＋ 添加规则
         </button>
         <button onClick={exportToXML}>📤 导出规则</button>
@@ -1283,7 +1471,7 @@ const TopicModal = () => {
           <div className="empty-state-title">还没有手动记忆入口规则</div>
           <div className="empty-state-text">
             从一条你想持续观察的消息模式开始。命中后消息会默认写入记忆，你也可以叠加
-            Glip 推送、摘要、自动答复或关注后续。
+            Glip 推送、摘要、自动答复、关注后续或关联操作。
           </div>
         </div>
       )}
@@ -1646,25 +1834,40 @@ const TopicModal = () => {
 
                 <div className="automation-config">
                   <div className="config-section">
-                    <div className="config-title">
-                      自动化动作（OpenClaw，可选）
+                    <div className="config-title">联动操作（OpenClaw）</div>
+                    <div className="automation-input-shell">
+                      <textarea
+                        className={`reply-content-input ${!openClawConfigured ? 'masked-textarea' : ''}`}
+                        placeholder="例如：从消息里提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续操作。"
+                        value={editingTopic.automationPrompt || ''}
+                        onChange={(e) =>
+                          setEditingTopic({
+                            ...editingTopic,
+                            automationPrompt: e.target.value || undefined,
+                          })
+                        }
+                        rows={4}
+                        readOnly={!openClawConfigured}
+                        aria-disabled={!openClawConfigured}
+                      />
+                      {!openClawConfigured && (
+                        <div className="automation-mask">
+                          <button
+                            type="button"
+                            className="secondary-btn automation-mask-btn"
+                            onClick={openOptionsPage}
+                          >
+                            启用 OpenClaw 以开启联动操作
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <textarea
-                      className="reply-content-input"
-                      placeholder="例如：从消息里提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续操作。"
-                      value={editingTopic.automationPrompt || ''}
-                      onChange={(e) =>
-                        setEditingTopic({
-                          ...editingTopic,
-                          automationPrompt: e.target.value || undefined,
-                        })
-                      }
-                      rows={4}
-                    />
                     <label className="checkbox-container">
                       <input
                         type="checkbox"
-                        checked={editingTopic.automationRequiresApproval !== true}
+                        checked={
+                          editingTopic.automationRequiresApproval !== true
+                        }
                         onChange={(e) =>
                           setEditingTopic({
                             ...editingTopic,
@@ -1676,7 +1879,7 @@ const TopicModal = () => {
                       操作无需批准
                     </label>
                     <div className="hint-text">
-                      这里填写的是你定义的自然语言动作。命中后消息仍默认写入记忆；后续动作会由
+                      这里填写的是你定义的自然语言联动操作。命中后消息仍默认写入记忆；后续动作会由
                       RuntimeAction / OpenClaw 能力消费。
                     </div>
                     {editingTopic.automationPrompt?.trim() && (
@@ -2091,7 +2294,7 @@ const TopicModal = () => {
                       <div className="supporting-panel">
                         <div className="automation-panel-head">
                           <div className="supporting-title">
-                            自动化动作
+                            关联操作
                             <span
                               className={`rule-badge ${openClawConfigured ? 'info' : 'warn'}`}
                               style={{ marginLeft: 8 }}
@@ -2469,14 +2672,86 @@ const TopicModal = () => {
 
           <div className="automation-config">
             <div className="config-section">
-              <div className="config-title">自动化动作（OpenClaw，可选）</div>
-              <textarea
-                className="reply-content-input"
-                placeholder="例如：从消息中提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续动作。留空表示不创建自动化动作。"
-                value={newAutomationPrompt}
-                onChange={(e) => setNewAutomationPrompt(e.target.value)}
-                rows={4}
-              />
+              <div className="config-title">联动操作（OpenClaw）</div>
+              <div className="automation-input-shell">
+                <textarea
+                  className={`reply-content-input ${!openClawConfigured ? 'masked-textarea' : ''}`}
+                  placeholder="例如：从消息中提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续动作。留空表示不创建联动操作。"
+                  value={newAutomationPrompt}
+                  onChange={(e) => setNewAutomationPrompt(e.target.value)}
+                  rows={4}
+                  readOnly={!openClawConfigured}
+                  aria-disabled={!openClawConfigured}
+                />
+                {!openClawConfigured && (
+                  <div className="automation-mask">
+                    <button
+                      type="button"
+                      className="secondary-btn automation-mask-btn"
+                      onClick={openOptionsPage}
+                    >
+                      启用 OpenClaw 以开启联动操作
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="reply-options">
+                <button
+                  type="button"
+                  className="ai-generate-btn"
+                  onClick={() => void requestLinkedActionSuggestion(true)}
+                  disabled={linkedActionSuggestionStatus === 'loading'}
+                >
+                  {linkedActionSuggestionStatus === 'loading'
+                    ? '生成中...'
+                    : linkedActionSuggestionStatus === 'ready'
+                      ? '🔄 重新建议'
+                      : '✨ 生成联动操作建议'}
+                </button>
+                {linkedActionSuggestionSource ? (
+                  <span className="hint-text suggestion-source-text">
+                    来源：{linkedActionSuggestionSource}
+                  </span>
+                ) : null}
+              </div>
+              {linkedActionSuggestionStatus === 'loading' && (
+                <div className="hint-text">
+                  正在优先参考你已有的联动操作历史；如果没有合适历史，会自动回退到内置样例目录。
+                </div>
+              )}
+              {linkedActionSuggestionStatus === 'failed' && (
+                <div className="supporting-panel linked-action-feedback-panel">
+                  <div className="supporting-title">建议生成失败</div>
+                  <div className="supporting-text muted-copy">
+                    {linkedActionSuggestionError}
+                  </div>
+                  <div className="supporting-actions">
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => void requestLinkedActionSuggestion(true)}
+                    >
+                      重试
+                    </button>
+                    {linkedActionSuggestionFallback ? (
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => {
+                          setNewAutomationPrompt(
+                            linkedActionSuggestionFallback,
+                          );
+                          setLinkedActionSuggestionStatus('ready');
+                          setLinkedActionSuggestionSource('内置兜底样例');
+                          setLinkedActionSuggestionError('');
+                        }}
+                      >
+                        使用兜底样例
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              )}
               <label className="checkbox-container">
                 <input
                   type="checkbox"
@@ -2489,7 +2764,7 @@ const TopicModal = () => {
                 操作无需批准
               </label>
               <div className="hint-text">
-                这里保存的是手动规则的自然语言动作描述。命中后仍默认写入记忆；如果
+                这里保存的是手动规则的自然语言联动操作。命中后仍默认写入记忆；如果
                 OpenClaw 还没配置，则会以待激活状态保存。
               </div>
               {newAutomationPrompt.trim() && (
@@ -2502,11 +2777,11 @@ const TopicModal = () => {
                   <span className="hint-text">
                     {openClawConfigured
                       ? newAutomationRequiresApproval
-                        ? 'OpenClaw 已连接；这条规则会生成 RuntimeAction，但执行外部写操作前仍需你批准。'
-                        : 'OpenClaw 已连接；这条规则会生成 RuntimeAction，并按计划自动执行外部写操作。'
+                        ? 'OpenClaw 已连接；这条关联操作会生成 RuntimeAction，但执行外部写操作前仍需你批准。'
+                        : 'OpenClaw 已连接；这条关联操作会生成 RuntimeAction，并按计划自动执行外部写操作。'
                       : newAutomationRequiresApproval
-                        ? 'OpenClaw 未配置 — 动作描述会先保存，但当前无法进入需批准的外部执行。'
-                        : 'OpenClaw 未配置 — 动作描述会先保存，等待后续激活自动执行。'}
+                        ? 'OpenClaw 未配置 — 关联操作描述会先保存，但当前无法进入需批准的外部执行。'
+                        : 'OpenClaw 未配置 — 关联操作描述会先保存，等待后续激活自动执行。'}
                   </span>
                 </div>
               )}
@@ -2573,8 +2848,8 @@ const TopicModal = () => {
                       type="radio"
                       id="notify-both"
                       name="notify-method"
-                      checked={newNotifyMethod === 'both'}
-                      onChange={() => setNewNotifyMethod('both')}
+                      checked={newNotifyMethod === 'bot,chrome'}
+                      onChange={() => setNewNotifyMethod('bot,chrome')}
                     />
                     <label htmlFor="notify-both">两者都推送</label>
                   </div>
@@ -2637,7 +2912,14 @@ const TopicModal = () => {
 
           <div className="form-buttons">
             <button onClick={handleAdd}>确认</button>
-            <button onClick={() => setShowAddForm(false)}>取消</button>
+            <button
+              onClick={() => {
+                resetNewRuleForm();
+                setShowAddForm(false);
+              }}
+            >
+              取消
+            </button>
           </div>
         </div>
       ) : null}
@@ -3033,6 +3315,48 @@ const TopicModal = () => {
                     resize: vertical;
                 }
 
+                .reply-content-input:disabled {
+                    opacity: 0.4;
+                    cursor: not-allowed;
+                }
+
+                .automation-input-shell {
+                    position: relative;
+                    overflow: hidden;
+                    border-radius: 12px;
+                }
+
+                .masked-textarea {
+                    filter: blur(1px);
+                    opacity: 0.86;
+                    user-select: none;
+                    pointer-events: none;
+                }
+
+                .automation-mask {
+                    position: absolute;
+                    inset: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 14px;
+                    border-radius: inherit;
+                    background: rgba(15, 23, 42, 0.22);
+                }
+
+                .automation-mask-btn {
+                    backdrop-filter: blur(10px);
+                    background: rgba(15, 23, 42, 0.72);
+                }
+
+                .suggestion-source-text {
+                    margin-top: 0;
+                }
+
+                .linked-action-feedback-panel {
+                    margin-top: 12px;
+                }
+
                 .reply-options {
                     margin-top: 8px;
                     display: flex;
@@ -3142,6 +3466,8 @@ const TopicModal = () => {
                     background: linear-gradient(135deg, #0b1020 0%, #111827 52%, #0f172a 100%);
                     color: #e5eefb;
                     min-height: 100vh;
+                    box-sizing: border-box;
+                    overflow-x: hidden;
                     font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                 }
 
@@ -3583,10 +3909,12 @@ const TopicModal = () => {
                     flex-direction: column;
                     gap: 12px;
                     width: 100%;
+                    box-sizing: border-box;
                     padding: 18px;
                     background: rgba(15, 23, 42, 0.78);
                     border-radius: 18px;
                     border: 1px solid rgba(96, 165, 250, 0.18);
+                    overflow: hidden;
                 }
 
                 .form-title-row h4 {
@@ -3620,6 +3948,7 @@ const TopicModal = () => {
                 }
 
                 .filter-conditions,
+                .automation-config,
                 .auto-reply-config,
                 .follow-thread-config,
                 .digest-config {

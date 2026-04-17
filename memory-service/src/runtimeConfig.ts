@@ -31,6 +31,10 @@ export interface UserRuntimeConfig {
   outreachIntervalMs: number;
   outreachRequireApprovalForReflection: boolean;
   outreachRequireApprovalForManual: boolean;
+  outreachResultPushTarget: RuntimePushTarget;
+  outreachResultPushGroupId: string;
+  outreachBeforeDispatchTargetChannelLookbackSeconds: number;
+  outreachBeforeDispatchGlobalMemoryLookbackSeconds: number;
   ringCentralServerUrl: string;
   ringCentralClientId: string;
   ringCentralClientSecret: string;
@@ -178,6 +182,23 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
     outreachRequireApprovalForManual: normalizeBoolean(
       persisted.outreachRequireApprovalForManual,
       appConfig.outreachRequireApprovalForManual,
+    ),
+    outreachResultPushTarget: normalizePushTarget(
+      persisted.outreachResultPushTarget,
+      false,
+      'me',
+    ),
+    outreachResultPushGroupId:
+      typeof persisted.outreachResultPushGroupId === 'string'
+        ? persisted.outreachResultPushGroupId
+        : '',
+    outreachBeforeDispatchTargetChannelLookbackSeconds: normalizePositiveInteger(
+      persisted.outreachBeforeDispatchTargetChannelLookbackSeconds,
+      appConfig.outreachBeforeDispatchTargetChannelLookbackSeconds,
+    ),
+    outreachBeforeDispatchGlobalMemoryLookbackSeconds: normalizePositiveInteger(
+      persisted.outreachBeforeDispatchGlobalMemoryLookbackSeconds,
+      appConfig.outreachBeforeDispatchGlobalMemoryLookbackSeconds,
     ),
     ringCentralServerUrl:
       typeof persisted.ringCentralServerUrl === 'string' &&

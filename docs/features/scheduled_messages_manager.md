@@ -1,8 +1,10 @@
 # 定时消息统一管理功能
 
+*最后更新: 2026-04-16*
+
 ## 功能概述
 
-定时消息统一管理功能提供了一个集中化的平台，用于管理和执行各种类型的定时消息推送。系统整合了 Google Sheet + AppScript 和 Jira Automation 两种执行引擎，支持 Email 和 Bot API 两种推送方式。
+定时消息统一管理功能提供了一个集中化的平台，用于管理和执行各种类型的定时消息推送。系统整合了 Google Sheet、AppScript、Jira Automation 和 memory-service runtime，既能做普通消息推送，也能做“帮我问 / 主动询问（Outreach）”这类带运行时状态和追问逻辑的任务。
 
 ## 核心特性
 
@@ -16,12 +18,13 @@
 ### 2. 统一数据模型
 - 用户友好的表格格式（无 JSON）
 - 支持三种消息类型：Daily（按日期）、Hourly（按时间）、Periodic（周期性）
-- 支持两种推送方式：AsMe（以我的身份）、Bot（机器人身份）
+- 支持多种推送方式：AsMe、Bot、AI Report、Outreach（帮我问）
 - 支持灵活的周期配置：日/周/月/年
 
 ### 3. 多种执行引擎
 - **AppScript 引擎**：处理 AsMe 推送（通过 Email），24/7 可靠运行
-- **Jira Automation 引擎**：处理 Bot 推送（通过 Bot API），解决内网访问限制
+- **Jira Automation 引擎**：处理 Bot / AI 类推送，解决内网访问限制
+- **Outreach Runtime**：处理“帮我问”的模板同步、目标解析、发出、等回复与追问
 - **Chrome Extension 备用**：浏览器开启时可直接执行
 
 ### 4. 智能调度
@@ -58,7 +61,7 @@
    - **Content**: 消息内容
    - **Schedule_Date**: 执行日期（YYYY-MM-DD）
    - **Schedule_Time**: 执行时间（HH:mm，可选）
-   - **Push_Method**: 推送方式（AsMe/Bot/AI）
+   - **Push_Method**: 推送方式（AsMe/Bot/AI/Outreach）
    - **Owner**: 创建者
    - **Status**: 状态（Active/Paused/Completed）
    
@@ -75,15 +78,25 @@
    - **AI_Headers**: HTTP 请求头（可选），每行一个，格式：`name: value`
    - **AI_Body**: 请求体（必填），JSON 格式，支持使用 `{Topic}`、`{Content}` 变量
 
+   **Outreach / 帮我问额外字段**：
+   - **Content**: 实际要问的问题
+   - **Target_Type**: `private` 或 `group`
+   - **Glip_User_Name**: 目标是某个人时填写
+   - **Glip_Team_ID**: 目标是某个群时填写
+   - **Outreach_Context**: 可选背景说明
+   - **Outreach_Max_Followup**: 最大追问次数
+   - **Outreach_Followup_Interval_Hours**: 追问间隔（小时）
+
 #### 方式二：通过管理界面创建
 
 1. 点击管理页面右上角的“➕ 新增”按钮
 2. 填写消息主题、内容以及执行时间
-3. 选择推送方式：AsMe / Bot / AI Report
+3. 选择推送方式：AsMe / Bot / AI Report / 帮我问
 4. 按提示填写对应字段：
    - **AsMe**：按接收人添加人名标签
    - **Bot**：选择私聊或群组，并填写 Glip 用户名或群组 ID
    - **AI Report**：选择模板（AI report / PEP report / 自定义），系统会为每个模板分别记住 Endpoint / Headers / Body
+   - **帮我问**：选择问某个人还是某个群，填写问题、可选背景和追问策略
 5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
 6. 点击“✅ 创建消息”完成创建
 
@@ -124,7 +137,7 @@
 #### Bot（机器人身份发送）
 - 通过 Jira Automation 调用内网 Bot API
 - 在 Glip 中显示为机器人发送的消息
-- 需要配置 Bot_Endpoint 字段（内网地址）
+- Bot 路由和凭据由扩展配置 / Jira Automation 规则维护，不需要在单条消息里额外填写专属 endpoint 字段
 - 由 **Jira Automation 引擎**执行（同时负责 AI 推送），解决内网访问限制
 
 #### AI Report（AI 报告推送）
@@ -132,6 +145,28 @@
 - 提供 **AI report / PEP report / 自定义** 三种模板，并为每种模板保留独立配置
 - `AI_Endpoint` 与 `AI_Headers` 会根据模板自动填充，可随时切换；`AI_Body` 可直接编辑并支持 `{Topic}`、`{Content}` 变量
 - 自定义模板支持完全自由填写 Endpoint / Headers / Body，切换模板时系统会记住各自的输入
+
+#### Outreach（帮我问 / 主动询问）
+- 这不是一次性消息推送，而是一个 **主动询问模板**
+- Sheet 中保留的是模板入口；真正的运行时状态在 memory-service 的 `outreach_templates / outreach_sessions / outreach_events`
+- 发送前会先做 **目标解析**，确认应该问谁
+- 真正触发时会先做 **答案预检**
+  - 第一层：检查目标群 / 目标私聊从模板创建到当前触发点的最近会话消息
+  - 第二层：检查全局记忆中是否已经存在其他群里的相关答复
+- 如果在发送前已经命中答案，则 **不发出消息**
+- 如果在等待回复期间仍未收到直接回复，每次追问前也会再次做同一套预检；若已命中答案，则 **不再追问**
+- 用户在定时消息列表中看到的是模板状态和最近结果；更完整的证据、命中阶段、来源与相关消息会在“主动询问 / Outreach Sessions”页面中查看
+- 系统会为 Outreach 动态挂载内部观察规则用于证据采集，但这些规则不会显示在“记忆入口规则”或 “Follow Threads” 列表中
+
+#### Outreach 典型状态
+- `pending_approval`：目标未解析完成，或需要人工批准后才能发出
+- `scheduled`：已排程，等待发送
+- `waiting_reply`：已经发出，正在等答复
+- `deferred`：对方表示稍后回复，系统等待新的时间点
+- `resolved`：已获得可用结果，可能来自直接回复，也可能来自发送前 / 追问前的答案预检
+- `no_reply`：达到等待和追问上限，仍然没有有效答复
+- `escalated`：需要人工介入处理
+- `failed`：发送、轮询或配置异常
 
 **预设模板默认值**：
 
@@ -218,6 +253,13 @@ Google Sheets（统一数据源）
     │
     └─→ Jira Automation（Bot/AI 推送）
         └─→ 每分钟读取 Sheet，调用 Bot/AI API
+    ↓
+memory-service runtime（Outreach）
+    ├─→ 模板同步 / runtime overlay
+    ├─→ 目标解析
+    ├─→ 发送前答案判定
+    ├─→ 等待回复 / 追问前答案判定
+    └─→ 会话结果与证据展示
 ```
 
 ### 核心组件
@@ -252,6 +294,17 @@ Google Sheets（统一数据源）
   4. 更新执行日志到 Sheet
 - **优势**：失败消息不阻塞队列，全天分散推送未指定时间的消息
 
+#### 5. Outreach Runtime
+- 将 `Push_Method = Outreach` 的定时消息同步成主动询问模板
+- 运行时状态通过 overlay 回写到定时消息列表，例如：
+  - `Outreach_Sync_State`
+  - `Outreach_Runtime_Status`
+  - `Outreach_Last_Session_ID`
+  - `Outreach_Result`
+  - `Outreach_Last_Updated`
+- 对重复模板，只结束单次 session，不会因为一次 `resolved` 就把整个模板永久视为 Done
+- 真正的会话详情和证据查看入口在 `memory-exploring.html#/outreach`
+
 ## 配置说明
 
 ### Messages 表字段
@@ -269,14 +322,26 @@ Google Sheets（统一数据源）
 | Repeat_Unit | Enum | ❌ | Day/Week/Month/Year |
 | Repeat_Count | Number | ❌ | 重复次数 |
 | Repeat_Days | String | ❌ | 多选日期（周模式：0=周日,1=周一...6=周六，逗号分隔） |
-| Push_Method | Enum | ✅ | AsMe/Bot/AI |
-| Glip_User_Name | String | ❌ | 接收人用户名（AsMe或Bot私聊；有值时系统自动识别为私聊） |
-| Glip_Team_ID | String | ❌ | 群组 ID（Bot群组推送；有值时系统自动识别为群组） |
-| Bot_Endpoint | String | ❌ | Bot API 端点（Bot推送必填） |
+| Push_Method | Enum | ✅ | AsMe / Bot / AI / JiraAutomation / Outreach |
+| Glip_User_Name | String | ❌ | 接收人用户名（AsMe、Bot 私聊或 Outreach private 目标） |
+| Glip_Team_ID | String | ❌ | 群组 ID（Bot 群推送或 Outreach group 目标） |
 | Attachment | String | ❌ | 附件文件名 |
 | AI_Endpoint | String | ❌ | AI API 端点（AI 推送必填） |
 | AI_Headers | String | ❌ | AI API 请求头（多行文本，每行一个 header） |
 | AI_Body | String | ❌ | AI API 请求体（JSON，支持 {Topic}/{Content} 变量） |
+| Target_Type | Enum | ❌ | `private` / `group` / `api`，Outreach 会使用 |
+| Outreach_Target_Type | Enum | ❌ | Outreach 目标类型镜像字段，兼容旧表头 |
+| Outreach_Target_Ref | String | ❌ | Outreach 目标引用镜像字段，兼容旧表头 |
+| Outreach_Context | String | ❌ | 帮我问的背景说明 |
+| Outreach_Max_Followup | Number | ❌ | 最大追问次数 |
+| Outreach_Followup_Interval_Hours | Number | ❌ | 追问间隔（小时） |
+| Outreach_Sync_State | String | ❌ | 模板同步状态（运行态 overlay） |
+| Outreach_Runtime_Status | String | ❌ | 最近一次会话状态（运行态 overlay） |
+| Outreach_Last_Session_ID | String | ❌ | 最近一次 session id（运行态 overlay） |
+| Outreach_Result | String | ❌ | 最近一次结果摘要（运行态 overlay） |
+| Outreach_Last_Result | String | ❌ | 最近一次结果摘要镜像字段，兼容旧表头 |
+| Outreach_Last_Updated | DateTime | ❌ | 最近一次会话更新时间（运行态 overlay） |
+| Outreach_Question | String | ❌ | 已废弃；历史表头兼容字段，当前使用 `Content` 保存问题原文 |
 | Owner | String | ✅ | 创建者 |
 | Status | Enum | ✅ | Active/Paused/Completed |
 | Last_Exec | DateTime | ❌ | 最后执行时间（自动） |
@@ -349,7 +414,7 @@ A:
 3. **查看原因**：检查 `Exec_Log` 列的错误信息
 4. **常见问题**：
    - Bot Token 过期：重新配置 Jira Automation Rule
-   - Bot_Endpoint 错误：检查内网地址是否正确
+   - Bot 路由配置异常：检查扩展中的 Bot 配置或 Jira Automation Rule 是否仍然有效
    - 权限不足：确认 Bot 有权限访问目标群组/用户
 
 ### Q: 看到错误 "Cannot read properties of undefined (reading '0')"？
@@ -369,6 +434,21 @@ Bot 消息采用**单条消息推送策略**，每分钟执行一条：
 - ✅ **同时多条**：按优先级排队，5-10 分钟内全部推送完
 - ✅ **未指定时间**：8 点后全天分散推送
 - ⚠️ **超大量**：同时超过 30 条可能部分延迟或遗漏
+
+### Q: 帮我问为什么到了触发时间却没有真的发出去？
+A:
+这通常不是失败，而是 **发送前答案判定已经命中**：
+1. 系统先检查目标群 / 私聊在模板创建到当前触发点之间的最近消息
+2. 如果没有，再检查全局记忆里是否已经在其他群拿到答案
+3. 如果两层检测已经能确认答案，session 会直接标记为 `resolved`，不会再重复追问
+
+### Q: 帮我问的系统观察规则在哪里看？
+A:
+用户不会在“记忆入口规则”里看到这类规则。当前可见入口是：
+1. 定时消息列表中的运行态摘要
+2. “主动询问 / Outreach Sessions” 页面里的证据状态、命中阶段、命中来源和相关消息
+
+系统内部观察规则是运行时能力，不是用户手动维护的规则列表。
 
 ## 未来规划
 
@@ -398,5 +478,3 @@ Bot 消息采用**单条消息推送策略**，每分钟执行一条：
 **实现细节文档**：
 - `BOT_SINGLE_MESSAGE_IMPLEMENTATION.md` - Bot 单条消息推送完整实现
 - `JIRA_GROOVY_FIX.md` - Jira Automation 架构演进
-
-

@@ -5,7 +5,8 @@ export type BotPushScenario =
   | 'follow_up'
   | 'dream_insight'
   | 'weekly_report'
-  | 'decision_center';
+  | 'decision_center'
+  | 'outreach_result';
 
 export interface ResolvedBotPushTarget {
   mode: BotPushTargetMode;
@@ -59,6 +60,8 @@ export interface EnvConfigType {
   // 消息交互功能开关
   ENABLE_AUTO_REPLY: boolean; // 启用自动答复功能
   ENABLE_SNOOZE: boolean; // 启用稍后处理功能
+  ENABLE_FOLLOW_THREAD: boolean; // 启用关注后续功能
+  ENABLE_LINKED_ACTION: boolean; // 启用联动操作功能
   // 消息过滤配置
   FILTER_OWN_MESSAGES: boolean; // 是否过滤自己发送的消息
   // 记忆系统 (Memory Service)
@@ -79,6 +82,8 @@ export interface EnvConfigType {
   WEEKLY_REPORT_PUSH_GROUP_ID?: string;
   DECISION_CENTER_PUSH_TARGET?: BotPushTargetMode;
   DECISION_CENTER_PUSH_GROUP_ID?: string;
+  OUTREACH_RESULT_PUSH_TARGET?: BotPushTargetMode;
+  OUTREACH_RESULT_PUSH_GROUP_ID?: string;
   DREAM_DIGEST_SCHEDULE_TYPE?: 'weekly' | 'every_x_days' | 'monthly';
   DREAM_DIGEST_INTERVAL_DAYS?: number;
   SELF_REFLECTION_ENABLED: boolean;
@@ -204,6 +209,15 @@ export function getBotPushTarget(
           ),
           teamId: config.DECISION_CENTER_PUSH_GROUP_ID || fallbackTeamId,
         };
+      case 'outreach_result':
+        return {
+          mode: normalizeBotPushTarget(
+            config.OUTREACH_RESULT_PUSH_TARGET,
+            false,
+            fallbackMode,
+          ),
+          teamId: config.OUTREACH_RESULT_PUSH_GROUP_ID || fallbackTeamId,
+        };
       default:
         return {
           mode: normalizeBotPushTarget(config.BOT_TYPE, false, fallbackMode),
@@ -325,6 +339,14 @@ export function transformPostLinks(inputString: string) {
 export function normalizeEnvConfigShape(
   config: Partial<EnvConfigType>,
 ): EnvConfigType {
+  const normalizedFollowThreadEnabled =
+    typeof config.ENABLE_FOLLOW_THREAD === 'boolean'
+      ? config.ENABLE_FOLLOW_THREAD
+      : defaultEnvConfig.ENABLE_FOLLOW_THREAD;
+  const normalizedLinkedActionEnabled =
+    typeof config.ENABLE_LINKED_ACTION === 'boolean'
+      ? config.ENABLE_LINKED_ACTION
+      : defaultEnvConfig.ENABLE_LINKED_ACTION;
   const normalizedMeetingPilotEnabled =
     typeof config.MEETING_PILOT_ENABLED === 'boolean'
       ? config.MEETING_PILOT_ENABLED
@@ -346,6 +368,8 @@ export function normalizeEnvConfigShape(
   return {
     ...defaultEnvConfig,
     ...config,
+    ENABLE_FOLLOW_THREAD: normalizedFollowThreadEnabled,
+    ENABLE_LINKED_ACTION: normalizedLinkedActionEnabled,
     MEETING_PILOT_ENABLED: normalizedMeetingPilotEnabled,
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
       normalizedMeetingPilotFloatingIconVisible,
@@ -407,6 +431,8 @@ export const defaultEnvConfig: EnvConfigType = {
   // 消息交互功能开关（默认全部启用）
   ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== 'false',
   ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== 'false',
+  ENABLE_FOLLOW_THREAD: process.env.ENABLE_FOLLOW_THREAD !== 'false',
+  ENABLE_LINKED_ACTION: process.env.ENABLE_LINKED_ACTION !== 'false',
   // 消息过滤配置（默认开启过滤）
   FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== 'false',
   // 记忆系统 (Memory Service)
@@ -429,6 +455,8 @@ export const defaultEnvConfig: EnvConfigType = {
   WEEKLY_REPORT_PUSH_GROUP_ID: '',
   DECISION_CENTER_PUSH_TARGET: 'me',
   DECISION_CENTER_PUSH_GROUP_ID: '',
+  OUTREACH_RESULT_PUSH_TARGET: 'me',
+  OUTREACH_RESULT_PUSH_GROUP_ID: '',
   DREAM_DIGEST_SCHEDULE_TYPE:
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'every_x_days' ||
     process.env.DREAM_DIGEST_SCHEDULE_TYPE === 'monthly'

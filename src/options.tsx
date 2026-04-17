@@ -29,14 +29,16 @@ type PushTargetField =
   | 'FOLLOW_UP_PUSH_TARGET'
   | 'DREAM_INSIGHT_PUSH_TARGET'
   | 'WEEKLY_REPORT_PUSH_TARGET'
-  | 'DECISION_CENTER_PUSH_TARGET';
+  | 'DECISION_CENTER_PUSH_TARGET'
+  | 'OUTREACH_RESULT_PUSH_TARGET';
 
 type PushGroupField =
   | 'MESSAGE_ANALYSIS_PUSH_GROUP_ID'
   | 'FOLLOW_UP_PUSH_GROUP_ID'
   | 'DREAM_INSIGHT_PUSH_GROUP_ID'
   | 'WEEKLY_REPORT_PUSH_GROUP_ID'
-  | 'DECISION_CENTER_PUSH_GROUP_ID';
+  | 'DECISION_CENTER_PUSH_GROUP_ID'
+  | 'OUTREACH_RESULT_PUSH_GROUP_ID';
 
 interface MemoryImportResponse {
   mode: 'merge' | 'replace';
@@ -93,6 +95,11 @@ const PUSH_TARGET_RULES: Array<{
     targetKey: 'DECISION_CENTER_PUSH_TARGET',
     groupKey: 'DECISION_CENTER_PUSH_GROUP_ID',
     label: '决策中心推送',
+  },
+  {
+    targetKey: 'OUTREACH_RESULT_PUSH_TARGET',
+    groupKey: 'OUTREACH_RESULT_PUSH_GROUP_ID',
+    label: '主动询问结果推送',
   },
 ];
 
@@ -564,7 +571,7 @@ const Options = () => {
     try {
       const serverConfig = await getRuntimeConfigFromBackend(targetConfig);
       if (!serverConfig) return;
-      const scheduleType = serverConfig?.dreamDigestScheduleType;
+      const scheduleType = String(serverConfig?.dreamDigestScheduleType || '');
       const intervalDays =
         Number(serverConfig?.dreamDigestIntervalDays) ||
         (Number(serverConfig?.dreamDigestIntervalWeeks) || 0) * 7;
@@ -647,6 +654,15 @@ const Options = () => {
           serverConfig?.outreachRequireApprovalForManual !== undefined
             ? Boolean(serverConfig.outreachRequireApprovalForManual)
             : prev.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL,
+        OUTREACH_RESULT_PUSH_TARGET: resolvePushTargetValue(
+          serverConfig?.outreachResultPushTarget,
+          prev.OUTREACH_RESULT_PUSH_TARGET || 'me',
+          false,
+        ),
+        OUTREACH_RESULT_PUSH_GROUP_ID:
+          serverConfig?.outreachResultPushGroupId ||
+          prev.OUTREACH_RESULT_PUSH_GROUP_ID ||
+          '',
         RINGCENTRAL_SERVER_URL:
           typeof serverConfig?.ringCentralServerUrl === 'string'
             ? serverConfig.ringCentralServerUrl
@@ -841,6 +857,16 @@ const Options = () => {
         ringCentralClientSecret.length === 0;
       const clearRingCentralJwt =
         Boolean(config.RINGCENTRAL_CLEAR_JWT) && ringCentralJwt.length === 0;
+      const decisionCenterPushTarget = resolvePushTargetValue(
+        config.DECISION_CENTER_PUSH_TARGET,
+        'me',
+        false,
+      );
+      const outreachResultPushTarget = resolvePushTargetValue(
+        config.OUTREACH_RESULT_PUSH_TARGET,
+        'me',
+        false,
+      );
       const payload: UpdateRuntimeConfigPayload = {
         dreamDigestScheduleType:
           config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
@@ -857,11 +883,8 @@ const Options = () => {
           1,
           Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES) || 15,
         ),
-        decisionCenterPushTarget: resolvePushTargetValue(
-          config.DECISION_CENTER_PUSH_TARGET,
-          'me',
-          false,
-        ),
+        decisionCenterPushTarget:
+          decisionCenterPushTarget === 'group' ? 'group' : 'me',
         decisionCenterPushGroupId:
           (config.DECISION_CENTER_PUSH_GROUP_ID || '').trim() || undefined,
         weeklyReportEnabled:
@@ -895,6 +918,10 @@ const Options = () => {
           config.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION,
         outreachRequireApprovalForManual:
           config.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL,
+        outreachResultPushTarget:
+          outreachResultPushTarget === 'group' ? 'group' : 'me',
+        outreachResultPushGroupId:
+          (config.OUTREACH_RESULT_PUSH_GROUP_ID || '').trim() || undefined,
         ringCentralServerUrl: (config.RINGCENTRAL_SERVER_URL || '').trim(),
         ringCentralClientId: (config.RINGCENTRAL_CLIENT_ID || '').trim(),
         clearRingCentralClientSecret,
@@ -1625,12 +1652,28 @@ const Options = () => {
           description="设置提醒时间，到时 Bot 会推送消息提醒您。"
         />
         <ToggleField
+          id="ENABLE_FOLLOW_THREAD"
+          name="ENABLE_FOLLOW_THREAD"
+          checked={config.ENABLE_FOLLOW_THREAD}
+          onChange={handleInputChange}
+          label="启用「关注后续」功能"
+          description="围绕当前消息快速创建关注后续规则，持续追踪后续讨论。"
+        />
+        <ToggleField
           id="ENABLE_AUTO_REPLY"
           name="ENABLE_AUTO_REPLY"
           checked={config.ENABLE_AUTO_REPLY}
           onChange={handleInputChange}
           label="启用「自动答复」功能"
           description="配置自动答复规则，匹配消息时自动发送回复。"
+        />
+        <ToggleField
+          id="ENABLE_LINKED_ACTION"
+          name="ENABLE_LINKED_ACTION"
+          checked={config.ENABLE_LINKED_ACTION}
+          onChange={handleInputChange}
+          label="启用「联动操作」功能"
+          description="从消息快速创建带关联操作的记忆入口规则。"
         />
       </div>
 
@@ -1842,8 +1885,9 @@ const Options = () => {
         >
           这里是 Meeting Pilot 的唯一核心配置入口：转写 Provider、Minutes API、
           分析模型与密钥都在这里维护；side panel 只保留会中体验和个性化设置。
-          Whisper 建议配置，用于实时 transcript，并提升摘要、行动项和决议提取准确度；
-          Minutes API 可选，主要用于会后 PDF 纪要。
+          Whisper 建议配置，用于实时
+          transcript，并提升摘要、行动项和决议提取准确度； Minutes API
+          可选，主要用于会后 PDF 纪要。
         </small>
         <ToggleField
           id="MEETING_PILOT_ENABLED"
@@ -1867,7 +1911,8 @@ const Options = () => {
           <small
             style={{ color: '#b45309', display: 'block', marginBottom: '15px' }}
           >
-            当前 meeting 页面悬浮入口已设为永不展示。重新打开这个开关后，右下角 icon 会恢复显示。
+            当前 meeting 页面悬浮入口已设为永不展示。重新打开这个开关后，右下角
+            icon 会恢复显示。
           </small>
         ) : null}
         <div className="form-group">
@@ -1962,7 +2007,7 @@ const Options = () => {
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
-          自我反思中的外部委派动作会走这里的 OpenClaw
+          自我反思与关联操作里的外部执行入口都会走这里的 OpenClaw
           配置。启用后才会真正调用外部系统。
         </small>
         <ToggleField
@@ -1971,7 +2016,7 @@ const Options = () => {
           checked={config.OPENCLAW_ENABLED === true}
           onChange={handleInputChange}
           label="启用 OpenClaw 外部委派"
-          description="开启后，自我反思动作可把外部系统查询/执行委派给 OpenClaw（OpenAI 兼容 Responses）。"
+          description="开启后，自我反思与关联操作都可把外部系统查询/执行委派给 OpenClaw（OpenAI 兼容 Responses）。"
         />
         <div className="form-group">
           <label htmlFor="OPENCLAW_BASE_URL">OpenClaw Base URL</label>
@@ -2115,6 +2160,13 @@ const Options = () => {
           description="开启后，Scheduled Messages 里的手动模板也会进入待审批。"
           disabled={config.OUTREACH_ENABLED !== true}
         />
+        {renderPushTargetFields(
+          '主动询问结果推送',
+          'OUTREACH_RESULT_PUSH_TARGET',
+          'OUTREACH_RESULT_PUSH_GROUP_ID',
+          false,
+          '当主动询问拿到最终结果时，用 Bot 推送给 Me 或指定群组。默认推送给 Me。',
+        )}
         <div className="form-group">
           <label htmlFor="RINGCENTRAL_SERVER_URL">RingCentral Server URL</label>
           <input

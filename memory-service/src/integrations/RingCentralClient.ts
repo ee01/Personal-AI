@@ -611,7 +611,10 @@ export class RingCentralClient {
       };
     }
 
-    const rememberedCandidates = this.searchAliasCandidates(normalizedTargetType, query, limit);
+    const rememberedCandidates = await this.enrichPrivateTargetCandidatesWithChatIds(
+      normalizedTargetType,
+      this.searchAliasCandidates(normalizedTargetType, query, limit),
+    );
     const rememberedTop = rememberedCandidates[0];
     const rememberedSecond = rememberedCandidates[1];
     if (
@@ -686,9 +689,12 @@ export class RingCentralClient {
       });
     }
 
-    const candidates = this.mergeCandidates(
-      [...rememberedCandidates, ...localDirectoryCandidates, ...liveCandidates],
-      limit,
+    const candidates = await this.enrichPrivateTargetCandidatesWithChatIds(
+      normalizedTargetType,
+      this.mergeCandidates(
+        [...rememberedCandidates, ...localDirectoryCandidates, ...liveCandidates],
+        limit,
+      ),
     );
 
     if (candidates.length === 0) {
@@ -728,6 +734,20 @@ export class RingCentralClient {
   async searchTargets(input: ResolveRingCentralTargetInput): Promise<RingCentralTargetCandidate[]> {
     const result = await this.searchTargetsDetailed(input);
     return result.items;
+  }
+
+  async resolveDirectConversationChatId(userEntityId: string): Promise<string | null> {
+    const normalizedUserId = userEntityId.trim();
+    if (!normalizedUserId) {
+      return null;
+    }
+
+    const existingChatId = await this.findExistingDirectChatIdForUser(normalizedUserId).catch(() => undefined);
+    if (existingChatId) {
+      return existingChatId;
+    }
+
+    return this.ensureConversationChatId([normalizedUserId]).catch(() => null);
   }
 
   async listPosts(chatId: string, sinceAt?: number): Promise<RingCentralPost[]> {
@@ -1896,6 +1916,54 @@ export class RingCentralClient {
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
       .slice(0, limit);
+  }
+
+  private async enrichPrivateTargetCandidatesWithChatIds(
+    targetType: string,
+    candidates: RingCentralTargetCandidate[],
+  ): Promise<RingCentralTargetCandidate[]> {
+    if (!['private', 'person'].includes(normalizeSearch(targetType))) {
+      return candidates;
+    }
+
+    const next = [...candidates];
+    for (const [index, candidate] of next.entries()) {
+      if (candidate.kind !== 'user' || candidate.chatId || !candidate.entityId) {
+        continue;
+      }
+      const chatId = await this.findExistingDirectChatIdForUser(candidate.entityId).catch(() => undefined);
+      if (!chatId) {
+        continue;
+      }
+      next[index] = {
+        ...candidate,
+        chatId,
+      };
+    }
+    return next;
+  }
+
+  private async findExistingDirectChatIdForUser(userEntityId: string): Promise<string | undefined> {
+    const chats = await this.listChatsAcrossPages(
+      RingCentralClient.DIRECTORY_CHAT_PAGE_SIZE,
+      RingCentralClient.CHAT_SEARCH_MAX_PAGES,
+      RingCentralClient.DIRECTORY_CHAT_INTER_PAGE_DELAY_MS,
+    );
+    const directChats = chats.filter(
+      (chat) =>
+        normalizeSearch(chat.type) === 'direct' &&
+        Array.isArray(chat.members) &&
+        chat.members.includes(userEntityId),
+    );
+    if (directChats.length === 0) {
+      return undefined;
+    }
+
+    const selfExtensionId = await this.getCurrentExtensionId().catch(() => '');
+    const exactMatch = selfExtensionId
+      ? directChats.find((chat) => chat.members?.includes(selfExtensionId))
+      : undefined;
+    return exactMatch?.id ?? directChats[0]?.id;
   }
 
   private async searchChatCandidates(

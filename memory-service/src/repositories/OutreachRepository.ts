@@ -31,6 +31,8 @@ export type OutreachEventType =
   | 'followup_sent'
   | 'resolved_without_dispatch'
   | 'followup_skipped_by_answer'
+  | 'result_notified'
+  | 'result_notification_failed'
   | 'resolved'
   | 'no_reply'
   | 'escalated'
