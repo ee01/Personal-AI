@@ -15,6 +15,8 @@ export type SourceType =
   | 'manual'
   | 'system'
   | 'meeting';
+export type MemoryScope = 'work' | 'personal';
+export type RecallScope = MemoryScope | 'both';
 export type RecallSourceType =
   | SourceType
   | 'daily_log'
@@ -151,6 +153,8 @@ export interface MessageRaw {
   id: string;
   content: string;
   summary?: string;
+  scope: MemoryScope;
+  source?: string;
   sourceType: SourceType;
   sourceUrl?: string;
   sourceTitle?: string;
@@ -229,6 +233,8 @@ export interface Chunk {
   lineEnd: number;
   content: string;
   contentHash: string;
+  scope?: MemoryScope;
+  source?: string;
   sourceType?: string;
   relatedProject?: string;
   relatedEntityId?: string;
@@ -443,6 +449,8 @@ export interface ProfileCandidate {
 export interface IngestPayload {
   content: string;
   sourceType: SourceType;
+  scope?: MemoryScope;
+  source?: string;
   sender?: string;
   groupId?: string;
   groupName?: string;
@@ -461,8 +469,28 @@ export interface IngestResult {
   matchedProjects?: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Recall — Active research interface (POST /recall)
+// ---------------------------------------------------------------------------
+
+export type RecallAnalysisMode = 'search' | 'research' | 'aggregate';
+export type RecallBlockType =
+  | 'summary'
+  | 'timeline'
+  | 'table'
+  | 'chart'
+  | 'evidence_list'
+  | 'media';
+export type RecallPresentationHint =
+  | 'default'
+  | 'compact'
+  | 'meeting_pilot'
+  | 'research'
+  | 'dashboard';
+
 export interface RecallQuery {
   query: string;
+  scope?: RecallScope;
   topK?: number; // default 10
   channels?: ('vector' | 'fts' | 'graph' | 'time')[]; // default all
   timeRange?: { start?: number; end?: number };
@@ -474,8 +502,23 @@ export interface RecallQuery {
   groupFilter?: string[];
   minImportance?: number;
   sourceTypes?: RecallSourceType[];
-  presentationHint?: 'default' | 'compact' | 'meeting_pilot';
+  presentationHint?: RecallPresentationHint;
   previewMaxLength?: number;
+  /** Hint to ActiveRecallService about the desired second-stage processing. */
+  analysisMode?: RecallAnalysisMode;
+  /**
+   * Which UI blocks to build alongside the items list.
+   *
+   * - Omitted / empty → evidence-only mode: response contains `items` only,
+   *   no `blocks`, no `analysis`, no LLM calls.
+   * - Provided → response contains `items` + the requested `blocks`. If the
+   *   list includes `'summary'`, an LLM second-stage runs to produce
+   *   `analysis` (and prepends a `summary` block).
+   *
+   * This single field replaces the old `responseMode` switch. The model is
+   * "you ask for what you want; LLM is opt-in by including 'summary'".
+   */
+  blockTypes?: RecallBlockType[];
 }
 
 export interface RecallResult {
@@ -483,12 +526,19 @@ export interface RecallResult {
   totalFound: number;
   queryTimeMs: number;
   channels: string[];
+  /** Block-style render schema (only present when `blockTypes` was provided). */
+  blocks?: RecallBlock[];
+  /** Higher-level analysis (only present when `blockTypes` includes `summary`). */
+  analysis?: RecallAnalysis;
+  /** Multi-modal references (URLs, file refs, structured spec). */
+  artifacts?: RecallArtifact[];
 }
 
 export interface RecallItem {
   id: string;
   type: 'message' | 'chunk' | 'entity';
   content: string;
+  scope?: MemoryScope;
   displayTitle?: string;
   displayText?: string;
   previewText?: string;
@@ -496,9 +546,195 @@ export interface RecallItem {
   source?: string;
   sourceUrl?: string;
   sourceTitle?: string;
+  /**
+   * Stable jump link into memory-exploring (Vue UI), e.g.
+   * `#/entity/Project/abc-123` or `#/timeline?focus=msg-id`.
+   * Always present when the item maps to a known explorer route.
+   */
+  exploreLink?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
   entity?: Entity;
+}
+
+// ---------- Block schema (active recall stage 2 output) ----------
+
+export interface RecallBlockBase<K extends RecallBlockType, P> {
+  type: K;
+  title?: string;
+  payload: P;
+}
+
+export interface RecallSummaryBlockPayload {
+  text: string;
+  bullets?: string[];
+  confidence?: number;
+}
+
+export interface RecallTimelineEvent {
+  id?: string;
+  date: string; // ISO date or relative description
+  timestamp?: number;
+  title: string;
+  description?: string;
+  sourceItemId?: string;
+  exploreLink?: string;
+}
+export interface RecallTimelineBlockPayload {
+  events: RecallTimelineEvent[];
+}
+
+export interface RecallTableBlockPayload {
+  columns: Array<{ key: string; label: string }>;
+  rows: Array<Record<string, string | number | null>>;
+}
+
+export interface RecallChartBlockPayload {
+  chartType: 'line' | 'bar' | 'pie' | 'scatter';
+  labels: string[];
+  series: Array<{ name: string; data: number[] }>;
+  xAxisLabel?: string;
+  yAxisLabel?: string;
+}
+
+export interface RecallEvidenceCard {
+  itemId: string;
+  title: string;
+  snippet: string;
+  source?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  exploreLink?: string;
+  whyMatched?: string;
+  score?: number;
+  timestamp?: number;
+}
+export interface RecallEvidenceListBlockPayload {
+  cards: RecallEvidenceCard[];
+}
+
+export interface RecallMediaItem {
+  kind: 'link' | 'image' | 'pdf' | 'attachment' | 'page';
+  title?: string;
+  url?: string;
+  thumbnailUrl?: string;
+  description?: string;
+  itemId?: string;
+}
+export interface RecallMediaBlockPayload {
+  items: RecallMediaItem[];
+}
+
+export type RecallBlock =
+  | RecallBlockBase<'summary', RecallSummaryBlockPayload>
+  | RecallBlockBase<'timeline', RecallTimelineBlockPayload>
+  | RecallBlockBase<'table', RecallTableBlockPayload>
+  | RecallBlockBase<'chart', RecallChartBlockPayload>
+  | RecallBlockBase<'evidence_list', RecallEvidenceListBlockPayload>
+  | RecallBlockBase<'media', RecallMediaBlockPayload>;
+
+export interface RecallAnalysis {
+  /** Short synthesized summary describing what was retrieved. */
+  summary: string;
+  /** Key conclusions, ordered by importance. */
+  keyFindings?: string[];
+  /** Higher-level insights derived from the evidence. */
+  insights?: string[];
+  /** Why specific evidence items were ranked above others. */
+  rankingRationale?: string;
+  /** Open questions the search could not answer locally. */
+  openQuestions?: string[];
+  /** Confidence in the synthesis, 0..1. */
+  confidence?: number;
+}
+
+export interface RecallArtifact {
+  kind: 'link' | 'file' | 'spec' | 'image' | 'pdf';
+  title?: string;
+  url?: string;
+  filePath?: string;
+  spec?: Record<string, unknown>;
+  description?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Context Recall — Passive associative interface (POST /context-recall)
+// ---------------------------------------------------------------------------
+
+export type ContextRecallSurface =
+  | 'web_passive'
+  | 'meeting_passive'
+  | 'popup_passive'
+  | 'follow_thread';
+
+export type ContextRecallContextType =
+  | 'webpage'
+  | 'meeting'
+  | 'message_thread'
+  | 'jira_issue'
+  | 'document';
+
+export type ContextRecallScope = RecallScope;
+
+export interface ContextRecallEntityHint {
+  /** Coarse hint type, e.g. `jira_key`, `person`, `project`, `group`. */
+  kind: string;
+  value: string;
+  /** Optional id when already resolved on the client. */
+  entityId?: string;
+}
+
+export interface ContextRecallRequest {
+  surface: ContextRecallSurface;
+  contextType: ContextRecallContextType;
+  title?: string;
+  url?: string;
+  /**
+   * The single most representative chunk of context. The server rejects
+   * payloads that look like raw DOM dumps (very long / very low-signal).
+   */
+  primaryText?: string;
+  /** Surrounding weak-signal texts: recent messages, summaries, topics, etc. */
+  secondaryTexts?: string[];
+  entityHints?: ContextRecallEntityHint[];
+  scope?: ContextRecallScope;
+  sourceTypes?: RecallSourceType[];
+  /** Default per-surface; usually 1-3. Hard cap of 5. */
+  limit?: number;
+  /** Set true to receive `debug` info in the response. */
+  debug?: boolean;
+}
+
+export interface ContextRecallMatch {
+  id: string;
+  type: 'message' | 'chunk' | 'entity';
+  score: number;
+  title?: string;
+  snippet: string;
+  /** Source label, e.g. `meeting`, `glip`, `manual`, `jira`. */
+  sourceLabel?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  /** Stable jump link into the memory-exploring Vue UI. */
+  exploreLink?: string;
+  /** Direct deep links to open the source (max 2). */
+  links: Array<{ label: string; url: string }>;
+  /** Short human-readable explanation: which channel hit / why this matches. */
+  whyMatched?: string;
+  timestamp?: number;
+}
+
+export interface ContextRecallDebug {
+  normalizedQuery: string;
+  channelsHit: string[];
+  rejectedReason?: string;
+}
+
+export interface ContextRecallResponse {
+  matches: ContextRecallMatch[];
+  topMatch: ContextRecallMatch | null;
+  queryTimeMs: number;
+  debug?: ContextRecallDebug;
 }
 
 export interface HealthResponse {

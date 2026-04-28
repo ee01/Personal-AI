@@ -55,6 +55,22 @@ export interface BatchIngestResult {
 // Recall & Ask types
 // ============================================================================
 
+export type RecallAnalysisMode = 'search' | 'research' | 'aggregate';
+export type RecallBlockType =
+  | 'summary'
+  | 'timeline'
+  | 'table'
+  | 'chart'
+  | 'evidence_list'
+  | 'media';
+export type RecallPresentationHint =
+  | 'default'
+  | 'compact'
+  | 'meeting_pilot'
+  | 'research'
+  | 'dashboard';
+export type RecallScope = 'work' | 'personal' | 'both' | 'all';
+
 export interface RecallOptions {
   topK?: number;
   channels?: ('vector' | 'fts' | 'graph' | 'time')[];
@@ -67,8 +83,17 @@ export interface RecallOptions {
   groupFilter?: string[];
   minImportance?: number;
   sourceTypes?: string[];
-  presentationHint?: 'default' | 'compact' | 'meeting_pilot';
+  presentationHint?: RecallPresentationHint;
   previewMaxLength?: number;
+  scope?: RecallScope;
+  analysisMode?: RecallAnalysisMode;
+  /**
+   * Drives both block construction and LLM use:
+   *  - omit / empty → evidence-only response (fast, no LLM)
+   *  - provided → response includes `blocks`; if it contains `'summary'`,
+   *    an `analysis` block is also produced via LLM.
+   */
+  blockTypes?: RecallBlockType[];
 }
 
 export interface RecallResult {
@@ -76,6 +101,8 @@ export interface RecallResult {
   totalFound: number;
   queryTimeMs: number;
   channels: string[];
+  blocks?: RecallBlock[];
+  analysis?: RecallAnalysis;
 }
 
 export interface RecallItem {
@@ -89,8 +116,153 @@ export interface RecallItem {
   source?: string;
   sourceUrl?: string;
   sourceTitle?: string;
+  /** Stable jump link into memory-exploring (Vue UI). */
+  exploreLink?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
+}
+
+// ---------- Active recall blocks ----------
+export interface RecallEvidenceCard {
+  itemId: string;
+  title: string;
+  snippet: string;
+  source?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  exploreLink?: string;
+  whyMatched?: string;
+  score?: number;
+  timestamp?: number;
+}
+export interface RecallTimelineEvent {
+  id?: string;
+  date: string;
+  timestamp?: number;
+  title: string;
+  description?: string;
+  sourceItemId?: string;
+  exploreLink?: string;
+}
+export interface RecallMediaItem {
+  kind: 'link' | 'image' | 'pdf' | 'attachment' | 'page';
+  title?: string;
+  url?: string;
+  thumbnailUrl?: string;
+  description?: string;
+  itemId?: string;
+}
+export interface RecallSummaryBlockPayload {
+  text: string;
+  bullets?: string[];
+  confidence?: number;
+}
+
+export type RecallBlock =
+  | { type: 'summary'; title?: string; payload: RecallSummaryBlockPayload }
+  | {
+      type: 'timeline';
+      title?: string;
+      payload: { events: RecallTimelineEvent[] };
+    }
+  | {
+      type: 'table';
+      title?: string;
+      payload: {
+        columns: Array<{ key: string; label: string }>;
+        rows: Array<Record<string, string | number | null>>;
+      };
+    }
+  | {
+      type: 'chart';
+      title?: string;
+      payload: {
+        chartType: 'line' | 'bar' | 'pie' | 'scatter';
+        labels: string[];
+        series: Array<{ name: string; data: number[] }>;
+        xAxisLabel?: string;
+        yAxisLabel?: string;
+      };
+    }
+  | {
+      type: 'evidence_list';
+      title?: string;
+      payload: { cards: RecallEvidenceCard[] };
+    }
+  | {
+      type: 'media';
+      title?: string;
+      payload: { items: RecallMediaItem[] };
+    };
+
+export interface RecallAnalysis {
+  summary: string;
+  keyFindings?: string[];
+  insights?: string[];
+  rankingRationale?: string;
+  openQuestions?: string[];
+  confidence?: number;
+}
+
+// ---------- Context recall (passive) ----------
+
+export type ContextRecallSurface =
+  | 'web_passive'
+  | 'meeting_passive'
+  | 'popup_passive'
+  | 'follow_thread';
+
+export type ContextRecallContextType =
+  | 'webpage'
+  | 'meeting'
+  | 'message_thread'
+  | 'jira_issue'
+  | 'document';
+
+export interface ContextRecallEntityHint {
+  kind: string;
+  value: string;
+  entityId?: string;
+}
+
+export interface ContextRecallRequest {
+  surface: ContextRecallSurface;
+  contextType: ContextRecallContextType;
+  title?: string;
+  url?: string;
+  primaryText?: string;
+  secondaryTexts?: string[];
+  entityHints?: ContextRecallEntityHint[];
+  scope?: RecallScope;
+  sourceTypes?: string[];
+  limit?: number;
+  debug?: boolean;
+}
+
+export interface ContextRecallMatch {
+  id: string;
+  type: 'message' | 'chunk' | 'entity';
+  score: number;
+  title?: string;
+  snippet: string;
+  sourceLabel?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  exploreLink?: string;
+  links: Array<{ label: string; url: string }>;
+  whyMatched?: string;
+  timestamp?: number;
+}
+
+export interface ContextRecallResponse {
+  matches: ContextRecallMatch[];
+  topMatch: ContextRecallMatch | null;
+  queryTimeMs: number;
+  debug?: {
+    normalizedQuery: string;
+    channelsHit: string[];
+    rejectedReason?: string;
+  };
 }
 
 export interface MeetingRecord {
@@ -172,6 +344,10 @@ export interface AskResponse {
     relatedEntities?: Array<{ name: string; type: string; relevance: string }>;
     confidence?: number;
   };
+  /** Structured UI blocks built from the recalled evidence. */
+  blocks?: RecallBlock[];
+  /** Higher-level synthesis derived from the recalled evidence. */
+  analysis?: RecallAnalysis;
 }
 
 // ============================================================================
@@ -1410,7 +1586,15 @@ export class MemoryServiceClient {
   // --------------------------------------------------------------------------
 
   /**
-   * Multi-channel recall — search across vector, full-text, graph, and time channels.
+   * Active recall — research-grade multi-channel recall.
+   *
+   * Returns evidence items always. When `blockTypes` is provided, the
+   * response also includes structured UI `blocks` (timeline, evidence_list,
+   * media, summary). If `blockTypes` includes `'summary'`, an LLM second
+   * stage runs and produces `analysis`.
+   *
+   * For passive associative recall (web/meeting bubbles), use
+   * {@link MemoryServiceClient.contextRecall} instead.
    */
   async recall(query: string, options?: RecallOptions): Promise<RecallResult> {
     return this.request<RecallResult>('POST', '/recall', {
@@ -1420,17 +1604,36 @@ export class MemoryServiceClient {
   }
 
   /**
-   * Natural language Q&A — combines recall with LLM generation.
+   * Passive associative recall — fast, structured, with stable jump links into
+   * memory-exploring (Vue UI). Designed for surface-attached "you've seen this
+   * before" bubbles in web/meeting/popup surfaces.
+   */
+  async contextRecall(
+    request: ContextRecallRequest,
+  ): Promise<ContextRecallResponse> {
+    return this.request<ContextRecallResponse>(
+      'POST',
+      '/context-recall',
+      request,
+    );
+  }
+
+  /**
+   * Natural language Q&A — combines active recall with LLM generation.
+   * Response includes deterministic `blocks` from recalled evidence in addition
+   * to the prose answer and structured findings.
    */
   async ask(
     query: string,
     context?: string,
     includeEvidence?: boolean,
+    options?: { scope?: RecallScope },
   ): Promise<AskResponse> {
     return this.request<AskResponse>('POST', '/ask', {
       query,
       context,
       includeEvidence,
+      scope: options?.scope,
     });
   }
 

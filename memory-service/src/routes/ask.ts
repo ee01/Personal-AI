@@ -8,8 +8,13 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
-import type { RecallItem } from '../types/index.js';
-import { RecallEngine } from '../core/RecallEngine.js';
+import type {
+  RecallAnalysis,
+  RecallBlock,
+  RecallItem,
+  RecallScope,
+} from '../types/index.js';
+import { ActiveRecallService } from '../core/ActiveRecallService.js';
 import { QueryIntentParser } from '../core/QueryIntentParser.js';
 import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
@@ -37,6 +42,7 @@ interface AskBody {
   query: string;
   context?: string;
   includeEvidence?: boolean;
+  scope?: RecallScope;
 }
 
 interface StructuredTimelineItem {
@@ -63,6 +69,10 @@ interface AskResponse {
   evidence?: RecallItem[];
   queryTimeMs: number;
   structuredAnswer?: StructuredAskAnswer;
+  /** Structured UI blocks (timeline, evidence_list, media, summary). */
+  blocks?: RecallBlock[];
+  /** Higher-level synthesis derived from the recalled evidence. */
+  analysis?: RecallAnalysis;
   resolutionState?: EvidenceResolutionState;
   missingInfo?: string[];
   followUpActions?: Array<{
@@ -81,6 +91,8 @@ interface AskResponse {
 
 interface PreparedAskContext {
   recalledItems: RecallItem[];
+  recallBlocks?: RecallBlock[];
+  recallAnalysis?: RecallAnalysis;
   intentContext: string;
   combinedMemoryContext: string;
   actionOutcome: {
@@ -104,6 +116,10 @@ const askBodySchema = {
     query: { type: 'string' as const, minLength: 1 },
     context: { type: 'string' as const },
     includeEvidence: { type: 'boolean' as const },
+    scope: {
+      type: 'string' as const,
+      enum: ['work', 'personal', 'both'],
+    },
   },
   additionalProperties: false,
 };
@@ -337,6 +353,37 @@ function parseStructuredAnswer(raw: string): {
   }
 }
 
+function structuredAnswerToAnalysis(
+  structured: StructuredAskAnswer | undefined,
+): RecallAnalysis | undefined {
+  if (!structured) return undefined;
+  const summaryParts = (structured.keyFindings ?? []).slice(0, 3);
+  const summary = summaryParts.join(' ').trim();
+  if (
+    !summary &&
+    !structured.insights?.length &&
+    structured.confidence == null
+  ) {
+    return undefined;
+  }
+  const analysis: RecallAnalysis = {
+    summary: summary || (structured.insights?.[0] ?? ''),
+  };
+  if (structured.keyFindings?.length) {
+    analysis.keyFindings = [...structured.keyFindings];
+  }
+  if (structured.insights?.length) {
+    analysis.insights = [...structured.insights];
+  }
+  if (typeof structured.confidence === 'number') {
+    analysis.confidence = structured.confidence;
+  }
+  if (!analysis.summary && !analysis.keyFindings && !analysis.insights) {
+    return undefined;
+  }
+  return analysis;
+}
+
 function buildAugmentedSystemPrompt(
   db: Database.Database,
   profileManager: ProfileManager,
@@ -383,36 +430,48 @@ async function recallForAsk(
   db: Database.Database,
   query: string,
   includeEvidence?: boolean,
+  scope?: RecallScope,
 ): Promise<{
   parsedIntent: ParsedQueryIntent;
   recalledItems: RecallItem[];
+  recallBlocks?: RecallBlock[];
   memoryContext: string;
   intentContext: string;
 }> {
   const parser = new QueryIntentParser(db);
   const parsedIntent = parser.parse(query);
   const recallQueryText = parsedIntent.cleanedQuery || query;
-  const recallEngine = new RecallEngine(db);
-  const recallResult = await recallEngine.recall({
-    query: recallQueryText,
-    topK:
-      parsedIntent.intent === 'profile' ||
-      Object.keys(parsedIntent.filters).length > 0
-        ? 15
-        : 10,
-    includeMetadata: Boolean(includeEvidence),
-    timeRange: parsedIntent.filters.timeRange,
-    projectFilter: parsedIntent.filters.projectNames?.[0],
-    senderFilter: parsedIntent.filters.senderNames,
-    groupFilter: parsedIntent.filters.groupNames,
-    minImportance: parsedIntent.filters.minImportance,
-    sourceTypes: parsedIntent.filters.sourceTypes,
-  });
+  // /ask runs its own LLM pass for the prose answer, so we ask
+  // ActiveRecallService for deterministic blocks only and skip its analysis
+  // pass to avoid double LLM cost.
+  const activeRecall = new ActiveRecallService(db);
+  const recallScope = scope ?? 'work';
+  const recallResult = await activeRecall.recall(
+    {
+      query: recallQueryText,
+      topK:
+        parsedIntent.intent === 'profile' ||
+        Object.keys(parsedIntent.filters).length > 0
+          ? 15
+          : 10,
+      includeMetadata: true,
+      scope: recallScope,
+      timeRange: parsedIntent.filters.timeRange,
+      projectFilter: parsedIntent.filters.projectNames?.[0],
+      senderFilter: parsedIntent.filters.senderNames,
+      groupFilter: parsedIntent.filters.groupNames,
+      minImportance: parsedIntent.filters.minImportance,
+      sourceTypes: parsedIntent.filters.sourceTypes,
+      blockTypes: ['evidence_list', 'timeline', 'media'],
+    },
+    { skipAnalysis: true },
+  );
 
   const recalledItems = recallResult.items;
   return {
     parsedIntent,
     recalledItems,
+    recallBlocks: recallResult.blocks,
     memoryContext: formatRecalledContext(recalledItems),
     intentContext: formatIntentContext(parsedIntent),
   };
@@ -647,14 +706,12 @@ async function prepareAskContext(
   query: string,
   userContext: string | undefined,
   includeEvidence: boolean | undefined,
+  scope: RecallScope | undefined,
   reportStatus?: AskStatusReporter,
 ): Promise<PreparedAskContext> {
   await reportStatus?.('正在检索相关记忆...');
-  const { recalledItems, memoryContext, intentContext } = await recallForAsk(
-    db,
-    query,
-    includeEvidence,
-  );
+  const { recalledItems, recallBlocks, memoryContext, intentContext } =
+    await recallForAsk(db, query, includeEvidence, scope);
   await reportStatus?.('正在分析已知信息...');
   const resolutionPlanner = new EvidenceResolutionPlanner();
   const initialPlan = await resolutionPlanner.resolve({
@@ -684,6 +741,7 @@ async function prepareAskContext(
 
   return {
     recalledItems,
+    recallBlocks,
     intentContext,
     combinedMemoryContext,
     actionOutcome,
@@ -813,6 +871,32 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
                   },
                 },
               },
+              blocks: {
+                type: 'array',
+                nullable: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: true,
+                  properties: {
+                    type: { type: 'string' },
+                    title: { type: 'string' },
+                    payload: { type: 'object', additionalProperties: true },
+                  },
+                },
+              },
+              analysis: {
+                type: 'object',
+                nullable: true,
+                additionalProperties: true,
+                properties: {
+                  summary: { type: 'string' },
+                  keyFindings: { type: 'array', items: { type: 'string' } },
+                  insights: { type: 'array', items: { type: 'string' } },
+                  rankingRationale: { type: 'string' },
+                  openQuestions: { type: 'array', items: { type: 'string' } },
+                  confidence: { type: 'number' },
+                },
+              },
             },
           },
         },
@@ -821,12 +905,18 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { db, profileManager, userDataManager } = request.userContext;
       const startMs = Date.now();
-      const { query, context: userContext, includeEvidence } = request.body;
+      const {
+        query,
+        context: userContext,
+        includeEvidence,
+        scope,
+      } = request.body;
       const requestId = randomUUID();
 
       try {
         const {
           recalledItems,
+          recallBlocks,
           intentContext,
           combinedMemoryContext,
           actionOutcome,
@@ -838,6 +928,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           query,
           userContext,
           includeEvidence,
+          scope,
         );
         const fullPrompt = buildPromptEnvelope(
           query,
@@ -867,6 +958,8 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           answer: parsedAnswer.answer,
           queryTimeMs,
           structuredAnswer: parsedAnswer.structuredAnswer,
+          blocks: recallBlocks,
+          analysis: structuredAnswerToAnalysis(parsedAnswer.structuredAnswer),
           resolutionState: actionOutcome.finalResolutionState,
           missingInfo: actionOutcome.missingInfo,
         };
@@ -915,7 +1008,12 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { db, profileManager, userDataManager } = request.userContext;
       const startMs = Date.now();
-      const { query, context: userContext, includeEvidence } = request.body;
+      const {
+        query,
+        context: userContext,
+        includeEvidence,
+        scope,
+      } = request.body;
       const requestId = randomUUID();
 
       reply.hijack();
@@ -932,6 +1030,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
 
         const {
           recalledItems,
+          recallBlocks,
           intentContext,
           combinedMemoryContext,
           actionOutcome,
@@ -943,8 +1042,28 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           query,
           userContext,
           includeEvidence,
+          scope,
           (message) => writeSseEvent(reply, 'status', { message }),
         );
+
+        // Emit recall_done so the UI can render evidence/timeline/media blocks
+        // immediately, in parallel with LLM token streaming.
+        writeSseEvent(reply, 'recall_done', {
+          itemsCount: recalledItems.length,
+          blocks: recallBlocks ?? [],
+          evidence: includeEvidence
+            ? recalledItems
+            : recalledItems.slice(0, 5).map((item) => ({
+                id: item.id,
+                type: item.type,
+                displayTitle: item.displayTitle,
+                previewText: item.previewText,
+                exploreLink: item.exploreLink,
+                sourceUrl: item.sourceUrl,
+                sourceTitle: item.sourceTitle,
+                score: item.score,
+              })),
+        });
         const answerSystemPrompt = buildAugmentedSystemPrompt(
           db,
           profileManager,
@@ -1021,6 +1140,8 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           answer: finalAnswer,
           queryTimeMs: Date.now() - startMs,
           structuredAnswer,
+          blocks: recallBlocks,
+          analysis: structuredAnswerToAnalysis(structuredAnswer),
           resolutionState: actionOutcome.finalResolutionState,
           missingInfo: actionOutcome.missingInfo,
         };

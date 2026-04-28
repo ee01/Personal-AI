@@ -40,7 +40,7 @@ module.exports = (env) => {
       contentScriptRingCentralMeeting:
         './src/meeting-shell/contentScriptRingCentralMeeting.ts',
       popup: './src/popup.tsx',
-      'doubao-bridge': './src/modals/doubao-bridge-entry.tsx',
+      'desktop-app': './src/modals/desktop-app-entry.tsx',
       options: './src/options.tsx',
       'meeting-sidepanel': './src/meeting-shell/meetingSidePanel.tsx',
       'meeting-live-map': './src/meeting-shell/meetingLiveMap.tsx',

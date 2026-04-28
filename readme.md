@@ -9,6 +9,7 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 ## 主要功能
 
 ### AI 智能消息分析过滤功能
+
 - **智能消息过滤**：基于自定义规则自动过滤重要消息
 - **多模式分析**：支持智能Agent、Agent工作流和普通模式三种分析方式
 - **上下文理解**：智能分析消息上下文，提供相关性和重要性评估
@@ -22,22 +23,26 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 - 详细文档：[docs/features/message_analysis_filter.md](docs/features/message_analysis_filter.md)
 
 ### Jira 设计链接显示功能
+
 - 在 Jira ticket 页面自动显示相关的设计链接
 - 支持从 Epic、Parent Link 和 Linked Issues 中查找 UX ticket 的设计链接
 - 详细文档：[docs/features/jira_design_links.md](docs/features/jira_design_links.md)
 
 ### Jira 自动化规则导入功能
+
 - 在 Jira 自动化管理页面添加导入功能
 - 支持导入之前导出的自动化规则 JSON 文件
 - 自动格式转换和 API 调用
 - 详细文档：[docs/features/jira_automation_import.md](docs/features/jira_automation_import.md)
 
 ### Google Slides 分析功能
+
 - AI 驱动的幻灯片内容分析
 - 智能内容提取和总结
 - 详细文档：[docs/features/google_slides_analyzer.md](docs/features/google_slides_analyzer.md)
 
 ### Agent 思维可视化
+
 - 显示 AI 代理的思考过程
 - 交互式思维流程图
 - 详细文档：[docs/features/agent_thinking.md](docs/features/agent_thinking.md)
@@ -47,40 +52,42 @@ https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authus
 1. 从 .env.example 创建 .env 文件以及内部的敏感字段清除
 2. 替换 GOOGLE_CLIENT_ID 为正式 oauth client_id: 850492875483-kmbu6or52oi6lsnapoqklbs5fo94jplv.apps.googleusercontent.com
 3. npm run build
-5. 上传 personal-ai.zip 到 chrome store: https://chrome.google.com/webstore/devconsole/2ae6926c-357d-4b1b-b4fc-5313c4e19f24/kefnadjndpllbibeklhajjddgmlbafel/edit/package?pli=1
+4. 上传 personal-ai.zip 到 chrome store: https://chrome.google.com/webstore/devconsole/2ae6926c-357d-4b1b-b4fc-5313c4e19f24/kefnadjndpllbibeklhajjddgmlbafel/edit/package?pli=1
 
-## 豆包对接
+## Desktop App 记忆流
 
 ### 用户主流程
 
-v2 中，`Doubao Bridge.app` 是唯一配置中心；Chrome extension 里的 Doubao 页面只负责安装引导和状态摘要。
+v2 中，`Personal AI.app` 是唯一配置中心。Chrome extension 里的 Desktop App 页面只负责安装引导和状态摘要。
 
 最终用户主流程：
 
-1. 从 GitHub Release 下载 `Doubao-Bridge-<version>-Installer.pkg`
-2. 安装后打开 `/Applications/Doubao Bridge.app`
+1. 从 GitHub Release 下载 `Personal-AI-Desktop-<version>-Installer.pkg`
+2. 安装后打开 `/Applications/Personal AI.app`
 3. 在 app 内依次完成：
    - 连接 Memory Service
    - 登录豆包
    - 创建/修复长期记忆线程
    - 绑定手机版对话
    - 开启自动同步
+   - 视需要检查 explorer 来源状态
 4. 看到 app 提示“现在已经可以自动推送记忆”后，关闭窗口即可
 
 行为说明：
 
 - 默认本地服务固定运行在 `http://127.0.0.1:46321`
-- 普通用户不需要配置 bridge 地址和 token
+- 普通用户不需要配置本机服务地址和 token
 - 关闭窗口后 app 会继续后台运行
 - `Cmd+Q` 不会停止同步；真正停止请在 app 内点击“停止后台并退出”
 - GitHub Release 面向用户只发布 `.pkg` 安装包，不额外暴露 `.app` 调试产物
+- Desktop App 同时负责把记忆推送到豆包，以及把 explorer 输入链路整理后的内容写回 Memory Service
 
 ### 开发与发布
 
 初始化本地开发：
 
 ```bash
-cd app
+cd desktop-app
 npm install
 npx playwright install chromium
 ```
@@ -88,25 +95,25 @@ npx playwright install chromium
 本地调试 app：
 
 ```bash
-npm --prefix app run app:dev
+npm --prefix desktop-app run app:dev
 ```
 
 打包 `.app` 和 `.pkg`：
 
 ```bash
-npm run build:app
+npm run build:desktop
 ```
 
 发布到 GitHub Release：
 
 ```bash
-npm run deploy:app
+npm run deploy:desktop
 ```
 
 如果要让发布出来的 `.pkg` 在其他 Mac 上尽量不被 Gatekeeper 拦截，先检查本机签名/公证准备状态：
 
 ```bash
-npm --prefix app run macos:signing-info
+npm --prefix desktop-app run macos:signing-info
 ```
 
 ## 开发环境设置
@@ -138,6 +145,7 @@ yarn start
 2. 替换 GOOGLE_CLIENT_ID: 850492875483-m5hdm6mtj068npvdl9r8sr51n9cijndg.apps.googleusercontent.com （配置测试设备：https://console.cloud.google.com/auth/clients?invt=AbuzdQ&project=sync-data-with-jira）
 
 ### 安装依赖
+
 ```bash
 yarn install
 ```
@@ -180,12 +188,15 @@ npm run dev
 > **说明**：Embedding 使用本地模型（Xenova），无需额外 API。LLM 用于实体抽取、问答等，需配置 `OPENAI_API_KEY` 或改用 Groq/Ollama/Dify。
 
 ### 开发模式
+
 ```bash
 yarn start
 ```
+
 这将启动 webpack 的监视模式，自动重新编译代码变更。
 
 ### 构建生产版本
+
 ```bash
 yarn build
 ```

@@ -22,9 +22,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Eagerly attempt to import sqlite-vec at module load time so
 // getTestDb() can remain synchronous.
-let sqliteVecModule: { load: (db: BetterSqlite3.Database) => void } | null = null;
+let sqliteVecModule: { load: (db: BetterSqlite3.Database) => void } | null =
+  null;
 try {
-  sqliteVecModule = await import('sqlite-vec') as any;
+  sqliteVecModule = (await import('sqlite-vec')) as any;
 } catch {
   // sqlite-vec not available in this environment
 }
@@ -116,6 +117,7 @@ export function createMockIngestPayload(
   return {
     content: `Test message ${Date.now()}`,
     sourceType: 'manual' as SourceType,
+    scope: 'work',
     sender: 'test-user',
     groupId: 'test-group',
     groupName: 'Test Group',
@@ -128,9 +130,7 @@ export function createMockIngestPayload(
  * Create a mock Entity with sensible defaults.
  * Override any field by passing a partial object.
  */
-export function createMockEntity(
-  overrides: Partial<Entity> = {},
-): Entity {
+export function createMockEntity(overrides: Partial<Entity> = {}): Entity {
   const id = overrides.id ?? uuidv4();
   return {
     id,

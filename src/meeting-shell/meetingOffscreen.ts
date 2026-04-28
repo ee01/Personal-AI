@@ -1,5 +1,11 @@
-import { getEnvConfig } from '../utils';
+import { getEnvConfig, getMeetingTranscriptionMode } from '../utils';
 import { MEETING_PILOT_OFFSCREEN_PATH } from './protocol';
+import { releaseWhisperTranscodeContext } from './transcodeForWhisper';
+import { ASROrchestrator } from './asr/orchestrator';
+import { CloudASRProvider } from './asr/cloudASRProvider';
+import { WebSpeechProvider } from './asr/webSpeechProvider';
+import { DesktopWhisperProvider } from './asr/desktopWhisperProvider';
+import type { MeetingPilotTierStatus } from './protocol';
 
 type OffscreenCaptureState = {
   meetingId?: string;
@@ -7,11 +13,20 @@ type OffscreenCaptureState = {
   title?: string;
   streamId?: string;
   stream?: MediaStream;
+  micStream?: MediaStream;
+  asrAudioStream?: MediaStream;
   recorder?: MediaRecorder;
+  asrOrchestrator?: ASROrchestrator;
+  /**
+   * Route captured tab audio back to speakers, and mix tab audio + mic audio
+   * into one ASR stream when offscreen microphone capture is available.
+   */
+  audioContext?: AudioContext;
   chunks: Blob[];
   startedAt?: number;
   chunkCount: number;
   blobSize: number;
+  transcriptSeq: number;
   requestLog: Array<{
     id: string;
     ts: number;
@@ -22,19 +37,49 @@ type OffscreenCaptureState = {
     enabled: boolean;
     requestLog: string[];
   };
+  /**
+   * MediaRecorder mimeType for merging chunks into a single WebM before
+   * uploading the full recording to the minutes service.
+   */
+  recorderMimeType?: string;
 };
+
+const AUDIO_RECORDER_MIME_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+];
+const VIDEO_RECORDER_MIME_CANDIDATES = [
+  'video/webm;codecs=vp8,opus',
+  'video/webm',
+];
 
 const state: OffscreenCaptureState = {
   chunks: [],
   chunkCount: 0,
   blobSize: 0,
+  transcriptSeq: 0,
   requestLog: [],
 };
+
+function getSupportedRecorderMimeType(
+  candidates: string[],
+): string | undefined {
+  return candidates.find((candidate) =>
+    MediaRecorder.isTypeSupported(candidate),
+  );
+}
 
 function appendCaptureLog(
   level: 'info' | 'request' | 'response' | 'error',
   message: string,
 ): void {
+  const log =
+    level === 'error'
+      ? console.error
+      : level === 'request'
+        ? console.info
+        : console.log;
+  log(`[Meeting Pilot][offscreen][${level}] ${message}`);
   state.requestLog.push({
     id: `${Date.now()}-${state.requestLog.length}`,
     ts: Date.now(),
@@ -147,7 +192,8 @@ async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
       '',
     );
     const apiKey = String(envConfig.MEETING_PROVIDER_API_KEY || '').trim();
-    const model = String(envConfig.MEETING_ANALYSIS_MODEL || '').trim();
+    // Vision 仍走 OneAPI/兼容网关；与主配置对齐时用 OPENAI_MODEL 作为多模态名。
+    const model = String(envConfig.OPENAI_MODEL || '').trim();
     if (!baseUrl || !apiKey || !model) {
       return;
     }
@@ -204,62 +250,56 @@ async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
   }
 }
 
-async function transcribeChunk(chunk: Blob): Promise<void> {
-  if (!state.tabId || !chunk.size) return;
+async function createAsrAudioStream(args: {
+  audioCtx: AudioContext;
+  tabStream: MediaStream;
+}): Promise<MediaStream> {
+  const tabAudioTracks = args.tabStream
+    .getAudioTracks()
+    .filter((track) => track.readyState === 'live');
+  const tabOnlyStream = new MediaStream(tabAudioTracks);
+  if (!tabAudioTracks.length) {
+    appendCaptureLog('error', 'ASR stream unavailable: no live tab audio track');
+    return tabOnlyStream;
+  }
+
+  const tabSrc = args.audioCtx.createMediaStreamSource(tabOnlyStream);
+
+  // tabCapture mutes local playback unless the captured audio is routed back.
+  tabSrc.connect(args.audioCtx.destination);
+
+  const mixDest = args.audioCtx.createMediaStreamDestination();
+  tabSrc.connect(mixDest);
 
   try {
-    const envConfig = await getEnvConfig();
-    const baseUrl = String(envConfig.MEETING_PROVIDER_BASE_URL || '').replace(
-      /\/$/,
-      '',
+    const micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    state.micStream = micStream;
+    const micTracks = micStream
+      .getAudioTracks()
+      .filter((track) => track.readyState === 'live');
+    if (!micTracks.length) {
+      appendCaptureLog('info', 'offscreen mic stream has no live audio track');
+      return tabOnlyStream;
+    }
+    const micSrc = args.audioCtx.createMediaStreamSource(
+      new MediaStream(micTracks),
     );
-    const apiKey = String(envConfig.MEETING_PROVIDER_API_KEY || '').trim();
-    const model = String(
-      envConfig.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
-    ).trim();
-
-    if (!baseUrl || !apiKey) {
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('file', chunk, `meeting-chunk-${Date.now()}.webm`);
-    formData.append('model', model || 'whisper-1');
-
-    appendCaptureLog('request', 'POST /v1/audio/transcriptions');
-    const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: formData,
-    });
-    const data = await response.json();
-    const text = String(data.text || '').trim();
-    if (!response.ok || !text) {
-      return;
-    }
-
-    appendCaptureLog('response', 'transcription chunk received');
-
-    await chrome.runtime.sendMessage({
-      type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
-      tabId: state.tabId,
-      transcriptChunk: {
-        id: `transcript-${Date.now()}`,
-        speaker: 'Unknown participant',
-        text,
-        ts: Date.now(),
-        source: 'whisper',
-        lowConfidence: false,
-      },
-    });
+    micSrc.connect(mixDest);
+    appendCaptureLog('info', 'offscreen mic stream acquired; ASR uses tab+mic');
+    return mixDest.stream;
   } catch (error) {
     appendCaptureLog(
-      'error',
-      `transcription failed: ${String((error as Error)?.message || error || 'unknown_error')}`,
+      'info',
+      `offscreen mic unavailable; ASR uses tab-only: ${String((error as Error)?.name || '')} ${String((error as Error)?.message || error)}`.trim(),
     );
-    console.warn('Meeting Pilot chunk transcription failed:', error);
+    return tabOnlyStream;
   }
 }
 
@@ -273,8 +313,10 @@ async function startCapture(message: Record<string, any>): Promise<void> {
   state.title = String(message.title || `Meeting ${state.meetingId || ''}`);
   state.streamId = String(message.streamId || '');
   state.chunks = [];
+  state.recorderMimeType = undefined;
   state.chunkCount = 0;
   state.blobSize = 0;
+  state.transcriptSeq = 0;
   state.startedAt = Date.now();
   state.requestLog = [];
   appendCaptureLog(
@@ -292,11 +334,26 @@ async function startCapture(message: Record<string, any>): Promise<void> {
   try {
     const stream = await createCaptureStream(state.streamId);
     state.stream = stream;
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
-      ? 'video/webm;codecs=vp8,opus'
-      : 'video/webm';
-    const recorder = new MediaRecorder(stream, { mimeType });
+
+    const audioCtx = new AudioContext();
+    state.audioContext = audioCtx;
+
+    const audioTracks = stream
+      .getAudioTracks()
+      .filter((track) => track.readyState === 'live');
+    const recorderStream = audioTracks.length
+      ? new MediaStream(audioTracks)
+      : stream;
+    const mimeType = getSupportedRecorderMimeType(
+      audioTracks.length
+        ? AUDIO_RECORDER_MIME_CANDIDATES
+        : VIDEO_RECORDER_MIME_CANDIDATES,
+    );
+    const recorder = mimeType
+      ? new MediaRecorder(recorderStream, { mimeType })
+      : new MediaRecorder(recorderStream);
     state.recorder = recorder;
+    state.recorderMimeType = recorder.mimeType || mimeType;
 
     recorder.ondataavailable = (event) => {
       if (!event.data.size) {
@@ -306,7 +363,6 @@ async function startCapture(message: Record<string, any>): Promise<void> {
       state.chunkCount += 1;
       state.blobSize += event.data.size;
       emitCaptureStatus('recording');
-      void transcribeChunk(event.data);
     };
 
     recorder.onerror = (event) => {
@@ -318,9 +374,72 @@ async function startCapture(message: Record<string, any>): Promise<void> {
 
     recorder.start(5000);
     setStatus(`Recording ${state.meetingId || ''}`);
-    appendCaptureLog('info', 'MediaRecorder started');
+    appendCaptureLog(
+      'info',
+      `MediaRecorder started (${
+        audioTracks.length ? 'audio' : 'video fallback'
+      }, ${state.recorderMimeType || 'default mime'})`,
+    );
+
+    const asrAudioStream = await createAsrAudioStream({
+      audioCtx,
+      tabStream: stream,
+    });
+    state.asrAudioStream = asrAudioStream;
+    const envConfig = await getEnvConfig();
+    const transcriptionMode = getMeetingTranscriptionMode(envConfig);
+    const providers = [
+      new WebSpeechProvider(),
+      new DesktopWhisperProvider(),
+      new CloudASRProvider(),
+    ];
+    const orchestrator = new ASROrchestrator({
+      providers,
+      mode: transcriptionMode,
+      onTierStatus: (tierStatus: MeetingPilotTierStatus) => {
+        void chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+          tabId: state.tabId,
+          tierStatus,
+        });
+      },
+      onTranscript: (event) => {
+        state.transcriptSeq += 1;
+        void chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+          tabId: state.tabId,
+          transcriptChunk: {
+            id: `transcript-${event.ts}-${state.transcriptSeq}`,
+            speaker: '',
+            text: event.text,
+            ts: event.ts,
+            source:
+              event.tier === 'web_speech'
+                ? 'web_speech'
+                : event.tier === 'desktop_whisper'
+                  ? 'desktop_whisper'
+                  : 'cloud',
+            lowConfidence: event.kind === 'interim',
+          },
+        });
+      },
+      onCaptureLog: (level, msg) => appendCaptureLog(level, msg),
+    });
+    state.asrOrchestrator = orchestrator;
+    if (asrAudioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+      void orchestrator.start(asrAudioStream);
+    }
+    appendCaptureLog(
+      'info',
+      `ASR orchestrator started (mode: ${transcriptionMode})`,
+    );
     emitCaptureStatus('recording');
-    void analyzeObservationFromFrame(stream);
+    void analyzeObservationFromFrame(stream).finally(() => {
+      if (audioTracks.length) {
+        stream.getVideoTracks().forEach((track) => track.stop());
+        appendCaptureLog('info', 'capture video track released after observation');
+      }
+    });
     emitDigestStatus({
       status: 'idle',
       message: 'Capture running. Digest will start after stop.',
@@ -337,6 +456,10 @@ async function startCapture(message: Record<string, any>): Promise<void> {
 
 async function stopCapture(): Promise<void> {
   const recorder = state.recorder;
+  if (state.asrOrchestrator) {
+    await state.asrOrchestrator.stop();
+    state.asrOrchestrator = undefined;
+  }
   const stopPromise =
     recorder && recorder.state !== 'inactive'
       ? new Promise<void>((resolve) => {
@@ -355,6 +478,16 @@ async function stopCapture(): Promise<void> {
   if (state.stream) {
     state.stream.getTracks().forEach((track) => track.stop());
   }
+  if (state.micStream) {
+    state.micStream.getTracks().forEach((track) => track.stop());
+    state.micStream = undefined;
+  }
+  state.asrAudioStream = undefined;
+  if (state.audioContext) {
+    state.audioContext.close().catch(() => undefined);
+    state.audioContext = undefined;
+  }
+  releaseWhisperTranscodeContext();
   state.recorder = undefined;
   state.stream = undefined;
   setStatus('Stopped');
@@ -388,7 +521,7 @@ async function uploadDigestForCapture(): Promise<void> {
   }
 
   const recordingBlob = new Blob(state.chunks, {
-    type: state.chunks[0]?.type || 'video/webm',
+    type: state.recorderMimeType || state.chunks[0]?.type || 'audio/webm',
   });
   const meetingKey = `${state.meetingId}-${Date.now()}`;
 
@@ -527,7 +660,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'MEETING_PILOT_OFFSCREEN_START_CAPTURE') {
-    void startCapture(message);
+    void startCapture(message).catch((error) => {
+      const messageText = String(
+        (error as Error)?.message || error || 'capture_start_failed',
+      );
+      appendCaptureLog('error', `capture start failed: ${messageText}`);
+      emitCaptureStatus('error', messageText);
+    });
     sendResponse({ success: true });
     return true;
   }
@@ -542,7 +681,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'MEETING_PILOT_OFFSCREEN_STOP_CAPTURE') {
-    void stopCapture();
+    appendCaptureLog(
+      'info',
+      `stop requested (${String(message.reason || 'manual-stop')})`,
+    );
+    void stopCapture().catch((error) => {
+      const messageText = String(
+        (error as Error)?.message || error || 'capture_stop_failed',
+      );
+      appendCaptureLog('error', `capture stop failed: ${messageText}`);
+      emitCaptureStatus('error', messageText);
+    });
     sendResponse({ success: true });
     return true;
   }

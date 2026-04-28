@@ -165,8 +165,8 @@ const error = ref('');
 const sortedMeetings = computed(() =>
   [...meetings.value].sort(
     (left, right) =>
-      (right.lastEventAt || right.date || 0) -
-      (left.lastEventAt || left.date || 0),
+      (normalizeTimestamp(right.lastEventAt || right.date) || 0) -
+      (normalizeTimestamp(left.lastEventAt || left.date) || 0),
   ),
 );
 
@@ -255,9 +255,16 @@ function displayParticipants(participants: string[] = []) {
   return participants.slice(0, 5);
 }
 
+function normalizeTimestamp(timestamp?: number) {
+  const parsed = Number(timestamp || 0);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
+}
+
 function formatMeetingDate(timestamp?: number) {
-  if (!timestamp) return '时间待补充';
-  return new Date(timestamp).toLocaleDateString('zh-CN', {
+  const normalized = normalizeTimestamp(timestamp);
+  if (!normalized) return '时间待补充';
+  return new Date(normalized).toLocaleDateString('zh-CN', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
@@ -266,8 +273,9 @@ function formatMeetingDate(timestamp?: number) {
 }
 
 function formatMeetingTime(timestamp?: number) {
-  if (!timestamp) return '--:--';
-  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+  const normalized = normalizeTimestamp(timestamp);
+  if (!normalized) return '--:--';
+  return new Date(normalized).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -281,12 +289,15 @@ function shortMeetingId(meetingId: string) {
 }
 
 function openPanorama(meeting: MeetingRecord) {
+  const date = normalizeTimestamp(meeting.date) || 0;
+  const lastEventAt =
+    normalizeTimestamp(meeting.lastEventAt || meeting.date) || date;
   const params = new URLSearchParams({
     history: '1',
     meetingId: meeting.meetingId,
     title: meeting.title || '会议记录',
-    date: String(meeting.date || 0),
-    lastEventAt: String(meeting.lastEventAt || meeting.date || 0),
+    date: String(date),
+    lastEventAt: String(lastEventAt),
     participants: JSON.stringify(meeting.participants || []),
   });
 

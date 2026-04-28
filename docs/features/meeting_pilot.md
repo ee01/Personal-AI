@@ -27,7 +27,7 @@ _最后更新: 2026-04-14_
 - 扩展不会静默自动录制。
 - 用户点击浮动入口或 popup 中的开始动作后，Meeting Pilot 会先做 **readiness / preflight** 检查：
   - `Blocked`：不允许开始录制（例如 Minutes API 未配置或不可达）
-  - `Degraded`：允许录制，但部分智能能力降级（例如 Whisper / memory-service / analysis model 不可用）
+  - `Degraded`：允许录制，但部分智能能力降级（例如 ASR / memory-service / analysis model 不可用）
   - `Ready`：完整能力可用
 - 当缺少必须配置时，浮动入口、popup、side panel 都会引导用户前往 `options` 配置页。
 
@@ -101,7 +101,7 @@ Meeting Pilot 的核心配置统一在 `options.tsx` 中维护：
 - `MEETING_PROVIDER_BASE_URL`
 - `MEETING_PROVIDER_API_KEY`
 - `MEETING_TRANSCRIBE_MODEL`
-- `MEETING_ANALYSIS_MODEL`
+- 会中结构化分析：与**选项页主 LLM** 相同（`LLM_TYPE` + 对应 `OPENAI_MODEL` / Dify / Ollama 等），不再使用单独的 `MEETING_ANALYSIS_MODEL`
 - `MEETING_MINUTES_API_URL`
 
 side panel 的 `设置` 只保留会中体验和个性化配置，例如：
@@ -133,7 +133,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 ## 已知边界
 
 - 扩展不能静默自动开始录制。
-- Meeting Pilot 的阻断依赖是 `Minutes API`；Whisper / memory-service / analysis model 为可降级依赖。
+- Meeting Pilot 的阻断依赖是 `Minutes API`；ASR / memory-service / analysis model 为可降级依赖。
 - `SpeechRecognition` 的麦克风路径不作为有效的会议转写降级方案。
 - 当前会中智能分析以 provider-backed transcript / observation / analysis 为主，仍受外部服务可用性影响。
 
@@ -145,6 +145,60 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Live Map
 - Panorama
 - `memory-exploring.html#/meetings`
+
+## 分层 ASR 架构（Layered ASR）
+
+Meeting Pilot 支持三层 ASR provider，按优先级依次尝试：
+
+```
+Tier 1: Chrome on-device Web Speech (On-Device)
+  ↓ 不可用时
+Tier 2: Desktop Local Whisper (Local Whisper) — macOS only
+  ↓ 不可用时
+Tier 3: Cloud ASR (Cloud) — 现有远程 /v1/audio/transcriptions
+```
+
+### 转写模式（Transcription Mode）
+
+在 Options → Meeting Pilot → Transcription Mode 中配置：
+
+| 模式               | 说明                           |
+| ------------------ | ------------------------------ |
+| Auto (local first) | 优先本地，自动 fallback 到云端 |
+| Local only         | 只用本地，不联网转写           |
+| Cloud only         | 只用云端（需要配置 API Key）   |
+
+### 层级徽章（Tier Badge）
+
+会议 Speech 面板顶部显示当前转写层级：
+
+| 徽章             | 含义                        |
+| ---------------- | --------------------------- |
+| On-Device        | Chrome 139+ 本地 Web Speech |
+| Local Whisper    | Desktop App 本地 Whisper    |
+| Cloud            | 云端 ASR                    |
+| No Transcription | 所有层级不可用              |
+
+### Desktop Local Whisper 配置
+
+1. 安装 Personal AI Desktop App
+2. 首次使用 Auto 模式时自动下载 `ggml-base.en` 模型（~148MB）
+3. 在 Options → Desktop ASR 面板查看下载状态
+
+**平台支持**：仅 macOS（Windows 用户自动 fallback 到云端）
+
+### 故障排查
+
+**No Transcription 徽章**：
+
+- `cloud-only` 模式：检查 Options 中的 API Key 配置
+- `local-only` 模式：安装 Personal AI Desktop App，或切换到 cloud/auto
+- `auto` 模式：配置云端 API Key 或安装 Desktop App
+
+**Local Whisper 不可用**：
+
+- 确认 Desktop App 正在运行（`http://127.0.0.1:46321/whisper/status`）
+- 在 Options → Desktop ASR 面板检查模型下载状态
 
 ## 验证
 

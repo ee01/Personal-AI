@@ -34,10 +34,19 @@ interface ContextMatchPayload {
     snippet?: string;
 }
 
-interface ContextMatchResult {
-    content: string;
-    source: string;
+interface ContextRecallMatch {
+    id: string;
+    type: 'message' | 'chunk' | 'entity';
     score: number;
+    title?: string;
+    snippet: string;
+    sourceLabel?: string;
+    sourceUrl?: string;
+    sourceTitle?: string;
+    exploreLink?: string;
+    links: Array<{ label: string; url: string }>;
+    whyMatched?: string;
+    timestamp?: number;
 }
 
 function escapeHtml(text: string): string {
@@ -50,7 +59,14 @@ function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
 }
 
-const contextMatchCache = new Map<string, { match: ContextMatchResult | null; ts: number }>();
+function isMeetingPilotPage(): boolean {
+    return (
+        window.location.hostname === 'v.ringcentral.com' &&
+        /^\/conf\/on\/[^/?#]+/.test(window.location.pathname)
+    );
+}
+
+const contextMatchCache = new Map<string, { match: ContextRecallMatch | null; ts: number }>();
 const CONTEXT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const URL_WATCH_INTERVAL_MS = 500;
 const GENERIC_CONTEXT_STABLE_MS = 250;
@@ -83,6 +99,11 @@ class WebIntelligenceContentScript {
     }
 
     private initialize(): void {
+        if (isMeetingPilotPage()) {
+            console.log('🚫 智能网页分析: RingCentral meeting 页面由 Meeting Pilot 接管');
+            return;
+        }
+
         if (!this.shouldRunOnCurrentDomain()) {
             console.log('🚫 智能网页分析: 当前域名被跳过');
             return;
@@ -617,11 +638,24 @@ class WebIntelligenceContentScript {
         this.pendingContextKey = payload.contextKey;
         const requestId = ++this.pendingContextRequestId;
 
+        const surface: 'web_passive' | 'meeting_passive' = this.isRingCentralMessagePage()
+            ? 'meeting_passive'
+            : 'web_passive';
+        const contextType: 'message_thread' | 'webpage' = this.isRingCentralMessagePage()
+            ? 'message_thread'
+            : 'webpage';
+
         chrome.runtime.sendMessage({
-            type: 'CONTEXT_MATCH_REQUEST',
-            title: payload.title,
-            keywords: payload.keywords,
-            snippet: payload.snippet,
+            type: 'CONTEXT_RECALL_REQUEST',
+            request: {
+                surface,
+                contextType,
+                title: payload.title,
+                url: window.location.href,
+                primaryText: payload.snippet,
+                secondaryTexts: payload.keywords,
+                limit: 1,
+            },
         }, (response) => {
             if (requestId !== this.pendingContextRequestId) {
                 return;
@@ -630,7 +664,7 @@ class WebIntelligenceContentScript {
             this.pendingContextKey = null;
 
             if (chrome.runtime.lastError) {
-                console.warn('Context match message error:', chrome.runtime.lastError.message);
+                console.warn('Context recall message error:', chrome.runtime.lastError.message);
                 return;
             }
 
@@ -639,7 +673,7 @@ class WebIntelligenceContentScript {
                 return;
             }
 
-            const match = (response?.match ?? null) as ContextMatchResult | null;
+            const match = (response?.topMatch ?? null) as ContextRecallMatch | null;
             contextMatchCache.set(payload.contextKey, { match, ts: Date.now() });
 
             if (match) {
@@ -882,7 +916,7 @@ class WebIntelligenceContentScript {
         this.activeBubbleContextKey = null;
     }
 
-    private showContextBubble(match: ContextMatchResult, contextKey: string, animate: boolean): void {
+    private showContextBubble(match: ContextRecallMatch, contextKey: string, animate: boolean): void {
         if (this.activeBubbleContextKey === contextKey && this.bubbleElement && this.cardElement) {
             return;
         }
@@ -910,18 +944,27 @@ class WebIntelligenceContentScript {
         const card = document.createElement('div');
         card.className = 'pai-context-card';
 
-        const sourceLabel =
-            match.source.startsWith('reflections/') || match.source.startsWith('reflection-threads/')
-                ? 'Reflection'
-                : 'Dream';
+        const sourceLabel = match.sourceLabel || match.title || 'Memory';
+        const titleText = match.title || sourceLabel;
+        const exploreUrl = match.exploreLink
+            ? chrome.runtime.getURL(`static/memory-exploring.html${match.exploreLink}`)
+            : '';
+
+        const linksHtml = (match.links || [])
+            .map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener" style="color:#5b5bd6;text-decoration:none;font-size:11px;margin-right:8px;">${escapeHtml(link.label)}</a>`)
+            .join('');
 
         card.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                <span style="font-weight:600;color:#5b5bd6;">🧠 ${sourceLabel}</span>
+                <span style="font-weight:600;color:#5b5bd6;">🧠 ${escapeHtml(titleText)}</span>
                 <span style="font-size:11px;color:#999;">score ${(match.score * 100).toFixed(0)}%</span>
             </div>
-            <div style="line-height:1.5;color:#555;white-space:pre-wrap;">${escapeHtml(match.content)}</div>
-            <div style="margin-top:8px;font-size:11px;color:#aaa;">${escapeHtml(match.source)}</div>
+            <div style="line-height:1.5;color:#555;white-space:pre-wrap;">${escapeHtml(match.snippet)}</div>
+            <div style="margin-top:8px;font-size:11px;color:#aaa;">${escapeHtml(sourceLabel)}${match.whyMatched ? ` · ${escapeHtml(match.whyMatched)}` : ''}</div>
+            <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+                ${exploreUrl ? `<a href="${escapeHtml(exploreUrl)}" target="_blank" rel="noopener" style="color:#5b5bd6;text-decoration:none;font-size:11px;font-weight:600;">在记忆中查看 →</a>` : ''}
+                ${linksHtml}
+            </div>
         `;
 
         let expanded = false;

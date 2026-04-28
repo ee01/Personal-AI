@@ -4,7 +4,7 @@ overview: 把 app/ 重命名为 desktop-app/ 并去掉单一豆包语义；新�
 todos:
   - id: rename
     content: 重命名 app/ → desktop-app/；包名、bundle id、release 工件名、Chrome extension 侧 DoubaoBridgeClient/doubao-bridge.html 同步改；环境变量保留别名
-    status: pending
+    status: in_progress
   - id: memory-scope
     content: Memory Service 加 scope (work/personal) + source 字段；ingest/recall/ask schema 与 DB migration；老数据 backfill scope=work
     status: pending
@@ -28,7 +28,7 @@ todos:
     status: pending
   - id: docs
     content: 重写 app/README.md / docs/features/doubao_bridge_integration.md / app/docs/features/doubao_bridge.md，Doubao 仅作为输出渠道之一 + 输入源之一出现
-    status: pending
+    status: completed
 isProject: false
 ---
 

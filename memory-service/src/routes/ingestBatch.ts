@@ -36,6 +36,11 @@ const ingestPayloadItemSchema = {
   required: ['content', 'sourceType'],
   properties: {
     content: { type: 'string' as const, minLength: 1 },
+    scope: {
+      type: 'string' as const,
+      enum: ['work', 'personal'],
+    },
+    source: { type: 'string' as const, minLength: 1 },
     sourceType: {
       type: 'string' as const,
       enum: ['glip', 'jira', 'web', 'manual', 'system', 'meeting'],
@@ -70,9 +75,7 @@ const batchBodySchema = {
 // Route plugin
 // ---------------------------------------------------------------------------
 
-export async function ingestBatchRoutes(
-  app: FastifyInstance,
-): Promise<void> {
+export async function ingestBatchRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: BatchIngestBody }>(
     '/ingest/batch',
     {
@@ -88,9 +91,15 @@ export async function ingestBatchRoutes(
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
-                    status: { type: 'string', enum: ['created', 'duplicate', 'error'] },
+                    status: {
+                      type: 'string',
+                      enum: ['created', 'duplicate', 'error'],
+                    },
                     entitiesExtracted: { type: 'number' },
-                    matchedProjects: { type: 'array', items: { type: 'string' } },
+                    matchedProjects: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
                   },
                 },
               },
@@ -104,7 +113,11 @@ export async function ingestBatchRoutes(
     },
     async (request, reply) => {
       const { db, userDataManager } = request.userContext;
-      const pipeline = new IngestionPipeline(db, userDataManager, request.userId);
+      const pipeline = new IngestionPipeline(
+        db,
+        userDataManager,
+        request.userId,
+      );
       const { items } = request.body;
       const results: IngestResult[] = [];
 

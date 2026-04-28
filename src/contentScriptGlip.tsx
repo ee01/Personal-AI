@@ -1381,6 +1381,19 @@ function parseGlipAnchorTarget(
   return null;
 }
 
+function isForwardedMessageGroupContext(mention: HTMLSpanElement): boolean {
+  const paragraph = mention.closest('p');
+  if (!paragraph) {
+    return false;
+  }
+
+  return Boolean(
+    paragraph.querySelector(
+      'a[data-test-automation-id="forwarded-message-view-message"]',
+    ),
+  );
+}
+
 function parseGlipMentionTarget(
   mention: HTMLSpanElement,
 ): GlipLinkTarget | null {
@@ -1426,7 +1439,8 @@ function parseGlipMentionTarget(
     hasSidebarConversation ||
     /^team:/i.test(mentionText) ||
     mentionText.includes(',') ||
-    groupEmojiSignals.some((signal) => mentionText.includes(signal));
+    groupEmojiSignals.some((signal) => mentionText.includes(signal)) ||
+    isForwardedMessageGroupContext(mention);
 
   if (!hasGroupSignal) {
     return null;

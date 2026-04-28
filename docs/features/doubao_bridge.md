@@ -1,20 +1,20 @@
-# Doubao Bridge
+# Personal AI Desktop App Memory Flow
 
-*最后更新: 2026-03-31*
+_最后更新: 2026-03-31_
 
 ## 概述
 
-Doubao Bridge 是一套运行在本机的豆包互联系统，用来把服务端 `Memory Service` 中沉淀出来的记忆和上下文，安全地注入到豆包。
+Personal AI Desktop App 是一套运行在本机的记忆协调系统，用来在 `Memory Service`、explorer 输入链路、豆包线程之间建立稳定的双向记忆流。
 
 它的目标不是让服务端直接控制豆包账号，而是把职责拆成三层：
 
 - `Memory Service`
   - 唯一真源
-  - 负责记忆提炼、画像、检索、提醒、上下文渲染
-- `Doubao Bridge.app`
+  - 负责记忆提炼、画像、检索、提醒、上下文渲染、explorer 落库
+- `Personal AI.app`
   - 本机控制中心
-  - 负责登录豆包、绑定线程、配置同步频率、查看状态、手动触发同步
-- Chrome Extension 中的 `doubao-bridge.html`
+  - 负责登录豆包、绑定线程、配置同步频率、查看状态、手动触发同步、管理 explorer 输入链路
+- Chrome Extension 中的 `desktop-app.html`
   - 只做安装引导、状态摘要、打开 app
   - 不再承载主要配置功能
 
@@ -24,7 +24,7 @@ Doubao Bridge 是一套运行在本机的豆包互联系统，用来把服务端
 
 ## 核心能力
 
-Doubao Bridge 当前提供这些核心能力：
+Desktop App 当前提供这些核心能力：
 
 ### 1. 连接 Memory Service
 
@@ -44,7 +44,7 @@ Doubao Bridge 当前提供这些核心能力：
 
 ### 3. 绑定两类豆包线程
 
-Doubao Bridge 使用双线程模型：
+Desktop App 使用双线程模型：
 
 - `memory_sync_thread`
   - 专门用于长期记忆沉淀
@@ -63,9 +63,9 @@ Doubao Bridge 使用双线程模型：
 - 长期稳定信息要发到 `memory_sync_thread`
 - 近期重点、提醒、查询结果要发到真实使用的 `mobile_context_thread`
 
-### 4. 自动同步与手动同步
+### 4. 输出侧同步，写回豆包
 
-Doubao Bridge 支持三类定时同步：
+Desktop App 支持三类定时同步：
 
 - `stable_memory`
   - 同步长期记忆到 `memory_sync_thread`
@@ -94,11 +94,27 @@ Doubao Bridge 支持三类定时同步：
 
 随手记格式发送后的内容，目标是让用户可以在豆包手机端按更结构化的方式查看和管理，而不是只停留在桥接线程里的一段普通上下文文本。
 
-### 5. 本机状态与后台运行
+### 5. 输入侧探索，写回 Memory Service
+
+Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中的消息重新整理后写回 `Memory Service`。
+
+- 支持查看各来源的认证状态、启用状态、运行频率、最近一次运行结果
+- 支持手动触发 explorer 立刻抓取
+- 原始消息先写本机 explorer cache，再由提炼链路产出 artifact 并写入 `Memory Service`
+- 支持 preview 已缓存消息、提炼结果、cursor 位置，方便定位问题
+- 支持 reset cache，只清理本机 raw message cache 与 cursor，不删除远端会话
+- 支持 revoke ingested memory，按来源和 `work/personal` scope 删除之前写入 `Memory Service` 的记忆，不回删远端聊天记录
+
+因此当前产品方向已经不是单向“往豆包发”的 bridge，而是：
+
+- 输出侧，把长期记忆、近期重点、提醒、查询答案发进豆包线程
+- 输入侧，把 explorer 抓回来的对话材料整理后沉淀回 `Memory Service`
+
+### 6. 本机状态与后台运行
 
 - app 关闭窗口后，后台会继续运行
 - 真正停掉后台，需要在 app 中点击 `停止后台并退出`
-- extension 页面会显示本机 Bridge 是否运行、是否就绪、当前还缺哪些前置条件
+- extension 页面会显示本机 Desktop App 服务是否运行、是否就绪、当前还缺哪些前置条件
 
 ---
 
@@ -108,8 +124,8 @@ Doubao Bridge 支持三类定时同步：
 
 1. 从 GitHub Releases 下载最新安装包  
    [https://github.com/ee01/personal-ai/releases/latest](https://github.com/ee01/personal-ai/releases/latest)
-2. 安装 `Doubao-Bridge-<version>-Installer.pkg`
-3. 在 `Applications` 中打开 `Doubao Bridge.app`
+2. 安装 `Personal-AI-Desktop-<version>-Installer.pkg`
+3. 在 `Applications` 中打开 `Personal AI.app`
 4. 在 app 中依次完成：
    - 配置 `Memory Service Base URL`
    - 配置 `Memory Service User ID`
@@ -120,7 +136,7 @@ Doubao Bridge 支持三类定时同步：
 5. 视情况调整同步频率
 6. 关闭窗口即可，后台会继续按节奏自动同步
 
-如果只打开 Chrome extension 中的 Doubao 页面，看到的是安装引导和状态页，不是完整配置页。
+如果只打开 Chrome extension 中的 Desktop App 页面，看到的是安装引导和状态页，不是完整配置页。
 
 ---
 
@@ -160,13 +176,13 @@ Doubao Bridge 支持三类定时同步：
 - `reminder_sync`
   - 每 `15` 分钟同步一次
 
-这些默认值来源于 `app/.env` 或代码默认值，但普通用户应在 `Doubao Bridge.app` 中修改，而不是手改 `.env`。
+这些默认值来源于 `desktop-app/.env` 或代码默认值，但普通用户应在 `Personal AI.app` 中修改，而不是手改 `.env`。
 
 ---
 
 ## 消息发送策略
 
-Doubao Bridge 当前正式发送链路不再使用实验性的 request-mode，而是固定走 DOM 发送，并尽量降低机器人验证触发率。
+Desktop App 当前正式发送链路不再使用实验性的 request-mode，而是固定走 DOM 发送，并尽量降低机器人验证触发率。
 
 当前策略：
 
@@ -195,7 +211,7 @@ Doubao Bridge 当前正式发送链路不再使用实验性的 request-mode，�
 
 ## App 与 Extension 的分工
 
-### `Doubao Bridge.app`
+### `Personal AI.app`
 
 负责：
 
@@ -216,7 +232,7 @@ Doubao Bridge 当前正式发送链路不再使用实验性的 request-mode，�
 - 用户在 app 里看到的按钮文案仍然是 `现在推一次 persona / 近期重点 / 提醒`，但发送给豆包的内容已经不是旧格式
 - 用户可在豆包手机端查看这些同步过去的随手记内容
 
-### Extension 中的 `doubao-bridge.html`
+### Extension 中的 `desktop-app.html`
 
 负责：
 
@@ -224,18 +240,18 @@ Doubao Bridge 当前正式发送链路不再使用实验性的 request-mode，�
 - 提示缺失步骤
 - 展示状态摘要
 - 引导下载安装包
-- 引导用户打开 `Doubao Bridge.app`
+- 引导用户打开 `Personal AI.app`
 
 不再负责：
 
-- 配置 bridge 地址
+- 配置本机服务地址
 - 配置 token
 - 配置 auto-sync 开关
 - 配置线程绑定细节
 
 当前固定约定：
 
-- Bridge 地址：`http://127.0.0.1:46321`
+- Desktop App 本机服务地址：`http://127.0.0.1:46321`
 - 这些细节由 app 自动管理，不暴露给普通用户
 
 ---
@@ -249,7 +265,7 @@ Doubao Bridge 当前正式发送链路不再使用实验性的 request-mode，�
 - 右键点击 tray icon
   - 只弹 context menu
 - 配置页
-  - 退回 `Open Doubao Bridge Settings`
+- 退回 `Open Desktop App Settings`
 
 ### 快捷键
 
@@ -380,7 +396,7 @@ Quick Ask 的最终视觉 demo 收敛为一个独立 HTML：
 
 面向用户的正式发布物只有一个：
 
-- `Doubao-Bridge-<version>-Installer.pkg`
+- `Personal-AI-Desktop-<version>-Installer.pkg`
 
 GitHub Release 主入口：
 
@@ -388,12 +404,12 @@ GitHub Release 主入口：
 
 本地打包产物通常会同时生成：
 
-- `app/release/Doubao Bridge.app`
-- `app/release/Doubao-Bridge-<version>-Installer.pkg`
+- `desktop-app/release/Personal AI.app`
+- `desktop-app/release/Personal-AI-Desktop-<version>-Installer.pkg`
 
 但对最终用户来说，推荐只下载 `.pkg`。
 
-版本号由 [app/package.json](/Users/Esone/git/personal-ai/app/package.json) 的 `version` 驱动，例如当前为 `2.0.2`。
+版本号由 [desktop-app/package.json](/Users/Esone/git/personal-ai/desktop-app/package.json) 的 `version` 驱动，例如当前为 `2.0.2`。
 
 ---
 
@@ -417,14 +433,14 @@ GitHub Release 主入口：
 
 注意：
 
-- 直接删除 `/Applications/Doubao Bridge.app` 不一定等于一次完整卸载
+- 直接删除 `/Applications/Personal AI.app` 不一定等于一次完整卸载
 - 推荐使用 app 内的卸载入口
 
 ---
 
 ## 本地 API 摘要
 
-Doubao Bridge 本机默认监听：
+Desktop App 本机默认监听：
 
 - `http://127.0.0.1:46321`
 
@@ -440,6 +456,12 @@ Doubao Bridge 本机默认监听：
 - `POST /threads/auto-bind-mobile`
 - `POST /sync/run-now`
 - `POST /inject/query`
+- `GET /explorer/status`
+- `POST /explorer/auth/open-login`
+- `POST /explorer/run-now`
+- `POST /explorer/reset-cache`
+- `POST /explorer/revoke-ingested-memory`
+- `GET /explorer/preview`
 - `POST /memo/sync`
 - `POST /memo/stable-memory`
 - `POST /memo/reminders`
@@ -452,12 +474,15 @@ Doubao Bridge 本机默认监听：
 - `POST /sync/run-now` 是 app 手动触发同步时走的统一入口
 - `stable_memory`、`mobile_briefing` 与 `reminder_sync` 都会使用随手记导向的话术
 - `/memo/*` 接口是直接操作随手记格式的本地 API
+- `/explorer/preview` 会返回原始缓存消息、清洗后的预览文本、提炼出的 artifact、以及 cursor 位置
+- `/explorer/reset-cache` 只清本地 explorer cache 与 cursor
+- `/explorer/revoke-ingested-memory` 只删除 `Memory Service` 中按来源和 scope 写入的记忆，不删除远端聊天记录
 
 ---
 
 ## 已知边界
 
-1. Doubao Bridge 目前按 macOS 优先设计
+1. Desktop App 目前按 macOS 优先设计
 2. 豆包普通会话上下文不天然跨线程共享，所以必须维护双线程模型
 3. 消息注入仍需要浏览器上下文；当前不采用纯 HTTP request-mode 作为正式路径
 4. 为降低风控触发率，当前不启用 headless 自动同步模式
@@ -469,13 +494,13 @@ Doubao Bridge 本机默认监听：
 
 - 旧的集成方案文档：[docs/features/doubao_bridge_integration.md](/Users/Esone/git/personal-ai/docs/features/doubao_bridge_integration.md)
 - app 入口与打包：
-  - [app/app/main.mjs](/Users/Esone/git/personal-ai/app/app/main.mjs)
-  - [app/app/renderer.js](/Users/Esone/git/personal-ai/app/app/renderer.js)
-  - [app/scripts/package-macos.mjs](/Users/Esone/git/personal-ai/app/scripts/package-macos.mjs)
-  - [app/scripts/deploy.mjs](/Users/Esone/git/personal-ai/app/scripts/deploy.mjs)
+- [desktop-app/app/main.mjs](/Users/Esone/git/personal-ai/desktop-app/app/main.mjs)
+  - [desktop-app/app/renderer.js](/Users/Esone/git/personal-ai/desktop-app/app/renderer.js)
+- [desktop-app/scripts/package-macos.mjs](/Users/Esone/git/personal-ai/desktop-app/scripts/package-macos.mjs)
+  - [desktop-app/scripts/deploy.mjs](/Users/Esone/git/personal-ai/desktop-app/scripts/deploy.mjs)
 - 发送与桥接核心：
-  - [app/src/browserSession.ts](/Users/Esone/git/personal-ai/app/src/browserSession.ts)
-  - [app/src/bridgeService.ts](/Users/Esone/git/personal-ai/app/src/bridgeService.ts)
-  - [app/src/server.ts](/Users/Esone/git/personal-ai/app/src/server.ts)
+- [desktop-app/src/browserSession.ts](/Users/Esone/git/personal-ai/desktop-app/src/browserSession.ts)
+  - [desktop-app/src/bridgeService.ts](/Users/Esone/git/personal-ai/desktop-app/src/bridgeService.ts)
+  - [desktop-app/src/server.ts](/Users/Esone/git/personal-ai/desktop-app/src/server.ts)
 - extension 状态页：
-  - [src/modals/doubao-bridge.tsx](/Users/Esone/git/personal-ai/src/modals/doubao-bridge.tsx)
+- [src/modals/desktop-app.tsx](/Users/Esone/git/personal-ai/src/modals/desktop-app.tsx)

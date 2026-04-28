@@ -24,14 +24,14 @@
       body {
         margin: 0;
         font-family:
-          ui-rounded,
-          "SF Pro Rounded",
-          "PingFang SC",
-          "Hiragino Sans GB",
-          "Noto Sans SC",
-          sans-serif;
+          ui-rounded, 'SF Pro Rounded', 'PingFang SC', 'Hiragino Sans GB',
+          'Noto Sans SC', sans-serif;
         background:
-          radial-gradient(circle at top, rgba(255, 255, 255, 0.78), transparent 42%),
+          radial-gradient(
+            circle at top,
+            rgba(255, 255, 255, 0.78),
+            transparent 42%
+          ),
           linear-gradient(180deg, #f7f2ed, var(--bg));
         color: var(--text);
       }
@@ -88,8 +88,14 @@
         padding: 14px 16px 18px;
         border-radius: 40px;
         border: 1px solid rgba(255, 255, 255, 0.88);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), var(--panel));
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88), var(--shadow);
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.94),
+          var(--panel)
+        );
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.88),
+          var(--shadow);
       }
 
       .shell.expanded {
@@ -263,7 +269,8 @@
       <section class="intro">
         <h1>Doubao Bridge Quick Ask</h1>
         <p>
-          这份 demo 把最终 quick ask 方案收敛成一页：收起态像 Spotlight，提问后展开成轻量 chat，
+          这份 demo 把最终 quick ask 方案收敛成一页：收起态像
+          Spotlight，提问后展开成轻量 chat，
           状态不跳页，而是在对话流里插入状态卡。
         </p>
       </section>
@@ -304,17 +311,23 @@
               </div>
             </div>
           </div>
-          <div class="notes">点击这颗状态胶囊，不跳设置页，而是展开窗口并把状态插入消息流。</div>
+          <div class="notes">
+            点击这颗状态胶囊，不跳设置页，而是展开窗口并把状态插入消息流。
+          </div>
         </article>
 
         <article class="demo-card">
           <h2>3. Expanded 普通问答态</h2>
-          <p>进入展开态后，先看回答，再看 structured answer，不做沉重的 dashboard。</p>
+          <p>
+            进入展开态后，先看回答，再看 structured answer，不做沉重的
+            dashboard。
+          </p>
           <div class="shell expanded">
             <div class="messages">
               <div class="message user">最近两周我在推进哪些事情？</div>
               <div class="message">
-                你最近两周主要集中在 `Doubao Bridge.app` 的 Quick Ask、小窗交互和状态整合三件事上。
+                你最近两周主要集中在 `Personal AI.app` 的 Quick
+                Ask、小窗交互和状态整合三件事上。
                 <div class="meta-list">
                   <div>
                     <h4>关键发现</h4>
@@ -345,7 +358,9 @@
 
         <article class="demo-card">
           <h2>4. Expanded 插入状态卡</h2>
-          <p>状态卡仍然属于对话的一部分。点击状态行，会把建议追问带回输入框。</p>
+          <p>
+            状态卡仍然属于对话的一部分。点击状态行，会把建议追问带回输入框。
+          </p>
           <div class="shell expanded">
             <div class="messages">
               <div class="message user">最近我还有什么挂起状态？</div>
@@ -380,7 +395,9 @@
               </div>
             </div>
             <div class="composer">
-              <div class="input">继续问：帮我总结这些状态，我该先处理哪个？</div>
+              <div class="input">
+                继续问：帮我总结这些状态，我该先处理哪个？
+              </div>
               <div class="footer">
                 <div class="footer-left">
                   <div class="circle">+</div>
@@ -395,10 +412,14 @@
 
         <article class="demo-card">
           <h2>5. Voice Listening 态</h2>
-          <p>语音不切换到新页面，仍然在同一个壳里转写，结束后保留文本给用户确认发送。</p>
+          <p>
+            语音不切换到新页面，仍然在同一个壳里转写，结束后保留文本给用户确认发送。
+          </p>
           <div class="shell">
             <div class="composer">
-              <div class="voice-banner">正在听... 再按一次 Option+A 或点麦克风停止</div>
+              <div class="voice-banner">
+                正在听... 再按一次 Option+A 或点麦克风停止
+              </div>
               <div class="input">记住我更偏好中文、短句和明确的结论…</div>
               <div class="footer">
                 <div class="footer-left">

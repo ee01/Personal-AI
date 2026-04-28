@@ -15,6 +15,11 @@ const ingestBodySchema = {
   required: ['content', 'sourceType'],
   properties: {
     content: { type: 'string' as const, minLength: 1 },
+    scope: {
+      type: 'string' as const,
+      enum: ['work', 'personal'],
+    },
+    source: { type: 'string' as const, minLength: 1 },
     sourceType: {
       type: 'string' as const,
       enum: ['glip', 'jira', 'web', 'manual', 'system', 'meeting'],
@@ -31,9 +36,7 @@ const ingestBodySchema = {
   additionalProperties: false,
 };
 
-export async function ingestRoutes(
-  app: FastifyInstance,
-): Promise<void> {
+export async function ingestRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: IngestPayload }>(
     '/ingest',
     {
@@ -44,7 +47,10 @@ export async function ingestRoutes(
             type: 'object',
             properties: {
               id: { type: 'string' },
-              status: { type: 'string', enum: ['created', 'duplicate', 'error'] },
+              status: {
+                type: 'string',
+                enum: ['created', 'duplicate', 'error'],
+              },
               entitiesExtracted: { type: 'number' },
               matchedProjects: { type: 'array', items: { type: 'string' } },
             },
@@ -54,7 +60,11 @@ export async function ingestRoutes(
     },
     async (request, reply) => {
       const { db, userDataManager } = request.userContext;
-      const pipeline = new IngestionPipeline(db, userDataManager, request.userId);
+      const pipeline = new IngestionPipeline(
+        db,
+        userDataManager,
+        request.userId,
+      );
       const payload = request.body;
 
       const result: IngestResult = await pipeline.ingest(payload);

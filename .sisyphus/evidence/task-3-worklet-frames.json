@@ -1,0 +1,30 @@
+{
+  "spike": "AudioWorklet in MV3 Offscreen",
+  "date": "2026-04-24",
+  "method": "Code analysis + Chrome documentation + existing codebase evidence",
+  "findings": {
+    "audioContextAvailable": {
+      "verdict": "PASS",
+      "confidence": "HIGH",
+      "evidence": "meetingOffscreen.ts:532 already uses 'new AudioContext()' in offscreen - proven to work in production"
+    },
+    "audioWorkletAvailable": {
+      "verdict": "PASS",
+      "confidence": "HIGH",
+      "evidence": "AudioWorklet is part of AudioContext API. Since AudioContext works (proven above), AudioWorklet should work. Chrome offscreen with USER_MEDIA reason supports full Web Audio API."
+    },
+    "addModuleUrl": {
+      "verdict": "PASS with constraint",
+      "confidence": "HIGH",
+      "constraint": "addModule() requires chrome-extension:// URL. Processor file must be in dist/ as static asset (not webpack-bundled). Must be added to webpack CopyPlugin or placed in static/ directory.",
+      "buildAction": "Add spikeWorkletProcessor.js to static/ directory OR add CopyPlugin pattern in webpack.common.cjs"
+    },
+    "pcmDataFlow": {
+      "verdict": "PASS",
+      "confidence": "HIGH",
+      "evidence": "Standard AudioWorklet pattern: processor.process() receives Float32Array inputs, posts to main thread via this.port.postMessage()"
+    }
+  },
+  "spikeCodeCreated": "src/meeting-shell/spikes/spikeWorkletProcessor.js + audioWorkletSpike.ts",
+  "buildNote": "spikeWorkletProcessor.js must be copied to dist/ as standalone file - NOT bundled by webpack"
+}

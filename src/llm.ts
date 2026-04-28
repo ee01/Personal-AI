@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import Groq from 'groq-sdk';
-import { getEnvConfig } from './utils';
+import { getEnvConfig, type EnvConfigType } from './utils';
 
 // ==================== 辅助函数：模糊匹配（从 vectorStore.ts 迁移）====================
 // 注意: 以下函数暂未使用，保留供将来扩展
@@ -132,6 +132,85 @@ export async function handleLLMRequest(body: any): Promise<string> {
     }
     const response = await handler(body);
     return response;
+}
+
+/**
+ * Meeting Pilot 结构化分析：与 `messageDealing` / `reviewMessageByLLMAndSendToBot` 共用
+ * `handleLLMRequest`（`LLM_TYPE`: dify / openai / groq / local），
+ * 不再单独依赖 `MEETING_PROVIDER_BASE_URL` 或 `MEETING_ANALYSIS_MODEL`。
+ */
+export async function runMeetingIntelligenceLLM(params: {
+  systemPrompt: string;
+  userPrompt: string;
+}): Promise<string> {
+  const merged = `${params.systemPrompt}\n\n${params.userPrompt}`.trim();
+  return handleLLMRequest({
+    system_prompt: params.systemPrompt,
+    user_prompt: params.userPrompt,
+    prompt: merged,
+  });
+}
+
+/**
+ * 会中侧栏等展示用：与 `handleLLMRequest` / `LLM_TYPE` 一致，便于与选项页主 LLM 配置对齐。
+ */
+export function formatMainLlmProfileForMeetingPilot(
+  env: EnvConfigType,
+): string {
+  const t = String(env.LLM_TYPE || 'openai');
+  if (t === 'local') {
+    const m = String(env.OLLAMA_MODEL || '').trim();
+    return m ? `Ollama · ${m}` : 'Ollama（模型未配）';
+  }
+  if (t === 'groq') {
+    const m = String(env.GROQ_MODEL || '').trim();
+    return m ? `Groq · ${m}` : 'Groq（模型未配）';
+  }
+  if (t === 'dify') {
+    return 'Dify（主应用）';
+  }
+  const m = String(env.OPENAI_MODEL || '').trim();
+  return m ? `OpenAI 兼容 · ${m}` : 'OpenAI 兼容（模型未配）';
+}
+
+/**
+ * 主消息分析 LLM 是否已配置（Meeting Pilot readiness，对应 options 里「分析」用的同一套）。
+ */
+export function isMainLLMConfiguredForMeetingAnalysis(
+  env: EnvConfigType,
+): { ok: true; message: string } | { ok: false; message: string } {
+  const t = String(env.LLM_TYPE || 'openai');
+  if (t === 'local') {
+    if (!String(env.OLLAMA_BASE_URL || '').trim()) {
+      return { ok: false, message: 'Ollama base URL 未配置。' };
+    }
+    if (!String(env.OLLAMA_MODEL || '').trim()) {
+      return { ok: false, message: 'Ollama 模型未配置。' };
+    }
+    return { ok: true, message: 'Ollama 分析可用。' };
+  }
+  if (t === 'groq') {
+    if (!String(env.GROQ_API_KEY || '').trim()) {
+      return { ok: false, message: 'Groq API key 未配置。' };
+    }
+    if (!String(env.GROQ_MODEL || '').trim()) {
+      return { ok: false, message: 'Groq 模型未配置。' };
+    }
+    return { ok: true, message: 'Groq 分析可用。' };
+  }
+  if (t === 'dify') {
+    if (!String(env.DIFY_API_KEY || '').trim()) {
+      return { ok: false, message: 'Dify API key 未配置。' };
+    }
+    return { ok: true, message: 'Dify 分析可用。' };
+  }
+  if (!String(env.OPENAI_API_KEY || '').trim()) {
+    return { ok: false, message: 'OpenAI API key 未配置。' };
+  }
+  if (!String(env.OPENAI_MODEL || '').trim()) {
+    return { ok: false, message: 'OpenAI 模型未配置。' };
+  }
+  return { ok: true, message: '主 LLM 分析可用。' };
 }
 
 // 处理 Ollama 请求。Ollama 安装后需要把 launchctl setenv OLLAMA_ORIGINS "*" 加入到 .bashrc 中

@@ -1,0 +1,56 @@
+/**
+ * Build stable jump links into the memory-exploring (Vue) UI.
+ *
+ * The links are *route fragments* relative to the modal (no host/origin)
+ * because the modal is mounted into different shells (extension popup, in-page
+ * modal, desktop app webview) and the host portion is decided by the consumer.
+ *
+ * Routes (kept in sync with src/modals/memory-exploring.vue):
+ *
+ *   /timeline?focus=<id>            // jump to a single message/chunk
+ *   /entity/<type>/<id>             // open entity detail
+ *   /chunk/<chunkId>                // open a knowledge chunk
+ *   /thread/<conversationId>?focus=<msgId>
+ */
+
+import type { Entity, EntityType, RecallItem } from '../types/index.js';
+
+export interface ExploreLinkInput {
+  type: 'message' | 'chunk' | 'entity';
+  id: string;
+  conversationId?: string;
+  entityType?: EntityType;
+  entity?: Entity;
+}
+
+export function buildExploreLink(input: ExploreLinkInput): string | undefined {
+  if (!input.id) return undefined;
+  if (input.type === 'entity') {
+    const t = input.entity?.type || input.entityType;
+    if (!t) return undefined;
+    return `#/entity/${encodeURIComponent(t)}/${encodeURIComponent(input.id)}`;
+  }
+  if (input.type === 'chunk') {
+    return `#/chunk/${encodeURIComponent(input.id)}`;
+  }
+  if (input.conversationId) {
+    return `#/thread/${encodeURIComponent(input.conversationId)}?focus=${encodeURIComponent(input.id)}`;
+  }
+  return `#/timeline?focus=${encodeURIComponent(input.id)}`;
+}
+
+export function attachExploreLink(item: RecallItem): RecallItem {
+  if (item.exploreLink) return item;
+  const conversationId =
+    (item.metadata?.conversationId as string | undefined) ||
+    (item.metadata?.conversation_id as string | undefined);
+  const entityType = item.entity?.type;
+  const link = buildExploreLink({
+    type: item.type,
+    id: item.id,
+    conversationId,
+    entityType,
+    entity: item.entity,
+  });
+  return link ? { ...item, exploreLink: link } : item;
+}

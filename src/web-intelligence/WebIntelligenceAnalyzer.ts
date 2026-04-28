@@ -58,6 +58,8 @@ export interface DetailedAnalysisResult extends WebAnalysisResult {
     id: string;
     similarity: number;
     snippet: string;
+    exploreLink?: string;
+    sourceUrl?: string;
   }>;
 }
 
@@ -888,19 +890,25 @@ ${pageContent.mainContent.substring(0, 2000)}
   }
 
   /**
-   * 查找相关记忆 — uses MemoryServiceClient.recall for semantic search.
+   * 查找相关记忆 — uses MemoryServiceClient.contextRecall for fast passive
+   * memory hints linked back to memory-exploring deep links.
    */
   private async findRelevantMemories(content: string): Promise<DetailedAnalysisResult['relevantMemories']> {
     try {
-      const recallResult = await this.client.recall(content.substring(0, 500), {
-        topK: 5,
-        channels: ['vector', 'fts'],
+      const trimmed = content.substring(0, 500);
+      const recallResult = await this.client.contextRecall({
+        surface: 'web_passive',
+        contextType: 'webpage',
+        primaryText: trimmed,
+        limit: 5,
       });
 
-      return recallResult.items.map(item => ({
-        id: item.id,
-        similarity: item.score,
-        snippet: item.content.substring(0, 200),
+      return recallResult.matches.map(match => ({
+        id: match.id,
+        similarity: match.score,
+        snippet: (match.snippet || '').substring(0, 200),
+        exploreLink: match.exploreLink,
+        sourceUrl: match.sourceUrl,
       }));
     } catch (error) {
       console.error('Memory search error:', error);

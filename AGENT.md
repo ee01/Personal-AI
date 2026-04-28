@@ -15,16 +15,88 @@ This is a Chrome Extension project called "Personal AI" (Radar PoC), built with:
 
 When you modify TypeScript/JavaScript files in `src/`:
 
-1. **Prefer `npm start`** for development verification
-   - Uses webpack watch mode
-   - Faster rebuilds with hot-reload
+1. **Prefer `npm start` for extension development verification**
+   - Uses webpack watch mode with `.env.development`
+   - Needed for development Google OAuth / Google Sheets keys
    - Output goes to `dist/` folder
+   - Because it watches forever, run it only until the first successful compile, then stop it cleanly
+2. Use `npm run build` only when you intentionally need the production bundle / zip flow, release packaging, or a production-env regression check
+
+### Harness Source Of Truth
+
+Use this `AGENT.md` as the source of truth for automated validation policy. Keep `AGENTS.md` as a compatibility pointer for tools that prefer the plural filename.
+
+When adding or changing automation rules:
+
+- Put durable agent behavior and validation decision policy in `AGENT.md`
+- Put reusable executable checks in `package.json` scripts or `tools/` scripts, then reference them from this file
+- Keep feature-specific investigation notes in `docs/` or `.cursor/plans/`; do not bury required harness behavior only in a plan file
+
+### Post-Change Verification Harness
+
+After implementing code, choose the smallest validation tier that gives real confidence. Do not run the full matrix for every tiny edit, but do escalate when the touched surface or risk justifies it.
+
+| Tier | Use When | Required Checks |
+|------|----------|-----------------|
+| 0 - Docs/config-only | Markdown, comments, non-runtime docs, or agent instructions only | Review diff. No build needed unless scripts/env/runtime config changed |
+| 1 - Local compile / targeted tests | Any runtime source, webpack/static assets, manifest, package scripts, env plumbing | Run targeted tests if available. Run dev extension build via `npm start`, wait for first successful compile, then stop it |
+| 2 - Extension E2E | Popup/options/side panel/content script/background/manifest behavior, user-visible UI, cross-context messaging | Tier 1 plus Playwright extension E2E against fresh `dist/` or the relevant existing helper script |
+| 3 - Real browser / real service validation | Google Sheets/OAuth/session-dependent behavior, real Chrome profile state, RingCentral live pages, flows needing installed dev extension | Tier 2 where practical, then use webpage-mcp against the real Chrome profile and dev extension |
+| 4 - Delivery gate | A complete feature/fix that is ready to hand off | Ensure relevant validation passes, summarize evidence, then commit and push when the task calls for delivery and the staging set is cleanly owned |
+
+Decision examples:
+
+- `src/meeting-shell/**`, Meeting Pilot popup/side panel/panorama/offscreen/background changes: start at Tier 2; use existing `test:meeting-pilot-*` scripts where they match the feature
+- Google Sheets content script, OAuth, manifest permissions, or API key behavior: start at Tier 3 because dev Chrome auth/key state matters
+- Pure memory-service logic: run the relevant `memory-service` tests first; deploy/real API checks only after local verification
+- UI copy/style-only edits in an extension page: Tier 1 is enough unless layout or click behavior is part of the task
+- `src/manifest.json` changes: Tier 2 minimum because extension registration and permissions can break outside TypeScript
+
+Failure loop:
+
+- If a required check fails, inspect the failure, fix the code, and rerun the same tier until it passes
+- If the failure shows a missing lower-level guard, add or update a targeted test before rerunning higher-level E2E
+- Stop and ask the user only when blocked by credentials, external service state, unavailable browser connection, or a required human click
+- Never report a validation as passed unless it actually ran in this turn
+
+Manual-interaction pauses:
+
+- When a flow needs user action that automation cannot safely perform, pause with exact instructions and wait for the user to reply before continuing
+- Example: "请在 Meeting Pilot popup 里点击 `开启会议全貌`，完成后回复我继续验证"
+- After the user replies, continue the same validation tier and include the manual step in the final evidence
+
+### Real Chrome / webpage-mcp Harness
+
+For checks that need the user's installed development extension, read the extension id from env:
+
+```bash
+HARNESS_EXTENSION_ID=hkmimegiefnbeadjoonnlogikcdddcho
+```
+
+Use `.env.development` first, then `.env`, then fall back to the literal id above. Prefer precise id targeting over name search:
+
+- Extension origin: `chrome-extension://$HARNESS_EXTENSION_ID`
+- Common pages: `popup.html`, `options.html`, `meeting-sidepanel.html`, `meeting-panorama.html`
+- If webpage-mcp can inspect Chrome extension pages in the current environment, open or select the page by id
+- If Chrome internal / extension URLs are redacted or unsupported by the active webpage-mcp tool, use a Playwright persistent context loaded from `dist/`, or ask the user to open the exact extension page and continue from the available tab
+- For Google Sheets and other auth-bound flows, prefer the real Chrome profile/webpage-mcp route because Playwright's clean profile may not have the required session
+
+### Commit / Push Gate
+
+After a complete feature or bug fix is validated:
+
+- Commit and push when the user requested a deliverable implementation or the task explicitly includes git delivery
+- Stage only files owned by the current task; do not include unrelated dirty worktree changes
+- If unrelated changes are present, report them and ask before staging anything ambiguous
+- Consider bumping `src/manifest.json` version for release-facing extension changes, permission changes, packaging updates, or user-visible features that should be identifiable in Chrome; skip for internal tests/docs unless asked
+- Include the validation evidence in the final response and, when appropriate, in the commit message body
 
 ### Build Commands
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
-| `npm start` | Development build with watch mode | After code changes (default) |
+| `npm start` | Development build with watch mode using `.env.development`; stop after first successful compile for harness checks | After code changes (default) |
+| `npm run build` | Production build and zip | Release/package verification or production-env regression checks |
 | `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the remote memory service | Only after local verification is complete and you need real-environment validation |
 
 ### Chrome Extension E2E Validation
@@ -33,7 +105,8 @@ When a feature can be verified through the built Chrome extension, do an E2E che
 
 Recommended flow:
 
-1. Run `npm run build` to produce the latest extension bundle in `dist/`
+1. Run `npm start`, wait for the first successful development compile to `dist/`, then stop the watch process
+   - Use `npm run build` instead only when the check specifically needs the production bundle / zip
 2. Launch Chromium with a **new Playwright persistent context** and load the unpacked extension from `dist/`
 3. Verify the feature in the extension page, content script, popup, side panel, or background-driven flow
 4. If you need to prove the latest build was picked up, relaunch a **new extension instance** after the rebuild and validate the changed text/data from that fresh instance

@@ -1,0 +1,27 @@
+Wave 0 Spike A1/A2: SpeechRecognition in MV3 Offscreen Document
+Analysis Date: 2026-04-24
+Method: Code analysis + Chrome documentation research (no live Chrome available in CI)
+
+FINDINGS:
+
+1. SpeechRecognition API in MV3 Offscreen:
+   - MV3 offscreen document IS a full browsing context (has window, DOM, Web APIs)
+   - SpeechRecognition is a window-level Web API
+   - Chrome offscreen documents with reasons:['USER_MEDIA'] support Web APIs
+   - VERDICT: SpeechRecognition SHOULD be available (typeof = 'function')
+   - Confidence: HIGH (based on Chrome MV3 offscreen spec)
+
+2. processLocally (Chrome 139+):
+   - New property added in Chrome 139 (released 2024)
+   - Enables on-device speech recognition without network
+   - VERDICT: Available in Chrome 139+ (PARTIAL - version dependent)
+   - Confidence: MEDIUM
+
+3. start(audioTrack) with tab-captured track:
+   - Chrome 139+ new API: recognition.start(audioTrack?: MediaStreamTrack)
+   - Tab-captured track from getUserMedia({chromeMediaSource:'tab'}) is a valid MediaStreamTrack
+   - RISK: Chrome may reject non-microphone tracks for SpeechRecognition
+   - VERDICT: PARTIAL - needs real Chrome 139+ validation
+   - Confidence: LOW (undocumented behavior with tab audio)
+
+SPIKE CODE CREATED: src/meeting-shell/spikes/webSpeechSpike.ts

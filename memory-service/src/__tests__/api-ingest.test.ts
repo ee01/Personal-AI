@@ -11,8 +11,12 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 // Mock the LLM client — fails immediately so the pipeline falls through gracefully
 vi.mock('../llm/LLMClient.js', () => ({
   getLLMClient: () => ({
-    generate: vi.fn().mockRejectedValue(new Error('LLM not available in tests')),
-    generateJSON: vi.fn().mockRejectedValue(new Error('LLM not available in tests')),
+    generate: vi
+      .fn()
+      .mockRejectedValue(new Error('LLM not available in tests')),
+    generateJSON: vi
+      .fn()
+      .mockRejectedValue(new Error('LLM not available in tests')),
   }),
   LLMClient: vi.fn(),
 }));
@@ -20,7 +24,9 @@ vi.mock('../llm/LLMClient.js', () => ({
 // Mock the embedding client — fails immediately
 vi.mock('../llm/EmbeddingClient.js', () => ({
   EmbeddingClient: {
-    getInstance: vi.fn().mockRejectedValue(new Error('Embedding not available in tests')),
+    getInstance: vi
+      .fn()
+      .mockRejectedValue(new Error('Embedding not available in tests')),
     isLoaded: vi.fn().mockReturnValue(false),
     getModelName: vi.fn().mockReturnValue('mock-model'),
   },
@@ -69,6 +75,40 @@ describe('Ingest API', () => {
     expect(body.id).toBeTruthy();
     expect(body).toHaveProperty('status');
     expect(body.status).toBe('created');
+  });
+
+  it('defaults scope to work and keeps source separate from sourceType during ingest', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      payload: {
+        content: `Scoped ingest message ${Date.now()}`,
+        sourceType: 'glip',
+        source: 'chat-sync',
+        sender: 'test-user',
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('created');
+
+    const stored = db
+      .prepare(
+        `SELECT scope, source, source_type
+         FROM messages_raw
+         WHERE id = ?`,
+      )
+      .get(body.id) as {
+      scope: string;
+      source: string | null;
+      source_type: string;
+    };
+
+    expect(stored.scope).toBe('work');
+    expect(stored.source).toBe('chat-sync');
+    expect(stored.source_type).toBe('glip');
   });
 
   // -------------------------------------------------------------------

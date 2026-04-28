@@ -1,6 +1,7 @@
 import { normalizeContentForDedup } from './contentNormalize.js';
+import type { RecallPresentationHint } from '../types/index.js';
 
-export type RecallPresentationHint = 'default' | 'compact' | 'meeting_pilot';
+export type { RecallPresentationHint } from '../types/index.js';
 
 export interface RecallPresentation {
   displayTitle?: string;

@@ -17,7 +17,12 @@
 import { v4 as uuidv4 } from 'uuid';
 import type Database from 'better-sqlite3';
 
-import type { IngestPayload, IngestResult, EntityType, ProfileCandidate } from '../types/index.js';
+import type {
+  IngestPayload,
+  IngestResult,
+  EntityType,
+  ProfileCandidate,
+} from '../types/index.js';
 import { SalienceScorer } from './SalienceScorer.js';
 import { TruthMaintainer } from './TruthMaintainer.js';
 import { getLLMClient } from '../llm/LLMClient.js';
@@ -86,7 +91,11 @@ export class IngestionPipeline {
   private truthMaintainer: TruthMaintainer;
   private userDataManager?: UserDataManager;
 
-  constructor(db: Database.Database, userDataManager?: UserDataManager, userId?: string) {
+  constructor(
+    db: Database.Database,
+    userDataManager?: UserDataManager,
+    userId?: string,
+  ) {
     this.db = db;
     this.userDataManager = userDataManager;
     this.scorer = new SalienceScorer(db);
@@ -98,6 +107,8 @@ export class IngestionPipeline {
    */
   async ingest(payload: IngestPayload): Promise<IngestResult> {
     const id = uuidv4();
+    const scope = payload.scope ?? 'work';
+    const source = payload.source?.trim() || null;
     let ts = payload.timestamp ?? now();
     // Normalize: if timestamp > 1e12, treat as milliseconds (JS Date.getTime())
     if (ts > 1e12) {
@@ -105,7 +116,8 @@ export class IngestionPipeline {
     }
 
     // ---- 1. Dedup check ----
-    const postId = payload.metadata?.postId != null ? String(payload.metadata.postId) : null;
+    const postId =
+      payload.metadata?.postId != null ? String(payload.metadata.postId) : null;
     let existing: { id: string } | undefined;
 
     if (postId) {
@@ -113,22 +125,35 @@ export class IngestionPipeline {
       existing = this.db
         .prepare(
           `SELECT id FROM messages_raw
-           WHERE source_type = ? AND json_extract(metadata_json, '$.postId') = ?
+           WHERE source_type = ?
+             AND COALESCE(scope, 'work') = ?
+             AND COALESCE(source, '') = COALESCE(?, '')
+             AND json_extract(metadata_json, '$.postId') = ?
            LIMIT 1`,
         )
-        .get(payload.sourceType, postId) as { id: string } | undefined;
+        .get(payload.sourceType, scope, source, postId) as
+        | { id: string }
+        | undefined;
     } else {
       // 无 post_id 时回退到 content + source_type + sender
       const contentNormalized = normalizeContentForDedup(payload.content);
       existing = this.db
         .prepare(
           `SELECT id FROM messages_raw
-           WHERE content = ? AND source_type = ? AND sender = ?
-           LIMIT 1`,
+           WHERE content = ?
+             AND source_type = ?
+             AND sender = ?
+             AND COALESCE(scope, 'work') = ?
+             AND COALESCE(source, '') = COALESCE(?, '')
+            LIMIT 1`,
         )
-        .get(contentNormalized, payload.sourceType, payload.sender ?? null) as
-        | { id: string }
-        | undefined;
+        .get(
+          contentNormalized,
+          payload.sourceType,
+          payload.sender ?? null,
+          scope,
+          source,
+        ) as { id: string } | undefined;
     }
 
     if (existing) {
@@ -157,9 +182,11 @@ export class IngestionPipeline {
       }
     }
 
-    const importance = extraction?.importance ?? (payload.metadata?.importance ?? 0.5);
-    const sentiment = extraction?.sentiment ?? (payload.metadata?.sentiment ?? 'neutral');
-    const summary = extraction?.summary ?? (payload.metadata?.summary ?? null);
+    const importance =
+      extraction?.importance ?? payload.metadata?.importance ?? 0.5;
+    const sentiment =
+      extraction?.sentiment ?? payload.metadata?.sentiment ?? 'neutral';
+    const summary = extraction?.summary ?? payload.metadata?.summary ?? null;
 
     // Build entities array for the messages_raw JSON column
     const entitiesList = extraction ? this.flattenEntities(extraction) : [];
@@ -188,16 +215,18 @@ export class IngestionPipeline {
       this.db
         .prepare(
           `INSERT INTO messages_raw
-            (id, content, summary, source_type, source_url, source_title,
+            (id, content, summary, scope, source, source_type, source_url, source_title,
              sender, group_id, group_name, timestamp,
              entities_json, matched_projects_json,
-             importance, sentiment, metadata_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              importance, sentiment, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
           contentNormalized,
           summary,
+          scope,
+          source,
           payload.sourceType,
           payload.sourceUrl ?? null,
           payload.sourceTitle ?? null,
@@ -246,7 +275,14 @@ export class IngestionPipeline {
       }
 
       try {
-        this.processChunks(contentNormalized, id, payload.sourceType, ts);
+        this.processChunks(
+          contentNormalized,
+          id,
+          scope,
+          source,
+          payload.sourceType,
+          ts,
+        );
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Chunk processing failed:',
@@ -269,7 +305,10 @@ export class IngestionPipeline {
       try {
         this.processProfileCandidates(extraction.profileCandidates, id, ts);
       } catch (err) {
-        console.warn('[IngestionPipeline] Profile extraction failed:', (err as Error).message);
+        console.warn(
+          '[IngestionPipeline] Profile extraction failed:',
+          (err as Error).message,
+        );
       }
     }
 
@@ -278,14 +317,20 @@ export class IngestionPipeline {
       try {
         this.processOpinionCandidates(extraction, id, ts);
       } catch (err) {
-        console.warn('[IngestionPipeline] Opinion extraction failed:', (err as Error).message);
+        console.warn(
+          '[IngestionPipeline] Opinion extraction failed:',
+          (err as Error).message,
+        );
       }
     }
 
     // ---- 7. Match against watched_projects ----
     let matchedProjects: string[] = [];
     try {
-      matchedProjects = this.matchWatchedProjects(contentNormalized, entitiesList);
+      matchedProjects = this.matchWatchedProjects(
+        contentNormalized,
+        entitiesList,
+      );
       if (matchedProjects.length > 0) {
         this.db
           .prepare(
@@ -307,7 +352,9 @@ export class IngestionPipeline {
         const dateStr = formatDate(ts);
         const logPath = udm.getDailyLogPath(new Date(ts * 1000));
         const header = `# Daily Log — ${dateStr}\n\n`;
-        const time = new Date(ts * 1000).toLocaleTimeString('en-US', { hour12: false });
+        const time = new Date(ts * 1000).toLocaleTimeString('en-US', {
+          hour12: false,
+        });
         const sender = payload.sender ?? 'unknown';
         const group = payload.groupName ? ` in ${payload.groupName}` : '';
         const line = `- **${time}** [${sender}${group}]: ${summary ?? contentNormalized.slice(0, 200)}\n`;
@@ -393,7 +440,8 @@ Rules:
     const raw = await llm.generateJSON<LLMExtraction>(prompt, {
       temperature: 0.2,
       maxTokens: 1500,
-      systemPrompt: 'You are an entity extraction assistant. Return only valid JSON.',
+      systemPrompt:
+        'You are an entity extraction assistant. Return only valid JSON.',
     });
 
     // Map snake_case profile_candidates from LLM to camelCase profileCandidates
@@ -488,7 +536,13 @@ Rules:
     if (entityIds.length >= 2) {
       for (let i = 0; i < entityIds.length; i++) {
         for (let j = i + 1; j < entityIds.length; j++) {
-          this.upsertRelationship(entityIds[i], entityIds[j], 'co_occurs', messageId, ts);
+          this.upsertRelationship(
+            entityIds[i],
+            entityIds[j],
+            'co_occurs',
+            messageId,
+            ts,
+          );
         }
       }
     }
@@ -553,15 +607,21 @@ Rules:
            LIMIT 1`,
         )
         .get(fingerprint) as
-        | { id: string; mention_count: number; evidence_refs_json: string | null; salience_score: number }
+        | {
+            id: string;
+            mention_count: number;
+            evidence_refs_json: string | null;
+            salience_score: number;
+          }
         | undefined;
 
       if (existing) {
         // Reinforce existing profile item
         const newMentionCount = existing.mention_count + 1;
-        const evidenceRefs: Array<{ messageId: string; ts: number }> = existing.evidence_refs_json
-          ? JSON.parse(existing.evidence_refs_json)
-          : [];
+        const evidenceRefs: Array<{ messageId: string; ts: number }> =
+          existing.evidence_refs_json
+            ? JSON.parse(existing.evidence_refs_json)
+            : [];
         evidenceRefs.push({ messageId, ts: timestamp });
 
         // Recalculate salience with updated frequency and recency
@@ -643,9 +703,7 @@ Rules:
       // Mark profile as dirty so snapshot rebuild picks it up
       try {
         this.db
-          .prepare(
-            `UPDATE profile_sync_state SET profile_dirty = 1`,
-          )
+          .prepare(`UPDATE profile_sync_state SET profile_dirty = 1`)
           .run();
       } catch {
         // Table may not exist yet — safe to ignore
@@ -682,7 +740,8 @@ Rules:
     const valence = isPositive ? 0.5 : -0.5;
 
     for (const personName of people) {
-      if (typeof personName !== 'string' || personName.trim().length === 0) continue;
+      if (typeof personName !== 'string' || personName.trim().length === 0)
+        continue;
 
       const slug = toSlug(personName);
       const targetEntityId = `person_${slug}`;
@@ -751,7 +810,11 @@ Rules:
          LIMIT 1`,
       )
       .get(fromId, toId, relationType) as
-      | { id: number; co_occurrence_count: number; evidence_message_ids_json: string | null }
+      | {
+          id: number;
+          co_occurrence_count: number;
+          evidence_message_ids_json: string | null;
+        }
       | undefined;
 
     if (existing) {
@@ -784,7 +847,14 @@ Rules:
              co_occurrence_count, evidence_message_ids_json, created_at, updated_at)
            VALUES (?, ?, ?, 0.5, 1, ?, ?, ?)`,
         )
-        .run(fromId, toId, relationType, JSON.stringify([messageId]), now(), now());
+        .run(
+          fromId,
+          toId,
+          relationType,
+          JSON.stringify([messageId]),
+          now(),
+          now(),
+        );
     }
   }
 
@@ -794,6 +864,8 @@ Rules:
   private processChunks(
     content: string,
     messageId: string,
+    scope: string,
+    source: string | null,
     sourceType: string,
     ts: number,
   ): void {
@@ -803,8 +875,8 @@ Rules:
     const insertChunk = this.db.prepare(
       `INSERT INTO chunks
         (file_path, line_start, line_end, content, content_hash,
-         source_type, related_entity_id, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         scope, source, source_type, related_entity_id, token_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     for (const chunk of chunks) {
@@ -817,6 +889,8 @@ Rules:
         chunk.lineEnd,
         chunk.content,
         hash,
+        scope,
+        source,
         sourceType,
         messageId,
         chunk.tokenCount,
@@ -864,7 +938,11 @@ Rules:
       .prepare(
         `SELECT id, name, aliases_json FROM watched_projects WHERE is_active = 1`,
       )
-      .all() as Array<{ id: string; name: string; aliases_json: string | null }>;
+      .all() as Array<{
+      id: string;
+      name: string;
+      aliases_json: string | null;
+    }>;
 
     if (projects.length === 0) return [];
 

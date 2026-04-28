@@ -44,6 +44,158 @@ export interface MessageGroupWithThreads {
 let cachedPersonsMap: Map<number | string, string> | null = null;
 let cachedGroupsMap: Map<number | string, { name: string; is_team: boolean }> | null = null;
 
+function normalizeText(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+function resolvePersonName(
+  personsMap: Map<any, string>,
+  rawId: unknown,
+): string {
+  if (rawId === null || rawId === undefined || rawId === '') {
+    return '';
+  }
+
+  return (
+    personsMap.get(rawId) ||
+    personsMap.get(String(rawId)) ||
+    personsMap.get(Number(rawId)) ||
+    ''
+  );
+}
+
+function resolvePersonNames(
+  personsMap: Map<any, string>,
+  rawIds: unknown,
+): string[] {
+  if (!Array.isArray(rawIds)) {
+    return [];
+  }
+
+  return rawIds
+    .map((id) => resolvePersonName(personsMap, id))
+    .filter(Boolean);
+}
+
+function hasEventSignals(post: any, personsMap?: Map<any, string>): boolean {
+  const activity = normalizeText(post.activity || post.activity_type);
+  const postType = normalizeText(post.type || post.post_type || post.postType);
+  const title = normalizeText(post.title || post.subject);
+  const addedIds =
+    post.added_person_ids || post.addedPersonsIds || post.addedPersonIds;
+  const removedIds =
+    post.removed_person_ids || post.removedPersonsIds || post.removedPersonIds;
+  const addedNames = personsMap
+    ? resolvePersonNames(personsMap, addedIds)
+    : Array.isArray(addedIds)
+      ? addedIds.filter(Boolean)
+      : [];
+  const removedNames = personsMap
+    ? resolvePersonNames(personsMap, removedIds)
+    : Array.isArray(removedIds)
+      ? removedIds.filter(Boolean)
+      : [];
+
+  return (
+    Boolean(activity) ||
+    Boolean(postType) ||
+    Boolean(title) ||
+    addedNames.length > 0 ||
+    removedNames.length > 0
+  );
+}
+
+function extractPostCreator(post: any, personsMap: Map<any, string>): string {
+  const namedCreator =
+    resolvePersonName(personsMap, post.creator_id) ||
+    resolvePersonName(personsMap, post.creatorId) ||
+    resolvePersonName(personsMap, post.from_) ||
+    resolvePersonName(personsMap, post.from_id) ||
+    resolvePersonName(personsMap, post.user_id) ||
+    resolvePersonName(personsMap, post.userId) ||
+    normalizeText(post.creator?.name) ||
+    normalizeText(post.creatorName) ||
+    normalizeText(post.author?.name) ||
+    normalizeText(post.authorName) ||
+    normalizeText(post.user_name_snapshot) ||
+    normalizeText(post.name_snapshot) ||
+    normalizeText(post.from_name) ||
+    normalizeText(post.fromName);
+
+  if (namedCreator) {
+    return namedCreator;
+  }
+
+  return hasEventSignals(post, personsMap) ||
+    normalizeText(post.type || post.post_type || post.postType)
+    ? 'System'
+    : '';
+}
+
+function buildEventText(post: any, personsMap: Map<any, string>): string {
+  const postType = normalizeText(post.type || post.post_type || post.postType);
+  const title = normalizeText(post.title || post.subject);
+  const activity = normalizeText(post.activity || post.activity_type);
+  const addedNames = resolvePersonNames(
+    personsMap,
+    post.added_person_ids || post.addedPersonsIds || post.addedPersonIds,
+  );
+  const removedNames = resolvePersonNames(
+    personsMap,
+    post.removed_person_ids || post.removedPersonsIds || post.removedPersonIds,
+  );
+  const creator = extractPostCreator(post, personsMap) || 'System';
+  if (!hasEventSignals(post, personsMap)) {
+    return '';
+  }
+
+  switch (postType) {
+    case 'PersonJoined':
+      return creator === 'System'
+        ? 'A member joined the chat'
+        : `${creator} joined the chat`;
+    case 'PersonsAdded':
+      return addedNames.length > 0
+        ? `${creator} added ${addedNames.join(', ')}`
+        : creator === 'System'
+          ? 'Members were added to the chat'
+          : `${creator} added members to the chat`;
+    case 'PersonsRemoved':
+      return removedNames.length > 0
+        ? `${creator} removed ${removedNames.join(', ')}`
+        : creator === 'System'
+          ? 'Members were removed from the chat'
+          : `${creator} removed members from the chat`;
+    case 'Card':
+      return [title, activity].filter(Boolean).join(' - ') || '[Card]';
+    default: {
+      const parts = [`[${postType || 'Event'}]`];
+      if (title) parts.push(title);
+      if (activity) parts.push(activity);
+      if (addedNames.length > 0) parts.push(`added: ${addedNames.join(', ')}`);
+      if (removedNames.length > 0)
+        parts.push(`removed: ${removedNames.join(', ')}`);
+      return parts.join(' ').trim();
+    }
+  }
+}
+
+function extractPostText(post: any, personsMap: Map<any, string>): string {
+  const directText = normalizeText(
+    post.text ||
+      post.body?.text ||
+      post.content ||
+      post.message ||
+      post.description,
+  );
+
+  if (directText) {
+    return directText;
+  }
+
+  return buildEventText(post, personsMap);
+}
+
 function fetchAllMessageData() {
     return Promise.all([
       getIndexedDBData('Glip', 'group'),
@@ -100,7 +252,8 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
     const allPosts = [...postsFromMain, ...postsFromReply];
     
     for (const post of allPosts) {
-      if (post && post.text) {
+      const text = post ? extractPostText(post, personsMap) : '';
+      if (post && text) {
         const groupInfo = groupsMap.get(post.group_id);
         missingPosts.set(post.id, {
           id: post.id,
@@ -108,8 +261,8 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
           groupId: post.group_id,
           groupName: groupInfo?.name || 'Unknown Team',
           groupType: groupInfo?.is_team ? 'team' : 'direct message',
-          text: post.text,
-          creator: personsMap.get(post.creator_id) || 'Unknown',
+          text,
+          creator: extractPostCreator(post, personsMap) || 'Unknown',
           time: formatDate(new Date(post.created_at)),
           type: 'message'
         });
@@ -335,10 +488,16 @@ export async function transformMessagePosts(
         });
       });
   
-      const filteredPosts = input.filter(post => !!post.text);
-  
+      const filteredPosts = input
+        .map(post => ({
+          raw: post,
+          text: extractPostText(post, personsMap),
+          creator: extractPostCreator(post, personsMap)
+        }))
+        .filter(item => item.text !== '');
+
       // 转换数据结构
-      const transformedData: MessagePost[] = filteredPosts.map(post => {
+      const transformedData: MessagePost[] = filteredPosts.map(({ raw: post, text, creator }) => {
         const groupInfo = groupsMap.get(post.group_id);
         return {
           id: post.id,
@@ -347,8 +506,8 @@ export async function transformMessagePosts(
           groupType: groupInfo?.is_team ? 'team' : 'direct message',
           groupId: post.group_id,
           type: 'message' as const,
-          text: post.text,
-          creator: personsMap.get(post.creator_id) || '',
+          text,
+          creator,
           time: formatDate(new Date(post.created_at))
         };
       }).filter(item => item.text !== '' && item.creator !== '');

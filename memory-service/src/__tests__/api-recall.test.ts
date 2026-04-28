@@ -40,6 +40,10 @@ describe('Recall API', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(
+      `INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`,
+    ).run();
     db.prepare('DELETE FROM messages_raw').run();
 
     const currentTime = Math.floor(Date.now() / 1000);
@@ -125,6 +129,126 @@ describe('Recall API', () => {
     expect(body.items.some((item: any) => item.source === 'meeting')).toBe(
       true,
     );
+  });
+
+  it('defaults recall scope to work and excludes personal memories', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, scope, source_type, sender, group_name, timestamp, importance, sentiment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'personal-memory-1',
+      'Personal note about private budget planning.',
+      'personal',
+      'manual',
+      'self',
+      'Personal',
+      now - 30,
+      0.8,
+      'neutral',
+      now - 30,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'planning',
+        topK: 10,
+        channels: ['time'],
+        timeRange: {
+          start: now - 3600,
+          end: now + 60,
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items.map((item: any) => item.id)).toContain(
+      'meeting-memory-1',
+    );
+    expect(body.items.map((item: any) => item.id)).not.toContain(
+      'personal-memory-1',
+    );
+  });
+
+  it('applies scope filtering to chunk recall and returns both only when explicitly requested', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      101,
+      'messages/work-memory',
+      1,
+      1,
+      'Roadmap milestone for the work launch plan.',
+      'hash-work-memory',
+      'work',
+      'sync-a',
+      'manual',
+      'Launch',
+      now,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      102,
+      'messages/personal-memory',
+      1,
+      1,
+      'Roadmap milestone for the personal travel plan.',
+      'hash-personal-memory',
+      'personal',
+      'sync-a',
+      'manual',
+      'Travel',
+      now,
+    );
+    db.prepare(
+      `INSERT INTO chunks_fts(rowid, content) VALUES (?, ?), (?, ?)`,
+    ).run(
+      101,
+      'Roadmap milestone for the work launch plan.',
+      102,
+      'Roadmap milestone for the personal travel plan.',
+    );
+
+    const workOnlyRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'roadmap milestone',
+        topK: 10,
+        channels: ['fts'],
+      },
+    });
+
+    expect(workOnlyRes.statusCode).toBe(200);
+    const workOnlyBody = workOnlyRes.json();
+    expect(workOnlyBody.items.map((item: any) => item.id)).toContain('101');
+    expect(workOnlyBody.items.map((item: any) => item.id)).not.toContain('102');
+
+    const bothRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'roadmap milestone',
+        topK: 10,
+        channels: ['fts'],
+        scope: 'both',
+      },
+    });
+
+    expect(bothRes.statusCode).toBe(200);
+    const bothBody = bothRes.json();
+    expect(bothBody.items.map((item: any) => item.id)).toContain('101');
+    expect(bothBody.items.map((item: any) => item.id)).toContain('102');
   });
 
   it('returns compact preview text while preserving full cleaned display text', async () => {

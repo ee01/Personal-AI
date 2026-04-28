@@ -1,21 +1,21 @@
-# Doubao Bridge Integration Plan
+# Desktop App Integration Plan
 
 ## Goal
 
-让服务端 `Memory Service` 产生的记忆，在不暴露 Doubao 登录态给服务端的前提下，被本机 `Doubao Bridge` 安全消费，并分别注入：
+让服务端 `Memory Service` 产生的记忆，在不暴露登录态给服务端的前提下，被本机 `Desktop App` 安全消费，并形成当前已经落地的双向记忆流：
 
-- Doubao 长期记忆
-- 真实使用中的“手机版对话”线程
-- 未来可扩展的提醒通道
+- Doubao 输出线程（长期记忆与移动上下文）
+- Doubao / ChatGPT explorer 输入链路
+- scope/source 感知的回写、预览、撤回与本地缓存管理
 
-这个方案从一开始就按 provider-neutral 设计，Doubao 只是第一个实现。
+这个方案从一开始就按 provider-neutral 设计。Doubao 是当前主要输出渠道之一，同时也是输入来源之一；ChatGPT 已作为独立 explorer 输入来源接入。
 
 ## Core Architecture
 
 ### Source of truth
 
 - `Memory Service` 仍然是唯一真源。
-- `Doubao Bridge` 只是本机消费端，不保存业务真值。
+- `Desktop App` 只是本机消费端，不保存业务真值。
 - Extension 只负责入口、状态、绑定和手动触发，不直接持有 Doubao 凭据。
 
 ### Three components
@@ -25,15 +25,16 @@
    - 把内部数据渲染成 provider-facing `context package`。
    - 持久化 provider bindings 与 sync jobs。
 
-2. `Doubao Bridge`
+2. `Desktop App`
    - 运行在用户机器上。
-   - 使用 Playwright persistent profile 保存 Doubao 登录态。
-   - 负责桥接 Doubao 会话、注入消息、同步状态。
+   - 使用受控浏览器 profile 保存 Doubao 登录态，并为 ChatGPT explorer 使用独立会话上下文。
+   - 负责 Doubao 输出线程、explorer 输入采集、本地缓存、预览、提炼回写、撤回与状态同步。
 
 3. Extension
    - 在 [src/popup.tsx](/Users/Esone/git/personal-ai/src/popup.tsx) 提供 Doubao 入口。
-   - 打开独立的 Doubao Bridge 控制页。
-   - 通过 memory-service provider API 渲染实际内容，再调用 localhost bridge。
+
+- 打开独立的 Desktop App 控制页。
+  - 通过 memory-service provider API 渲染实际内容，再调用 localhost bridge。
 
 ## Thread Model
 
@@ -102,13 +103,13 @@
 
 ## Transport Mapping
 
-| Product | Provider transport | Target binding |
-| --- | --- | --- |
-| `persona_core` | `native_memory` | `memory_sync_thread` |
-| `voice_mode` | `native_memory` | `memory_sync_thread` |
-| `active_focus_digest` | `session_context` | `mobile_context_thread` |
-| `reminder_digest` | `reminder` or `session_context` fallback | `reminder_channel` / `mobile_context_thread` |
-| `query_answer_card` | `session_context` | `mobile_context_thread` |
+| Product               | Provider transport                       | Target binding                               |
+| --------------------- | ---------------------------------------- | -------------------------------------------- |
+| `persona_core`        | `native_memory`                          | `memory_sync_thread`                         |
+| `voice_mode`          | `native_memory`                          | `memory_sync_thread`                         |
+| `active_focus_digest` | `session_context`                        | `mobile_context_thread`                      |
+| `reminder_digest`     | `reminder` or `session_context` fallback | `reminder_channel` / `mobile_context_thread` |
+| `query_answer_card`   | `session_context`                        | `mobile_context_thread`                      |
 
 ## Service-side API
 
@@ -175,7 +176,7 @@
 - external thread id
 - error
 
-## Local Doubao Bridge API
+## Local Desktop App API
 
 Bridge 默认地址：
 
@@ -216,8 +217,23 @@ Bridge 内部 binding type：
 - `POST /inject/query`
 - `POST /reminders/sync`
 
-当前 bridge API 是 Doubao-optimized contract，不是 memory-service contract。
-由 extension 负责把 provider package 转成 bridge payload。
+当前本机 API 既包含输出侧 bridge contract，也包含 explorer contract。extension 只承担入口和状态页职责，完整配置与 explorer 操作在 Desktop App 内完成。
+
+### Explorer operations
+
+- `GET /explorer/status`
+- `POST /explorer/auth/open-login`
+- `POST /explorer/run-now`
+- `POST /explorer/reset-cache`
+- `POST /explorer/revoke-ingested-memory`
+- `GET /explorer/preview`
+
+Explorer 相关行为：
+
+- 原始消息先写本机 explorer cache
+- 预览会返回 raw messages、cleaned preview、artifacts、cursor
+- `reset-cache` 只清本地缓存与 cursor
+- `revoke-ingested-memory` 只删除 `Memory Service` 中按 source/scope 写入的记忆，不删除远端聊天记录
 
 ## End-user Packaging
 
@@ -225,16 +241,16 @@ Bridge 内部 binding type：
 
 推荐交付物：
 
-- `/Applications/Doubao Bridge.app`
-- `Doubao-Bridge-<version>-Installer.pkg`
+- `/Applications/Personal AI.app`
+- `Personal-AI-Desktop-<version>-Installer.pkg`
 - GitHub Releases 下载页：<https://github.com/ee01/personal-ai/releases/latest>
 
 开发者打包命令：
 
-- `npm run build:app`
-- `npm run deploy:app`
+- `npm run build:desktop`
+- `npm run deploy:desktop`
 
-`deploy` 优先读取 `app/.env`，其次使用 `gh auth token` / `gh release`。可配置：
+`deploy` 优先读取 `desktop-app/.env`，其次使用 `gh auth token` / `gh release`。可配置：
 
 - `GITHUB_TOKEN` 或 `GH_TOKEN`
 - `GITHUB_REPOSITORY`（如果无法从 `origin` 推断）
@@ -243,7 +259,7 @@ Bridge 内部 binding type：
 
 安装后的体验：
 
-- `.pkg` 会把 `Doubao Bridge.app` 安装到 `Applications`
+- `.pkg` 会把 `Personal AI.app` 安装到 `Applications`
 - app 首次启动后会在后台继续运行
 - 关闭窗口后仍继续同步
 - 只有在 app 中点击“停止后台并退出”才会真正停止
@@ -267,8 +283,8 @@ Bridge 内部 binding type：
 
 ### Implemented now
 
-- `Doubao Bridge.app` 作为主配置中心
-- extension 中的 `doubao-bridge.html` 退化为安装引导与状态摘要
+- `Personal AI.app` 作为主配置中心
+- extension 中的 `desktop-app.html` 退化为安装引导与状态摘要
 - bridge 本机常驻并固定监听 `http://127.0.0.1:46321`
 - app 内支持：
   - 配置 Memory Service
@@ -293,16 +309,16 @@ Bridge 内部 binding type：
 
 当前行为：
 
-- 顶部 help/share 旁新增 Doubao icon
-- 点击打开 `doubao-bridge.html`
+- 顶部 help/share 旁新增 Desktop App icon
+- 点击打开 `desktop-app.html`
 - 该页面只负责：
   - 下载 app
   - 检测本机 bridge 状态
   - 展示只读 checklist
-  - 引导用户去 `Doubao Bridge.app` 完成真实配置
+  - 引导用户去 `Personal AI.app` 完成真实配置
 - 页面实现位于：
-  - [src/modals/doubao-bridge.tsx](/Users/Esone/git/personal-ai/src/modals/doubao-bridge.tsx)
-  - [src/services/DoubaoBridgeClient.ts](/Users/Esone/git/personal-ai/src/services/DoubaoBridgeClient.ts)
+  - [src/modals/desktop-app.tsx](/Users/Esone/git/personal-ai/src/modals/desktop-app.tsx)
+  - [src/services/DesktopAppClient.ts](/Users/Esone/git/personal-ai/src/services/DesktopAppClient.ts)
 
 ## Test Chain
 
@@ -312,8 +328,8 @@ Bridge 内部 binding type：
 
 验证：
 
-- popup 中能打开 Doubao Bridge 页面
-- 构建产物包含 `doubao-bridge.html` 与 `doubao-bridge.js`
+- popup 中能打开 Desktop App 页面
+- 构建产物包含 `desktop-app.html` 与 `desktop-app.js`
 
 ### Memory service
 
@@ -342,9 +358,9 @@ Bridge 内部 binding type：
 
 1. 启动 `memory-service`
 2. 启动 `app`
-前台模式可直接双击 `Start Doubao Bridge.command`
-后台模式可直接双击 `Install Background Sync.command`
-3. 打开 extension popup 中的 Doubao Bridge 页面
+   前台模式可直接双击 `Start Desktop App.command`
+   后台模式可直接双击 `Install Background Sync.command`
+3. 打开 extension popup 中的 Desktop App 页面
 4. 点击“重新配对”
 5. 点击“打开登录窗口”，完成 Doubao 登录
 6. 创建长期记忆线程
@@ -357,10 +373,10 @@ Bridge 内部 binding type：
 ## Files Added in This Slice
 
 - [docs/features/doubao_bridge_integration.md](/Users/Esone/git/personal-ai/docs/features/doubao_bridge_integration.md)
-- [app/src/server.ts](/Users/Esone/git/personal-ai/app/src/server.ts)
-- [app/src/bridgeService.ts](/Users/Esone/git/personal-ai/app/src/bridgeService.ts)
+- [desktop-app/src/server.ts](/Users/Esone/git/personal-ai/desktop-app/src/server.ts)
+- [desktop-app/src/bridgeService.ts](/Users/Esone/git/personal-ai/desktop-app/src/bridgeService.ts)
 - [memory-service/src/routes/providers.ts](/Users/Esone/git/personal-ai/memory-service/src/routes/providers.ts)
 - [memory-service/src/core/ProviderContextService.ts](/Users/Esone/git/personal-ai/memory-service/src/core/ProviderContextService.ts)
 - [memory-service/src/repositories/ProviderRepository.ts](/Users/Esone/git/personal-ai/memory-service/src/repositories/ProviderRepository.ts)
-- [src/services/DoubaoBridgeClient.ts](/Users/Esone/git/personal-ai/src/services/DoubaoBridgeClient.ts)
-- [src/modals/doubao-bridge.tsx](/Users/Esone/git/personal-ai/src/modals/doubao-bridge.tsx)
+- [src/services/DesktopAppClient.ts](/Users/Esone/git/personal-ai/src/services/DesktopAppClient.ts)
+- [src/modals/desktop-app.tsx](/Users/Esone/git/personal-ai/src/modals/desktop-app.tsx)

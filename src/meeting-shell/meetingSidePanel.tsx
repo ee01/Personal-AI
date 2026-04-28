@@ -1,7 +1,13 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { useEffect, useMemo, useState } from 'react';
-import { defaultEnvConfig, EnvConfigType, getEnvConfig } from '../utils';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { formatMainLlmProfileForMeetingPilot } from '../llm';
+import {
+  defaultEnvConfig,
+  EnvConfigType,
+  getEnvConfig,
+} from '../utils';
+import CaptureLogTab from './CaptureLogTab';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
   MeetingPilotActionItem,
@@ -14,12 +20,10 @@ import {
   getRequestedTabId,
   useMeetingPilotState,
 } from './useMeetingPilotState';
+import SpeechTab from './SpeechTab';
+import { TierBadge } from './components/TierBadge';
 
 declare const __DEV__: boolean;
-
-const CaptureLogTab = __DEV__
-  ? React.lazy(() => import('./CaptureLogTab'))
-  : null;
 
 function shouldUseMeetingPilotDemo() {
   return new URLSearchParams(window.location.search).get('demo') === '1';
@@ -39,7 +43,150 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   );
 }
 
-type TabId = 'live' | 'timeline' | 'actions' | 'settings' | 'capture-log';
+type TabId =
+  | 'live'
+  | 'speech'
+  | 'timeline'
+  | 'actions'
+  | 'settings'
+  | 'capture-log';
+
+type PanelSurfaceMode = 'embedded' | 'side-panel' | 'window';
+
+type MeetingSidePanelUiState = {
+  activeTab?: TabId;
+  scrollTopByTab?: Partial<Record<TabId, number>>;
+};
+
+type PanelViewportState = {
+  isAtTop: boolean;
+  lastScrollHeight: number;
+};
+
+const PANEL_UI_STORAGE_PREFIX = 'meetingPilot.panelUi.';
+const DEFAULT_TAB: TabId = 'live';
+const TOP_SCROLL_THRESHOLD = 12;
+
+function getRequestedSurfaceMode(): PanelSurfaceMode {
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get('surface');
+  if (raw === 'embedded' || raw === 'side-panel' || raw === 'window') {
+    return raw;
+  }
+  return params.get('embedded') === '1' ? 'embedded' : 'window';
+}
+
+function openChromeSidePanelFromUserGesture(
+  tabId: number,
+): Promise<'side-panel' | 'unavailable'> | undefined {
+  if (tabId <= 0 || !chrome.sidePanel?.open) {
+    return undefined;
+  }
+  return chrome.sidePanel
+    .open({ tabId })
+    .then(() => 'side-panel' as const)
+    .catch((error) => {
+      console.warn('[Meeting Pilot][sidepanel] native side panel open failed', {
+        tabId,
+        error: String((error as Error)?.message || error),
+      });
+      return 'unavailable' as const;
+    });
+}
+
+type ChromeSidePanelWithClose = typeof chrome.sidePanel & {
+  close?: (options?: { tabId?: number }) => Promise<void> | void;
+};
+
+async function closePanelHostSurface(
+  tabId: number,
+  surfaceMode: PanelSurfaceMode,
+): Promise<void> {
+  if (surfaceMode === 'embedded') {
+    return;
+  }
+
+  if (surfaceMode === 'side-panel') {
+    const closeSidePanel = (chrome.sidePanel as ChromeSidePanelWithClose)
+      ?.close;
+    if (closeSidePanel) {
+      try {
+        await closeSidePanel.call(chrome.sidePanel, { tabId });
+        return;
+      } catch (error) {
+        console.warn('[Meeting Pilot][sidepanel] close failed', {
+          tabId,
+          error: String((error as Error)?.message || error),
+        });
+      }
+    }
+  }
+
+  window.close();
+}
+
+function isValidTabId(tab: unknown, showDebugTab: boolean): tab is TabId {
+  if (
+    tab === 'live' ||
+    tab === 'speech' ||
+    tab === 'timeline' ||
+    tab === 'actions' ||
+    tab === 'settings'
+  ) {
+    return true;
+  }
+  return showDebugTab && tab === 'capture-log';
+}
+
+function normalizeActiveTab(tab: unknown, showDebugTab: boolean): TabId {
+  return isValidTabId(tab, showDebugTab) ? tab : DEFAULT_TAB;
+}
+
+function sanitizeScrollTopByTab(
+  value: unknown,
+  showDebugTab: boolean,
+): Partial<Record<TabId, number>> {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+  const next: Partial<Record<TabId, number>> = {};
+  Object.entries(value as Record<string, unknown>).forEach(
+    ([tab, scrollTop]) => {
+      if (!isValidTabId(tab, showDebugTab)) {
+        return;
+      }
+      const parsed = Number(scrollTop);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return;
+      }
+      next[tab] = parsed;
+    },
+  );
+  return next;
+}
+
+function buildPanelUiStorageKey(session: MeetingPilotSessionSnapshot): string {
+  const stableKey =
+    String(session.meetingId || '').trim() ||
+    (session.tabId > 0 ? `tab-${session.tabId}` : 'global');
+  return `${PANEL_UI_STORAGE_PREFIX}${stableKey}`;
+}
+
+async function loadPanelUiState(
+  storageKey: string,
+): Promise<MeetingSidePanelUiState> {
+  const payload = await chrome.storage.local.get([storageKey]);
+  return (payload?.[storageKey] as MeetingSidePanelUiState | undefined) || {};
+}
+
+async function persistPanelUiState(
+  storageKey: string,
+  uiState: MeetingSidePanelUiState,
+): Promise<void> {
+  await chrome.storage.local.set({
+    [storageKey]: uiState,
+  });
+}
 
 const shellStyle = `
   :root {
@@ -81,13 +228,18 @@ const shellStyle = `
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    width: min(360px, 100%);
+    width: 360px;
     max-width: 100%;
     margin-left: auto;
     background: linear-gradient(180deg, rgba(26,29,39,0.995), rgba(15,17,24,0.995));
     border-left: 1px solid var(--border);
     box-shadow: -18px 0 42px rgba(0,0,0,0.28);
     animation: panel-enter 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-sizing: border-box;
+  }
+
+  .meeting-shell.fill-width {
+    width: 100%;
   }
 
   @keyframes panel-enter {
@@ -134,6 +286,13 @@ const shellStyle = `
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     flex: 1;
+  }
+
+  .panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
   }
 
   .panel-tabs {
@@ -335,6 +494,8 @@ const shellStyle = `
   .time { font-size: 11px; color: var(--text-dim); margin-left: auto; }
   .content { font-size: 13px; line-height: 1.5; color: var(--text); margin-top: 5px; }
   .content a { color: var(--accent-light); text-decoration: underline; text-underline-offset: 2px; }
+  .memory-why-matched { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-style: italic; }
+  .memory-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 
   .mini-timeline { display: flex; flex-direction: column; gap: 6px; padding-left: 16px; position: relative; }
   .mini-timeline::before {
@@ -563,6 +724,7 @@ const shellStyle = `
     transition: all 0.2s;
   }
   .panel-status-action:hover { border-color: var(--accent); color: var(--text); }
+  .panel-pin,
   .panel-close {
     width: 28px;
     height: 28px;
@@ -577,7 +739,18 @@ const shellStyle = `
     justify-content: center;
     transition: all 0.2s;
   }
+  .panel-pin:hover,
   .panel-close:hover { background: var(--surface-2); color: var(--text); }
+  .panel-pin svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+  }
+  .panel-pin.active {
+    color: var(--accent-light);
+    border-color: rgba(162,155,254,0.48);
+    background: rgba(108,92,231,0.16);
+  }
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
   .empty-state {
@@ -647,6 +820,163 @@ const shellStyle = `
   .catchup-section .section-title { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
   .catchup-section .section-content { font-size: 14px; line-height: 1.6; }
 
+  .speech-tab { display: flex; flex-direction: column; gap: 10px; padding: 0; }
+  .speech-status-card {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .speech-status-card .speech-error { color: var(--p0-color); }
+  .speech-turn-list { display: flex; flex-direction: column; gap: 8px; }
+  .speech-turn-card {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .speech-turn-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-glow);
+  }
+  .speech-turn-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .speech-speaker-btn {
+    background: none;
+    border: none;
+    color: var(--text);
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    font-size: 13px;
+  }
+  .speech-speaker-btn:hover { color: var(--accent-light); }
+  .speech-meta { color: var(--text-dim); font-size: 11px; }
+  .speech-lowconf { color: var(--p1-color); }
+  .speech-rename-btn {
+    margin-left: auto;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .speech-rename-btn:hover { color: var(--text); }
+  .speech-rename-row { display: inline-flex; gap: 4px; align-items: center; }
+  .speech-rename-input {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-size: 12px;
+    min-width: 100px;
+  }
+  .speech-rename-confirm,
+  .speech-rename-cancel {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .speech-rename-confirm { color: var(--accent-light); border-color: var(--accent); }
+  .speech-source-badges { display: inline-flex; gap: 4px; }
+  .speech-source-badge {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(108,92,231,0.12);
+    color: var(--accent-light);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+  .speech-turn-body {
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.55;
+    word-break: break-word;
+  }
+  .speech-fade-text {
+    display: inline;
+  }
+  .speech-chunk {
+    display: inline;
+  }
+  .speech-chunk-gap {
+    display: inline;
+  }
+  .speech-fade-char {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(3px);
+    animation: speech-char-in 420ms ease forwards;
+    will-change: opacity, transform;
+  }
+  @keyframes speech-char-in {
+    from {
+      opacity: 0;
+      transform: translateY(3px);
+      filter: blur(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .speech-fade-char {
+      opacity: 1;
+      transform: none;
+      filter: none;
+      animation: none;
+    }
+  }
+  .speech-stance-panel {
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(108,92,231,0.08);
+    border: 1px solid rgba(108,92,231,0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .speech-stance-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .speech-stance-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+  .speech-stance-item { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+  .speech-stance-tag {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .speech-stance-tag.stance-主导 { color: #fff; background: var(--accent); }
+  .speech-stance-tag.stance-支持 { color: #fff; background: var(--p2-color); }
+  .speech-stance-tag.stance-中立 { color: var(--text-dim); }
+  .speech-stance-tag.stance-质疑 { color: #1a1d27; background: var(--p1-color); }
+  .speech-stance-tag.stance-反对 { color: #fff; background: var(--p0-color); }
+  .speech-stance-topic { color: var(--text); font-weight: 500; }
+  .speech-stance-quote { color: var(--text-dim); font-style: italic; }
+
 `;
 
 function formatElapsed(startedAt?: number, fallback?: number): string {
@@ -704,16 +1034,17 @@ function MeetingSidePanel() {
   const [captureLogEntries, setCaptureLogEntries] = useState<
     MeetingPilotCaptureLogEntry[]
   >([]);
-  const [activeTab, setActiveTab] = useState<TabId>('live');
+  const [activeTab, setActiveTab] = useState<TabId>(DEFAULT_TAB);
   const [catchupOpen, setCatchupOpen] = useState(false);
   const [expandedTimelineIds, setExpandedTimelineIds] = useState<string[]>([]);
+  const [panelUiReady, setPanelUiReady] = useState(false);
   const [settings, setSettings] = useState({
     autoDetect: true,
     danmakuSpeed: 'medium',
     entryMode: 'auto',
     providerBaseUrl: '',
     transcribeModel: defaultEnvConfig.MEETING_TRANSCRIBE_MODEL,
-    analysisModel: defaultEnvConfig.MEETING_ANALYSIS_MODEL,
+    mainLlmProfile: '—',
     minutesApiUrl: '',
     hotwords: '',
     nameAliases: '',
@@ -723,12 +1054,23 @@ function MeetingSidePanel() {
     privacyNoticeText: '',
   });
   const requestedTabId = getRequestedTabId();
-  const embeddedMode = useMemo(
-    () => new URLSearchParams(window.location.search).get('embedded') === '1',
-    [],
+  const surfaceMode = useMemo(() => getRequestedSurfaceMode(), []);
+  const embeddedMode = useMemo(() => surfaceMode === 'embedded', [surfaceMode]);
+  const fillShellWidth = surfaceMode !== 'window';
+  const panelContentRef = useRef<HTMLDivElement | null>(null);
+  const activeTabRef = useRef<TabId>(DEFAULT_TAB);
+  const scrollTopByTabRef = useRef<Partial<Record<TabId, number>>>({});
+  const viewportStateRef = useRef<Partial<Record<TabId, PanelViewportState>>>(
+    {},
   );
+  const pendingRestoreTabRef = useRef<TabId | null>(DEFAULT_TAB);
+  const persistTimerRef = useRef<number | null>(null);
+  const restoreTimerRefs = useRef<number[]>([]);
+  const panelUiReadyRef = useRef(false);
+  const panelUiStorageKeyRef = useRef('');
+  /** 开发联调：始终可开 Capture Log；?debug=1 仍保留给其它更啰嗦的调试用。 */
   const showDebugTab =
-    __DEV__ && new URLSearchParams(window.location.search).get('debug') === '1';
+    __DEV__ && new URLSearchParams(window.location.search).get('debug') !== '0';
   const session =
     (requestedTabId
       ? (state?.activeSession?.tabId === requestedTabId
@@ -745,6 +1087,72 @@ function MeetingSidePanel() {
           url: '',
           title: 'Meeting Pilot',
         }));
+  const panelUiStorageKey = useMemo(
+    () => buildPanelUiStorageKey(session),
+    [session.meetingId, session.tabId],
+  );
+  panelUiStorageKeyRef.current = panelUiStorageKey;
+  panelUiReadyRef.current = panelUiReady;
+
+  const persistCurrentTabScroll = () => {
+    const container = panelContentRef.current;
+    if (!container) {
+      return;
+    }
+    const currentTab = activeTabRef.current;
+    const scrollTop = container.scrollTop;
+    scrollTopByTabRef.current[currentTab] = scrollTop;
+    viewportStateRef.current[currentTab] = {
+      isAtTop: scrollTop <= TOP_SCROLL_THRESHOLD,
+      lastScrollHeight: container.scrollHeight,
+    };
+  };
+
+  const schedulePersistPanelUiState = () => {
+    if (!panelUiReady) {
+      return;
+    }
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      persistTimerRef.current = null;
+      void persistPanelUiState(panelUiStorageKey, {
+        activeTab: activeTabRef.current,
+        scrollTopByTab: scrollTopByTabRef.current,
+      });
+    }, 120);
+  };
+
+  const flushPersistPanelUiState = () => {
+    if (!panelUiReady) {
+      return;
+    }
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    void persistPanelUiState(panelUiStorageKey, {
+      activeTab: activeTabRef.current,
+      scrollTopByTab: scrollTopByTabRef.current,
+    });
+  };
+
+  const handlePanelTabChange = (nextTab: TabId) => {
+    if (nextTab === activeTabRef.current) {
+      return;
+    }
+    persistCurrentTabScroll();
+    activeTabRef.current = nextTab;
+    pendingRestoreTabRef.current = nextTab;
+    setActiveTab(nextTab);
+    schedulePersistPanelUiState();
+  };
+
+  const handlePanelScroll = () => {
+    persistCurrentTabScroll();
+    schedulePersistPanelUiState();
+  };
 
   const syncSettingsFromEnv = (envConfig: EnvConfigType) => {
     setSettings({
@@ -753,9 +1161,7 @@ function MeetingSidePanel() {
       entryMode: envConfig.MEETING_ENTRY_MODE,
       providerBaseUrl: envConfig.MEETING_PROVIDER_BASE_URL,
       transcribeModel: envConfig.MEETING_TRANSCRIBE_MODEL,
-      analysisModel:
-        envConfig.MEETING_ANALYSIS_MODEL ||
-        defaultEnvConfig.MEETING_ANALYSIS_MODEL,
+      mainLlmProfile: formatMainLlmProfileForMeetingPilot(envConfig),
       minutesApiUrl: envConfig.MEETING_MINUTES_API_URL,
       hotwords: envConfig.MEETING_HOTWORDS,
       nameAliases: envConfig.MEETING_NAME_ALIASES,
@@ -789,6 +1195,46 @@ function MeetingSidePanel() {
   const pendingActions = session.actionItems.filter(
     (item) => item.status === 'pending',
   );
+  const activeTabContentVersion = useMemo(() => {
+    if (activeTab === 'live') {
+      return `live:${session.updatedAt}:${liveFeedItems.length}:${
+        liveFeedItems[0]?.id || ''
+      }:${session.currentTopic}`;
+    }
+    if (activeTab === 'speech') {
+      return `speech:${session.updatedAt}:${session.transcriptTurns.length}:${
+        session.transcriptTurns[0]?.id || ''
+      }`;
+    }
+    if (activeTab === 'timeline') {
+      return `timeline:${session.updatedAt}:${session.timelineEvents.length}:${
+        session.timelineEvents[0]?.id || ''
+      }`;
+    }
+    if (activeTab === 'actions') {
+      return `actions:${session.updatedAt}:${session.actionItems.length}:${
+        session.actionItems[0]?.id || ''
+      }`;
+    }
+    if (activeTab === 'settings') {
+      return `settings:${settings.autoDetect}:${settings.danmakuSpeed}:${settings.entryMode}`;
+    }
+    return `capture-log:${captureLogEntries.length}:${
+      captureLogEntries[0]?.id || ''
+    }`;
+  }, [
+    activeTab,
+    captureLogEntries,
+    liveFeedItems,
+    session.actionItems,
+    session.currentTopic,
+    session.timelineEvents,
+    session.transcriptTurns,
+    session.updatedAt,
+    settings.autoDetect,
+    settings.danmakuSpeed,
+    settings.entryMode,
+  ]);
   const toggleTimelineItem = (eventId: string) => {
     setExpandedTimelineIds((current) =>
       current.includes(eventId)
@@ -817,6 +1263,51 @@ function MeetingSidePanel() {
 
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPanelUiReady(false);
+    pendingRestoreTabRef.current = DEFAULT_TAB;
+    void loadPanelUiState(panelUiStorageKey).then((stored) => {
+      if (cancelled) {
+        return;
+      }
+      const restoredTab = normalizeActiveTab(stored.activeTab, showDebugTab);
+      activeTabRef.current = restoredTab;
+      scrollTopByTabRef.current = sanitizeScrollTopByTab(
+        stored.scrollTopByTab,
+        showDebugTab,
+      );
+      setActiveTab(restoredTab);
+      pendingRestoreTabRef.current = restoredTab;
+      setPanelUiReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [panelUiStorageKey, showDebugTab]);
+
+  useEffect(() => {
+    const handlePageHide = () => {
+      if (!panelUiReadyRef.current) {
+        return;
+      }
+      persistCurrentTabScroll();
+      void persistPanelUiState(panelUiStorageKeyRef.current, {
+        activeTab: activeTabRef.current,
+        scrollTopByTab: scrollTopByTabRef.current,
+      });
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+      restoreTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
+      restoreTimerRefs.current = [];
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current);
+      }
     };
   }, []);
 
@@ -894,6 +1385,60 @@ function MeetingSidePanel() {
     };
   }, [activeTab]);
 
+  useLayoutEffect(() => {
+    const container = panelContentRef.current;
+    if (!container || !panelUiReady) {
+      return;
+    }
+    if (pendingRestoreTabRef.current === activeTab) {
+      const savedScrollTop = scrollTopByTabRef.current[activeTab] || 0;
+      const applySavedScroll = () => {
+        const activeContainer = panelContentRef.current;
+        if (!activeContainer || activeTabRef.current !== activeTab) {
+          return;
+        }
+        activeContainer.scrollTop = savedScrollTop;
+        scrollTopByTabRef.current[activeTab] = activeContainer.scrollTop;
+        viewportStateRef.current[activeTab] = {
+          isAtTop: activeContainer.scrollTop <= TOP_SCROLL_THRESHOLD,
+          lastScrollHeight: activeContainer.scrollHeight,
+        };
+      };
+      restoreTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
+      restoreTimerRefs.current = [
+        window.setTimeout(applySavedScroll, 0),
+        window.setTimeout(applySavedScroll, 120),
+      ];
+      applySavedScroll();
+      pendingRestoreTabRef.current = null;
+      return;
+    }
+
+    const priorViewport = viewportStateRef.current[activeTab];
+    if (!priorViewport) {
+      viewportStateRef.current[activeTab] = {
+        isAtTop: container.scrollTop <= TOP_SCROLL_THRESHOLD,
+        lastScrollHeight: container.scrollHeight,
+      };
+      scrollTopByTabRef.current[activeTab] = container.scrollTop;
+      return;
+    }
+
+    const nextScrollHeight = container.scrollHeight;
+    if (
+      !priorViewport.isAtTop &&
+      nextScrollHeight > priorViewport.lastScrollHeight
+    ) {
+      container.scrollTop += nextScrollHeight - priorViewport.lastScrollHeight;
+    }
+
+    scrollTopByTabRef.current[activeTab] = container.scrollTop;
+    viewportStateRef.current[activeTab] = {
+      isAtTop: container.scrollTop <= TOP_SCROLL_THRESHOLD,
+      lastScrollHeight: nextScrollHeight,
+    };
+  }, [activeTab, activeTabContentVersion, panelUiReady]);
+
   const toggleCaptureFromFooter = async () => {
     if (session.capture.kind === 'recording') {
       await chrome.runtime.sendMessage({
@@ -945,6 +1490,8 @@ function MeetingSidePanel() {
   };
 
   const closeMeetingPanel = () => {
+    persistCurrentTabScroll();
+    flushPersistPanelUiState();
     if (embeddedMode && window.parent !== window) {
       window.parent.postMessage(
         {
@@ -960,11 +1507,62 @@ function MeetingSidePanel() {
       tabId: session.tabId,
     });
   };
+  const sidePanelPinned = Boolean(session.sidePanelPinned);
+  const toggleSidePanelPin = async () => {
+    const nextPinned = !sidePanelPinned;
+    const nativeOpenPromise = nextPinned
+      ? openChromeSidePanelFromUserGesture(session.tabId)
+      : undefined;
+    const response = (await chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_SET_SIDE_PANEL_PIN',
+      tabId: session.tabId,
+      meetingId: session.meetingId,
+      pinned: nextPinned,
+      source: 'pin',
+      skipOpen: Boolean(nativeOpenPromise),
+    })) as
+      | {
+          success?: boolean;
+          surface?: 'side-panel' | 'window' | 'unavailable';
+        }
+      | undefined;
+
+    if (!response?.success) {
+      return;
+    }
+    if (!nextPinned && surfaceMode !== 'embedded') {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_OPEN_SIDE_PANEL',
+        tabId: session.tabId,
+        source: 'unpin',
+        preferSurface: 'embedded',
+      });
+      await closePanelHostSurface(session.tabId, surfaceMode);
+      await refresh();
+      return;
+    }
+    const nativeSurface = await nativeOpenPromise;
+    const openedSurface = nativeSurface || response.surface;
+    if (
+      nextPinned &&
+      openedSurface === 'side-panel' &&
+      embeddedMode &&
+      window.parent !== window
+    ) {
+      window.parent.postMessage(
+        {
+          type: 'MEETING_PILOT_EMBEDDED_PANEL_CLOSE',
+          source: 'meeting-pilot-pin',
+        },
+        '*',
+      );
+    }
+    await refresh();
+  };
 
   const transcribeModelLabel =
     settings.transcribeModel || defaultEnvConfig.MEETING_TRANSCRIBE_MODEL;
-  const analysisModelLabel =
-    settings.analysisModel || defaultEnvConfig.MEETING_ANALYSIS_MODEL;
+  const mainLlmProfileLabel = settings.mainLlmProfile;
   const readinessStatusLabel =
     session.readiness.status === 'blocked'
       ? 'Blocked'
@@ -973,14 +1571,13 @@ function MeetingSidePanel() {
         : 'Ready';
   const showCaptureStartCard =
     session.capture.kind !== 'recording' && activeTab === 'live';
-  const captureStartTitle =
-    !session.readiness.canStartCapture
-      ? '先修复配置，再从 popup 开始'
-      : session.capture.kind === 'error'
-        ? '请改从 popup 重试 Capture'
-        : session.capture.kind === 'stopped'
-          ? '请改从 popup 重新开始 Capture'
-          : '请从 popup 开始 Capture';
+  const captureStartTitle = !session.readiness.canStartCapture
+    ? '先修复配置，再从 popup 开始'
+    : session.capture.kind === 'error'
+      ? '请改从 popup 重试 Capture'
+      : session.capture.kind === 'stopped'
+        ? '请改从 popup 重新开始 Capture'
+        : '请从 popup 开始 Capture';
   const captureStartDescription = !session.readiness.canStartCapture
     ? '当前配置仍有阻断项。先修复配置，再点击浏览器右上角的 Personal AI 图标，并在 popup 第一项点击“开启会议全貌”。'
     : session.capture.lastError === 'tabCapture_stream_unavailable'
@@ -998,27 +1595,28 @@ function MeetingSidePanel() {
     __DEV__ && showDebugTab ? (
       <button
         className={`panel-tab ${activeTab === 'capture-log' ? 'active' : ''}`}
-        onClick={() => setActiveTab('capture-log')}
+        onClick={() => handlePanelTabChange('capture-log')}
       >
         Capture Log
       </button>
     ) : null;
   const debugTabContent =
-    __DEV__ && CaptureLogTab && activeTab === 'capture-log' && showDebugTab ? (
-      <React.Suspense
-        fallback={<div className="empty-state">正在加载 Capture Log…</div>}
-      >
+    __DEV__ && activeTab === 'capture-log' && showDebugTab ? (
+      <>
         <CaptureLogTab
           session={session}
           captureLogEntries={captureLogEntries}
           readinessStatusLabel={readinessStatusLabel}
           currentTopicLabel={currentChapter?.title || session.currentTopic}
         />
-      </React.Suspense>
+      </>
     ) : null;
 
   return (
-    <div className="meeting-shell" data-session-title={session.title}>
+    <div
+      className={`meeting-shell${fillShellWidth ? ' fill-width' : ''}`}
+      data-session-title={session.title}
+    >
       <style>{shellStyle}</style>
       <div className="panel-header">
         <div className="panel-logo">
@@ -1028,45 +1626,89 @@ function MeetingSidePanel() {
           />
         </div>
         <span className="panel-title">Meeting Pilot</span>
-        <button
-          className="panel-close"
-          onClick={closeMeetingPanel}
-        >
-          ✕
-        </button>
+        <div className="panel-header-actions">
+          <button
+            className={`panel-pin${sidePanelPinned ? ' active' : ''}`}
+            type="button"
+            title={
+              sidePanelPinned
+                ? '取消固定 Chrome 侧边栏'
+                : '固定到 Chrome 侧边栏'
+            }
+            aria-label={
+              sidePanelPinned
+                ? '取消固定 Chrome 侧边栏'
+                : '固定到 Chrome 侧边栏'
+            }
+            aria-pressed={sidePanelPinned}
+            disabled={session.tabId <= 0}
+            onClick={() => void toggleSidePanelPin()}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M14.5 4.5 19.5 9.5 16.3 10.6 13.2 13.7 13 18 11 20 9 15 4 13 6 11 10.3 10.8 13.4 7.7 14.5 4.5Z"
+                fill={sidePanelPinned ? 'currentColor' : 'none'}
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            className="panel-close"
+            type="button"
+            aria-label="关闭 Meeting Pilot"
+            onClick={closeMeetingPanel}
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <div className="panel-tabs" id="panelTabs">
-        {(['live', 'timeline', 'actions', 'settings'] as TabId[]).map((tab) => (
-          <button
-            key={tab}
-            className={`panel-tab ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab)}
-          >
-            {tab === 'live'
-              ? '实时'
-              : tab === 'timeline'
-                ? '时间线'
-                : tab === 'actions'
-                  ? '行动项'
-                  : '设置'}
-            {tab === 'live' &&
-            unresolvedAlerts.some((alert) => alert.level === 'P0') ? (
-              <div className="badge" />
-            ) : null}
-          </button>
-        ))}
+        {(['live', 'speech', 'timeline', 'actions', 'settings'] as TabId[]).map(
+          (tab) => (
+            <button
+              key={tab}
+              className={`panel-tab ${activeTab === tab ? 'active' : ''}`}
+              onClick={() => handlePanelTabChange(tab)}
+            >
+              {tab === 'live'
+                ? '实时'
+                : tab === 'speech'
+                  ? '发言'
+                  : tab === 'timeline'
+                    ? '时间线'
+                    : tab === 'actions'
+                      ? '行动项'
+                      : '设置'}
+              {tab === 'live' &&
+              unresolvedAlerts.some((alert) => alert.level === 'P0') ? (
+                <div className="badge" />
+              ) : null}
+            </button>
+          ),
+        )}
         {debugTabButton}
       </div>
 
-      <div className="panel-content">
+      <div
+        className="panel-content"
+        ref={panelContentRef}
+        onScroll={handlePanelScroll}
+      >
         {activeTab === 'live' ? (
           <>
             {showCaptureStartCard ? (
               <div
-                className={`capture-start-card ${session.capture.kind === 'error' ? 'warn' : ''}`}
+                className={`capture-start-card ${
+                  session.capture.kind === 'error' ? 'warn' : ''
+                }`}
               >
-                <div className="capture-start-eyebrow">Capture Authorization</div>
+                <div className="capture-start-eyebrow">
+                  Capture Authorization
+                </div>
                 <div className="capture-start-title">{captureStartTitle}</div>
                 <div className="capture-start-copy">
                   {captureStartDescription}
@@ -1084,10 +1726,7 @@ function MeetingSidePanel() {
               </div>
             ) : null}
 
-            <button
-              className="catchup-btn"
-              onClick={openCatchup}
-            >
+            <button className="catchup-btn" onClick={openCatchup}>
               ⚡ 刚错过了什么？
               <span className="shortcut">C</span>
             </button>
@@ -1129,9 +1768,25 @@ function MeetingSidePanel() {
                         {item.memory.title ? (
                           <strong>{item.memory.title}</strong>
                         ) : null}
-                        <div>{item.memory.fullSnippet || item.memory.snippet}</div>
-                        {item.memory.sourceUrl ? (
-                          <div>
+                        <div>
+                          {item.memory.fullSnippet || item.memory.snippet}
+                        </div>
+                        {item.memory.whyMatched ? (
+                          <div className="memory-why-matched">
+                            {item.memory.whyMatched}
+                          </div>
+                        ) : null}
+                        <div className="memory-links">
+                          {item.memory.exploreLink ? (
+                            <a
+                              href={item.memory.exploreLink}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              在记忆库中查看
+                            </a>
+                          ) : null}
+                          {item.memory.sourceUrl ? (
                             <a
                               href={item.memory.sourceUrl}
                               target="_blank"
@@ -1139,15 +1794,17 @@ function MeetingSidePanel() {
                             >
                               打开原始文档
                             </a>
-                          </div>
-                        ) : null}
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   ) : (
                     <div className="alert-card" key={`alert-${item.id}`}>
                       <div className="card-header">
                         <span
-                          className={`priority-tag ${levelKey(item.alert.level)}`}
+                          className={`priority-tag ${levelKey(
+                            item.alert.level,
+                          )}`}
                         >
                           {item.alert.level}
                         </span>
@@ -1178,13 +1835,31 @@ function MeetingSidePanel() {
           </>
         ) : null}
 
+        {activeTab === 'speech' ? (
+          <>
+            <div
+              style={{
+                padding: '4px 12px 0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <TierBadge tier={session.tier} />
+            </div>
+            <SpeechTab session={session} refresh={refresh} />
+          </>
+        ) : null}
+
         {activeTab === 'timeline' ? (
           <div className="mini-timeline">
             {session.timelineEvents.length ? (
               session.timelineEvents.map((event) => (
                 <div
                   key={event.id}
-                  className={`mini-tl-item ${event.type} ${expandedTimelineIds.includes(event.id) ? 'expanded' : ''}`}
+                  className={`mini-tl-item ${event.type} ${
+                    expandedTimelineIds.includes(event.id) ? 'expanded' : ''
+                  }`}
                   onClick={() => toggleTimelineItem(event.id)}
                 >
                   <div className="tl-summary">
@@ -1268,29 +1943,33 @@ function MeetingSidePanel() {
             <div className="settings-group">
               <div className="sg-title">核心服务</div>
               <div className="settings-note">
-                Whisper 转写、Meeting Minutes 和结构化分析模型统一在选项页维护，
-                这里仅展示当前状态，避免会中面板和选项页双写配置。
-                未配置 Whisper 时，Capture 仍可开启，但会缺少 transcript
+                ASR / 转写、Meeting Minutes 在会议区块配置；结构化分析使用选项页
+                主 LLM（与消息分析相同的 LLM_TYPE），这里仅展示当前状态。
+                未配置转写服务时，Capture 仍可开启，但会缺少 transcript
                 驱动的实时总结与更准确的行动项/决议提取。未配置 Minutes API
                 时，不影响会中提醒与基础归档，但不会生成会后 PDF 纪要。
               </div>
               <div className="settings-summary">
                 <span
-                  className={`settings-chip ${providerConfigured ? 'ok' : 'warn'}`}
+                  className={`settings-chip ${
+                    providerConfigured ? 'ok' : 'warn'
+                  }`}
                 >
-                  Whisper {providerConfigured ? '已配置' : '未配置'}
+                  转写 {providerConfigured ? '已配置' : '未配置'}
                 </span>
                 <span
-                  className={`settings-chip ${minutesConfigured ? 'ok' : 'warn'}`}
+                  className={`settings-chip ${
+                    minutesConfigured ? 'ok' : 'warn'
+                  }`}
                 >
                   Minutes API {minutesConfigured ? '已配置' : '未配置'}
                 </span>
                 <span className="settings-chip neutral">
-                  分析模型 {analysisModelLabel}
+                  主 LLM {mainLlmProfileLabel}
                 </span>
               </div>
               <div className="setting-row readonly">
-                <span>Whisper Provider</span>
+                <span>ASR Provider</span>
                 <span className="setting-value">
                   {formatConfigEndpoint(settings.providerBaseUrl)}
                 </span>
@@ -1300,8 +1979,8 @@ function MeetingSidePanel() {
                 <span className="setting-value">{transcribeModelLabel}</span>
               </div>
               <div className="setting-row readonly">
-                <span>结构化分析模型</span>
-                <span className="setting-value">{analysisModelLabel}</span>
+                <span>结构化分析（主 LLM）</span>
+                <span className="setting-value">{mainLlmProfileLabel}</span>
               </div>
               <div className="setting-row readonly">
                 <span>Meeting Minutes API</span>
@@ -1542,7 +2221,9 @@ function MeetingSidePanel() {
                         .slice(0, 3)
                         .map(
                           (item) =>
-                            `${item.owner} — ${item.title}${item.deadline ? ` (${item.deadline})` : ''}`,
+                            `${item.owner} — ${item.title}${
+                              item.deadline ? ` (${item.deadline})` : ''
+                            }`,
                         )
                         .join('；')
                     : '当前章节暂无新的待处理行动项。'}

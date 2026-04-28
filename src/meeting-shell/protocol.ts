@@ -1,4 +1,21 @@
 export const MEETING_PILOT_HOST_PREFIX = 'https://v.ringcentral.com/conf/on/';
+
+export type MeetingPilotASRTier = 'web_speech' | 'desktop_whisper' | 'cloud';
+
+export function normalizeTranscriptSource(
+  value: string | undefined,
+): 'whisper' | 'cloud' | 'web_speech' | 'desktop_whisper' | 'test' | undefined {
+  if (value === 'whisper') return 'cloud';
+  if (
+    value === 'cloud' ||
+    value === 'web_speech' ||
+    value === 'desktop_whisper' ||
+    value === 'test'
+  ) {
+    return value;
+  }
+  return undefined;
+}
 export const MEETING_PILOT_SIDE_PANEL_PATH = 'meeting-sidepanel.html';
 export const MEETING_PILOT_LIVE_MAP_PATH = 'meeting-live-map.html';
 export const MEETING_PILOT_OFFSCREEN_PATH = 'meeting-offscreen.html';
@@ -43,7 +60,7 @@ export interface MeetingPilotReadinessState {
   degradations: string[];
   dependencies: {
     minutesApi: MeetingPilotDependencyReadiness;
-    whisper: MeetingPilotDependencyReadiness;
+    transcription: MeetingPilotDependencyReadiness;
     analysisModel: MeetingPilotDependencyReadiness;
     memoryService: MeetingPilotDependencyReadiness;
   };
@@ -66,6 +83,29 @@ export interface MeetingPilotCaptureLogEntry {
   message: string;
 }
 
+export type MeetingPilotSpeakerSource =
+  | 'transcript'
+  | 'caption'
+  | 'dom'
+  | 'roster'
+  | 'continuity'
+  | 'ai'
+  | 'user';
+
+export type MeetingPilotResolutionState =
+  | 'roster'
+  | 'provisional'
+  | 'device'
+  | 'user_named'
+  | 'resolved';
+
+export interface MeetingPilotParticipantResolution {
+  fromId: string;
+  toId: string;
+  confidence: number;
+  evidence?: string;
+}
+
 export interface MeetingPilotStructuredParseResult {
   topic: string;
   summary: string;
@@ -74,11 +114,13 @@ export interface MeetingPilotStructuredParseResult {
   alerts: MeetingPilotAlert[];
   participantStances: Array<{
     participant: string;
+    participantId?: string;
     topic: string;
     stance: MeetingPilotParticipantStance['stance'];
     keyQuote: string;
     timeRange?: string;
   }>;
+  participantResolutions?: MeetingPilotParticipantResolution[];
   latestObservationText?: string;
 }
 
@@ -121,6 +163,10 @@ export interface MeetingPilotParticipant {
   isSelf?: boolean;
   isHost?: boolean;
   stances?: MeetingPilotParticipantStance[];
+  resolutionState?: MeetingPilotResolutionState;
+  resolutionConfidence?: number;
+  sourceLabels?: MeetingPilotSpeakerSource[];
+  aliases?: string[];
 }
 
 export interface MeetingPilotParticipantStance {
@@ -164,14 +210,37 @@ export interface MeetingPilotMemoryRef {
   score: number;
   sourceLabel: string;
   sourceUrl?: string;
+  /** Stable link into memory-exploring (Vue UI). */
+  exploreLink?: string;
+  /** Why this memory was matched (channel hits / context). */
+  whyMatched?: string;
 }
 
 export interface MeetingPilotTranscriptChunk {
   id: string;
+  /**
+   * Resolved speaker display name. May be empty when upstream sources cannot
+   * provide a name; the speaker resolver in background fills this in.
+   */
   speaker: string;
+  participantId?: string;
+  resolutionSource?: MeetingPilotSpeakerSource;
+  resolutionConfidence?: number;
   text: string;
   ts: number;
-  source?: 'whisper' | 'test';
+  source?: 'whisper' | 'cloud' | 'web_speech' | 'desktop_whisper' | 'test';
+  lowConfidence?: boolean;
+}
+
+export interface MeetingPilotTranscriptTurn {
+  id: string;
+  participantId: string;
+  speakerNameSnapshot: string;
+  startTs: number;
+  endTs: number;
+  text: string;
+  chunkIds: string[];
+  resolutionSources: MeetingPilotSpeakerSource[];
   lowConfidence?: boolean;
 }
 
@@ -198,14 +267,19 @@ export interface MeetingPilotSessionSnapshot {
   timelineEvents: MeetingPilotTimelineEvent[];
   participants: MeetingPilotParticipant[];
   transcript: MeetingPilotTranscriptChunk[];
+  transcriptTurns: MeetingPilotTranscriptTurn[];
   memoryRefs: MeetingPilotMemoryRef[];
   summary: string;
+  shareSummary?: string;
+  speakerSummary?: string;
   latestObservationText?: string;
   latestStructuredParse?: MeetingPilotStructuredParseResult;
   timelineProgress: number;
+  sidePanelPinned?: boolean;
   detectedAt: number;
   updatedAt: number;
   endedAt?: number;
+  tier?: MeetingPilotTierStatus;
 }
 
 export interface MeetingPilotDetectionPayload {
@@ -264,6 +338,7 @@ export interface MeetingPilotPanelCommand {
   type:
     | 'MEETING_PILOT_OPEN_SIDE_PANEL'
     | 'MEETING_PILOT_CLOSE_SIDE_PANEL'
+    | 'MEETING_PILOT_SET_SIDE_PANEL_PIN'
     | 'MEETING_PILOT_OPEN_EMBEDDED_PANEL'
     | 'MEETING_PILOT_CLOSE_EMBEDDED_PANEL'
     | 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL'
@@ -277,8 +352,58 @@ export interface MeetingPilotPanelCommand {
     | 'MEETING_PILOT_OBSERVATION_UPDATE'
     | 'MEETING_PILOT_CAPTURE_STATUS'
     | 'MEETING_PILOT_DIGEST_STATUS'
-    | 'MEETING_PILOT_GET_CAPTURE_LOG';
+    | 'MEETING_PILOT_GET_CAPTURE_LOG'
+    | 'MEETING_PILOT_RENAME_PARTICIPANT'
+    | 'MEETING_PILOT_MERGE_PARTICIPANTS'
+    | 'MEETING_PILOT_FOCUS_PARTICIPANT'
+    | 'MEETING_PILOT_TIER_STATUS_UPDATE'
+    | 'MEETING_PILOT_TIER_FALLBACK_NOTICE';
   [key: string]: any;
+}
+
+export interface MeetingPilotTierStatus {
+  activeTier: MeetingPilotASRTier | null;
+  badge: 'Probing' | 'On-Device' | 'Local Whisper' | 'Cloud' | 'No ASR';
+  mode: 'auto' | 'local-only' | 'cloud-only';
+  lastTransitionAt?: number;
+  lastTransitionReason?: string;
+}
+
+export function isValidTierTransition(
+  from: MeetingPilotTierStatus['badge'],
+  to: MeetingPilotTierStatus['badge'],
+): boolean {
+  const transitions: Record<
+    MeetingPilotTierStatus['badge'],
+    MeetingPilotTierStatus['badge'][]
+  > = {
+    Probing: ['On-Device', 'Local Whisper', 'Cloud', 'No ASR'],
+    'On-Device': ['Local Whisper', 'Cloud', 'No ASR'],
+    'Local Whisper': ['Cloud', 'No ASR'],
+    Cloud: ['No ASR'],
+    'No ASR': [],
+  };
+  return transitions[from]?.includes(to) ?? false;
+}
+
+export interface MeetingPilotRenameParticipantRequest {
+  tabId: number;
+  meetingId?: string;
+  participantId: string;
+  newName: string;
+}
+
+export interface MeetingPilotMergeParticipantsRequest {
+  tabId: number;
+  meetingId?: string;
+  fromId: string;
+  toId: string;
+}
+
+export interface MeetingPilotFocusParticipantRequest {
+  tabId: number;
+  meetingId?: string;
+  participantId: string;
 }
 
 const chapterSeed: MeetingPilotChapter[] = [
@@ -597,7 +722,7 @@ export function createDefaultReadinessState(): MeetingPilotReadinessState {
         message: 'Waiting for preflight.',
         checkedAt,
       },
-      whisper: {
+      transcription: {
         status: 'degraded',
         message: 'Waiting for preflight.',
         checkedAt,
@@ -651,15 +776,20 @@ export function createMeetingPilotSessionSnapshot(
     timelineEvents: input.timelineEvents || [],
     participants: input.participants || [],
     transcript: input.transcript || [],
+    transcriptTurns: input.transcriptTurns || [],
     memoryRefs: input.memoryRefs || [],
     summary:
       input.summary || 'Meeting Pilot is waiting for the first useful signal.',
+    shareSummary: input.shareSummary,
+    speakerSummary: input.speakerSummary,
     latestObservationText: input.latestObservationText,
     latestStructuredParse: input.latestStructuredParse,
     timelineProgress: input.timelineProgress ?? 0,
+    sidePanelPinned: input.sidePanelPinned ?? false,
     detectedAt,
     updatedAt: input.updatedAt || detectedAt,
     endedAt: input.endedAt,
+    tier: input.tier ?? { activeTier: null, badge: 'Probing', mode: 'auto' },
   };
 }
 
@@ -706,9 +836,9 @@ export function createDemoMeetingSnapshot(
           message: 'Minutes API is reachable.',
           checkedAt: Date.now(),
         },
-        whisper: {
+        transcription: {
           status: 'ready',
-          message: 'Whisper transcription is available.',
+          message: 'Audio transcription is available.',
           checkedAt: Date.now(),
         },
         analysisModel: {

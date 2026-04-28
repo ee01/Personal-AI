@@ -116,14 +116,25 @@ export interface EnvConfigType {
   MEETING_DIGEST_API_BASE_URL: string;
   MEETING_PROVIDER_BASE_URL: string;
   MEETING_PROVIDER_API_KEY?: string;
+  MEETING_TRANSCRIBE_API_STYLE:
+    | 'openai_audio_transcriptions'
+    | 'openai_chat_completions';
   MEETING_TRANSCRIBE_MODEL: string;
-  MEETING_ANALYSIS_MODEL: string;
   MEETING_NAME_ALIASES: string;
   MEETING_HOTWORDS: string;
   MEETING_SUMMARY_INTERVAL_SEC: number;
   MEETING_SCREENSHOT_INTERVAL_SEC: number;
   MEETING_MEMORY_CONTEXT_ENABLED: boolean;
   MEETING_PRIVACY_NOTICE_TEXT: string;
+  MEETING_TRANSCRIPTION_MODE?: 'auto' | 'local-only' | 'cloud-only';
+}
+
+export function getMeetingTranscriptionMode(
+  envConfig: Pick<EnvConfigType, 'MEETING_TRANSCRIPTION_MODE'>,
+): 'auto' | 'local-only' | 'cloud-only' {
+  const v = envConfig.MEETING_TRANSCRIPTION_MODE;
+  if (v === 'local-only' || v === 'cloud-only') return v;
+  return 'auto';
 }
 
 export function normalizeBotPushTarget(
@@ -364,6 +375,10 @@ export function normalizeEnvConfigShape(
         config.MEETING_DIGEST_API_BASE_URL ||
         '',
     ).trim() || defaultEnvConfig.MEETING_MINUTES_API_URL;
+  const normalizedMeetingTranscribeApiStyle =
+    config.MEETING_TRANSCRIBE_API_STYLE === 'openai_chat_completions'
+      ? 'openai_chat_completions'
+      : defaultEnvConfig.MEETING_TRANSCRIBE_API_STYLE;
 
   return {
     ...defaultEnvConfig,
@@ -376,6 +391,7 @@ export function normalizeEnvConfigShape(
     MEETING_FEATURE_ENABLED: normalizedMeetingPilotEnabled,
     MEETING_MINUTES_API_URL: normalizedMinutesApiUrl,
     MEETING_DIGEST_API_BASE_URL: normalizedMinutesApiUrl,
+    MEETING_TRANSCRIBE_API_STYLE: normalizedMeetingTranscribeApiStyle,
   };
 }
 
@@ -520,11 +536,11 @@ export const defaultEnvConfig: EnvConfigType = {
     '',
   MEETING_PROVIDER_API_KEY:
     process.env.MEETING_PROVIDER_API_KEY || process.env.OPENAI_API_KEY || '',
+  MEETING_TRANSCRIBE_API_STYLE:
+    process.env.MEETING_TRANSCRIBE_API_STYLE === 'openai_chat_completions'
+      ? 'openai_chat_completions'
+      : 'openai_audio_transcriptions',
   MEETING_TRANSCRIBE_MODEL: process.env.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
-  MEETING_ANALYSIS_MODEL:
-    process.env.MEETING_ANALYSIS_MODEL ||
-    process.env.OPENAI_MODEL ||
-    'gpt-5.3-codex',
   MEETING_NAME_ALIASES: process.env.MEETING_NAME_ALIASES || '',
   MEETING_HOTWORDS: process.env.MEETING_HOTWORDS || '',
   MEETING_DANMAKU_SPEED:
@@ -547,18 +563,84 @@ export const defaultEnvConfig: EnvConfigType = {
     'Meeting Pilot 正在录制、转写并生成会中提醒。',
 };
 
-// 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
-export async function getEnvConfig(): Promise<EnvConfigType> {
+const GET_ENV_CONFIG_MESSAGE = 'PERSONAL_AI_GET_ENV_CONFIG' as const;
+
+/**
+ * Offscreen documents and a few other extension contexts do not expose
+ * `chrome.storage` (see chrome.storage is undefined). Ask the service worker
+ * for the same envConfig the rest of the extension uses.
+ */
+async function getEnvConfigViaBackground(): Promise<EnvConfigType | null> {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+    return null;
+  }
   try {
-    const { envConfig } = await chrome.storage.local.get(['envConfig']);
-    if (envConfig) {
-      return normalizeEnvConfigShape(envConfig);
+    const response = await new Promise<{
+      success?: boolean;
+      envConfig?: EnvConfigType;
+    }>((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: GET_ENV_CONFIG_MESSAGE }, (res) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(
+          (res || {}) as { success?: boolean; envConfig?: EnvConfigType },
+        );
+      });
+    });
+    if (response?.envConfig) {
+      return normalizeEnvConfigShape(response.envConfig);
     }
   } catch (error) {
-    console.error('获取配置失败:', error);
+    console.warn('getEnvConfig via background failed:', error);
+  }
+  return null;
+}
+
+/** Offscreen 常读到空 envConfig；用 SW 的 storage 作权威源需要 Meeting Pilot / Whisper 字段。 */
+function isMissingMeetingProvider(c: EnvConfigType): boolean {
+  return (
+    !String(c.MEETING_PROVIDER_BASE_URL || '').trim() ||
+    !String(c.MEETING_PROVIDER_API_KEY || '').trim()
+  );
+}
+
+// 获取环境配置，如果可能的话从 storage 获取，否则从 process.env 获取
+export async function getEnvConfig(): Promise<EnvConfigType> {
+  const storageApi =
+    typeof chrome !== 'undefined' ? chrome.storage?.local : undefined;
+  let fromStorage: EnvConfigType | null = null;
+  if (storageApi) {
+    try {
+      const { envConfig } = await storageApi.get(['envConfig']);
+      if (envConfig) {
+        fromStorage = normalizeEnvConfigShape(envConfig);
+      }
+    } catch (error) {
+      console.error('获取配置失败:', error);
+    }
   }
 
-  // 如果获取失败或没有保存的配置，返回默认值
+  // Offscreen 等上下文常能读到 storage 但 env 为空/缺项；只在这种情况下再问 SW（避免热路径多一次消息）
+  let fromBg: EnvConfigType | null = null;
+  if (!fromStorage || isMissingMeetingProvider(fromStorage)) {
+    fromBg = await getEnvConfigViaBackground();
+  }
+
+  if (fromStorage && !isMissingMeetingProvider(fromStorage)) {
+    return fromStorage;
+  }
+  if (fromBg && !isMissingMeetingProvider(fromBg)) {
+    return fromBg;
+  }
+  if (fromBg) {
+    return fromBg;
+  }
+  if (fromStorage) {
+    return fromStorage;
+  }
+
   return normalizeEnvConfigShape(defaultEnvConfig);
 }
 

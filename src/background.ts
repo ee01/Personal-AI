@@ -772,6 +772,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Offscreen / 部分页面无 chrome.storage：由 service worker 代读 envConfig
+  if (request.type === 'PERSONAL_AI_GET_ENV_CONFIG') {
+    (async () => {
+      try {
+        const envConfig = await getEnvConfig();
+        sendResponse({ success: true, envConfig });
+      } catch (error) {
+        sendResponse({
+          success: false,
+          error: String((error as Error)?.message || error),
+        });
+      }
+    })();
+    return true;
+  }
+
   // 离屏嵌入已废弃 — 后端 memory-service 处理嵌入生成
 
   // 处理 Jira tickets 获取
@@ -913,33 +929,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // Context Match: proxy request to memory-service backend
-  if (request.type === 'CONTEXT_MATCH_REQUEST') {
+  // Passive context recall: proxy request to memory-service /context-recall
+  if (request.type === 'CONTEXT_RECALL_REQUEST') {
     (async () => {
       try {
         const client = getMemoryServiceClient();
-        const url = `${client.getBaseUrl()}/context-match`;
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-          'X-User-Id': client.getUserId(),
-        };
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            title: request.title,
-            keywords: request.keywords,
-            snippet: request.snippet,
-          }),
+        const result = await client.contextRecall(request.request);
+        sendResponse({
+          success: true,
+          topMatch: result.topMatch,
+          matches: result.matches,
+          queryTimeMs: result.queryTimeMs,
         });
-        if (!resp.ok) {
-          sendResponse({ success: true, match: null });
-          return;
-        }
-        const data = await resp.json();
-        sendResponse({ success: true, match: data.match ?? null });
-      } catch {
-        sendResponse({ success: true, match: null });
+      } catch (err) {
+        console.warn('[background] context-recall failed:', err);
+        sendResponse({ success: true, topMatch: null, matches: [] });
       }
     })();
     return true;

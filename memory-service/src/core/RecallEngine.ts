@@ -19,7 +19,9 @@ import type {
   RecallItem,
   Entity,
   EntityType,
+  MemoryScope,
   RecallSourceType,
+  RecallScope,
   SourceType,
 } from '../types/index.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
@@ -27,6 +29,7 @@ import { now } from '../utils/time.js';
 import { toSlug } from '../utils/slug.js';
 import { parseQueryTimeRange } from '../utils/queryTime.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
+import { buildExploreLink } from '../utils/exploreLink.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -58,6 +61,8 @@ interface VecSearchRow {
 interface MessageRow {
   id: string;
   content: string;
+  scope: MemoryScope | null;
+  source: string | null;
   source_type: SourceType;
   source_url: string | null;
   source_title: string | null;
@@ -74,6 +79,8 @@ interface ChunkRow {
   chunk_id: number;
   content: string;
   file_path: string;
+  scope: MemoryScope | null;
+  source: string | null;
   source_type: RecallSourceType | null;
   related_project: string | null;
   created_at: number;
@@ -215,6 +222,12 @@ function buildMessageMetadata(
   if (msg.source_title && !metadata.sourceTitle) {
     metadata.sourceTitle = msg.source_title;
   }
+  if (msg.scope && !metadata.scope) {
+    metadata.scope = msg.scope;
+  }
+  if (msg.source && !metadata.source) {
+    metadata.source = msg.source;
+  }
   if (msg.sender && !metadata.sender) {
     metadata.sender = msg.sender;
   }
@@ -227,6 +240,28 @@ function buildMessageMetadata(
     }
   }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function normalizeStoredScope(
+  scope: MemoryScope | null | undefined,
+): MemoryScope {
+  return scope === 'personal' ? 'personal' : 'work';
+}
+
+function normalizeRequestedScope(scope: RecallScope | undefined): RecallScope {
+  return scope ?? 'work';
+}
+
+function matchesScope(
+  storedScope: MemoryScope | null | undefined,
+  queryScope: RecallScope | undefined,
+): boolean {
+  const requestedScope = normalizeRequestedScope(queryScope);
+  if (requestedScope === 'both') {
+    return true;
+  }
+
+  return normalizeStoredScope(storedScope) === requestedScope;
 }
 
 function matchesTextFilter(value: string | null, filters?: string[]): boolean {
@@ -371,10 +406,24 @@ export class RecallEngine {
         presentationHint: query.presentationHint,
         previewMaxLength: query.previewMaxLength,
       });
+      const conversationId =
+        (c.metadata?.conversationId as string | undefined) ||
+        (c.metadata?.conversation_id as string | undefined);
+      const exploreLink = buildExploreLink({
+        type: c.type,
+        id: c.id,
+        conversationId,
+        entityType: c.entity?.type,
+        entity: c.entity,
+      });
       const item: RecallItem = {
         id: c.id,
         type: c.type,
         content: c.content,
+        scope:
+          c.type === 'entity'
+            ? undefined
+            : (c.metadata?.scope as MemoryScope | undefined),
         displayTitle: presentation.displayTitle,
         displayText: presentation.displayText,
         previewText: presentation.previewText,
@@ -382,6 +431,7 @@ export class RecallEngine {
         source: c.source,
         sourceUrl: c.sourceUrl,
         sourceTitle: c.sourceTitle,
+        exploreLink,
         timestamp: c.timestamp,
         entity: c.entity,
       };
@@ -437,7 +487,7 @@ export class RecallEngine {
         const ph = ids.map(() => '?').join(', ');
         const msgs = this.db
           .prepare(
-            `SELECT id, content, source_type, timestamp, sender, group_name,
+            `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
                     source_url, source_title,
                     matched_projects_json,
                     metadata_json, importance, entities_json
@@ -490,7 +540,7 @@ export class RecallEngine {
         const ph = chunkIds.map(() => '?').join(', ');
         const chunks = this.db
           .prepare(
-            `SELECT chunk_id, content, file_path, source_type, related_project, created_at
+            `SELECT chunk_id, content, file_path, scope, source, source_type, related_project, created_at
              FROM chunks
              WHERE chunk_id IN (${ph})`,
           )
@@ -502,6 +552,7 @@ export class RecallEngine {
           const chunk = chunkMap.get(row.chunk_id);
           if (!chunk) continue;
 
+          if (!matchesScope(chunk.scope, query.scope)) continue;
           if (
             !matchesProjectFilter(query.projectFilter, [
               chunk.related_project ?? '',
@@ -526,6 +577,8 @@ export class RecallEngine {
             channels: ['vector'],
             metadata: {
               filePath: chunk.file_path,
+              scope: normalizeStoredScope(chunk.scope),
+              source: chunk.source ?? undefined,
               relatedProject: chunk.related_project,
             },
           });
@@ -568,7 +621,7 @@ export class RecallEngine {
       const ph = chunkIds.map(() => '?').join(', ');
       const chunks = this.db
         .prepare(
-          `SELECT chunk_id, content, file_path, source_type, related_project, created_at
+          `SELECT chunk_id, content, file_path, scope, source, source_type, related_project, created_at
            FROM chunks
            WHERE chunk_id IN (${ph})`,
         )
@@ -583,6 +636,7 @@ export class RecallEngine {
         const chunk = chunkMap.get(row.rowid);
         if (!chunk) continue;
 
+        if (!matchesScope(chunk.scope, query.scope)) continue;
         if (
           !matchesProjectFilter(query.projectFilter, [
             chunk.related_project ?? '',
@@ -609,6 +663,8 @@ export class RecallEngine {
           channels: ['fts'],
           metadata: {
             filePath: chunk.file_path,
+            scope: normalizeStoredScope(chunk.scope),
+            source: chunk.source ?? undefined,
             relatedProject: chunk.related_project,
           },
         });
@@ -747,7 +803,7 @@ export class RecallEngine {
         try {
           const mentionMsgs = this.db
             .prepare(
-              `SELECT id, content, source_type, timestamp, sender, group_name,
+              `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
                       source_url, source_title,
                       matched_projects_json,
                       metadata_json, importance, entities_json
@@ -813,7 +869,7 @@ export class RecallEngine {
     try {
       const msgs = this.db
         .prepare(
-          `SELECT id, content, source_type, timestamp, sender, group_name,
+          `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
                   source_url, source_title,
                   matched_projects_json,
                   metadata_json, importance, entities_json
@@ -1188,6 +1244,8 @@ export class RecallEngine {
 
     if (query.minImportance != null && msg.importance < query.minImportance)
       return false;
+
+    if (!matchesScope(msg.scope, query.scope)) return false;
 
     if (
       query.sourceTypes?.length &&

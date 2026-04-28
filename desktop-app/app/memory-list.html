@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>记忆列表 · Personal AI</title>
+    <link rel="stylesheet" href="./app.css" />
+    <link rel="stylesheet" href="./memory-list.css" />
+  </head>
+  <body>
+    <div class="memory-list-shell">
+      <header class="memory-list-header">
+        <div class="memory-list-header-main">
+          <p class="eyebrow">记忆探索 · 已入库</p>
+          <h1>记忆列表</h1>
+          <p class="memory-list-subtitle">
+            这里是 Personal AI
+            从豆包、ChatGPT 等来源探索后，已经存入记忆服务的事实、偏好、事件和计划。
+            这是只读视图：抓错了不用一条条清理，调整开关或来源后重抓即可让旧条目随时间自然弱化。
+          </p>
+        </div>
+        <div class="memory-list-header-actions">
+          <button id="memory-list-refresh" type="button" class="secondary">
+            刷新
+          </button>
+        </div>
+      </header>
+
+      <section class="memory-list-toolbar">
+        <div class="memory-list-filter-group" role="tablist" aria-label="按来源过滤">
+          <button
+            type="button"
+            class="memory-list-filter is-active"
+            data-source="all"
+            role="tab"
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            class="memory-list-filter"
+            data-source="doubao"
+            role="tab"
+          >
+            豆包
+          </button>
+          <button
+            type="button"
+            class="memory-list-filter"
+            data-source="chatgpt"
+            role="tab"
+          >
+            ChatGPT
+          </button>
+        </div>
+        <div class="memory-list-search">
+          <input
+            id="memory-list-query"
+            type="search"
+            placeholder="搜索记忆内容或原句…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+      </section>
+
+      <section class="memory-list-meta">
+        <span id="memory-list-summary" class="memory-list-summary"
+          >正在加载…</span
+        >
+      </section>
+
+      <main class="memory-list-body">
+        <ul id="memory-list-items" class="memory-list-items" aria-live="polite"></ul>
+        <div id="memory-list-empty" class="memory-list-empty" hidden>
+          <h2>暂时没有可显示的记忆</h2>
+          <p>
+            打开主控制台，登录豆包或 ChatGPT 后点击「立即抓取一次」，几分钟后再回来看看。
+          </p>
+        </div>
+        <div class="memory-list-footer">
+          <button
+            id="memory-list-load-more"
+            type="button"
+            class="secondary"
+            hidden
+          >
+            加载更多
+          </button>
+        </div>
+      </main>
+    </div>
+
+    <script src="./memory-list.js"></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+Wave 0 Spike A3: chrome.runtime.connectNative() from MV3 Offscreen
+Analysis Date: 2026-04-24
+Method: Chrome documentation research + API surface analysis
+
+FINDINGS:
+
+1. chrome.runtime.connectNative() in offscreen document:
+   - connectNative() is an extension-privileged API (not a Web API)
+   - Chrome MV3 offscreen documents have LIMITED access to chrome.* APIs
+   - Documented accessible APIs in offscreen: chrome.runtime.sendMessage, chrome.runtime.onMessage
+   - connectNative() is NOT listed as accessible from offscreen contexts
+   - Chrome docs state: "Native messaging is only available to extension pages and background scripts"
+   - Offscreen document is NOT an "extension page" in the traditional sense
+
+2. Evidence from Chrome source/docs:
+   - chrome.runtime.connectNative requires "nativeMessaging" permission (already in manifest)
+   - BUT the calling context must be a background page, popup, or extension page
+   - Offscreen documents are a special restricted context
+
+3. VERDICT: FAIL - connectNative() NOT available from offscreen document
+   - Confidence: HIGH
+   - Implication: NM port MUST live in background service worker
+   - Audio chunks must route: Offscreen (AudioWorklet) → sendMessage → Background (NM port) → Desktop-app
+
+MITIGATION PLAN (per Metis L5):
+- NM port lives in background SW
+- Offscreen sends PCM chunks via chrome.runtime.sendMessage({type:'NM_AUDIO_CHUNK', pcm:ArrayBuffer})
+- Background relays to NM port
+- Transcript responses follow reverse path
+- At 16kHz mono 16-bit with 200ms chunks: ~6.4KB per message (well within limits)
+
+SPIKE CODE CREATED: src/meeting-shell/spikes/nativeMessagingSpike.ts

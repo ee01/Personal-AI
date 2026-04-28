@@ -9,6 +9,7 @@ import {
   MeetingPilotParticipantStance,
   createMeetingPilotSessionSnapshot,
 } from './protocol';
+import { TierBadge } from './components/TierBadge';
 import { useMeetingPilotState } from './useMeetingPilotState';
 
 const panoramaStyle = `
@@ -403,7 +404,8 @@ function formatMeetingDate() {
 function parseTimestampParam(raw: string | null): number | undefined {
   if (!raw) return undefined;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
 }
 
 function parseHistoryParticipants(raw: string | null): string[] {
@@ -751,6 +753,10 @@ function PanoramaPage() {
   const [expandedStanceParticipants, setExpandedStanceParticipants] = useState<
     string[]
   >([]);
+  const [renamingParticipantId, setRenamingParticipantId] = useState<
+    string | null
+  >(null);
+  const [renameDraft, setRenameDraft] = useState<string>('');
   const archivedSession = useMemo(() => getArchivedSessionFromQuery(), []);
   const isArchivedHistoryMode = Boolean(archivedSession);
   const session =
@@ -765,6 +771,29 @@ function PanoramaPage() {
           url: '',
           title: 'Meeting Pilot',
         }));
+
+  const submitRenameParticipant = async (
+    participantId: string,
+    newName: string,
+  ) => {
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      setRenamingParticipantId(null);
+      return;
+    }
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_RENAME_PARTICIPANT',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        participantId,
+        newName: trimmed,
+      });
+    } catch {
+      // best effort; UI will refresh on next snapshot push
+    }
+    setRenamingParticipantId(null);
+  };
 
   useEffect(() => {
     if (!archivedSession) return;
@@ -805,7 +834,7 @@ function PanoramaPage() {
         ),
         whisperConfigured: Boolean(
           String(envConfig.MEETING_PROVIDER_BASE_URL || '').trim() &&
-            String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
+          String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
         ),
         transcribeModel: String(
           envConfig.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
@@ -1019,6 +1048,9 @@ function PanoramaPage() {
               人参会
             </span>
             <span>⏱️ {formatSessionDuration(session)}</span>
+            <span>
+              <TierBadge tier={session.tier} />
+            </span>
           </div>
         </div>
         <div className="header-actions">
@@ -1268,12 +1300,91 @@ function PanoramaPage() {
                       >
                         {participant.name[0]}
                       </div>
-                      <span className="stance-participant-name">
-                        {participant.name}
-                      </span>
+                      {renamingParticipantId === participant.id ? (
+                        <span style={{ display: 'inline-flex', gap: 4 }}>
+                          <input
+                            autoFocus
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                void submitRenameParticipant(
+                                  participant.id,
+                                  renameDraft,
+                                );
+                              } else if (e.key === 'Escape') {
+                                setRenamingParticipantId(null);
+                              }
+                            }}
+                            style={{
+                              background: 'var(--surface-2)',
+                              color: 'var(--text)',
+                              border: '1px solid var(--accent)',
+                              borderRadius: 6,
+                              padding: '2px 6px',
+                              fontSize: 13,
+                            }}
+                          />
+                          <button
+                            onClick={() =>
+                              void submitRenameParticipant(
+                                participant.id,
+                                renameDraft,
+                              )
+                            }
+                            style={{
+                              background: 'var(--accent)',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: 6,
+                              padding: '2px 8px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onClick={() => setRenamingParticipantId(null)}
+                            style={{
+                              background: 'var(--surface-2)',
+                              color: 'var(--text-dim)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 6,
+                              padding: '2px 8px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="stance-participant-name">
+                          {participant.name}
+                        </span>
+                      )}
                       <span className="stance-participant-role">
                         {participant.role} · {participant.speakingPct}%
                       </span>
+                      {!isArchivedHistoryMode &&
+                      renamingParticipantId !== participant.id ? (
+                        <button
+                          onClick={() => {
+                            setRenamingParticipantId(participant.id);
+                            setRenameDraft(participant.name);
+                          }}
+                          title="重命名"
+                          style={{
+                            marginLeft: 'auto',
+                            background: 'transparent',
+                            color: 'var(--text-dim)',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 11,
+                          }}
+                        >
+                          ✎
+                        </button>
+                      ) : null}
                     </div>
                     {primaryItems.map((item) => (
                       <div
@@ -1409,12 +1520,12 @@ function PanoramaPage() {
               </div>
               <div className="digest-item">
                 <div className="digest-title">
-                  <span>🎙️</span> Whisper Transcript
+                  <span>🎙️</span> ASR Transcript
                 </div>
                 <div className="digest-desc">
                   {whisperConfigured
                     ? `当前会议允许使用 ${serviceConfig.transcribeModel || 'whisper-1'} 做音频转写，摘要、行动项和决议提取会优先结合 transcript。`
-                    : 'Whisper 当前未配置。录制和基础归档仍然可用，但会缺少 transcript 驱动的实时总结，行动项、决议和摘要会更多依赖共享画面观测与启发式推断。'}
+                    : 'ASR / 转写当前未配置。录制和基础归档仍然可用，但会缺少 transcript 驱动的实时总结，行动项、决议和摘要会更多依赖共享画面观测与启发式推断。'}
                 </div>
                 <div className="digest-links">
                   {whisperConfigured ? (
@@ -1429,7 +1540,7 @@ function PanoramaPage() {
                           openMeetingOptions();
                         }}
                       >
-                        去配置 Whisper
+                        去配置转写
                       </a>
                       <span className="digest-link">不阻断 Capture</span>
                     </>

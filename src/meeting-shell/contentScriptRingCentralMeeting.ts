@@ -88,6 +88,7 @@ function buildEmbeddedPanelUrl(args?: {
     params.set('tabId', String(args.tabId));
   }
   params.set('embedded', '1');
+  params.set('surface', 'embedded');
   if (args?.catchup) {
     params.set('catchup', '1');
   }
@@ -105,13 +106,21 @@ function setEmbeddedPanelOpen(
   args?: { tabId?: number; catchup?: boolean; debug?: boolean },
 ): boolean {
   const shadow = getOverlayShadowRoot();
-  if (!shadow) return false;
+  if (!shadow) {
+    console.warn('[Meeting Pilot][content] embedded panel open failed: no shadow');
+    return false;
+  }
   const backdrop = shadow.getElementById('mpSidePanelBackdrop');
   const panel = shadow.getElementById('mpSidePanelShell');
   const frame = shadow.getElementById(
     'mpSidePanelFrame',
   ) as HTMLIFrameElement | null;
   if (!backdrop || !panel || !frame) {
+    console.warn('[Meeting Pilot][content] embedded panel open failed: missing DOM', {
+      hasBackdrop: Boolean(backdrop),
+      hasPanel: Boolean(panel),
+      hasFrame: Boolean(frame),
+    });
     return false;
   }
 
@@ -129,6 +138,11 @@ function setEmbeddedPanelOpen(
     overlayState.hover = false;
     backdrop.classList.add('open');
     panel.classList.add('open');
+    console.info('[Meeting Pilot][content] embedded panel opened', {
+      tabId: args?.tabId || overlayState.snapshot?.tabId,
+      catchup: Boolean(args?.catchup),
+      debug: Boolean(args?.debug),
+    });
   } else {
     overlayState.embeddedPanelOpen = false;
     backdrop.classList.remove('open');
@@ -155,12 +169,29 @@ function resolveParticipantAlias(name: string): string {
 function getDanmakuDuration(level: 'P1' | 'P2'): number {
   const base = level === 'P1' ? 8 : 7;
   const multiplier =
-    danmakuSpeedKey === 'fast'
-      ? 2
-      : danmakuSpeedKey === 'slow'
-        ? 4.5
-        : 3;
+    danmakuSpeedKey === 'fast' ? 2 : danmakuSpeedKey === 'slow' ? 4.5 : 3;
   return Math.round(base * multiplier * 10) / 10;
+}
+
+function attachDanmakuHoverFreeze(item: HTMLElement): void {
+  item.addEventListener('mouseenter', () => {
+    const matrix = new DOMMatrix(getComputedStyle(item).transform);
+    item.style.transform = `translateX(${matrix.m41}px) translateZ(0)`;
+    item.classList.add('paused');
+  });
+  item.addEventListener('mouseleave', () => {
+    item.classList.remove('paused');
+    const currentX = new DOMMatrix(getComputedStyle(item).transform).m41;
+    const endX = -(window.innerWidth + 240);
+    const startX = window.innerWidth;
+    const totalPx = startX - endX;
+    const remainingPx = currentX - endX;
+    const originalDur =
+      parseFloat(item.style.getPropertyValue('--duration')) || 8;
+    const remainingDur = originalDur * (remainingPx / totalPx);
+    item.style.setProperty('--duration', `${Math.max(remainingDur, 0.1)}s`);
+    item.style.transform = '';
+  });
 }
 
 async function hydrateDanmakuConfig(): Promise<void> {
@@ -314,6 +345,9 @@ function extractParticipants(selfName?: string): MeetingPilotParticipant[] {
         Boolean(selfName && namesMatch(normalized, selfName)),
       isHost: partial?.isHost,
       stances: partial?.stances,
+      resolutionState: 'roster',
+      resolutionConfidence: 1,
+      sourceLabels: ['roster'],
     });
   };
 
@@ -650,12 +684,16 @@ function getCatchupSections(snapshot?: MeetingPilotSessionSnapshot): Array<{
     .slice(0, 3)
     .map(
       (item) =>
-        `${item.owner} — ${item.title}${item.deadline ? ` (${item.deadline})` : ''}`,
+        `${item.owner} — ${item.title}${
+          item.deadline ? ` (${item.deadline})` : ''
+        }`,
     )
     .join('；');
   const topicFlow =
-    snapshot?.chapters?.map((item) => item.title).filter(Boolean).join(' → ') ||
-    '';
+    snapshot?.chapters
+      ?.map((item) => item.title)
+      .filter(Boolean)
+      .join(' → ') || '';
 
   return [
     {
@@ -868,7 +906,8 @@ function syncAlertLayers(
         detailText: alert.body,
       });
       danmakuOverlay.appendChild(item);
-      window.setTimeout(() => item.remove(), (duration + 1) * 1000);
+      attachDanmakuHoverFreeze(item);
+      item.addEventListener('animationend', () => item.remove());
     });
 
   snapshot.memoryRefs.forEach((ref, index) => {
@@ -893,10 +932,8 @@ function syncAlertLayers(
     });
 
     danmakuOverlay.appendChild(item);
-    window.setTimeout(
-      () => item.remove(),
-      (getDanmakuDuration('P2') + 4) * 1000,
-    );
+    attachDanmakuHoverFreeze(item);
+    item.addEventListener('animationend', () => item.remove());
   });
 }
 
@@ -959,6 +996,17 @@ function ensureStanceCardStyles(): void {
     .meeting-pilot-stance-card .stance-topic-label.oppose { background: rgba(255,107,107,0.15); color: #ff6b6b; }
     .meeting-pilot-stance-card .stance-quote { font-size: 10px; color: #8b8fa3; font-style: italic; margin-top: 2px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .meeting-pilot-stance-card .sc-footer { padding: 6px 12px; border-top: 1px solid rgba(46,51,64,0.9); font-size: 9px; color: #8b8fa3; text-align: center; }
+    @keyframes meeting-pilot-focus-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(108,92,231,0.6); outline: 2px solid rgba(108,92,231,0.8); }
+      50% { box-shadow: 0 0 0 12px rgba(108,92,231,0); outline: 2px solid rgba(108,92,231,0.5); }
+      100% { box-shadow: 0 0 0 0 rgba(108,92,231,0); outline: 2px solid transparent; }
+    }
+    .meeting-pilot-focus-flash {
+      animation: meeting-pilot-focus-pulse 1s ease-out 2;
+      outline: 2px solid rgba(108,92,231,0.8);
+      outline-offset: 2px;
+      border-radius: 8px;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -971,62 +1019,130 @@ function getStanceClass(stance: string): string {
   return 'neutral';
 }
 
+interface RosterDomEntry {
+  name: string;
+  element: HTMLElement;
+}
+
+function collectRosterDomEntries(): RosterDomEntry[] {
+  const entries: RosterDomEntry[] = [];
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>('button, div, span'),
+  );
+  candidates.forEach((node) => {
+    const aria = normalizeText(node.getAttribute('aria-label'));
+    const text = normalizeText(node.textContent);
+    let name: string | undefined;
+    const ariaMatch = aria.match(/^(.+?)\s+has a good connection/i);
+    if (ariaMatch) {
+      name = ariaMatch[1];
+    } else if (
+      text &&
+      text.length <= 60 &&
+      /^[\w\s\u4e00-\u9fa5(.-]+$/.test(text)
+    ) {
+      // weak fallback: only consider short text-like nodes
+      name = text.replace(/\s*\(you\)$/i, '').trim();
+    }
+    if (!name) return;
+    entries.push({ name, element: node });
+  });
+  return entries;
+}
+
+function findParticipantHost(
+  participant: { name: string; aliases?: string[] },
+  rosterEntries: RosterDomEntry[],
+): HTMLElement | undefined {
+  const candidateNames = [participant.name, ...(participant.aliases || [])];
+  for (const candidate of candidateNames) {
+    const match = rosterEntries.find((entry) =>
+      namesMatch(entry.name, candidate),
+    );
+    if (match) return match.element;
+  }
+  return undefined;
+}
+
 function syncParticipantStanceCards(
   snapshot?: MeetingPilotSessionSnapshot,
 ): void {
   document
     .querySelectorAll('.meeting-pilot-stance-card')
     .forEach((node) => node.remove());
+  document
+    .querySelectorAll<HTMLElement>('[data-meeting-pilot-participant-id]')
+    .forEach((node) => {
+      node.removeAttribute('data-meeting-pilot-participant-id');
+    });
   if (!snapshot?.participants?.length) return;
 
   ensureStanceCardStyles();
-  const candidates = Array.from(document.querySelectorAll('button, div, span'));
+  const rosterEntries = collectRosterDomEntries();
 
-  snapshot.participants
-    .filter((participant) => (participant.stances || []).length > 0)
-    .forEach((participant) => {
-      const target = candidates.find((node) => {
-        const text = normalizeText(node.textContent);
-        const aria = normalizeText(
-          (node as HTMLElement).getAttribute('aria-label'),
-        );
-        return (
-          text === participant.name ||
-          text === `${participant.name} (You)` ||
-          aria.startsWith(`${participant.name} has a good connection`)
-        );
-      }) as HTMLElement | undefined;
+  snapshot.participants.forEach((participant) => {
+    const target = findParticipantHost(participant, rosterEntries);
+    if (!target) return;
+    target.setAttribute('data-meeting-pilot-participant-id', participant.id);
+    if (!(participant.stances || []).length) return;
+    target.classList.add('meeting-pilot-stance-host');
 
-      if (!target) return;
-      target.classList.add('meeting-pilot-stance-host');
-
-      const card = document.createElement('div');
-      card.className = 'meeting-pilot-stance-card';
-      card.innerHTML = `
-        <div class="sc-header">
-          <span class="sc-name">${participant.name}</span>
-          <span class="sc-role">${participant.role}</span>
-        </div>
-        <div class="sc-topics">
-          ${(participant.stances || [])
-            .slice(0, 5)
-            .map(
-              (item) => `
-                <div class="stance-topic">
-                  <div class="stance-indicator ${getStanceClass(item.stance)}">${item.stance === '主导' ? '🎯' : item.stance === '支持' ? '✓' : item.stance === '质疑' ? '?' : item.stance === '反对' ? '!' : '—'}</div>
-                  <div class="stance-topic-info">
-                    <div class="stance-topic-name">${item.topic}<span class="stance-topic-label ${getStanceClass(item.stance)}">${item.stance}</span></div>
-                    <div class="stance-quote">${item.keyQuote}</div>
-                  </div>
+    const card = document.createElement('div');
+    card.className = 'meeting-pilot-stance-card';
+    card.dataset.participantId = participant.id;
+    card.innerHTML = `
+      <div class="sc-header">
+        <span class="sc-name">${participant.name}</span>
+        <span class="sc-role">${participant.role}</span>
+      </div>
+      <div class="sc-topics">
+        ${(participant.stances || [])
+          .slice(0, 5)
+          .map(
+            (item) => `
+              <div class="stance-topic">
+                <div class="stance-indicator ${getStanceClass(item.stance)}">${
+                  item.stance === '主导'
+                    ? '🎯'
+                    : item.stance === '支持'
+                      ? '✓'
+                      : item.stance === '质疑'
+                        ? '?'
+                        : item.stance === '反对'
+                          ? '!'
+                          : '—'
+                }</div>
+                <div class="stance-topic-info">
+                  <div class="stance-topic-name">${
+                    item.topic
+                  }<span class="stance-topic-label ${getStanceClass(
+                    item.stance,
+                  )}">${item.stance}</span></div>
+                  <div class="stance-quote">${item.keyQuote}</div>
                 </div>
-              `,
-            )
-            .join('')}
-        </div>
-        <div class="sc-footer">点击头像查看完整发言记录</div>
-      `;
-      target.appendChild(card);
-    });
+              </div>
+            `,
+          )
+          .join('')}
+      </div>
+      <div class="sc-footer">点击头像查看完整发言记录</div>
+    `;
+    target.appendChild(card);
+  });
+}
+
+function focusParticipantInDom(participantId: string): boolean {
+  if (!participantId) return false;
+  const target = document.querySelector<HTMLElement>(
+    `[data-meeting-pilot-participant-id="${CSS.escape(participantId)}"]`,
+  );
+  if (!target) return false;
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.add('meeting-pilot-focus-flash');
+  window.setTimeout(() => {
+    target.classList.remove('meeting-pilot-focus-flash');
+  }, 2000);
+  return true;
 }
 
 function emitHeuristicAlerts(
@@ -1147,11 +1263,13 @@ function createOverlay(): void {
           background 0.2s ease;
       }
       .danmaku-item:hover {
-        animation-play-state: paused;
         align-items: flex-start;
         max-width: min(560px, calc(100vw - 48px));
         box-shadow: 0 10px 28px rgba(0,0,0,0.38);
         z-index: 2147483647;
+      }
+      .danmaku-item.paused {
+        animation: none;
       }
       .danmaku-item .icon {
         font-size: 16px;
@@ -1252,7 +1370,8 @@ function createOverlay(): void {
         top: 0;
         left: 0;
         bottom: 0;
-        width: min(380px, calc(100vw - 12px));
+        width: min(361px, calc(100vw - 12px));
+        box-sizing: border-box;
         transform: translateX(-100%);
         transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
         z-index: 2147483645;
@@ -1997,7 +2116,7 @@ function createOverlay(): void {
       }
       @media (max-width: 720px) {
         .side-panel {
-          width: min(100vw, 420px);
+          width: min(100vw, 361px);
         }
       }
     </style>
@@ -2289,7 +2408,9 @@ function createOverlay(): void {
           source: 'overlay',
         });
         if (!response?.success) return false;
-        return response?.surface === 'window'
+        return response?.surface === 'side-panel'
+          ? '已打开 Chrome 侧边栏。'
+          : response?.surface === 'window'
           ? '已用独立窗口打开 Meeting Pilot。'
           : '已打开面板。';
       },
@@ -2337,7 +2458,11 @@ function createOverlay(): void {
       try {
         await hideMeetingPilotFloatingIconForever();
       } catch (error) {
-        showNote(String((error as Error)?.message || '设置 Meeting Pilot 为永不展示失败'));
+        showNote(
+          String(
+            (error as Error)?.message || '设置 Meeting Pilot 为永不展示失败',
+          ),
+        );
         renderOverlay(overlayState.snapshot, getMeetingPageContext());
       }
     })();
@@ -2353,11 +2478,7 @@ function createOverlay(): void {
       hideEntryCloseControls(true);
       return;
     }
-    if (isCaptureEnabled(overlayState.snapshot)) {
-      void openPanel();
-      return;
-    }
-    setCoachmarkOpen(true);
+    void openPanel();
   });
 
   void syncContext('mount');
@@ -2546,11 +2667,15 @@ function renderOverlay(
     const idleCopy = readinessBlocked
       ? readiness?.summary || '当前配置阻止开始 Capture。'
       : captureKind === 'error'
-        ? `${fallbackError || 'Capture 未能成功启动，请重试。'} 请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”重新授权。`
+        ? `${
+            fallbackError || 'Capture 未能成功启动，请重试。'
+          } 请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”重新授权。`
         : captureKind === 'stopped'
           ? '录制已停止。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”重新开始。'
           : shareOwner
-            ? `${shareOwner}${snapshot?.selfSharing || context?.selfSharing ? '（你）' : ''} 正在共享屏幕。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”开始录制、实时总结和会后分析。`
+            ? `${shareOwner}${
+                snapshot?.selfSharing || context?.selfSharing ? '（你）' : ''
+              } 正在共享屏幕。请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”开始录制、实时总结和会后分析。`
             : '请点击浏览器右上角的 Personal AI 图标，再在 popup 第一项点击“开启会议全貌”开始录制、实时总结和会后分析。';
     const idleCopyWithReadiness =
       readiness?.status === 'degraded' &&
@@ -2587,7 +2712,9 @@ function renderOverlay(
     if (eyebrow) eyebrow.textContent = '当前话题';
     if (topicTitle) topicTitle.textContent = chapter?.title || '会议进行中';
     if (topicMeta)
-      topicMeta.textContent = `${formatDurationLabel(elapsedMs)} · ${speaker || shareOwner || '多人讨论'}${speaker ? ' 主讲' : ''}`;
+      topicMeta.textContent = `${formatDurationLabel(elapsedMs)} · ${
+        speaker || shareOwner || '多人讨论'
+      }${speaker ? ' 主讲' : ''}`;
     if (primary) {
       primary.textContent = '⚡ Catch Up';
       primary.disabled = overlayState.busy;
@@ -2630,7 +2757,9 @@ function syncCoachmark(
   const shell = shadow.getElementById('mpCoachmark');
   const title = shadow.getElementById('mpCoachmarkTitle');
   const copy = shadow.getElementById('mpCoachmarkCopy');
-  const readinessBlocked = Boolean(snapshot?.readiness && !snapshot.readiness.canStartCapture);
+  const readinessBlocked = Boolean(
+    snapshot?.readiness && !snapshot.readiness.canStartCapture,
+  );
   const captureKind = snapshot?.capture.kind || 'idle';
   const visible = overlayState.coachmarkOpen && !isCaptureEnabled(snapshot);
 
@@ -2648,7 +2777,9 @@ function syncCoachmark(
   }
   if (copy) {
     copy.textContent = readinessBlocked
-      ? `${snapshot?.readiness.summary || '当前配置阻止了 Capture。'} 先修复配置，再点击浏览器右上角的 Personal AI 图标，在 popup 第一项点击“开启会议全貌”。`
+      ? `${
+          snapshot?.readiness.summary || '当前配置阻止了 Capture。'
+        } 先修复配置，再点击浏览器右上角的 Personal AI 图标，在 popup 第一项点击“开启会议全貌”。`
       : 'Chrome 的 tab capture 授权在当前实现里需要从扩展 popup 稳定发起。先点击浏览器右上角的 Personal AI 图标，然后在弹出的 popup 第一项点击“开启会议全貌”。';
   }
 }
@@ -2706,7 +2837,9 @@ async function syncContext(reason: string): Promise<void> {
         ...context,
         tabId: 0,
         summary: topicHint
-          ? `${topicHint} 正在被优先关注。 ${context.notes?.join(' ') || ''}`.trim()
+          ? `${topicHint} 正在被优先关注。 ${
+              context.notes?.join(' ') || ''
+            }`.trim()
           : undefined,
       },
     })) as MeetingPilotSessionSnapshot | undefined;
@@ -2782,6 +2915,12 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   }
   if (request.type === 'MEETING_PILOT_CLOSE_EMBEDDED_PANEL') {
     const success = setEmbeddedPanelOpen(false);
+    sendResponse({ success });
+    return true;
+  }
+  if (request.type === 'MEETING_PILOT_FOCUS_PARTICIPANT') {
+    const participantId = String(request.participantId || '');
+    const success = focusParticipantInDom(participantId);
     sendResponse({ success });
     return true;
   }

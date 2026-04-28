@@ -155,16 +155,17 @@ async function checkSemanticSimilarity(
   try {
     const client = getMemoryServiceClient();
 
-    // Use the recall API to find similar messages via vector search
-    const recallResult = await client.recall(messageContent, {
-      topK: 1,
-      channels: ['vector'],
+    // Use the fast passive contextRecall API for semantic similarity probe.
+    const recallResult = await client.contextRecall({
+      surface: 'follow_thread',
+      contextType: 'message_thread',
+      primaryText: messageContent,
+      limit: 1,
     });
 
     let similarity = 0;
-    if (recallResult && recallResult.items && recallResult.items.length > 0) {
-      // The recall API returns a score (higher = more similar)
-      similarity = recallResult.items[0].score;
+    if (recallResult && recallResult.matches && recallResult.matches.length > 0) {
+      similarity = recallResult.matches[0].score;
     }
 
     // 缓存结果

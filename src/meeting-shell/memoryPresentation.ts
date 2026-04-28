@@ -1,4 +1,8 @@
-import type { RecallItem, RecallOptions } from '../services/MemoryServiceClient';
+import type {
+  ContextRecallMatch,
+  ContextRecallRequest,
+  RecallItem,
+} from '../services/MemoryServiceClient';
 import type { MeetingPilotMemoryRef } from './protocol';
 
 const GENERIC_SOURCE_LABELS = new Set([
@@ -92,33 +96,115 @@ function resolveTitle(item: RecallItem, snippet: string): string {
   return sourceLabel;
 }
 
-export function buildMeetingPilotRecallOptions(): RecallOptions {
+export interface BuildMeetingPilotContextRecallArgs {
+  /** Current meeting id to exclude from recall (self-echo protection). */
+  excludeMeetingId?: string;
+  meetingTitle: string;
+  currentTopic?: string;
+  summary?: string;
+  transcriptSummary?: string;
+  meetingMetadata?: string;
+}
+
+const BOILERPLATE_BLOCKLIST = [
+  'no active screen share is detected.',
+  'meeting pilot is recording this meeting.',
+  '决议 - 暂无',
+  '行动项 - 暂无',
+  'open the panel to start capture or follow the live map.',
+  'a shared application is minimized.',
+  'current speaker:',
+];
+
+function isBoilerplate(text: string): boolean {
+  if (!text) return true;
+  const lower = text.toLowerCase().trim();
+  if (!lower) return true;
+  return BOILERPLATE_BLOCKLIST.some((entry) => lower.includes(entry));
+}
+
+function dropBoilerplateLines(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !isBoilerplate(line))
+    .join('\n')
+    .trim();
+}
+
+/**
+ * Build a ContextRecallRequest body for Meeting Pilot's passive memory hint
+ * surface. The body avoids self-echo by trimming meeting boilerplate before
+ * sending it to the backend.
+ */
+export function buildMeetingPilotContextRecallRequest(
+  args: BuildMeetingPilotContextRecallArgs,
+): ContextRecallRequest {
+  const cleanedPrimary = dropBoilerplateLines(
+    sanitizeMemoryText(args.transcriptSummary ?? ''),
+  );
+  const secondary = [
+    args.currentTopic,
+    args.summary,
+    args.meetingMetadata,
+  ]
+    .map((part) => (part ? dropBoilerplateLines(sanitizeMemoryText(part)) : ''))
+    .filter(Boolean) as string[];
+
   return {
-    topK: 3,
-    channels: ['fts', 'time'],
-    includeMetadata: true,
+    surface: 'meeting_passive',
+    contextType: 'meeting',
+    title: args.meetingTitle,
+    primaryText: cleanedPrimary || args.meetingTitle,
+    secondaryTexts: secondary,
     sourceTypes: ['meeting', 'manual', 'web', 'glip'],
-    presentationHint: 'meeting_pilot',
-    previewMaxLength: 72,
+    limit: 3,
   };
 }
 
+export function contextMatchToMeetingPilotMemoryRef(
+  match: ContextRecallMatch,
+): MeetingPilotMemoryRef {
+  const fullSnippet = dropBoilerplateLines(sanitizeMemoryText(match.snippet));
+  const previewClean = isBoilerplate(match.snippet) ? '' : match.snippet;
+  const snippet = previewClean || fallbackPreview(fullSnippet);
+  const title =
+    cleanTitle(match.title) ||
+    cleanTitle(match.sourceTitle) ||
+    (match.sourceLabel || 'memory-service');
+
+  return {
+    id: match.id,
+    title,
+    snippet: isBoilerplate(snippet) ? '' : snippet,
+    fullSnippet,
+    score: match.score,
+    sourceLabel: match.sourceLabel || 'memory-service',
+    sourceUrl: match.sourceUrl,
+    exploreLink: match.exploreLink,
+    whyMatched: match.whyMatched,
+  };
+}
+
+/** Kept for legacy explorer surfaces that still convert RecallItems. */
 export function recallItemToMeetingPilotMemoryRef(
   item: RecallItem,
 ): MeetingPilotMemoryRef {
-  const fullSnippet = sanitizeMemoryText(
-    item.displayText || item.content || '',
+  const fullSnippet = dropBoilerplateLines(
+    sanitizeMemoryText(item.displayText || item.content || ''),
   );
-  const snippet = (item.previewText || '').trim() || fallbackPreview(fullSnippet);
+  const rawPreview = (item.previewText || '').trim();
+  const previewClean = isBoilerplate(rawPreview) ? '' : rawPreview;
+  const snippet = previewClean || fallbackPreview(fullSnippet);
   const title = resolveTitle(item, snippet);
 
   return {
     id: item.id,
     title,
-    snippet,
+    snippet: isBoilerplate(snippet) ? '' : snippet,
     fullSnippet,
     score: item.score,
     sourceLabel: item.source || 'memory-service',
     sourceUrl: item.sourceUrl,
+    exploreLink: item.exploreLink,
   };
 }

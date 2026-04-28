@@ -31,6 +31,7 @@ import { askRoutes } from './routes/ask.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { eventsRoutes } from './routes/events.js';
 import { ingestBatchRoutes } from './routes/ingestBatch.js';
+import { memoryRoutes } from './routes/memories.js';
 import { exportRoutes } from './routes/export.js';
 import { importRoutes } from './routes/import.js';
 import { statsRoutes } from './routes/stats.js';
@@ -42,7 +43,7 @@ import { feedbackRoutes } from './routes/feedback.js';
 import { profileRoutes } from './routes/profile.js';
 import { agentRoutes } from './routes/agent.js';
 import { migrateRoutes } from './routes/migrate.js';
-import { contextMatchRoutes } from './routes/contextMatch.js';
+import { contextRecallRoutes } from './routes/contextRecall.js';
 import { userFilesRoutes } from './routes/userFiles.js';
 import { dreamDigestRoutes } from './routes/dreamDigest.js';
 import { weeklyReportRoutes } from './routes/weeklyReport.js';
@@ -55,6 +56,7 @@ import { outreachRoutes } from './routes/outreach.js';
 import { notificationCenterRoutes } from './routes/notificationCenter.js';
 import { providerRoutes } from './routes/providers.js';
 import { meetingRoutes } from './routes/meetings.js';
+import { extractorRoutes } from './routes/extractor.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -163,6 +165,7 @@ export async function buildApp(
       await instance.register(notificationRoutes);
       await instance.register(eventsRoutes);
       await instance.register(ingestBatchRoutes);
+      await instance.register(memoryRoutes);
       await instance.register(exportRoutes);
       await instance.register(importRoutes);
       await instance.register(statsRoutes);
@@ -174,7 +177,7 @@ export async function buildApp(
       await instance.register(profileRoutes);
       await instance.register(agentRoutes);
       await instance.register(migrateRoutes);
-      await instance.register(contextMatchRoutes);
+      await instance.register(contextRecallRoutes);
       await instance.register(userFilesRoutes);
       await instance.register(dreamDigestRoutes);
       await instance.register(weeklyReportRoutes);
@@ -187,6 +190,7 @@ export async function buildApp(
       await instance.register(notificationCenterRoutes);
       await instance.register(providerRoutes);
       await instance.register(meetingRoutes);
+      await instance.register(extractorRoutes);
     },
     { prefix: '/api/v1' },
   );

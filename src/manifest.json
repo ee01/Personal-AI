@@ -17,24 +17,22 @@
     "notifications",
     "sidePanel",
     "offscreen",
-    "tabCapture"
+    "tabCapture",
+    "microphone",
+    "nativeMessaging"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://mfe_a-develop.jupiter.int.rclabenv.com/*", 
+        "https://mfe_a-develop.jupiter.int.rclabenv.com/*",
         "https://rc-a-develop.jupiter.int.rclabenv.com/*",
         "https://app.ringcentral.com/*"
       ],
       "js": ["contentScriptGlip.js"]
     },
     {
-      "matches": [
-        "https://v.ringcentral.com/conf/on/*"
-      ],
-      "js": [
-        "contentScriptRingCentralMeeting.js"
-      ],
+      "matches": ["https://v.ringcentral.com/conf/on/*"],
+      "js": ["contentScriptRingCentralMeeting.js"],
       "run_at": "document_idle",
       "all_frames": false
     },
@@ -52,9 +50,7 @@
         "*://*.atlassian.net/browse/*",
         "*://jira.ringcentral.com/browse/*"
       ],
-      "js": [
-        "contentScriptJira.js"
-      ],
+      "js": ["contentScriptJira.js"],
       "run_at": "document_end"
     },
     {
@@ -63,29 +59,19 @@
         "*://*.atlassian.net/secure/AutomationProjectAdminAction*",
         "*://jira.ringcentral.com/secure/AutomationProjectAdminAction*"
       ],
-      "js": [
-        "contentScriptJiraAutomation.js"
-      ],
+      "js": ["contentScriptJiraAutomation.js"],
       "run_at": "document_end",
       "all_frames": true
     },
     {
-      "matches": [
-        "https://rpa.int.rclabenv.com/*"
-      ],
-      "js": [
-        "contentScriptRPA.js"
-      ],
+      "matches": ["https://rpa.int.rclabenv.com/*"],
+      "js": ["contentScriptRPA.js"],
       "run_at": "document_end",
       "all_frames": false
     },
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "contentScriptWebIntelligence.js"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["contentScriptWebIntelligence.js"],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -107,18 +93,51 @@
     }
   },
   "options_page": "options.html",
-  "host_permissions": [
-    "*://*/*",
-    "https://v.ringcentral.com/*"
-  ],
+  "host_permissions": ["*://*/*", "https://v.ringcentral.com/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "web_accessible_resources": [{
-    "resources": ["topic-modal.html", "prompt-config.html", "project-dashboard.html", "project-dashboard.js", "enhanced-fishbone-timeline.js", "options.css", "agent-visualizer.css", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png", "slides-analysis.html", "slides-analysis.js", "memory.html", "memory.js", "scheduled-messages.html", "scheduled-messages.js", "share-modal.html", "share-modal.js", "doubao-bridge.html", "doubao-bridge.js", "auth-logs.html", "auth-logs.js", "meeting-sidepanel.html", "meeting-sidepanel.js", "app-script-template.gs", "glipNativePopoutPage.js", "previews/Personal AI - fetch jira.png", "previews/Personal AI - import jira automation.png", "previews/Personal AI - ask.png", "previews/Personal AI - messages filter.png", "previews/Personal AI - design link.png", "previews/Personal AI - scheduled messages.png"],
-    "matches": ["<all_urls>"]
-  }],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "topic-modal.html",
+        "prompt-config.html",
+        "project-dashboard.html",
+        "project-dashboard.js",
+        "enhanced-fishbone-timeline.js",
+        "options.css",
+        "agent-visualizer.css",
+        "icons/icon16.png",
+        "icons/icon32.png",
+        "icons/icon48.png",
+        "icons/icon128.png",
+        "slides-analysis.html",
+        "slides-analysis.js",
+        "memory.html",
+        "memory.js",
+        "scheduled-messages.html",
+        "scheduled-messages.js",
+        "share-modal.html",
+        "share-modal.js",
+        "desktop-app.html",
+        "desktop-app.js",
+        "auth-logs.html",
+        "auth-logs.js",
+        "meeting-sidepanel.html",
+        "meeting-sidepanel.js",
+        "app-script-template.gs",
+        "glipNativePopoutPage.js",
+        "previews/Personal AI - fetch jira.png",
+        "previews/Personal AI - import jira automation.png",
+        "previews/Personal AI - ask.png",
+        "previews/Personal AI - messages filter.png",
+        "previews/Personal AI - design link.png",
+        "previews/Personal AI - scheduled messages.png"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "icons": {
     "16": "icons/{{ICON_NAME}}16.png",
     "32": "icons/{{ICON_NAME}}32.png",

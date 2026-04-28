@@ -7,6 +7,7 @@ import {
   MeetingPilotCaptureState,
   MeetingPilotDetectionPayload,
   MeetingPilotDecisionItem,
+  MeetingPilotParticipant,
   MeetingPilotParticipantStance,
   MeetingPilotSessionSnapshot,
   MeetingPilotDependencyReadiness,
@@ -19,15 +20,32 @@ import {
   extractMeetingIdFromUrl,
 } from './protocol';
 import { MeetingPilotRegistry } from './store';
+import { getMemoryServiceClient } from '../services/MemoryServiceClient';
+import { getEnvConfig, getMeetingTranscriptionMode } from '../utils';
 import {
-  getMemoryServiceClient,
-  MemoryServiceError,
-} from '../services/MemoryServiceClient';
-import { getEnvConfig } from '../utils';
+  isMainLLMConfiguredForMeetingAnalysis,
+  runMeetingIntelligenceLLM,
+} from '../llm';
 import {
-  buildMeetingPilotRecallOptions,
-  recallItemToMeetingPilotMemoryRef,
+  buildMeetingPilotContextRecallRequest,
+  contextMatchToMeetingPilotMemoryRef,
 } from './memoryPresentation';
+import {
+  createAliasResolverFromEnv,
+  resolveParticipantByName,
+  resolveSpeakerForChunk,
+} from './speakerResolver';
+import { buildTranscriptTurns } from './transcriptTurns';
+import {
+  applyAiParticipantResolutions,
+  mergeParticipants,
+  renameParticipant,
+} from './participantOps';
+import {
+  doesProviderExposeTranscribeModel,
+  normalizeMeetingTranscribeApiStyle,
+  probeMeetingTranscribeProvider,
+} from './asrProvider';
 
 const registry = new MeetingPilotRegistry();
 let initPromise: Promise<void> | null = null;
@@ -45,6 +63,136 @@ let readinessCache:
     }
   | undefined;
 
+const WHISPER_NATIVE_HOST = 'com.personal_ai.whisper_host';
+let whisperBridgeToken: string | undefined;
+let whisperNativeHostBackoffUntil = 0;
+const WHISPER_NATIVE_HOST_BACKOFF_MS = 60_000;
+
+async function pairWhisperBridge(): Promise<void> {
+  const pairResponse = await fetch('http://127.0.0.1:46321/pair', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!pairResponse.ok) {
+    return;
+  }
+  const pairData = (await pairResponse.json()) as { token?: string };
+  whisperBridgeToken = pairData.token?.trim() || undefined;
+  if (!whisperBridgeToken) {
+    return;
+  }
+  await fetch('http://127.0.0.1:46321/whisper/native-host/install', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-bridge-token': whisperBridgeToken,
+    },
+    body: JSON.stringify({ extensionIds: [chrome.runtime.id] }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => undefined);
+}
+
+async function sendWhisperNativeMessage<T>(message: {
+  method: string;
+  path: string;
+  body?: Record<string, unknown>;
+}): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let port: chrome.runtime.Port | undefined;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        port?.disconnect();
+      } catch {
+        // ignore disconnect timeout cleanup
+      }
+      reject(new Error('native_messaging_timeout'));
+    }, 10_000);
+
+    try {
+      port = chrome.runtime.connectNative(WHISPER_NATIVE_HOST);
+    } catch (error) {
+      clearTimeout(timeout);
+      reject(error);
+      return;
+    }
+
+    port.onMessage.addListener((response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        port?.disconnect();
+      } catch {
+        // ignore disconnect cleanup
+      }
+      resolve(response as T);
+    });
+
+    port.onDisconnect.addListener(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const messageText =
+        chrome.runtime.lastError?.message || 'native_messaging_disconnected';
+      reject(new Error(messageText));
+    });
+
+    port.postMessage(message);
+  });
+}
+
+async function sendWhisperBridgeRequest<T>(message: {
+  method: string;
+  path: string;
+  body?: Record<string, unknown>;
+}): Promise<T> {
+  try {
+    if (Date.now() >= whisperNativeHostBackoffUntil) {
+      const response = await sendWhisperNativeMessage<T>(message);
+      whisperNativeHostBackoffUntil = 0;
+      return response;
+    }
+  } catch {
+    whisperNativeHostBackoffUntil = Date.now() + WHISPER_NATIVE_HOST_BACKOFF_MS;
+    if (!whisperBridgeToken) {
+      await pairWhisperBridge().catch(() => undefined);
+    }
+
+    const url = `http://127.0.0.1:46321${message.path}`;
+    const opts: RequestInit = {
+      method: message.method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(whisperBridgeToken ? { 'x-bridge-token': whisperBridgeToken } : {}),
+      },
+      signal: AbortSignal.timeout(10_000),
+    };
+    if (message.body && message.method !== 'GET') {
+      opts.body = JSON.stringify(message.body);
+    }
+    let res = await fetch(url, opts);
+    if (res.status === 401) {
+      whisperBridgeToken = undefined;
+      await pairWhisperBridge().catch(() => undefined);
+      if (whisperBridgeToken) {
+        opts.headers = {
+          'Content-Type': 'application/json',
+          'x-bridge-token': whisperBridgeToken,
+        };
+        res = await fetch(url, opts);
+      }
+    }
+    return (
+      res.ok ? await res.json() : { ok: false, error: `HTTP ${res.status}` }
+    ) as T;
+  }
+}
+
 function createDependencyReadiness(
   status: 'ready' | 'degraded' | 'blocked',
   message: string,
@@ -60,7 +208,7 @@ function createDependencyReadiness(
 function buildReadinessSummary(args: {
   blockedByFeatureFlag: boolean;
   minutesApi: MeetingPilotDependencyReadiness;
-  whisper: MeetingPilotDependencyReadiness;
+  transcription: MeetingPilotDependencyReadiness;
   analysisModel: MeetingPilotDependencyReadiness;
   memoryService: MeetingPilotDependencyReadiness;
 }): MeetingPilotReadinessState {
@@ -71,7 +219,7 @@ function buildReadinessSummary(args: {
   ];
   const degradations = [
     args.minutesApi,
-    args.whisper,
+    args.transcription,
     args.analysisModel,
     args.memoryService,
   ]
@@ -79,7 +227,7 @@ function buildReadinessSummary(args: {
     .map((item) => item.message);
   const checkedAt = Math.max(
     args.minutesApi.checkedAt,
-    args.whisper.checkedAt,
+    args.transcription.checkedAt,
     args.analysisModel.checkedAt,
     args.memoryService.checkedAt,
   );
@@ -103,7 +251,7 @@ function buildReadinessSummary(args: {
     degradations,
     dependencies: {
       minutesApi: args.minutesApi,
-      whisper: args.whisper,
+      transcription: args.transcription,
       analysisModel: args.analysisModel,
       memoryService: args.memoryService,
     },
@@ -121,26 +269,9 @@ function trimTrailingSlash(url: string): string {
 }
 
 function joinUrl(baseUrl: string, path: string): string {
-  return `${trimTrailingSlash(baseUrl)}${path.startsWith('/') ? path : `/${path}`}`;
-}
-
-function shouldRetryLegacyMeetingRecall(error: unknown): boolean {
-  if (!(error instanceof MemoryServiceError) || error.status !== 400) {
-    return false;
-  }
-
-  const bodyText =
-    typeof error.body === 'string'
-      ? error.body
-      : JSON.stringify(error.body || {});
-  const message = `${error.message} ${bodyText}`.toLowerCase();
-
-  return (
-    message.includes('presentationhint') ||
-    message.includes('previewmaxlength') ||
-    (message.includes('additional properties') &&
-      (message.includes('presentation') || message.includes('preview')))
-  );
+  return `${trimTrailingSlash(baseUrl)}${
+    path.startsWith('/') ? path : `/${path}`
+  }`;
 }
 
 async function probeHttpCandidates(
@@ -162,45 +293,6 @@ async function probeHttpCandidates(
     }
   }
   return false;
-}
-
-async function probeProviderModels(
-  envConfig: Awaited<ReturnType<typeof getEnvConfig>>,
-): Promise<{
-  reachable: boolean;
-  models: Set<string> | null;
-}> {
-  const baseUrl = trimTrailingSlash(
-    String(envConfig.MEETING_PROVIDER_BASE_URL || ''),
-  );
-  const apiKey = String(envConfig.MEETING_PROVIDER_API_KEY || '').trim();
-  if (!baseUrl || !apiKey) {
-    return { reachable: false, models: null };
-  }
-
-  try {
-    const response = await fetch(joinUrl(baseUrl, '/v1/models'), {
-      method: 'GET',
-      signal: withTimeoutSignal(6000),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
-    if (!response.ok) {
-      return { reachable: false, models: null };
-    }
-    const payload = await response.json();
-    const models = Array.isArray(payload?.data)
-      ? new Set(
-          payload.data
-            .map((item: { id?: string }) => String(item?.id || '').trim())
-            .filter(Boolean),
-        )
-      : null;
-    return { reachable: true, models };
-  } catch {
-    return { reachable: false, models: null };
-  }
 }
 
 async function evaluateMeetingReadiness(
@@ -256,68 +348,115 @@ async function evaluateMeetingReadiness(
       String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
     );
     const providerProbe = providerConfigured
-      ? await probeProviderModels(envConfig)
-      : { reachable: false, models: null as Set<string> | null };
+      ? await probeMeetingTranscribeProvider(envConfig)
+      : {
+          reachable: false,
+          models: null as Set<string> | null,
+          compatibilityIssue: null,
+        };
     const whisperModel = String(
       envConfig.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
     ).trim();
-    const analysisModel = String(envConfig.MEETING_ANALYSIS_MODEL || '').trim();
+    const transcribeApiStyle = normalizeMeetingTranscribeApiStyle(
+      envConfig.MEETING_TRANSCRIBE_API_STYLE,
+    );
+    const mainLlmForAnalysis = isMainLLMConfiguredForMeetingAnalysis(envConfig);
 
-    const whisper = !providerConfigured
+    const transcriptionMode = getMeetingTranscriptionMode(envConfig);
+
+    const cloudTranscription = !providerConfigured
       ? createDependencyReadiness(
           'degraded',
-          'Whisper is unavailable because the provider or API key is missing.',
+          'ASR / transcription provider is unavailable because the base URL or API key is missing.',
           checkedAt,
         )
-      : !providerProbe.reachable
+      : providerProbe.compatibilityIssue
         ? createDependencyReadiness(
             'degraded',
-            'Whisper is degraded because the provider could not be reached.',
-            checkedAt,
-          )
-        : providerProbe.models &&
-            whisperModel &&
-            !providerProbe.models.has(whisperModel)
-          ? createDependencyReadiness(
-              'degraded',
-              `Whisper model ${whisperModel} is not exposed by the provider.`,
-              checkedAt,
-            )
-          : createDependencyReadiness(
-              'ready',
-              'Whisper transcription is available.',
-              checkedAt,
-            );
-
-    const analysis = !providerConfigured
-      ? createDependencyReadiness(
-          'degraded',
-          'Analysis model is unavailable because the provider or API key is missing.',
-          checkedAt,
-        )
-      : !analysisModel
-        ? createDependencyReadiness(
-            'degraded',
-            'Analysis model is not configured.',
+            providerProbe.compatibilityIssue,
             checkedAt,
           )
         : !providerProbe.reachable
           ? createDependencyReadiness(
               'degraded',
-              'Analysis model is degraded because the provider could not be reached.',
+              'ASR / transcription provider is degraded because the provider could not be reached.',
               checkedAt,
             )
-          : providerProbe.models && !providerProbe.models.has(analysisModel)
+          : providerProbe.models &&
+              whisperModel &&
+              !doesProviderExposeTranscribeModel(
+                whisperModel,
+                providerProbe.models,
+              )
             ? createDependencyReadiness(
                 'degraded',
-                `Analysis model ${analysisModel} is not exposed by the provider.`,
+                `Transcribe model ${whisperModel} is not exposed by the provider (${transcribeApiStyle}).`,
                 checkedAt,
               )
             : createDependencyReadiness(
                 'ready',
-                'Analysis model is available.',
+                'Audio transcription is available.',
                 checkedAt,
               );
+
+    const desktopAvailable = await (async () => {
+      try {
+        const data = await sendWhisperBridgeRequest<{
+          ok?: boolean;
+          modelReady?: boolean;
+        }>({
+          method: 'GET',
+          path: '/whisper/status',
+        });
+        return Boolean(data?.modelReady);
+      } catch {
+        return false;
+      }
+    })();
+
+    const transcription = (() => {
+      if (transcriptionMode === 'cloud-only') {
+        return cloudTranscription;
+      }
+      if (transcriptionMode === 'local-only') {
+        if (desktopAvailable) {
+          return createDependencyReadiness(
+            'ready',
+            'Local Whisper is available.',
+            checkedAt,
+          );
+        }
+        return createDependencyReadiness(
+          'degraded',
+          'No local transcription available. Install the Personal AI desktop app or switch to cloud/auto.',
+          checkedAt,
+        );
+      }
+      if (desktopAvailable || cloudTranscription.status === 'ready') {
+        return createDependencyReadiness(
+          'ready',
+          'Transcription is available.',
+          checkedAt,
+        );
+      }
+      return createDependencyReadiness(
+        'degraded',
+        'No transcription available. Configure a cloud API key in settings, or install the Personal AI desktop app for local transcription.',
+        checkedAt,
+      );
+    })();
+
+    const analysis = mainLlmForAnalysis.ok
+      ? createDependencyReadiness(
+          'ready',
+          mainLlmForAnalysis.message,
+          checkedAt,
+        )
+      : createDependencyReadiness(
+          'degraded',
+          `Meeting analysis (主 LLM): ${mainLlmForAnalysis.message}`,
+          checkedAt,
+        );
 
     const memoryService = (() => {
       const client = getMemoryServiceClient();
@@ -348,7 +487,7 @@ async function evaluateMeetingReadiness(
     return buildReadinessSummary({
       blockedByFeatureFlag,
       minutesApi,
-      whisper,
+      transcription,
       analysisModel: analysis,
       memoryService: await memoryService,
     });
@@ -505,7 +644,9 @@ async function pollDigestStatus(tabId: number): Promise<void> {
   } catch (error) {
     const updated = await registry.updateDigest(tabId, {
       status: 'processing',
-      message: `Digest polling retrying: ${String((error as Error)?.message || error || 'unknown_error')}`,
+      message: `Digest polling retrying: ${String(
+        (error as Error)?.message || error || 'unknown_error',
+      )}`,
       updatedAt: Date.now(),
     });
     if (updated) {
@@ -547,13 +688,10 @@ async function runMeetingAnalysis(
   transcript: MeetingPilotSessionSnapshot['transcript'],
   envConfig: Awaited<ReturnType<typeof getEnvConfig>>,
 ): Promise<MeetingPilotStructuredParseResult | undefined> {
-  const baseUrl = String(envConfig.MEETING_PROVIDER_BASE_URL || '').replace(
-    /\/$/,
-    '',
-  );
-  const apiKey = String(envConfig.MEETING_PROVIDER_API_KEY || '').trim();
-  const model = String(envConfig.MEETING_ANALYSIS_MODEL || '').trim();
-  if (!baseUrl || !apiKey || !model || transcript.length < 2) {
+  if (transcript.length < 2) {
+    return undefined;
+  }
+  if (!isMainLLMConfiguredForMeetingAnalysis(envConfig).ok) {
     return undefined;
   }
 
@@ -561,13 +699,34 @@ async function runMeetingAnalysis(
     .slice(-12)
     .map(
       (chunk) =>
-        `[${formatTranscriptTimestamp(chunk.ts)}] ${chunk.speaker}: ${chunk.text}`,
+        `[${formatTranscriptTimestamp(chunk.ts)}] ${chunk.speaker}: ${
+          chunk.text
+        }`,
     )
     .join('\n');
   const participantList = session.participants
-    .map((item) => item.name)
+    .map(
+      (item) =>
+        `{id:${item.id},name:${item.name},state:${
+          item.resolutionState || 'unknown'
+        }}`,
+    )
     .join(', ');
-  const prompt = `You are analyzing an ongoing RingCentral meeting. Return strict JSON only with this shape:
+  const provisionalList = session.participants
+    .filter(
+      (p) =>
+        p.resolutionState === 'provisional' || p.resolutionState === 'device',
+    )
+    .map((p) => `${p.id}=${p.name}`)
+    .join(', ');
+  const rosterList = session.participants
+    .filter(
+      (p) =>
+        p.resolutionState === 'roster' || p.resolutionState === 'user_named',
+    )
+    .map((p) => `${p.id}=${p.name}`)
+    .join(', ');
+  const userPrompt = `You are analyzing an ongoing RingCentral meeting. Return strict JSON only with this shape:
 {
   "topic": string,
   "summary": string,
@@ -575,12 +734,15 @@ async function runMeetingAnalysis(
   "decisions": [{"text": string, "timestamp": string}],
   "alerts": [{"level": "P0"|"P1"|"P2", "title": string, "body": string, "source": "mention"|"memory"|"share"|"summary"|"action"}],
   "participantStances": [{"participant": string, "topic": string, "stance": "主导"|"支持"|"中立"|"质疑"|"反对", "keyQuote": string, "timeRange": string}],
+  "participantResolutions": [{"fromId": string, "toId": string, "confidence": number, "evidence": string}],
   "latestObservationText": string
 }
 
 Requirements:
 - Infer topic, summary, action items, decisions, alerts, and participant stances from the transcript.
 - Use tone in the transcript when deciding stance (supportive, doubtful, strong objection, etc.).
+- For participantStances.participant, prefer using one of the participant names listed below verbatim.
+- participantResolutions: ONLY when you are highly confident (>=0.85) that a provisional/device participant is the same person as a roster participant, output {fromId, toId} mapping the provisional/device id to the roster id. Otherwise omit. Never merge two roster ids together.
 - latestObservationText should be a concise OCR/observation-style text summary of the currently shared content or meeting focus.
 - Prefer concrete owners and deadlines when present; otherwise use empty string.
 - Keep alerts high precision and useful.
@@ -588,36 +750,24 @@ Requirements:
 Meeting title: ${session.title}
 Current topic hint: ${session.currentTopic}
 Participants: ${participantList || 'Unknown'}
+Roster (real names): ${rosterList || 'none'}
+Provisional/device speakers (may be merged): ${provisionalList || 'none'}
 Share state: ${session.shareState}
 Sharer: ${session.sharerName || 'Unknown'}
 Transcript:\n${transcriptWindow}`;
 
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You extract structured meeting intelligence. Output valid JSON only.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    }),
-  });
-  const payload = await response.json();
-  const content = String(payload?.choices?.[0]?.message?.content || '').trim();
-  if (!response.ok || !content) {
+  const systemPrompt =
+    'You extract structured meeting intelligence. Output valid JSON only.';
+  let content: string;
+  try {
+    content = (
+      await runMeetingIntelligenceLLM({ systemPrompt, userPrompt })
+    ).trim();
+  } catch (error) {
+    console.warn('Meeting Pilot runMeetingIntelligenceLLM failed:', error);
+    return undefined;
+  }
+  if (!content) {
     return undefined;
   }
 
@@ -646,6 +796,12 @@ Transcript:\n${transcriptWindow}`;
       stance?: MeetingPilotParticipantStance['stance'];
       keyQuote?: string;
       timeRange?: string;
+    }>;
+    participantResolutions?: Array<{
+      fromId?: string;
+      toId?: string;
+      confidence?: number;
+      evidence?: string;
     }>;
     latestObservationText?: string;
   };
@@ -699,9 +855,24 @@ Transcript:\n${transcriptWindow}`;
         keyQuote: item.keyQuote!.trim(),
         timeRange: item.timeRange?.trim(),
       })),
+    participantResolutions: (parsed.participantResolutions || [])
+      .filter(
+        (item) =>
+          item.fromId?.trim() &&
+          item.toId?.trim() &&
+          typeof item.confidence === 'number',
+      )
+      .map((item) => ({
+        fromId: item.fromId!.trim(),
+        toId: item.toId!.trim(),
+        confidence: Number(item.confidence) || 0,
+        evidence: item.evidence?.trim(),
+      })),
     latestObservationText:
       parsed.latestObservationText?.trim() ||
-      `${session.sharerName || '会议参与者'} 正在共享屏幕，当前讨论聚焦：${parsed.topic?.trim() || session.currentTopic}`,
+      `${session.sharerName || '会议参与者'} 正在共享屏幕，当前讨论聚焦：${
+        parsed.topic?.trim() || session.currentTopic
+      }`,
   };
 }
 
@@ -747,7 +918,10 @@ function buildStructuredMeetingData(
   screenshotIntervalSec: number,
 ) {
   const chapterTitle = currentTopic || '会议讨论';
-  const chapterId = `chapter-${chapterTitle.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '-') || 'current'}`;
+  const chapterId = `chapter-${
+    chapterTitle.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '-') ||
+    'current'
+  }`;
   const chapterSummary = transcript
     .slice(-4)
     .map((chunk) => chunk.text)
@@ -808,7 +982,9 @@ function buildStructuredMeetingData(
       id: `timeline-screen-${latestTs}`,
       type: 'screen',
       title: '共享画面观察已更新',
-      description: `${session.sharerName || 'Someone'} 正在共享屏幕，已记录最新观察。`,
+      description: `${
+        session.sharerName || 'Someone'
+      } 正在共享屏幕，已记录最新观察。`,
       timestamp: new Date(latestTs).toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
@@ -855,6 +1031,7 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_UPDATE_CONTEXT',
   'MEETING_PILOT_OPEN_SIDE_PANEL',
   'MEETING_PILOT_CLOSE_SIDE_PANEL',
+  'MEETING_PILOT_SET_SIDE_PANEL_PIN',
   'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
   'MEETING_PILOT_OPEN_LIVE_MAP',
   'MEETING_PILOT_START_CAPTURE',
@@ -864,6 +1041,9 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_TRANSCRIPT_UPDATE',
   'MEETING_PILOT_CAPTURE_STATUS',
   'MEETING_PILOT_DIGEST_STATUS',
+  'MEETING_PILOT_RENAME_PARTICIPANT',
+  'MEETING_PILOT_MERGE_PARTICIPANTS',
+  'MEETING_PILOT_FOCUS_PARTICIPANT',
   'MEETING_PILOT_TEST_INJECT_CAPTURE_CHUNK',
   'MEETING_PILOT_TEST_BOOTSTRAP_CAPTURE',
   'MEETING_PILOT_TEST_SET_API_MOCK',
@@ -909,7 +1089,11 @@ async function scanOpenMeetingTabs(): Promise<void> {
 
 function buildMeetingSidePanelPath(
   tabId: number,
-  options?: { catchup?: boolean; debug?: boolean },
+  options?: {
+    catchup?: boolean;
+    debug?: boolean;
+    surface?: 'side-panel' | 'window';
+  },
 ): string {
   const params = new URLSearchParams({ tabId: String(tabId) });
   if (options?.catchup) {
@@ -918,35 +1102,49 @@ function buildMeetingSidePanelPath(
   if (options?.debug) {
     params.set('debug', '1');
   }
+  if (options?.surface) {
+    params.set('surface', options.surface);
+  }
   return `${MEETING_PILOT_SIDE_PANEL_PATH}?${params.toString()}`;
 }
 
 async function configureTabSidePanel(
   tabId: number,
   enabled: boolean,
-  options?: { catchup?: boolean },
+  options?: { catchup?: boolean; debug?: boolean },
 ): Promise<void> {
   if (!chrome.sidePanel?.setOptions) return;
   await chrome.sidePanel.setOptions({
     tabId,
     enabled,
-    path: buildMeetingSidePanelPath(tabId, options),
+    path: buildMeetingSidePanelPath(tabId, {
+      ...options,
+      surface: 'side-panel',
+    }),
   });
 }
 
 async function updateBrowserAction(
   session: MeetingPilotSessionSnapshot,
 ): Promise<void> {
-  const badgeText = buildMeetingPilotBadgeText(session);
-  await chrome.action.setBadgeText({ tabId: session.tabId, text: badgeText });
-  await chrome.action.setBadgeBackgroundColor({
-    tabId: session.tabId,
-    color: session.capture.kind === 'recording' ? '#e74c3c' : '#6c5ce7',
-  });
-  await chrome.action.setTitle({
-    tabId: session.tabId,
-    title: buildMeetingPilotTooltip(session),
-  });
+  try {
+    const badgeText = buildMeetingPilotBadgeText(session);
+    await chrome.action.setBadgeText({ tabId: session.tabId, text: badgeText });
+    await chrome.action.setBadgeBackgroundColor({
+      tabId: session.tabId,
+      color: session.capture.kind === 'recording' ? '#e74c3c' : '#6c5ce7',
+    });
+    await chrome.action.setTitle({
+      tabId: session.tabId,
+      title: buildMeetingPilotTooltip(session),
+    });
+  } catch (error) {
+    console.warn('[Meeting Pilot][background] browser action update failed', {
+      tabId: session.tabId,
+      meetingId: session.meetingId,
+      error: String((error as Error)?.message || error),
+    });
+  }
 }
 
 async function broadcastSessionSnapshot(
@@ -959,6 +1157,25 @@ async function broadcastSessionSnapshot(
     });
   } catch {
     // Ignore when no extension page is listening.
+  }
+}
+
+async function pushSessionSnapshotToMeetingTab(
+  session: MeetingPilotSessionSnapshot,
+): Promise<boolean> {
+  try {
+    await chrome.tabs.sendMessage(session.tabId, {
+      type: 'MEETING_PILOT_SESSION_SNAPSHOT',
+      snapshot: session,
+    });
+    return true;
+  } catch (error) {
+    console.warn('[Meeting Pilot][background] tab snapshot sync failed', {
+      tabId: session.tabId,
+      meetingId: session.meetingId,
+      error: String((error as Error)?.message || error),
+    });
+    return false;
   }
 }
 
@@ -1055,9 +1272,25 @@ async function endMeetingSession(
   tabId: number,
 ): Promise<MeetingPilotSessionSnapshot | undefined> {
   const session = await registry.removeByTabId(tabId);
-  await configureTabSidePanel(tabId, false);
-  await clearBrowserAction(tabId);
-  if (session) await broadcastSessionSnapshot(session);
+  try {
+    await configureTabSidePanel(tabId, false);
+  } catch (error) {
+    console.warn('[Meeting Pilot][background] side panel cleanup failed', {
+      tabId,
+      error: String((error as Error)?.message || error),
+    });
+  }
+  try {
+    await clearBrowserAction(tabId);
+  } catch (error) {
+    console.warn('[Meeting Pilot][background] browser action cleanup failed', {
+      tabId,
+      error: String((error as Error)?.message || error),
+    });
+  }
+  if (session) {
+    await broadcastSessionSnapshot(session);
+  }
   return session;
 }
 
@@ -1069,26 +1302,112 @@ function shouldStopCaptureForLifecycle(
 
 async function finalizeMeetingTabSession(
   tabId: number,
+  reason = 'meeting-finalize',
 ): Promise<MeetingPilotSessionSnapshot | undefined> {
   const session = registry.getSessionByTabId(tabId);
   if (!session) return undefined;
+  console.info('[Meeting Pilot][background] finalizing meeting tab session', {
+    tabId,
+    meetingId: session.meetingId,
+    reason,
+    captureKind: session.capture.kind,
+  });
   clearDigestPoll(tabId);
   if (shouldStopCaptureForLifecycle(session)) {
-    await stopMeetingCapture(tabId, session.meetingId);
+    await stopMeetingCapture(tabId, session.meetingId, reason);
   }
   return endMeetingSession(tabId);
 }
 
+async function isRecordingSessionStillOpen(
+  session: MeetingPilotSessionSnapshot,
+): Promise<boolean> {
+  if (!session.inMeeting || session.status === 'ended') {
+    return false;
+  }
+  try {
+    const tab = await chrome.tabs.get(session.tabId);
+    const tabMeetingId = extractMeetingIdFromUrl(tab.url);
+    return tabMeetingId === session.meetingId;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveActiveRecordingBlocker(
+  tabId: number,
+): Promise<MeetingPilotSessionSnapshot | undefined> {
+  const activeRecordings = registry
+    .listSessions()
+    .filter(
+      (session) =>
+        session.capture.kind === 'recording' && session.tabId !== tabId,
+    );
+
+  for (const candidate of activeRecordings) {
+    if (await isRecordingSessionStillOpen(candidate)) {
+      return candidate;
+    }
+    console.warn('[Meeting Pilot][background] clearing stale recording session', {
+      tabId: candidate.tabId,
+      meetingId: candidate.meetingId,
+      status: candidate.status,
+      inMeeting: candidate.inMeeting,
+    });
+    await finalizeMeetingTabSession(candidate.tabId, 'stale-recording-cleanup');
+  }
+
+  return undefined;
+}
+
+type StartMeetingCaptureResult = {
+  session?: MeetingPilotSessionSnapshot;
+  activeRecording?: MeetingPilotSessionSnapshot;
+};
+
 async function startMeetingCapture(
   tabId: number,
   meetingId: string,
-): Promise<MeetingPilotSessionSnapshot | undefined> {
+  preferredStreamId?: string,
+): Promise<StartMeetingCaptureResult> {
   await ensureInitialized();
+
+  const activeRecording = await resolveActiveRecordingBlocker(tabId);
+  if (activeRecording) {
+    const blocked = await registry.updateSession(tabId, (s) => ({
+      ...s,
+      capture: {
+        ...s.capture,
+        kind: 'error' as const,
+        lastError: `Already recording meeting ${activeRecording.meetingId} on another tab. Stop that first.`,
+      },
+      updatedAt: Date.now(),
+    }));
+    if (blocked) await broadcastSessionSnapshot(blocked);
+    return {
+      session: blocked ?? undefined,
+      activeRecording,
+    };
+  }
+
   const session = await syncSessionReadiness(tabId, true);
-  if (!session || session.meetingId !== meetingId) return undefined;
+  if (!session || session.meetingId !== meetingId) {
+    console.warn('[Meeting Pilot][background] capture session not ready', {
+      tabId,
+      meetingId,
+      sessionMeetingId: session?.meetingId,
+      hasSession: Boolean(session),
+    });
+    return { session: undefined };
+  }
   if (!session.readiness.canStartCapture) {
+    console.warn('[Meeting Pilot][background] capture blocked by readiness', {
+      tabId,
+      meetingId,
+      readiness: session.readiness,
+    });
     await broadcastSessionSnapshot(session);
-    return session;
+    return { session };
   }
 
   const armed = await registry.setCaptureState(tabId, {
@@ -1102,7 +1421,7 @@ async function startMeetingCapture(
     await updateBrowserAction(armed);
     await broadcastSessionSnapshot(armed);
   }
-  const streamId = await getMediaStreamId(tabId);
+  const streamId = preferredStreamId || (await getMediaStreamId(tabId));
 
   if (!streamId) {
     if (testUseMockCapture) {
@@ -1127,8 +1446,13 @@ async function startMeetingCapture(
         await updateBrowserAction(updated);
         await broadcastSessionSnapshot(updated);
       }
-      return updated;
+      return { session: updated };
     }
+    console.warn('[Meeting Pilot][background] tabCapture stream unavailable', {
+      tabId,
+      meetingId,
+      preferredStreamProvided: Boolean(preferredStreamId),
+    });
     const updated = await registry.setCaptureState(tabId, {
       kind: 'error',
       lastError: 'tabCapture_stream_unavailable',
@@ -1138,7 +1462,7 @@ async function startMeetingCapture(
       await updateBrowserAction(updated);
       await broadcastSessionSnapshot(updated);
     }
-    return updated;
+    return { session: updated };
   }
 
   await ensureOffscreenDocument();
@@ -1164,7 +1488,7 @@ async function startMeetingCapture(
       await updateBrowserAction(updated);
       await broadcastSessionSnapshot(updated);
     }
-    return updated;
+    return { session: updated };
   }
 
   const updated = await registry.setCaptureState(tabId, {
@@ -1178,7 +1502,7 @@ async function startMeetingCapture(
     await updateBrowserAction(updated);
     await broadcastSessionSnapshot(updated);
   }
-  return updated;
+  return { session: updated };
 }
 
 async function ensureMeetingSessionForCapture(params: {
@@ -1210,16 +1534,24 @@ async function ensureMeetingSessionForCapture(params: {
 async function stopMeetingCapture(
   tabId: number,
   meetingId: string,
+  reason = 'manual-stop',
 ): Promise<MeetingPilotSessionSnapshot | undefined> {
   await ensureInitialized();
   const session = registry.getSessionByTabId(tabId);
   if (!session || session.meetingId !== meetingId) return undefined;
 
+  console.info('[Meeting Pilot][background] stopping meeting capture', {
+    tabId,
+    meetingId,
+    reason,
+    chunkCount: session.capture.chunkCount,
+  });
   try {
     await pushOffscreenCommand({
       type: 'MEETING_PILOT_OFFSCREEN_STOP_CAPTURE',
       tabId,
       meetingId,
+      reason,
     });
   } catch (error) {
     console.warn('Meeting Pilot offscreen stop failed:', error);
@@ -1260,7 +1592,12 @@ async function openMeetingSidePanelWindow(
   options?: { catchup?: boolean; debug?: boolean },
 ): Promise<void> {
   await chrome.windows.create({
-    url: chrome.runtime.getURL(buildMeetingSidePanelPath(tabId, options)),
+    url: chrome.runtime.getURL(
+      buildMeetingSidePanelPath(tabId, {
+        ...options,
+        surface: 'window',
+      }),
+    ),
     type: 'popup',
     width: 1280,
     height: 920,
@@ -1271,6 +1608,7 @@ async function openMeetingSidePanelWindow(
 async function openMeetingEmbeddedPanel(
   tabId: number,
   source?: string,
+  retried = false,
 ): Promise<boolean> {
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -1278,9 +1616,48 @@ async function openMeetingEmbeddedPanel(
       tabId,
       source,
     });
-    return Boolean(response?.success);
-  } catch {
+    const success = Boolean(response?.success);
+    if (!success) {
+      console.warn('[Meeting Pilot][background] embedded panel open rejected', {
+        tabId,
+        source,
+        response,
+      });
+      if (!retried) {
+        await ensureMeetingContentScript(tabId);
+        return openMeetingEmbeddedPanel(tabId, source, true);
+      }
+    }
+    return success;
+  } catch (error) {
+    console.warn('[Meeting Pilot][background] embedded panel open failed', {
+      tabId,
+      source,
+      error: String((error as Error)?.message || error),
+    });
+    if (!retried) {
+      await ensureMeetingContentScript(tabId);
+      return openMeetingEmbeddedPanel(tabId, source, true);
+    }
     return false;
+  }
+}
+
+async function ensureMeetingContentScript(tabId: number): Promise<void> {
+  if (!chrome.scripting?.executeScript) {
+    return;
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['contentScriptRingCentralMeeting.js'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } catch (error) {
+    console.warn('[Meeting Pilot][background] content script injection failed', {
+      tabId,
+      error: String((error as Error)?.message || error),
+    });
   }
 }
 
@@ -1296,20 +1673,23 @@ async function closeMeetingEmbeddedPanel(tabId: number): Promise<boolean> {
   }
 }
 
-async function openMeetingSidePanel(
+function buildSidePanelOpenOptions(source?: string): {
+  catchup: boolean;
+  debug: boolean;
+} {
+  return {
+    catchup: source === 'overlay-catchup',
+    debug: source === 'overlay' || source === 'overlay-catchup',
+  };
+}
+
+async function openMeetingChromeSidePanel(
   tabId: number,
   source?: string,
-): Promise<'embedded' | 'side-panel' | 'window'> {
-  const shouldOpenCatchup = source === 'overlay-catchup';
-  const shouldOpenDebug = source === 'overlay' || source === 'overlay-catchup';
-  await configureTabSidePanel(tabId, true, {
-    catchup: shouldOpenCatchup,
-    debug: shouldOpenDebug,
-  });
-
-  if (await openMeetingEmbeddedPanel(tabId, source)) {
-    return 'embedded';
-  }
+  behavior?: { fallbackToWindow?: boolean },
+): Promise<'side-panel' | 'window' | 'unavailable'> {
+  const openOptions = buildSidePanelOpenOptions(source);
+  await configureTabSidePanel(tabId, true, openOptions);
 
   if (chrome.sidePanel?.open) {
     try {
@@ -1318,16 +1698,52 @@ async function openMeetingSidePanel(
       }
       await chrome.sidePanel.open({ tabId });
       return 'side-panel';
-    } catch {
-      // Fall back to a popup window when side panel open is rejected.
+    } catch (error) {
+      console.warn('[Meeting Pilot][background] Chrome side panel open failed', {
+        tabId,
+        source,
+        error: String((error as Error)?.message || error),
+      });
     }
   }
 
-  await openMeetingSidePanelWindow(tabId, {
-    catchup: shouldOpenCatchup,
-    debug: shouldOpenDebug,
+  if (behavior?.fallbackToWindow === false) {
+    return 'unavailable';
+  }
+
+  console.warn('[Meeting Pilot][background] falling back to side panel window', {
+    tabId,
+    source,
+    catchup: openOptions.catchup,
+    debug: openOptions.debug,
   });
+  await openMeetingSidePanelWindow(tabId, openOptions);
   return 'window';
+}
+
+async function openMeetingSidePanel(
+  tabId: number,
+  source?: string,
+  options?: { preferSurface?: 'embedded' | 'side-panel' },
+): Promise<'embedded' | 'side-panel' | 'window' | 'unavailable'> {
+  if (options?.preferSurface === 'side-panel') {
+    return openMeetingChromeSidePanel(tabId, source, {
+      fallbackToWindow: false,
+    });
+  }
+
+  const openOptions = buildSidePanelOpenOptions(source);
+  await configureTabSidePanel(tabId, true, openOptions);
+
+  if (await openMeetingEmbeddedPanel(tabId, source)) {
+    return 'embedded';
+  }
+
+  if (options?.preferSurface === 'embedded') {
+    return 'unavailable';
+  }
+
+  return openMeetingChromeSidePanel(tabId, source);
 }
 
 function isCaptureActiveForUi(session?: MeetingPilotSessionSnapshot): boolean {
@@ -1378,33 +1794,40 @@ async function handleTranscriptUpdate(
 
   const session = registry.getSessionByTabId(tabId);
   if (!session) return;
-  const envConfig = await getEnvConfig();
-  const aliasEntries = String(envConfig.MEETING_NAME_ALIASES || '')
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => item.split('=').map((part) => part.trim()))
-    .filter((parts) => parts.length === 2);
-  const resolveAlias = (name: string) => {
-    const normalized = name
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '');
-    const match = aliasEntries.find(
-      ([alias]) =>
-        alias.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '') ===
-        normalized,
-    );
-    return match?.[1] || name;
-  };
 
-  const effectiveSpeaker =
-    transcriptChunk.speaker && transcriptChunk.speaker !== 'Unknown participant'
-      ? resolveAlias(transcriptChunk.speaker)
-      : resolveAlias(session.speakerLabel || 'Unknown participant');
-  const nextTranscript = [
-    ...session.transcript,
-    { ...transcriptChunk, speaker: effectiveSpeaker },
-  ].slice(-60);
+  if (transcriptChunk.lowConfidence) {
+    const updated = await registry.updateSession(tabId, (s) => ({
+      ...s,
+      transcript: [...s.transcript, transcriptChunk].slice(-60),
+      updatedAt: Date.now(),
+    }));
+    if (updated) await broadcastSessionSnapshot(updated);
+    return;
+  }
+
+  const envConfig = await getEnvConfig();
+  const resolveAlias = createAliasResolverFromEnv(
+    envConfig.MEETING_NAME_ALIASES,
+  );
+
+  const resolution = resolveSpeakerForChunk(session, transcriptChunk, {
+    resolveAlias,
+  });
+
+  let workingParticipants = resolution.participantsAfter;
+  if (resolution.newParticipant) {
+    // already included via participantsAfter; nothing else to do
+  }
+
+  const enrichedChunk = {
+    ...transcriptChunk,
+    speaker: resolution.resolvedName,
+    participantId: resolution.participantId,
+    resolutionSource: resolution.source,
+    resolutionConfidence: resolution.confidence,
+  };
+  const nextTranscript = [...session.transcript, enrichedChunk].slice(-60);
+
   const configuredHotwords = String(envConfig.MEETING_HOTWORDS || '')
     .split(/[\n,]/)
     .map((item) => item.trim())
@@ -1438,49 +1861,29 @@ async function handleTranscriptUpdate(
 
   const inferTimeLabel = (ts: number) => {
     const date = new Date(ts);
-    return `📍 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    return `📍 ${String(date.getHours()).padStart(2, '0')}:${String(
+      date.getMinutes(),
+    ).padStart(2, '0')}`;
   };
 
+  // Stance accumulation by participantId
   const heuristicParticipants = (() => {
-    const current = [...session.participants];
-    const speakerId = effectiveSpeaker
-      ? effectiveSpeaker.toLowerCase().replace(/[^a-z0-9]+/g, '')
-      : '';
-    const speakerIndex = current.findIndex(
-      (participant) =>
-        participant.name.toLowerCase().replace(/[^a-z0-9]+/g, '') === speakerId,
-    );
-    if (speakerIndex === -1 && effectiveSpeaker !== 'Unknown participant') {
-      current.push({
-        id: speakerId || `participant-${current.length + 1}`,
-        name: effectiveSpeaker,
-        role: 'Participant',
-        speakingPct: 0,
-        stances: [],
-      });
-    }
-
-    const totalChunksBySpeaker = nextTranscript.reduce<Record<string, number>>(
-      (acc, chunk) => {
-        const key = chunk.speaker.toLowerCase().replace(/[^a-z0-9]+/g, '');
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      },
-      {},
-    );
+    const totalChunksByParticipantId = nextTranscript.reduce<
+      Record<string, number>
+    >((acc, chunk) => {
+      if (!chunk.participantId) return acc;
+      acc[chunk.participantId] = (acc[chunk.participantId] || 0) + 1;
+      return acc;
+    }, {});
     const totalCount = nextTranscript.length || 1;
 
-    return current.map((participant) => {
-      const participantKey = participant.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '');
+    return workingParticipants.map((participant) => {
       const speakingPct = Math.round(
-        ((totalChunksBySpeaker[participantKey] || 0) / totalCount) * 100,
+        ((totalChunksByParticipantId[participant.id] || 0) / totalCount) * 100,
       );
 
       if (
-        participantKey !== speakerId ||
-        effectiveSpeaker === 'Unknown participant' ||
+        participant.id !== resolution.participantId ||
         transcriptChunk.lowConfidence
       ) {
         return { ...participant, speakingPct };
@@ -1506,10 +1909,12 @@ async function handleTranscriptUpdate(
     });
   })();
 
+  workingParticipants = heuristicParticipants;
+
   let llmResult: MeetingPilotStructuredParseResult | undefined;
   try {
     llmResult = await runMeetingAnalysis(
-      session,
+      { ...session, participants: workingParticipants },
       analysisTranscript.length ? analysisTranscript : nextTranscript,
       envConfig,
     );
@@ -1520,28 +1925,71 @@ async function handleTranscriptUpdate(
     );
   }
   const nextTopic = llmResult?.topic || heuristicTopic;
-  const nextParticipants = (() => {
-    if (!llmResult?.participantStances.length) {
-      return heuristicParticipants;
-    }
-    return heuristicParticipants.map((participant) => {
-      const participantMatches = llmResult.participantStances.filter(
-        (item) => item.participant === participant.name,
+
+  // Apply LLM stance results, mapping LLM-emitted participant strings back to canonical ids.
+  let nextParticipants: MeetingPilotParticipant[] = workingParticipants;
+  let resolvedStances: MeetingPilotStructuredParseResult['participantStances'] =
+    [];
+
+  if (llmResult?.participantStances.length) {
+    const stancesByParticipantId = new Map<
+      string,
+      MeetingPilotParticipantStance[]
+    >();
+    resolvedStances = llmResult.participantStances.map((item) => {
+      const target = resolveParticipantByName(
+        workingParticipants,
+        item.participant,
       );
-      if (!participantMatches.length) {
-        return participant;
-      }
-      return {
-        ...participant,
-        stances: participantMatches.slice(0, 5).map((item) => ({
+      if (target) {
+        const list = stancesByParticipantId.get(target.id) || [];
+        list.push({
           topic: item.topic,
           stance: item.stance,
           keyQuote: item.keyQuote,
           timeRange: item.timeRange,
-        })),
+        });
+        stancesByParticipantId.set(target.id, list);
+        return { ...item, participantId: target.id };
+      }
+      return item;
+    });
+    nextParticipants = workingParticipants.map((participant) => {
+      const llmStances = stancesByParticipantId.get(participant.id);
+      if (!llmStances || !llmStances.length) {
+        return participant;
+      }
+      return {
+        ...participant,
+        stances: llmStances.slice(0, 5),
       };
     });
-  })();
+  }
+
+  // Apply AI auto-merge suggestions (high-confidence only)
+  if (llmResult?.participantResolutions?.length) {
+    const aiMerge = applyAiParticipantResolutions(
+      {
+        ...session,
+        participants: nextParticipants,
+        transcript: nextTranscript,
+        transcriptTurns: session.transcriptTurns,
+      },
+      llmResult.participantResolutions,
+    );
+    if (aiMerge.changed) {
+      nextParticipants = aiMerge.session.participants;
+      // mergeParticipants also rewrites transcript/turns; pull updated transcript back
+      // (we'll regenerate turns below from the latest transcript).
+    }
+  }
+
+  // Aggregate turns from latest transcript
+  const nextTranscriptForTurns = nextTranscript;
+  const nextTranscriptTurns = buildTranscriptTurns(
+    nextTranscriptForTurns,
+    nextParticipants,
+  );
 
   const structuredData = buildStructuredMeetingData(
     session,
@@ -1579,29 +2027,35 @@ async function handleTranscriptUpdate(
       ].slice(-12)
     : structuredData.timelineEvents;
 
-  const latestStructuredParse = llmResult || {
-    topic: nextTopic,
-    summary: nextSummary || session.summary,
-    actionItems: structuredData.actionItems,
-    decisions: structuredData.decisions,
-    alerts: [],
-    participantStances: nextParticipants.flatMap((participant) =>
-      (participant.stances || []).map((item) => ({
-        participant: participant.name,
-        topic: item.topic,
-        stance: item.stance,
-        keyQuote: item.keyQuote,
-        timeRange: item.timeRange,
-      })),
-    ),
-    latestObservationText:
-      session.shareState === 'active'
-        ? `${session.sharerName || 'Someone'} 正在共享屏幕，当前内容聚焦于 ${nextTopic}`
-        : `当前会议讨论聚焦于 ${nextTopic}`,
-  };
+  const latestStructuredParse: MeetingPilotStructuredParseResult = llmResult
+    ? { ...llmResult, participantStances: resolvedStances }
+    : {
+        topic: nextTopic,
+        summary: nextSummary || session.summary,
+        actionItems: structuredData.actionItems,
+        decisions: structuredData.decisions,
+        alerts: [],
+        participantStances: nextParticipants.flatMap((participant) =>
+          (participant.stances || []).map((item) => ({
+            participant: participant.name,
+            participantId: participant.id,
+            topic: item.topic,
+            stance: item.stance,
+            keyQuote: item.keyQuote,
+            timeRange: item.timeRange,
+          })),
+        ),
+        latestObservationText:
+          session.shareState === 'active'
+            ? `${
+                session.sharerName || 'Someone'
+              } 正在共享屏幕，当前内容聚焦于 ${nextTopic}`
+            : `当前会议讨论聚焦于 ${nextTopic}`,
+      };
 
   const updated = await registry.updateObservation(tabId, {
     transcript: nextTranscript,
+    transcriptTurns: nextTranscriptTurns,
     currentTopic: nextTopic,
     summary: llmResult?.summary || nextSummary || session.summary,
     participants: nextParticipants,
@@ -1682,23 +2136,41 @@ async function handleDigestStatusUpdate(
   }
 }
 
-function buildMeetingIngestPayloads(session: MeetingPilotSessionSnapshot) {
+export function buildMeetingIngestPayloads(
+  session: MeetingPilotSessionSnapshot,
+) {
   const panoramaUrl = chrome.runtime.getURL(
-    `meeting-panorama.html?meetingId=${encodeURIComponent(session.meetingId)}&tabId=${session.tabId}`,
+    `meeting-panorama.html?meetingId=${encodeURIComponent(
+      session.meetingId,
+    )}&tabId=${session.tabId}`,
   );
   const summaryPayload = {
     content: `## 会议: ${session.title}
 日期: ${new Date(session.detectedAt).toISOString()}
-参会者: ${session.participants.map((participant) => participant.name).join(', ')}
+参会者: ${session.participants
+      .map((participant) => participant.name)
+      .join(', ')}
 
 ### 摘要
 ${session.summary}
 
 ### 决议
-${session.decisions.map((decision) => `- ${decision.text}`).join('\n') || '- 暂无'}
+${
+  session.decisions.map((decision) => `- ${decision.text}`).join('\n') ||
+  '- 暂无'
+}
 
 ### 行动项
-${session.actionItems.map((item) => `- [${item.owner}] ${item.title}${item.deadline ? ` (DDL: ${item.deadline})` : ''}`).join('\n') || '- 暂无'}`,
+${
+  session.actionItems
+    .map(
+      (item) =>
+        `- [${item.owner}] ${item.title}${
+          item.deadline ? ` (DDL: ${item.deadline})` : ''
+        }`,
+    )
+    .join('\n') || '- 暂无'
+}`,
     sourceType: 'meeting' as const,
     sourceUrl: panoramaUrl,
     sourceTitle: session.title,
@@ -1787,61 +2259,67 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
     .slice(-6)
     .map((chunk) => `${chunk.speaker}: ${chunk.text}`)
     .join(' ');
-  const visualObservation = [
-    session.shareState === 'active'
-      ? `${session.sharerName || 'Someone'} is sharing the screen.`
-      : undefined,
-    session.speakerLabel
-      ? `Current speaker: ${session.speakerLabel}.`
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(' ');
   const meetingMetadata = [
     `Meeting: ${session.title}`,
     session.participants.length
-      ? `Participants: ${session.participants.map((participant) => participant.name).join(', ')}`
+      ? `Participants: ${session.participants
+          .map((participant) => participant.name)
+          .join(', ')}`
       : undefined,
   ]
     .filter(Boolean)
     .join(' ');
 
-  const query = [
-    session.currentTopic,
-    session.summary,
+  // Don't fire recall if there is no meaningful content beyond the meeting
+  // title. "RingCentral Video" / generic titles are useless as recall signals
+  // and will return noisy or irrelevant matches.
+  const hasRealTranscript = transcriptSummary.trim().length > 20;
+  const hasRealTopic =
+    session.currentTopic.trim() &&
+    session.currentTopic.trim().toLowerCase() !==
+      session.title.trim().toLowerCase() &&
+    session.currentTopic !== 'Live discussion';
+  const hasRealSummary = session.summary.trim().length > 20;
+  if (!hasRealTranscript && !hasRealTopic && !hasRealSummary) {
+    return;
+  }
+
+  // Intentionally exclude shareSummary / speakerSummary boilerplate to avoid
+  // self-echoing recall noise.
+  const requestBody = buildMeetingPilotContextRecallRequest({
+    excludeMeetingId: session.meetingId,
+    meetingTitle: session.title,
+    currentTopic: session.currentTopic,
+    summary: session.summary,
     transcriptSummary,
-    visualObservation,
     meetingMetadata,
-  ]
-    .filter(Boolean)
-    .join(' ');
-  if (!query.trim()) return;
+  });
+
+  if (
+    !requestBody.primaryText?.trim() &&
+    !requestBody.secondaryTexts?.some((part) => part.trim())
+  ) {
+    return;
+  }
 
   try {
     const client = getMemoryServiceClient();
-    let result;
-    try {
-      result = await client.recall(query, buildMeetingPilotRecallOptions());
-    } catch (error) {
-      if (!shouldRetryLegacyMeetingRecall(error)) {
-        throw error;
-      }
-      result = await client.recall(query, {
-        topK: 3,
-        channels: ['fts', 'time'],
-        includeMetadata: true,
-        sourceTypes: ['meeting', 'manual', 'web', 'glip'],
-      });
-    }
+    const result = await client.contextRecall(requestBody);
 
-    const memoryRefs = result.items.map(recallItemToMeetingPilotMemoryRef);
+    const memoryRefs = result.matches
+      .filter((match) => {
+        const itemMeetingId = (match as any)?.metadata?.meetingId;
+        return !itemMeetingId || itemMeetingId !== session.meetingId;
+      })
+      .map(contextMatchToMeetingPilotMemoryRef)
+      .filter((ref) => ref && (ref.snippet?.trim() || ref.fullSnippet?.trim()));
 
     const updated = await registry.updateObservation(tabId, { memoryRefs });
     if (updated) {
       await broadcastSessionSnapshot(updated);
     }
   } catch (error) {
-    console.warn('Meeting Pilot recall failed:', error);
+    console.warn('Meeting Pilot context recall failed:', error);
   }
 }
 
@@ -1913,9 +2391,18 @@ async function handleMeetingPilotMessage(
     }
     case 'MEETING_PILOT_OPEN_SIDE_PANEL': {
       await ensureInitialized();
+      const resolvedTabId = Number(request.tabId || tabId || 0);
+      const session = registry.getSessionByTabId(resolvedTabId);
+      if (session) {
+        await pushSessionSnapshotToMeetingTab(session);
+      }
       const surface = await openMeetingSidePanel(
-        Number(request.tabId || tabId || 0),
+        resolvedTabId,
         typeof request.source === 'string' ? request.source : undefined,
+        request.preferSurface === 'side-panel' ||
+          request.preferSurface === 'embedded'
+          ? { preferSurface: request.preferSurface }
+          : undefined,
       );
       sendResponse({ success: true, surface });
       return;
@@ -1926,6 +2413,37 @@ async function handleMeetingPilotMessage(
       await closeMeetingEmbeddedPanel(resolvedTabId);
       await configureTabSidePanel(resolvedTabId, false);
       sendResponse({ success: true });
+      return;
+    }
+    case 'MEETING_PILOT_SET_SIDE_PANEL_PIN': {
+      await ensureInitialized();
+      const resolvedTabId = Number(request.tabId || tabId || 0);
+      const pinned = Boolean(request.pinned);
+      const current = registry.getSessionByTabId(resolvedTabId);
+      if (
+        !current ||
+        (request.meetingId && String(request.meetingId) !== current.meetingId)
+      ) {
+        sendResponse({ success: false });
+        return;
+      }
+      const updated = await registry.updateSession(resolvedTabId, (session) => ({
+        ...session,
+        sidePanelPinned: pinned,
+      }));
+      if (updated) {
+        await broadcastSessionSnapshot(updated);
+        await pushSessionSnapshotToMeetingTab(updated);
+      }
+      let surface: 'side-panel' | 'window' | 'unavailable' | undefined;
+      if (updated && pinned && !request.skipOpen) {
+        surface = await openMeetingChromeSidePanel(
+          resolvedTabId,
+          typeof request.source === 'string' ? request.source : undefined,
+          { fallbackToWindow: false },
+        );
+      }
+      sendResponse({ success: Boolean(updated), session: updated, surface });
       return;
     }
     case 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL': {
@@ -1940,13 +2458,21 @@ async function handleMeetingPilotMessage(
         title: String(request.title || request.payload?.title || ''),
         sender,
       });
-      const result = await startMeetingCapture(
+      const captureResult = await startMeetingCapture(
         resolvedTabId,
         String(request.meetingId || request.payload?.meetingId || ''),
+        String(request.streamId || request.payload?.streamId || ''),
       );
-      let surface: 'embedded' | 'side-panel' | 'window' | undefined;
+      const result = captureResult.session;
+      let surface:
+        | 'embedded'
+        | 'side-panel'
+        | 'window'
+        | 'unavailable'
+        | undefined;
       let panelError: string | undefined;
       if (isCaptureActiveForUi(result)) {
+        await pushSessionSnapshotToMeetingTab(result);
         try {
           surface = await openMeetingSidePanel(
             resolvedTabId,
@@ -1961,6 +2487,7 @@ async function handleMeetingPilotMessage(
       sendResponse({
         success: isCaptureActiveForUi(result),
         session: result,
+        activeRecording: captureResult.activeRecording,
         panelError,
         surface,
       });
@@ -1984,11 +2511,16 @@ async function handleMeetingPilotMessage(
         title: String(request.title || request.payload?.title || ''),
         sender,
       });
-      const result = await startMeetingCapture(
+      const captureResult = await startMeetingCapture(
         resolvedTabId,
         String(request.meetingId || request.payload?.meetingId || ''),
+        String(request.streamId || request.payload?.streamId || ''),
       );
-      sendResponse({ success: isCaptureActiveForUi(result), session: result });
+      sendResponse({
+        success: isCaptureActiveForUi(captureResult.session),
+        session: captureResult.session,
+        activeRecording: captureResult.activeRecording,
+      });
       return;
     }
     case 'MEETING_PILOT_STOP_CAPTURE': {
@@ -2045,6 +2577,38 @@ async function handleMeetingPilotMessage(
         tabId: Number(request.tabId || tabId || 0),
       });
       sendResponse({ success: true });
+      return;
+    }
+    case 'MEETING_PILOT_TIER_STATUS_UPDATE': {
+      await ensureInitialized();
+      const tierTabId = Number(request.tabId || tabId || 0);
+      const tierStatus = request.tierStatus;
+      if (tierTabId && tierStatus) {
+        const updated = await registry.updateSession(tierTabId, (s) => ({
+          ...s,
+          tier: tierStatus,
+          updatedAt: Date.now(),
+        }));
+        if (updated) await broadcastSessionSnapshot(updated);
+      }
+      sendResponse({ success: true });
+      return;
+    }
+    case 'WHISPER_NM_REQUEST': {
+      const { method = 'GET', path = '/whisper/status', body } = request;
+      try {
+        const data = await sendWhisperBridgeRequest<unknown>({
+          method,
+          path,
+          body:
+            body && typeof body === 'object'
+              ? (body as Record<string, unknown>)
+              : undefined,
+        });
+        sendResponse(data);
+      } catch (e) {
+        sendResponse({ ok: false, error: String((e as Error)?.message || e) });
+      }
       return;
     }
     case 'MEETING_PILOT_CAPTURE_STATUS': {
@@ -2118,6 +2682,91 @@ async function handleMeetingPilotMessage(
       sendResponse(response);
       return;
     }
+    case 'MEETING_PILOT_RENAME_PARTICIPANT': {
+      await ensureInitialized();
+      const renameTabId = Number(request.tabId || tabId || 0);
+      const participantId = String(request.participantId || '');
+      const newName = String(request.newName || '');
+      if (!Number.isFinite(renameTabId) || !participantId || !newName) {
+        sendResponse({ success: false });
+        return;
+      }
+      const session = registry.getSessionByTabId(renameTabId);
+      if (!session) {
+        sendResponse({ success: false });
+        return;
+      }
+      const result = renameParticipant(session, participantId, newName, {
+        allowMerge: true,
+      });
+      if (!result.changed) {
+        sendResponse({ success: false });
+        return;
+      }
+      const updated = await registry.updateObservation(renameTabId, {
+        participants: result.session.participants,
+        transcript: result.session.transcript,
+        transcriptTurns: result.session.transcriptTurns,
+      });
+      if (updated) {
+        await broadcastSessionSnapshot(updated);
+      }
+      sendResponse({
+        success: true,
+        merged: result.merged,
+        session: updated,
+      });
+      return;
+    }
+    case 'MEETING_PILOT_MERGE_PARTICIPANTS': {
+      await ensureInitialized();
+      const mergeTabId = Number(request.tabId || tabId || 0);
+      const fromId = String(request.fromId || '');
+      const toId = String(request.toId || '');
+      if (!Number.isFinite(mergeTabId) || !fromId || !toId) {
+        sendResponse({ success: false });
+        return;
+      }
+      const session = registry.getSessionByTabId(mergeTabId);
+      if (!session) {
+        sendResponse({ success: false });
+        return;
+      }
+      const result = mergeParticipants(session, fromId, toId);
+      if (!result.changed) {
+        sendResponse({ success: false });
+        return;
+      }
+      const updated = await registry.updateObservation(mergeTabId, {
+        participants: result.session.participants,
+        transcript: result.session.transcript,
+        transcriptTurns: result.session.transcriptTurns,
+      });
+      if (updated) {
+        await broadcastSessionSnapshot(updated);
+      }
+      sendResponse({ success: true, session: updated });
+      return;
+    }
+    case 'MEETING_PILOT_FOCUS_PARTICIPANT': {
+      await ensureInitialized();
+      const focusTabId = Number(request.tabId || tabId || 0);
+      const participantId = String(request.participantId || '');
+      if (!Number.isFinite(focusTabId) || !participantId) {
+        sendResponse({ success: false });
+        return;
+      }
+      try {
+        await chrome.tabs.sendMessage(focusTabId, {
+          type: 'MEETING_PILOT_FOCUS_PARTICIPANT',
+          participantId,
+        });
+        sendResponse({ success: true });
+      } catch (error) {
+        sendResponse({ success: false, error: String(error) });
+      }
+      return;
+    }
     default:
       return;
   }
@@ -2134,7 +2783,14 @@ function handleTabUpdate(
   if (!meetingId) {
     const current = registry.getSessionByTabId(tabId);
     if (current && current.inMeeting) {
-      void finalizeMeetingTabSession(tabId);
+      void finalizeMeetingTabSession(tabId, 'tab-left-meeting-url').catch(
+        (error) => {
+          console.warn('[Meeting Pilot][background] tab update finalize failed', {
+            tabId,
+            error: String((error as Error)?.message || error),
+          });
+        },
+      );
     }
     return;
   }
@@ -2183,7 +2839,12 @@ export async function initMeetingPilotBackgroundRuntime(): Promise<void> {
 
   chrome.tabs.onUpdated.addListener(handleTabUpdate);
   chrome.tabs.onRemoved.addListener((tabId) => {
-    void finalizeMeetingTabSession(tabId);
+    void finalizeMeetingTabSession(tabId, 'tab-removed').catch((error) => {
+      console.warn('[Meeting Pilot][background] tab removal finalize failed', {
+        tabId,
+        error: String((error as Error)?.message || error),
+      });
+    });
   });
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {

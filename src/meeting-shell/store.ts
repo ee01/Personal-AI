@@ -13,38 +13,46 @@ type StoragePayload = {
   sessions: MeetingPilotSessionSnapshot[];
 };
 
-function buildSessionSummary(
+interface SessionSummaryFields {
+  summary: string;
+  shareSummary?: string;
+  speakerSummary?: string;
+}
+
+export function buildSessionSummaryFields(
   payload: MeetingPilotDetectionPayload,
   existing?: MeetingPilotSessionSnapshot,
-): string {
-  const parts: string[] = [];
+): SessionSummaryFields {
+  let shareSummary: string | undefined;
   if (payload.shareState === 'active') {
-    parts.push(
-      payload.selfSharing
-        ? 'You are sharing your screen.'
-        : `${payload.sharerName || 'Someone'} is sharing their screen.`,
-    );
+    shareSummary = payload.selfSharing
+      ? 'You are sharing your screen.'
+      : `${payload.sharerName || 'Someone'} is sharing their screen.`;
   } else if (payload.shareState === 'minimized') {
-    parts.push('A shared application is minimized.');
+    shareSummary = 'A shared application is minimized.';
   } else {
-    parts.push('No active screen share is detected.');
+    shareSummary = 'No active screen share is detected.';
   }
 
-  if (payload.speakerLabel) {
-    parts.push(`Current speaker: ${payload.speakerLabel}.`);
-  }
+  const speakerSummary = payload.speakerLabel
+    ? `Current speaker: ${payload.speakerLabel}.`
+    : undefined;
 
+  const summaryParts: string[] = [];
   if (payload.participantCount) {
-    parts.push(`${payload.participantCount} participants detected.`);
+    summaryParts.push(`${payload.participantCount} participants detected.`);
   }
-
   if (existing?.capture.kind === 'recording') {
-    parts.push('Meeting Pilot is recording this meeting.');
+    summaryParts.push('Meeting Pilot is recording this meeting.');
   } else {
-    parts.push('Open the panel to start capture or follow the live map.');
+    summaryParts.push('Open the panel to start capture or follow the live map.');
   }
 
-  return parts.join(' ');
+  return {
+    summary: summaryParts.join(' '),
+    shareSummary,
+    speakerSummary,
+  };
 }
 
 export class MeetingPilotRegistry {
@@ -122,12 +130,21 @@ export class MeetingPilotRegistry {
   ): Promise<MeetingPilotSessionSnapshot | undefined> {
     const session = this.sessions.get(tabId);
     if (!session) return undefined;
+    const shouldMarkCaptureStopped =
+      session.capture.kind === 'armed' || session.capture.kind === 'recording';
     const ended = {
       ...session,
       status: 'ended' as const,
       inMeeting: false,
       endedAt: Date.now(),
       updatedAt: Date.now(),
+      capture: shouldMarkCaptureStopped
+        ? {
+            ...session.capture,
+            kind: 'stopped' as const,
+            stoppedAt: Date.now(),
+          }
+        : session.capture,
     };
     this.sessions.set(tabId, ended);
     if (this.activeMeetingId === session.meetingId) {
@@ -190,8 +207,17 @@ export class MeetingPilotRegistry {
       decisions: reusableExisting?.decisions || [],
       timelineEvents: reusableExisting?.timelineEvents || [],
       transcript: reusableExisting?.transcript || [],
+      transcriptTurns: reusableExisting?.transcriptTurns || [],
       memoryRefs: reusableExisting?.memoryRefs || [],
-      summary: buildSessionSummary(payload, reusableExisting),
+      sidePanelPinned: reusableExisting?.sidePanelPinned ?? false,
+      ...(() => {
+        const fields = buildSessionSummaryFields(payload, reusableExisting);
+        return {
+          summary: fields.summary,
+          shareSummary: fields.shareSummary,
+          speakerSummary: fields.speakerSummary,
+        };
+      })(),
       timelineProgress: reusableExisting?.timelineProgress ?? 0,
       detectedAt: createdAt,
       updatedAt: payload.detectedAt || Date.now(),
@@ -309,6 +335,7 @@ export class MeetingPilotRegistry {
       timelineEvents: data.timelineEvents || session.timelineEvents,
       participants: data.participants || session.participants,
       transcript: data.transcript || session.transcript,
+      transcriptTurns: data.transcriptTurns || session.transcriptTurns,
       memoryRefs: data.memoryRefs || session.memoryRefs,
     }));
   }

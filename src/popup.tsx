@@ -46,6 +46,16 @@ function isMeetingPilotCaptureActive(
   );
 }
 
+async function focusMeetingPilotRecordingTab(
+  session: MeetingPilotSessionSnapshot,
+): Promise<void> {
+  const tab = await chrome.tabs.get(session.tabId);
+  if (typeof tab.windowId === 'number') {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
+  await chrome.tabs.update(session.tabId, { active: true });
+}
+
 const Popup = () => {
   const [isScheduleActive, setIsScheduleActive] = useState(false);
   const [envConfig, setEnvConfig] = useState<any>(null);
@@ -178,6 +188,9 @@ const Popup = () => {
 
   const handleOpenRadar = async () => {
     if (!activeRingCentralTab?.id) {
+      console.info(
+        '[Meeting Pilot][popup] no meeting tab resolved, falling back to active tab message',
+      );
       sendMessageToActiveTab(
         { type: 'RADAR-POC-OPEN-PANEL' },
         'RADAR-POC-OPEN-PANEL',
@@ -203,9 +216,17 @@ const Popup = () => {
 
       const meetingId = extractMeetingIdFromUrl(activeRingCentralTab.url);
       if (!meetingId) {
+        console.warn('[Meeting Pilot][popup] meeting id not found', {
+          tabId: activeRingCentralTab.id,
+          url: activeRingCentralTab.url,
+        });
         return;
       }
 
+      console.info('[Meeting Pilot][popup] starting capture', {
+        tabId: activeRingCentralTab.id,
+        meetingId,
+      });
       const response = (await chrome.runtime.sendMessage({
         type: 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
         tabId: activeRingCentralTab.id,
@@ -217,8 +238,12 @@ const Popup = () => {
         | {
             success?: boolean;
             session?: MeetingPilotSessionSnapshot;
+            activeRecording?: MeetingPilotSessionSnapshot;
+            panelError?: string;
+            surface?: string;
           }
         | undefined;
+      console.info('[Meeting Pilot][popup] start capture response', response);
 
       if (response?.session) {
         setMeetingPilotSession(response.session);
@@ -227,7 +252,36 @@ const Popup = () => {
 
       if (response?.success) {
         window.close();
+      } else {
+        if (response?.activeRecording) {
+          const activeRecording = response.activeRecording;
+          const shouldFocusRecordingTab = window.confirm(
+            `已有会议正在录制：${
+              activeRecording.title || activeRecording.meetingId
+            }\n\n是否跳转到正在录制的会议 tab？`,
+          );
+          if (shouldFocusRecordingTab) {
+            try {
+              await focusMeetingPilotRecordingTab(activeRecording);
+              window.close();
+              return;
+            } catch (error) {
+              console.warn(
+                '[Meeting Pilot][popup] failed to focus active recording tab',
+                error,
+              );
+              alert('正在录制的会议 tab 已无法访问，请重试开启会议全貌。');
+            }
+          }
+        }
+        console.warn('[Meeting Pilot][popup] start capture did not succeed', {
+          response,
+          capture: response?.session?.capture,
+          readiness: response?.session?.readiness,
+        });
       }
+    } catch (error) {
+      console.error('[Meeting Pilot][popup] failed to open panorama', error);
     } finally {
       setIsMeetingPilotBusy(false);
     }
@@ -296,9 +350,9 @@ const Popup = () => {
     });
   };
 
-  const handleOpenDoubaoBridge = () => {
+  const handleOpenDesktopApp = () => {
     chrome.windows.create({
-      url: chrome.runtime.getURL('doubao-bridge.html'),
+      url: chrome.runtime.getURL('desktop-app.html'),
       type: 'popup',
       width: 900,
       height: 920,
@@ -502,8 +556,8 @@ const Popup = () => {
           </button>
           <button
             className="header-icon-btn doubao-icon-btn"
-            onClick={handleOpenDoubaoBridge}
-            title="Doubao Bridge"
+            onClick={handleOpenDesktopApp}
+            title="Desktop App"
           >
             {DOUBAO_ICON_URL ? (
               <img

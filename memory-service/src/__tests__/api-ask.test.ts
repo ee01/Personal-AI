@@ -255,12 +255,54 @@ describe('Ask API', () => {
     expect(body.answer).toContain('Esone');
     expect(recallSpy).toHaveBeenCalled();
     expect(recallSpy.mock.calls[0][0].sourceTypes).toBeUndefined();
+    expect(recallSpy.mock.calls[0][0].scope).toBe('work');
     expect(body.evidence).toHaveLength(1);
     expect(body.evidence[0].source).toBe('meeting');
     expect(body.evidence[0].id).toBe('ask-meeting-memory');
     expect(body.evidence[0].sourceUrl).toBe(
       'https://memory.example.com/meetings/ask-meeting-memory',
     );
+    recallSpy.mockRestore();
+  });
+
+  it('propagates explicit ask scope to recall', async () => {
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ask-john-message',
+            type: 'message',
+            content:
+              'John said the release risks are increasing and we should adjust the timeline.',
+            score: 0.92,
+            source: 'glip',
+            timestamp: Math.floor(Date.now() / 1000) - 86400,
+          },
+        ],
+        totalFound: 1,
+        channels: ['time'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'I found both-scope evidence.',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'What did John say?',
+        includeEvidence: true,
+        scope: 'both',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(recallSpy).toHaveBeenCalled();
+    expect(recallSpy.mock.calls[0][0].scope).toBe('both');
     recallSpy.mockRestore();
   });
 

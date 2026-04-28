@@ -224,7 +224,171 @@ const ToggleField = ({
   </div>
 );
 
-// 使用从utils.ts导入的类型
+function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
+  const [status, setStatus] = React.useState<{
+    ok: boolean;
+    modelReady?: boolean;
+    downloadInProgress?: boolean;
+    downloadProgress?: number;
+    error?: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+
+    const sendWhisperRequest = async <T,>(message: {
+      method: string;
+      path: string;
+      body?: Record<string, unknown>;
+    }): Promise<T> => {
+      return new Promise<T>((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          { type: 'WHISPER_NM_REQUEST', ...message },
+          (response: T) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(response);
+            }
+          },
+        );
+      });
+    };
+
+    const poll = async () => {
+      try {
+        const res = await sendWhisperRequest<{
+          ok: boolean;
+          modelReady?: boolean;
+          downloadInProgress?: boolean;
+          downloadProgress?: number;
+          error?: string;
+        }>({
+          method: 'GET',
+          path: '/whisper/status',
+        });
+        if (!cancelled) {
+          setStatus(
+            res.ok
+              ? res
+              : { ok: false, error: res.error || 'Desktop app not running' },
+          );
+        }
+      } catch {
+        if (!cancelled)
+          setStatus({ ok: false, error: 'Desktop app not running' });
+      }
+    };
+
+    const startPolling = () => {
+      if (intervalId) return;
+      void poll();
+      intervalId = setInterval(poll, 5000);
+    };
+
+    const stopPolling = () => {
+      if (!intervalId) return;
+      clearInterval(intervalId);
+      intervalId = undefined;
+    };
+
+    startPolling();
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      stopPolling();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [enabled]);
+
+  const handleEnsureModel = async () => {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          {
+            type: 'WHISPER_NM_REQUEST',
+            method: 'POST',
+            path: '/whisper/model/ensure',
+            body: {},
+          },
+          () => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve();
+            }
+          },
+        );
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  if (!enabled) return null;
+
+  return (
+    <div
+      className="form-group"
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: 8,
+        padding: '12px 16px',
+        marginBottom: 16,
+        backgroundColor: '#f9fafb',
+      }}
+    >
+      <strong style={{ display: 'block', marginBottom: 8 }}>
+        Desktop ASR (Local Whisper)
+      </strong>
+      {!status ? (
+        <small style={{ color: '#6b7280' }}>Checking...</small>
+      ) : !status.ok ? (
+        <div>
+          <small style={{ color: '#dc2626' }}>
+            {status.error || 'Desktop app not running'}
+          </small>
+          <br />
+          <small style={{ color: '#6b7280' }}>
+            Install the Personal AI desktop app for local transcription.
+          </small>
+        </div>
+      ) : (
+        <div>
+          <small style={{ color: status.modelReady ? '#16a34a' : '#d97706' }}>
+            Model:{' '}
+            {status.modelReady
+              ? 'Ready'
+              : status.downloadInProgress
+                ? `Downloading ${status.downloadProgress ?? 0}%`
+                : 'Not downloaded'}
+          </small>
+          {!status.modelReady && !status.downloadInProgress && (
+            <button
+              type="button"
+              onClick={handleEnsureModel}
+              style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px' }}
+            >
+              Download Model
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const Options = () => {
   const outreachConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const meetingPilotConfigSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1883,11 +2047,11 @@ const Options = () => {
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
-          这里是 Meeting Pilot 的唯一核心配置入口：转写 Provider、Minutes API、
-          分析模型与密钥都在这里维护；side panel 只保留会中体验和个性化设置。
-          Whisper 建议配置，用于实时
-          transcript，并提升摘要、行动项和决议提取准确度； Minutes API
-          可选，主要用于会后 PDF 纪要。
+          这里是 Meeting Pilot 的唯一核心配置入口：ASR / 转写 Provider、 Minutes
+          API、分析模型与密钥都在这里维护；side panel
+          只保留会中体验和个性化设置。建议配置转写能力，用于实时 transcript，
+          并提升摘要、行动项和决议提取准确度； Minutes API 可选，主要用于会后
+          PDF 纪要。
         </small>
         <ToggleField
           id="MEETING_PILOT_ENABLED"
@@ -1916,8 +2080,32 @@ const Options = () => {
           </small>
         ) : null}
         <div className="form-group">
+          <label htmlFor="MEETING_TRANSCRIPTION_MODE">Transcription Mode</label>
+          <select
+            id="MEETING_TRANSCRIPTION_MODE"
+            name="MEETING_TRANSCRIPTION_MODE"
+            value={config.MEETING_TRANSCRIPTION_MODE || 'auto'}
+            onChange={handleInputChange}
+            disabled={config.MEETING_PILOT_ENABLED !== true}
+          >
+            <option value="auto">Auto (local first)</option>
+            <option value="local-only">Local only</option>
+            <option value="cloud-only">Cloud only</option>
+          </select>
+          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+            Auto: tries on-device and desktop Whisper first, then cloud. Local
+            only: never contacts cloud. Cloud only: always uses cloud (requires
+            API key).
+          </small>
+        </div>
+        {config.MEETING_TRANSCRIPTION_MODE !== 'cloud-only' && (
+          <DesktopASRStatusPanel
+            enabled={config.MEETING_PILOT_ENABLED === true}
+          />
+        )}
+        <div className="form-group">
           <label htmlFor="MEETING_PROVIDER_BASE_URL">
-            Whisper Provider URL
+            ASR Provider Base URL
           </label>
           <input
             type="url"
@@ -1929,15 +2117,41 @@ const Options = () => {
             disabled={config.MEETING_PILOT_ENABLED !== true}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            OpenAI-compatible 语音转写服务地址。系统会在此基础上调用
-            `/v1/audio/transcriptions`。建议配置，用于实时 transcript，
-            提升摘要、行动项和决议提取准确度。
+            转写服务的 Base URL。可填写 `https://api.openai.com`，也可填写
+            `https://dashscope.aliyuncs.com/compatible-mode` 或已包含 `/v1`
+            的等价地址；具体会调用哪个 endpoint 取决于下方 API Style 配置。
           </small>
         </div>
         <div className="form-group">
-          <label htmlFor="MEETING_PROVIDER_API_KEY">
-            Whisper Provider API Key
+          <label htmlFor="MEETING_TRANSCRIBE_API_STYLE">
+            Transcribe API Style
           </label>
+          <select
+            id="MEETING_TRANSCRIBE_API_STYLE"
+            name="MEETING_TRANSCRIBE_API_STYLE"
+            value={
+              config.MEETING_TRANSCRIBE_API_STYLE ||
+              'openai_audio_transcriptions'
+            }
+            onChange={handleInputChange}
+            disabled={config.MEETING_PILOT_ENABLED !== true}
+          >
+            <option value="openai_audio_transcriptions">
+              OpenAI Audio Transcriptions (/v1/audio/transcriptions)
+            </option>
+            <option value="openai_chat_completions">
+              OpenAI Chat Completions + input_audio
+            </option>
+          </select>
+          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+            Whisper / OneAPI 类模型通常选择前者；阿里云 DashScope 的
+            `qwen3-asr-flash` 这类 OpenAI 兼容 ASR 通常选择后者。`fun-asr` /
+            `fun-asr-mtl` 不属于这两种协议，它们走 DashScope 原生 ASR API 或
+            WebSocket。
+          </small>
+        </div>
+        <div className="form-group">
+          <label htmlFor="MEETING_PROVIDER_API_KEY">ASR Provider API Key</label>
           <input
             type="password"
             id="MEETING_PROVIDER_API_KEY"
@@ -1951,7 +2165,7 @@ const Options = () => {
         </div>
         <div className="form-group">
           <label htmlFor="MEETING_TRANSCRIBE_MODEL">
-            Whisper Transcribe Model
+            Transcribe / ASR Model
           </label>
           <input
             type="text"
@@ -1962,24 +2176,10 @@ const Options = () => {
             placeholder="whisper-1"
             disabled={config.MEETING_PILOT_ENABLED !== true}
           />
-        </div>
-        <div className="form-group">
-          <label htmlFor="MEETING_ANALYSIS_MODEL">Meeting Analysis Model</label>
-          <input
-            type="text"
-            id="MEETING_ANALYSIS_MODEL"
-            name="MEETING_ANALYSIS_MODEL"
-            value={config.MEETING_ANALYSIS_MODEL || ''}
-            onChange={handleInputChange}
-            placeholder={
-              defaultEnvConfig.MEETING_ANALYSIS_MODEL || 'gpt-5.3-codex'
-            }
-            disabled={config.MEETING_PILOT_ENABLED !== true}
-          />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            用于章节总结、行动项和结构化分析。若不额外指定，会默认跟随
-            {` ${defaultEnvConfig.MEETING_ANALYSIS_MODEL || 'gpt-5.3-codex'} `}
-            这一内建兜底值。
+            例如 `whisper-1`、`gpt-4o-mini-transcribe`、`qwen3-asr-flash`。
+            若填写阿里云 `fun-asr` / `fun-asr-mtl`，需要使用 DashScope 原生 ASR
+            接口而不是 OpenAI 风格转写接口。
           </small>
         </div>
         <div className="form-group">

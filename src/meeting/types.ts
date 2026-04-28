@@ -173,7 +173,6 @@ export interface MeetingConfig {
   providerBaseUrl: string;
   providerApiKey?: string;
   transcribeModel: string;
-  analysisModel: string;
   nameAliases: string[];
   hotwords: string[];
   summaryIntervalSec: number;

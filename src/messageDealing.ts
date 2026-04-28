@@ -270,6 +270,23 @@ export async function analyzeMessagesInBackground(
   ];
   const runtimeWatchRules = await loadRuntimeWatchRules(concernedItems);
 
+  const skippedTypeCounts = data.reduce(
+    (acc, item) => {
+      const itemType = String(item?.type || 'unknown');
+      if (itemType !== 'message') {
+        acc[itemType] = (acc[itemType] || 0) + 1;
+      }
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+  if (Object.keys(skippedTypeCounts).length > 0) {
+    console.log(
+      '消息分析当前仅处理 type=message 的群组；以下顶层数据源已跳过:',
+      skippedTypeCounts,
+    );
+  }
+
   const messageItems = data.filter((item) => item.type === 'message');
   const excludedItems =
     excludedPushGroupIds.size === 0
