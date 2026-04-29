@@ -25,10 +25,21 @@ const SOURCE_LABEL: Record<MeetingPilotSpeakerSource, string> = {
 };
 
 const ASR_SOURCE_LABEL: Record<MeetingPilotASRTier | 'whisper', string> = {
-  web_speech: 'On-Device',
-  desktop_whisper: 'Local Whisper',
+  web_speech: 'Chrome On-Device',
+  desktop_whisper: 'Desktop Whisper',
   cloud: 'Cloud',
   whisper: 'Whisper',
+};
+
+const ASR_BADGE_LABEL: Record<
+  NonNullable<MeetingPilotSessionSnapshot['tier']>['badge'],
+  string
+> = {
+  Probing: 'Probing',
+  'On-Device': 'Chrome On-Device',
+  'Local Whisper': 'Desktop Whisper',
+  Cloud: 'Cloud',
+  'No ASR': 'No ASR',
 };
 
 function formatTime(ts: number): string {
@@ -69,35 +80,274 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
     .reverse()
     .find((c) => c.source && c.source !== 'test');
   const activeTier = session.tier?.activeTier || null;
+  const tierBadge = session.tier?.badge;
   const activeLabel = activeTier ? ASR_SOURCE_LABEL[activeTier] : undefined;
+  const badgeLabel = tierBadge ? ASR_BADGE_LABEL[tierBadge] : undefined;
   const lastSourceLabel =
     lastSuccess?.source && lastSuccess.source !== 'test'
       ? ASR_SOURCE_LABEL[lastSuccess.source]
       : undefined;
   const dependencyReady =
-    session.readiness?.dependencies?.whisper?.status === 'ready';
+    session.readiness?.dependencies?.transcription?.status === 'ready';
   const configured =
     successCount > 0 ||
     Boolean(activeTier) ||
     dependencyReady ||
-    session.tier?.badge === 'Cloud' ||
-    session.tier?.badge === 'Local Whisper' ||
-    session.tier?.badge === 'On-Device';
+    tierBadge === 'Cloud' ||
+    tierBadge === 'Local Whisper' ||
+    tierBadge === 'On-Device' ||
+    tierBadge === 'No ASR';
+  const tierIsStillTrying = Boolean(activeTier) || tierBadge === 'Probing';
+  const tierHasFailed = tierBadge === 'No ASR';
+  const readinessError =
+    successCount === 0 &&
+    !tierIsStillTrying &&
+    session.readiness?.dependencies?.transcription?.status !== 'ready'
+      ? session.readiness?.dependencies?.transcription?.message
+      : undefined;
   const lastError =
     session.capture?.lastError ||
-    (successCount === 0 && session.readiness?.dependencies?.whisper?.status !== 'ready'
-      ? session.readiness?.dependencies?.whisper?.message
-      : undefined);
+    (tierHasFailed ? session.tier?.lastTransitionReason : undefined) ||
+    readinessError;
   return {
     configured,
     label:
       activeLabel ||
       lastSourceLabel ||
-      (configured ? '已连接' : '未配置'),
+      badgeLabel ||
+      (configured ? 'ASR Ready' : '未配置'),
     successCount,
     lastSuccessTs: lastSuccess?.ts,
     lastError,
   };
+}
+
+function truncateUiText(value: string, maxLength: number): string {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}...`;
+}
+
+function speechSuggestionSourceLabel(
+  source: NonNullable<MeetingPilotSessionSnapshot['speechSuggestion']>['source'],
+): string {
+  switch (source) {
+    case 'memory':
+      return '基于记忆';
+    case 'transcript_memory':
+      return '基于最近讨论 + 记忆';
+    case 'profile':
+      return '基于身份记忆';
+    case 'session_context':
+      return '基于本场上下文';
+    case 'transcript':
+      return '基于最近讨论';
+    default:
+      return '建议';
+  }
+}
+
+function emptySpeechSuggestionText(
+  session: MeetingPilotSessionSnapshot,
+): string {
+  const recentText = session.transcript
+    .slice(-4)
+    .map((chunk) => chunk.text)
+    .join(' ');
+  return /[A-Za-z]{2,}/.test(recentText) && !/[\u3400-\u9fff]/.test(recentText)
+    ? 'Nothing to add yet.'
+    : '先听一下，暂时不用插话。';
+}
+
+function SpeechSuggestionPanel(props: {
+  session: MeetingPilotSessionSnapshot;
+  refresh: () => Promise<void>;
+  now: number;
+}) {
+  const { session, refresh, now } = props;
+  const [expanded, setExpanded] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  const suggestion = session.speechSuggestion;
+  const isStale = Boolean(suggestion?.expiresAt && suggestion.expiresAt < now);
+  const displayText = suggestion?.text || emptySpeechSuggestionText(session);
+  const context = session.speechGuidanceContext;
+  const sessionNotes = context?.sessionNotes || [];
+  const evidenceCount = suggestion?.evidenceRefs?.length || 0;
+  const metaParts = [
+    suggestion ? speechSuggestionSourceLabel(suggestion.source) : '等待上下文',
+    suggestion?.confidence !== undefined
+      ? `置信度 ${Math.round(suggestion.confidence * 100)}%`
+      : undefined,
+    evidenceCount ? `${evidenceCount} 条依据` : undefined,
+    isStale ? '可能已过时' : undefined,
+  ].filter(Boolean);
+
+  const clearStatus = () => {
+    setMessage('');
+    setError('');
+  };
+
+  const copySuggestion = async () => {
+    clearStatus();
+    try {
+      await navigator.clipboard.writeText(displayText);
+      setMessage('已复制');
+    } catch {
+      setError('复制失败');
+    }
+  };
+
+  const forceRefresh = async () => {
+    clearStatus();
+    setRefreshing(true);
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_REFRESH_SPEECH_SUGGESTION',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+      })) as { success?: boolean; error?: string };
+      if (!response?.success) {
+        throw new Error(response?.error || '刷新失败');
+      }
+      setMessage('已刷新');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '刷新失败');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const saveContext = async () => {
+    const text = draft.trim();
+    if (!text || saving) return;
+    clearStatus();
+    setSaving(true);
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_UPSERT_SPEECH_CONTEXT',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        text,
+      })) as { success?: boolean; message?: string; error?: string };
+      if (!response?.success) {
+        throw new Error(response?.message || response?.error || '保存失败');
+      }
+      setDraft('');
+      setMessage(response.message || '已用于本次会议');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearNote = async (noteId: string) => {
+    clearStatus();
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_CLEAR_SPEECH_CONTEXT_NOTE',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        noteId,
+      })) as { success?: boolean; error?: string };
+      if (!response?.success) {
+        throw new Error(response?.error || '移除失败');
+      }
+      setMessage('已移除');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '移除失败');
+    }
+  };
+
+  return (
+    <div className={`speech-suggestion-card${isStale ? ' stale' : ''}`}>
+      <div className="speech-suggestion-kicker">我现在可以说</div>
+      <div className="speech-suggestion-main">
+        <div className="speech-suggestion-text">{displayText}</div>
+        <div className="speech-suggestion-actions">
+          <button
+            type="button"
+            className="speech-suggestion-icon-btn"
+            onClick={() => void copySuggestion()}
+            title="复制话术"
+          >
+            复制
+          </button>
+          <button
+            type="button"
+            className="speech-suggestion-icon-btn"
+            onClick={() => void forceRefresh()}
+            disabled={refreshing}
+            title="重新生成"
+          >
+            {refreshing ? '刷新中' : '刷新'}
+          </button>
+        </div>
+      </div>
+      <div className="speech-suggestion-meta">
+        {metaParts.join(' · ')}
+      </div>
+      <div className="speech-context-row">
+        <button
+          type="button"
+          className="speech-context-toggle"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? '收起身份/上下文' : '补充身份/上下文'}
+        </button>
+        {sessionNotes.length ? (
+          <span className="speech-meta">本场已补充 {sessionNotes.length} 条</span>
+        ) : null}
+        {message ? <span className="speech-context-message">{message}</span> : null}
+        {error ? <span className="speech-context-error">{error}</span> : null}
+      </div>
+      {expanded ? (
+        <div className="speech-context-editor">
+          <textarea
+            className="speech-context-input"
+            rows={3}
+            value={draft}
+            placeholder="例如：我是 mobile 项目的 tech lead；或：本次会议需要提醒 mobile 项目的风险。"
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <div className="speech-context-editor-actions">
+            <button
+              type="button"
+              className="speech-context-save"
+              disabled={!draft.trim() || saving}
+              onClick={() => void saveContext()}
+            >
+              {saving ? '判断中...' : '保存并刷新建议'}
+            </button>
+          </div>
+          {sessionNotes.length ? (
+            <div className="speech-context-note-list">
+              {sessionNotes.map((note) => (
+                <span key={note.id} className="speech-context-note">
+                  <span>{truncateUiText(note.text, 58)}</span>
+                  <button
+                    type="button"
+                    onClick={() => void clearNote(note.id)}
+                    title="移除本场上下文"
+                  >
+                    移除
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function AnimatedTranscriptText(props: { text: string }) {
@@ -291,6 +541,8 @@ export function SpeechTab(props: SpeechTabProps) {
 
   return (
     <div className="speech-tab">
+      <SpeechSuggestionPanel session={session} refresh={refresh} now={now} />
+
       <div className="speech-status-card">
         <div>
           <strong>ASR:</strong>{' '}

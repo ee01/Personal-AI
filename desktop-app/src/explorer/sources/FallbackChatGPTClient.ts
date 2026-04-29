@@ -18,6 +18,7 @@ import type {
   ChatGPTConversationResponse,
   ChatGPTConversationSummary,
 } from './ChatGPTSource.js';
+import type { BridgeAuthStatus } from '../../types.js';
 import type { TransportMode } from '../transports/types.js';
 
 const FALLBACK_COOLDOWN_MS = 10 * 60 * 1_000; // 10 minutes
@@ -51,7 +52,60 @@ export class FallbackChatGPTClient implements ChatGPTApiClient {
   constructor(private readonly options: FallbackChatGPTClientOptions) {}
 
   async openLogin(): Promise<string> {
-    return this.invoke((client) => client.openLogin());
+    const transport = this.options.getTransport();
+    if (transport === 'webpage_mcp') {
+      try {
+        const result = await this.options.webpageMcpClient.openLogin();
+        this.webpageMcpCooldownUntil = 0;
+        this.lastOutcome = {
+          mode: 'webpage_mcp',
+          fellBackFromWebpageMcp: false,
+        };
+        return result;
+      } catch (error) {
+        this.lastOutcome = {
+          mode: 'webpage_mcp',
+          fellBackFromWebpageMcp: false,
+          fallbackReason: formatError(error),
+        };
+        throw error;
+      }
+    }
+
+    const result = await this.options.playwrightClient.openLogin();
+    this.lastOutcome = {
+      mode: 'playwright',
+      fellBackFromWebpageMcp: false,
+    };
+    return result;
+  }
+
+  async probeAuthStatus(): Promise<BridgeAuthStatus> {
+    const transport = this.options.getTransport();
+    const client =
+      transport === 'webpage_mcp'
+        ? this.options.webpageMcpClient
+        : this.options.playwrightClient;
+
+    try {
+      const status = await probeClientAuthStatus(client);
+      this.lastOutcome = {
+        mode: transport,
+        fellBackFromWebpageMcp: false,
+      };
+      return status;
+    } catch (error) {
+      const reason = formatError(error);
+      this.lastOutcome = {
+        mode: transport,
+        fellBackFromWebpageMcp: false,
+        fallbackReason: reason,
+      };
+      if (looksLikeAuthFailure(error)) {
+        return 'needs_login';
+      }
+      return 'error';
+    }
   }
 
   async getAccessToken(): Promise<string | undefined> {
@@ -159,4 +213,24 @@ export class FallbackChatGPTClient implements ChatGPTApiClient {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function probeClientAuthStatus(
+  client: ChatGPTApiClient,
+): Promise<BridgeAuthStatus> {
+  const token = await client.getAccessToken();
+  if (token) {
+    return 'connected';
+  }
+  await client.listConversationsPage(undefined, 0, 1);
+  return 'connected';
+}
+
+function looksLikeAuthFailure(error: unknown): boolean {
+  const message = formatError(error);
+  return (
+    /\b(401|403)\b/.test(message) ||
+    /login required|unauthorized|forbidden/i.test(message) ||
+    /No existing chatgpt\.com tab found/i.test(message)
+  );
 }

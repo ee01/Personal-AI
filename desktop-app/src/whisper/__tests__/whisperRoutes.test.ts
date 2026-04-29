@@ -1,15 +1,49 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { after, before, test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import Fastify from 'fastify';
 
-import { registerWhisperRoutes } from '../whisperRoutes.js';
+import {
+  normalizeWhisperLanguage,
+  registerWhisperRoutes,
+  shouldTranscribeBufferedPcm,
+} from '../whisperRoutes.js';
+
+let modelDir: string;
+
+before(async () => {
+  modelDir = await mkdtemp(join(tmpdir(), 'whisper-routes-test-'));
+  process.env.PERSONAL_AI_WHISPER_MODEL_DIR = modelDir;
+});
+
+after(async () => {
+  delete process.env.PERSONAL_AI_WHISPER_MODEL_DIR;
+  await rm(modelDir, { recursive: true, force: true });
+});
 
 async function createApp() {
   const app = Fastify();
   await registerWhisperRoutes(app);
   return app;
 }
+
+test('normalizeWhisperLanguage defaults to auto detection', () => {
+  assert.equal(normalizeWhisperLanguage(undefined), 'auto');
+  assert.equal(normalizeWhisperLanguage(''), 'auto');
+  assert.equal(normalizeWhisperLanguage('auto'), 'auto');
+  assert.equal(normalizeWhisperLanguage('zh-CN'), 'zh');
+  assert.equal(normalizeWhisperLanguage('en-US'), 'en');
+});
+
+test('shouldTranscribeBufferedPcm flushes short buffered speech', () => {
+  const oneSecond = 16000 * 2;
+  assert.equal(shouldTranscribeBufferedPcm(oneSecond), false);
+  assert.equal(shouldTranscribeBufferedPcm(oneSecond, { flush: true }), true);
+  assert.equal(shouldTranscribeBufferedPcm(16000 * 2 * 3), true);
+});
 
 test('GET /whisper/status returns ok payload', async () => {
   const app = await createApp();
@@ -19,6 +53,9 @@ test('GET /whisper/status returns ok payload', async () => {
   assert.equal(body.ok, true);
   assert.equal(typeof body.modelReady, 'boolean');
   assert.equal(typeof body.engineLoaded, 'boolean');
+  assert.equal(body.engineMode, 'cli_warm');
+  assert.equal(typeof body.engineIdleUnloadMs, 'number');
+  assert.equal(typeof body.engineQueued, 'boolean');
   await app.close();
 });
 

@@ -184,10 +184,12 @@ export class MeetingPilotRegistry {
       inMeeting: payload.inMeeting,
       shareState: payload.shareState,
       selfSharing: payload.selfSharing,
+      micMuted: payload.micMuted ?? reusableExisting?.micMuted,
       sharerName: payload.sharerName || reusableExisting?.sharerName,
       speakerLabel: payload.speakerLabel || reusableExisting?.speakerLabel,
       participantCount:
         payload.participantCount ?? reusableExisting?.participantCount ?? 0,
+      selfName: payload.selfName || reusableExisting?.selfName,
       participants: payload.participants?.length
         ? payload.participants
         : reusableExisting?.participants || [],
@@ -279,10 +281,24 @@ export class MeetingPilotRegistry {
     tabId: number,
     alert: MeetingPilotAlert,
   ): Promise<MeetingPilotSessionSnapshot | undefined> {
-    return this.updateSession(tabId, (session) => ({
-      ...session,
-      alerts: [alert, ...session.alerts].slice(0, 20),
-    }));
+    return this.updateSession(tabId, (session) => {
+      const existing = session.alerts.find(
+        (item) =>
+          item.id === alert.id ||
+          (!item.resolved &&
+            item.level === alert.level &&
+            item.source === alert.source &&
+            item.title === alert.title &&
+            item.body === alert.body),
+      );
+      if (existing) {
+        return session;
+      }
+      return {
+        ...session,
+        alerts: [alert, ...session.alerts].slice(0, 20),
+      };
+    });
   }
 
   async updateDigest(

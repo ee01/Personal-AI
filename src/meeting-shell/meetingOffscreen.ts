@@ -3,8 +3,8 @@ import { MEETING_PILOT_OFFSCREEN_PATH } from './protocol';
 import { releaseWhisperTranscodeContext } from './transcodeForWhisper';
 import { ASROrchestrator } from './asr/orchestrator';
 import { CloudASRProvider } from './asr/cloudASRProvider';
-import { WebSpeechProvider } from './asr/webSpeechProvider';
 import { DesktopWhisperProvider } from './asr/desktopWhisperProvider';
+import { WebSpeechProvider } from './asr/webSpeechProvider';
 import type { MeetingPilotTierStatus } from './protocol';
 
 type OffscreenCaptureState = {
@@ -17,9 +17,14 @@ type OffscreenCaptureState = {
   asrAudioStream?: MediaStream;
   recorder?: MediaRecorder;
   asrOrchestrator?: ASROrchestrator;
+  micAsrOrchestrator?: ASROrchestrator;
+  tierStatus?: MeetingPilotTierStatus;
+  micGain?: GainNode;
+  micMuted: boolean;
+  selfName?: string;
   /**
-   * Route captured tab audio back to speakers, and mix tab audio + mic audio
-   * into one ASR stream when offscreen microphone capture is available.
+   * Route captured tab audio back to speakers while keeping tab and mic ASR
+   * separate so speaker attribution can distinguish remote speakers from self.
    */
   audioContext?: AudioContext;
   chunks: Blob[];
@@ -58,8 +63,20 @@ const state: OffscreenCaptureState = {
   chunkCount: 0,
   blobSize: 0,
   transcriptSeq: 0,
+  micMuted: false,
   requestLog: [],
 };
+
+function setMicMuted(muted: boolean): void {
+  state.micMuted = muted;
+  if (state.micGain) {
+    state.micGain.gain.value = muted ? 0 : 1;
+  }
+  appendCaptureLog(
+    'info',
+    `offscreen mic ${muted ? 'muted' : 'unmuted'} for ASR`,
+  );
+}
 
 function getSupportedRecorderMimeType(
   candidates: string[],
@@ -128,6 +145,7 @@ function emitCaptureStatus(kind: string, lastError?: string): void {
       startedAt: state.startedAt,
       streamId: state.streamId,
     },
+    tierStatus: state.tierStatus,
   });
 }
 
@@ -253,23 +271,20 @@ async function analyzeObservationFromFrame(stream: MediaStream): Promise<void> {
 async function createAsrAudioStream(args: {
   audioCtx: AudioContext;
   tabStream: MediaStream;
-}): Promise<MediaStream> {
+}): Promise<{ tabStream: MediaStream; micStream?: MediaStream }> {
   const tabAudioTracks = args.tabStream
     .getAudioTracks()
     .filter((track) => track.readyState === 'live');
   const tabOnlyStream = new MediaStream(tabAudioTracks);
   if (!tabAudioTracks.length) {
     appendCaptureLog('error', 'ASR stream unavailable: no live tab audio track');
-    return tabOnlyStream;
+    return { tabStream: tabOnlyStream };
   }
 
   const tabSrc = args.audioCtx.createMediaStreamSource(tabOnlyStream);
 
   // tabCapture mutes local playback unless the captured audio is routed back.
   tabSrc.connect(args.audioCtx.destination);
-
-  const mixDest = args.audioCtx.createMediaStreamDestination();
-  tabSrc.connect(mixDest);
 
   try {
     const micStream = await navigator.mediaDevices.getUserMedia({
@@ -286,20 +301,25 @@ async function createAsrAudioStream(args: {
       .filter((track) => track.readyState === 'live');
     if (!micTracks.length) {
       appendCaptureLog('info', 'offscreen mic stream has no live audio track');
-      return tabOnlyStream;
+      return { tabStream: tabOnlyStream };
     }
     const micSrc = args.audioCtx.createMediaStreamSource(
       new MediaStream(micTracks),
     );
-    micSrc.connect(mixDest);
-    appendCaptureLog('info', 'offscreen mic stream acquired; ASR uses tab+mic');
-    return mixDest.stream;
+    const micDest = args.audioCtx.createMediaStreamDestination();
+    const micGain = args.audioCtx.createGain();
+    micGain.gain.value = state.micMuted ? 0 : 1;
+    state.micGain = micGain;
+    micSrc.connect(micGain);
+    micGain.connect(micDest);
+    appendCaptureLog('info', 'offscreen mic stream acquired; ASR uses tab+mic separate streams');
+    return { tabStream: tabOnlyStream, micStream: micDest.stream };
   } catch (error) {
     appendCaptureLog(
       'info',
       `offscreen mic unavailable; ASR uses tab-only: ${String((error as Error)?.name || '')} ${String((error as Error)?.message || error)}`.trim(),
     );
-    return tabOnlyStream;
+    return { tabStream: tabOnlyStream };
   }
 }
 
@@ -317,8 +337,11 @@ async function startCapture(message: Record<string, any>): Promise<void> {
   state.chunkCount = 0;
   state.blobSize = 0;
   state.transcriptSeq = 0;
+  state.tierStatus = undefined;
   state.startedAt = Date.now();
   state.requestLog = [];
+  state.selfName = String(message.selfName || '').trim() || undefined;
+  setMicMuted(message.micMuted === true);
   appendCaptureLog(
     'info',
     `capture requested for ${state.meetingId || 'meeting'}`,
@@ -381,53 +404,105 @@ async function startCapture(message: Record<string, any>): Promise<void> {
       }, ${state.recorderMimeType || 'default mime'})`,
     );
 
-    const asrAudioStream = await createAsrAudioStream({
+    const asrStreams = await createAsrAudioStream({
       audioCtx,
       tabStream: stream,
     });
-    state.asrAudioStream = asrAudioStream;
+    state.asrAudioStream = asrStreams.tabStream;
     const envConfig = await getEnvConfig();
     const transcriptionMode = getMeetingTranscriptionMode(envConfig);
-    const providers = [
-      new WebSpeechProvider(),
-      new DesktopWhisperProvider(),
-      new CloudASRProvider(),
-    ];
-    const orchestrator = new ASROrchestrator({
-      providers,
-      mode: transcriptionMode,
-      onTierStatus: (tierStatus: MeetingPilotTierStatus) => {
-        void chrome.runtime.sendMessage({
-          type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
-          tabId: state.tabId,
-          tierStatus,
-        });
-      },
-      onTranscript: (event) => {
-        state.transcriptSeq += 1;
-        void chrome.runtime.sendMessage({
-          type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
-          tabId: state.tabId,
-          transcriptChunk: {
-            id: `transcript-${event.ts}-${state.transcriptSeq}`,
-            speaker: '',
-            text: event.text,
-            ts: event.ts,
-            source:
-              event.tier === 'web_speech'
-                ? 'web_speech'
-                : event.tier === 'desktop_whisper'
-                  ? 'desktop_whisper'
-                  : 'cloud',
-            lowConfidence: event.kind === 'interim',
-          },
-        });
-      },
-      onCaptureLog: (level, msg) => appendCaptureLog(level, msg),
-    });
+    // SpeechRecognition.start(audioTrack) is unstable in extension/offscreen
+    // renderers. Use it only when the user explicitly chooses local-only.
+    const providers =
+      transcriptionMode === 'local-only'
+        ? [new DesktopWhisperProvider(), new WebSpeechProvider()]
+        : [new DesktopWhisperProvider(), new CloudASRProvider()];
+    const buildOrchestrator = (args: {
+      channel: 'tab' | 'mic';
+      fixedSpeaker?: string;
+    }) =>
+      new ASROrchestrator({
+        providers,
+        mode: transcriptionMode,
+        onTierStatus: (tierStatus: MeetingPilotTierStatus) => {
+          if (args.channel === 'mic') return;
+          state.tierStatus = tierStatus;
+          void chrome.runtime.sendMessage({
+            type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+            tabId: state.tabId,
+            tierStatus,
+          });
+          emitCaptureStatus('recording');
+        },
+        onTranscript: (event) => {
+          state.transcriptSeq += 1;
+          void chrome.runtime.sendMessage({
+            type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+            tabId: state.tabId,
+            transcriptChunk: {
+              id: `transcript-${event.ts}-${state.transcriptSeq}`,
+              speaker: args.fixedSpeaker || '',
+              text: event.text,
+              ts: event.ts,
+              source:
+                event.tier === 'web_speech'
+                  ? 'web_speech'
+                  : event.tier === 'desktop_whisper'
+                    ? 'desktop_whisper'
+                    : 'cloud',
+              lowConfidence: event.kind === 'interim',
+            },
+          });
+        },
+        onCaptureLog: (level, msg) =>
+          appendCaptureLog(level, `${args.channel} ${msg}`),
+      });
+
+    const orchestrator = buildOrchestrator({ channel: 'tab' });
     state.asrOrchestrator = orchestrator;
-    if (asrAudioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
-      void orchestrator.start(asrAudioStream);
+    if (
+      asrStreams.tabStream.getAudioTracks().some((t) => t.readyState === 'live')
+    ) {
+      void orchestrator.start(asrStreams.tabStream);
+    }
+    if (asrStreams.micStream) {
+      const fixedSpeaker = state.selfName || 'You';
+      const micProviders =
+        transcriptionMode === 'cloud-only'
+          ? [new CloudASRProvider()]
+          : [new DesktopWhisperProvider()];
+      const micOrchestrator = new ASROrchestrator({
+        providers: micProviders,
+        mode: transcriptionMode,
+        onTierStatus: () => undefined,
+        onTranscript: (event) => {
+          state.transcriptSeq += 1;
+          void chrome.runtime.sendMessage({
+            type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+            tabId: state.tabId,
+            transcriptChunk: {
+              id: `transcript-${event.ts}-${state.transcriptSeq}`,
+              speaker: fixedSpeaker,
+              text: event.text,
+              ts: event.ts,
+              source:
+                event.tier === 'web_speech'
+                  ? 'web_speech'
+                  : event.tier === 'desktop_whisper'
+                    ? 'desktop_whisper'
+                    : 'cloud',
+              lowConfidence: event.kind === 'interim',
+            },
+          });
+        },
+        onCaptureLog: (level, msg) => appendCaptureLog(level, `mic ${msg}`),
+      });
+      state.micAsrOrchestrator = micOrchestrator;
+      void micOrchestrator.start(asrStreams.micStream);
+      appendCaptureLog(
+        'info',
+        `mic ASR orchestrator started for ${fixedSpeaker}`,
+      );
     }
     appendCaptureLog(
       'info',
@@ -460,6 +535,10 @@ async function stopCapture(): Promise<void> {
     await state.asrOrchestrator.stop();
     state.asrOrchestrator = undefined;
   }
+  if (state.micAsrOrchestrator) {
+    await state.micAsrOrchestrator.stop();
+    state.micAsrOrchestrator = undefined;
+  }
   const stopPromise =
     recorder && recorder.state !== 'inactive'
       ? new Promise<void>((resolve) => {
@@ -482,6 +561,7 @@ async function stopCapture(): Promise<void> {
     state.micStream.getTracks().forEach((track) => track.stop());
     state.micStream = undefined;
   }
+  state.micGain = undefined;
   state.asrAudioStream = undefined;
   if (state.audioContext) {
     state.audioContext.close().catch(() => undefined);
@@ -489,6 +569,7 @@ async function stopCapture(): Promise<void> {
   }
   releaseWhisperTranscodeContext();
   state.recorder = undefined;
+  state.tierStatus = undefined;
   state.stream = undefined;
   setStatus('Stopped');
   appendCaptureLog('info', 'capture stopped');
@@ -692,6 +773,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       appendCaptureLog('error', `capture stop failed: ${messageText}`);
       emitCaptureStatus('error', messageText);
     });
+    sendResponse({ success: true });
+    return true;
+  }
+  if (message.type === 'MEETING_PILOT_OFFSCREEN_SET_MIC_MUTED') {
+    setMicMuted(message.micMuted === true);
     sendResponse({ success: true });
     return true;
   }

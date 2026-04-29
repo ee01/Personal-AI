@@ -79,6 +79,10 @@ Use `.env.development` first, then `.env`, then fall back to the literal id abov
 - Common pages: `popup.html`, `options.html`, `meeting-sidepanel.html`, `meeting-panorama.html`
 - If webpage-mcp can inspect Chrome extension pages in the current environment, open or select the page by id
 - If Chrome internal / extension URLs are redacted or unsupported by the active webpage-mcp tool, use a Playwright persistent context loaded from `dist/`, or ask the user to open the exact extension page and continue from the available tab
+- If validating the user's already-installed dev extension, do not stop at "please reload the extension" when browser control is available:
+  - Open or ask the user to open `chrome://extensions/?id=$HARNESS_EXTENSION_ID`
+  - Reload the unpacked extension from the extension details page
+  - Confirm the page shows the extension id and a reload result, or report exactly why automation could not operate on the Chrome internal page
 - For Google Sheets and other auth-bound flows, prefer the real Chrome profile/webpage-mcp route because Playwright's clean profile may not have the required session
 
 ### Commit / Push Gate
@@ -134,6 +138,12 @@ For Meeting Pilot / RingCentral flows:
 - Prefer keeping the target URL real, for example `https://v.ringcentral.com/conf/on/:meetingId`
 - Use Playwright `page.route()` / `context.route()` to fulfill that URL with local fixture HTML when you need deterministic E2E coverage
 - This keeps manifest matching and content-script injection behavior real, while avoiding dependence on live RingCentral state
+- For real Chrome validation against the installed dev extension, after rebuilding `dist/` and reloading the extension, do not trust an already-open meeting tab or existing embedded side panel:
+  - Stop any existing Meeting Pilot capture first
+  - Refresh or close/reopen the RingCentral meeting tab so the content script is injected from the rebuilt extension
+  - Reopen the Meeting Pilot embedded panel or side panel from the fresh meeting tab
+  - Start capture again only after the refreshed tab is active
+- Extension reload can invalidate the active offscreen document and leave old content-script UI state behind. Symptoms include an embedded panel iframe stuck at `about:blank`, an old side panel still showing a previous ASR tier, or capture state that does not match the freshly loaded extension. Treat these as stale page state and reload/reopen the meeting tab before validating.
 - When validating `meeting-sidepanel.html`, `meeting-live-map.html`, or `meeting-panorama.html` against a specific meeting session, pass the real Chrome tab id in the query string, for example `?tabId=<real-tab-id>`
 - If you open those pages without the meeting tab id, they may resolve against the extension page tab itself and fall back to demo/empty state
 

@@ -182,7 +182,7 @@ Tier 3: Cloud ASR (Cloud) — 现有远程 /v1/audio/transcriptions
 ### Desktop Local Whisper 配置
 
 1. 安装 Personal AI Desktop App
-2. 首次使用 Auto 模式时自动下载 `ggml-base.en` 模型（~148MB）
+2. 首次使用 Auto 模式时自动下载 multilingual `ggml-base` 模型（~148MB），支持中英文自动识别
 3. 在 Options → Desktop ASR 面板查看下载状态
 
 **平台支持**：仅 macOS（Windows 用户自动 fallback 到云端）

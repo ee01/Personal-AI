@@ -56,8 +56,14 @@ export class ExplorerManager {
 
   async getStatus(): Promise<ExplorerStatusSnapshot> {
     const settings = this.options.settingsStore.getSettings();
-    const doubaoAuthStatus = await this.getAuthStatus('doubao');
-    const chatgptAuthStatus = await this.getAuthStatus('chatgpt');
+    const doubaoAuthStatus = await this.getAuthStatus(
+      'doubao',
+      settings.explorer.doubao.enabled,
+    );
+    const chatgptAuthStatus = await this.getAuthStatus(
+      'chatgpt',
+      settings.explorer.chatgpt.enabled,
+    );
 
     return {
       updatedAt: new Date().toISOString(),
@@ -323,10 +329,14 @@ export class ExplorerManager {
 
   private async getAuthStatus(
     source: SourceId,
+    enabled: boolean,
   ): Promise<BridgeAuthStatus | 'unsupported'> {
     const adapter = this.sourceAdapters[source];
     if (!adapter?.getAuthStatus) {
       return source === 'chatgpt' ? 'unsupported' : 'unknown';
+    }
+    if (!enabled) {
+      return 'unknown';
     }
     return adapter.getAuthStatus();
   }

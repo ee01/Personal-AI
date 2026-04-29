@@ -8,38 +8,113 @@ import {
   downloadModel,
   deleteModel,
   getModelPath,
+  MODEL_NAME,
 } from './modelManager.js';
 import {
   loadWhisperModel,
   transcribeWithWhisper,
   unloadWhisperModel,
   isWhisperLoaded,
+  getWhisperBinaryPath,
+  getWhisperServerPath,
+  retainWhisperEngine,
+  releaseWhisperEngine,
+  getWhisperEngineState,
+  warmWhisperEngine,
 } from './whisperEngine.js';
+import {
+  ensureWhisperBinary,
+  getWhisperBinaryInstallStatus,
+} from './binaryManager.js';
 import { installManifest } from '../nativeMessaging/manifestInstaller.js';
 
 interface SessionBuffer {
   chunks: Buffer[];
   startedAt: number;
+  language?: string;
 }
 
 const sessions = new Map<string, SessionBuffer>();
+const MIN_TRANSCRIBE_SECONDS = 3;
+const MIN_IDLE_FLUSH_TRANSCRIBE_SECONDS = 0.7;
+const PCM16_MONO_16KHZ_BYTES_PER_SECOND = 16000 * 2;
+const DEFAULT_MEETING_WHISPER_LANGUAGE = 'auto';
 
 let downloadProgress = 0;
 let downloadInProgress = false;
+
+export function normalizeWhisperLanguage(value: unknown): string | undefined {
+  const raw = String(value || DEFAULT_MEETING_WHISPER_LANGUAGE)
+    .trim()
+    .toLowerCase();
+  if (!raw || raw === 'auto') return 'auto';
+  if (raw.startsWith('zh')) return 'zh';
+  if (raw.startsWith('en')) return 'en';
+  return raw;
+}
+
+export function shouldTranscribeBufferedPcm(
+  totalBytes: number,
+  options?: { flush?: boolean },
+): boolean {
+  const minSeconds = options?.flush
+    ? MIN_IDLE_FLUSH_TRANSCRIBE_SECONDS
+    : MIN_TRANSCRIBE_SECONDS;
+  return totalBytes >= PCM16_MONO_16KHZ_BYTES_PER_SECOND * minSeconds;
+}
+
+function shouldAutoEnsureWhisperBinary(): boolean {
+  return process.env.NODE_ENV !== 'test';
+}
 
 export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
   app.get(
     '/whisper/status',
     async (_req: FastifyRequest, reply: FastifyReply) => {
       const modelStatus = await isModelReady();
+      const binaryStatus = getWhisperBinaryInstallStatus();
+      const engineState = getWhisperEngineState();
+      if (
+        shouldAutoEnsureWhisperBinary() &&
+        !binaryStatus.ready &&
+        !binaryStatus.installInProgress
+      ) {
+        void ensureWhisperBinary();
+      }
       return reply.send({
         ok: true,
+        modelName: MODEL_NAME,
+        modelPath: getModelPath(),
         modelReady: modelStatus.ready,
+        whisperBinaryAvailable: Boolean(getWhisperBinaryPath()),
+        whisperBinaryPath: getWhisperBinaryPath(),
+        whisperServerAvailable: Boolean(getWhisperServerPath()),
+        whisperServerPath: getWhisperServerPath(),
+        whisperServerRunning: engineState.server.running,
+        whisperServerPort: engineState.server.port,
+        whisperServerError: engineState.server.lastError,
+        whisperBinaryInstallInProgress: binaryStatus.installInProgress,
+        whisperBinaryInstallProgress: binaryStatus.installProgress,
+        whisperBinaryInstallError: binaryStatus.error,
         engineLoaded: isWhisperLoaded(),
+        engineMode: engineState.mode,
+        engineActiveSessionRefs: engineState.activeSessionRefs,
+        engineLastUsedAt: engineState.lastUsedAt,
+        engineIdleUnloadMs: engineState.idleUnloadMs,
+        engineIdleUnloadAt: engineState.idleUnloadAt,
+        engineQueued: engineState.queued,
         activeSessionId: sessions.size > 0 ? [...sessions.keys()][0] : null,
         downloadInProgress,
         downloadProgress,
       });
+    },
+  );
+
+  app.post(
+    '/whisper/binary/ensure',
+    async (_req: FastifyRequest, reply: FastifyReply) => {
+      const result = await ensureWhisperBinary();
+      return reply.send(result);
     },
   );
 
@@ -114,7 +189,7 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
   app.post(
     '/whisper/session/start',
     async (req: FastifyRequest, reply: FastifyReply) => {
-      const body = req.body as { sessionId?: string };
+      const body = req.body as { sessionId?: string; language?: string };
       const sessionId = String(body?.sessionId || `session-${Date.now()}`);
 
       if (!isWhisperLoaded()) {
@@ -126,8 +201,23 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
         }
         await loadWhisperModel(getModelPath());
       }
+      if (!getWhisperBinaryPath()) {
+        await ensureWhisperBinary();
+        return reply
+          .status(503)
+          .send({ ok: false, error: 'whisper_binary_installing' });
+      }
 
-      sessions.set(sessionId, { chunks: [], startedAt: Date.now() });
+      const replacingExistingSession = sessions.has(sessionId);
+      sessions.set(sessionId, {
+        chunks: [],
+        startedAt: Date.now(),
+        language: normalizeWhisperLanguage(body?.language),
+      });
+      if (!replacingExistingSession) {
+        retainWhisperEngine();
+      }
+      await warmWhisperEngine();
       return reply.send({ ok: true, sessionId });
     },
   );
@@ -143,25 +233,33 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
           .send({ ok: false, error: 'session_not_found' });
       }
 
-      const body = req.body as { pcmBase64?: string } | undefined;
+      const body = req.body as
+        | { pcmBase64?: string; flush?: boolean }
+        | undefined;
       if (body?.pcmBase64) {
         const pcmBuf = Buffer.from(body.pcmBase64, 'base64');
         if (pcmBuf.length > 0) session.chunks.push(pcmBuf);
       }
 
       const totalBytes = session.chunks.reduce((sum, c) => sum + c.length, 0);
-      if (totalBytes >= 16000 * 2 * 1) {
+      if (shouldTranscribeBufferedPcm(totalBytes, { flush: body?.flush })) {
         const combined = Buffer.concat(session.chunks);
         session.chunks = [];
         try {
-          const result = await transcribeWithWhisper(combined);
+          const result = await transcribeWithWhisper(combined, {
+            language: session.language,
+          });
           return reply.send({ ok: true, interim: result.text });
         } catch {
           return reply.send({ ok: true, interim: null });
         }
       }
 
-      return reply.send({ ok: true, interim: null });
+      return reply.send({
+        ok: true,
+        interim: null,
+        flushed: Boolean(body?.flush),
+      });
     },
   );
 
@@ -177,6 +275,7 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
       }
 
       sessions.delete(id);
+      releaseWhisperEngine();
 
       if (session.chunks.length === 0) {
         return reply.send({ ok: true, final: '' });
@@ -184,7 +283,9 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
 
       const combined = Buffer.concat(session.chunks);
       try {
-        const result = await transcribeWithWhisper(combined);
+        const result = await transcribeWithWhisper(combined, {
+          language: session.language,
+        });
         return reply.send({ ok: true, final: result.text });
       } catch (e) {
         return reply.send({
@@ -199,6 +300,7 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
   app.delete(
     '/whisper/model',
     async (_req: FastifyRequest, reply: FastifyReply) => {
+      sessions.clear();
       await unloadWhisperModel();
       await deleteModel();
       return reply.send({ ok: true });

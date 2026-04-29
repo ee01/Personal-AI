@@ -235,6 +235,19 @@ function authStatusTone(value) {
   return 'pending';
 }
 
+function sourceUsesDailyBrowser(source, sourceStatus) {
+  if (source === 'doubao') {
+    return Boolean(
+      elements.doubaoSourceUseDailyBrowser?.checked ||
+        sourceStatus?.settings?.transport === 'webpage_mcp',
+    );
+  }
+  return Boolean(
+    elements.chatgptUseDailyBrowser?.checked ||
+      sourceStatus?.settings?.transport === 'webpage_mcp',
+  );
+}
+
 function formatRunOutcome(sourceStatus) {
   if (!sourceStatus) return '待检查';
   if (sourceStatus.running) return '抓取中';
@@ -697,8 +710,17 @@ function renderChatgptTransportBanner(sourceStatus) {
 
   if (transport.mode === 'webpage_mcp') {
     banner.hidden = false;
-    banner.className = 'inline-message success';
-    banner.textContent = '当前传输：日常浏览器（webpage-mcp）。已借用登录态。';
+    if (sourceStatus.authStatus === 'connected') {
+      banner.className = 'inline-message success';
+      banner.textContent = '当前传输：日常浏览器（webpage-mcp）。已借用登录态。';
+    } else if (transport.fallbackReason) {
+      banner.className = 'inline-message status-blocked';
+      banner.textContent = `当前传输：日常浏览器（webpage-mcp）。登录态待确认：${transport.fallbackReason}`;
+    } else {
+      banner.className = 'inline-message';
+      banner.textContent =
+        '当前传输：日常浏览器（webpage-mcp）。保存并开启后会使用日常浏览器登录态。';
+    }
     return;
   }
 
@@ -791,6 +813,7 @@ function applyExplorerToggleGating(source, { memoryReady, sourceStatus }) {
       : elements.chatgptSourceToggleStatus;
   if (!input) return;
   const wrapper = input.closest('.source-toggle');
+  const usesDailyBrowser = sourceUsesDailyBrowser(source, sourceStatus);
 
   let blockedReason = null;
   if (!memoryReady) {
@@ -799,7 +822,7 @@ function applyExplorerToggleGating(source, { memoryReady, sourceStatus }) {
     blockedReason = '正在检查...';
   } else if (sourceStatus.authStatus === 'unsupported') {
     blockedReason = '该平台暂不支持';
-  } else if (sourceStatus.authStatus !== 'connected') {
+  } else if (sourceStatus.authStatus !== 'connected' && !usesDailyBrowser) {
     blockedReason =
       sourceStatus.authStatus === 'error'
         ? '登录态异常，请重新登录'
@@ -940,20 +963,27 @@ function collectExplorerSettings() {
   };
 }
 
-async function saveExplorerSourceSettings(source) {
+async function saveExplorerSourceSettings(
+  source,
+  { silent = false, refresh = true } = {},
+) {
   const nextExplorer = collectExplorerSettings();
   const saved = await bridgeApi.updateSettings({ explorer: nextExplorer });
   latestSettingsPayload = saved;
   clearExplorerSourceDirty(source);
   applyExplorerSettings(saved.effective.explorer, { force: true });
-  setMessage(
-    source === 'doubao'
-      ? elements.doubaoSourceMessage
-      : elements.chatgptSourceMessage,
-    `${source === 'doubao' ? '豆包' : 'ChatGPT'} 来源设置已保存。启用状态、抓取范围、抓取节奏与默认范围会立即按新配置生效。`,
-    'success',
-  );
-  await refreshStatus();
+  if (!silent) {
+    setMessage(
+      source === 'doubao'
+        ? elements.doubaoSourceMessage
+        : elements.chatgptSourceMessage,
+      `${source === 'doubao' ? '豆包' : 'ChatGPT'} 来源设置已保存。启用状态、抓取范围、抓取节奏与默认范围会立即按新配置生效。`,
+      'success',
+    );
+  }
+  if (refresh) {
+    await refreshStatus();
+  }
 }
 
 async function handleRefresh() {
@@ -1328,6 +1358,12 @@ elements.chatgptSourceSaveButton.addEventListener('click', () => {
 elements.doubaoSourceLoginButton.addEventListener('click', () => {
   void withAction(elements.doubaoSourceLoginButton, '打开中...', async () => {
     try {
+      if (explorerSourceDirty.has('doubao')) {
+        await saveExplorerSourceSettings('doubao', {
+          silent: true,
+          refresh: false,
+        });
+      }
       const result = await explorerApi.openLogin('doubao');
       if (!result.implemented) {
         throw new Error('豆包 explorer 登录入口暂未实现。');
@@ -1353,6 +1389,12 @@ elements.doubaoSourceLoginButton.addEventListener('click', () => {
 elements.chatgptSourceLoginButton.addEventListener('click', () => {
   void withAction(elements.chatgptSourceLoginButton, '打开中...', async () => {
     try {
+      if (explorerSourceDirty.has('chatgpt')) {
+        await saveExplorerSourceSettings('chatgpt', {
+          silent: true,
+          refresh: false,
+        });
+      }
       const result = await explorerApi.openLogin('chatgpt');
       if (!result.implemented) {
         throw new Error('ChatGPT explorer 登录暂未接通。');

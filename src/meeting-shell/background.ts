@@ -12,15 +12,22 @@ import {
   MeetingPilotSessionSnapshot,
   MeetingPilotDependencyReadiness,
   MeetingPilotReadinessState,
+  MeetingPilotSpeechGuidanceContext,
+  MeetingPilotSpeechGuidanceProfileRef,
+  MeetingPilotSpeechGuidanceSessionNote,
   MeetingPilotStructuredParseResult,
   MeetingPilotStateResponse,
+  MeetingPilotTierStatus,
   buildMeetingPilotBadgeText,
   buildMeetingPilotTooltip,
   createMeetingPilotSessionSnapshot,
   extractMeetingIdFromUrl,
 } from './protocol';
 import { MeetingPilotRegistry } from './store';
-import { getMemoryServiceClient } from '../services/MemoryServiceClient';
+import {
+  getMemoryServiceClient,
+  type MemoryServiceError,
+} from '../services/MemoryServiceClient';
 import { getEnvConfig, getMeetingTranscriptionMode } from '../utils';
 import {
   isMainLLMConfiguredForMeetingAnalysis,
@@ -46,12 +53,23 @@ import {
   normalizeMeetingTranscribeApiStyle,
   probeMeetingTranscribeProvider,
 } from './asrProvider';
+import { sanitizeASRTranscriptText } from './asr/transcriptFilter';
+import {
+  buildMeetingPilotSpeechSuggestion,
+  buildSpeechSuggestionSignature,
+  classifyMeetingPilotSpeechGuidanceInput,
+  type MeetingPilotLlmRunner,
+} from './speechSuggestion';
 
 const registry = new MeetingPilotRegistry();
 let initPromise: Promise<void> | null = null;
 let offscreenReady = false;
 const memoryRefreshTimers = new Map<number, number>();
+const speechSuggestionRefreshTimers = new Map<number, number>();
+const speechSuggestionLastRunAt = new Map<number, number>();
+const speechSuggestionLastSignatures = new Map<number, string>();
 const digestPollTimers = new Map<number, number>();
+const transcriptUpdateQueues = new Map<number, Promise<void>>();
 let testForceSidePanelOpenFailure = false;
 let testUseMockCapture = false;
 const READINESS_CACHE_TTL_MS = 20_000;
@@ -146,19 +164,26 @@ async function sendWhisperNativeMessage<T>(message: {
   });
 }
 
+function getWhisperBridgeErrorMessage(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const error = (value as { error?: unknown }).error;
+  return typeof error === 'string' ? error : undefined;
+}
+
+function isWhisperBridgeAuthError(value: unknown): boolean {
+  const message = getWhisperBridgeErrorMessage(value)?.toLowerCase() || '';
+  return (
+    message.includes('missing or invalid bridge token') ||
+    message.includes('bridge is not paired')
+  );
+}
+
 async function sendWhisperBridgeRequest<T>(message: {
   method: string;
   path: string;
   body?: Record<string, unknown>;
 }): Promise<T> {
-  try {
-    if (Date.now() >= whisperNativeHostBackoffUntil) {
-      const response = await sendWhisperNativeMessage<T>(message);
-      whisperNativeHostBackoffUntil = 0;
-      return response;
-    }
-  } catch {
-    whisperNativeHostBackoffUntil = Date.now() + WHISPER_NATIVE_HOST_BACKOFF_MS;
+  const sendHttpFallback = async (): Promise<T> => {
     if (!whisperBridgeToken) {
       await pairWhisperBridge().catch(() => undefined);
     }
@@ -190,7 +215,24 @@ async function sendWhisperBridgeRequest<T>(message: {
     return (
       res.ok ? await res.json() : { ok: false, error: `HTTP ${res.status}` }
     ) as T;
+  };
+
+  try {
+    if (Date.now() >= whisperNativeHostBackoffUntil) {
+      const response = await sendWhisperNativeMessage<T>(message);
+      if (isWhisperBridgeAuthError(response)) {
+        whisperBridgeToken = undefined;
+        throw new Error(getWhisperBridgeErrorMessage(response));
+      }
+      whisperNativeHostBackoffUntil = 0;
+      return response;
+    }
+  } catch {
+    whisperNativeHostBackoffUntil = Date.now() + WHISPER_NATIVE_HOST_BACKOFF_MS;
+    return sendHttpFallback();
   }
+
+  return sendHttpFallback();
 }
 
 function createDependencyReadiness(
@@ -404,11 +446,12 @@ async function evaluateMeetingReadiness(
         const data = await sendWhisperBridgeRequest<{
           ok?: boolean;
           modelReady?: boolean;
+          whisperBinaryAvailable?: boolean;
         }>({
           method: 'GET',
           path: '/whisper/status',
         });
-        return Boolean(data?.modelReady);
+        return Boolean(data?.modelReady && data?.whisperBinaryAvailable);
       } catch {
         return false;
       }
@@ -428,7 +471,7 @@ async function evaluateMeetingReadiness(
         }
         return createDependencyReadiness(
           'degraded',
-          'No local transcription available. Install the Personal AI desktop app or switch to cloud/auto.',
+          'Desktop Whisper is unavailable. Capture will still probe Chrome on-device speech recognition; install the Personal AI desktop app for the more stable local path.',
           checkedAt,
         );
       }
@@ -1044,6 +1087,9 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_RENAME_PARTICIPANT',
   'MEETING_PILOT_MERGE_PARTICIPANTS',
   'MEETING_PILOT_FOCUS_PARTICIPANT',
+  'MEETING_PILOT_UPSERT_SPEECH_CONTEXT',
+  'MEETING_PILOT_CLEAR_SPEECH_CONTEXT_NOTE',
+  'MEETING_PILOT_REFRESH_SPEECH_SUGGESTION',
   'MEETING_PILOT_TEST_INJECT_CAPTURE_CHUNK',
   'MEETING_PILOT_TEST_BOOTSTRAP_CAPTURE',
   'MEETING_PILOT_TEST_SET_API_MOCK',
@@ -1158,10 +1204,12 @@ async function broadcastSessionSnapshot(
   } catch {
     // Ignore when no extension page is listening.
   }
+  await pushSessionSnapshotToMeetingTab(session, { silent: true });
 }
 
 async function pushSessionSnapshotToMeetingTab(
   session: MeetingPilotSessionSnapshot,
+  options?: { silent?: boolean },
 ): Promise<boolean> {
   try {
     await chrome.tabs.sendMessage(session.tabId, {
@@ -1170,11 +1218,13 @@ async function pushSessionSnapshotToMeetingTab(
     });
     return true;
   } catch (error) {
-    console.warn('[Meeting Pilot][background] tab snapshot sync failed', {
-      tabId: session.tabId,
-      meetingId: session.meetingId,
-      error: String((error as Error)?.message || error),
-    });
+    if (!options?.silent) {
+      console.warn('[Meeting Pilot][background] tab snapshot sync failed', {
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        error: String((error as Error)?.message || error),
+      });
+    }
     return false;
   }
 }
@@ -1365,6 +1415,17 @@ type StartMeetingCaptureResult = {
   activeRecording?: MeetingPilotSessionSnapshot;
 };
 
+function resolveSessionSelfName(
+  session: MeetingPilotSessionSnapshot,
+): string | undefined {
+  const explicit = session.selfName?.trim();
+  if (explicit) return explicit;
+  const selfParticipant = session.participants.find(
+    (participant) => participant.isSelf || participant.role === 'You',
+  );
+  return selfParticipant?.name?.replace(/\s*\(you\)\s*$/i, '').trim() || undefined;
+}
+
 async function startMeetingCapture(
   tabId: number,
   meetingId: string,
@@ -1410,6 +1471,7 @@ async function startMeetingCapture(
     return { session };
   }
 
+  const selfName = resolveSessionSelfName(session);
   const armed = await registry.setCaptureState(tabId, {
     kind: 'armed',
     startedAt: Date.now(),
@@ -1434,6 +1496,8 @@ async function startMeetingCapture(
         meetingId,
         streamId: fallbackStreamId,
         title: session.title,
+        micMuted: session.micMuted === true,
+        selfName,
       });
       const updated = await registry.setCaptureState(tabId, {
         kind: 'recording',
@@ -1474,6 +1538,8 @@ async function startMeetingCapture(
       meetingId,
       streamId,
       title: session.title,
+      micMuted: session.micMuted === true,
+      selfName,
     });
   } catch (error) {
     const updated = await registry.setCaptureState(tabId, {
@@ -1768,19 +1834,368 @@ function buildStateResponse(tabId?: number): MeetingPilotStateResponse {
   };
 }
 
+function getMeetingLlmRunner(
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>,
+): MeetingPilotLlmRunner | undefined {
+  return isMainLLMConfiguredForMeetingAnalysis(envConfig).ok
+    ? runMeetingIntelligenceLLM
+    : undefined;
+}
+
+function createSpeechGuidanceContext(
+  current?: MeetingPilotSpeechGuidanceContext,
+): MeetingPilotSpeechGuidanceContext {
+  return {
+    sessionNotes: current?.sessionNotes || [],
+    profileRefs: current?.profileRefs || [],
+    lastInputText: current?.lastInputText,
+    lastClassifiedAt: current?.lastClassifiedAt,
+    lastClassificationScope: current?.lastClassificationScope,
+    lastClassificationReason: current?.lastClassificationReason,
+    updatedAt: current?.updatedAt,
+  };
+}
+
+function createSpeechGuidanceNote(
+  text: string,
+  sourceInput?: string,
+): MeetingPilotSpeechGuidanceSessionNote {
+  return {
+    id: `speech-note-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`,
+    text,
+    sourceInput,
+    createdAt: Date.now(),
+  };
+}
+
+async function getProfileCoreForSpeechSuggestion(): Promise<string> {
+  try {
+    const client = getMemoryServiceClient();
+    const profile = await client.getUserCore();
+    return profile.content || '';
+  } catch {
+    return '';
+  }
+}
+
+function resolveSpeechActionTabId(rawTabId: number): number {
+  if (Number.isFinite(rawTabId) && registry.getSessionByTabId(rawTabId)) {
+    return rawTabId;
+  }
+  const activeSession = registry.getActiveSession();
+  if (activeSession) {
+    return activeSession.tabId;
+  }
+  const activeRecording = registry
+    .listSessions()
+    .find((session) => session.capture.kind === 'recording');
+  if (activeRecording) {
+    return activeRecording.tabId;
+  }
+  return rawTabId;
+}
+
+async function refreshSpeechSuggestion(
+  tabId: number,
+  options: { force?: boolean } = {},
+): Promise<MeetingPilotSessionSnapshot | undefined> {
+  const session = registry.getSessionByTabId(tabId);
+  if (!session || session.status === 'ended') {
+    return session;
+  }
+
+  const profileCore = await getProfileCoreForSpeechSuggestion();
+  const signature = buildSpeechSuggestionSignature(session, profileCore);
+  const existingSignature = speechSuggestionLastSignatures.get(tabId);
+  const existingSuggestion = session.speechSuggestion;
+  if (
+    !options.force &&
+    existingSignature === signature &&
+    existingSuggestion?.expiresAt &&
+    existingSuggestion.expiresAt > Date.now()
+  ) {
+    return session;
+  }
+
+  const envConfig = await getEnvConfig();
+  const suggestion = await buildMeetingPilotSpeechSuggestion(
+    {
+      session,
+      profileCore,
+      now: Date.now(),
+    },
+    getMeetingLlmRunner(envConfig),
+  );
+  speechSuggestionLastRunAt.set(tabId, Date.now());
+  speechSuggestionLastSignatures.set(tabId, signature);
+
+  if (
+    !options.force &&
+    existingSuggestion?.text === suggestion.text &&
+    existingSuggestion?.source === suggestion.source &&
+    existingSuggestion?.intent === suggestion.intent
+  ) {
+    return session;
+  }
+
+  const updated = await registry.updateObservation(tabId, {
+    speechSuggestion: suggestion,
+  });
+  if (updated) {
+    await broadcastSessionSnapshot(updated);
+  }
+  return updated;
+}
+
+function scheduleSpeechSuggestionRefresh(tabId: number, delayMs = 1200): void {
+  const existing = speechSuggestionRefreshTimers.get(tabId);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const lastRunAt = speechSuggestionLastRunAt.get(tabId) || 0;
+  const throttleDelay = Math.max(delayMs, 10_000 - (Date.now() - lastRunAt));
+  const timer = setTimeout(() => {
+    speechSuggestionRefreshTimers.delete(tabId);
+    void refreshSpeechSuggestion(tabId).catch((error) => {
+      console.warn('Meeting Pilot speech suggestion refresh failed:', error);
+    });
+  }, throttleDelay);
+  speechSuggestionRefreshTimers.set(tabId, timer as unknown as number);
+}
+
+async function createSpeechProfileRef(args: {
+  session: MeetingPilotSessionSnapshot;
+  itemType: MeetingPilotSpeechGuidanceProfileRef['itemType'];
+  itemKey: string;
+  itemValue: string;
+  confidence: number;
+}): Promise<MeetingPilotSpeechGuidanceProfileRef> {
+  const client = getMemoryServiceClient();
+  try {
+    const created = await client.createProfileItem({
+      itemType: args.itemType,
+      itemKey: args.itemKey,
+      itemValue: args.itemValue,
+      confidence: args.confidence,
+      evidenceRefs: [
+        {
+          source: 'meeting_pilot_speech_context',
+          meetingId: args.session.meetingId,
+          tabId: args.session.tabId,
+          title: args.session.title,
+          capturedAt: Date.now(),
+        },
+      ],
+    });
+    return {
+      id: String((created as any)?.id || ''),
+      itemType: args.itemType,
+      itemKey: args.itemKey,
+      itemValue: args.itemValue,
+      createdAt: Date.now(),
+    };
+  } catch (error) {
+    const status = (error as MemoryServiceError)?.status;
+    const existingId = (error as MemoryServiceError)?.body?.existingId;
+    if (status === 409 && existingId) {
+      return {
+        id: String(existingId),
+        itemType: args.itemType,
+        itemKey: args.itemKey,
+        itemValue: args.itemValue,
+        createdAt: Date.now(),
+      };
+    }
+    throw error;
+  }
+}
+
+async function handleSpeechContextUpsert(
+  request: Record<string, any>,
+  tabId: number,
+): Promise<{
+  success: boolean;
+  message: string;
+  session?: MeetingPilotSessionSnapshot;
+  scope?: string;
+  memorySaved?: boolean;
+  error?: string;
+}> {
+  const text = String(request.text || request.value || '').trim();
+  const session = registry.getSessionByTabId(tabId);
+  if (!session || (request.meetingId && request.meetingId !== session.meetingId)) {
+    return { success: false, message: '没有找到当前会议。' };
+  }
+  if (!text) {
+    return { success: false, message: '请输入身份或本场上下文。' };
+  }
+
+  const envConfig = await getEnvConfig();
+  const classification = await classifyMeetingPilotSpeechGuidanceInput(
+    {
+      text,
+      meetingTitle: session.title,
+      currentTopic: session.currentTopic,
+    },
+    getMeetingLlmRunner(envConfig),
+  );
+  const baseContext = createSpeechGuidanceContext(
+    session.speechGuidanceContext,
+  );
+  let nextContext: MeetingPilotSpeechGuidanceContext = {
+    ...baseContext,
+    lastInputText: text,
+    lastClassifiedAt: Date.now(),
+    lastClassificationScope: classification.scope,
+    lastClassificationReason: classification.reason,
+    updatedAt: Date.now(),
+  };
+
+  let memorySaved = false;
+  let responseMessage = '已用于本次会议';
+  let memoryError: string | undefined;
+
+  if (classification.scope === 'long_term_profile') {
+    try {
+      const profileRef = await createSpeechProfileRef({
+        session,
+        itemType: classification.itemType,
+        itemKey: classification.itemKey,
+        itemValue: classification.itemValue,
+        confidence: classification.confidence,
+      });
+      memorySaved = true;
+      responseMessage = '已记住，下次会议会自动使用';
+      nextContext = {
+        ...nextContext,
+        profileRefs: [
+          profileRef,
+          ...nextContext.profileRefs.filter((ref) => ref.id !== profileRef.id),
+        ].slice(0, 12),
+      };
+    } catch (error) {
+      memoryError = String((error as Error)?.message || error);
+      const fallbackNote = createSpeechGuidanceNote(
+        classification.itemValue || text,
+        text,
+      );
+      nextContext = {
+        ...nextContext,
+        sessionNotes: [fallbackNote, ...nextContext.sessionNotes].slice(0, 8),
+      };
+      responseMessage = '已用于本次会议；长期记忆保存失败';
+    }
+  } else if (classification.scope === 'session_only') {
+    const noteText = classification.sessionNote || text;
+    const alreadyExists = nextContext.sessionNotes.some(
+      (note) => note.text === noteText,
+    );
+    nextContext = {
+      ...nextContext,
+      sessionNotes: alreadyExists
+        ? nextContext.sessionNotes
+        : [
+            createSpeechGuidanceNote(noteText, text),
+            ...nextContext.sessionNotes,
+          ].slice(0, 8),
+    };
+  } else {
+    responseMessage = '这条信息暂时不会影响发言建议';
+  }
+
+  const contextUpdated = await registry.updateObservation(tabId, {
+    speechGuidanceContext: nextContext,
+  });
+  if (contextUpdated) {
+    await broadcastSessionSnapshot(contextUpdated);
+  }
+  const refreshed = await refreshSpeechSuggestion(tabId, { force: true });
+  return {
+    success: true,
+    message: responseMessage,
+    session: refreshed || contextUpdated,
+    scope: classification.scope,
+    memorySaved,
+    error: memoryError,
+  };
+}
+
+async function handleSpeechContextClear(
+  request: Record<string, any>,
+  tabId: number,
+): Promise<{
+  success: boolean;
+  session?: MeetingPilotSessionSnapshot;
+}> {
+  const session = registry.getSessionByTabId(tabId);
+  if (!session || (request.meetingId && request.meetingId !== session.meetingId)) {
+    return { success: false };
+  }
+  const noteId = String(request.noteId || '').trim();
+  const current = createSpeechGuidanceContext(session.speechGuidanceContext);
+  const nextContext: MeetingPilotSpeechGuidanceContext = {
+    ...current,
+    sessionNotes: noteId
+      ? current.sessionNotes.filter((note) => note.id !== noteId)
+      : [],
+    updatedAt: Date.now(),
+  };
+  const updated = await registry.updateObservation(tabId, {
+    speechGuidanceContext: nextContext,
+  });
+  if (updated) {
+    await broadcastSessionSnapshot(updated);
+  }
+  const refreshed = await refreshSpeechSuggestion(tabId, { force: true });
+  return { success: Boolean(refreshed || updated), session: refreshed || updated };
+}
+
 async function handleCapturedStatusUpdate(
   message: Record<string, any>,
 ): Promise<void> {
-  const tabId = Number(message.tabId);
+  const tabId = resolveMeetingPilotStatusTabId(Number(message.tabId));
   const capture = message.capture as
     | Partial<MeetingPilotCaptureState>
     | undefined;
   if (!Number.isFinite(tabId) || !capture) return;
-  const updated = await registry.setCaptureState(tabId, capture);
+  const tierStatus = message.tierStatus as MeetingPilotTierStatus | undefined;
+  const updated = tierStatus
+    ? await registry.updateSession(tabId, (session) => ({
+        ...session,
+        capture: {
+          ...session.capture,
+          ...capture,
+        },
+        tier: tierStatus,
+        status:
+          capture.kind === 'recording'
+            ? 'recording'
+            : capture.kind === 'error'
+              ? 'error'
+              : session.inMeeting
+                ? 'ready'
+                : session.status,
+      }))
+    : await registry.setCaptureState(tabId, capture);
   if (updated) {
     await updateBrowserAction(updated);
     await broadcastSessionSnapshot(updated);
   }
+}
+
+function resolveMeetingPilotStatusTabId(rawTabId: number): number {
+  if (Number.isFinite(rawTabId) && registry.getSessionByTabId(rawTabId)) {
+    return rawTabId;
+  }
+  const activeRecording = registry
+    .listSessions()
+    .find((session) => session.capture.kind === 'recording');
+  if (activeRecording) {
+    return activeRecording.tabId;
+  }
+  return rawTabId;
 }
 
 async function handleTranscriptUpdate(
@@ -1792,13 +2207,20 @@ async function handleTranscriptUpdate(
     | undefined;
   if (!Number.isFinite(tabId) || !transcriptChunk) return;
 
+  const sanitizedText = sanitizeASRTranscriptText(transcriptChunk.text);
+  if (!sanitizedText) return;
+  const normalizedChunk = {
+    ...transcriptChunk,
+    text: sanitizedText,
+  };
+
   const session = registry.getSessionByTabId(tabId);
   if (!session) return;
 
-  if (transcriptChunk.lowConfidence) {
+  if (normalizedChunk.lowConfidence) {
     const updated = await registry.updateSession(tabId, (s) => ({
       ...s,
-      transcript: [...s.transcript, transcriptChunk].slice(-60),
+      transcript: [...s.transcript, normalizedChunk].slice(-60),
       updatedAt: Date.now(),
     }));
     if (updated) await broadcastSessionSnapshot(updated);
@@ -1810,7 +2232,7 @@ async function handleTranscriptUpdate(
     envConfig.MEETING_NAME_ALIASES,
   );
 
-  const resolution = resolveSpeakerForChunk(session, transcriptChunk, {
+  const resolution = resolveSpeakerForChunk(session, normalizedChunk, {
     resolveAlias,
   });
 
@@ -1820,7 +2242,7 @@ async function handleTranscriptUpdate(
   }
 
   const enrichedChunk = {
-    ...transcriptChunk,
+    ...normalizedChunk,
     speaker: resolution.resolvedName,
     participantId: resolution.participantId,
     resolutionSource: resolution.source,
@@ -1833,15 +2255,15 @@ async function handleTranscriptUpdate(
     .map((item) => item.trim())
     .filter(Boolean);
   const hotwordTopic = configuredHotwords.find((item) =>
-    transcriptChunk.text.toLowerCase().includes(item.toLowerCase()),
+    normalizedChunk.text.toLowerCase().includes(item.toLowerCase()),
   );
-  const topicHintMatch = transcriptChunk.text.match(
+  const topicHintMatch = normalizedChunk.text.match(
     /(预算|排期|技术评审|风险|QA|owner|行动项)/i,
   );
   const heuristicTopic =
     hotwordTopic ||
     topicHintMatch?.[1] ||
-    transcriptChunk.text.slice(0, 48) ||
+    normalizedChunk.text.slice(0, 48) ||
     session.currentTopic;
   const nextSummary = nextTranscript
     .slice(-3)
@@ -1884,16 +2306,16 @@ async function handleTranscriptUpdate(
 
       if (
         participant.id !== resolution.participantId ||
-        transcriptChunk.lowConfidence
+        normalizedChunk.lowConfidence
       ) {
         return { ...participant, speakingPct };
       }
 
       const stanceItem = {
         topic: heuristicTopic || '会议讨论',
-        stance: inferStance(transcriptChunk.text),
-        keyQuote: transcriptChunk.text,
-        timeRange: inferTimeLabel(transcriptChunk.ts),
+        stance: inferStance(normalizedChunk.text),
+        keyQuote: normalizedChunk.text,
+        timeRange: inferTimeLabel(normalizedChunk.ts),
       };
 
       const existingStances = participant.stances || [];
@@ -2073,21 +2495,41 @@ async function handleTranscriptUpdate(
   });
   if (updated) {
     const generatedAlerts = llmResult?.alerts || [];
+    let latestSession = updated;
     for (const alert of generatedAlerts) {
-      const existing = updated.alerts.find(
+      const existing = latestSession.alerts.find(
         (item) => item.title === alert.title && item.body === alert.body,
       );
       if (!existing) {
         const alertUpdated = await registry.addAlert(tabId, alert);
         if (alertUpdated) {
+          latestSession = alertUpdated;
           await updateBrowserAction(alertUpdated);
           await broadcastSessionSnapshot(alertUpdated);
         }
       }
     }
-    await broadcastSessionSnapshot(updated);
+    await broadcastSessionSnapshot(latestSession);
     scheduleMeetingMemoryRefresh(tabId);
+    scheduleSpeechSuggestionRefresh(tabId);
   }
+}
+
+function enqueueTranscriptUpdate(
+  tabId: number,
+  message: Record<string, any>,
+): Promise<void> {
+  const previous = transcriptUpdateQueues.get(tabId) || Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => handleTranscriptUpdate(message));
+  const queued = next.finally(() => {
+    if (transcriptUpdateQueues.get(tabId) === queued) {
+      transcriptUpdateQueues.delete(tabId);
+    }
+  });
+  transcriptUpdateQueues.set(tabId, queued);
+  return next;
 }
 
 async function handleDigestStatusUpdate(
@@ -2317,6 +2759,9 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
     const updated = await registry.updateObservation(tabId, { memoryRefs });
     if (updated) {
       await broadcastSessionSnapshot(updated);
+      void refreshSpeechSuggestion(tabId).catch((error) => {
+        console.warn('Meeting Pilot speech suggestion after recall failed:', error);
+      });
     }
   } catch (error) {
     console.warn('Meeting Pilot context recall failed:', error);
@@ -2378,14 +2823,33 @@ async function handleMeetingPilotMessage(
         inMeeting: payload.inMeeting !== false,
         shareState: payload.shareState || 'unknown',
         selfSharing: Boolean(payload.selfSharing),
+        micMuted:
+          typeof payload.micMuted === 'boolean' ? payload.micMuted : undefined,
         participantCount: payload.participantCount,
         participants: payload.participants,
+        selfName: payload.selfName,
         sharerName: payload.sharerName,
         speakerLabel: payload.speakerLabel,
         detectedAt: payload.detectedAt || Date.now(),
       });
+      if (
+        session.capture.kind === 'recording' &&
+        typeof payload.micMuted === 'boolean'
+      ) {
+        await pushOffscreenCommand({
+          type: 'MEETING_PILOT_OFFSCREEN_SET_MIC_MUTED',
+          tabId: session.tabId,
+          micMuted: payload.micMuted,
+        }).catch((error) => {
+          console.warn('[Meeting Pilot][background] mic mute sync failed', {
+            tabId: session.tabId,
+            error: String((error as Error)?.message || error),
+          });
+        });
+      }
       await broadcastSessionSnapshot(session);
       scheduleMeetingMemoryRefresh(session.tabId);
+      scheduleSpeechSuggestionRefresh(session.tabId, 1600);
       sendResponse(session);
       return;
     }
@@ -2572,16 +3036,48 @@ async function handleMeetingPilotMessage(
     }
     case 'MEETING_PILOT_TRANSCRIPT_UPDATE': {
       await ensureInitialized();
-      await handleTranscriptUpdate({
+      const transcriptTabId = Number(request.tabId || tabId || 0);
+      await enqueueTranscriptUpdate(transcriptTabId, {
         ...request,
-        tabId: Number(request.tabId || tabId || 0),
+        tabId: transcriptTabId,
       });
       sendResponse({ success: true });
       return;
     }
+    case 'MEETING_PILOT_UPSERT_SPEECH_CONTEXT': {
+      await ensureInitialized();
+      const speechTabId = resolveSpeechActionTabId(
+        Number(request.tabId || tabId || 0),
+      );
+      const result = await handleSpeechContextUpsert(request, speechTabId);
+      sendResponse(result);
+      return;
+    }
+    case 'MEETING_PILOT_CLEAR_SPEECH_CONTEXT_NOTE': {
+      await ensureInitialized();
+      const speechTabId = resolveSpeechActionTabId(
+        Number(request.tabId || tabId || 0),
+      );
+      const result = await handleSpeechContextClear(request, speechTabId);
+      sendResponse(result);
+      return;
+    }
+    case 'MEETING_PILOT_REFRESH_SPEECH_SUGGESTION': {
+      await ensureInitialized();
+      const speechTabId = resolveSpeechActionTabId(
+        Number(request.tabId || tabId || 0),
+      );
+      const session = await refreshSpeechSuggestion(speechTabId, {
+        force: true,
+      });
+      sendResponse({ success: Boolean(session), session });
+      return;
+    }
     case 'MEETING_PILOT_TIER_STATUS_UPDATE': {
       await ensureInitialized();
-      const tierTabId = Number(request.tabId || tabId || 0);
+      const tierTabId = resolveMeetingPilotStatusTabId(
+        Number(request.tabId || tabId || 0),
+      );
       const tierStatus = request.tierStatus;
       if (tierTabId && tierStatus) {
         const updated = await registry.updateSession(tierTabId, (s) => ({
@@ -2590,6 +3086,12 @@ async function handleMeetingPilotMessage(
           updatedAt: Date.now(),
         }));
         if (updated) await broadcastSessionSnapshot(updated);
+      } else {
+        console.warn('[Meeting Pilot][background] tier status dropped', {
+          tabId: request.tabId,
+          senderTabId: tabId,
+          hasTierStatus: Boolean(tierStatus),
+        });
       }
       sendResponse({ success: true });
       return;
@@ -2858,7 +3360,21 @@ export async function initMeetingPilotBackgroundRuntime(): Promise<void> {
       request as Record<string, any>,
       sender,
       sendResponse,
-    );
+    ).catch((error) => {
+      console.warn('[Meeting Pilot][background] message handler failed', {
+        type: request.type,
+        error: String((error as Error)?.message || error),
+      });
+      try {
+        sendResponse({
+          ok: false,
+          success: false,
+          error: String((error as Error)?.message || error),
+        });
+      } catch {
+        // The sender may already be gone.
+      }
+    });
     return true;
   });
 

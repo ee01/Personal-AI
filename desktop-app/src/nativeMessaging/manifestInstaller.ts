@@ -68,7 +68,15 @@ export async function installManifest(extensionIds: string[]): Promise<void> {
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
   if (existsSync(bridgePath)) {
-    await chmod(bridgePath, 0o755);
+    try {
+      await chmod(bridgePath, 0o755);
+    } catch (error) {
+      // Installed macOS app bundles may be owned by root:wheel. The bridge can
+      // still be executable; failing chmod must not make manifest repair fail.
+      if ((error as NodeJS.ErrnoException)?.code !== 'EPERM') {
+        throw error;
+      }
+    }
   }
 }
 

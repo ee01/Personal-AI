@@ -79,6 +79,7 @@ function resolvePersonNames(
 
 function hasEventSignals(post: any, personsMap?: Map<any, string>): boolean {
   const activity = normalizeText(post.activity || post.activity_type);
+  const functionId = normalizeText(post.function_id || post.functionId);
   const postType = normalizeText(post.type || post.post_type || post.postType);
   const title = normalizeText(post.title || post.subject);
   const addedIds =
@@ -98,11 +99,53 @@ function hasEventSignals(post: any, personsMap?: Map<any, string>): boolean {
 
   return (
     Boolean(activity) ||
+    functionId === 'event' ||
     Boolean(postType) ||
     Boolean(title) ||
     addedNames.length > 0 ||
     removedNames.length > 0
   );
+}
+
+function normalizeTimestamp(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') {
+    return undefined;
+  }
+
+  if (value instanceof Date) {
+    const timestamp = value.getTime();
+    return Number.isNaN(timestamp) ? undefined : timestamp;
+  }
+
+  if (typeof value === 'number') {
+    return value < 100000000000 ? value * 1000 : value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const numericValue = Number(value);
+    return numericValue < 100000000000 ? numericValue * 1000 : numericValue;
+  }
+
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function formatOptionalDateTime(value: unknown): string {
+  const timestamp = normalizeTimestamp(value);
+  return timestamp ? formatDate(timestamp) : '';
+}
+
+function buildEventTimeRange(post: any): string {
+  const start = formatOptionalDateTime(
+    post.start || post.start_time || post.startTime,
+  );
+  const end = formatOptionalDateTime(post.end || post.end_time || post.endTime);
+
+  if (start && end) {
+    return `${start} - ${end}`;
+  }
+
+  return start || end;
 }
 
 function extractPostCreator(post: any, personsMap: Map<any, string>): string {
@@ -133,8 +176,10 @@ function extractPostCreator(post: any, personsMap: Map<any, string>): string {
 }
 
 function buildEventText(post: any, personsMap: Map<any, string>): string {
+  const functionId = normalizeText(post.function_id || post.functionId);
   const postType = normalizeText(post.type || post.post_type || post.postType);
-  const title = normalizeText(post.title || post.subject);
+  const title = normalizeText(post.text || post.title || post.subject);
+  const description = normalizeText(post.description);
   const activity = normalizeText(post.activity || post.activity_type);
   const addedNames = resolvePersonNames(
     personsMap,
@@ -147,6 +192,14 @@ function buildEventText(post: any, personsMap: Map<any, string>): string {
   const creator = extractPostCreator(post, personsMap) || 'System';
   if (!hasEventSignals(post, personsMap)) {
     return '';
+  }
+
+  if (functionId === 'event') {
+    const timeRange = buildEventTimeRange(post);
+    const parts = ['[Event]', title || 'Untitled event'];
+    if (timeRange) parts.push(`Date and time: ${timeRange}`);
+    if (description && description !== title) parts.push(description);
+    return parts.join(' ').trim();
   }
 
   switch (postType) {
@@ -181,8 +234,16 @@ function buildEventText(post: any, personsMap: Map<any, string>): string {
 }
 
 function extractPostText(post: any, personsMap: Map<any, string>): string {
+  const functionId = normalizeText(post.function_id || post.functionId);
+
+  if (functionId === 'event') {
+    return buildEventText(post, personsMap);
+  }
+
   const directText = normalizeText(
     post.text ||
+      post.subject ||
+      post.title ||
       post.body?.text ||
       post.content ||
       post.message ||
@@ -196,14 +257,194 @@ function extractPostText(post: any, personsMap: Map<any, string>): string {
   return buildEventText(post, personsMap);
 }
 
+function extractPostGroupId(post: any): string | number | undefined {
+  const groupId =
+    post.group_id ||
+    post.groupId ||
+    post.from_group_id ||
+    post.fromGroupId ||
+    post.group?.id;
+
+  if (groupId) {
+    return groupId;
+  }
+
+  const groupIds = post.group_ids || post.groupIds;
+  return Array.isArray(groupIds) && groupIds.length > 0
+    ? groupIds[0]
+    : undefined;
+}
+
+function extractPostCreatedAt(post: any): Date {
+  const rawTime =
+    post.created_at ||
+    post.createdAt ||
+    post.modified_at ||
+    post.modifiedAt ||
+    post.start ||
+    post.startTime;
+
+  return rawTime ? new Date(rawTime) : new Date();
+}
+
+function resolveGroupInfo(
+  groupsMap: Map<any, any>,
+  groupId: string | number | undefined,
+) {
+  if (groupId === null || groupId === undefined || groupId === '') {
+    return undefined;
+  }
+
+  return (
+    groupsMap.get(groupId) ||
+    groupsMap.get(String(groupId)) ||
+    groupsMap.get(Number(groupId))
+  );
+}
+
+function fetchIndexedDBStoreNames(databaseName: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(databaseName);
+
+    request.onsuccess = (event: any) => {
+      const db = event.target.result;
+      const storeNames = Array.from(db.objectStoreNames) as string[];
+      db.close();
+      resolve(storeNames);
+    };
+
+    request.onerror = (event: any) => {
+      reject(event.target.error);
+    };
+  });
+}
+
+function fetchOptionalIndexedDBData(
+  databaseName: string,
+  storeName: string,
+): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(databaseName);
+
+    request.onsuccess = (event: any) => {
+      const db = event.target.result;
+
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.close();
+        resolve([]);
+        return;
+      }
+
+      try {
+        const transaction = db.transaction([storeName], 'readonly');
+        const objectStore = transaction.objectStore(storeName);
+        const dataRequest = objectStore.getAll();
+
+        dataRequest.onsuccess = (dataEvent: any) => {
+          resolve(dataEvent.target.result || []);
+          db.close();
+        };
+
+        dataRequest.onerror = (dataEvent: any) => {
+          reject(dataEvent.target.error);
+          db.close();
+        };
+      } catch (error) {
+        db.close();
+        reject(error);
+      }
+    };
+
+    request.onerror = (event: any) => {
+      reject(event.target.error);
+    };
+  });
+}
+
+function mergeEventContext(eventRecord: any, nestedPost: any) {
+  return {
+    ...nestedPost,
+    group_id: extractPostGroupId(nestedPost) || extractPostGroupId(eventRecord),
+    created_at:
+      nestedPost.created_at ||
+      nestedPost.createdAt ||
+      eventRecord.created_at ||
+      eventRecord.createdAt,
+    creator_id:
+      nestedPost.creator_id || nestedPost.creatorId || eventRecord.creator_id,
+    function_id: nestedPost.function_id || eventRecord.function_id || 'event',
+    text: nestedPost.text || eventRecord.text || eventRecord.title,
+    title: nestedPost.title || eventRecord.title,
+    description: nestedPost.description || eventRecord.description,
+    start: nestedPost.start || eventRecord.start,
+    end: nestedPost.end || eventRecord.end,
+  };
+}
+
+function flattenEventRecords(eventRecords: any[]): any[] {
+  return eventRecords.flatMap((eventRecord) => {
+    const nestedPosts = Array.isArray(eventRecord?.posts)
+      ? eventRecord.posts.filter((post: any) => post && typeof post === 'object')
+      : [];
+
+    if (nestedPosts.length === 0) {
+      return eventRecord ? [eventRecord] : [];
+    }
+
+    return [
+      eventRecord,
+      ...nestedPosts.map((nestedPost: any) =>
+        mergeEventContext(eventRecord, nestedPost),
+      ),
+    ];
+  });
+}
+
+async function fetchGlipEventData(): Promise<any[]> {
+  const storeNames = await fetchIndexedDBStoreNames('Glip');
+  const eventStoreNames = storeNames.filter((storeName) =>
+    /event/i.test(storeName),
+  );
+
+  if (eventStoreNames.length === 0) {
+    console.warn('Glip IndexedDB 未发现 event store:', storeNames);
+    return [];
+  }
+
+  const eventStoreData = await Promise.all(
+    eventStoreNames.map(async (storeName) => {
+      try {
+        const rows = await fetchOptionalIndexedDBData('Glip', storeName);
+        return { storeName, rows };
+      } catch (error) {
+        console.warn(`读取 Glip/${storeName} 失败:`, error);
+        return { storeName, rows: [] as any[] };
+      }
+    }),
+  );
+
+  console.log(
+    'Glip event stores loaded:',
+    eventStoreData.map(({ storeName, rows }) => ({
+      storeName,
+      count: rows.length,
+    })),
+  );
+
+  return flattenEventRecords(
+    eventStoreData.flatMap(({ rows }) => rows),
+  );
+}
+
 function fetchAllMessageData() {
     return Promise.all([
       getIndexedDBData('Glip', 'group'),
       getIndexedDBData('Glip', 'person'),
       getIndexedDBData('Glip', 'post'),
-      getIndexedDBData('Glip', 'replyPost')
+      getIndexedDBData('Glip', 'replyPost'),
+      fetchGlipEventData()
     ])
-    .then(([groupData, personData, postData, replyPostData]) => {
+    .then(([groupData, personData, postData, replyPostData, eventData]) => {
       // 缓存 person 和 group 数据
       cachedPersonsMap = new Map();
       personData.forEach((person: any) => {
@@ -212,17 +453,21 @@ function fetchAllMessageData() {
       
       cachedGroupsMap = new Map();
       groupData.forEach((group: any) => {
-        cachedGroupsMap!.set(group.id, {
+        const groupInfo = {
           name: group.set_abbreviation,
           is_team: group.is_team
-        });
+        };
+
+        cachedGroupsMap!.set(group.id, groupInfo);
+        cachedGroupsMap!.set(String(group.id), groupInfo);
       });
       
       return {
         group: groupData,
         person: personData,
         post: postData,
-        replyPost: replyPostData
+        replyPost: replyPostData,
+        event: eventData
       };
     })
     .catch(error => {
@@ -254,16 +499,17 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
     for (const post of allPosts) {
       const text = post ? extractPostText(post, personsMap) : '';
       if (post && text) {
-        const groupInfo = groupsMap.get(post.group_id);
+        const groupId = extractPostGroupId(post);
+        const groupInfo = resolveGroupInfo(groupsMap, groupId);
         missingPosts.set(post.id, {
           id: post.id,
           parentId: post.parent_post_id,
-          groupId: post.group_id,
+          groupId: groupId || 'unknown',
           groupName: groupInfo?.name || 'Unknown Team',
           groupType: groupInfo?.is_team ? 'team' : 'direct message',
           text,
           creator: extractPostCreator(post, personsMap) || 'Unknown',
-          time: formatDate(new Date(post.created_at)),
+          time: formatDate(extractPostCreatedAt(post).getTime()),
           type: 'message'
         });
       }
@@ -481,11 +727,14 @@ export async function transformMessagePosts(
       
       const groupsMap = new Map<any, any>();
       groups.forEach(group => {
-        groupsMap.set(group.id, {
+        const groupInfo = {
           id: group.id,
           name: group.set_abbreviation,
           is_team: group.is_team
-        });
+        };
+
+        groupsMap.set(group.id, groupInfo);
+        groupsMap.set(String(group.id), groupInfo);
       });
   
       const filteredPosts = input
@@ -498,19 +747,20 @@ export async function transformMessagePosts(
 
       // 转换数据结构
       const transformedData: MessagePost[] = filteredPosts.map(({ raw: post, text, creator }) => {
-        const groupInfo = groupsMap.get(post.group_id);
+        const groupId = extractPostGroupId(post);
+        const groupInfo = resolveGroupInfo(groupsMap, groupId);
         return {
           id: post.id,
           parentId: post.parent_post_id || undefined,
           groupName: groupInfo?.name || 'Unknown Team',
           groupType: groupInfo?.is_team ? 'team' : 'direct message',
-          groupId: post.group_id,
+          groupId: groupId || 'unknown',
           type: 'message' as const,
           text,
           creator,
-          time: formatDate(new Date(post.created_at))
+          time: formatDate(extractPostCreatedAt(post).getTime())
         };
-      }).filter(item => item.text !== '' && item.creator !== '');
+      }).filter(item => item.text !== '' && item.creator !== '' && item.groupId !== 'unknown');
   
       // 按时间排序
       transformedData.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
@@ -520,7 +770,7 @@ export async function transformMessagePosts(
   
     try {
       const glipData = await fetchAllMessageData();
-      const post = glipData.post.concat(glipData.replyPost);
+      const post = glipData.post.concat(glipData.replyPost, glipData.event);
       const { posts, personsMap, groupsMap } = transformPosts(post, glipData.person, glipData.group);
       
       // 按时间和群组过滤

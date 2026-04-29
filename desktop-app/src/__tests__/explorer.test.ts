@@ -216,7 +216,7 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
       };
     };
     assert.equal(statusBody.askDefaultScope, 'work');
-    assert.equal(statusBody.sources.doubao.authStatus, 'needs_login');
+    assert.equal(statusBody.sources.doubao.authStatus, 'unknown');
     assert.equal(statusBody.sources.doubao.cache.messageCount, 1);
     assert.equal(statusBody.sources.doubao.settings.defaultScope, 'personal');
     assert.equal(statusBody.sources.chatgpt.authStatus, 'unsupported');
@@ -466,6 +466,80 @@ test('ExplorerManager tick schedules only enabled sources by interval', async ()
   }
 
   assert.deepEqual(calls, ['doubao', 'chatgpt', 'doubao']);
+});
+
+test('ExplorerManager status does not probe disabled source auth', async () => {
+  const settings = {
+    explorer: {
+      doubao: {
+        enabled: false,
+        lookbackDays: 7,
+        intervalMinutes: 5,
+        defaultScope: 'personal' as const,
+      },
+      chatgpt: {
+        enabled: false,
+        maxConversations: 0,
+        lookbackDays: 0,
+        intervalMinutes: 10,
+        defaultScope: 'work' as const,
+      },
+      autoClassify: false,
+      askDefaultScope: 'work' as const,
+    },
+  };
+  const authProbeCalls: string[] = [];
+  const manager = new ExplorerManager({
+    settingsStore: {
+      getSettings: () => settings,
+    } as any,
+    memoryClient: {
+      deleteMemoriesBySourceScope: async () => ({
+        source: 'doubao',
+        scope: 'work',
+        deletedMessages: 0,
+        deletedChunks: 0,
+      }),
+    } as any,
+    rawStore: {
+      getStats: () => ({
+        messageCount: 0,
+        pendingExtractCount: 0,
+        conversationCount: 0,
+      }),
+      close: () => undefined,
+    } as any,
+    cursorStore: {
+      get: async () => undefined,
+      reset: async () => 0,
+    } as any,
+    sourceAdapters: {
+      doubao: {
+        getAuthStatus: async () => {
+          authProbeCalls.push('doubao');
+          return 'connected';
+        },
+      },
+      chatgpt: {
+        getAuthStatus: async () => {
+          authProbeCalls.push('chatgpt');
+          return 'connected';
+        },
+      },
+    },
+  });
+
+  const disabledStatus = await manager.getStatus();
+
+  assert.deepEqual(authProbeCalls, []);
+  assert.equal(disabledStatus.sources.doubao.authStatus, 'unknown');
+  assert.equal(disabledStatus.sources.chatgpt.authStatus, 'unknown');
+
+  settings.explorer.chatgpt.enabled = true;
+  const enabledStatus = await manager.getStatus();
+
+  assert.deepEqual(authProbeCalls, ['chatgpt']);
+  assert.equal(enabledStatus.sources.chatgpt.authStatus, 'connected');
 });
 
 test('explorer revoke endpoint proxies memory deletion by source and scope', async () => {

@@ -216,6 +216,70 @@ export interface MeetingPilotMemoryRef {
   whyMatched?: string;
 }
 
+export type MeetingPilotSpeechSuggestionIntent =
+  | 'answer_question'
+  | 'add_context'
+  | 'clarify'
+  | 'status_update'
+  | 'follow_up'
+  | 'none';
+
+export type MeetingPilotSpeechSuggestionSource =
+  | 'transcript'
+  | 'memory'
+  | 'transcript_memory'
+  | 'profile'
+  | 'session_context'
+  | 'fallback';
+
+export interface MeetingPilotSpeechSuggestionEvidenceRef {
+  kind: 'transcript' | 'turn' | 'memory' | 'profile' | 'session_context';
+  id?: string;
+  title?: string;
+  snippet?: string;
+}
+
+export interface MeetingPilotSpeechSuggestion {
+  text: string;
+  language: string;
+  intent: MeetingPilotSpeechSuggestionIntent;
+  source: MeetingPilotSpeechSuggestionSource;
+  confidence: number;
+  evidenceRefs?: MeetingPilotSpeechSuggestionEvidenceRef[];
+  updatedAt: number;
+  expiresAt?: number;
+}
+
+export type MeetingPilotSpeechGuidanceClassificationScope =
+  | 'long_term_profile'
+  | 'session_only'
+  | 'ignore';
+
+export interface MeetingPilotSpeechGuidanceSessionNote {
+  id: string;
+  text: string;
+  createdAt: number;
+  sourceInput?: string;
+}
+
+export interface MeetingPilotSpeechGuidanceProfileRef {
+  id: string;
+  itemType: 'fact' | 'preference' | 'habit' | 'interest' | 'constraint';
+  itemKey: string;
+  itemValue: string;
+  createdAt: number;
+}
+
+export interface MeetingPilotSpeechGuidanceContext {
+  sessionNotes: MeetingPilotSpeechGuidanceSessionNote[];
+  profileRefs: MeetingPilotSpeechGuidanceProfileRef[];
+  lastInputText?: string;
+  lastClassifiedAt?: number;
+  lastClassificationScope?: MeetingPilotSpeechGuidanceClassificationScope;
+  lastClassificationReason?: string;
+  updatedAt?: number;
+}
+
 export interface MeetingPilotTranscriptChunk {
   id: string;
   /**
@@ -253,9 +317,11 @@ export interface MeetingPilotSessionSnapshot {
   inMeeting: boolean;
   shareState: MeetingPilotShareState;
   selfSharing: boolean;
+  micMuted?: boolean;
   sharerName?: string;
   speakerLabel?: string;
   participantCount: number;
+  selfName?: string;
   capture: MeetingPilotCaptureState;
   digest: MeetingPilotDigestState;
   readiness: MeetingPilotReadinessState;
@@ -269,6 +335,8 @@ export interface MeetingPilotSessionSnapshot {
   transcript: MeetingPilotTranscriptChunk[];
   transcriptTurns: MeetingPilotTranscriptTurn[];
   memoryRefs: MeetingPilotMemoryRef[];
+  speechSuggestion?: MeetingPilotSpeechSuggestion;
+  speechGuidanceContext?: MeetingPilotSpeechGuidanceContext;
   summary: string;
   shareSummary?: string;
   speakerSummary?: string;
@@ -290,8 +358,10 @@ export interface MeetingPilotDetectionPayload {
   inMeeting: boolean;
   shareState: MeetingPilotShareState;
   selfSharing: boolean;
+  micMuted?: boolean;
   participantCount?: number;
   participants?: MeetingPilotParticipant[];
+  selfName?: string;
   sharerName?: string;
   speakerLabel?: string;
   notes?: string[];
@@ -324,6 +394,8 @@ export interface MeetingPilotUpdateContextRequest {
   inMeeting: boolean;
   shareState: MeetingPilotShareState;
   selfSharing: boolean;
+  micMuted?: boolean;
+  selfName?: string;
   sharerName?: string;
   speakerLabel?: string;
   summary?: string;
@@ -356,6 +428,9 @@ export interface MeetingPilotPanelCommand {
     | 'MEETING_PILOT_RENAME_PARTICIPANT'
     | 'MEETING_PILOT_MERGE_PARTICIPANTS'
     | 'MEETING_PILOT_FOCUS_PARTICIPANT'
+    | 'MEETING_PILOT_UPSERT_SPEECH_CONTEXT'
+    | 'MEETING_PILOT_CLEAR_SPEECH_CONTEXT_NOTE'
+    | 'MEETING_PILOT_REFRESH_SPEECH_SUGGESTION'
     | 'MEETING_PILOT_TIER_STATUS_UPDATE'
     | 'MEETING_PILOT_TIER_FALLBACK_NOTICE';
   [key: string]: any;
@@ -760,6 +835,7 @@ export function createMeetingPilotSessionSnapshot(
     inMeeting: input.inMeeting ?? true,
     shareState: input.shareState || 'unknown',
     selfSharing: input.selfSharing ?? false,
+    micMuted: input.micMuted,
     sharerName: input.sharerName,
     speakerLabel: input.speakerLabel,
     participantCount: input.participantCount ?? 0,
@@ -778,6 +854,8 @@ export function createMeetingPilotSessionSnapshot(
     transcript: input.transcript || [],
     transcriptTurns: input.transcriptTurns || [],
     memoryRefs: input.memoryRefs || [],
+    speechSuggestion: input.speechSuggestion,
+    speechGuidanceContext: input.speechGuidanceContext,
     summary:
       input.summary || 'Meeting Pilot is waiting for the first useful signal.',
     shareSummary: input.shareSummary,

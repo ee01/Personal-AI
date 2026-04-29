@@ -74,6 +74,33 @@ test('WebpageMcpChatGPTClient.getAccessToken returns undefined when session has 
   assert.equal(token, undefined);
 });
 
+test('WebpageMcpChatGPTClient.openLogin opens daily Chrome tab through webpage-mcp', async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const host = {
+    callTool: async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return { content: [{ type: 'text', text: '' }] };
+    },
+    findTabByUrl: async () => undefined,
+    evalInTab: async () => '',
+    start: async () => {},
+    stop: async () => {},
+    getStatus: () => ({ running: true, extensionConnected: true }),
+  } as unknown as WebpageMcpHost;
+  const client = new WebpageMcpChatGPTClient(host);
+
+  assert.equal(await client.openLogin(), 'https://chatgpt.com/auth/login');
+  assert.deepEqual(calls, [
+    {
+      name: 'chrome_navigate',
+      args: {
+        url: 'https://chatgpt.com/auth/login',
+        openMode: 'new_tab',
+      },
+    },
+  ]);
+});
+
 test('WebpageMcpChatGPTClient.listConversationsPage parses items array', async () => {
   const listBody = JSON.stringify({
     ok: true,

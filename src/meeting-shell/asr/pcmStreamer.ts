@@ -1,4 +1,7 @@
-type PcmChunkHandler = (buffer: ArrayBuffer) => void;
+type PcmChunkHandler = (
+  buffer: ArrayBuffer,
+  timing: { startedAt: number; endedAt: number },
+) => void;
 
 export interface PcmStreamer {
   start(): Promise<void>;
@@ -28,7 +31,18 @@ export function createPcmStreamer(track: MediaStreamTrack): PcmStreamer {
       workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
       workletNode.port.onmessage = (event) => {
         if (event.data?.type === 'pcm' && event.data.buffer) {
-          handlers.forEach((h) => h(event.data.buffer));
+          const endedAt = Date.now();
+          const sampleCount =
+            typeof event.data.sampleCount === 'number'
+              ? event.data.sampleCount
+              : event.data.buffer.byteLength / 2;
+          const durationMs = Math.round((sampleCount / 16000) * 1000);
+          handlers.forEach((h) =>
+            h(event.data.buffer, {
+              startedAt: endedAt - durationMs,
+              endedAt,
+            }),
+          );
         }
       };
       sourceNode.connect(workletNode);

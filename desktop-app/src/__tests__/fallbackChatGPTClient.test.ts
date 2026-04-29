@@ -118,6 +118,31 @@ test('FallbackChatGPTClient falls back to Playwright if webpage-mcp fails', asyn
   assert.match(logged[0], /webpage-mcp transport failed/);
 });
 
+test('FallbackChatGPTClient.openLogin does not fall back from webpage-mcp to Playwright', async () => {
+  const opts = makeOptions('webpage_mcp', {
+    failOpen: true,
+  });
+  const client = new FallbackChatGPTClient(opts);
+
+  await assert.rejects(client.openLogin(), /mcp-openLogin-failed/);
+  assert.deepEqual(opts.mcp.calls, ['openLogin']);
+  assert.deepEqual(opts.pw.calls, []);
+  assert.equal(client.getLastOutcome().mode, 'webpage_mcp');
+  assert.equal(client.getLastOutcome().fellBackFromWebpageMcp, false);
+});
+
+test('FallbackChatGPTClient.probeAuthStatus uses selected transport without fallback', async () => {
+  const opts = makeOptions('webpage_mcp', {
+    throwAccessToken: new Error('extension-not-connected'),
+  });
+  const client = new FallbackChatGPTClient(opts);
+
+  assert.equal(await client.probeAuthStatus(), 'error');
+  assert.deepEqual(opts.mcp.calls, ['getAccessToken']);
+  assert.deepEqual(opts.pw.calls, []);
+  assert.equal(client.getLastOutcome().mode, 'webpage_mcp');
+});
+
 test('FallbackChatGPTClient surfaces fallback reason if Playwright also fails', async () => {
   const opts = makeOptions(
     'webpage_mcp',

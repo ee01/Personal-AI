@@ -28,6 +28,7 @@ interface SpeechRecognitionErrorEventLike {
 interface SpeechRecognitionInstanceLike {
   continuous: boolean;
   interimResults: boolean;
+  lang?: string;
   processLocally?: boolean;
   start(track?: MediaStreamTrack): void;
   abort(): void;
@@ -44,6 +45,34 @@ interface SpeechRecognitionCtorLike {
   }) => Promise<unknown>;
 }
 
+function getPreferredSpeechLangs(): string[] {
+  const values = [
+    'zh-CN',
+    typeof navigator !== 'undefined' ? navigator.language : '',
+    'en-US',
+  ];
+  return Array.from(
+    new Set(values.map((value) => String(value || '').trim()).filter(Boolean)),
+  );
+}
+
+function isAvailableResult(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value === 'string') return value === 'available';
+  if (Array.isArray(value)) return value.includes('available');
+  return false;
+}
+
+function formatAvailabilityResult(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function getSpeechRecognitionCtor(): SpeechRecognitionCtorLike | null {
   return (
     (typeof window !== 'undefined' &&
@@ -58,6 +87,7 @@ export class WebSpeechProvider implements ASRProvider {
   private emitter = createASREventEmitter();
   private recognition: SpeechRecognitionInstanceLike | undefined;
   private audioTrack: MediaStreamTrack | undefined;
+  private lang = 'zh-CN';
   private stopped = false;
 
   async isAvailable(): Promise<{ ok: boolean; reason?: string }> {
@@ -70,15 +100,31 @@ export class WebSpeechProvider implements ASRProvider {
     }
     if (typeof SR.available === 'function') {
       try {
-        const result = await SR.available({
-          langs: ['en-US'],
-          processLocally: true,
-        });
-        if (!result) {
-          return { ok: false, reason: 'on-device model not available' };
+        const availabilityResults: string[] = [];
+        for (const lang of getPreferredSpeechLangs()) {
+          const result = await SR.available({
+            langs: [lang],
+            processLocally: true,
+          });
+          availabilityResults.push(
+            `${lang}: ${formatAvailabilityResult(result)}`,
+          );
+          if (isAvailableResult(result)) {
+            this.lang = lang;
+            return { ok: true };
+          }
         }
-      } catch {
-        return { ok: false, reason: 'SpeechRecognition.available() threw' };
+        return {
+          ok: false,
+          reason: `on-device language pack unavailable (${availabilityResults.join('; ')})`,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          reason: `SpeechRecognition.available() threw: ${String(
+            (error as Error)?.message || error,
+          )}`,
+        };
       }
     }
     return { ok: true };
@@ -148,6 +194,7 @@ export class WebSpeechProvider implements ASRProvider {
 
     const recognition = new SR();
     this.recognition = recognition;
+    recognition.lang = this.lang;
     recognition.continuous = true;
     recognition.interimResults = true;
     if ('processLocally' in recognition) {

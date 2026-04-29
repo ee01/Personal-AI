@@ -63,6 +63,7 @@ const seenDanmakuIds = new Set<string>();
 const dismissedP0Ids = new Set<string>();
 const emittedHeuristicAlertIds = new Set<string>();
 let danmakuSpeedKey: 'fast' | 'medium' | 'slow' = 'medium';
+const contentScriptStartedAt = Date.now();
 let runtimeConfig: MeetingPilotRuntimeConfig = {
   enabled: true,
   floatingIconVisible: true,
@@ -183,7 +184,7 @@ function attachDanmakuHoverFreeze(item: HTMLElement): void {
     item.classList.remove('paused');
     const currentX = new DOMMatrix(getComputedStyle(item).transform).m41;
     const endX = -(window.innerWidth + 240);
-    const startX = window.innerWidth;
+    const startX = item.getBoundingClientRect().width + 48;
     const totalPx = startX - endX;
     const remainingPx = currentX - endX;
     const originalDur =
@@ -318,6 +319,154 @@ function inferParticipantCount(selfName?: string): number {
   return participantButtons + (selfName ? 1 : 0);
 }
 
+function isInsideMeetingPilotOverlay(node: Element): boolean {
+  return Boolean(node.closest(`#${OVERLAY_ID}`));
+}
+
+function parseParticipantNameFromStatusText(
+  value?: string | null,
+  options: { requireSpeaking?: boolean } = {},
+): string | undefined {
+  const text = normalizeText(value);
+  if (!text) return undefined;
+
+  const speakingPatterns = [
+    /^(.+?)\s+(?:is\s+)?(?:speaking|talking)$/i,
+    /^(.+?)\s+(?:is\s+)?(?:currently\s+)?(?:speaking|talking)\b/i,
+    /^active speaker[:\s]+(.+?)$/i,
+    /^currently speaking[:\s]+(.+?)$/i,
+    /^speaker[:\s]+(.+?)$/i,
+  ];
+  const rosterPatterns = [
+    /^(.+?)\s+has a good connection\b/i,
+    /^(.+?)\s+(?:is\s+)?(?:muted|unmuted)\b/i,
+    /^(.+?)\s+(?:microphone|camera)\b/i,
+  ];
+
+  const patterns = options.requireSpeaking
+    ? speakingPatterns
+    : [...speakingPatterns, ...rosterPatterns];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const name = normalizeText(match?.[1]);
+    if (isLikelyParticipantName(name)) return name;
+  }
+
+  return undefined;
+}
+
+function isLikelyParticipantName(value?: string | null): value is string {
+  const text = normalizeText(value);
+  if (!text || text.length > 80) return false;
+  if (
+    /^(you|me|host|speaker|participant|participants|microphone|camera|mute|unmute|video|audio|screen|share|sharing|active speaker)$/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (/^(leave|chat|apps|record|settings|more|raise hand)$/i.test(text)) {
+    return false;
+  }
+  return /[A-Za-z0-9\u4e00-\u9fa5]/.test(text);
+}
+
+function getElementAccessibleText(element: Element): string {
+  const el = element as HTMLElement;
+  return normalizeText(
+    [
+      el.getAttribute('aria-label'),
+      el.getAttribute('title'),
+      el.getAttribute('data-testid'),
+      el.getAttribute('data-test-id'),
+      el.getAttribute('data-test'),
+      el.textContent,
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+}
+
+function extractParticipantNameFromElement(
+  element: Element,
+  options: { requireSpeaking?: boolean } = {},
+): string | undefined {
+  if (isInsideMeetingPilotOverlay(element)) return undefined;
+
+  const tileName = extractParticipantNameFromTile(element);
+  if (tileName) return tileName;
+
+  const direct = parseParticipantNameFromStatusText(
+    getElementAccessibleText(element),
+    options,
+  );
+  if (direct) return direct;
+
+  if (options.requireSpeaking) return undefined;
+
+  const shortText = normalizeText(element.textContent);
+  if (isLikelyParticipantName(shortText) && shortText.length <= 40) {
+    return shortText;
+  }
+  return undefined;
+}
+
+function extractParticipantNameFromTile(element: Element): string | undefined {
+  const tile = element.closest('.GalleryGrid__tile') || element;
+  const nameNode =
+    tile.querySelector<HTMLElement>('.part-info[data-at^="VideoTile::name::"]') ||
+    tile.querySelector<HTMLElement>('.part-info');
+  const fromText = normalizeText(nameNode?.textContent);
+  if (isLikelyParticipantName(fromText)) return fromText;
+
+  const dataAt = normalizeText(nameNode?.getAttribute('data-at'));
+  const match = dataAt.match(/^VideoTile::name::(.+)$/i);
+  const fromDataAt = normalizeText(match?.[1]);
+  if (isLikelyParticipantName(fromDataAt)) return fromDataAt;
+
+  return undefined;
+}
+
+function findParticipantNameNearElement(
+  element: Element,
+): string | undefined {
+  let cursor: Element | null = element;
+  for (let depth = 0; cursor && depth < 6; depth += 1) {
+    if (isInsideMeetingPilotOverlay(cursor)) return undefined;
+
+    const direct = extractParticipantNameFromElement(cursor);
+    if (direct) return direct;
+
+    const indicatorCandidate = Array.from(
+      cursor.querySelectorAll<HTMLElement>(
+        [
+          '[aria-label*="has a good connection" i]',
+          '[aria-label*="speaking" i]',
+          '[aria-label*="talking" i]',
+          '[aria-label*="muted" i]',
+          '[aria-label*="microphone" i]',
+          '[title*="speaking" i]',
+          '[title*="talking" i]',
+        ].join(','),
+      ),
+    )
+      .map((node) => extractParticipantNameFromElement(node))
+      .find(Boolean);
+    if (indicatorCandidate) return indicatorCandidate;
+
+    const textCandidates = Array.from(
+      cursor.querySelectorAll<HTMLElement>('span, div, p, button'),
+    )
+      .map((node) => normalizeText(node.textContent))
+      .filter((text) => isLikelyParticipantName(text) && text.length <= 40)
+      .sort((left, right) => left.length - right.length);
+    if (textCandidates[0]) return textCandidates[0];
+
+    cursor = cursor.parentElement;
+  }
+  return undefined;
+}
+
 function extractParticipants(selfName?: string): MeetingPilotParticipant[] {
   const participants = new Map<string, MeetingPilotParticipant>();
 
@@ -354,13 +503,31 @@ function extractParticipants(selfName?: string): MeetingPilotParticipant[] {
   Array.from(
     document.querySelectorAll('button[aria-label*="has a good connection" i]'),
   ).forEach((node) => {
-    const label = normalizeText(
+    const indicator = normalizeText(
       (node as HTMLElement).getAttribute('aria-label'),
     );
-    const match = label.match(/^(.+?)\s+has a good connection/i);
+    const match = indicator.match(/^(.+?)\s+has a good connection/i);
     if (match?.[1]) {
       pushParticipant(match[1]);
     }
+  });
+
+  Array.from(
+    document.querySelectorAll<HTMLElement>(
+      [
+        '.part-info[data-at^="VideoTile::name::"]',
+        '[aria-label*="speaking" i]',
+        '[aria-label*="talking" i]',
+        '[aria-label*="muted" i]',
+        '[aria-label*="unmuted" i]',
+        '[aria-label*="microphone" i]',
+        '[title*="speaking" i]',
+        '[title*="talking" i]',
+      ].join(','),
+    ),
+  ).forEach((node) => {
+    const name = extractParticipantNameFromElement(node);
+    if (name) pushParticipant(name);
   });
 
   if (selfName) {
@@ -412,10 +579,105 @@ function inferSelfSharing(args: {
 }
 
 function extractSpeakerLabel(bodyText: string): string | undefined {
+  const domSpeaker = extractActiveSpeakerFromDom();
+  if (domSpeaker) return domSpeaker;
+
   const match =
     bodyText.match(/speaker[:\s]+([^\n]+)/i) ||
     bodyText.match(/currently speaking[:\s]+([^\n]+)/i);
   return normalizeText(match?.[1]);
+}
+
+function extractActiveSpeakerFromDom(): string | undefined {
+  const mainSpeakerTile = document.querySelector<HTMLElement>(
+    '.GalleryGrid__tile--main-speaker',
+  );
+  const mainSpeakerName = mainSpeakerTile
+    ? extractParticipantNameFromTile(mainSpeakerTile)
+    : undefined;
+  if (mainSpeakerName) return resolveParticipantAlias(mainSpeakerName);
+
+  const activeSelectors = [
+    '.GalleryGrid__tile--main-speaker',
+    '[aria-label*="speaking" i]',
+    '[aria-label*="talking" i]',
+    '[aria-label*="active speaker" i]',
+    '[title*="speaking" i]',
+    '[title*="talking" i]',
+    '[data-testid*="speaker" i]',
+    '[data-test-id*="speaker" i]',
+    '[data-test*="speaker" i]',
+    '[class*="active-speaker" i]',
+    '[class*="activeSpeaker" i]',
+    '[class*="speaking" i]',
+    '[class*="talking" i]',
+    '[class*="voice-active" i]',
+    '[class*="dominant" i]',
+    '[data-speaking="true"]',
+    '[data-is-speaking="true"]',
+  ].join(',');
+
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>(activeSelectors),
+  ).filter((node) => !isInsideMeetingPilotOverlay(node));
+
+  const direct = candidates
+    .map((node) =>
+      extractParticipantNameFromElement(node, { requireSpeaking: true }),
+    )
+    .find(Boolean);
+  if (direct) return resolveParticipantAlias(direct);
+
+  const nearby = candidates
+    .map((node) => findParticipantNameNearElement(node))
+    .find(Boolean);
+  return nearby ? resolveParticipantAlias(nearby) : undefined;
+}
+
+function inferMicMuted(): boolean | undefined {
+  const candidates = Array.from(
+    document.querySelectorAll(
+      [
+        'button[aria-label*="mute" i]',
+        'button[aria-label*="microphone" i]',
+        'button[title*="mute" i]',
+        'button[title*="microphone" i]',
+      ].join(','),
+    ),
+  )
+    .map((node) => {
+      const el = node as HTMLElement;
+      return normalizeText(
+        [
+          el.getAttribute('aria-label'),
+          el.getAttribute('title'),
+          el.textContent,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      );
+    })
+    .filter(Boolean);
+
+  const controlText = candidates.join(' | ');
+  if (!controlText) return undefined;
+  if (
+    /\b(unmute|turn on microphone|start audio|join audio)\b/i.test(
+      controlText,
+    ) ||
+    /\b(microphone is muted|you are muted|currently muted)\b/i.test(
+      controlText,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(mute|turn off microphone|stop audio)\b/i.test(controlText) ||
+    /\b(microphone is on|you are unmuted)\b/i.test(controlText)
+  ) {
+    return false;
+  }
+  return undefined;
 }
 
 function resolveTopicHint(value: string): string | undefined {
@@ -468,6 +730,7 @@ function getMeetingPageContext():
     selfName,
     sharerName,
   });
+  const micMuted = inferMicMuted();
   const ended =
     /meeting ended/i.test(bodyText) ||
     /you have left the meeting/i.test(bodyText) ||
@@ -488,6 +751,7 @@ function getMeetingPageContext():
         : 'active'
       : 'none',
     selfSharing,
+    micMuted,
     sharerName,
     speakerLabel: extractSpeakerLabel(bodyText),
     detectedAt: Date.now(),
@@ -734,6 +998,22 @@ function getDanmakuTop(index: number): number {
   return 96 + (index % 6) * 52;
 }
 
+function seedInitialDanmakuIds(
+  snapshot: MeetingPilotSessionSnapshot,
+): void {
+  snapshot.alerts
+    .filter((alert) => !alert.resolved && alert.level !== 'P0')
+    .forEach((alert) => {
+      if (!alert.createdAt || alert.createdAt <= contentScriptStartedAt) {
+        seenDanmakuIds.add(alert.id);
+      }
+    });
+
+  snapshot.memoryRefs.forEach((ref) => {
+    seenDanmakuIds.add(`memory:${ref.id}`);
+  });
+}
+
 function formatAlertAge(createdAt?: number): string {
   if (!createdAt) return 'just now';
   const diffSeconds = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
@@ -869,6 +1149,7 @@ function syncAlertLayers(
     lastAlertMeetingId = snapshot.meetingId;
     seenDanmakuIds.clear();
     dismissedP0Ids.clear();
+    seedInitialDanmakuIds(snapshot);
   }
 
   const unresolved = snapshot.alerts.filter((alert) => !alert.resolved);
@@ -1255,7 +1536,7 @@ function createOverlay(): void {
         animation: danmakuSlide var(--duration, 8s) linear forwards;
         will-change: transform;
         backface-visibility: hidden;
-        transform: translateX(100vw) translateZ(0);
+        transform: translateX(calc(100% + 48px)) translateZ(0);
         transition:
           max-width 0.2s ease,
           box-shadow 0.2s ease,
@@ -2111,7 +2392,7 @@ function createOverlay(): void {
         to { transform: rotate(360deg); }
       }
       @keyframes danmakuSlide {
-        0% { transform: translateX(100vw) translateZ(0); }
+        0% { transform: translateX(calc(100% + 48px)) translateZ(0); }
         100% { transform: translateX(calc(-100vw - 240px)) translateZ(0); }
       }
       @media (max-width: 720px) {
@@ -2478,7 +2759,11 @@ function createOverlay(): void {
       hideEntryCloseControls(true);
       return;
     }
-    void openPanel();
+    if (isCaptureEnabled(overlayState.snapshot)) {
+      void openPanel();
+      return;
+    }
+    setCoachmarkOpen(true);
   });
 
   void syncContext('mount');
@@ -2815,6 +3100,7 @@ async function syncContext(reason: string): Promise<void> {
     inMeeting: context.inMeeting,
     shareState: context.shareState,
     selfSharing: context.selfSharing,
+    micMuted: context.micMuted,
     sharerName: context.sharerName,
     speakerLabel: context.speakerLabel,
     participantCount: context.participantCount,

@@ -15,10 +15,10 @@ test('getModelDir returns correct macOS path', () => {
   assert.ok(dir.includes('whisper-models'), 'should be in whisper-models');
 });
 
-test('getModelPath returns path ending in ggml-base.en.bin', () => {
+test('getModelPath returns path ending in ggml-small.bin', () => {
   const path = getModelPath();
   assert.ok(
-    path.endsWith('ggml-base.en.bin'),
+    path.endsWith('ggml-small.bin'),
     `expected .bin extension, got: ${path}`,
   );
 });

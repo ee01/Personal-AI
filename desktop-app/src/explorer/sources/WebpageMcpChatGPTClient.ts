@@ -35,11 +35,11 @@ export class WebpageMcpChatGPTClient implements ChatGPTApiClient {
   constructor(private readonly host: WebpageMcpHost) {}
 
   async openLogin(): Promise<string> {
-    const tabId = await this.requireChatGptTab();
-    await this.host.evalInTab(
-      tabId,
-      `window.location.href = 'https://chatgpt.com/auth/login'; return window.location.href;`,
-    );
+    const tabId = await this.host.findTabByUrl(CHATGPT_URL_PATTERN);
+    await this.host.callTool('chrome_navigate', {
+      url: 'https://chatgpt.com/auth/login',
+      ...(tabId !== undefined ? { tabId } : { openMode: 'new_tab' }),
+    });
     return 'https://chatgpt.com/auth/login';
   }
 

@@ -224,14 +224,302 @@ const ToggleField = ({
   </div>
 );
 
+const CHROME_ON_DEVICE_ASR_LANG = 'zh-CN';
+const DESKTOP_APP_RELEASE_URL =
+  'https://github.com/ee01/personal-ai/releases/latest';
+
+function ChromeOnDeviceASRPanel({ enabled }: { enabled: boolean }) {
+  const [status, setStatus] = React.useState<{
+    supported: boolean;
+    availability?: string;
+    message: string;
+  }>({
+    supported: false,
+    message: 'Not checked',
+  });
+  const [busyAction, setBusyAction] = React.useState<
+    'check' | 'install' | null
+  >(null);
+
+  const getSpeechRecognitionCtor = () => {
+    const speechWindow = window as typeof window & {
+      SpeechRecognition?: {
+        available?: (args: {
+          langs: string[];
+          processLocally: boolean;
+        }) => Promise<unknown>;
+        install?: (args: {
+          langs: string[];
+          processLocally: boolean;
+        }) => Promise<unknown>;
+      };
+      webkitSpeechRecognition?: {
+        available?: (args: {
+          langs: string[];
+          processLocally: boolean;
+        }) => Promise<unknown>;
+        install?: (args: {
+          langs: string[];
+          processLocally: boolean;
+        }) => Promise<unknown>;
+      };
+    };
+    return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+  };
+
+  const checkAvailability = async (silent = false) => {
+    if (!enabled) return;
+    if (!silent) setBusyAction((current) => current || 'check');
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor?.available) {
+      setStatus({
+        supported: false,
+        message: 'This Chrome build does not expose on-device SpeechRecognition checks.',
+      });
+      if (!silent) setBusyAction(null);
+      return;
+    }
+    try {
+      const result = await SpeechRecognitionCtor.available({
+        langs: [CHROME_ON_DEVICE_ASR_LANG],
+        processLocally: true,
+      });
+      const availability = String(result || 'unknown');
+      setStatus({
+        supported: availability === 'available',
+        availability,
+        message:
+          availability === 'available'
+            ? `${CHROME_ON_DEVICE_ASR_LANG} language pack is installed.`
+            : `${CHROME_ON_DEVICE_ASR_LANG} language pack is ${availability}.`,
+      });
+    } catch (error) {
+      setStatus({
+        supported: false,
+        message: String((error as Error)?.message || error),
+      });
+    } finally {
+      if (!silent) setBusyAction(null);
+    }
+  };
+
+  const installLanguagePack = async () => {
+    if (!enabled) return;
+    setBusyAction('install');
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor?.install) {
+      setStatus({
+        supported: false,
+        message: 'This Chrome build does not expose SpeechRecognition.install().',
+      });
+      setBusyAction(null);
+      return;
+    }
+    try {
+      const result = await SpeechRecognitionCtor.install({
+        langs: [CHROME_ON_DEVICE_ASR_LANG],
+        processLocally: true,
+      });
+      await checkAvailability(true);
+      if (!result) {
+        setStatus((prev) => ({
+          ...prev,
+          message:
+            'Chrome did not install the language pack. It may be unsupported on this version or blocked by browser policy.',
+        }));
+      }
+    } catch (error) {
+      setStatus({
+        supported: false,
+        message: String((error as Error)?.message || error),
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  React.useEffect(() => {
+    if (enabled) void checkAvailability();
+  }, [enabled]);
+
+  if (!enabled) return null;
+
+  return (
+    <div
+      className="form-group"
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: 8,
+        padding: '12px 16px',
+        marginBottom: 16,
+        backgroundColor: '#f9fafb',
+      }}
+    >
+      <strong style={{ display: 'block', marginBottom: 8 }}>
+        Chrome On-Device ASR
+      </strong>
+      <small style={{ color: '#4b5563', display: 'block', marginBottom: 8 }}>
+        这是 Chrome Web Speech 的实验性本地识别能力。语言包不会可靠地静默完成；
+        Chrome 文档建议先检查 `available()`，如果是 `downloadable` 或
+        `downloading`，由用户触发 `install()` 安装。
+      </small>
+      <small style={{ color: '#6b7280', display: 'block', marginBottom: 8 }}>
+        由于 Chrome 对 extension offscreen 中的自定义 audio track 支持不稳定，
+        Meeting Pilot 仅在 Local only 模式下尝试使用它；Auto 模式会优先
+        Desktop Whisper，然后回退 Cloud。
+      </small>
+      <small
+        style={{
+          color: status.supported ? '#16a34a' : '#b45309',
+          display: 'block',
+          marginBottom: 8,
+        }}
+      >
+        {status.availability
+          ? `Language pack ${CHROME_ON_DEVICE_ASR_LANG}: ${status.availability}`
+          : status.message}
+      </small>
+      {status.availability && status.message !== status.availability ? (
+        <small style={{ color: '#6b7280', display: 'block', marginBottom: 8 }}>
+          {status.message}
+        </small>
+      ) : null}
+      <button
+        type="button"
+        onClick={checkAvailability}
+        disabled={Boolean(busyAction)}
+        style={{ marginRight: 8, fontSize: 11, padding: '2px 8px' }}
+      >
+        {busyAction === 'check' ? 'Checking...' : 'Check'}
+      </button>
+      <button
+        type="button"
+        onClick={installLanguagePack}
+        disabled={Boolean(busyAction)}
+        style={{ fontSize: 11, padding: '2px 8px' }}
+      >
+        {busyAction === 'install' ? 'Installing...' : 'Install zh-CN Pack'}
+      </button>
+    </div>
+  );
+}
+
 function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
   const [status, setStatus] = React.useState<{
     ok: boolean;
+    modelName?: string;
+    modelPath?: string;
     modelReady?: boolean;
+    whisperBinaryAvailable?: boolean;
+    whisperBinaryPath?: string;
+    whisperBinaryInstallInProgress?: boolean;
+    whisperBinaryInstallProgress?: number;
+    whisperBinaryInstallError?: string;
     downloadInProgress?: boolean;
     downloadProgress?: number;
+    engineLoaded?: boolean;
     error?: string;
   } | null>(null);
+  const isMac =
+    typeof navigator !== 'undefined' &&
+    navigator.platform?.toLowerCase().includes('mac');
+  const autoEnsureModelRequestedRef = React.useRef(false);
+
+  const requestDesktopDirectly = async <T,>(args: {
+    method: string;
+    path: string;
+    body?: Record<string, unknown>;
+  }): Promise<T> => {
+    const { method, path, body } = args;
+    const pairResponse = await fetch('http://127.0.0.1:46321/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!pairResponse.ok) {
+      return {
+        ok: false,
+        error: `Desktop app pair failed: HTTP ${pairResponse.status}`,
+      } as T;
+    }
+    const pairData = (await pairResponse.json()) as { token?: string };
+    const token = pairData.token?.trim();
+    if (!token) {
+      return { ok: false, error: 'Desktop app pair failed: missing token' } as T;
+    }
+    const response = await fetch(`http://127.0.0.1:46321${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bridge-token': token,
+      },
+      body: body && method !== 'GET' ? JSON.stringify(body) : undefined,
+    });
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Desktop app request failed: HTTP ${response.status}`,
+      } as T;
+    }
+    return (await response.json()) as T;
+  };
+
+  const requestDesktopStatusDirectly = async (): Promise<{
+    ok: boolean;
+    modelName?: string;
+    modelPath?: string;
+    modelReady?: boolean;
+    whisperBinaryAvailable?: boolean;
+    whisperBinaryPath?: string;
+    whisperBinaryInstallInProgress?: boolean;
+    whisperBinaryInstallProgress?: number;
+    whisperBinaryInstallError?: string;
+    downloadInProgress?: boolean;
+    downloadProgress?: number;
+    engineLoaded?: boolean;
+    error?: string;
+  }> => {
+    return requestDesktopDirectly({
+      method: 'GET',
+      path: '/whisper/status',
+    });
+  };
+
+  const ensureModelDirectly = async (): Promise<void> => {
+    const result = await requestDesktopDirectly<{
+      ok?: boolean;
+      error?: string;
+    }>({
+      method: 'POST',
+      path: '/whisper/model/ensure',
+      body: {},
+    });
+    if (result.ok === false) {
+      throw new Error(result.error || 'Desktop app model ensure failed');
+    }
+  };
+
+  const maybeAutoEnsureModel = (
+    nextStatus: {
+      ok: boolean;
+      modelReady?: boolean;
+      downloadInProgress?: boolean;
+    },
+    ensureModel: () => Promise<void>,
+  ) => {
+    if (
+      !nextStatus.ok ||
+      nextStatus.modelReady ||
+      nextStatus.downloadInProgress ||
+      autoEnsureModelRequestedRef.current
+    ) {
+      return;
+    }
+    autoEnsureModelRequestedRef.current = true;
+    void ensureModel().catch(() => {
+      autoEnsureModelRequestedRef.current = false;
+    });
+  };
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -261,9 +549,17 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
       try {
         const res = await sendWhisperRequest<{
           ok: boolean;
+          modelName?: string;
+          modelPath?: string;
           modelReady?: boolean;
+          whisperBinaryAvailable?: boolean;
+          whisperBinaryPath?: string;
+          whisperBinaryInstallInProgress?: boolean;
+          whisperBinaryInstallProgress?: number;
+          whisperBinaryInstallError?: string;
           downloadInProgress?: boolean;
           downloadProgress?: number;
+          engineLoaded?: boolean;
           error?: string;
         }>({
           method: 'GET',
@@ -275,10 +571,31 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
               ? res
               : { ok: false, error: res.error || 'Desktop app not running' },
           );
+          maybeAutoEnsureModel(res, async () => {
+            await sendWhisperRequest({
+              method: 'POST',
+              path: '/whisper/model/ensure',
+              body: {},
+            });
+          });
         }
-      } catch {
-        if (!cancelled)
-          setStatus({ ok: false, error: 'Desktop app not running' });
+      } catch (error) {
+        try {
+          const directStatus = await requestDesktopStatusDirectly();
+          if (!cancelled) {
+            setStatus(directStatus);
+            maybeAutoEnsureModel(directStatus, ensureModelDirectly);
+          }
+        } catch {
+          if (!cancelled) {
+            setStatus({
+              ok: false,
+              error: `Extension bridge failed: ${String(
+                (error as Error)?.message || error,
+              )}`,
+            });
+          }
+        }
       }
     };
 
@@ -312,30 +629,6 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
     };
   }, [enabled]);
 
-  const handleEnsureModel = async () => {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          {
-            type: 'WHISPER_NM_REQUEST',
-            method: 'POST',
-            path: '/whisper/model/ensure',
-            body: {},
-          },
-          () => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-            } else {
-              resolve();
-            }
-          },
-        );
-      });
-    } catch {
-      // ignore
-    }
-  };
-
   if (!enabled) return null;
 
   return (
@@ -352,6 +645,25 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
       <strong style={{ display: 'block', marginBottom: 8 }}>
         Desktop ASR (Local Whisper)
       </strong>
+      <small style={{ color: '#4b5563', display: 'block', marginBottom: 8 }}>
+        Local Whisper 不是 Chrome 内置能力。它需要安装并启动 Personal AI
+        desktop app，由 desktop app 在本机运行 Whisper，并通过 native messaging
+        / localhost bridge 接收音频。Auto 模式会优先使用 Desktop Whisper，然后回退
+        Cloud。
+      </small>
+      <button
+        type="button"
+        onClick={() => window.open(DESKTOP_APP_RELEASE_URL, '_blank', 'noopener')}
+        style={{ marginBottom: 8, fontSize: 11, padding: '2px 8px' }}
+      >
+        Download App
+      </button>
+      {!isMac && (
+        <small style={{ color: '#b45309', display: 'block', marginBottom: 8 }}>
+          当前 Desktop Whisper provider 代码只支持 macOS。Windows 上 local
+          mode 暂无稳定本地转录路径；Auto 会回退云端，Local only 会显示 No ASR。
+        </small>
+      )}
       {!status ? (
         <small style={{ color: '#6b7280' }}>Checking...</small>
       ) : !status.ok ? (
@@ -359,30 +671,48 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
           <small style={{ color: '#dc2626' }}>
             {status.error || 'Desktop app not running'}
           </small>
-          <br />
-          <small style={{ color: '#6b7280' }}>
-            Install the Personal AI desktop app for local transcription.
-          </small>
         </div>
       ) : (
         <div>
           <small style={{ color: status.modelReady ? '#16a34a' : '#d97706' }}>
             Model:{' '}
+            {status.modelName ? `${status.modelName} · ` : ''}
             {status.modelReady
               ? 'Ready'
               : status.downloadInProgress
                 ? `Downloading ${status.downloadProgress ?? 0}%`
                 : 'Not downloaded'}
           </small>
-          {!status.modelReady && !status.downloadInProgress && (
-            <button
-              type="button"
-              onClick={handleEnsureModel}
-              style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px' }}
-            >
-              Download Model
-            </button>
-          )}
+          <small
+            style={{
+              color: status.whisperBinaryAvailable ? '#16a34a' : '#dc2626',
+              display: 'block',
+              marginTop: 4,
+            }}
+          >
+          Whisper binary:{' '}
+          {status.whisperBinaryAvailable
+            ? status.whisperBinaryPath || 'Found'
+            : status.whisperBinaryInstallInProgress
+              ? `Installing ${status.whisperBinaryInstallProgress ?? 0}%`
+              : 'Missing'}
+        </small>
+          <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
+            Desktop app connected
+            {status.engineLoaded ? ' · Whisper engine loaded' : ''}
+          </small>
+          {status.whisperBinaryInstallError ? (
+            <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
+              Whisper binary install failed: {status.whisperBinaryInstallError}
+            </small>
+          ) : null}
+          {!status.whisperBinaryAvailable &&
+          !status.whisperBinaryInstallInProgress ? (
+            <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
+              Desktop app 会自动安装本地 Whisper binary。安装完成后 Local
+              Whisper 才会真正转录。
+            </small>
+          ) : null}
         </div>
       )}
     </div>
@@ -2093,15 +2423,23 @@ const Options = () => {
             <option value="cloud-only">Cloud only</option>
           </select>
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            Auto: tries on-device and desktop Whisper first, then cloud. Local
-            only: never contacts cloud. Cloud only: always uses cloud (requires
-            API key).
+            Auto: 先尝试 Personal AI desktop app 的 Local Whisper，然后回退
+            cloud。Chrome Web Speech on-device 只在 Local only 中作为实验性本地兜底使用。
+            Local only: never contacts cloud. Cloud only: always uses cloud
+            (requires API key).
           </small>
         </div>
         {config.MEETING_TRANSCRIPTION_MODE !== 'cloud-only' && (
-          <DesktopASRStatusPanel
-            enabled={config.MEETING_PILOT_ENABLED === true}
-          />
+          <>
+            {config.MEETING_TRANSCRIPTION_MODE === 'local-only' && (
+              <ChromeOnDeviceASRPanel
+                enabled={config.MEETING_PILOT_ENABLED === true}
+              />
+            )}
+            <DesktopASRStatusPanel
+              enabled={config.MEETING_PILOT_ENABLED === true}
+            />
+          </>
         )}
         <div className="form-group">
           <label htmlFor="MEETING_PROVIDER_BASE_URL">

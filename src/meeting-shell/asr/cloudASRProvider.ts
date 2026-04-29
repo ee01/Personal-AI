@@ -7,6 +7,7 @@ import {
 import { prepareMediaBlobForTranscription } from '../transcodeForWhisper';
 import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types';
 import { createASREventEmitter } from './types';
+import { sanitizeASRTranscriptText } from './transcriptFilter';
 
 const SEGMENT_MS = 5000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -216,7 +217,7 @@ export class CloudASRProvider implements ASRProvider {
       }
 
       this.consecutiveFailures = 0;
-      const text = String(result.text || '').trim();
+      const text = sanitizeASRTranscriptText(result.text);
       if (!text) return;
 
       this.emitter.emit('transcript', {

@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 
-const MODEL_NAME = 'ggml-base.en';
+export const MODEL_NAME = 'ggml-small';
 const MODEL_URL =
-  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
-const MODEL_EXPECTED_BYTES = 147964211;
+  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin';
+const MODEL_EXPECTED_BYTES = 487601967;
 
 export function getModelDir(): string {
+  const overrideDir = process.env.PERSONAL_AI_WHISPER_MODEL_DIR?.trim();
+  if (overrideDir) return overrideDir;
   return join(
     homedir(),
     'Library',

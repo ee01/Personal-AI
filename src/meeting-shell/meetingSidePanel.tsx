@@ -821,6 +821,141 @@ const shellStyle = `
   .catchup-section .section-content { font-size: 14px; line-height: 1.6; }
 
   .speech-tab { display: flex; flex-direction: column; gap: 10px; padding: 0; }
+  .speech-suggestion-card {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(23, 29, 42, 0.96);
+    border: 1px solid rgba(94, 116, 160, 0.42);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.22);
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .speech-suggestion-card.stale {
+    opacity: 0.78;
+  }
+  .speech-suggestion-kicker {
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .speech-suggestion-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: start;
+  }
+  .speech-suggestion-text {
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    font-weight: 650;
+    word-break: break-word;
+  }
+  .speech-suggestion-actions {
+    display: inline-flex;
+    gap: 5px;
+    flex-wrap: nowrap;
+  }
+  .speech-suggestion-icon-btn,
+  .speech-context-toggle,
+  .speech-context-save,
+  .speech-context-note button {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .speech-suggestion-icon-btn:hover,
+  .speech-context-toggle:hover,
+  .speech-context-save:hover,
+  .speech-context-note button:hover {
+    color: var(--text);
+    border-color: rgba(108,92,231,0.6);
+  }
+  .speech-suggestion-icon-btn:disabled,
+  .speech-context-save:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .speech-suggestion-meta,
+  .speech-context-row {
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .speech-context-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .speech-context-message { color: var(--p2-color); }
+  .speech-context-error { color: var(--p0-color); }
+  .speech-context-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .speech-context-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    min-height: 68px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .speech-context-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-glow);
+  }
+  .speech-context-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .speech-context-save {
+    color: var(--accent-light);
+    border-color: rgba(108,92,231,0.55);
+  }
+  .speech-context-note-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .speech-context-note {
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 5px 4px 8px;
+    border-radius: 6px;
+    background: rgba(108,92,231,0.08);
+    border: 1px solid rgba(108,92,231,0.16);
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .speech-context-note span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .speech-context-note button {
+    padding: 1px 5px;
+    font-size: 10px;
+  }
   .speech-status-card {
     padding: 10px 12px;
     border-radius: 10px;
@@ -1508,8 +1643,9 @@ function MeetingSidePanel() {
     });
   };
   const sidePanelPinned = Boolean(session.sidePanelPinned);
+  const pinButtonActive = surfaceMode === 'side-panel' && sidePanelPinned;
   const toggleSidePanelPin = async () => {
-    const nextPinned = !sidePanelPinned;
+    const nextPinned = !pinButtonActive;
     const nativeOpenPromise = nextPinned
       ? openChromeSidePanelFromUserGesture(session.tabId)
       : undefined;
@@ -1628,26 +1764,26 @@ function MeetingSidePanel() {
         <span className="panel-title">Meeting Pilot</span>
         <div className="panel-header-actions">
           <button
-            className={`panel-pin${sidePanelPinned ? ' active' : ''}`}
+            className={`panel-pin${pinButtonActive ? ' active' : ''}`}
             type="button"
             title={
-              sidePanelPinned
+              pinButtonActive
                 ? '取消固定 Chrome 侧边栏'
                 : '固定到 Chrome 侧边栏'
             }
             aria-label={
-              sidePanelPinned
+              pinButtonActive
                 ? '取消固定 Chrome 侧边栏'
                 : '固定到 Chrome 侧边栏'
             }
-            aria-pressed={sidePanelPinned}
+            aria-pressed={pinButtonActive}
             disabled={session.tabId <= 0}
             onClick={() => void toggleSidePanelPin()}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M14.5 4.5 19.5 9.5 16.3 10.6 13.2 13.7 13 18 11 20 9 15 4 13 6 11 10.3 10.8 13.4 7.7 14.5 4.5Z"
-                fill={sidePanelPinned ? 'currentColor' : 'none'}
+                fill={pinButtonActive ? 'currentColor' : 'none'}
                 stroke="currentColor"
                 strokeWidth="1.8"
                 strokeLinecap="round"

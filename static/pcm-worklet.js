@@ -40,9 +40,10 @@ class PcmProcessor extends AudioWorkletProcessor {
       }
       this._buffer = [];
       this._bufferSamples = 0;
-      this.port.postMessage({ type: 'pcm', buffer: merged.buffer }, [
-        merged.buffer,
-      ]);
+      this.port.postMessage(
+        { type: 'pcm', buffer: merged.buffer, sampleCount: merged.length },
+        [merged.buffer],
+      );
     }
 
     return true;

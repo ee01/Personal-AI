@@ -75,6 +75,7 @@ export interface ChatGPTClientStatus {
 
 export interface ChatGPTApiClient {
   openLogin(): Promise<string>;
+  probeAuthStatus?(): Promise<BridgeAuthStatus>;
   getAccessToken(): Promise<string | undefined>;
   listConversationsPage(
     accessToken: string | undefined,
@@ -417,6 +418,10 @@ export class ChatGPTSource {
 
   async getAuthStatus(): Promise<BridgeAuthStatus> {
     try {
+      const probedStatus = await this.client.probeAuthStatus?.();
+      if (probedStatus) {
+        return probedStatus;
+      }
       const token = await this.client.getAccessToken();
       if (token) {
         return 'connected';
