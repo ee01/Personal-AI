@@ -24,9 +24,11 @@ Apps Script 会优先解析标准 JSON；如果 Jira 返回 `{key=value}` 这类
 
 这样可以避免用户在界面选择了看似存在但实际不会触发的 milestone。
 
+旧 inline 参数链路仍然兼容：Apps Script 通过 `extractReleaseInfoFromParameters()` 统一读取 inline 参数，再交给 `parseJiraJson()` 兼容 Groovy Map 和标准 JSON。
+
 ## 用户排障路径
 
-- App Script 部署版本应不低于 `2.7.1`。
+- App Script 部署版本应不低于 `2.7.3`。
 - 修改 Jira Rule 后，先手动运行 `Timeline Sync Rule`。
 - 回到扩展的定时消息表单，点击“刷新状态”。
 - 如果仍失败，复制 Timeline 缓存诊断，对照 Jira Automation Audit Log 中的 `cacheReleaseInfo` 响应。
@@ -55,6 +57,10 @@ TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-reso
   src/scheduled-messages/__tests__/timelineSyncRule.test.ts \
   src/scheduled-messages/__tests__/timelineCacheStatus.test.ts \
   src/scheduled-messages/__tests__/timelineMilestones.test.ts
+```
+
+```bash
+npm run verify:scheduled-messages-timeline-cache
 ```
 
 参考资料：

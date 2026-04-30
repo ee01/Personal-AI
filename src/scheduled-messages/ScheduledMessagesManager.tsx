@@ -591,8 +591,8 @@ function buildBotConfigWarningState(
     case 'missing_timeline_sync_rule':
       return {
         status,
-        title: 'Timeline Sync Rule 缺失',
-        description: '检测到您有 Timeline Bot/AI 消息，但缺少 Timeline Sync Rule，相关消息无法读取项目 Milestone 缓存。',
+        title: 'Timeline 缓存同步未配置',
+        description: '检测到您有 Timeline Bot/AI 消息，但缺少 Timeline Sync Rule，相关消息无法读取项目 Milestone 缓存；普通 Bot/AI 不受影响。',
         dialogMode: 'upgrade-sync-only',
       };
     case 'missing_executor_rule':
@@ -5626,7 +5626,7 @@ ${content}
                   <p style={{ margin: '0 0 10px 0', color: '#856404', fontSize: '14px' }}>
                     {!botConfigured
                       ? '⚠️ Timeline 触发功能需要先配置 Bot 推送才能使用（需要通过 Jira Automation 规则访问 Release 信息）'
-                      : '⚠️ 当前缺少 Timeline Sync Rule，Timeline 消息（包括 AsMe）无法读取项目 Milestone 缓存，请先补齐配置。'}
+                      : '⚠️ 当前缺少 Timeline Sync Rule，Timeline 消息（包括 AsMe）无法读取项目 Milestone 缓存，请先补齐配置。普通 Bot/AI 不受影响。'}
                   </p>
                   <button
                     type="button"
@@ -7735,9 +7735,10 @@ const BotConfigDialog: React.FC<{
 
   const modeDescription = mode === 'upgrade-sync-only'
     ? [
-        '将补齐 Timeline Sync Rule，现有执行 rule 保持不变',
+        '只补齐 Timeline Sync Rule，现有执行 rule 保持不变',
         'Jira URL 和 Project Key 将复用现有配置',
         '同步规则每天 05:00 执行一次，负责刷新项目 Timeline 缓存',
+        '同步规则每天 05:00 刷新项目里程碑缓存，Executor Rule 每分钟读取缓存',
         '补齐后可在 Jira Automation 中手动运行一次 Sync Rule，或等待下一次 05:00 同步'
       ]
     : mode === 'repair'

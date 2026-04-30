@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.7.2';
+var APP_SCRIPT_VERSION = '2.7.3';
 var APP_SCRIPT_LAST_UPDATED = '2026-05-08';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
@@ -165,8 +165,8 @@ function executeScheduledMessages() {
         const targetDate = getTimelineTargetDate(rowData, timelineReleaseInfo);
         dateMatches = targetDate && isSameDate(now, targetDate);
 
-        if (dateMatches && rowData.Timeline_Project && timelineReleaseInfo[rowData.Timeline_Project]) {
-          const projectInfo = timelineReleaseInfo[rowData.Timeline_Project];
+        const projectInfo = getTimelineProjectInfo(timelineReleaseInfo, rowData.Timeline_Project);
+        if (dateMatches && projectInfo) {
           messageToSend = Object.assign({}, rowData, {
             Topic: replaceProjectVariablesInText(rowData.Topic || '', projectInfo),
             Content: replaceProjectVariablesInText(rowData.Content || '', projectInfo)
@@ -1908,11 +1908,13 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       let aiBody = rowData.AI_Body || '';
       
       // 如果有 releaseInfo 且设置了 Timeline_Project，则替换变量
-      if (rowData.Timeline_Project && releaseInfo && releaseInfo[rowData.Timeline_Project]) {
-        const projectInfo = releaseInfo[rowData.Timeline_Project];
-        topic = replaceProjectVariablesInText(topic, projectInfo);
-        content = replaceProjectVariablesInText(content, projectInfo);
-        aiBody = replaceProjectVariablesInText(aiBody, projectInfo);
+      if (rowData.Timeline_Project) {
+        const projectInfo = getTimelineProjectInfo(releaseInfo, rowData.Timeline_Project);
+        if (projectInfo) {
+          topic = replaceProjectVariablesInText(topic, projectInfo);
+          content = replaceProjectVariablesInText(content, projectInfo);
+          aiBody = replaceProjectVariablesInText(aiBody, projectInfo);
+        }
       }
       
       // 生成 glipEmailAddress（用于 email targetType）
@@ -2451,15 +2453,15 @@ function getTimelineTargetDate(rowData, releaseInfo) {
     return null;
   }
   
-  // 获取项目的 releaseInfo
-  const projectInfo = releaseInfo[project];
-  if (!projectInfo || !projectInfo.releaseInfo) {
+  // 获取项目的 releaseInfo。当前缓存保存扁平项目对象，旧 inline 调用可能保存 { releaseInfo: {...} } 包装对象。
+  const projectInfo = getTimelineProjectInfo(releaseInfo, project);
+  if (!projectInfo) {
     Logger.log(`未找到项目 ${project} 的 releaseInfo`);
     return null;
   }
   
   // 获取 milestone 日期
-  const milestoneDate = getTimelineMilestoneDateText(projectInfo.releaseInfo[milestone]);
+  const milestoneDate = getTimelineMilestoneDateText(projectInfo[milestone]);
   if (!milestoneDate) {
     Logger.log(`未找到有效 Milestone 日期: ${milestone}`);
     return null;
@@ -2477,6 +2479,23 @@ function getTimelineTargetDate(rowData, releaseInfo) {
   const targetDate = addWorkingDays(baseDate, offset);
   
   return targetDate;
+}
+
+function getTimelineProjectInfo(releaseInfo, project) {
+  if (!releaseInfo || !project) {
+    return null;
+  }
+
+  const projectInfo = releaseInfo[project];
+  if (!projectInfo) {
+    return null;
+  }
+
+  if (projectInfo.releaseInfo && typeof projectInfo.releaseInfo === 'object') {
+    return projectInfo.releaseInfo;
+  }
+
+  return projectInfo;
 }
 
 /**

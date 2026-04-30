@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const appScriptPath = path.join(repoRoot, 'src/scheduled-messages/app-script-template.gs');
+const source = readFileSync(appScriptPath, 'utf8');
+const logs = [];
+
+const context = {
+  console,
+  Logger: {
+    log(message) {
+      logs.push(String(message));
+    },
+  },
+};
+
+vm.createContext(context);
+vm.runInContext(source, context, { filename: appScriptPath });
+
+function isoDate(value) {
+  assert.equal(typeof value?.getTime, 'function', 'Expected getTimelineTargetDate to return a Date-like value');
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+const row = {
+  Timeline_Project: 'mThor',
+  Timeline_Milestone: 'FF',
+  Timeline_Offset: '0',
+};
+
+const cachedShape = {
+  mThor: {
+    FF: '05/06/2026',
+    currentRelease: '26.2',
+    currentPhase: 'FF',
+  },
+};
+
+const legacyInlineShape = {
+  mThor: {
+    releaseInfo: {
+      FF: '05/06/2026',
+      currentRelease: '26.2',
+      currentPhase: 'FF',
+    },
+  },
+};
+
+assert.equal(isoDate(context.getTimelineTargetDate(row, cachedShape)), '2026-05-06');
+assert.equal(isoDate(context.getTimelineTargetDate(row, legacyInlineShape)), '2026-05-06');
+
+const previousWorkingDayRow = {
+  Timeline_Project: 'mThor',
+  Timeline_Milestone: 'FF',
+  Timeline_Offset: '-1',
+};
+const mondayMilestone = {
+  mThor: {
+    FF: '05/04/2026',
+  },
+};
+
+assert.equal(isoDate(context.getTimelineTargetDate(previousWorkingDayRow, mondayMilestone)), '2026-05-01');
+
+const cachedProjectInfo = context.getTimelineProjectInfo(cachedShape, 'mThor');
+const legacyProjectInfo = context.getTimelineProjectInfo(legacyInlineShape, 'mThor');
+
+assert.equal(
+  context.replaceProjectVariablesInText('Release {currentRelease} is in {currentPhase}', cachedProjectInfo),
+  'Release 26.2 is in FF'
+);
+assert.equal(
+  context.replaceProjectVariablesInText('Release {currentRelease} is in {currentPhase}', legacyProjectInfo),
+  'Release 26.2 is in FF'
+);
+
+assert.equal(context.getTimelineProjectInfo(cachedShape, 'Unknown'), null);
+
+console.log('scheduled messages timeline cache verification passed');
