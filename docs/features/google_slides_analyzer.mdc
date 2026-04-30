@@ -1,0 +1,27 @@
+---
+description: Google Slides project analyzer implementation notes
+globs:
+  - src/contentScriptGoogleSlide.tsx
+  - src/slide.ts
+  - src/analyzers/tableAnalyzer.ts
+  - src/modals/slides-analysis.tsx
+alwaysApply: false
+---
+# Google Slides Analyzer
+
+Source of truth: [google_slides_analyzer.md](./google_slides_analyzer.md).
+
+Keep this feature aligned with the current implementation:
+
+- The user starts analysis from a Google Slides page or the extension popup.
+- `contentScriptGoogleSlide.tsx` extracts the current presentation/slide and opens `slides-analysis.html`.
+- `slide.ts` reads and updates Slides through the Google Slides API.
+- `tableAnalyzer.ts` handles table header detection, Jira Key columns, and project row extraction.
+- `slides-analysis.tsx` is the review UI; users select specific fields before writing updates.
+
+When changing this feature, verify:
+
+- Invalid column indexes such as `-1` are not sent to Slides API update requests.
+- Cell replacement uses `deleteText.textRange.type = ALL` and `insertText.insertionIndex = 0`.
+- The review window and Slides page use constrained `postMessage` origins.
+- `docs/features/google_slides_analyzer.md` stays concise and current.
