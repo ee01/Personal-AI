@@ -1,0 +1,16 @@
+---
+description: Google Slides 项目分析器
+globs:
+alwaysApply: false
+---
+
+# Google Slides 项目分析器
+
+当前功能说明以 `docs/features/google_slides_analyzer.md` 为准。
+
+同步要点：
+
+- 从 Google Slides 页面或 popup 触发分析当前 slide。
+- 结合表格/文本/LLM 分析、Jira 查询和项目上下文生成更新建议。
+- 结果页只展示建议和选择状态，不保存 OAuth token。
+- 写回前必须由用户勾选字段并确认。

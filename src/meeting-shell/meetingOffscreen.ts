@@ -3,7 +3,7 @@ import { MEETING_PILOT_OFFSCREEN_PATH } from './protocol';
 import { releaseWhisperTranscodeContext } from './transcodeForWhisper';
 import { ASROrchestrator } from './asr/orchestrator';
 import { CloudASRProvider } from './asr/cloudASRProvider';
-import { DesktopWhisperProvider } from './asr/desktopWhisperProvider';
+import { DesktopLocalAsrProvider } from './asr/desktopLocalAsrProvider';
 import { WebSpeechProvider } from './asr/webSpeechProvider';
 import type { MeetingPilotTierStatus } from './protocol';
 
@@ -22,6 +22,7 @@ type OffscreenCaptureState = {
   micGain?: GainNode;
   micMuted: boolean;
   selfName?: string;
+  activeSpeakerLabel?: string;
   /**
    * Route captured tab audio back to speakers while keeping tab and mic ASR
    * separate so speaker attribution can distinguish remote speakers from self.
@@ -76,6 +77,37 @@ function setMicMuted(muted: boolean): void {
     'info',
     `offscreen mic ${muted ? 'muted' : 'unmuted'} for ASR`,
   );
+}
+
+function normalizeSpeakerIdentity(value?: string): string {
+  return String(value || '')
+    .replace(/\s*\(you\)\s*$/i, '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isSelfSpeakerLabel(value?: string): boolean {
+  const selfName = normalizeSpeakerIdentity(state.selfName);
+  const speaker = normalizeSpeakerIdentity(value);
+  return Boolean(selfName && speaker && selfName === speaker);
+}
+
+function shouldEmitMicTranscript(): boolean {
+  if (state.micMuted) return false;
+  if (!state.activeSpeakerLabel) return true;
+  return isSelfSpeakerLabel(state.activeSpeakerLabel);
+}
+
+function updateMeetingContextForOffscreen(message: Record<string, any>): void {
+  if (typeof message.micMuted === 'boolean') {
+    setMicMuted(message.micMuted);
+  }
+  const selfName = String(message.selfName || '').trim();
+  if (selfName) state.selfName = selfName;
+  state.activeSpeakerLabel =
+    String(message.speakerLabel || '').trim() || undefined;
 }
 
 function getSupportedRecorderMimeType(
@@ -341,6 +373,8 @@ async function startCapture(message: Record<string, any>): Promise<void> {
   state.startedAt = Date.now();
   state.requestLog = [];
   state.selfName = String(message.selfName || '').trim() || undefined;
+  state.activeSpeakerLabel =
+    String(message.speakerLabel || '').trim() || undefined;
   setMicMuted(message.micMuted === true);
   appendCaptureLog(
     'info',
@@ -415,8 +449,8 @@ async function startCapture(message: Record<string, any>): Promise<void> {
     // renderers. Use it only when the user explicitly chooses local-only.
     const providers =
       transcriptionMode === 'local-only'
-        ? [new DesktopWhisperProvider(), new WebSpeechProvider()]
-        : [new DesktopWhisperProvider(), new CloudASRProvider()];
+        ? [new DesktopLocalAsrProvider(), new WebSpeechProvider()]
+        : [new DesktopLocalAsrProvider(), new CloudASRProvider()];
     const buildOrchestrator = (args: {
       channel: 'tab' | 'mic';
       fixedSpeaker?: string;
@@ -440,7 +474,9 @@ async function startCapture(message: Record<string, any>): Promise<void> {
             type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
             tabId: state.tabId,
             transcriptChunk: {
-              id: `transcript-${event.ts}-${state.transcriptSeq}`,
+              id: event.utteranceId
+                ? `transcript-${event.utteranceId}`
+                : `transcript-${event.ts}-${state.transcriptSeq}`,
               speaker: args.fixedSpeaker || '',
               text: event.text,
               ts: event.ts,
@@ -470,18 +506,27 @@ async function startCapture(message: Record<string, any>): Promise<void> {
       const micProviders =
         transcriptionMode === 'cloud-only'
           ? [new CloudASRProvider()]
-          : [new DesktopWhisperProvider()];
+          : [new DesktopLocalAsrProvider()];
       const micOrchestrator = new ASROrchestrator({
         providers: micProviders,
         mode: transcriptionMode,
         onTierStatus: () => undefined,
         onTranscript: (event) => {
+          if (!shouldEmitMicTranscript()) {
+            appendCaptureLog(
+              'info',
+              `mic transcript suppressed (${state.micMuted ? 'muted' : `active speaker: ${state.activeSpeakerLabel || 'unknown'}`})`,
+            );
+            return;
+          }
           state.transcriptSeq += 1;
           void chrome.runtime.sendMessage({
             type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
             tabId: state.tabId,
             transcriptChunk: {
-              id: `transcript-${event.ts}-${state.transcriptSeq}`,
+              id: event.utteranceId
+                ? `transcript-${event.utteranceId}`
+                : `transcript-${event.ts}-${state.transcriptSeq}`,
               speaker: fixedSpeaker,
               text: event.text,
               ts: event.ts,
@@ -778,6 +823,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === 'MEETING_PILOT_OFFSCREEN_SET_MIC_MUTED') {
     setMicMuted(message.micMuted === true);
+    sendResponse({ success: true });
+    return true;
+  }
+  if (message.type === 'MEETING_PILOT_OFFSCREEN_UPDATE_CONTEXT') {
+    updateMeetingContextForOffscreen(message);
     sendResponse({ success: true });
     return true;
   }

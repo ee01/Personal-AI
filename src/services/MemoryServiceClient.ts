@@ -520,6 +520,7 @@ export interface ConfirmRequest {
   reasonCode?:
     | 'authority_required'
     | 'approval_required'
+    | 'action_result_improvement'
     | 'future_monitoring'
     | 'owner_eta_gap'
     | 'artifact_gap'
@@ -529,7 +530,8 @@ export interface ConfirmRequest {
     | 'future_monitoring'
     | 'owner_eta'
     | 'artifact_check'
-    | 'decision_blocker';
+    | 'decision_blocker'
+    | 'linked_action_prompt_improvement';
   userAnswer?: string;
   answeredAt?: number;
   snoozeUntil?: number;
@@ -685,6 +687,17 @@ export interface MessageRuleAutomationPlanRequest {
     groupName?: string;
     content: string;
     timestamp?: number;
+    timezone?: string;
+    event?: {
+      title?: string;
+      start?: string;
+      end?: string;
+      startAtMs?: number;
+      endAtMs?: number;
+      timeRange?: string;
+      location?: string;
+      allDay?: boolean;
+    };
   };
   match?: {
     matchedRule?: string;
@@ -697,6 +710,39 @@ export interface MessageRuleAutomationPlanResponse {
   deduped: boolean;
   skippedReason?: string;
   actions: RuntimeAction[];
+  detectedWindow?: {
+    startAt: number;
+    endAt: number;
+    startActionAt: number;
+    restoreActionAt: number;
+    label: string;
+  };
+}
+
+export interface MessageRuleAutomationWarning {
+  code: string;
+  severity: 'info' | 'warning' | 'critical';
+  message: string;
+}
+
+export interface MessageRuleAutomationPreviewAction {
+  actionType: 'notify_user' | 'delegate_openclaw';
+  title: string;
+  description?: string;
+  targetSystem?: string;
+  scheduledAt?: number;
+  executionMode?: 'manual' | 'auto';
+  requiresApproval?: boolean;
+}
+
+export interface MessageRuleAutomationPreviewResponse {
+  canPlan: boolean;
+  skippedReason?: string;
+  actionFamily: string;
+  actions: MessageRuleAutomationPreviewAction[];
+  warnings: MessageRuleAutomationWarning[];
+  suggestedPrompt?: string;
+  suggestionReason?: string;
   detectedWindow?: {
     startAt: number;
     endAt: number;
@@ -2227,6 +2273,12 @@ export class MemoryServiceClient {
     body: MessageRuleAutomationPlanRequest,
   ): Promise<MessageRuleAutomationPlanResponse> {
     return this.request('POST', '/message-rules/plan', body);
+  }
+
+  async previewMessageRuleAutomation(
+    body: MessageRuleAutomationPlanRequest,
+  ): Promise<MessageRuleAutomationPreviewResponse> {
+    return this.request('POST', '/message-rules/preview', body);
   }
 
   // --------------------------------------------------------------------------

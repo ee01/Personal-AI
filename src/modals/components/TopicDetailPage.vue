@@ -14,7 +14,8 @@
             <span class="meta-item">🔗 {{ topicData.statistic?.projects || 0 }} 个关联项目</span>
             <span class="meta-item">👥 {{ topicData.statistic?.participants || 0 }} 位参与者</span>
             <span class="meta-item">📚 {{ topicData.statistic?.resources || 0 }} 个资源</span> 
-            <span class="meta-item">⏰ 最后更新：30 分钟前</span>
+            <span v-if="topicUnreadCount > 0" class="meta-item unread-meta">● {{ topicUnreadCount }} 条未读</span>
+            <span class="meta-item">⏰ 最后更新：{{ formatTimeAgo(topicData.readStatus?.lastUpdateTime || topicData.updated || Date.now()) }}</span>
           </div>
         </div>
         <div class="topic-actions">
@@ -136,7 +137,13 @@
               <option value="project">项目群</option>
               <option value="tech">技术讨论</option>
             </select>
-            <button class="mark-all-read-btn" @click="handleMarkAllAsRead" title="标记所有消息为已读">
+            <button
+              type="button"
+              class="mark-all-read-btn"
+              @click="handleMarkAllAsRead"
+              title="标记所有消息为已读"
+              :disabled="topicUnreadCount === 0"
+            >
               ✓ 全部已阅
             </button>
           </div>
@@ -253,6 +260,7 @@ const topicId = computed(() => route.params.id as string);
 const topicData = computed(() => store.topicDetailData);
 const isLoading = computed(() => store.isLoading);
 const activeTab = ref('conversations');
+const topicUnreadCount = computed(() => topicData.value?.readStatus?.unreadCount || 0);
 
 const convSearchQuery = ref('');
 const convFilter = ref('all');
@@ -274,9 +282,9 @@ const filteredConversations = computed(() => {
   if (convSearchQuery.value.trim()) {
     const query = convSearchQuery.value.toLowerCase();
     filtered = filtered.filter(conv => 
-      conv.summary.toLowerCase().includes(query) ||
-      conv.sender.toLowerCase().includes(query) ||
-      conv.groupName.toLowerCase().includes(query)
+      (conv.summary || '').toLowerCase().includes(query) ||
+      (conv.sender || '').toLowerCase().includes(query) ||
+      (conv.groupName || '').toLowerCase().includes(query)
     );
   }
   
@@ -284,11 +292,11 @@ const filteredConversations = computed(() => {
     filtered = filtered.filter(conv => {
       switch (convFilter.value) {
         case 'team':
-          return conv.groupName.includes('团队') || conv.groupName.includes('Team');
+          return (conv.groupName || '').includes('团队') || (conv.groupName || '').includes('Team');
         case 'project':
-          return conv.groupName.includes('项目') || conv.groupName.includes('Project');
+          return (conv.groupName || '').includes('项目') || (conv.groupName || '').includes('Project');
         case 'tech':
-          return conv.groupName.includes('技术') || conv.groupName.includes('Tech') || conv.groupName.includes('开发');
+          return (conv.groupName || '').includes('技术') || (conv.groupName || '').includes('Tech') || (conv.groupName || '').includes('开发');
         default:
           return true;
       }
@@ -304,9 +312,9 @@ const filteredWebpages = computed(() => {
   if (webSearchQuery.value.trim()) {
     const query = webSearchQuery.value.toLowerCase();
     filtered = filtered.filter(webpage => 
-      webpage.title.toLowerCase().includes(query) ||
-      webpage.summary.toLowerCase().includes(query) ||
-      webpage.url.toLowerCase().includes(query)
+      (webpage.title || '').toLowerCase().includes(query) ||
+      (webpage.summary || '').toLowerCase().includes(query) ||
+      (webpage.url || '').toLowerCase().includes(query)
     );
   }
   
@@ -418,6 +426,21 @@ watch(() => route.query, (newQuery) => {
 .mark-all-read-btn:hover {
   background: rgba(34, 197, 94, 0.2);
   border-color: rgba(34, 197, 94, 0.5);
+}
+
+.mark-all-read-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mark-all-read-btn:disabled:hover {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.unread-meta {
+  color: #f87171;
+  font-weight: 600;
 }
 
 /* 未读指示器 */

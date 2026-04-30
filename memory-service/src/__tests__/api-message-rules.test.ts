@@ -77,6 +77,142 @@ describe('Message Rule Automation API', () => {
     expect(delegated[1].params.leaveLabel).toBe('4/18~4/20');
   });
 
+  it('prefers structured event payload for timezone-aware PTO scheduling', async () => {
+    const eventStartAt = Date.parse('2099-04-30T02:00:19.000Z');
+    const eventEndAt = Date.parse('2099-04-30T02:05:19.000Z');
+    const startActionAt = Date.parse('2099-04-29T23:00:19.000Z');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/message-rules/plan',
+      payload: {
+        ruleRef: 'manual:event-leave-rule',
+        ruleText: "发送了内容与以下语义相似：Esone's PTO",
+        automationPrompt:
+          '从消息提取请假日期，请假前 3 小时修改 Glip 状态为 PTO，结束后恢复原本状态。',
+        message: {
+          postId: 'post-event-leave-1',
+          sender: 'AI Service',
+          groupId: 'sync-service',
+          groupName: 'esone.qiu+sync.service',
+          content:
+            "[Event] Esone's PTO Date and time: 2099-04-30 10:00:19 - 2099-04-30 10:05:19",
+          timestamp: Date.parse('2099-04-29T00:00:00.000Z'),
+          timezone: 'Asia/Shanghai',
+          event: {
+            title: "Esone's PTO",
+            start: '2099-04-30 10:00:19',
+            end: '2099-04-30 10:05:19',
+            startAtMs: eventStartAt,
+            endAtMs: eventEndAt,
+            timeRange: '2099-04-30 10:00:19 - 2099-04-30 10:05:19',
+          },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.deduped).toBe(false);
+    expect(body.detectedWindow?.label).toBe('4/30');
+    expect(body.detectedWindow?.startAt).toBe(eventStartAt);
+    expect(body.detectedWindow?.endAt).toBe(eventEndAt);
+    expect(body.detectedWindow?.startActionAt).toBe(startActionAt);
+    expect(body.detectedWindow?.restoreActionAt).toBe(eventEndAt);
+
+    const repo = new ActionRepository(db);
+    const delegated = repo
+      .list({
+        sourceKind: 'message_rule',
+        sourceRefId: 'manual:event-leave-rule',
+        limit: 10,
+      })
+      .items.filter((item) => item.actionType === 'delegate_openclaw');
+
+    expect(delegated).toHaveLength(2);
+    expect(delegated[0].scheduledAt).toBe(Math.floor(startActionAt / 1000));
+    expect(delegated[1].scheduledAt).toBe(Math.floor(eventEndAt / 1000));
+  });
+
+  it('uses the provided message timezone when only naive text timestamps are available', async () => {
+    const eventStartAt = Date.parse('2099-04-30T02:00:19.000Z');
+    const eventEndAt = Date.parse('2099-04-30T02:05:19.000Z');
+    const startActionAt = Date.parse('2099-04-29T23:00:19.000Z');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/message-rules/plan',
+      payload: {
+        ruleRef: 'manual:timezone-fallback-leave-rule',
+        automationPrompt:
+          '从消息提取请假日期，请假前 3 小时修改 Glip 状态为 PTO，结束后恢复原本状态。',
+        message: {
+          postId: 'post-timezone-leave-1',
+          sender: 'AI Service',
+          groupId: 'sync-service',
+          groupName: 'esone.qiu+sync.service',
+          content:
+            "[Event] Esone's PTO Date and time: 2099-04-30 10:00:19 - 2099-04-30 10:05:19",
+          timestamp: Date.parse('2099-04-29T00:00:00.000Z'),
+          timezone: 'Asia/Shanghai',
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.skippedReason).toBeUndefined();
+    expect(body.detectedWindow?.label).toBe('4/30');
+    expect(body.detectedWindow?.startAt).toBe(eventStartAt);
+    expect(body.detectedWindow?.endAt).toBe(eventEndAt);
+    expect(body.detectedWindow?.startActionAt).toBe(startActionAt);
+    expect(body.detectedWindow?.restoreActionAt).toBe(eventEndAt);
+  });
+
+  it('previews automation actions and prompt improvement without writing actions', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/message-rules/preview',
+      payload: {
+        ruleRef: 'manual:preview-leave-rule',
+        ruleText: "发送了内容与以下语义相似：Esone's PTO",
+        automationPrompt:
+          '检测到请假消息后，开始前 3 小时修改 Glip 状态为 PTO，结束后改回 Available。',
+        message: {
+          postId: 'post-preview-leave-1',
+          sender: 'AI Service',
+          groupName: 'Leave Chat',
+          content:
+            "[Event] Esone's PTO Date and time: 2099-04-30 10:00:19 - 2099-04-30 10:05:19",
+          timestamp: Date.parse('2099-04-29T00:00:00.000Z'),
+          timezone: 'Asia/Shanghai',
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.canPlan).toBe(true);
+    expect(body.actions).toHaveLength(3);
+    expect(body.detectedWindow?.label).toBe('4/30');
+    expect(
+      body.warnings.some(
+        (warning: { code: string }) =>
+          warning.code === 'missing_presence_snapshot',
+      ),
+    ).toBe(true);
+    expect(body.suggestedPrompt).toContain('RingCentral token/API');
+    expect(body.suggestedPrompt).toContain('不要猜测 Available');
+
+    const repo = new ActionRepository(db);
+    const queued = repo.list({
+      sourceKind: 'message_rule',
+      sourceRefId: 'manual:preview-leave-rule',
+      limit: 10,
+    }).items;
+    expect(queued).toHaveLength(0);
+  });
+
   it('keeps write delegate actions manual when requiresApproval is explicitly enabled', async () => {
     const res = await app.inject({
       method: 'POST',

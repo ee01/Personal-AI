@@ -25,7 +25,9 @@
     "backup": "tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data",
     "clean": "rm -rf dist/* && rm personal-ai.zip",
     "verify:project-report": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-project-report.ts",
-    "verify:memory-backup": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-backup.ts"
+    "verify:memory-backup": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-backup.ts",
+    "verify:topic-based-messages": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-topic-based-messages.ts",
+    "verify:project-dashboard": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-project-dashboard.ts"
   },
   "type": "module",
   "license": "MIT",

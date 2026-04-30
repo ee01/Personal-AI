@@ -38,6 +38,7 @@ const storage: Record<string, any> = {
 
 const ingests: any[] = [];
 const botMessages: any[] = [];
+const relationshipPrompts: string[] = [];
 
 function installChromeMock() {
   const local = {
@@ -91,26 +92,43 @@ function installFetchMock() {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const prompt = String(body?.prompt || '');
 
-    if (url.startsWith('http://mock-memory/api/v1/outreach/sessions')) {
+    if (
+      url.startsWith(
+        'http://mock-memory/api/v1/outreach/templates/runtime-status',
+      )
+    ) {
       return new Response(
         JSON.stringify({
           items: [
             {
-              id: 'session-before-followup',
-              targetType: 'group',
-              targetRef: 'sdk-updates',
-              renderedQuestion: 'migration guide 发布了吗？',
-              status: 'waiting_reply',
-              requiresApproval: false,
-              followupCount: 0,
-              maxFollowup: 2,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
+              template: {
+                id: 'template-before-followup',
+                title: 'SDK migration followup',
+                questionTemplate: 'migration guide 发布了吗？',
+                targetType: 'group',
+                targetRef: 'sdk-updates',
+                enabled: true,
+                syncState: 'synced',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+              latestSession: {
+                id: 'session-before-followup',
+                templateId: 'template-before-followup',
+                targetType: 'group',
+                targetRef: 'sdk-updates',
+                targetResolvedLabel: 'SDK Updates',
+                renderedQuestion: 'migration guide 发布了吗？',
+                status: 'waiting_reply',
+                requiresApproval: false,
+                followupCount: 0,
+                maxFollowup: 2,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
             },
           ],
           total: 1,
-          limit: 20,
-          offset: 0,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
@@ -178,8 +196,8 @@ function installFetchMock() {
           JSON.stringify({
             response: JSON.stringify({
               entities: {
-                people: ['James Lee'],
-                projects: [],
+                people: [{ name: 'James Lee' }, { name: 'Priya Shah' }],
+                projects: [{ name: 'SDK Migration' }],
                 topics: ['SDK Updates'],
                 resources: [],
                 webpages: [],
@@ -193,6 +211,25 @@ function installFetchMock() {
                 tags: [],
               },
               actions: [],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (prompt.includes('分析以下人物之间可能的关系')) {
+        relationshipPrompts.push(prompt);
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              relationships: [
+                {
+                  source: 'James Lee',
+                  target: 'Priya Shah',
+                  relationship: 'SDK migration collaborators',
+                  confidence: 0.82,
+                },
+              ],
             }),
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -246,7 +283,7 @@ async function main() {
     sender: 'James Lee',
     team_id: 'team-1',
     team_name: 'SDK Updates',
-    message_content: 'migration guide draft is ready',
+    content: 'migration guide draft is ready',
     datetime: '2026-04-15T00:00:00.000Z',
   });
 
@@ -255,7 +292,22 @@ async function main() {
   assert.deepEqual(result.matchedRuleRefs, [
     'outreach:session-before-followup',
   ]);
+  assert.equal(relationshipPrompts.length, 1);
+  assert.match(relationshipPrompts[0], /James Lee, Priya Shah/);
+  assert.deepEqual(result.enrichedData.relationships, [
+    {
+      source: 'James Lee',
+      target: 'Priya Shah',
+      relationship: 'SDK migration collaborators',
+      confidence: 0.82,
+    },
+  ]);
   assert.equal(ingests.length, 1);
+  assert.equal(ingests[0].content, 'migration guide draft is ready');
+  assert.equal(
+    ingests[0].metadata.summary,
+    'system-only outreach evidence matched',
+  );
   assert.equal(botMessages.length, 0);
 
   console.log('verify-memory-entry-agent-workflow: ok');

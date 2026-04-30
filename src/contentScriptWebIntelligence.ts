@@ -68,6 +68,7 @@ function isMeetingPilotPage(): boolean {
 
 const contextMatchCache = new Map<string, { match: ContextRecallMatch | null; ts: number }>();
 const CONTEXT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const DISMISSED_CONTEXT_TTL_MS = 30 * 60 * 1000;
 const URL_WATCH_INTERVAL_MS = 500;
 const GENERIC_CONTEXT_STABLE_MS = 250;
 const RINGCENTRAL_CONTEXT_STABLE_MS = 700;
@@ -93,6 +94,7 @@ class WebIntelligenceContentScript {
     private bubbleElement: HTMLDivElement | null = null;
     private cardElement: HTMLDivElement | null = null;
     private outsideClickListener: ((event: MouseEvent) => void) | null = null;
+    private dismissedContextKeys = new Map<string, number>();
 
     constructor() {
         this.initialize();
@@ -618,6 +620,11 @@ class WebIntelligenceContentScript {
         }
 
         const cached = contextMatchCache.get(payload.contextKey);
+        if (this.isContextDismissed(payload.contextKey)) {
+            this.clearContextBubble();
+            return;
+        }
+
         if (cached && now - cached.ts < CONTEXT_MATCH_CACHE_TTL_MS) {
             if (cached.match) {
                 this.showContextBubble(cached.match, payload.contextKey, this.activeBubbleContextKey !== payload.contextKey);
@@ -741,13 +748,13 @@ class WebIntelligenceContentScript {
             return null;
         }
 
-        const messageIds = messageCards
-            .slice(0, 3)
+        const messageIds = cardsForSnippet
             .map(card => card.getAttribute('data-id'))
             .filter((id): id is string => !!id);
         const selectedTabText = normalizeText(document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.textContent);
-        const contextKey = `ringcentral:${conversationId}|${title}`;
-        const stabilityKey = `${contextKey}|${messageIds.join(',')}`;
+        const snippetSignature = this.createContextSignature(snippet);
+        const contextKey = `ringcentral:${conversationId}|${title}|${messageIds.slice(-3).join(',')}|${snippetSignature}`;
+        const stabilityKey = contextKey;
 
         return {
             contextKey,
@@ -779,7 +786,7 @@ class WebIntelligenceContentScript {
         });
 
         const sourceCards = visibleCards.length > 0 ? visibleCards : messageCards;
-        return sourceCards.slice(0, 6);
+        return sourceCards.slice(-6);
     }
 
     private collectKeywords(parts: string[]): string[] | undefined {
@@ -798,6 +805,36 @@ class WebIntelligenceContentScript {
 
         const list = Array.from(keywords).slice(0, 8);
         return list.length > 0 ? list : undefined;
+    }
+
+    private createContextSignature(text: string): string {
+        const compact = normalizeText(text).slice(-500);
+        let hash = 0;
+        for (let i = 0; i < compact.length; i++) {
+            hash = ((hash << 5) - hash + compact.charCodeAt(i)) | 0;
+        }
+        return Math.abs(hash).toString(36);
+    }
+
+    private isContextDismissed(contextKey: string): boolean {
+        this.pruneDismissedContextKeys();
+        const dismissedAt = this.dismissedContextKeys.get(contextKey);
+        return dismissedAt !== undefined && Date.now() - dismissedAt < DISMISSED_CONTEXT_TTL_MS;
+    }
+
+    private dismissContext(contextKey: string): void {
+        this.dismissedContextKeys.set(contextKey, Date.now());
+        this.pruneDismissedContextKeys();
+        this.clearContextBubble();
+    }
+
+    private pruneDismissedContextKeys(): void {
+        const now = Date.now();
+        for (const [key, dismissedAt] of this.dismissedContextKeys.entries()) {
+            if (now - dismissedAt >= DISMISSED_CONTEXT_TTL_MS) {
+                this.dismissedContextKeys.delete(key);
+            }
+        }
     }
 
     private ensureContextBubbleStyles(): void {
@@ -947,7 +984,7 @@ class WebIntelligenceContentScript {
         const sourceLabel = match.sourceLabel || match.title || 'Memory';
         const titleText = match.title || sourceLabel;
         const exploreUrl = match.exploreLink
-            ? chrome.runtime.getURL(`static/memory-exploring.html${match.exploreLink}`)
+            ? chrome.runtime.getURL(`memory-exploring.html${match.exploreLink}`)
             : '';
 
         const linksHtml = (match.links || [])
@@ -957,7 +994,10 @@ class WebIntelligenceContentScript {
         card.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                 <span style="font-weight:600;color:#5b5bd6;">🧠 ${escapeHtml(titleText)}</span>
-                <span style="font-size:11px;color:#999;">score ${(match.score * 100).toFixed(0)}%</span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:11px;color:#999;">score ${(match.score * 100).toFixed(0)}%</span>
+                    <button type="button" class="pai-context-dismiss" aria-label="关闭此记忆提示" title="关闭此记忆提示" style="border:0;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0;width:20px;height:20px;">×</button>
+                </div>
             </div>
             <div style="line-height:1.5;color:#555;white-space:pre-wrap;">${escapeHtml(match.snippet)}</div>
             <div style="margin-top:8px;font-size:11px;color:#aaa;">${escapeHtml(sourceLabel)}${match.whyMatched ? ` · ${escapeHtml(match.whyMatched)}` : ''}</div>
@@ -972,10 +1012,28 @@ class WebIntelligenceContentScript {
             event.stopPropagation();
             expanded = !expanded;
             card.style.display = expanded ? 'block' : 'none';
+            bubble.setAttribute('aria-expanded', String(expanded));
+        });
+
+        bubble.setAttribute('role', 'button');
+        bubble.setAttribute('aria-label', '打开相关记忆提示');
+        bubble.setAttribute('aria-expanded', 'false');
+        bubble.tabIndex = 0;
+        bubble.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') {
+                return;
+            }
+            event.preventDefault();
+            bubble.click();
         });
 
         card.addEventListener('click', (event) => {
             event.stopPropagation();
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-dismiss')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.dismissContext(contextKey);
         });
 
         this.outsideClickListener = (event: MouseEvent) => {

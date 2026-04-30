@@ -56,7 +56,20 @@
             </div>
 
             <h3 class="question-text">{{ req.question }}</h3>
-            <p v-if="req.context" class="context-text">{{ req.context }}</p>
+            <div
+              v-if="isMessageRuleImprovement(req)"
+              class="improvement-context"
+            >
+              <div class="improvement-title">
+                {{ messageRuleImprovementSummary(req) }}
+              </div>
+              <div class="improvement-reason">
+                {{ messageRuleImprovementReason(req) }}
+              </div>
+            </div>
+            <p v-else-if="req.context" class="context-text">
+              {{ req.context }}
+            </p>
 
             <div class="meta-row">
               <span>来源 {{ routeLabel(req) }}</span>
@@ -81,7 +94,23 @@
             />
 
             <div class="action-buttons">
-              <template v-if="req.options && req.options.length > 0">
+              <template v-if="isMessageRuleImprovement(req)">
+                <button
+                  class="option-btn yes"
+                  :disabled="submitting[req.id]"
+                  @click="openMessageRuleImprovement(req)"
+                >
+                  打开规则并应用建议
+                </button>
+                <button
+                  class="option-btn quiet"
+                  :disabled="submitting[req.id]"
+                  @click="submitAnswer(req.id, 'dismissed')"
+                >
+                  忽略
+                </button>
+              </template>
+              <template v-else-if="req.options && req.options.length > 0">
                 <button
                   v-for="opt in req.options"
                   :key="opt.value"
@@ -252,6 +281,23 @@ const detailTexts = reactive<Record<string, string>>({});
 const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
 
+interface MessageRuleImprovementContext {
+  schema: 'message_rule_improvement.v1';
+  ruleRef: string;
+  ruleText?: string;
+  currentPrompt: string;
+  proposedPrompt: string;
+  reason: string;
+  summary: string;
+  sourceActionId?: string;
+  sourceActionTitle?: string;
+  sourceMessage?: string;
+  outcomeStatus?: string;
+  outcomeSummary?: string;
+  targetSystem?: string;
+  createdAt?: number;
+}
+
 onMounted(async () => {
   await loadQueues();
 });
@@ -322,6 +368,77 @@ async function submitAnswer(id: string, answer: string) {
   }
 }
 
+function parseMessageRuleImprovement(
+  req: ConfirmRequest,
+): MessageRuleImprovementContext | null {
+  if (req.category !== 'message_rule_improvement' || !req.context) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(req.context) as Partial<MessageRuleImprovementContext>;
+    if (
+      parsed.schema === 'message_rule_improvement.v1' &&
+      typeof parsed.ruleRef === 'string' &&
+      typeof parsed.currentPrompt === 'string' &&
+      typeof parsed.proposedPrompt === 'string'
+    ) {
+      return parsed as MessageRuleImprovementContext;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isMessageRuleImprovement(req: ConfirmRequest) {
+  return Boolean(parseMessageRuleImprovement(req));
+}
+
+function messageRuleImprovementSummary(req: ConfirmRequest) {
+  const improvement = parseMessageRuleImprovement(req);
+  return improvement?.summary || req.context || '';
+}
+
+function messageRuleImprovementReason(req: ConfirmRequest) {
+  const improvement = parseMessageRuleImprovement(req);
+  return improvement?.reason || '根据关联操作运行结果建议改进规则文案';
+}
+
+async function openMessageRuleImprovement(req: ConfirmRequest) {
+  const improvement = parseMessageRuleImprovement(req);
+  if (!improvement) {
+    cardErrors[req.id] = '无法解析规则改进建议';
+    return;
+  }
+
+  submitting[req.id] = true;
+  delete cardErrors[req.id];
+  try {
+    await chrome.storage.local.set({
+      pendingMessageRuleImprovement: {
+        ...improvement,
+        requestId: req.id,
+        timestamp: Date.now(),
+      },
+    });
+    const url = chrome.runtime.getURL('topic-modal.html');
+    if (chrome.windows?.create) {
+      await chrome.windows.create({
+        url,
+        type: 'popup',
+        width: 1100,
+        height: 820,
+      });
+    } else {
+      window.open(url, '_blank');
+    }
+  } catch (e: any) {
+    cardErrors[req.id] = e.message || '打开规则编辑失败';
+  } finally {
+    submitting[req.id] = false;
+  }
+}
+
 async function transitionWatchRequest(
   id: string,
   state: 'pending' | 'snoozed' | 'expired',
@@ -362,6 +479,7 @@ function reasonLabel(req: ConfirmRequest) {
     owner_eta_gap: '负责人 / ETA 缺口',
     artifact_gap: '等待更多证据',
     time_sensitive_blocker: '时效阻塞',
+    action_result_improvement: '规则改进',
   };
   if (req.reasonCode && labels[req.reasonCode]) return labels[req.reasonCode];
   if (req.category) return req.category;
@@ -604,6 +722,27 @@ function relativeTime(ts: number) {
   font-size: 0.875rem;
   line-height: 1.5;
   margin-bottom: 0.75rem;
+}
+
+.improvement-context {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  background: rgba(14, 116, 144, 0.12);
+}
+
+.improvement-title {
+  color: #e0f2fe;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  margin-bottom: 0.35rem;
+}
+
+.improvement-reason {
+  color: #a5f3fc;
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .meta-row {

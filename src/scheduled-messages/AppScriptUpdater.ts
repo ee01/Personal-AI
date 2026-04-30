@@ -24,6 +24,11 @@ export interface UpdateResult {
   helpMessage?: string;
 }
 
+export interface AppScriptVersionInfo {
+  version: string;
+  lastUpdated: string;
+}
+
 export const APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR = 'APP_SCRIPT_PROJECT_HISTORY_LIMIT';
 
 function buildProjectHistoryUrl(scriptId: string): string {
@@ -57,7 +62,7 @@ export class AppScriptUpdater {
   private config: SheetConfig | null = null;
   
   // 缓存版本信息，避免重复读取文件
-  private static cachedVersionInfo: { version: string; lastUpdated: string } | null = null;
+  private static cachedVersionInfo: AppScriptVersionInfo | null = null;
   
   constructor(token: string, config?: SheetConfig) {
     this.token = token;
@@ -67,7 +72,7 @@ export class AppScriptUpdater {
   /**
    * 从 App Script 模板文件中解析版本信息
    */
-  private static async parseVersionFromTemplate(): Promise<{ version: string; lastUpdated: string }> {
+  private static async parseVersionFromTemplate(): Promise<AppScriptVersionInfo> {
     // 如果已经缓存，直接返回
     if (AppScriptUpdater.cachedVersionInfo) {
       return AppScriptUpdater.cachedVersionInfo;
@@ -116,8 +121,12 @@ export class AppScriptUpdater {
   /**
    * 获取最新的 App Script 版本号
    */
+  static async getLatestVersionInfo(): Promise<AppScriptVersionInfo> {
+    return AppScriptUpdater.parseVersionFromTemplate();
+  }
+
   static async getLatestVersion(): Promise<string> {
-    const versionInfo = await AppScriptUpdater.parseVersionFromTemplate();
+    const versionInfo = await AppScriptUpdater.getLatestVersionInfo();
     return versionInfo.version;
   }
   
@@ -127,7 +136,8 @@ export class AppScriptUpdater {
   async checkForUpdates(): Promise<UpdateCheckResult> {
     try {
       // 获取最新版本号
-      const latestVersion = await AppScriptUpdater.getLatestVersion();
+      const latestVersionInfo = await AppScriptUpdater.getLatestVersionInfo();
+      const latestVersion = latestVersionInfo.version;
       
       if (!this.config?.webAppUrl) {
         return {
@@ -210,7 +220,8 @@ export class AppScriptUpdater {
       console.log('开始更新 App Script...');
       
       // 0. 获取最新版本号
-      const latestVersion = await AppScriptUpdater.getLatestVersion();
+      const latestVersionInfo = await AppScriptUpdater.getLatestVersionInfo();
+      const latestVersion = latestVersionInfo.version;
       
       // 1. 加载最新的 App Script 模板代码
       const scriptCode = await this.loadAppScriptTemplate();
@@ -228,7 +239,7 @@ export class AppScriptUpdater {
       await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber, latestVersion);
       
       // 6. 更新配置中的版本信息
-      await this.updateConfigVersion(latestVersion);
+      await this.updateConfigVersion(latestVersionInfo);
       
       console.log('App Script 更新成功！');
       
@@ -515,13 +526,13 @@ export class AppScriptUpdater {
   /**
    * 更新配置中的版本信息
    */
-  private async updateConfigVersion(version: string): Promise<void> {
+  private async updateConfigVersion(versionInfo: AppScriptVersionInfo): Promise<void> {
     if (!this.config) {
       return;
     }
     
-    this.config.appScriptVersion = version;
-    this.config.appScriptLastUpdated = new Date().toISOString();
+    this.config.appScriptVersion = versionInfo.version;
+    this.config.appScriptLastUpdated = versionInfo.lastUpdated;
     
     // 保存到 Chrome Storage
     await this.saveConfigToStorage();

@@ -9,7 +9,10 @@ import { extractEntitiesFromMessage } from './services/entityExtraction';
 import { processNewMessage } from './agentWorkflow';
 import { IntelligentAgent } from './agentThinking';
 import { MessageAnalysisResult } from './types';
-import { getMemoryServiceClient } from './services/MemoryServiceClient';
+import {
+  getMemoryServiceClient,
+  type MessageRuleAutomationPlanRequest,
+} from './services/MemoryServiceClient';
 import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
 import {
   handleAutoReplyRules,
@@ -115,19 +118,76 @@ function getExcludedPushGroupIds(envConfig: EnvConfigType): string[] {
   return Array.from(excludedGroupIds);
 }
 
+type MessageRuleAutomationMessage =
+  MessageRuleAutomationPlanRequest['message'];
+type MessageRuleAutomationEvent = NonNullable<
+  MessageRuleAutomationMessage['event']
+>;
+
+function getLocalTimeZone(): string | undefined {
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof timezone === 'string' && timezone.trim().length > 0
+      ? timezone.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractEventPayload(sourcePost: any): MessageRuleAutomationEvent | undefined {
+  const event = sourcePost?.event;
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const normalized: MessageRuleAutomationEvent = {};
+  if (typeof event.title === 'string' && event.title.trim()) {
+    normalized.title = event.title.trim();
+  }
+  if (typeof event.start === 'string' && event.start.trim()) {
+    normalized.start = event.start.trim();
+  }
+  if (typeof event.end === 'string' && event.end.trim()) {
+    normalized.end = event.end.trim();
+  }
+  if (typeof event.timeRange === 'string' && event.timeRange.trim()) {
+    normalized.timeRange = event.timeRange.trim();
+  }
+  if (typeof event.location === 'string' && event.location.trim()) {
+    normalized.location = event.location.trim();
+  }
+  if (typeof event.startAtMs === 'number' && Number.isFinite(event.startAtMs)) {
+    normalized.startAtMs = event.startAtMs;
+  }
+  if (typeof event.endAtMs === 'number' && Number.isFinite(event.endAtMs)) {
+    normalized.endAtMs = event.endAtMs;
+  }
+  if (event.allDay === true) {
+    normalized.allDay = true;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function buildSourcePostIndex(messageGroups: any[]): Map<string, any> {
+  const index = new Map<string, any>();
+  for (const group of messageGroups || []) {
+    for (const post of group?.posts || []) {
+      const postId = String(post?.post_id ?? post?.id ?? post?.raw?.id ?? '').trim();
+      if (!postId) continue;
+      index.set(postId, post?.raw ?? post);
+    }
+  }
+  return index;
+}
+
 async function queueMatchedRuleAutomations(params: {
   manualItems: TopicItemWithAutoReply[];
   matchedRule?: string;
   summary?: string;
   confidence?: number;
-  message: {
-    postId?: string;
-    sender?: string;
-    groupId?: string;
-    groupName?: string;
-    content: string;
-    timestamp?: number;
-  };
+  message: MessageRuleAutomationMessage;
 }) {
   const automationItems = params.manualItems.filter((item) =>
     Boolean(item.automationPrompt?.trim()),
@@ -389,6 +449,7 @@ export async function analyzeMessagesInBackground(
         threads: item.threads || [],
         standalone: item.standalone || [],
       }));
+      const sourcePostIndex = buildSourcePostIndex(messageGroups);
 
       // 🆕 关注后续检测已移至 LLM 分析中统一处理（方案 B）
       // 通过 buildRuleText 生成专门的"关注后续"规则，让 LLM 识别语义相关的消息
@@ -724,6 +785,7 @@ export async function analyzeMessagesInBackground(
         }
 
         if (matchedManualItems.length > 0) {
+          const sourcePost = sourcePostIndex.get(String(postId));
           await queueMatchedRuleAutomations({
             manualItems: matchedManualItems,
             matchedRule: result.matchedRule,
@@ -740,6 +802,8 @@ export async function analyzeMessagesInBackground(
               content: originalMessage.messageContent || '',
               timestamp:
                 new Date(originalMessage.datetime).getTime() || Date.now(),
+              timezone: getLocalTimeZone(),
+              event: extractEventPayload(sourcePost),
             },
           });
         }
@@ -876,6 +940,7 @@ export async function analyzeMessagesInBackground(
           }
 
           if (matchedManualItems.length > 0) {
+            const sourcePost = post.raw ?? post;
             await queueMatchedRuleAutomations({
               manualItems: matchedManualItems,
               matchedRule: processResult.matchedRule,
@@ -893,6 +958,8 @@ export async function analyzeMessagesInBackground(
                 timestamp:
                   new Date(processResult.messageContext?.datetime || '').getTime() ||
                   Date.now(),
+                timezone: getLocalTimeZone(),
+                event: extractEventPayload(sourcePost),
               },
             });
           }
@@ -1047,6 +1114,14 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
     );
     const runtimeWatchRules = await loadRuntimeWatchRules(manualConcernedItems);
     const { userinfo } = await chrome.storage.local.get('userinfo');
+    const sourcePostIndex = new Map<string, any>();
+    if (Array.isArray(body.messageData?.posts)) {
+      for (const post of body.messageData.posts) {
+        const postId = String(post?.id ?? '').trim();
+        if (!postId) continue;
+        sourcePostIndex.set(postId, post);
+      }
+    }
     if (!body.prompt)
       body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
     const dealResponse = await callLLMJsonAPI(body);
@@ -1336,6 +1411,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         }
 
         if (matchedManualItems.length > 0) {
+          const sourcePost = sourcePostIndex.get(String(json.post_id));
           await queueMatchedRuleAutomations({
             manualItems: matchedManualItems,
             matchedRule: matched_rule,
@@ -1351,6 +1427,8 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
                 : json.team_name,
               content: json.message_content,
               timestamp: new Date(json.datetime).getTime() || Date.now(),
+              timezone: getLocalTimeZone(),
+              event: extractEventPayload(sourcePost),
             },
           });
         }

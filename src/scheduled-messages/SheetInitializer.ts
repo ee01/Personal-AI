@@ -4,6 +4,7 @@
  */
 
 import { InitializationResult, SheetConfig } from './types';
+import { AppScriptUpdater } from './AppScriptUpdater';
 
 /**
  * Messages 表的 Schema 定义
@@ -843,6 +844,7 @@ function dailyTrigger() {
     triggers: { minuteTriggerId: string; dailyTriggerId: string },
   ): Promise<void> {
     const now = new Date();
+    const appScriptVersionInfo = await AppScriptUpdater.getLatestVersionInfo();
 
     // 构建配置对象
     const config: SheetConfig = {
@@ -856,8 +858,8 @@ function dailyTrigger() {
       minute_trigger_id: triggers.minuteTriggerId,
       daily_trigger_id: triggers.dailyTriggerId,
       sheet_version: MESSAGES_SCHEMA.version,
-      appScriptVersion: '1.0.0', // 初始 App Script 版本
-      appScriptLastUpdated: this.formatDateTime(now),
+      appScriptVersion: appScriptVersionInfo.version,
+      appScriptLastUpdated: appScriptVersionInfo.lastUpdated,
       created_by: 'Personal AI Extension',
       created_at: this.formatDateTime(now),
       last_sync_time: this.formatDateTime(now),

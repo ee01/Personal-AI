@@ -7,8 +7,50 @@ import { DisplaySlideAnalysisResult } from '../contentScriptGoogleSlide';
 interface AnalysisData {
     result: DisplaySlideAnalysisResult;
     presentationId: string;
-    token: string;
 }
+
+type UpdateField = 'status' | 'owner' | 'track' | 'comments';
+
+const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
+const HIGH_CONFIDENCE_THRESHOLD = 0.75;
+
+const fieldKey = (projectIndex: number, field: UpdateField) => `${projectIndex}:${field}`;
+
+const getAvailableUpdateFields = (suggestion: ProjectUpdateSuggestion): UpdateField[] => {
+    const fields: UpdateField[] = [];
+    const hasStatusColumn = suggestion.columnIndices?.status !== undefined && suggestion.columnIndices.status !== -1;
+    const hasOwnerColumn = suggestion.columnIndices?.owner !== undefined && suggestion.columnIndices.owner !== -1;
+    const hasTrackColumn = suggestion.columnIndices?.track !== undefined && suggestion.columnIndices.track !== -1;
+    const hasCommentsColumn = suggestion.columnIndices?.comments !== undefined && suggestion.columnIndices.comments !== -1;
+
+    if (hasStatusColumn && suggestion.suggestedStatus && suggestion.suggestedStatus !== suggestion.currentStatus) {
+        fields.push('status');
+    }
+    if (hasCommentsColumn && suggestion.suggestedComments) {
+        fields.push('comments');
+    }
+    if (hasOwnerColumn && suggestion.suggestedOwner && suggestion.suggestedOwner !== suggestion.currentOwner) {
+        fields.push('owner');
+    }
+    if (hasTrackColumn && suggestion.suggestedTrack && suggestion.suggestedTrack !== suggestion.currentTrack) {
+        fields.push('track');
+    }
+
+    return fields;
+};
+
+const getAllowedOpenerOrigin = (): string => {
+    try {
+        const referrerOrigin = new URL(document.referrer).origin;
+        if (referrerOrigin === GOOGLE_SLIDES_ORIGIN) {
+            return referrerOrigin;
+        }
+    } catch {
+        // Fall through to the Google Slides origin used by the content script.
+    }
+
+    return GOOGLE_SLIDES_ORIGIN;
+};
 
 interface ToastProps {
     message: string;
@@ -35,9 +77,9 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
 const SlidesAnalysis: React.FC = () => {
     const [analysisResult, setAnalysisResult] = useState<DisplaySlideAnalysisResult | null>(null);
     const [presentationId, setPresentationId] = useState<string>('');
-    const [token, setToken] = useState<string>('');
     const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
     const [isApplying, setIsApplying] = useState(false);
+    const [selectedFields, setSelectedFields] = useState<Record<string, boolean>>({});
 
     useEffect(() => {
         initAnalysisPage();
@@ -54,12 +96,32 @@ const SlidesAnalysis: React.FC = () => {
         };
     }, []);
 
+    useEffect(() => {
+        if (!analysisResult) {
+            setSelectedFields({});
+            return;
+        }
+
+        const defaults: Record<string, boolean> = {};
+        analysisResult.updateSuggestions.forEach((suggestion, projectIndex) => {
+            if ((suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD) {
+                return;
+            }
+
+            getAvailableUpdateFields(suggestion).forEach((field) => {
+                defaults[fieldKey(projectIndex, field)] = true;
+            });
+        });
+
+        setSelectedFields(defaults);
+    }, [analysisResult]);
+
     const initAnalysisPage = () => {
         try {
             // 告知父窗口页面已加载完成，请求数据
             if (window.opener) {
                 debugLog('向父窗口请求分析数据');
-                window.opener.postMessage({ type: 'REQUEST_ANALYSIS_DATA' }, '*');
+                window.opener.postMessage({ type: 'REQUEST_ANALYSIS_DATA' }, getAllowedOpenerOrigin());
             } else {
                 showToast('无法与父窗口通信', 'error');
             }
@@ -74,6 +136,11 @@ const SlidesAnalysis: React.FC = () => {
             type: event.data?.type,
             source: event.origin
         }));
+
+        if (event.source !== window.opener || event.origin !== getAllowedOpenerOrigin()) {
+            debugLog('忽略非预期来源消息');
+            return;
+        }
         
         try {
             if (!event.data) {
@@ -86,7 +153,6 @@ const SlidesAnalysis: React.FC = () => {
                 const data: AnalysisData = event.data.data;
                 setAnalysisResult(data.result);
                 setPresentationId(data.presentationId);
-                setToken(data.token);
             } else if (event.data.type === 'UPDATE_SUCCESS') {
                 debugLog('收到更新成功消息: ' + JSON.stringify(event.data));
                 showToast(`更新成功: 已更新 ${event.data.updatedCount || '0'} 个项目`, 'success');
@@ -104,35 +170,55 @@ const SlidesAnalysis: React.FC = () => {
     };
 
     const handleSelectAll = (projectIndex: number, isChecked: boolean) => {
-        const checkboxes = document.querySelectorAll(`.update-item-checkbox[data-project-index="${projectIndex}"]`);
-        checkboxes.forEach((checkbox) => {
-            (checkbox as HTMLInputElement).checked = isChecked;
+        if (!analysisResult) {
+            return;
+        }
+
+        const suggestion = analysisResult.updateSuggestions[projectIndex];
+        if (!suggestion) {
+            return;
+        }
+
+        setSelectedFields((current) => {
+            const next = { ...current };
+            getAvailableUpdateFields(suggestion).forEach((field) => {
+                next[fieldKey(projectIndex, field)] = isChecked;
+            });
+            return next;
         });
     };
+
+    const handleFieldSelection = (projectIndex: number, field: UpdateField, isChecked: boolean) => {
+        setSelectedFields((current) => ({
+            ...current,
+            [fieldKey(projectIndex, field)]: isChecked
+        }));
+    };
+
+    const isFieldSelected = (projectIndex: number, field: UpdateField): boolean => {
+        return Boolean(selectedFields[fieldKey(projectIndex, field)]);
+    };
+
+    const selectedUpdateCount = analysisResult
+        ? analysisResult.updateSuggestions.reduce((count, suggestion, projectIndex) => {
+            return count + getAvailableUpdateFields(suggestion)
+                .filter((field) => isFieldSelected(projectIndex, field)).length;
+        }, 0)
+        : 0;
 
     const handleApplyUpdates = () => {
         try {
             debugLog('应用更新按钮被点击');
-            
-            const selectedItems = Array.from(document.querySelectorAll('.update-item-checkbox:checked')) as HTMLInputElement[];
-            
-            if (selectedItems.length === 0) {
+
+            if (!analysisResult || selectedUpdateCount === 0) {
                 showToast('请选择至少一个更新项', 'warning');
                 return;
             }
             
-            debugLog('选择了 ' + selectedItems.length + ' 个更新项');
-            
-            // 按项目组织选中的更新项
-            const groupedUpdates = new Map<number, ProjectUpdateSuggestion>();
-            
-            selectedItems.forEach(item => {
-                const projectIndex = parseInt(item.dataset.projectIndex || '0', 10);
-                const field = item.dataset.field;
-                const suggested = item.dataset.suggested;
-                
-                if (!groupedUpdates.has(projectIndex) && analysisResult) {
-                    const originalSuggestion = analysisResult.updateSuggestions[projectIndex];
+            debugLog('选择了 ' + selectedUpdateCount + ' 个更新项');
+
+            const selectedUpdates = analysisResult.updateSuggestions
+                .map((originalSuggestion, projectIndex) => {
                     const partialUpdate: ProjectUpdateSuggestion = {
                         projectId: originalSuggestion.projectId,
                         projectName: originalSuggestion.projectName,
@@ -148,42 +234,39 @@ const SlidesAnalysis: React.FC = () => {
                         sourceInfo: originalSuggestion.sourceInfo,
                         confidence: originalSuggestion.confidence
                     };
-                    groupedUpdates.set(projectIndex, partialUpdate);
-                }
                 
-                // 添加选中的更新字段
-                const update = groupedUpdates.get(projectIndex);
-                if (update) {
-                    switch (field) {
-                        case 'status':
-                            update.suggestedStatus = suggested;
-                            break;
-                        case 'owner':
-                            update.suggestedOwner = suggested;
-                            break;
-                        case 'track':
-                            update.suggestedTrack = suggested;
-                            break;
-                        case 'comments':
-                            update.suggestedComments = suggested;
-                            break;
+                    if (isFieldSelected(projectIndex, 'status')) {
+                        partialUpdate.suggestedStatus = originalSuggestion.suggestedStatus;
                     }
-                }
-            });
-            
-            const selectedUpdates = Array.from(groupedUpdates.values());
+                    if (isFieldSelected(projectIndex, 'owner')) {
+                        partialUpdate.suggestedOwner = originalSuggestion.suggestedOwner;
+                    }
+                    if (isFieldSelected(projectIndex, 'track')) {
+                        partialUpdate.suggestedTrack = originalSuggestion.suggestedTrack;
+                    }
+                    if (isFieldSelected(projectIndex, 'comments')) {
+                        partialUpdate.suggestedComments = originalSuggestion.suggestedComments;
+                    }
+
+                    return partialUpdate;
+                })
+                .filter((update) => (
+                    update.suggestedStatus ||
+                    update.suggestedOwner ||
+                    update.suggestedTrack ||
+                    update.suggestedComments
+                ));
             
             debugLog('准备发送 ' + selectedUpdates.length + ' 个项目更新到父窗口');
             
             const message = {
                 type: 'APPLY_PROJECT_UPDATES',
                 presentationId,
-                token,
                 selectedUpdates
             };
             
             if (window.opener) {
-                window.opener.postMessage(message, '*');
+                window.opener.postMessage(message, getAllowedOpenerOrigin());
                 showToast('正在应用更新...', 'info');
                 setIsApplying(true);
             } else {
@@ -289,6 +372,9 @@ const SlidesAnalysis: React.FC = () => {
                 <h3>📊 分析报告</h3>
                 <div id="summary-info">
                     <p>检测到 {analysisResult.summary.totalProjects} 个项目，{analysisResult.summary.projectsNeedingUpdate} 个需要更新</p>
+                    {analysisResult.updateSuggestions.length > 0 && (
+                        <p className="selection-summary">已选择 {selectedUpdateCount} 项更新</p>
+                    )}
                 </div>
             </div>
 
@@ -322,11 +408,19 @@ const SlidesAnalysis: React.FC = () => {
                             const hasOwnerColumn = suggestion.columnIndices?.owner !== undefined && suggestion.columnIndices.owner !== -1;
                             const hasTrackColumn = suggestion.columnIndices?.track !== undefined && suggestion.columnIndices.track !== -1;
                             const hasCommentsColumn = suggestion.columnIndices?.comments !== undefined && suggestion.columnIndices.comments !== -1;
+                            const availableFields = getAvailableUpdateFields(suggestion);
+                            const allAvailableSelected = availableFields.length > 0 &&
+                                availableFields.every((field) => isFieldSelected(index, field));
 
                             return (
                                 <div key={index} className="project-item">
                                     <div style={{ marginBottom: '10px' }}>
-                                        <span style={{ fontWeight: 'bold' }}>项目 {suggestion.projectId}: {suggestion.projectName}</span>
+                                        <div className="project-header">
+                                            <span className="project-title">项目 {suggestion.projectId}: {suggestion.projectName}</span>
+                                            <span className={`confidence-badge ${suggestion.confidence >= HIGH_CONFIDENCE_THRESHOLD ? 'confidence-high' : 'confidence-review'}`}>
+                                                可信度 {Math.round((suggestion.confidence || 0) * 100)}%
+                                            </span>
+                                        </div>
                                         
                                         {/* Jira信息显示区域 */}
                                         {suggestion.sourceInfo.jiraIssues && suggestion.sourceInfo.jiraIssues.length > 0 && (
@@ -346,7 +440,7 @@ const SlidesAnalysis: React.FC = () => {
                                                         borderLeft: '3px solid #0052CC' 
                                                     }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                            <a href={issue.url || '#'} target="_blank" style={{ 
+                                                            <a href={issue.url || '#'} target="_blank" rel="noreferrer" style={{
                                                                 color: '#0052CC', 
                                                                 fontWeight: 'bold', 
                                                                 textDecoration: 'none' 
@@ -444,6 +538,7 @@ const SlidesAnalysis: React.FC = () => {
                                                     type="checkbox" 
                                                     id={`select-all-${index}`} 
                                                     className="select-all-checkbox"
+                                                    checked={allAvailableSelected}
                                                     onChange={(e) => handleSelectAll(index, e.target.checked)}
                                                 />
                                                 <label htmlFor={`select-all-${index}`}>全选</label>
@@ -457,10 +552,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-status-${index}`} 
                                                 className="update-item-checkbox"
-                                                data-project-index={index}
-                                                data-field="status"
-                                                data-current={suggestion.currentStatus}
-                                                data-suggested={suggestion.suggestedStatus}
+                                                checked={isFieldSelected(index, 'status')}
+                                                onChange={(e) => handleFieldSelection(index, 'status', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
                                             <div>
@@ -489,10 +582,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-comments-${index}`} 
                                                 className="update-item-checkbox"
-                                                data-project-index={index}
-                                                data-field="comments"
-                                                data-current={suggestion.currentComments || ''}
-                                                data-suggested={suggestion.suggestedComments}
+                                                checked={isFieldSelected(index, 'comments')}
+                                                onChange={(e) => handleFieldSelection(index, 'comments', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
                                             <div>
@@ -519,10 +610,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-owner-${index}`} 
                                                 className="update-item-checkbox"
-                                                data-project-index={index}
-                                                data-field="owner"
-                                                data-current={suggestion.currentOwner || ''}
-                                                data-suggested={suggestion.suggestedOwner}
+                                                checked={isFieldSelected(index, 'owner')}
+                                                onChange={(e) => handleFieldSelection(index, 'owner', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
                                             <div>
@@ -551,10 +640,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-track-${index}`} 
                                                 className="update-item-checkbox"
-                                                data-project-index={index}
-                                                data-field="track"
-                                                data-current={suggestion.currentTrack || ''}
-                                                data-suggested={suggestion.suggestedTrack}
+                                                checked={isFieldSelected(index, 'track')}
+                                                onChange={(e) => handleFieldSelection(index, 'track', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
                                             <div>
@@ -584,9 +671,9 @@ const SlidesAnalysis: React.FC = () => {
                             id="apply-updates-button" 
                             className="btn-primary"
                             onClick={handleApplyUpdates}
-                            disabled={isApplying}
+                            disabled={isApplying || selectedUpdateCount === 0}
                         >
-                            {isApplying ? '正在更新...' : '应用选定更新'}
+                            {isApplying ? '正在更新...' : `应用 ${selectedUpdateCount} 项更新`}
                         </button>
                     )}
                 </div>
@@ -645,6 +732,44 @@ const styles = `
         background: #fff;
     }
 
+    .project-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .project-title {
+        font-weight: bold;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .selection-summary {
+        color: #42526e;
+        font-size: 13px;
+        margin-bottom: 0;
+    }
+
+    .confidence-badge {
+        flex: 0 0 auto;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 3px 8px;
+    }
+
+    .confidence-high {
+        background: #e3fcef;
+        color: #006644;
+    }
+
+    .confidence-review {
+        background: #fff0b3;
+        color: #7a5d00;
+    }
+
     .update-item {
         display: flex;
         align-items: flex-start;
@@ -689,8 +814,13 @@ const styles = `
     }
 
     .apply-section {
+        position: sticky;
+        bottom: 0;
         text-align: center;
         margin-top: 30px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.96);
+        border-top: 1px solid #e0e0e0;
     }
 
     .center {
@@ -755,4 +885,4 @@ const styles = `
 ReactDOM.render(
     <SlidesAnalysis />,
     document.getElementById('slides-analysis-root')
-); 
+);

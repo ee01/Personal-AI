@@ -550,6 +550,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [appScriptVersion, setAppScriptVersion] = useState<string>('');
+  const [latestAppScriptVersion, setLatestAppScriptVersion] = useState<string>('');
   const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
   const [outreachRuntime, setOutreachRuntime] = useState<OutreachRuntimeState>({
     enabled: false,
@@ -985,6 +986,7 @@ const ScheduledMessagesManager: React.FC = () => {
       
       const updater = new AppScriptUpdater(token, config);
       const result = await updater.checkForUpdates();
+      setLatestAppScriptVersion(result.latestVersion);
       
       if (result.needsUpdate) {
         setUpdateAvailable(true);
@@ -1003,7 +1005,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const handleUpgradeVersion = async () => {
     if (!config) return;
     
-    if (!confirm('确定要升级到最新版本吗？\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script 代码升级\n3. Jira Automation 规则升级\n\n整个过程可能需要几分钟时间。')) {
+    if (!confirm('确定要升级调度系统吗？\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（保持 Web App URL 不变）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本，不影响当前定时消息继续运行。整个过程可能需要几分钟时间。')) {
       return;
     }
     
@@ -1045,6 +1047,7 @@ const ScheduledMessagesManager: React.FC = () => {
           updateResults.push(`✅ App Script 已升级到 ${appScriptResult.newVersion}`);
           setUpdateAvailable(false);
           setAppScriptVersion(appScriptResult.newVersion || '');
+          setLatestAppScriptVersion(appScriptResult.newVersion || '');
         } else if (
           appScriptResult.errorCode === APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR &&
           appScriptResult.helpUrl
@@ -2255,9 +2258,9 @@ const ScheduledMessagesManager: React.FC = () => {
               style={styles.updateButton} 
               onClick={handleUpgradeVersion} 
               disabled={isUpdating}
-              title={`当前版本: ${appScriptVersion}，点击升级到最新版本（包含 Sheet、Script、Jira Rule）`}
+              title={`当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule。`}
             >
-              {isUpdating ? '⏳ 升级中...' : '🚀 升级版本'}
+              {isUpdating ? '⏳ 升级中...' : '🚀 升级调度系统'}
             </button>
           )}
           <button style={styles.configButton} onClick={handleOpenSheet} title="查看推送记录">

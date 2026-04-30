@@ -25,7 +25,15 @@
         style="position: relative;"
         @click="navigateToEntityType('Project')"
       >
-        <button class="mark-read-btn" @click.stop="handleCloseTodayCard('today-projects')">阅</button>
+        <button
+          type="button"
+          class="dismiss-card-btn"
+          title="今日不再显示"
+          aria-label="今日不再显示今日重点项目"
+          @click.stop="handleCloseTodayCard('today-projects')"
+        >
+          ×
+        </button>
         <div class="card-header">
           <div class="card-title">
             <span>🚀</span>
@@ -64,7 +72,15 @@
         style="position: relative;"
         @click="navigateToEntityType('Topic')"
       >
-        <button class="mark-read-btn" @click.stop="handleCloseTodayCard('today-topics')">阅</button>
+        <button
+          type="button"
+          class="dismiss-card-btn"
+          title="今日不再显示"
+          aria-label="今日不再显示热门主题讨论"
+          @click.stop="handleCloseTodayCard('today-topics')"
+        >
+          ×
+        </button>
         <div class="card-header">
           <div class="card-title">
             <span>💡</span>
@@ -98,7 +114,15 @@
         style="position: relative;"
         @click="navigateToEntityType('Person')"
       >
-        <button class="mark-read-btn" @click.stop="handleCloseTodayCard('today-people')">阅</button>
+        <button
+          type="button"
+          class="dismiss-card-btn"
+          title="今日不再显示"
+          aria-label="今日不再显示重要联系人动态"
+          @click.stop="handleCloseTodayCard('today-people')"
+        >
+          ×
+        </button>
         <div class="card-header">
           <div class="card-title">
             <span>👥</span>
@@ -131,7 +155,15 @@
         class="content-card" 
         style="position: relative;"
       >
-        <button class="mark-read-btn" @click.stop="handleCloseTodayCard('today-ai-recommend')">阅</button>
+        <button
+          type="button"
+          class="dismiss-card-btn"
+          title="今日不再显示"
+          aria-label="今日不再显示 AI 推荐内容"
+          @click.stop="handleCloseTodayCard('today-ai-recommend')"
+        >
+          ×
+        </button>
         <div class="card-header">
           <div class="card-title">
             <span>🎯</span>
@@ -165,7 +197,15 @@
         style="position: relative;"
         @click="router.push('/outreach')"
       >
-        <button class="mark-read-btn" @click.stop="handleCloseTodayCard('today-outreach')">阅</button>
+        <button
+          type="button"
+          class="dismiss-card-btn"
+          title="今日不再显示"
+          aria-label="今日不再显示主动询问进度"
+          @click.stop="handleCloseTodayCard('today-outreach')"
+        >
+          ×
+        </button>
         <div class="card-header">
           <div class="card-title">
             <span>📡</span>
@@ -213,7 +253,15 @@
             style="position: relative;"
             @click="handleTopicClick(topic)"
           >
-            <button class="mark-read-btn" @click.stop="handleMarkTopicAsRead(topic.id)">阅</button>
+            <button
+              type="button"
+              class="mark-read-btn"
+              title="标记主题已读"
+              :aria-label="`标记 ${topic.name} 为已读`"
+              @click.stop="handleMarkTopicAsRead(topic.id)"
+            >
+              阅
+            </button>
             <div class="card-header">
               <div class="card-title">
                 <span>💡</span>
@@ -463,7 +511,31 @@ onUnmounted(() => {
   z-index: 10;
 }
 
-.content-card:hover .mark-read-btn {
+.dismiss-card-btn {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.content-card:hover .mark-read-btn,
+.content-card:hover .dismiss-card-btn,
+.mark-read-btn:focus-visible,
+.dismiss-card-btn:focus-visible {
   opacity: 1;
 }
 
@@ -476,6 +548,19 @@ onUnmounted(() => {
 
 .mark-read-btn:active {
   transform: scale(0.95);
+}
+
+.dismiss-card-btn:hover,
+.dismiss-card-btn:focus-visible {
+  border-color: rgba(148, 163, 184, 0.55);
+  background: rgba(30, 41, 59, 0.95);
+  color: #ffffff;
+}
+
+.mark-read-btn:focus-visible,
+.dismiss-card-btn:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.75);
+  outline-offset: 2px;
 }
 
 /* 未读徽章 */

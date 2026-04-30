@@ -43,8 +43,28 @@
           </div>
           <div class="head-badges">
             <span class="badge" :class="action.queueStatus">{{ action.queueStatus }}</span>
+            <span
+              v-if="scheduleBadgeLabel(action)"
+              class="badge"
+              :class="scheduleBadgeClass(action)"
+            >{{ scheduleBadgeLabel(action) }}</span>
             <span class="badge muted">{{ action.executionMode }}</span>
             <span class="badge muted">P{{ action.priority }}</span>
+          </div>
+        </div>
+
+        <div class="schedule-panel">
+          <div class="schedule-item" :class="scheduleToneClass(action)">
+            <span class="schedule-label">预计执行</span>
+            <span class="schedule-value">{{ scheduledExecutionLabel(action) }}</span>
+          </div>
+          <div v-if="action.startedAt" class="schedule-item">
+            <span class="schedule-label">开始执行</span>
+            <span class="schedule-value">{{ formatActionTime(action.startedAt) }}</span>
+          </div>
+          <div v-if="action.finishedAt || action.executedAt" class="schedule-item">
+            <span class="schedule-label">完成时间</span>
+            <span class="schedule-value">{{ formatActionTime(action.finishedAt || action.executedAt) }}</span>
           </div>
         </div>
 
@@ -311,6 +331,93 @@ function delegationTargetLabel(action: RuntimeAction) {
     : '';
 }
 
+function normalizeEpochMs(value?: number): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value < 1_000_000_000_000 ? value * 1000 : value;
+}
+
+function formatActionTime(value?: number): string {
+  const ms = normalizeEpochMs(value);
+  if (!ms) return '未记录';
+  return new Date(ms).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function relativeScheduleText(value?: number): string {
+  const ms = normalizeEpochMs(value);
+  if (!ms) return '';
+  const diffMs = ms - Date.now();
+  const absMins = Math.round(Math.abs(diffMs) / 60000);
+  if (absMins < 1) return diffMs >= 0 ? '1 分钟内' : '已到期';
+  if (absMins < 60) return diffMs >= 0 ? `${absMins} 分钟后` : `已过 ${absMins} 分钟`;
+  const hours = Math.round(absMins / 60);
+  if (hours < 24) return diffMs >= 0 ? `${hours} 小时后` : `已过 ${hours} 小时`;
+  const days = Math.round(hours / 24);
+  return diffMs >= 0 ? `${days} 天后` : `已过 ${days} 天`;
+}
+
+function isAutoExecutable(action: RuntimeAction): boolean {
+  return (
+    action.queueStatus === 'queued' &&
+    action.executionMode === 'auto' &&
+    action.requiresApproval !== true
+  );
+}
+
+function isScheduledDue(action: RuntimeAction): boolean {
+  const scheduledMs = normalizeEpochMs(action.scheduledAt);
+  return Boolean(isAutoExecutable(action) && scheduledMs && scheduledMs <= Date.now());
+}
+
+function scheduledExecutionLabel(action: RuntimeAction): string {
+  if (action.scheduledAt) {
+    const base = formatActionTime(action.scheduledAt);
+    const relative = relativeScheduleText(action.scheduledAt);
+    if (isScheduledDue(action)) {
+      return `${base}（${relative}，等待下一次调度扫描）`;
+    }
+    return relative ? `${base}（${relative}）` : base;
+  }
+
+  if (isAutoExecutable(action)) {
+    return '未设置具体时间；下一次调度扫描会执行';
+  }
+  if (action.queueStatus === 'queued' && action.requiresApproval) {
+    return '等待人工批准后才能执行';
+  }
+  if (action.queueStatus === 'queued' && action.executionMode === 'manual') {
+    return '手动执行模式；不会被定时调度自动触发';
+  }
+  return '无待执行时间';
+}
+
+function scheduleBadgeLabel(action: RuntimeAction): string {
+  if (isScheduledDue(action)) return '已到期';
+  if (action.scheduledAt && action.queueStatus === 'queued') {
+    return relativeScheduleText(action.scheduledAt) || '已排程';
+  }
+  if (isAutoExecutable(action) && !action.scheduledAt) return '下次扫描';
+  return '';
+}
+
+function scheduleBadgeClass(action: RuntimeAction): string {
+  if (isScheduledDue(action)) return 'due';
+  if (action.scheduledAt && action.queueStatus === 'queued') return 'scheduled';
+  return 'muted';
+}
+
+function scheduleToneClass(action: RuntimeAction): string {
+  if (isScheduledDue(action)) return 'due';
+  if (action.scheduledAt && action.queueStatus === 'queued') return 'scheduled';
+  if (isAutoExecutable(action)) return 'ready';
+  return '';
+}
+
 function actionResultSummary(action: RuntimeAction): string {
   return action.result && typeof action.result.summary === 'string'
     ? action.result.summary
@@ -448,9 +555,62 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   color: #fcd34d;
 }
 
+.badge.scheduled {
+  background: rgba(99, 102, 241, 0.18);
+  color: #c4b5fd;
+}
+
+.badge.due {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
 .badge.succeeded {
   background: rgba(34, 197, 94, 0.16);
   color: #86efac;
+}
+
+.schedule-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.schedule-item {
+  min-width: 12rem;
+  padding: 0.68rem 0.82rem;
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.52);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.schedule-item.scheduled {
+  background: rgba(49, 46, 129, 0.22);
+  border-color: rgba(129, 140, 248, 0.24);
+}
+
+.schedule-item.due {
+  background: rgba(120, 53, 15, 0.2);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.schedule-item.ready {
+  background: rgba(20, 83, 45, 0.16);
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.schedule-label {
+  display: block;
+  margin-bottom: 0.28rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.schedule-value {
+  color: #e2e8f0;
+  font-size: 0.86rem;
+  line-height: 1.35;
 }
 
 .thread-link {

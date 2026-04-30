@@ -7,6 +7,7 @@ import {
   buildProjectReport,
   buildProjectReportFileName,
   importProjectsFromReport,
+  sanitizeProject,
   serializeProjectReport,
   type ProjectReportFile,
   type ProjectReportImportMode,
@@ -32,6 +33,7 @@ export interface FishboneTask {
   status: DepStatus | DesignStatus | TaskStatus | string;
   eta?: string;
   desc?: string;
+  anchorPosition?: number;
   platforms?: Partial<Record<PlatformKey, PlatformState>>;
   jira?: Array<{ key: string; title: string }>;
 }
@@ -137,6 +139,158 @@ export interface Risk {
   tags?: string[];
 }
 
+export type ProjectHealthState = 'empty' | 'on-track' | 'at-risk' | 'off-track';
+
+export interface ProjectHealthSummary {
+  state: ProjectHealthState;
+  label: string;
+  headline: string;
+  totalTasks: number;
+  completedTasks: number;
+  blockedTasks: number;
+  overdueTasks: number;
+  dueSoonTasks: number;
+  upcomingMilestone?: {
+    label: string;
+    date: string;
+    daysUntil: number;
+  };
+}
+
+const PROJECT_DASHBOARD_STORAGE_KEY = 'projectDashboardFishboneProjects';
+
+function normalizeStatusToken(status: string | undefined): string {
+  return String(status || 'unknown').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function parseDateOnly(date: string | undefined): Date | null {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const parsed = new Date(`${date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function daysUntil(date: string | undefined, now: Date): number | null {
+  const parsed = parseDateOnly(date);
+  if (!parsed) return null;
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+function isCompletedStatus(status: string | undefined): boolean {
+  const token = normalizeStatusToken(status);
+  return token === 'done' || token === 'closed' || token === 'complete' || token === 'completed';
+}
+
+function isBlockedStatus(status: string | undefined): boolean {
+  return normalizeStatusToken(status).includes('blocked');
+}
+
+export function buildProjectHealthSummary(
+  project: FishboneProject,
+  now = new Date(),
+): ProjectHealthSummary {
+  const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+  const milestones = Array.isArray(project.milestones) ? project.milestones : [];
+
+  const completedTasks = tasks.filter((task) => isCompletedStatus(task.status)).length;
+  const blockedTasks = tasks.filter((task) => isBlockedStatus(task.status)).length;
+  const overdueTasks = tasks.filter((task) => {
+    if (isCompletedStatus(task.status)) return false;
+    const delta = daysUntil(task.eta, now);
+    return delta !== null && delta < 0;
+  }).length;
+  const dueSoonTasks = tasks.filter((task) => {
+    if (isCompletedStatus(task.status)) return false;
+    const delta = daysUntil(task.eta, now);
+    return delta !== null && delta >= 0 && delta <= 7;
+  }).length;
+
+  const upcomingMilestone = milestones
+    .map((milestone) => ({
+      label: milestone.label,
+      date: milestone.date || '',
+      daysUntil: daysUntil(milestone.date, now),
+    }))
+    .filter(
+      (milestone): milestone is { label: string; date: string; daysUntil: number } =>
+        Boolean(milestone.label && milestone.date) && milestone.daysUntil !== null && milestone.daysUntil >= 0,
+    )
+    .sort((a, b) => a.daysUntil - b.daysUntil)[0];
+
+  if (tasks.length === 0) {
+    return {
+      state: 'empty',
+      label: '待规划',
+      headline: milestones.length
+        ? `已配置 ${milestones.length} 个里程碑，等待拆解任务`
+        : '还没有任务或里程碑',
+      totalTasks: 0,
+      completedTasks: 0,
+      blockedTasks: 0,
+      overdueTasks: 0,
+      dueSoonTasks: 0,
+      upcomingMilestone,
+    };
+  }
+
+  if (blockedTasks > 0 || overdueTasks > 0) {
+    return {
+      state: 'off-track',
+      label: '需处理',
+      headline:
+        blockedTasks > 0
+          ? `${blockedTasks} 个阻塞项需要先处理`
+          : `${overdueTasks} 个任务已超过 ETA`,
+      totalTasks: tasks.length,
+      completedTasks,
+      blockedTasks,
+      overdueTasks,
+      dueSoonTasks,
+      upcomingMilestone,
+    };
+  }
+
+  if (dueSoonTasks > 0) {
+    return {
+      state: 'at-risk',
+      label: '需关注',
+      headline: `${dueSoonTasks} 个任务 7 天内到期`,
+      totalTasks: tasks.length,
+      completedTasks,
+      blockedTasks,
+      overdueTasks,
+      dueSoonTasks,
+      upcomingMilestone,
+    };
+  }
+
+  return {
+    state: 'on-track',
+    label: '正常',
+    headline: upcomingMilestone
+      ? `下个里程碑 ${upcomingMilestone.label} 还有 ${upcomingMilestone.daysUntil} 天`
+      : `${completedTasks}/${tasks.length} 个任务已完成`,
+    totalTasks: tasks.length,
+    completedTasks,
+    blockedTasks,
+    overdueTasks,
+    dueSoonTasks,
+    upcomingMilestone,
+  };
+}
+
+function sanitizeFishboneProject(project: FishboneProject): FishboneProject {
+  const sanitized = sanitizeProject(project) as FishboneProject;
+  return {
+    ...sanitized,
+    platformConfig: sanitized.platformConfig?.filter((item): item is PlatformKey =>
+      ['sdk', 'ios', 'android', 'qa', 'dev'].includes(item),
+    ),
+  };
+}
+
 /**
  * 仪表盘数据管理器
  */
@@ -146,6 +300,8 @@ export class DashboardDataManager {
   private mockData: ProjectData[] = [];
   // 新鱼骨模型数据源
   private fishboneProjects: FishboneProject[] = [];
+  private storageLoadPromise: Promise<void> | null = null;
+  private storageLoaded = false;
 
   static getInstance(): DashboardDataManager {
     if (!DashboardDataManager.instance) {
@@ -157,6 +313,67 @@ export class DashboardDataManager {
   constructor() {
     this.initializeMockData(); // 兼容旧接口（即使前端不再使用）
     this.initializeFishboneMock();
+  }
+
+  private getChromeStorage(): chrome.storage.LocalStorageArea | null {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        return chrome.storage.local;
+      }
+    } catch {
+      // chrome is unavailable in local node verifiers.
+    }
+
+    return null;
+  }
+
+  private async ensureFishboneProjectsLoaded(): Promise<void> {
+    if (this.storageLoaded) return;
+    if (this.storageLoadPromise) {
+      await this.storageLoadPromise;
+      return;
+    }
+
+    this.storageLoadPromise = (async () => {
+      const storage = this.getChromeStorage();
+      if (!storage) {
+        this.storageLoaded = true;
+        return;
+      }
+
+      try {
+        const result = await storage.get(PROJECT_DASHBOARD_STORAGE_KEY);
+        const stored = result?.[PROJECT_DASHBOARD_STORAGE_KEY];
+        const storedProjects = Array.isArray(stored)
+          ? stored
+          : Array.isArray(stored?.projects)
+            ? stored.projects
+            : null;
+
+        if (storedProjects) {
+          this.fishboneProjects = storedProjects.map(sanitizeFishboneProject);
+        }
+      } catch (error) {
+        console.warn('读取项目仪表盘本地数据失败，继续使用默认数据:', error);
+      } finally {
+        this.storageLoaded = true;
+      }
+    })();
+
+    await this.storageLoadPromise;
+  }
+
+  private async persistFishboneProjects(): Promise<void> {
+    const storage = this.getChromeStorage();
+    if (!storage) return;
+
+    await storage.set({
+      [PROJECT_DASHBOARD_STORAGE_KEY]: {
+        version: 1,
+        savedAt: Date.now(),
+        projects: this.fishboneProjects.map(sanitizeFishboneProject),
+      },
+    });
   }
 
   /**
@@ -530,6 +747,8 @@ export class DashboardDataManager {
    * 获取项目数据
    */
   async getProjectData(projectId?: string): Promise<any[]> {
+    await this.ensureFishboneProjectsLoaded();
+
     console.log('🗂️ DashboardDataManager.getProjectData 开始:', {
       projectId,
       mockDataLength: this.mockData?.length || 0,
@@ -543,7 +762,7 @@ export class DashboardDataManager {
     }
     
     // 新模型优先：返回鱼骨项目
-    if (!this.fishboneProjects || this.fishboneProjects.length === 0) {
+    if (!this.fishboneProjects) {
       this.initializeFishboneMock();
     }
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -562,6 +781,8 @@ export class DashboardDataManager {
     changes: any
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      await this.ensureFishboneProjectsLoaded();
+
       const project = this.fishboneProjects.find(p => p.id === projectId);
       if (!project) {
         return { success: false, error: '项目不存在' };
@@ -587,6 +808,7 @@ export class DashboardDataManager {
           break;
         }
       }
+      await this.persistFishboneProjects();
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -602,6 +824,8 @@ export class DashboardDataManager {
     itemData: any
   ): Promise<{ success: boolean; newItem?: any; error?: string }> {
     try {
+      await this.ensureFishboneProjectsLoaded();
+
       const project = this.fishboneProjects.find(p => p.id === projectId);
       if (!project) {
         return { success: false, error: '项目不存在' };
@@ -622,11 +846,13 @@ export class DashboardDataManager {
             status: itemData.status || 'todo',
             eta: itemData.eta,
             desc: itemData.desc,
+            anchorPosition: itemData.anchorPosition,
             platforms: itemData.platforms,
             jira: itemData.jira
           });
           break;
       }
+      await this.persistFishboneProjects();
       return { success: true, newItem };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -668,6 +894,8 @@ export class DashboardDataManager {
     error?: string;
   }> {
     try {
+      await this.ensureFishboneProjectsLoaded();
+
       const isAllProjects = !projectId || projectId === 'all';
       const projects = isAllProjects
         ? this.fishboneProjects
@@ -713,8 +941,11 @@ export class DashboardDataManager {
     error?: string;
   }> {
     try {
+      await this.ensureFishboneProjectsLoaded();
+
       const result = importProjectsFromReport(this.fishboneProjects as any[], reportContent, { mode });
       this.fishboneProjects = result.projects as FishboneProject[];
+      await this.persistFishboneProjects();
 
       return {
         success: true,
@@ -732,23 +963,53 @@ export class DashboardDataManager {
     name: string;
     description?: string;
     platformConfig?: PlatformKey[];
+    milestones?: MilestonePoint[];
     prompt?: string;
   }): Promise<{ success: boolean; project?: FishboneProject; error?: string }> {
     try {
-      const id = `p_${Date.now()}`;
+      await this.ensureFishboneProjectsLoaded();
+
+      const id = this.createUniqueProjectId(data.name);
       const project: FishboneProject = {
         id,
         name: data.name,
         description: data.description || '',
-        milestones: [],
+        milestones: Array.isArray(data.milestones)
+          ? data.milestones
+              .filter((milestone) => milestone.label?.trim())
+              .map((milestone, index) => ({
+                id: milestone.id || `milestone-${id}-${index + 1}`,
+                label: milestone.label.trim(),
+                date: milestone.date,
+              }))
+          : [],
         tasks: [],
         platformConfig: data.platformConfig?.length ? data.platformConfig : ['sdk', 'ios', 'android', 'qa']
       };
       this.fishboneProjects.push(project);
+      await this.persistFishboneProjects();
       return { success: true, project };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
+  }
+
+  private createUniqueProjectId(name: string): string {
+    const base = String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || `p-${Date.now()}`;
+    const existingIds = new Set(this.fishboneProjects.map((project) => project.id));
+
+    if (!existingIds.has(base)) return base;
+
+    let index = 2;
+    while (existingIds.has(`${base}-${index}`)) {
+      index += 1;
+    }
+
+    return `${base}-${index}`;
   }
 
   /** 🔄 使用向量数据库为项目名提供建议 */
@@ -911,8 +1172,8 @@ export class DashboardMessageHandler {
 
   private async handleAddProject(request: any, sendResponse: (response: any) => void) {
     try {
-      const { name, description, platformConfig, prompt } = request;
-      const res = await this.dataManager.createProject({ name, description, platformConfig, prompt });
+      const { name, description, platformConfig, milestones, prompt } = request;
+      const res = await this.dataManager.createProject({ name, description, platformConfig, milestones, prompt });
       sendResponse(res);
     } catch (e: any) {
       sendResponse({ success: false, error: e.message });

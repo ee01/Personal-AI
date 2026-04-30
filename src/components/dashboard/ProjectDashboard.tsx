@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { buildProjectHealthSummary } from '../../utils/dashboardIntegration';
 import { getEnvConfig, EnvConfigType } from '../../utils';
 
 // 新仪表盘数据结构（与 docs/demo/项目进展图-缩放版.html 对齐）
@@ -15,6 +16,7 @@ interface FishboneTask {
   status: string; // dep: todo|progress|testBuild|rollout|blocked; design: todo|progress|review|done; task: todo|progress|testing|closed|rollout
   eta?: string;   // YYYY-MM-DD
   desc?: string;
+  anchorPosition?: number;
   platforms?: Partial<Record<PlatformKey, PlatformState>>;
   jira?: Array<{ key: string; title: string }>
 }
@@ -356,7 +358,8 @@ const ProjectDashboard: React.FC = () => {
       title: newTaskTitle.trim(),
       status: 'todo',
       eta: '',
-      desc: ''
+      desc: '',
+      anchorPosition: showAddTask.position,
     };
 
     const res = await chrome.runtime.sendMessage({
@@ -564,6 +567,11 @@ const ProjectDashboard: React.FC = () => {
     
     const project = projects.find(p => p.id === projectId);
     if (!project) return 50;
+
+    const task = project.tasks.find(t => t.id === taskId);
+    if (task && typeof task.anchorPosition === 'number' && Number.isFinite(task.anchorPosition)) {
+      return Math.max(2, Math.min(98, task.anchorPosition));
+    }
     
     const tasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
     const index = tasks.findIndex(t => t.id === taskId);
@@ -768,10 +776,20 @@ const ProjectDashboard: React.FC = () => {
 
       <div className="container">
         <div className="project-list">
+          {projects.length === 0 && (
+            <div className="empty-projects">
+              <h2>暂无项目</h2>
+              <p>新增项目后，这里会显示里程碑、任务健康状态和鱼骨时间线。</p>
+              <button className="control-button primary" onClick={handleOpenCreateModal}>
+                新增项目
+              </button>
+            </div>
+          )}
           {projects.map(project => {
             const milestones = project.milestones || [];
             const tasks = [...(project.tasks || [])]
               .sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
+            const health = buildProjectHealthSummary(project);
               return (
               <div className="project-card" key={project.id}>
                 <div className="project-header">
@@ -790,7 +808,22 @@ const ProjectDashboard: React.FC = () => {
                     </button>
                   </div>
                 </div>
-                                <div 
+                <div className={`project-health ${health.state}`}>
+                  <div className="health-main">
+                    <span className="health-badge">{health.label}</span>
+                    <span className="health-headline">{health.headline}</span>
+                  </div>
+                  <div className="health-metrics">
+                    <span>{health.completedTasks}/{health.totalTasks} 完成</span>
+                    <span>{health.blockedTasks} 阻塞</span>
+                    <span>{health.overdueTasks} 过期</span>
+                    <span>{health.dueSoonTasks} 近 7 天</span>
+                    {health.upcomingMilestone && (
+                      <span>下个里程碑: {health.upcomingMilestone.label} · {health.upcomingMilestone.date}</span>
+                    )}
+                  </div>
+                </div>
+                <div
                   className="fishbone-container" 
                   onClick={(e) => {
                     // 只在点击空白区域时添加任务
@@ -1185,6 +1218,22 @@ const ProjectDashboard: React.FC = () => {
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
         .project-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
         .project-title { font-size: 24px; font-weight: 700; margin: 0; color: var(--text); }
+        .empty-projects { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 28px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+        .empty-projects h2 { margin: 0; color: var(--text); font-size: 20px; }
+        .empty-projects p { margin: 0; color: var(--text-muted); }
+        .project-health { border: 1px solid var(--border); border-left-width: 5px; border-radius: 8px; padding: 12px 14px; margin-bottom: 18px; background: #f8fafc; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+        .project-health.empty { border-left-color: var(--text-muted); }
+        .project-health.on-track { border-left-color: var(--success); }
+        .project-health.at-risk { border-left-color: var(--warning); }
+        .project-health.off-track { border-left-color: var(--danger); }
+        .health-main { display: flex; align-items: center; gap: 10px; min-width: 240px; }
+        .health-badge { border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; color: white; background: var(--text-muted); white-space: nowrap; }
+        .project-health.on-track .health-badge { background: var(--success); }
+        .project-health.at-risk .health-badge { background: var(--warning); }
+        .project-health.off-track .health-badge { background: var(--danger); }
+        .health-headline { font-weight: 650; color: var(--text); }
+        .health-metrics { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; color: var(--text-muted); font-size: 12px; }
+        .health-metrics span { padding: 3px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
 
         .fishbone-container { position: relative; height: 200px; margin: 20px 0; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 12px; padding: 20px; border: 2px solid var(--border); cursor: crosshair; }
         .timeline-spine { position: absolute; left: 40px; right: 40px; top: 50%; height: 4px; background: linear-gradient(90deg, var(--design-color), var(--primary), var(--dep-color)); border-radius: 2px; transform: translateY(-50%); }
@@ -1366,6 +1415,9 @@ const ProjectDashboard: React.FC = () => {
         @media (max-width: 768px) {
           .container { padding: 15px; }
           .project-card { padding: 20px; }
+          .project-health { align-items: flex-start; flex-direction: column; }
+          .health-main { min-width: 0; }
+          .health-metrics { justify-content: flex-start; }
           .fishbone-container { height: 160px; padding: 15px; }
           .task-bone { min-width: 140px; padding: 8px 12px; }
           .zoom-content { margin: 20px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); }

@@ -20,6 +20,18 @@ export interface MessagePost {
   creator: string;
   time: string;
   type: 'message';
+  contentType?: 'message' | 'event';
+  event?: {
+    title: string;
+    start?: string;
+    end?: string;
+    startAtMs?: number;
+    endAtMs?: number;
+    timeRange?: string;
+    location?: string;
+    description?: string;
+    allDay?: boolean;
+  };
 }
 
 export interface MessageGroupWithThreads {
@@ -77,9 +89,39 @@ function resolvePersonNames(
     .filter(Boolean);
 }
 
+function isEventPost(post: any): boolean {
+  const functionId = normalizeText(post.function_id || post.functionId);
+  if (functionId === 'event') {
+    return true;
+  }
+
+  const hasEventTime =
+    post.start !== undefined ||
+    post.start_time !== undefined ||
+    post.startTime !== undefined ||
+    post.end !== undefined ||
+    post.end_time !== undefined ||
+    post.endTime !== undefined;
+
+  if (!hasEventTime) {
+    return false;
+  }
+
+  return (
+    post.all_day !== undefined ||
+    post.allDay !== undefined ||
+    post.repeat !== undefined ||
+    post.invitee_ids !== undefined ||
+    post.inviteeIds !== undefined ||
+    post.attachment_ids !== undefined ||
+    post.attachmentIds !== undefined ||
+    Boolean(normalizeText(post.location)) ||
+    Boolean(normalizeText(post.text || post.title || post.subject))
+  );
+}
+
 function hasEventSignals(post: any, personsMap?: Map<any, string>): boolean {
   const activity = normalizeText(post.activity || post.activity_type);
-  const functionId = normalizeText(post.function_id || post.functionId);
   const postType = normalizeText(post.type || post.post_type || post.postType);
   const title = normalizeText(post.title || post.subject);
   const addedIds =
@@ -99,7 +141,7 @@ function hasEventSignals(post: any, personsMap?: Map<any, string>): boolean {
 
   return (
     Boolean(activity) ||
-    functionId === 'event' ||
+    isEventPost(post) ||
     Boolean(postType) ||
     Boolean(title) ||
     addedNames.length > 0 ||
@@ -148,6 +190,40 @@ function buildEventTimeRange(post: any): string {
   return start || end;
 }
 
+function buildEventDetails(post: any): MessagePost['event'] {
+  const title =
+    normalizeText(post.text || post.title || post.subject) || 'Untitled event';
+  const startAtMs = normalizeTimestamp(
+    post.start || post.start_time || post.startTime,
+  );
+  const endAtMs = normalizeTimestamp(post.end || post.end_time || post.endTime);
+  const start = formatOptionalDateTime(
+    post.start || post.start_time || post.startTime,
+  );
+  const end = formatOptionalDateTime(post.end || post.end_time || post.endTime);
+  const timeRange = buildEventTimeRange(post);
+  const location = normalizeText(post.location);
+  const description = normalizeText(post.description);
+  const allDay =
+    typeof post.all_day === 'boolean'
+      ? post.all_day
+      : typeof post.allDay === 'boolean'
+        ? post.allDay
+        : undefined;
+
+  return {
+    title,
+    ...(start ? { start } : {}),
+    ...(end ? { end } : {}),
+    ...(startAtMs ? { startAtMs } : {}),
+    ...(endAtMs ? { endAtMs } : {}),
+    ...(timeRange ? { timeRange } : {}),
+    ...(location ? { location } : {}),
+    ...(description ? { description } : {}),
+    ...(allDay !== undefined ? { allDay } : {}),
+  };
+}
+
 function extractPostCreator(post: any, personsMap: Map<any, string>): string {
   const namedCreator =
     resolvePersonName(personsMap, post.creator_id) ||
@@ -176,7 +252,6 @@ function extractPostCreator(post: any, personsMap: Map<any, string>): string {
 }
 
 function buildEventText(post: any, personsMap: Map<any, string>): string {
-  const functionId = normalizeText(post.function_id || post.functionId);
   const postType = normalizeText(post.type || post.post_type || post.postType);
   const title = normalizeText(post.text || post.title || post.subject);
   const description = normalizeText(post.description);
@@ -194,10 +269,12 @@ function buildEventText(post: any, personsMap: Map<any, string>): string {
     return '';
   }
 
-  if (functionId === 'event') {
-    const timeRange = buildEventTimeRange(post);
-    const parts = ['[Event]', title || 'Untitled event'];
-    if (timeRange) parts.push(`Date and time: ${timeRange}`);
+  if (isEventPost(post)) {
+    const event = buildEventDetails(post);
+    const parts = ['[Event]', event?.title || title || 'Untitled event'];
+    if (event?.timeRange) parts.push(`Date and time: ${event.timeRange}`);
+    if (event?.allDay) parts.push('All day');
+    if (event?.location) parts.push(`Location: ${event.location}`);
     if (description && description !== title) parts.push(description);
     return parts.join(' ').trim();
   }
@@ -234,9 +311,7 @@ function buildEventText(post: any, personsMap: Map<any, string>): string {
 }
 
 function extractPostText(post: any, personsMap: Map<any, string>): string {
-  const functionId = normalizeText(post.function_id || post.functionId);
-
-  if (functionId === 'event') {
+  if (isEventPost(post)) {
     return buildEventText(post, personsMap);
   }
 
@@ -501,6 +576,7 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
       if (post && text) {
         const groupId = extractPostGroupId(post);
         const groupInfo = resolveGroupInfo(groupsMap, groupId);
+        const isEvent = isEventPost(post);
         missingPosts.set(post.id, {
           id: post.id,
           parentId: post.parent_post_id,
@@ -510,7 +586,9 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
           text,
           creator: extractPostCreator(post, personsMap) || 'Unknown',
           time: formatDate(extractPostCreatedAt(post).getTime()),
-          type: 'message'
+          type: 'message',
+          contentType: isEvent ? 'event' : 'message',
+          ...(isEvent ? { event: buildEventDetails(post) } : {})
         });
       }
     }
@@ -749,6 +827,7 @@ export async function transformMessagePosts(
       const transformedData: MessagePost[] = filteredPosts.map(({ raw: post, text, creator }) => {
         const groupId = extractPostGroupId(post);
         const groupInfo = resolveGroupInfo(groupsMap, groupId);
+        const isEvent = isEventPost(post);
         return {
           id: post.id,
           parentId: post.parent_post_id || undefined,
@@ -758,7 +837,9 @@ export async function transformMessagePosts(
           type: 'message' as const,
           text,
           creator,
-          time: formatDate(extractPostCreatedAt(post).getTime())
+          time: formatDate(extractPostCreatedAt(post).getTime()),
+          contentType: isEvent ? 'event' : 'message',
+          ...(isEvent ? { event: buildEventDetails(post) } : {})
         };
       }).filter(item => item.text !== '' && item.creator !== '' && item.groupId !== 'unknown');
   

@@ -594,6 +594,71 @@ describe('ActionExecutor', () => {
     ).toBe(true);
   });
 
+  it('creates a message rule improvement confirm request when linked action delegation fails', async () => {
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '请假开始前 3h 设置 Glip 状态',
+      description: '根据记忆入口规则设置 PTO 状态',
+      params: {
+        task: '设置 Glip 状态为 PTO，结束后恢复 Available。',
+        mode: 'write',
+        targetSystem: 'glip',
+        metadata: {
+          ruleRef: 'manual:pto-rule',
+          ruleText: "发送了内容与以下语义相似：Esone's PTO",
+          automationPrompt:
+            '检测到请假消息后，开始前 3 小时修改 Glip 状态为 PTO，结束后改回 Available。',
+          sourceMessage:
+            "Event title: Esone's PTO. Date and time: Thu, Apr 30, 10:00 AM - 10:05 AM",
+        },
+      },
+      sourceKind: 'message_rule',
+      sourceRefId: 'manual:pto-rule',
+      executionMode: 'auto',
+      requiresApproval: false,
+      queueStatus: 'queued',
+      priority: 8,
+    });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'capability_missing',
+            summary:
+              '当前没有可用的 Glip 状态设置专用能力，且需先确认恢复到的原始状态文案。',
+          }),
+        }),
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(result.queueStatus).toBe('failed');
+    const improvementRequests = db
+      .prepare(
+        `SELECT * FROM confirm_requests WHERE category = 'message_rule_improvement'`,
+      )
+      .all() as Array<{
+      context: string;
+      source_anchor: string;
+      gap_type: string;
+    }>;
+    expect(improvementRequests).toHaveLength(1);
+    expect(improvementRequests[0].source_anchor).toBe(
+      'message_rule:manual:pto-rule',
+    );
+    expect(improvementRequests[0].gap_type).toBe(
+      'linked_action_prompt_improvement',
+    );
+    const context = JSON.parse(improvementRequests[0].context);
+    expect(context.ruleRef).toBe('manual:pto-rule');
+    expect(context.proposedPrompt).toContain('RingCentral token/API');
+    expect(context.proposedPrompt).toContain('不要猜测 Available');
+  });
+
   it('alerts immediately when a high-priority confirm request is created', async () => {
     const thread = threadRepo.upsertThread({
       topicKey: 'project:orbit',

@@ -51,6 +51,54 @@ interface MessageProcessResult {
   replyAdvice?: string;
 }
 
+function getMessageContent(message: any): string {
+  return (
+    message?.message_content ||
+    message?.messageContent ||
+    message?.content ||
+    message?.text ||
+    ''
+  );
+}
+
+function getMessageDatetime(message: any): string {
+  return message?.datetime || message?.time || new Date().toISOString();
+}
+
+function getMessageTimestamp(message: any): number {
+  const timestamp = new Date(getMessageDatetime(message)).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function getEntityMap(entityExtraction: any): Record<string, any> {
+  if (!entityExtraction || typeof entityExtraction !== 'object') {
+    return {};
+  }
+  const entities = entityExtraction.entities || entityExtraction;
+  return entities && typeof entities === 'object' ? entities : {};
+}
+
+function normalizePeople(people: any[] = []): Array<{ name: string }> {
+  return people
+    .map((person) => {
+      if (typeof person === 'string') {
+        return { name: person.trim() };
+      }
+      if (person && typeof person.name === 'string') {
+        return { ...person, name: person.name.trim() };
+      }
+      return null;
+    })
+    .filter(
+      (person): person is { name: string } =>
+        Boolean(person && person.name.length > 0),
+    );
+}
+
+function getPeopleFromContext(params: any): Array<{ name: string }> {
+  return normalizePeople(getEntityMap(params.entities).people || []);
+}
+
 // 定义可用工具列表
 const availableTools: Record<string, AgentTool> = {
   entityExtraction: {
@@ -58,8 +106,12 @@ const availableTools: Record<string, AgentTool> = {
     description: '从消息中提取人物、时间、地点、项目等实体信息',
     execute: async (params) => {
       return await extractEntitiesFromMessage(
-        params.message_content || params.content,
-        params.metadata,
+        getMessageContent(params),
+        params.metadata || {
+          sender: params.sender,
+          team_name: params.team_name,
+          summary: params.summary,
+        },
       );
     },
   },
@@ -67,16 +119,16 @@ const availableTools: Record<string, AgentTool> = {
     name: '关系分析工具',
     description: '分析消息中提到的人物之间的关系',
     execute: async (params) => {
-      const people = params.entities?.people || [];
+      const people = getPeopleFromContext(params);
       if (people.length < 2) return { relationships: [] };
 
       // 构建关系分析提示
       const relationshipPrompt = `
       分析以下人物之间可能的关系:
-      ${people.map((p: { name: string }) => p.name).join(', ')}
+      ${people.map((p) => p.name).join(', ')}
       
       消息上下文:
-      ${params.message_content || params.content}
+      ${getMessageContent(params)}
       
       ${params.summary ? `上下文总结: ${params.summary}` : ''}
       
@@ -105,7 +157,10 @@ const availableTools: Record<string, AgentTool> = {
     name: '历史消息搜索工具',
     description: '搜索历史消息以提供上下文',
     execute: async (params) => {
-      const searchQuery = `与"${params.person || ''}"相关的最近消息`;
+      const primaryPerson = params.person || getPeopleFromContext(params)[0]?.name;
+      const searchQuery = primaryPerson
+        ? `与"${primaryPerson}"相关的最近消息`
+        : `与当前消息"${getMessageContent(params).slice(0, 80)}"相关的最近消息`;
 
       const timeRange =
         params.time_range && params.time_range.start && params.time_range.end
@@ -170,7 +225,7 @@ const availableTools: Record<string, AgentTool> = {
       分析以下消息的重要性:
       
       消息内容:
-      ${params.message_content || params.content}
+      ${getMessageContent(params)}
       
       发送者: ${params.sender}
       ${params.team_name ? `聊天群组: ${params.team_name}` : ''}
@@ -235,7 +290,7 @@ const availableTools: Record<string, AgentTool> = {
       分析以下消息并提供回复建议:
       
       消息内容:
-      ${params.message_content || params.content}
+      ${getMessageContent(params)}
       
       发送者: ${params.sender}
       ${params.team_name ? `聊天群组: ${params.team_name}` : ''}
@@ -290,7 +345,7 @@ const availableTools: Record<string, AgentTool> = {
         username: params.username || userinfo?.fullName || '',
         envConfig,
       });
-      const xmlMessage = `<message_group team_name="${params.team_name || ''}" team_id="${params.team_id || ''}">\n  <standalone>\n    <message sender="${params.sender || ''}" datetime="${params.datetime || new Date().toISOString()}" post_id="${params.post_id || ''}">${escapeXml(params.message_content || params.content || '')}</message>\n  </standalone>\n</message_group>`;
+      const xmlMessage = `<message_group team_name="${params.team_name || ''}" team_id="${params.team_id || ''}">\n  <standalone>\n    <message sender="${params.sender || ''}" datetime="${params.datetime || new Date().toISOString()}" post_id="${params.post_id || ''}">${escapeXml(getMessageContent(params))}</message>\n  </standalone>\n</message_group>`;
       const userPrompt = `
 我的名字是：<current_user_name>${params.username || userinfo?.fullName || ''}</current_user_name>
 
@@ -468,10 +523,9 @@ class AgentCoordinator {
         // 新增字段：填充消息上下文
         groupId: message.team_id || message.groupId,
         groupName: message.team_name || message.groupName,
-        messageContent:
-          message.message_content || message.content || message.text,
+        messageContent: getMessageContent(message),
         sender: message.sender || message.creator,
-        datetime: message.datetime || message.time,
+        datetime: getMessageDatetime(message),
       },
       enrichedData: {},
       actions: [],
@@ -506,7 +560,16 @@ class AgentCoordinator {
 
         // 合并结果
         if (toolResults.entityExtraction) {
-          result.enrichedData.entities = toolResults.entityExtraction;
+          result.enrichedData.entityExtraction = toolResults.entityExtraction;
+          result.enrichedData.entities = getEntityMap(
+            toolResults.entityExtraction,
+          );
+          result.enrichedData.entityMetadata =
+            toolResults.entityExtraction.metadata || {};
+          if (Array.isArray(toolResults.entityExtraction.actions)) {
+            result.actions = toolResults.entityExtraction.actions;
+            result.enrichedData.actions = toolResults.entityExtraction.actions;
+          }
         }
 
         if (toolResults.relationshipAnalysis) {
@@ -574,25 +637,34 @@ export async function processNewMessage(
 
   // 调用Agent协调器处理消息，传递完整的消息上下文
   const processResult = await agentCoordinator.processMessage(message);
+  const messageContent = getMessageContent(message);
 
   // 🆕 如果消息需要存储到向量数据库（通过 MemoryServiceClient HTTP 后端）
   if (processResult.shouldStore) {
+    if (!messageContent.trim()) {
+      console.warn('agentWorkflow跳过空消息存储:', {
+        postId: message.post_id,
+        teamId: message.team_id,
+      });
+      return processResult;
+    }
+
     try {
       const client = getMemoryServiceClient();
       const ingestResult = await client.ingest({
-        content: message.message_content,
+        content: messageContent,
         sourceType: 'glip',
         sender: message.sender || 'unknown',
         groupId: message.team_id,
         groupName: message.team_name,
-        timestamp: new Date(message.datetime).getTime() || Date.now(),
+        timestamp: getMessageTimestamp(message),
         metadata: {
-          datetime: message.datetime || new Date().toISOString(),
+          datetime: getMessageDatetime(message),
           matchedRules: processResult.matchedRule
             ? [processResult.matchedRule]
             : [],
           matchedRuleRefs: processResult.matchedRuleRefs || [],
-          summary: message.summary || '',
+          summary: processResult.summary || message.summary || '',
           replyAdvice: processResult.replyAdvice || message.reply_advice || '',
           groupUrl: message.team_url,
           contextMessages: [], // agentWorkflow 模式下暂无上下文

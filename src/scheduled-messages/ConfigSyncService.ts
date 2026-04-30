@@ -74,8 +74,20 @@ export class ConfigSyncService {
           case 'script_id':
             config.scriptId = value;
             break;
+          case 'deployment_id':
+          case 'deploymentId':
+            config.deploymentId = value;
+            break;
           case 'sheet_version':
             config.sheet_version = value;
+            break;
+          case 'app_script_version':
+          case 'appScriptVersion':
+            config.appScriptVersion = value;
+            break;
+          case 'app_script_last_updated':
+          case 'appScriptLastUpdated':
+            config.appScriptLastUpdated = value;
             break;
           case 'created_by':
             config.created_by = value;
@@ -196,8 +208,17 @@ export class ConfigSyncService {
       if (normalizedConfig.scriptId) {
         configData.push(['script_id', normalizedConfig.scriptId]);
       }
+      if (normalizedConfig.deploymentId) {
+        configData.push(['deployment_id', normalizedConfig.deploymentId]);
+      }
       if (normalizedConfig.sheet_version) {
         configData.push(['sheet_version', normalizedConfig.sheet_version]);
+      }
+      if (normalizedConfig.appScriptVersion) {
+        configData.push(['app_script_version', normalizedConfig.appScriptVersion]);
+      }
+      if (normalizedConfig.appScriptLastUpdated) {
+        configData.push(['app_script_last_updated', normalizedConfig.appScriptLastUpdated]);
       }
       if (normalizedConfig.created_by) {
         configData.push(['created_by', normalizedConfig.created_by]);

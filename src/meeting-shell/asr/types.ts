@@ -5,6 +5,7 @@ export interface ASRTranscriptEvent {
   text: string;
   tier: MeetingPilotASRTier;
   ts: number;
+  utteranceId?: string;
 }
 
 export interface ASRErrorEvent {
@@ -19,6 +20,7 @@ export interface ASRStatusEvent {
   tier: MeetingPilotASRTier;
   state: 'starting' | 'running' | 'stopped';
   ts: number;
+  detail?: string;
 }
 
 export type ASREventMap = {

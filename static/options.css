@@ -5,6 +5,142 @@
   margin-top: 20px;
 }
 
+.agent-workflow-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.agent-workflow-summary > div {
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.agent-summary-value {
+  display: block;
+  min-height: 22px;
+  color: #1f2328;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.agent-summary-label {
+  display: block;
+  margin-top: 4px;
+  color: #57606a;
+  font-size: 12px;
+}
+
+.agent-flow-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.agent-flow-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.agent-flow-card.disabled {
+  opacity: 0.62;
+}
+
+.agent-flow-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #0969da;
+  color: #fff;
+  font-weight: 700;
+}
+
+.agent-flow-main {
+  min-width: 0;
+}
+
+.agent-flow-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-flow-phase {
+  color: #57606a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-flow-name {
+  margin-top: 2px;
+  color: #1f2328;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.agent-flow-meta,
+.agent-tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-flow-meta {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.agent-priority,
+.agent-state,
+.agent-tool-chip {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.agent-priority {
+  background: #eaeef2;
+  color: #24292f;
+}
+
+.agent-state.on {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.agent-state.off {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.agent-flow-description {
+  margin: 7px 0;
+  color: #57606a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-tool-chip {
+  background: #f6f8fa;
+  color: #57606a;
+}
+
 .agent-table {
   width: 100%;
   border-collapse: collapse;
@@ -48,6 +184,20 @@
   font-size: 0.8em;
   color: #666;
   margin-left: 10px;
+}
+
+@media (max-width: 720px) {
+  .agent-workflow-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-flow-title-row {
+    flex-direction: column;
+  }
+
+  .agent-flow-meta {
+    justify-content: flex-start;
+  }
 }
 
 /* 智能Agent设置相关样式 */

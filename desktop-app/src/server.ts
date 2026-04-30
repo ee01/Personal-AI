@@ -14,6 +14,7 @@ import {
   BridgeMemoryServiceHttpError,
 } from './memoryServiceClient.js';
 import { registerWhisperRoutes } from './whisper/whisperRoutes.js';
+import { registerAsrRoutes } from './asr/asrRoutes.js';
 import {
   applyBridgeSettingsToConfig,
   BridgeSettingsStore,
@@ -804,6 +805,7 @@ export async function createBridgeServer(
   });
 
   await registerWhisperRoutes(app);
+  await registerAsrRoutes(app);
 
   return app;
 }

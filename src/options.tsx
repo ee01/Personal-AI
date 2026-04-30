@@ -366,7 +366,7 @@ function ChromeOnDeviceASRPanel({ enabled }: { enabled: boolean }) {
       <small style={{ color: '#6b7280', display: 'block', marginBottom: 8 }}>
         由于 Chrome 对 extension offscreen 中的自定义 audio track 支持不稳定，
         Meeting Pilot 仅在 Local only 模式下尝试使用它；Auto 模式会优先
-        Desktop Whisper，然后回退 Cloud。
+        Local ASR，然后回退 Cloud。
       </small>
       <small
         style={{
@@ -643,13 +643,12 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
       }}
     >
       <strong style={{ display: 'block', marginBottom: 8 }}>
-        Desktop ASR (Local Whisper)
+        Desktop ASR (Local ASR)
       </strong>
       <small style={{ color: '#4b5563', display: 'block', marginBottom: 8 }}>
-        Local Whisper 不是 Chrome 内置能力。它需要安装并启动 Personal AI
-        desktop app，由 desktop app 在本机运行 Whisper，并通过 native messaging
-        / localhost bridge 接收音频。Auto 模式会优先使用 Desktop Whisper，然后回退
-        Cloud。
+        Local ASR 不是 Chrome 内置能力。它需要安装并启动 Personal AI
+        desktop app，由 desktop app 在本机运行本地转录模型，并通过 native messaging
+        / localhost bridge 接收音频。Auto 模式会优先使用 Local ASR，然后回退 Cloud。
       </small>
       <button
         type="button"
@@ -660,7 +659,7 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
       </button>
       {!isMac && (
         <small style={{ color: '#b45309', display: 'block', marginBottom: 8 }}>
-          当前 Desktop Whisper provider 代码只支持 macOS。Windows 上 local
+          当前 Local ASR provider 代码只支持 macOS。Windows 上 local
           mode 暂无稳定本地转录路径；Auto 会回退云端，Local only 会显示 No ASR。
         </small>
       )}
@@ -2423,7 +2422,7 @@ const Options = () => {
             <option value="cloud-only">Cloud only</option>
           </select>
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            Auto: 先尝试 Personal AI desktop app 的 Local Whisper，然后回退
+            Auto: 先尝试 Personal AI desktop app 的 Local ASR，然后回退
             cloud。Chrome Web Speech on-device 只在 Local only 中作为实验性本地兜底使用。
             Local only: never contacts cloud. Cloud only: always uses cloud
             (requires API key).
@@ -3291,6 +3290,15 @@ const AgentSettings = () => {
     concernedItemMatcher: '关注项匹配工具',
   };
 
+  const workflowPhaseMap: Record<string, string> = {
+    entityRecognizer: '提取实体',
+    notificationJudge: '匹配关注项',
+    relationshipAnalyzer: '补全关系',
+    relevanceJudge: '判断存储',
+    externalInfoFetcher: '查询外部信息',
+    responseAdviser: '生成回复建议',
+  };
+
   // 加载当前Agent列表
   useEffect(() => {
     const loadAgents = async () => {
@@ -3384,38 +3392,77 @@ const AgentSettings = () => {
     }
   };
 
+  const sortedAgents = [...agents].sort(
+    (a, b) => (b.priority || 0) - (a.priority || 0),
+  );
+  const enabledAgents = sortedAgents.filter((agent) => agent.enabled !== false);
+  const enabledToolCount = new Set(
+    enabledAgents.flatMap((agent) => agent.tools || []),
+  ).size;
+
   return (
     <div className="agent-settings">
-      <h3>当前 Agent 列表</h3>
+      <div className="agent-workflow-summary">
+        <div>
+          <span className="agent-summary-value">{enabledAgents.length}</span>
+          <span className="agent-summary-label">启用 Agent</span>
+        </div>
+        <div>
+          <span className="agent-summary-value">{enabledToolCount}</span>
+          <span className="agent-summary-label">启用工具</span>
+        </div>
+        <div>
+          <span className="agent-summary-value">
+            {enabledAgents[0]?.name || '-'}
+          </span>
+          <span className="agent-summary-label">首个阶段</span>
+        </div>
+      </div>
+
+      <h3>执行顺序</h3>
       {loading ? (
         <p>加载中...</p>
       ) : (
-        <table className="agent-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>名称</th>
-              <th>描述</th>
-              <th>优先级</th>
-              <th>工具</th>
-            </tr>
-          </thead>
-          <tbody>
-            {agents.map((agent) => (
-              <tr key={agent.id}>
-                <td>{agent.id}</td>
-                <td>{agent.name}</td>
-                <td>{agent.description}</td>
-                <td>{agent.priority}</td>
-                <td>
-                  {agent.tools
-                    .map((tool: string) => toolNameMap[tool] || tool)
-                    .join(', ')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="agent-flow-list">
+          {sortedAgents.map((agent, index) => (
+            <div
+              key={agent.id}
+              className={`agent-flow-card ${agent.enabled === false ? 'disabled' : ''}`}
+            >
+              <div className="agent-flow-index">{index + 1}</div>
+              <div className="agent-flow-main">
+                <div className="agent-flow-title-row">
+                  <div>
+                    <div className="agent-flow-phase">
+                      {workflowPhaseMap[agent.id] || '自定义阶段'}
+                    </div>
+                    <div className="agent-flow-name">{agent.name}</div>
+                  </div>
+                  <div className="agent-flow-meta">
+                    <span className="agent-priority">
+                      P{agent.priority || 0}
+                    </span>
+                    <span
+                      className={`agent-state ${agent.enabled === false ? 'off' : 'on'}`}
+                    >
+                      {agent.enabled === false ? '停用' : '启用'}
+                    </span>
+                  </div>
+                </div>
+                <div className="agent-flow-description">
+                  {agent.description || agent.id}
+                </div>
+                <div className="agent-tool-chips">
+                  {(agent.tools || []).map((tool: string) => (
+                    <span key={tool} className="agent-tool-chip">
+                      {toolNameMap[tool] || tool}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       <h3>添加自定义 Agent</h3>

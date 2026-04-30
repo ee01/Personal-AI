@@ -438,7 +438,13 @@ export interface MeetingPilotPanelCommand {
 
 export interface MeetingPilotTierStatus {
   activeTier: MeetingPilotASRTier | null;
-  badge: 'Probing' | 'On-Device' | 'Local Whisper' | 'Cloud' | 'No ASR';
+  badge:
+    | 'Probing'
+    | 'On-Device'
+    | 'Local ASR'
+    | 'Local Whisper'
+    | 'Cloud'
+    | 'No ASR';
   mode: 'auto' | 'local-only' | 'cloud-only';
   lastTransitionAt?: number;
   lastTransitionReason?: string;
@@ -452,9 +458,10 @@ export function isValidTierTransition(
     MeetingPilotTierStatus['badge'],
     MeetingPilotTierStatus['badge'][]
   > = {
-    Probing: ['On-Device', 'Local Whisper', 'Cloud', 'No ASR'],
-    'On-Device': ['Local Whisper', 'Cloud', 'No ASR'],
-    'Local Whisper': ['Cloud', 'No ASR'],
+    Probing: ['On-Device', 'Local ASR', 'Cloud', 'No ASR'],
+    'On-Device': ['Local ASR', 'Cloud', 'No ASR'],
+    'Local ASR': ['Cloud', 'No ASR'],
+    'Local Whisper': ['Local ASR', 'Cloud', 'No ASR'],
     Cloud: ['No ASR'],
     'No ASR': [],
   };

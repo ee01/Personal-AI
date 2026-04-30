@@ -2,6 +2,8 @@
 declare global {
   interface Window {
     analysisPopupWindow?: Window | null;
+    analysisPopupOrigin?: string;
+    analysisPopupMessageCleanup?: () => void;
   }
 }
 
@@ -22,6 +24,11 @@ import {
   ProjectUpdateSuggestion
 } from './slide';
 import { JiraTicket } from './types';
+import {
+  containsSuggestionText,
+  extractJiraTicketKeys,
+  joinSuggestionText,
+} from './utils/slidesAnalyzerSuggestions';
 
 // 分析结果接口
 export interface DisplaySlideAnalysisResult {
@@ -182,56 +189,19 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
     // 获取Jira工单信息
     const jiraIssues: Record<string, JiraTicket> = {};
     
-    // 首先，检查project.id是否是JIRA格式，如果是，添加到jiraIssues
-    if (project.id && project.id.match(/[A-Z]+-\d+/)) {
+    const jiraKeys = extractJiraTicketKeys(
+      ...Object.values(project).filter((value) => typeof value === 'string'),
+    );
+
+    for (const jiraKey of jiraKeys) {
       try {
         // 使用封装的Jira API获取数据
-        const jiraTickets = await fetchJiraTickets(`key = ${project.id}`);
+        const jiraTickets = await fetchJiraTickets(`key = ${jiraKey}`);
         if (jiraTickets && jiraTickets.length > 0) {
-          jiraIssues[project.id] = jiraTickets[0];
+          jiraIssues[jiraKey] = jiraTickets[0];
         }
       } catch (error) {
-        console.warn(`获取Jira工单信息失败: ${project.id}`, error);
-      }
-    }
-    
-    // 其次，在项目的其他字段中查找JIRA ID，如状态、注释等
-    const jiraIdRegex = /[A-Z]+-\d+/g;
-    
-    // 可能包含JIRA ID的字段列表
-    const fieldsToCheck = ['name', 'status', 'comments', 'description', 'track'];
-    
-    // 从所有可能的字段中提取JIRA ID
-    // 遍历project对象的所有字段，查找匹配的字段
-    for (const [projectKey, projectValue] of Object.entries(project)) {
-      // 检查字段值是否为字符串类型
-      if (projectValue && typeof projectValue === 'string') {
-        // 检查字段名是否匹配（忽略大小写或包含关系）
-        const shouldCheck = fieldsToCheck.some(field => {
-          const lowerProjectKey = projectKey.toLowerCase();
-          const lowerField = field.toLowerCase();
-          // 精确匹配或包含关系
-          return lowerProjectKey === lowerField || lowerProjectKey.includes(lowerField);
-        });
-        
-        if (shouldCheck) {
-          const matches = projectValue.match(jiraIdRegex);
-          if (matches) {
-            // 对每个找到的JIRA ID获取数据
-            for (const jiraId of matches) {
-              if (!jiraIssues[jiraId]) {  // 避免重复获取
-                try {
-                  const jiraTickets = await fetchJiraTickets(`key = ${jiraId}`);
-                  if (jiraTickets && jiraTickets.length > 0) {
-                    jiraIssues[jiraId] = jiraTickets[0];
-                  }
-                } catch (error) {
-                  console.warn(`获取Jira工单信息失败: ${jiraId}`, error);
-                }
-              }
-            }
-          }
-        }
+        console.warn(`获取Jira工单信息失败: ${jiraKey}`, error);
       }
     }
     
@@ -307,11 +277,11 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
         const suggestedStatus = hasStatusColumn && result.suggestions.status;
         const suggestedOwner = hasOwnerColumn && result.suggestions.owner;
         const suggestedTrack = hasTrackColumn && result.suggestions.track;
-        const comments = Array.isArray(result.suggestions.highlights) && result.suggestions.highlights.length > 0 
-        ? result.suggestions.highlights.join('\n') : result.suggestions.highlights
-        const actions = Array.isArray(result.suggestions.actionItems) && result.suggestions.actionItems.length > 0 
-        ? result.suggestions.actionItems.join('\n') : result.suggestions.actionItems
-        const suggestedComments = hasCommentsColumn && (comments + '\n' + actions);
+        const suggestedCommentsText = joinSuggestionText(
+          result.suggestions.highlights,
+          result.suggestions.actionItems,
+        );
+        const suggestedComments = hasCommentsColumn ? suggestedCommentsText : '';
         
         // 获取更新理由
         const reasons = Array.isArray(result.suggestions.risks) ? result.suggestions.risks : [];
@@ -321,7 +291,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
           (hasStatusColumn && suggestedStatus && suggestedStatus !== project.status) ||
           (hasOwnerColumn && suggestedOwner && suggestedOwner !== project.owner) ||
           (hasTrackColumn && suggestedTrack && suggestedTrack !== project.track) ||
-          (hasCommentsColumn && suggestedComments && !project.comments?.includes(suggestedComments));
+          (hasCommentsColumn && suggestedComments && !containsSuggestionText(project.comments, suggestedComments));
         
         if (needsUpdate) {
           const suggestion: ProjectUpdateSuggestion = {
@@ -333,7 +303,7 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
             currentComments: project.comments,
             reason: reasons,
             sourceInfo: {
-              jiraIssues: Object.values(result.jiraIssues) || [],  // 稍后填充
+              jiraIssues: result.jiraIssues ? Object.values(result.jiraIssues) : [],
               chatHistory: []
             },
             confidence: result.confidence || 0.5,
@@ -427,12 +397,12 @@ function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId:
   // 准备要传递的数据
   const analysisData = {
     result,
-    presentationId,
-    token
+    presentationId
   };
   
   // 获取扩展URL (不再使用URL参数)
   const extensionUrl = chrome.runtime.getURL('slides-analysis.html');
+  const analysisPageOrigin = new URL(extensionUrl).origin;
   
   // 打开新窗口
   const newWindow = window.open(extensionUrl, '_blank', 'width=1000,height=800,resizable=yes,scrollbars=yes');
@@ -443,11 +413,17 @@ function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId:
   }
   
   // 保存弹窗引用到全局变量
+  window.analysisPopupMessageCleanup?.();
   window.analysisPopupWindow = newWindow;
+  window.analysisPopupOrigin = analysisPageOrigin;
   console.log('保存分析窗口引用到全局变量');
   
   // 添加消息监听器，处理来自新窗口的消息
   const messageHandler = async (event: MessageEvent) => {
+    if (event.source !== newWindow || event.origin !== analysisPageOrigin) {
+      return;
+    }
+
     console.log('收到来自弹出窗口的消息:', event.data);
     
     if (event.data && event.data.type === 'REQUEST_ANALYSIS_DATA') {
@@ -456,13 +432,13 @@ function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId:
       newWindow.postMessage({
         type: 'ANALYSIS_DATA',
         data: analysisData
-      }, '*');
+      }, analysisPageOrigin);
     } else if (event.data && event.data.type === 'APPLY_PROJECT_UPDATES') {
       console.log('处理项目更新请求', event.data.selectedUpdates?.length || 0);
       try {
-        const { presentationId, token, selectedUpdates } = event.data;
+        const { selectedUpdates } = event.data;
         // 确保所有需要的字段都存在
-        if (!presentationId || !token || !selectedUpdates || !Array.isArray(selectedUpdates)) {
+        if (!selectedUpdates || !Array.isArray(selectedUpdates)) {
           console.error('收到无效的更新请求', event.data);
           return;
         }
@@ -475,9 +451,24 @@ function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId:
     }
   };
   
-  // 移除任何现有的消息处理程序，以避免重复
-  window.removeEventListener('message', messageHandler);
   window.addEventListener('message', messageHandler);
+  const closeCheck = window.setInterval(() => {
+    if (!newWindow.closed) {
+      return;
+    }
+
+    window.analysisPopupMessageCleanup?.();
+  }, 30000);
+
+  window.analysisPopupMessageCleanup = () => {
+    window.removeEventListener('message', messageHandler);
+    window.clearInterval(closeCheck);
+    if (window.analysisPopupWindow === newWindow) {
+      window.analysisPopupWindow = null;
+      window.analysisPopupOrigin = undefined;
+    }
+    window.analysisPopupMessageCleanup = undefined;
+  };
 }
 
 // 应用项目更新
@@ -502,26 +493,20 @@ async function applyProjectUpdates(presentationId: string, token: string, select
       showToast(`更新失败: ${errorMessage}`, 'error');
       console.error('更新失败:', result.errors);
       
-      // 向弹出窗口发送错误消息
-      if (window.analysisPopupWindow) {
-        window.analysisPopupWindow.postMessage({
-          type: 'UPDATE_ERROR',
-          errorMessage
-        }, '*');
-      }
+      postToAnalysisPopup({
+        type: 'UPDATE_ERROR',
+        errorMessage
+      });
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     showToast(`更新处理错误: ${errorMessage}`, 'error');
     console.error('处理更新时出错:', error);
     
-    // 向弹出窗口发送错误消息
-    if (window.analysisPopupWindow) {
-      window.analysisPopupWindow.postMessage({
-        type: 'UPDATE_ERROR',
-        errorMessage
-      }, '*');
-    }
+    postToAnalysisPopup({
+      type: 'UPDATE_ERROR',
+      errorMessage
+    });
   }
 }
 
@@ -534,40 +519,19 @@ function showSuccessInPopup(updates: ProjectUpdateSuggestion[], updatedCount: nu
     updates
   };
   
-  // 尝试向弹出窗口发送消息
+  postToAnalysisPopup(message);
+}
+
+function postToAnalysisPopup(message: unknown) {
+  if (!window.analysisPopupWindow || !window.analysisPopupOrigin) {
+    console.warn('未找到可通信的分析窗口');
+    return;
+  }
+
   try {
-    console.log('准备发送UPDATE_SUCCESS消息给分析窗口');
-    
-    // 首先尝试使用已保存的窗口引用
-    if (window.analysisPopupWindow) {
-      console.log('使用已保存的分析窗口引用发送消息');
-      window.analysisPopupWindow.postMessage(message, '*');
-      return;
-    }
-    
-    console.log('未找到已保存的分析窗口引用，尝试使用其他方法');
-    
-    // 如果没有保存的窗口引用，尝试其他方法
-    // 检查当前窗口是否有子窗口
-    if (window.frames && window.frames.length > 0) {
-      console.log(`尝试向 ${window.frames.length} 个子窗口发送消息`);
-      for (let i = 0; i < window.frames.length; i++) {
-        try {
-          window.frames[i].postMessage(message, '*');
-          console.log(`向子窗口 ${i} 发送消息成功`);
-        } catch (e) {
-          console.warn(`向子窗口 ${i} 发送消息失败`, e);
-        }
-      }
-    }
-    
-    // 尝试向opener窗口发送消息
-    if (window.opener) {
-      console.log('尝试向opener窗口发送消息');
-      window.opener.postMessage(message, '*');
-    }
+    window.analysisPopupWindow.postMessage(message, window.analysisPopupOrigin);
   } catch (e) {
-    console.warn('处理弹出窗口引用失败', e);
+    console.warn('向分析窗口发送消息失败', e);
   }
 }
 
@@ -616,4 +580,4 @@ function showToast(message: string, type = 'info') {
 }
 
 // 初始化
-initializeSlidesAnalyzer(); 
+initializeSlidesAnalyzer();

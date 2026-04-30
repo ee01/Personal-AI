@@ -41,14 +41,15 @@ After implementing code, choose the smallest validation tier that gives real con
 | 0 - Docs/config-only | Markdown, comments, non-runtime docs, or agent instructions only | Review diff. No build needed unless scripts/env/runtime config changed |
 | 1 - Local compile / targeted tests | Any runtime source, webpack/static assets, manifest, package scripts, env plumbing | Run targeted tests if available. Run dev extension build via `npm start`, wait for first successful compile, then stop it |
 | 2 - Extension E2E | Popup/options/side panel/content script/background/manifest behavior, user-visible UI, cross-context messaging | Tier 1 plus Playwright extension E2E against fresh `dist/` or the relevant existing helper script |
-| 3 - Real browser / real service validation | Google Sheets/OAuth/session-dependent behavior, real Chrome profile state, RingCentral live pages, flows needing installed dev extension | Tier 2 where practical, then use webpage-mcp against the real Chrome profile and dev extension |
+| 3 - Real browser / real service validation | Google Sheets/OAuth/session-dependent behavior, real Chrome profile state, RingCentral live pages, flows needing installed dev extension, real memory-service data, or installed desktop app integration | Tier 2 where practical, then use webpage-mcp against the real Chrome profile/dev extension, `npm run deploy:memory` plus `10.32.56.212` checks, or `npm run build:app` plus Computer Use installer validation |
 | 4 - Delivery gate | A complete feature/fix that is ready to hand off | Ensure relevant validation passes, summarize evidence, then commit and push when the task calls for delivery and the staging set is cleanly owned |
 
 Decision examples:
 
 - `src/meeting-shell/**`, Meeting Pilot popup/side panel/panorama/offscreen/background changes: start at Tier 2; use existing `test:meeting-pilot-*` scripts where they match the feature
 - Google Sheets content script, OAuth, manifest permissions, or API key behavior: start at Tier 3 because dev Chrome auth/key state matters
-- Pure memory-service logic: run the relevant `memory-service` tests first; deploy/real API checks only after local verification
+- Pure memory-service logic: run the relevant `memory-service` tests first; if the local result needs validation against real memory data, promote to Tier 3 with `npm run deploy:memory`, then verify against `http://10.32.56.212:3210`
+- `desktop-app/**`, native messaging, local service, packaged app, or extension-to-desktop integration changes: run local desktop tests/build first; if installed-app behavior matters, promote to Tier 3 with `npm run build:app`, install the generated `.pkg` via Computer Use, then validate the app behavior end to end
 - UI copy/style-only edits in an extension page: Tier 1 is enough unless layout or click behavior is part of the task
 - `src/manifest.json` changes: Tier 2 minimum because extension registration and permissions can break outside TypeScript
 
@@ -102,6 +103,7 @@ After a complete feature or bug fix is validated:
 | `npm start` | Development build with watch mode using `.env.development`; stop after first successful compile for harness checks | After code changes (default) |
 | `npm run build` | Production build and zip | Release/package verification or production-env regression checks |
 | `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the remote memory service | Only after local verification is complete and you need real-environment validation |
+| `npm run build:app` | Build the desktop app and macOS installer package | When desktop-app or extension-to-desktop behavior needs packaged/installed-app E2E validation |
 
 ### Chrome Extension E2E Validation
 
@@ -188,6 +190,23 @@ Important constraints:
 - This is useful when the latest verified fix has not been committed yet
 - Because deploy uses file sync, the remote Git worktree can become dirty; do not assume a later `git pull` on the server will be clean unless those same changes are committed upstream
 - Prefer read-only API checks against `10.32.56.212` unless the task explicitly requires mutating real data
+
+## Desktop App Package And Real Validation
+
+When a change depends on the installed desktop app, native messaging, packaged resources, login/session state, or extension-to-desktop integration, validate the packaged app instead of only running local Node/Electron commands.
+
+Recommended flow:
+
+1. Complete local verification first
+   - Run targeted `desktop-app` tests and/or `npm --prefix desktop-app run build`
+   - For extension-facing flows, finish the relevant extension build/E2E validation first
+2. Build the installer from the repo root with `npm run build:app`
+   - This runs the desktop packaging flow and writes the installer under `desktop-app/release/`
+   - Expected installer shape: `desktop-app/release/Personal-AI-Desktop-<version>-Installer.pkg`
+3. Use Computer Use to run the generated `.pkg`, install/update the app, launch it, and validate the real behavior
+   - Prefer validating the installed app plus the Chrome extension together when the feature crosses that boundary
+   - If macOS permissions, installer prompts, or app login state require the user, pause with exact instructions and continue after the user confirms completion
+4. Include the installed-app evidence in the final response
 
 ## Code Conventions
 

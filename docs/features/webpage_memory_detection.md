@@ -1,488 +1,131 @@
 # 网页记忆探测与提示
 
-*最后更新: 2026-03-25*
+*最后更新: 2026-04-30*
 
 ## 概述
 
-这个功能有两条相邻但不完全相同的链路：
+这个功能负责在用户浏览网页或 RingCentral 消息会话时，静默判断当前上下文是否和记忆系统里的历史内容相关。如果命中，会在页面右下角显示一个轻量记忆 icon，用户点开后可以看到命中的摘要、来源和跳转到记忆探索页的入口。
 
-1. **网页智能分析**：判断当前网页是否值得做深度分析和存储。
-2. **网页记忆提示**：在当前网页右下角弹出记忆 icon，提示“记忆系统里存在和当前上下文相关的信息”。
-
-当前真正在线上生效、能在网页右下角弹出记忆 icon 的实现，核心不在 `src/web-intelligence/` 目录里的那套实验型 `UniversalContentScript`，而在：
+当前线上主链路是：
 
 - `src/contentScriptWebIntelligence.ts`
 - `src/background.ts`
-- `memory-service/src/routes/contextMatch.ts`
+- `src/services/MemoryServiceClient.ts`
+- `memory-service/src/routes/contextRecall.ts`
+- `memory-service/src/core/ContextRecallService.ts`
 
-`docs/progressing/` 下已有几篇 `web intelligence / webpage analysis` 文档，但它们大多描述的是一套更大、更理想化的架构草稿，不是当前这条实际运行的“页面记忆提示”链路。本文作为当前代码的**实际说明文档**。
+`src/web-intelligence/` 里还有早期实验架构，`docs/progressing/` 里也有旧 Web Intelligence 文档；它们可以参考，但不是当前网页记忆提示的 source of truth。
 
-## 现有文档判定
+## 当前链路
 
-`/docs` 下和本功能直接相关的旧文档主要有：
+### 网页智能分析
 
-- `docs/progressing/web_intelligence_usage_guide.md`
-- `docs/progressing/web_intelligence_detailed_explanation.md`
-- `docs/progressing/webpage_analysis_integration_guide.md`
+这条链路判断页面是否值得进一步理解或存储：
 
-判定结果：
+1. `contentScriptWebIntelligence.js` 由 manifest 注入 `<all_urls>`。
+2. 内容脚本提取标题、URL、正文并做轻量规则分析。
+3. 达到相关性阈值后发送 `WEB_INTELLIGENCE_ANALYSIS`。
+4. `background.ts` 调用 `IntelligentAgent`，以 `type: 'webpage'` 做深度分析。
 
-- 这些文档**有参考价值，但不是现状 truth**。
-- 它们重点描述 `UniversalContentScript` / `EnhancedUniversalContentScript` / `WebIntelligenceIntegrator` / Chrome AI 分层分析。
-- 当前 manifest 真正注入所有网页的是 `contentScriptWebIntelligence.js`，而不是这些旧文档里的主角。
-- 当前右下角记忆 icon 的实现，也不在旧文档描述的 UI 流程里。
+### 被动上下文召回
 
-因此这里不直接沿用旧文档，而是以当前代码为准重写一篇正式文档。
+这条链路负责右下角记忆提示：
 
-## 当前实现总览
+1. 内容脚本在页面稳定后构造当前上下文。
+2. 发送 `CONTEXT_RECALL_REQUEST` 到 background。
+3. Background 通过 `MemoryServiceClient.contextRecall()` 调用 memory-service 的 `/context-recall`。
+4. `ContextRecallService` 使用 `vector + fts` 快速召回，不走 LLM。
+5. 命中时显示 `.pai-context-bubble` 与 `.pai-context-card`。
 
-### 1. 注入入口
+## 前端行为
 
-入口在 `src/manifest.json`：
+`src/contentScriptWebIntelligence.ts` 的核心职责：
 
-- `<all_urls>` 注入 `contentScriptWebIntelligence.js`
-- `https://app.ringcentral.com/*` 额外注入 `contentScriptGlip.js`
+- 跳过 Chrome 内部页、扩展页、Meeting Pilot 已接管的 `v.ringcentral.com/conf/on/*` 页面和部分低价值域名。
+- 监听 DOM 变化、focus、`hashchange`、`popstate`，并用 URL 轮询补足 SPA 路由变化。
+- 对普通网页使用标题、meta keywords、主内容摘要生成上下文。
+- 对 RingCentral 消息页使用会话级上下文，而不是整页 body。
+- 按上下文 key 缓存召回结果，TTL 为 5 分钟。
+- 用户关闭某个提示后，当前上下文在 30 分钟内不会反复弹出。
 
-这意味着在 RingCentral 页面里，**通用网页探测脚本**和**RingCentral 专用脚本**会同时存在。
+## RingCentral 会话级探测
 
-### 2. 网页智能分析链路
+RingCentral 是 SPA，不能只按页面首次加载判断。当前实现会在 `app.ringcentral.com/messages/{conversationId}` 上提取：
 
-这条链路负责“网页是否值得深度分析 / 存储”：
-
-1. `src/contentScriptWebIntelligence.ts`
-2. 提取标题、URL、正文，做本地规则分析
-3. 如果 `isRelevant` / `suggestedStorage` 达到阈值，发消息给 background
-4. `src/background.ts` 处理 `WEB_INTELLIGENCE_ANALYSIS`
-5. `src/agentThinking.ts` 用 `type: 'webpage'` 做进一步分析
-
-这条链路偏向“存储和理解网页”。
-
-### 3. 网页记忆提示链路
-
-这条链路负责“右下角记忆 icon 提示”：
-
-1. `src/contentScriptWebIntelligence.ts` 在初始化 2 秒后调用 `tryContextMatch()`
-2. Content script 向 `src/background.ts` 发送 `CONTEXT_MATCH_REQUEST`
-3. Background 转发到 `memory-service` 的 `/context-match`
-4. `memory-service/src/routes/contextMatch.ts` 做向量检索
-5. 如果命中，content script 调用 `showContextBubble()`
-6. 右下角显示 `.pai-context-bubble` 和 `.pai-context-card`
-
-这条链路偏向“提醒用户当前页面和记忆中的 reflection / dream 有关联”。
-
-## 代码职责拆解
-
-### `src/contentScriptWebIntelligence.ts`
-
-当前这是本功能最关键的前端入口，职责包括：
-
-- 判断当前域名是否跳过
-- 监听页面初始加载和 DOM 变化
-- 提取页面文本做轻量分析
-- 在初始化后触发一次 `tryContextMatch()`
-- 将匹配结果显示为右下角 bubble
-
-当前 context match 的实现细节：
-
-- URL 级缓存：`contextMatchCache`
-- 域名级防抖：`domainLastRequest`
-- 防抖时间：5 分钟
-- 上下文输入：
-  - `title`
-  - `meta keywords`
-  - `snippet`（`main/article/[role=main]` 或 `body` 的前 300 字）
-
-### `src/background.ts`
-
-负责两个动作：
-
-- 处理 `CONTEXT_MATCH_REQUEST`
-  - 拼 `/context-match`
-  - 带上 `X-User-Id`
-  - 返回 `{ match }`
-- 处理 `WEB_INTELLIGENCE_ANALYSIS`
-  - 命中条件后交给 `IntelligentAgent`
-
-这里并没有页面级上下文状态管理，background 只是转发层。
-
-### `memory-service/src/routes/contextMatch.ts`
-
-服务端现在的匹配逻辑非常明确：
-
-- 将 `title + keywords + snippet` 拼成 query text
-- 生成 embedding
-- 在 `chunks_vec` 上做 top 20 向量搜索
-- 只保留以下来源：
-  - `reflection-threads/`
-  - `reflections/`
-  - `dreams/`
-- 将距离映射成 `score = 1 / (1 + distance)`
-- 只有 `score >= contextMatchThreshold` 才返回
-
-当前默认阈值在 `memory-service/src/config.ts`：
-
-- `CONTEXT_MATCH_THRESHOLD`
-- 默认值 `0.50`
-
-### `src/contentScriptGlip.tsx`
-
-这个文件不是当前网页记忆 bubble 的直接实现，但对 RingCentral 场景很关键，因为它已经有：
-
-- 消息流 DOM 选择器知识
-- 对会话切换的观察逻辑
-- `hashchange` / `popstate` 监听
-- MutationObserver 监听消息容器和主内容区域变化
-
-它的“关注后续”视觉增强已经证明：**RingCentral 这类 SPA 场景必须按“会话切换”而不是“页面首次加载”来判断上下文变化**。
-
-## 当前 UI 行为
-
-`showContextBubble()` 的表现：
-
-- 在右下角固定位置显示一个圆形 icon
-- 点击 icon 展开卡片
-- 卡片里显示：
-  - 来源类型（Reflection / Dream）
-  - score
-  - 命中的内容摘要
-  - source 路径
-
-当前 UI 特征：
-
-- 位置：`bottom: 24px; right: 24px`
-- 圆形 icon
-- 卡片默认隐藏
-- 没有“上下文变化时重新播放”的动效
-- 使用 singleton 判断：如果页面里已有 `.pai-context-bubble`，就不再重复注入
-
-## 当前问题
-
-### 1. context match 只在初始化时跑一次
-
-`tryContextMatch()` 只在 `initialize()` 里被 `setTimeout(..., 2000)` 调用一次。
-
-结果：
-
-- 首次进入页面可以尝试匹配
-- 后续 SPA 内部上下文切换不会自动重跑
-
-### 2. 防抖粒度太粗
-
-当前是**域名级 5 分钟防抖**。
-
-这对 `app.ringcentral.com`、`jira.ringcentral.com/issues/...` 这类单页应用不合适，因为：
-
-- 用户在同一域名下切换不同会话 / issue / 文档很常见
-- 新上下文明明已经变了，但域名没变
-
-### 3. bubble 不会随上下文切换清理
-
-当前 `showContextBubble()` 会先检查：
-
-- `document.querySelector('.pai-context-bubble')`
-
-只要旧 bubble 还在，就不会创建新 bubble。
-
-结果：
-
-- 会话 A 命中过一次后
-- 切到会话 B 时，旧 bubble 可能还留在页面上
-- 用户看到的是**过期的记忆提示**
-
-### 4. 通用 snippet 抽取不适合聊天类页面
-
-当前 snippet 来自：
-
-- `main`
-- `article`
-- `[role=main]`
-- 或者整个 `body`
-
-在 RingCentral 里这会带来两个问题：
-
-- 内容太杂，容易掺入侧边栏、按钮文案、全局壳子文字
-- 不能准确表达“当前聊天会话”的主题
-
-## RingCentral 页面实测
-
-使用 `webpage-mcp` 对已打开的 `app.ringcentral.com` 页面做了实测，结果如下。
-
-### 实测页面
-
-- 初始会话：`https://app.ringcentral.com/messages/35165069318`
-- 切换后会话：`https://app.ringcentral.com/messages/135800094726`
-
-### 页面结构
-
-在当前 RingCentral 消息页，可以稳定观察到：
-
-- 左侧会话列表项：
-  - `[role="tab"]`
-  - 当前选中项：`[role="tab"][aria-selected="true"]`
-- 主面板标题：
-  - `main` 区域内的 heading
-- 消息流容器：
-  - `#message-chat-stream-wrapper`
-- 消息卡片：
-  - `.conversation-card-wrapper[data-id]`
-
-### 会话切换时真实发生的变化
-
-实测确认，切换会话时以下信号会一起变化：
-
-- `window.location.href`
-  - `/messages/{chatId}` 中的 `chatId` 改变
-- `document.title`
-- 左侧选中 tab 的 `aria-selected`
+- URL 中的 `conversationId`
 - 主面板标题
-- 消息流中的 `.conversation-card-wrapper[data-id]`
+- 当前选中 tab 文本
+- `#message-chat-stream-wrapper`
+- 最近/可见的 `.conversation-card-wrapper[data-id]` 文本
 
-### 当前 bug 已被实测复现
+上下文 key 包含会话 id、标题、最近消息 id 和消息文本签名。这样同一会话里出现新消息或可见上下文变化时，也能重新走召回，而不是继续复用旧会话或旧消息的 bubble。
 
-切换到新的 RingCentral 会话后：
+为了避免在 DOM 还没稳定时误触发，内容脚本会等待上下文稳定：
 
-- URL 已经变成新的 `/messages/{chatId}`
-- 主面板标题和消息列表也已切换
-- 但页面右下角的 `.pai-context-bubble` 仍然存在
-- 卡片内容还是旧会话对应的 Dream 匹配结果
+- 普通网页：约 250ms
+- RingCentral 消息页：约 700ms
 
-这说明当前实现的问题不是“匹配算法完全没工作”，而是：
+## UI
 
-- **上下文触发时机不对**
-- **旧 UI 没有在会话切换时被重置**
+记忆提示使用页面右下角的固定圆形 icon：
 
-## 设计目标
+- 首次命中带一次轻量 pulse/ring 动效。
+- 点击 icon 展开卡片。
+- 卡片展示命中标题、摘要、来源说明、匹配分数和跳转链接。
+- “在记忆中查看”跳到扩展内的 `memory-exploring.html#...`。
+- 卡片右上角可以关闭当前提示；关闭后同一上下文短时间内不再打扰。
 
-对于 RingCentral 这类动态页面，用户真正期望的是：
+这个设计偏向 ambient notification：提示要容易被看到，但不应抢占用户当前任务。
 
-- 当用户切换到某个聊天会话
-- 且该会话最近消息与记忆系统中已有内容相关
-- 右下角弹出记忆 icon
-- 并通过轻量动效告诉用户“这是新会话触发的新提示”
+## 后端召回
 
-因此，探测单位必须从“页面”升级为“当前会话上下文”。
+`memory-service/src/routes/contextRecall.ts` 提供 `POST /context-recall`，请求体包含：
 
-## RingCentral 会话级探测设计
+- `surface`：例如 `web_passive` / `meeting_passive`
+- `contextType`：例如 `webpage` / `message_thread`
+- `title`
+- `url`
+- `primaryText`
+- `secondaryTexts`
+- `entityHints`
+- `scope`
+- `limit`
 
-### 设计原则
+`ContextRecallService` 的约束：
 
-1. **按会话而不是按页面检测**
-2. **等待会话稳定后再检索**
-3. **每个会话独立缓存**
-4. **旧提示在会话切换后必须清理**
-5. **抽取聊天语义，而不是整页 body 语义**
+- 默认返回少量结果，硬上限 5 条。
+- 只使用 `vector + fts`，不做图遍历和 LLM 总结。
+- 拒绝过短或低信号 payload。
+- 返回 `exploreLink`，供前端跳转到记忆探索页。
 
-### 可用信号
+## 竞品与研究启发
 
-建议同时使用三类信号，避免只依赖单点：
+本功能更接近“当前工作表面上的被动记忆提醒”，不是全局搜索页。调研结论：
 
-1. **主信号：URL**
-   - `location.pathname` 匹配 `/messages/{chatId}`
-   - `chatId` 是最稳定的会话标识
+- ChatGPT Memory 强调用户可以查看、删除、关闭记忆，并区分显式保存记忆和历史对话引用。
+- Microsoft Recall 强调从一开始让用户选择、可以暂停、过滤网站和删除数据。
+- Notion AI connectors 强调跨工具检索要尊重原工具权限，并显示引用来源。
+- Mem0 contextual add v2 强调会话级上下文自动管理，避免调用方每次传完整历史。
+- MemGPT / LongMem / MemoryAgentBench 都指向同一个工程要求：记忆系统必须能准确召回、可更新、避免 stale context，并能选择性遗忘。
 
-2. **确认信号：选中会话**
-   - `[role="tab"][aria-selected="true"]`
-   - 能判断左侧选中状态是否已更新
+因此，本功能的产品原则是：
 
-3. **就绪信号：主面板**
-   - 主标题已变更
-   - `#message-chat-stream-wrapper` 已出现
-   - `.conversation-card-wrapper[data-id]` 已渲染出至少 1 到 3 条消息
+- 只在上下文足够明确时提示。
+- 提示必须带来源和跳转。
+- 旧上下文切换时必须清理。
+- 用户必须能就地关闭当前提示。
+- RingCentral 这类动态页面必须按会话和最近消息重新评估。
 
-### 会话上下文对象
+## 已知边界
 
-建议把 RingCentral 当前会话抽象成：
+- 站点适配器还没有抽象出来，RingCentral 特化逻辑仍在 `contentScriptWebIntelligence.ts` 内。
+- 普通网页的 snippet 仍是通用主内容抽取，对复杂应用页面不一定准确。
+- 目前只有页面内关闭当前提示，还没有全局“关闭此站点记忆提示”的设置入口。
+- 还没有针对内容脚本的常驻单元测试；当前主要依赖构建和浏览器脚本验证。
 
-```ts
-interface RingCentralConversationContext {
-  conversationId: string;
-  title: string;
-  selectedTabText: string;
-  url: string;
-  messageIds: string[];
-  messageSnippet: string;
-  participants?: string[];
-}
-```
+## 后续方向
 
-其中：
-
-- `conversationId`：来自 URL
-- `title`：来自主面板 heading
-- `messageIds`：前几条可见消息的 `data-id`
-- `messageSnippet`：最近 N 条消息拼接出的摘要文本
-
-### 稳定性判断
-
-不能在用户刚点开会话的瞬间立刻请求，因为这时 DOM 可能还在重绘。
-
-建议流程：
-
-1. 监听 URL 变化、左侧选中项变化、消息容器变化
-2. 统一进入 `scheduleConversationEvaluation(500~800ms)`
-3. 连续两次采样得到相同 `conversationKey` 才认为“已稳定”
-
-建议的 `conversationKey`：
-
-```ts
-const conversationKey = [
-  conversationId,
-  title,
-  messageIds.slice(0, 3).join(',')
-].join('|');
-```
-
-如果 key 改了，说明上下文已切换。
-
-### 检索触发策略
-
-当检测到**新的稳定会话**时：
-
-1. 清理旧的 bubble / card
-2. 取消上一个尚未完成的 context-match 请求
-3. 使用当前会话构造新的 payload
-4. 请求返回后：
-   - 命中：显示新 bubble
-   - 未命中：保持无提示状态
-
-建议 payload 至少包含：
-
-```ts
-{
-  title,
-  keywords,
-  snippet,
-  sourceUrl: url,
-  metadata: {
-    domain: 'app.ringcentral.com',
-    conversationId
-  }
-}
-```
-
-现有 `/context-match` 只接收 `title / keywords / snippet`，短期内可以继续兼容；中期建议扩展接口，让服务端知道这是“聊天会话”而不是普通网页。
-
-### 会话级缓存建议
-
-当前的域名级 5 分钟防抖应改成更细粒度：
-
-- 不再按 domain 防抖
-- 改成按 `conversationKey` 缓存结果
-- TTL 可以保留 2 到 5 分钟
-
-这样：
-
-- 切到新会话时可以立刻重查
-- 回到同一会话时又能避免重复请求
-
-### UI 行为建议
-
-当会话切换后命中新记忆，UI 建议采用：
-
-1. 旧 bubble 立即移除
-2. 新 bubble 从 `scale(0.85)` + `opacity(0)` 过渡到正常状态
-3. 第一次出现时增加 1 次到 2 次轻微 pulse
-4. 停止为静态 icon，避免持续打扰
-
-建议动效：
-
-- `slide-up + fade-in`
-- `pulse ring` 只播放一次
-- 用户点开后卡片展开
-- 用户切会话时卡片自动关闭
-
-## 推荐实现方式
-
-### 方案 A：在 `contentScriptWebIntelligence.ts` 内直接增强
-
-优点：
-
-- 修改范围小
-- 能快速验证
-
-做法：
-
-- 新增 RingCentral 专用检测分支
-- 如果 `hostname === 'app.ringcentral.com'`，使用“会话级上下文提取”替代通用 `body snippet`
-- 增加 bubble 清理和会话级重检逻辑
-
-缺点：
-
-- 通用网页逻辑和站点特化逻辑会继续混在一起
-
-### 方案 B：引入站点适配器
-
-更推荐：
-
-```ts
-interface SiteContextAdapter {
-  matches(location: Location): boolean;
-  watch(onContextMaybeChanged: () => void): () => void;
-  getStableContext(): Promise<{
-    contextKey: string;
-    title: string;
-    keywords?: string[];
-    snippet?: string;
-  } | null>;
-}
-```
-
-默认实现：
-
-- `GenericPageAdapter`
-
-站点特化实现：
-
-- `RingCentralConversationAdapter`
-
-这样可以把：
-
-- 通用网页探测
-- RingCentral 会话探测
-- 未来 Jira / Google Docs / Confluence 的动态上下文探测
-
-统一到一个机制里。
-
-## 可复用的现有能力
-
-RingCentral 会话探测不需要从零开始写，当前代码里已经有可复用基础：
-
-- `src/contentScriptGlip.tsx`
-  - 已有 URL 变化监听
-  - 已有 MutationObserver
-  - 已经知道 RingCentral 消息卡片和消息容器结构
-
-可直接借用的经验：
-
-- 等待消息流渲染完成再处理
-- 对 DOM 变化做防抖
-- 对会话切换和消息新增分别处理
-
-## 建议的最小实现步骤
-
-1. 在 `contentScriptWebIntelligence.ts` 中抽出 bubble 的 `show / hide / update`
-2. 新增 `clearContextBubble()`
-3. 为 `app.ringcentral.com` 增加 `watchConversationSwitch()`
-4. 使用 `URL + selected tab + heading + first message ids` 生成 `conversationKey`
-5. 将 domain debounce 改为 `conversationKey` 级缓存
-6. 使用会话消息摘要替换 body 前 300 字
-7. 新匹配命中时播放一次 icon 动效
-
-## 当前结论
-
-当前“网页记忆提示”功能是**存在且在线的**，但它仍然是“页面级、首次加载式”的实现。
-
-对普通静态网页，这个实现可以工作。
-
-对 RingCentral 这种 SPA，会出现两个核心问题：
-
-- 不会在会话切换后自动重检
-- 旧会话的记忆 bubble 会残留到新会话
-
-因此，后续演进方向应该明确为：
-
-- 从**页面级探测**升级到**会话级探测**
-- 从**域名防抖**升级到**上下文 key 防抖**
-- 从**整页 snippet**升级到**会话消息摘要**
-
-这才符合“切到某个聊天会话时，如果上面的聊天内容有相关记忆，则弹出记忆 icon 并通过动效提醒”的真实用户预期。
+1. 抽出 `SiteContextAdapter`，把 Generic / RingCentral / Jira / Google Docs 的上下文提取分离。
+2. 增加站点级静默设置，尤其是隐私敏感页面。
+3. 在 context recall 结果里展示更明确的来源类型和时间。
+4. 为内容脚本增加可复用的浏览器端测试 harness，覆盖 SPA 切换、关闭提示和跳转链接。

@@ -598,12 +598,12 @@ console.log('✅ Alarm 监听器已设置（顶层同步）');
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 全局日志：记录所有收到的消息
-  console.log(
-    '🔔 Background 收到消息:',
-    request.type,
-    '来自:',
-    sender.tab?.url || sender.url || 'unknown',
-  );
+  // console.log(
+  //   '🔔 Background 收到消息:',
+  //   request.type,
+  //   '来自:',
+  //   sender.tab?.url || sender.url || 'unknown',
+  // );
 
   if (request.type === 'SYNC_OUTREACH_TEMPLATE_MIRROR') {
     (async () => {
@@ -1094,6 +1094,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     request.type === 'QUICK_ACTION' ||
     request.type === 'ADD_PROJECT' ||
     request.type === 'SUGGEST_PROJECTS' ||
+    request.type === 'ADD_PROJECT_ITEM' ||
     request.type === 'IMPORT_PROJECT_REPORT'
   ) {
     console.log('📊 仪表盘消息处理开始:', {
@@ -1716,6 +1717,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
       } catch (error: any) {
         console.error('❌ 打开定时消息管理界面失败:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
+  }
+
+  // 打开项目进度仪表盘
+  if (request.type === 'OPEN_PROJECT_DASHBOARD') {
+    (async () => {
+      try {
+        console.log('📊 打开项目进度仪表盘...', {
+          projectId: request.projectId,
+          projectName: request.projectName,
+        });
+        const url = chrome.runtime.getURL('project-dashboard.html');
+        await chrome.windows.create({
+          url,
+          type: 'popup',
+          width: 1200,
+          height: 900,
+          focused: true,
+        });
+        sendResponse({ success: true });
+      } catch (error: any) {
+        console.error('❌ 打开项目进度仪表盘失败:', error);
         sendResponse({ success: false, error: error.message });
       }
     })();

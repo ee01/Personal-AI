@@ -85,6 +85,25 @@ const WHISPER_NATIVE_HOST = 'com.personal_ai.whisper_host';
 let whisperBridgeToken: string | undefined;
 let whisperNativeHostBackoffUntil = 0;
 const WHISPER_NATIVE_HOST_BACKOFF_MS = 60_000;
+const MEETING_TITLE_MAX_LENGTH = 40;
+const GENERIC_MEETING_TITLE_PATTERNS = [
+  /^$/,
+  /^meeting$/,
+  /^meeting record$/,
+  /^meeting archive$/,
+  /^ringcentral$/,
+  /^ringcentral meeting$/,
+  /^ringcentral video$/,
+  /^video meeting$/,
+  /^join meeting$/,
+  /^join a meeting$/,
+  /^live discussion$/,
+  /^shared screen review$/,
+  /^waiting for context$/,
+  /^会议$/,
+  /^会议记录$/,
+  /^未命名会议$/,
+];
 
 async function pairWhisperBridge(): Promise<void> {
   const pairResponse = await fetch('http://127.0.0.1:46321/pair', {
@@ -445,13 +464,12 @@ async function evaluateMeetingReadiness(
       try {
         const data = await sendWhisperBridgeRequest<{
           ok?: boolean;
-          modelReady?: boolean;
-          whisperBinaryAvailable?: boolean;
+          ready?: boolean;
         }>({
           method: 'GET',
-          path: '/whisper/status',
+          path: '/asr/status',
         });
-        return Boolean(data?.modelReady && data?.whisperBinaryAvailable);
+        return Boolean(data?.ready);
       } catch {
         return false;
       }
@@ -465,13 +483,13 @@ async function evaluateMeetingReadiness(
         if (desktopAvailable) {
           return createDependencyReadiness(
             'ready',
-            'Local Whisper is available.',
+            'Local ASR is available.',
             checkedAt,
           );
         }
         return createDependencyReadiness(
           'degraded',
-          'Desktop Whisper is unavailable. Capture will still probe Chrome on-device speech recognition; install the Personal AI desktop app for the more stable local path.',
+          'Local ASR is unavailable. Capture will still probe Chrome on-device speech recognition; install the Personal AI desktop app for the more stable local path.',
           checkedAt,
         );
       }
@@ -647,7 +665,7 @@ async function pollDigestStatus(tabId: number): Promise<void> {
       if (next) {
         await updateBrowserAction(next);
         await broadcastSessionSnapshot(next);
-        void ingestMeetingSession(next);
+        void archiveMeetingSession(next);
       }
       return;
     }
@@ -717,6 +735,243 @@ function normalizeStructuredJson(raw: string): string {
     return objectMatch[0];
   }
   return raw.trim();
+}
+
+function normalizeTitleForGenericCheck(value?: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/\s*[|｜-]\s*Personal AI$/i, '')
+    .replace(/\s*[|｜-]\s*Meeting Pilot$/i, '')
+    .replace(/[“”"'.!！?？:：;；,，、()[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function shouldGenerateMeetingArchiveTitle(
+  title?: string,
+  meetingId?: string,
+): boolean {
+  const normalized = normalizeTitleForGenericCheck(title);
+  if (
+    GENERIC_MEETING_TITLE_PATTERNS.some((pattern) => pattern.test(normalized))
+  ) {
+    return true;
+  }
+  if (/^.+ speaking$/.test(normalized)) {
+    return true;
+  }
+  const compactMeetingId = String(meetingId || '')
+    .trim()
+    .toLowerCase();
+  if (
+    compactMeetingId &&
+    normalized.includes(compactMeetingId) &&
+    normalized.length <= compactMeetingId.length + 20
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function normalizeGeneratedMeetingArchiveTitle(
+  value?: string,
+  meetingId?: string,
+): string | undefined {
+  let title = String(value || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .replace(/^(?:title|会议标题)\s*[:：]\s*/i, '')
+    .replace(/^\d+[).、]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[。.!！?？:：;；,，、]+$/g, '')
+    .trim();
+
+  if (!title) return undefined;
+  if (title.length > MEETING_TITLE_MAX_LENGTH) {
+    title = `${title.slice(0, MEETING_TITLE_MAX_LENGTH - 3).trim()}...`;
+  }
+  if (shouldGenerateMeetingArchiveTitle(title, meetingId)) {
+    return undefined;
+  }
+  return title;
+}
+
+function extractTitleCandidateFromSentence(value?: string): string | undefined {
+  const sentence = String(value || '')
+    .replace(/^#+\s*/gm, '')
+    .split(/[\n。.!！?？]/)
+    .map((item) => item.trim())
+    .find(Boolean);
+  if (!sentence) return undefined;
+  return sentence.replace(
+    /^(?:当前|本次)?会议(?:主要|讨论|聚焦于|围绕)?\s*/i,
+    '',
+  );
+}
+
+export function buildFallbackMeetingArchiveTitle(
+  session: MeetingPilotSessionSnapshot,
+): string | undefined {
+  const candidates = [
+    ...session.chapters
+      .slice(-3)
+      .reverse()
+      .map((chapter) => chapter.title),
+    session.latestStructuredParse?.topic,
+    session.currentTopic,
+    session.decisions[0]?.text,
+    session.actionItems[0]?.title,
+    extractTitleCandidateFromSentence(session.summary),
+    extractTitleCandidateFromSentence(
+      session.transcript
+        .filter((chunk) => !chunk.lowConfidence)
+        .slice(-4)
+        .map((chunk) => chunk.text)
+        .join(' '),
+    ),
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeGeneratedMeetingArchiveTitle(
+      candidate,
+      session.meetingId,
+    );
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+function hasUsefulMeetingTitleContext(
+  session: MeetingPilotSessionSnapshot,
+): boolean {
+  if (session.transcript.filter((chunk) => !chunk.lowConfidence).length >= 2) {
+    return true;
+  }
+  if (session.chapters.some((chapter) => chapter.summary || chapter.title)) {
+    return true;
+  }
+  const summary = String(session.summary || '').trim();
+  const summaryIsGeneric =
+    !summary ||
+    /Meeting Pilot is waiting|participants detected|Open the panel|recording this meeting/i.test(
+      summary,
+    );
+  return Boolean(
+    !summaryIsGeneric ||
+      session.decisions.length ||
+      session.actionItems.length ||
+      session.latestStructuredParse?.topic,
+  );
+}
+
+function buildMeetingArchiveTitlePrompt(
+  session: MeetingPilotSessionSnapshot,
+): string {
+  const transcriptWindow = session.transcript
+    .filter((chunk) => !chunk.lowConfidence)
+    .slice(-20)
+    .map(
+      (chunk) =>
+        `[${formatTranscriptTimestamp(chunk.ts)}] ${chunk.speaker}: ${
+          chunk.text
+        }`,
+    )
+    .join('\n');
+  const chapters = session.chapters
+    .slice(-5)
+    .map((chapter) => `- ${chapter.title}: ${chapter.summary || ''}`)
+    .join('\n');
+  const decisions = session.decisions
+    .slice(0, 6)
+    .map((decision) => `- ${decision.text}`)
+    .join('\n');
+  const actionItems = session.actionItems
+    .slice(0, 6)
+    .map((item) => `- ${item.owner}: ${item.title}`)
+    .join('\n');
+
+  return `Generate a concise archive title for this meeting. Return strict JSON only: {"title":"..."}.
+
+Rules:
+- Use the actual meeting topic/content, not the browser title.
+- Keep it under 18 Chinese characters or 8 English words.
+- Do not include dates, participant names unless essential, quotes, or generic words like "meeting" / "discussion".
+- Prefer a noun phrase, for example "Q2 预算与排期确认" or "API migration risk review".
+
+Browser title: ${session.title}
+Current topic: ${session.currentTopic}
+Summary: ${session.summary}
+Chapters:
+${chapters || 'none'}
+Decisions:
+${decisions || 'none'}
+Action items:
+${actionItems || 'none'}
+Transcript:
+${transcriptWindow || 'none'}`;
+}
+
+async function resolveMeetingArchiveTitle(
+  session: MeetingPilotSessionSnapshot,
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>,
+): Promise<string | undefined> {
+  if (!shouldGenerateMeetingArchiveTitle(session.title, session.meetingId)) {
+    return normalizeGeneratedMeetingArchiveTitle(
+      session.title,
+      session.meetingId,
+    );
+  }
+
+  const fallback = buildFallbackMeetingArchiveTitle(session);
+  if (
+    !hasUsefulMeetingTitleContext(session) ||
+    !isMainLLMConfiguredForMeetingAnalysis(envConfig).ok
+  ) {
+    return fallback;
+  }
+
+  try {
+    const raw = await runMeetingIntelligenceLLM({
+      systemPrompt:
+        'You write short, specific titles for archived meeting records. Output valid JSON only.',
+      userPrompt: buildMeetingArchiveTitlePrompt(session),
+    });
+    const parsed = JSON.parse(normalizeStructuredJson(raw)) as {
+      title?: string;
+    };
+    return (
+      normalizeGeneratedMeetingArchiveTitle(parsed.title, session.meetingId) ||
+      fallback
+    );
+  } catch (error) {
+    console.warn('Meeting Pilot archive title generation failed:', error);
+    return fallback;
+  }
+}
+
+async function prepareMeetingSessionForArchive(
+  session: MeetingPilotSessionSnapshot,
+): Promise<MeetingPilotSessionSnapshot> {
+  const envConfig = await getEnvConfig();
+  const archiveTitle = await resolveMeetingArchiveTitle(session, envConfig);
+  if (!archiveTitle || archiveTitle === session.title) {
+    return session;
+  }
+  const updated = await registry.updateObservation(session.tabId, {
+    title: archiveTitle,
+  });
+  if (updated) {
+    await updateBrowserAction(updated);
+    await broadcastSessionSnapshot(updated);
+    return updated;
+  }
+  return {
+    ...session,
+    title: archiveTitle,
+  };
 }
 
 function formatTranscriptTimestamp(ts: number): string {
@@ -1498,6 +1753,7 @@ async function startMeetingCapture(
         title: session.title,
         micMuted: session.micMuted === true,
         selfName,
+        speakerLabel: session.speakerLabel,
       });
       const updated = await registry.setCaptureState(tabId, {
         kind: 'recording',
@@ -1540,6 +1796,7 @@ async function startMeetingCapture(
       title: session.title,
       micMuted: session.micMuted === true,
       selfName,
+      speakerLabel: session.speakerLabel,
     });
   } catch (error) {
     const updated = await registry.setCaptureState(tabId, {
@@ -1631,7 +1888,7 @@ async function stopMeetingCapture(
   if (updated) {
     await updateBrowserAction(updated);
     await broadcastSessionSnapshot(updated);
-    void ingestMeetingSession(updated);
+    void archiveMeetingSession(updated);
   }
   return updated;
 }
@@ -2217,20 +2474,46 @@ async function handleTranscriptUpdate(
   const session = registry.getSessionByTabId(tabId);
   if (!session) return;
 
-  if (normalizedChunk.lowConfidence) {
-    const updated = await registry.updateSession(tabId, (s) => ({
-      ...s,
-      transcript: [...s.transcript, normalizedChunk].slice(-60),
-      updatedAt: Date.now(),
-    }));
-    if (updated) await broadcastSessionSnapshot(updated);
-    return;
-  }
-
   const envConfig = await getEnvConfig();
   const resolveAlias = createAliasResolverFromEnv(
     envConfig.MEETING_NAME_ALIASES,
   );
+
+  if (normalizedChunk.lowConfidence) {
+    const previewResolution = resolveSpeakerForChunk(
+      session,
+      { ...normalizedChunk, lowConfidence: false },
+      { resolveAlias },
+    );
+    const previewChunk = {
+      ...normalizedChunk,
+      speaker: previewResolution.resolvedName,
+      participantId: previewResolution.participantId,
+      resolutionSource: previewResolution.source,
+      resolutionConfidence: previewResolution.confidence,
+    };
+    const updated = await registry.updateSession(tabId, (s) => {
+      const transcriptWithoutPreviousPreview = s.transcript.filter(
+        (chunk) => chunk.id !== previewChunk.id,
+      );
+      const transcript = [
+        ...transcriptWithoutPreviousPreview,
+        previewChunk,
+      ].slice(-60);
+      return {
+        ...s,
+        participants: previewResolution.participantsAfter,
+        transcript,
+        transcriptTurns: buildTranscriptTurns(
+          transcript,
+          previewResolution.participantsAfter,
+        ),
+        updatedAt: Date.now(),
+      };
+    });
+    if (updated) await broadcastSessionSnapshot(updated);
+    return;
+  }
 
   const resolution = resolveSpeakerForChunk(session, normalizedChunk, {
     resolveAlias,
@@ -2248,7 +2531,12 @@ async function handleTranscriptUpdate(
     resolutionSource: resolution.source,
     resolutionConfidence: resolution.confidence,
   };
-  const nextTranscript = [...session.transcript, enrichedChunk].slice(-60);
+  const nextTranscript = [
+    ...session.transcript.filter(
+      (chunk) => !(chunk.id === enrichedChunk.id && chunk.lowConfidence),
+    ),
+    enrichedChunk,
+  ].slice(-60);
 
   const configuredHotwords = String(envConfig.MEETING_HOTWORDS || '')
     .split(/[\n,]/)
@@ -2573,7 +2861,7 @@ async function handleDigestStatusUpdate(
     }
     await broadcastSessionSnapshot(sessionForBroadcast);
     if (digest.status === 'completed') {
-      void ingestMeetingSession(sessionForBroadcast);
+      void archiveMeetingSession(sessionForBroadcast);
     }
   }
 }
@@ -2686,6 +2974,13 @@ async function ingestMeetingSession(
   } catch (error) {
     console.warn('Meeting Pilot ingest failed:', error);
   }
+}
+
+async function archiveMeetingSession(
+  session: MeetingPilotSessionSnapshot,
+): Promise<void> {
+  const archiveSession = await prepareMeetingSessionForArchive(session);
+  await ingestMeetingSession(archiveSession);
 }
 
 async function refreshMeetingMemory(tabId: number): Promise<void> {
@@ -2834,14 +3129,18 @@ async function handleMeetingPilotMessage(
       });
       if (
         session.capture.kind === 'recording' &&
-        typeof payload.micMuted === 'boolean'
+        (typeof payload.micMuted === 'boolean' ||
+          typeof payload.speakerLabel === 'string' ||
+          typeof payload.selfName === 'string')
       ) {
         await pushOffscreenCommand({
-          type: 'MEETING_PILOT_OFFSCREEN_SET_MIC_MUTED',
+          type: 'MEETING_PILOT_OFFSCREEN_UPDATE_CONTEXT',
           tabId: session.tabId,
           micMuted: payload.micMuted,
+          selfName: session.selfName,
+          speakerLabel: session.speakerLabel,
         }).catch((error) => {
-          console.warn('[Meeting Pilot][background] mic mute sync failed', {
+          console.warn('[Meeting Pilot][background] offscreen context sync failed', {
             tabId: session.tabId,
             error: String((error as Error)?.message || error),
           });

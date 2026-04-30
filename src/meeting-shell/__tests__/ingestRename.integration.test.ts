@@ -36,7 +36,11 @@ const chromeStub = {
 // Heavy ingestion deps (memory-service client, env config) are loaded by
 // background.ts. We only call buildMeetingIngestPayloads which doesn't need
 // network, so importing is fine as long as chrome is stubbed.
-import { buildMeetingIngestPayloads } from '../background';
+import {
+  buildFallbackMeetingArchiveTitle,
+  buildMeetingIngestPayloads,
+  shouldGenerateMeetingArchiveTitle,
+} from '../background';
 import { renameParticipant } from '../participantOps';
 import {
   MeetingPilotParticipant,
@@ -162,8 +166,44 @@ test('ingest after merge: stances and participant lists collapse to the target',
   }>;
   assert.equal(stances.length, 1);
   assert.equal(stances[0].participant, 'Alice');
-  assert.deepEqual(
-    (summaryPayload.metadata as any).participants,
-    ['Alice'],
+  assert.deepEqual((summaryPayload.metadata as any).participants, ['Alice']);
+});
+
+test('archive title generation replaces generic RingCentral titles from meeting content', () => {
+  const session: MeetingPilotSessionSnapshot = {
+    ...makeSession(),
+    title: 'RingCentral Video',
+    currentTopic: 'Q2 预算与排期确认',
+    chapters: [
+      {
+        id: 'chapter-budget',
+        title: 'Q2 预算与排期确认',
+        summary: '确认 Q2 预算和 Sprint 排期。',
+        viewMode: 'outline',
+        startLabel: '10:00',
+        actionCount: 0,
+        decisionCount: 1,
+      },
+    ],
+  };
+
+  assert.equal(
+    shouldGenerateMeetingArchiveTitle(session.title, session.meetingId),
+    true,
+  );
+  assert.equal(buildFallbackMeetingArchiveTitle(session), 'Q2 预算与排期确认');
+
+  const [summaryPayload] = buildMeetingIngestPayloads({
+    ...session,
+    title: buildFallbackMeetingArchiveTitle(session)!,
+  });
+  assert.equal(summaryPayload.sourceTitle, 'Q2 预算与排期确认');
+  assert.equal(summaryPayload.groupName, 'Q2 预算与排期确认');
+});
+
+test('archive title generation keeps an explicit meeting title', () => {
+  assert.equal(
+    shouldGenerateMeetingArchiveTitle('Design Review Weekly', 'meeting-int-1'),
+    false,
   );
 });

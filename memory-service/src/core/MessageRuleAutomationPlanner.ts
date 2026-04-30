@@ -5,6 +5,10 @@ import {
   type QueuedActionRecord,
 } from '../repositories/ActionRepository.js';
 import { now } from '../utils/time.js';
+import {
+  reviewMessageRuleAutomationPrompt,
+  type MessageRuleAutomationWarning,
+} from './MessageRuleAutomationAdvisor.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { detectAutomationActionFamily } from './actions/detectAutomationActionFamily.js';
 
@@ -20,6 +24,17 @@ export interface MessageRuleAutomationPlanInput {
     groupName?: string;
     content: string;
     timestamp?: number;
+    timezone?: string;
+    event?: {
+      title?: string;
+      start?: string;
+      end?: string;
+      startAtMs?: number;
+      endAtMs?: number;
+      timeRange?: string;
+      location?: string;
+      allDay?: boolean;
+    };
   };
   match?: {
     matchedRule?: string;
@@ -32,6 +47,33 @@ export interface MessageRuleAutomationPlanResult {
   deduped: boolean;
   skippedReason?: string;
   actions: QueuedActionRecord[];
+  detectedWindow?: {
+    startAt: number;
+    endAt: number;
+    startActionAt: number;
+    restoreActionAt: number;
+    label: string;
+  };
+}
+
+export interface MessageRuleAutomationPreviewAction {
+  actionType: 'notify_user' | 'delegate_openclaw';
+  title: string;
+  description?: string;
+  targetSystem?: string;
+  scheduledAt?: number;
+  executionMode?: 'manual' | 'auto';
+  requiresApproval?: boolean;
+}
+
+export interface MessageRuleAutomationPreviewResult {
+  canPlan: boolean;
+  skippedReason?: string;
+  actionFamily: ReturnType<typeof detectAutomationActionFamily>;
+  actions: MessageRuleAutomationPreviewAction[];
+  warnings: MessageRuleAutomationWarning[];
+  suggestedPrompt?: string;
+  suggestionReason?: string;
   detectedWindow?: {
     startAt: number;
     endAt: number;
@@ -66,6 +108,122 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function sanitizeTimeZone(value?: string): string | undefined {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: normalized }).format(0);
+    return normalized;
+  } catch {
+    return undefined;
+  }
+}
+
+function getDateTimePartsInTimeZone(
+  timestampMs: number,
+  timeZone?: string,
+): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+} {
+  const date = new Date(timestampMs);
+  if (!timeZone) {
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      hour: date.getHours(),
+      minute: date.getMinutes(),
+      second: date.getSeconds(),
+    };
+  }
+
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    hourCycle: 'h23',
+  });
+  const parts = formatter.formatToParts(date);
+  const read = (type: string) => {
+    const value = parts.find((part) => part.type === type)?.value;
+    return value ? parseInt(value, 10) : 0;
+  };
+
+  return {
+    year: read('year'),
+    month: read('month'),
+    day: read('day'),
+    hour: read('hour'),
+    minute: read('minute'),
+    second: read('second'),
+  };
+}
+
+function getTimeZoneOffsetMs(timeZone: string, utcMs: number): number {
+  const parts = getDateTimePartsInTimeZone(utcMs, timeZone);
+  const asUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  return asUtc - utcMs;
+}
+
+function zonedLocalDateTimeToUtcMs(
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second: number;
+  },
+  timeZone?: string,
+): number {
+  if (!timeZone) {
+    return new Date(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+      0,
+    ).getTime();
+  }
+
+  const guessUtcMs = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    0,
+  );
+  const firstOffset = getTimeZoneOffsetMs(timeZone, guessUtcMs);
+  const firstPass = guessUtcMs - firstOffset;
+  const secondOffset = getTimeZoneOffsetMs(timeZone, firstPass);
+  return secondOffset === firstOffset
+    ? firstPass
+    : guessUtcMs - secondOffset;
+}
+
 function buildHitRef(input: MessageRuleAutomationPlanInput): string {
   const postId = input.message.postId?.trim();
   if (postId) return postId;
@@ -81,32 +239,41 @@ function buildHitRef(input: MessageRuleAutomationPlanInput): string {
   return `synthetic:${digest}`;
 }
 
-function formatMonthDay(value: number): string {
-  const date = new Date(value);
-  return `${date.getMonth() + 1}/${date.getDate()}`;
+function formatMonthDay(value: number, timeZone?: string): string {
+  const parts = getDateTimePartsInTimeZone(value, timeZone);
+  return `${parts.month}/${parts.day}`;
 }
 
-function formatLeaveLabel(startAt: number, endAt: number): string {
-  const start = formatMonthDay(startAt);
-  const end = formatMonthDay(endAt);
+function formatLeaveLabel(startAt: number, endAt: number, timeZone?: string): string {
+  const start = formatMonthDay(startAt, timeZone);
+  const end = formatMonthDay(endAt, timeZone);
   return start === end ? start : `${start}~${end}`;
+}
+
+function hasExplicitTimeToken(value?: string): boolean {
+  return typeof value === 'string' && /\d{1,2}:\d{2}(?::\d{2})?/.test(value);
 }
 
 function parseDateToken(
   raw: string,
   anchorTime: number,
   defaultToEndOfDay: boolean,
+  timeZone?: string,
 ): ParsedDateToken | null {
   const normalized = normalizeWhitespace(raw);
-  const anchorDate = new Date(anchorTime || Date.now());
+  const normalizedTimeZone = sanitizeTimeZone(timeZone);
+  const anchorDateParts = getDateTimePartsInTimeZone(
+    anchorTime || Date.now(),
+    normalizedTimeZone,
+  );
 
   const slashMatch = normalized.match(
-    /^(?:(\d{4})[\/.-])?(\d{1,2})[\/.-](\d{1,2})(?:\s+(\d{1,2})(?::(\d{2}))?)?$/,
+    /^(?:(\d{4})[\/.-])?(\d{1,2})[\/.-](\d{1,2})(?:\s+(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?)?$/,
   );
   if (slashMatch) {
     const year = slashMatch[1]
       ? parseInt(slashMatch[1], 10)
-      : anchorDate.getFullYear();
+      : anchorDateParts.year;
     const month = parseInt(slashMatch[2], 10);
     const day = parseInt(slashMatch[3], 10);
     const hasExplicitTime = Boolean(slashMatch[4]);
@@ -120,19 +287,30 @@ function parseDateToken(
       : defaultToEndOfDay
         ? 59
         : 0;
+    const second = hasExplicitTime ? parseInt(slashMatch[6] || '0', 10) : 0;
     return {
-      value: new Date(year, month - 1, day, hour, minute, 0, 0).getTime(),
+      value: zonedLocalDateTimeToUtcMs(
+        {
+          year,
+          month,
+          day,
+          hour,
+          minute,
+          second,
+        },
+        normalizedTimeZone,
+      ),
       hasExplicitTime,
     };
   }
 
   const chineseMatch = normalized.match(
-    /^(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2})(?::(\d{2}))?)?$/,
+    /^(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?)?$/,
   );
   if (chineseMatch) {
     const year = chineseMatch[1]
       ? parseInt(chineseMatch[1], 10)
-      : anchorDate.getFullYear();
+      : anchorDateParts.year;
     const month = parseInt(chineseMatch[2], 10);
     const day = parseInt(chineseMatch[3], 10);
     const hasExplicitTime = Boolean(chineseMatch[4]);
@@ -146,8 +324,19 @@ function parseDateToken(
       : defaultToEndOfDay
         ? 59
         : 0;
+    const second = hasExplicitTime ? parseInt(chineseMatch[6] || '0', 10) : 0;
     return {
-      value: new Date(year, month - 1, day, hour, minute, 0, 0).getTime(),
+      value: zonedLocalDateTimeToUtcMs(
+        {
+          year,
+          month,
+          day,
+          hour,
+          minute,
+          second,
+        },
+        normalizedTimeZone,
+      ),
       hasExplicitTime,
     };
   }
@@ -155,52 +344,106 @@ function parseDateToken(
   return null;
 }
 
-function parseLeaveWindow(
-  automationPrompt: string,
-  messageContent: string,
+function parseLeaveWindowFromEvent(
+  message: MessageRuleAutomationPlanInput['message'],
   anchorTime: number,
 ): ParsedLeaveWindow | null {
-  const normalizedMessage = normalizeWhitespace(messageContent);
+  const event = message.event;
+  if (!event || typeof event !== 'object') {
+    return null;
+  }
+
+  const timeZone = sanitizeTimeZone(message.timezone);
+  const startAt =
+    typeof event.startAtMs === 'number' && Number.isFinite(event.startAtMs)
+      ? event.startAtMs
+      : typeof event.start === 'string'
+        ? parseDateToken(event.start, anchorTime, false, timeZone)?.value
+        : undefined;
+  const endAt =
+    typeof event.endAtMs === 'number' && Number.isFinite(event.endAtMs)
+      ? event.endAtMs
+      : typeof event.end === 'string'
+        ? parseDateToken(event.end, anchorTime, true, timeZone)?.value
+        : startAt;
+
+  if (typeof startAt !== 'number' || typeof endAt !== 'number') {
+    return null;
+  }
+
+  const hasExplicitStartTime =
+    hasExplicitTimeToken(event.start) ||
+    (event.allDay !== true &&
+      typeof event.startAtMs === 'number' &&
+      Number.isFinite(event.startAtMs));
+  const hasExplicitEndTime =
+    hasExplicitTimeToken(event.end) ||
+    (event.allDay !== true &&
+      typeof event.endAtMs === 'number' &&
+      Number.isFinite(event.endAtMs));
+
+  return {
+    startAt,
+    endAt,
+    hasExplicitStartTime,
+    hasExplicitEndTime,
+    label: formatLeaveLabel(startAt, endAt, timeZone),
+  };
+}
+
+function parseLeaveWindow(
+  message: MessageRuleAutomationPlanInput['message'],
+  automationPrompt: string,
+  anchorTime: number,
+): ParsedLeaveWindow | null {
   if (detectAutomationActionFamily(automationPrompt) !== 'leave_glip_status') {
     return null;
   }
 
+  const eventWindow = parseLeaveWindowFromEvent(message, anchorTime);
+  if (eventWindow) {
+    return eventWindow;
+  }
+
+  const normalizedMessage = normalizeWhitespace(message.content);
+  const timeZone = sanitizeTimeZone(message.timezone);
+
   const rangePatterns = [
-    /((?:\d{4}[\/.-])?\d{1,2}[\/.-]\d{1,2}(?:\s+\d{1,2}(?::\d{2})?)?)\s*(?:~|～|—|-|至|到)\s*((?:\d{4}[\/.-])?\d{1,2}[\/.-]\d{1,2}(?:\s+\d{1,2}(?::\d{2})?)?)/,
-    /((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*\d{1,2}(?::\d{2})?)?)\s*(?:~|～|—|-|至|到)\s*((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*\d{1,2}(?::\d{2})?)?)/,
+    /((?:\d{4}[\/.-])?\d{1,2}[\/.-]\d{1,2}(?:\s+\d{1,2}(?::\d{2})?(?::\d{2})?)?)\s*(?:~|～|—|-|至|到)\s*((?:\d{4}[\/.-])?\d{1,2}[\/.-]\d{1,2}(?:\s+\d{1,2}(?::\d{2})?(?::\d{2})?)?)/,
+    /((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*\d{1,2}(?::\d{2})?(?::\d{2})?)?)\s*(?:~|～|—|-|至|到)\s*((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*\d{1,2}(?::\d{2})?(?::\d{2})?)?)/,
   ];
 
   for (const pattern of rangePatterns) {
     const matched = normalizedMessage.match(pattern);
     if (!matched) continue;
-    const start = parseDateToken(matched[1], anchorTime, false);
-    const end = parseDateToken(matched[2], anchorTime, true);
+    const start = parseDateToken(matched[1], anchorTime, false, timeZone);
+    const end = parseDateToken(matched[2], anchorTime, true, timeZone);
     if (!start || !end) continue;
     return {
       startAt: start.value,
       endAt: end.value,
       hasExplicitStartTime: start.hasExplicitTime,
       hasExplicitEndTime: end.hasExplicitTime,
-      label: formatLeaveLabel(start.value, end.value),
+      label: formatLeaveLabel(start.value, end.value, timeZone),
     };
   }
 
   const singlePatterns = [
-    /((?:\d{4}[\/.-])?\d{1,2}[\/.-]\d{1,2}(?:\s+\d{1,2}(?::\d{2})?)?)/,
-    /((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*\d{1,2}(?::\d{2})?)?)/,
+    /((?:\d{4}[\/.-])?\d{1,2}[\/.-]\d{1,2}(?:\s+\d{1,2}(?::\d{2})?(?::\d{2})?)?)/,
+    /((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*\d{1,2}(?::\d{2})?(?::\d{2})?)?)/,
   ];
   for (const pattern of singlePatterns) {
     const matched = normalizedMessage.match(pattern);
     if (!matched) continue;
-    const start = parseDateToken(matched[1], anchorTime, false);
-    const end = parseDateToken(matched[1], anchorTime, true);
+    const start = parseDateToken(matched[1], anchorTime, false, timeZone);
+    const end = parseDateToken(matched[1], anchorTime, true, timeZone);
     if (!start || !end) continue;
     return {
       startAt: start.value,
       endAt: end.value,
       hasExplicitStartTime: start.hasExplicitTime,
       hasExplicitEndTime: end.hasExplicitTime,
-      label: formatLeaveLabel(start.value, end.value),
+      label: formatLeaveLabel(start.value, end.value, timeZone),
     };
   }
 
@@ -285,6 +528,164 @@ export class MessageRuleAutomationPlanner {
     this.actionRepo = actionRepo;
   }
 
+  preview(
+    input: MessageRuleAutomationPlanInput,
+  ): MessageRuleAutomationPreviewResult {
+    const anchorTime = input.message.timestamp ?? Date.now();
+    const actionFamily = detectAutomationActionFamily(input.automationPrompt);
+    const review = reviewMessageRuleAutomationPrompt({
+      automationPrompt: input.automationPrompt,
+      actionFamily,
+    });
+    const warnings = [...review.warnings];
+
+    if (actionFamily !== 'leave_glip_status') {
+      const genericPlan = buildGenericActionPlan(input);
+      if (!genericPlan) {
+        return {
+          canPlan: false,
+          skippedReason: 'unsupported_or_unparseable_automation_prompt',
+          actionFamily,
+          actions: [],
+          warnings: [
+            ...warnings,
+            {
+              code: 'unsupported_action_family',
+              severity: 'warning',
+              message:
+                '当前联动操作文案还不能稳定映射到已知 RuntimeAction/OpenClaw 动作族。',
+            },
+          ],
+          suggestedPrompt: review.suggestedPrompt,
+          suggestionReason: review.suggestionReason,
+        };
+      }
+
+      const policy = resolveDelegateOpenClawPolicy({
+        params: { mode: 'write' },
+        requestedRequiresApproval: input.requiresApproval,
+        defaultExecutionMode: 'auto',
+        defaultRequiresApproval: false,
+      });
+
+      return {
+        canPlan: true,
+        actionFamily,
+        actions: [
+          {
+            actionType: 'notify_user',
+            title: `已创建关联操作: ${genericPlan.title}`,
+            description: `规则 ${input.ruleRef} 命中后，会为 ${genericPlan.targetSystem} 排入 1 个关联操作。`,
+            executionMode: 'auto',
+            requiresApproval: false,
+          },
+          {
+            actionType: 'delegate_openclaw',
+            title: genericPlan.title,
+            description: genericPlan.description,
+            targetSystem: genericPlan.targetSystem,
+            executionMode: policy.executionMode,
+            requiresApproval: policy.requiresApproval,
+          },
+        ],
+        warnings,
+        suggestedPrompt: review.suggestedPrompt,
+        suggestionReason: review.suggestionReason,
+      };
+    }
+
+    const leaveWindow = parseLeaveWindow(
+      input.message,
+      input.automationPrompt,
+      anchorTime,
+    );
+    if (!leaveWindow) {
+      return {
+        canPlan: false,
+        skippedReason: 'unsupported_or_unparseable_automation_prompt',
+        actionFamily,
+        actions: [],
+        warnings: [
+          ...warnings,
+          {
+            code: 'unparseable_leave_window',
+            severity: 'critical',
+            message:
+              '规则看起来是请假/PTO 状态联动，但当前样例消息里没有可解析的开始和结束时间。',
+          },
+        ],
+        suggestedPrompt: review.suggestedPrompt,
+        suggestionReason: review.suggestionReason,
+      };
+    }
+
+    const currentTimeMs = now() * 1000;
+    const idealStartActionAt = leaveWindow.startAt - 3 * 60 * 60 * 1000;
+    const startActionAt = Math.max(currentTimeMs, idealStartActionAt);
+    const restoreActionAt = leaveWindow.hasExplicitEndTime
+      ? leaveWindow.endAt
+      : leaveWindow.endAt + 60 * 1000;
+    const scheduledStartAt = Math.floor(startActionAt / 1000);
+    const scheduledRestoreAt = Math.floor(restoreActionAt / 1000);
+    const policy = resolveDelegateOpenClawPolicy({
+      params: { mode: 'write' },
+      requestedRequiresApproval: input.requiresApproval,
+      defaultExecutionMode: 'auto',
+      defaultRequiresApproval: false,
+    });
+
+    if (idealStartActionAt <= currentTimeMs) {
+      warnings.push({
+        code: 'start_action_due_immediately',
+        severity: 'info',
+        message:
+          '请假开始前 3 小时的执行点已经过去，实际入队后会按当前时间排入，下一次 due action 扫描会立即触发。',
+      });
+    }
+
+    return {
+      canPlan: true,
+      actionFamily,
+      actions: [
+        {
+          actionType: 'notify_user',
+          title: `已解析请假时间并创建后续动作: ${leaveWindow.label}`,
+          description: `规则 ${input.ruleRef} 会从消息中抽取请假时间，并排入 2 个后续状态动作。`,
+          executionMode: 'auto',
+          requiresApproval: false,
+        },
+        {
+          actionType: 'delegate_openclaw',
+          title: '请假开始前 3h 设置 Glip 状态',
+          description: `设置状态为 PTO on ${leaveWindow.label}`,
+          targetSystem: 'glip',
+          scheduledAt: scheduledStartAt,
+          executionMode: policy.executionMode,
+          requiresApproval: policy.requiresApproval,
+        },
+        {
+          actionType: 'delegate_openclaw',
+          title: '请假结束后恢复 Glip 状态',
+          description: '按开始动作保存的状态快照恢复',
+          targetSystem: 'glip',
+          scheduledAt: scheduledRestoreAt,
+          executionMode: policy.executionMode,
+          requiresApproval: policy.requiresApproval,
+        },
+      ],
+      warnings,
+      suggestedPrompt: review.suggestedPrompt,
+      suggestionReason: review.suggestionReason,
+      detectedWindow: {
+        startAt: leaveWindow.startAt,
+        endAt: leaveWindow.endAt,
+        startActionAt,
+        restoreActionAt,
+        label: leaveWindow.label,
+      },
+    };
+  }
+
   planAndQueue(
     input: MessageRuleAutomationPlanInput,
   ): MessageRuleAutomationPlanResult {
@@ -328,8 +729,8 @@ export class MessageRuleAutomationPlanner {
     const anchorTime = input.message.timestamp ?? Date.now();
     const actionFamily = detectAutomationActionFamily(input.automationPrompt);
     const leaveWindow = parseLeaveWindow(
+      input.message,
       input.automationPrompt,
-      input.message.content,
       anchorTime,
     );
     if (actionFamily === 'leave_glip_status' && !leaveWindow) {
@@ -464,12 +865,16 @@ export class MessageRuleAutomationPlanner {
       messageGroupId: input.message.groupId || '',
       messagePostId: input.message.postId || '',
       messageTimestamp: input.message.timestamp ?? null,
+      messageTimezone: input.message.timezone || '',
+      messageEvent: input.message.event || null,
       sourceMessage: input.message.content,
       startAt: parsedLeaveWindow.startAt,
       endAt: parsedLeaveWindow.endAt,
       startActionAt,
       restoreActionAt,
       leaveLabel: parsedLeaveWindow.label,
+      restoreStrategy: 'presence_snapshot',
+      presenceSnapshotKey: `message_rule_presence:${input.ruleRef}:${hitRef}`,
     };
 
     const actions = [
@@ -496,7 +901,7 @@ export class MessageRuleAutomationPlanner {
       this.actionRepo.create({
         actionType: 'delegate_openclaw',
         title: `请假开始前 3h 设置 Glip 状态`,
-        description: `将 Glip 状态改为 "PTO on ${parsedLeaveWindow.label}"。`,
+        description: `先读取并保存当前 Glip 状态，再将状态改为 "PTO on ${parsedLeaveWindow.label}"。`,
         params: {
           mode: 'write',
           targetSystem: 'glip',
@@ -509,7 +914,9 @@ export class MessageRuleAutomationPlanner {
           task: [
             `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
             `The matched message content is: ${input.message.content}`,
+            `Before making any status write, use the available RingCentral token/API access to read the current Glip/RingCentral presence and status text for the target user, then persist a durable snapshot using key ${commonMetadata.presenceSnapshotKey}.`,
             `At or after ${new Date(startActionAt).toISOString()}, update the Glip status to: PTO on ${parsedLeaveWindow.label}`,
+            'If you cannot read and persist the pre-change presence snapshot, do not guess the original status. Return a human-decision response instead.',
           ].join('\n'),
           metadata: commonMetadata,
         },
@@ -531,7 +938,7 @@ export class MessageRuleAutomationPlanner {
       this.actionRepo.create({
         actionType: 'delegate_openclaw',
         title: `请假结束后恢复 Glip 状态`,
-        description: '将 Glip 状态恢复为 "Available"。',
+        description: '读取开始动作保存的状态快照，并恢复为原本的 Glip 状态。',
         params: {
           mode: 'write',
           targetSystem: 'glip',
@@ -544,7 +951,8 @@ export class MessageRuleAutomationPlanner {
           task: [
             `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
             `The matched message content is: ${input.message.content}`,
-            `At or after ${new Date(restoreActionAt).toISOString()}, restore the Glip status to: Available`,
+            `At or after ${new Date(restoreActionAt).toISOString()}, load the previously stored presence snapshot using key ${commonMetadata.presenceSnapshotKey} and restore that exact Glip/RingCentral presence and status text.`,
+            'Do not default to Available unless the stored snapshot explicitly says the original status was Available.',
           ].join('\n'),
           metadata: commonMetadata,
         },

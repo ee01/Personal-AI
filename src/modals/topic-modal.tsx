@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { analyzeMessages } from '../messageDealing';
 import {
   getMemoryServiceClient,
+  type MessageRuleAutomationPreviewResponse,
   type RuntimeAction,
 } from '../services/MemoryServiceClient';
 import {
@@ -122,6 +123,31 @@ interface AutomationActionSummary {
   loadError?: boolean;
 }
 
+interface AutomationPreviewState {
+  status: 'idle' | 'loading' | 'ready' | 'failed';
+  result?: MessageRuleAutomationPreviewResponse;
+  error?: string;
+}
+
+interface PendingMessageRuleImprovement {
+  schema: 'message_rule_improvement.v1';
+  requestId?: string;
+  ruleRef: string;
+  ruleText?: string;
+  currentPrompt: string;
+  proposedPrompt: string;
+  reason: string;
+  summary: string;
+  sourceActionId?: string;
+  sourceActionTitle?: string;
+  sourceMessage?: string;
+  outcomeStatus?: string;
+  outcomeSummary?: string;
+  targetSystem?: string;
+  createdAt?: number;
+  timestamp?: number;
+}
+
 const TopicModal = () => {
   const addFormRef = useRef<HTMLDivElement | null>(null);
   const [topics, setTopics] = useState<TopicItem[]>([]);
@@ -195,6 +221,12 @@ const TopicModal = () => {
     useState('');
   const [linkedActionSuggestionFallback, setLinkedActionSuggestionFallback] =
     useState('');
+  const [newAutomationPreview, setNewAutomationPreview] =
+    useState<AutomationPreviewState>({ status: 'idle' });
+  const [editingAutomationPreview, setEditingAutomationPreview] =
+    useState<AutomationPreviewState>({ status: 'idle' });
+  const [pendingRuleImprovement, setPendingRuleImprovement] =
+    useState<PendingMessageRuleImprovement | null>(null);
 
   const linkedActionConfigSignals = {
     openClawEnabled: Boolean(
@@ -235,6 +267,7 @@ const TopicModal = () => {
     setLinkedActionSuggestionSource('');
     setLinkedActionSuggestionError('');
     setLinkedActionSuggestionFallback('');
+    setNewAutomationPreview({ status: 'idle' });
     setNewTopic('');
     setNewExpiry('30');
     setNewMentionMe(false);
@@ -288,6 +321,12 @@ const TopicModal = () => {
     };
   };
 
+  const isPendingMessageRuleImprovementFresh = (
+    value: PendingMessageRuleImprovement,
+  ) => {
+    return !value.timestamp || Date.now() - value.timestamp < 10 * 60 * 1000;
+  };
+
   const requestLinkedActionSuggestion = async (force = false) => {
     const context = getDraftLinkedActionContext();
     if (!context) {
@@ -310,6 +349,7 @@ const TopicModal = () => {
         configSignals: linkedActionConfigSignals,
       });
       setNewAutomationPrompt(suggestion.prompt);
+      setNewAutomationPreview({ status: 'idle' });
       setLinkedActionSuggestionStatus('ready');
       setLinkedActionSuggestionSource(suggestion.sourceLabel);
       setLinkedActionSuggestionFallback('');
@@ -458,6 +498,66 @@ const TopicModal = () => {
   }, [envConfig]);
 
   useEffect(() => {
+    (async () => {
+      const result = await chrome.storage.local.get(
+        'pendingMessageRuleImprovement',
+      );
+      const config = result.pendingMessageRuleImprovement as
+        | PendingMessageRuleImprovement
+        | undefined;
+      if (!config) return;
+
+      try {
+        if (
+          config.schema === 'message_rule_improvement.v1' &&
+          config.ruleRef &&
+          config.proposedPrompt &&
+          isPendingMessageRuleImprovementFresh(config)
+        ) {
+          const storage = await chrome.storage.local.get('concernedItems');
+          const storedItems: any[] = Array.isArray(storage.concernedItems)
+            ? storage.concernedItems
+            : [];
+          const { manualItems } = partitionConcernedItems(storedItems);
+          const manualTopics = (manualItems as TopicItem[]).map((item) => ({
+            ...item,
+            id: item.id || Math.random().toString(36).substr(2, 9),
+            mentionMe: item.mentionMe || false,
+            automationPrompt: item.automationPrompt || undefined,
+            automationRequiresApproval: item.automationPrompt
+              ? item.automationRequiresApproval === true
+              : undefined,
+            autoReply: item.autoReply || false,
+            autoReplyConfig: item.autoReplyConfig || undefined,
+          }));
+          setTopics(manualTopics);
+          const ruleId = config.ruleRef.replace(/^manual:/, '');
+          const topic = manualTopics.find(
+            (item) =>
+              item.id === ruleId || `manual:${item.id}` === config.ruleRef,
+          );
+
+          if (topic) {
+            setPendingRuleImprovement(config);
+            setEditingAutomationPreview({ status: 'idle' });
+            setEditingTopic({
+              ...topic,
+              automationPrompt: config.proposedPrompt,
+              automationRequiresApproval: topic.automationPrompt
+                ? topic.automationRequiresApproval === true
+                : false,
+            });
+          } else {
+            alert(`未找到要改进的记忆入口规则：${config.ruleRef}`);
+          }
+        }
+      } finally {
+        await chrome.storage.local.remove('pendingMessageRuleImprovement');
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     // 初始化时获取进度
     chrome.storage.local.get('ollamaAnalysisProgress', (result) => {
       console.log('ollamaAnalysisProgress:', result.ollamaAnalysisProgress);
@@ -584,6 +684,7 @@ const TopicModal = () => {
   };
 
   const handleEdit = (topic: TopicItem) => {
+    setEditingAutomationPreview({ status: 'idle' });
     setEditingTopic(topic);
   };
 
@@ -606,7 +707,23 @@ const TopicModal = () => {
       t.id === normalizedEditingTopic.id ? normalizedEditingTopic : t,
     );
     await saveTopics(newTopics);
+    if (
+      pendingRuleImprovement?.requestId &&
+      pendingRuleImprovement.ruleRef === getRuleRef(normalizedEditingTopic)
+    ) {
+      try {
+        await getMemoryServiceClient().answerConfirmRequest(
+          pendingRuleImprovement.requestId,
+          'applied',
+          '已将建议文案应用到记忆入口规则。',
+        );
+      } catch (error) {
+        console.warn('规则改进确认项回写失败:', error);
+      }
+      setPendingRuleImprovement(null);
+    }
     setEditingTopic(null);
+    setEditingAutomationPreview({ status: 'idle' });
 
     // 如果保存的是自动答复或关注后续，检查静默消息分析是否启用
     if ((savedAutoReply || savedFollowThread) && !isSilentAnalysisEnabled) {
@@ -1344,6 +1461,168 @@ const TopicModal = () => {
     );
   };
 
+  const getLocalTimeZone = () => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const requestAutomationPreview = async (mode: 'new' | 'edit') => {
+    const isEdit = mode === 'edit';
+    const targetTopic = isEdit ? editingTopic : null;
+    const prompt = isEdit
+      ? targetTopic?.automationPrompt?.trim() || ''
+      : newAutomationPrompt.trim();
+    const setPreview = isEdit
+      ? setEditingAutomationPreview
+      : setNewAutomationPreview;
+
+    if (!prompt) {
+      setPreview({ status: 'idle' });
+      return;
+    }
+
+    if (!memoryServiceConfigured) {
+      setPreview({
+        status: 'failed',
+        error: 'Memory Service 未配置，无法预演联动操作。',
+      });
+      return;
+    }
+
+    setPreview({ status: 'loading' });
+    try {
+      const client = getMemoryServiceClient();
+      const content = isEdit
+        ? pendingRuleImprovement?.sourceMessage ||
+          targetTopic?.text ||
+          prompt
+        : pendingLinkedActionConfig?.content || newTopic.trim() || prompt;
+      const response = await client.previewMessageRuleAutomation({
+        ruleRef: targetTopic ? getRuleRef(targetTopic) : 'manual:draft',
+        ruleText: targetTopic?.text || newTopic.trim() || undefined,
+        automationPrompt: prompt,
+        requiresApproval: isEdit
+          ? targetTopic?.automationRequiresApproval === true
+          : newAutomationRequiresApproval,
+        message: {
+          content,
+          sender: isEdit
+            ? targetTopic?.filterSender || undefined
+            : newFilterSender.trim() || undefined,
+          groupName: isEdit
+            ? targetTopic?.filterGroup || undefined
+            : newFilterGroup.trim() || undefined,
+          timestamp: Date.now(),
+          timezone: getLocalTimeZone(),
+        },
+      });
+      setPreview({ status: 'ready', result: response });
+    } catch (error: any) {
+      console.error('预演联动操作失败:', error);
+      setPreview({
+        status: 'failed',
+        error: error?.message || '预演失败，请稍后重试。',
+      });
+    }
+  };
+
+  const renderAutomationPreview = (
+    preview: AutomationPreviewState,
+    onApplySuggestion: (suggestedPrompt: string) => void,
+  ) => {
+    if (preview.status === 'idle') return null;
+    if (preview.status === 'loading') {
+      return (
+        <div className="supporting-panel automation-preview-panel">
+          <div className="supporting-title">正在预演联动操作</div>
+          <div className="supporting-text muted-copy">
+            只做 dry-run，不会创建 RuntimeAction，也不会调用 OpenClaw。
+          </div>
+        </div>
+      );
+    }
+    if (preview.status === 'failed') {
+      return (
+        <div className="supporting-panel automation-preview-panel warning">
+          <div className="supporting-title">预演失败</div>
+          <div className="supporting-text muted-copy">{preview.error}</div>
+        </div>
+      );
+    }
+
+    const result = preview.result;
+    if (!result) return null;
+
+    return (
+      <div className="supporting-panel automation-preview-panel">
+        <div className="automation-panel-head">
+          <div className="supporting-title">联动操作预演</div>
+          <span
+            className={`rule-badge ${result.canPlan ? 'info' : 'warn'}`}
+          >
+            {result.canPlan ? '可生成动作' : '需要改写'}
+          </span>
+        </div>
+        <div className="supporting-text">
+          动作族：{result.actionFamily}
+          {result.detectedWindow
+            ? `，时间窗口 ${formatDateTime(result.detectedWindow.startAt)} - ${formatDateTime(result.detectedWindow.endAt)}`
+            : ''}
+        </div>
+        {result.actions.length > 0 && (
+          <div className="automation-preview-actions">
+            {result.actions.map((action, index) => (
+              <div
+                key={`${action.actionType}-${action.title}-${index}`}
+                className="automation-preview-action"
+              >
+                <span>{action.actionType === 'delegate_openclaw' ? '⚡' : '🔔'}</span>
+                <span>
+                  {action.title}
+                  {action.targetSystem ? ` / ${action.targetSystem}` : ''}
+                  {action.scheduledAt
+                    ? ` / ${formatDateTime(action.scheduledAt)}`
+                    : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {result.warnings.length > 0 && (
+          <div className="automation-preview-warnings">
+            {result.warnings.map((warning) => (
+              <div
+                key={`${warning.code}-${warning.message}`}
+                className={`automation-preview-warning ${warning.severity}`}
+              >
+                {warning.message}
+              </div>
+            ))}
+          </div>
+        )}
+        {result.suggestedPrompt && (
+          <div className="automation-suggestion-box">
+            <div className="supporting-title">建议改写</div>
+            <div className="supporting-text">{result.suggestedPrompt}</div>
+            {result.suggestionReason && (
+              <div className="hint-text">{result.suggestionReason}</div>
+            )}
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => onApplySuggestion(result.suggestedPrompt!)}
+            >
+              应用建议文案
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const getFollowThreadSummary = (topic: TopicItem) => {
     if (!topic.followThread || !topic.followConfig) return '';
     const relatedMessages = topic.followConfig.relatedMessages;
@@ -1840,12 +2119,13 @@ const TopicModal = () => {
                         className={`reply-content-input ${!openClawConfigured ? 'masked-textarea' : ''}`}
                         placeholder="例如：从消息里提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续操作。"
                         value={editingTopic.automationPrompt || ''}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setEditingTopic({
                             ...editingTopic,
                             automationPrompt: e.target.value || undefined,
-                          })
-                        }
+                          });
+                          setEditingAutomationPreview({ status: 'idle' });
+                        }}
                         rows={4}
                         readOnly={!openClawConfigured}
                         aria-disabled={!openClawConfigured}
@@ -1882,6 +2162,42 @@ const TopicModal = () => {
                       这里填写的是你定义的自然语言联动操作。命中后消息仍默认写入记忆；后续动作会由
                       RuntimeAction / OpenClaw 能力消费。
                     </div>
+                    {pendingRuleImprovement?.ruleRef ===
+                      getRuleRef(editingTopic) && (
+                      <div className="supporting-panel automation-preview-panel">
+                        <div className="supporting-title">
+                          来自决策中心的改进建议
+                        </div>
+                        <div className="supporting-text">
+                          {pendingRuleImprovement.reason}
+                        </div>
+                        <div className="hint-text">
+                          保存后会更新原规则，并把对应确认项标记为已应用。
+                        </div>
+                      </div>
+                    )}
+                    <div className="reply-options">
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => void requestAutomationPreview('edit')}
+                        disabled={!editingTopic.automationPrompt?.trim()}
+                      >
+                        {editingAutomationPreview.status === 'loading'
+                          ? '预演中...'
+                          : '预演并改进'}
+                      </button>
+                    </div>
+                    {renderAutomationPreview(
+                      editingAutomationPreview,
+                      (suggestedPrompt) => {
+                        setEditingTopic({
+                          ...editingTopic,
+                          automationPrompt: suggestedPrompt,
+                        });
+                        setEditingAutomationPreview({ status: 'idle' });
+                      },
+                    )}
                     {editingTopic.automationPrompt?.trim() && (
                       <div className="automation-status-row">
                         <span
@@ -2223,7 +2539,15 @@ const TopicModal = () => {
 
                 <div className="form-buttons">
                   <button onClick={handleSaveEdit}>保存</button>
-                  <button onClick={() => setEditingTopic(null)}>取消</button>
+                  <button
+                    onClick={() => {
+                      setEditingTopic(null);
+                      setEditingAutomationPreview({ status: 'idle' });
+                      setPendingRuleImprovement(null);
+                    }}
+                  >
+                    取消
+                  </button>
                 </div>
               </div>
             ) : (
@@ -2678,7 +3002,10 @@ const TopicModal = () => {
                   className={`reply-content-input ${!openClawConfigured ? 'masked-textarea' : ''}`}
                   placeholder="例如：从消息中提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续动作。留空表示不创建联动操作。"
                   value={newAutomationPrompt}
-                  onChange={(e) => setNewAutomationPrompt(e.target.value)}
+                  onChange={(e) => {
+                    setNewAutomationPrompt(e.target.value);
+                    setNewAutomationPreview({ status: 'idle' });
+                  }}
                   rows={4}
                   readOnly={!openClawConfigured}
                   aria-disabled={!openClawConfigured}
@@ -2707,6 +3034,16 @@ const TopicModal = () => {
                     : linkedActionSuggestionStatus === 'ready'
                       ? '🔄 重新建议'
                       : '✨ 生成联动操作建议'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => void requestAutomationPreview('new')}
+                  disabled={!newAutomationPrompt.trim()}
+                >
+                  {newAutomationPreview.status === 'loading'
+                    ? '预演中...'
+                    : '预演并改进'}
                 </button>
                 {linkedActionSuggestionSource ? (
                   <span className="hint-text suggestion-source-text">
@@ -2741,6 +3078,7 @@ const TopicModal = () => {
                           setNewAutomationPrompt(
                             linkedActionSuggestionFallback,
                           );
+                          setNewAutomationPreview({ status: 'idle' });
                           setLinkedActionSuggestionStatus('ready');
                           setLinkedActionSuggestionSource('内置兜底样例');
                           setLinkedActionSuggestionError('');
@@ -2752,6 +3090,10 @@ const TopicModal = () => {
                   </div>
                 </div>
               )}
+              {renderAutomationPreview(newAutomationPreview, (suggestedPrompt) => {
+                setNewAutomationPrompt(suggestedPrompt);
+                setNewAutomationPreview({ status: 'idle' });
+              })}
               <label className="checkbox-container">
                 <input
                   type="checkbox"
@@ -3355,6 +3697,68 @@ const TopicModal = () => {
 
                 .linked-action-feedback-panel {
                     margin-top: 12px;
+                }
+
+                .automation-preview-panel {
+                    margin-top: 12px;
+                }
+
+                .automation-preview-panel.warning {
+                    border-color: rgba(245, 158, 11, 0.28);
+                    background: rgba(120, 53, 15, 0.18);
+                }
+
+                .automation-preview-actions,
+                .automation-preview-warnings {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    margin-top: 10px;
+                }
+
+                .automation-preview-action {
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                    padding: 8px 10px;
+                    border-radius: 10px;
+                    background: rgba(15, 23, 42, 0.38);
+                    color: #dbeafe;
+                    font-size: 13px;
+                }
+
+                .automation-preview-warning {
+                    padding: 8px 10px;
+                    border-radius: 10px;
+                    font-size: 13px;
+                    line-height: 1.45;
+                    color: #fde68a;
+                    background: rgba(245, 158, 11, 0.12);
+                    border: 1px solid rgba(245, 158, 11, 0.18);
+                }
+
+                .automation-preview-warning.critical {
+                    color: #fecaca;
+                    background: rgba(239, 68, 68, 0.12);
+                    border-color: rgba(239, 68, 68, 0.24);
+                }
+
+                .automation-preview-warning.info {
+                    color: #bae6fd;
+                    background: rgba(14, 165, 233, 0.12);
+                    border-color: rgba(14, 165, 233, 0.2);
+                }
+
+                .automation-suggestion-box {
+                    margin-top: 12px;
+                    padding: 12px;
+                    border-radius: 12px;
+                    background: rgba(8, 47, 73, 0.28);
+                    border: 1px solid rgba(125, 211, 252, 0.18);
+                }
+
+                .automation-suggestion-box .secondary-btn {
+                    margin-top: 10px;
                 }
 
                 .reply-options {

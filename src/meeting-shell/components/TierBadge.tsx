@@ -9,6 +9,7 @@ interface TierBadgeProps {
 const BADGE_COLORS: Record<MeetingPilotTierStatus['badge'], string> = {
   Probing: '#9ca3af',
   'On-Device': '#16a34a',
+  'Local ASR': '#2563eb',
   'Local Whisper': '#2563eb',
   Cloud: '#7c3aed',
   'No ASR': '#dc2626',
@@ -17,7 +18,8 @@ const BADGE_COLORS: Record<MeetingPilotTierStatus['badge'], string> = {
 const BADGE_LABELS: Record<MeetingPilotTierStatus['badge'], string> = {
   Probing: 'Probing...',
   'On-Device': 'On-Device',
-  'Local Whisper': 'Local Whisper',
+  'Local ASR': 'Local ASR',
+  'Local Whisper': 'Local ASR',
   Cloud: 'Cloud',
   'No ASR': 'No Transcription',
 };

@@ -12,8 +12,8 @@
 
 ```javascript
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '1.0.0';
-var APP_SCRIPT_LAST_UPDATED = '2025-12-01';
+var APP_SCRIPT_VERSION = '2.6.1';
+var APP_SCRIPT_LAST_UPDATED = '2026-04-03';
 ```
 
 同时提供了一个 API 端点来获取当前部署的版本：
@@ -50,6 +50,7 @@ export interface SheetConfig {
 - **检查更新**: `checkForUpdates()` - 对比本地版本和部署版本
 - **执行更新**: `updateAppScript()` - 自动更新 App Script 代码并重新部署
 - **版本比较**: `compareVersions()` - 语义化版本号比较
+- **版本解析**: 从 `app-script-template.gs` 读取最新版本和更新时间，避免在多个文件重复维护版本号
 
 ### 4. 自动检测机制
 
@@ -154,19 +155,9 @@ await fetch(
    var APP_SCRIPT_LAST_UPDATED = '2025-12-15';  // 更新日期
    ```
 
-2. **更新 Updater 中的版本**
+2. **构建并发布扩展**
    
-   编辑 `src/scheduled-messages/AppScriptUpdater.ts`:
-   
-   ```typescript
-   export class AppScriptUpdater {
-     // 当前扩展中的 App Script 版本（从模板文件中提取）
-     private static readonly LATEST_APP_SCRIPT_VERSION = '1.1.0';
-   ```
-
-3. **构建并发布扩展**
-   
-   版本号会自动嵌入到扩展中，用户更新扩展后会自动检测并更新 App Script。
+   版本号会随模板文件进入扩展包。初始化新系统、检查更新和升级成功后的配置同步都会读取该模板版本。
 
 ### 版本号规范
 
@@ -190,6 +181,7 @@ await fetch(
    - 持久化存储
    - 跨设备同步
    - 便于查看和调试
+   - 保存 `deployment_id`、`app_script_version`、`app_script_last_updated`
 
 ## 错误处理
 
@@ -212,6 +204,11 @@ await fetch(
    - 显示错误通知
    - 保留当前版本
    - 用户可稍后重试
+
+5. **App Script 历史版本达到 200 个上限**
+   - 识别 Google 返回的版本上限错误
+   - 提供 Project History 清理入口
+   - 用户清理旧版本后可重试升级
 
 ### 已知问题和解决方案
 
@@ -338,9 +335,8 @@ import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 ### 模拟扩展更新
 
 1. 修改 `app-script-template.gs` 中的版本号
-2. 修改 `AppScriptUpdater.ts` 中的 `LATEST_APP_SCRIPT_VERSION`
-3. 重新加载扩展
-4. 在 background console 中手动调用：
+2. 重新加载扩展
+3. 在 background console 中手动调用：
    ```javascript
    checkAndUpdateAppScript()
    ```

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MeetingPilotParticipant,
   MeetingPilotASRTier,
@@ -26,7 +26,7 @@ const SOURCE_LABEL: Record<MeetingPilotSpeakerSource, string> = {
 
 const ASR_SOURCE_LABEL: Record<MeetingPilotASRTier | 'whisper', string> = {
   web_speech: 'Chrome On-Device',
-  desktop_whisper: 'Desktop Whisper',
+  desktop_whisper: 'Local ASR',
   cloud: 'Cloud',
   whisper: 'Whisper',
 };
@@ -37,7 +37,8 @@ const ASR_BADGE_LABEL: Record<
 > = {
   Probing: 'Probing',
   'On-Device': 'Chrome On-Device',
-  'Local Whisper': 'Desktop Whisper',
+  'Local ASR': 'Local ASR',
+  'Local Whisper': 'Local ASR',
   Cloud: 'Cloud',
   'No ASR': 'No ASR',
 };
@@ -94,6 +95,7 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
     Boolean(activeTier) ||
     dependencyReady ||
     tierBadge === 'Cloud' ||
+    tierBadge === 'Local ASR' ||
     tierBadge === 'Local Whisper' ||
     tierBadge === 'On-Device' ||
     tierBadge === 'No ASR';
@@ -112,7 +114,9 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
   return {
     configured,
     label:
-      activeLabel ||
+      (activeLabel === 'Local ASR' && session.tier?.lastTransitionReason?.startsWith('Local ASR')
+        ? session.tier.lastTransitionReason
+        : activeLabel) ||
       lastSourceLabel ||
       badgeLabel ||
       (configured ? 'ASR Ready' : '未配置'),
@@ -350,18 +354,34 @@ function SpeechSuggestionPanel(props: {
   );
 }
 
-function AnimatedTranscriptText(props: { text: string }) {
+function AnimatedTranscriptText(props: { text: string; stableId?: string }) {
+  const previousTextByIdRef = useRef(new Map<string, string>());
+  const stableId = props.stableId || '__default__';
+  const previousText = previousTextByIdRef.current.get(stableId) || '';
+  const animatedFromIndex = props.text.startsWith(previousText)
+    ? previousText.length
+    : 0;
+
+  useEffect(() => {
+    previousTextByIdRef.current.set(stableId, props.text);
+  }, [props.text, stableId]);
+
   const chars = useMemo(() => Array.from(props.text), [props.text]);
   return (
     <span className="speech-fade-text" aria-label={props.text}>
       {chars.map((char, index) => {
-        const delayMs = Math.min(index * 18, 1200);
+        const shouldAnimate = index >= animatedFromIndex;
+        const delayMs = shouldAnimate
+          ? Math.min((index - animatedFromIndex) * 18, 1200)
+          : 0;
         return (
           <span
             aria-hidden="true"
-            className="speech-fade-char"
-            key={`${index}-${char}`}
-            style={{ animationDelay: `${delayMs}ms` }}
+            className={`speech-fade-char${shouldAnimate ? '' : ' visible'}`}
+            key={`${stableId}-${index}-${char}`}
+            style={
+              shouldAnimate ? { animationDelay: `${delayMs}ms` } : undefined
+            }
           >
             {char === ' ' ? '\u00A0' : char}
           </span>
@@ -380,7 +400,12 @@ function TurnTranscriptText(props: {
     .filter((chunk): chunk is MeetingPilotTranscriptChunk => Boolean(chunk));
 
   if (!chunks.length) {
-    return <AnimatedTranscriptText text={props.turn.text} />;
+    return (
+      <AnimatedTranscriptText
+        stableId={props.turn.id}
+        text={props.turn.text}
+      />
+    );
   }
 
   return (
@@ -389,7 +414,7 @@ function TurnTranscriptText(props: {
         <React.Fragment key={chunk.id}>
           {index > 0 ? <span className="speech-chunk-gap"> </span> : null}
           <span className="speech-chunk" data-source={chunk.source || 'unknown'}>
-            <AnimatedTranscriptText text={chunk.text} />
+            <AnimatedTranscriptText stableId={chunk.id} text={chunk.text} />
           </span>
         </React.Fragment>
       ))}

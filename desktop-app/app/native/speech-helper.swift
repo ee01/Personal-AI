@@ -5,6 +5,9 @@ import Speech
 private struct IncomingCommand: Codable {
   let command: String
   let locale: String?
+  let pcmBase64: String?
+  let sampleRate: Double?
+  let localOnly: Bool?
 }
 
 private struct OutgoingEvent: Codable {
@@ -30,6 +33,8 @@ final class SpeechHelper {
   private var stopTimer: DispatchSourceTimer?
   private var sessionActive = false
   private var stopEmittedForSession = false
+  private var audioTapInstalled = false
+  private var usingExternalPcm = false
 
   func run() {
     FileHandle.standardInput.readabilityHandler = { [weak self] handle in
@@ -72,6 +77,12 @@ final class SpeechHelper {
       switch command.command {
       case "start":
         requestPermissionsAndStart(localeIdentifier: command.locale)
+      case "pcm_start":
+        requestSpeechAccessAndStartPcm(localeIdentifier: command.locale, localOnly: command.localOnly ?? true)
+      case "pcm_chunk":
+        appendPcmBase64Chunk(command.pcmBase64, sampleRate: command.sampleRate ?? 16000)
+      case "pcm_end":
+        stopListening(reason: "pcm_completed")
       case "stop":
         stopListening(reason: "completed")
       case "cancel":
@@ -120,6 +131,34 @@ final class SpeechHelper {
     }
   }
 
+  private func requestSpeechAccessAndStartPcm(localeIdentifier: String?, localOnly: Bool) {
+    requestSpeechAccess { [weak self] speechGranted, speechStatus in
+      guard let self else { return }
+      guard speechGranted else {
+        self.emit(
+          type: "error",
+          code: "speech_denied",
+          message: "Speech Recognition permission is required",
+          microphoneStatus: self.microphoneStatusString(),
+          speechStatus: speechStatus
+        )
+        return
+      }
+
+      do {
+        try self.startPcmRecognition(localeIdentifier: localeIdentifier, localOnly: localOnly)
+      } catch {
+        self.emit(
+          type: "error",
+          code: "speech_start_failed",
+          message: error.localizedDescription,
+          microphoneStatus: self.microphoneStatusString(),
+          speechStatus: speechStatus
+        )
+      }
+    }
+  }
+
   private func startRecognition(localeIdentifier: String?) throws {
     cancelListening(reason: nil, emitStopped: false)
 
@@ -142,16 +181,21 @@ final class SpeechHelper {
     latestTranscript = ""
     lastStopReason = "completed"
     stopEmittedForSession = false
+    usingExternalPcm = false
     request.taskHint = .dictation
 
     let inputNode = audioEngine.inputNode
     let recordingFormat = inputNode.outputFormat(forBus: 0)
-    inputNode.removeTap(onBus: 0)
+    if audioTapInstalled {
+      inputNode.removeTap(onBus: 0)
+      audioTapInstalled = false
+    }
     inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
       guard let self else { return }
       request.append(buffer)
       self.emitAmplitude(buffer)
     }
+    audioTapInstalled = true
 
     audioEngine.prepare()
     try audioEngine.start()
@@ -188,6 +232,109 @@ final class SpeechHelper {
     )
   }
 
+  private func startPcmRecognition(localeIdentifier: String?, localOnly: Bool) throws {
+    cancelListening(reason: nil, emitStopped: false)
+
+    let locale = Locale(identifier: localeIdentifier?.isEmpty == false ? localeIdentifier! : "en-US")
+    guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer() else {
+      throw NSError(domain: "DoubaoBridgeSpeechHelper", code: 1, userInfo: [
+        NSLocalizedDescriptionKey: "Speech recognizer is unavailable for this locale",
+      ])
+    }
+
+    if !recognizer.isAvailable {
+      throw NSError(domain: "DoubaoBridgeSpeechHelper", code: 2, userInfo: [
+        NSLocalizedDescriptionKey: "Speech recognizer is currently unavailable",
+      ])
+    }
+
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    request.shouldReportPartialResults = true
+    request.taskHint = .dictation
+    if localOnly {
+      if #available(macOS 10.15, *) {
+        guard recognizer.supportsOnDeviceRecognition else {
+          throw NSError(domain: "DoubaoBridgeSpeechHelper", code: 3, userInfo: [
+            NSLocalizedDescriptionKey: "On-device speech recognition is unavailable for this locale",
+          ])
+        }
+        request.requiresOnDeviceRecognition = true
+      } else {
+        throw NSError(domain: "DoubaoBridgeSpeechHelper", code: 4, userInfo: [
+          NSLocalizedDescriptionKey: "On-device speech recognition requires macOS 10.15 or newer",
+        ])
+      }
+    }
+
+    latestTranscript = ""
+    lastStopReason = "completed"
+    stopEmittedForSession = false
+    usingExternalPcm = true
+    audioTapInstalled = false
+
+    self.recognizer = recognizer
+    recognitionRequest = request
+    sessionActive = true
+
+    recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+      guard let self else { return }
+      guard self.sessionActive else { return }
+
+      if let result {
+        self.latestTranscript = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.emit(type: "transcript", text: self.latestTranscript, isFinal: result.isFinal)
+        if result.isFinal {
+          self.finishSession(reason: self.lastStopReason, emitStopped: true)
+          return
+        }
+      }
+
+      if let error {
+        let nsError = error as NSError
+        let code = "speech_error_\(nsError.code)"
+        self.emit(type: "error", code: code, message: nsError.localizedDescription)
+        self.finishSession(reason: "error", emitStopped: !self.latestTranscript.isEmpty)
+      }
+    }
+
+    emit(
+      type: "started",
+      microphoneStatus: microphoneStatusString(),
+      speechStatus: speechStatusString()
+    )
+  }
+
+  private func appendPcmBase64Chunk(_ pcmBase64: String?, sampleRate: Double) {
+    guard sessionActive, usingExternalPcm, let request = recognitionRequest else {
+      emit(type: "error", code: "pcm_session_inactive", message: "PCM speech session is not active")
+      return
+    }
+    guard let pcmBase64, let data = Data(base64Encoded: pcmBase64), data.count >= 2 else {
+      return
+    }
+
+    let sampleCount = data.count / MemoryLayout<Int16>.size
+    guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+          let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(sampleCount)) else {
+      emit(type: "error", code: "pcm_format_failed", message: "Unable to create PCM buffer")
+      return
+    }
+
+    buffer.frameLength = AVAudioFrameCount(sampleCount)
+    guard let channel = buffer.floatChannelData?[0] else {
+      return
+    }
+
+    data.withUnsafeBytes { rawBuffer in
+      let samples = rawBuffer.bindMemory(to: Int16.self)
+      for index in 0..<sampleCount {
+        channel[index] = Float(samples[index]) / 32768.0
+      }
+    }
+    request.append(buffer)
+    emitAmplitude(buffer)
+  }
+
   private func stopListening(reason: String) {
     guard sessionActive else {
       emit(type: "stopped", text: latestTranscript, isFinal: true, reason: reason)
@@ -196,10 +343,7 @@ final class SpeechHelper {
 
     lastStopReason = reason
     recognitionRequest?.endAudio()
-    if audioEngine.isRunning {
-      audioEngine.stop()
-    }
-    audioEngine.inputNode.removeTap(onBus: 0)
+    stopAudioCaptureIfNeeded()
 
     cancelStopTimer()
     let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -215,10 +359,7 @@ final class SpeechHelper {
   private func cancelListening(reason: String?, emitStopped: Bool = true) {
     cancelStopTimer()
     if sessionActive {
-      if audioEngine.isRunning {
-        audioEngine.stop()
-      }
-      audioEngine.inputNode.removeTap(onBus: 0)
+      stopAudioCaptureIfNeeded()
       recognitionRequest?.endAudio()
       recognitionTask?.cancel()
     }
@@ -233,15 +374,13 @@ final class SpeechHelper {
     cancelStopTimer()
     sessionActive = false
 
-    if audioEngine.isRunning {
-      audioEngine.stop()
-    }
-    audioEngine.inputNode.removeTap(onBus: 0)
+    stopAudioCaptureIfNeeded()
     recognitionRequest?.endAudio()
     recognitionRequest = nil
     recognitionTask?.cancel()
     recognitionTask = nil
     recognizer = nil
+    usingExternalPcm = false
 
     if emitStopped && !stopEmittedForSession {
       stopEmittedForSession = true
@@ -255,6 +394,16 @@ final class SpeechHelper {
     FileHandle.standardInput.readabilityHandler = nil
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) {
       exit(0)
+    }
+  }
+
+  private func stopAudioCaptureIfNeeded() {
+    if audioEngine.isRunning {
+      audioEngine.stop()
+    }
+    if audioTapInstalled {
+      audioEngine.inputNode.removeTap(onBus: 0)
+      audioTapInstalled = false
     }
   }
 

@@ -1064,6 +1064,13 @@ const shellStyle = `
     animation: speech-char-in 420ms ease forwards;
     will-change: opacity, transform;
   }
+  .speech-fade-char.visible {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+    animation: none;
+    will-change: auto;
+  }
   @keyframes speech-char-in {
     from {
       opacity: 0;

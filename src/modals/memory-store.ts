@@ -68,6 +68,97 @@ interface _ConversationMessage {
   [key: string]: any;
 }
 
+const TOPIC_CONVERSATION_CONTAINERS = [
+  'recentDataDetails',
+  'relatedData',
+] as const;
+
+const getTopicConversationLists = (topic: any): any[][] => {
+  if (!topic) return [];
+
+  const lists: any[][] = [];
+  TOPIC_CONVERSATION_CONTAINERS.forEach((containerKey) => {
+    const conversations = topic[containerKey]?.conversations;
+    if (Array.isArray(conversations) && !lists.includes(conversations)) {
+      lists.push(conversations);
+    }
+  });
+  return lists;
+};
+
+const inferUnreadCountFromConversations = (topic: any): number => {
+  const lists = getTopicConversationLists(topic);
+  if (lists.length === 0) return Number(topic?.readStatus?.unreadCount || 0);
+
+  return Math.max(
+    0,
+    ...lists.map((conversations) =>
+      conversations.filter((conversation: any) => conversation?.isRead !== true)
+        .length,
+    ),
+  );
+};
+
+const setTopicReadStatus = (
+  topic: any,
+  unreadCount: number,
+  timestamp: number,
+) => {
+  if (!topic) return;
+
+  topic.readStatus = {
+    ...(topic.readStatus || {}),
+    isRead: unreadCount === 0,
+    unreadCount,
+    lastReadTime:
+      unreadCount === 0 ? timestamp : topic.readStatus?.lastReadTime || null,
+    lastUpdateTime: topic.readStatus?.lastUpdateTime || topic.updated || timestamp,
+  };
+};
+
+const markKnownConversationsAsRead = (topic: any, timestamp: number) => {
+  getTopicConversationLists(topic).forEach((conversations) => {
+    conversations.forEach((conversation: any) => {
+      conversation.isRead = true;
+      conversation.readTimestamp = timestamp;
+    });
+  });
+};
+
+const markKnownConversationAsRead = (
+  topic: any,
+  conversationId: string,
+  timestamp: number,
+): boolean => {
+  let changed = false;
+
+  getTopicConversationLists(topic).forEach((conversations) => {
+    conversations.forEach((conversation: any) => {
+      if (conversation?.id !== conversationId) return;
+      if (conversation.isRead !== true) {
+        changed = true;
+      }
+      conversation.isRead = true;
+      conversation.readTimestamp = timestamp;
+    });
+  });
+
+  return changed;
+};
+
+const pruneReadDiscussion = (topic: any, conversationId: string) => {
+  if (!Array.isArray(topic?.unreadDiscussions)) return;
+
+  topic.unreadDiscussions = topic.unreadDiscussions.filter((discussion: any) => {
+    const discussionId =
+      discussion?.id ||
+      discussion?.conversationId ||
+      discussion?.messageId ||
+      discussion?.sourceMessageId;
+    return discussionId ? discussionId !== conversationId : true;
+  });
+};
+
 // Pinia Store
 export const useMemoryStore = defineStore('memory', () => {
   const isLoading = ref(false);
@@ -1101,7 +1192,8 @@ export const useMemoryStore = defineStore('memory', () => {
   };
 
   const getMockTopicDetail = (topicId: string) => {
-    return {
+    const updated = Date.now() - 1800000;
+    const legacyDetail = {
       id: topicId,
       title: 'AI 工作流自动化',
       overview: {
@@ -1266,6 +1358,58 @@ export const useMemoryStore = defineStore('memory', () => {
         },
       ],
     };
+
+    return {
+      ...legacyDetail,
+      id: topicId,
+      name: legacyDetail.title,
+      type: 'Topic',
+      description: '讨论 AI 在工作流程中的应用和自动化实践',
+      importance: 0.9,
+      updated,
+      readStatus: {
+        isRead: false,
+        lastReadTime: null,
+        unreadCount: legacyDetail.conversations.length,
+        lastUpdateTime: updated,
+      },
+      unreadDiscussions: legacyDetail.conversations.map((conversation) => ({
+        id: conversation.id,
+        text: conversation.summary,
+      })),
+      statistic: {
+        conversations: legacyDetail.overview.discussions,
+        projects: legacyDetail.overview.projects,
+        participants: legacyDetail.overview.participants,
+        resources: legacyDetail.overview.resources,
+        documents: 0,
+        webpages: legacyDetail.webpages.length,
+        relationships: 0,
+      },
+      recentDataDetails: {
+        conversations: legacyDetail.conversations.map((conversation) => ({
+          id: conversation.id,
+          sender: conversation.sender,
+          groupName: conversation.group,
+          datetime: updated,
+          summary: conversation.summary,
+          contextMessages: conversation.contextMessages.map((message) => ({
+            sender: message.sender,
+            content: message.content,
+            datetime: updated,
+            isMainMessage: Boolean(message.isMainMessage),
+          })),
+          isRead: false,
+        })),
+        webpages: legacyDetail.webpages,
+        resources: legacyDetail.relatedResources,
+        projects: legacyDetail.relatedProjects,
+        people: [],
+        topics: [],
+        jiraTickets: legacyDetail.relatedTickets,
+        cooccurringEntities: [],
+      },
+    };
   };
 
   /**
@@ -1404,38 +1548,39 @@ export const useMemoryStore = defineStore('memory', () => {
    * 标记主题已读并清空所有未读消息
    */
   const markTopicAsRead = async (topicId: string) => {
-    const entity = entities.value.find((e: any) => e.id === topicId);
-    if (!entity) return;
+    const timestamp = Date.now();
+    const targets = [
+      entities.value.find((e: any) => e.id === topicId),
+      topicDetailData.value &&
+      (topicDetailData.value as any).id === topicId
+        ? topicDetailData.value
+        : null,
+    ].filter((topic, index, all) => topic && all.indexOf(topic) === index);
 
-    // 标记为已读
-    entity.readStatus = {
-      lastReadTime: Date.now(),
-      unreadCount: 0,
-      lastUpdateTime: entity.readStatus?.lastUpdateTime || Date.now(),
-    };
+    if (targets.length === 0) return;
 
-    // 清空未读讨论
-    if (entity.unreadDiscussions) {
-      entity.unreadDiscussions = [];
-    }
-
-    // 标记所有聊天消息为已读
-    if (entity.relatedData?.conversations) {
-      entity.relatedData?.conversations?.forEach((conv: any) => {
-        conv.isRead = true;
-      });
-    }
-
-    // 持久化到LocalStorage，使用 toRaw 确保存储原始对象
-    chromeAPI.sendMessage({
-      type: 'CACHE_ENTITY',
-      entity: toRaw(entity),
+    targets.forEach((topic: any) => {
+      setTopicReadStatus(topic, 0, timestamp);
+      markKnownConversationsAsRead(topic, timestamp);
+      if (Array.isArray(topic.unreadDiscussions)) {
+        topic.unreadDiscussions = [];
+      }
     });
+
+    await Promise.allSettled(
+      targets.map((topic: any) =>
+        chromeAPI.sendMessage({
+          type: 'CACHE_ENTITY',
+          entity: toRaw(topic),
+        }),
+      ),
+    );
 
     // 更新侧边栏计数
     updateTopicUnreadCount();
 
-    console.log(`[主题阅读] "${entity.name}" 已标记为已读`);
+    const topicName = (targets[0] as any)?.name || topicId;
+    console.log(`[主题阅读] "${topicName}" 已标记为已读`);
   };
 
   /**
@@ -1445,35 +1590,60 @@ export const useMemoryStore = defineStore('memory', () => {
     topicId: string,
     conversationId: string,
   ) => {
-    const topic = topicDetailData.value;
-    if (!topic || topic.id !== topicId) return;
+    const timestamp = Date.now();
+    const targets = [
+      entities.value.find((e: any) => e.id === topicId),
+      topicDetailData.value &&
+      (topicDetailData.value as any).id === topicId
+        ? topicDetailData.value
+        : null,
+    ].filter((topic, index, all) => topic && all.indexOf(topic) === index);
 
-    const conversations = topic.recentDataDetails?.conversations;
-    if (!Array.isArray(conversations)) return;
+    if (targets.length === 0) return;
 
-    const conversation = conversations.find(
-      (c: any) => c.id === conversationId,
+    const changed = targets.some((topic: any) =>
+      getTopicConversationLists(topic).some((conversations) =>
+        conversations.some(
+          (conversation: any) =>
+            conversation?.id === conversationId && conversation.isRead !== true,
+        ),
+      ),
     );
-    if (conversation) {
-      conversation.isRead = true;
 
-      // 持久化到LocalStorage，使用 toRaw 确保存储原始对象
-      chromeAPI.sendMessage({
-        type: 'CACHE_ENTITY',
-        entity: toRaw(topic),
-      });
+    if (!changed) return;
 
-      // 检查是否所有消息都已读，如果是则标记整个主题为已读
-      const allRead = conversations.every((c: any) => c.isRead === true);
-      if (allRead) {
-        await markTopicAsRead(topicId);
-      } else {
-        // 更新主题未读计数
-        updateTopicUnreadCountAfterMessageRead(topicId);
+    targets.forEach((topic: any) => {
+      markKnownConversationAsRead(topic, conversationId, timestamp);
+      pruneReadDiscussion(topic, conversationId);
+
+      const previousUnreadCount =
+        typeof topic.readStatus?.unreadCount === 'number'
+          ? topic.readStatus.unreadCount
+          : inferUnreadCountFromConversations(topic) + 1;
+      const unreadCount = Math.max(0, previousUnreadCount - 1);
+      setTopicReadStatus(topic, unreadCount, timestamp);
+
+      if (unreadCount === 0) {
+        markKnownConversationsAsRead(topic, timestamp);
+        if (Array.isArray(topic.unreadDiscussions)) {
+          topic.unreadDiscussions = [];
+        }
       }
+    });
 
-      console.log(`[消息阅读] 消息 "${conversationId}" 已标记为已读`);
-    }
+    await Promise.allSettled(
+      targets.map((topic: any) =>
+        chromeAPI.sendMessage({
+          type: 'CACHE_ENTITY',
+          entity: toRaw(topic),
+        }),
+      ),
+    );
+
+    // 更新主题未读计数
+    updateTopicUnreadCount();
+
+    console.log(`[消息阅读] 消息 "${conversationId}" 已标记为已读`);
   };
 
   /**
@@ -1535,30 +1705,6 @@ export const useMemoryStore = defineStore('memory', () => {
     if (topicType) {
       topicType.count = unreadCount;
     }
-  };
-
-  /**
-   * 更新主题未读计数(单条消息已读后)
-   */
-  const updateTopicUnreadCountAfterMessageRead = (topicId: string) => {
-    const topic = topicDetailData.value;
-    if (!topic || topic.id !== topicId) return;
-
-    const conversations = topic.recentDataDetails?.conversations;
-    const unreadCount = Array.isArray(conversations)
-      ? conversations.filter((c: any) => !c.isRead).length
-      : 0;
-
-    // 更新实体列表中的主题状态
-    const entity = entities.value.find((e: any) => e.id === topicId);
-    if (entity && entity.readStatus) {
-      entity.readStatus.unreadCount = unreadCount;
-      if (unreadCount === 0) {
-        entity.readStatus.lastReadTime = Date.now();
-      }
-    }
-
-    updateTopicUnreadCount();
   };
 
   /**

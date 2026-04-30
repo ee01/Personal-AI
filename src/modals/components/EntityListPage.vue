@@ -144,7 +144,10 @@
         <!-- "阅"按钮 - 仅未读主题显示 -->
         <button 
           v-if="entity.readStatus?.unreadCount > 0" 
+          type="button"
           class="mark-read-btn" 
+          title="标记主题已读"
+          :aria-label="`标记 ${entity.name} 为已读`"
           @click.stop="handleMarkTopicAsRead(entity.id)"
         >
           阅
@@ -1013,7 +1016,8 @@ watch(entityType, (newType) => {
 }
 
 .content-card:hover .mark-read-btn,
-.topic-card:hover .mark-read-btn {
+.topic-card:hover .mark-read-btn,
+.mark-read-btn:focus-visible {
   opacity: 1;
 }
 
@@ -1026,6 +1030,11 @@ watch(entityType, (newType) => {
 
 .mark-read-btn:active {
   transform: scale(0.95);
+}
+
+.mark-read-btn:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.75);
+  outline-offset: 2px;
 }
 
 /* 未读徽章 */

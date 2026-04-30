@@ -42,5 +42,28 @@ export function sanitizeASRTranscriptText(
   }
 
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  if (looksGarbledWhisperText(cleaned)) return '';
   return PURE_NON_SPEECH_RE.test(cleaned) ? '' : cleaned;
+}
+
+function looksGarbledWhisperText(text: string): boolean {
+  if (!text) return false;
+  if (text.includes('\uFFFD')) return true;
+  const garbledCount = Array.from(text).filter(isGarbledSymbol).length;
+  if (garbledCount >= 4) return true;
+  return text.length >= 40 && garbledCount / text.length > 0.08;
+}
+
+function isGarbledSymbol(char: string): boolean {
+  const code = char.codePointAt(0) || 0;
+  return (
+    (code >= 0x0488 && code <= 0x0489) ||
+    (code >= 0x0590 && code <= 0x05ff) ||
+    (code >= 0x0600 && code <= 0x06ff) ||
+    (code >= 0x0700 && code <= 0x074f) ||
+    (code >= 0x07c0 && code <= 0x07ff) ||
+    (code >= 0x0900 && code <= 0x0fff) ||
+    (code >= 0x20a0 && code <= 0x20cf) ||
+    (code >= 0x2300 && code <= 0x27bf)
+  );
 }

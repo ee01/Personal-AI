@@ -24,7 +24,7 @@ const TIER_BADGE_MAP: Record<
   MeetingPilotTierStatus['badge']
 > = {
   web_speech: 'On-Device',
-  desktop_whisper: 'Local Whisper',
+  desktop_whisper: 'Local ASR',
   cloud: 'Cloud',
 };
 
@@ -128,8 +128,15 @@ export class ASROrchestrator {
     const unsubStatus = provider.on('status', (e) => {
       this.onCaptureLog(
         'info',
-        `ASR tier ${e.tier} status: ${e.state}`,
+        `ASR tier ${e.tier} status: ${e.state}${e.detail ? ` (${e.detail})` : ''}`,
       );
+      if (
+        e.detail &&
+        e.state === 'running' &&
+        this.activeProvider === provider
+      ) {
+        this._emitTierStatus(provider.tier, badge, e.detail);
+      }
     });
 
     const unsubError = provider.on('error', (e: ASRErrorEvent) => {

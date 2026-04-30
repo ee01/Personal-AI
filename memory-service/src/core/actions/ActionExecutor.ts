@@ -15,6 +15,7 @@ import { ActionResultRepository } from '../../repositories/ActionResultRepositor
 import { ConfirmRequestRepository } from '../../repositories/ConfirmRequestRepository.js';
 import { getUserRuntimeConfig } from '../../runtimeConfig.js';
 import { now } from '../../utils/time.js';
+import { buildMessageRuleImprovementContextFromDelegationOutcome } from '../MessageRuleAutomationAdvisor.js';
 import { TruthMaintainer, type PropertyChange } from '../TruthMaintainer.js';
 import { ReflectionThreadService } from '../ReflectionThreadService.js';
 import { OutreachEngine } from '../OutreachEngine.js';
@@ -539,11 +540,16 @@ export class ActionExecutor {
         action,
         outcome,
       );
+      const improvementActionId =
+        await this.enqueueMessageRuleImprovementRequest(action, outcome);
       return {
         result: {
           status: outcome.status,
           summary: outcome.summary,
-          followUpActionIds,
+          followUpActionIds: [
+            ...followUpActionIds,
+            ...(improvementActionId ? [improvementActionId] : []),
+          ],
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
@@ -558,11 +564,16 @@ export class ActionExecutor {
         action,
         outcome,
       );
+      const improvementActionId =
+        await this.enqueueMessageRuleImprovementRequest(action, outcome);
       return {
         result: {
           status: outcome.status,
           summary: outcome.summary,
-          followUpActionIds: confirmActionId ? [confirmActionId] : [],
+          followUpActionIds: [
+            ...(confirmActionId ? [confirmActionId] : []),
+            ...(improvementActionId ? [improvementActionId] : []),
+          ],
           transcriptPath: outcome.transcriptPath,
           payload: outcome.payload,
         },
@@ -572,10 +583,15 @@ export class ActionExecutor {
       };
     }
 
+    const improvementActionId =
+      await this.enqueueMessageRuleImprovementRequest(action, outcome);
     return {
       result: {
         status: outcome.status,
         summary: outcome.summary,
+        ...(improvementActionId
+          ? { followUpActionIds: [improvementActionId] }
+          : {}),
         transcriptPath: outcome.transcriptPath,
         payload: outcome.payload,
       },
@@ -757,6 +773,63 @@ export class ActionExecutor {
       runId: action.runId,
       sourceKind: 'delegation_recovery',
       sourceRefId: action.id,
+      queueStatus: 'queued',
+      confidence: action.confidence,
+      utilityScore: action.utilityScore,
+      urgencyScore: action.urgencyScore,
+    });
+
+    await this.executeAction(confirmAction.id);
+    return confirmAction.id;
+  }
+
+  private async enqueueMessageRuleImprovementRequest(
+    action: QueuedActionRecord,
+    outcome: DelegationOutcome,
+  ): Promise<string | undefined> {
+    if (action.sourceKind !== 'message_rule') {
+      const metadata =
+        action.params.metadata &&
+        typeof action.params.metadata === 'object' &&
+        !Array.isArray(action.params.metadata)
+          ? (action.params.metadata as Record<string, unknown>)
+          : {};
+      if (typeof metadata.ruleRef !== 'string' || !metadata.ruleRef.trim()) {
+        return undefined;
+      }
+    }
+
+    const context =
+      buildMessageRuleImprovementContextFromDelegationOutcome(action, outcome);
+    if (!context) {
+      return undefined;
+    }
+
+    const confirmAction = this.actionRepo.create({
+      actionType: 'create_confirm_request',
+      title: `建议改进记忆入口规则: ${context.ruleRef}`,
+      description: context.summary,
+      params: {
+        question: `这条记忆入口规则的联动操作可能需要改写，是否打开规则应用建议？`,
+        context: JSON.stringify(context),
+        options: [{ label: '忽略建议', value: 'dismissed' }],
+        category: 'message_rule_improvement',
+        priority: 'normal',
+        reasonCode: 'action_result_improvement',
+        sourceAnchor: `message_rule:${context.ruleRef}`,
+        gapType: 'linked_action_prompt_improvement',
+        evidenceRefs: [
+          `action:${action.id}`,
+          `message_rule:${context.ruleRef}`,
+        ],
+      },
+      requiresApproval: false,
+      executionMode: 'auto',
+      priority: Math.max(6, action.priority),
+      threadId: action.threadId,
+      runId: action.runId,
+      sourceKind: 'message_rule_improvement',
+      sourceRefId: context.ruleRef,
       queueStatus: 'queued',
       confidence: action.confidence,
       utilityScore: action.utilityScore,

@@ -11,6 +11,7 @@ export interface ProjectReportTask {
   status: string;
   eta?: string;
   desc?: string;
+  anchorPosition?: number;
   platforms?: Record<string, ProjectReportPlatformState>;
   jira?: Array<{ key: string; title: string }>;
 }
@@ -153,6 +154,10 @@ function sanitizeTask(task: any): ProjectReportTask {
     status: typeof task?.status === 'string' ? task.status : 'unknown',
     eta: typeof task?.eta === 'string' ? task.eta : undefined,
     desc: typeof task?.desc === 'string' ? task.desc : undefined,
+    anchorPosition:
+      typeof task?.anchorPosition === 'number' && Number.isFinite(task.anchorPosition)
+        ? Math.max(0, Math.min(100, task.anchorPosition))
+        : undefined,
     platforms,
     jira,
   };
