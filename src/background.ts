@@ -999,6 +999,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Composer Guard: user-approved context insertion for native page composers.
+  if (request.type === 'COMPOSER_ASSIST_REQUEST') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.composerAssist(request.request);
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        console.warn('[background] composer-assist failed:', err);
+        sendResponse({
+          success: false,
+          error: err?.message || 'composer_assist_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
   // 🆕 处理用户画像相关请求
   const userProfileHandled = UserProfileMessageHandler.handleMessage(
     request,

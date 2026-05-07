@@ -14,7 +14,9 @@ export type SourceType =
   | 'web'
   | 'manual'
   | 'system'
-  | 'meeting';
+  | 'meeting'
+  | 'ai_chat'
+  | 'doubao';
 export type MemoryScope = 'work' | 'personal';
 export type RecallScope = MemoryScope | 'both' | 'all';
 export type RecallSourceType =
@@ -736,6 +738,79 @@ export interface ContextRecallResponse {
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
   debug?: ContextRecallDebug;
+}
+
+export type ComposerSurface =
+  | 'ringcentral_message'
+  | 'ringcentral_thread'
+  | 'jira_issue'
+  | 'chatgpt'
+  | 'doubao'
+  | 'claude'
+  | 'gemini'
+  | 'generic_agent';
+
+export type ComposerContextType =
+  | 'message_thread'
+  | 'jira_issue'
+  | 'web_agent_prompt';
+
+export interface ComposerVisibleMessage {
+  id?: string;
+  sender?: string;
+  text: string;
+  timestampLabel?: string;
+}
+
+export interface ComposerAssistRequest {
+  surface: ComposerSurface;
+  contextType: ComposerContextType;
+  title?: string;
+  url?: string;
+  draftText?: string;
+  primaryText?: string;
+  secondaryTexts?: string[];
+  keywords?: string[];
+  identifiers?: {
+    conversationId?: string;
+    groupId?: string;
+    threadRootPostId?: string;
+    issueKey?: string;
+    provider?: string;
+  };
+  visibleMessages?: ComposerVisibleMessage[];
+  threadRoot?: ComposerVisibleMessage;
+  sourceTypes?: RecallSourceType[];
+  automationLevel?: 'L1' | 'L2';
+  debug?: boolean;
+}
+
+export interface ComposerAssistEvidence {
+  id: string;
+  type: 'message' | 'chunk' | 'entity';
+  title?: string;
+  snippet: string;
+  sourceLabel?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  exploreLink?: string;
+  whyMatched?: string;
+  timestamp?: number;
+  score?: number;
+}
+
+export interface ComposerAssistResponse {
+  available: boolean;
+  suggestionType: 'none' | 'context_pack' | 'reply_context' | 'issue_context';
+  title?: string;
+  summary?: string;
+  insertText?: string;
+  evidence: ComposerAssistEvidence[];
+  riskLevel: 'low' | 'medium' | 'high';
+  previewRequired: boolean;
+  confidence: number;
+  queryTimeMs: number;
+  debug?: Record<string, unknown>;
 }
 
 export interface HealthResponse {

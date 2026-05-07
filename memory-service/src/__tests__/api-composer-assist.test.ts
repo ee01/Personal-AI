@@ -1,0 +1,196 @@
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+
+vi.mock('../llm/EmbeddingClient.js', () => ({
+  EmbeddingClient: {
+    getInstance: vi
+      .fn()
+      .mockRejectedValue(new Error('Embedding not available in tests')),
+    isLoaded: vi.fn().mockReturnValue(false),
+    getModelName: vi.fn().mockReturnValue('mock-model'),
+  },
+}));
+
+import type { FastifyInstance } from 'fastify';
+import type BetterSqlite3 from 'better-sqlite3';
+
+import { buildApp } from '../server.js';
+import { getTestDb } from './setup.js';
+
+describe('Composer Assist API (POST /composer/assist)', () => {
+  let app: FastifyInstance;
+  let db: BetterSqlite3.Database;
+
+  beforeAll(async () => {
+    db = getTestDb();
+    const result = await buildApp({ db });
+    app = result.app;
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9201,
+      content:
+        'Factory AI free trial passed security approval, but production usage must use RingCentral email login.',
+      sourceType: 'glip',
+      source: 'glip',
+      scope: 'work',
+      createdAt: now - 60,
+    });
+    insertChunk({
+      id: 9202,
+      content:
+        'Cross AI handoff should inject a concise Personal AI context pack into the current ChatGPT prompt.',
+      sourceType: 'ai_chat',
+      source: 'chatgpt',
+      scope: 'work',
+      createdAt: now - 30,
+    });
+    insertChunk({
+      id: 9203,
+      content:
+        'Doubao conversation memory says do not auto-send prompts when transferring context to another AI platform.',
+      sourceType: 'doubao',
+      source: 'doubao',
+      scope: 'work',
+      createdAt: now - 20,
+    });
+  });
+
+  function insertChunk(args: {
+    id: number;
+    content: string;
+    sourceType: string;
+    source: string;
+    scope: string;
+    createdAt: number;
+  }): void {
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      args.id,
+      `messages/${args.id}`,
+      1,
+      1,
+      args.content,
+      `hash-${args.id}`,
+      args.scope,
+      args.source,
+      args.sourceType,
+      'Personal AI',
+      args.createdAt,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      args.id,
+      args.content,
+    );
+  }
+
+  it('rejects unknown surfaces', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'unknown_surface',
+        contextType: 'web_agent_prompt',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns a preview-required AI context pack for web agent prompts', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        title: 'ChatGPT',
+        draftText: 'Help me design cross AI prompt injection for Personal AI',
+        primaryText: 'current prompt is about cross AI handoff context pack',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['ai_chat', 'doubao'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('context_pack');
+    expect(body.previewRequired).toBe(true);
+    expect(body.riskLevel).toBe('medium');
+    expect(body.insertText).toContain('Personal AI context pack');
+    expect(body.insertText).toContain('Do not expose private details');
+    expect(body.evidence.length).toBeGreaterThan(0);
+  });
+
+  it('returns reply context for RingCentral threads and includes thread root', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        title: 'AI tools selection',
+        draftText: 'Factory AI trial status?',
+        primaryText: 'Discussing Factory AI free trial security approval',
+        identifiers: {
+          conversationId: '1280503250946',
+          groupId: '1280503250946',
+          threadRootPostId: 'post-1',
+        },
+        threadRoot: {
+          id: 'post-1',
+          sender: 'Alice',
+          text: 'Can we use Factory AI for production project?',
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('reply_context');
+    expect(body.insertText).toContain('Thread root');
+    expect(body.insertText).toContain('Factory AI free trial');
+  });
+
+  it('returns an empty result when no memory is relevant', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'jira_issue',
+        contextType: 'jira_issue',
+        title: 'VIDEONONEXISTENT-1',
+        primaryText: 'unrelated basalt kitchen cabinet hardware',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.suggestionType).toBe('none');
+    expect(body.evidence).toEqual([]);
+  });
+});

@@ -44,6 +44,7 @@ import { profileRoutes } from './routes/profile.js';
 import { agentRoutes } from './routes/agent.js';
 import { migrateRoutes } from './routes/migrate.js';
 import { contextRecallRoutes } from './routes/contextRecall.js';
+import { composerAssistRoutes } from './routes/composerAssist.js';
 import { userFilesRoutes } from './routes/userFiles.js';
 import { dreamDigestRoutes } from './routes/dreamDigest.js';
 import { weeklyReportRoutes } from './routes/weeklyReport.js';
@@ -178,6 +179,7 @@ export async function buildApp(
       await instance.register(agentRoutes);
       await instance.register(migrateRoutes);
       await instance.register(contextRecallRoutes);
+      await instance.register(composerAssistRoutes);
       await instance.register(userFilesRoutes);
       await instance.register(dreamDigestRoutes);
       await instance.register(weeklyReportRoutes);

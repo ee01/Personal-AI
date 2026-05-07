@@ -12,6 +12,8 @@ import {
     sanitizeContextExternalUrl,
     sanitizeExploreRoute,
 } from './web-intelligence/contextRecallGuards';
+import { startComposerGuardController } from './composer-guard/ComposerGuardController';
+import { buildPassiveContextSnapshot } from './composer-guard/siteContextAdapters';
 
 interface SimplePageContent {
     title: string;
@@ -185,6 +187,7 @@ class WebIntelligenceContentScript {
 
         console.log('🧠 智能网页分析已启动:', window.location.href);
 
+        startComposerGuardController();
         this.setupEventListeners();
         void this.loadSiteMutes().then(() => this.scheduleContextMatch(200));
 
@@ -864,11 +867,19 @@ class WebIntelligenceContentScript {
     }
 
     private buildContextMatchPayload(): ContextMatchPayload | null {
-        if (this.isRingCentralMessagePage()) {
-            return this.buildRingCentralContextPayload();
+        const snapshot = buildPassiveContextSnapshot(document, window.location);
+        if (snapshot) {
+            return {
+                contextKey: snapshot.contextKey,
+                stabilityKey: snapshot.contextKey,
+                title: snapshot.title,
+                url: snapshot.url,
+                keywords: snapshot.keywords,
+                snippet: snapshot.primaryText,
+            };
         }
 
-        return this.buildGenericContextPayload();
+        return null;
     }
 
     private buildGenericContextPayload(): ContextMatchPayload | null {
