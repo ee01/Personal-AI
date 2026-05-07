@@ -5,6 +5,7 @@ import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import { getEnvConfig } from '../utils';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
+  MeetingPilotActionItem,
   MeetingPilotSessionSnapshot,
   MeetingPilotParticipantStance,
   createMeetingPilotSessionSnapshot,
@@ -235,6 +236,7 @@ const panoramaStyle = `
   .sidebar-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
   .participant-list, .action-list, .decision-list { display: flex; flex-direction: column; gap: 8px; }
   .participant-row, .action-item, .decision-item { padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; transition: all 0.2s; }
+  .action-item.dismissed { opacity: 0.68; border-style: dashed; }
   .participant-row:hover { border-color: var(--accent); transform: translateX(2px); }
   .participant-row { display: flex; align-items: center; gap: 10px; }
   .participant-avatar { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
@@ -247,9 +249,12 @@ const panoramaStyle = `
   .action-item:hover { border-color: var(--orange); transform: translateX(2px); }
   .action-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: flex-start; gap: 6px; }
   .action-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-evidence { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--orange); border-radius: 6px; background: rgba(255,165,2,0.08); color: var(--text-dim); font-size: 11px; line-height: 1.45; }
   .action-status { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
   .status-pending { background: rgba(255, 165, 2, 0.15); color: var(--orange); }
   .status-done { background: rgba(105, 219, 124, 0.15); color: var(--p2); }
+  .status-confirmed { background: rgba(116,185,255,0.15); color: var(--blue); }
+  .status-dismissed { background: rgba(148,163,184,0.12); color: var(--text-dim); }
   .decision-item { border-left: 3px solid var(--teal); font-size: 13px; line-height: 1.5; }
   .decision-item:hover { border-color: var(--teal); transform: translateX(2px); }
   .dec-time { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
@@ -478,13 +483,15 @@ function getArchivedSessionFromQuery():
       message: pdfUrl
         ? '会议纪要 PDF 已就绪。'
         : digestId
-          ? '会议记录已归档，PDF 仍在生成中。'
-          : '会议记录已归档。',
+        ? '会议记录已归档，PDF 仍在生成中。'
+        : '会议记录已归档。',
     },
     currentTopic: '会议结果已归档',
     summary:
       participants.length > 0
-        ? `这是一条从“会议记录”入口打开的归档会议，参会者包括：${participants.join('、')}。`
+        ? `这是一条从“会议记录”入口打开的归档会议，参会者包括：${participants.join(
+            '、',
+          )}。`
         : '这是一条从“会议记录”入口打开的归档会议。',
     updatedAt: lastEventAt,
     endedAt: lastEventAt,
@@ -536,6 +543,34 @@ function hydrateArchivedSession(
             owner: owner || 'Unknown',
             deadline: String(item.deadline || '').trim() || undefined,
             status: item.status === 'done' ? 'done' : 'pending',
+            reviewState:
+              item.reviewState === 'confirmed' ||
+              item.reviewState === 'dismissed'
+                ? item.reviewState
+                : 'suggested',
+            reviewedAt: Number.isFinite(Number(item.reviewedAt))
+              ? Number(item.reviewedAt)
+              : undefined,
+            editedAt: Number.isFinite(Number(item.editedAt))
+              ? Number(item.editedAt)
+              : undefined,
+            generatedTitle:
+              String(item.generatedTitle || '').trim() || undefined,
+            generatedOwner:
+              String(item.generatedOwner || '').trim() || undefined,
+            generatedDeadline:
+              typeof item.generatedDeadline === 'string'
+                ? item.generatedDeadline.trim()
+                : undefined,
+            chapterId: String(item.chapterId || '').trim() || undefined,
+            evidence: String(item.evidence || '').trim() || undefined,
+            timestamp: String(item.timestamp || '').trim() || undefined,
+            source:
+              item.source === 'llm'
+                ? 'llm'
+                : item.source === 'heuristic'
+                ? 'heuristic'
+                : undefined,
           };
         })
         .filter(Boolean)
@@ -631,7 +666,9 @@ function formatSessionTimeRange(
   const startDate = new Date(start);
   const endDate = new Date(end);
   const formatPart = (date: Date) =>
-    `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    `${String(date.getHours()).padStart(2, '0')}:${String(
+      date.getMinutes(),
+    ).padStart(2, '0')}`;
   return `${formatPart(startDate)} - ${formatPart(endDate)}`;
 }
 
@@ -652,12 +689,42 @@ function getEnergyLabels(
   const step = Math.max(1, Math.floor((end - start) / 7));
   return Array.from({ length: 8 }, (_, index) => {
     const point = new Date(start + step * index);
-    return `${String(point.getHours()).padStart(2, '0')}:${String(point.getMinutes()).padStart(2, '0')}`;
+    return `${String(point.getHours()).padStart(2, '0')}:${String(
+      point.getMinutes(),
+    ).padStart(2, '0')}`;
   });
 }
 
 function shouldUseMeetingPilotDemo() {
   return new URLSearchParams(window.location.search).get('demo') === '1';
+}
+
+function getActionReviewState(
+  item: MeetingPilotActionItem,
+): 'suggested' | 'confirmed' | 'dismissed' {
+  if (item.reviewState === 'dismissed') {
+    return 'dismissed';
+  }
+  if (item.reviewState === 'confirmed' || item.status === 'done') {
+    return 'confirmed';
+  }
+  return 'suggested';
+}
+
+function getActionStatusLabel(item: MeetingPilotActionItem): string {
+  const reviewState = getActionReviewState(item);
+  if (reviewState === 'dismissed') return '已忽略';
+  if (item.status === 'done') return '已完成';
+  if (reviewState === 'confirmed') return '已确认';
+  return '待复核';
+}
+
+function getActionStatusClass(item: MeetingPilotActionItem): string {
+  const reviewState = getActionReviewState(item);
+  if (reviewState === 'dismissed') return 'status-dismissed';
+  if (item.status === 'done') return 'status-done';
+  if (reviewState === 'confirmed') return 'status-confirmed';
+  return 'status-pending';
 }
 
 function getStanceBadgeClass(stance: MeetingPilotParticipantStance['stance']) {
@@ -834,7 +901,7 @@ function PanoramaPage() {
         ),
         whisperConfigured: Boolean(
           String(envConfig.MEETING_PROVIDER_BASE_URL || '').trim() &&
-          String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
+            String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
         ),
         transcribeModel: String(
           envConfig.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
@@ -859,10 +926,13 @@ function PanoramaPage() {
   const mentionCount = session.alerts.filter(
     (alert) => alert.source === 'mention' || alert.source === 'action',
   ).length;
-  const pendingActions = session.actionItems.filter(
+  const activeActionItems = session.actionItems.filter(
+    (item) => getActionReviewState(item) !== 'dismissed',
+  );
+  const pendingActions = activeActionItems.filter(
     (item) => item.status === 'pending',
   );
-  const completedActions = session.actionItems.length - pendingActions.length;
+  const completedActions = activeActionItems.length - pendingActions.length;
   const pdfUrl = session.digest.resultUrl;
   const minutesConfigured = serviceConfig.minutesConfigured;
   const whisperConfigured = serviceConfig.whisperConfigured;
@@ -889,12 +959,12 @@ function PanoramaPage() {
           (event.type === 'decision'
             ? 0.32
             : event.type === 'action'
-              ? 0.24
-              : event.type === 'mention'
-                ? 0.28
-                : event.type === 'screen'
-                  ? 0.18
-                  : 0.14),
+            ? 0.24
+            : event.type === 'mention'
+            ? 0.28
+            : event.type === 'screen'
+            ? 0.18
+            : 0.14),
       );
     });
     return buckets;
@@ -959,7 +1029,9 @@ function PanoramaPage() {
         ).replace(/\/$/, '');
         if (!baseUrl) return;
         const response = await fetch(
-          `${baseUrl}/api/v3/digest/${encodeURIComponent(session.digest.lookupId)}`,
+          `${baseUrl}/api/v3/digest/${encodeURIComponent(
+            session.digest.lookupId,
+          )}`,
         );
         const data = await response.json();
         if (!response.ok || disposed) return;
@@ -971,8 +1043,8 @@ function PanoramaPage() {
               data.status === 'COMPLETED'
                 ? 'completed'
                 : data.status === 'FAILED'
-                  ? 'failed'
-                  : 'processing',
+                ? 'failed'
+                : 'processing',
             taskId: session.digest.taskId,
             lookupId: session.digest.lookupId,
             videoUrl: session.digest.videoUrl,
@@ -1024,10 +1096,10 @@ function PanoramaPage() {
           {session.digest.status === 'completed'
             ? '✅ 已同步'
             : session.digest.status === 'processing'
-              ? '⏳ 生成中'
-              : session.digest.status === 'failed'
-                ? '⚠️ 需处理'
-                : '🟣 已就绪'}
+            ? '⏳ 生成中'
+            : session.digest.status === 'failed'
+            ? '⚠️ 需处理'
+            : '🟣 已就绪'}
         </span>
         {isArchivedHistoryMode ? (
           <button className="header-btn" onClick={openMeetingArchive}>
@@ -1111,7 +1183,7 @@ function PanoramaPage() {
         </div>
         <div className="stat-card">
           <div className="stat-label">行动项</div>
-          <div className="stat-value">{session.actionItems.length}</div>
+          <div className="stat-value">{activeActionItems.length}</div>
           <div className="stat-sub">
             {pendingActions.length} 待处理 · {completedActions} 已确认
           </div>
@@ -1199,12 +1271,12 @@ function PanoramaPage() {
                         {event.type === 'screen'
                           ? '共享画面'
                           : event.type === 'decision'
-                            ? '决议'
-                            : event.type === 'action'
-                              ? '行动项'
-                              : event.type === 'mention'
-                                ? '提及你'
-                                : '话题'}
+                          ? '决议'
+                          : event.type === 'action'
+                          ? '行动项'
+                          : event.type === 'mention'
+                          ? '提及你'
+                          : '话题'}
                       </span>
                       <span className="timestamp">{event.timestamp}</span>
                     </div>
@@ -1243,10 +1315,10 @@ function PanoramaPage() {
                         participant.id === 'alex'
                           ? 'linear-gradient(135deg, var(--accent), var(--accent-light))'
                           : participant.id === 'esone'
-                            ? 'linear-gradient(135deg, #00b894, #55efc4)'
-                            : participant.id === 'sarah'
-                              ? 'linear-gradient(135deg, #e17055, #fab1a0)'
-                              : 'linear-gradient(135deg, #0984e3, #74b9ff)',
+                          ? 'linear-gradient(135deg, #00b894, #55efc4)'
+                          : participant.id === 'sarah'
+                          ? 'linear-gradient(135deg, #e17055, #fab1a0)'
+                          : 'linear-gradient(135deg, #0984e3, #74b9ff)',
                     }}
                   >
                     {participant.name[0]}
@@ -1292,10 +1364,10 @@ function PanoramaPage() {
                             participant.id === 'alex'
                               ? 'linear-gradient(135deg, var(--accent), var(--accent-light))'
                               : participant.id === 'esone'
-                                ? 'linear-gradient(135deg, #00b894, #55efc4)'
-                                : participant.id === 'sarah'
-                                  ? 'linear-gradient(135deg, #e17055, #fab1a0)'
-                                  : 'linear-gradient(135deg, #0984e3, #74b9ff)',
+                              ? 'linear-gradient(135deg, #00b894, #55efc4)'
+                              : participant.id === 'sarah'
+                              ? 'linear-gradient(135deg, #e17055, #fab1a0)'
+                              : 'linear-gradient(135deg, #0984e3, #74b9ff)',
                         }}
                       >
                         {participant.name[0]}
@@ -1393,7 +1465,9 @@ function PanoramaPage() {
                       >
                         <div className="stance-item-top">
                           <span
-                            className={`stance-badge ${getStanceBadgeClass(item.stance)}`}
+                            className={`stance-badge ${getStanceBadgeClass(
+                              item.stance,
+                            )}`}
                           >
                             {item.stance}
                           </span>
@@ -1408,7 +1482,9 @@ function PanoramaPage() {
                     {extraItems.length ? (
                       <>
                         <div
-                          className={`stance-details ${isExpanded ? 'open' : ''}`}
+                          className={`stance-details ${
+                            isExpanded ? 'open' : ''
+                          }`}
                         >
                           {extraItems.map((item) => (
                             <div
@@ -1417,7 +1493,9 @@ function PanoramaPage() {
                             >
                               <div className="stance-item-top">
                                 <span
-                                  className={`stance-badge ${getStanceBadgeClass(item.stance)}`}
+                                  className={`stance-badge ${getStanceBadgeClass(
+                                    item.stance,
+                                  )}`}
                                 >
                                   {item.stance}
                                 </span>
@@ -1456,7 +1534,10 @@ function PanoramaPage() {
             </div>
             <div className="action-list">
               {session.actionItems.map((item) => (
-                <div className="action-item" key={item.id}>
+                <div
+                  className={`action-item ${getActionReviewState(item)}`}
+                  key={item.id}
+                >
                   <div className="action-title">
                     <span>📌</span>
                     {item.title}
@@ -1464,12 +1545,16 @@ function PanoramaPage() {
                   <div className="action-meta">
                     <span>👤 {item.owner}</span>
                     {item.deadline ? <span>📅 {item.deadline}</span> : null}
+                    {item.timestamp ? <span>🕒 {item.timestamp}</span> : null}
                     <span
-                      className={`action-status ${item.status === 'done' ? 'status-done' : 'status-pending'}`}
+                      className={`action-status ${getActionStatusClass(item)}`}
                     >
-                      {item.status === 'done' ? '已确认' : '待处理'}
+                      {getActionStatusLabel(item)}
                     </span>
                   </div>
+                  {item.evidence ? (
+                    <div className="action-evidence">依据：{item.evidence}</div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -1524,7 +1609,9 @@ function PanoramaPage() {
                 </div>
                 <div className="digest-desc">
                   {whisperConfigured
-                    ? `当前会议允许使用 ${serviceConfig.transcribeModel || 'whisper-1'} 做音频转写，摘要、行动项和决议提取会优先结合 transcript。`
+                    ? `当前会议允许使用 ${
+                        serviceConfig.transcribeModel || 'whisper-1'
+                      } 做音频转写，摘要、行动项和决议提取会优先结合 transcript。`
                     : 'ASR / 转写当前未配置。录制和基础归档仍然可用，但会缺少 transcript 驱动的实时总结，行动项、决议和摘要会更多依赖共享画面观测与启发式推断。'}
                 </div>
                 <div className="digest-links">
@@ -1558,8 +1645,8 @@ function PanoramaPage() {
                   {pdfUrl
                     ? '由 Meeting Minutes API 生成的正式会议纪要，包含完整 transcript、决议汇总、行动项与参会者签到。'
                     : missingMinutesForThisMeeting
-                      ? '当前没有可用的 Meeting Minutes PDF。配置 Minutes API 后，新会议可以自动生成正式 PDF 纪要。'
-                      : `Minutes API 仍在生成 PDF，当前 Digest 状态：${session.digest.status}。完成后这里会切换成正式预览。`}
+                    ? '当前没有可用的 Meeting Minutes PDF。配置 Minutes API 后，新会议可以自动生成正式 PDF 纪要。'
+                    : `Minutes API 仍在生成 PDF，当前 Digest 状态：${session.digest.status}。完成后这里会切换成正式预览。`}
                 </div>
                 <div className="pdf-digest-preview">
                   <div className="pdf-digest-preview-head">
@@ -1567,8 +1654,8 @@ function PanoramaPage() {
                       {pdfUrl
                         ? '📄 meeting-pilot-minutes.pdf'
                         : missingMinutesForThisMeeting
-                          ? 'Minutes API 未配置'
-                          : `Digest · ${session.digest.status}`}
+                        ? 'Minutes API 未配置'
+                        : `Digest · ${session.digest.status}`}
                     </span>
                     <div className="pdf-digest-preview-actions">
                       <a

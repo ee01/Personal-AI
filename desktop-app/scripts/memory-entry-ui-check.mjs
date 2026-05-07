@@ -142,7 +142,9 @@ async function main() {
 
     await topicPage.reload({ waitUntil: 'load', timeout: 15000 });
     await topicPage.waitForFunction(
-      () => document.body.innerText.includes('自动化动作'),
+      () =>
+        document.body.innerText.includes('联动操作') ||
+        document.body.innerText.includes('RuntimeAction'),
       { timeout: 15000 },
     );
     const topicReloadedText = await topicPage.locator('body').innerText();
@@ -150,11 +152,23 @@ async function main() {
     assert.doesNotMatch(topicReloadedText, /legacy internal rule/);
 
     await topicPage.getByRole('button', { name: '＋ 添加规则' }).click();
+    await topicPage.waitForFunction(
+      () =>
+        document.body.innerText.includes('未填写消息模式') &&
+        document.body.innerText.includes('写入记忆'),
+      { timeout: 15000 },
+    );
     await topicPage
       .getByPlaceholder(
         '例如：Standup 里有人提到 blocker；或 Leave Chat 里出现与我相关的请假消息',
       )
       .fill('QA seeded rule for automation flow');
+    await topicPage.waitForFunction(
+      () =>
+        document.body.innerText.includes('QA seeded rule for automation flow') &&
+        document.body.innerText.includes('所有群组 / 所有发送人'),
+      { timeout: 15000 },
+    );
     await topicPage.getByRole('button', { name: '确认' }).click();
     await topicPage.waitForFunction(
       () =>

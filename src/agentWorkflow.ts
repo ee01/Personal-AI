@@ -6,10 +6,13 @@ import { getEnvConfig } from './utils';
 import {
   getFirstManualItemFromMatchedRules,
   isManualConcernedItem,
+  filterWatchRulesForMessageContext,
   loadRuntimeWatchRules,
   resolveMatchedWatchRules,
 } from './watchRules';
 import type { TopicItemWithAutoReply } from './message-reaction/AutoReplyHandler';
+
+const AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD = 0.7;
 
 // Agent配置接口
 interface AgentConfig {
@@ -26,6 +29,75 @@ interface AgentTool {
   name: string;
   description: string;
   execute: (params: any) => Promise<any>;
+}
+
+interface AgentWorkflowTraceTool {
+  name: string;
+  displayName: string;
+  status: 'success' | 'skipped' | 'error';
+  durationMs?: number;
+  summary: string;
+  error?: string;
+}
+
+interface AgentWorkflowTraceStep {
+  agentId: string;
+  agentName: string;
+  priority: number;
+  status: 'success' | 'skipped' | 'error';
+  startedAt: string;
+  durationMs: number;
+  inputSummary: string;
+  outputSummary: string;
+  tools: AgentWorkflowTraceTool[];
+  error?: string;
+}
+
+interface AgentStorageReview {
+  generatedAt: string;
+  summary: string;
+  primaryReason: string;
+  reasonSource:
+    | 'concernedItemMatcher'
+    | 'relevanceJudgment'
+    | 'message'
+    | 'workflow';
+  shouldStore: boolean;
+  shouldNotify: boolean;
+  confidence: number;
+  matchedRuleRefs: string[];
+  matchedRuleIds: number[];
+  entitySummary: {
+    people: number;
+    projects: number;
+    topics: number;
+    resources: number;
+    webpages: number;
+    jiraTickets: number;
+    actions: number;
+  };
+  relationshipCount: number;
+  replyAdviceAvailable: boolean;
+  traceStatus: 'complete' | 'partial' | 'missing';
+  agentCount: number;
+  failedAgents: string[];
+  toolErrorCount: number;
+  notificationReviewRequired?: boolean;
+  notificationReviewReason?: string;
+  notificationConfidenceThreshold?: number;
+}
+
+interface AgentNotificationReview {
+  required: boolean;
+  status: 'pending' | 'not_required';
+  reason: 'low_confidence_notification';
+  confidence: number;
+  threshold: number;
+  originalShouldNotify: boolean;
+  matchedRule?: string;
+  matchedRuleRefs: string[];
+  matchedRuleIds: number[];
+  message: string;
 }
 
 // 消息处理接口
@@ -49,6 +121,9 @@ interface MessageProcessResult {
   enrichedData?: any;
   actions?: any[];
   replyAdvice?: string;
+  agentWorkflowTrace?: AgentWorkflowTraceStep[];
+  storageReview?: AgentStorageReview;
+  notificationReview?: AgentNotificationReview;
 }
 
 function getMessageContent(message: any): string {
@@ -97,6 +172,237 @@ function normalizePeople(people: any[] = []): Array<{ name: string }> {
 
 function getPeopleFromContext(params: any): Array<{ name: string }> {
   return normalizePeople(getEntityMap(params.entities).people || []);
+}
+
+function truncateForTrace(value: any, maxLength = 180): string {
+  let rawText = '';
+  if (typeof value === 'string') {
+    rawText = value;
+  } else if (value !== undefined && value !== null) {
+    try {
+      rawText = JSON.stringify(value);
+    } catch {
+      rawText = String(value);
+    }
+  }
+  const text = rawText.replace(/\s+/g, ' ').trim();
+  return text.length > maxLength
+    ? `${text.slice(0, Math.max(0, maxLength - 3))}...`
+    : text;
+}
+
+function buildAgentInputSummary(context: any): string {
+  const sender = context.sender || context.creator || 'unknown';
+  const group = context.team_name || context.groupName || 'unknown group';
+  const content = truncateForTrace(getMessageContent(context), 120);
+  return `${sender} @ ${group}: ${content}`;
+}
+
+function summarizeToolResult(toolName: string, result: any): string {
+  if (!result || typeof result !== 'object') {
+    return truncateForTrace(result || 'empty result');
+  }
+
+  if (toolName === 'entityExtraction') {
+    const entities = getEntityMap(result);
+    const count = (value: any) => (Array.isArray(value) ? value.length : 0);
+    return `people=${count(entities.people)}, projects=${count(entities.projects)}, topics=${count(entities.topics)}, actions=${count(result.actions)}`;
+  }
+
+  if (toolName === 'concernedItemMatcher') {
+    return `store=${Boolean(result.shouldStore)}, notify=${Boolean(result.shouldNotify)}, refs=${(result.matchedRuleRefs || []).join('|') || 'none'}, confidence=${result.confidence ?? 0}`;
+  }
+
+  if (toolName === 'relationshipAnalysis') {
+    return `relationships=${Array.isArray(result.relationships) ? result.relationships.length : 0}`;
+  }
+
+  if (toolName === 'historySearch') {
+    const ids = result.results?.ids;
+    return `query=${truncateForTrace(result.question || '', 80)}, results=${Array.isArray(ids) ? ids.length : 0}`;
+  }
+
+  if (toolName === 'relevanceJudgment') {
+    return `important=${Boolean(result.isImportant)}, store=${Boolean(result.shouldStore)}, priority=${result.priority || 'unknown'}`;
+  }
+
+  if (toolName === 'externalServiceQuery') {
+    return result.success
+      ? `success=true, keys=${Object.keys(result.data || {}).join('|') || 'none'}`
+      : `success=false, message=${truncateForTrace(result.message || 'unsupported')}`;
+  }
+
+  if (toolName === 'replyAdviser') {
+    return `needsReply=${Boolean(result.needsReply)}, priority=${result.priority || 'unknown'}`;
+  }
+
+  return truncateForTrace(result);
+}
+
+function summarizeAgentOutput(toolResults: Record<string, any>): string {
+  const summaries = Object.entries(toolResults).map(
+    ([toolName, result]) => `${toolName}: ${summarizeToolResult(toolName, result)}`,
+  );
+  return summaries.length > 0 ? summaries.join('; ') : 'no tools executed';
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getArrayCount(value: any): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function getNestedToolResult(
+  agentResults: Record<string, any>,
+  agentId: string,
+  toolName: string,
+): any {
+  return agentResults?.[agentId]?.[toolName];
+}
+
+function buildStorageReview(params: {
+  message: any;
+  result: MessageProcessResult;
+  agentResults: Record<string, any>;
+}): AgentStorageReview {
+  const { message, result, agentResults } = params;
+  const relevanceJudgment = getNestedToolResult(
+    agentResults,
+    'relevanceJudge',
+    'relevanceJudgment',
+  );
+  const matcher = getNestedToolResult(
+    agentResults,
+    'notificationJudge',
+    'concernedItemMatcher',
+  );
+  const entities = result.enrichedData?.entities || {};
+  const relationships = result.enrichedData?.relationships;
+  const trace = result.agentWorkflowTrace || [];
+  const failedAgents = trace
+    .filter((step) => step.status === 'error')
+    .map((step) => step.agentName || step.agentId);
+  const toolErrorCount = trace.reduce(
+    (count, step) =>
+      count + step.tools.filter((tool) => tool.status === 'error').length,
+    0,
+  );
+
+  let reasonSource: AgentStorageReview['reasonSource'] = 'workflow';
+  let primaryReason = 'Agent Workflow requested storage';
+
+  if ((result.matchedRuleRefs || []).length > 0 || result.matchedRule) {
+    reasonSource = 'concernedItemMatcher';
+    primaryReason =
+      result.matchedRule ||
+      `Matched watch rules: ${(result.matchedRuleRefs || []).join(', ')}`;
+  } else if (relevanceJudgment?.reason) {
+    reasonSource = 'relevanceJudgment';
+    primaryReason = String(relevanceJudgment.reason);
+  } else if (relevanceJudgment?.isImportant || relevanceJudgment?.shouldStore) {
+    reasonSource = 'relevanceJudgment';
+    primaryReason = `Importance=${Boolean(relevanceJudgment.isImportant)}, store=${Boolean(relevanceJudgment.shouldStore)}, priority=${relevanceJudgment.priority || 'unknown'}`;
+  } else if (message.summary) {
+    reasonSource = 'message';
+    primaryReason = String(message.summary);
+  }
+
+  const summary =
+    truncateForTrace(result.summary, 260) ||
+    truncateForTrace(relevanceJudgment?.reason, 260) ||
+    truncateForTrace(message.summary, 260) ||
+    `Agent Workflow 存储：${truncateForTrace(getMessageContent(message), 180)}`;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary,
+    primaryReason: truncateForTrace(primaryReason, 320),
+    reasonSource,
+    shouldStore: Boolean(result.shouldStore),
+    shouldNotify: Boolean(result.shouldNotify),
+    confidence:
+      typeof result.confidence === 'number'
+        ? result.confidence
+        : typeof matcher?.confidence === 'number'
+          ? matcher.confidence
+          : 0,
+    matchedRuleRefs: result.matchedRuleRefs || [],
+    matchedRuleIds: result.matchedRuleIds || [],
+    entitySummary: {
+      people: getArrayCount(entities.people),
+      projects: getArrayCount(entities.projects),
+      topics: getArrayCount(entities.topics),
+      resources: getArrayCount(entities.resources),
+      webpages: getArrayCount(entities.webpages),
+      jiraTickets: getArrayCount(entities.jiraTickets),
+      actions: getArrayCount(result.actions),
+    },
+    relationshipCount: getArrayCount(relationships),
+    replyAdviceAvailable: Boolean(result.replyAdvice),
+    traceStatus:
+      trace.length === 0
+        ? 'missing'
+        : failedAgents.length > 0 || toolErrorCount > 0
+          ? 'partial'
+          : 'complete',
+    agentCount: trace.length,
+    failedAgents,
+    toolErrorCount,
+    notificationReviewRequired: Boolean(result.notificationReview?.required),
+    notificationReviewReason: result.notificationReview?.reason,
+    notificationConfidenceThreshold: result.notificationReview?.threshold,
+  };
+}
+
+function buildNotificationReviewGate(
+  result: MessageProcessResult,
+): AgentNotificationReview | null {
+  if (!result.shouldNotify) {
+    return null;
+  }
+
+  const confidence =
+    typeof result.confidence === 'number' && Number.isFinite(result.confidence)
+      ? result.confidence
+      : 0;
+
+  if (confidence >= AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD) {
+    return null;
+  }
+
+  const percentage = Math.round(confidence * 100);
+  const thresholdPercentage = Math.round(
+    AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD * 100,
+  );
+
+  return {
+    required: true,
+    status: 'pending',
+    reason: 'low_confidence_notification',
+    confidence,
+    threshold: AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD,
+    originalShouldNotify: true,
+    matchedRule: result.matchedRule,
+    matchedRuleRefs: result.matchedRuleRefs || [],
+    matchedRuleIds: result.matchedRuleIds || [],
+    message: `低置信度关注项命中待复核：${percentage}% < ${thresholdPercentage}%`,
+  };
+}
+
+function applyNotificationReviewGate(result: MessageProcessResult) {
+  const reviewGate = buildNotificationReviewGate(result);
+  if (!reviewGate) {
+    return;
+  }
+
+  result.notificationReview = reviewGate;
+  result.shouldNotify = false;
+  result.shouldStore = true;
+  if (!result.summary) {
+    result.summary = reviewGate.message;
+  }
 }
 
 // 定义可用工具列表
@@ -325,8 +631,17 @@ const availableTools: Record<string, AgentTool> = {
       const items = (concernedItems as TopicItemWithAutoReply[]).filter(
         isManualConcernedItem,
       );
+      const envConfig = await getEnvConfig();
+      const runtimeWatchRules = filterWatchRulesForMessageContext(
+        await loadRuntimeWatchRules(items),
+        {
+          sender: params.sender,
+          groupId: params.team_id,
+          groupName: params.team_name,
+        },
+      );
 
-      if (items.length === 0) {
+      if (runtimeWatchRules.length === 0) {
         return {
           shouldNotify: false,
           shouldStore: false,
@@ -338,8 +653,6 @@ const availableTools: Record<string, AgentTool> = {
         };
       }
 
-      const envConfig = await getEnvConfig();
-      const runtimeWatchRules = await loadRuntimeWatchRules(items);
       const systemPrompt = buildMessageFilterSystemPrompt({
         concernedItems: runtimeWatchRules,
         username: params.username || userinfo?.fullName || '',
@@ -384,6 +697,11 @@ ${xmlMessage}
         matchedRuleIds: Array.isArray(firstMatch.matched_rule_ids)
           ? firstMatch.matched_rule_ids
           : [],
+        messageContext: {
+          sender: params.sender,
+          groupId: params.team_id,
+          groupName: params.team_name,
+        },
       });
       const matchedManualItem = getFirstManualItemFromMatchedRules(
         resolvedMatch.watchRules,
@@ -529,6 +847,7 @@ class AgentCoordinator {
       },
       enrichedData: {},
       actions: [],
+      agentWorkflowTrace: [],
     };
 
     // 存储每个Agent的处理结果
@@ -537,6 +856,18 @@ class AgentCoordinator {
     // 逐个运行Agent
     for (const agent of sortedAgents) {
       console.log(`运行Agent: ${agent.name}`);
+      const traceStep: AgentWorkflowTraceStep = {
+        agentId: agent.id,
+        agentName: agent.name,
+        priority: agent.priority,
+        status: 'success',
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        inputSummary: '',
+        outputSummary: '',
+        tools: [],
+      };
+      const stepStartedAt = Date.now();
       try {
         // 收集之前Agent的结果作为上下文
         const context = {
@@ -544,6 +875,7 @@ class AgentCoordinator {
           ...result.enrichedData,
           previousResults: agentResults,
         };
+        traceStep.inputSummary = buildAgentInputSummary(context);
 
         // 执行该Agent可用的工具
         const toolResults: Record<string, any> = {};
@@ -551,9 +883,47 @@ class AgentCoordinator {
           if (availableTools[toolName]) {
             const tool = availableTools[toolName];
             console.log(`执行工具: ${tool.name}`);
-            toolResults[toolName] = await tool.execute(context);
+            const toolStartedAt = Date.now();
+            try {
+              toolResults[toolName] = await tool.execute(context);
+              traceStep.tools.push({
+                name: toolName,
+                displayName: tool.name,
+                status: 'success',
+                durationMs: Date.now() - toolStartedAt,
+                summary: summarizeToolResult(toolName, toolResults[toolName]),
+              });
+            } catch (toolError) {
+              traceStep.tools.push({
+                name: toolName,
+                displayName: tool.name,
+                status: 'error',
+                durationMs: Date.now() - toolStartedAt,
+                summary: 'tool failed',
+                error: getErrorMessage(toolError),
+              });
+              throw toolError;
+            }
+          } else {
+            traceStep.tools.push({
+              name: toolName,
+              displayName: toolName,
+              status: 'skipped',
+              summary: 'tool is not registered',
+            });
           }
         }
+        const allToolsSkipped =
+          traceStep.tools.length > 0 &&
+          traceStep.tools.every((tool) => tool.status === 'skipped');
+        if (traceStep.tools.length === 0 || allToolsSkipped) {
+          traceStep.status = 'skipped';
+        }
+        traceStep.outputSummary = allToolsSkipped
+          ? traceStep.tools
+              .map((tool) => `${tool.name}: ${tool.summary}`)
+              .join('; ')
+          : summarizeAgentOutput(toolResults);
 
         // 存储该Agent的处理结果
         agentResults[agent.id] = toolResults;
@@ -618,6 +988,25 @@ class AgentCoordinator {
         }
       } catch (error) {
         console.error(`Agent "${agent.name}" 执行失败:`, error);
+        traceStep.status = 'error';
+        traceStep.error = getErrorMessage(error);
+        traceStep.outputSummary = traceStep.outputSummary || 'agent failed';
+      } finally {
+        traceStep.durationMs = Date.now() - stepStartedAt;
+        result.agentWorkflowTrace?.push(traceStep);
+      }
+    }
+
+    applyNotificationReviewGate(result);
+
+    if (result.shouldStore) {
+      result.storageReview = buildStorageReview({
+        message,
+        result,
+        agentResults,
+      });
+      if (!result.summary) {
+        result.summary = result.storageReview.summary;
       }
     }
 
@@ -664,8 +1053,15 @@ export async function processNewMessage(
             ? [processResult.matchedRule]
             : [],
           matchedRuleRefs: processResult.matchedRuleRefs || [],
-          summary: processResult.summary || message.summary || '',
+          summary:
+            processResult.storageReview?.summary ||
+            processResult.summary ||
+            message.summary ||
+            '',
           replyAdvice: processResult.replyAdvice || message.reply_advice || '',
+          agentWorkflowTrace: processResult.agentWorkflowTrace || [],
+          storageReview: processResult.storageReview,
+          notificationReview: processResult.notificationReview,
           groupUrl: message.team_url,
           contextMessages: [], // agentWorkflow 模式下暂无上下文
           ...processResult.enrichedData,

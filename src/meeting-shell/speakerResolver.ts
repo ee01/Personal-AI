@@ -150,10 +150,13 @@ function generateParticipantId(
 
 function findContinuityParticipant(
   session: MeetingPilotSessionSnapshot,
+  currentChunkId: string,
   chunkTs: number,
   windowMs: number,
 ): MeetingPilotParticipant | undefined {
-  const lastChunk = session.transcript[session.transcript.length - 1];
+  const lastChunk = [...session.transcript]
+    .reverse()
+    .find((chunk) => chunk.id !== currentChunkId && !chunk.lowConfidence);
   if (!lastChunk || !lastChunk.participantId) return undefined;
   if (chunkTs - lastChunk.ts > windowMs) return undefined;
   return session.participants.find((p) => p.id === lastChunk.participantId);
@@ -244,6 +247,7 @@ export function resolveSpeakerForChunk(
   // 3. continuity from previous chunk
   const continuity = findContinuityParticipant(
     session,
+    chunk.id,
     chunk.ts,
     SPEAKER_CONTINUITY_WINDOW_MS,
   );

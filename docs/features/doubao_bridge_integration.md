@@ -1,4 +1,6 @@
-# Desktop App Integration Plan
+# Desktop App Integration
+
+_最后更新: 2026-05-05_
 
 ## Goal
 
@@ -31,10 +33,8 @@
    - 负责 Doubao 输出线程、explorer 输入采集、本地缓存、预览、提炼回写、撤回与状态同步。
 
 3. Extension
-   - 在 [src/popup.tsx](/Users/Esone/git/personal-ai/src/popup.tsx) 提供 Doubao 入口。
-
-- 打开独立的 Desktop App 控制页。
-  - 通过 memory-service provider API 渲染实际内容，再调用 localhost bridge。
+   - 在 [src/popup.tsx](/Users/Esone/git/personal-ai/src/popup.tsx) 提供 Desktop App 入口。
+   - Extension 页面只负责安装引导、状态摘要和打开 app；完整配置在 `Personal AI.app` 内完成。
 
 ## Thread Model
 
@@ -273,11 +273,17 @@ Explorer 相关行为：
 - 用户在窗口中手动登录豆包
 - 登录态保存在本地 bridge profile 目录
 
+可选方案：
+
+- 用户可以选择“使用我日常浏览器的登录状态”
+- app 会通过 `webpage-mcp` 操作明确打开的 `doubao.com` 标签页
+- 如果连接器不可用，输出广播与输入抓取会短时间回退到桌面端自带 Chromium，并在 UI 中显示回退原因
+
 这意味着：
 
 - 服务端拿不到 Doubao auth
 - extension 不需要收集用户名和密码
-- 不依赖用户主浏览器当前 cookie
+- 默认不依赖用户主浏览器 cookie；日常浏览器模式也不会把 cookie 导出到服务端
 
 ## Runtime Model
 
@@ -292,16 +298,42 @@ Explorer 相关行为：
   - create/bind memory sync thread
   - 自动绑定“手机版对话”
   - 手动触发 stable memory / briefing / reminder
+  - 管理 Doubao / ChatGPT explorer 输入来源
+  - 查看 explorer 缓存、预览、撤回已入库记忆
 - bridge 在满足前置条件后可自动执行：
   - stable memory sync
   - mobile briefing sync
-  - reminder sync
+  - todo / notice sync
+  - Doubao / ChatGPT explorer 定时抓取
+
+当前可靠性边界：
+
+- `mobile_context` 未绑定时，非 dry-run 的近期重点、待办、通知、查询注入不会发送到当前豆包页，避免误投递。
+- 豆包安全验证、发送失败或消息不可见时，手动推送会返回失败，后台同步不会把失败任务当成已完成冷却。
+- todo / notice 投递失败会回写 delivery failed，避免 Memory Service 误以为用户已经收到。
+- 日常浏览器模式下，登录按钮会显示“打开 Chrome 豆包”，避免用户误以为仍在使用内置登录窗口。
+
+## Industry References And Product Direction
+
+业内相似能力给出的方向比较一致：
+
+- ChatGPT memory 把“用户显式保存的记忆”和“从历史对话引用的上下文”分开，并强调用户可查看、删除、关闭与临时聊天控制：<https://help.openai.com/en/articles/8590148-memory-in-chatgpt>
+- Claude memory 把全局记忆、项目记忆和可迁移/可重置的控制面分开，说明项目级隔离对工作场景很重要：<https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context>
+- Claude API memory tool 与 Mem0 都强调“client-side / managed memory layer”模式，和本功能的“服务端真源 + 本机桥接登录态”方向一致：<https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool>、<https://docs.mem0.ai/overview>
+- MemGPT 把长期记忆看成分层上下文管理问题；2026 年综述进一步把 agent memory 归纳成 write-manage-read loop，并特别点出写入过滤、矛盾处理、延迟预算、隐私治理和 learned forgetting：<https://arxiv.org/abs/2310.08560>、<https://arxiv.org/abs/2603.07670>
+
+对 Personal AI 的建设性结论：
+
+- 保持双线程模型，不把长期画像、近期重点、待办、通知混成一条普通对话。
+- Explorer 侧继续强化可见、可撤回、可按 scope 清理的记忆列表，而不是只展示“抓取成功”。
+- 同步链路要优先保证可验证投递，不要为了顺滑体验吞掉失败。
+- 后续适合补一个“记忆审计 / 版本历史”视图，让用户能看到哪些外部对话材料进入了 Memory Service，以及哪些推送已经送达豆包。
 
 ### Next step
 
-- 用 provider sync job 的 dedupe / 调度策略进一步避免高频重复渲染
-- 无需打开 extension 面板也能基于 richer policy 自动同步
-- reminder 通道再升级为真正的 Doubao reminder API 或系统提醒
+- 为外部记忆推送增加用户可读的审计时间线。
+- 对 sent / delivered / failed / skipped 做更一致的状态展示与筛选。
+- 如果 Doubao 暴露稳定 reminder API，再把待办通道从随手记文本升级为原生提醒。
 
 ## UI Entry
 
@@ -345,14 +377,16 @@ Explorer 相关行为：
 
 ### Local bridge
 
-- `npm --prefix app run build`
-- `npm --prefix app test`
+- `npm --prefix desktop-app run build`
+- `npm --prefix desktop-app test`
 
 重点覆盖：
 
 - pairing flow
 - auth-protected endpoints
 - dry-run sync endpoints
+- mobile-context 未绑定防误投递
+- todo / notice 失败投递回报
 
 ### Manual smoke test
 
@@ -362,19 +396,22 @@ Explorer 相关行为：
    后台模式可直接双击 `Install Background Sync.command`
 3. 打开 extension popup 中的 Desktop App 页面
 4. 点击“重新配对”
-5. 点击“打开登录窗口”，完成 Doubao 登录
+5. 根据广播方式点击“打开登录窗口”或“打开 Chrome 豆包”，完成 Doubao 登录
 6. 创建长期记忆线程
 7. 在当前标签页打开真实 Doubao 会话并绑定为手机版对话
-8. 点击“同步 persona_core / voice_mode”
-9. 点击“同步今日重点到手机版对话”
-10. 点击“查记忆并注入当前会话”
+8. 点击“现在推一次 persona”
+9. 点击“现在推一次近期记忆重点”
+10. 点击“现在推一次待办 / 通知”
 11. 检查 memory-service 的 sync job 已被成功回写
 
-## Files Added in This Slice
+## Primary Files
 
 - [docs/features/doubao_bridge_integration.md](/Users/Esone/git/personal-ai/docs/features/doubao_bridge_integration.md)
 - [desktop-app/src/server.ts](/Users/Esone/git/personal-ai/desktop-app/src/server.ts)
 - [desktop-app/src/bridgeService.ts](/Users/Esone/git/personal-ai/desktop-app/src/bridgeService.ts)
+- [desktop-app/src/syncManager.ts](/Users/Esone/git/personal-ai/desktop-app/src/syncManager.ts)
+- [desktop-app/app/index.html](/Users/Esone/git/personal-ai/desktop-app/app/index.html)
+- [desktop-app/app/renderer.js](/Users/Esone/git/personal-ai/desktop-app/app/renderer.js)
 - [memory-service/src/routes/providers.ts](/Users/Esone/git/personal-ai/memory-service/src/routes/providers.ts)
 - [memory-service/src/core/ProviderContextService.ts](/Users/Esone/git/personal-ai/memory-service/src/core/ProviderContextService.ts)
 - [memory-service/src/repositories/ProviderRepository.ts](/Users/Esone/git/personal-ai/memory-service/src/repositories/ProviderRepository.ts)

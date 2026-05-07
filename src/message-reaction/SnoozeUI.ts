@@ -2,7 +2,7 @@
  * Snooze UI - 消息交互工具栏界面
  * 
  * UI 结构：
- * - 悬停 3 秒后显示工具栏（稍后处理按钮 + 自动答复按钮 + icon）
+ * - 短暂停留后显示工具栏（稍后处理按钮 + 自动答复按钮 + icon）
  * - 点击"稍后处理"按钮默认触发 1 小时后提醒
  * - hover "稍后处理"按钮时显示 Snooze 快速选项菜单
  * - 点击"自动答复"按钮打开自动答复配置
@@ -20,6 +20,8 @@ import {
   showSuccessToast,
   showErrorToast
 } from './SnoozeManager';
+import { MESSAGE_REACTION_SHOW_DELAY_MS } from './messageReactionTiming';
+import { getSnoozeCreateFailureMessage } from './snoozeCreateResult';
 
 // 功能开关配置接口
 export interface MessageReactionConfig {
@@ -570,13 +572,13 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     confirmBtn.disabled = true;
     confirmBtn.textContent = '创建中...';
     
-    const success = await createSnoozeReminder({
+    const result = await createSnoozeReminder({
       messageInfo,
       remindAt: selectedDate
     });
     
     // 如果成功，隐藏 UI；如果失败，恢复按钮状态
-    if (success) {
+    if (result.success) {
       hideAllSnoozeUI();
       hideToolbar();
       showSuccessToast(`已设置提醒：${formatRemindTime(selectedDate)}`);
@@ -584,7 +586,10 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
       // 恢复按钮状态
       confirmBtn.disabled = false;
       confirmBtn.textContent = '确认';
-      showErrorToast('创建提醒失败，请稍后重试');
+      const failureMessage = getSnoozeCreateFailureMessage(result);
+      if (failureMessage) {
+        showErrorToast(failureMessage);
+      }
     }
   });
   
@@ -611,10 +616,10 @@ async function showSnoozeQuickMenu(messageInfo: MessageInfo, anchorElement: HTML
   
   // 精简的菜单，不包含消息预览
   menu.innerHTML = `
-    ${quickOptions.map(opt => {
+    ${quickOptions.map((opt, index) => {
       const time = opt.getTime();
       return `
-        <div class="snooze-quick-option" data-time="${time.getTime()}">
+        <div class="snooze-quick-option" data-option-index="${index}">
           <span class="snooze-quick-option-icon">${opt.icon}</span>
           <span class="snooze-quick-option-label">${opt.label}</span>
         </div>
@@ -653,20 +658,25 @@ async function showSnoozeQuickMenu(messageInfo: MessageInfo, anchorElement: HTML
   menu.querySelectorAll('.snooze-quick-option').forEach(opt => {
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const timestamp = parseInt((opt as HTMLElement).dataset.time!);
-      const remindAt = new Date(timestamp);
+      const optionIndex = Number((opt as HTMLElement).dataset.optionIndex);
+      const quickOption = quickOptions[optionIndex];
+      if (!quickOption) {
+        showErrorToast('无法识别提醒时间');
+        return;
+      }
+      const remindAt = quickOption.getTime();
       
       // 禁用菜单
       menu.style.pointerEvents = 'none';
       menu.style.opacity = '0.7';
       
-      const success = await createSnoozeReminder({
+      const result = await createSnoozeReminder({
         messageInfo,
         remindAt
       });
       
       // 如果成功，隐藏 UI；如果失败，恢复菜单状态
-      if (success) {
+      if (result.success) {
         hideAllSnoozeUI();
         hideToolbar();
         showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
@@ -674,7 +684,10 @@ async function showSnoozeQuickMenu(messageInfo: MessageInfo, anchorElement: HTML
         // 恢复菜单状态
         menu.style.pointerEvents = '';
         menu.style.opacity = '';
-        showErrorToast('创建提醒失败，请稍后重试');
+        const failureMessage = getSnoozeCreateFailureMessage(result);
+        if (failureMessage) {
+          showErrorToast(failureMessage);
+        }
       }
     });
   });
@@ -781,13 +794,13 @@ function processMessageElement(messageElement: HTMLElement) {
     // 取消之前的隐藏计划
     cancelSnoozeHide();
     
-    // 3 秒后显示工具栏
+    // 短暂停留后显示工具栏
     if (showTriggerTimeout) {
       clearTimeout(showTriggerTimeout);
     }
     showTriggerTimeout = setTimeout(() => {
       toolbar.classList.add('visible');
-    }, 3000);
+    }, MESSAGE_REACTION_SHOW_DELAY_MS);
   });
   
   conversationCard.addEventListener('mouseleave', (e: MouseEvent) => {
@@ -855,13 +868,13 @@ function processMessageElement(messageElement: HTMLElement) {
       const remindAt = new Date();
       remindAt.setHours(remindAt.getHours() + 1);
       
-      const success = await createSnoozeReminder({
+      const result = await createSnoozeReminder({
         messageInfo,
         remindAt
       });
       
       // 如果成功，隐藏 UI；如果失败，恢复按钮状态
-      if (success) {
+      if (result.success) {
         hideAllSnoozeUI();
         hideToolbar();
         showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
@@ -869,7 +882,10 @@ function processMessageElement(messageElement: HTMLElement) {
         // 恢复按钮状态
         textBtn.style.pointerEvents = '';
         textBtn.style.opacity = '';
-        showErrorToast('创建提醒失败，请稍后重试');
+        const failureMessage = getSnoozeCreateFailureMessage(result);
+        if (failureMessage) {
+          showErrorToast(failureMessage);
+        }
       }
     });
     

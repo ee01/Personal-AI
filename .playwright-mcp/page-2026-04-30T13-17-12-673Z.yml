@@ -1,0 +1,205 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]: 🧠 记忆查询系统
+      - paragraph [ref=e8]: 记忆入口规则只展示你手动创建的规则；帮我问 / 自我反思等系统内部观察会在主动询问里展示证据，不计入这里的 FollowThreads。
+    - generic [ref=e9]:
+      - link "🏠 首页概览" [ref=e10] [cursor=pointer]:
+        - /url: "#/"
+        - generic [ref=e11]: 🏠
+        - generic [ref=e12]: 首页概览
+      - link "⏰ 时间轴" [ref=e13] [cursor=pointer]:
+        - /url: "#/timeline"
+        - generic [ref=e14]: ⏰
+        - generic [ref=e15]: 时间轴
+      - link "📡 会议记录" [ref=e16] [cursor=pointer]:
+        - /url: "#/meetings"
+        - generic [ref=e17]: 📡
+        - generic [ref=e18]: 会议记录
+      - link "👤 用户画像" [ref=e19] [cursor=pointer]:
+        - /url: "#/user-profile"
+        - generic [ref=e20]: 👤
+        - generic [ref=e21]: 用户画像
+      - link "👁 关注后续 仅统计手动规则 0" [ref=e22] [cursor=pointer]:
+        - /url: "#/follow-threads"
+        - generic [ref=e23]: 👁
+        - generic [ref=e24]:
+          - generic [ref=e25]: 关注后续
+          - generic [ref=e26]: 仅统计手动规则
+        - generic [ref=e27]: "0"
+      - link "🌙 梦境重放" [ref=e28] [cursor=pointer]:
+        - /url: "#/dreams"
+        - generic [ref=e29]: 🌙
+        - generic [ref=e30]: 梦境重放
+      - link "🧠 自我反思" [ref=e31] [cursor=pointer]:
+        - /url: "#/reflection-threads"
+        - generic [ref=e32]: 🧠
+        - generic [ref=e33]: 自我反思
+      - link "⚖️ 决策中心" [ref=e34] [cursor=pointer]:
+        - /url: "#/decisions"
+        - generic [ref=e35]: ⚖️
+        - generic [ref=e36]: 决策中心
+      - link "⚙️ 动作队列" [ref=e37] [cursor=pointer]:
+        - /url: "#/actions"
+        - generic [ref=e38]: ⚙️
+        - generic [ref=e39]: 动作队列
+      - link "📡 主动询问 系统证据在这里看" [ref=e40] [cursor=pointer]:
+        - /url: "#/outreach"
+        - generic [ref=e41]: 📡
+        - generic [ref=e42]:
+          - generic [ref=e43]: 主动询问
+          - generic [ref=e44]: 系统证据在这里看
+      - separator [ref=e45]
+      - link "🚀 项目 12" [ref=e46] [cursor=pointer]:
+        - /url: "#/entity/Project"
+        - generic [ref=e47]: 🚀
+        - generic [ref=e48]: 项目
+        - generic [ref=e49]: "12"
+      - link "💡 主题 0" [ref=e50] [cursor=pointer]:
+        - /url: "#/entity/Topic"
+        - generic [ref=e51]: 💡
+        - generic [ref=e52]: 主题
+        - generic [ref=e53]: "0"
+      - link "👥 人物 45" [ref=e54] [cursor=pointer]:
+        - /url: "#/entity/Person"
+        - generic [ref=e55]: 👥
+        - generic [ref=e56]: 人物
+        - generic [ref=e57]: "45"
+      - link "🏢 组织 8" [ref=e58] [cursor=pointer]:
+        - /url: "#/entity/Organization"
+        - generic [ref=e59]: 🏢
+        - generic [ref=e60]: 组织
+        - generic [ref=e61]: "8"
+      - link "📄 文档 156" [ref=e62] [cursor=pointer]:
+        - /url: "#/entity/Document"
+        - generic [ref=e63]: 📄
+        - generic [ref=e64]: 文档
+        - generic [ref=e65]: "156"
+      - link "🔧 技术 23" [ref=e66] [cursor=pointer]:
+        - /url: "#/entity/Technology"
+        - generic [ref=e67]: 🔧
+        - generic [ref=e68]: 技术
+        - generic [ref=e69]: "23"
+  - generic [ref=e70]:
+    - generic [ref=e71]:
+      - generic [ref=e72]:
+        - generic [ref=e73]: 🔍
+        - textbox "搜索任何内容、实体或关键词（按 Enter 搜索）..." [ref=e74]
+      - button "📊 搜索" [ref=e75] [cursor=pointer]
+      - button "🔄 重置" [ref=e76] [cursor=pointer]
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - button "← 返回主题列表" [ref=e79] [cursor=pointer]:
+          - generic [ref=e80]: ←
+          - generic [ref=e81]: 返回主题列表
+        - generic [ref=e82]:
+          - generic [ref=e83]: 💡
+          - generic [ref=e84]:
+            - heading "AI 工作流自动化" [level=2] [ref=e85]
+            - generic [ref=e86]:
+              - generic [ref=e87]: 📈 12 条讨论
+              - generic [ref=e88]: 🔗 5 个关联项目
+              - generic [ref=e89]: 👥 8 位参与者
+              - generic [ref=e90]: 📚 15 个资源
+              - generic [ref=e91]: ● 2 条未读
+              - generic [ref=e92]: ⏰ 最后更新：刚刚
+          - generic [ref=e93]:
+            - button "📝 编辑主题" [ref=e94] [cursor=pointer]
+            - button "🔗 添加关联" [ref=e95] [cursor=pointer]
+      - generic [ref=e96]:
+        - generic [ref=e97]:
+          - button "🚀 相关项目" [ref=e98] [cursor=pointer]
+          - button "📚 相关资源" [ref=e99] [cursor=pointer]
+          - button "🎯 相关Tickets" [ref=e100] [cursor=pointer]
+          - button "💬 聊天记录" [ref=e101] [cursor=pointer]
+          - button "🌐 网页记录" [ref=e102] [cursor=pointer]
+        - generic [ref=e103]:
+          - generic [ref=e104]:
+            - heading "💬 聊天记录" [level=3] [ref=e105]
+            - generic [ref=e106]:
+              - textbox "搜索聊天记录..." [ref=e107]
+              - combobox [ref=e108]:
+                - option "全部群组" [selected]
+                - option "团队群"
+                - option "项目群"
+                - option "技术讨论"
+              - button "✓ 全部已阅" [ref=e109] [cursor=pointer]
+          - generic [ref=e110]:
+            - generic [ref=e111]:
+              - generic [ref=e112]:
+                - generic [ref=e113]:
+                  - generic [ref=e114]: 张
+                  - generic [ref=e115]:
+                    - generic [ref=e116]: 张三
+                    - generic [ref=e117]: 技术讨论组
+                - generic [ref=e118]: 刚刚
+              - generic [ref=e119]: 分享了最新的GPT-4 API集成经验，讨论了Token优化策略
+              - generic [ref=e120] [cursor=pointer]: 🔼 收起上下文
+              - generic [ref=e121]:
+                - generic [ref=e123]:
+                  - generic [ref=e124]:
+                    - generic [ref=e125]: 李四
+                    - generic [ref=e126]: 刚刚
+                  - generic [ref=e127]: 最近GPT-4的API调用成本有点高
+                - generic [ref=e128]:
+                  - generic [ref=e129]:
+                    - generic [ref=e130]: 张三
+                    - generic [ref=e131]: 刚刚
+                  - generic [ref=e132]: 我找到了一些优化Token使用的方法，可以减少30%的成本
+                - generic [ref=e133]:
+                  - generic [ref=e134]:
+                    - generic [ref=e135]: 王五
+                    - generic [ref=e136]: 刚刚
+                  - generic [ref=e137]: 能分享一下具体的优化策略吗？
+            - generic [ref=e138] [cursor=pointer]:
+              - generic [ref=e139]:
+                - generic [ref=e140]:
+                  - generic [ref=e141]: 李
+                  - generic [ref=e142]:
+                    - generic [ref=e143]: 李四 ●
+                    - generic [ref=e144]: 产品团队
+                - generic [ref=e145]: 刚刚
+              - generic [ref=e146]: 讨论了自动化测试的实现方案，提出了新的测试框架选型建议
+              - generic [ref=e147]: 🔍 查看上下文 (3 条相关消息)
+              - generic:
+                - generic [ref=e149]:
+                  - generic [ref=e150]:
+                    - generic [ref=e151]: 产品经理
+                    - generic [ref=e152]: 刚刚
+                  - generic [ref=e153]: 我们需要一个更好的自动化测试方案
+                - generic [ref=e154]:
+                  - generic [ref=e155]:
+                    - generic [ref=e156]: 李四
+                    - generic [ref=e157]: 刚刚
+                  - generic [ref=e158]: 建议采用Playwright + Jest的组合，覆盖率会更高
+                - generic [ref=e159]:
+                  - generic [ref=e160]:
+                    - generic [ref=e161]: 测试负责人
+                    - generic [ref=e162]: 刚刚
+                  - generic [ref=e163]: 这个方案看起来不错，我们可以试试
+            - generic [ref=e164] [cursor=pointer]:
+              - generic [ref=e165]:
+                - generic [ref=e166]:
+                  - generic [ref=e167]: 王
+                  - generic [ref=e168]:
+                    - generic [ref=e169]: 王五 ●
+                    - generic [ref=e170]: AI研发团队
+                - generic [ref=e171]: 刚刚
+              - generic [ref=e172]: 探讨了多模态AI模型在产品中的应用场景
+              - generic [ref=e173]: 🔍 查看上下文 (3 条相关消息)
+              - generic:
+                - generic [ref=e175]:
+                  - generic [ref=e176]:
+                    - generic [ref=e177]: 技术总监
+                    - generic [ref=e178]: 刚刚
+                  - generic [ref=e179]: 现在多模态AI技术越来越成熟了
+                - generic [ref=e180]:
+                  - generic [ref=e181]:
+                    - generic [ref=e182]: 王五
+                    - generic [ref=e183]: 刚刚
+                  - generic [ref=e184]: 我们可以考虑在用户界面中集成图像识别和文本理解
+                - generic [ref=e185]:
+                  - generic [ref=e186]:
+                    - generic [ref=e187]: 产品经理
+                    - generic [ref=e188]: 刚刚
+                  - generic [ref=e189]: 这样可以大大提升用户体验

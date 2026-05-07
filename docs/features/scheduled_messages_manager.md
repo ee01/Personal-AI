@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-04-16*
+*最后更新: 2026-05-06*
 
 ## 功能概述
 
@@ -32,12 +32,22 @@
 - 支持重复次数限制
 - 自动标记已完成任务
 - 记录执行日志
+- 日期和时间按本机本地时间保存，避免接近午夜时被 UTC 转换成前一天 / 后一天
+- 执行时间必须是有效的本地时间（00:00-23:59），异常值会在管理界面提示并被执行器跳过
+- 周期任务的 `End_Date` 包含结束日当天；达到 `Repeat_Count` 后会在本次成功发送后收尾
+- 周重复任务的预览和 `Next_Exec` 始终指向未来的有效执行日，今天时间已过时会自动跳到下一个匹配星期
 
 ### 5. 灵活的表格结构 ✨
 - **动态列位置识别**：通过 header 行自动识别列的位置
 - **支持自由调整列顺序**：用户可以在 Google Sheet 中随意调整列的顺序
 - **自动适配读写**：系统自动根据 header 确定数据的读取和写入位置
 - **向后兼容**：自动适配旧版本和新版本的表格结构
+
+### 6. 列表筛选与恢复路径
+- 管理页支持按类别、待审核状态和“过滤掉仅发我的”筛选消息
+- 筛选结果为空时会显示明确空状态和“清除筛选”按钮，不再只留下空表格
+- 筛选逻辑由共享 helper 统一处理，便于入口链接和 UI 保持一致
+- 自动答复通知中的“点击审核或取消”链接会带上 `messageId`，管理页打开后直接定位目标消息，并提供返回完整列表的恢复路径
 
 ## 使用方法
 
@@ -60,7 +70,7 @@
    - **Topic**: 消息主题
    - **Content**: 消息内容
    - **Schedule_Date**: 执行日期（YYYY-MM-DD）
-   - **Schedule_Time**: 执行时间（HH:mm，可选）
+   - **Schedule_Time**: 执行时间（00:00-23:59，本地时间，可选）
    - **Push_Method**: 推送方式（AsMe/Bot/AI/Outreach）
    - **Owner**: 创建者
    - **Status**: 状态（Active/Paused/Completed）
@@ -80,12 +90,9 @@
 
    **Outreach / 帮我问额外字段**：
    - **Content**: 实际要问的问题
-   - **Target_Type**: `private` 或 `group`
    - **Glip_User_Name**: 目标是某个人时填写
    - **Glip_Team_ID**: 目标是某个群时填写
-   - **Outreach_Context**: 可选背景说明
-   - **Outreach_Max_Followup**: 最大追问次数
-   - **Outreach_Followup_Interval_Hours**: 追问间隔（小时）
+   - 上下文、目标解析、追问策略和运行态结果下沉到 memory-service；新表不再把这些运行态字段作为 Sheet 主 schema 保存
 
 #### 方式二：通过管理界面创建
 
@@ -95,10 +102,21 @@
 4. 按提示填写对应字段：
    - **AsMe**：按接收人添加人名标签
    - **Bot**：选择私聊或群组，并填写 Glip 用户名或群组 ID
-   - **AI Report**：选择模板（AI report / PEP report / 自定义），系统会为每个模板分别记住 Endpoint / Headers / Body
+   - **AI Report**：选择模板（AI report / PEP report / Multiple Jira Query / 自定义），系统会为每个模板分别记住 Endpoint / Headers / Body
    - **帮我问**：选择问某个人还是某个群，填写问题、可选背景和追问策略
 5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
-6. 点击“✅ 创建消息”完成创建
+6. 执行日期 / 时间支持快捷选择：1 分钟后、下个整点、下次默认时间（AsMe 09:00，Bot / AI / JiraAutomation 08:00）或清空时间
+7. 表单会显示预计下次执行时间；一次性任务若已经错过可执行窗口，会提示改成未来时间
+8. 未填写执行时间时，AsMe 默认按 09:00 执行；Bot / AI / JiraAutomation 默认从 08:00 后进入队列，每分钟执行一条
+9. 点击“✅ 创建消息”完成创建
+
+### 管理列表筛选
+
+- “只看待审核”用于快速处理自动答复审核队列
+- 类别筛选支持多个类别，按并集匹配
+- “过滤掉仅发我的”用于隐藏只发给当前账号的个人提醒
+- 从自动答复通知打开时，页面会优先展示目标消息；如果该消息已处理，仍会显示当前状态，避免用户在待审核列表中找不到记录
+- 如果筛选后没有结果，页面会提示当前筛选条件并提供一键清除筛选
 
 ### 消息类型说明
 
@@ -114,12 +132,14 @@
 - 按固定周期重复执行
 - 必填字段：Schedule_Date, Repeat_Every, Repeat_Unit
 - 可选字段：End_Date（结束日期）, Repeat_Count（重复次数）, Repeat_Days（多选日期）
+- End_Date 表示最后允许执行的日期，结束日当天仍会执行匹配的任务
 - Repeat_Unit 可选值：
   - Day: 每 N 天（排除周末）
   - Week: 每 N 周
     - 支持多星期选择：可通过 Repeat_Days 指定一周多天执行（如周一、三、五）
     - Repeat_Days 格式：逗号分隔的数字（0=周日, 1=周一...6=周六）
     - 示例：`1,3,5` 表示每周一、三、五执行
+    - `Repeat_Every > 1` 时会按开始周计算间隔，例如每 2 周的周一/三/五不会退化成每周执行
     - 特殊情况：工作日（1,2,3,4,5）、周末（0,6）会显示为"工作日"、"周末"
   - Month: 每 N 个月
   - Year: 每 N 年
@@ -142,7 +162,7 @@
 
 #### AI Report（AI 报告推送）
 - 通过 Jira Automation 调用外部 API，发送结构化报告
-- 提供 **AI report / PEP report / 自定义** 三种模板，并为每种模板保留独立配置
+- 提供 **AI report / PEP report / Multiple Jira Query / 自定义** 四种模板，并为每种模板保留独立配置
 - `AI_Endpoint` 与 `AI_Headers` 会根据模板自动填充，可随时切换；`AI_Body` 可直接编辑并支持 `{Topic}`、`{Content}` 变量
 - 自定义模板支持完全自由填写 Endpoint / Headers / Body，切换模板时系统会记住各自的输入
 
@@ -229,6 +249,11 @@
     }
     ```
 
+- **Multiple Jira Query report**
+  - Endpoint：`POST https://pep.int.rclabenv.com/multiple_jira_query_notify`
+  - Headers：`Content-Type: application/json`
+  - Body 默认包含 `team_id` 和多条 Jira query 配置，可按团队报告需求调整
+
 - **自定义**：Endpoint / Headers / Body 均由用户填写，模板切换后仍会保留已输入内容
 
 - 🎯 **单条消息推送**：每分钟执行一条（覆盖 Bot / AI），避免批量失败
@@ -248,8 +273,7 @@ Chrome Extension 管理界面
 Google Sheets（统一数据源）
     ↓
     ├─→ AppScript Trigger（AsMe 推送）
-    │   ├─→ minuteTrigger（每分钟）
-    │   └─→ dailyTrigger（每日）
+    │   └─→ minuteTrigger（每分钟统一检查时间 / 周期 / Timeline）
     │
     └─→ Jira Automation（Bot/AI 推送）
         └─→ 每分钟读取 Sheet，调用 Bot/AI API
@@ -281,17 +305,19 @@ memory-service runtime（Outreach）
   - 自动同步：同步数据时清除缓存，确保获取最新列结构
 
 #### 3. AppScript 执行引擎
-- `minuteTrigger()`: 每分钟执行，处理 Hourly 类型
-- `dailyTrigger()`: 每日执行，处理 Daily 和 Periodic 类型
+- `minuteTrigger()`: 每分钟执行，统一处理一次性、周期性和 Timeline 类型
 - `doGet()`: Web App 端点，供 Jira Automation 调用
 
 #### 4. Jira Automation 执行器（v2 架构）
-- 每分钟触发一次 Webhook 调用 AppScript
+- 由两条 Jira Automation Rule 组成：
+  - Executor Rule 每分钟触发一次 Webhook 调用 AppScript
+  - Timeline Sync Rule 每天 05:00 按项目刷新 releaseInfo 缓存
 - AppScript 执行完整流程：
   1. 按优先级选择单条消息（当前分钟 > 过去30分钟 > 未指定时间）
   2. 过滤今日已成功/已失败的消息
-  3. 调用内网 Bot API 或外部 AI API 发送
-  4. 更新执行日志到 Sheet
+  3. Timeline 消息从缓存读取项目 Milestone 信息；缓存缺失时跳过 Timeline，不影响普通时间消息
+  4. 调用内网 Bot API 或外部 AI API 发送
+  5. 更新执行日志到 Sheet
 - **优势**：失败消息不阻塞队列，全天分散推送未指定时间的消息
 
 #### 5. Outreach Runtime
@@ -312,42 +338,34 @@ memory-service runtime（Outreach）
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | ID | String | ✅ | 唯一标识 |
-| Type | Enum | ✅ | Daily/Hourly/Periodic |
 | Topic | String | ✅ | 消息主题 |
 | Content | String | ✅ | 消息内容 |
 | Schedule_Date | Date | ✅ | 执行日期 (YYYY-MM-DD) |
-| Schedule_Time | Time | ❌ | 执行时间 (HH:mm) |
-| End_Date | Date | ❌ | 结束日期 |
+| Schedule_Time | Time | ❌ | 执行时间（00:00-23:59，本地时间） |
+| End_Date | Date | ❌ | 结束日期（包含当天） |
 | Repeat_Every | Number | ❌ | 重复间隔 |
 | Repeat_Unit | Enum | ❌ | Day/Week/Month/Year |
 | Repeat_Count | Number | ❌ | 重复次数 |
 | Repeat_Days | String | ❌ | 多选日期（周模式：0=周日,1=周一...6=周六，逗号分隔） |
+| Timeline_Project | String | ❌ | Timeline 触发项目 |
+| Timeline_Milestone | String | ❌ | Timeline 触发里程碑 |
+| Timeline_Offset | Number | ❌ | Timeline 偏移天数 |
 | Push_Method | Enum | ✅ | AsMe / Bot / AI / JiraAutomation / Outreach |
-| Glip_User_Name | String | ❌ | 接收人用户名（AsMe、Bot 私聊或 Outreach private 目标） |
-| Glip_Team_ID | String | ❌ | 群组 ID（Bot 群推送或 Outreach group 目标） |
+| Glip_User_Name | String | ❌ | 接收人用户名（AsMe、Bot 私聊或 Outreach 个人目标） |
+| Glip_Team_ID | String | ❌ | 群组 ID（Bot 群推送、AI 报告或 Outreach 群目标） |
 | Attachment | String | ❌ | 附件文件名 |
 | AI_Endpoint | String | ❌ | AI API 端点（AI 推送必填） |
 | AI_Headers | String | ❌ | AI API 请求头（多行文本，每行一个 header） |
 | AI_Body | String | ❌ | AI API 请求体（JSON，支持 {Topic}/{Content} 变量） |
-| Target_Type | Enum | ❌ | `private` / `group` / `api`，Outreach 会使用 |
-| Outreach_Target_Type | Enum | ❌ | Outreach 目标类型镜像字段，兼容旧表头 |
-| Outreach_Target_Ref | String | ❌ | Outreach 目标引用镜像字段，兼容旧表头 |
-| Outreach_Context | String | ❌ | 帮我问的背景说明 |
-| Outreach_Max_Followup | Number | ❌ | 最大追问次数 |
-| Outreach_Followup_Interval_Hours | Number | ❌ | 追问间隔（小时） |
-| Outreach_Sync_State | String | ❌ | 模板同步状态（运行态 overlay） |
-| Outreach_Runtime_Status | String | ❌ | 最近一次会话状态（运行态 overlay） |
-| Outreach_Last_Session_ID | String | ❌ | 最近一次 session id（运行态 overlay） |
-| Outreach_Result | String | ❌ | 最近一次结果摘要（运行态 overlay） |
-| Outreach_Last_Result | String | ❌ | 最近一次结果摘要镜像字段，兼容旧表头 |
-| Outreach_Last_Updated | DateTime | ❌ | 最近一次会话更新时间（运行态 overlay） |
-| Outreach_Question | String | ❌ | 已废弃；历史表头兼容字段，当前使用 `Content` 保存问题原文 |
-| Owner | String | ✅ | 创建者 |
+| Category | String | ❌ | 分类标签 |
+| Automation_Link | String | ❌ | Jira Automation Rule 链接 |
 | Status | Enum | ✅ | Active/Paused/Completed |
 | Last_Exec | DateTime | ❌ | 最后执行时间（自动） |
 | Next_Exec | DateTime | ❌ | 下次执行时间（自动） |
 | Exec_Count | Number | ❌ | 执行次数（自动） |
 | Exec_Log | String | ❌ | 执行日志（自动） |
+
+说明：`Type` 由程序根据日期、时间和重复字段自动判断，不再作为新表 schema 保存。旧表中的 `Target_Type`、`Outreach_*`、`Outreach_Question` 等列会继续兼容读取，但 v2.7 新表只把 Outreach 入口保存在 `Content / Glip_User_Name / Glip_Team_ID / Push_Method` 等基础列中，运行态以上游 memory-service 为准。
 
 ### Config 表字段
 
@@ -373,25 +391,28 @@ A: 请检查：
 ### Q: 消息没有按时发送？
 A: 请检查：
 1. 消息状态是否为 Active
-2. Schedule_Date 和 Schedule_Time 是否正确
+2. Schedule_Date 和 Schedule_Time 是否正确，Schedule_Time 必须是 00:00-23:59 的本地时间
 3. AppScript 触发器是否正常运行（在 Google Apps Script 控制台查看）
 
 ### Q: 如何修改消息内容？
 A: 
-1. 打开 Google Sheet
-2. 找到对应的消息行
-3. 直接编辑内容
-4. 保存即可（下次执行时生效）
+1. 在管理界面点击消息右侧的编辑按钮，或打开 Google Sheet 找到对应行
+2. 修改内容 / 时间 / 目标后保存
+3. 下次执行时会使用最新配置
+
+### Q: 为什么列表是空的，但总计不为 0？
+A:
+这通常是筛选条件没有匹配消息。点击空状态里的“清除筛选”即可恢复全部消息列表。
 
 ### Q: 如何暂停消息？
 A:
-1. 将消息的 Status 字段改为 "Paused"
+1. 在管理界面点击状态标签切换 Active / Paused，或在 Sheet 中将 Status 改为 "Paused"
 2. 系统将跳过该消息的执行
 
 ### Q: 如何删除消息？
 A:
-1. 打开 Google Sheet
-2. 删除对应的消息行即可
+1. 在管理界面点击删除按钮，或打开 Google Sheet 删除对应消息行
+2. 托管的 Jira Automation 规则会先尝试恢复原 trigger，再删除 Personal AI 记录
 
 ### Q: 可以调整 Sheet 中列的顺序吗？
 A: 
@@ -462,9 +483,9 @@ A:
 
 ### Phase 3: 高级功能
 - [ ] RingCentral 聊天界面集成
-- [ ] 一键定时回复按钮
+- [x] 一键定时回复按钮
 - [ ] AI 建议回复时间
-- [ ] 在管理界面直接创建/编辑消息
+- [x] 在管理界面直接创建/编辑消息
 - [ ] 消息模板管理
 - [ ] 执行历史查看
 
@@ -474,6 +495,11 @@ A:
 - [Google Apps Script 文档](https://developers.google.com/apps-script)
 - [Apps Script API 文档](https://developers.google.com/apps-script/api)
 - [Jira Automation 文档](https://support.atlassian.com/cloud-automation/docs/jira-automation/)
+- [Slack scheduled messages API](https://docs.slack.dev/messaging/sending-and-scheduling-messages/)：已排程消息需要可列出、删除，更新时可用删除后重建策略
+- [Microsoft Teams schedule chat messages](https://support.microsoft.com/en-gb/office/schedule-chat-messages-in-microsoft-teams-2fc5ea77-7bb4-4511-8f59-e62bac1c0f6a)：已排程消息支持编辑、改期和删除
+- [Google Chat schedule messages](https://support.google.com/chat/answer/16059642?co=GENIE.Platform%3DDesktop&hl=en)：Drafts 入口集中管理待发送消息，并显示发送人与接收人时区
+- [Intelligent Notification Systems survey](https://arxiv.org/abs/1711.10171)：通知系统需要结合时间、上下文和用户偏好降低打扰
+- [Adaptive notification scheduling study](https://www.sciencedirect.com/science/article/abs/pii/S1574119217304388)：真实生产环境中延迟到更合适时机发送通知能改善响应体验
 
 **实现细节文档**：
 - `BOT_SINGLE_MESSAGE_IMPLEMENTATION.md` - Bot 单条消息推送完整实现

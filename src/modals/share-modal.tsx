@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useMemo } from 'react';
+import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime';
 
 // 推荐功能定义
 interface RecommendFeature {
@@ -190,8 +191,8 @@ const ShareModal: React.FC = () => {
             // 计算 1 分钟后的时间
             const now = new Date();
             const scheduleTime = new Date(now.getTime() + 60 * 1000);
-            const scheduleDate = scheduleTime.toISOString().split('T')[0]; // YYYY-MM-DD
-            const scheduleTimeStr = scheduleTime.toTimeString().slice(0, 5); // HH:mm
+            const { dateStr: scheduleDate, timeStr: scheduleTimeStr } =
+                formatLocalScheduleDateTime(scheduleTime);
             
             // 通过 background 发送消息
             const response = await chrome.runtime.sendMessage({
@@ -635,4 +636,3 @@ ReactDOM.render(
     </React.StrictMode>,
     document.getElementById('share-modal-root')
 );
-

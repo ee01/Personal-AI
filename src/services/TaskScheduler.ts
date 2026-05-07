@@ -1,7 +1,7 @@
 /**
  * 统一任务调度管理器
  * 集中管理所有定时任务，避免重复执行和遗漏
- * 
+ *
  * 特性：
  * - message_analysis 任务的间隔时间从 envConfig.MESSAGE_ANALYSIS_INTERVAL 动态读取
  * - 消息上下文获取窗口从 envConfig.MESSAGE_CONTEXT_WINDOW 动态读取
@@ -9,100 +9,103 @@
  * - 无需手动干预，配置更改后立即生效
  */
 
-import { findRingCentralTab, createRingCentralTab, waitForTabLoad } from '../utils/tabHelpers';
-import { analyzeMessages } from '../messageDealing';
+import {
+  findRingCentralTab,
+  createRingCentralTab,
+  waitForTabLoad,
+} from '../utils/tabHelpers';
 import { getEnvConfig } from '../utils';
 import { Logger } from '../utils/logger';
 import { digestQueueService } from './DigestQueueService';
 import { getMemoryServiceClient } from './MemoryServiceClient';
 import { concernedItemsSyncService } from './ConcernedItemsSyncService';
+import { TASK_DEFINITIONS } from './taskSchedulerDefinitions';
+export {
+  getTaskEnabled,
+  onTaskEnabledChanged,
+} from './taskSchedulerDefinitions';
 
 // 任务类型定义
 export interface ScheduledTask {
   id: string;
   name: string;
-  category: 'message_analysis' | 'data_sync' | 'system_maintenance' | 'user_profile';
+  category:
+    | 'message_analysis'
+    | 'data_sync'
+    | 'system_maintenance'
+    | 'user_profile';
   intervalMinutes: number;
   description: string;
   enabled: boolean;
   lastRun?: number;
+  lastCompletedAt?: number;
+  lastSkippedAt?: number;
+  lastSuccess?: boolean;
+  lastError?: string;
+  lastSkipReason?: string;
   nextRun?: number;
+  runHistory?: ScheduledTaskRunRecord[];
 }
 
-// 预定义的任务配置
-const TASK_DEFINITIONS: ScheduledTask[] = [
-  {
-    id: 'message_analysis',
-    name: '静默消息分析',
-    category: 'message_analysis',
-    intervalMinutes: 30, // 默认30分钟间隔（实际值从 envConfig.MESSAGE_ANALYSIS_INTERVAL 读取）
-    description: '自动分析RingCentral消息，提取关键信息',
-    enabled: false
-  },
-  {
-    id: 'memory_sync',
-    name: '记忆系统同步',
-    category: 'data_sync',
-    intervalMinutes: 5, // 5分钟间隔
-    description: '同步本地和云端记忆数据',
-    enabled: true
-  },
-  {
-    id: 'system_monitoring',
-    name: '系统健康监控',
-    category: 'system_maintenance',
-    intervalMinutes: 60, // 1小时间隔
-    description: '执行系统健康检查和自动维护',
-    enabled: true
-  },
-  {
-    id: 'user_profile_decay',
-    name: '用户画像权重衰变',
-    category: 'user_profile',
-    intervalMinutes: 1440, // 24小时间隔
-    description: '执行用户画像权重的自然衰变',
-    enabled: true
-  },
-  {
-    id: 'vectorized_data_maintenance',
-    name: '向量化数据维护',
-    category: 'user_profile',
-    intervalMinutes: 720, // 12小时间隔
-    description: '清理过期向量记录，更新嵌入向量，生成用户概要',
-    enabled: true
-  },
-  {
-    id: 'user_summary_generation',
-    name: '用户概要生成',
-    category: 'user_profile',
-    intervalMinutes: 10080, // 7天间隔
-    description: '定期生成和更新用户行为概要记录',
-    enabled: true
-  },
-  {
-    id: 'vector_quality_check',
-    name: '向量质量检查',
-    category: 'system_maintenance',
-    intervalMinutes: 4320, // 3天间隔
-    description: '检查向量数据质量，修复异常记录',
-    enabled: true
-  },
-  {
-    id: 'digest_queue_process',
-    name: '汇总推送队列处理',
-    category: 'data_sync',
-    intervalMinutes: 60, // 每小时检查一次
-    description: '检查并处理到期的汇总推送任务（关注后续合并通知、每日摘要等）',
-    enabled: true
+export interface ScheduledTaskStatus extends ScheduledTask {
+  status: 'running' | 'stopped';
+  isExecuting: boolean;
+  scheduleHealth:
+    | 'scheduled'
+    | 'missing_alarm'
+    | 'period_mismatch'
+    | 'disabled';
+  scheduleWarning?: string;
+}
+
+export interface TaskExecutionResult {
+  success: boolean;
+  skipped?: boolean;
+  error?: string;
+}
+
+export type TaskExecutionTrigger = 'scheduled' | 'manual' | 'startup';
+
+export interface ScheduledTaskRunRecord {
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+  success: boolean;
+  skipped?: boolean;
+  trigger: TaskExecutionTrigger;
+  error?: string;
+}
+
+interface TaskStatusOptions {
+  repairAlarms?: boolean;
+  persist?: boolean;
+}
+
+const TASK_RUN_HISTORY_LIMIT = 5;
+
+function getTaskErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
-];
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+  return '未知错误';
+}
 
 export class TaskScheduler {
   private static instance: TaskScheduler | null = null;
   private tasks: Map<string, ScheduledTask> = new Map();
   private alarmListeners: Set<string> = new Set();
+  private runningTasks: Set<string> = new Set();
+  private startPromise: Promise<void> | null = null;
   public isInitialized = false; // 改为 public，方便 background.ts 检查状态
-  private storageChangeListener: ((changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => void) | null = null;
+  private storageChangeListener:
+    | ((
+        changes: { [key: string]: chrome.storage.StorageChange },
+        namespace: string,
+      ) => void)
+    | null = null;
 
   private constructor() {
     // initializeTasks 现在是异步的，将在 startAllTasks 中调用
@@ -128,23 +131,35 @@ export class TaskScheduler {
   private async initializeTasks(): Promise<void> {
     // 获取环境配置
     const config = await getEnvConfig();
-    
+
     // 初始化所有任务
-    TASK_DEFINITIONS.forEach(task => {
+    TASK_DEFINITIONS.forEach((task) => {
       const taskCopy = { ...task };
-      
+
       // message_analysis 任务的间隔时间使用用户配置
       if (task.id === 'message_analysis') {
         // 优先使用新配置，如果不存在则使用旧配置作为回退
-        taskCopy.intervalMinutes = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
-        console.log(`⚙️ message_analysis 任务间隔已设置为: ${taskCopy.intervalMinutes} 分钟`);
-        console.log(`⚙️ 消息上下文窗口已设置为: ${config.MESSAGE_CONTEXT_WINDOW || 125} 分钟`);
+        taskCopy.intervalMinutes =
+          Number(config.MESSAGE_ANALYSIS_INTERVAL) ||
+          Number(config.SCHEDULED_INTERVAL) ||
+          30;
+        console.log(
+          `⚙️ message_analysis 任务间隔已设置为: ${taskCopy.intervalMinutes} 分钟`,
+        );
+        console.log(
+          `⚙️ 消息上下文窗口已设置为: ${
+            config.MESSAGE_CONTEXT_WINDOW || 125
+          } 分钟`,
+        );
       }
-      
+
       this.tasks.set(taskCopy.id, taskCopy);
     });
-    
-    console.log('📋 任务调度器初始化完成，注册任务:', Array.from(this.tasks.keys()));
+
+    console.log(
+      '📋 任务调度器初始化完成，注册任务:',
+      Array.from(this.tasks.keys()),
+    );
   }
 
   /**
@@ -156,6 +171,21 @@ export class TaskScheduler {
       return;
     }
 
+    if (this.startPromise) {
+      console.log('⏳ 任务调度器正在启动，等待已有启动流程完成');
+      await this.startPromise;
+      return;
+    }
+
+    this.startPromise = this.startAllTasksInternal();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async startAllTasksInternal(): Promise<void> {
     console.log('🚀 启动任务调度器...');
 
     // 初始化任务定义（包括从配置中读取 message_analysis 的间隔）
@@ -173,7 +203,9 @@ export class TaskScheduler {
     }
 
     // 检查是否是首次启动（没有保存的状态）
-    const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
+    const { taskSchedulerStates } = await chrome.storage.local.get(
+      'taskSchedulerStates',
+    );
     const isFirstRun = !taskSchedulerStates;
 
     // 确保所有启用的任务都有对应的 alarm
@@ -195,10 +227,10 @@ export class TaskScheduler {
     }
 
     this.isInitialized = true;
-    
+
     // 保存初始化状态
     await this.saveTaskStates();
-    
+
     console.log('✅ 任务调度器启动完成');
   }
 
@@ -207,33 +239,33 @@ export class TaskScheduler {
    */
   public async stopAllTasks(): Promise<void> {
     console.log('🛑 停止任务调度器...');
-    
+
     // 只清除我们创建的 alarms，不影响其他扩展功能的 alarms
     const existingAlarms = await this.getExistingAlarms();
     for (const alarm of existingAlarms) {
-      await new Promise(resolve => chrome.alarms.clear(alarm.name, resolve));
+      await new Promise((resolve) => chrome.alarms.clear(alarm.name, resolve));
     }
     console.log(`🧹 已清除 ${existingAlarms.length} 个任务定时器`);
-    
+
     this.alarmListeners.clear();
-    
+
     // 移除配置变化监听器
     if (this.storageChangeListener) {
       chrome.storage.onChanged.removeListener(this.storageChangeListener);
       this.storageChangeListener = null;
       console.log('🗑️ 已移除配置变化监听器');
     }
-    
+
     this.isInitialized = false;
-    
+
     // 禁用所有任务
     for (const [_taskId, task] of Array.from(this.tasks.entries())) {
       task.enabled = false;
     }
-    
+
     // 保存停止状态
     await this.saveTaskStates();
-    
+
     console.log('✅ 任务调度器已停止');
   }
 
@@ -242,22 +274,34 @@ export class TaskScheduler {
    */
   private async restoreTaskStates(): Promise<void> {
     try {
-      const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
-      
+      const { taskSchedulerStates } = await chrome.storage.local.get(
+        'taskSchedulerStates',
+      );
+
       if (taskSchedulerStates) {
         console.log('🔄 恢复任务状态:', taskSchedulerStates);
-        
+
         // 恢复每个任务的状态
-        for (const [taskId, savedState] of Object.entries(taskSchedulerStates)) {
+        for (const [taskId, savedState] of Object.entries(
+          taskSchedulerStates,
+        )) {
           const task = this.tasks.get(taskId);
           if (task && savedState) {
             const state = savedState as Partial<ScheduledTask>;
             task.enabled = state.enabled ?? task.enabled;
             task.lastRun = state.lastRun;
+            task.lastCompletedAt = state.lastCompletedAt;
+            task.lastSkippedAt = state.lastSkippedAt;
+            task.lastSuccess = state.lastSuccess;
+            task.lastError = state.lastError;
+            task.lastSkipReason = state.lastSkipReason;
             task.nextRun = state.nextRun;
+            task.runHistory = Array.isArray(state.runHistory)
+              ? state.runHistory.slice(0, TASK_RUN_HISTORY_LIMIT)
+              : undefined;
           }
         }
-        
+
         console.log('✅ 任务状态恢复完成');
       } else {
         console.log('📝 未找到已保存的任务状态，使用默认配置');
@@ -273,15 +317,21 @@ export class TaskScheduler {
   private async saveTaskStates(): Promise<void> {
     try {
       const taskStates: Record<string, Partial<ScheduledTask>> = {};
-      
+
       for (const [taskId, task] of Array.from(this.tasks.entries())) {
         taskStates[taskId] = {
           enabled: task.enabled,
           lastRun: task.lastRun,
-          nextRun: task.nextRun
+          lastCompletedAt: task.lastCompletedAt,
+          lastSkippedAt: task.lastSkippedAt,
+          lastSuccess: task.lastSuccess,
+          lastError: task.lastError,
+          lastSkipReason: task.lastSkipReason,
+          nextRun: task.nextRun,
+          runHistory: task.runHistory,
         };
       }
-      
+
       await chrome.storage.local.set({ taskSchedulerStates: taskStates });
       console.log('💾 任务状态已保存');
     } catch (error) {
@@ -294,15 +344,50 @@ export class TaskScheduler {
    */
   private async createTaskAlarm(task: ScheduledTask): Promise<void> {
     const alarmName = `scheduled_task_${task.id}`;
-    
-    return new Promise((resolve) => {
-      chrome.alarms.create(alarmName, {
-        periodInMinutes: task.intervalMinutes
-      });
-      
-      console.log(`⏰ 创建定时任务: ${task.name} (${task.intervalMinutes}分钟间隔)`);
-      resolve();
+    const createAlarm = chrome.alarms.create as unknown as (
+      name: string,
+      alarmInfo: chrome.alarms.AlarmCreateInfo,
+      callback: () => void,
+    ) => void;
+
+    await new Promise<void>((resolve, reject) => {
+      createAlarm(
+        alarmName,
+        {
+          delayInMinutes: task.intervalMinutes,
+          periodInMinutes: task.intervalMinutes,
+        },
+        () => {
+          const errorMessage = chrome.runtime.lastError?.message;
+          if (errorMessage) {
+            reject(new Error(`创建定时器失败: ${alarmName}: ${errorMessage}`));
+            return;
+          }
+          resolve();
+        },
+      );
     });
+
+    const createdAlarm = await this.getAlarm(alarmName);
+    if (!createdAlarm) {
+      throw new Error(`创建定时器失败: ${alarmName}`);
+    }
+
+    task.nextRun = createdAlarm.scheduledTime;
+
+    console.log(
+      `⏰ 创建定时任务: ${task.name} (${task.intervalMinutes}分钟间隔)`,
+    );
+  }
+
+  private async refreshTaskNextRun(task: ScheduledTask): Promise<void> {
+    if (!task.enabled) {
+      task.nextRun = undefined;
+      return;
+    }
+
+    const alarm = await this.getAlarm(`scheduled_task_${task.id}`);
+    task.nextRun = alarm?.scheduledTime;
   }
 
   /**
@@ -311,24 +396,27 @@ export class TaskScheduler {
    */
   private async ensureAlarmsCreated(): Promise<void> {
     console.log('🔍 检查并确保所有任务的定时器已创建...');
-    
+
     for (const [taskId, task] of Array.from(this.tasks.entries())) {
       const alarmName = `scheduled_task_${taskId}`;
-      
+
       if (task.enabled) {
         // 检查 alarm 是否存在
         const existingAlarm = await this.getAlarm(alarmName);
-        
+
         if (!existingAlarm) {
           // alarm 不存在，创建新的
           await this.createTaskAlarm(task);
         } else if (existingAlarm.periodInMinutes !== task.intervalMinutes) {
           // alarm 存在但配置不一致，重新创建
-          console.log(`🔄 更新定时器配置: ${task.name} (${existingAlarm.periodInMinutes}min -> ${task.intervalMinutes}min)`);
+          console.log(
+            `🔄 更新定时器配置: ${task.name} (${existingAlarm.periodInMinutes}min -> ${task.intervalMinutes}min)`,
+          );
           await this.clearAlarm(alarmName);
           await this.createTaskAlarm(task);
         } else {
           // alarm 存在且配置正确
+          task.nextRun = existingAlarm.scheduledTime;
           console.log(`✅ 定时器已存在: ${task.name}`);
         }
       } else {
@@ -338,16 +426,19 @@ export class TaskScheduler {
           console.log(`🗑️ 清除已禁用任务的定时器: ${task.name}`);
           await this.clearAlarm(alarmName);
         }
+        task.nextRun = undefined;
       }
     }
-    
+
     console.log('✅ 定时器检查完成');
   }
 
   /**
    * 获取单个 alarm
    */
-  private async getAlarm(name: string): Promise<chrome.alarms.Alarm | undefined> {
+  private async getAlarm(
+    name: string,
+  ): Promise<chrome.alarms.Alarm | undefined> {
     return new Promise((resolve) => {
       chrome.alarms.get(name, (alarm) => {
         resolve(alarm);
@@ -373,8 +464,8 @@ export class TaskScheduler {
     return new Promise((resolve) => {
       chrome.alarms.getAll((alarms) => {
         // 只返回我们的任务调度器创建的 alarms
-        const taskAlarms = alarms.filter(alarm => 
-          alarm.name.startsWith('scheduled_task_')
+        const taskAlarms = alarms.filter((alarm) =>
+          alarm.name.startsWith('scheduled_task_'),
         );
         resolve(taskAlarms);
       });
@@ -407,7 +498,9 @@ export class TaskScheduler {
     // 原因：Service Worker 重启时，如果监听器设置延迟，alarm 事件会丢失
 
     this.alarmListeners.add('main');
-    console.log('✅ TaskScheduler 监听器标记已设置（实际监听器在 background.ts 顶层）');
+    console.log(
+      '✅ TaskScheduler 监听器标记已设置（实际监听器在 background.ts 顶层）',
+    );
   }
 
   /**
@@ -419,8 +512,15 @@ export class TaskScheduler {
     const task = this.tasks.get(taskId);
 
     if (task) {
+      if (!task.enabled) {
+        console.warn(`⚠️ 忽略已禁用任务的残留定时器: ${task.name}`);
+        await this.clearAlarm(alarm.name);
+        task.nextRun = undefined;
+        await this.saveTaskStates();
+        return;
+      }
       console.log(`⚡ 执行定时任务: ${task.name}`);
-      await this.executeTask(task);
+      await this.executeTask(task, 'scheduled');
     } else {
       console.warn(`⚠️ 未找到任务: ${taskId}`);
     }
@@ -430,23 +530,25 @@ export class TaskScheduler {
    * 静态方法：尝试处理 alarm 事件
    * 返回 true 表示已处理，false 表示不是 TaskScheduler 的 alarm
    */
-  public static async tryHandleAlarm(alarm: chrome.alarms.Alarm): Promise<boolean> {
+  public static async tryHandleAlarm(
+    alarm: chrome.alarms.Alarm,
+  ): Promise<boolean> {
     if (!alarm.name.startsWith('scheduled_task_')) {
       return false;
     }
 
     const instance = TaskScheduler.getInstance();
-    
+
     // 确保已初始化
     if (!instance.isInitialized) {
       console.log('⚠️ TaskScheduler 未初始化，开始初始化...');
       await instance.startAllTasks();
     }
-    
+
     const taskId = alarm.name.replace('scheduled_task_', '');
     console.log(`⚡ 执行定时任务: ${taskId}`);
     await instance.handleAlarmEvent(alarm);
-    
+
     return true;
   }
 
@@ -472,30 +574,38 @@ export class TaskScheduler {
         const newConfig = changes.envConfig.newValue;
 
         // 检查 MESSAGE_ANALYSIS_INTERVAL 是否变化
-        const oldInterval = oldConfig?.MESSAGE_ANALYSIS_INTERVAL || oldConfig?.SCHEDULED_INTERVAL;
-        const newInterval = newConfig?.MESSAGE_ANALYSIS_INTERVAL || newConfig?.SCHEDULED_INTERVAL;
+        const oldInterval =
+          oldConfig?.MESSAGE_ANALYSIS_INTERVAL || oldConfig?.SCHEDULED_INTERVAL;
+        const newInterval =
+          newConfig?.MESSAGE_ANALYSIS_INTERVAL || newConfig?.SCHEDULED_INTERVAL;
         const oldContextWindow = oldConfig?.MESSAGE_CONTEXT_WINDOW;
         const newContextWindow = newConfig?.MESSAGE_CONTEXT_WINDOW;
-        
+
         if (oldInterval !== newInterval) {
-          console.log(`🔄 检测到 MESSAGE_ANALYSIS_INTERVAL 配置变化: ${oldInterval} -> ${newInterval} 分钟`);
-          
+          console.log(
+            `🔄 检测到 MESSAGE_ANALYSIS_INTERVAL 配置变化: ${oldInterval} -> ${newInterval} 分钟`,
+          );
+
           // 自动重新加载 message_analysis 任务的间隔配置
           const updated = await this.reloadMessageAnalysisInterval();
-          
+
           if (updated) {
             console.log('✅ message_analysis 任务间隔已自动更新');
           }
         }
-        
+
         if (oldContextWindow !== newContextWindow) {
-          console.log(`🔄 检测到 MESSAGE_CONTEXT_WINDOW 配置变化: ${oldContextWindow} -> ${newContextWindow} 分钟`);
+          console.log(
+            `🔄 检测到 MESSAGE_CONTEXT_WINDOW 配置变化: ${oldContextWindow} -> ${newContextWindow} 分钟`,
+          );
         }
       }
     };
 
     chrome.storage.onChanged.addListener(this.storageChangeListener);
-    console.log('👂 配置变化监听器已设置（自动监听 MESSAGE_ANALYSIS_INTERVAL 和 MESSAGE_CONTEXT_WINDOW）');
+    console.log(
+      '👂 配置变化监听器已设置（自动监听 MESSAGE_ANALYSIS_INTERVAL 和 MESSAGE_CONTEXT_WINDOW）',
+    );
   }
 
   /**
@@ -505,11 +615,11 @@ export class TaskScheduler {
     // 延迟执行首次运行，避免启动时资源竞争
     setTimeout(async () => {
       console.log('🎯 执行首次定时任务运行...');
-      
+
       for (const [_taskId, task] of Array.from(this.tasks.entries())) {
         if (task.enabled) {
           try {
-            await this.executeTask(task);
+            await this.executeTask(task, 'startup');
           } catch (error) {
             console.error(`❌ 首次运行任务 ${task.name} 失败:`, error);
           }
@@ -521,10 +631,49 @@ export class TaskScheduler {
   /**
    * 执行具体任务
    */
-  private async executeTask(task: ScheduledTask): Promise<void> {
+  private recordTaskRun(
+    task: ScheduledTask,
+    record: ScheduledTaskRunRecord,
+  ): void {
+    const history = Array.isArray(task.runHistory) ? task.runHistory : [];
+    task.runHistory = [record, ...history].slice(0, TASK_RUN_HISTORY_LIMIT);
+  }
+
+  private async executeTask(
+    task: ScheduledTask,
+    trigger: TaskExecutionTrigger,
+  ): Promise<TaskExecutionResult> {
+    if (this.runningTasks.has(task.id)) {
+      const message = `任务 ${task.name} 正在执行，跳过重复触发`;
+      const skippedAt = Date.now();
+      console.warn(`⚠️ ${message}`);
+      task.lastSkippedAt = skippedAt;
+      task.lastSkipReason = message;
+      await this.refreshTaskNextRun(task);
+      this.recordTaskRun(task, {
+        startedAt: skippedAt,
+        completedAt: skippedAt,
+        durationMs: 0,
+        success: false,
+        skipped: true,
+        trigger,
+        error: message,
+      });
+      await this.saveTaskStates();
+      Logger.task(task.id, true, message, {
+        category: task.category,
+        skipped: true,
+        trigger,
+      });
+      return { success: false, skipped: true, error: message };
+    }
+
+    this.runningTasks.add(task.id);
     const startTime = Date.now();
     task.lastRun = startTime;
-    task.nextRun = startTime + (task.intervalMinutes * 60 * 1000);
+    task.lastError = undefined;
+    task.lastSkipReason = undefined;
+    await this.refreshTaskNextRun(task);
 
     try {
       switch (task.id) {
@@ -553,27 +702,55 @@ export class TaskScheduler {
           await this.executeDigestQueueProcess();
           break;
         default:
-          console.warn(`⚠️ 未知任务类型: ${task.id}`);
+          throw new Error(`未实现任务执行逻辑: ${task.id}`);
       }
 
       const duration = Date.now() - startTime;
+      task.lastCompletedAt = Date.now();
+      task.lastSuccess = true;
+      task.lastError = undefined;
+      this.recordTaskRun(task, {
+        startedAt: startTime,
+        completedAt: task.lastCompletedAt,
+        durationMs: duration,
+        success: true,
+        trigger,
+      });
       console.log(`✅ 任务 ${task.name} 执行完成，耗时: ${duration}ms`);
-      
+
       // 记录任务执行日志
       Logger.task(task.id, true, `${task.name} 执行完成`, {
         duration: `${duration}ms`,
         category: task.category,
       });
+      return { success: true };
     } catch (error: any) {
       const duration = Date.now() - startTime;
+      const errorMessage = getTaskErrorMessage(error);
+      task.lastCompletedAt = Date.now();
+      task.lastSuccess = false;
+      task.lastError = errorMessage;
+      this.recordTaskRun(task, {
+        startedAt: startTime,
+        completedAt: task.lastCompletedAt,
+        durationMs: duration,
+        success: false,
+        trigger,
+        error: errorMessage,
+      });
       console.error(`❌ 任务 ${task.name} 执行失败:`, error);
-      
+
       // 记录任务执行失败日志
-      Logger.task(task.id, false, `${task.name} 执行失败: ${error.message}`, {
+      Logger.task(task.id, false, `${task.name} 执行失败: ${errorMessage}`, {
         duration: `${duration}ms`,
         category: task.category,
-        error: error.message,
+        error: errorMessage,
       });
+      return { success: false, error: errorMessage };
+    } finally {
+      this.runningTasks.delete(task.id);
+      await this.refreshTaskNextRun(task);
+      await this.saveTaskStates();
     }
   }
 
@@ -582,11 +759,11 @@ export class TaskScheduler {
    */
   private async executeMessageAnalysis(): Promise<void> {
     const startTime = Date.now();
-    
+
     try {
       // 获取配置
       const config = await getEnvConfig();
-      
+
       // 该任务已经通过 enabled 状态控制，无需额外检查
 
       // 查找或创建 RingCentral 标签页
@@ -612,8 +789,10 @@ export class TaskScheduler {
       // MESSAGE_CONTEXT_WINDOW 是从此刻往前推的绝对时间窗口
       const contextWindow = Number(config.MESSAGE_CONTEXT_WINDOW) || 125;
       const messageStartTime = new Date(Date.now() - contextWindow * 60 * 1000);
-      
-      console.log(`📝 开始消息分析，时间范围: 距离此刻 ${contextWindow} 分钟内的消息`);
+
+      console.log(
+        `📝 开始消息分析，时间范围: 距离此刻 ${contextWindow} 分钟内的消息`,
+      );
 
       // 发送消息获取请求
       const response = await this.sendMessageWithRetry(rcTab.id, {
@@ -623,12 +802,13 @@ export class TaskScheduler {
 
       const messagesCount = response.data?.length || 0;
 
-      // 分析消息
+      // 分析消息。这里延迟加载 messageDealing，避免轻量调度器导入路径拉入完整消息分析模块。
+      const { analyzeMessages } = await import('../messageDealing');
       await analyzeMessages(response.data, userinfo.fullName, true);
-      
+
       const duration = Date.now() - startTime;
       console.log('📝 消息分析任务执行完成');
-      
+
       // 记录消息分析日志
       Logger.analysis('message_analysis', {
         messagesCount,
@@ -637,13 +817,13 @@ export class TaskScheduler {
       });
     } catch (error: any) {
       console.error('❌ 消息分析任务失败:', error);
-      
+
       // 记录消息分析错误日志
       Logger.analysis('message_analysis', {
         duration: Date.now() - startTime,
         error: error.message,
       });
-      
+
       throw error; // 重新抛出以便 executeTask 记录
     }
   }
@@ -664,6 +844,7 @@ export class TaskScheduler {
       console.log('🔄 concernedItems 周期同步完成');
     } catch (error) {
       console.error('❌ 记忆系统同步任务失败:', error);
+      throw error;
     }
   }
 
@@ -682,6 +863,7 @@ export class TaskScheduler {
       console.log('🔧 系统维护由后端自动管理');
     } catch (error) {
       console.error('❌ 系统监控任务失败:', error);
+      throw error;
     }
   }
 
@@ -696,6 +878,7 @@ export class TaskScheduler {
       console.log('🧠 用户画像权重衰变由后端自动管理');
     } catch (error) {
       console.error('❌ 用户画像权重衰变任务失败:', error);
+      throw error;
     }
   }
 
@@ -710,6 +893,7 @@ export class TaskScheduler {
       console.log('🔧 向量化数据维护由后端自动管理');
     } catch (error) {
       console.error('❌ 向量化数据维护任务失败:', error);
+      throw error;
     }
   }
 
@@ -730,13 +914,14 @@ export class TaskScheduler {
       console.log('📈 当前存储统计:', {
         total_messages: stats.messages.total,
         total_entities: stats.entities.total,
-        total_chunks: stats.chunks.total
+        total_chunks: stats.chunks.total,
       });
 
       // No-op: backend consolidation engine handles summary generation automatically.
       console.log('📊 用户概要生成由后端自动管理');
     } catch (error) {
       console.error('❌ 用户概要生成任务失败:', error);
+      throw error;
     }
   }
 
@@ -762,7 +947,7 @@ export class TaskScheduler {
         chunkCount: health.database.chunkCount,
         embeddingLoaded: health.embedding.loaded,
         embeddingModel: health.embedding.model,
-        issues: [] as string[]
+        issues: [] as string[],
       };
 
       // 检查1: 服务状态
@@ -802,6 +987,7 @@ export class TaskScheduler {
       }
     } catch (error) {
       console.error('❌ 向量质量检查任务失败:', error);
+      throw error;
     }
   }
 
@@ -811,51 +997,70 @@ export class TaskScheduler {
   private async executeDigestQueueProcess(): Promise<void> {
     try {
       console.log('📬 开始处理汇总推送队列...');
-      
+
       // 确保 DigestQueueService 已初始化
       await digestQueueService.initialize();
-      
+
       // 处理所有到期的 digest 任务
       const results = await digestQueueService.processAll();
-      
-      const successCount = results.filter(r => r.success).length;
+
+      const successCount = results.filter((r) => r.success).length;
       const totalItems = results.reduce((sum, r) => sum + r.itemsProcessed, 0);
-      
-      console.log(`✅ 汇总推送处理完成: ${successCount}/${results.length} 个任务成功, 共推送 ${totalItems} 条`);
-      
+
+      console.log(
+        `✅ 汇总推送处理完成: ${successCount}/${results.length} 个任务成功, 共推送 ${totalItems} 条`,
+      );
+
       // 保存任务状态
       await digestQueueService.saveTaskStates();
     } catch (error) {
       console.error('❌ 汇总推送队列处理失败:', error);
+      throw error;
     }
   }
 
   /**
    * 带重试机制的消息发送函数
    */
-  private sendMessageWithRetry(tabId: number, message: any, maxRetries = 3, retryInterval = 10000): Promise<any> {
+  private sendMessageWithRetry(
+    tabId: number,
+    message: any,
+    maxRetries = 3,
+    retryInterval = 10000,
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       let attempts = 0;
 
       const trySendMessage = () => {
         attempts++;
-        chrome.tabs.sendMessage(tabId, message, async response => {
+        chrome.tabs.sendMessage(tabId, message, async (response) => {
           if (chrome.runtime.lastError) {
-            console.log(`Attempt ${attempts} failed:`, chrome.runtime.lastError);
+            console.log(
+              `Attempt ${attempts} failed:`,
+              chrome.runtime.lastError,
+            );
             if (attempts < maxRetries) {
-              if (chrome.runtime.lastError.message?.includes('Could not establish connection')) {
+              if (
+                chrome.runtime.lastError.message?.includes(
+                  'Could not establish connection',
+                )
+              ) {
                 await chrome.tabs.reload(tabId);
               }
               setTimeout(trySendMessage, retryInterval);
             } else {
-              reject(new Error('Failed to send message after multiple attempts'));
+              reject(
+                new Error('Failed to send message after multiple attempts'),
+              );
             }
+          } else if (response && !response.error) {
+            resolve(response);
+          } else if (attempts < maxRetries) {
+            setTimeout(trySendMessage, retryInterval * 3);
           } else {
-            if (response && !response.error) {
-              resolve(response);
-            } else {
-              setTimeout(trySendMessage, retryInterval * 3);
-            }
+            const responseError =
+              response?.error || 'Empty or error response from content script';
+            reject(new Error(responseError));
           }
         });
       };
@@ -867,63 +1072,149 @@ export class TaskScheduler {
   /**
    * 获取任务状态
    */
-  public getTaskStatus(): Array<ScheduledTask & { status: 'running' | 'stopped' }> {
-    return Array.from(this.tasks.values()).map(task => ({
-      ...task,
-      status: this.isInitialized && task.enabled ? 'running' : 'stopped'
-    }));
+  public getTaskStatus(): Array<ScheduledTaskStatus> {
+    return this.buildTaskStatus();
+  }
+
+  public async getTaskStatusFresh(
+    options: TaskStatusOptions = {},
+  ): Promise<Array<ScheduledTaskStatus>> {
+    if (!this.isInitialized) {
+      await this.startAllTasks();
+    }
+
+    if (options.repairAlarms !== false) {
+      await this.ensureAlarmsCreated();
+    }
+
+    const alarms = await this.getExistingAlarms();
+    const alarmByName = new Map(alarms.map((alarm) => [alarm.name, alarm]));
+
+    for (const task of Array.from(this.tasks.values())) {
+      if (!task.enabled) {
+        task.nextRun = undefined;
+        continue;
+      }
+
+      const alarm = alarmByName.get(`scheduled_task_${task.id}`);
+      task.nextRun = alarm?.scheduledTime;
+    }
+
+    const status = this.buildTaskStatus(alarmByName);
+    if (options.persist !== false) {
+      await this.saveTaskStates();
+    }
+    return status;
+  }
+
+  private buildTaskStatus(
+    alarmByName?: Map<string, chrome.alarms.Alarm>,
+  ): Array<ScheduledTaskStatus> {
+    return Array.from(this.tasks.values()).map((task) => {
+      const alarmName = `scheduled_task_${task.id}`;
+      const alarm = alarmByName?.get(alarmName);
+      let scheduleHealth: ScheduledTaskStatus['scheduleHealth'] = 'disabled';
+      let scheduleWarning: string | undefined;
+
+      if (task.enabled) {
+        if (alarmByName && !alarm) {
+          scheduleHealth = 'missing_alarm';
+          scheduleWarning = '任务已启用，但未找到对应的 Chrome alarm';
+        } else if (alarm && alarm.periodInMinutes !== task.intervalMinutes) {
+          scheduleHealth = 'period_mismatch';
+          scheduleWarning = `任务间隔为 ${
+            task.intervalMinutes
+          } 分钟，Chrome alarm 仍为 ${alarm.periodInMinutes ?? '一次性'} 排程`;
+        } else {
+          scheduleHealth = 'scheduled';
+        }
+      }
+
+      return {
+        ...task,
+        status: this.isInitialized && task.enabled ? 'running' : 'stopped',
+        isExecuting: this.runningTasks.has(task.id),
+        scheduleHealth,
+        scheduleWarning,
+      };
+    });
   }
 
   /**
    * 启用/禁用特定任务
    */
   public async toggleTask(taskId: string, enabled: boolean): Promise<boolean> {
+    if (!this.isInitialized) {
+      console.log(`⚠️ 任务调度器未初始化，先启动后再控制任务: ${taskId}`);
+      await this.startAllTasks();
+    }
+
     const task = this.tasks.get(taskId);
     if (!task) {
       console.error(`❌ 任务不存在: ${taskId}`);
       return false;
     }
-    if (!this.isInitialized) {
-      console.error(`❌ 任务调度器未初始化，跳过启用/禁用任务: ${taskId}`);
-      return false;
-    }
+
+    const previousState = {
+      enabled: task.enabled,
+      nextRun: task.nextRun,
+    };
+    const alarmName = `scheduled_task_${taskId}`;
 
     task.enabled = enabled;
-    if (enabled) {
-      if (taskId === 'memory_sync') {
-        try {
-          await concernedItemsSyncService.syncOnStartup();
-        } catch (error) {
-          console.warn('ConcernedItems enable sync skipped:', error);
-        }
+    try {
+      if (enabled) {
+        await this.createTaskAlarm(task);
+      } else {
+        await this.clearAlarm(alarmName);
+        task.nextRun = undefined;
       }
-      await this.createTaskAlarm(task);
-      this.runTaskManually(taskId);
-    } else {
-      const alarmName = `scheduled_task_${taskId}`;
-      chrome.alarms.clear(alarmName);
+
+      // 保存任务状态变更
+      await this.saveTaskStates();
+    } catch (error) {
+      task.enabled = previousState.enabled;
+      task.nextRun = previousState.nextRun;
+      if (!previousState.enabled) {
+        await this.clearAlarm(alarmName);
+      }
+      await this.saveTaskStates();
+      throw error;
     }
 
-    // 保存任务状态变更
-    await this.saveTaskStates();
-
-    console.log(`${enabled ? '✅' : '❌'} 任务 ${task.name} ${enabled ? '已启用' : '已禁用'}`);
+    console.log(
+      `${enabled ? '✅' : '❌'} 任务 ${task.name} ${
+        enabled ? '已启用' : '已禁用'
+      }`,
+    );
     return true;
   }
 
   /**
    * 手动执行指定任务
    */
-  public async runTaskManually(taskId: string): Promise<boolean> {
+  public async runTaskManuallyWithResult(
+    taskId: string,
+  ): Promise<TaskExecutionResult> {
+    if (!this.isInitialized) {
+      console.log(`⚠️ 任务调度器未初始化，先启动后再手动执行任务: ${taskId}`);
+      await this.startAllTasks();
+    }
+
     const task = this.tasks.get(taskId);
     if (!task) {
-      console.error(`❌ 任务不存在: ${taskId}`);
-      return false;
+      const error = `任务不存在: ${taskId}`;
+      console.error(`❌ ${error}`);
+      return { success: false, error };
     }
 
     console.log(`🔧 手动执行任务: ${task.name}`);
-    await this.executeTask(task);
-    return true;
+    return this.executeTask(task, 'manual');
+  }
+
+  public async runTaskManually(taskId: string): Promise<boolean> {
+    const result = await this.runTaskManuallyWithResult(taskId);
+    return result.success;
   }
 
   /**
@@ -940,7 +1231,10 @@ export class TaskScheduler {
 
     // 读取最新配置
     const config = await getEnvConfig();
-    const newInterval = Number(config.MESSAGE_ANALYSIS_INTERVAL) || Number(config.SCHEDULED_INTERVAL) || 30;
+    const newInterval =
+      Number(config.MESSAGE_ANALYSIS_INTERVAL) ||
+      Number(config.SCHEDULED_INTERVAL) ||
+      30;
 
     // 如果间隔没有变化，不需要更新
     if (task.intervalMinutes === newInterval) {
@@ -951,7 +1245,9 @@ export class TaskScheduler {
     // 更新间隔时间
     const oldInterval = task.intervalMinutes;
     task.intervalMinutes = newInterval;
-    console.log(`⚙️ message_analysis 任务间隔已更新: ${oldInterval} -> ${newInterval} 分钟`);
+    console.log(
+      `⚙️ message_analysis 任务间隔已更新: ${oldInterval} -> ${newInterval} 分钟`,
+    );
 
     // 如果任务已启用，需要重新创建 alarm
     if (task.enabled && this.isInitialized) {
@@ -970,46 +1266,3 @@ export class TaskScheduler {
 
 // 导出单例实例
 export const taskScheduler = TaskScheduler.getInstance();
-
-/**
- * 辅助函数: 获取指定任务的启用状态
- * 用于替代旧的 scheduleActive 存储
- */
-export async function getTaskEnabled(taskId: string): Promise<boolean> {
-  try {
-    const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
-    if (taskSchedulerStates && taskSchedulerStates[taskId]) {
-      return taskSchedulerStates[taskId].enabled ?? false;
-    }
-    // 如果没有保存的状态,返回默认值(根据任务定义)
-    const defaultTask = TASK_DEFINITIONS.find(t => t.id === taskId);
-    return defaultTask?.enabled ?? false;
-  } catch (error) {
-    console.error(`获取任务 ${taskId} 状态失败:`, error);
-    return false;
-  }
-}
-
-/**
- * 辅助函数: 监听指定任务的启用状态变化
- */
-export function onTaskEnabledChanged(
-  taskId: string, 
-  callback: (enabled: boolean) => void
-): () => void {
-  const listener = (changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => {
-    if (namespace === 'local' && changes.taskSchedulerStates) {
-      const newStates = changes.taskSchedulerStates.newValue;
-      if (newStates && newStates[taskId]) {
-        callback(newStates[taskId].enabled ?? false);
-      }
-    }
-  };
-  
-  chrome.storage.onChanged.addListener(listener);
-  
-  // 返回清理函数
-  return () => {
-    chrome.storage.onChanged.removeListener(listener);
-  };
-}

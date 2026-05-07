@@ -54,6 +54,15 @@ export interface ResolvedWatchRuleMatch {
   matchedRuleIds: number[];
 }
 
+export interface WatchRuleMessageContext {
+  sender?: string;
+  creator?: string;
+  groupName?: string;
+  teamName?: string;
+  groupId?: string;
+  teamId?: string;
+}
+
 export interface ConcernedItemsPartition {
   manualItems: TopicItemWithAutoReply[];
   systemItems: TopicItemWithAutoReply[];
@@ -118,6 +127,144 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function normalizeScopeValue(value: unknown): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function compactScopeValue(value: string): string {
+  return value.replace(/[\s_-]+/g, '');
+}
+
+function tokenizeScopeValue(value: string): string[] {
+  return value
+    .split(/[^0-9a-zA-Z\u00c0-\uffff]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function tokensContainSequence(actualTokens: string[], expectedTokens: string[]): boolean {
+  if (expectedTokens.length === 0 || actualTokens.length < expectedTokens.length) {
+    return false;
+  }
+
+  return actualTokens.some((_, startIndex) =>
+    expectedTokens.every(
+      (expectedToken, offset) => actualTokens[startIndex + offset] === expectedToken,
+    ),
+  );
+}
+
+function containsEastAsianText(value: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(
+    value,
+  );
+}
+
+function isSafeContainedScopeMatch(expected: string, actual: string): boolean {
+  if (expected.length === 0 || actual.length === 0) return false;
+  if (!containsEastAsianText(expected) && !containsEastAsianText(actual)) {
+    return false;
+  }
+  return expected.length >= 2 && actual.includes(expected);
+}
+
+function valuesMatchScope(expected: string | undefined, actualValues: unknown[]): boolean {
+  const normalizedExpected = normalizeScopeValue(expected);
+  if (!normalizedExpected) return true;
+  const compactExpected = compactScopeValue(normalizedExpected);
+  const expectedTokens = tokenizeScopeValue(normalizedExpected);
+
+  return actualValues.some((value) => {
+    const normalizedActual = normalizeScopeValue(value);
+    const compactActual = compactScopeValue(normalizedActual);
+    const actualTokens = tokenizeScopeValue(normalizedActual);
+    return (
+      normalizedActual.length > 0 &&
+      (normalizedActual === normalizedExpected ||
+        (compactActual.length > 0 &&
+          compactExpected.length > 0 &&
+          compactActual === compactExpected) ||
+        tokensContainSequence(actualTokens, expectedTokens) ||
+        isSafeContainedScopeMatch(normalizedExpected, normalizedActual))
+    );
+  });
+}
+
+function getContextGroupValues(context?: WatchRuleMessageContext): unknown[] {
+  return [context?.groupId, context?.teamId, context?.groupName, context?.teamName];
+}
+
+function getContextSenderValues(context?: WatchRuleMessageContext): unknown[] {
+  return [context?.sender, context?.creator];
+}
+
+export function isWatchRuleEligibleForMessage(
+  rule: WatchRule,
+  context?: WatchRuleMessageContext,
+): boolean {
+  if (!context) return true;
+
+  if (rule.source === 'manual') {
+    if (
+      rule.filterSender &&
+      !valuesMatchScope(rule.filterSender, getContextSenderValues(context))
+    ) {
+      return false;
+    }
+
+    if (
+      rule.filterGroup &&
+      !valuesMatchScope(rule.filterGroup, getContextGroupValues(context))
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  const contextGroupIds = [context.groupId, context.teamId]
+    .map(normalizeScopeValue)
+    .filter(Boolean);
+  const strictTargetIds = [rule.sentChatId, rule.targetResolvedChatId]
+    .map(normalizeScopeValue)
+    .filter(Boolean);
+
+  if (strictTargetIds.length > 0 && contextGroupIds.length > 0) {
+    return contextGroupIds.some((groupId) => strictTargetIds.includes(groupId));
+  }
+
+  const targetLabels = [rule.targetLabel, rule.targetRef].filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  );
+  if (targetLabels.length > 0 && getContextGroupValues(context).some(Boolean)) {
+    return targetLabels.some((target) =>
+      valuesMatchScope(target, getContextGroupValues(context)),
+    );
+  }
+
+  return true;
+}
+
+export function filterWatchRulesForMessageContext(
+  watchRules: WatchRule[],
+  context?: WatchRuleMessageContext,
+): WatchRule[] {
+  return watchRules.filter((rule) => isWatchRuleEligibleForMessage(rule, context));
+}
+
+export function filterWatchRulesForMessageGroups(
+  watchRules: WatchRule[],
+  groups: WatchRuleMessageContext[] = [],
+): WatchRule[] {
+  if (groups.length === 0) return watchRules;
+  return watchRules.filter((rule) =>
+    groups.some((group) => isWatchRuleEligibleForMessage(rule, group)),
+  );
+}
+
 function buildOutreachWatchRuleText(params: {
   question: string;
   targetLabel: string;
@@ -172,7 +319,7 @@ export function buildOutreachWatchRules(
 ): OutreachWatchRule[] {
   return sessions
     .filter(isOutreachAnswerResolutionSession)
-    .map((session) => {
+    .map<OutreachWatchRule | null>((session) => {
       const stableId = session.id || session.templateId;
       if (!stableId) {
         return null;
@@ -371,8 +518,15 @@ export function resolveMatchedWatchRules(params: {
   matchedRule?: string;
   matchedRuleRefs?: string[];
   matchedRuleIds?: number[];
+  messageContext?: WatchRuleMessageContext;
 }): ResolvedWatchRuleMatch {
-  const { watchRules, matchedRule, matchedRuleRefs, matchedRuleIds } = params;
+  const {
+    watchRules,
+    matchedRule,
+    matchedRuleRefs,
+    matchedRuleIds,
+    messageContext,
+  } = params;
   const manualRules = watchRules.filter(
     (rule): rule is ManualWatchRule => rule.source === 'manual',
   );
@@ -387,23 +541,27 @@ export function resolveMatchedWatchRules(params: {
   );
   const refsFromIds = resolvedIds
     .map((id) => manualRules[id]?.ruleRef)
-    .filter((value): value is WatchRuleRef => typeof value === 'string');
+    .filter((value): value is `manual:${string}` => typeof value === 'string');
   const finalRefs = uniqStrings([...resolvedRefs, ...refsFromIds]);
 
   const matchedRules = finalRefs
     .map((ruleRef) => watchRules.find((rule) => rule.ruleRef === ruleRef))
-    .filter((rule): rule is WatchRule => Boolean(rule));
+    .filter((rule): rule is WatchRule => Boolean(rule))
+    .filter((rule) => isWatchRuleEligibleForMessage(rule, messageContext));
 
   if (matchedRules.length > 0) {
     return {
       watchRules: matchedRules,
-      matchedRuleRefs: finalRefs,
+      matchedRuleRefs: matchedRules.map((rule) => rule.ruleRef),
       matchedRuleIds: resolvedIds,
     };
   }
 
   const fallbackMatch = fallbackMatchWatchRuleByText(matchedRule, watchRules);
-  if (fallbackMatch) {
+  if (
+    fallbackMatch &&
+    isWatchRuleEligibleForMessage(fallbackMatch, messageContext)
+  ) {
     return {
       watchRules: [fallbackMatch],
       matchedRuleRefs: [fallbackMatch.ruleRef],

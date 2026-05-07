@@ -199,6 +199,7 @@ export class CloudASRProvider implements ASRProvider {
         model: model || 'whisper-1',
         apiStyle,
         audioBlob: prepared.wavBlob,
+        language: envConfig.MEETING_TRANSCRIBE_LANGUAGE,
         timeoutMs: 30000,
       });
 

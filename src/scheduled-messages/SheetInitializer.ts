@@ -5,6 +5,7 @@
 
 import { InitializationResult, SheetConfig } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
+import { formatLocalScheduleDate } from './scheduleDateTime';
 
 /**
  * Messages 表的 Schema 定义
@@ -600,11 +601,7 @@ export class SheetInitializer {
 // 注意：这里会被实际的模板代码替换
 // 在实际构建时，我们会通过 webpack 或其他方式将 .gs 文件内容注入
 function minuteTrigger() {
-  executeScheduledMessages(['Hourly']);
-}
-
-function dailyTrigger() {
-  executeScheduledMessages(['Daily', 'Periodic']);
+  executeScheduledMessages();
 }
 
 // ... 其他函数
@@ -874,7 +871,7 @@ function dailyTrigger() {
   // 辅助方法
 
   private formatDate(date: Date): string {
-    return date.toISOString().split('T')[0];
+    return formatLocalScheduleDate(date);
   }
 
   private formatTime(date: Date): string {

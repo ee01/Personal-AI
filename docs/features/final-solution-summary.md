@@ -1,256 +1,49 @@
-# 最终方案总结：Jira 302 重定向问题
+# Jira 302 规避最终方案
 
-## 🎯 核心设计
+这份文档是 `jira-302-redirect-fix.md` 的简版总结。当前实现不是把所有 `releaseInfo` 放进每分钟执行请求，而是拆成两条 Jira Automation Rule。
 
-### 统一处理函数 + 双模式支持
+## 当前架构
 
-```
-┌─────────────────────────────────────────────────┐
-│  getMessageCurrentTimeWithReleaseInfo(postData) │  ← 统一处理函数
-│  - 复用代码，减少重复                           │
-│  - 支持 GET 和 POST 两种请求方式                │
-│  - 支持带/不带 releaseInfo 两种模式             │
-└─────────────────────────────────────────────────┘
-          ↑                         ↑
-          │                         │
-     doGet (GET)              doPost (POST)
-          │                         │
-   解析 URL 参数            解析 JSON body
-   构建 postData           直接使用 postData
-```
+1. **Timeline Sync Rule**
+   - 每天 05:00 运行。
+   - 逐项目调用内网 release info API。
+   - 逐项目用 POST JSON body 调用 Apps Script `cacheReleaseInfo`，把里程碑信息写入 Script Properties。
+   - 每个缓存 webhook 都开启 `responseEnabled`，失败信息可在 Jira Audit Log 和扩展的 Timeline 缓存状态里看到；单个项目失败不阻断后续项目同步。
 
-## 📊 两种使用模式
+2. **Bot Executor Rule**
+   - 每分钟运行。
+   - 用 GET 调用 Apps Script `getBotMessageCurrentTime`。
+   - Apps Script 从缓存读取 Timeline release info，匹配当前应该发送的一条 Bot/AI 消息。
+   - 发送后用 POST JSON body 调用 `markBotMessageExecuted` 写回执行结果，并携带 `executionKey` 做幂等标记，避免 Jira/网络重试导致重复记账。
 
-### 模式 1：带 releaseInfo（完整功能）
+## 为什么这样做
 
-**用途**：匹配所有消息，包括 Timeline 触发的消息
+- Google Apps Script `ContentService` 会把响应重定向到 `script.googleusercontent.com` 的一次性 URL；Jira Automation 对这类 POST 重定向支持不稳定。
+- 每分钟执行请求保持短 GET，避开最频繁路径上的 POST body + redirect 组合风险。
+- Timeline 数据按项目缓存，避免每分钟请求携带大对象；缓存和执行回写使用 JSON body，避免 Jira smart value 在 URL query 中把空格、`+`、`%`、换行和长文本解析坏。
+- Apps Script 仍支持兼容 GET 入口，但正式 Rule 以 POST JSON body 为准，并通过 `responseEnabled` 暴露失败。
+- Executor Rule 仍保留旧 inline `releaseInfo` 参数解析，主要用于兼容旧规则或手工调试。
 
-**URL 格式**：
-```
-{{WEB_APP_URL}}?action=getBotMessageCurrentTime
-  &currentTime={{now}}
-  &mThor={{mThorReleaseInfo.asJsonString.urlEncode}}
-  &jupiterDesktop={{jupiterDesktopReleaseInfo.asJsonString.urlEncode}}
-  &jupiterWeb={{jupiterWebReleaseInfo.asJsonString.urlEncode}}
-```
+## 用户路径
 
-**处理流程**：
-```
-1. Jira 获取内网 releaseInfo
-2. Jira 通过 URL 参数传递给 Apps Script
-3. Apps Script 解析 releaseInfo
-4. 查找消息时：
-   - Timeline 消息：使用 releaseInfo 匹配日期
-   - 普通消息：使用时间匹配
-5. 返回匹配的消息
-```
+在 Scheduled Messages 页面配置 Bot 推送后，系统会同时创建 Executor Rule 和 Timeline Sync Rule。
 
-### 模式 2：不带 releaseInfo（简化模式）
+首次配置后，Timeline 消息不会等到第二天才可用：页面会提示用户打开 Timeline Sync Rule 手动运行一次，让缓存立即生效。新增或编辑 Timeline 消息时，页面会读取 Apps Script 的缓存状态，并按所选项目展示可用 Milestone。
 
-**用途**：只匹配普通时间触发的消息，跳过 Timeline 消息
+如果缓存状态尚未读取、读取失败、用户选择的项目没有出现在 Apps Script 返回的缓存状态中，缓存过期，或所选 Milestone 不在当前项目缓存内，页面会阻止保存并提示先刷新状态、手动运行 Sync Rule、更新脚本或重新配置 Sync Rule。
 
-**URL 格式**：
-```
-{{WEB_APP_URL}}?action=getBotMessageCurrentTime
-  &currentTime={{now}}
-```
+如果缓存状态接口返回 HTML、空响应或 Apps Script 错误对象，页面会显示面向排查的错误说明，避免用户只看到底层 JSON 解析错误。
 
-**处理流程**：
-```
-1. Jira 直接调用（不获取 releaseInfo）
-2. Apps Script 检测没有 releaseInfo
-3. 查找消息时：
-   - Timeline 消息：自动跳过（因为没有 releaseInfo）
-   - 普通消息：使用时间匹配
-4. 返回匹配的消息
-```
+时间触发的 Bot/AI 消息如果使用 `{currentRelease}`、`{nextPhase}` 等项目变量，也会复用同一套 Timeline 缓存状态面板和保存前校验，避免消息发送时变量无法替换。
 
-## 🔧 技术实现
+Apps Script 会拒绝格式异常、未知项目、空 release info、超出单个 Script Properties value 限制的缓存写入，并返回可读错误，便于从 Jira Audit Log 排查。
 
-### 1. doGet 函数（GET 请求处理）
+## 验证重点
 
-```javascript
-if (action === 'getBotMessageCurrentTime') {
-  const currentTimeStr = e.parameter.currentTime || '';
-  
-  // 从 URL 参数接收 releaseInfo（可选）
-  const mThor = e.parameter.mThor || '';
-  const jupiterDesktop = e.parameter.jupiterDesktop || '';
-  const jupiterWeb = e.parameter.jupiterWeb || '';
-  
-  let releaseInfo = null;
-  
-  // 如果提供了参数，则解析
-  if (mThor || jupiterDesktop || jupiterWeb) {
-    try {
-      releaseInfo = {};
-      if (mThor) releaseInfo['mThor'] = JSON.parse(decodeURIComponent(mThor));
-      if (jupiterDesktop) releaseInfo['Jupiter desktop'] = JSON.parse(decodeURIComponent(jupiterDesktop));
-      if (jupiterWeb) releaseInfo['Jupiter web'] = JSON.parse(decodeURIComponent(jupiterWeb));
-      
-      Logger.log(`[GET] 接收到 releaseInfo，项目: ${Object.keys(releaseInfo).join(', ')}`);
-    } catch (parseError) {
-      Logger.log(`[GET] 解析失败，使用原方案`);
-      releaseInfo = null;
-    }
-  } else {
-    Logger.log(`[GET] 未提供 releaseInfo，只匹配普通消息`);
-  }
-  
-  // 构建统一格式，复用处理函数
-  const postData = {
-    releaseInfo: releaseInfo || {},
-    currentTime: currentTimeStr || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
-  };
-  
-  // ✅ 复用统一处理函数
-  const result = getMessageCurrentTimeWithReleaseInfo(postData);
-  
-  return ContentService.createTextOutput(JSON.stringify(result))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-```
-
-### 2. doPost 函数（POST 请求处理，向后兼容）
-
-```javascript
-if (action === 'getBotMessageCurrentTime') {
-  // 解析 POST 数据
-  const postData = JSON.parse(e.postData.contents);
-  Logger.log(`[POST] 接收到数据: ${JSON.stringify(postData).substring(0, 200)}...`);
-  
-  // ✅ 复用统一处理函数
-  const result = getMessageCurrentTimeWithReleaseInfo(postData);
-  
-  return ContentService.createTextOutput(JSON.stringify(result))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-```
-
-### 3. 智能跳过 Timeline 消息
-
-在 `findMessageWithTimelineSupport` 函数中：
-
-```javascript
-for (const msg of messages) {
-  const rowData = msg.data;
-  const isTimeline = !rowData.Schedule_Date && rowData.Timeline_Milestone;
-  
-  let matches = false;
-  
-  if (isTimeline) {
-    // Timeline 消息需要 releaseInfo
-    const hasReleaseInfo = releaseInfo && Object.keys(releaseInfo).length > 0;
-    
-    if (hasReleaseInfo) {
-      // ✅ 有 releaseInfo，正常匹配
-      matches = checkTimelineTrigger(rowData, now, releaseInfo);
-    } else {
-      // ⏭️ 没有 releaseInfo，跳过此消息
-      Logger.log(`跳过 Timeline 消息（未提供 releaseInfo）: ${rowData.ID}`);
-      continue;
-    }
-  } else {
-    // ✅ 普通消息，使用时间匹配
-    matches = shouldExecuteNow(rowData, now, messageType);
-  }
-  
-  if (matches) {
-    return message; // 返回匹配的消息
-  }
-}
-```
-
-## 📈 优势对比
-
-| 特性 | 旧方案 (POST) | 新方案 (GET) |
-|-----|--------------|-------------|
-| **避免 302** | ❌ | ✅ |
-| **代码复用** | ❌ 分散 | ✅ 统一函数 |
-| **POST 支持** | ✅ | ✅ 保留 |
-| **GET 支持** | ❌ | ✅ 新增 |
-| **灵活性** | 单一模式 | ✅ 双模式 |
-| **智能跳过** | ❌ | ✅ 自动跳过 Timeline |
-| **维护成本** | 高 | ✅ 低（代码集中） |
-
-## 🎯 使用建议
-
-### 推荐配置
-
-**完整功能的 Jira Rule**（带 releaseInfo）：
-```json
-{
-  "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&currentTime={{now.format(\"yyyy-MM-dd HH:mm\").urlEncode}}&mThor={{mThorReleaseInfo.asJsonString.urlEncode}}&jupiterDesktop={{jupiterDesktopReleaseInfo.asJsonString.urlEncode}}&jupiterWeb={{jupiterWebReleaseInfo.asJsonString.urlEncode}}",
-  "method": "GET",
-  "responseEnabled": true
-}
-```
-
-**简化版 Jira Rule**（不带 releaseInfo）：
-```json
-{
-  "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&currentTime={{now.format(\"yyyy-MM-dd HH:mm\").urlEncode}}",
-  "method": "GET",
-  "responseEnabled": true
-}
-```
-
-### 何时使用哪种模式？
-
-| 场景 | 使用模式 | 原因 |
-|-----|---------|------|
-| 有 Timeline 消息需要发送 | 模式 1（带 releaseInfo） | 需要项目进度信息匹配日期 |
-| 只有普通时间触发消息 | 模式 2（不带 releaseInfo） | 简化请求，减少 URL 长度 |
-| 内网 API 不可用 | 模式 2（不带 releaseInfo） | 无法获取 releaseInfo |
-| 测试环境 | 模式 2（不带 releaseInfo） | 快速测试普通消息 |
-
-## 📝 日志示例
-
-### 模式 1（带 releaseInfo）日志：
-
-```
-[GET] 接收到 releaseInfo 参数，项目: mThor, Jupiter desktop, Jupiter web
-查找当前时间的消息: 2025-11-11 14:30
-匹配消息: MSG_001 - Timeline 提醒 (优先级: 1)
-```
-
-### 模式 2（不带 releaseInfo）日志：
-
-```
-[GET] 未提供 releaseInfo，使用原方案（不匹配 Timeline 消息）
-查找当前时间的消息: 2025-11-11 14:30
-跳过 Timeline 消息（未提供 releaseInfo）: MSG_001 - Timeline 提醒
-匹配消息: MSG_002 - 每日提醒 (优先级: 2)
-```
-
-## 🚀 部署清单
-
-- [x] 更新 `app-script-template.gs`
-  - [x] 修改 `doGet` 支持可选的 releaseInfo
-  - [x] 保留 `doPost` 向后兼容
-  - [x] 删除重复的 `getBotMessageCurrentTime` 函数
-  - [x] 更新 `findMessageWithTimelineSupport` 智能跳过
-- [x] 更新 `jira-rule-template.json`
-  - [x] 修改为 GET 请求
-  - [x] 添加 releaseInfo URL 参数
-- [x] 更新文档
-  - [x] `jira-302-redirect-fix.md`
-  - [x] `solution-comparison.md`
-  - [x] `final-solution-summary.md`
-
-## ✅ 总结
-
-**最终方案特点**：
-1. ✅ **避免 302 重定向**：使用 GET 请求
-2. ✅ **代码复用**：GET 和 POST 共用 `getMessageCurrentTimeWithReleaseInfo`
-3. ✅ **双模式支持**：带/不带 releaseInfo 都能工作
-4. ✅ **智能跳过**：没有 releaseInfo 时自动跳过 Timeline 消息
-5. ✅ **向后兼容**：保留 POST 支持
-6. ✅ **维护性强**：代码集中，易于维护
-
-**核心改进**：
-- 从 POST 改为 GET，解决 302 问题
-- 统一处理函数，减少代码重复
-- 灵活支持两种模式，适应不同场景
-- 智能判断，自动跳过不适用的消息
-
+- `app-script-template.gs` 的 `TIMELINE_PROJECT_PARAM_MAP` 必须和 `timelineProjects.ts` 的项目清单一致。
+- Timeline Sync Rule 的缓存 webhook 使用 POST JSON body 且 `responseEnabled=true`。
+- `getTimelineCacheStatus` 只返回项目状态和 Milestone key，不暴露具体 release 日期。
+- `markBotMessageExecuted` 使用 POST JSON body 且 `responseEnabled=true`，避免特殊字符导致执行状态写回失败时被静默吞掉。
+- 同一个 `executionKey` 重复写回时应返回 `duplicate=true`，且不重复更新执行次数或日志。
+- Timeline 消息保存前必须能成功读取缓存状态，避免配置完成但永远不触发。
+- 时间触发项目变量消息也必须能成功读取所选项目的 Timeline 缓存，避免发送未替换占位符。

@@ -179,6 +179,7 @@ try {
       const shell = document.querySelector('.meeting-shell');
       return Boolean(shell && shell.getAttribute('data-session-title'));
     },
+    undefined,
     { timeout: 15000 },
   );
 
@@ -189,7 +190,7 @@ try {
     });
   });
 
-  log('通过真实 START_CAPTURE + sidePanel fallback 启动 Capture');
+  log('通过真实 START_CAPTURE + panel open path 启动 Capture');
   const startResult = await panelPage.evaluate(
     async ({ meetingId, tabId, title, url }) => {
       await chrome.runtime.sendMessage({
@@ -197,7 +198,7 @@ try {
         enabled: true,
       });
       try {
-        return await chrome.runtime.sendMessage({
+        const response = await chrome.runtime.sendMessage({
           type: 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
           meetingId,
           tabId,
@@ -205,6 +206,13 @@ try {
           url,
           source: 'overlay',
         });
+        return response ?? { success: false, error: 'empty_response' };
+      } catch (error) {
+        return {
+          success: false,
+          error: String(error?.message || error),
+          lastError: chrome.runtime.lastError?.message,
+        };
       } finally {
         await chrome.runtime.sendMessage({
           type: 'MEETING_PILOT_TEST_SET_SIDE_PANEL_FAILURE',
@@ -214,17 +222,22 @@ try {
     },
     { meetingId, tabId: meetingTabId, title: meetingTitle, url: meetingUrl },
   );
-  assert.equal(startResult?.success, true, '真实 START_CAPTURE 未成功');
   assert.equal(
-    startResult?.surface,
-    'window',
-    `sidePanel.open 失败后未走 window fallback: ${String(startResult?.surface)}`,
+    startResult?.success,
+    true,
+    `真实 START_CAPTURE 未成功: ${JSON.stringify(startResult)}`,
+  );
+  assert.ok(
+    ['embedded', 'side-panel', 'window'].includes(startResult?.surface),
+    `启动 Capture 后未打开有效面板 surface: ${String(startResult?.surface)}`,
   );
   assert.ok(
     ['armed', 'recording', 'uploading', 'completed'].includes(
       startResult?.session?.capture?.kind,
     ),
-    `sidePanel fallback 后 capture 未进入有效状态: ${String(startResult?.session?.capture?.kind)}`,
+    `打开面板后 capture 未进入有效状态: ${String(
+      startResult?.session?.capture?.kind,
+    )}`,
   );
 
   await panelPage.evaluate(
@@ -286,11 +299,157 @@ try {
     },
     { timeout: 15000 },
   );
+  const actionText = await panelPage
+    .locator('.action-card')
+    .first()
+    .innerText();
+  assert.match(
+    actionText,
+    /Esone|Sarah Wang/,
+    `行动项未展示明确 owner: ${actionText}`,
+  );
+  assert.match(
+    actionText,
+    /依据：/,
+    `行动项未展示 transcript 依据: ${actionText}`,
+  );
+  assert.match(actionText, /待复核/, `行动项未进入用户复核状态: ${actionText}`);
+  const firstActionId = await panelPage
+    .locator('.action-card')
+    .first()
+    .getAttribute('data-action-id');
+  assert.ok(firstActionId, '行动项卡片缺少稳定 data-action-id');
+  await panelPage
+    .locator('.action-copy-all', { hasText: '复制当前筛选' })
+    .click();
+  await panelPage.waitForFunction(
+    () => {
+      return Array.from(document.querySelectorAll('.action-copy-all')).some(
+        (button) => button.textContent?.trim() === '已复制当前筛选',
+      );
+    },
+    undefined,
+    { timeout: 10000 },
+  );
+  await panelPage
+    .locator(`[data-action-id="${firstActionId}"]`)
+    .locator('button', { hasText: '复制' })
+    .click();
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      return Array.from(card?.querySelectorAll('button') || []).some(
+        (button) => button.textContent?.trim() === '已复制',
+      );
+    },
+    firstActionId,
+    { timeout: 10000 },
+  );
+
+  log('编辑行动项并验证人工校正状态');
+  await panelPage
+    .locator(`[data-action-id="${firstActionId}"]`)
+    .locator('button', { hasText: '编辑' })
+    .click();
+  const actionCard = panelPage.locator(`[data-action-id="${firstActionId}"]`);
+  await actionCard.locator('label', { hasText: '行动项' }).locator('input').fill(
+    '校正后的 Meeting Pilot 技术评审材料',
+  );
+  await actionCard
+    .locator('label', { hasText: '负责人' })
+    .locator('input')
+    .fill('Esone Qiu');
+  await actionCard
+    .locator('label', { hasText: '截止' })
+    .locator('input')
+    .fill('下周四');
+  await actionCard.locator('button', { hasText: '保存校正' }).click();
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      return (
+        card?.textContent?.includes('校正后的 Meeting Pilot 技术评审材料') &&
+        card?.textContent?.includes('Esone Qiu') &&
+        card?.textContent?.includes('下周四') &&
+        card?.textContent?.includes('人工校正') &&
+        card?.textContent?.includes('已确认')
+      );
+    },
+    firstActionId,
+    { timeout: 10000 },
+  );
+  await panelPage.locator('[data-action-filter="confirmed"]').click();
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      return (
+        card?.textContent?.includes('已确认') &&
+        card?.textContent?.includes('校正后的 Meeting Pilot 技术评审材料')
+      );
+    },
+    firstActionId,
+    { timeout: 10000 },
+  );
+  await panelPage.locator('[data-action-filter="review"]').click();
+  await panelPage.waitForFunction(
+    (actionId) => !document.querySelector(`[data-action-id="${actionId}"]`),
+    firstActionId,
+    { timeout: 10000 },
+  );
+  await panelPage.locator('[data-action-filter="open"]').click();
+  await panelPage.waitForFunction(
+    (actionId) =>
+      Boolean(document.querySelector(`[data-action-id="${actionId}"]`)),
+    firstActionId,
+    { timeout: 10000 },
+  );
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+        tabId,
+        transcriptChunk: {
+          id: 'scene2-t4',
+          speaker: 'Sarah Wang',
+          text: '确认保持当前 Meeting Pilot 技术评审计划。',
+          ts: Date.now(),
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      return (
+        card?.textContent?.includes('已确认') &&
+        card?.textContent?.includes('校正后的 Meeting Pilot 技术评审材料') &&
+        card?.textContent?.includes('Esone Qiu') &&
+        card?.textContent?.includes('人工校正')
+      );
+    },
+    firstActionId,
+    { timeout: 10000 },
+  );
   await saveScreenshot(panelPage, 'scene2-sidepanel-runtime.png');
 
   log('通过真实 stop path 触发 upload/generate/poll');
   await panelPage.locator('.panel-tab', { hasText: '实时' }).click();
   await panelPage.locator('.panel-status-action').click();
+
+  await panelPage.waitForFunction(
+    async () => {
+      const apiLog = await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TEST_GET_API_LOG',
+      });
+      return (
+        apiLog?.requestLog?.includes('POST /api/v2/upload/video') &&
+        apiLog?.requestLog?.includes('POST /api/v3/generate_digest')
+      );
+    },
+    undefined,
+    { timeout: 15000 },
+  );
 
   const apiLog = await panelPage.evaluate(async () => {
     return chrome.runtime.sendMessage({

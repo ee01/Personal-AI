@@ -9,6 +9,8 @@ import { getEnvConfig } from '../utils';
 import { getJiraToken, jiraFetch } from '../jira';
 import { buildTimelineSyncComponentsFragment } from './timelineProjects';
 import { BotAutomationConfig, BotAutomationRule } from './types';
+import { formatLocalScheduleDate } from './scheduleDateTime';
+import { redactJiraRulePayloadForLog } from './jiraRulePayloadSafety';
 
 // Jira Rule 版本信息（从模板的 _metadata 字段读取）
 export const JIRA_EXECUTOR_RULE_VERSION = (executorRuleTemplate as any)._metadata?.version || '1.3.0';
@@ -250,7 +252,7 @@ export class JiraAutomationService {
     const token = await this.getEffectiveToken(config);
 
     console.log('创建 Jira Automation 规则:', rulePayload.name);
-    console.log('Rule Payload:', JSON.stringify(rulePayload, null, 2));
+    console.log('Rule Payload:', JSON.stringify(redactJiraRulePayloadForLog(rulePayload), null, 2));
 
     const response = await jiraFetch(url, {
       method: 'POST',
@@ -711,7 +713,7 @@ export class JiraAutomationService {
             continue;
           }
           
-          return targetDate.toISOString().split('T')[0];
+          return formatLocalScheduleDate(targetDate);
         }
       }
     }
@@ -721,7 +723,7 @@ export class JiraAutomationService {
       today.setDate(today.getDate() + 1);
     }
     
-    return today.toISOString().split('T')[0];
+    return formatLocalScheduleDate(today);
   }
   
   /**
@@ -807,7 +809,7 @@ export class JiraAutomationService {
     if (successLog && successLog.timestamp) {
       // 转换时间戳为日期
       const date = new Date(successLog.timestamp);
-      return date.toISOString().split('T')[0];
+      return formatLocalScheduleDate(date);
     }
     
     return null;

@@ -382,7 +382,7 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
   extractedEntities: {
     projects?: string[];
     people?: string[];
-    deadlines?: Date[];
+    deadlines?: Array<Date | string>;
     actionItems?: string[];
     technologies?: string[];
     organizations?: string[];
@@ -417,7 +417,7 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
   /** 存储建议 */
   storageRecommendation: {
     priority: 'high' | 'medium' | 'low';
-    expiryDate?: Date;
+    expiryDate?: Date | string;
     importanceScore: number;
     retentionReason?: string;
   };
@@ -431,7 +431,7 @@ export interface WebpageAnalysisResult extends BaseAnalysisResult {
       | 'create_task';
     description: string;
     priority: 'urgent' | 'important' | 'normal';
-    suggestedDate?: Date;
+    suggestedDate?: Date | string;
   }>;
 }
 

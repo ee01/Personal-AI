@@ -4,6 +4,17 @@
  */
 
 import { getLocalStorageItem, setLocalStorageItem } from "./storage";
+import {
+  JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
+  buildJiraAutomationImportRule,
+  buildJiraAutomationImportWarnings,
+  collectJiraAutomationImportReviewSignals,
+  isJiraAutomationImportFileSizeAllowed,
+  parseJiraAutomationExport,
+  summarizeJiraAutomationImportRule,
+  type ExportedData,
+  type ImportRule,
+} from './jira-automation-import/transform';
 import { 
   parseCronExpression, 
   getNextScheduleDate,
@@ -12,53 +23,6 @@ import {
   jiraDaysToJsDays
 } from './scheduled-messages/scheduleUtils';
 import { createJiraHeaders } from './jira';
-
-// 类型定义
-interface ExportedRule {
-  id?: number;
-  clientKey?: string;
-  name: string;
-  state: string;
-  description?: string;
-  canOtherRuleTrigger: boolean;
-  notifyOnError: string;
-  authorAccountId: string;
-  actorAccountId?: string;
-  created?: number;
-  updated?: number;
-  trigger: any;
-  components: any[];
-  projects: Array<{
-    projectId: string;
-    projectTypeKey: string;
-  }>;
-  labels: any[];
-  tags?: any[];
-}
-
-interface ExportedData {
-  rules: ExportedRule[];
-  cloud: boolean;
-}
-
-interface ImportRule {
-  name: string;
-  isNewRule: boolean;
-  state: string;
-  canOtherRuleTrigger: boolean;
-  notifyOnError: string;
-  authorAccountId: string;
-  created: number;
-  updated: number;
-  components: any[];
-  trigger: any;
-  labels: any[];
-  description?: string;
-  projects: Array<{
-    projectId: string;
-    projectTypeKey: string;
-  }>;
-}
 
 // 检测是否在Jira automation管理页面
 function isJiraAutomationPage(): boolean {
@@ -104,32 +68,32 @@ async function getCurrentOwnerId(): Promise<string> {
         }
       }
     }
+  }
+
+  // 如果页面元素中也获取不到，尝试通过API获取（使用统一的认证方法）
+  try {
+    console.log('Trying to get ownerId from JIRA API...');
+    const headers = await createJiraHeaders();
+    const response = await fetch(window.location.origin + '/rest/api/2/myself', {
+      method: 'GET',
+      headers,
+      credentials: 'include'
+    });
     
-    // 如果页面元素中也获取不到，尝试通过API获取（使用统一的认证方法）
-    try {
-      console.log('Trying to get ownerId from JIRA API...');
-      const headers = await createJiraHeaders();
-      const response = await fetch(window.location.origin + '/rest/api/2/myself', {
-        method: 'GET',
-        headers,
-        credentials: 'include'
-      });
-      
-      if (response.ok) {
-        const userInfo = await response.json();
-        if (userInfo.key) {
-          const ownerId = userInfo.key;
-          console.log('Found ownerId from JIRA API:', ownerId);
-          // 保存到localStorage
-          setLocalStorageItem('ownerId', ownerId);
-          return ownerId;
-        }
-      } else {
-        console.warn('Failed to fetch user info from JIRA API:', response.status, response.statusText);
+    if (response.ok) {
+      const userInfo = await response.json();
+      const resolvedOwnerId = userInfo.key || userInfo.name || userInfo.accountId;
+      if (resolvedOwnerId) {
+        console.log('Found ownerId from JIRA API:', resolvedOwnerId);
+        // 保存到localStorage
+        setLocalStorageItem('ownerId', resolvedOwnerId);
+        return resolvedOwnerId;
       }
-    } catch (error) {
-      console.warn('Error fetching user info from JIRA API:', error);
+    } else {
+      console.warn('Failed to fetch user info from JIRA API:', response.status, response.statusText);
     }
+  } catch (error) {
+    console.warn('Error fetching user info from JIRA API:', error);
   }
   
   console.warn('Could not find ownerId');
@@ -137,9 +101,17 @@ async function getCurrentOwnerId(): Promise<string> {
 }
 
 // 全局变量存储当前项目ID
+interface JiraAutomationProjectContext {
+  projectId: string;
+  projectKey: string;
+  projectTypeKey?: string;
+}
+
 declare global {
   interface Window {
     __PERSONAL_AI_PROJECT_ID__?: string;
+    __PERSONAL_AI_PROJECT_CONTEXT__?: JiraAutomationProjectContext;
+    __PERSONAL_AI_PENDING_NAVIGATION__?: string | null;
   }
 }
 
@@ -198,16 +170,6 @@ function getProjectId(): string {
     }
   }
   
-  // 方案4：从URL获取projectKey
-  if (!projectId) {
-    const urlParams = new URLSearchParams(window.location.search);
-    const projectKey = urlParams.get('projectKey') || '';
-    if (projectKey) {
-      projectId = projectKey;
-      console.log('Using projectKey from URL as fallback:', projectId);
-    }
-  }
-  
   // 如果在主页面且找到了项目ID，存储到全局变量供iframe使用
   if (projectId && window === window.top) {
     (window as any).__PERSONAL_AI_PROJECT_ID__ = projectId;
@@ -224,6 +186,18 @@ function getProjectId(): string {
 
 // 获取项目Key (用于URL构建)
 function getProjectKey(): string {
+  if (window !== window.top) {
+    try {
+      const parentProjectKey = window.top?.__PERSONAL_AI_PROJECT_CONTEXT__?.projectKey;
+      if (parentProjectKey) {
+        console.log('Found projectKey from parent window context:', parentProjectKey);
+        return parentProjectKey;
+      }
+    } catch (error) {
+      console.log('Cannot access parent projectKey, trying local detection...');
+    }
+  }
+
   // 首先尝试从URL参数获取projectKey
   const urlParams = new URLSearchParams(window.location.search);
   const projectKey = urlParams.get('projectKey');
@@ -232,10 +206,96 @@ function getProjectKey(): string {
     return projectKey;
   }
   
-  // 如果URL中没有projectKey，尝试从其他地方获取
-  // 这里可以根据需要添加更多的获取逻辑
-  console.warn('Could not find projectKey, using default');
-  return 'MTR'; // 默认值
+  if (typeof (window as any).WRM !== 'undefined' && (window as any).WRM._unparsedData) {
+    const wrmProjectKey = (window as any).WRM._unparsedData['project-key'];
+    if (wrmProjectKey) {
+      console.log('Found projectKey from WRM._unparsedData:', wrmProjectKey);
+      return wrmProjectKey;
+    }
+  }
+
+  try {
+    if (window.top && window.top !== window) {
+      const parentUrl = new URL(window.top.location.href);
+      const parentProjectKey = parentUrl.searchParams.get('projectKey');
+      if (parentProjectKey) {
+        console.log('Found projectKey from parent URL:', parentProjectKey);
+        return parentProjectKey;
+      }
+    }
+  } catch (error) {
+    console.log('Cannot access parent URL for projectKey detection');
+  }
+
+  console.warn('Could not find projectKey');
+  return '';
+}
+
+async function resolveCurrentProjectContext(): Promise<JiraAutomationProjectContext | null> {
+  if (window !== window.top) {
+    try {
+      const parentContext = window.top?.__PERSONAL_AI_PROJECT_CONTEXT__;
+      if (parentContext?.projectId && parentContext.projectKey) {
+        return parentContext;
+      }
+    } catch (error) {
+      console.log('Cannot access parent project context, resolving locally...');
+    }
+  }
+
+  let projectId = getProjectId();
+  let projectKey = getProjectKey();
+  let projectTypeKey: string | undefined;
+
+  if (!projectKey && projectId && !/^\d+$/.test(projectId)) {
+    projectKey = projectId;
+  }
+
+  if (projectKey) {
+    try {
+      const headers = await createJiraHeaders();
+      const response = await fetch(`${window.location.origin}/rest/api/2/project/${encodeURIComponent(projectKey)}`, {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        console.warn('Failed to resolve project by key:', response.status, response.statusText);
+        if (!/^\d+$/.test(projectId)) {
+          return null;
+        }
+      } else {
+        const projectInfo = await response.json();
+        projectId = String(projectInfo.id || projectId);
+        projectKey = String(projectInfo.key || projectKey);
+        projectTypeKey = projectInfo.projectTypeKey;
+      }
+    } catch (error) {
+      console.warn('Error resolving project by key:', error);
+      if (!/^\d+$/.test(projectId)) {
+        return null;
+      }
+    }
+  } else if (!/^\d+$/.test(projectId)) {
+    console.warn('Cannot resolve Jira project context without projectKey');
+    return null;
+  }
+
+  if (!projectId || !/^\d+$/.test(projectId) || !projectKey) {
+    console.warn('Resolved Jira project context is incomplete:', { projectId, projectKey });
+    return null;
+  }
+
+  const context: JiraAutomationProjectContext = { projectId, projectKey, projectTypeKey };
+  try {
+    window.__PERSONAL_AI_PROJECT_ID__ = projectId;
+    window.__PERSONAL_AI_PROJECT_CONTEXT__ = context;
+  } catch (error) {
+    console.log('Could not store project context on current window:', error);
+  }
+
+  return context;
 }
 
 // 等待元素出现（预留功能）
@@ -317,46 +377,6 @@ function waitForIframe(): Promise<Document> {
   });
 }
 
-// 转换导出的JSON格式为API所需格式
-async function convertExportedRuleToImportFormat(exportedRule: ExportedRule, projectId: string): Promise<ImportRule> {
-  const now = Date.now();
-  const ownerId = await getCurrentOwnerId();
-  
-  // 为components生成新的ID
-  const convertedComponents = exportedRule.components.map((component, index) => ({
-    ...component,
-    id: `__NEW__COMPONENT__${now + index}`
-  }));
-  
-  // 为trigger设置新的ID
-  const convertedTrigger = {
-    ...exportedRule.trigger,
-    id: '__NEW__TRIGGER'
-  };
-  
-  // 确保项目ID正确
-  const projects = exportedRule.projects.map(project => ({
-    ...project,
-    projectId: projectId // 使用当前项目ID
-  }));
-  
-  return {
-    name: '(Imported by Personal AI) ' + exportedRule.name,
-    isNewRule: true,
-    state: exportedRule.state,
-    canOtherRuleTrigger: exportedRule.canOtherRuleTrigger,
-    notifyOnError: exportedRule.notifyOnError,
-    authorAccountId: ownerId,
-    created: now,
-    updated: now,
-    components: convertedComponents,
-    trigger: convertedTrigger,
-    labels: exportedRule.labels || [],
-    description: exportedRule.description,
-    projects: projects
-  };
-}
-
 // 创建automation rule的API调用（使用统一的认证方法）
 async function createAutomationRule(ruleData: ImportRule, projectId: string): Promise<any> {
   try {
@@ -406,6 +426,33 @@ function showSuccessMessage(message: string): void {
   }, 5000);
 }
 
+function showInfoMessage(message: string): void {
+  const infoDiv = document.createElement('div');
+  infoDiv.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #0747A6;
+    color: white;
+    padding: 16px;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    z-index: 10000;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    max-width: 400px;
+  `;
+  infoDiv.textContent = message;
+  document.body.appendChild(infoDiv);
+
+  setTimeout(() => {
+    if (document.body.contains(infoDiv)) {
+      document.body.removeChild(infoDiv);
+    }
+  }, 5000);
+}
+
 // 显示错误消息
 function showErrorMessage(message: string): void {
   const errorDiv = document.createElement('div');
@@ -435,39 +482,333 @@ function showErrorMessage(message: string): void {
   }, 10000);
 }
 
+function createDialogButton(doc: Document, text: string, variant: 'primary' | 'secondary'): HTMLButtonElement {
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.textContent = text;
+  button.style.cssText =
+    variant === 'primary'
+      ? `
+        padding: 8px 16px;
+        border: none;
+        border-radius: 4px;
+        background: #0052cc;
+        color: white;
+        cursor: pointer;
+        font-weight: 500;
+      `
+      : `
+        padding: 8px 16px;
+        border: 1px solid #DFE1E6;
+        border-radius: 4px;
+        background: white;
+        color: #172B4D;
+        cursor: pointer;
+        font-weight: 500;
+      `;
+  return button;
+}
+
+function appendInfoRow(doc: Document, container: HTMLElement, label: string, value: string): void {
+  const row = doc.createElement('div');
+  row.style.cssText = 'display: flex; gap: 8px; margin-bottom: 6px;';
+
+  const labelEl = doc.createElement('span');
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'flex: 0 0 110px; color: #6B778C; font-size: 13px;';
+
+  const valueEl = doc.createElement('span');
+  valueEl.textContent = value || '未提供';
+  valueEl.style.cssText = 'flex: 1; color: #172B4D; font-size: 13px; word-break: break-word;';
+
+  row.appendChild(labelEl);
+  row.appendChild(valueEl);
+  container.appendChild(row);
+}
+
+function formatReviewSignalValue(count: number, samples: string[]): string {
+  if (count === 0) {
+    return 'None detected';
+  }
+
+  const visibleSamples = samples.slice(0, 2);
+  const sampleText = visibleSamples.join(' | ');
+  const moreText = count > visibleSamples.length ? `, ${count - visibleSamples.length} more` : '';
+  return sampleText ? `${count} to review: ${sampleText}${moreText}` : `${count} to review`;
+}
+
+function showImportPreviewDialog(
+  exportedData: ExportedData,
+  file: File,
+  projectContext: JiraAutomationProjectContext,
+  doc: Document,
+): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean }> {
+  return new Promise((resolve) => {
+    const overlay = doc.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(9, 30, 66, 0.54);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+    `;
+
+    const dialog = doc.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'personal-ai-jira-import-title');
+    dialog.style.cssText = `
+      width: min(640px, 100%);
+      max-height: min(720px, 92vh);
+      overflow: auto;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 8px 28px rgba(9, 30, 66, 0.28);
+      color: #172B4D;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 24px;
+      box-sizing: border-box;
+    `;
+
+    const title = doc.createElement('h3');
+    title.id = 'personal-ai-jira-import-title';
+    title.textContent = 'Import Jira Automation Rule';
+    title.style.cssText = 'margin: 0 0 12px; font-size: 18px; line-height: 1.3;';
+    dialog.appendChild(title);
+
+    const intro = doc.createElement('p');
+    intro.textContent = `Found ${exportedData.rules.length} rule(s) in ${file.name}. Select one rule to import into ${projectContext.projectKey}.`;
+    intro.style.cssText = 'margin: 0 0 16px; color: #44546F; font-size: 13px; line-height: 1.5;';
+    dialog.appendChild(intro);
+
+    let selectedRuleIndex = 0;
+    let select: HTMLSelectElement | null = null;
+    let preventChainedTrigger = Boolean(exportedData.rules[0]?.canOtherRuleTrigger);
+
+    if (exportedData.rules.length > 1) {
+      const selectLabel = doc.createElement('label');
+      selectLabel.textContent = 'Rule to import';
+      selectLabel.style.cssText = 'display: block; margin-bottom: 6px; font-weight: 600; font-size: 13px;';
+      dialog.appendChild(selectLabel);
+
+      select = doc.createElement('select');
+      select.style.cssText = `
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 16px;
+        padding: 8px 10px;
+        border: 1px solid #DFE1E6;
+        border-radius: 4px;
+        background: white;
+        color: #172B4D;
+        font-size: 14px;
+      `;
+
+      exportedData.rules.forEach((rule, index) => {
+        const option = doc.createElement('option');
+        option.value = String(index);
+        option.textContent = `${index + 1}. ${rule.name}`;
+        select?.appendChild(option);
+      });
+
+      dialog.appendChild(select);
+    }
+
+    const details = doc.createElement('div');
+    details.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #DFE1E6;
+      border-radius: 6px;
+      background: #F7F8F9;
+    `;
+    dialog.appendChild(details);
+
+    const safeguardBox = doc.createElement('div');
+    safeguardBox.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #DFE1E6;
+      border-radius: 6px;
+      background: white;
+    `;
+
+    const chainedTriggerLabel = doc.createElement('label');
+    chainedTriggerLabel.style.cssText = 'display: flex; align-items: flex-start; gap: 8px; color: #172B4D; font-size: 13px; line-height: 1.45;';
+
+    const chainedTriggerCheckbox = doc.createElement('input');
+    chainedTriggerCheckbox.type = 'checkbox';
+    chainedTriggerCheckbox.checked = preventChainedTrigger;
+    chainedTriggerCheckbox.style.cssText = 'margin-top: 2px;';
+
+    const chainedTriggerText = doc.createElement('span');
+    chainedTriggerText.textContent = 'Prevent other automation rules from triggering this imported copy until it has been reviewed.';
+
+    chainedTriggerLabel.appendChild(chainedTriggerCheckbox);
+    chainedTriggerLabel.appendChild(chainedTriggerText);
+    safeguardBox.appendChild(chainedTriggerLabel);
+    dialog.appendChild(safeguardBox);
+
+    const warningBox = doc.createElement('div');
+    warningBox.style.cssText = `
+      margin-bottom: 18px;
+      padding: 12px;
+      border-radius: 6px;
+      background: #FFFAE6;
+      border-left: 3px solid #FFAB00;
+    `;
+    dialog.appendChild(warningBox);
+
+    const renderRuleDetails = () => {
+      const rule = exportedData.rules[selectedRuleIndex];
+      const summary = summarizeJiraAutomationImportRule(rule);
+      const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+      const sourceAllowsChainedTrigger = Boolean(rule.canOtherRuleTrigger);
+      chainedTriggerCheckbox.disabled = !sourceAllowsChainedTrigger;
+      chainedTriggerCheckbox.checked = sourceAllowsChainedTrigger && preventChainedTrigger;
+      chainedTriggerText.textContent = sourceAllowsChainedTrigger
+        ? 'Prevent other automation rules from triggering this imported copy until it has been reviewed.'
+        : 'The source rule does not allow other automation rules to trigger it.';
+
+      details.textContent = '';
+      appendInfoRow(doc, details, 'Rule name', rule.name);
+      appendInfoRow(doc, details, 'Source state', rule.state || 'UNKNOWN');
+      appendInfoRow(doc, details, 'Trigger', rule.trigger?.type || 'UNKNOWN');
+      appendInfoRow(doc, details, 'Components', `${summary.componentCount} total`);
+      appendInfoRow(doc, details, 'Actions', String(summary.actionCount));
+      appendInfoRow(doc, details, 'Conditions', String(summary.conditionCount));
+      appendInfoRow(doc, details, 'Web requests', summary.webRequestCount > 0 ? `${summary.webRequestCount} to review` : 'None detected');
+      appendInfoRow(doc, details, 'External actions', summary.externalIntegrationCount > 0 ? `${summary.externalIntegrationCount} to review` : 'None detected');
+      appendInfoRow(doc, details, 'Secrets', summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} reference(s)` : 'None detected');
+      appendInfoRow(doc, details, 'JQL / filters', formatReviewSignalValue(summary.jqlReferenceCount, reviewSignals.jqlReferences));
+      appendInfoRow(doc, details, 'Hard-coded URLs', formatReviewSignalValue(summary.hardcodedUrlCount, reviewSignals.hardcodedUrls));
+      appendInfoRow(doc, details, 'Accounts', formatReviewSignalValue(summary.emailReferenceCount, reviewSignals.emailReferences));
+      appendInfoRow(doc, details, 'Source project refs', formatReviewSignalValue(summary.sourceProjectReferenceCount, reviewSignals.sourceProjectReferences));
+      appendInfoRow(doc, details, 'Schedule', summary.scheduledTrigger ? 'Scheduled trigger' : 'No scheduled trigger');
+      appendInfoRow(
+        doc,
+        details,
+        'Rule chaining',
+        sourceAllowsChainedTrigger
+          ? (preventChainedTrigger ? 'Blocked in imported copy' : 'Preserved from source')
+          : 'Disabled in source',
+      );
+      appendInfoRow(doc, details, 'Target project', `${projectContext.projectKey} (${projectContext.projectId})`);
+      appendInfoRow(doc, details, 'Imported state', 'DISABLED');
+
+      warningBox.textContent = '';
+      const warnings = buildJiraAutomationImportWarnings(rule);
+      warnings.forEach((warning) => {
+        const item = doc.createElement('p');
+        item.textContent = warning;
+        item.style.cssText = 'margin: 0 0 6px; font-size: 13px; line-height: 1.45;';
+        warningBox.appendChild(item);
+      });
+    };
+
+    select?.addEventListener('change', () => {
+      selectedRuleIndex = Number(select?.value || '0');
+      preventChainedTrigger = Boolean(exportedData.rules[selectedRuleIndex]?.canOtherRuleTrigger);
+      renderRuleDetails();
+    });
+
+    chainedTriggerCheckbox.addEventListener('change', () => {
+      preventChainedTrigger = chainedTriggerCheckbox.checked;
+      renderRuleDetails();
+    });
+    renderRuleDetails();
+
+    const footer = doc.createElement('div');
+    footer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;';
+
+    const cancelButton = createDialogButton(doc, 'Cancel', 'secondary');
+    const confirmButton = createDialogButton(doc, 'Import disabled copy', 'primary');
+    footer.appendChild(cancelButton);
+    footer.appendChild(confirmButton);
+    dialog.appendChild(footer);
+
+    const close = (result: { confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean }) => {
+      doc.removeEventListener('keydown', onKeyDown);
+      if (doc.body.contains(overlay)) {
+        doc.body.removeChild(overlay);
+      }
+      resolve(result);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false });
+      }
+    };
+
+    doc.addEventListener('keydown', onKeyDown);
+    cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false }));
+    confirmButton.addEventListener('click', () => {
+      const selectedRule = exportedData.rules[selectedRuleIndex];
+      close({
+        confirmed: true,
+        selectedRuleIndex,
+        allowOtherRuleTrigger: Boolean(selectedRule.canOtherRuleTrigger) && !preventChainedTrigger,
+      });
+    });
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false });
+      }
+    });
+
+    overlay.appendChild(dialog);
+    doc.body.appendChild(overlay);
+  });
+}
+
 // 处理文件导入
-function handleFileImport(file: File, projectId: string): void {
+function handleFileImport(file: File, projectContext: JiraAutomationProjectContext, doc: Document): void {
+  if (!isJiraAutomationImportFileSizeAllowed(file.size)) {
+    showErrorMessage(`Import failed: JSON file must be ${JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES / 1024 / 1024}MB or smaller`);
+    return;
+  }
+
   const reader = new FileReader();
   
   reader.onload = async (e) => {
     try {
       const content = e.target?.result as string;
-      const exportedData: ExportedData = JSON.parse(content);
-      
-      if (!exportedData.rules || !Array.isArray(exportedData.rules)) {
-        throw new Error('Invalid JSON format: Missing rules array');
+      const exportedData = parseJiraAutomationExport(JSON.parse(content));
+      const previewResult = await showImportPreviewDialog(exportedData, file, projectContext, doc);
+
+      if (!previewResult.confirmed) {
+        return;
       }
-      
-      if (exportedData.rules.length === 0) {
-        throw new Error('No rules found in the imported file');
-      }
-      
-      // 只导入第一个rule（如果有多个的话）
-      const ruleToImport = exportedData.rules[0];
-      const convertedRule = await convertExportedRuleToImportFormat(ruleToImport, projectId);
-      
+
+      const ownerId = await getCurrentOwnerId();
+      const ruleToImport = exportedData.rules[previewResult.selectedRuleIndex];
+      const convertedRule = buildJiraAutomationImportRule(ruleToImport, {
+        projectId: projectContext.projectId,
+        projectTypeKey: projectContext.projectTypeKey,
+        ownerId,
+        allowOtherRuleTrigger: previewResult.allowOtherRuleTrigger,
+      });
+
       console.log('Importing rule:', convertedRule);
-      
+      showInfoMessage('Creating disabled Jira Automation copy...');
+
       // 调用API创建rule
-      const result = await createAutomationRule(convertedRule, projectId);
+      const result = await createAutomationRule(convertedRule, projectContext.projectId);
       console.log('Rule created successfully:', result);
       
-      showSuccessMessage(`Automation rule "${ruleToImport.name}" imported successfully!`);
+      showSuccessMessage(`Automation rule "${ruleToImport.name}" imported as a disabled copy.`);
       
       // 跳转到导入后的automation脚本页面
       if (result && result.id) {
-        const projectKey = getProjectKey();
-        const ruleUrl = `https://jira.ringcentral.com/secure/AutomationProjectAdminAction!default.jspa?projectKey=${projectKey}#/rule/${result.id}`;
+        const ruleUrl = `${window.location.origin}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${encodeURIComponent(projectContext.projectKey)}#/rule/${encodeURIComponent(String(result.id))}`;
         console.log('Navigating to rule page:', ruleUrl);
         
         setTimeout(() => {
@@ -508,59 +849,70 @@ function handleFileImport(file: File, projectId: string): void {
 }
 
 // 创建Import按钮
-function createImportButton(iframeDoc: Document, projectId: string): void {
+const importButtonObservers = new WeakSet<Document>();
+
+function findCreateRuleButton(doc: Document): HTMLElement | null {
+  const selectorMatch = doc.querySelector(
+    'button[data-testid*="create"][data-testid*="rule"], button[aria-label*="Create rule"], button[title*="Create rule"]',
+  );
+  if (selectorMatch instanceof HTMLElement) {
+    return selectorMatch;
+  }
+
+  const buttons = doc.querySelectorAll('button');
+  for (const button of Array.from(buttons)) {
+    const text = button.textContent?.replace(/\s+/g, ' ').trim();
+    if (text && text.toLowerCase().includes('create rule')) {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+function waitForCreateRuleButton(doc: Document, projectContext: JiraAutomationProjectContext): void {
+  if (importButtonObservers.has(doc) || doc.getElementById('import-rule-button') || !doc.body) {
+    return;
+  }
+
+  importButtonObservers.add(doc);
+  const observer = new MutationObserver(() => {
+    if (doc.getElementById('import-rule-button')) {
+      observer.disconnect();
+      return;
+    }
+
+    const button = findCreateRuleButton(doc);
+    if (button) {
+      observer.disconnect();
+      appendImportButtonNearElement(button, projectContext, doc);
+    }
+  });
+
+  observer.observe(doc.body, { childList: true, subtree: true });
+  setTimeout(() => observer.disconnect(), 15000);
+}
+
+function createImportButton(iframeDoc: Document, projectContext: JiraAutomationProjectContext): void {
   if (iframeDoc.getElementById('import-rule-button')) {
     console.log('Import rule button already exists');
     return;
   }
 
   console.log('Looking for Create rule button...');
-  
-  // 首先尝试通过文本内容查找按钮
-  const buttons = iframeDoc.querySelectorAll('button');
-  let foundButton = null;
-  
-  buttons.forEach(button => {
-    const text = button.textContent?.trim();
-    console.log('Button text:', text);
-    if (text && text.toLowerCase().includes('create rule')) {
-      foundButton = button;
-      console.log('Found Create rule button by text:', text);
-    }
-  });
-  
-  // if (!foundButton) {
-  //   console.warn('Create rule button not found by text, trying CSS selectors...');
-    
-  //   // 尝试CSS选择器作为备选方案
-  //   const createButton = iframeDoc.querySelector('button[data-testid="create-rule-button"], .create-rule-button, [class*="create"], [class*="Create"]');
-    
-  //   if (createButton) {
-  //     foundButton = createButton;
-  //     console.log('Found Create rule button by CSS selector');
-  //   }
-  // }
-  
-  // if (!foundButton) {
-  //   console.warn('Could not find Create rule button, will append to first available container');
-  //   const container = iframeDoc.querySelector('div[class*="header"], .page-header, .toolbar, .actions') 
-  //                    || iframeDoc.body.firstElementChild;
-  //   if (container) {
-  //     appendImportButton(container as HTMLElement, projectId, iframeDoc);
-  //   }
-  //   return;
-  // }
+  const foundButton = findCreateRuleButton(iframeDoc);
 
   if (!foundButton) {
-    console.warn('Could not find Create import rule button!');
+    console.warn('Create rule button not found yet; waiting for Jira Automation toolbar to render');
+    waitForCreateRuleButton(iframeDoc, projectContext);
     return;
   }
   
-  appendImportButtonNearElement(foundButton as HTMLElement, projectId, iframeDoc);
+  appendImportButtonNearElement(foundButton, projectContext, iframeDoc);
 }
 
-function appendImportButtonNearElement(referenceElement: HTMLElement, projectId: string, iframeDoc: Document): void {
-  const importButton = createImportButtonElement(projectId, iframeDoc);
+function appendImportButtonNearElement(referenceElement: HTMLElement, projectContext: JiraAutomationProjectContext, iframeDoc: Document): void {
+  const importButton = createImportButtonElement(projectContext, iframeDoc);
   
   // 尝试在Create button旁边插入
   if (referenceElement.parentNode) {
@@ -568,22 +920,23 @@ function appendImportButtonNearElement(referenceElement: HTMLElement, projectId:
   }
 }
 
-function _appendImportButton(container: HTMLElement, projectId: string, iframeDoc: Document): void {
-  const importButton = createImportButtonElement(projectId, iframeDoc);
+function _appendImportButton(container: HTMLElement, projectContext: JiraAutomationProjectContext, iframeDoc: Document): void {
+  const importButton = createImportButtonElement(projectContext, iframeDoc);
   container.appendChild(importButton);
 }
 
-function createImportButtonElement(projectId: string, iframeDoc: Document): HTMLElement {
+function createImportButtonElement(projectContext: JiraAutomationProjectContext, iframeDoc: Document): HTMLElement {
   // 创建隐藏的文件输入元素
   const fileInput = iframeDoc.createElement('input');
   fileInput.type = 'file';
-  fileInput.accept = '.json';
+  fileInput.accept = 'application/json,.json';
   fileInput.style.display = 'none';
   
   // 创建Import按钮
   const importButton = iframeDoc.createElement('button');
   importButton.textContent = 'Import rule';
   importButton.id = 'import-rule-button';
+  importButton.setAttribute('aria-label', `Import a disabled Jira Automation rule into ${projectContext.projectKey}`);
   importButton.style.cssText = `
     margin-left: 8px;
     padding: 8px 16px;
@@ -614,8 +967,9 @@ function createImportButtonElement(projectId: string, iframeDoc: Document): HTML
   fileInput.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
-      handleFileImport(file, projectId);
+      handleFileImport(file, projectContext, iframeDoc);
     }
+    fileInput.value = '';
   });
   
   // 创建容器
@@ -644,21 +998,21 @@ async function main(): Promise<void> {
     if (window !== window.top) {
       console.log('Running inside iframe, executing directly...');
       
-      const projectId = getProjectId();
-      if (!projectId) {
-        console.warn('Project ID not found');
+      const projectContext = await resolveCurrentProjectContext();
+      if (!projectContext) {
+        console.warn('Project context not found');
         return;
       }
       
-      console.log('Project ID:', projectId);
+      console.log('Project context:', projectContext);
       
       // 等待页面内容加载
       setTimeout(async () => {
-        createImportButton(document, projectId);
+        createImportButton(document, projectContext);
         console.log('Import button created in iframe');
         
         // 同时初始化 Schedule 按钮（异步）
-        await initScheduleButtons(document, projectId);
+        await initScheduleButtons(document, projectContext.projectId);
         console.log('Schedule buttons initialization completed in iframe');
       }, 2000);
       
@@ -669,12 +1023,12 @@ async function main(): Promise<void> {
       const ownerId = await getCurrentOwnerId();
       console.log('OwnerId:', ownerId);
       
-      const projectId = getProjectId();
-      if (!projectId) {
-        console.warn('Project ID not found');
+      const projectContext = await resolveCurrentProjectContext();
+      if (!projectContext) {
+        console.warn('Project context not found');
         return;
       }
-      console.log('Project ID:', projectId);
+      console.log('Project context:', projectContext);
       
       // 等待iframe加载完成
       const iframeDoc = await waitForIframe();
@@ -682,11 +1036,11 @@ async function main(): Promise<void> {
       
       // 等待页面内容加载
       setTimeout(async () => {
-        createImportButton(iframeDoc, projectId);
+        createImportButton(iframeDoc, projectContext);
         console.log('Import button created in main page');
         
         // 同时初始化 Schedule 按钮（异步）
-        await initScheduleButtons(iframeDoc, projectId);
+        await initScheduleButtons(iframeDoc, projectContext.projectId);
         console.log('Schedule buttons initialization completed in main page');
       }, 2000);
     }
@@ -1667,4 +2021,4 @@ async function initScheduleButtons(doc: Document, projectId: string): Promise<vo
 }
 
 // Schedule 按钮初始化已集成到 main() 函数中
-// 与 Import button 共享同一个初始化时机，无需额外的独立入口 
+// 与 Import button 共享同一个初始化时机，无需额外的独立入口

@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref, nextTick, toRaw } from 'vue';
-import { getMemoryServiceClient } from '../services/MemoryServiceClient';
+import {
+  getMemoryServiceClient,
+  type RecallItem,
+  type RecallScope,
+} from '../services/MemoryServiceClient';
 
 // 实体类型配置
 export const ENTITY_TYPE_CONFIG = {
@@ -68,10 +72,252 @@ interface _ConversationMessage {
   [key: string]: any;
 }
 
+interface _DeferredTopicState {
+  until: number;
+  createdAt: number;
+}
+
+interface _MutedTopicState {
+  until: number | null;
+  createdAt: number;
+}
+
+interface _TopicReadUndoConversationState {
+  conversation: any;
+  hadIsRead: boolean;
+  isRead: any;
+  hadReadTimestamp: boolean;
+  readTimestamp: any;
+}
+
+interface _TopicReadUndoTarget {
+  topic: any;
+  hadReadStatus: boolean;
+  readStatus: any;
+  hadUnreadDiscussions: boolean;
+  unreadDiscussions: any;
+  conversations: _TopicReadUndoConversationState[];
+}
+
+interface _TopicReadUndoState {
+  topicId: string;
+  topicName: string;
+  capturedAt: number;
+  targets: _TopicReadUndoTarget[];
+}
+
+interface _ConversationReadUndoState {
+  topicId: string;
+  topicName: string;
+  conversationId: string;
+  conversationLabel: string;
+  capturedAt: number;
+  targets: _TopicReadUndoTarget[];
+}
+
+export type TopicDeferPresetKey =
+  | 'one-hour'
+  | 'this-evening'
+  | 'tomorrow-morning'
+  | 'next-monday';
+
+export interface TopicDeferPresetOption {
+  key: TopicDeferPresetKey;
+  label: string;
+  until: number;
+}
+
+export type TopicMutePresetKey = 'one-day' | 'one-week' | 'indefinite';
+
+export interface TopicMutePresetOption {
+  key: TopicMutePresetKey;
+  label: string;
+  until: number | null;
+}
+
+const TOPIC_DEFER_STORAGE_KEY = 'personal-ai-deferred-topics-v1';
+const TOPIC_MUTE_STORAGE_KEY = 'personal-ai-muted-topics-v1';
+const DEFAULT_TOPIC_DEFER_HOUR = 9;
+const TOPIC_DEFER_EVENING_HOUR = 18;
+const TOPIC_DEFER_MONDAY = 1;
+const TOPIC_READ_UNDO_WINDOW_MS = 10_000;
+
+const EMPTY_SEARCH_RESULT_DETAILS = {
+  conversations: [],
+  webpages: [],
+  resources: [],
+  projects: [],
+  people: [],
+  topics: [],
+  jiraTickets: [],
+  cooccurringEntities: [],
+};
+
+const getDateAtTime = (timestamp: number, hour: number, minute = 0) => {
+  const date = new Date(timestamp);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+};
+
+const getNextWeekdayAtTime = (
+  timestamp: number,
+  weekday: number,
+  hour: number,
+  minute = 0,
+) => {
+  const date = getDateAtTime(timestamp, hour, minute);
+  const currentWeekday = date.getDay();
+  let daysUntilTarget = (weekday - currentWeekday + 7) % 7;
+  if (daysUntilTarget === 0 && date.getTime() <= timestamp) {
+    daysUntilTarget += 7;
+  }
+  date.setDate(date.getDate() + daysUntilTarget);
+  return date;
+};
+
+const getRecallItemTitle = (item: RecallItem): string => {
+  const title =
+    item.displayTitle ||
+    item.sourceTitle ||
+    item.entity?.name ||
+    item.source ||
+    item.previewText ||
+    item.content;
+  return String(title || item.id).slice(0, 80);
+};
+
+const getRecallItemDescription = (item: RecallItem): string => {
+  return (
+    item.previewText ||
+    item.displayText ||
+    item.entity?.description ||
+    item.content ||
+    ''
+  );
+};
+
+const mapRecallItemToSearchResult = (item: RecallItem) => {
+  const metadata = item.metadata || {};
+  const entityType =
+    item.type === 'entity'
+      ? item.entity?.type || String(metadata.entityType || 'entity')
+      : item.type;
+
+  return {
+    ...(metadata || {}),
+    id: item.id,
+    name: getRecallItemTitle(item),
+    type: entityType,
+    recallType: item.type,
+    description: getRecallItemDescription(item),
+    relevanceScore: item.score,
+    scope: item.scope || metadata.scope,
+    source: item.source || metadata.source,
+    sourceUrl: item.sourceUrl || metadata.sourceUrl,
+    sourceTitle: item.sourceTitle || metadata.sourceTitle,
+    displayTitle: item.displayTitle,
+    displayText: item.displayText,
+    previewText: item.previewText,
+    exploreLink: item.exploreLink,
+    timestamp: item.timestamp,
+    channels: Array.isArray(metadata.channels) ? metadata.channels : [],
+    recentDataDetails: { ...EMPTY_SEARCH_RESULT_DETAILS },
+  };
+};
+
+export const getTopicDeferPresetOptions = (
+  now = Date.now(),
+): TopicDeferPresetOption[] => {
+  const oneHour = now + 60 * 60 * 1000;
+  const thisEvening = getDateAtTime(now, TOPIC_DEFER_EVENING_HOUR).getTime();
+  const tomorrowMorning = getDateAtTime(now, DEFAULT_TOPIC_DEFER_HOUR);
+  tomorrowMorning.setDate(tomorrowMorning.getDate() + 1);
+
+  return [
+    {
+      key: 'one-hour',
+      label: '1小时后',
+      until: oneHour,
+    },
+    {
+      key: 'this-evening',
+      label: thisEvening > now ? '今天晚些时候' : '明天上午',
+      until: thisEvening > now ? thisEvening : tomorrowMorning.getTime(),
+    },
+    {
+      key: 'tomorrow-morning',
+      label: '明天上午',
+      until: tomorrowMorning.getTime(),
+    },
+    {
+      key: 'next-monday',
+      label: '下周一',
+      until: getNextWeekdayAtTime(
+        now,
+        TOPIC_DEFER_MONDAY,
+        DEFAULT_TOPIC_DEFER_HOUR,
+      ).getTime(),
+    },
+  ];
+};
+
+export const getTopicMutePresetOptions = (
+  now = Date.now(),
+): TopicMutePresetOption[] => {
+  return [
+    {
+      key: 'one-day',
+      label: '静音1天',
+      until: now + 24 * 60 * 60 * 1000,
+    },
+    {
+      key: 'one-week',
+      label: '静音1周',
+      until: now + 7 * 24 * 60 * 60 * 1000,
+    },
+    {
+      key: 'indefinite',
+      label: '一直静音',
+      until: null,
+    },
+  ];
+};
+
 const TOPIC_CONVERSATION_CONTAINERS = [
   'recentDataDetails',
   'relatedData',
 ] as const;
+
+const TOPIC_TOP_LEVEL_CONVERSATION_KEYS = [
+  'conversations',
+  'latestConversations',
+] as const;
+
+const getMessageIdentityValues = (message: any): string[] => {
+  return [
+    message?.id,
+    message?.messageId,
+    message?.conversationId,
+    message?.sourceMessageId,
+  ]
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value));
+};
+
+const getConversationIdentitySet = (conversation: any): Set<string> => {
+  const identitySet = new Set(getMessageIdentityValues(conversation));
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+
+  contextMessages.forEach((contextMessage: any) => {
+    getMessageIdentityValues(contextMessage).forEach((value) =>
+      identitySet.add(value),
+    );
+  });
+
+  return identitySet;
+};
 
 const getTopicConversationLists = (topic: any): any[][] => {
   if (!topic) return [];
@@ -79,6 +325,12 @@ const getTopicConversationLists = (topic: any): any[][] => {
   const lists: any[][] = [];
   TOPIC_CONVERSATION_CONTAINERS.forEach((containerKey) => {
     const conversations = topic[containerKey]?.conversations;
+    if (Array.isArray(conversations) && !lists.includes(conversations)) {
+      lists.push(conversations);
+    }
+  });
+  TOPIC_TOP_LEVEL_CONVERSATION_KEYS.forEach((conversationKey) => {
+    const conversations = topic[conversationKey];
     if (Array.isArray(conversations) && !lists.includes(conversations)) {
       lists.push(conversations);
     }
@@ -92,10 +344,21 @@ const inferUnreadCountFromConversations = (topic: any): number => {
 
   return Math.max(
     0,
-    ...lists.map((conversations) =>
-      conversations.filter((conversation: any) => conversation?.isRead !== true)
-        .length,
+    ...lists.map(
+      (conversations) =>
+        conversations.filter(
+          (conversation: any) => conversation?.isRead !== true,
+        ).length,
     ),
+  );
+};
+
+const inferUnreadCountFromTopic = (topic: any): number => {
+  return Math.max(
+    inferUnreadCountFromConversations(topic),
+    Array.isArray(topic?.unreadDiscussions)
+      ? topic.unreadDiscussions.length
+      : 0,
   );
 };
 
@@ -112,7 +375,8 @@ const setTopicReadStatus = (
     unreadCount,
     lastReadTime:
       unreadCount === 0 ? timestamp : topic.readStatus?.lastReadTime || null,
-    lastUpdateTime: topic.readStatus?.lastUpdateTime || topic.updated || timestamp,
+    lastUpdateTime:
+      topic.readStatus?.lastUpdateTime || topic.updated || timestamp,
   };
 };
 
@@ -131,10 +395,15 @@ const markKnownConversationAsRead = (
   timestamp: number,
 ): boolean => {
   let changed = false;
+  const normalizedConversationId = String(conversationId);
 
   getTopicConversationLists(topic).forEach((conversations) => {
     conversations.forEach((conversation: any) => {
-      if (conversation?.id !== conversationId) return;
+      if (
+        !getConversationIdentitySet(conversation).has(normalizedConversationId)
+      ) {
+        return;
+      }
       if (conversation.isRead !== true) {
         changed = true;
       }
@@ -146,16 +415,163 @@ const markKnownConversationAsRead = (
   return changed;
 };
 
-const pruneReadDiscussion = (topic: any, conversationId: string) => {
-  if (!Array.isArray(topic?.unreadDiscussions)) return;
+const getTopicConversationMatchingIds = (
+  topic: any,
+  conversationId: string,
+): Set<string> => {
+  const matchingIds = new Set([String(conversationId)]);
+  getTopicConversationLists(topic).forEach((conversations) => {
+    conversations.forEach((conversation: any) => {
+      if (
+        !getConversationIdentitySet(conversation).has(String(conversationId))
+      ) {
+        return;
+      }
 
-  topic.unreadDiscussions = topic.unreadDiscussions.filter((discussion: any) => {
+      getConversationIdentitySet(conversation).forEach((value) =>
+        matchingIds.add(value),
+      );
+    });
+  });
+
+  return matchingIds;
+};
+
+const hasUnreadConversationMatch = (
+  topic: any,
+  conversationId: string,
+): boolean => {
+  const normalizedConversationId = String(conversationId);
+  return getTopicConversationLists(topic).some((conversations) =>
+    conversations.some(
+      (conversation: any) =>
+        getConversationIdentitySet(conversation).has(
+          normalizedConversationId,
+        ) && conversation.isRead !== true,
+    ),
+  );
+};
+
+const hasUnreadDiscussionMatch = (
+  topic: any,
+  conversationId: string,
+): boolean => {
+  if (!Array.isArray(topic?.unreadDiscussions)) return false;
+
+  const matchingIds = getTopicConversationMatchingIds(topic, conversationId);
+  return topic.unreadDiscussions.some((discussion: any) => {
     const discussionId =
       discussion?.id ||
       discussion?.conversationId ||
       discussion?.messageId ||
       discussion?.sourceMessageId;
-    return discussionId ? discussionId !== conversationId : true;
+    return discussionId ? matchingIds.has(String(discussionId)) : false;
+  });
+};
+
+const getConversationDisplayLabel = (
+  topic: any,
+  conversationId: string,
+): string => {
+  const normalizedConversationId = String(conversationId);
+  for (const conversations of getTopicConversationLists(topic)) {
+    const conversation = conversations.find((candidate: any) =>
+      getConversationIdentitySet(candidate).has(normalizedConversationId),
+    );
+    const summary =
+      conversation?.summary ||
+      conversation?.highlightText ||
+      conversation?.originalContent ||
+      conversation?.content;
+    if (summary) return String(summary);
+  }
+  return normalizedConversationId;
+};
+
+const pruneReadDiscussion = (topic: any, conversationId: string): number => {
+  if (!Array.isArray(topic?.unreadDiscussions)) return 0;
+
+  const matchingIds = getTopicConversationMatchingIds(topic, conversationId);
+  const previousLength = topic.unreadDiscussions.length;
+  topic.unreadDiscussions = topic.unreadDiscussions.filter(
+    (discussion: any) => {
+      const discussionId =
+        discussion?.id ||
+        discussion?.conversationId ||
+        discussion?.messageId ||
+        discussion?.sourceMessageId;
+      return discussionId ? !matchingIds.has(String(discussionId)) : true;
+    },
+  );
+  return previousLength - topic.unreadDiscussions.length;
+};
+
+const cloneTopicReadState = (value: any) => {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(toRaw(value)));
+};
+
+const captureTopicReadUndoTarget = (topic: any): _TopicReadUndoTarget => {
+  const conversationStates: _TopicReadUndoConversationState[] = [];
+  const seenConversations = new Set<any>();
+
+  getTopicConversationLists(topic).forEach((conversations) => {
+    conversations.forEach((conversation: any) => {
+      if (!conversation || seenConversations.has(conversation)) return;
+      seenConversations.add(conversation);
+      conversationStates.push({
+        conversation,
+        hadIsRead: Object.prototype.hasOwnProperty.call(conversation, 'isRead'),
+        isRead: conversation.isRead,
+        hadReadTimestamp: Object.prototype.hasOwnProperty.call(
+          conversation,
+          'readTimestamp',
+        ),
+        readTimestamp: conversation.readTimestamp,
+      });
+    });
+  });
+
+  return {
+    topic,
+    hadReadStatus: Object.prototype.hasOwnProperty.call(topic, 'readStatus'),
+    readStatus: cloneTopicReadState(topic.readStatus),
+    hadUnreadDiscussions: Object.prototype.hasOwnProperty.call(
+      topic,
+      'unreadDiscussions',
+    ),
+    unreadDiscussions: cloneTopicReadState(topic.unreadDiscussions),
+    conversations: conversationStates,
+  };
+};
+
+const restoreTopicReadUndoTarget = (target: _TopicReadUndoTarget) => {
+  if (target.hadReadStatus) {
+    target.topic.readStatus = cloneTopicReadState(target.readStatus);
+  } else {
+    delete target.topic.readStatus;
+  }
+
+  if (target.hadUnreadDiscussions) {
+    target.topic.unreadDiscussions = cloneTopicReadState(
+      target.unreadDiscussions,
+    );
+  } else {
+    delete target.topic.unreadDiscussions;
+  }
+
+  target.conversations.forEach((state) => {
+    if (state.hadIsRead) {
+      state.conversation.isRead = state.isRead;
+    } else {
+      delete state.conversation.isRead;
+    }
+
+    if (state.hadReadTimestamp) {
+      state.conversation.readTimestamp = state.readTimestamp;
+    } else {
+      delete state.conversation.readTimestamp;
+    }
   });
 };
 
@@ -183,12 +599,20 @@ export const useMemoryStore = defineStore('memory', () => {
   const topicDetailData = ref(null);
   const personDetailData = ref(null);
   const closedTodayCards = ref(new Set<string>()); // 今日已关闭的卡片
+  const deferredTopics = ref<Record<string, _DeferredTopicState>>({});
+  const mutedTopics = ref<Record<string, _MutedTopicState>>({});
+  const topicReadUndo = ref<_TopicReadUndoState | null>(null);
+  const conversationReadUndo = ref<_ConversationReadUndoState | null>(null);
+  let topicReadUndoTimer: ReturnType<typeof setTimeout> | null = null;
+  let conversationReadUndoTimer: ReturnType<typeof setTimeout> | null = null;
 
   const initialize = async () => {
     isLoading.value = true;
     try {
       // 恢复已关闭的今日卡片
       loadClosedCardsFromLocalStorage();
+      loadDeferredTopicsFromLocalStorage();
+      loadMutedTopicsFromLocalStorage();
 
       const response = await chromeAPI.sendMessage({
         type: 'GET_ENTITY_STATISTICS',
@@ -231,6 +655,8 @@ export const useMemoryStore = defineStore('memory', () => {
       // 如果是第一页 Topic 数据，恢复已读状态
       if (offset === 0 && entityType === 'Topic') {
         loadReadStatusFromLocalStorage();
+        loadDeferredTopicsFromLocalStorage();
+        loadMutedTopicsFromLocalStorage();
         updateTopicUnreadCount();
       }
     }
@@ -294,7 +720,7 @@ export const useMemoryStore = defineStore('memory', () => {
         type: 'GET_TOPIC_DETAIL',
         topicId,
       });
-      if (response && (response as any).success) {
+      if (response && (response as any).success && (response as any).data) {
         topicDetailData.value = (response as any).data;
       } else {
         topicDetailData.value = getMockTopicDetail(topicId);
@@ -1471,13 +1897,10 @@ export const useMemoryStore = defineStore('memory', () => {
           // 如果已读,清空未读讨论
           if (isRead) {
             entity.unreadDiscussions = [];
-
-            // 标记所有聊天消息为已读
-            if (entity.latestConversations) {
-              entity.latestConversations.forEach((conv: any) => {
-                conv.isRead = true;
-              });
-            }
+            markKnownConversationsAsRead(
+              entity,
+              entity.readStatus?.lastReadTime || Date.now(),
+            );
           }
 
           restoredCount++;
@@ -1544,6 +1967,314 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   };
 
+  const getDefaultTopicDeferUntil = (now = Date.now()) => {
+    const tomorrowMorning = new Date(now);
+    tomorrowMorning.setDate(tomorrowMorning.getDate() + 1);
+    tomorrowMorning.setHours(DEFAULT_TOPIC_DEFER_HOUR, 0, 0, 0);
+    return tomorrowMorning.getTime();
+  };
+
+  const normalizeTopicMuteUntil = (
+    until: number | null | undefined,
+    now = Date.now(),
+  ): number | null => {
+    if (until === null) return null;
+
+    const requestedUntil = Number(until);
+    if (Number.isFinite(requestedUntil) && requestedUntil > now) {
+      return requestedUntil;
+    }
+
+    return getTopicMutePresetOptions(now)[0].until;
+  };
+
+  const saveDeferredTopicsToLocalStorage = () => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem(
+        TOPIC_DEFER_STORAGE_KEY,
+        JSON.stringify(toRaw(deferredTopics.value)),
+      );
+    } catch (error) {
+      console.error('[Topic Triage] 保存稍后主题失败:', error);
+    }
+  };
+
+  const loadDeferredTopicsFromLocalStorage = () => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+
+      const saved = localStorage.getItem(TOPIC_DEFER_STORAGE_KEY);
+      if (!saved) {
+        deferredTopics.value = {};
+        return;
+      }
+
+      const parsed = JSON.parse(saved) || {};
+      const now = Date.now();
+      const next: Record<string, _DeferredTopicState> = {};
+      let prunedCount = 0;
+
+      Object.entries(parsed).forEach(([topicId, state]: [string, any]) => {
+        const until =
+          typeof state === 'number' ? state : Number(state?.until || 0);
+        if (!Number.isFinite(until) || until <= now) {
+          prunedCount++;
+          return;
+        }
+        next[topicId] = {
+          until,
+          createdAt:
+            typeof state?.createdAt === 'number' ? state.createdAt : now,
+        };
+      });
+
+      deferredTopics.value = next;
+      if (prunedCount > 0) {
+        saveDeferredTopicsToLocalStorage();
+      }
+    } catch (error) {
+      console.error('[Topic Triage] 恢复稍后主题失败:', error);
+      deferredTopics.value = {};
+    }
+  };
+
+  const isTopicDeferred = (topicId: string, now = Date.now()) => {
+    const state = deferredTopics.value[topicId];
+    return Boolean(state && Number.isFinite(state.until) && state.until > now);
+  };
+
+  const getTopicDeferredState = (topicId: string) => {
+    return isTopicDeferred(topicId) ? deferredTopics.value[topicId] : null;
+  };
+
+  const pruneExpiredDeferredTopics = (now = Date.now()) => {
+    const next: Record<string, _DeferredTopicState> = {};
+    let changed = false;
+
+    Object.entries(deferredTopics.value).forEach(([topicId, state]) => {
+      if (Number.isFinite(state.until) && state.until > now) {
+        next[topicId] = state;
+      } else {
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      deferredTopics.value = next;
+      saveDeferredTopicsToLocalStorage();
+    }
+  };
+
+  const deferTopicForLater = async (
+    topicId: string,
+    until = getDefaultTopicDeferUntil(),
+  ) => {
+    const normalizedTopicId = String(topicId || '').trim();
+    if (!normalizedTopicId) return;
+
+    const now = Date.now();
+    const requestedUntil = Number(until);
+    const deferredUntil =
+      Number.isFinite(requestedUntil) && requestedUntil > now
+        ? requestedUntil
+        : getDefaultTopicDeferUntil(now);
+
+    deferredTopics.value = {
+      ...deferredTopics.value,
+      [normalizedTopicId]: {
+        until: deferredUntil,
+        createdAt: now,
+      },
+    };
+    saveDeferredTopicsToLocalStorage();
+    updateTopicUnreadCount();
+
+    console.log(
+      `[Topic Triage] 主题 "${normalizedTopicId}" 已稍后处理至 ${new Date(
+        deferredUntil,
+      ).toLocaleString()}`,
+    );
+  };
+
+  const restoreDeferredTopic = (topicId: string) => {
+    const normalizedTopicId = String(topicId || '').trim();
+    if (!normalizedTopicId || !deferredTopics.value[normalizedTopicId]) return;
+
+    const next = { ...deferredTopics.value };
+    delete next[normalizedTopicId];
+    deferredTopics.value = next;
+    saveDeferredTopicsToLocalStorage();
+    updateTopicUnreadCount();
+    console.log(`[Topic Triage] 主题 "${normalizedTopicId}" 已恢复到未读流`);
+  };
+
+  const getDeferredTopics = () => {
+    pruneExpiredDeferredTopics();
+
+    return entities.value
+      .filter((e: any) => e.type === 'Topic' && isTopicDeferred(e.id))
+      .sort((a: any, b: any) => {
+        const untilA = deferredTopics.value[a.id]?.until || 0;
+        const untilB = deferredTopics.value[b.id]?.until || 0;
+        return untilA - untilB;
+      });
+  };
+
+  const saveMutedTopicsToLocalStorage = () => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem(
+        TOPIC_MUTE_STORAGE_KEY,
+        JSON.stringify(toRaw(mutedTopics.value)),
+      );
+    } catch (error) {
+      console.error('[Topic Triage] 保存静音主题失败:', error);
+    }
+  };
+
+  const loadMutedTopicsFromLocalStorage = () => {
+    try {
+      if (typeof localStorage === 'undefined') return;
+
+      const saved = localStorage.getItem(TOPIC_MUTE_STORAGE_KEY);
+      if (!saved) {
+        mutedTopics.value = {};
+        return;
+      }
+
+      const parsed = JSON.parse(saved) || {};
+      const now = Date.now();
+      const next: Record<string, _MutedTopicState> = {};
+      let prunedCount = 0;
+
+      Object.entries(parsed).forEach(([topicId, state]: [string, any]) => {
+        const until =
+          state === null || state?.until === null
+            ? null
+            : typeof state === 'number'
+            ? state
+            : Number(state?.until || 0);
+
+        if (until !== null && (!Number.isFinite(until) || until <= now)) {
+          prunedCount++;
+          return;
+        }
+
+        next[topicId] = {
+          until,
+          createdAt:
+            typeof state?.createdAt === 'number' ? state.createdAt : now,
+        };
+      });
+
+      mutedTopics.value = next;
+      if (prunedCount > 0) {
+        saveMutedTopicsToLocalStorage();
+      }
+    } catch (error) {
+      console.error('[Topic Triage] 恢复静音主题失败:', error);
+      mutedTopics.value = {};
+    }
+  };
+
+  const isTopicMuted = (topicId: string, now = Date.now()) => {
+    const state = mutedTopics.value[topicId];
+    return Boolean(
+      state &&
+        (state.until === null ||
+          (Number.isFinite(state.until) && state.until > now)),
+    );
+  };
+
+  const getTopicMutedState = (topicId: string) => {
+    return isTopicMuted(topicId) ? mutedTopics.value[topicId] : null;
+  };
+
+  const pruneExpiredMutedTopics = (now = Date.now()) => {
+    const next: Record<string, _MutedTopicState> = {};
+    let changed = false;
+
+    Object.entries(mutedTopics.value).forEach(([topicId, state]) => {
+      if (
+        state.until === null ||
+        (Number.isFinite(state.until) && state.until > now)
+      ) {
+        next[topicId] = state;
+      } else {
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      mutedTopics.value = next;
+      saveMutedTopicsToLocalStorage();
+    }
+  };
+
+  const muteTopic = async (
+    topicId: string,
+    until: number | null = getTopicMutePresetOptions()[0].until,
+  ) => {
+    const normalizedTopicId = String(topicId || '').trim();
+    if (!normalizedTopicId) return;
+
+    const now = Date.now();
+    const mutedUntil = normalizeTopicMuteUntil(until, now);
+
+    mutedTopics.value = {
+      ...mutedTopics.value,
+      [normalizedTopicId]: {
+        until: mutedUntil,
+        createdAt: now,
+      },
+    };
+    saveMutedTopicsToLocalStorage();
+    updateTopicUnreadCount();
+
+    console.log(
+      `[Topic Triage] 主题 "${normalizedTopicId}" 已静音${
+        mutedUntil ? `至 ${new Date(mutedUntil).toLocaleString()}` : ''
+      }`,
+    );
+  };
+
+  const restoreMutedTopic = (topicId: string) => {
+    const normalizedTopicId = String(topicId || '').trim();
+    if (!normalizedTopicId || !mutedTopics.value[normalizedTopicId]) return;
+
+    const next = { ...mutedTopics.value };
+    delete next[normalizedTopicId];
+    mutedTopics.value = next;
+    saveMutedTopicsToLocalStorage();
+    updateTopicUnreadCount();
+    console.log(`[Topic Triage] 主题 "${normalizedTopicId}" 已恢复到未读流`);
+  };
+
+  const getMutedTopics = () => {
+    pruneExpiredMutedTopics();
+
+    return entities.value
+      .filter((e: any) => e.type === 'Topic' && isTopicMuted(e.id))
+      .sort((a: any, b: any) => {
+        const untilA = mutedTopics.value[a.id]?.until;
+        const untilB = mutedTopics.value[b.id]?.until;
+
+        if (untilA === null && untilB === null) return 0;
+        if (untilA === null) return 1;
+        if (untilB === null) return -1;
+        return (untilA || 0) - (untilB || 0);
+      });
+  };
+
+  const clearConversationReadUndo = () => {
+    conversationReadUndo.value = null;
+    if (conversationReadUndoTimer) {
+      clearTimeout(conversationReadUndoTimer);
+      conversationReadUndoTimer = null;
+    }
+  };
+
   /**
    * 标记主题已读并清空所有未读消息
    */
@@ -1551,13 +2282,28 @@ export const useMemoryStore = defineStore('memory', () => {
     const timestamp = Date.now();
     const targets = [
       entities.value.find((e: any) => e.id === topicId),
-      topicDetailData.value &&
-      (topicDetailData.value as any).id === topicId
+      topicDetailData.value && (topicDetailData.value as any).id === topicId
         ? topicDetailData.value
         : null,
     ].filter((topic, index, all) => topic && all.indexOf(topic) === index);
 
     if (targets.length === 0) return;
+
+    clearConversationReadUndo();
+    topicReadUndo.value = {
+      topicId,
+      topicName: (targets[0] as any)?.name || topicId,
+      capturedAt: timestamp,
+      targets: targets.map((topic: any) => captureTopicReadUndoTarget(topic)),
+    };
+    if (topicReadUndoTimer) {
+      clearTimeout(topicReadUndoTimer);
+    }
+    topicReadUndoTimer = setTimeout(() => {
+      topicReadUndo.value = null;
+      topicReadUndoTimer = null;
+    }, TOPIC_READ_UNDO_WINDOW_MS);
+    (topicReadUndoTimer as any)?.unref?.();
 
     targets.forEach((topic: any) => {
       setTopicReadStatus(topic, 0, timestamp);
@@ -1583,6 +2329,35 @@ export const useMemoryStore = defineStore('memory', () => {
     console.log(`[主题阅读] "${topicName}" 已标记为已读`);
   };
 
+  const clearTopicReadUndo = () => {
+    topicReadUndo.value = null;
+    if (topicReadUndoTimer) {
+      clearTimeout(topicReadUndoTimer);
+      topicReadUndoTimer = null;
+    }
+  };
+
+  const undoLastTopicRead = async () => {
+    const undoState = topicReadUndo.value;
+    if (!undoState) return false;
+
+    clearTopicReadUndo();
+    undoState.targets.forEach(restoreTopicReadUndoTarget);
+
+    await Promise.allSettled(
+      undoState.targets.map((target) =>
+        chromeAPI.sendMessage({
+          type: 'CACHE_ENTITY',
+          entity: toRaw(target.topic),
+        }),
+      ),
+    );
+
+    updateTopicUnreadCount();
+    console.log(`[主题阅读] "${undoState.topicName}" 已恢复为未读状态`);
+    return true;
+  };
+
   /**
    * 标记单条消息已读
    */
@@ -1593,34 +2368,65 @@ export const useMemoryStore = defineStore('memory', () => {
     const timestamp = Date.now();
     const targets = [
       entities.value.find((e: any) => e.id === topicId),
-      topicDetailData.value &&
-      (topicDetailData.value as any).id === topicId
+      topicDetailData.value && (topicDetailData.value as any).id === topicId
         ? topicDetailData.value
         : null,
     ].filter((topic, index, all) => topic && all.indexOf(topic) === index);
 
     if (targets.length === 0) return;
 
-    const changed = targets.some((topic: any) =>
-      getTopicConversationLists(topic).some((conversations) =>
-        conversations.some(
-          (conversation: any) =>
-            conversation?.id === conversationId && conversation.isRead !== true,
-        ),
-      ),
+    const changedTargets = targets.filter(
+      (topic: any) =>
+        hasUnreadConversationMatch(topic, conversationId) ||
+        hasUnreadDiscussionMatch(topic, conversationId),
     );
 
-    if (!changed) return;
+    if (changedTargets.length === 0) return;
 
-    targets.forEach((topic: any) => {
-      markKnownConversationAsRead(topic, conversationId, timestamp);
-      pruneReadDiscussion(topic, conversationId);
+    const conversationLabel = getConversationDisplayLabel(
+      changedTargets[0],
+      conversationId,
+    );
+    conversationReadUndo.value = {
+      topicId,
+      topicName: (changedTargets[0] as any)?.name || topicId,
+      conversationId,
+      conversationLabel,
+      capturedAt: timestamp,
+      targets: changedTargets.map((topic: any) =>
+        captureTopicReadUndoTarget(topic),
+      ),
+    };
+    if (conversationReadUndoTimer) {
+      clearTimeout(conversationReadUndoTimer);
+    }
+    conversationReadUndoTimer = setTimeout(() => {
+      conversationReadUndo.value = null;
+      conversationReadUndoTimer = null;
+    }, TOPIC_READ_UNDO_WINDOW_MS);
+    (conversationReadUndoTimer as any)?.unref?.();
 
-      const previousUnreadCount =
-        typeof topic.readStatus?.unreadCount === 'number'
-          ? topic.readStatus.unreadCount
-          : inferUnreadCountFromConversations(topic) + 1;
-      const unreadCount = Math.max(0, previousUnreadCount - 1);
+    changedTargets.forEach((topic: any) => {
+      const conversationChanged = markKnownConversationAsRead(
+        topic,
+        conversationId,
+        timestamp,
+      );
+      const prunedDiscussionCount = pruneReadDiscussion(topic, conversationId);
+      if (!conversationChanged && prunedDiscussionCount === 0) return;
+
+      const hasExplicitUnreadCount =
+        typeof topic.readStatus?.unreadCount === 'number';
+      const previousUnreadCount = hasExplicitUnreadCount
+        ? topic.readStatus.unreadCount
+        : 0;
+      const readDelta = Math.max(
+        conversationChanged ? 1 : 0,
+        prunedDiscussionCount,
+      );
+      const unreadCount = hasExplicitUnreadCount
+        ? Math.max(0, previousUnreadCount - readDelta)
+        : inferUnreadCountFromTopic(topic);
       setTopicReadStatus(topic, unreadCount, timestamp);
 
       if (unreadCount === 0) {
@@ -1632,7 +2438,7 @@ export const useMemoryStore = defineStore('memory', () => {
     });
 
     await Promise.allSettled(
-      targets.map((topic: any) =>
+      changedTargets.map((topic: any) =>
         chromeAPI.sendMessage({
           type: 'CACHE_ENTITY',
           entity: toRaw(topic),
@@ -1644,6 +2450,29 @@ export const useMemoryStore = defineStore('memory', () => {
     updateTopicUnreadCount();
 
     console.log(`[消息阅读] 消息 "${conversationId}" 已标记为已读`);
+  };
+
+  const undoLastConversationRead = async () => {
+    const undoState = conversationReadUndo.value;
+    if (!undoState) return false;
+
+    clearConversationReadUndo();
+    undoState.targets.forEach(restoreTopicReadUndoTarget);
+
+    await Promise.allSettled(
+      undoState.targets.map((target) =>
+        chromeAPI.sendMessage({
+          type: 'CACHE_ENTITY',
+          entity: toRaw(target.topic),
+        }),
+      ),
+    );
+
+    updateTopicUnreadCount();
+    console.log(
+      `[消息阅读] 消息 "${undoState.conversationId}" 已恢复为未读状态`,
+    );
+    return true;
   };
 
   /**
@@ -1661,6 +2490,8 @@ export const useMemoryStore = defineStore('memory', () => {
   const getUnreadTopics = () => {
     return entities.value.filter((e: any) => {
       if (e.type !== 'Topic') return false;
+      if (isTopicDeferred(e.id)) return false;
+      if (isTopicMuted(e.id)) return false;
       // 如果有 readStatus，只根据 unreadCount 判断
       if (e.readStatus) {
         return e.readStatus.unreadCount > 0;
@@ -1719,26 +2550,32 @@ export const useMemoryStore = defineStore('memory', () => {
     query: string; // 搜索关键词
     askResult: any | null; // ask() 的返回结果
     entityType?: string; // 如果是实体搜索，记录类型
+    scope: RecallScope; // 召回范围
   }>({
     mode: null,
     query: '',
     askResult: null,
+    scope: 'work',
   });
 
   /**
    * 执行智能搜索 (使用 ask() 方法)
    * 用于首页概览搜索
    */
-  const performAskSearch = async (query: string) => {
+  const performAskSearch = async (
+    query: string,
+    scope: RecallScope = 'work',
+  ) => {
     isLoading.value = true;
     isAISearching.value = true; // 显示 AI 搜索动画
     searchContext.value.mode = 'overview';
     searchContext.value.query = query;
+    searchContext.value.scope = scope;
     searchQuery.value = query;
 
     try {
       const client = getMemoryServiceClient();
-      const result = await client.ask(query, undefined, true);
+      const result = await client.ask(query, undefined, true, { scope });
       const evidence = result.evidence || [];
       searchContext.value.askResult = {
         success: true,
@@ -1752,19 +2589,14 @@ export const useMemoryStore = defineStore('memory', () => {
         },
       };
 
-      // Evidence items become the entity list
-      const allEntities: any[] = evidence.map((item) => ({
-        id: item.id,
-        name: item.source || item.content?.slice(0, 40),
-        type: item.type,
-        description: item.content,
-        relevanceScore: item.score,
-        ...item.metadata,
-      }));
+      // Evidence items become result cards while preserving recall-specific
+      // links, scope and source metadata for the UI.
+      const allEntities: any[] = evidence.map(mapRecallItemToSearchResult);
       entities.value = allEntities;
 
       console.log('[智能搜索] Ask 搜索完成:', {
         query,
+        scope,
         entitiesCount: allEntities.length,
         hasStructuredAnswer: !!result.structuredAnswer,
       });
@@ -1785,11 +2617,13 @@ export const useMemoryStore = defineStore('memory', () => {
   const performEntityVectorSearch = async (
     query: string,
     entityType?: string,
+    scope: RecallScope = 'work',
   ) => {
     isLoading.value = true;
     searchContext.value.mode = 'entity';
     searchContext.value.query = query;
     searchContext.value.entityType = entityType;
+    searchContext.value.scope = scope;
     searchContext.value.askResult = null; // 清空之前的 AI 结果
     searchQuery.value = query;
 
@@ -1798,6 +2632,7 @@ export const useMemoryStore = defineStore('memory', () => {
         type: 'SEARCH_ENTITIES',
         query,
         entityType, // 如果指定类型，只搜索该类型
+        scope,
         limit: 30,
       })) as any;
 
@@ -1806,6 +2641,7 @@ export const useMemoryStore = defineStore('memory', () => {
         console.log('[向量搜索] 搜索完成，获取实际数据:', {
           query,
           entityType,
+          scope,
           entitiesCount: entities.value.length,
           source: response.source,
         });
@@ -1831,6 +2667,7 @@ export const useMemoryStore = defineStore('memory', () => {
       mode: null,
       query: '',
       askResult: null,
+      scope: 'work',
     };
     searchQuery.value = '';
   };
@@ -1845,6 +2682,10 @@ export const useMemoryStore = defineStore('memory', () => {
     topicDetailData,
     personDetailData,
     closedTodayCards,
+    deferredTopics,
+    mutedTopics,
+    topicReadUndo,
+    conversationReadUndo,
     initialize,
     loadEntitiesByType,
     searchEntities,
@@ -1852,10 +2693,24 @@ export const useMemoryStore = defineStore('memory', () => {
     loadTopicDetail,
     markTopicAsRead,
     markConversationAsRead,
+    deferTopicForLater,
+    restoreDeferredTopic,
+    muteTopic,
+    restoreMutedTopic,
+    undoLastTopicRead,
+    clearTopicReadUndo,
+    undoLastConversationRead,
+    clearConversationReadUndo,
     closeTodayCard,
     getUnreadTopics,
+    getDeferredTopics,
+    getMutedTopics,
     getUnreadTopicsByImportance,
     getUnreadTopicsByLatestMessage,
+    isTopicDeferred,
+    getTopicDeferredState,
+    isTopicMuted,
+    getTopicMutedState,
     updateTopicUnreadCount,
     // 智能搜索相关
     searchContext,

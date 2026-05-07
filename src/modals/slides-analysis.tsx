@@ -1,8 +1,9 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ProjectUpdateSuggestion } from '../slide';
 import { DisplaySlideAnalysisResult } from '../contentScriptGoogleSlide';
+import { normalizeComparableText } from '../utils/slidesAnalyzerSuggestions';
 
 interface AnalysisData {
     result: DisplaySlideAnalysisResult;
@@ -10,30 +11,162 @@ interface AnalysisData {
 }
 
 type UpdateField = 'status' | 'owner' | 'track' | 'comments';
+type ReviewFilter = 'all' | 'selected' | 'review' | 'blocked';
 
 const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
 const HIGH_CONFIDENCE_THRESHOLD = 0.75;
+const APPLY_TIMEOUT_MS = 45000;
+const INITIAL_DATA_TIMEOUT_MS = 12000;
+const UPDATE_FIELD_LABELS: Record<UpdateField, string> = {
+    status: '状态列',
+    owner: '负责人列',
+    track: '赛道列',
+    comments: '备注列'
+};
+const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = {
+    all: '全部',
+    selected: '已选',
+    review: '需复核',
+    blocked: '无法写回'
+};
 
 const fieldKey = (projectIndex: number, field: UpdateField) => `${projectIndex}:${field}`;
 
+const hasWritableColumnIndex = (columnIndex: unknown): columnIndex is number => (
+    Number.isInteger(columnIndex) && (columnIndex as number) >= 0
+);
+
+const hasMeaningfulSuggestedChange = (currentValue: unknown, suggestedValue: unknown): boolean => {
+    if (typeof suggestedValue !== 'string' || !suggestedValue.trim()) {
+        return false;
+    }
+
+    return normalizeComparableText(currentValue) !== normalizeComparableText(suggestedValue);
+};
+
+const addUniqueEvidenceItem = (items: string[], value: unknown): void => {
+    if (typeof value !== 'string') {
+        return;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed || items.includes(trimmed)) {
+        return;
+    }
+
+    items.push(trimmed);
+};
+
+const getSuggestionEvidenceItems = (suggestion: ProjectUpdateSuggestion): string[] => {
+    const items: string[] = [];
+    const jiraIssues = suggestion.sourceInfo?.jiraIssues || [];
+    const chatHistory = suggestion.sourceInfo?.chatHistory || [];
+
+    if (jiraIssues.length > 0) {
+        const jiraKeys = jiraIssues
+            .map((issue) => issue.key)
+            .filter(Boolean)
+            .slice(0, 3)
+            .join(', ');
+        addUniqueEvidenceItem(
+            items,
+            jiraKeys
+                ? `Jira: ${jiraKeys}${jiraIssues.length > 3 ? ` 等 ${jiraIssues.length} 个工单` : ''}`
+                : `Jira: ${jiraIssues.length} 个相关工单`,
+        );
+    }
+
+    if (chatHistory.length > 0) {
+        addUniqueEvidenceItem(items, `历史上下文: ${chatHistory.length} 条记录`);
+    }
+
+    suggestion.reason?.forEach((reason) => addUniqueEvidenceItem(items, reason));
+    addUniqueEvidenceItem(items, suggestion.suggestedStatusReason);
+    addUniqueEvidenceItem(items, suggestion.suggestedOwnerReason);
+    addUniqueEvidenceItem(items, suggestion.suggestedTrackReason);
+    addUniqueEvidenceItem(items, suggestion.suggestedCommentsReason);
+
+    return items.slice(0, 5);
+};
+
+const hasVisibleEvidence = (suggestion: ProjectUpdateSuggestion): boolean => (
+    getSuggestionEvidenceItems(suggestion).length > 0
+);
+
+const shouldDefaultSelectSuggestion = (suggestion: ProjectUpdateSuggestion): boolean => (
+    (suggestion.confidence || 0) >= HIGH_CONFIDENCE_THRESHOLD && hasVisibleEvidence(suggestion)
+);
+
+const isSuggestionReviewRequired = (suggestion: ProjectUpdateSuggestion): boolean => (
+    (suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD || !hasVisibleEvidence(suggestion)
+);
+
+const confidenceReviewText = (suggestion: ProjectUpdateSuggestion): string => {
+    const confidence = suggestion.confidence || 0;
+
+    if (confidence < HIGH_CONFIDENCE_THRESHOLD) {
+        return '需复核 · 未默认选中';
+    }
+
+    if (!hasVisibleEvidence(suggestion)) {
+        return '高可信但缺少来源 · 需复核';
+    }
+
+    return '高可信有来源 · 已默认选中';
+};
+
 const getAvailableUpdateFields = (suggestion: ProjectUpdateSuggestion): UpdateField[] => {
     const fields: UpdateField[] = [];
-    const hasStatusColumn = suggestion.columnIndices?.status !== undefined && suggestion.columnIndices.status !== -1;
-    const hasOwnerColumn = suggestion.columnIndices?.owner !== undefined && suggestion.columnIndices.owner !== -1;
-    const hasTrackColumn = suggestion.columnIndices?.track !== undefined && suggestion.columnIndices.track !== -1;
-    const hasCommentsColumn = suggestion.columnIndices?.comments !== undefined && suggestion.columnIndices.comments !== -1;
+    const hasStatusColumn = hasWritableColumnIndex(suggestion.columnIndices?.status);
+    const hasOwnerColumn = hasWritableColumnIndex(suggestion.columnIndices?.owner);
+    const hasTrackColumn = hasWritableColumnIndex(suggestion.columnIndices?.track);
+    const hasCommentsColumn = hasWritableColumnIndex(suggestion.columnIndices?.comments);
 
-    if (hasStatusColumn && suggestion.suggestedStatus && suggestion.suggestedStatus !== suggestion.currentStatus) {
+    if (hasStatusColumn && hasMeaningfulSuggestedChange(suggestion.currentStatus, suggestion.suggestedStatus)) {
         fields.push('status');
     }
     if (hasCommentsColumn && suggestion.suggestedComments) {
         fields.push('comments');
     }
-    if (hasOwnerColumn && suggestion.suggestedOwner && suggestion.suggestedOwner !== suggestion.currentOwner) {
+    if (hasOwnerColumn && hasMeaningfulSuggestedChange(suggestion.currentOwner, suggestion.suggestedOwner)) {
         fields.push('owner');
     }
-    if (hasTrackColumn && suggestion.suggestedTrack && suggestion.suggestedTrack !== suggestion.currentTrack) {
+    if (hasTrackColumn && hasMeaningfulSuggestedChange(suggestion.currentTrack, suggestion.suggestedTrack)) {
         fields.push('track');
+    }
+
+    return fields;
+};
+
+const getUnavailableUpdateFields = (suggestion: ProjectUpdateSuggestion): string[] => {
+    const fields: string[] = [];
+
+    if (
+        hasMeaningfulSuggestedChange(suggestion.currentStatus, suggestion.suggestedStatus) &&
+        !hasWritableColumnIndex(suggestion.columnIndices?.status)
+    ) {
+        fields.push(UPDATE_FIELD_LABELS.status);
+    }
+
+    if (
+        suggestion.suggestedComments &&
+        !hasWritableColumnIndex(suggestion.columnIndices?.comments)
+    ) {
+        fields.push(UPDATE_FIELD_LABELS.comments);
+    }
+
+    if (
+        hasMeaningfulSuggestedChange(suggestion.currentOwner, suggestion.suggestedOwner) &&
+        !hasWritableColumnIndex(suggestion.columnIndices?.owner)
+    ) {
+        fields.push(UPDATE_FIELD_LABELS.owner);
+    }
+
+    if (
+        hasMeaningfulSuggestedChange(suggestion.currentTrack, suggestion.suggestedTrack) &&
+        !hasWritableColumnIndex(suggestion.columnIndices?.track)
+    ) {
+        fields.push(UPDATE_FIELD_LABELS.track);
     }
 
     return fields;
@@ -80,6 +213,29 @@ const SlidesAnalysis: React.FC = () => {
     const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'warning' | 'error' } | null>(null);
     const [isApplying, setIsApplying] = useState(false);
     const [selectedFields, setSelectedFields] = useState<Record<string, boolean>>({});
+    const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all');
+    const [lastApplyResult, setLastApplyResult] = useState<{ updatedCount: number; skippedCount: number } | null>(null);
+    const [loadError, setLoadError] = useState<string>('');
+    const applyTimeoutRef = useRef<number | null>(null);
+    const initialDataTimeoutRef = useRef<number | null>(null);
+
+    const clearApplyTimeout = () => {
+        if (applyTimeoutRef.current === null) {
+            return;
+        }
+
+        window.clearTimeout(applyTimeoutRef.current);
+        applyTimeoutRef.current = null;
+    };
+
+    const clearInitialDataTimeout = () => {
+        if (initialDataTimeoutRef.current === null) {
+            return;
+        }
+
+        window.clearTimeout(initialDataTimeoutRef.current);
+        initialDataTimeoutRef.current = null;
+    };
 
     useEffect(() => {
         initAnalysisPage();
@@ -93,18 +249,21 @@ const SlidesAnalysis: React.FC = () => {
         
         return () => {
             window.removeEventListener('message', handleParentMessage);
+            clearApplyTimeout();
+            clearInitialDataTimeout();
         };
     }, []);
 
     useEffect(() => {
         if (!analysisResult) {
             setSelectedFields({});
+            setLastApplyResult(null);
             return;
         }
 
         const defaults: Record<string, boolean> = {};
         analysisResult.updateSuggestions.forEach((suggestion, projectIndex) => {
-            if ((suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD) {
+            if (!shouldDefaultSelectSuggestion(suggestion)) {
                 return;
             }
 
@@ -114,20 +273,35 @@ const SlidesAnalysis: React.FC = () => {
         });
 
         setSelectedFields(defaults);
+        setLastApplyResult(null);
     }, [analysisResult]);
 
     const initAnalysisPage = () => {
         try {
+            setLoadError('');
+            clearInitialDataTimeout();
+
             // 告知父窗口页面已加载完成，请求数据
             if (window.opener) {
                 debugLog('向父窗口请求分析数据');
                 window.opener.postMessage({ type: 'REQUEST_ANALYSIS_DATA' }, getAllowedOpenerOrigin());
+                initialDataTimeoutRef.current = window.setTimeout(() => {
+                    initialDataTimeoutRef.current = null;
+                    const message = '未收到 Slides 页面返回的分析数据，请确认原 Slides 页面仍然打开后重试。';
+                    setLoadError(message);
+                    showToast(message, 'warning');
+                    debugLog('请求分析数据超时，未收到父窗口响应');
+                }, INITIAL_DATA_TIMEOUT_MS);
             } else {
-                showToast('无法与父窗口通信', 'error');
+                const message = '无法与父窗口通信，请从 Google Slides 页面重新触发分析。';
+                setLoadError(message);
+                showToast(message, 'error');
             }
         } catch (err) {
             console.error('初始化分析页面时出错:', err);
-            showToast('初始化页面失败: ' + (err as Error).message, 'error');
+            const message = '初始化页面失败: ' + (err as Error).message;
+            setLoadError(message);
+            showToast(message, 'error');
         }
     };
 
@@ -150,17 +324,27 @@ const SlidesAnalysis: React.FC = () => {
             
             if (event.data.type === 'ANALYSIS_DATA') {
                 debugLog('收到分析数据');
+                clearInitialDataTimeout();
                 const data: AnalysisData = event.data.data;
                 setAnalysisResult(data.result);
                 setPresentationId(data.presentationId);
+                setLoadError('');
             } else if (event.data.type === 'UPDATE_SUCCESS') {
                 debugLog('收到更新成功消息: ' + JSON.stringify(event.data));
-                showToast(`更新成功: 已更新 ${event.data.updatedCount || '0'} 个项目`, 'success');
+                clearApplyTimeout();
+                const updatedCount = Number(event.data.updatedCount) || 0;
+                const skippedCount = Array.isArray(event.data.errors) ? event.data.errors.length : 0;
+                const skippedSummary = skippedCount > 0 ? `，跳过 ${skippedCount} 项` : '';
+                showToast(`更新成功: 已写回 ${updatedCount} 个字段${skippedSummary}`, skippedCount > 0 ? 'warning' : 'success');
                 setIsApplying(false);
+                setSelectedFields({});
+                setLastApplyResult({ updatedCount, skippedCount });
             } else if (event.data.type === 'UPDATE_ERROR') {
+                clearApplyTimeout();
                 showToast('更新失败: ' + (event.data.errorMessage || '未知错误'), 'error');
                 debugLog('收到更新错误消息: ' + JSON.stringify(event.data));
                 setIsApplying(false);
+                setLastApplyResult(null);
             }
         } catch (err) {
             debugLog('处理消息时出错: ' + (err as Error).message);
@@ -199,12 +383,102 @@ const SlidesAnalysis: React.FC = () => {
         return Boolean(selectedFields[fieldKey(projectIndex, field)]);
     };
 
+    const buildHighConfidenceDefaults = (): Record<string, boolean> => {
+        const defaults: Record<string, boolean> = {};
+
+        if (!analysisResult) {
+            return defaults;
+        }
+
+        analysisResult.updateSuggestions.forEach((suggestion, projectIndex) => {
+            if (!shouldDefaultSelectSuggestion(suggestion)) {
+                return;
+            }
+
+            getAvailableUpdateFields(suggestion).forEach((field) => {
+                defaults[fieldKey(projectIndex, field)] = true;
+            });
+        });
+
+        return defaults;
+    };
+
+    const handleRestoreHighConfidenceDefaults = () => {
+        const defaults = buildHighConfidenceDefaults();
+        const restoredCount = Object.keys(defaults).length;
+        setSelectedFields(defaults);
+        showToast(`已恢复 ${restoredCount} 个高可信默认选择`, restoredCount > 0 ? 'info' : 'warning');
+    };
+
+    const handleClearSelectedFields = () => {
+        setSelectedFields({});
+        showToast('已清空选择', 'info');
+    };
+
+    const suggestionHasSelectedField = (suggestion: ProjectUpdateSuggestion, projectIndex: number): boolean => {
+        return getAvailableUpdateFields(suggestion).some((field) => isFieldSelected(projectIndex, field));
+    };
+
+    const suggestionMatchesReviewFilter = (suggestion: ProjectUpdateSuggestion, projectIndex: number): boolean => {
+        if (reviewFilter === 'selected') {
+            return suggestionHasSelectedField(suggestion, projectIndex);
+        }
+
+        if (reviewFilter === 'review') {
+            return isSuggestionReviewRequired(suggestion);
+        }
+
+        if (reviewFilter === 'blocked') {
+            return getUnavailableUpdateFields(suggestion).length > 0;
+        }
+
+        return true;
+    };
+
     const selectedUpdateCount = analysisResult
         ? analysisResult.updateSuggestions.reduce((count, suggestion, projectIndex) => {
             return count + getAvailableUpdateFields(suggestion)
                 .filter((field) => isFieldSelected(projectIndex, field)).length;
         }, 0)
         : 0;
+
+    const availableUpdateFieldCount = analysisResult
+        ? analysisResult.updateSuggestions.reduce((count, suggestion) => (
+            count + getAvailableUpdateFields(suggestion).length
+        ), 0)
+        : 0;
+
+    const defaultSelectedFieldCount = analysisResult
+        ? analysisResult.updateSuggestions.reduce((count, suggestion) => {
+            if (!shouldDefaultSelectSuggestion(suggestion)) {
+                return count;
+            }
+
+            return count + getAvailableUpdateFields(suggestion).length;
+        }, 0)
+        : 0;
+
+    const reviewRequiredCount = analysisResult
+        ? analysisResult.updateSuggestions.filter((suggestion) => (
+            isSuggestionReviewRequired(suggestion)
+        )).length
+        : 0;
+
+    const missingEvidenceCount = analysisResult
+        ? analysisResult.updateSuggestions.filter((suggestion) => !hasVisibleEvidence(suggestion)).length
+        : 0;
+
+    const unavailableUpdateFieldCount = analysisResult
+        ? analysisResult.updateSuggestions.reduce((count, suggestion) => (
+            count + getUnavailableUpdateFields(suggestion).length
+        ), 0)
+        : 0;
+
+    const filteredSuggestionEntries = analysisResult
+        ? analysisResult.updateSuggestions
+            .map((suggestion, index) => ({ suggestion, index }))
+            .filter(({ suggestion, index }) => suggestionMatchesReviewFilter(suggestion, index))
+        : [];
 
     const handleApplyUpdates = () => {
         try {
@@ -216,6 +490,7 @@ const SlidesAnalysis: React.FC = () => {
             }
             
             debugLog('选择了 ' + selectedUpdateCount + ' 个更新项');
+            setLastApplyResult(null);
 
             const selectedUpdates = analysisResult.updateSuggestions
                 .map((originalSuggestion, projectIndex) => {
@@ -266,14 +541,24 @@ const SlidesAnalysis: React.FC = () => {
             };
             
             if (window.opener) {
+                clearApplyTimeout();
                 window.opener.postMessage(message, getAllowedOpenerOrigin());
                 showToast('正在应用更新...', 'info');
                 setIsApplying(true);
+                applyTimeoutRef.current = window.setTimeout(() => {
+                    applyTimeoutRef.current = null;
+                    setIsApplying(false);
+                    setLastApplyResult(null);
+                    showToast('写回请求超时，请回到 Slides 页面确认是否已更新后再重试', 'warning');
+                    debugLog('写回请求超时，未收到父窗口结果消息');
+                }, APPLY_TIMEOUT_MS);
             } else {
                 showToast('无法与父窗口通信，请重新打开分析窗口', 'error');
                 debugLog('父窗口引用不存在');
             }
         } catch (err) {
+            clearApplyTimeout();
+            setIsApplying(false);
             showToast('更新操作失败: ' + (err as Error).message, 'error');
             debugLog('错误: ' + (err as Error).message);
             console.error(err);
@@ -348,6 +633,21 @@ const SlidesAnalysis: React.FC = () => {
             <div className="slides-analysis">
                 <div className="loading-container">
                     <p>正在加载分析结果...</p>
+                    {loadError ? (
+                        <div className="load-error-panel">
+                            <p>{loadError}</p>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={initAnalysisPage}
+                                disabled={!window.opener}
+                            >
+                                重新请求数据
+                            </button>
+                        </div>
+                    ) : (
+                        <p className="loading-hint">请保持原 Google Slides 页面打开。</p>
+                    )}
                 </div>
                 {toast && (
                     <Toast
@@ -363,17 +663,73 @@ const SlidesAnalysis: React.FC = () => {
 
     return (
         <div className="slides-analysis">
-            <div className="success-message" id="success-message" style={{ display: 'none' }}>
-                <h3>✅ 更新完成</h3>
-                <p id="success-details"></p>
-            </div>
+            {lastApplyResult && (
+                <div className={`success-message ${lastApplyResult.skippedCount > 0 ? 'success-message-warning' : ''}`}>
+                    <h3>更新完成</h3>
+                    <p>
+                        已写回 {lastApplyResult.updatedCount} 个字段
+                        {lastApplyResult.skippedCount > 0 ? `，跳过 ${lastApplyResult.skippedCount} 项` : ''}。
+                    </p>
+                </div>
+            )}
 
             <div className="summary-section">
                 <h3>📊 分析报告</h3>
                 <div id="summary-info">
                     <p>检测到 {analysisResult.summary.totalProjects} 个项目，{analysisResult.summary.projectsNeedingUpdate} 个需要更新</p>
                     {analysisResult.updateSuggestions.length > 0 && (
-                        <p className="selection-summary">已选择 {selectedUpdateCount} 项更新</p>
+                        <p className="selection-summary">已选择 {selectedUpdateCount} 个字段</p>
+                    )}
+                    {analysisResult.updateSuggestions.length > 0 && (
+                        <div className="review-strip">
+                            <span className="review-chip">可更新字段 {availableUpdateFieldCount}</span>
+                            <span className="review-chip review-chip-safe">高可信默认 {defaultSelectedFieldCount}</span>
+                            <span className="review-chip review-chip-attention">需复核项目 {reviewRequiredCount}</span>
+                            {missingEvidenceCount > 0 && (
+                                <span className="review-chip review-chip-attention">缺少来源 {missingEvidenceCount}</span>
+                            )}
+                            {unavailableUpdateFieldCount > 0 && (
+                                <span className="review-chip review-chip-blocked">无法写回字段 {unavailableUpdateFieldCount}</span>
+                            )}
+                        </div>
+                    )}
+                    {analysisResult.updateSuggestions.length > 0 && (
+                        <div className="review-controls" aria-label="审阅筛选和批量选择">
+                            <div className="review-filter-group" role="group" aria-label="审阅视图">
+                                {(Object.keys(REVIEW_FILTER_LABELS) as ReviewFilter[]).map((filter) => (
+                                    <button
+                                        key={filter}
+                                        id={`review-filter-${filter}`}
+                                        type="button"
+                                        className={`review-filter-button ${reviewFilter === filter ? 'review-filter-button-active' : ''}`}
+                                        aria-pressed={reviewFilter === filter}
+                                        onClick={() => setReviewFilter(filter)}
+                                    >
+                                        {REVIEW_FILTER_LABELS[filter]}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="bulk-actions">
+                                <button
+                                    id="restore-high-confidence-fields"
+                                    type="button"
+                                    className="btn-quiet"
+                                    onClick={handleRestoreHighConfidenceDefaults}
+                                    disabled={isApplying || defaultSelectedFieldCount === 0}
+                                >
+                                    恢复高可信默认
+                                </button>
+                                <button
+                                    id="clear-selected-fields"
+                                    type="button"
+                                    className="btn-quiet"
+                                    onClick={handleClearSelectedFields}
+                                    disabled={isApplying || selectedUpdateCount === 0}
+                                >
+                                    清空选择
+                                </button>
+                            </div>
+                        </div>
                     )}
                 </div>
             </div>
@@ -401,14 +757,23 @@ const SlidesAnalysis: React.FC = () => {
 
             <div className="suggestions-section">
                 <h3>💡 更新建议</h3>
+                {analysisResult.updateSuggestions && analysisResult.updateSuggestions.length > 0 && (
+                    <p className="filter-summary">
+                        当前视图 {filteredSuggestionEntries.length} / {analysisResult.updateSuggestions.length} 个建议
+                    </p>
+                )}
                 <div id="suggestions-container">
                     {analysisResult.updateSuggestions && analysisResult.updateSuggestions.length > 0 ? (
-                        analysisResult.updateSuggestions.map((suggestion, index) => {
-                            const hasStatusColumn = suggestion.columnIndices?.status !== undefined && suggestion.columnIndices.status !== -1;
-                            const hasOwnerColumn = suggestion.columnIndices?.owner !== undefined && suggestion.columnIndices.owner !== -1;
-                            const hasTrackColumn = suggestion.columnIndices?.track !== undefined && suggestion.columnIndices.track !== -1;
-                            const hasCommentsColumn = suggestion.columnIndices?.comments !== undefined && suggestion.columnIndices.comments !== -1;
+                        filteredSuggestionEntries.length > 0 ? filteredSuggestionEntries.map(({ suggestion, index }) => {
+                            const hasStatusColumn = hasWritableColumnIndex(suggestion.columnIndices?.status);
+                            const hasOwnerColumn = hasWritableColumnIndex(suggestion.columnIndices?.owner);
+                            const hasTrackColumn = hasWritableColumnIndex(suggestion.columnIndices?.track);
+                            const hasCommentsColumn = hasWritableColumnIndex(suggestion.columnIndices?.comments);
                             const availableFields = getAvailableUpdateFields(suggestion);
+                            const unavailableFields = getUnavailableUpdateFields(suggestion);
+                            const evidenceItems = getSuggestionEvidenceItems(suggestion);
+                            const needsReview = isSuggestionReviewRequired(suggestion);
+                            const isDefaultSelectable = shouldDefaultSelectSuggestion(suggestion);
                             const allAvailableSelected = availableFields.length > 0 &&
                                 availableFields.every((field) => isFieldSelected(index, field));
 
@@ -417,13 +782,37 @@ const SlidesAnalysis: React.FC = () => {
                                     <div style={{ marginBottom: '10px' }}>
                                         <div className="project-header">
                                             <span className="project-title">项目 {suggestion.projectId}: {suggestion.projectName}</span>
-                                            <span className={`confidence-badge ${suggestion.confidence >= HIGH_CONFIDENCE_THRESHOLD ? 'confidence-high' : 'confidence-review'}`}>
-                                                可信度 {Math.round((suggestion.confidence || 0) * 100)}%
+                                            <span className={`confidence-badge ${isDefaultSelectable ? 'confidence-high' : 'confidence-review'}`}>
+                                                {confidenceReviewText(suggestion)} · {Math.round((suggestion.confidence || 0) * 100)}%
                                             </span>
                                         </div>
+                                        {needsReview && (
+                                            <div className="project-review-note">
+                                                {(suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD
+                                                    ? '低可信建议未自动选中，来源或理由不足时保持不写回。'
+                                                    : '缺少可见来源或理由，需人工确认后手动勾选。'}
+                                            </div>
+                                        )}
+                                        <div className={`source-evidence-panel ${evidenceItems.length === 0 ? 'source-evidence-panel-empty' : ''}`}>
+                                            <div className="source-evidence-title">来源证据</div>
+                                            {evidenceItems.length > 0 ? (
+                                                <ul className="source-evidence-list">
+                                                    {evidenceItems.map((item, evidenceIndex) => (
+                                                        <li key={evidenceIndex}>{item}</li>
+                                                    ))}
+                                                </ul>
+                                            ) : (
+                                                <div className="source-evidence-empty">没有可见来源，建议保持未勾选直到人工确认。</div>
+                                            )}
+                                        </div>
+                                        {unavailableFields.length > 0 && (
+                                            <div className="project-blocked-note">
+                                                无法写回 {unavailableFields.join('、')}：未识别到可写表格列，请先在 Slides 表格中补齐对应列或手动更新。
+                                            </div>
+                                        )}
                                         
                                         {/* Jira信息显示区域 */}
-                                        {suggestion.sourceInfo.jiraIssues && suggestion.sourceInfo.jiraIssues.length > 0 && (
+                                        {suggestion.sourceInfo?.jiraIssues && suggestion.sourceInfo.jiraIssues.length > 0 && (
                                             <div className="jira-issues-container" style={{ 
                                                 marginTop: '8px', 
                                                 marginBottom: '10px', 
@@ -539,14 +928,21 @@ const SlidesAnalysis: React.FC = () => {
                                                     id={`select-all-${index}`} 
                                                     className="select-all-checkbox"
                                                     checked={allAvailableSelected}
+                                                    disabled={availableFields.length === 0}
                                                     onChange={(e) => handleSelectAll(index, e.target.checked)}
                                                 />
-                                                <label htmlFor={`select-all-${index}`}>全选</label>
+                                                <label
+                                                    htmlFor={`select-all-${index}`}
+                                                    className={availableFields.length === 0 ? 'disabled-label' : undefined}
+                                                >
+                                                    全选
+                                                </label>
+                                                <span className="available-fields-count">可更新 {availableFields.length} 个字段</span>
                                             </span>
                                         </div>
                                     </div>
                                     
-                                    {hasStatusColumn && suggestion.suggestedStatus && suggestion.suggestedStatus !== suggestion.currentStatus && (
+                                    {hasStatusColumn && hasMeaningfulSuggestedChange(suggestion.currentStatus, suggestion.suggestedStatus) && (
                                         <div className="update-item">
                                             <input 
                                                 type="checkbox" 
@@ -604,7 +1000,7 @@ const SlidesAnalysis: React.FC = () => {
                                         </div>
                                     )}
                                     
-                                    {hasOwnerColumn && suggestion.suggestedOwner && suggestion.suggestedOwner !== suggestion.currentOwner && (
+                                    {hasOwnerColumn && hasMeaningfulSuggestedChange(suggestion.currentOwner, suggestion.suggestedOwner) && (
                                         <div className="update-item">
                                             <input 
                                                 type="checkbox" 
@@ -634,7 +1030,7 @@ const SlidesAnalysis: React.FC = () => {
                                         </div>
                                     )}
                                     
-                                    {hasTrackColumn && suggestion.suggestedTrack && suggestion.suggestedTrack !== suggestion.currentTrack && (
+                                    {hasTrackColumn && hasMeaningfulSuggestedChange(suggestion.currentTrack, suggestion.suggestedTrack) && (
                                         <div className="update-item">
                                             <input 
                                                 type="checkbox" 
@@ -655,7 +1051,11 @@ const SlidesAnalysis: React.FC = () => {
                                     )}
                                 </div>
                             );
-                        })
+                        }) : (
+                            <div className="empty-filter-state">
+                                当前视图没有匹配的更新建议。
+                            </div>
+                        )
                     ) : (
                         <div className="center" style={{ padding: '20px', background: '#f9f9f9', borderRadius: '8px' }}>
                             <p>所有项目信息均已是最新，无需更新。</p>
@@ -673,7 +1073,7 @@ const SlidesAnalysis: React.FC = () => {
                             onClick={handleApplyUpdates}
                             disabled={isApplying || selectedUpdateCount === 0}
                         >
-                            {isApplying ? '正在更新...' : `应用 ${selectedUpdateCount} 项更新`}
+                            {isApplying ? '正在更新...' : `应用 ${selectedUpdateCount} 个字段到 Slides`}
                         </button>
                     )}
                 </div>
@@ -707,6 +1107,25 @@ const styles = `
         padding: 50px;
     }
 
+    .loading-hint {
+        color: #6b778c;
+        font-size: 13px;
+        margin-top: 8px;
+    }
+
+    .load-error-panel {
+        background: #fffbdd;
+        border: 1px solid #ffe380;
+        border-radius: 6px;
+        color: #5f4b00;
+        display: inline-block;
+        line-height: 1.5;
+        margin-top: 16px;
+        max-width: 520px;
+        padding: 14px 16px;
+        text-align: left;
+    }
+
     .success-message {
         background: #d4edda;
         border: 1px solid #c3e6cb;
@@ -714,6 +1133,12 @@ const styles = `
         padding: 15px;
         border-radius: 5px;
         margin-bottom: 20px;
+    }
+
+    .success-message-warning {
+        background: #fff3cd;
+        border-color: #ffeeba;
+        color: #856404;
     }
 
     .summary-section, .statistics-section, .findings-section, .suggestions-section {
@@ -752,6 +1177,106 @@ const styles = `
         margin-bottom: 0;
     }
 
+    .review-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+    }
+
+    .review-chip {
+        background: #eef2f7;
+        border: 1px solid #d9e2ec;
+        border-radius: 6px;
+        color: #334e68;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 8px;
+    }
+
+    .review-chip-safe {
+        background: #e3fcef;
+        border-color: #abf5d1;
+        color: #006644;
+    }
+
+    .review-chip-attention {
+        background: #fff0b3;
+        border-color: #ffe380;
+        color: #7a5d00;
+    }
+
+    .review-chip-blocked {
+        background: #ffebe6;
+        border-color: #ffbdad;
+        color: #bf2600;
+    }
+
+    .review-controls {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: space-between;
+        margin-top: 14px;
+    }
+
+    .review-filter-group,
+    .bulk-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .review-filter-button,
+    .btn-quiet {
+        background: #fff;
+        border: 1px solid #dfe1e6;
+        border-radius: 5px;
+        color: #253858;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        min-height: 32px;
+        padding: 6px 10px;
+    }
+
+    .review-filter-button-active {
+        background: #deebff;
+        border-color: #4c9aff;
+        color: #0747a6;
+    }
+
+    .review-filter-button:hover,
+    .btn-quiet:hover {
+        background: #f4f5f7;
+    }
+
+    .review-filter-button-active:hover {
+        background: #deebff;
+    }
+
+    .btn-quiet:disabled {
+        background: #f4f5f7;
+        color: #a5adba;
+        cursor: not-allowed;
+    }
+
+    .filter-summary {
+        color: #6b778c;
+        font-size: 13px;
+        margin: -8px 0 12px;
+    }
+
+    .empty-filter-state {
+        background: #f4f5f7;
+        border: 1px dashed #c1c7d0;
+        border-radius: 6px;
+        color: #42526e;
+        padding: 18px;
+        text-align: center;
+    }
+
     .confidence-badge {
         flex: 0 0 auto;
         border-radius: 6px;
@@ -768,6 +1293,67 @@ const styles = `
     .confidence-review {
         background: #fff0b3;
         color: #7a5d00;
+    }
+
+    .project-review-note {
+        background: #fffbdd;
+        border-left: 3px solid #ffab00;
+        color: #5f4b00;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 8px;
+        padding: 6px 8px;
+    }
+
+    .source-evidence-panel {
+        background: #f4f8ff;
+        border: 1px solid #deebff;
+        border-radius: 6px;
+        color: #253858;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 8px;
+        padding: 8px 10px;
+    }
+
+    .source-evidence-panel-empty {
+        background: #fffbdd;
+        border-color: #ffe380;
+        color: #5f4b00;
+    }
+
+    .source-evidence-title {
+        font-weight: 700;
+        margin-bottom: 4px;
+    }
+
+    .source-evidence-list {
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .source-evidence-empty {
+        color: inherit;
+    }
+
+    .project-blocked-note {
+        background: #ffebe6;
+        border-left: 3px solid #de350b;
+        color: #6b1f00;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 8px;
+        padding: 6px 8px;
+    }
+
+    .available-fields-count {
+        color: #6b778c;
+        margin-left: 6px;
+    }
+
+    .disabled-label {
+        color: #8993a4;
+        cursor: not-allowed;
     }
 
     .update-item {
@@ -810,6 +1396,23 @@ const styles = `
 
     .btn-primary:disabled {
         background-color: #6c757d;
+        cursor: not-allowed;
+    }
+
+    .btn-secondary {
+        background-color: #fff;
+        border: 1px solid #0052cc;
+        border-radius: 5px;
+        color: #0052cc;
+        cursor: pointer;
+        font-size: 14px;
+        margin-top: 8px;
+        padding: 8px 14px;
+    }
+
+    .btn-secondary:disabled {
+        border-color: #a5adba;
+        color: #8993a4;
         cursor: not-allowed;
     }
 

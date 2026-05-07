@@ -1,5 +1,9 @@
 import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types';
 import { createASREventEmitter } from './types';
+import {
+  normalizeMeetingTranscribeLanguage,
+  type MeetingTranscribeLanguage,
+} from '../../utils';
 
 declare global {
   interface Window {
@@ -45,12 +49,17 @@ interface SpeechRecognitionCtorLike {
   }) => Promise<unknown>;
 }
 
-function getPreferredSpeechLangs(): string[] {
-  const values = [
-    'zh-CN',
-    typeof navigator !== 'undefined' ? navigator.language : '',
-    'en-US',
-  ];
+function getPreferredSpeechLangs(language: MeetingTranscribeLanguage): string[] {
+  const values =
+    language === 'en-US'
+      ? ['en-US', 'en', 'zh-CN']
+      : language === 'zh-CN'
+        ? ['zh-CN', 'zh', 'en-US']
+        : [
+            'zh-CN',
+            typeof navigator !== 'undefined' ? navigator.language : '',
+            'en-US',
+          ];
   return Array.from(
     new Set(values.map((value) => String(value || '').trim()).filter(Boolean)),
   );
@@ -87,8 +96,16 @@ export class WebSpeechProvider implements ASRProvider {
   private emitter = createASREventEmitter();
   private recognition: SpeechRecognitionInstanceLike | undefined;
   private audioTrack: MediaStreamTrack | undefined;
+  private language: MeetingTranscribeLanguage;
   private lang = 'zh-CN';
   private stopped = false;
+
+  constructor(language: MeetingTranscribeLanguage | string = 'auto') {
+    this.language = normalizeMeetingTranscribeLanguage(language);
+    if (this.language === 'en-US') {
+      this.lang = 'en-US';
+    }
+  }
 
   async isAvailable(): Promise<{ ok: boolean; reason?: string }> {
     const SR = getSpeechRecognitionCtor();
@@ -101,7 +118,7 @@ export class WebSpeechProvider implements ASRProvider {
     if (typeof SR.available === 'function') {
       try {
         const availabilityResults: string[] = [];
-        for (const lang of getPreferredSpeechLangs()) {
+        for (const lang of getPreferredSpeechLangs(this.language)) {
           const result = await SR.available({
             langs: [lang],
             processLocally: true,

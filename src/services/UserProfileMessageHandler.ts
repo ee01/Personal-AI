@@ -1,4 +1,10 @@
 import { getMemoryServiceClient } from './MemoryServiceClient';
+import {
+    getIndependentUserConfig,
+    storeExplicitUserContextConfig,
+    storeIndependentUserConfig,
+} from './UserConfigStore';
+import { buildUserProfileViewModel } from './userProfileViewModel';
 
 /**
  * 用户画像相关消息处理器
@@ -27,6 +33,13 @@ export class UserProfileMessageHandler {
                 client.getOpinions({ limit: 50 })
             ])
             .then(([coreResult, profileItems, opinions]) => {
+                const viewModel = buildUserProfileViewModel({
+                    core: coreResult.content,
+                    items: profileItems.items,
+                    totalItems: profileItems.total,
+                    opinions: opinions.items,
+                    totalOpinions: opinions.total,
+                });
                 console.log('用户画像获取成功');
                 sendResponse({
                     success: true,
@@ -39,7 +52,8 @@ export class UserProfileMessageHandler {
                         analysis: {
                             opinions: opinions.items,
                             totalOpinions: opinions.total,
-                        }
+                        },
+                        viewModel,
                     }
                 });
             })
@@ -57,16 +71,30 @@ export class UserProfileMessageHandler {
         if (request.type === 'SET_EXPLICIT_IMPORTANCE') {
             console.log('处理显式重要性标记请求:', request);
             const { itemId, importance } = request;
+            const normalizedImportance = Number(importance);
+
+            if (!itemId || !Number.isFinite(normalizedImportance)) {
+                sendResponse({
+                    success: false,
+                    error: '重要性参数无效',
+                });
+                return true;
+            }
+
+            const clampedImportance = Math.max(0, Math.min(1, normalizedImportance));
 
             const client = getMemoryServiceClient();
             client.updateProfileItem(itemId, {
-                confidence: importance,
-                status: 'confirmed'
+                confidence: clampedImportance,
+                salienceScore: clampedImportance,
+                status: 'active'
             })
+            .then(() => client.confirmProfileItem(itemId))
             .then(result => {
                 console.log('重要性标记设置结果:', result);
                 sendResponse({
                     success: true,
+                    data: result,
                     message: '重要性标记设置成功'
                 });
             })
@@ -75,6 +103,70 @@ export class UserProfileMessageHandler {
                 sendResponse({
                     success: false,
                     error: error.message
+                });
+            });
+            return true;
+        }
+
+        if (request.type === 'CONFIRM_PROFILE_ITEM') {
+            console.log('处理画像条目确认请求:', request.itemId);
+            const { itemId } = request;
+
+            if (!itemId) {
+                sendResponse({
+                    success: false,
+                    error: '缺少画像条目ID',
+                });
+                return true;
+            }
+
+            const client = getMemoryServiceClient();
+            client.confirmProfileItem(itemId)
+            .then(result => {
+                sendResponse({
+                    success: true,
+                    data: result,
+                    message: '画像条目已确认'
+                });
+            })
+            .catch(error => {
+                console.error('画像条目确认失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '画像条目确认失败'
+                });
+            });
+            return true;
+        }
+
+        if (request.type === 'RETRACT_PROFILE_ITEM') {
+            console.log('处理画像条目排除请求:', request.itemId);
+            const { itemId } = request;
+
+            if (!itemId) {
+                sendResponse({
+                    success: false,
+                    error: '缺少画像条目ID',
+                });
+                return true;
+            }
+
+            const client = getMemoryServiceClient();
+            client.deleteProfileItem(itemId)
+            .then(result => {
+                sendResponse({
+                    success: true,
+                    data: result,
+                    message: '画像条目已排除'
+                });
+            })
+            .catch(error => {
+                console.error('画像条目排除失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '画像条目排除失败'
                 });
             });
             return true;
@@ -94,6 +186,12 @@ export class UserProfileMessageHandler {
             .then(([coreResult, profileItems, healthStatus, stats]) => {
                 console.log('用户画像导出数据准备完成');
 
+                const viewModel = buildUserProfileViewModel({
+                    core: coreResult.content,
+                    items: profileItems.items,
+                    totalItems: profileItems.total,
+                });
+
                 // 构建导出数据结构
                 const exportData = {
                     // 基本信息
@@ -109,6 +207,7 @@ export class UserProfileMessageHandler {
                         core: coreResult.content,
                         items: profileItems.items,
                         totalItems: profileItems.total,
+                        viewModel: viewModel.profile,
                     },
 
                     // 系统状态信息
@@ -135,6 +234,8 @@ export class UserProfileMessageHandler {
                     // 生成用户友好的总结
                     exportSummary: {
                         profileCompleteness: profileItems.total > 0 ? '完整' : '部分',
+                        totalInteractions: viewModel.profile.statistics.totalInteractions,
+                        averageDailyActivity: viewModel.profile.statistics.averageDailyActivity,
                         totalProfileItems: profileItems.total,
                         totalEntities: stats.entities.total,
                         dataQuality: healthStatus.database.connected ? '良好' : '离线模式'
@@ -247,13 +348,7 @@ export class UserProfileMessageHandler {
             (async () => {
                 try {
                     const client = getMemoryServiceClient();
-                    // Store the context config as a profile item
-                    await client.createProfileItem({
-                        itemType: 'user_context_config',
-                        itemKey: 'context_config',
-                        itemValue: JSON.stringify(userContextConfig),
-                        confidence: 1.0
-                    });
+                    await storeExplicitUserContextConfig(userContextConfig, client);
 
                     console.log('用户上下文配置融合成功');
 
@@ -298,6 +393,13 @@ export class UserProfileMessageHandler {
                         client.getProfileItems({ limit: 100 }),
                         client.getOpinions({ limit: 50 })
                     ]);
+                    const viewModel = buildUserProfileViewModel({
+                        core: coreResult.content,
+                        items: profileItems.items,
+                        totalItems: profileItems.total,
+                        opinions: opinions.items,
+                        totalOpinions: opinions.total,
+                    });
 
                     console.log('融合用户画像获取成功');
                     sendResponse({
@@ -314,7 +416,8 @@ export class UserProfileMessageHandler {
                             },
                             fusedInterests: profileItems.items.filter(
                                 (item: any) => item.itemType === 'interest' || item.itemType === 'preference'
-                            )
+                            ),
+                            viewModel,
                         },
                         message: '融合用户画像获取成功'
                     });
@@ -383,26 +486,23 @@ export class UserProfileMessageHandler {
             (async () => {
                 try {
                     const client = getMemoryServiceClient();
-                    // 添加时间戳和版本信息
                     const configWithMetadata = {
                         ...config,
                         lastUpdated: Date.now(),
                         version: config.version || '1.0'
                     };
 
-                    // Store as a profile item with a well-known key
-                    await client.createProfileItem({
-                        itemType: 'independent_user_config',
-                        itemKey: 'user_config',
-                        itemValue: JSON.stringify(configWithMetadata),
-                        confidence: 1.0
-                    });
+                    const stored = await storeIndependentUserConfig(
+                        configWithMetadata,
+                        client,
+                    );
 
                     console.log('独立用户配置存储成功');
                     sendResponse({
                         success: true,
                         message: '独立用户配置存储成功',
-                        data: configWithMetadata
+                        data: stored.config,
+                        operation: stored.operation,
                     });
                 } catch (error) {
                     console.error('独立用户配置存储失败:', error);
@@ -423,21 +523,9 @@ export class UserProfileMessageHandler {
             (async () => {
                 try {
                     const client = getMemoryServiceClient();
-                    const result = await client.getProfileItems({
-                        type: 'independent_user_config',
-                        key: 'user_config',
-                        limit: 1
-                    });
+                    const config = await getIndependentUserConfig(client);
 
-                    if (result.items.length > 0) {
-                        const configItem = result.items[0];
-                        let config: any = null;
-                        try {
-                            config = JSON.parse(configItem.itemValue);
-                        } catch {
-                            config = configItem.itemValue;
-                        }
-
+                    if (config) {
                         console.log('独立用户配置获取成功');
                         sendResponse({
                             success: true,

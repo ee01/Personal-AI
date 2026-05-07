@@ -2,10 +2,13 @@ import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types';
 import { createASREventEmitter } from './types';
 import { createPcmStreamer } from './pcmStreamer';
 import { sanitizeASRTranscriptText } from './transcriptFilter';
+import {
+  normalizeMeetingTranscribeLanguage,
+  type MeetingTranscribeLanguage,
+} from '../../utils';
 
 const MAX_CHUNK_BYTES = 900 * 1024;
 const DESKTOP_WHISPER_BASE_URL = 'http://127.0.0.1:46321';
-const DESKTOP_WHISPER_LANGUAGE = 'auto';
 const IDLE_FLUSH_DELAY_MS = 900;
 
 function hasLikelySpeechPcm16(buffer: ArrayBuffer): boolean {
@@ -80,6 +83,7 @@ interface BackgroundWhisperRequest {
 export class DesktopWhisperProvider implements ASRProvider {
   readonly tier: MeetingPilotASRTier = 'desktop_whisper';
 
+  private language: MeetingTranscribeLanguage;
   private emitter = createASREventEmitter();
   private sessionId: string | undefined;
   private sessionStartedAt = 0;
@@ -88,6 +92,10 @@ export class DesktopWhisperProvider implements ASRProvider {
   private unsubPcm: (() => void) | undefined;
   private directBridgeToken: string | undefined;
   private idleFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(language: MeetingTranscribeLanguage | string = 'auto') {
+    this.language = normalizeMeetingTranscribeLanguage(language);
+  }
 
   async isAvailable(): Promise<{ ok: boolean; reason?: string }> {
     if (
@@ -153,7 +161,7 @@ export class DesktopWhisperProvider implements ASRProvider {
       const result = await this._sendToBackground<WhisperSessionStartResponse>({
         method: 'POST',
         path: '/whisper/session/start',
-        body: { sessionId: this.sessionId, language: DESKTOP_WHISPER_LANGUAGE },
+        body: { sessionId: this.sessionId, language: this.language },
       });
       if (result?.ok === false) {
         throw new Error(result.error || 'session_start_failed');

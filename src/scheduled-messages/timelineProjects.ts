@@ -57,12 +57,50 @@ export const TIMELINE_PROJECT_OPTIONS: TimelineProjectOption[] = TIMELINE_PROJEC
   label: project.label,
 }));
 
+export function buildJiraUrlEncodedSmartValue(expression: string): string {
+  return `{{${expression}.urlEncode.replaceAll("\\+","%20")}}`;
+}
+
+export function buildJiraJsonStringSmartValue(expression: string): string {
+  return `{{${expression}.asJsonString}}`;
+}
+
+function buildJsonContentTypeHeader(id: string) {
+  return {
+    id,
+    name: 'Content-Type',
+    value: {
+      keyOrValue: 'application/json',
+      secret: false,
+    },
+  };
+}
+
 export function getTimelineProjectOption(project?: string): TimelineProjectOption {
   const matchedProject = TIMELINE_PROJECTS.find(item => item.value === project) || TIMELINE_PROJECTS[0];
   return {
     value: matchedProject.value,
     label: matchedProject.label,
   };
+}
+
+export function resolveTimelineProjectForSave(input: {
+  isTimelineTrigger: boolean;
+  pushMethod?: string;
+  hasProjectVariables: boolean;
+  timelineProject?: string;
+}): TimelineProject | undefined {
+  const matchedProject = TIMELINE_PROJECTS.find(item => item.value === input.timelineProject);
+
+  if (input.isTimelineTrigger) {
+    return matchedProject?.value;
+  }
+
+  if (input.pushMethod === 'AsMe' || !input.hasProjectVariables) {
+    return undefined;
+  }
+
+  return matchedProject?.value || DEFAULT_TIMELINE_PROJECT;
 }
 
 function buildReleaseInfoWebhookAction(project: typeof TIMELINE_PROJECTS[number]) {
@@ -126,12 +164,15 @@ function buildCacheReleaseInfoWebhookAction(project: typeof TIMELINE_PROJECTS[nu
     schemaVersion: 2,
     type: 'jira.issue.outgoing.webhook',
     value: {
-      url: `{{WEB_APP_URL}}?action=cacheReleaseInfo&project=${project.paramKey}&releaseInfo={{${project.variableName}.urlEncode}}`,
-      headers: [],
+      url: '{{WEB_APP_URL}}?action=cacheReleaseInfo',
+      headers: [
+        buildJsonContentTypeHeader(`_header_cache_content_type_${project.paramKey}`),
+      ],
       sendIssue: false,
-      contentType: 'empty',
-      method: 'GET',
-      responseEnabled: false,
+      contentType: 'custom',
+      customBody: `{\n  "project": "${project.paramKey}",\n  "releaseInfo": ${buildJiraJsonStringSmartValue(project.variableName)}\n}`,
+      method: 'POST',
+      responseEnabled: true,
       usedSecretsKeys: [],
     },
     children: [],

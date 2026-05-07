@@ -3,6 +3,16 @@
  * 在所有网页中运行，自动分析相关内容与相关记忆提示
  */
 
+import {
+    formatRecallTimestamp,
+    hasSensitiveUrlSignal,
+    isLowValueContextHost,
+    isSensitiveControlDescriptor,
+    normalizeContextPageUrl,
+    sanitizeContextExternalUrl,
+    sanitizeExploreRoute,
+} from './web-intelligence/contextRecallGuards';
+
 interface SimplePageContent {
     title: string;
     url: string;
@@ -30,6 +40,7 @@ interface ContextMatchPayload {
     contextKey: string;
     stabilityKey: string;
     title: string;
+    url: string;
     keywords?: string[];
     snippet?: string;
 }
@@ -55,6 +66,25 @@ function escapeHtml(text: string): string {
     return div.innerHTML;
 }
 
+function escapeHtmlAttribute(text: string): string {
+    return text.replace(/[&<>"']/g, (char) => {
+        switch (char) {
+            case '&':
+                return '&amp;';
+            case '<':
+                return '&lt;';
+            case '>':
+                return '&gt;';
+            case '"':
+                return '&quot;';
+            case '\'':
+                return '&#39;';
+            default:
+                return char;
+        }
+    });
+}
+
 function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
 }
@@ -68,21 +98,53 @@ function isMeetingPilotPage(): boolean {
 
 const contextMatchCache = new Map<string, { match: ContextRecallMatch | null; ts: number }>();
 const CONTEXT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const CONTEXT_MATCH_CACHE_MAX_ENTRIES = 80;
 const DISMISSED_CONTEXT_TTL_MS = 30 * 60 * 1000;
 const URL_WATCH_INTERVAL_MS = 500;
 const GENERIC_CONTEXT_STABLE_MS = 250;
 const RINGCENTRAL_CONTEXT_STABLE_MS = 700;
+const SITE_CONTEXT_MUTE_TTL_MS = 24 * 60 * 60 * 1000;
+const SITE_CONTEXT_MUTE_STORAGE_KEY = 'pai-context-muted-sites-v1';
+const CONTEXT_UI_EXCLUDE_SELECTOR = [
+    'script',
+    'style',
+    'noscript',
+    'nav',
+    'header',
+    'footer',
+    'iframe',
+    '.sidebar',
+    '.ads',
+    '.pai-context-bubble',
+    '.pai-context-card',
+    '.pai-context-toast',
+    '#pai-context-bubble-styles',
+].join(', ');
+
+function pruneContextMatchCache(now = Date.now()): void {
+    for (const [key, entry] of contextMatchCache.entries()) {
+        if (now - entry.ts >= CONTEXT_MATCH_CACHE_TTL_MS) {
+            contextMatchCache.delete(key);
+        }
+    }
+
+    if (contextMatchCache.size <= CONTEXT_MATCH_CACHE_MAX_ENTRIES) {
+        return;
+    }
+
+    const overflow = contextMatchCache.size - CONTEXT_MATCH_CACHE_MAX_ENTRIES;
+    const oldestKeys = Array.from(contextMatchCache.entries())
+        .sort((a, b) => a[1].ts - b[1].ts)
+        .slice(0, overflow)
+        .map(([key]) => key);
+    oldestKeys.forEach((key) => contextMatchCache.delete(key));
+}
 
 class WebIntelligenceContentScript {
     private isAnalyzing = false;
     private lastAnalysisTime = 0;
     private analysisCount = 0;
     private readonly MIN_ANALYSIS_INTERVAL = 5000;
-    private readonly BLOCKED_DOMAINS = [
-        'google.com', 'facebook.com', 'twitter.com', 'youtube.com',
-        'amazon.com', 'netflix.com', 'spotify.com'
-    ];
-
     private lastSeenUrl = window.location.href;
     private urlWatcherId: number | null = null;
     private contextMatchTimer: number | null = null;
@@ -93,14 +155,24 @@ class WebIntelligenceContentScript {
     private activeBubbleContextKey: string | null = null;
     private bubbleElement: HTMLDivElement | null = null;
     private cardElement: HTMLDivElement | null = null;
+    private toastElement: HTMLDivElement | null = null;
+    private toastTimer: number | null = null;
     private outsideClickListener: ((event: MouseEvent) => void) | null = null;
     private dismissedContextKeys = new Map<string, number>();
+    private mutedSiteHosts = new Map<string, number>();
+    private siteMutesLoaded = false;
+    private siteMutesLoadPromise: Promise<void> | null = null;
 
     constructor() {
         this.initialize();
     }
 
     private initialize(): void {
+        if (this.isPrivateBrowsingContext()) {
+            console.log('🚫 智能网页分析: 隐身窗口中不启用网页记忆探测');
+            return;
+        }
+
         if (isMeetingPilotPage()) {
             console.log('🚫 智能网页分析: RingCentral meeting 页面由 Meeting Pilot 接管');
             return;
@@ -114,6 +186,7 @@ class WebIntelligenceContentScript {
         console.log('🧠 智能网页分析已启动:', window.location.href);
 
         this.setupEventListeners();
+        void this.loadSiteMutes().then(() => this.scheduleContextMatch(200));
 
         this.scheduleAnalysis(2000);
         this.scheduleContextMatch(2000);
@@ -127,7 +200,7 @@ class WebIntelligenceContentScript {
             return false;
         }
 
-        return !this.BLOCKED_DOMAINS.some(blocked => domain.includes(blocked));
+        return !isLowValueContextHost(domain);
     }
 
     private setupEventListeners(): void {
@@ -143,6 +216,10 @@ class WebIntelligenceContentScript {
 
         if (document.body) {
             const observer = new MutationObserver((mutations) => {
+                if (this.mutationMayAffectSensitiveContext(mutations)) {
+                    this.handleSensitiveContextMutation();
+                }
+
                 const hasSignificantChanges = this.hasSignificantAnalysisChanges(mutations);
                 if (hasSignificantChanges) {
                     this.scheduleAnalysis(1000);
@@ -155,7 +232,21 @@ class WebIntelligenceContentScript {
 
             observer.observe(document.body, {
                 childList: true,
-                subtree: true
+                subtree: true,
+                attributes: true,
+                attributeFilter: [
+                    'type',
+                    'autocomplete',
+                    'name',
+                    'id',
+                    'aria-label',
+                    'placeholder',
+                    'inputmode',
+                    'contenteditable',
+                    'class',
+                    'style',
+                    'hidden',
+                ],
             });
         }
 
@@ -288,8 +379,9 @@ class WebIntelligenceContentScript {
         return (
             node.classList.contains('pai-context-bubble') ||
             node.classList.contains('pai-context-card') ||
+            node.classList.contains('pai-context-toast') ||
             node.id === 'pai-context-bubble-styles' ||
-            !!node.closest('.pai-context-bubble, .pai-context-card')
+            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-toast')
         );
     }
 
@@ -321,6 +413,49 @@ class WebIntelligenceContentScript {
         this.pendingContextKey = null;
     }
 
+    private invalidatePendingContextRequest(): void {
+        this.pendingContextRequestId++;
+        this.pendingContextKey = null;
+    }
+
+    private mutationMayAffectSensitiveContext(mutations: MutationRecord[]): boolean {
+        return mutations.some((mutation) => {
+            if (mutation.type === 'attributes') {
+                const target = mutation.target instanceof HTMLElement ? mutation.target : null;
+                return !!target && !this.isOwnedContextUiNode(target) && this.elementMayAffectSensitiveContext(target);
+            }
+
+            if (mutation.type !== 'childList') {
+                return false;
+            }
+
+            const nodes = [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)];
+            return nodes.some((node) => {
+                if (!(node instanceof HTMLElement)) return false;
+                if (this.isOwnedContextUiNode(node)) return false;
+                return this.elementMayAffectSensitiveContext(node);
+            });
+        });
+    }
+
+    private elementMayAffectSensitiveContext(element: HTMLElement): boolean {
+        return (
+            element.matches('input, textarea, [contenteditable="true"], [contenteditable]') ||
+            !!element.querySelector?.('input, textarea, [contenteditable="true"], [contenteditable]')
+        );
+    }
+
+    private handleSensitiveContextMutation(): void {
+        if (this.isSensitiveContextPage()) {
+            this.invalidatePendingContextRequest();
+            this.resetContextStability();
+            this.clearContextBubble();
+            return;
+        }
+
+        this.scheduleContextMatch(400);
+    }
+
     private getContextChangeDelayMs(): number {
         return this.isRingCentralMessagePage() ? 800 : 1200;
     }
@@ -331,6 +466,10 @@ class WebIntelligenceContentScript {
 
     private async performAnalysis(): Promise<SimpleAnalysisResult | null> {
         if (this.isAnalyzing) return null;
+        if (this.isSensitiveContextPage()) {
+            console.log('🔒 当前页面处于敏感场景，跳过网页智能分析');
+            return null;
+        }
 
         this.isAnalyzing = true;
         this.lastAnalysisTime = Date.now();
@@ -452,8 +591,15 @@ class WebIntelligenceContentScript {
 
     private getTextContent(element: Element): string {
         const clone = element.cloneNode(true) as Element;
-        const unwanted = clone.querySelectorAll('script, style, nav, header, footer, .sidebar, .ads');
+        const unwanted = clone.querySelectorAll(CONTEXT_UI_EXCLUDE_SELECTOR);
         unwanted.forEach(el => el.remove());
+        return normalizeText(clone.textContent);
+    }
+
+    private getContextTextContent(element: Element | null | undefined): string {
+        if (!element) return '';
+        const clone = element.cloneNode(true) as Element;
+        clone.querySelectorAll(CONTEXT_UI_EXCLUDE_SELECTOR).forEach(el => el.remove());
         return normalizeText(clone.textContent);
     }
 
@@ -598,6 +744,21 @@ class WebIntelligenceContentScript {
     }
 
     private tryContextMatch(): void {
+        if (this.isSensitiveContextPage()) {
+            this.clearContextBubble();
+            return;
+        }
+
+        if (!this.siteMutesLoaded) {
+            void this.loadSiteMutes().then(() => {
+                this.scheduleContextMatch(0);
+            });
+            return;
+        } else if (this.isCurrentSiteMuted()) {
+            this.clearContextBubble();
+            return;
+        }
+
         const payload = this.buildContextMatchPayload();
         if (!payload) {
             this.clearContextBubble();
@@ -605,6 +766,7 @@ class WebIntelligenceContentScript {
         }
 
         const now = Date.now();
+        pruneContextMatchCache(now);
         if (payload.stabilityKey !== this.observedContextStabilityKey) {
             this.observedContextStabilityKey = payload.stabilityKey;
             this.observedContextSince = now;
@@ -658,7 +820,7 @@ class WebIntelligenceContentScript {
                 surface,
                 contextType,
                 title: payload.title,
-                url: window.location.href,
+                url: payload.url,
                 primaryText: payload.snippet,
                 secondaryTexts: payload.keywords,
                 limit: 1,
@@ -680,8 +842,18 @@ class WebIntelligenceContentScript {
                 return;
             }
 
+            if (
+                this.isSensitiveContextPage() ||
+                this.isCurrentSiteMuted() ||
+                this.isContextDismissed(payload.contextKey)
+            ) {
+                this.clearContextBubble();
+                return;
+            }
+
             const match = (response?.topMatch ?? null) as ContextRecallMatch | null;
             contextMatchCache.set(payload.contextKey, { match, ts: Date.now() });
+            pruneContextMatchCache();
 
             if (match) {
                 this.showContextBubble(match, payload.contextKey, true);
@@ -700,10 +872,15 @@ class WebIntelligenceContentScript {
     }
 
     private buildGenericContextPayload(): ContextMatchPayload | null {
+        const contextUrl = normalizeContextPageUrl(window.location.href);
+        if (!contextUrl) {
+            return null;
+        }
+
         const title = normalizeText(document.title);
         const metaKeywords = document.querySelector('meta[name="keywords"]')?.getAttribute('content');
         const mainEl = document.querySelector('main, article, [role="main"]');
-        const snippet = normalizeText((mainEl || document.body)?.textContent).slice(0, 500);
+        const snippet = this.getContextTextContent(mainEl || document.body).slice(0, 500);
         if (!title && !snippet) {
             return null;
         }
@@ -714,12 +891,13 @@ class WebIntelligenceContentScript {
             snippet
         ]);
         const snippetToken = normalizeText(snippet).slice(0, 160);
-        const contextKey = `page:${window.location.href}|${title}|${snippetToken}`;
+        const contextKey = `page:${contextUrl}|${title}|${snippetToken}`;
 
         return {
             contextKey,
             stabilityKey: contextKey,
-            title: title || window.location.href,
+            title: title || contextUrl,
+            url: contextUrl,
             keywords,
             snippet
         };
@@ -733,6 +911,11 @@ class WebIntelligenceContentScript {
     }
 
     private buildRingCentralContextPayload(): ContextMatchPayload | null {
+        const contextUrl = normalizeContextPageUrl(window.location.href);
+        if (!contextUrl) {
+            return null;
+        }
+
         const conversationId = this.getRingCentralConversationId();
         const title = this.getRingCentralConversationTitle();
         const stream = document.querySelector<HTMLElement>('#message-chat-stream-wrapper');
@@ -760,6 +943,7 @@ class WebIntelligenceContentScript {
             contextKey,
             stabilityKey,
             title,
+            url: contextUrl,
             keywords: this.collectKeywords([title, selectedTabText, snippet]),
             snippet
         };
@@ -816,6 +1000,140 @@ class WebIntelligenceContentScript {
         return Math.abs(hash).toString(36);
     }
 
+    private isSensitiveContextPage(): boolean {
+        if (this.isPrivateBrowsingContext()) {
+            return true;
+        }
+
+        if (hasSensitiveUrlSignal(window.location.href)) {
+            return true;
+        }
+
+        return this.hasVisibleSensitiveInput();
+    }
+
+    private isPrivateBrowsingContext(): boolean {
+        return !!chrome.extension?.inIncognitoContext;
+    }
+
+    private hasVisibleSensitiveInput(): boolean {
+        const controls = Array.from(document.querySelectorAll<HTMLElement>('input, textarea, [contenteditable="true"]'));
+        return controls.some((control) => {
+            if (!this.isVisibleElement(control)) {
+                return false;
+            }
+
+            return isSensitiveControlDescriptor({
+                type: control.getAttribute('type'),
+                autocomplete: control.getAttribute('autocomplete'),
+                name: control.getAttribute('name'),
+                id: control.id,
+                ariaLabel: control.getAttribute('aria-label'),
+                placeholder: control.getAttribute('placeholder'),
+                inputMode: control.getAttribute('inputmode'),
+            });
+        });
+    }
+
+    private isVisibleElement(element: HTMLElement): boolean {
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+            return false;
+        }
+
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    }
+
+    private loadSiteMutes(): Promise<void> {
+        if (this.siteMutesLoaded) {
+            return Promise.resolve();
+        }
+        if (this.siteMutesLoadPromise) {
+            return this.siteMutesLoadPromise;
+        }
+
+        this.siteMutesLoadPromise = new Promise((resolve) => {
+            try {
+                let settled = false;
+                const finish = (result?: Record<string, any>): void => {
+                    if (settled) return;
+                    settled = true;
+                    const stored = result?.[SITE_CONTEXT_MUTE_STORAGE_KEY];
+                    if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+                        for (const [host, mutedAt] of Object.entries(stored)) {
+                            if (typeof mutedAt === 'number') {
+                                this.mutedSiteHosts.set(host, mutedAt);
+                            }
+                        }
+                    }
+                    this.siteMutesLoaded = true;
+                    this.pruneMutedSiteHosts();
+                    resolve();
+                };
+
+                const maybePromise = chrome.storage.local.get(
+                    SITE_CONTEXT_MUTE_STORAGE_KEY,
+                    finish,
+                ) as unknown as Promise<Record<string, any>> | undefined;
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    maybePromise.then(finish).catch(() => finish());
+                }
+            } catch (_error) {
+                this.siteMutesLoaded = true;
+                resolve();
+            }
+        });
+
+        return this.siteMutesLoadPromise;
+    }
+
+    private saveSiteMutes(): void {
+        const payload: Record<string, number> = {};
+        for (const [host, mutedAt] of this.mutedSiteHosts.entries()) {
+            payload[host] = mutedAt;
+        }
+
+        try {
+            chrome.storage.local.set({ [SITE_CONTEXT_MUTE_STORAGE_KEY]: payload });
+        } catch (_error) {
+            // Storage is best-effort; in-memory mute still applies until reload.
+        }
+    }
+
+    private getCurrentSiteMuteHost(): string {
+        return window.location.hostname.toLowerCase();
+    }
+
+    private isCurrentSiteMuted(): boolean {
+        this.pruneMutedSiteHosts();
+        const host = this.getCurrentSiteMuteHost();
+        const mutedAt = this.mutedSiteHosts.get(host);
+        return mutedAt !== undefined && Date.now() - mutedAt < SITE_CONTEXT_MUTE_TTL_MS;
+    }
+
+    private muteCurrentSite(): void {
+        this.mutedSiteHosts.set(this.getCurrentSiteMuteHost(), Date.now());
+        this.pruneMutedSiteHosts();
+        this.saveSiteMutes();
+        this.clearContextBubble();
+        this.showContextToast('已暂停此网站记忆提示 24 小时');
+    }
+
+    private pruneMutedSiteHosts(): void {
+        const now = Date.now();
+        let changed = false;
+        for (const [host, mutedAt] of this.mutedSiteHosts.entries()) {
+            if (now - mutedAt >= SITE_CONTEXT_MUTE_TTL_MS) {
+                this.mutedSiteHosts.delete(host);
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.saveSiteMutes();
+        }
+    }
+
     private isContextDismissed(contextKey: string): boolean {
         this.pruneDismissedContextKeys();
         const dismissedAt = this.dismissedContextKeys.get(contextKey);
@@ -826,6 +1144,7 @@ class WebIntelligenceContentScript {
         this.dismissedContextKeys.set(contextKey, Date.now());
         this.pruneDismissedContextKeys();
         this.clearContextBubble();
+        this.showContextToast('已隐藏此条记忆提示 30 分钟');
     }
 
     private pruneDismissedContextKeys(): void {
@@ -847,8 +1166,8 @@ class WebIntelligenceContentScript {
         style.textContent = `
             .pai-context-bubble {
                 position: fixed;
-                bottom: 24px;
-                right: 24px;
+                bottom: max(16px, env(safe-area-inset-bottom));
+                right: max(16px, env(safe-area-inset-right));
                 width: 44px;
                 height: 44px;
                 border-radius: 999px;
@@ -889,12 +1208,13 @@ class WebIntelligenceContentScript {
 
             .pai-context-card {
                 position: fixed;
-                bottom: 76px;
-                right: 24px;
-                width: 320px;
+                bottom: calc(max(16px, env(safe-area-inset-bottom)) + 52px);
+                right: max(16px, env(safe-area-inset-right));
+                width: min(320px, calc(100vw - 32px));
                 max-height: 280px;
+                box-sizing: border-box;
                 background: rgba(255, 255, 255, 0.98);
-                border-radius: 12px;
+                border-radius: 8px;
                 box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
                 padding: 16px;
                 z-index: 2147483646;
@@ -905,6 +1225,52 @@ class WebIntelligenceContentScript {
                 overflow-y: auto;
                 line-height: 1.5;
                 backdrop-filter: blur(12px);
+            }
+
+            .pai-context-card a,
+            .pai-context-card button {
+                font: inherit;
+            }
+
+            .pai-context-card a:focus-visible,
+            .pai-context-card button:focus-visible,
+            .pai-context-bubble:focus-visible {
+                outline: 2px solid #2563eb;
+                outline-offset: 2px;
+            }
+
+            .pai-context-action-button {
+                border: 1px solid #cbd5e1;
+                background: #fff;
+                color: #334155;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 11px;
+                line-height: 1;
+                padding: 6px 8px;
+            }
+
+            .pai-context-action-button:hover {
+                background: #f8fafc;
+                border-color: #94a3b8;
+            }
+
+            .pai-context-toast {
+                position: fixed;
+                bottom: max(16px, env(safe-area-inset-bottom));
+                right: max(16px, env(safe-area-inset-right));
+                max-width: min(280px, calc(100vw - 32px));
+                box-sizing: border-box;
+                border-radius: 8px;
+                background: rgba(15, 23, 42, 0.94);
+                color: #fff;
+                padding: 10px 12px;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 12px;
+                line-height: 1.45;
+                box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+                z-index: 2147483646;
+                animation: pai-context-toast-enter 0.18s ease-out;
             }
 
             @keyframes pai-context-bubble-enter {
@@ -935,9 +1301,65 @@ class WebIntelligenceContentScript {
                     border-color: rgba(102, 126, 234, 0);
                 }
             }
+
+            @keyframes pai-context-toast-enter {
+                from {
+                    opacity: 0;
+                    transform: translateY(6px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                .pai-context-bubble,
+                .pai-context-bubble::after,
+                .pai-context-bubble--fresh::after,
+                .pai-context-bubble--fresh img,
+                .pai-context-toast {
+                    animation: none !important;
+                    transition: none !important;
+                }
+
+                .pai-context-bubble:hover {
+                    transform: none !important;
+                }
+            }
         `;
 
         document.head.appendChild(style);
+    }
+
+    private clearContextToast(): void {
+        if (this.toastTimer !== null) {
+            window.clearTimeout(this.toastTimer);
+            this.toastTimer = null;
+        }
+
+        this.toastElement?.remove();
+        this.toastElement = null;
+    }
+
+    private showContextToast(message: string): void {
+        this.clearContextToast();
+        this.ensureContextBubbleStyles();
+
+        if (!document.body) {
+            return;
+        }
+
+        const toast = document.createElement('div');
+        toast.className = 'pai-context-toast';
+        toast.setAttribute('role', 'status');
+        toast.textContent = message;
+
+        document.body.appendChild(toast);
+        this.toastElement = toast;
+        this.toastTimer = window.setTimeout(() => {
+            this.clearContextToast();
+        }, 2400);
     }
 
     private clearContextBubble(): void {
@@ -970,56 +1392,88 @@ class WebIntelligenceContentScript {
         if (animate) {
             bubble.classList.add('pai-context-bubble--fresh');
         }
-        bubble.title = 'Related memory found';
+        bubble.title = '发现相关记忆';
 
         const iconImg = document.createElement('img');
         iconImg.src = chrome.runtime.getURL('icons/icon48.png');
-        iconImg.alt = 'Related memory';
+        iconImg.alt = '相关记忆';
         iconImg.style.cssText = 'width: 28px; height: 28px; object-fit: contain;';
         bubble.appendChild(iconImg);
 
         const card = document.createElement('div');
         card.className = 'pai-context-card';
+        card.id = `pai-context-card-${Math.random().toString(36).slice(2)}`;
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-label', '相关记忆详情');
+        card.setAttribute('aria-hidden', 'true');
 
-        const sourceLabel = match.sourceLabel || match.title || 'Memory';
+        const sourceLabel = match.sourceLabel || match.sourceTitle || '记忆来源';
         const titleText = match.title || sourceLabel;
-        const exploreUrl = match.exploreLink
-            ? chrome.runtime.getURL(`memory-exploring.html${match.exploreLink}`)
+        const safeExploreRoute = sanitizeExploreRoute(match.exploreLink);
+        const exploreUrl = safeExploreRoute
+            ? chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`)
             : '';
+        const sourceMeta = [
+            sourceLabel,
+            formatRecallTimestamp(match.timestamp),
+            match.whyMatched
+        ].filter(Boolean).join(' · ');
 
         const linksHtml = (match.links || [])
-            .map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener" style="color:#5b5bd6;text-decoration:none;font-size:11px;margin-right:8px;">${escapeHtml(link.label)}</a>`)
+            .map((link) => ({
+                label: link.label,
+                url: sanitizeContextExternalUrl(link.url, window.location.href),
+            }))
+            .filter((link): link is { label: string; url: string } => !!link.url)
+            .map((link) => `<a href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:11px;margin-right:8px;">${escapeHtml(link.label)}</a>`)
             .join('');
 
         card.innerHTML = `
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                <span style="font-weight:600;color:#5b5bd6;">🧠 ${escapeHtml(titleText)}</span>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
+                <div style="min-width:0;">
+                    <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:2px;">相关记忆</div>
+                    <div style="font-weight:600;color:#0f172a;overflow-wrap:anywhere;">${escapeHtml(titleText)}</div>
+                </div>
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="font-size:11px;color:#999;">score ${(match.score * 100).toFixed(0)}%</span>
-                    <button type="button" class="pai-context-dismiss" aria-label="关闭此记忆提示" title="关闭此记忆提示" style="border:0;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0;width:20px;height:20px;">×</button>
+                    <span style="font-size:11px;color:#64748b;white-space:nowrap;">${Math.round(match.score * 100)}%</span>
+                    <button type="button" class="pai-context-dismiss" aria-label="隐藏此记忆提示" title="隐藏此记忆提示" style="border:0;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0;width:20px;height:20px;">×</button>
                 </div>
             </div>
-            <div style="line-height:1.5;color:#555;white-space:pre-wrap;">${escapeHtml(match.snippet)}</div>
-            <div style="margin-top:8px;font-size:11px;color:#aaa;">${escapeHtml(sourceLabel)}${match.whyMatched ? ` · ${escapeHtml(match.whyMatched)}` : ''}</div>
-            <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
-                ${exploreUrl ? `<a href="${escapeHtml(exploreUrl)}" target="_blank" rel="noopener" style="color:#5b5bd6;text-decoration:none;font-size:11px;font-weight:600;">在记忆中查看 →</a>` : ''}
+            <div style="line-height:1.5;color:#334155;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(match.snippet)}</div>
+            <div style="margin-top:8px;font-size:11px;color:#64748b;">${escapeHtml(sourceMeta)}</div>
+            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                ${exploreUrl ? `<a href="${escapeHtmlAttribute(exploreUrl)}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:600;">在记忆中查看</a>` : ''}
                 ${linksHtml}
+                <button type="button" class="pai-context-action-button pai-context-site-mute" aria-label="此网站今天不再显示记忆提示">此网站今天不提示</button>
             </div>
         `;
 
         let expanded = false;
+        const setExpanded = (nextExpanded: boolean): void => {
+            expanded = nextExpanded;
+            card.style.display = expanded ? 'block' : 'none';
+            card.setAttribute('aria-hidden', String(!expanded));
+            bubble.setAttribute('aria-expanded', String(expanded));
+        };
+
         bubble.addEventListener('click', (event) => {
             event.stopPropagation();
-            expanded = !expanded;
-            card.style.display = expanded ? 'block' : 'none';
-            bubble.setAttribute('aria-expanded', String(expanded));
+            setExpanded(!expanded);
         });
 
         bubble.setAttribute('role', 'button');
         bubble.setAttribute('aria-label', '打开相关记忆提示');
         bubble.setAttribute('aria-expanded', 'false');
+        bubble.setAttribute('aria-controls', card.id);
+        bubble.setAttribute('aria-haspopup', 'dialog');
         bubble.tabIndex = 0;
         bubble.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                setExpanded(false);
+                return;
+            }
+
             if (event.key !== 'Enter' && event.key !== ' ') {
                 return;
             }
@@ -1030,10 +1484,23 @@ class WebIntelligenceContentScript {
         card.addEventListener('click', (event) => {
             event.stopPropagation();
         });
+        card.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') {
+                return;
+            }
+            event.preventDefault();
+            setExpanded(false);
+            bubble.focus();
+        });
 
         card.querySelector<HTMLButtonElement>('.pai-context-dismiss')?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.dismissContext(contextKey);
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-site-mute')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.muteCurrentSite();
         });
 
         this.outsideClickListener = (event: MouseEvent) => {
@@ -1043,14 +1510,13 @@ class WebIntelligenceContentScript {
                 return;
             }
 
-            expanded = false;
-            card.style.display = 'none';
+            setExpanded(false);
         };
 
         document.addEventListener('click', this.outsideClickListener, true);
 
-        document.body.appendChild(card);
         document.body.appendChild(bubble);
+        document.body.appendChild(card);
 
         this.bubbleElement = bubble;
         this.cardElement = card;
@@ -1096,7 +1562,7 @@ class WebIntelligenceContentScript {
                 <span style="margin-left: auto; font-size: 11px; opacity: 0.8;">${confidencePercent}%</span>
             </div>
             <div style="font-size: 11px; opacity: 0.9;">
-                ${result.reasoning.substring(0, 60)}...
+                ${escapeHtml(result.reasoning.substring(0, 60))}...
             </div>
         `;
 

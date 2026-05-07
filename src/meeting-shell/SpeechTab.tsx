@@ -25,6 +25,7 @@ const SOURCE_LABEL: Record<MeetingPilotSpeakerSource, string> = {
 };
 
 const ASR_SOURCE_LABEL: Record<MeetingPilotASRTier | 'whisper', string> = {
+  ringcentral_transcript: 'RingCentral Transcript',
   web_speech: 'Chrome On-Device',
   desktop_whisper: 'Local ASR',
   cloud: 'Cloud',
@@ -36,6 +37,7 @@ const ASR_BADGE_LABEL: Record<
   string
 > = {
   Probing: 'Probing',
+  'RC Transcript': 'RingCentral Transcript',
   'On-Device': 'Chrome On-Device',
   'Local ASR': 'Local ASR',
   'Local Whisper': 'Local ASR',
@@ -95,6 +97,7 @@ function asrStatus(session: MeetingPilotSessionSnapshot): {
     Boolean(activeTier) ||
     dependencyReady ||
     tierBadge === 'Cloud' ||
+    tierBadge === 'RC Transcript' ||
     tierBadge === 'Local ASR' ||
     tierBadge === 'Local Whisper' ||
     tierBadge === 'On-Device' ||

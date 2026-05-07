@@ -13,6 +13,7 @@ import { handleLLMRequest } from '../llm';
 import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';
 import { sendPlainBotMessage } from '../bot';
+import { buildScheduledMessagesReviewUrl } from '../scheduled-messages/scheduledMessagesFilters';
 
 // ==================== 类型定义 ====================
 
@@ -326,8 +327,8 @@ __后续回复__：
     // 构建回复建议或自动答复信息
     let replySection: string;
     if (data.autoReplyInfo?.hasAutoReply) {
-      const scheduledMessagesUrl = chrome.runtime.getURL('scheduled-messages.html?filterPendingReview=true');
-      replySection = `__自动答复__：✅ 已配置自动答复，将于 ${data.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl}?messageId=${data.autoReplyInfo.messageId})
+      const scheduledMessagesUrl = buildScheduledMessagesReviewUrl(data.autoReplyInfo.messageId);
+      replySection = `__自动答复__：✅ 已配置自动答复，将于 ${data.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl})
 > ${data.autoReplyInfo.replyContent?.substring(0, 100)}${(data.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
     } else if (data.replyAdvice) {
       replySection = `__回复建议__：${data.replyAdvice}`;

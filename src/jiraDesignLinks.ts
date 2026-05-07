@@ -52,7 +52,7 @@ export type UXDesignItem = {
 export type DesignDisplayItem = FigmaDesignItem | ExternalDesignItem | UXDesignItem;
 
 export type UXEpicStatusTone = 'todo' | 'in-progress' | 'done' | 'blocked' | 'cancelled';
-export type DesignStatusTone = 'ready' | 'updated' | 'missing' | 'blocked' | 'review' | 'done' | 'neutral';
+export type DesignStatusTone = 'ready' | 'updated' | 'missing' | 'not-ready' | 'blocked' | 'review' | 'done' | 'neutral';
 
 export function getUXEpicStatusTone(status?: string): UXEpicStatusTone {
   const normalizedStatus = status?.trim().toLowerCase() || '';
@@ -86,21 +86,36 @@ export function getDesignStatusTone(status?: string): DesignStatusTone {
   if (!normalizedStatus) return 'neutral';
 
   const matchesAny = (keywords: string[]) => keywords.some(keyword => normalizedStatus.includes(keyword));
-
-  if (matchesAny(['ready for dev', 'ready for development', 'ready'])) {
-    return 'ready';
-  }
-
-  if (matchesAny(['updated', 'changed', 'new changes', 'out of sync', 'stale'])) {
-    return 'updated';
-  }
+  const matchesPattern = (patterns: RegExp[]) => patterns.some(pattern => pattern.test(normalizedStatus));
 
   if (matchesAny(['missing link', 'missing design', 'no design link', 'no design', 'not linked'])) {
     return 'missing';
   }
 
+  if (matchesPattern([
+    /\bnot\s+ready\b/,
+    /\bdraft\b/,
+    /\bwip\b/,
+    /\bwork\s+in\s+progress\b/,
+    /\bin\s+design\b/,
+  ])) {
+    return 'not-ready';
+  }
+
   if (matchesAny(['blocked', 'on hold', 'hold', 'waiting', 'permission', 'no access', 'error'])) {
     return 'blocked';
+  }
+
+  if (matchesPattern([
+    /\bready\s+for\s+(dev|development|implementation|handoff)\b/,
+    /\bready\s+to\s+(build|implement|start)\b/,
+    /^ready$/,
+  ])) {
+    return 'ready';
+  }
+
+  if (matchesAny(['updated', 'outdated', 'changed', 'new changes', 'out of sync', 'stale'])) {
+    return 'updated';
   }
 
   if (matchesAny(['done', 'resolved', 'closed', 'complete', 'completed', 'shipped'])) {
@@ -119,10 +134,11 @@ function getDesignStatusPriority(status?: string): number {
     ready: 0,
     updated: 1,
     missing: 2,
-    blocked: 3,
-    review: 4,
-    done: 5,
-    neutral: 6,
+    'not-ready': 3,
+    blocked: 4,
+    review: 5,
+    done: 6,
+    neutral: 7,
   };
 
   return priorityByTone[getDesignStatusTone(status)];

@@ -35,6 +35,7 @@ import type { RawMessageRecord } from '../types.js';
 const SYNC_USER_MESSAGE_PATTERNS: RegExp[] = [
   /^建立长期记忆同步线程/,
   /^请把以下长期稳定信息存入随手记/,
+  /^请把以下近期记忆重点记录到随手记/,
   /^请把以下近期重点记录到随手记/,
   /^请把以下信息存入随手记/,
   /^请把以下内容存入随手记/,

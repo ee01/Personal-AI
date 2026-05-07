@@ -1,4 +1,5 @@
 import { BotPushScenario, getBotPushTarget, getEnvConfig } from "./utils";
+import { buildScheduledMessagesReviewUrl } from "./scheduled-messages/scheduledMessagesFilters";
 
 interface MessageData {
     matched_rule: string;
@@ -103,10 +104,9 @@ __后续回复__：
     // 构建回复建议或自动答复信息
     let replySection: string;
     if (messageData.autoReplyInfo?.hasAutoReply) {
-        // 构建 scheduled messages 页面链接（带筛选参数）
-        const scheduledMessagesUrl = chrome.runtime.getURL('scheduled-messages.html?filterPendingReview=true');
+        const scheduledMessagesUrl = buildScheduledMessagesReviewUrl(messageData.autoReplyInfo.messageId);
 
-        replySection = `__自动答复__：✅ 已配置自动答复，将于 ${messageData.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl}?messageId=${messageData.autoReplyInfo.messageId})
+        replySection = `__自动答复__：✅ 已配置自动答复，将于 ${messageData.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl})
 > ${messageData.autoReplyInfo.replyContent?.substring(0, 100)}${(messageData.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
     } else {
         replySection = `__回复建议__：${messageData.reply_advice}`;

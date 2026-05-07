@@ -41,6 +41,13 @@ type DigestFrequency =
   | { type: 'weekly'; dayOfWeek: number; hour: number }
   | { type: 'custom'; intervalMinutes: number };
 
+interface DigestConfig {
+  enabled: boolean;
+  frequency: 'daily' | 'weekly';
+  preferredHour?: number;
+  preferredDayOfWeek?: number; // 0=周日, 1=周一
+}
+
 // 队列中的单个条目
 interface DigestQueueItem {
   id: string;
@@ -99,8 +106,15 @@ interface DigestTaskRegistration {
 ### P1.2 ConcernedItems 每日消息摘要
 
 在 `TopicItemWithAutoReply` 中新增 `digestConfig` 字段。
-当用户勾选后，匹配到的消息不立即推送，而是入队到 `concerned_items_daily`。
-每日 18:00 推送当日汇总。
+当用户勾选后，匹配到的消息不立即推送，而是带着该规则自己的 `digestConfig` 入队到 `concerned_items_daily`。
+队列任务每小时检查一次，仅释放已经到达该规则每日/每周本地推送时间的条目；旧条目没有规则级配置时使用全局默认小时。
+
+实现注意：
+- `DigestQueueService` 对 chrome.storage 的入队/消费使用串行写入保护，避免并发消息同时入队时互相覆盖。
+- 队列条目按 `id` 幂等入队；ConcernedItems 摘要使用 `ruleId + postId` 作为稳定条目 ID，重复分析同一消息不会重复出现在摘要里。
+- 规则编辑 UI 允许设置每日/每周、每周发送日和 0-23 点推送时间，展示 chip 会显示实际摘要时间，并在配置区提示下一次摘要时间。
+- 摘要推送失败或格式化为空时不会删除队列条目，保留到下次调度重试。
+- ConcernedItems 摘要按规则 ID 分组，避免多个同名规则被合并成一个摘要区块。
 
 ---
 
@@ -149,8 +163,9 @@ Chrome Storage key: `digestQueues`
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
 | `src/types/digestQueue.ts` | 新增 | 类型定义 |
-| `src/services/DigestQueueService.ts` | 新增 | 核心队列服务 |
+| `src/services/DigestQueueService.ts` | 新增 | 核心队列服务、ConcernedItems 到期释放逻辑 |
 | `src/services/TaskScheduler.ts` | 修改 | 注册 digest_queue_process 任务 |
 | `src/message-reaction/FollowThreadHandler.ts` | 修改 | 迁移到新服务 |
 | `src/message-reaction/AutoReplyHandler.ts` | 修改 | 添加 digestConfig 类型 |
 | `src/modals/topic-modal.tsx` | 修改 | 添加摘要配置 UI |
+| `tools/verify-digest-queue-service.ts` | 新增 | 验证并发入队和摘要释放规则 |

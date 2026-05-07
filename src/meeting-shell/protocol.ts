@@ -1,15 +1,27 @@
 export const MEETING_PILOT_HOST_PREFIX = 'https://v.ringcentral.com/conf/on/';
 
-export type MeetingPilotASRTier = 'web_speech' | 'desktop_whisper' | 'cloud';
+export type MeetingPilotASRTier =
+  | 'ringcentral_transcript'
+  | 'web_speech'
+  | 'desktop_whisper'
+  | 'cloud';
 
 export function normalizeTranscriptSource(
   value: string | undefined,
-): 'whisper' | 'cloud' | 'web_speech' | 'desktop_whisper' | 'test' | undefined {
+):
+  | 'whisper'
+  | 'cloud'
+  | 'web_speech'
+  | 'desktop_whisper'
+  | 'ringcentral_transcript'
+  | 'test'
+  | undefined {
   if (value === 'whisper') return 'cloud';
   if (
     value === 'cloud' ||
     value === 'web_speech' ||
     value === 'desktop_whisper' ||
+    value === 'ringcentral_transcript' ||
     value === 'test'
   ) {
     return value;
@@ -182,7 +194,16 @@ export interface MeetingPilotActionItem {
   owner: string;
   deadline?: string;
   status: 'pending' | 'done';
+  reviewState?: 'suggested' | 'confirmed' | 'dismissed';
+  reviewedAt?: number;
+  editedAt?: number;
+  generatedTitle?: string;
+  generatedOwner?: string;
+  generatedDeadline?: string;
   chapterId?: string;
+  evidence?: string;
+  timestamp?: string;
+  source?: 'llm' | 'heuristic';
 }
 
 export interface MeetingPilotDecisionItem {
@@ -292,7 +313,13 @@ export interface MeetingPilotTranscriptChunk {
   resolutionConfidence?: number;
   text: string;
   ts: number;
-  source?: 'whisper' | 'cloud' | 'web_speech' | 'desktop_whisper' | 'test';
+  source?:
+    | 'whisper'
+    | 'cloud'
+    | 'web_speech'
+    | 'desktop_whisper'
+    | 'ringcentral_transcript'
+    | 'test';
   lowConfidence?: boolean;
 }
 
@@ -335,6 +362,7 @@ export interface MeetingPilotSessionSnapshot {
   transcript: MeetingPilotTranscriptChunk[];
   transcriptTurns: MeetingPilotTranscriptTurn[];
   memoryRefs: MeetingPilotMemoryRef[];
+  webTranscript?: MeetingPilotWebTranscriptState;
   speechSuggestion?: MeetingPilotSpeechSuggestion;
   speechGuidanceContext?: MeetingPilotSpeechGuidanceContext;
   summary: string;
@@ -348,6 +376,15 @@ export interface MeetingPilotSessionSnapshot {
   updatedAt: number;
   endedAt?: number;
   tier?: MeetingPilotTierStatus;
+}
+
+export interface MeetingPilotWebTranscriptState {
+  enabled: boolean;
+  available: boolean;
+  active: boolean;
+  lastSeenAt?: number;
+  latestChunkId?: string;
+  lastError?: string;
 }
 
 export interface MeetingPilotDetectionPayload {
@@ -414,6 +451,7 @@ export interface MeetingPilotPanelCommand {
     | 'MEETING_PILOT_OPEN_EMBEDDED_PANEL'
     | 'MEETING_PILOT_CLOSE_EMBEDDED_PANEL'
     | 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL'
+    | 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE'
     | 'MEETING_PILOT_OPEN_LIVE_MAP'
     | 'MEETING_PILOT_START_CAPTURE'
     | 'MEETING_PILOT_STOP_CAPTURE'
@@ -421,6 +459,7 @@ export interface MeetingPilotPanelCommand {
     | 'MEETING_PILOT_REGISTER_TAB'
     | 'MEETING_PILOT_UPDATE_CONTEXT'
     | 'MEETING_PILOT_UPDATE_ALERTS'
+    | 'MEETING_PILOT_RINGCENTRAL_TRANSCRIPT_STATUS'
     | 'MEETING_PILOT_OBSERVATION_UPDATE'
     | 'MEETING_PILOT_CAPTURE_STATUS'
     | 'MEETING_PILOT_DIGEST_STATUS'
@@ -440,6 +479,7 @@ export interface MeetingPilotTierStatus {
   activeTier: MeetingPilotASRTier | null;
   badge:
     | 'Probing'
+    | 'RC Transcript'
     | 'On-Device'
     | 'Local ASR'
     | 'Local Whisper'
@@ -458,7 +498,8 @@ export function isValidTierTransition(
     MeetingPilotTierStatus['badge'],
     MeetingPilotTierStatus['badge'][]
   > = {
-    Probing: ['On-Device', 'Local ASR', 'Cloud', 'No ASR'],
+    Probing: ['RC Transcript', 'On-Device', 'Local ASR', 'Cloud', 'No ASR'],
+    'RC Transcript': ['On-Device', 'Local ASR', 'Cloud', 'No ASR'],
     'On-Device': ['Local ASR', 'Cloud', 'No ASR'],
     'Local ASR': ['Cloud', 'No ASR'],
     'Local Whisper': ['Local ASR', 'Cloud', 'No ASR'],
@@ -861,6 +902,7 @@ export function createMeetingPilotSessionSnapshot(
     transcript: input.transcript || [],
     transcriptTurns: input.transcriptTurns || [],
     memoryRefs: input.memoryRefs || [],
+    webTranscript: input.webTranscript,
     speechSuggestion: input.speechSuggestion,
     speechGuidanceContext: input.speechGuidanceContext,
     summary:
@@ -1012,6 +1054,7 @@ export function buildMeetingPilotBadgeText(
   snapshot: MeetingPilotSessionSnapshot,
 ): string {
   if (snapshot.capture.kind === 'recording') return 'REC';
+  if (snapshot.webTranscript?.active) return 'TXT';
   if (snapshot.alerts.some((alert) => alert.level === 'P0' && !alert.resolved))
     return '!';
   return snapshot.inMeeting ? 'MP' : '';
@@ -1024,7 +1067,7 @@ export function buildMeetingPilotTooltip(
     snapshot.capture.kind === 'recording'
       ? 'recording'
       : snapshot.capture.kind === 'armed'
-        ? 'armed'
-        : snapshot.capture.kind;
+      ? 'armed'
+      : snapshot.capture.kind;
   return `Meeting Pilot: ${snapshot.title} (${snapshot.meetingId}) - ${state}`;
 }

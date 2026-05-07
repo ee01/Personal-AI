@@ -13,9 +13,14 @@ import {
   waitForTabLoad,
   sendMessageWithRetry,
 } from '../utils/tabHelpers';
-import { getEnvConfig, type EnvConfigType } from '../utils';
+import {
+  getEnvConfig,
+  normalizeConcernedItemsDigestDayOfWeek,
+  normalizeConcernedItemsDigestHour,
+  type EnvConfigType,
+} from '../utils';
 import { generateAutoReply } from '../llm';
-import { getTaskEnabled } from '../services/TaskScheduler';
+import { getTaskEnabled } from '../services/taskSchedulerDefinitions';
 import {
   mergeManualConcernedItemsPreservingSystem,
   partitionConcernedItems,
@@ -75,6 +80,7 @@ interface DigestConfigType {
   enabled: boolean;
   frequency: 'daily' | 'weekly';
   preferredHour?: number;
+  preferredDayOfWeek?: number;
 }
 
 interface TopicItem {
@@ -104,6 +110,101 @@ interface TopicItem {
   followConfig?: FollowThreadConfigType;
 }
 
+const normalizeOptionalRuleText = (value?: string): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const isShortScopeValue = (value?: string): boolean => {
+  const normalized = normalizeOptionalRuleText(value);
+  if (!normalized) return false;
+  const compact = normalized.replace(/[\s_-]+/g, '');
+  return compact.length > 0 && compact.length <= 2;
+};
+
+const getScopeGuidanceText = (params: {
+  filterSender?: string;
+  filterGroup?: string;
+}): string => {
+  const sender = normalizeOptionalRuleText(params.filterSender);
+  const group = normalizeOptionalRuleText(params.filterGroup);
+
+  if (!sender && !group) {
+    return '当前规则会在所有群组和所有发送人中生效。建议先限定群组或发送人，降低误入库和误触发。';
+  }
+
+  const shortScopes = [
+    isShortScopeValue(group) ? '群组' : '',
+    isShortScopeValue(sender) ? '发送人' : '',
+  ].filter(Boolean);
+
+  if (shortScopes.length > 0) {
+    return `${shortScopes.join('、')}条件较短；运行时会按完整词、群组 ID 或发送人 ID 匹配，建议写完整名称。`;
+  }
+
+  return '';
+};
+
+const getScopeSummaryText = (params: {
+  filterSender?: string;
+  filterGroup?: string;
+}): string => {
+  const sender = normalizeOptionalRuleText(params.filterSender) || '所有发送人';
+  const group = normalizeOptionalRuleText(params.filterGroup) || '所有群组';
+  return `${group} / ${sender}`;
+};
+
+const hasNotifyMethod = (notifyMethod: string, method: string): boolean =>
+  notifyMethod
+    .split(',')
+    .map((value) => value.trim())
+    .includes(method);
+
+const buildActionSummaryItems = (params: {
+  notifyMethod: string;
+  mentionMe: boolean;
+  digestEnabled: boolean;
+  digestFrequency: 'daily' | 'weekly';
+  autoReply: boolean;
+  autoReplyMode: AutoReplyConfig['reviewMode'];
+  followThread: boolean;
+  automationPrompt?: string;
+  automationRequiresApproval: boolean;
+}): string[] => {
+  const items = ['写入记忆'];
+
+  if (hasNotifyMethod(params.notifyMethod, 'bot')) {
+    items.push(params.digestEnabled ? `${params.digestFrequency === 'weekly' ? '每周' : '每日'}摘要` : 'Glip 推送');
+  }
+  if (hasNotifyMethod(params.notifyMethod, 'chrome')) {
+    items.push('Chrome 通知');
+  }
+  if (params.mentionMe && hasNotifyMethod(params.notifyMethod, 'bot')) {
+    items.push('@我');
+  }
+  if (params.autoReply) {
+    const modeLabel =
+      params.autoReplyMode === 'manual'
+        ? '手动审核'
+        : params.autoReplyMode === 'delayed'
+          ? '延迟可拦截'
+          : '直接发送';
+    items.push(`自动答复：${modeLabel}`);
+  }
+  if (params.followThread) {
+    items.push('关注后续');
+  }
+  if (normalizeOptionalRuleText(params.automationPrompt)) {
+    items.push(
+      params.automationRequiresApproval
+        ? '联动操作：需批准'
+        : '联动操作：自动执行',
+    );
+  }
+
+  return items;
+};
+
 interface TabResponse {
   success: boolean;
   error?: string;
@@ -122,6 +223,68 @@ interface AutomationActionSummary {
   latestFinishedAt?: number;
   loadError?: boolean;
 }
+
+const DIGEST_WEEKDAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 0, label: '周日' },
+];
+
+const getDigestWeekdayLabel = (dayOfWeek: number): string =>
+  DIGEST_WEEKDAY_OPTIONS.find(option => option.value === dayOfWeek)?.label ||
+  '周一';
+
+const isSameCalendarDate = (a: Date, b: Date): boolean =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate();
+
+const formatDigestNextDeliveryText = (
+  digestConfig: Pick<
+    DigestConfigType,
+    'frequency' | 'preferredHour' | 'preferredDayOfWeek'
+  >,
+): string => {
+  const now = new Date();
+  const hour = normalizeConcernedItemsDigestHour(
+    digestConfig.preferredHour,
+    8,
+  );
+  const nextDelivery = new Date(now);
+  nextDelivery.setHours(hour, 0, 0, 0);
+
+  if (digestConfig.frequency === 'weekly') {
+    const targetDay = normalizeConcernedItemsDigestDayOfWeek(
+      digestConfig.preferredDayOfWeek,
+      1,
+    );
+    const daysUntilTarget = (targetDay - nextDelivery.getDay() + 7) % 7;
+    nextDelivery.setDate(nextDelivery.getDate() + daysUntilTarget);
+    if (now.getTime() >= nextDelivery.getTime()) {
+      nextDelivery.setDate(nextDelivery.getDate() + 7);
+    }
+  } else if (now.getTime() >= nextDelivery.getTime()) {
+    nextDelivery.setDate(nextDelivery.getDate() + 1);
+  }
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dayLabel = isSameCalendarDate(nextDelivery, now)
+    ? '今天'
+    : isSameCalendarDate(nextDelivery, tomorrow)
+      ? '明天'
+      : nextDelivery.toLocaleDateString('zh-CN', {
+          month: 'numeric',
+          day: 'numeric',
+          weekday: 'short',
+        });
+
+  return `下一次摘要：${dayLabel} ${hour}:00`;
+};
 
 interface AutomationPreviewState {
   status: 'idle' | 'loading' | 'ready' | 'failed';
@@ -183,6 +346,7 @@ const TopicModal = () => {
     'daily' | 'weekly'
   >('daily');
   const [newDigestHour, setNewDigestHour] = useState(8);
+  const [newDigestDayOfWeek, setNewDigestDayOfWeek] = useState(1);
   const [newAutomationPrompt, setNewAutomationPrompt] = useState('');
   const [newAutomationRequiresApproval, setNewAutomationRequiresApproval] =
     useState(false);
@@ -277,7 +441,8 @@ const TopicModal = () => {
     setNewNotifyFrequency('immediate');
     setNewDigestEnabled(false);
     setNewDigestFrequency('daily');
-    setNewDigestHour(18);
+    setNewDigestHour(8);
+    setNewDigestDayOfWeek(1);
     setNewAutomationPrompt('');
     setNewAutomationRequiresApproval(false);
     setNewAutoReply(false);
@@ -696,6 +861,8 @@ const TopicModal = () => {
     const savedFollowThread = editingTopic.followThread;
     const normalizedEditingTopic: TopicItem = {
       ...editingTopic,
+      filterSender: normalizeOptionalRuleText(editingTopic.filterSender),
+      filterGroup: normalizeOptionalRuleText(editingTopic.filterGroup),
       automationPrompt: editingTopic.automationPrompt?.trim() || undefined,
       automationRequiresApproval: editingTopic.automationPrompt?.trim()
         ? editingTopic.automationRequiresApproval === true
@@ -743,18 +910,19 @@ const TopicModal = () => {
   };
 
   const handleAdd = async () => {
-    if (!newTopic) return;
+    const topicText = newTopic.trim();
+    if (!topicText) return;
 
     const newTopicItem: TopicItem = {
       id: Math.random().toString(36).substr(2, 9),
-      text: newTopic,
+      text: topicText,
       expiredAt: newExpiry
         ? Date.now() + parseInt(newExpiry) * 24 * 60 * 60 * 1000
         : 0,
       mentionMe: newMentionMe,
       // 新增：通用匹配条件
-      filterSender: newFilterSender || undefined,
-      filterGroup: newFilterGroup || undefined,
+      filterSender: normalizeOptionalRuleText(newFilterSender),
+      filterGroup: normalizeOptionalRuleText(newFilterGroup),
       // 🆕 通用通知配置（notifyMethod 使用逗号分隔格式）
       notifyMethod: newNotifyMethod || undefined,
       notifyFrequency:
@@ -764,7 +932,11 @@ const TopicModal = () => {
         ? {
             enabled: true,
             frequency: newDigestFrequency,
-            preferredHour: newDigestHour,
+            preferredHour: normalizeConcernedItemsDigestHour(newDigestHour, 8),
+            preferredDayOfWeek: normalizeConcernedItemsDigestDayOfWeek(
+              newDigestDayOfWeek,
+              1,
+            ),
           }
         : undefined,
       automationPrompt: newAutomationPrompt.trim() || undefined,
@@ -1367,9 +1539,32 @@ const TopicModal = () => {
   };
 
   const getScopeChips = (topic: TopicItem) => [
-    `💬 ${topic.filterGroup || '不限群组'}`,
-    `👤 ${topic.filterSender || '不限发送人'}`,
+    `群组：${topic.filterGroup || '不限'}`,
+    `发送人：${topic.filterSender || '不限'}`,
   ];
+
+  const getTopicScopeGuidanceText = (topic: TopicItem) =>
+    getScopeGuidanceText({
+      filterSender: topic.filterSender,
+      filterGroup: topic.filterGroup,
+    });
+
+  const formatDigestScheduleChip = (digestConfig: DigestConfigType) => {
+    const hour = normalizeConcernedItemsDigestHour(
+      digestConfig.preferredHour,
+      8,
+    );
+    if (digestConfig.frequency === 'weekly') {
+      const weekday = getDigestWeekdayLabel(
+        normalizeConcernedItemsDigestDayOfWeek(
+          digestConfig.preferredDayOfWeek,
+          1,
+        ),
+      );
+      return `✓ 每${weekday} ${hour}:00 摘要`;
+    }
+    return `✓ 每日 ${hour}:00 摘要`;
+  };
 
   const getCapabilityChips = (topic: TopicItem) => {
     const chips = ['✓ 写入记忆'];
@@ -1380,9 +1575,7 @@ const TopicModal = () => {
       chips.push('✓ Chrome 通知');
     }
     if (topic.digestConfig?.enabled) {
-      chips.push(
-        `✓ ${topic.digestConfig.frequency === 'weekly' ? '每周摘要' : '每日摘要'}`,
-      );
+      chips.push(formatDigestScheduleChip(topic.digestConfig));
     }
     if (topic.autoReply) {
       chips.push('✓ 自动答复');
@@ -1632,6 +1825,18 @@ const TopicModal = () => {
     }
     return `已捕获 ${relatedMessages.length} 条关联消息`;
   };
+
+  const newRuleActionItems = buildActionSummaryItems({
+    notifyMethod: newNotifyMethod || '',
+    mentionMe: newMentionMe,
+    digestEnabled: newDigestEnabled && !newFollowThread,
+    digestFrequency: newDigestFrequency,
+    autoReply: newAutoReply,
+    autoReplyMode: newAutoReplyConfig.reviewMode,
+    followThread: newFollowThread,
+    automationPrompt: newAutomationPrompt,
+    automationRequiresApproval: newAutomationRequiresApproval,
+  });
 
   return (
     <div className="topic-modal">
@@ -1924,8 +2129,8 @@ const TopicModal = () => {
                 </div>
 
                 {/* 通用匹配条件（可编辑） */}
-                <div className="filter-conditions">
-                  <div className="filter-item">
+	                <div className="filter-conditions">
+	                  <div className="filter-item">
                     <label htmlFor={`filter-sender-${topic.id}`}>
                       匹配发送人:
                     </label>
@@ -1957,11 +2162,16 @@ const TopicModal = () => {
                           filterGroup: e.target.value || undefined,
                         })
                       }
-                    />
-                  </div>
-                </div>
+	                    />
+	                  </div>
+	                </div>
+	                {getTopicScopeGuidanceText(editingTopic) && (
+	                  <div className="scope-guidance">
+	                    {getTopicScopeGuidanceText(editingTopic)}
+	                  </div>
+	                )}
 
-                {/* 编辑时的自动答复配置区域 */}
+	                {/* 编辑时的自动答复配置区域 */}
                 {editingTopic.autoReply && (
                   <div className="auto-reply-config">
                     <div className="config-section">
@@ -2237,6 +2447,9 @@ const TopicModal = () => {
                                       preferredHour:
                                         editingTopic.digestConfig
                                           ?.preferredHour ?? 8,
+                                      preferredDayOfWeek:
+                                        editingTopic.digestConfig
+                                          ?.preferredDayOfWeek ?? 1,
                                     }
                                   : undefined,
                               })
@@ -2298,36 +2511,83 @@ const TopicModal = () => {
                                   每周
                                 </label>
                               </div>
-                              <div className="radio-option">
-                                <label>
-                                  推送时间：
-                                  <input
-                                    type="number"
-                                    className="delay-hours-input"
-                                    value={
+                              {editingTopic.digestConfig?.frequency ===
+                                'weekly' && (
+                                <div className="radio-option digest-weekday-option">
+                                  <label
+                                    htmlFor={`digest-weekday-${topic.id}`}
+                                  >
+                                    发送日：
+                                  </label>
+                                  <select
+                                    id={`digest-weekday-${topic.id}`}
+                                    value={normalizeConcernedItemsDigestDayOfWeek(
                                       editingTopic.digestConfig
-                                        ?.preferredHour ?? 8
-                                    }
+                                        ?.preferredDayOfWeek,
+                                      1,
+                                    )}
                                     onChange={(e) =>
                                       setEditingTopic({
                                         ...editingTopic,
                                         digestConfig: {
                                           ...editingTopic.digestConfig!,
-                                          preferredHour:
-                                            parseInt(e.target.value) || 8,
+                                          preferredDayOfWeek:
+                                            normalizeConcernedItemsDigestDayOfWeek(
+                                              e.target.value,
+                                              1,
+                                            ),
                                         },
                                       })
                                     }
-                                    min="0"
-                                    max="23"
-                                  />
-                                  :00
+                                  >
+                                    {DIGEST_WEEKDAY_OPTIONS.map(option => (
+                                      <option
+                                        key={option.value}
+                                        value={option.value}
+                                      >
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                              <div className="radio-option digest-time-option">
+                                <label htmlFor={`digest-hour-${topic.id}`}>
+                                  推送时间：
                                 </label>
+                                <input
+                                  id={`digest-hour-${topic.id}`}
+                                  type="number"
+                                  className="delay-hours-input"
+                                  value={normalizeConcernedItemsDigestHour(
+                                    editingTopic.digestConfig?.preferredHour,
+                                    8,
+                                  )}
+                                  onChange={(e) =>
+                                    setEditingTopic({
+                                      ...editingTopic,
+                                      digestConfig: {
+                                        ...editingTopic.digestConfig!,
+                                        preferredHour:
+                                          normalizeConcernedItemsDigestHour(
+                                            e.target.value,
+                                            8,
+                                          ),
+                                      },
+                                    })
+                                  }
+                                  min="0"
+                                  max="23"
+                                />
+                                <span>:00</span>
                               </div>
                             </div>
                           </div>
                           <div className="hint-text">
-                            匹配到的消息不会立即推送，而是在指定时间汇总推送
+                            匹配消息会按这条规则自己的时间汇总推送 ·{' '}
+                            {formatDigestNextDeliveryText(
+                              editingTopic.digestConfig,
+                            )}
                           </div>
                         </div>
                       )}
@@ -2574,15 +2834,20 @@ const TopicModal = () => {
                   <span className="block-label when-label">当</span>
                   <div className="block-body">
                     <div className="topic-text">{topic.text}</div>
-                    <div className="scope-chip-row">
-                      {getScopeChips(topic).map((chip) => (
-                        <span key={chip} className="scope-chip">
-                          {chip}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+	                    <div className="scope-chip-row">
+	                      {getScopeChips(topic).map((chip) => (
+	                        <span key={chip} className="scope-chip">
+	                          {chip}
+	                        </span>
+	                      ))}
+	                    </div>
+	                    {getTopicScopeGuidanceText(topic) && (
+	                      <div className="scope-guidance compact">
+	                        {getTopicScopeGuidanceText(topic)}
+	                      </div>
+	                    )}
+	                  </div>
+	                </div>
 
                 <div className="rule-block then-block">
                   <span className="block-label then-label">则</span>
@@ -2788,7 +3053,7 @@ const TopicModal = () => {
           </div>
 
           {/* 通用匹配条件（可编辑） */}
-          <div className="filter-conditions">
+	          <div className="filter-conditions">
             <div className="filter-item">
               <label htmlFor="new-filter-sender">匹配发送人:</label>
               <input
@@ -2808,10 +3073,42 @@ const TopicModal = () => {
                 value={newFilterGroup}
                 onChange={(e) => setNewFilterGroup(e.target.value)}
               />
+	            </div>
+	          </div>
+	          {getScopeGuidanceText({
+	            filterSender: newFilterSender,
+	            filterGroup: newFilterGroup,
+	          }) && (
+	            <div className="scope-guidance">
+	              {getScopeGuidanceText({
+	                filterSender: newFilterSender,
+	                filterGroup: newFilterGroup,
+	              })}
+	            </div>
+	          )}
+
+          <div className="rule-path-preview" aria-label="新规则触发与动作预览">
+            <div className="rule-path-step">
+              <span className="rule-path-label">当</span>
+              <strong>{newTopic.trim() || '未填写消息模式'}</strong>
+              <p>{getScopeSummaryText({
+                filterSender: newFilterSender,
+                filterGroup: newFilterGroup,
+              })}</p>
+            </div>
+            <div className="rule-path-step then">
+              <span className="rule-path-label">则</span>
+              <div className="rule-action-chip-row">
+                {newRuleActionItems.map((item) => (
+                  <span className="rule-badge muted" key={item}>
+                    {item}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* 每日摘要配置区域（仅在启用 Glip 推送且非关注后续模式时显示） */}
+	          {/* 每日摘要配置区域（仅在启用 Glip 推送且非关注后续模式时显示） */}
           {(newNotifyMethod || '').includes('bot') && !newFollowThread && (
             <div className="digest-config">
               <div className="config-section">
@@ -2852,26 +3149,58 @@ const TopicModal = () => {
                         />
                         <label htmlFor="new-digest-weekly">每周</label>
                       </div>
-                      <div className="radio-option">
-                        <label>
-                          推送时间：
-                          <input
-                            type="number"
-                            className="delay-hours-input"
-                            value={newDigestHour}
+                      {newDigestFrequency === 'weekly' && (
+                        <div className="radio-option digest-weekday-option">
+                          <label htmlFor="new-digest-weekday">发送日：</label>
+                          <select
+                            id="new-digest-weekday"
+                            value={newDigestDayOfWeek}
                             onChange={(e) =>
-                              setNewDigestHour(parseInt(e.target.value) || 8)
+                              setNewDigestDayOfWeek(
+                                normalizeConcernedItemsDigestDayOfWeek(
+                                  e.target.value,
+                                  1,
+                                ),
+                              )
                             }
-                            min="0"
-                            max="23"
-                          />
-                          :00
-                        </label>
+                          >
+                            {DIGEST_WEEKDAY_OPTIONS.map(option => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="radio-option digest-time-option">
+                        <label htmlFor="new-digest-hour">推送时间：</label>
+                        <input
+                          id="new-digest-hour"
+                          type="number"
+                          className="delay-hours-input"
+                          value={newDigestHour}
+                          onChange={(e) =>
+                            setNewDigestHour(
+                              normalizeConcernedItemsDigestHour(
+                                e.target.value,
+                                8,
+                              ),
+                            )
+                          }
+                          min="0"
+                          max="23"
+                        />
+                        <span>:00</span>
                       </div>
                     </div>
                   </div>
                   <div className="hint-text">
-                    匹配到的消息不会立即推送，而是在指定时间汇总推送
+                    匹配消息会按这条规则自己的时间汇总推送 ·{' '}
+                    {formatDigestNextDeliveryText({
+                      frequency: newDigestFrequency,
+                      preferredHour: newDigestHour,
+                      preferredDayOfWeek: newDigestDayOfWeek,
+                    })}
                   </div>
                 </div>
               )}
@@ -3810,6 +4139,15 @@ const TopicModal = () => {
                     padding: 2px 4px;
                 }
 
+                .digest-weekday-option select {
+                    min-width: 82px;
+                    padding: 4px 8px;
+                }
+
+                .digest-time-option span {
+                    color: inherit;
+                }
+
                 .form-buttons {
                     margin-top: 12px;
                     display: flex;
@@ -4213,6 +4551,79 @@ const TopicModal = () => {
                     color: #cbd5e1;
                 }
 
+                .scope-guidance {
+                    margin: 8px 0 0;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(250, 204, 21, 0.22);
+                    background: rgba(250, 204, 21, 0.08);
+                    color: #fde68a;
+                    font-size: 12px;
+                    line-height: 1.5;
+                }
+
+                .scope-guidance.compact {
+                    margin-top: 10px;
+                }
+
+                .rule-path-preview {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                    gap: 12px;
+                    margin-top: 12px;
+                    padding: 12px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(125, 211, 252, 0.16);
+                    background: rgba(15, 23, 42, 0.52);
+                }
+
+                .rule-path-step {
+                    min-width: 0;
+                }
+
+                .rule-path-step strong {
+                    display: block;
+                    margin-top: 6px;
+                    color: #f8fbff;
+                    font-size: 14px;
+                    line-height: 1.5;
+                    overflow-wrap: anywhere;
+                }
+
+                .rule-path-step p {
+                    margin: 4px 0 0;
+                    color: #94a3b8;
+                    font-size: 12px;
+                    line-height: 1.4;
+                    overflow-wrap: anywhere;
+                }
+
+                .rule-path-label {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    min-width: 28px;
+                    height: 24px;
+                    padding: 0 8px;
+                    border-radius: 999px;
+                    background: rgba(34, 211, 238, 0.14);
+                    color: #67e8f9;
+                    font-size: 12px;
+                    font-weight: 800;
+                }
+
+                .rule-path-step.then .rule-path-label {
+                    background: rgba(34, 197, 94, 0.14);
+                    color: #86efac;
+                }
+
+                .rule-action-chip-row {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-top: 8px;
+                }
+
                 .capability-chip {
                     background: rgba(34, 197, 94, 0.14);
                     color: #bbf7d0;
@@ -4389,18 +4800,22 @@ const TopicModal = () => {
                     color: #dbe4f3;
                 }
 
-                @media (max-width: 880px) {
-                    .warning-content,
-                    .section-head,
-                    .rule-card-top,
-                    .rule-block {
-                        flex-direction: column;
-                        align-items: flex-start;
-                    }
+	                @media (max-width: 880px) {
+	                    .warning-content,
+	                    .section-head,
+	                    .rule-card-top,
+	                    .rule-block {
+	                        flex-direction: column;
+	                        align-items: flex-start;
+	                    }
 
-                    .rule-ref {
-                        margin-left: 0;
-                    }
+	                    .rule-path-preview {
+	                        grid-template-columns: 1fr;
+	                    }
+
+	                    .rule-ref {
+	                        margin-left: 0;
+	                    }
                 }
             `}</style>
     </div>

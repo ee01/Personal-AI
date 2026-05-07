@@ -9,6 +9,10 @@ import {
   SlideAnalysisResult 
 } from '../interfaces/slideAnalyzer';
 import { BaseSlideAnalyzer } from './baseAnalyzer';
+import {
+  findFirstJiraTicketKey,
+  hasJiraTicketKey,
+} from '../utils/slidesAnalyzerSuggestions';
 
 /**
  * 表格分析器类
@@ -28,7 +32,27 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
   private static readonly TRACK_COLUMNS = ['track', 'team', 'group', 'department', 'area', '赛道', '团队', '组别', '部门', '分类'];
   
   // 识别备注/注释的常见列名
-  private static readonly COMMENTS_COLUMNS = ['comment', 'note', 'action', 'item', 'todo', 'remarks', 'hightlight', '备注', '注释', '行动项', '待办'];
+  private static readonly COMMENTS_COLUMNS = [
+    'comment',
+    'comments',
+    'note',
+    'notes',
+    'actions',
+    'action item',
+    'todo',
+    'remark',
+    'remarks',
+    'highlight',
+    'highlights',
+    'next step',
+    'next steps',
+    '备注',
+    '注释',
+    '行动项',
+    '待办',
+    '亮点',
+    '下一步'
+  ];
 
   /**
    * 判断是否可以处理此类型的幻灯片
@@ -309,8 +333,7 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
     }
     
     // 提取Jira工单ID
-    const jiraTicketMatch = descriptionText.match(/([A-Z]+-\d+)/);
-    const jiraTicketId = jiraTicketMatch ? jiraTicketMatch[0] : '';
+    const jiraTicketId = findFirstJiraTicketKey(descriptionText) || '';
     
     // 提取项目名称
     let projectName = descriptionText;
@@ -408,7 +431,7 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
     }
     
     // 计算包含Jira工单ID的项目比例
-    const jiraProjects = projects.filter(p => /[A-Z]+-\d+/.test(p.id));
+    const jiraProjects = projects.filter(p => hasJiraTicketKey(p.id));
     const jiraRatio = jiraProjects.length / projects.length;
     score += jiraRatio * 0.2;
     
@@ -418,4 +441,4 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
     
     return Math.min(1, score);
   }
-} 
+}

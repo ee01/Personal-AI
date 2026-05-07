@@ -109,28 +109,48 @@ function _fuzzyMatchEntityName(partialName: string, knownNames: string[]): strin
 }
 
 // 根据不同 LLM 服务处理 LLM 请求，并提取 JSON 数据
+function normalizeLLMRequestBody(body: any): any {
+    const normalizedBody = { ...body };
+    const hasPrompt =
+        normalizedBody.prompt !== undefined &&
+        normalizedBody.prompt !== null &&
+        String(normalizedBody.prompt).trim().length > 0;
+
+    if (!hasPrompt && (normalizedBody.system_prompt || normalizedBody.user_prompt)) {
+        normalizedBody.prompt = [
+            normalizedBody.system_prompt,
+            normalizedBody.user_prompt,
+        ]
+            .filter((part) => String(part || '').trim().length > 0)
+            .join('\n\n');
+    }
+
+    return normalizedBody;
+}
+
 export async function handleLLMRequest(body: any): Promise<string> {
+    const requestBody = normalizeLLMRequestBody(body);
     const envConfig = await getEnvConfig();
     let handler;
     switch (envConfig.LLM_TYPE) {
         case 'local':
             handler = handleOllamaRequest;
-            if (body.type === 'review') body.model = envConfig.OLLAMA_REVIEW_MODEL;
-            if (body.type === 'query') body.model = envConfig.OLLAMA_QUERY_MODEL;
+            if (requestBody.type === 'review') requestBody.model = envConfig.OLLAMA_REVIEW_MODEL;
+            if (requestBody.type === 'query') requestBody.model = envConfig.OLLAMA_QUERY_MODEL;
             break;
         case 'groq':
             handler = handleGroqRequest;
-            if (body.type === 'review') body.model = envConfig.GROQ_REVIEW_MODEL;
+            if (requestBody.type === 'review') requestBody.model = envConfig.GROQ_REVIEW_MODEL;
             break;
         case 'dify':
             handler = handleDifyRequest;
-            if (body.type === 'review') body.apiKey = envConfig.DIFY_REVIEW_API_KEY;
+            if (requestBody.type === 'review') requestBody.apiKey = envConfig.DIFY_REVIEW_API_KEY;
             break;
         default:
             handler = handleOpenAIRequest;
-            if (body.type === 'review') body.model = envConfig.OPENAI_REVIEW_MODEL;
+            if (requestBody.type === 'review') requestBody.model = envConfig.OPENAI_REVIEW_MODEL;
     }
-    const response = await handler(body);
+    const response = await handler(requestBody);
     return response;
 }
 

@@ -16,7 +16,7 @@ export type SourceType =
   | 'system'
   | 'meeting';
 export type MemoryScope = 'work' | 'personal';
-export type RecallScope = MemoryScope | 'both';
+export type RecallScope = MemoryScope | 'both' | 'all';
 export type RecallSourceType =
   | SourceType
   | 'daily_log'
@@ -73,6 +73,7 @@ export type ProfileItemType =
 export type ProfileSourceKind = 'explicit' | 'inferred' | 'system';
 export type ProfileItemStatus =
   | 'active'
+  | 'pending_confirm'
   | 'superseded'
   | 'retracted'
   | 'archived';
@@ -548,7 +549,7 @@ export interface RecallItem {
   sourceTitle?: string;
   /**
    * Stable jump link into memory-exploring (Vue UI), e.g.
-   * `#/entity/Project/abc-123` or `#/timeline?focus=msg-id`.
+   * `#/project/project-123` or `#/timeline?focus=msg-id`.
    * Always present when the item maps to a known explorer route.
    */
   exploreLink?: string;

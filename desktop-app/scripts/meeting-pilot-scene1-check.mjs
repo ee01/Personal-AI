@@ -331,8 +331,8 @@ try {
     ['READY', 'DEGRADED'].includes(overlayState.statusText),
     `Idle 状态不应为阻断态: ${overlayState.statusText}`,
   );
-  assert.match(overlayState.idlePrimaryText, /开始 Capture/);
-  assert.match(overlayState.topicTitle, /授权并开启 Capture/);
+  assert.match(overlayState.idlePrimaryText, /查看开启步骤|开始 Capture/);
+  assert.match(overlayState.topicTitle, /扩展 icon|授权并开启 Capture/);
   assert.ok(
     Number.parseInt(overlayState.participantCount || '0', 10) >= 4,
     `参会人数未正确渲染: ${overlayState.participantCount}`,

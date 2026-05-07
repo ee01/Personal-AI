@@ -1,0 +1,2300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>个人技能炼金台 · memory-exploring tab demo</title>
+  <!--
+    交互简化版（2026-05-07）：
+    - 用户视角：我有什么技能 / 候选 / 绑定到哪些平台 / 怎么快速绑定到其他平台
+    - 移除右侧 "发布就绪" 列；移除 Runs / Evals / Spec tab
+    - Tabs 简化为 工作流 / 证据 / 版本 / 绑定
+    - 候选卡片底部显示已绑定平台（不是来源）
+    - 绑定不是把 SKILL.md 全文塞进剪贴板，而是 "一句安装指引 + skill URL"
+      由 agent 通过 URL 抓取 SKILL.md / scripts；已绑定状态由同步程序异步获取
+    - 顶部新增『自动同步设置』入口，区分三类同步路径：
+        a) OpenClaw remote      -> API 直连
+        b) 本地 coding agent    -> 通过 Desktop App 写本地 skill 目录
+        c) 纯 web 平台          -> 只能 manual install（复制安装指引）
+  -->
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      color-scheme: dark;
+      --ink: #f8fafc;
+      --ink-2: #e2e8f0;
+      --muted: #94a3b8;
+      --muted-2: #64748b;
+      --line: rgba(148, 163, 184, 0.12);
+      --line-strong: rgba(148, 163, 184, 0.22);
+      --panel: rgba(15, 23, 42, 0.6);
+      --panel-2: rgba(15, 23, 42, 0.78);
+      --panel-3: rgba(30, 41, 59, 0.55);
+      --accent: #60a5fa;
+      --accent-2: #a78bfa;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --code-bg: rgba(2, 6, 23, 0.65);
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+        Roboto, sans-serif;
+      background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+      color: var(--ink);
+      overflow-x: hidden;
+      min-height: 100vh;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+      color: inherit;
+    }
+
+    /* ====== 模拟 memory-exploring.vue 的整体壳子 ====== */
+    .memory-container {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      width: 280px;
+      flex-shrink: 0;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(20px);
+      border-right: 1px solid var(--line);
+      padding: 2rem 0;
+    }
+
+    .sidebar-header {
+      padding: 0 2rem 1.6rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .logo {
+      font-size: 1.4rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .sidebar-note {
+      margin-top: 0.7rem;
+      color: #cbd5e1;
+      font-size: 0.78rem;
+      line-height: 1.55;
+    }
+
+    .entity-types {
+      padding: 1.2rem 0;
+    }
+
+    .entity-type {
+      display: flex;
+      align-items: center;
+      padding: 0.7rem 2rem;
+      margin: 0.2rem 0;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      border-left: 3px solid transparent;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .entity-type:hover {
+      background: rgba(59, 130, 246, 0.08);
+      border-left-color: var(--accent);
+    }
+
+    .entity-type.active {
+      background: rgba(167, 139, 250, 0.18);
+      border-left-color: var(--accent-2);
+    }
+
+    .entity-icon {
+      width: 1.5rem;
+      margin-right: 0.7rem;
+      font-size: 1.05rem;
+      text-align: center;
+    }
+
+    .entity-name {
+      font-weight: 500;
+      flex: 1;
+      font-size: 0.92rem;
+    }
+
+    .entity-count {
+      background: rgba(167, 139, 250, 0.22);
+      color: var(--accent-2);
+      padding: 0.18rem 0.5rem;
+      border-radius: 0.7rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+
+    .sidebar-divider {
+      margin: 0.8rem 1.6rem;
+      border: none;
+      border-top: 1px solid var(--line);
+    }
+
+    /* ====== Skill Foundry 主面板 ====== */
+    .main-content {
+      flex: 1;
+      padding: 1.4rem 1.8rem 2rem;
+      overflow-y: auto;
+      height: 100vh;
+      max-height: 100vh;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.2rem;
+    }
+
+    .page-title {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 1.45rem;
+      font-weight: 700;
+    }
+
+    .page-title-mark {
+      width: 2.1rem;
+      height: 2.1rem;
+      border-radius: 0.55rem;
+      background: linear-gradient(135deg, rgba(96, 165, 250, 0.32), rgba(167, 139, 250, 0.32));
+      border: 1px solid rgba(167, 139, 250, 0.45);
+      display: grid;
+      place-items: center;
+      font-size: 1.1rem;
+    }
+
+    .page-eyebrow {
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .page-subtitle {
+      margin-top: 0.4rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.55;
+      max-width: 720px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .capture-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.8rem;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.32);
+      color: var(--green);
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .capture-chip .pulse {
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+      animation: pulse 1.6s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+      }
+      70% {
+        box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+      }
+    }
+
+    /* ====== 两栏布局（左：候选 / 右：详情） ====== */
+    .foundry-grid {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 1rem;
+      height: calc(100vh - 8rem);
+      min-height: 560px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 0.85rem;
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    /* ====== 左栏：候选列表 ====== */
+    .rail-head {
+      padding: 0.9rem 1rem;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(96, 165, 250, 0.04), transparent);
+    }
+
+    .rail-search {
+      width: 100%;
+      padding: 0.55rem 0.8rem;
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid var(--line-strong);
+      border-radius: 0.55rem;
+      color: var(--ink);
+      font-size: 0.84rem;
+    }
+
+    .rail-search:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.12);
+    }
+
+    .rail-segmented {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.25rem;
+      margin-top: 0.6rem;
+      padding: 0.25rem;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid var(--line);
+      border-radius: 0.55rem;
+    }
+
+    .rail-segmented button {
+      border: none;
+      border-radius: 0.4rem;
+      padding: 0.4rem 0.2rem;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .rail-segmented button.active {
+      background: rgba(96, 165, 250, 0.18);
+      color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.32);
+    }
+
+    .candidate-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.6rem;
+      display: grid;
+      align-content: start;
+      gap: 0.6rem;
+    }
+
+    .candidate {
+      width: 100%;
+      text-align: left;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid var(--line);
+      border-radius: 0.65rem;
+      padding: 0.85rem;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      display: grid;
+      gap: 0.55rem;
+      color: inherit;
+    }
+
+    .candidate:hover {
+      border-color: rgba(96, 165, 250, 0.32);
+      transform: translateY(-1px);
+    }
+
+    .candidate.active {
+      border-color: rgba(167, 139, 250, 0.55);
+      background: rgba(76, 29, 149, 0.18);
+      box-shadow: inset 3px 0 0 var(--accent-2);
+    }
+
+    .candidate-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      align-items: flex-start;
+    }
+
+    .candidate h3 {
+      font-size: 0.92rem;
+      font-weight: 650;
+      line-height: 1.25;
+      margin: 0;
+    }
+
+    .candidate p {
+      color: var(--muted);
+      font-size: 0.75rem;
+      line-height: 1.45;
+    }
+
+    .risk {
+      flex: none;
+      border-radius: 999px;
+      padding: 0.18rem 0.45rem;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      border: 1px solid;
+    }
+
+    .risk.low {
+      color: var(--green);
+      background: rgba(34, 197, 94, 0.1);
+      border-color: rgba(34, 197, 94, 0.32);
+    }
+
+    .risk.medium {
+      color: var(--amber);
+      background: rgba(245, 158, 11, 0.1);
+      border-color: rgba(245, 158, 11, 0.32);
+    }
+
+    .risk.high {
+      color: var(--red);
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.32);
+    }
+
+    /* 候选卡 meta：原本展示来源，改为展示已绑定平台 */
+    .candidate-bindings {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      align-items: center;
+    }
+
+    .candidate-bindings .label {
+      font-size: 0.66rem;
+      color: var(--muted-2);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-right: 0.15rem;
+    }
+
+    .binding-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.16rem 0.45rem;
+      border: 1px solid var(--line-strong);
+      border-radius: 0.35rem;
+      background: rgba(15, 23, 42, 0.6);
+      color: var(--ink-2);
+      font-size: 0.68rem;
+      font-weight: 600;
+    }
+
+    .binding-pill .dot {
+      width: 0.4rem;
+      height: 0.4rem;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+
+    .binding-pill.installed .dot {
+      background: var(--green);
+      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
+    }
+
+    .binding-pill.outdated .dot {
+      background: var(--amber);
+    }
+
+    .binding-pill.blocked .dot {
+      background: var(--red);
+    }
+
+    .binding-pill.not_installed .dot {
+      background: var(--muted);
+      opacity: 0.6;
+    }
+
+    .candidate-status {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+      padding-top: 0.2rem;
+      border-top: 1px dashed var(--line);
+    }
+
+    .candidate-status .badge {
+      padding: 0.1rem 0.4rem;
+      border-radius: 0.3rem;
+      font-weight: 600;
+    }
+
+    .candidate-status .badge.draft {
+      background: rgba(96, 165, 250, 0.14);
+      color: #93c5fd;
+    }
+
+    .candidate-status .badge.candidate {
+      background: rgba(245, 158, 11, 0.14);
+      color: var(--amber);
+    }
+
+    .candidate-status .badge.active {
+      background: rgba(34, 197, 94, 0.14);
+      color: var(--green);
+    }
+
+    /* ====== 右栏：详情 ====== */
+    .workspace-head {
+      padding: 1rem 1.2rem;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 1rem;
+      justify-content: space-between;
+      align-items: flex-start;
+      background: linear-gradient(180deg, rgba(167, 139, 250, 0.06), transparent);
+    }
+
+    .workspace-title h2 {
+      font-size: 1.18rem;
+      line-height: 1.25;
+      font-weight: 700;
+      margin-top: 0.25rem;
+    }
+
+    .workspace-title .eyebrow {
+      color: var(--accent-2);
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .workspace-title p {
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.55;
+      margin-top: 0.45rem;
+      max-width: 620px;
+    }
+
+    .workspace-actions {
+      display: flex;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      height: 2rem;
+      padding: 0 0.85rem;
+      border-radius: 0.5rem;
+      border: 1px solid;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.78rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.2s;
+    }
+
+    .btn.primary {
+      background: linear-gradient(135deg, rgba(96, 165, 250, 0.85), rgba(167, 139, 250, 0.85));
+      border-color: rgba(167, 139, 250, 0.6);
+      color: #fff;
+    }
+
+    .btn.primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(96, 165, 250, 0.32);
+    }
+
+    .btn.primary:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn.secondary {
+      background: rgba(15, 23, 42, 0.55);
+      border-color: var(--line-strong);
+      color: var(--ink-2);
+    }
+
+    .btn.secondary:hover {
+      background: rgba(96, 165, 250, 0.12);
+      border-color: rgba(96, 165, 250, 0.32);
+      color: #93c5fd;
+    }
+
+    .btn.ghost {
+      width: 2rem;
+      padding: 0;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.5);
+      border-color: var(--line);
+      color: var(--muted);
+    }
+
+    .btn.ghost:hover {
+      color: var(--ink);
+      border-color: var(--line-strong);
+    }
+
+    .btn.danger {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.32);
+      color: var(--red);
+    }
+
+    .btn.danger:hover {
+      background: rgba(239, 68, 68, 0.18);
+    }
+
+    .workspace-tabs {
+      display: flex;
+      gap: 0.4rem;
+      padding: 0.55rem 1.2rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.32);
+      overflow-x: auto;
+    }
+
+    .workspace-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .tab-btn {
+      padding: 0.45rem 0.9rem;
+      background: transparent;
+      border: none;
+      border-radius: 0.5rem;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .tab-btn:hover {
+      background: rgba(96, 165, 250, 0.1);
+      color: #93c5fd;
+    }
+
+    .tab-btn.active {
+      background: rgba(167, 139, 250, 0.18);
+      color: var(--accent-2);
+      box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.32);
+    }
+
+    .tab-badge {
+      margin-left: 0.4rem;
+      padding: 0.05rem 0.4rem;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.18);
+      color: var(--muted);
+      font-size: 0.66rem;
+      font-weight: 700;
+    }
+
+    .tab-btn.active .tab-badge {
+      background: rgba(167, 139, 250, 0.3);
+      color: #f8fafc;
+    }
+
+    .workspace-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.1rem 1.2rem;
+    }
+
+    /* ====== 通用 section ====== */
+    .section {
+      background: var(--panel-3);
+      border: 1px solid var(--line);
+      border-radius: 0.7rem;
+      overflow: hidden;
+      margin-bottom: 1rem;
+    }
+
+    .section-head {
+      padding: 0.7rem 0.95rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.6rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.4);
+    }
+
+    .section-head h3 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .section-head h3 .icon {
+      margin-right: 0.4rem;
+    }
+
+    .section-body {
+      padding: 0.95rem;
+      display: grid;
+      gap: 0.85rem;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.85rem;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 5.5rem 1fr;
+      gap: 0.6rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px dashed var(--line);
+    }
+
+    .kv:last-child {
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .kv .label {
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .kv .value {
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: var(--ink-2);
+    }
+
+    .pill-row {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      padding: 0.2rem 0.55rem;
+      background: rgba(96, 165, 250, 0.12);
+      border: 1px solid rgba(96, 165, 250, 0.25);
+      color: #93c5fd;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 500;
+    }
+
+    .pill.warn {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.3);
+      color: #fbbf24;
+    }
+
+    .pill.ok {
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.3);
+      color: var(--green);
+    }
+
+    .pill.muted {
+      background: rgba(148, 163, 184, 0.12);
+      border-color: rgba(148, 163, 184, 0.25);
+      color: var(--muted);
+    }
+
+    /* Workflow steps */
+    .steps {
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 1.6rem 1fr;
+      gap: 0.6rem;
+      align-items: start;
+      padding: 0.7rem 0.85rem;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid var(--line);
+      border-radius: 0.55rem;
+    }
+
+    .step-num {
+      width: 1.6rem;
+      height: 1.6rem;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #0f172a;
+      font-weight: 800;
+      font-size: 0.78rem;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+
+    .step-body strong {
+      display: block;
+      font-size: 0.86rem;
+      color: var(--ink);
+      margin-bottom: 0.25rem;
+    }
+
+    .step-body p {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .step-tools {
+      margin-top: 0.45rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+    }
+
+    .step-tools .pill {
+      font-size: 0.66rem;
+    }
+
+    /* Evidence / Versions / Bindings shared list */
+    .evidence-list,
+    .version-list,
+    .bindings-list {
+      display: grid;
+      gap: 0.6rem;
+    }
+
+    .evidence,
+    .version,
+    .binding-card {
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid var(--line);
+      border-radius: 0.55rem;
+      padding: 0.85rem 0.95rem;
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .evidence-top,
+    .version-top,
+    .binding-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .evidence h4,
+    .version h4,
+    .binding-card h4 {
+      font-size: 0.86rem;
+      font-weight: 650;
+      color: var(--ink);
+    }
+
+    .evidence p,
+    .version p {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .evidence-foot {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      font-size: 0.7rem;
+      color: var(--muted-2);
+      align-items: center;
+    }
+
+    .evidence-link {
+      color: #93c5fd;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .evidence-link:hover {
+      text-decoration: underline;
+    }
+
+    /* Status badges */
+    .status {
+      flex: none;
+      padding: 0.2rem 0.5rem;
+      border-radius: 0.35rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      border: 1px solid;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .status.pass {
+      color: var(--green);
+      border-color: rgba(34, 197, 94, 0.4);
+      background: rgba(34, 197, 94, 0.1);
+    }
+
+    .status.warn {
+      color: var(--amber);
+      border-color: rgba(245, 158, 11, 0.4);
+      background: rgba(245, 158, 11, 0.1);
+    }
+
+    .status.fail {
+      color: var(--red);
+      border-color: rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .status.draft {
+      color: var(--accent);
+      border-color: rgba(96, 165, 250, 0.4);
+      background: rgba(96, 165, 250, 0.1);
+    }
+
+    .status.muted {
+      color: var(--muted);
+      border-color: rgba(148, 163, 184, 0.3);
+      background: rgba(148, 163, 184, 0.08);
+    }
+
+    /* ====== Bindings tab 专属样式 ====== */
+    .install-banner {
+      background: linear-gradient(135deg, rgba(96, 165, 250, 0.12), rgba(167, 139, 250, 0.12));
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      border-radius: 0.6rem;
+      padding: 0.75rem 0.95rem;
+      display: flex;
+      gap: 0.6rem;
+      align-items: flex-start;
+    }
+
+    .install-banner-icon {
+      flex-shrink: 0;
+      font-size: 1.1rem;
+    }
+
+    .install-banner-body {
+      flex: 1;
+      font-size: 0.78rem;
+      color: var(--ink-2);
+      line-height: 1.6;
+    }
+
+    .install-banner-body strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .install-banner-body code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(2, 6, 23, 0.55);
+      border: 1px solid var(--line);
+      padding: 0.05rem 0.3rem;
+      border-radius: 0.25rem;
+      font-size: 0.72rem;
+    }
+
+    .binding-card {
+      gap: 0.65rem;
+    }
+
+    .binding-card-top {
+      align-items: center;
+    }
+
+    .binding-name-block {
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .binding-icon {
+      width: 1.9rem;
+      height: 1.9rem;
+      border-radius: 0.45rem;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--line-strong);
+      display: grid;
+      place-items: center;
+      font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+
+    .binding-name-block .name {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.2;
+    }
+
+    .binding-name-block .sub {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 0.15rem;
+    }
+
+    .binding-state-row {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .binding-instruction {
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 0.45rem;
+      padding: 0.55rem 0.75rem;
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+    }
+
+    .binding-instruction .text {
+      flex: 1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.74rem;
+      color: var(--ink-2);
+      word-break: break-all;
+      line-height: 1.55;
+    }
+
+    .binding-instruction .text .url {
+      color: #93c5fd;
+    }
+
+    .binding-instruction .copy-btn {
+      flex-shrink: 0;
+    }
+
+    .binding-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.75rem;
+      align-items: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+
+    .binding-meta-row .meta-key {
+      color: var(--muted-2);
+    }
+
+    .binding-meta-row .meta-val {
+      color: var(--ink-2);
+    }
+
+    .auto-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.18rem 0.55rem;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid var(--line-strong);
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .auto-toggle.on {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: rgba(34, 197, 94, 0.32);
+      color: var(--green);
+    }
+
+    .auto-toggle.unsupported {
+      background: rgba(148, 163, 184, 0.08);
+      color: var(--muted-2);
+      opacity: 0.85;
+    }
+
+    /* Versions diff */
+    .version-diff {
+      display: grid;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      padding: 0.6rem 0.8rem;
+    }
+
+    .diff-line {
+      display: flex;
+      gap: 0.4rem;
+    }
+
+    .diff-line .marker {
+      width: 0.8rem;
+      flex-shrink: 0;
+      font-weight: 700;
+    }
+
+    .diff-line.add .marker,
+    .diff-line.add {
+      color: var(--green);
+    }
+
+    .diff-line.remove .marker,
+    .diff-line.remove {
+      color: #fb7185;
+    }
+
+    .diff-line.context {
+      color: var(--muted);
+    }
+
+    /* ====== 自动同步 dialog ====== */
+    .dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.55);
+      backdrop-filter: blur(6px);
+      display: grid;
+      place-items: center;
+      z-index: 100;
+      padding: 1rem;
+    }
+
+    .dialog-backdrop[hidden] {
+      display: none !important;
+    }
+
+    .dialog {
+      width: min(640px, 100%);
+      max-height: min(680px, 92vh);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--line-strong);
+      border-radius: 0.85rem;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .dialog-head {
+      padding: 1rem 1.2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .dialog-head h3 {
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .dialog-head p {
+      margin-top: 0.3rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      max-width: 460px;
+    }
+
+    .dialog-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.9rem 1.2rem 1.2rem;
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .sync-row {
+      display: grid;
+      grid-template-columns: 2.4rem 1fr auto;
+      gap: 0.7rem;
+      align-items: center;
+      padding: 0.75rem 0.9rem;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid var(--line);
+      border-radius: 0.6rem;
+    }
+
+    .sync-row .icon {
+      font-size: 1.05rem;
+      width: 2.4rem;
+      height: 2.4rem;
+      border-radius: 0.45rem;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--line-strong);
+      display: grid;
+      place-items: center;
+    }
+
+    .sync-row .body strong {
+      display: block;
+      font-size: 0.86rem;
+      color: var(--ink);
+    }
+
+    .sync-row .body p {
+      margin-top: 0.18rem;
+      font-size: 0.74rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .sync-row .body .mode {
+      margin-top: 0.35rem;
+      display: inline-flex;
+      gap: 0.35rem;
+      align-items: center;
+      font-size: 0.7rem;
+      color: var(--muted-2);
+    }
+
+    .sync-row .control {
+      flex-shrink: 0;
+    }
+
+    /* Switch */
+    .switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .switch input {
+      appearance: none;
+      width: 2.4rem;
+      height: 1.4rem;
+      background: rgba(148, 163, 184, 0.25);
+      border-radius: 999px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin: 0;
+      flex-shrink: 0;
+    }
+
+    .switch input::after {
+      content: "";
+      position: absolute;
+      width: 1.05rem;
+      height: 1.05rem;
+      background: #fff;
+      border-radius: 50%;
+      top: 0.175rem;
+      left: 0.175rem;
+      transition: left 0.18s ease;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }
+
+    .switch input:checked {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    }
+
+    .switch input:checked::after {
+      left: 1.175rem;
+    }
+
+    .switch input:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .switch .switch-label {
+      font-size: 0.74rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 1.5rem;
+      transform: translateX(-50%) translateY(120%);
+      opacity: 0;
+      transition: 220ms ease;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--line-strong);
+      color: var(--ink);
+      padding: 0.65rem 1rem;
+      border-radius: 0.55rem;
+      font-size: 0.82rem;
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+      backdrop-filter: blur(12px);
+      z-index: 200;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* Empty state */
+    .empty {
+      padding: 1.5rem;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line-strong);
+      border-radius: 0.6rem;
+      background: rgba(15, 23, 42, 0.3);
+      font-size: 0.85rem;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.3);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(96, 165, 250, 0.25);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(96, 165, 250, 0.45);
+    }
+
+    /* Responsive */
+    @media (max-width: 1100px) {
+      .foundry-grid {
+        grid-template-columns: 280px 1fr;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .memory-container {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        width: 100%;
+      }
+
+      .foundry-grid {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+
+      .panel {
+        min-height: 360px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="memory-app">
+    <div class="memory-container">
+      <!-- 模拟 memory-exploring.vue 的侧边栏，"个人技能"是新增 tab -->
+      <aside class="sidebar">
+        <header class="sidebar-header">
+          <div class="logo">🧠 记忆查询系统</div>
+          <p class="sidebar-note">
+            个人技能炼金台是从你真实操作里萃取出来的可复用能力库；这里只展示已确认的来源记忆与候选技能。
+          </p>
+        </header>
+
+        <nav class="entity-types">
+          <a class="entity-type"><span class="entity-icon">🏠</span><span class="entity-name">首页概览</span></a>
+          <a class="entity-type"><span class="entity-icon">⏰</span><span class="entity-name">时间轴</span></a>
+          <a class="entity-type"><span class="entity-icon">📡</span><span class="entity-name">会议记录</span><span class="entity-count">42</span></a>
+          <a class="entity-type"><span class="entity-icon">👤</span><span class="entity-name">用户画像</span></a>
+          <a class="entity-type"><span class="entity-icon">👁</span><span class="entity-name">关注后续</span><span class="entity-count">7</span></a>
+          <a class="entity-type"><span class="entity-icon">🌙</span><span class="entity-name">梦境重放</span></a>
+          <a class="entity-type"><span class="entity-icon">🧠</span><span class="entity-name">自我反思</span></a>
+          <a class="entity-type"><span class="entity-icon">⚖️</span><span class="entity-name">决策中心</span></a>
+          <a class="entity-type"><span class="entity-icon">⚙️</span><span class="entity-name">动作队列</span></a>
+          <a class="entity-type"><span class="entity-icon">📡</span><span class="entity-name">主动询问</span></a>
+
+          <hr class="sidebar-divider" />
+
+          <a class="entity-type"><span class="entity-icon">🛫</span><span class="entity-name">操作记忆</span><span class="entity-count">12</span></a>
+          <a class="entity-type active"><span class="entity-icon">🧪</span><span class="entity-name">个人技能</span><span class="entity-count">4</span></a>
+
+          <hr class="sidebar-divider" />
+
+          <a class="entity-type"><span class="entity-icon">👥</span><span class="entity-name">人物</span><span class="entity-count">28</span></a>
+          <a class="entity-type"><span class="entity-icon">📂</span><span class="entity-name">项目</span><span class="entity-count">11</span></a>
+          <a class="entity-type"><span class="entity-icon">🏷️</span><span class="entity-name">主题</span><span class="entity-count">36</span></a>
+        </nav>
+      </aside>
+
+      <!-- 主内容区：个人技能炼金台 -->
+      <main class="main-content">
+        <header class="page-header">
+          <div>
+            <div class="page-eyebrow">Personal Skill Foundry</div>
+            <h1 class="page-title">
+              <span class="page-title-mark">🧪</span>
+              <span>个人技能炼金台</span>
+            </h1>
+            <p class="page-subtitle">
+              你的真源技能库：从 Codex / Claude / 豆包 / Jira / 会议中沉淀「做事方法」，再以一句安装指引 + URL 的方式快速绑定到任意 agent 平台。
+            </p>
+          </div>
+          <div class="header-actions">
+            <span class="capture-chip" title="Flight Recorder 来源数据正在被监听">
+              <span class="pulse"></span>
+              Flight Recorder 已联通
+            </span>
+            <button class="btn secondary" id="autoSyncBtn">⚙ 自动同步设置</button>
+          </div>
+        </header>
+
+        <div class="foundry-grid">
+          <!-- 左栏：候选技能 inbox -->
+          <section class="panel rail" aria-label="技能候选列表">
+            <div class="rail-head">
+              <input id="search" class="rail-search" placeholder="搜索技能 / 候选 / 平台…" aria-label="搜索候选" />
+              <div class="rail-segmented" role="group" aria-label="候选过滤">
+                <button class="active" data-filter="all">全部</button>
+                <button data-filter="active">在用</button>
+                <button data-filter="draft">草稿</button>
+                <button data-filter="candidate">候选</button>
+              </div>
+            </div>
+            <div id="candidateList" class="candidate-list"></div>
+          </section>
+
+          <!-- 右栏：详情 -->
+          <section class="panel workspace" aria-label="技能详情">
+            <header class="workspace-head">
+              <div class="workspace-title">
+                <div class="eyebrow" id="eyebrow">候选技能</div>
+                <h2 id="skillTitle"></h2>
+                <p id="skillSummary"></p>
+              </div>
+              <div class="workspace-actions">
+                <button class="btn primary" id="promoteBtn">⇪ 升级为 Draft</button>
+                <button class="btn secondary" id="dismissBtn" title="忽略候选">✕</button>
+              </div>
+            </header>
+
+            <nav class="workspace-tabs" aria-label="详情 Tabs">
+              <button class="tab-btn active" data-tab="workflow">工作流</button>
+              <button class="tab-btn" data-tab="evidence">证据 <span class="tab-badge" id="evidenceCount"></span></button>
+              <button class="tab-btn" data-tab="versions">版本</button>
+              <button class="tab-btn" data-tab="bindings">绑定 <span class="tab-badge" id="bindingsCount"></span></button>
+            </nav>
+
+            <div id="content" class="workspace-content"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- 自动同步设置 dialog -->
+    <div class="dialog-backdrop" id="autoSyncDialog" hidden>
+      <div class="dialog" role="dialog" aria-labelledby="autoSyncTitle">
+        <header class="dialog-head">
+          <div>
+            <h3 id="autoSyncTitle">⚙ 自动同步设置</h3>
+            <p>
+              开启后，Personal AI 会把所有 active 技能自动推送到目标平台，并周期性回拉 SKILL.md 修改时间，发现冲突时进入候选审稿。<strong>真源永远在 Personal AI 内</strong>。
+            </p>
+          </div>
+          <button class="btn ghost" id="autoSyncCloseBtn" aria-label="关闭">✕</button>
+        </header>
+        <div class="dialog-body" id="syncRowsContainer"></div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script>
+    /*
+     * 数据模型简化要点（对应 plan.md 2026-05-07 简化决策）：
+     * - skill.bindings[]：每条 binding 同时承载「已绑定状态」(state/installedVersion) 与
+     *   「快速安装指引」(installCommand + skillUrl)，让用户能复制一句话给 agent 自助安装。
+     * - 已绑定状态由同步程序异步更新（OpenClaw API / Desktop App fs watch / 手动），UI 只展示。
+     * - 不再保存 receipts / eval runs；评测交给目标 agent 自己跑。
+     */
+
+    // ===== 自动同步全局配置（按平台维度，而非按 skill）=====
+    const autoSyncDefaults = {
+      personal_ai: { enabled: true, capability: "internal", mode: "internal" },
+      openclaw: { enabled: true, capability: "api", mode: "API direct" },
+      codex: { enabled: false, capability: "fs_via_desktop_app", mode: "Desktop App fs watcher" },
+      claude_code: { enabled: false, capability: "fs_via_desktop_app", mode: "Desktop App fs watcher" },
+      cursor: { enabled: false, capability: "fs_via_desktop_app", mode: "Desktop App fs watcher" },
+      chatgpt_gpts: { enabled: false, capability: "manual_only", mode: "Manual install only" },
+      claude_skills_web: { enabled: false, capability: "manual_only", mode: "Manual install only" },
+    };
+    // 模拟 Desktop App 是否已安装
+    const desktopAppInstalled = false;
+
+    // ===== 平台元数据 =====
+    const platformMeta = {
+      personal_ai: { label: "Personal AI", icon: "🧠", note: "技能真源，永远 active" },
+      openclaw: { label: "OpenClaw remote", icon: "🐾", note: "通过 /v1/responses + skills.* RPC 同步" },
+      codex: { label: "Codex CLI", icon: "🤖", note: "本机 ~/.codex/skills" },
+      claude_code: { label: "Claude Code", icon: "🪶", note: "本机 ~/.claude/skills" },
+      cursor: { label: "Cursor", icon: "🅒", note: "Cursor user rules + skills" },
+      chatgpt_gpts: { label: "ChatGPT / GPTs", icon: "💬", note: "纯 Web，不可写文件" },
+      claude_skills_web: { label: "Claude.ai Skills", icon: "🅰", note: "Web 版本，不可写文件" },
+    };
+
+    // ===== 候选技能数据 =====
+    const skills = [
+      {
+        id: "jira-headcount",
+        slug: "jira-headcount-trend-report",
+        title: "Jira Headcount Trend Report",
+        scope: "work",
+        status: "candidate",
+        risk: "medium",
+        summary: "把和 Sophia 协作的 Jira 数据分析（人头去重 / 趋势 / 项目维度统计）固化成可复用、可评测的技能。",
+        trigger: "页面 URL 是 Jira / Google Sheets，或消息中出现『统计开发人数 / assignee 去重 / Q3 趋势 / headcount』。",
+        notUse: "不要在缺少 project key、时间范围或团队归属时直接生成报告。",
+        sources: ["Jira", "RingCentral", "Codex", "Google Sheets"],
+        owner: "esone.qiu",
+        repetition: "近 30 天 5 次相似任务",
+        riskBrief: "外部写: 首次必问 · 个人数据: 仅工作 scope · Secret: 导出前阻断",
+        steps: [
+          { title: "确认数据范围", desc: "向用户问清 project key、时间窗、ticket 类型、是否计入空 assignee。", tools: ["ask_user", "jira"] },
+          { title: "拉取并归一化 Jira 导出", desc: "去重 assignee、把 bot 与人分离、保留原始 JQL 与口径备注。", tools: ["jira", "codex/python"] },
+          { title: "聚合趋势", desc: "按 month / team / status / project stream 聚合，并标注异常跳变。", tools: ["pandas", "sheets"] },
+          { title: "生成报告", desc: "输出 chart-ready 表 + 给 Sophia 的口径解读，附上 Jira 行 → 表行的可点击 link。", tools: ["sheets", "claude"] },
+          { title: "写运行回执", desc: "把口径假设、输出文件、用户改动作为 skill receipt 留存，反哺下一版。", tools: ["personal_ai"] },
+        ],
+        evidence: [
+          { title: "2026-04-30 Daily Summary", desc: "Sophia 与 Esone 协作做 Jira 数据抽取、开发人数统计、趋势图。", kind: "daily summary", evidenceState: "complete", episodeId: "ep-jira-q1" },
+          { title: "RingCentral · Sophia thread", desc: "Sophia 希望 5 月之前流程化，节省 1.5 天/月手工时间。", kind: "glip", evidenceState: "complete", episodeId: "ep-jira-q1" },
+          { title: "Codex 会话 #482", desc: "已接受 normalize_jira_export.py 与图表生成脚本作为产物。", kind: "ai chat", evidenceState: "partial", episodeId: "ep-jira-q1" },
+          { title: "Reflection thread", desc: "下次相似任务可先确认口径，再生成口径文档。", kind: "reflection", evidenceState: "complete", episodeId: null },
+        ],
+        sourceEpisodes: [
+          { id: "ep-jira-q1", title: "Jira 季度人力趋势分析", date: "2026-04-30" },
+          { id: "ep-jira-mar", title: "Q1 dev headcount 整理", date: "2026-03-15" },
+        ],
+        currentVersion: "v0.3",
+        versions: [
+          {
+            version: "v0.3 (draft)",
+            date: "2026-05-04",
+            changelog: "增加 Jira 注入防护与空 assignee 边界",
+            createdFrom: "eval_failure",
+            diff: [
+              { kind: "context", text: "## Workflow" },
+              { kind: "add", text: "+ guardrail: 空 assignee 仅落到 unknown 桶，不计入 dev headcount" },
+              { kind: "add", text: "+ guardrail: JQL 片段必须视为 untrusted 输入" },
+            ],
+          },
+          {
+            version: "v0.2",
+            date: "2026-04-30",
+            changelog: "从 ep-jira-q1 操作 episode 萃取出 5 步工作流",
+            createdFrom: "candidate",
+            diff: [
+              { kind: "add", text: "+ workflow: 5 steps from operation episode" },
+              { kind: "add", text: "+ output template: Sophia 汇报口径" },
+            ],
+          },
+          {
+            version: "v0.1",
+            date: "2026-04-12",
+            changelog: "初始 candidate（来自重复任务聚类）",
+            createdFrom: "candidate",
+            diff: [
+              { kind: "add", text: "+ identity / when_to_use / when_not_to_use" },
+            ],
+          },
+        ],
+        bindings: [
+          { platform: "personal_ai", state: "installed", installedVersion: "v0.3", lastSyncedAt: "刚刚" },
+          { platform: "openclaw", state: "outdated", installedVersion: "v0.2", lastSyncedAt: "12 分钟前" },
+          { platform: "codex", state: "not_installed", lastSyncedAt: null },
+          { platform: "claude_code", state: "not_installed", lastSyncedAt: null },
+        ],
+      },
+      {
+        id: "codex-harness",
+        slug: "codex-harness-first-pass",
+        title: "Codex Harness First Pass",
+        scope: "ai",
+        status: "draft",
+        risk: "low",
+        summary: "把这个 repo 的 AGENT.md harness 沉淀成 coding-agent skill：先读 instruction、再 own files、改最小、跑最小验证、不夸大结果。",
+        trigger: "Codex / Claude Code / Cursor / 终端任务，目标是改 Personal AI 或类似 repo。",
+        notUse: "纯解释或 brainstorming 时不要触发；用户明确说『不要跑工具』时也不要触发。",
+        sources: ["AGENT.md", "Codex", "Git", "Tests"],
+        owner: "esone.qiu",
+        repetition: "近 30 天 9 次相似任务",
+        riskBrief: "外部写: 禁止 · 个人数据: 排除 · 自动运行: 仅只读",
+        steps: [
+          { title: "读取本地 instructions", desc: "打开 AGENT.md 与相关 feature 文档，再开始动手。", tools: ["fs"] },
+          { title: "检查 worktree", desc: "git status 检查脏文件，禁止 revert 用户未提交改动。", tools: ["git"] },
+          { title: "定义 owned files", desc: "把改动收敛到本次请求面，不做不相关 refactor。", tools: ["fs"] },
+          { title: "按风险层级验证", desc: "选最小验证 tier：docs-only 不跑 build；逻辑改才跑 unit。", tools: ["pnpm/npm", "tests"] },
+          { title: "汇报证据", desc: "讲清楚跑了什么、过了什么、什么没法验证。不夸大不撒谎。", tools: ["personal_ai"] },
+        ],
+        evidence: [
+          { title: "AGENT.md", desc: "post-change 验证 tier 与脏 worktree 规则非常明确。", kind: "repo", evidenceState: "complete", episodeId: "ep-codex-mar" },
+          { title: "Codex 多次自动化运行", desc: "之前的 plan 多为 docs-only，未触发不必要 build。", kind: "operation", evidenceState: "complete", episodeId: "ep-codex-apr" },
+          { title: "ChatGPT 长期记忆", desc: "用户多次强调要给出验证证据，并保持简洁交付。", kind: "ai chat", evidenceState: "partial", episodeId: null },
+        ],
+        sourceEpisodes: [
+          { id: "ep-codex-apr", title: "Codex 自动化任务连环", date: "2026-04-22" },
+          { id: "ep-codex-mar", title: "AGENT.md tier 调整", date: "2026-03-09" },
+        ],
+        currentVersion: "v1.1",
+        versions: [
+          {
+            version: "v1.1 (active)",
+            date: "2026-05-01",
+            changelog: "新增『未提交改动保护』评测，对应 ep-codex-apr 中的失败案例",
+            createdFrom: "run_feedback",
+            diff: [
+              { kind: "context", text: "## Workflow" },
+              { kind: "add", text: "+ guardrail: 禁止 revert / 删除用户未 commit 的文件" },
+            ],
+          },
+          {
+            version: "v1.0",
+            date: "2026-04-22",
+            changelog: "首版发布：5 步工作流",
+            createdFrom: "manual_edit",
+            diff: [
+              { kind: "add", text: "+ workflow: 5 steps" },
+            ],
+          },
+        ],
+        bindings: [
+          { platform: "personal_ai", state: "installed", installedVersion: "v1.1", lastSyncedAt: "刚刚" },
+          { platform: "codex", state: "installed", installedVersion: "v1.1", lastSyncedAt: "3 分钟前" },
+          { platform: "claude_code", state: "outdated", installedVersion: "v1.0", lastSyncedAt: "昨天" },
+          { platform: "cursor", state: "not_installed", lastSyncedAt: null },
+          { platform: "openclaw", state: "blocked", lastSyncedAt: "5 小时前" },
+        ],
+      },
+      {
+        id: "meeting-handoff",
+        slug: "meeting-handoff-brief",
+        title: "Meeting Handoff Brief",
+        scope: "work",
+        status: "candidate",
+        risk: "medium",
+        summary: "在重要项目会议前 10 分钟自动产出 5 分钟 brief：相关项目、人、最近决策、未完成 action。",
+        trigger: "RingCentral 会议 / 消息 mention：Video Mobile / Rooms / Nova / RCV SDK / Coa / Fred / Sophia / handover。",
+        notUse: "聊家常、含 HR 敏感话题或没有项目归属的会议不要触发。",
+        sources: ["Meeting Pilot", "RingCentral", "Daily Summary", "Decision Episodes"],
+        owner: "esone.qiu",
+        repetition: "近 30 天 6 次会议前 brief 需求",
+        riskBrief: "外部写: 首次必问 · 个人数据: 默认 redact · 自动运行: 仅会议 preview",
+        steps: [
+          { title: "识别会议上下文", desc: "匹配 title、参会人、project name、最近 thread。", tools: ["meeting_pilot", "ringcentral"] },
+          { title: "召回 handoff 状态", desc: "近期决策、commitment、blocker、owner 变更。", tools: ["recall", "decisions"] },
+          { title: "生成 brief", desc: "区分『要说的』『要问的』『不要重复 relitigate 的旧结论』。", tools: ["claude"] },
+          { title: "捕获结果", desc: "会后提取 action item 与可能的 skill patch。", tools: ["personal_ai"] },
+        ],
+        evidence: [
+          { title: "2026-04-30 Daily Summary", desc: "Sophia 计划在 Video Mobile / Rooms / RCV SDK / Nova 之间调整责任。", kind: "daily", evidenceState: "complete", episodeId: "ep-meeting-handoff" },
+          { title: "Daily Reflection", desc: "open question：最终 ownership 与节后协调。", kind: "reflection", evidenceState: "complete", episodeId: null },
+          { title: "Meeting Pilot", desc: "近期 meeting 记录显示 Q3 准备进展。", kind: "meeting", evidenceState: "partial", episodeId: "ep-meeting-handoff" },
+        ],
+        sourceEpisodes: [
+          { id: "ep-meeting-handoff", title: "Video Mobile / Rooms / Nova handover", date: "2026-04-29" },
+        ],
+        currentVersion: "v0.1",
+        versions: [
+          {
+            version: "v0.1 (candidate)",
+            date: "2026-05-02",
+            changelog: "首版 candidate：4 步工作流",
+            createdFrom: "candidate",
+            diff: [
+              { kind: "add", text: "+ workflow: 4 steps" },
+              { kind: "add", text: "+ riskPolicy.personalData = redact_by_default" },
+            ],
+          },
+        ],
+        bindings: [
+          { platform: "personal_ai", state: "installed", installedVersion: "v0.1", lastSyncedAt: "刚刚" },
+          { platform: "claude_code", state: "not_installed", lastSyncedAt: null },
+          { platform: "chatgpt_gpts", state: "not_installed", lastSyncedAt: null },
+        ],
+      },
+      {
+        id: "ai-tool-comparator",
+        slug: "ai-tool-trial-comparator",
+        title: "AI Tool Trial Comparator",
+        scope: "ai",
+        status: "candidate",
+        risk: "low",
+        summary: "比较 Codex / Claude Code / Cursor / Factory.ai / Kimi / GLM 等工具的成本、安全审批、coding 适配与团队 rollout 限制。",
+        trigger: "消息 mention：AI 工具 trial / license reclaim / Cursor cost / OpenAI deal / Claude Code vs Codex 投票 / Factory.ai 审批。",
+        notUse: "用户要求做正式采购建议但缺少最新 source link 时不要直接给出推荐。",
+        sources: ["RingCentral", "Daily Reflection", "Web", "AI chats"],
+        owner: "esone.qiu",
+        repetition: "近 14 天 4 次相似讨论",
+        riskBrief: "外部写: 禁止 · 个人数据: 排除 · 自动运行: 可生成草稿",
+        steps: [
+          { title: "搜集当前事实", desc: "拉取最近内部 memory，必要时浏览公开 pricing / 安全文档。", tools: ["recall", "web"] },
+          { title: "多维度比较", desc: "成本 / 可获得性 / 安全审批 / coding 质量 / review / connector / production 限制。", tools: ["claude"] },
+          { title: "生成建议", desc: "区分团队默认、例外路径、个人 workflow 建议。", tools: ["claude"] },
+          { title: "排定复盘", desc: "trial 期 / 投票 deadline 临近时生成复盘 reminder。", tools: ["reminders"] },
+        ],
+        evidence: [
+          { title: "2026-04-30 Daily Summary", desc: "Cursor 用户可能迁移到 usage-based；Claude Code vs Codex 投票请求。", kind: "daily", evidenceState: "complete", episodeId: "ep-ai-trial" },
+          { title: "RingCentral 消息", desc: "Factory.ai 免费 trial active 且 production 已批准。", kind: "glip", evidenceState: "complete", episodeId: "ep-ai-trial" },
+          { title: "Reflection thread", desc: "AI 工具使用与限制持续追踪。", kind: "reflection", evidenceState: "complete", episodeId: null },
+        ],
+        sourceEpisodes: [
+          { id: "ep-ai-trial", title: "AI 工具评估 thread", date: "2026-04-29" },
+        ],
+        currentVersion: "v0.1",
+        versions: [
+          {
+            version: "v0.1 (candidate)",
+            date: "2026-05-01",
+            changelog: "首版 candidate",
+            createdFrom: "candidate",
+            diff: [
+              { kind: "add", text: "+ workflow: 4 steps" },
+              { kind: "add", text: "+ guardrail: pricing 未验证 must mark unknown" },
+            ],
+          },
+        ],
+        bindings: [
+          { platform: "personal_ai", state: "installed", installedVersion: "v0.1", lastSyncedAt: "刚刚" },
+          { platform: "codex", state: "not_installed", lastSyncedAt: null },
+        ],
+      },
+    ];
+
+    // ===== state =====
+    let currentId = skills[0].id;
+    let currentTab = "workflow";
+    let activeFilter = "all";
+    const promotedSet = new Set(skills.filter((s) => s.status === "draft" || s.status === "active").map((s) => s.id));
+    const autoSync = JSON.parse(JSON.stringify(autoSyncDefaults));
+
+    const $ = (sel) => document.querySelector(sel);
+    const list = $("#candidateList");
+    const content = $("#content");
+    const toast = $("#toast");
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1900);
+    }
+
+    function currentSkill() {
+      return skills.find((s) => s.id === currentId) || skills[0];
+    }
+
+    function statusOf(skill) {
+      if (skill.status === "active") return "active";
+      if (promotedSet.has(skill.id)) return "draft";
+      return "candidate";
+    }
+
+    function statusLabel(status) {
+      return ({ active: "在用", draft: "草稿", candidate: "候选" })[status] || status;
+    }
+
+    function statusEyebrow(status) {
+      return ({ active: "Active Skill", draft: "Draft Skill", candidate: "Candidate" })[status] || "Skill";
+    }
+
+    function evidenceStateLabel(state) {
+      return ({ complete: "证据完整", partial: "部分证据", manual: "用户补充", unverified: "推断" })[state] || state;
+    }
+
+    function evidenceStateClass(state) {
+      return ({ complete: "ok", partial: "warn", manual: "muted", unverified: "fail" })[state] || "muted";
+    }
+
+    function bindingStateLabel(s) {
+      return ({ installed: "已安装", outdated: "需更新", not_installed: "未安装", blocked: "受限", unknown: "未知" })[s] || s;
+    }
+
+    function bindingStateClass(s) {
+      return ({ installed: "pass", outdated: "warn", not_installed: "muted", blocked: "fail", unknown: "muted" })[s] || "muted";
+    }
+
+    /**
+     * 安装指引文案：用户复制这一句给 agent，agent 通过 URL 抓取 SKILL.md / scripts。
+     * 这里用 personal-ai.local 占位，真实落地会是 Personal AI memory-service 暴露的只读端点
+     * （含 ETag / If-None-Match，便于 agent 端缓存）。
+     */
+    function buildSkillUrl(skill) {
+      return `https://personal-ai.local/skills/${skill.slug}@${skill.currentVersion}`;
+    }
+
+    function buildInstallCommand(platform, skill) {
+      const url = buildSkillUrl(skill);
+      switch (platform) {
+        case "openclaw":
+          return `skills.install --url ${url}`;
+        case "codex":
+          return `请安装并使用我的个人技能：${url}`;
+        case "claude_code":
+          return `Read and follow this skill spec, then install it locally: ${url}`;
+        case "cursor":
+          return `Add this user-rule from URL: ${url}`;
+        case "chatgpt_gpts":
+          return `请按这份 SKILL spec 工作（按需 fetch 资源）：${url}`;
+        case "claude_skills_web":
+          return `Use this skill spec for the current task: ${url}`;
+        default:
+          return url;
+      }
+    }
+
+    function filteredSkills() {
+      const q = $("#search").value.trim().toLowerCase();
+      return skills.filter((skill) => {
+        const status = statusOf(skill);
+        const filterOk = activeFilter === "all" || activeFilter === status;
+        const platformLabels = (skill.bindings || []).map((b) => platformMeta[b.platform]?.label || b.platform).join(" ");
+        const haystack = [skill.title, skill.summary, skill.trigger, platformLabels].join(" ").toLowerCase();
+        return filterOk && (!q || haystack.includes(q));
+      });
+    }
+
+    function renderCandidates() {
+      const items = filteredSkills();
+      if (!items.length) {
+        list.innerHTML = `<div class="empty">没有匹配的候选。</div>`;
+        return;
+      }
+      list.innerHTML = items.map((skill) => {
+        const status = statusOf(skill);
+        // 候选卡 meta 改为展示已绑定平台（最多 4 个，超出折叠为 +N）
+        const installed = (skill.bindings || []).filter((b) => b.state === "installed" || b.state === "outdated");
+        const visible = installed.slice(0, 4);
+        const overflow = installed.length - visible.length;
+        const bindingsHtml = installed.length === 0
+          ? `<span class="binding-pill not_installed"><span class="dot"></span>未绑定</span>`
+          : visible.map((b) => `<span class="binding-pill ${b.state}" title="${platformMeta[b.platform]?.note || ''}"><span class="dot"></span>${platformMeta[b.platform]?.label || b.platform}</span>`).join("") +
+            (overflow > 0 ? `<span class="binding-pill not_installed"><span class="dot"></span>+${overflow}</span>` : "");
+
+        return `
+          <button class="candidate ${skill.id === currentId ? "active" : ""}" data-id="${skill.id}">
+            <div class="candidate-top">
+              <h3>${skill.title}</h3>
+              <span class="risk ${skill.risk}">${skill.risk}</span>
+            </div>
+            <p>${skill.summary}</p>
+            <div class="candidate-bindings">
+              <span class="label">已绑定</span>
+              ${bindingsHtml}
+            </div>
+            <div class="candidate-status">
+              <span class="badge ${status}">${statusLabel(status)}</span>
+              <span>·</span>
+              <span>${skill.repetition}</span>
+            </div>
+          </button>
+        `;
+      }).join("");
+
+      list.querySelectorAll(".candidate").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          currentId = btn.dataset.id;
+          render();
+        });
+      });
+    }
+
+    function renderHeader(skill) {
+      const status = statusOf(skill);
+      $("#eyebrow").textContent = statusEyebrow(status);
+      $("#skillTitle").textContent = skill.title;
+      $("#skillSummary").textContent = skill.summary;
+
+      const promoteBtn = $("#promoteBtn");
+      if (status === "active") {
+        promoteBtn.textContent = "✓ 已发布";
+        promoteBtn.disabled = true;
+      } else if (status === "draft") {
+        promoteBtn.textContent = "✓ 已升级为 Draft";
+        promoteBtn.disabled = true;
+      } else {
+        promoteBtn.textContent = "⇪ 升级为 Draft";
+        promoteBtn.disabled = false;
+      }
+
+      $("#evidenceCount").textContent = skill.evidence.length;
+      $("#bindingsCount").textContent = (skill.bindings || []).length;
+    }
+
+    function renderTabs() {
+      document.querySelectorAll(".tab-btn").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.tab === currentTab);
+      });
+    }
+
+    function renderWorkflow(skill) {
+      return `
+        <section class="section">
+          <div class="section-head">
+            <h3><span class="icon">🔁</span>工作流（${skill.steps.length} 步）</h3>
+            <span class="status draft">${skill.currentVersion}</span>
+          </div>
+          <div class="section-body">
+            <div class="kv"><div class="label">触发</div><div class="value">${skill.trigger}</div></div>
+            <div class="kv"><div class="label">不要触发</div><div class="value">${skill.notUse}</div></div>
+            <div class="kv"><div class="label">来源</div><div class="value"><div class="pill-row">${skill.sources.map((s) => `<span class="pill">${s}</span>`).join("")}</div></div></div>
+            <div class="kv"><div class="label">风险策略</div><div class="value">${skill.riskBrief}</div></div>
+            <div class="steps">
+              ${skill.steps.map((step, i) => `
+                <div class="step">
+                  <div class="step-num">${i + 1}</div>
+                  <div class="step-body">
+                    <strong>${step.title}</strong>
+                    <p>${step.desc}</p>
+                    ${step.tools ? `<div class="step-tools">${step.tools.map((t) => `<span class="pill muted">${t}</span>`).join("")}</div>` : ""}
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h3><span class="icon">🛫</span>来源 episode（Flight Recorder）</h3>
+            <span class="status muted">${(skill.sourceEpisodes || []).length} 条</span>
+          </div>
+          <div class="section-body" style="gap: 0.5rem;">
+            ${(skill.sourceEpisodes || []).length === 0
+              ? `<div class="empty" style="padding: 0.85rem; font-size: 0.78rem;">尚未链接到来源 episode</div>`
+              : skill.sourceEpisodes.map((ep) => `
+                  <div class="binding-card" data-episode="${ep.id}" style="cursor: pointer;">
+                    <div class="binding-card-top">
+                      <div class="binding-name-block">
+                        <span class="binding-icon">🛫</span>
+                        <div>
+                          <div class="name">${ep.title}</div>
+                          <div class="sub">${ep.date} · ${ep.id}</div>
+                        </div>
+                      </div>
+                      <span class="status muted">打开 →</span>
+                    </div>
+                  </div>
+                `).join("")}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderEvidence(skill) {
+      return `
+        <section class="section">
+          <div class="section-head">
+            <h3><span class="icon">🧾</span>证据链（${skill.evidence.length} refs）</h3>
+            <span class="status muted">来自 Flight Recorder + 消息记忆</span>
+          </div>
+          <div class="section-body">
+            <div class="evidence-list">
+              ${skill.evidence.map((ev) => `
+                <article class="evidence">
+                  <div class="evidence-top">
+                    <h4>${ev.title}</h4>
+                    <span class="pill muted">${ev.kind}</span>
+                  </div>
+                  <p>${ev.desc}</p>
+                  <div class="evidence-foot">
+                    <span class="status ${evidenceStateClass(ev.evidenceState)}">${evidenceStateLabel(ev.evidenceState)}</span>
+                    ${ev.episodeId ? `<span>·</span><a class="evidence-link" data-episode="${ev.episodeId}">🛫 来自 episode ${ev.episodeId}</a>` : "<span>·</span><span>无来源 episode</span>"}
+                  </div>
+                </article>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderVersions(skill) {
+      return `
+        <section class="section">
+          <div class="section-head">
+            <h3><span class="icon">🪜</span>版本历史（${skill.versions.length}）</h3>
+            <span class="status muted">当前 ${skill.currentVersion}</span>
+          </div>
+          <div class="section-body">
+            <div class="version-list">
+              ${skill.versions.map((v) => `
+                <article class="version">
+                  <div class="version-top">
+                    <h4>${v.version}</h4>
+                    <span class="pill muted">${v.date} · ${v.createdFrom}</span>
+                  </div>
+                  <p>${v.changelog}</p>
+                  <div class="version-diff">
+                    ${v.diff.map((d) => `
+                      <div class="diff-line ${d.kind}"><span class="marker">${d.kind === "add" ? "+" : d.kind === "remove" ? "−" : " "}</span><span>${escapeHtml(d.text.replace(/^[+\-\s]?\s?/, ""))}</span></div>
+                    `).join("")}
+                  </div>
+                </article>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderBindings(skill) {
+      const bindings = skill.bindings || [];
+      const otherPlatforms = Object.keys(platformMeta).filter((p) => !bindings.some((b) => b.platform === p));
+      const skillUrl = buildSkillUrl(skill);
+
+      return `
+        <div class="install-banner">
+          <div class="install-banner-icon">🔗</div>
+          <div class="install-banner-body">
+            <strong>这条技能的真源 URL：</strong>
+            <code>${skillUrl}</code><br />
+            把任意平台下面那一句话复制给 agent，它会通过这个 URL 拉取 SKILL.md 和资源。<strong>已绑定状态由后台同步程序异步更新</strong>，不依赖 UI 写入文件。
+          </div>
+        </div>
+
+        <section class="section" style="margin-top: 1rem;">
+          <div class="section-head">
+            <h3><span class="icon">🔌</span>已绑定平台（${bindings.length}）</h3>
+            <button class="btn secondary" id="bindingsAutoSyncBtn" style="height: 1.7rem; font-size: 0.72rem;">⚙ 平台级自动同步</button>
+          </div>
+          <div class="section-body">
+            <div class="bindings-list">
+              ${bindings.map((b) => renderBindingCard(b, skill)).join("")}
+            </div>
+          </div>
+        </section>
+
+        ${otherPlatforms.length === 0 ? "" : `
+          <section class="section">
+            <div class="section-head">
+              <h3><span class="icon">＋</span>快速绑定到其他平台</h3>
+              <span class="status muted">复制安装指引</span>
+            </div>
+            <div class="section-body">
+              <div class="bindings-list">
+                ${otherPlatforms.map((p) => renderBindingCard({ platform: p, state: "not_installed" }, skill)).join("")}
+              </div>
+            </div>
+          </section>
+        `}
+      `;
+    }
+
+    function renderBindingCard(b, skill) {
+      const meta = platformMeta[b.platform] || { label: b.platform, icon: "❓", note: "" };
+      const sync = autoSync[b.platform] || { enabled: false, capability: "manual_only", mode: "Manual install only" };
+      const installCmd = buildInstallCommand(b.platform, skill);
+
+      const syncTagClass =
+        sync.capability === "manual_only" ? "unsupported" :
+        sync.enabled ? "on" : "";
+      const syncTagText =
+        sync.capability === "manual_only" ? "仅手动安装" :
+        sync.enabled ? "自动同步: 开" : "自动同步: 关";
+
+      return `
+        <article class="binding-card">
+          <div class="binding-card-top">
+            <div class="binding-name-block">
+              <span class="binding-icon">${meta.icon}</span>
+              <div>
+                <div class="name">${meta.label}</div>
+                <div class="sub">${meta.note}</div>
+              </div>
+            </div>
+            <div class="binding-state-row">
+              <span class="status ${bindingStateClass(b.state)}">${bindingStateLabel(b.state)}</span>
+              <span class="auto-toggle ${syncTagClass}" title="${sync.mode}">${syncTagText}</span>
+            </div>
+          </div>
+
+          ${b.platform === "personal_ai" ? `
+            <div class="binding-meta-row">
+              <span><span class="meta-key">已安装：</span><span class="meta-val">${b.installedVersion || "-"}</span></span>
+              <span>·</span>
+              <span><span class="meta-key">同步方式：</span><span class="meta-val">${sync.mode}</span></span>
+            </div>
+          ` : `
+            <div class="binding-instruction">
+              <div class="text">${escapeHtml(installCmd).replace(/(https?:\/\/\S+)/, '<span class="url">$1</span>')}</div>
+              <button class="btn secondary copy-btn" data-install-cmd="${escapeAttr(installCmd)}">复制</button>
+            </div>
+            <div class="binding-meta-row">
+              ${b.installedVersion ? `<span><span class="meta-key">已安装：</span><span class="meta-val">${b.installedVersion}</span></span><span>·</span>` : ""}
+              ${b.lastSyncedAt ? `<span><span class="meta-key">上次同步：</span><span class="meta-val">${b.lastSyncedAt}</span></span><span>·</span>` : ""}
+              <span><span class="meta-key">同步方式：</span><span class="meta-val">${sync.mode}</span></span>
+            </div>
+          `}
+        </article>
+      `;
+    }
+
+    function renderContent(skill) {
+      switch (currentTab) {
+        case "evidence": content.innerHTML = renderEvidence(skill); break;
+        case "versions": content.innerHTML = renderVersions(skill); break;
+        case "bindings": content.innerHTML = renderBindings(skill); break;
+        default: content.innerHTML = renderWorkflow(skill);
+      }
+
+      content.querySelectorAll("[data-episode]").forEach((el) => {
+        el.addEventListener("click", () => {
+          showToast(`🛫 跳转到 Flight Recorder · ${el.dataset.episode}`);
+        });
+      });
+
+      content.querySelectorAll("[data-install-cmd]").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const cmd = btn.getAttribute("data-install-cmd");
+          try {
+            await navigator.clipboard.writeText(cmd);
+            showToast("📋 已复制安装指引，到目标 agent 粘贴即可");
+          } catch {
+            showToast("❌ 当前预览环境不支持剪贴板");
+          }
+        });
+      });
+
+      const bindingsAutoBtn = document.getElementById("bindingsAutoSyncBtn");
+      if (bindingsAutoBtn) bindingsAutoBtn.addEventListener("click", openAutoSyncDialog);
+    }
+
+    function render() {
+      const skill = currentSkill();
+      renderCandidates();
+      renderHeader(skill);
+      renderTabs();
+      renderContent(skill);
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function escapeAttr(str) {
+      return escapeHtml(str).replace(/"/g, "&quot;");
+    }
+
+    // ===== 自动同步设置 dialog =====
+    function openAutoSyncDialog() {
+      $("#autoSyncDialog").hidden = false;
+      renderSyncRows();
+    }
+
+    function closeAutoSyncDialog() {
+      $("#autoSyncDialog").hidden = true;
+    }
+
+    function renderSyncRows() {
+      const container = $("#syncRowsContainer");
+      const order = ["personal_ai", "openclaw", "codex", "claude_code", "cursor", "chatgpt_gpts", "claude_skills_web"];
+      container.innerHTML = order.map((platform) => {
+        const meta = platformMeta[platform];
+        const sync = autoSync[platform];
+        const desc = describeSyncRow(platform, sync);
+        const disabled = platform === "personal_ai" || sync.capability === "manual_only" ||
+          (sync.capability === "fs_via_desktop_app" && !desktopAppInstalled);
+        return `
+          <div class="sync-row">
+            <div class="icon">${meta.icon}</div>
+            <div class="body">
+              <strong>${meta.label}</strong>
+              <p>${desc.text}</p>
+              ${desc.cta ? `<div class="mode">${desc.cta}</div>` : ""}
+            </div>
+            <div class="control">
+              <label class="switch">
+                <input type="checkbox" data-sync-platform="${platform}" ${sync.enabled ? "checked" : ""} ${disabled ? "disabled" : ""}/>
+                <span class="switch-label">${sync.enabled ? "已开启" : (disabled && sync.capability !== "internal" ? "不可用" : "未开启")}</span>
+              </label>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      container.querySelectorAll("input[data-sync-platform]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const platform = input.getAttribute("data-sync-platform");
+          autoSync[platform].enabled = input.checked;
+          showToast(`${platformMeta[platform].label} 自动同步已${input.checked ? "开启" : "关闭"}`);
+          renderSyncRows();
+          render(); // 让 binding tag 状态实时刷新
+        });
+      });
+    }
+
+    /**
+     * 三类同步路径的文案差异（对应 plan.md 简化决策）：
+     *  - api          : OpenClaw 走 /v1/responses + skills.* RPC，最确定
+     *  - fs_via_desktop_app: Codex / Claude Code / Cursor 等本地 agent，需要 Desktop App
+     *                        监听本地 SKILL.md mtime + sha256；mtime 冲突 → 进入候选审稿
+     *  - manual_only  : ChatGPT GPTs / Claude.ai Skills 等 Web 平台，无文件写入能力，
+     *                   只能通过「复制安装指引」手动安装
+     */
+    function describeSyncRow(platform, sync) {
+      if (sync.capability === "internal") {
+        return { text: "Personal AI 是真源，始终保持同步。", cta: "" };
+      }
+      if (sync.capability === "api") {
+        return {
+          text: "通过 OpenClaw 远端 API 直连，可双向 list / install / status / 回拉 SKILL 包。",
+          cta: "<span class=\"pill ok\">API 直连</span><span>·</span><span>开启后周期性比对 hash</span>",
+        };
+      }
+      if (sync.capability === "fs_via_desktop_app") {
+        if (desktopAppInstalled) {
+          return {
+            text: "Desktop App 会监听本地 skill 目录的 SKILL.md mtime + sha256，发现远端新版自动写入，发现本地手动改动则推到候选审稿。",
+            cta: "<span class=\"pill ok\">Desktop App 已就绪</span>",
+          };
+        }
+        return {
+          text: "本地 coding agent（Codex / Claude Code / Cursor）需要 Desktop App 才能读写 SKILL.md，否则只能用复制指引手动安装。",
+          cta: '<span class="pill warn">需要 Desktop App</span><span>·</span><a class="evidence-link" id="installDesktopAppLink">点此查看安装步骤 →</a>',
+        };
+      }
+      if (sync.capability === "manual_only") {
+        return {
+          text: "纯 Web 平台无法写本地文件，只能在『绑定』tab 复制安装指引粘贴给目标 agent。",
+          cta: '<span class="pill muted">仅手动安装</span>',
+        };
+      }
+      return { text: "", cta: "" };
+    }
+
+    // ===== events =====
+    document.querySelectorAll(".rail-segmented button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".rail-segmented button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        activeFilter = btn.dataset.filter;
+        const visible = filteredSkills();
+        if (visible.length && !visible.some((s) => s.id === currentId)) {
+          currentId = visible[0].id;
+        }
+        render();
+      });
+    });
+
+    document.querySelectorAll(".tab-btn").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        currentTab = tab.dataset.tab;
+        render();
+      });
+    });
+
+    $("#search").addEventListener("input", () => {
+      const visible = filteredSkills();
+      if (visible.length && !visible.some((s) => s.id === currentId)) {
+        currentId = visible[0].id;
+      }
+      render();
+    });
+
+    $("#promoteBtn").addEventListener("click", () => {
+      const skill = currentSkill();
+      if (skill.status === "active") return;
+      promotedSet.add(skill.id);
+      showToast(`⇪ 已把「${skill.title}」升级为 Draft`);
+      render();
+    });
+
+    $("#dismissBtn").addEventListener("click", () => {
+      showToast("👋 候选已忽略（demo session 内）");
+    });
+
+    $("#autoSyncBtn").addEventListener("click", openAutoSyncDialog);
+    $("#autoSyncCloseBtn").addEventListener("click", closeAutoSyncDialog);
+    $("#autoSyncDialog").addEventListener("click", (e) => {
+      if (e.target === $("#autoSyncDialog")) closeAutoSyncDialog();
+    });
+
+    document.addEventListener("click", (e) => {
+      if (e.target && e.target.id === "installDesktopAppLink") {
+        e.preventDefault();
+        showToast("🖥 跳转到 Desktop App 安装指引（demo 仅提示）");
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("#autoSyncDialog").hidden) closeAutoSyncDialog();
+    });
+
+    render();
+  </script>
+</body>
+</html>

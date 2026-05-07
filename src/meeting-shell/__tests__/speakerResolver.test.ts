@@ -165,6 +165,74 @@ test('resolveSpeakerForChunk: continuity sticks to previous speaker', () => {
   assert.equal(result.source, 'continuity');
 });
 
+test('resolveSpeakerForChunk: transcript speaker beats previous continuity', () => {
+  const session = makeSession(
+    [
+      {
+        id: 'alice',
+        name: 'Alice',
+        role: 'PM',
+        speakingPct: 0,
+        resolutionState: 'roster',
+      },
+      {
+        id: 'bob',
+        name: 'Bob',
+        role: 'Eng',
+        speakingPct: 0,
+        resolutionState: 'roster',
+      },
+    ],
+    {
+      transcript: [
+        makeChunk({
+          id: 'c0',
+          speaker: 'Alice',
+          participantId: 'alice',
+          ts: 5000,
+        }),
+      ],
+    },
+  );
+  const result = resolveSpeakerForChunk(
+    session,
+    makeChunk({ id: 'c1', speaker: 'Bob', ts: 7000 }),
+  );
+  assert.equal(result.participantId, 'bob');
+  assert.equal(result.source, 'transcript');
+});
+
+test('resolveSpeakerForChunk: final replacement ignores its own interim chunk for continuity', () => {
+  const session = makeSession(
+    [
+      {
+        id: 'alice',
+        name: 'Alice',
+        role: 'PM',
+        speakingPct: 0,
+        resolutionState: 'roster',
+      },
+    ],
+    {
+      transcript: [
+        makeChunk({
+          id: 'c1',
+          speaker: 'Alice',
+          participantId: 'alice',
+          ts: 5000,
+          lowConfidence: true,
+        }),
+      ],
+    },
+  );
+  const result = resolveSpeakerForChunk(
+    session,
+    makeChunk({ id: 'c1', speaker: '', ts: 7000 }),
+  );
+  assert.equal(result.state, 'provisional');
+  assert.match(result.resolvedName, /说话人/);
+});
+
 test('resolveSpeakerForChunk: gap > window breaks continuity and creates provisional', () => {
   const session = makeSession([], {
     transcript: [

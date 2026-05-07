@@ -1,6 +1,6 @@
 # Personal AI Desktop App Memory Flow
 
-_最后更新: 2026-03-31_
+_最后更新: 2026-05-05_
 
 ## 概述
 
@@ -41,6 +41,10 @@ Desktop App 当前提供这些核心能力：
 - 本机使用独立的 Playwright 持久化 profile 保存豆包登录态
 - 用户通过 app 打开的受控浏览器窗口手动登录一次
 - 登录态只保存在本机，不回传服务端
+- 也可以在“使用我日常浏览器的登录状态”开关下，通过 `webpage-mcp` 借用用户日常 Chrome 里已登录的豆包页面
+- 如果 `webpage-mcp` 不可用、没有可用豆包标签页、填入/发送失败或发送后无法验证消息可见，输出广播与输入抓取都会临时回退到桌面端自带的 Chromium profile，并在短时间内避免反复重试不可用的连接器
+- 输入侧的豆包 / ChatGPT 来源卡片会显示当前传输状态；如果用户选择了日常浏览器但系统临时回退到内置 Chromium，会直接展示回退原因，避免用户误以为仍在使用日常浏览器登录态
+- 输出侧“使用日常浏览器”的广播方式可在广播卡片里直接保存；未保存时界面会提示待生效状态，如果用户切换后立刻登录、绑定或手动推送，app 会先保存待生效的广播方式再执行操作
 
 ### 3. 绑定两类豆包线程
 
@@ -91,6 +95,7 @@ Desktop App 支持三类定时同步：
 - 自动同步与“现在推一次提醒”走同一条 `reminder_sync` 发送链路
 - 这三条链路现在都会明确要求豆包把内容记录到“随手记”
 - 其中 `stable_memory` / `reminder_sync` 的结构化程度更强，`mobile_briefing` 仍以近期重点列表为主，但记录话术已改为随手记导向
+- 手动触发同步会区分 `succeeded` 与 `skipped`：如果 Memory Service 当前没有真实可推送内容，app 会提示“本次没有可推送内容”，不会把跳过误展示为已推送
 
 随手记格式发送后的内容，目标是让用户可以在豆包手机端按更结构化的方式查看和管理，而不是只停留在桥接线程里的一段普通上下文文本。
 
@@ -104,6 +109,8 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 - 支持 preview 已缓存消息、提炼结果、cursor 位置，方便定位问题
 - 支持 reset cache，只清理本机 raw message cache 与 cursor，不删除远端会话
 - 支持 revoke ingested memory，按来源和 `work/personal` scope 删除之前写入 `Memory Service` 的记忆，不回删远端聊天记录
+- 使用日常 Chrome 抓取或广播豆包时，必须先存在明确的 `doubao.com` 标签页；不会把当前活动页误当作豆包页面读取或写入。DOM fallback 也会统一处理 `/chat/<id>`、`/thread/<id>` 与绝对链接。
+- 当 `webpage-mcp` 来源读取失败并临时回退到桌面端 Chromium 时，Explorer 状态会保留最近一次回退原因，UI 会在来源卡片内显示，用户可以据此补齐扩展连接、Chrome 标签页或登录态
 
 因此当前产品方向已经不是单向“往豆包发”的 bridge，而是：
 
@@ -200,12 +207,19 @@ Desktop App 当前正式发送链路不再使用实验性的 request-mode，而�
 - 发送后会检查：
   - 是否检测到 challenge
   - 消息是否真的出现在页面
+- 近期重点、待办、通知和查询注入必须先绑定 `mobile_context_thread`；未绑定时不会把内容发到当前豆包页
+- 发送失败、命中安全验证或消息不可见时，手动推送会返回失败，后台同步也不会把失败任务当作已完成冷却
+- todo / notice 投递失败会回写到 Memory Service，避免把未送达的通知误标为已送达
 - 如果已经检测到 challenge，不会继续盲目切换输入方式乱发
+- 日常浏览器 `webpage-mcp` 传输不会只因为按下 Enter 就判定成功；它必须先成功填入输入框、触发提交，并在页面正文里观察到本次消息片段，才会向上层返回 `sent=true`
+- `webpage-mcp` 传输会先检查当前页是否已经处在安全验证状态；发送后会等待消息出现在非输入区正文中，避免把仍留在输入框里的文本或慢加载页面误判为成功/失败；如果这些检查返回未送达，输出链路会切到内置 Chromium profile 再尝试
+- `webpage-mcp` 传输现在支持 `/chat/<id>` 和 `/thread/<id>` 两类路径，也不再假设 thread id 一定是纯数字
 
 这套策略的背景是：
 
 - 纯请求方式曾做过实验，但无法稳定通过豆包的校验链路
 - `paste + 等待 + 发送` 更接近真实人工操作，实际表现更稳定
+- 对输出同步来说，误报成功比失败重试更危险，因为 Memory Service 可能会把待办或通知标记成已投递
 
 ---
 
@@ -472,6 +486,7 @@ Desktop App 本机默认监听：
 其中：
 
 - `POST /sync/run-now` 是 app 手动触发同步时走的统一入口
+- `POST /sync/run-now` 会返回本次状态；`skipped` 表示没有可推送内容，不代表发送失败
 - `stable_memory`、`mobile_briefing` 与 `reminder_sync` 都会使用随手记导向的话术
 - `/memo/*` 接口是直接操作随手记格式的本地 API
 - `/explorer/preview` 会返回原始缓存消息、清洗后的预览文本、提炼出的 artifact、以及 cursor 位置

@@ -7,7 +7,7 @@
 
 .agent-workflow-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -33,6 +33,294 @@
   margin-top: 4px;
   color: #57606a;
   font-size: 12px;
+}
+
+.agent-audit-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 18px;
+}
+
+.agent-audit-chip {
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+  background: #f6f8fa;
+  color: #57606a;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-workflow-test-panel {
+  margin: 0 0 24px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+}
+
+.agent-workflow-test-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.agent-workflow-test-header h3 {
+  margin: 0;
+}
+
+.agent-workflow-test-header p {
+  margin: 4px 0 0;
+  color: #57606a;
+  font-size: 13px;
+}
+
+.agent-workflow-test-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.agent-workflow-scenario-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.agent-workflow-scenario-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-bottom: 15px;
+}
+
+.agent-workflow-replay-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.agent-workflow-replay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-bottom: 15px;
+}
+
+.agent-workflow-test-result {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border-top: 1px solid #d8dee4;
+  padding-top: 12px;
+}
+
+.agent-test-decision-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-test-decision {
+  border-radius: 999px;
+  background: #eaeef2;
+  color: #24292f;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-test-decision.on {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.agent-test-decision.off {
+  background: #f6f8fa;
+  color: #57606a;
+}
+
+.agent-test-decision.review {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.agent-test-review-banner {
+  border: 1px solid #f0d98c;
+  border-radius: 8px;
+  background: #fff8c5;
+  color: #7d4e00;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-test-summary {
+  color: #24292f;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-test-review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.agent-test-review-item {
+  min-width: 0;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  background: #f6f8fa;
+  padding: 8px 9px;
+}
+
+.agent-test-review-item span {
+  display: block;
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-test-review-item strong {
+  display: block;
+  margin-top: 3px;
+  color: #24292f;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-test-trace {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-test-section-title {
+  color: #57606a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-test-trace-step {
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  color: #57606a;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.agent-test-trace-step summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-test-trace-step summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-test-trace-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-test-trace-main > span {
+  color: #24292f;
+  font-weight: 700;
+}
+
+.agent-test-trace-main small {
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-test-trace-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.agent-test-trace-step strong {
+  color: #1f2328;
+}
+
+.agent-test-trace-step.error {
+  border-color: #ff8182;
+}
+
+.agent-test-trace-step.skipped {
+  opacity: 0.7;
+}
+
+.agent-test-trace-error {
+  border-top: 1px solid #ffebe9;
+  background: #fff5f5;
+  color: #cf222e;
+  padding: 8px 9px;
+  overflow-wrap: anywhere;
+}
+
+.agent-test-tool-list {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #d8dee4;
+  background: #fbfbfc;
+  padding: 8px 9px;
+}
+
+.agent-test-tool {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.8fr) auto minmax(0, 1.5fr);
+  gap: 8px;
+  align-items: start;
+  color: #57606a;
+}
+
+.agent-test-tool > span {
+  color: #24292f;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.agent-test-tool strong {
+  color: #0969da;
+}
+
+.agent-test-tool.error strong {
+  color: #cf222e;
+}
+
+.agent-test-tool.skipped strong {
+  color: #6e7781;
+}
+
+.agent-test-tool small {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .agent-flow-list {
@@ -186,6 +474,29 @@
   margin-left: 10px;
 }
 
+.agent-form-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 10px 12px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  background: #f6f8fa;
+  color: #57606a;
+  font-size: 13px;
+}
+
+.agent-form-preview strong {
+  color: #0969da;
+}
+
+.agent-settings button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 @media (max-width: 720px) {
   .agent-workflow-summary {
     grid-template-columns: 1fr;
@@ -197,6 +508,45 @@
 
   .agent-flow-meta {
     justify-content: flex-start;
+  }
+
+  .agent-workflow-test-header {
+    flex-direction: column;
+  }
+
+  .agent-workflow-replay-row {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-workflow-scenario-row {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-workflow-scenario-actions {
+    justify-content: flex-start;
+    padding-bottom: 0;
+  }
+
+  .agent-workflow-replay-actions {
+    justify-content: flex-start;
+    padding-bottom: 0;
+  }
+
+  .agent-workflow-test-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-test-trace-step summary,
+  .agent-test-tool {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-test-trace-step summary {
+    flex-direction: column;
+  }
+
+  .agent-test-trace-meta {
+    align-items: flex-start;
   }
 }
 

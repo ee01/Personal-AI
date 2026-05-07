@@ -2,7 +2,17 @@
 
 ## 功能概述
 
-消息交互功能提供了在 RingCentral 消息流中快速处理消息的能力。当前工具栏固定提供四个入口：稍后处理、关注后续、自动答复、联动操作。
+消息交互功能提供了在 RingCentral 消息流中快速处理消息的能力。当前工具栏固定提供四个入口：稍后处理、关注后续、自动答复、联动操作，并在长悬停工具栏时提供齿轮设置入口。
+
+## 设计参考
+
+- Gmail Snooze、Slack Later 都强调“先从当前消息流移出，再在明确时间回到可处理列表”。
+- Slack Later / Reminders 和 Microsoft Teams 定时消息都强调创建后的管理能力：可回到统一列表完成、编辑、重排期或删除；本功能创建提醒后会给出「管理」入口，并直接跳转到定时消息管理器的 Snooze 类别视图。
+- Slack Later 对同一保存项支持修改提醒时间，而不是为同一消息堆积多个提醒；本功能会用原消息链接识别仍待处理的同源 Snooze，再次设置时更新原提醒的时间和内容。
+- MobileHCI 2018 的 Snooze 研究显示，多数延后处理发生在当天或次日上午，且和用户日常节奏强相关；当前快捷项优先覆盖 1 小时、3 小时、下班前、明早和下周一。
+- Snooze 快速菜单提供常驻「管理稍后处理」入口，避免用户错过成功 Toast 后找不到统一管理列表。
+- 为避免用户连点或多个入口同时触发造成重复提醒，Snooze 在前端和 Background 都会用原消息链接 / 群组消息 ID 做同源 pending 保护；同源请求未完成前，后续请求不再进入 Google Sheets 创建流程。
+- 配置型入口（关注后续、自动答复、联动操作）点击后会进入短暂 pending 状态，并等待 Background 明确返回成功后才提示正在打开配置，避免失败时给出误导性成功反馈或重复打开多个配置窗口。
 
 ## 功能开关
 
@@ -22,13 +32,16 @@
 
 ## 工具栏结构
 
-悬停消息 3 秒后显示工具栏，功能按钮顺序固定为：
+鼠标在消息上短暂停留后显示工具栏，功能按钮顺序固定为：
 
 1. **稍后处理**：闹钟 icon，点击默认创建 1 小时提醒，hover 展开快速菜单
 2. **关注后续**：紫色按钮，打开关注后续规则配置
 3. **自动答复**：琥珀 / 橙色按钮，打开自动答复规则配置
 4. **联动操作**：红色按钮，打开“记忆入口规则”弹窗并预填一条带“关联操作”的规则
 5. **PAI 图标**：视觉标识
+6. **齿轮设置**：工具栏长悬停后出现，可快速开关四个入口
+
+工具栏按钮和 Snooze 快速菜单项使用可聚焦的原生 `button` 元素，保留 `aria-label`、悬停提示和键盘焦点样式。Snooze 快速菜单只会在鼠标仍停留在稍后处理按钮上时完成展示，避免消息信息异步提取较慢时，用户已经离开按钮但菜单又延迟弹出；键盘用户也可以在稍后处理按钮上按 `ArrowDown` 打开菜单。
 
 ---
 
@@ -63,6 +76,7 @@
 
 - **AI 生成**：勾选"每次 AI 生成类似答复"后，每次由 LLM 根据模板风格动态生成
 - **固定文本**：不勾选时，使用用户编辑的固定回复内容
+- **标题容错**：如果 LLM 分析摘要为空，自动答复定时消息标题会回退到原消息内容，避免创建流程被空摘要阻塞
 
 ### 配置入口
 
@@ -103,7 +117,7 @@ interface TopicItem {
 
 ### 触发方式
 
-- **悬停触发**：在 RingCentral 消息页面，将鼠标悬停在任意消息上 **3 秒**后，自动显示浮动工具栏
+- **悬停触发**：在 RingCentral 消息页面，将鼠标悬停在任意消息上短暂停留后，自动显示浮动工具栏
 - **排除规则**：Reply 输入框不会显示工具栏
 - **功能开关**：需要在设置中启用对应功能，否则不显示工具栏或对应按钮
 
@@ -120,21 +134,28 @@ interface TopicItem {
 
 悬浮"稍后处理"按钮时显示快速选项菜单：
 
-| 选项       | 提醒时间               |
-| ---------- | ---------------------- |
-| 1小时后    | 当前时间 + 1 小时      |
-| 今晚       | 当天 20:00 (8:00 PM)   |
-| 明天       | 第二天 09:00 (9:00 AM) |
-| 下周一     | 下周一 09:00 (9:00 AM) |
-| 自定义时间 | 打开日期时间选择器     |
+| 选项         | 提醒时间                             |
+| ------------ | ------------------------------------ |
+| 1 小时后     | 当前时间 + 1 小时                    |
+| 3 小时后     | 当前时间 + 3 小时                    |
+| 今天下班前   | 当天 18:00，若已过则为次日 18:00     |
+| 明天 9 点    | 第二天 09:00                         |
+| 下周一 9 点  | 下周一 09:00                         |
+| 自定义时间   | 打开日期时间选择器                   |
+| 管理稍后处理 | 打开定时消息管理器的 Snooze 类别视图 |
+
+快速菜单会同时展示预计提醒时间，减少用户点选前的不确定性。
+
+快速菜单点击时会重新计算所选快捷项的提醒时间，并在创建前统一校验必须是未来时间，避免长时间停留在菜单上后写入已经过期的提醒。
+
+同一条消息的 Snooze 创建 / 更新请求会串行化：当前请求仍在处理中时，重复点击不会创建第二条定时消息，也不会弹出额外错误 Toast；首个请求完成后再显示成功或失败结果。
 
 ### 自定义时间选择器
 
 点击"自定义时间"后弹出选择器：
 
-- **日期选择**：点击日期预设按钮或使用日期选择框
-- **时间选择**：输入具体时间（HH:mm 格式）
-- **确认**：点击确认按钮完成设置
+- **日期时间选择**：使用 `datetime-local` 输入框选择本地日期和时间
+- **确认**：只允许选择未来时间，点击确认按钮完成设置
 
 ### 工作流程
 
@@ -143,7 +164,15 @@ interface TopicItem {
          ↓
   发送消息到 Background
          ↓
-  创建定时消息到 Google Sheets
+  前置检查定时消息初始化状态
+   ├─ 未初始化：显示初始化引导并停止创建
+   └─ 已初始化：继续
+         ↓
+  查找是否已有同源待处理 Snooze
+   ├─ 有：更新原提醒的日期/时间/内容，并提示“已更新提醒”
+   └─ 无：创建定时消息到 Google Sheets
+         ↓
+  Toast 显示成功结果，可点击「管理」打开定时消息管理器的 Snooze 类别视图
          ↓
   [异步] LLM 生成摘要更新 Topic
          ↓
@@ -207,6 +236,9 @@ interface SnoozeRequest {
 - 鼠标离开消息区域（除非移动到工具栏/菜单/选择器）
 - 成功创建提醒后
 - 点击页面其他区域
+- 自定义时间选择器支持点击外部或按 `Esc` 关闭
+
+快速菜单会根据屏幕空间在按钮下方或上方展开，并保留鼠标移动缓冲区，避免靠近屏幕底部时菜单刚弹出就消失。
 
 ---
 
@@ -449,28 +481,35 @@ LLM 返回的匹配结果格式：
 
 ## 相关文件
 
-| 文件                                               | 说明                                                                     |
-| -------------------------------------------------- | ------------------------------------------------------------------------ |
-| `src/message-reaction/`                            | 消息交互功能模块                                                         |
-| `src/message-reaction/index.ts`                    | 模块入口，导出所有公共接口                                               |
-| `src/message-reaction/MessageReactionUI.ts`        | 消息交互工具栏 UI、消息信息提取、功能开关控制                            |
-| `src/message-reaction/SnoozeManager.ts`            | Snooze 功能核心逻辑                                                      |
-| `src/message-reaction/AutoReplyHandler.ts`         | 自动答复处理逻辑                                                         |
-| `src/message-reaction/FollowThreadHandler.ts`      | 关注后续核心逻辑：关联关系检测、ChromaDB 存储、过期清理                  |
-| `src/services/NotificationService.ts`              | 统一通知推送服务（Bot / Chrome），替代旧的 `sendBotMessage`              |
-| `src/types/followThread.ts`                        | 关注后续功能类型定义                                                     |
-| `src/modals/topic-modal.tsx`                       | 关注主题管理：关注后续 + 自动答复 + 通知方式配置 UI                      |
-| `src/modals/components/FollowThreads.vue`          | 关注后续管理界面组件                                                     |
-| `src/messageDealing.ts`                            | 消息分析主流程，调用关注后续匹配与推送                                   |
-| `src/agentThinking.ts`                             | Agent 模式消息分析，生成关注后续规则 Prompt                              |
-| `src/contentScriptGlip.tsx`                        | RingCentral 页面内容脚本，初始化消息交互功能                             |
-| `src/background.ts`                                | Snooze 请求处理、Chrome 通知点击事件处理                                 |
-| `src/bot.ts`                                       | Bot 消息底层发送                                                         |
-| `src/scheduled-messages/`                          | 定时消息管理                                                             |
-| `src/scheduled-messages/ScheduledMessagesUtils.ts` | 定时消息共用工具                                                         |
-| `src/llm.ts`                                       | LLM 调用，`generateAutoReply`、摘要生成                                  |
-| `src/utils.ts`                                     | 包含 `ENABLE_SNOOZE`、`ENABLE_AUTO_REPLY`、`LLM_REVIEW_BEFORE_SEND` 配置 |
-| `src/options.tsx`                                  | 设置页面，消息交互功能开关 UI                                            |
+| 文件                                                 | 说明                                                                     |
+| ---------------------------------------------------- | ------------------------------------------------------------------------ |
+| `src/message-reaction/`                              | 消息交互功能模块                                                         |
+| `src/message-reaction/index.ts`                      | 模块入口，导出所有公共接口                                               |
+| `src/message-reaction/MessageReactionUI.ts`          | 消息交互工具栏 UI、消息信息提取、功能开关控制                            |
+| `src/message-reaction/SnoozeManager.ts`              | Snooze 功能核心逻辑                                                      |
+| `src/message-reaction/snoozeTime.ts`                 | Snooze 提醒时间格式化与未来时间校验                                      |
+| `src/message-reaction/snoozeCreateResult.ts`         | Snooze 创建结果和错误反馈文案                                            |
+| `src/message-reaction/snoozeDeduplication.ts`        | 根据原消息链接识别仍待处理的同源 Snooze，避免重复提醒堆积                |
+| `src/message-reaction/floatingPosition.ts`           | Snooze 菜单/选择器浮层定位计算                                           |
+| `src/message-reaction/messageReactionTiming.ts`      | 工具栏短悬停和长悬停延迟常量                                             |
+| `src/message-reaction/AutoReplyHandler.ts`           | 自动答复处理逻辑                                                         |
+| `src/message-reaction/FollowThreadHandler.ts`        | 关注后续核心逻辑：关联关系检测、ChromaDB 存储、过期清理                  |
+| `src/services/NotificationService.ts`                | 统一通知推送服务（Bot / Chrome），替代旧的 `sendBotMessage`              |
+| `src/types/followThread.ts`                          | 关注后续功能类型定义                                                     |
+| `src/modals/topic-modal.tsx`                         | 关注主题管理：关注后续 + 自动答复 + 通知方式配置 UI                      |
+| `src/modals/components/FollowThreads.vue`            | 关注后续管理界面组件                                                     |
+| `src/messageDealing.ts`                              | 消息分析主流程，调用关注后续匹配与推送                                   |
+| `src/agentThinking.ts`                               | Agent 模式消息分析，生成关注后续规则 Prompt                              |
+| `src/contentScriptGlip.tsx`                          | RingCentral 页面内容脚本，初始化消息交互功能                             |
+| `src/background.ts`                                  | Snooze 请求处理、Chrome 通知点击事件处理                                 |
+| `src/bot.ts`                                         | Bot 消息底层发送                                                         |
+| `src/scheduled-messages/`                            | 定时消息管理                                                             |
+| `src/scheduled-messages/scheduleDateTime.ts`         | 将用户选择的本地提醒日期/时间写入定时消息                                |
+| `src/scheduled-messages/scheduledMessagesFilters.ts` | 定时消息页面 URL 查询参数到过滤器状态的解析                              |
+| `src/scheduled-messages/ScheduledMessagesUtils.ts`   | 定时消息共用工具                                                         |
+| `src/llm.ts`                                         | LLM 调用，`generateAutoReply`、摘要生成                                  |
+| `src/utils.ts`                                       | 包含 `ENABLE_SNOOZE`、`ENABLE_AUTO_REPLY`、`LLM_REVIEW_BEFORE_SEND` 配置 |
+| `src/options.tsx`                                    | 设置页面，消息交互功能开关 UI                                            |
 
 ---
 

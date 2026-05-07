@@ -255,7 +255,8 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
     transcript: string;
   };
   assert.equal(briefingSyncBody.accepted, true);
-  assert.match(briefingSyncBody.transcript, /请把以下近期重点记录到随手记/);
+  assert.match(briefingSyncBody.transcript, /请把以下近期记忆重点记录到随手记/);
+  assert.match(briefingSyncBody.transcript, /不要把关注规则或同步配置当作记忆重点/);
   assert.doesNotMatch(briefingSyncBody.transcript, /当前会话上下文/);
 
   const memoStableSync = await app.inject({
@@ -317,6 +318,62 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   await app.close();
 });
 
+test('run-now endpoint returns skipped status for manual sync feedback', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-run-now-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(
+    config,
+    path.join(tempDir, 'bridge-settings.json'),
+  );
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+  const browser = new FakeBrowser();
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = {
+    runNow: async (kind: string) => {
+      assert.equal(kind, 'mobile_briefing');
+      return { status: 'skipped' };
+    },
+  };
+
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager: syncManager as unknown as BridgeSyncManager,
+    version: '2.0.0-test',
+  });
+  const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
+  const token = (pair.json() as { token: string }).token;
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/sync/run-now',
+    headers: { 'x-bridge-token': token },
+    payload: {
+      kind: 'mobile_briefing',
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), {
+    ok: true,
+    kind: 'mobile_briefing',
+    status: 'skipped',
+  });
+
+  await app.close();
+});
+
 test('createMemorySyncThread creates a real chat-style binding', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'doubao-bridge-test-thread-'),
@@ -339,6 +396,42 @@ test('createMemorySyncThread creates a real chat-style binding', async () => {
   const status = await service.getStatus();
   assert.equal(status.bindings.memory_sync?.threadId, thread.id);
   assert.equal(status.bindings.memory_sync?.threadUrl, thread.url);
+});
+
+test('mobile sync refuses to send when mobile context is not bound', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-mobile-unbound-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const browser = new FakeBrowser();
+  let sendCalls = 0;
+  browser.sendTranscriptImpl = async () => {
+    sendCalls += 1;
+    return {
+      sent: true,
+      url: 'https://www.doubao.com/chat/unexpected',
+      threadId: 'unexpected',
+    };
+  };
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+
+  const result = await service.syncMobileBriefing({
+    title: '自动同步的近期重点',
+    bullets: ['不应该发到当前豆包页'],
+  });
+  const status = await service.getStatus();
+
+  assert.equal(result.accepted, false);
+  assert.match(result.error || '', /手机对话尚未绑定/);
+  assert.equal(sendCalls, 0);
+  assert.match(status.lastError || '', /手机对话尚未绑定/);
 });
 
 test('settings endpoint updates effective sync configuration', async () => {

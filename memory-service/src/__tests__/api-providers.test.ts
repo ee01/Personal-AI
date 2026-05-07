@@ -26,6 +26,8 @@ describe('Provider API', () => {
     db.prepare('DELETE FROM provider_bindings').run();
     db.prepare('DELETE FROM user_profile_items').run();
     db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM memory_metadata').run();
+    db.prepare('DELETE FROM reflection_artifacts').run();
     db.prepare('DELETE FROM concerned_items_state').run();
     db.prepare('DELETE FROM notification_records').run();
     db.prepare('DELETE FROM proposed_actions').run();
@@ -207,7 +209,7 @@ describe('Provider API', () => {
     expect(reportBody.job.externalThreadId).toBe('thread-mobile-1');
   });
 
-  it('renders mobile briefing concerned items with readable labels and expanded details', async () => {
+  it('renders mobile briefing from real memory highlights instead of concerned items', async () => {
     const now = Math.floor(Date.now() / 1000);
     const contentUpdatedAt = Date.now();
     const concernedItems = [
@@ -255,6 +257,32 @@ describe('Provider API', () => {
       'provider-test-device',
     );
 
+    db.prepare(
+      `INSERT INTO memory_metadata
+        (target_type, target_id, salience_score, importance, frequency, consolidation_level, created_at, updated_at)
+       VALUES ('message', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'provider-message-1',
+      0.96,
+      0.91,
+      3,
+      'working',
+      now,
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO reflection_artifacts
+        (id, scope, scope_ref, summary, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      'reflection-provider-1',
+      'project',
+      'doubao-bridge',
+      '需要把近期重点限定为真实记忆信号，关注规则只能作为触发配置。',
+      now,
+    );
+
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/providers/context-packages/render',
@@ -269,14 +297,19 @@ describe('Provider API', () => {
     const body = res.json();
     expect(body.packages).toHaveLength(1);
     expect(body.packages[0].kind).toBe('active_focus_digest');
-    expect(body.packages[0].bodyMd).toContain('关注 Doubao Bridge 线程绑定异常');
-    expect(body.packages[0].bodyMd).toContain('group mobile-ops');
-    expect(body.packages[0].bodyMd).toContain('notify bot + chrome');
-    expect(body.packages[0].bodyMd).toContain('digest daily @ 09:00');
-    expect(body.packages[0].bodyMd).toContain('track replies to "豆包最近没有把近期重点正确记到随手记里"');
-    expect(body.packages[0].bodyMd).toContain('keywords 随手记, 近期重点');
-    expect(body.packages[0].bodyMd).not.toContain('- tp3ppwxlu');
-    expect(body.packages[0].bodyMd).not.toContain('- x2c7o07b0');
+    expect(body.packages[0].itemCount).toBe(4);
+    expect(body.packages[0].bodyMd).toContain('Recent Memory Highlights');
+    expect(body.packages[0].bodyMd).toContain('下一个版本优先级聚焦 onboarding 和 Doubao bridge 会话绑定');
+    expect(body.packages[0].bodyMd).toContain('score 0.96');
+    expect(body.packages[0].bodyMd).toContain('response_length');
+    expect(body.packages[0].bodyMd).toContain('近期重点限定为真实记忆信号');
+    expect(body.packages[0].bodyMd).not.toContain('Concerned Items');
+    expect(body.packages[0].bodyMd).not.toContain('关注 Doubao Bridge 线程绑定异常');
+    expect(body.packages[0].bodyMd).not.toContain('豆包最近没有把近期重点正确记到随手记里');
+    expect(body.packages[0].sourceRefs).toContain('message:provider-message-1');
+    expect(body.packages[0].sourceRefs).toContain('profile_item:response_length');
+    expect(body.packages[0].sourceRefs).toContain('reflection:reflection-provider-1');
+    expect(body.packages[0].sourceRefs).not.toContain('concerned_items:1');
   });
 
   it('renders todo_sync and notice_sync with the new split while keeping reminder_sync as todo alias', async () => {

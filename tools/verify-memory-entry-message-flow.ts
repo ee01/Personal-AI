@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { analyzeMessagesInBackground } from '../src/messageDealing.ts';
 import { getEnvConfig } from '../src/utils.ts';
-import { getTaskEnabled } from '../src/services/TaskScheduler.ts';
+import { getTaskEnabled } from '../src/services/taskSchedulerDefinitions.ts';
 import { loadRuntimeWatchRules } from '../src/watchRules.ts';
 
 type StorageMap = Record<string, any>;
@@ -179,26 +179,42 @@ function installFetchMock() {
       );
     }
 
-    if (url.startsWith('http://mock-memory/api/v1/outreach/sessions')) {
+    if (
+      url.startsWith(
+        'http://mock-memory/api/v1/outreach/templates/runtime-status',
+      )
+    ) {
+      const now = Date.now();
       return new Response(
         JSON.stringify({
           items: [
             {
-              id: 'session-before-followup',
-              targetType: 'group',
-              targetRef: 'sdk-updates',
-              renderedQuestion: 'migration guide 发布了吗？',
-              status: 'waiting_reply',
-              requiresApproval: false,
-              followupCount: 0,
-              maxFollowup: 2,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
+              template: {
+                id: 'template-migration-guide',
+                title: 'Migration guide follow-up',
+                questionTemplate: 'migration guide 发布了吗？',
+                targetType: 'group',
+                targetRef: 'sdk-updates',
+                enabled: true,
+                syncState: 'synced',
+                createdAt: now,
+                updatedAt: now,
+              },
+              latestSession: {
+                id: 'session-before-followup',
+                targetType: 'group',
+                targetRef: 'sdk-updates',
+                renderedQuestion: 'migration guide 发布了吗？',
+                status: 'waiting_reply',
+                requiresApproval: false,
+                followupCount: 0,
+                maxFollowup: 2,
+                createdAt: now,
+                updatedAt: now,
+              },
             },
           ],
           total: 1,
-          limit: 20,
-          offset: 0,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );

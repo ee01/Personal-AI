@@ -2,11 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { formatMainLlmProfileForMeetingPilot } from '../llm';
-import {
-  defaultEnvConfig,
-  EnvConfigType,
-  getEnvConfig,
-} from '../utils';
+import { defaultEnvConfig, EnvConfigType, getEnvConfig } from '../utils';
 import CaptureLogTab from './CaptureLogTab';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
@@ -52,6 +48,13 @@ type TabId =
   | 'capture-log';
 
 type PanelSurfaceMode = 'embedded' | 'side-panel' | 'window';
+type ActionReviewFilter =
+  | 'open'
+  | 'review'
+  | 'confirmed'
+  | 'done'
+  | 'dismissed'
+  | 'all';
 
 type MeetingSidePanelUiState = {
   activeTab?: TabId;
@@ -63,9 +66,16 @@ type PanelViewportState = {
   lastScrollHeight: number;
 };
 
+type ActionEditDraft = {
+  title: string;
+  owner: string;
+  deadline: string;
+};
+
 const PANEL_UI_STORAGE_PREFIX = 'meetingPilot.panelUi.';
 const DEFAULT_TAB: TabId = 'live';
 const TOP_SCROLL_THRESHOLD = 12;
+const BULK_ACTION_COPY_ID = '__bulk_action_copy__';
 
 function getRequestedSurfaceMode(): PanelSurfaceMode {
   const params = new URLSearchParams(window.location.search);
@@ -170,6 +180,148 @@ function buildPanelUiStorageKey(session: MeetingPilotSessionSnapshot): string {
     String(session.meetingId || '').trim() ||
     (session.tabId > 0 ? `tab-${session.tabId}` : 'global');
   return `${PANEL_UI_STORAGE_PREFIX}${stableKey}`;
+}
+
+function getActionReviewState(
+  item: MeetingPilotActionItem,
+): 'suggested' | 'confirmed' | 'dismissed' {
+  if (item.reviewState === 'dismissed') {
+    return 'dismissed';
+  }
+  if (item.reviewState === 'confirmed' || item.status === 'done') {
+    return 'confirmed';
+  }
+  return 'suggested';
+}
+
+function getActionStatusLabel(item: MeetingPilotActionItem): string {
+  const reviewState = getActionReviewState(item);
+  if (reviewState === 'dismissed') return '已忽略';
+  if (item.status === 'done') return '已完成';
+  if (reviewState === 'confirmed') return '已确认';
+  return '待复核';
+}
+
+function getActionStatusClass(item: MeetingPilotActionItem): string {
+  const reviewState = getActionReviewState(item);
+  if (reviewState === 'dismissed') return 'dismissed';
+  if (item.status === 'done') return 'done';
+  if (reviewState === 'confirmed') return 'confirmed';
+  return 'pending';
+}
+
+function isActionVisibleInFilter(
+  item: MeetingPilotActionItem,
+  filter: ActionReviewFilter,
+): boolean {
+  const reviewState = getActionReviewState(item);
+  if (filter === 'all') return true;
+  if (filter === 'open') {
+    return reviewState !== 'dismissed' && item.status !== 'done';
+  }
+  if (filter === 'review') return reviewState === 'suggested';
+  if (filter === 'confirmed') {
+    return reviewState === 'confirmed' && item.status !== 'done';
+  }
+  if (filter === 'done') {
+    return reviewState !== 'dismissed' && item.status === 'done';
+  }
+  return reviewState === 'dismissed';
+}
+
+function getActionFilterEmptyCopy(filter: ActionReviewFilter): string {
+  if (filter === 'open') {
+    return '当前没有需要继续处理的行动项。已完成或已忽略的项目可以从上方筛选查看。';
+  }
+  if (filter === 'review') {
+    return '当前没有待复核行动项。新的 transcript 触发明确 owner / deadline 后会进入这里。';
+  }
+  if (filter === 'confirmed') {
+    return '当前没有已确认行动项。复核通过后，项目会保留在这个筛选中。';
+  }
+  if (filter === 'done') {
+    return '当前没有已完成行动项。完成后的跟进会移到这里，便于会后复盘。';
+  }
+  if (filter === 'dismissed') {
+    return '当前没有已忽略行动项。误判项目被忽略后会移到这里，必要时可以恢复。';
+  }
+  return '当前还没有识别到结构化行动项。随着 transcript 增长，这里会自动更新。';
+}
+
+function getActionFilterLabel(filter: ActionReviewFilter): string {
+  if (filter === 'open') return '处理中';
+  if (filter === 'review') return '待复核';
+  if (filter === 'confirmed') return '已确认';
+  if (filter === 'done') return '已完成';
+  if (filter === 'dismissed') return '已忽略';
+  return '全部';
+}
+
+function buildActionEditDraft(item: MeetingPilotActionItem): ActionEditDraft {
+  return {
+    title: item.title || '',
+    owner: item.owner || '',
+    deadline: item.deadline || '',
+  };
+}
+
+function formatActionItemForClipboard(item: MeetingPilotActionItem): string {
+  const lines = [`行动项：${item.title}`, `负责人：${item.owner || 'Unknown'}`];
+  if (item.deadline) {
+    lines.push(`截止：${item.deadline}`);
+  }
+  if (item.timestamp) {
+    lines.push(`识别时间：${item.timestamp}`);
+  }
+  lines.push(`状态：${getActionStatusLabel(item)}`);
+  if (item.evidence) {
+    lines.push(`依据：${item.evidence}`);
+  }
+  return lines.join('\n');
+}
+
+function formatActionItemsForClipboard(
+  items: MeetingPilotActionItem[],
+  filter: ActionReviewFilter,
+): string {
+  const header = `Meeting Pilot 行动项（${getActionFilterLabel(filter)}，${
+    items.length
+  } 项）`;
+  return [
+    header,
+    '',
+    ...items.flatMap((item, index) => [
+      `${index + 1}. ${item.title}`,
+      `负责人：${item.owner || 'Unknown'}`,
+      ...(item.deadline ? [`截止：${item.deadline}`] : []),
+      ...(item.timestamp ? [`识别时间：${item.timestamp}`] : []),
+      `状态：${getActionStatusLabel(item)}`,
+      ...(item.evidence ? [`依据：${item.evidence}`] : []),
+      '',
+    ]),
+  ]
+    .join('\n')
+    .trim();
+}
+
+async function writeTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand('copy');
+  textarea.remove();
+  if (!ok) {
+    throw new Error('execCommand copy returned false');
+  }
 }
 
 async function loadPanelUiState(
@@ -408,6 +560,11 @@ const shellStyle = `
     background: linear-gradient(135deg, rgba(255,107,107,0.12), rgba(255,212,59,0.06));
   }
 
+  .capture-start-card.low-mode {
+    border-color: rgba(105,219,124,0.30);
+    background: linear-gradient(135deg, rgba(105,219,124,0.12), rgba(108,92,231,0.08));
+  }
+
   .capture-start-eyebrow {
     font-size: 10px;
     color: var(--text-dim);
@@ -460,11 +617,111 @@ const shellStyle = `
     gap: 8px;
   }
 
+  .action-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  .action-toolbar-count {
+    min-width: 0;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .action-copy-all {
+    flex-shrink: 0;
+    min-height: 28px;
+    padding: 5px 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(116,185,255,0.28);
+    background: rgba(116,185,255,0.1);
+    color: #bfdbfe;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .action-copy-all:hover:not(:disabled) {
+    border-color: rgba(116,185,255,0.48);
+    color: var(--text);
+  }
+
+  .action-copy-all:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .action-copy-all.success {
+    background: rgba(105,219,124,0.12);
+    border-color: rgba(105,219,124,0.34);
+    color: var(--p2-color);
+  }
+
+  .action-copy-all.danger {
+    background: rgba(255,107,107,0.1);
+    border-color: rgba(255,107,107,0.28);
+    color: var(--p0-color);
+  }
+
+  .action-review-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .action-review-filter {
+    min-width: 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .action-review-filter:hover {
+    border-color: rgba(108,92,231,0.5);
+    color: var(--text);
+  }
+
+  .action-review-filter.active {
+    background: rgba(108,92,231,0.18);
+    border-color: rgba(162,155,254,0.55);
+    color: var(--accent-light);
+  }
+
+  .action-review-filter-count {
+    color: var(--text);
+  }
+
   .alert-card, .action-card {
     padding: 10px 14px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--surface-2);
+  }
+
+  .action-card.dismissed {
+    opacity: 0.68;
+    border-style: dashed;
+  }
+
+  .action-card.editing {
+    border-color: rgba(116,185,255,0.54);
+    background: rgba(116,185,255,0.08);
   }
 
   .alert-card:hover, .action-card:hover {
@@ -600,9 +857,103 @@ const shellStyle = `
 
   .action-card .ac-title { font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
   .action-card .ac-meta { font-size: 10.5px; color: var(--text-muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .action-card .ac-edited {
+    color: #bfdbfe;
+    border: 1px solid rgba(116,185,255,0.25);
+    border-radius: 999px;
+    padding: 1px 6px;
+  }
+  .action-card .ac-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .action-card .ac-edit-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(86px, 0.7fr);
+    gap: 7px;
+  }
+  .action-card .ac-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .action-card .ac-field input {
+    min-width: 0;
+    min-height: 30px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: rgba(15,23,42,0.64);
+    color: var(--text);
+    padding: 5px 7px;
+    font-size: 11px;
+    line-height: 1.35;
+    outline: none;
+  }
+  .action-card .ac-field input:focus {
+    border-color: rgba(116,185,255,0.58);
+    box-shadow: 0 0 0 2px rgba(116,185,255,0.1);
+  }
+  .action-card .ac-edit-error {
+    color: var(--p0-color);
+    font-size: 10.5px;
+    line-height: 1.35;
+  }
+  .action-card .ac-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .action-card .ac-button {
+    min-height: 26px;
+    padding: 5px 8px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface-3);
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .action-card .ac-button:hover {
+    border-color: rgba(108,92,231,0.58);
+    color: var(--text);
+  }
+  .action-card .ac-button.primary {
+    background: rgba(105,219,124,0.12);
+    border-color: rgba(105,219,124,0.34);
+    color: var(--p2-color);
+  }
+  .action-card .ac-button.success {
+    background: rgba(116,185,255,0.12);
+    border-color: rgba(116,185,255,0.34);
+    color: #74b9ff;
+  }
+  .action-card .ac-button.danger {
+    background: rgba(255,107,107,0.1);
+    border-color: rgba(255,107,107,0.28);
+    color: var(--p0-color);
+  }
+  .action-card .ac-evidence {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-left: 2px solid #ffa502;
+    border-radius: 6px;
+    background: rgba(255,165,2,0.08);
+    color: var(--text-dim);
+    font-size: 10.5px;
+    line-height: 1.45;
+  }
   .ac-status { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
   .ac-status.pending { background: rgba(255,165,2,0.15); color: #ffa502; }
   .ac-status.done { background: rgba(105,219,124,0.15); color: var(--p2-color); }
+  .ac-status.confirmed { background: rgba(116,185,255,0.15); color: #74b9ff; }
+  .ac-status.dismissed { background: rgba(148,163,184,0.12); color: var(--text-muted); }
 
   .settings-group { margin-bottom: 12px; }
   .settings-group .sg-title {
@@ -1179,6 +1530,18 @@ function MeetingSidePanel() {
   const [activeTab, setActiveTab] = useState<TabId>(DEFAULT_TAB);
   const [catchupOpen, setCatchupOpen] = useState(false);
   const [expandedTimelineIds, setExpandedTimelineIds] = useState<string[]>([]);
+  const [actionFilter, setActionFilter] = useState<ActionReviewFilter>('open');
+  const [actionCopyFeedback, setActionCopyFeedback] = useState<{
+    id: string;
+    status: 'copied' | 'failed';
+  } | null>(null);
+  const [editingActionId, setEditingActionId] = useState<string | null>(null);
+  const [actionEditDraft, setActionEditDraft] = useState<ActionEditDraft>({
+    title: '',
+    owner: '',
+    deadline: '',
+  });
+  const [actionEditError, setActionEditError] = useState<string | null>(null);
   const [panelUiReady, setPanelUiReady] = useState(false);
   const [settings, setSettings] = useState({
     autoDetect: true,
@@ -1208,6 +1571,7 @@ function MeetingSidePanel() {
   const pendingRestoreTabRef = useRef<TabId | null>(DEFAULT_TAB);
   const persistTimerRef = useRef<number | null>(null);
   const restoreTimerRefs = useRef<number[]>([]);
+  const actionCopyResetTimerRef = useRef<number | null>(null);
   const panelUiReadyRef = useRef(false);
   const panelUiStorageKeyRef = useRef('');
   /** 开发联调：始终可开 Capture Log；?debug=1 仍保留给其它更啰嗦的调试用。 */
@@ -1335,8 +1699,40 @@ function MeetingSidePanel() {
     })),
   ].sort((left, right) => right.createdAt - left.createdAt);
   const pendingActions = session.actionItems.filter(
-    (item) => item.status === 'pending',
+    (item) =>
+      item.status === 'pending' && getActionReviewState(item) !== 'dismissed',
   );
+  const openActions = session.actionItems.filter((item) =>
+    isActionVisibleInFilter(item, 'open'),
+  );
+  const reviewQueueActions = session.actionItems.filter(
+    (item) => getActionReviewState(item) === 'suggested',
+  );
+  const confirmedActions = session.actionItems.filter(
+    (item) =>
+      getActionReviewState(item) === 'confirmed' && item.status !== 'done',
+  );
+  const doneActions = session.actionItems.filter((item) =>
+    isActionVisibleInFilter(item, 'done'),
+  );
+  const dismissedActions = session.actionItems.filter(
+    (item) => getActionReviewState(item) === 'dismissed',
+  );
+  const visibleActionItems = session.actionItems.filter((item) =>
+    isActionVisibleInFilter(item, actionFilter),
+  );
+  const actionFilterOptions: Array<{
+    key: ActionReviewFilter;
+    label: string;
+    count: number;
+  }> = [
+    { key: 'open', label: '处理中', count: openActions.length },
+    { key: 'review', label: '待复核', count: reviewQueueActions.length },
+    { key: 'confirmed', label: '已确认', count: confirmedActions.length },
+    { key: 'done', label: '已完成', count: doneActions.length },
+    { key: 'dismissed', label: '已忽略', count: dismissedActions.length },
+    { key: 'all', label: '全部', count: session.actionItems.length },
+  ];
   const activeTabContentVersion = useMemo(() => {
     if (activeTab === 'live') {
       return `live:${session.updatedAt}:${liveFeedItems.length}:${
@@ -1356,7 +1752,7 @@ function MeetingSidePanel() {
     if (activeTab === 'actions') {
       return `actions:${session.updatedAt}:${session.actionItems.length}:${
         session.actionItems[0]?.id || ''
-      }`;
+      }:${actionFilter}:${visibleActionItems.length}`;
     }
     if (activeTab === 'settings') {
       return `settings:${settings.autoDetect}:${settings.danmakuSpeed}:${settings.entryMode}`;
@@ -1369,6 +1765,8 @@ function MeetingSidePanel() {
     captureLogEntries,
     liveFeedItems,
     session.actionItems,
+    actionFilter,
+    visibleActionItems.length,
     session.currentTopic,
     session.timelineEvents,
     session.transcriptTurns,
@@ -1383,6 +1781,125 @@ function MeetingSidePanel() {
         ? current.filter((id) => id !== eventId)
         : [...current, eventId],
     );
+  };
+  const updateActionItemReview = async (
+    item: MeetingPilotActionItem,
+    updates: {
+      status?: 'pending' | 'done';
+      reviewState?: 'suggested' | 'confirmed' | 'dismissed';
+      title?: string;
+      owner?: string;
+      deadline?: string;
+    },
+  ): Promise<boolean> => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_UPDATE_ACTION_ITEM',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        actionItemId: item.id,
+        ...updates,
+      });
+      if (!response?.success) {
+        throw new Error(response?.message || '更新行动项失败');
+      }
+      await refresh();
+      return true;
+    } catch (error) {
+      console.warn('[Meeting Pilot][sidepanel] update action item failed', {
+        actionItemId: item.id,
+        error: String((error as Error)?.message || error),
+      });
+      return false;
+    }
+  };
+  const startActionItemEdit = (item: MeetingPilotActionItem) => {
+    setEditingActionId(item.id);
+    setActionEditDraft(buildActionEditDraft(item));
+    setActionEditError(null);
+  };
+  const cancelActionItemEdit = () => {
+    setEditingActionId(null);
+    setActionEditError(null);
+  };
+  const saveActionItemEdit = async (item: MeetingPilotActionItem) => {
+    const title = actionEditDraft.title.trim();
+    const owner = actionEditDraft.owner.trim();
+    const deadline = actionEditDraft.deadline.trim();
+    if (!title || !owner) {
+      setActionEditError('标题和负责人不能为空。');
+      return;
+    }
+    setActionEditError(null);
+    const success = await updateActionItemReview(item, {
+      title,
+      owner,
+      deadline,
+      reviewState: 'confirmed',
+    });
+    if (success) {
+      setEditingActionId(null);
+    } else {
+      setActionEditError('保存失败，请稍后重试。');
+    }
+  };
+  const copyActionItem = async (item: MeetingPilotActionItem) => {
+    if (actionCopyResetTimerRef.current) {
+      window.clearTimeout(actionCopyResetTimerRef.current);
+    }
+
+    try {
+      await writeTextToClipboard(formatActionItemForClipboard(item));
+      setActionCopyFeedback({ id: item.id, status: 'copied' });
+    } catch (error) {
+      console.warn('[Meeting Pilot][sidepanel] copy action item failed', {
+        actionItemId: item.id,
+        error: String((error as Error)?.message || error),
+      });
+      setActionCopyFeedback({ id: item.id, status: 'failed' });
+    }
+
+    actionCopyResetTimerRef.current = window.setTimeout(() => {
+      setActionCopyFeedback((current) =>
+        current?.id === item.id ? null : current,
+      );
+      actionCopyResetTimerRef.current = null;
+    }, 1800);
+  };
+  const copyVisibleActionItems = async () => {
+    if (!visibleActionItems.length) {
+      return;
+    }
+    if (actionCopyResetTimerRef.current) {
+      window.clearTimeout(actionCopyResetTimerRef.current);
+    }
+
+    try {
+      await writeTextToClipboard(
+        formatActionItemsForClipboard(visibleActionItems, actionFilter),
+      );
+      setActionCopyFeedback({
+        id: BULK_ACTION_COPY_ID,
+        status: 'copied',
+      });
+    } catch (error) {
+      console.warn('[Meeting Pilot][sidepanel] copy action items failed', {
+        actionFilter,
+        count: visibleActionItems.length,
+        error: String((error as Error)?.message || error),
+      });
+      setActionCopyFeedback({
+        id: BULK_ACTION_COPY_ID,
+        status: 'failed',
+      });
+    }
+
+    actionCopyResetTimerRef.current = window.setTimeout(() => {
+      setActionCopyFeedback((current) =>
+        current?.id === BULK_ACTION_COPY_ID ? null : current,
+      );
+      actionCopyResetTimerRef.current = null;
+    }, 1800);
   };
 
   useEffect(() => {
@@ -1407,6 +1924,15 @@ function MeetingSidePanel() {
       chrome.storage.onChanged.removeListener(handleStorageChanged);
     };
   }, []);
+
+  useEffect(
+    () => () => {
+      if (actionCopyResetTimerRef.current) {
+        window.clearTimeout(actionCopyResetTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1649,6 +2175,16 @@ function MeetingSidePanel() {
       tabId: session.tabId,
     });
   };
+
+  const showCaptureAuthorizationGuide = async () => {
+    await chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE',
+      tabId: session.tabId,
+      meetingId: session.meetingId,
+      source: 'sidepanel-upgrade',
+    });
+  };
+
   const sidePanelPinned = Boolean(session.sidePanelPinned);
   const pinButtonActive = surfaceMode === 'side-panel' && sidePanelPinned;
   const toggleSidePanelPin = async () => {
@@ -1710,24 +2246,39 @@ function MeetingSidePanel() {
     session.readiness.status === 'blocked'
       ? 'Blocked'
       : session.readiness.status === 'degraded'
-        ? 'Degraded'
-        : 'Ready';
+      ? 'Degraded'
+      : 'Ready';
+  const isEnhancedCaptureActive =
+    session.capture.kind === 'armed' ||
+    session.capture.kind === 'recording' ||
+    session.capture.kind === 'uploading' ||
+    session.capture.kind === 'completed';
+  const isTranscriptPilotActive = Boolean(
+    session.webTranscript?.active &&
+      session.transcript.some(
+        (chunk) => chunk.source === 'ringcentral_transcript',
+      ),
+  );
   const showCaptureStartCard =
-    session.capture.kind !== 'recording' && activeTab === 'live';
+    !isEnhancedCaptureActive && activeTab === 'live';
   const captureStartTitle = !session.readiness.canStartCapture
     ? '先修复配置，再从 popup 开始'
+    : isTranscriptPilotActive
+    ? 'Transcript Pilot 已自动运行'
     : session.capture.kind === 'error'
-      ? '请改从 popup 重试 Capture'
-      : session.capture.kind === 'stopped'
-        ? '请改从 popup 重新开始 Capture'
-        : '请从 popup 开始 Capture';
+    ? '请改从 popup 重试 Capture'
+    : session.capture.kind === 'stopped'
+    ? '请改从 popup 重新开始 Capture'
+    : '请从 popup 开始 Capture';
   const captureStartDescription = !session.readiness.canStartCapture
     ? '当前配置仍有阻断项。先修复配置，再点击浏览器右上角的 Personal AI 图标，并在 popup 第一项点击“开启会议全貌”。'
+    : isTranscriptPilotActive
+    ? '当前已通过 RingCentral Transcript 支撑发言、实时摘要、时间线、行动项和记忆关联。启用画面理解与纪要后，会额外读取共享画面/OCR，并把画面文字一起用于记忆关联和会后图文 Minutes。'
     : session.capture.lastError === 'tabCapture_stream_unavailable'
-      ? 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。'
-      : session.capture.kind === 'stopped'
-        ? '录制已经停止。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”，恢复会中总结、时间线和会后分析。'
-        : 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。';
+    ? 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。'
+    : session.capture.kind === 'stopped'
+    ? '录制已经停止。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”，恢复会中总结、时间线和会后分析。'
+    : 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。';
   const providerConfigured = Boolean(
     String(settings.providerBaseUrl || '').trim(),
   );
@@ -1820,12 +2371,12 @@ function MeetingSidePanel() {
               {tab === 'live'
                 ? '实时'
                 : tab === 'speech'
-                  ? '发言'
-                  : tab === 'timeline'
-                    ? '时间线'
-                    : tab === 'actions'
-                      ? '行动项'
-                      : '设置'}
+                ? '发言'
+                : tab === 'timeline'
+                ? '时间线'
+                : tab === 'actions'
+                ? '行动项'
+                : '设置'}
               {tab === 'live' &&
               unresolvedAlerts.some((alert) => alert.level === 'P0') ? (
                 <div className="badge" />
@@ -1847,10 +2398,12 @@ function MeetingSidePanel() {
               <div
                 className={`capture-start-card ${
                   session.capture.kind === 'error' ? 'warn' : ''
-                }`}
+                } ${isTranscriptPilotActive ? 'low-mode' : ''}`}
               >
                 <div className="capture-start-eyebrow">
-                  Capture Authorization
+                  {isTranscriptPilotActive
+                    ? 'Low-Power Meeting Pilot'
+                    : 'Capture Authorization'}
                 </div>
                 <div className="capture-start-title">{captureStartTitle}</div>
                 <div className="capture-start-copy">
@@ -1863,6 +2416,15 @@ function MeetingSidePanel() {
                       onClick={openMeetingOptionsPage}
                     >
                       ⚙️ 去配置 Meeting Pilot
+                    </button>
+                  </div>
+                ) : isTranscriptPilotActive ? (
+                  <div className="capture-start-actions">
+                    <button
+                      className="capture-start-primary"
+                      onClick={() => void showCaptureAuthorizationGuide()}
+                    >
+                      启用画面理解与纪要
                     </button>
                   </div>
                 ) : null}
@@ -2011,12 +2573,12 @@ function MeetingSidePanel() {
                       {event.type === 'screen'
                         ? '画面'
                         : event.type === 'decision'
-                          ? '决议'
-                          : event.type === 'mention'
-                            ? '提及你'
-                            : event.type === 'action'
-                              ? '行动项'
-                              : '话题'}
+                        ? '决议'
+                        : event.type === 'mention'
+                        ? '提及你'
+                        : event.type === 'action'
+                        ? '行动项'
+                        : '话题'}
                     </span>
                     {event.title}
                     <span className="tl-expand-icon">▶</span>
@@ -2027,16 +2589,25 @@ function MeetingSidePanel() {
                       <div className="detail-speaker">👤 {event.speaker}</div>
                     ) : null}
                     {session.actionItems.some(
-                      (item) => item.chapterId === event.chapterId,
+                      (item) =>
+                        item.chapterId === event.chapterId &&
+                        getActionReviewState(item) !== 'dismissed',
                     ) ? (
                       <div className="detail-actions">
                         {session.actionItems
-                          .filter((item) => item.chapterId === event.chapterId)
+                          .filter(
+                            (item) =>
+                              item.chapterId === event.chapterId &&
+                              getActionReviewState(item) !== 'dismissed',
+                          )
                           .slice(0, 2)
                           .map((item) => (
                             <div className="detail-action" key={item.id}>
                               {item.owner} — {item.title}
                               {item.deadline ? ` (${item.deadline})` : ''}
+                              {item.evidence ? (
+                                <div>依据：{item.evidence}</div>
+                              ) : null}
                             </div>
                           ))}
                       </div>
@@ -2060,22 +2631,235 @@ function MeetingSidePanel() {
         {activeTab === 'actions' ? (
           <div className="action-list">
             {session.actionItems.length ? (
-              session.actionItems.map((item: MeetingPilotActionItem) => (
-                <div className="action-card" key={item.id}>
-                  <div className="ac-title">📌 {item.title}</div>
-                  <div className="ac-meta">
-                    <span>👤 {item.owner}</span>
-                    {item.deadline ? <span>📅 {item.deadline}</span> : null}
-                    <span className={`ac-status ${item.status}`}>
-                      {item.status === 'done' ? '已确认' : '待处理'}
-                    </span>
+              <>
+                <div className="action-toolbar">
+                  <div className="action-toolbar-count">
+                    当前筛选 {visibleActionItems.length} /{' '}
+                    {session.actionItems.length} 项
+                  </div>
+                  <button
+                    className={`action-copy-all ${
+                      actionCopyFeedback?.id === BULK_ACTION_COPY_ID
+                        ? actionCopyFeedback.status === 'copied'
+                          ? 'success'
+                          : 'danger'
+                        : ''
+                    }`}
+                    type="button"
+                    disabled={!visibleActionItems.length}
+                    onClick={() => void copyVisibleActionItems()}
+                  >
+                    {actionCopyFeedback?.id === BULK_ACTION_COPY_ID
+                      ? actionCopyFeedback.status === 'copied'
+                        ? '已复制当前筛选'
+                        : '复制失败'
+                      : '复制当前筛选'}
+                  </button>
+                </div>
+                <div className="action-review-summary" aria-label="行动项筛选">
+                  {actionFilterOptions.map((option) => (
+                    <button
+                      className={`action-review-filter ${
+                        actionFilter === option.key ? 'active' : ''
+                      }`}
+                      data-action-filter={option.key}
+                      type="button"
+                      aria-pressed={actionFilter === option.key}
+                      key={option.key}
+                      onClick={() => setActionFilter(option.key)}
+                    >
+                      <span>{option.label}</span>
+                      <span className="action-review-filter-count">
+                        {option.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {visibleActionItems.length ? (
+              visibleActionItems.map((item: MeetingPilotActionItem) => (
+                <div
+                  className={`action-card ${getActionReviewState(item)} ${
+                    editingActionId === item.id ? 'editing' : ''
+                  }`}
+                  data-action-id={item.id}
+                  key={item.id}
+                >
+                  {editingActionId === item.id ? (
+                    <div className="ac-edit-form">
+                      <label className="ac-field">
+                        <span>行动项</span>
+                        <input
+                          value={actionEditDraft.title}
+                          onChange={(event) =>
+                            setActionEditDraft((current) => ({
+                              ...current,
+                              title: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <div className="ac-edit-row">
+                        <label className="ac-field">
+                          <span>负责人</span>
+                          <input
+                            value={actionEditDraft.owner}
+                            onChange={(event) =>
+                              setActionEditDraft((current) => ({
+                                ...current,
+                                owner: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label className="ac-field">
+                          <span>截止</span>
+                          <input
+                            value={actionEditDraft.deadline}
+                            placeholder="可留空"
+                            onChange={(event) =>
+                              setActionEditDraft((current) => ({
+                                ...current,
+                                deadline: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                      {actionEditError ? (
+                        <div className="ac-edit-error">{actionEditError}</div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="ac-title">📌 {item.title}</div>
+                      <div className="ac-meta">
+                        <span>👤 {item.owner}</span>
+                        {item.deadline ? <span>📅 {item.deadline}</span> : null}
+                        {item.timestamp ? <span>🕒 {item.timestamp}</span> : null}
+                        <span
+                          className={`ac-status ${getActionStatusClass(item)}`}
+                        >
+                          {getActionStatusLabel(item)}
+                        </span>
+                        {item.editedAt ? (
+                          <span className="ac-edited">人工校正</span>
+                        ) : null}
+                      </div>
+                    </>
+                  )}
+                  {item.evidence ? (
+                    <div className="ac-evidence">依据：{item.evidence}</div>
+                  ) : null}
+                  <div className="ac-actions">
+                    {editingActionId === item.id ? (
+                      <>
+                        <button
+                          className="ac-button primary"
+                          type="button"
+                          onClick={() => void saveActionItemEdit(item)}
+                        >
+                          保存校正
+                        </button>
+                        <button
+                          className="ac-button"
+                          type="button"
+                          onClick={cancelActionItemEdit}
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className={`ac-button ${
+                            actionCopyFeedback?.id === item.id &&
+                            actionCopyFeedback.status === 'copied'
+                              ? 'success'
+                              : ''
+                          }`}
+                          type="button"
+                          onClick={() => void copyActionItem(item)}
+                        >
+                          {actionCopyFeedback?.id === item.id
+                            ? actionCopyFeedback.status === 'copied'
+                              ? '已复制'
+                              : '复制失败'
+                            : '复制'}
+                        </button>
+                        <button
+                          className="ac-button"
+                          type="button"
+                          onClick={() => startActionItemEdit(item)}
+                        >
+                          编辑
+                        </button>
+                        {getActionReviewState(item) === 'dismissed' ? (
+                          <button
+                            className="ac-button"
+                            type="button"
+                            onClick={() =>
+                              void updateActionItemReview(item, {
+                                status: 'pending',
+                                reviewState: 'suggested',
+                              })
+                            }
+                          >
+                            恢复
+                          </button>
+                        ) : (
+                          <>
+                            {getActionReviewState(item) !== 'confirmed' ? (
+                              <button
+                                className="ac-button primary"
+                                type="button"
+                                onClick={() =>
+                                  void updateActionItemReview(item, {
+                                    reviewState: 'confirmed',
+                                  })
+                                }
+                              >
+                                确认
+                              </button>
+                            ) : null}
+                            <button
+                              className="ac-button"
+                              type="button"
+                              onClick={() =>
+                                void updateActionItemReview(item, {
+                                  status:
+                                    item.status === 'done' ? 'pending' : 'done',
+                                  reviewState: 'confirmed',
+                                })
+                              }
+                            >
+                              {item.status === 'done' ? '撤回完成' : '完成'}
+                            </button>
+                            <button
+                              className="ac-button danger"
+                              type="button"
+                              onClick={() =>
+                                void updateActionItemReview(item, {
+                                  status: 'pending',
+                                  reviewState: 'dismissed',
+                                })
+                              }
+                            >
+                              忽略
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               ))
             ) : (
               <div className="empty-state">
-                当前还没有识别到结构化行动项。随着 transcript
-                增长，这里会自动更新。
+                {getActionFilterEmptyCopy(
+                  session.actionItems.length ? actionFilter : 'all',
+                )}
               </div>
             )}
           </div>
@@ -2301,8 +3085,8 @@ function MeetingSidePanel() {
             session.capture.kind === 'recording'
               ? toggleCaptureFromFooter
               : session.readiness.canStartCapture
-                ? undefined
-                : openMeetingOptionsPage
+              ? undefined
+              : openMeetingOptionsPage
           }
           disabled={
             session.capture.kind !== 'recording' &&
@@ -2312,8 +3096,8 @@ function MeetingSidePanel() {
           {session.capture.kind === 'recording'
             ? '🔘 停止 Capture'
             : session.readiness.canStartCapture
-              ? '请从 popup 开启'
-              : '⚙️ 去配置 Meeting Pilot'}
+            ? '请从 popup 开启'
+            : '⚙️ 去配置 Meeting Pilot'}
         </button>
       </div>
 

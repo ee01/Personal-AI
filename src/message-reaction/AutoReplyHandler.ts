@@ -13,11 +13,14 @@ import { generateAutoReply } from '../llm';
 import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 import { ScheduledMessageService } from '../scheduled-messages/ScheduledMessageService';
 import { isScheduledMessagesInitialized } from '../scheduled-messages/ScheduledMessagesUtils';
+import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime';
+import type { DigestConfig } from '../types/digestQueue';
 import {
   buildManualWatchRules,
   getManualItemsFromMatchedRules,
   resolveMatchedWatchRules,
 } from '../watchRules';
+import { buildAutoReplyTopic } from './autoReplyPresentation';
 
 // 自动答复配置接口（与 topic-modal.tsx 中定义保持一致）
 export interface AutoReplyConfig {
@@ -43,11 +46,7 @@ export interface TopicItemWithAutoReply {
   notifyMethod?: string;
   notifyFrequency?: 'immediate' | 'merged';
   // 🆕 每日/每周摘要配置
-  digestConfig?: {
-    enabled: boolean;
-    frequency: 'daily' | 'weekly';
-    preferredHour?: number; // 默认 8
-  };
+  digestConfig?: DigestConfig;
   // 自动答复相关
   autoReply?: boolean;
   autoReplyConfig?: AutoReplyConfig;
@@ -72,6 +71,7 @@ export interface TopicItemWithAutoReply {
     lastNotifiedAt?: string;
   };
   // 自动化动作审批配置
+  automationPrompt?: string;
   automationRequiresApproval?: boolean;
 }
 
@@ -91,6 +91,29 @@ export interface AutoReplyContext {
   };
 }
 
+export function getMatchedAutoReplyItem(
+  context: AutoReplyContext,
+  concernedItems: TopicItemWithAutoReply[],
+): TopicItemWithAutoReply | undefined {
+  const allMatchedItems = getManualItemsFromMatchedRules(
+    resolveMatchedWatchRules({
+      watchRules: buildManualWatchRules(concernedItems),
+      matchedRule: context.matchedRule,
+      matchedRuleRefs: context.matchedRuleRefs,
+      matchedRuleIds: context.matchedRuleIds,
+      messageContext: {
+        sender: context.messageContext.sender,
+        groupId: context.messageContext.groupId,
+        groupName: context.messageContext.groupName,
+      },
+    }).watchRules,
+  );
+
+  return allMatchedItems.find(
+    (item) => item.autoReply && item.autoReplyConfig?.enabled,
+  );
+}
+
 /**
  * 统一的自动答复规则处理函数
  * 同时支持 agentThinking 模式和 filter 模式
@@ -108,30 +131,15 @@ export async function handleAutoReplyRules(
   };
 }> {
   try {
-    // 0. 前置检查：定时消息是否已初始化
+    const matchedItem = getMatchedAutoReplyItem(context, concernedItems);
+    if (!matchedItem || !matchedItem.autoReplyConfig) {
+      return { handled: false };
+    }
+
     const initialized = await isScheduledMessagesInitialized();
     if (!initialized) {
       console.log('🤖 自动答复: 定时消息未初始化，跳过自动答复处理');
       // 注意：在后台任务中不显示对话框，只记录日志并跳过
-      return { handled: false };
-    }
-
-    // 1. 找到匹配的关注项（启用了自动答复的）
-    const allMatchedItems = getManualItemsFromMatchedRules(
-      resolveMatchedWatchRules({
-        watchRules: buildManualWatchRules(concernedItems),
-        matchedRule: context.matchedRule,
-        matchedRuleRefs: context.matchedRuleRefs,
-        matchedRuleIds: context.matchedRuleIds,
-      }).watchRules,
-    );
-
-    // 筛选启用了自动答复的项
-    const matchedItem = allMatchedItems.find(
-      (item) => item.autoReply && item.autoReplyConfig?.enabled,
-    );
-
-    if (!matchedItem || !matchedItem.autoReplyConfig) {
       return { handled: false };
     }
 
@@ -147,24 +155,7 @@ export async function handleAutoReplyRules(
       config,
     });
 
-    // 2. 验证匹配条件
-    if (
-      matchedItem.filterSender &&
-      !msgContext.sender?.includes(matchedItem.filterSender)
-    ) {
-      console.log('🤖 发送者不匹配，跳过自动答复');
-      return { handled: false };
-    }
-
-    if (
-      matchedItem.filterGroup &&
-      !msgContext.groupName?.includes(matchedItem.filterGroup)
-    ) {
-      console.log('🤖 群组不匹配，跳过自动答复');
-      return { handled: false };
-    }
-
-    // 3. 检查是否已经对这条消息创建过自动答复
+    // 1. 检查是否已经对这条消息创建过自动答复
     if (msgContext.postId) {
       const existingReplies = await checkExistingAutoReply(msgContext.postId);
       if (existingReplies) {
@@ -173,7 +164,7 @@ export async function handleAutoReplyRules(
       }
     }
 
-    // 4. 生成答复内容
+    // 2. 生成答复内容
     let replyContent = config.replyContent;
     if (config.useAIGenerate) {
       console.log('🤖 使用 AI 生成答复内容...');
@@ -194,7 +185,7 @@ export async function handleAutoReplyRules(
       }
     }
 
-    // 5. 创建定时消息并获取调度信息
+    // 3. 创建定时消息并获取调度信息
     const scheduleInfo = await createAutoReplyScheduledMessage({
       matchedItem,
       msgContext,
@@ -311,12 +302,12 @@ async function createAutoReplyScheduledMessage(params: {
     }
 
     // 格式化日期和时间
-    const scheduleDate = scheduleTime.toISOString().split('T')[0];
-    const scheduleTimeStr = scheduleTime.toTimeString().substring(0, 5);
+    const { dateStr: scheduleDate, timeStr: scheduleTimeStr } =
+      formatLocalScheduleDateTime(scheduleTime);
 
     // 创建消息
     const createResult = await service.createMessage({
-      Topic: `自动答复 ${msgContext.summary.includes(msgContext.sender.split(' ')[0]) ? '' : msgContext.sender.split(' ')[0]}「${msgContext.summary.substring(0, 50)}${msgContext.summary.length > 50 ? '...' : ''}」`,
+      Topic: buildAutoReplyTopic(msgContext),
       Content: replyContent,
       Schedule_Date: scheduleDate,
       Schedule_Time: scheduleTimeStr,

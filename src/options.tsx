@@ -12,12 +12,23 @@ import {
 } from './utils';
 import {
   MemoryServiceClient,
+  getMemoryServiceClient,
   type OutreachDirectoryStatus,
   type RuntimeConfigResponse,
   type UpdateRuntimeConfigPayload,
 } from './services/MemoryServiceClient';
 import { agentCoordinator } from './agentWorkflow';
-import { IntelligentAgent } from './agentThinking';
+import {
+  AGENT_WORKFLOW_TEST_SCENARIOS,
+  buildAgentWorkflowScenarioInput,
+  buildAgentWorkflowReplayMessages,
+  formatAgentWorkflowReplayLabel,
+  formatAgentWorkflowDatetimeInputValue,
+  normalizeAgentWorkflowInputDatetime,
+  type AgentWorkflowTestInput,
+  type AgentWorkflowReplayMessage,
+} from './agentWorkflowReplay';
+import { IntelligentAgent, type AgentToolDescription } from './agentThinking';
 import {
   AgentVisualizer,
   AgentFlowVisualizer,
@@ -2422,12 +2433,22 @@ const Options = () => {
             <option value="cloud-only">Cloud only</option>
           </select>
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            Auto: 先尝试 Personal AI desktop app 的 Local ASR，然后回退
-            cloud。Chrome Web Speech on-device 只在 Local only 中作为实验性本地兜底使用。
-            Local only: never contacts cloud. Cloud only: always uses cloud
-            (requires API key).
+            Auto: 先尝试读取 RingCentral 自带 Transcript；如果不可用，再尝试
+            Personal AI desktop app 的 Local ASR，然后回退 cloud。Chrome Web
+            Speech on-device 只在 Local only 中作为实验性本地兜底使用。Local
+            only: never contacts cloud. Cloud only: 在 RingCentral Transcript
+            不可用时直接使用 cloud (requires API key).
           </small>
         </div>
+        <ToggleField
+          id="MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED"
+          name="MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED"
+          checked={config.MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED !== false}
+          onChange={handleInputChange}
+          label="自动识别 RingCentral Transcript"
+          description="开启后优先读取会议页面 Notes / Transcript 中 RingCentral 自动生成的转录；读取成功时不会再启动 Local ASR 或 Cloud ASR。"
+          disabled={config.MEETING_PILOT_ENABLED !== true}
+        />
         {config.MEETING_TRANSCRIPTION_MODE !== 'cloud-only' && (
           <>
             {config.MEETING_TRANSCRIPTION_MODE === 'local-only' && (
@@ -3191,6 +3212,21 @@ const Options = () => {
         </div>
 
         <div className="form-group">
+          <label htmlFor="DESIGN_LINK_DOMAINS">Design link domains</label>
+          <input
+            type="text"
+            id="DESIGN_LINK_DOMAINS"
+            name="DESIGN_LINK_DOMAINS"
+            value={config.DESIGN_LINK_DOMAINS || ''}
+            onChange={handleInputChange}
+            placeholder="prototype.example.com, *.design.example.com"
+          />
+          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+            额外识别 description 和 Jira remote links 里的内部原型/设计系统域名；Figma、Miro、Loom、Google Slides 不需要配置。
+          </small>
+        </div>
+
+        <div className="form-group">
           <label htmlFor="DEPENDENCIES_JIRA_PROJECT">
             Dependencies JIRA Project 前缀
           </label>
@@ -3259,7 +3295,14 @@ const AgentSettings = () => {
   const [errorMsg, setErrorMsg] = useState('');
 
   // 新Agent表单状态
-  const [newAgent, setNewAgent] = useState({
+  const [newAgent, setNewAgent] = useState<{
+    id: string;
+    name: string;
+    description: string;
+    enabled: boolean;
+    priority: number;
+    tools: string[];
+  }>({
     id: '',
     name: '',
     description: '',
@@ -3267,6 +3310,26 @@ const AgentSettings = () => {
     priority: 50,
     tools: [],
   });
+  const [workflowTestInput, setWorkflowTestInput] =
+    useState<AgentWorkflowTestInput>({
+      sender: 'Example Sender',
+      teamName: 'Example Group',
+      teamId: '',
+      datetime: formatAgentWorkflowDatetimeInputValue(),
+      content: '',
+    });
+  const [workflowTestRunning, setWorkflowTestRunning] = useState(false);
+  const [workflowTestResult, setWorkflowTestResult] = useState<any>(null);
+  const [workflowTestError, setWorkflowTestError] = useState('');
+  const [workflowReplaySamples, setWorkflowReplaySamples] = useState<
+    AgentWorkflowReplayMessage[]
+  >([]);
+  const [workflowReplaySelectedId, setWorkflowReplaySelectedId] = useState('');
+  const [workflowReplayLoading, setWorkflowReplayLoading] = useState(false);
+  const [workflowReplayError, setWorkflowReplayError] = useState('');
+  const [workflowScenarioSelectedId, setWorkflowScenarioSelectedId] = useState(
+    AGENT_WORKFLOW_TEST_SCENARIOS[0]?.id || '',
+  );
 
   // 获取可用工具列表
   const availableTools = [
@@ -3317,6 +3380,39 @@ const AgentSettings = () => {
     loadAgents();
   }, []);
 
+  const loadWorkflowReplaySamples = async () => {
+    setWorkflowReplayLoading(true);
+    setWorkflowReplayError('');
+    try {
+      const client = getMemoryServiceClient();
+      const result = await client.recall('', {
+        topK: 12,
+        channels: ['time'],
+        includeMetadata: true,
+        previewMaxLength: 260,
+      });
+      const samples = buildAgentWorkflowReplayMessages(result.items || [], 8);
+      setWorkflowReplaySamples(samples);
+      setWorkflowReplaySelectedId(samples[0]?.id || '');
+      if (samples.length === 0) {
+        setWorkflowReplayError('没有可回放的最近消息');
+      }
+    } catch (error) {
+      console.error('加载 Agent Workflow 回放样本失败:', error);
+      setWorkflowReplaySamples([]);
+      setWorkflowReplaySelectedId('');
+      setWorkflowReplayError(
+        error instanceof Error ? error.message : '加载最近消息失败',
+      );
+    } finally {
+      setWorkflowReplayLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadWorkflowReplaySamples();
+  }, []);
+
   // 处理新Agent表单变化
   const handleNewAgentChange = (
     e: React.ChangeEvent<
@@ -3352,21 +3448,150 @@ const AgentSettings = () => {
     });
   };
 
+  const handleWorkflowTestInputChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) => {
+    const { name, value } = e.target;
+    setWorkflowTestInput((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const runWorkflowTest = async (input: AgentWorkflowTestInput) => {
+    const messageContent = input.content.trim();
+    if (!messageContent) {
+      setWorkflowTestError('请输入测试消息');
+      setWorkflowTestResult(null);
+      return;
+    }
+
+    setWorkflowTestRunning(true);
+    setWorkflowTestError('');
+    setWorkflowTestResult(null);
+    try {
+      const result = await agentCoordinator.processMessage({
+        post_id: `agent-workflow-test-${Date.now()}`,
+        team_id: input.teamId.trim() || 'agent-workflow-test',
+        team_name: input.teamName.trim() || 'Example Group',
+        message_content: messageContent,
+        sender: input.sender.trim() || 'Example Sender',
+        datetime: normalizeAgentWorkflowInputDatetime(input.datetime),
+      });
+      setWorkflowTestResult(result);
+    } catch (error) {
+      console.error('Agent Workflow 测试失败:', error);
+      setWorkflowTestError(
+        error instanceof Error ? error.message : 'Agent Workflow 测试失败',
+      );
+    } finally {
+      setWorkflowTestRunning(false);
+    }
+  };
+
+  const handleRunWorkflowTest = () => {
+    runWorkflowTest(workflowTestInput);
+  };
+
+  const buildWorkflowInputFromReplaySample = (
+    sample: AgentWorkflowReplayMessage,
+  ): AgentWorkflowTestInput => ({
+    sender: sample.sender,
+    teamName: sample.teamName,
+    teamId: sample.teamId || '',
+    datetime: formatAgentWorkflowDatetimeInputValue(sample.datetime),
+    content: sample.content,
+  });
+
+  const getSelectedWorkflowReplaySample = () => {
+    const sample = workflowReplaySamples.find(
+      (item) => item.id === workflowReplaySelectedId,
+    );
+    if (!sample) {
+      setWorkflowReplayError('请选择一条最近消息');
+      return null;
+    }
+    return sample;
+  };
+
+  const handleLoadWorkflowReplaySample = () => {
+    const sample = getSelectedWorkflowReplaySample();
+    if (!sample) return;
+
+    setWorkflowTestInput(buildWorkflowInputFromReplaySample(sample));
+    setWorkflowTestResult(null);
+    setWorkflowTestError('');
+    setWorkflowReplayError('');
+  };
+
+  const handleRunWorkflowReplaySample = async () => {
+    const sample = getSelectedWorkflowReplaySample();
+    if (!sample) return;
+
+    const nextInput = buildWorkflowInputFromReplaySample(sample);
+    setWorkflowTestInput(nextInput);
+    setWorkflowReplayError('');
+    await runWorkflowTest(nextInput);
+  };
+
+  const getSelectedWorkflowScenario = () =>
+    AGENT_WORKFLOW_TEST_SCENARIOS.find(
+      (scenario) => scenario.id === workflowScenarioSelectedId,
+    ) || AGENT_WORKFLOW_TEST_SCENARIOS[0];
+
+  const handleLoadWorkflowScenario = () => {
+    const scenario = getSelectedWorkflowScenario();
+    if (!scenario) return;
+
+    setWorkflowTestInput(buildAgentWorkflowScenarioInput(scenario));
+    setWorkflowTestResult(null);
+    setWorkflowTestError('');
+    setWorkflowReplayError('');
+  };
+
+  const handleRunWorkflowScenario = async () => {
+    const scenario = getSelectedWorkflowScenario();
+    if (!scenario) return;
+
+    const nextInput = buildAgentWorkflowScenarioInput(scenario);
+    setWorkflowTestInput(nextInput);
+    setWorkflowReplayError('');
+    await runWorkflowTest(nextInput);
+  };
+
   // 添加新Agent
   const handleAddAgent = async () => {
     try {
-      if (!newAgent.id || !newAgent.name) {
+      const sanitizedAgent = {
+        ...newAgent,
+        id: newAgent.id.trim(),
+        name: newAgent.name.trim(),
+        description: newAgent.description.trim(),
+        tools: newAgent.tools.filter((tool) => availableTools.includes(tool)),
+      };
+
+      if (!sanitizedAgent.id || !sanitizedAgent.name) {
         setErrorMsg('请填写Agent ID和名称');
         return;
       }
 
+      if (!/^[a-zA-Z][a-zA-Z0-9_-]{1,63}$/.test(sanitizedAgent.id)) {
+        setErrorMsg('Agent ID需以字母开头，仅包含字母、数字、_ 或 -');
+        return;
+      }
+
+      if (sanitizedAgent.tools.length === 0) {
+        setErrorMsg('请至少选择一个工具');
+        return;
+      }
+
       // 检查ID是否重复
-      if (agents.some((a) => a.id === newAgent.id)) {
+      if (agents.some((a) => a.id === sanitizedAgent.id)) {
         setErrorMsg('Agent ID已存在');
         return;
       }
 
-      const success = await agentCoordinator.addAgent(newAgent);
+      const success = await agentCoordinator.addAgent(sanitizedAgent);
       if (success) {
         // 重新加载Agent列表
         const agentList = await agentCoordinator.getAgents();
@@ -3399,6 +3624,132 @@ const AgentSettings = () => {
   const enabledToolCount = new Set(
     enabledAgents.flatMap((agent) => agent.tools || []),
   ).size;
+  const sanitizedNewAgentId = newAgent.id.trim();
+  const selectedToolLabels = newAgent.tools
+    .map((tool) => toolNameMap[tool] || tool)
+    .join('、');
+  const previewAgents = sanitizedNewAgentId
+    ? [
+        ...agents,
+        {
+          ...newAgent,
+          id: sanitizedNewAgentId,
+          name: newAgent.name.trim() || sanitizedNewAgentId,
+        },
+      ].sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    : sortedAgents;
+  const previewOrder = sanitizedNewAgentId
+    ? previewAgents.findIndex((agent) => agent.id === sanitizedNewAgentId) + 1
+    : 0;
+  const canAddAgent =
+    Boolean(sanitizedNewAgentId) &&
+    Boolean(newAgent.name.trim()) &&
+    newAgent.tools.length > 0 &&
+    /^[a-zA-Z][a-zA-Z0-9_-]{1,63}$/.test(sanitizedNewAgentId) &&
+    !agents.some((agent) => agent.id === sanitizedNewAgentId);
+  const firstAgent = enabledAgents[0];
+  const storageAuditFields = [
+    '存储原因',
+    '执行 Trace',
+    '实体摘要',
+    '关系数量',
+    '失败 Agent',
+    '通知复核',
+  ];
+  const workflowTestTrace = workflowTestResult?.agentWorkflowTrace || [];
+  const workflowTestConfidence =
+    typeof workflowTestResult?.confidence === 'number'
+      ? workflowTestResult.confidence
+      : 0;
+  const workflowTestNotificationLabel = workflowTestResult?.notificationReview
+    ?.required
+    ? '待复核'
+    : workflowTestResult?.shouldNotify
+      ? '发送'
+      : '不发送';
+  const workflowTestStorageReview = workflowTestResult?.storageReview;
+  const workflowTraceStatusLabels: Record<string, string> = {
+    complete: '完整',
+    partial: '部分异常',
+    missing: '缺失',
+    success: '成功',
+    skipped: '跳过',
+    error: '失败',
+  };
+  const workflowToolStatusLabels: Record<string, string> = {
+    success: '成功',
+    skipped: '跳过',
+    error: '失败',
+  };
+  const workflowTestTraceStatus =
+    workflowTestStorageReview?.traceStatus ||
+    (workflowTestTrace.length === 0
+      ? 'missing'
+      : workflowTestTrace.some((step: any) => step.status === 'error')
+        ? 'partial'
+        : 'complete');
+
+  const formatWorkflowTraceDuration = (durationMs?: number) => {
+    if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
+      return '-';
+    }
+    return durationMs < 1000
+      ? `${Math.round(durationMs)}ms`
+      : `${(durationMs / 1000).toFixed(1)}s`;
+  };
+
+  const formatWorkflowEntitySummary = (summary: any) => {
+    if (!summary || typeof summary !== 'object') return '-';
+    return [
+      `人 ${summary.people || 0}`,
+      `项目 ${summary.projects || 0}`,
+      `主题 ${summary.topics || 0}`,
+      `行动项 ${summary.actions || 0}`,
+    ].join(' / ');
+  };
+
+  const workflowTestReviewRows = workflowTestStorageReview
+    ? [
+        {
+          label: '存储原因',
+          value:
+            workflowTestStorageReview.primaryReason ||
+            workflowTestStorageReview.summary ||
+            '-',
+        },
+        {
+          label: 'Trace 状态',
+          value:
+            workflowTraceStatusLabels[workflowTestTraceStatus] ||
+            workflowTestTraceStatus,
+        },
+        {
+          label: '匹配规则',
+          value:
+            (workflowTestStorageReview.matchedRuleRefs || []).join('、') ||
+            (workflowTestStorageReview.matchedRuleIds || []).join('、') ||
+            '-',
+        },
+        {
+          label: '实体/关系',
+          value: `${formatWorkflowEntitySummary(
+            workflowTestStorageReview.entitySummary,
+          )} / 关系 ${workflowTestStorageReview.relationshipCount || 0}`,
+        },
+        {
+          label: '回复建议',
+          value: workflowTestStorageReview.replyAdviceAvailable ? '有' : '无',
+        },
+        {
+          label: '异常',
+          value:
+            (workflowTestStorageReview.failedAgents || []).join('、') ||
+            (workflowTestStorageReview.toolErrorCount
+              ? `工具错误 ${workflowTestStorageReview.toolErrorCount}`
+              : '-'),
+        },
+      ]
+    : [];
 
   return (
     <div className="agent-settings">
@@ -3413,10 +3764,272 @@ const AgentSettings = () => {
         </div>
         <div>
           <span className="agent-summary-value">
-            {enabledAgents[0]?.name || '-'}
+            {firstAgent
+              ? workflowPhaseMap[firstAgent.id] || firstAgent.name
+              : '-'}
           </span>
           <span className="agent-summary-label">首个阶段</span>
         </div>
+        <div>
+          <span className="agent-summary-value">Storage Review</span>
+          <span className="agent-summary-label">记忆审计</span>
+        </div>
+      </div>
+
+      <div className="agent-audit-strip" aria-label="Agent Workflow 记忆审计字段">
+        {storageAuditFields.map((field) => (
+          <span key={field} className="agent-audit-chip">
+            {field}
+          </span>
+        ))}
+      </div>
+
+      <div className="agent-workflow-test-panel">
+        <div className="agent-workflow-test-header">
+          <div>
+            <h3>关注项测试</h3>
+          </div>
+          <button onClick={handleRunWorkflowTest} disabled={workflowTestRunning}>
+            {workflowTestRunning ? '测试中...' : '运行测试'}
+          </button>
+        </div>
+        <div className="agent-workflow-scenario-row">
+          <div className="form-group">
+            <label htmlFor="workflowScenario">内置样例</label>
+            <select
+              id="workflowScenario"
+              value={workflowScenarioSelectedId}
+              onChange={(event) =>
+                setWorkflowScenarioSelectedId(event.target.value)
+              }
+            >
+              {AGENT_WORKFLOW_TEST_SCENARIOS.map((scenario) => (
+                <option key={scenario.id} value={scenario.id}>
+                  {scenario.label} · {scenario.signal}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="agent-workflow-scenario-actions">
+            <button type="button" onClick={handleLoadWorkflowScenario}>
+              填入样例
+            </button>
+            <button
+              type="button"
+              onClick={handleRunWorkflowScenario}
+              disabled={workflowTestRunning}
+            >
+              {workflowTestRunning ? '测试中...' : '运行样例'}
+            </button>
+          </div>
+        </div>
+        <div className="agent-workflow-replay-row">
+          <div className="form-group">
+            <label htmlFor="workflowReplaySample">最近消息</label>
+            <select
+              id="workflowReplaySample"
+              value={workflowReplaySelectedId}
+              onChange={(event) =>
+                setWorkflowReplaySelectedId(event.target.value)
+              }
+              disabled={workflowReplayLoading || workflowReplaySamples.length === 0}
+            >
+              {workflowReplaySamples.length === 0 ? (
+                <option value="">
+                  {workflowReplayLoading ? '加载中...' : '无可用消息'}
+                </option>
+              ) : (
+                workflowReplaySamples.map((sample) => (
+                  <option key={sample.id} value={sample.id}>
+                    {formatAgentWorkflowReplayLabel(sample)}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div className="agent-workflow-replay-actions">
+            <button
+              type="button"
+              onClick={handleLoadWorkflowReplaySample}
+              disabled={workflowReplayLoading || workflowReplaySamples.length === 0}
+            >
+              填入
+            </button>
+            <button
+              type="button"
+              onClick={handleRunWorkflowReplaySample}
+              disabled={
+                workflowReplayLoading ||
+                workflowTestRunning ||
+                workflowReplaySamples.length === 0
+              }
+            >
+              {workflowTestRunning ? '测试中...' : '回放测试'}
+            </button>
+            <button
+              type="button"
+              onClick={loadWorkflowReplaySamples}
+              disabled={workflowReplayLoading}
+            >
+              {workflowReplayLoading ? '刷新中...' : '刷新'}
+            </button>
+          </div>
+        </div>
+        {workflowReplayError && (
+          <p className="error-message">{workflowReplayError}</p>
+        )}
+        <div className="agent-workflow-test-grid">
+          <div className="form-group">
+            <label htmlFor="workflowTestSender">发送者</label>
+            <input
+              type="text"
+              id="workflowTestSender"
+              name="sender"
+              value={workflowTestInput.sender}
+              onChange={handleWorkflowTestInputChange}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="workflowTestTeamName">群组</label>
+            <input
+              type="text"
+              id="workflowTestTeamName"
+              name="teamName"
+              value={workflowTestInput.teamName}
+              onChange={handleWorkflowTestInputChange}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="workflowTestTeamId">群组 ID</label>
+            <input
+              type="text"
+              id="workflowTestTeamId"
+              name="teamId"
+              value={workflowTestInput.teamId}
+              onChange={handleWorkflowTestInputChange}
+              placeholder="可选，用于范围匹配"
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="workflowTestDatetime">消息时间</label>
+            <input
+              type="datetime-local"
+              id="workflowTestDatetime"
+              name="datetime"
+              step="1"
+              value={workflowTestInput.datetime}
+              onChange={handleWorkflowTestInputChange}
+            />
+          </div>
+        </div>
+        <div className="form-group">
+          <label htmlFor="workflowTestContent">测试消息</label>
+          <textarea
+            id="workflowTestContent"
+            name="content"
+            value={workflowTestInput.content}
+            onChange={handleWorkflowTestInputChange}
+            placeholder="消息内容"
+          />
+        </div>
+        {workflowTestError && (
+          <p className="error-message">{workflowTestError}</p>
+        )}
+        {workflowTestResult && (
+          <div className="agent-workflow-test-result">
+            <div className="agent-test-decision-row">
+              <span
+                className={`agent-test-decision ${workflowTestResult.shouldStore ? 'on' : 'off'}`}
+              >
+                存储 {workflowTestResult.shouldStore ? '是' : '否'}
+              </span>
+              <span
+                className={`agent-test-decision ${workflowTestResult.shouldNotify ? 'on' : workflowTestResult.notificationReview?.required ? 'review' : 'off'}`}
+              >
+                通知 {workflowTestNotificationLabel}
+              </span>
+              <span className="agent-test-decision">
+                置信度 {Math.round(workflowTestConfidence * 100)}%
+              </span>
+            </div>
+            {workflowTestResult.notificationReview?.required && (
+              <div className="agent-test-review-banner">
+                {workflowTestResult.notificationReview.message}
+              </div>
+            )}
+            <div className="agent-test-summary">
+              {workflowTestResult.summary || '未生成摘要'}
+            </div>
+            {workflowTestReviewRows.length > 0 && (
+              <div
+                className="agent-test-review-grid"
+                aria-label="Agent Workflow 存储审计"
+              >
+                {workflowTestReviewRows.map((row) => (
+                  <div key={row.label} className="agent-test-review-item">
+                    <span>{row.label}</span>
+                    <strong>{row.value}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+            {workflowTestTrace.length > 0 && (
+              <div
+                className={`agent-test-trace ${workflowTestTraceStatus}`}
+                aria-label="Agent Workflow 执行 Trace"
+              >
+                <div className="agent-test-section-title">执行 Trace</div>
+                {workflowTestTrace.map((step: any) => (
+                  <details
+                    key={`${step.agentId}-${step.startedAt}`}
+                    className={`agent-test-trace-step ${step.status}`}
+                    open={step.status === 'error'}
+                  >
+                    <summary>
+                      <span className="agent-test-trace-main">
+                        <span>
+                          {workflowPhaseMap[step.agentId] || step.agentName}
+                        </span>
+                        <small>{step.outputSummary || '未生成输出摘要'}</small>
+                      </span>
+                      <span className="agent-test-trace-meta">
+                        <strong>
+                          {workflowTraceStatusLabels[step.status] ||
+                            step.status}
+                        </strong>
+                        <span>
+                          {formatWorkflowTraceDuration(step.durationMs)}
+                        </span>
+                      </span>
+                    </summary>
+                    {step.error && (
+                      <div className="agent-test-trace-error">{step.error}</div>
+                    )}
+                    {Array.isArray(step.tools) && step.tools.length > 0 && (
+                      <div className="agent-test-tool-list">
+                        {step.tools.map((tool: any) => (
+                          <div
+                            key={`${step.agentId}-${tool.name}`}
+                            className={`agent-test-tool ${tool.status}`}
+                          >
+                            <span>{tool.displayName || tool.name}</span>
+                            <strong>
+                              {workflowToolStatusLabels[tool.status] ||
+                                tool.status}
+                            </strong>
+                            <small>
+                              {tool.summary || tool.error || '无摘要'}
+                            </small>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </details>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <h3>执行顺序</h3>
@@ -3536,7 +4149,15 @@ const AgentSettings = () => {
         </div>
       </div>
 
-      <button onClick={handleAddAgent}>添加 Agent</button>
+      <div className="agent-form-preview" aria-live="polite">
+        <span>预计顺序</span>
+        <strong>{previewOrder ? `#${previewOrder}` : '-'}</strong>
+        <span>{selectedToolLabels || '未选择工具'}</span>
+      </div>
+
+      <button onClick={handleAddAgent} disabled={!canAddAgent}>
+        添加 Agent
+      </button>
     </div>
   );
 };
@@ -3545,15 +4166,30 @@ const agent = new IntelligentAgent();
 
 // 智能Agent系统设置组件
 const IntelligentAgentSettings = () => {
-  const [tools, setTools] = useState<any[]>([]);
+  const [tools, setTools] = useState<AgentToolDescription[]>([]);
   const [demoMode, setDemoMode] = useState(false);
   const [demoThoughtProcess, setDemoThoughtProcess] = useState<any[]>([]);
   const [demoResult, setDemoResult] = useState<any>(null);
+  const demoRunRef = useRef(0);
+
+  const getToolLabel = (toolId: string) => {
+    return tools.find((tool) => tool.id === toolId)?.name || toolId;
+  };
+
+  const formatToolParameters = (tool: AgentToolDescription) => {
+    if (!tool.parameters || tool.parameters.length === 0) {
+      return '无参数';
+    }
+
+    return tool.parameters
+      .map((param) => `${param.name}${param.required ? '*' : ''}`)
+      .join('、');
+  };
 
   // 获取可用工具
   useEffect(() => {
     try {
-      const availableTools = agent.getToolDescriptions();
+      const availableTools = agent.getToolCatalog();
       setTools(availableTools);
     } catch (error) {
       console.error('加载工具失败:', error);
@@ -3562,91 +4198,144 @@ const IntelligentAgentSettings = () => {
 
   // 启动演示模式
   const startDemo = () => {
+    const runId = demoRunRef.current + 1;
+    demoRunRef.current = runId;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const isDemoRunActive = () => demoRunRef.current === runId;
+
     setDemoMode(true);
     setDemoThoughtProcess([]);
     setDemoResult(null);
 
+    const historyToolId = 'historySearch';
+    const jiraToolId = 'jiraQuery';
+    const historyToolName = getToolLabel(historyToolId);
+    const jiraToolName = getToolLabel(jiraToolId);
+
     // 模拟思考过程
     const simulateThoughtProcess = async () => {
       // 模拟初始思考
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await wait(1000);
+      if (!isDemoRunActive()) return;
       setDemoThoughtProcess([
         {
           timestamp: Date.now(),
           thought:
-            '收到一条新消息，需要对其进行分析。首先我应该提取消息中的关键实体信息，了解消息的基本内容。',
-          action: '执行工具',
-          toolUsed: 'entityExtractor',
-        },
-      ]);
-
-      // 模拟实体提取结果
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      setDemoThoughtProcess((prev) => [
-        ...prev,
-        {
-          timestamp: Date.now(),
-          thought:
-            '我已经提取了消息中的实体信息。发现消息提及了一个项目和几个人物。接下来，我应该检查这个项目在JIRA中的状态，以便了解更多上下文。',
-          action: '执行工具',
-          toolUsed: 'jiraQuery',
+            '收到一条项目状态消息，需要先确认是否和用户近期关注的上下文相关。',
+          action: 'use_tool',
+          toolUsed: historyToolId,
           result: {
-            success: true,
-            issue: {
-              id: 'PROJ-1001',
-              title: '示例项目任务',
-              status: '进行中',
-              assignee: '开发人员A',
+            [historyToolId]: {
+              message: '找到 2 条相关历史消息：上周讨论过 PROJ-1001 的交付风险和截止时间。',
+              result: [
+                {
+                  summary: 'PROJ-1001 需要在下周前完成主要开发。',
+                  sender: 'Product Lead',
+                },
+                {
+                  summary: '用户关注该项目是否需要升级风险。',
+                  sender: 'Current User',
+                },
+              ],
             },
           },
         },
       ]);
 
-      // 模拟JIRA查询后的思考
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // 模拟历史搜索后的判断
+      await wait(2000);
+      if (!isDemoRunActive()) return;
       setDemoThoughtProcess((prev) => [
         ...prev,
         {
           timestamp: Date.now(),
           thought:
-            '我找到了与消息相关的JIRA任务。从任务状态来看，这是一个正在进行中的项目。消息中提到的人物可能与这个项目有关，接下来我应该查询他们之间的组织关系。',
-          action: '执行工具',
-          toolUsed: 'orgChart',
+            '历史消息显示该项目是近期关注对象。消息里出现了明确的 JIRA key，需要查询任务状态后再决定是否通知。',
+          action: 'use_tool',
+          toolUsed: jiraToolId,
           result: {
-            success: true,
-            person: '张工程师',
-            role: '高级工程师',
-            department: '研发部',
-            manager: '李经理',
+            [jiraToolId]: {
+              message: '[PROJ-1001][In Progress] 查询数据：示例项目任务，预计下周完成。',
+              type: 'single',
+              result: {
+                key: 'PROJ-1001',
+                summary: '示例项目任务',
+                status: 'In Progress',
+                assignee: '开发人员A',
+                duedate: '2026-05-12',
+              },
+            },
           },
         },
       ]);
 
-      // 模拟组织架构查询后的思考
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // 模拟重复工具调用被跳过
+      await wait(2000);
+      if (!isDemoRunActive()) return;
       setDemoThoughtProcess((prev) => [
         ...prev,
         {
           timestamp: Date.now(),
           thought:
-            '我已经了解了消息中提到的人物的组织关系。综合JIRA任务信息和组织关系，我认为这条消息是关于项目进展的重要更新，应该存储下来并通知用户。',
+            '模型再次提出用同样参数查询历史消息。系统已经有相同工具结果，因此跳过重复调用并保留已有证据。',
+          action: 'use_tool',
+          toolUsed: historyToolId,
+          result: {
+            [historyToolId]: {
+              skipped: true,
+              message: '已跳过重复工具调用',
+            },
+          },
+        },
+      ]);
+
+      // 模拟无效工具调用被阻断
+      await wait(1600);
+      if (!isDemoRunActive()) return;
+      setDemoThoughtProcess((prev) => [
+        ...prev,
+        {
+          timestamp: Date.now(),
+          thought:
+            '模型提出了一个未注册工具调用。系统在执行前完成校验，阻断该调用并提示当前可用工具。',
+          action: 'use_tool',
+          toolUsed: 'orgStructure',
+          result: {
+            orgStructure: {
+              blocked: true,
+              message: '工具 orgStructure 未注册，已阻断调用。当前可用工具: historySearch, jiraQuery',
+            },
+          },
+        },
+      ]);
+
+      // 模拟最终判断
+      await wait(2000);
+      if (!isDemoRunActive()) return;
+      setDemoThoughtProcess((prev) => [
+        ...prev,
+        {
+          timestamp: Date.now(),
+          thought:
+            '结合历史上下文和 JIRA 状态，这是一条需要存储的项目进展；当前没有阻塞或高风险变化，因此不需要即时通知。',
           action: 'finish',
         },
       ]);
 
       // 设置最终结果
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await wait(1000);
+      if (!isDemoRunActive()) return;
       setDemoResult({
         isImportant: true,
         shouldStore: true,
-        shouldNotify: true,
+        shouldNotify: false,
         confidence: 0.85,
         summary:
-          '项目PROJ-1001的进展更新：开发工作正在按计划进行，预计下周完成。',
+          '项目 PROJ-1001 仍在进行中，预计 2026-05-12 完成；本次消息应沉淀为项目进展，但无需打断用户。',
         reasonsToStore: [
-          '消息包含重要项目的进展信息',
-          '涉及关键团队成员的工作状态',
-          '有助于跟踪项目时间线',
+          `通过 ${historyToolName} 确认为近期关注项目`,
+          `通过 ${jiraToolName} 获得任务状态和截止时间`,
+          '本轮重复工具调用已被跳过，避免浪费和重复证据',
         ],
       });
     };
@@ -3656,7 +4345,10 @@ const IntelligentAgentSettings = () => {
 
   // 停止演示
   const stopDemo = () => {
+    demoRunRef.current += 1;
     setDemoMode(false);
+    setDemoThoughtProcess([]);
+    setDemoResult(null);
   };
 
   return (
@@ -3669,6 +4361,7 @@ const IntelligentAgentSettings = () => {
               <th>ID</th>
               <th>名称</th>
               <th>描述</th>
+              <th>参数</th>
             </tr>
           </thead>
           <tbody>
@@ -3677,6 +4370,7 @@ const IntelligentAgentSettings = () => {
                 <td>{tool.id}</td>
                 <td>{tool.name}</td>
                 <td>{tool.description}</td>
+                <td>{formatToolParameters(tool)}</td>
               </tr>
             ))}
           </tbody>

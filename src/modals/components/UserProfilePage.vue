@@ -17,6 +17,14 @@
           </button>
         </div>
       </div>
+
+      <div
+        v-if="statusMessage"
+        class="status-message"
+        :class="statusTone"
+      >
+        {{ statusMessage }}
+      </div>
     </div>
     
     <div v-if="isLoading" class="loading-container">
@@ -25,6 +33,47 @@
     </div>
     
     <div v-else-if="userProfile && userProfileAnalysis" class="profile-content">
+      <div class="review-strip">
+        <div class="review-summary-card primary">
+          <span class="review-label">待确认推断</span>
+          <strong>{{ profileHealthMetrics.inferredCount }}</strong>
+          <button
+            type="button"
+            class="review-link"
+            :disabled="profileHealthMetrics.inferredCount === 0"
+            @click="scrollToSection('profile-predictions')"
+          >
+            处理
+          </button>
+        </div>
+        <div class="review-summary-card">
+          <span class="review-label">确认率</span>
+          <strong>{{ profileHealthMetrics.confirmationRate.toFixed(0) }}%</strong>
+          <button
+            type="button"
+            class="review-link"
+            @click="scrollToSection('profile-items')"
+          >
+            查看
+          </button>
+        </div>
+        <div class="review-summary-card">
+          <span class="review-label">证据覆盖</span>
+          <strong>{{ profileHealthMetrics.evidenceCoverage.toFixed(0) }}%</strong>
+          <button
+            type="button"
+            class="review-link"
+            @click="scrollToSection('profile-items')"
+          >
+            核对
+          </button>
+        </div>
+        <div class="review-summary-card">
+          <span class="review-label">最近信号</span>
+          <strong class="review-time">{{ formatTime(userProfile.statistics.lastActiveTime) }}</strong>
+        </div>
+      </div>
+
       <!-- 核心兴趣概览 -->
       <div class="profile-card">
         <h3>🎯 当前关注重点</h3>
@@ -32,24 +81,35 @@
           <div class="interest-category">
             <h4>📁 项目</h4>
             <div class="interest-list">
+              <div v-if="getProjectsWithImportance().length === 0" class="inline-empty compact">
+                暂无项目画像条目
+              </div>
               <div 
                 v-for="(project, idx) in getProjectsWithImportance()" 
                 :key="project.id || idx" 
                 class="interest-item"
+                :class="{ updating: isItemPending(project.id) }"
               >
                 <span class="interest-icon">🚀</span>
                 <span class="interest-name">{{ project.name }}</span>
                 <div class="importance-rating">
                   <div class="stars">
-                    <span 
+                    <button
                       v-for="star in 5" 
                       :key="star"
+                      type="button"
                       class="star"
-                      :class="{ active: star <= (project.explicitImportance || 0) * 5 }"
+                      :class="{
+                        active: star <= (project.explicitImportance || 0) * 5,
+                        disabled: isItemPending(project.id)
+                      }"
+                      :disabled="isItemPending(project.id)"
+                      :aria-label="`将 ${project.name} 重要性设为 ${star} 星`"
+                      :aria-pressed="star <= (project.explicitImportance || 0) * 5"
                       @click="setImportance(project.id, 'project', star / 5)"
                     >
                       ★
-                    </span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -59,24 +119,35 @@
           <div class="interest-category">
             <h4>👥 人员</h4>
             <div class="interest-list">
+              <div v-if="getPeopleWithImportance().length === 0" class="inline-empty compact">
+                暂无人员画像条目
+              </div>
               <div 
                 v-for="(person, idx) in getPeopleWithImportance()" 
                 :key="person.id || idx" 
                 class="interest-item"
+                :class="{ updating: isItemPending(person.id) }"
               >
                 <span class="interest-icon">👤</span>
                 <span class="interest-name">{{ person.name }}</span>
                 <div class="importance-rating">
                   <div class="stars">
-                    <span 
+                    <button
                       v-for="star in 5" 
                       :key="star"
+                      type="button"
                       class="star"
-                      :class="{ active: star <= (person.explicitImportance || 0) * 5 }"
+                      :class="{
+                        active: star <= (person.explicitImportance || 0) * 5,
+                        disabled: isItemPending(person.id)
+                      }"
+                      :disabled="isItemPending(person.id)"
+                      :aria-label="`将 ${person.name} 重要性设为 ${star} 星`"
+                      :aria-pressed="star <= (person.explicitImportance || 0) * 5"
                       @click="setImportance(person.id, 'person', star / 5)"
                     >
                       ★
-                    </span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -86,24 +157,35 @@
           <div class="interest-category">
             <h4>💡 主题</h4>
             <div class="interest-list">
+              <div v-if="getTopicsWithImportance().length === 0" class="inline-empty compact">
+                暂无主题画像条目
+              </div>
               <div 
                 v-for="(topic, idx) in getTopicsWithImportance()" 
                 :key="topic.id || idx" 
                 class="interest-item"
+                :class="{ updating: isItemPending(topic.id) }"
               >
                 <span class="interest-icon">💭</span>
                 <span class="interest-name">{{ topic.name }}</span>
                 <div class="importance-rating">
                   <div class="stars">
-                    <span 
+                    <button
                       v-for="star in 5" 
                       :key="star"
+                      type="button"
                       class="star"
-                      :class="{ active: star <= (topic.explicitImportance || 0) * 5 }"
+                      :class="{
+                        active: star <= (topic.explicitImportance || 0) * 5,
+                        disabled: isItemPending(topic.id)
+                      }"
+                      :disabled="isItemPending(topic.id)"
+                      :aria-label="`将 ${topic.name} 重要性设为 ${star} 星`"
+                      :aria-pressed="star <= (topic.explicitImportance || 0) * 5"
                       @click="setImportance(topic.id, 'topic', star / 5)"
                     >
                       ★
-                    </span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -141,7 +223,7 @@
       
       <!-- 智能推荐 -->
       <div class="profile-card">
-        <h3>💡 智能推荐</h3>
+        <h3>💡 校准建议</h3>
         <div class="suggestions-list">
           <div 
             v-for="(suggestion, idx) in userProfileAnalysis.insights.suggestedContent" 
@@ -155,13 +237,18 @@
       </div>
       
       <!-- 预测兴趣 -->
-      <div v-if="userProfileAnalysis.predictedInterests.length > 0" class="profile-card">
-        <h3>🔮 预测您可能感兴趣的内容</h3>
+      <div
+        v-if="userProfileAnalysis.predictedInterests.length > 0"
+        id="profile-predictions"
+        class="profile-card"
+      >
+        <h3>🔮 待确认推断</h3>
         <div class="predictions-list">
-          <div 
-            v-for="(prediction, idx) in userProfileAnalysis.predictedInterests" 
-            :key="idx" 
+          <div
+            v-for="prediction in userProfileAnalysis.predictedInterests"
+            :key="prediction.id"
             class="prediction-item"
+            :class="{ updating: isItemPending(prediction.id) }"
           >
             <div class="prediction-header">
               <span class="prediction-type">{{ prediction.type }}</span>
@@ -170,13 +257,36 @@
               </span>
             </div>
             <div class="prediction-name">{{ prediction.name }}</div>
+            <div class="prediction-meta">
+              <span>{{ getCategoryDisplayName(prediction.category) }}</span>
+              <span>{{ getProfileStatusDisplayName(prediction.status) }}</span>
+              <span>{{ getSourceDisplayName(prediction.sourceKind) }}</span>
+              <span>{{ prediction.evidenceCount > 0 ? `${prediction.evidenceCount} 条证据` : '暂无证据' }}</span>
+              <span>{{ formatTime(prediction.lastSeen) }}</span>
+            </div>
             <div class="prediction-reason">{{ prediction.reason }}</div>
+            <div class="prediction-actions">
+              <button
+                class="secondary-action-btn"
+                :disabled="isItemPending(prediction.id)"
+                @click="confirmProfileItem(prediction.id)"
+              >
+                {{ isItemPending(prediction.id) ? '处理中' : '确认' }}
+              </button>
+              <button
+                class="danger-action-btn"
+                :disabled="isItemPending(prediction.id)"
+                @click="retractProfileItem(prediction.id)"
+              >
+                {{ isItemPending(prediction.id) ? '处理中' : '排除' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
       
       <!-- 统计数据 -->
-      <div class="profile-card">
+      <div id="profile-items" class="profile-card">
         <h3>📊 活动统计</h3>
         <div class="stats-grid">
           <div class="stat-card">
@@ -194,6 +304,64 @@
           <div class="stat-card">
             <div class="stat-value">{{ userProfile.interests.people.length }}</div>
             <div class="stat-label">协作人员数</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-card">
+        <div class="items-header">
+          <h3>🧭 画像条目</h3>
+          <span class="items-count">{{ userProfile.allItems.length }} 条</span>
+        </div>
+        <div v-if="userProfile.allItems.length === 0" class="inline-empty">
+          暂无可校准的画像条目
+        </div>
+        <div v-else class="profile-items-list">
+          <div
+            v-for="item in userProfile.allItems.slice(0, 20)"
+            :key="item.id"
+            class="profile-item-row"
+            :class="{ updating: isItemPending(item.id) }"
+          >
+            <div class="profile-item-main">
+              <div class="profile-item-title">
+                <span class="profile-item-name">{{ item.name }}</span>
+                <span class="profile-item-type">{{ getCategoryDisplayName(item.category) }}</span>
+                <span
+                  class="profile-item-state"
+                  :class="{
+                    confirmed: item.userConfirmed,
+                    pending: item.status === 'pending_confirm'
+                  }"
+                >
+                  {{ getProfileStatusDisplayName(item.status, item.userConfirmed) }}
+                </span>
+              </div>
+              <div class="profile-item-meta">
+                <span>重要性 {{ formatPercent(item.explicitImportance) }}</span>
+                <span>命中 {{ item.mentionCount }} 次</span>
+                <span>{{ getSourceDisplayName(item.sourceKind) }}</span>
+                <span>{{ getEvidenceLabel(item) }}</span>
+                <span>{{ formatTime(item.lastSeen) }}</span>
+              </div>
+            </div>
+            <div class="profile-item-actions">
+              <button
+                v-if="!item.userConfirmed"
+                class="secondary-action-btn"
+                :disabled="isItemPending(item.id)"
+                @click="confirmProfileItem(item.id)"
+              >
+                {{ isItemPending(item.id) ? '处理中' : '确认' }}
+              </button>
+              <button
+                class="danger-action-btn"
+                :disabled="isItemPending(item.id)"
+                @click="retractProfileItem(item.id)"
+              >
+                {{ isItemPending(item.id) ? '处理中' : '排除' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -276,36 +444,36 @@
           </div>
         </div>
 
-        <!-- 效率指标 -->
+        <!-- 画像健康度 -->
         <div class="efficiency-metrics">
-          <h4>🎯 个人效率指标</h4>
+          <h4>🎯 画像健康度</h4>
           <div class="metrics-grid">
             <div class="metric-card">
-              <div class="metric-icon">⚡</div>
+              <div class="metric-icon">✅</div>
               <div class="metric-content">
-                <div class="metric-value">{{ efficiencyMetrics.responseSpeed.toFixed(1) }}h</div>
-                <div class="metric-label">平均响应时间</div>
+                <div class="metric-value">{{ profileHealthMetrics.confirmationRate.toFixed(0) }}%</div>
+                <div class="metric-label">已确认比例</div>
               </div>
             </div>
             <div class="metric-card">
-              <div class="metric-icon">🔥</div>
+              <div class="metric-icon">🧭</div>
               <div class="metric-content">
-                <div class="metric-value">{{ efficiencyMetrics.focusScore.toFixed(0) }}%</div>
-                <div class="metric-label">专注度评分</div>
+                <div class="metric-value">{{ profileHealthMetrics.inferredCount }}</div>
+                <div class="metric-label">待确认条目</div>
               </div>
             </div>
             <div class="metric-card">
-              <div class="metric-icon">🚀</div>
+              <div class="metric-icon">📎</div>
               <div class="metric-content">
-                <div class="metric-value">{{ efficiencyMetrics.productivityIndex.toFixed(1) }}</div>
-                <div class="metric-label">生产力指数</div>
+                <div class="metric-value">{{ profileHealthMetrics.evidenceCoverage.toFixed(0) }}%</div>
+                <div class="metric-label">证据覆盖</div>
               </div>
             </div>
             <div class="metric-card">
-              <div class="metric-icon">🤝</div>
+              <div class="metric-icon">📚</div>
               <div class="metric-content">
-                <div class="metric-value">{{ efficiencyMetrics.collaborationScore.toFixed(0) }}%</div>
-                <div class="metric-label">协作活跃度</div>
+                <div class="metric-value">{{ profileHealthMetrics.categoryCoverage }}/6</div>
+                <div class="metric-label">类别覆盖</div>
               </div>
             </div>
           </div>
@@ -461,55 +629,25 @@
 <script setup lang="ts">
 import { ref, onMounted, toRaw } from 'vue';
 import { chromeAPI } from '../memory-store';
-
-// 类型定义（基于memory.tsx中的接口）
-interface UserProfile {
-  userId: string;
-  interests: {
-    projects: any[];
-    people: any[];
-    topics: any[];
-    jiraItems: any[];
-    technologies: any[];
-    documents: any[];
-  };
-  statistics: {
-    totalInteractions: number;
-    averageDailyActivity: number;
-    lastActiveTime: number;
-  };
-  lastUpdated: number;
-}
-
-interface UserProfileAnalysis {
-  topInterests: {
-    projects: string[];
-    people: string[];
-    topics: string[];
-  };
-  insights: {
-    workingPattern: string;
-    collaborationStyle: string;
-    focusAreas: string[];
-    suggestedContent: string[];
-  };
-  predictedInterests: Array<{
-    type: string;
-    name: string;
-    confidence: number;
-    reason: string;
-  }>;
-  lastUpdated: number;
-}
+import {
+  buildUserProfileViewModel,
+  normalizeUserProfilePayload,
+  type UserProfileAnalysisViewModel,
+  type UserProfileCategory,
+  type UserProfileInterestItem,
+  type UserProfileViewModel,
+} from '../../services/userProfileViewModel';
 
 const isLoading = ref(true);
 const isExporting = ref(false);
 const showAdvancedSettings = ref(false);
 const isApplyingSettings = ref(false);
-const userProfile = ref<UserProfile | null>(null);
-const userProfileAnalysis = ref<UserProfileAnalysis | null>(null);
+const statusMessage = ref('');
+const statusTone = ref<'success' | 'error' | 'info'>('info');
+const userProfile = ref<UserProfileViewModel | null>(null);
+const userProfileAnalysis = ref<UserProfileAnalysisViewModel | null>(null);
+const pendingItemIds = ref<Set<string>>(new Set());
 
-// 🆕 权重衰变设置
 const weightDecaySettings = ref({
   baseDecayRate: 0.05,
   maxWeight: 1.0,
@@ -522,320 +660,262 @@ const weightDecaySettings = ref({
     mention: 0.2,
     search: 0.15,
     favorite: 0.5
-  }
+  } as Record<string, number>
 });
 
-// 衰变预览数据
 const decayPreviewData = ref<Array<{ day: number; weight: number }>>([]);
-
-// 🆕 图表数据
-const behaviorTrendData = ref<Array<{ date: string; day: string; activity: number; interactions: number }>>([]);
-const heatmapData = ref<Array<{ day: number; hour: number; dayName: string; intensity: number }>>([]);
-const interestTimelineData = ref<Array<{ 
-  name: string; 
-  currentWeight: number; 
-  history: Array<{ date: string; weight: number; position: number }> 
-}>>([]);
-const efficiencyMetrics = ref({
-  responseSpeed: 2.3,      // 平均响应时间（小时）
-  focusScore: 87,          // 专注度评分
-  productivityIndex: 4.2,  // 生产力指数
-  collaborationScore: 76   // 协作活跃度
+const behaviorTrendData = ref<UserProfileViewModel['activityTrend']>([]);
+const heatmapData = ref<UserProfileViewModel['heatmap']>([]);
+const interestTimelineData = ref<UserProfileViewModel['interestTimeline']>([]);
+const profileHealthMetrics = ref({
+  confirmationRate: 0,
+  inferredCount: 0,
+  evidenceCoverage: 0,
+  categoryCoverage: 0
 });
 
-const loadUserProfile = async () => {
-  isLoading.value = true;
+const setStatus = (message: string, tone: 'success' | 'error' | 'info' = 'info') => {
+  statusMessage.value = message;
+  statusTone.value = tone;
+};
+
+const isItemPending = (itemId?: string) => Boolean(itemId && pendingItemIds.value.has(itemId));
+
+const setItemPending = (itemId: string, pending: boolean) => {
+  const nextPending = new Set(pendingItemIds.value);
+  if (pending) {
+    nextPending.add(itemId);
+  } else {
+    nextPending.delete(itemId);
+  }
+  pendingItemIds.value = nextPending;
+};
+
+const applyViewModel = (payload: any) => {
+  const viewModel = normalizeUserProfilePayload(payload);
+  userProfile.value = viewModel.profile;
+  userProfileAnalysis.value = viewModel.analysis;
+  updateChartData();
+};
+
+const loadUserProfile = async (options: { showLoading?: boolean } = {}) => {
+  const showLoading = options.showLoading ?? true;
+  if (showLoading) {
+    isLoading.value = true;
+  }
   try {
-    // 🆕 优先获取融合后的用户画像
     let response = await chromeAPI.sendMessage({ type: 'GET_FUSED_USER_PROFILE' });
-    
-    if (response && (response as any).success && (response as any).data.profile) {
-      // 使用融合后的画像数据
-      userProfile.value = (response as any).data.profile;
-      userProfileAnalysis.value = (response as any).data.analysis;
-      console.log('融合用户画像加载成功:', userProfile.value);
-      console.log('融合兴趣数据:', (response as any).data.fusedInterests);
-    } else {
-      // 降级：获取普通用户画像
-      console.log('降级到普通用户画像获取');
+
+    if (!response || !(response as any).success) {
       response = await chromeAPI.sendMessage({ type: 'GET_USER_PROFILE' });
-      if (response && (response as any).success) {
-        userProfile.value = (response as any).data.profile;
-        userProfileAnalysis.value = (response as any).data.analysis;
-        console.log('普通用户画像加载成功:', userProfile.value);
-      } else {
-        // 使用模拟数据
-        userProfile.value = getMockUserProfile();
-        userProfileAnalysis.value = getMockUserProfileAnalysis();
-        console.log('使用模拟数据');
-      }
     }
-  } catch (error) {
+
+    if (response && (response as any).success) {
+      applyViewModel((response as any).data);
+    } else {
+      applyViewModel(buildUserProfileViewModel());
+      setStatus((response as any)?.error || '用户画像服务暂不可用', 'error');
+    }
+  } catch (error: any) {
     console.error('加载用户画像失败:', error);
-    // 再次降级尝试
-    try {
-      const fallbackResponse = await chromeAPI.sendMessage({ type: 'GET_USER_PROFILE' });
-      if (fallbackResponse && (fallbackResponse as any).success) {
-        userProfile.value = (fallbackResponse as any).data.profile;
-        userProfileAnalysis.value = (fallbackResponse as any).data.analysis;
-        console.log('降级用户画像加载成功');
-      } else {
-        // 使用模拟数据
-        userProfile.value = getMockUserProfile();
-        userProfileAnalysis.value = getMockUserProfileAnalysis();
-        console.log('最终降级到模拟数据');
-      }
-    } catch (fallbackError) {
-      console.error('降级用户画像获取也失败:', fallbackError);
-      // 使用模拟数据
-      userProfile.value = getMockUserProfile();
-      userProfileAnalysis.value = getMockUserProfileAnalysis();
-    }
+    applyViewModel(buildUserProfileViewModel());
+    setStatus(error?.message || '加载用户画像失败', 'error');
   } finally {
-    isLoading.value = false;
-    // 🆕 用户画像加载完成后更新图表数据
-    updateChartData();
+    if (showLoading) {
+      isLoading.value = false;
+    }
   }
 };
 
-const getMockUserProfile = (): UserProfile => {
-  return {
-    userId: 'default_user',
-    interests: {
-      projects: [
-        { id: 'personal-ai', name: 'Personal-AI', weight: 0.9 },
-        { id: 'data-pipeline', name: 'Data Pipeline', weight: 0.7 }
-      ],
-      people: [
-        { id: 'zhangsan', name: '张三', weight: 0.8 },
-        { id: 'lisi', name: '李四', weight: 0.6 }
-      ],
-      topics: [
-        { id: 'ai-workflow', name: 'AI工作流自动化', weight: 0.9 },
-        { id: 'frontend-opt', name: '前端性能优化', weight: 0.7 }
-      ],
-      jiraItems: [],
-      technologies: [],
-      documents: []
-    },
-    statistics: {
-      totalInteractions: 156,
-      averageDailyActivity: 12.3,
-      lastActiveTime: Date.now()
-    },
-    lastUpdated: Date.now()
+const getProjectsWithImportance = () => userProfile.value?.interests.projects ?? [];
+const getPeopleWithImportance = () => userProfile.value?.interests.people ?? [];
+const getTopicsWithImportance = () => [
+  ...(userProfile.value?.interests.topics ?? []),
+  ...(userProfile.value?.interests.technologies ?? []),
+].slice(0, 8);
+
+const scrollToSection = (sectionId: string) => {
+  document.getElementById(sectionId)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  });
+};
+
+const formatPercent = (value: number) => `${Math.round((value || 0) * 100)}%`;
+
+const formatTime = (timestamp: number) => {
+  if (!timestamp) return '暂无时间';
+  return new Date(timestamp).toLocaleString('zh-CN');
+};
+
+const getCategoryDisplayName = (category: UserProfileCategory): string => {
+  const names: Record<UserProfileCategory, string> = {
+    projects: '项目',
+    people: '人员',
+    topics: '主题',
+    jiraItems: 'JIRA',
+    technologies: '技术',
+    documents: '文档'
   };
+  return names[category] || category;
 };
 
-const getMockUserProfileAnalysis = (): UserProfileAnalysis => {
-  return {
-    topInterests: {
-      projects: ['Personal-AI', 'Data Pipeline', 'Web Platform'],
-      people: ['张三', '李四', '王五'],
-      topics: ['AI工作流自动化', '前端性能优化', '产品设计思维']
-    },
-    insights: {
-      workingPattern: '您倾向于在上午9-11点进行深度思考工作，下午主要处理协作和沟通任务。',
-      collaborationStyle: '您是一个积极的团队协作者，经常主动分享技术见解和参与讨论。',
-      focusAreas: ['前端开发', 'AI技术', '性能优化', '用户体验'],
-      suggestedContent: [
-        '《Clean Architecture》读书笔记复习',
-        'React 18 新特性深度解析',
-        'AI驱动的代码审查工具探索',
-        '前端性能监控最佳实践'
-      ]
-    },
-    predictedInterests: [
-      {
-        type: '技术话题',
-        name: 'Web3.0 前端开发',
-        confidence: 0.82,
-        reason: '基于您对前端技术和新兴技术的关注'
-      },
-      {
-        type: '项目协作',
-        name: '敏捷开发方法论',
-        confidence: 0.75,
-        reason: '您经常参与项目讨论和团队协作'
-      }
-    ],
-    lastUpdated: Date.now()
+const getSourceDisplayName = (sourceKind: string): string => {
+  const names: Record<string, string> = {
+    explicit: '用户录入',
+    inferred: '系统推断',
+    system: '系统生成',
   };
+  return names[sourceKind] || sourceKind || '来源未知';
 };
 
-// 🆕 获取包含重要性信息的项目列表
-const getProjectsWithImportance = () => {
-  if (!userProfile.value?.interests?.projects) {
-    // 返回mock数据格式，包含重要性信息
-    return [
-      { id: 'personal-ai', name: 'Personal-AI', explicitImportance: 0.9 },
-      { id: 'data-pipeline', name: 'Data Pipeline', explicitImportance: 0.7 },
-      { id: 'web-platform', name: 'Web Platform', explicitImportance: 0.6 }
-    ];
+const getProfileStatusDisplayName = (status: string, userConfirmed = false): string => {
+  if (userConfirmed) return '已确认';
+  const names: Record<string, string> = {
+    pending_confirm: '待确认',
+    active: '推断',
+    superseded: '已替换',
+    archived: '已归档',
+  };
+  return names[status] || '待确认';
+};
+
+const getEvidenceLabel = (item: UserProfileInterestItem): string => {
+  const count = item.evidenceRefs.length;
+  return count > 0 ? `${count} 条证据` : '暂无证据';
+};
+
+const replaceProfileItem = (itemId: string, updates: Partial<UserProfileInterestItem>) => {
+  if (!userProfile.value) return;
+  userProfile.value.allItems = userProfile.value.allItems.map((item) =>
+    item.id === itemId ? { ...item, ...updates } : item
+  );
+  for (const category of Object.keys(userProfile.value.interests) as UserProfileCategory[]) {
+    userProfile.value.interests[category] = userProfile.value.interests[category].map((item) =>
+      item.id === itemId ? { ...item, ...updates } : item
+    );
   }
-  return userProfile.value.interests.projects.map(project => ({
-    id: project.id,
-    name: project.name,
-    explicitImportance: project.explicitImportance || 0
-  }));
 };
 
-// 🆕 获取包含重要性信息的人员列表
-const getPeopleWithImportance = () => {
-  if (!userProfile.value?.interests?.people) {
-    return [
-      { id: 'zhangsan', name: '张三', explicitImportance: 0.8 },
-      { id: 'lisi', name: '李四', explicitImportance: 0.6 },
-      { id: 'wangwu', name: '王五', explicitImportance: 0.5 }
-    ];
-  }
-  return userProfile.value.interests.people.map(person => ({
-    id: person.id,
-    name: person.name,
-    explicitImportance: person.explicitImportance || 0
-  }));
-};
-
-// 🆕 获取包含重要性信息的主题列表
-const getTopicsWithImportance = () => {
-  if (!userProfile.value?.interests?.topics) {
-    return [
-      { id: 'ai-workflow', name: 'AI工作流自动化', explicitImportance: 0.9 },
-      { id: 'frontend-opt', name: '前端性能优化', explicitImportance: 0.7 },
-      { id: 'design-thinking', name: '产品设计思维', explicitImportance: 0.6 }
-    ];
-  }
-  return userProfile.value.interests.topics.map(topic => ({
-    id: topic.id,
-    name: topic.name,
-    explicitImportance: topic.explicitImportance || 0
-  }));
-};
-
-// 🆕 设置重要性标记
 const setImportance = async (itemId: string, type: string, importance: number) => {
   if (!itemId) {
-    console.warn('设置重要性失败：缺少项目ID');
+    setStatus('缺少画像条目ID，无法设置重要性', 'error');
     return;
   }
-  
+
+  if (isItemPending(itemId)) return;
+  setItemPending(itemId, true);
+
+  replaceProfileItem(itemId, {
+    explicitImportance: importance,
+    confidence: importance,
+    salienceScore: importance,
+    userConfirmed: true,
+  });
+
   try {
-    console.log(`设置重要性: ${itemId} (${type}) -> ${importance}`);
-    
     const response = await chromeAPI.sendMessage({
       type: 'SET_EXPLICIT_IMPORTANCE',
-      itemId: itemId,
+      itemId,
       itemType: type,
-      importance: importance
+      importance
     });
-    
+
     if (response && (response as any).success) {
-      console.log('重要性设置成功');
-      // 刷新用户画像数据
-      await loadUserProfile();
+      setStatus('重要性已更新', 'success');
+      await loadUserProfile({ showLoading: false });
     } else {
-      console.error('重要性设置失败:', (response as any)?.error);
+      setStatus((response as any)?.error || '重要性更新失败', 'error');
+      await loadUserProfile({ showLoading: false });
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('设置重要性时发生错误:', error);
+    setStatus(error?.message || '重要性更新失败', 'error');
+    await loadUserProfile({ showLoading: false });
+  } finally {
+    setItemPending(itemId, false);
   }
 };
 
-// 🆕 导出用户画像功能
-const exportUserProfile = async () => {
-  if (isExporting.value) {
-    return; // 防止重复导出
-  }
-  
-  isExporting.value = true;
-  
+const confirmProfileItem = async (itemId: string) => {
+  if (!itemId || isItemPending(itemId)) return;
+  setItemPending(itemId, true);
   try {
-    console.log('开始导出用户画像...');
-    
+    const response = await chromeAPI.sendMessage({
+      type: 'CONFIRM_PROFILE_ITEM',
+      itemId
+    });
+    if (response && (response as any).success) {
+      replaceProfileItem(itemId, { userConfirmed: true });
+      setStatus('画像条目已确认', 'success');
+      await loadUserProfile({ showLoading: false });
+    } else {
+      setStatus((response as any)?.error || '画像条目确认失败', 'error');
+    }
+  } catch (error: any) {
+    setStatus(error?.message || '画像条目确认失败', 'error');
+  } finally {
+    setItemPending(itemId, false);
+  }
+};
+
+const retractProfileItem = async (itemId: string) => {
+  if (!itemId || isItemPending(itemId)) return;
+  setItemPending(itemId, true);
+  try {
+    const response = await chromeAPI.sendMessage({
+      type: 'RETRACT_PROFILE_ITEM',
+      itemId
+    });
+    if (response && (response as any).success) {
+      setStatus('画像条目已排除', 'success');
+      await loadUserProfile({ showLoading: false });
+    } else {
+      setStatus((response as any)?.error || '画像条目排除失败', 'error');
+    }
+  } catch (error: any) {
+    setStatus(error?.message || '画像条目排除失败', 'error');
+  } finally {
+    setItemPending(itemId, false);
+  }
+};
+
+const exportUserProfile = async () => {
+  if (isExporting.value) return;
+
+  isExporting.value = true;
+  try {
     const response = await chromeAPI.sendMessage({
       type: 'EXPORT_USER_PROFILE'
     });
-    
+
     if (response && (response as any).success) {
-      console.log('用户画像导出成功:', (response as any).data);
-      
-      // 生成文件名（包含时间戳）
       const now = new Date();
       const timestamp = now.toISOString().slice(0, 19).replace(/[:.]/g, '-');
       const fileName = `用户画像_${timestamp}.json`;
-      
-      // 格式化JSON数据（美化输出）
       const jsonData = JSON.stringify((response as any).data, null, 2);
-      
-      // 创建下载链接
       const blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
-      
-      // 创建临时下载链接
       const link = document.createElement('a');
       link.href = url;
       link.download = fileName;
       link.style.display = 'none';
-      
-      // 触发下载
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
-      // 清理URL对象
       URL.revokeObjectURL(url);
-      
-      console.log(`用户画像已导出到文件: ${fileName}`);
-      
-      // 显示成功提示（可选：使用浏览器通知或自定义提示）
-      showExportSuccessNotification(fileName, (response as any).data.exportSummary);
-      
+      setStatus(`画像已导出：${fileName}`, 'success');
     } else {
-      console.error('用户画像导出失败:', (response as any)?.error);
-      showExportErrorNotification((response as any)?.error || '未知错误');
+      setStatus((response as any)?.error || '用户画像导出失败', 'error');
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('导出用户画像时发生错误:', error);
-    showExportErrorNotification(error.message);
+    setStatus(error?.message || '用户画像导出失败', 'error');
   } finally {
     isExporting.value = false;
   }
 };
 
-// 🆕 显示导出成功通知
-const showExportSuccessNotification = (fileName: string, summary: any) => {
-  // 使用简单的alert，也可以替换为更好的通知组件
-  const message = `
-📥 导出成功！
-
-文件名: ${fileName}
-画像完整性: ${summary?.profileCompleteness || '未知'}
-总交互次数: ${summary?.totalInteractions || 0}
-日均活动量: ${summary?.averageDailyActivity?.toFixed(1) || 0}
-数据质量: ${summary?.dataQuality || '未知'}
-
-文件已保存到下载文件夹。
-  `.trim();
-  
-  alert(message);
-};
-
-// 🆕 显示导出错误通知
-const showExportErrorNotification = (error: string) => {
-  const message = `
-❌ 导出失败
-
-错误信息: ${error}
-
-请稍后重试或联系技术支持。
-  `.trim();
-  
-  alert(message);
-};
-
-// 🆕 权重衰变设置相关方法
-
-// 获取行为显示名称
 const getActionDisplayName = (action: string): string => {
   const actionNames: Record<string, string> = {
     view: '📖 查看',
@@ -849,28 +929,18 @@ const getActionDisplayName = (action: string): string => {
   return actionNames[action] || action;
 };
 
-// 更新衰变预览
 const updateDecayPreview = () => {
   const data: Array<{ day: number; weight: number }> = [];
-  let currentWeight = 1.0; // 初始权重100%
-  
-  // 模拟30天的衰变过程
   for (let day = 0; day <= 30; day += 2) {
+    const weight = Math.pow(1 - weightDecaySettings.value.baseDecayRate, day);
     data.push({
-      day: day,
-      weight: Math.max(weightDecaySettings.value.minWeight, currentWeight)
+      day,
+      weight: Math.max(weightDecaySettings.value.minWeight, weight)
     });
-    
-    // 应用衰变（每天）
-    if (day > 0) {
-      currentWeight *= (1 - weightDecaySettings.value.baseDecayRate);
-    }
   }
-  
   decayPreviewData.value = data;
 };
 
-// 重置为默认设置
 const resetToDefaults = () => {
   if (confirm('确定要重置为默认设置吗？')) {
     weightDecaySettings.value = {
@@ -888,66 +958,41 @@ const resetToDefaults = () => {
       }
     };
     updateDecayPreview();
+    setStatus('权重衰变设置已恢复默认值', 'success');
   }
 };
 
-// 应用衰变设置
 const applyDecaySettings = async () => {
-  if (isApplyingSettings.value) {
-    return;
-  }
-  
+  if (isApplyingSettings.value) return;
+
   isApplyingSettings.value = true;
-  
   try {
-    // 使用 toRaw 确保传递的是原始对象
     const rawConfig = toRaw(weightDecaySettings.value);
-    console.log('应用权重衰变设置:', rawConfig);
-    
     const response = await chromeAPI.sendMessage({
       type: 'UPDATE_WEIGHT_DECAY_CONFIG',
       config: rawConfig
     });
-    
+
     if (response && (response as any).success) {
-      console.log('权重衰变设置应用成功');
-      
-      // 显示成功通知
-      const message = `
-✅ 设置应用成功！
-
-基础衰变率: ${(weightDecaySettings.value.baseDecayRate * 100).toFixed(1)}%
-权重范围: ${weightDecaySettings.value.minWeight.toFixed(3)} - ${weightDecaySettings.value.maxWeight.toFixed(1)}
-
-新的权重衰变配置已生效。
-      `.trim();
-      
-      alert(message);
-      
-      // 可选：重新加载用户画像以应用新设置
+      setStatus('权重衰变设置已应用', 'success');
       await loadUserProfile();
     } else {
-      console.error('权重衰变设置应用失败:', (response as any)?.error);
-      alert(`设置应用失败: ${(response as any)?.error || '未知错误'}`);
+      setStatus((response as any)?.error || '权重衰变设置应用失败', 'error');
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('应用权重衰变设置时发生错误:', error);
-    alert(`设置应用失败: ${error.message}`);
+    setStatus(error?.message || '权重衰变设置应用失败', 'error');
   } finally {
     isApplyingSettings.value = false;
   }
 };
 
-// 🆕 图表相关方法
-
-// 获取热力图强度等级
 const getHeatmapIntensity = (intensity: number): string => {
   if (intensity > 0.7) return 'high';
   if (intensity > 0.4) return 'medium';
   return 'low';
 };
 
-// 获取权重颜色
 const getWeightColor = (weight: number): string => {
   if (weight > 0.8) return '#e74c3c';
   if (weight > 0.6) return '#f39c12';
@@ -956,97 +1001,37 @@ const getWeightColor = (weight: number): string => {
   return '#95a5a6';
 };
 
-// 初始化图表数据
-const initializeChartData = () => {
-  // 生成行为趋势数据（最近7天）
-  const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-  behaviorTrendData.value = days.map((day, index) => ({
-    date: new Date(Date.now() - (6 - index) * 24 * 60 * 60 * 1000).toLocaleDateString(),
-    day,
-    activity: 0.3 + Math.random() * 0.7, // 30%-100%的活跃度
-    interactions: Math.floor(20 + Math.random() * 50) // 20-70次交互
-  }));
-
-  // 生成热力图数据（一周7天，每天24小时）
-  const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-  heatmapData.value = [];
-  for (let day = 0; day < 7; day++) {
-    for (let hour = 0; hour < 24; hour++) {
-      let intensity = 0;
-      // 工作时间（9-18）活跃度更高
-      if (hour >= 9 && hour <= 18 && day < 5) {
-        intensity = 0.4 + Math.random() * 0.6;
-      } else if (hour >= 20 && hour <= 23) {
-        // 晚上时间有一定活跃度
-        intensity = 0.2 + Math.random() * 0.4;
-      } else {
-        intensity = Math.random() * 0.3;
-      }
-      
-      heatmapData.value.push({
-        day,
-        hour,
-        dayName: dayNames[day],
-        intensity
-      });
-    }
-  }
-
-  // 生成兴趣权重时间线数据
-  const sampleInterests = ['Personal-AI项目', 'React开发', '用户体验设计', '数据分析'];
-  interestTimelineData.value = sampleInterests.map(name => {
-    const history = [];
-    const baseWeight = 0.3 + Math.random() * 0.4; // 基础权重
-    
-    // 生成30天的历史数据
-    for (let i = 0; i < 30; i++) {
-      const date = new Date(Date.now() - (29 - i) * 24 * 60 * 60 * 1000);
-      const weight = Math.max(0.1, Math.min(1.0, baseWeight + (Math.random() - 0.5) * 0.3));
-      history.push({
-        date: date.toLocaleDateString(),
-        weight,
-        position: (i / 29) * 100 // 转换为百分比位置
-      });
-    }
-    
-    return {
-      name,
-      currentWeight: history[history.length - 1].weight,
-      history
-    };
-  });
-
-  // 根据用户画像数据更新效率指标
-  if (userProfile.value) {
-    const stats = userProfile.value.statistics;
-    if (stats) {
-      efficiencyMetrics.value = {
-        responseSpeed: Math.max(0.5, 6 - (stats.averageDailyActivity / 10)), // 基于日均活动计算
-        focusScore: Math.min(100, 60 + (stats.totalInteractions / 10)), // 基于总交互数计算
-        productivityIndex: Math.min(5.0, 2.0 + (stats.averageDailyActivity / 20)), // 基于活跃度计算
-        collaborationScore: Math.min(100, 40 + (userProfile.value.interests.people.length * 5)) // 基于协作人员数计算
-      };
-    }
-  }
-};
-
-// 更新图表数据（当用户画像更新时调用）
 const updateChartData = () => {
-  initializeChartData();
-  
-  // 如果有真实的用户画像数据，可以在这里进行更精确的计算
-  if (userProfile.value) {
-    console.log('基于真实用户画像数据更新图表');
-    // 可以在这里添加基于真实数据的图表更新逻辑
+  const profile = userProfile.value;
+  behaviorTrendData.value = profile?.activityTrend ?? [];
+  heatmapData.value = profile?.heatmap ?? [];
+  interestTimelineData.value = profile?.interestTimeline ?? [];
+
+  if (!profile) {
+    profileHealthMetrics.value = {
+      confirmationRate: 0,
+      inferredCount: 0,
+      evidenceCoverage: 0,
+      categoryCoverage: 0
+    };
+    return;
   }
+
+  const totalItems = profile.allItems.length;
+  const evidenceBackedItems = profile.allItems.filter((item) => item.evidenceRefs.length > 0).length;
+  const coveredCategories = Object.values(profile.interests).filter((items) => items.length > 0).length;
+
+  profileHealthMetrics.value = {
+    confirmationRate: totalItems > 0 ? (profile.statistics.confirmedItems / totalItems) * 100 : 0,
+    inferredCount: profile.statistics.inferredItems,
+    evidenceCoverage: totalItems > 0 ? (evidenceBackedItems / totalItems) * 100 : 0,
+    categoryCoverage: coveredCategories
+  };
 };
 
 onMounted(() => {
-  loadUserProfile();
-  // 初始化衰变预览
   updateDecayPreview();
-  // 🆕 初始化图表数据
-  initializeChartData();
+  loadUserProfile();
 });
 </script>
 
@@ -1120,6 +1105,28 @@ onMounted(() => {
   box-shadow: 0 2px 4px rgba(149, 165, 166, 0.3);
 }
 
+.status-message {
+  margin: 0 0 16px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  border: 1px solid #d7dee5;
+  background: #f7fbff;
+  color: #34495e;
+}
+
+.status-message.success {
+  background: #eefaf2;
+  border-color: #b7e3c5;
+  color: #1f7a3f;
+}
+
+.status-message.error {
+  background: #fff4f3;
+  border-color: #f3c4bd;
+  color: #a33a2b;
+}
+
 .loading-container {
   display: flex;
   flex-direction: column;
@@ -1143,9 +1150,80 @@ onMounted(() => {
   100% { transform: rotate(360deg); }
 }
 
+.review-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.review-summary-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "label action"
+    "value action";
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 78px;
+  padding: 14px 16px;
+  background: #ffffff;
+  border: 1px solid #dfe6ee;
+  border-radius: 8px;
+}
+
+.review-summary-card.primary {
+  border-color: #b7d4f6;
+  background: #f2f8ff;
+}
+
+.review-label {
+  grid-area: label;
+  color: #6c757d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-summary-card strong {
+  grid-area: value;
+  min-width: 0;
+  color: #2c3e50;
+  font-size: 22px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.review-summary-card .review-time {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.review-link {
+  grid-area: action;
+  border: 1px solid #bdd7f2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1565c0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.review-link:hover {
+  background: #e3f2fd;
+}
+
+.review-link:disabled {
+  border-color: #d7dee5;
+  color: #8a97a3;
+  cursor: not-allowed;
+  background: #f8f9fa;
+}
+
 .profile-card {
   background: white;
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 24px;
   margin-bottom: 24px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
@@ -1196,6 +1274,12 @@ onMounted(() => {
   transform: translateY(-1px);
 }
 
+.interest-item.updating,
+.profile-item-row.updating,
+.prediction-item.updating {
+  opacity: 0.72;
+}
+
 .interest-icon {
   margin-right: 12px;
   font-size: 16px;
@@ -1219,11 +1303,16 @@ onMounted(() => {
 }
 
 .star {
+  appearance: none;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   font-size: 18px;
   color: #ddd;
   transition: all 0.2s ease;
   user-select: none;
+  line-height: 1;
+  padding: 0 1px;
 }
 
 .star:hover {
@@ -1231,9 +1320,32 @@ onMounted(() => {
   transform: scale(1.1);
 }
 
+.star:focus-visible,
+.review-link:focus-visible,
+.secondary-action-btn:focus-visible,
+.danger-action-btn:focus-visible {
+  outline: 2px solid #1976d2;
+  outline-offset: 2px;
+}
+
 .star.active {
   color: #ffd700;
   text-shadow: 0 0 3px rgba(255, 215, 0, 0.5);
+}
+
+.star.disabled {
+  cursor: wait;
+  opacity: 0.6;
+  transform: none;
+}
+
+.star.disabled:hover {
+  color: #ddd;
+  transform: none;
+}
+
+.star.active.disabled:hover {
+  color: #ffd700;
 }
 
 /* 洞察网格 */
@@ -1290,6 +1402,11 @@ onMounted(() => {
   border-left: 4px solid #3498db;
 }
 
+.prediction-item {
+  flex-direction: column;
+  gap: 8px;
+}
+
 .suggestion-icon {
   margin-right: 12px;
   font-size: 16px;
@@ -1301,6 +1418,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
   margin-bottom: 8px;
 }
 
@@ -1333,11 +1451,167 @@ onMounted(() => {
   font-size: 14px;
 }
 
+.prediction-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.prediction-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  width: 100%;
+}
+
 /* 统计数据网格 */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 16px;
+}
+
+.items-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.items-header h3 {
+  margin-bottom: 0;
+}
+
+.items-count {
+  color: #6c757d;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inline-empty {
+  padding: 16px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  color: #6c757d;
+  font-size: 14px;
+}
+
+.inline-empty.compact {
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.profile-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+}
+
+.profile-item-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.profile-item-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.profile-item-name {
+  min-width: 0;
+  color: #2c3e50;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.profile-item-type,
+.profile-item-state {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #e9ecef;
+  color: #495057;
+}
+
+.profile-item-state.confirmed {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.profile-item-state.pending {
+  background: #fff8e1;
+  color: #8a5a00;
+}
+
+.profile-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.profile-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.secondary-action-btn,
+.danger-action-btn {
+  border: 1px solid #d7dee5;
+  border-radius: 6px;
+  padding: 7px 12px;
+  background: white;
+  color: #34495e;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary-action-btn:hover {
+  background: #e3f2fd;
+  border-color: #90caf9;
+  color: #1565c0;
+}
+
+.danger-action-btn:hover {
+  background: #fff4f3;
+  border-color: #f3c4bd;
+  color: #a33a2b;
+}
+
+.secondary-action-btn:disabled,
+.danger-action-btn:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.secondary-action-btn:disabled:hover,
+.danger-action-btn:disabled:hover {
+  background: white;
+  border-color: #d7dee5;
+  color: #34495e;
 }
 
 .stat-card {
@@ -1957,6 +2231,15 @@ onMounted(() => {
   
   .metric-card {
     padding: 12px;
+  }
+
+  .profile-item-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .profile-item-actions {
+    justify-content: flex-end;
   }
   
   .metric-icon {

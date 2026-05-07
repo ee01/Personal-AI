@@ -3,6 +3,7 @@ import * as ReactDOM from 'react-dom';
 import { useMemo } from 'react';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
+  MeetingPilotActionItem,
   MeetingPilotSessionSnapshot,
   createMeetingPilotSessionSnapshot,
 } from './protocol';
@@ -96,6 +97,7 @@ const liveStyle = `
   table { width: 100%; border-collapse: collapse; font-size: 12px; color: var(--muted); }
   th, td { padding: 9px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); text-align: left; }
   th { color: #dbeafe; font-weight: 600; }
+  .evidence-cell { max-width: 260px; white-space: normal; color: #cbd5e1; }
   .alert-stack, .meta-list { display: grid; gap: 12px; }
   .alert { border-radius: 18px; padding: 14px 15px; border: 1px solid rgba(148, 163, 184, 0.18); background: rgba(148, 163, 184, 0.08); transition: all 0.2s; }
   .alert.p0 { background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.34); }
@@ -179,6 +181,10 @@ function shouldUseMeetingPilotDemo() {
   return new URLSearchParams(window.location.search).get('demo') === '1';
 }
 
+function isActiveActionItem(item: MeetingPilotActionItem): boolean {
+  return item.reviewState !== 'dismissed';
+}
+
 function MeetingLiveMap() {
   const [state, refresh] = useMeetingPilotState();
   const requestedTabId = getRequestedTabId();
@@ -200,6 +206,7 @@ function MeetingLiveMap() {
         }));
   const chapter = useMemo(() => getCurrentChapter(session), [session]);
   const activeAlerts = session.alerts.filter((alert) => !alert.resolved);
+  const activeActionItems = session.actionItems.filter(isActiveActionItem);
   const chapterEvents = session.timelineEvents.filter(
     (event) => !chapter || event.chapterId === chapter.id,
   );
@@ -333,21 +340,25 @@ function MeetingLiveMap() {
                     <th>Owner</th>
                     <th>Status</th>
                     <th>ETA</th>
+                    <th>Evidence</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {session.actionItems.length ? (
-                    session.actionItems.slice(0, 3).map((item) => (
+                  {activeActionItems.length ? (
+                    activeActionItems.slice(0, 3).map((item) => (
                       <tr key={item.id}>
                         <td>{item.title}</td>
                         <td>{item.owner}</td>
                         <td>{item.status}</td>
                         <td>{item.deadline || 'TBD'}</td>
+                        <td className="evidence-cell">
+                          {item.evidence || item.timestamp || '-'}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={4}>当前还没有结构化条目。</td>
+                      <td colSpan={5}>当前还没有结构化条目。</td>
                     </tr>
                   )}
                 </tbody>
@@ -383,10 +394,14 @@ function MeetingLiveMap() {
             <div className="meta-item">
               <strong>Actions</strong>
               <p>
-                {session.actionItems.length
-                  ? session.actionItems
+                {activeActionItems.length
+                  ? activeActionItems
                       .slice(0, 2)
-                      .map((item) => `${item.owner}：${item.title}`)
+                      .map((item) =>
+                        item.evidence
+                          ? `${item.owner}：${item.title}（依据：${item.evidence}）`
+                          : `${item.owner}：${item.title}`,
+                      )
                       .join('；')
                   : '当前章节暂无新的待处理行动项。'}
               </p>
@@ -403,8 +418,13 @@ function MeetingLiveMap() {
               <strong>Memory refresh</strong>
               <p>
                 {session.memoryRefs.length
-                  ? `已命中 ${session.memoryRefs.length} 条相关记忆，Top1: ${session.memoryRefs[0].title || session.memoryRefs[0].snippet}`
-                  : `当前尚未命中相关记忆。最新会中片段：${getLatestTranscriptLabel(session)}`}
+                  ? `已命中 ${session.memoryRefs.length} 条相关记忆，Top1: ${
+                      session.memoryRefs[0].title ||
+                      session.memoryRefs[0].snippet
+                    }`
+                  : `当前尚未命中相关记忆。最新会中片段：${getLatestTranscriptLabel(
+                      session,
+                    )}`}
               </p>
             </div>
           </div>

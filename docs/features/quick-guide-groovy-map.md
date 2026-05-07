@@ -13,7 +13,21 @@ Jira Automation 的 `{{webhookResponse.body.asJsonString}}` 返回的不是标�
 
 在 Apps Script 中添加了 `parseJiraJson()` 函数，自动兼容两种格式。
 
-### 1. Jira Rule 配置（旧链路兼容）
+### 1. Jira Rule 配置（正式链路）
+
+当前正式实现使用双 Jira Rule：
+
+```json
+{
+  "url": "{{WEB_APP_URL}}?action=cacheReleaseInfo",
+  "method": "POST",
+  "customBody": "{\n  \"project\": \"mThor\",\n  \"releaseInfo\": {{mThorReleaseInfo.asJsonString}}\n}"
+}
+```
+
+Timeline Sync Rule 先把每个项目的 release info 写入 Apps Script 缓存，Executor Rule 再读取缓存匹配 Timeline 消息。
+
+### 2. 旧链路兼容
 
 继续使用 `.asJsonString`：
 
@@ -27,15 +41,14 @@ Jira Automation 的 `{{webhookResponse.body.asJsonString}}` 返回的不是标�
 说明：
 
 - 这类 inline URL 参数写法仍然被 Apps Script 兼容，方便旧 rule 继续运行或手工测试
-- 当前正式实现已经切换为双 Jira Rule：先由 Timeline Sync Rule 调 `cacheReleaseInfo`，再由 Executor Rule 调 `getBotMessageCurrentTime`
 
-### 2. Apps Script 自动处理
+### 3. Apps Script 自动处理
 
 ```javascript
 // doGet 函数中
 if (mThor) {
-  // ✅ 使用 parseJiraJson 替代 JSON.parse
-  releaseInfo['mThor'] = parseJiraJson(decodeURIComponent(mThor));
+  // Apps Script 的 e.parameter 已经完成 form-urlencoded 解码
+  releaseInfo['mThor'] = parseJiraJson(mThor);
 }
 ```
 
@@ -111,9 +124,19 @@ Groovy Map 解析成功: {"currentRelease":"25.4.20","currentPhase":"Dev"}
 | `{"key":"value"}` | `{"key":"value"}` | ✅ |
 | `{num=123}` | `{"num":123}` | ✅ |
 | `{flag=true}` | `{"flag":true}` | ✅ |
-| `{list=[a,b]}` | `{"list":["a","b"]}` | ✅ |
+| `{list=[a,b,{x=1}]}` | `{"list":["a","b",{"x":1}]}` | ✅ |
 | `{nested={x=1}}` | `{"nested":{"x":1}}` | ✅ |
 | `{empty=null}` | `{"empty":null}` | ✅ |
+| `{notes="Alpha, Beta = ready"}` | `{"notes":"Alpha, Beta = ready"}` | ✅ |
+
+## 📦 缓存大小限制
+
+Timeline Sync Rule 会把每个项目单独写入 Apps Script Script Properties。Google Apps Script 对单个 property value 有 9KB 限制，所以 `cacheReleaseInfo` 会在写入前预检最终缓存 JSON 大小：
+
+- 超过限制时返回 `TIMELINE_CACHE_TOO_LARGE`
+- 响应只包含 payload 字节数、Milestone 数量和前 20 个 Milestone key，不暴露具体日期
+- 扩展里的 Timeline 缓存状态卡会展示最近同步失败原因、payload 大小、Milestone 数量和样例 key，方便直接判断是格式问题还是缓存过大
+- 处理方式：减少同步的 Milestone 数量或字段体积；如果项目确实需要更大 payload，需要改用 Sheet/Drive 等外部缓存
 
 ## 🔧 部署步骤
 
@@ -141,18 +164,20 @@ Groovy Map 解析成功: {"currentRelease":"25.4.20","currentPhase":"Dev"}
 - **无需修改 Jira**：继续使用 `.asJsonString`
 - **向后兼容**：支持标准 JSON 和 Groovy Map
 - **自动处理**：透明转换，无需手动干预
-- **错误容错**：解析失败返回空对象，不影响流程
+- **错误容错**：旧 inline 路径解析失败会安全返回空对象；`cacheReleaseInfo` 会返回失败并拒绝写入坏缓存
 
 ### ⚠️ 限制
 
-- 字符串值中包含 `=` 或 `,` 可能导致解析错误（实际很少遇到）
-- 不支持特殊字符转义（如 `\n`），但实际使用中够用
+- 无引号字符串中包含逗号时，原始 Groovy Map 字符串无法可靠区分文本逗号和字段分隔符
+- 字段可能包含逗号、等号或换行时，优先让上游输出标准 JSON，或至少让字段值以单/双引号包裹
+- `cacheReleaseInfo` 会校验 `releaseInfo` 对象；解析失败返回 `PARSE_RELEASE_INFO_FAILED`，schema 不匹配返回 `INVALID_RELEASE_INFO_SCHEMA`，不会把坏缓存写入 Script Properties
+- Apps Script Script Properties 单值限制为 9KB；最终缓存 JSON 超限会返回 `TIMELINE_CACHE_TOO_LARGE`，不会进入不透明的 `setProperty` 异常
 
 ## 📚 相关文档
 
 - **详细文档**：`jira-groovy-map-parsing.md`
 - **整体方案**：`jira-302-redirect-fix.md`
-- **代码位置**：`app-script-template.gs` (第 1588-1726 行)
+- **代码位置**：`src/scheduled-messages/app-script-template.gs`
 
 ## 🆘 故障排查
 
@@ -164,10 +189,23 @@ Groovy Map 解析失败: ...
 ```
 
 **解决**：
-1. 查看日志中的原始字符串
-2. 检查是否有特殊字符
+1. 先看 Jira Audit Log 里的 `errorCode` 和 `parseError`
+2. 检查是否有未闭合括号、未闭合引号或未加引号的逗号文本
 3. 在 `testParseJiraJson()` 中添加测试用例
 4. 如果是边缘情况，可以临时在 Jira 端转换格式
+
+### 问题：缓存过大
+
+**Audit Log**:
+```
+errorCode: TIMELINE_CACHE_TOO_LARGE
+```
+
+**解决**：
+1. 在定时消息界面查看 Timeline 缓存状态卡，确认 `payloadBytes / maxBytes`、Milestone 数量和样例 key
+2. 打开 Timeline Sync Rule 查看最近一次运行结果
+3. 减少 Timeline Sync Rule 中同步的 Milestone 数量或字段
+4. 如果项目确实需要超过 9KB 的 release info，改用 Sheet/Drive 等外部缓存设计
 
 ### 问题：类型不正确
 

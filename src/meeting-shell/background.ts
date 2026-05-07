@@ -28,7 +28,11 @@ import {
   getMemoryServiceClient,
   type MemoryServiceError,
 } from '../services/MemoryServiceClient';
-import { getEnvConfig, getMeetingTranscriptionMode } from '../utils';
+import {
+  getEnvConfig,
+  getMeetingTranscriptionMode,
+  isMeetingRingCentralTranscriptEnabled,
+} from '../utils';
 import {
   isMainLLMConfiguredForMeetingAnalysis,
   runMeetingIntelligenceLLM,
@@ -43,11 +47,17 @@ import {
   resolveSpeakerForChunk,
 } from './speakerResolver';
 import { buildTranscriptTurns } from './transcriptTurns';
+import { inferActionItemFromText } from './actionItems';
 import {
   applyAiParticipantResolutions,
   mergeParticipants,
   renameParticipant,
 } from './participantOps';
+import {
+  getActiveMeetingActionItems,
+  mergeActionItemReviewStates,
+  normalizeActionItemReviewState,
+} from './actionItemReview';
 import {
   doesProviderExposeTranscribeModel,
   normalizeMeetingTranscribeApiStyle,
@@ -60,6 +70,8 @@ import {
   classifyMeetingPilotSpeechGuidanceInput,
   type MeetingPilotLlmRunner,
 } from './speechSuggestion';
+
+export { mergeActionItemReviewStates } from './actionItemReview';
 
 const registry = new MeetingPilotRegistry();
 let initPromise: Promise<void> | null = null;
@@ -295,8 +307,8 @@ function buildReadinessSummary(args: {
   const status = blockers.length
     ? 'blocked'
     : degradations.length
-      ? 'degraded'
-      : 'ready';
+    ? 'degraded'
+    : 'ready';
 
   return {
     status,
@@ -304,8 +316,8 @@ function buildReadinessSummary(args: {
       status === 'ready'
         ? 'Ready — capture and meeting memory are available.'
         : status === 'blocked'
-          ? `Blocked — ${blockers[0]}`
-          : `Degraded — ${degradations[0]}`,
+        ? `Blocked — ${blockers[0]}`
+        : `Degraded — ${degradations[0]}`,
     canStartCapture: blockers.length === 0,
     checkedAt,
     blockers,
@@ -317,6 +329,86 @@ function buildReadinessSummary(args: {
       memoryService: args.memoryService,
     },
   };
+}
+
+function createDeferredDependencyReadiness(
+  previous: MeetingPilotDependencyReadiness | undefined,
+  message: string,
+  checkedAt: number,
+): MeetingPilotDependencyReadiness {
+  if (previous && previous.message !== 'Waiting for preflight.') {
+    return previous;
+  }
+  return createDependencyReadiness('degraded', message, checkedAt);
+}
+
+function buildCaptureGateReadiness(args: {
+  blockedByFeatureFlag: boolean;
+  previous?: MeetingPilotReadinessState;
+  checkedAt?: number;
+}): MeetingPilotReadinessState {
+  const checkedAt = args.checkedAt || Date.now();
+  const blockers = args.blockedByFeatureFlag
+    ? ['Meeting Pilot is disabled in settings.']
+    : [];
+  const dependencies = {
+    minutesApi: createDeferredDependencyReadiness(
+      args.previous?.dependencies?.minutesApi,
+      'Minutes API readiness will refresh after capture starts.',
+      checkedAt,
+    ),
+    transcription: createDeferredDependencyReadiness(
+      args.previous?.dependencies?.transcription,
+      'Transcription readiness will refresh after capture starts.',
+      checkedAt,
+    ),
+    analysisModel: createDeferredDependencyReadiness(
+      args.previous?.dependencies?.analysisModel,
+      'Meeting analysis readiness will refresh after capture starts.',
+      checkedAt,
+    ),
+    memoryService: createDeferredDependencyReadiness(
+      args.previous?.dependencies?.memoryService,
+      'Memory service readiness will refresh after capture starts.',
+      checkedAt,
+    ),
+  };
+  const degradations = Object.values(dependencies)
+    .filter((dependency) => dependency.status !== 'ready')
+    .map((dependency) => dependency.message);
+
+  return {
+    status: blockers.length
+      ? 'blocked'
+      : degradations.length
+      ? 'degraded'
+      : 'ready',
+    summary: blockers.length
+      ? `Blocked — ${blockers[0]}`
+      : 'Capture can start. Service readiness checks continue in background.',
+    canStartCapture: blockers.length === 0,
+    checkedAt,
+    blockers,
+    degradations,
+    dependencies,
+  };
+}
+
+function hasOwnRequestField(
+  request: Record<string, unknown>,
+  field: string,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(request, field);
+}
+
+function sanitizeActionTextEdit(
+  value: unknown,
+  maxLength: number,
+): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
 }
 
 function withTimeoutSignal(timeoutMs: number): AbortSignal {
@@ -390,23 +482,23 @@ async function evaluateMeetingReadiness(
           checkedAt,
         )
       : (await probeHttpCandidates([
-            joinUrl(minutesApiBaseUrl, '/health'),
-            minutesApiBaseUrl,
-          ]))
-        ? createDependencyReadiness(
-            'ready',
-            'Minutes API is reachable.',
-            checkedAt,
-          )
-        : createDependencyReadiness(
-            'degraded',
-            'Minutes API is unreachable.',
-            checkedAt,
-          );
+          joinUrl(minutesApiBaseUrl, '/health'),
+          minutesApiBaseUrl,
+        ]))
+      ? createDependencyReadiness(
+          'ready',
+          'Minutes API is reachable.',
+          checkedAt,
+        )
+      : createDependencyReadiness(
+          'degraded',
+          'Minutes API is unreachable.',
+          checkedAt,
+        );
 
     const providerConfigured = Boolean(
       String(envConfig.MEETING_PROVIDER_BASE_URL || '').trim() &&
-      String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
+        String(envConfig.MEETING_PROVIDER_API_KEY || '').trim(),
     );
     const providerProbe = providerConfigured
       ? await probeMeetingTranscribeProvider(envConfig)
@@ -432,33 +524,30 @@ async function evaluateMeetingReadiness(
           checkedAt,
         )
       : providerProbe.compatibilityIssue
-        ? createDependencyReadiness(
-            'degraded',
-            providerProbe.compatibilityIssue,
-            checkedAt,
-          )
-        : !providerProbe.reachable
-          ? createDependencyReadiness(
-              'degraded',
-              'ASR / transcription provider is degraded because the provider could not be reached.',
-              checkedAt,
-            )
-          : providerProbe.models &&
-              whisperModel &&
-              !doesProviderExposeTranscribeModel(
-                whisperModel,
-                providerProbe.models,
-              )
-            ? createDependencyReadiness(
-                'degraded',
-                `Transcribe model ${whisperModel} is not exposed by the provider (${transcribeApiStyle}).`,
-                checkedAt,
-              )
-            : createDependencyReadiness(
-                'ready',
-                'Audio transcription is available.',
-                checkedAt,
-              );
+      ? createDependencyReadiness(
+          'degraded',
+          providerProbe.compatibilityIssue,
+          checkedAt,
+        )
+      : !providerProbe.reachable
+      ? createDependencyReadiness(
+          'degraded',
+          'ASR / transcription provider is degraded because the provider could not be reached.',
+          checkedAt,
+        )
+      : providerProbe.models &&
+        whisperModel &&
+        !doesProviderExposeTranscribeModel(whisperModel, providerProbe.models)
+      ? createDependencyReadiness(
+          'degraded',
+          `Transcribe model ${whisperModel} is not exposed by the provider (${transcribeApiStyle}).`,
+          checkedAt,
+        )
+      : createDependencyReadiness(
+          'ready',
+          'Audio transcription is available.',
+          checkedAt,
+        );
 
     const desktopAvailable = await (async () => {
       try {
@@ -575,6 +664,36 @@ async function syncSessionReadiness(
   if (!session) return undefined;
   const readiness = await evaluateMeetingReadiness(forceRefresh);
   return registry.updateObservation(tabId, { readiness });
+}
+
+async function syncSessionCaptureGateReadiness(
+  tabId: number,
+): Promise<MeetingPilotSessionSnapshot | undefined> {
+  const session = registry.getSessionByTabId(tabId);
+  if (!session) return undefined;
+  const envConfig = await getEnvConfig();
+  const readiness = buildCaptureGateReadiness({
+    blockedByFeatureFlag: envConfig.MEETING_PILOT_ENABLED === false,
+    previous: session.readiness,
+  });
+  return registry.updateObservation(tabId, { readiness });
+}
+
+function refreshSessionReadinessInBackground(
+  tabId: number,
+  forceRefresh = false,
+): void {
+  void (async () => {
+    const updated = await syncSessionReadiness(tabId, forceRefresh);
+    if (!updated) return;
+    await updateBrowserAction(updated);
+    await broadcastSessionSnapshot(updated);
+  })().catch((error) => {
+    console.warn('[Meeting Pilot][background] readiness refresh failed', {
+      tabId,
+      error: String((error as Error)?.message || error),
+    });
+  });
 }
 
 function clearDigestPoll(tabId: number): void {
@@ -1028,7 +1147,7 @@ async function runMeetingAnalysis(
 {
   "topic": string,
   "summary": string,
-  "actionItems": [{"title": string, "owner": string, "deadline": string, "status": "pending"|"done"}],
+  "actionItems": [{"title": string, "owner": string, "deadline": string, "status": "pending"|"done", "evidence": string}],
   "decisions": [{"text": string, "timestamp": string}],
   "alerts": [{"level": "P0"|"P1"|"P2", "title": string, "body": string, "source": "mention"|"memory"|"share"|"summary"|"action"}],
   "participantStances": [{"participant": string, "topic": string, "stance": "主导"|"支持"|"中立"|"质疑"|"反对", "keyQuote": string, "timeRange": string}],
@@ -1037,12 +1156,13 @@ async function runMeetingAnalysis(
 }
 
 Requirements:
-- Infer topic, summary, action items, decisions, alerts, and participant stances from the transcript.
+- Infer topic, summary, action items, decisions, alerts, and participant stances from the transcript plus screen observation when available.
 - Use tone in the transcript when deciding stance (supportive, doubtful, strong objection, etc.).
 - For participantStances.participant, prefer using one of the participant names listed below verbatim.
 - participantResolutions: ONLY when you are highly confident (>=0.85) that a provisional/device participant is the same person as a roster participant, output {fromId, toId} mapping the provisional/device id to the roster id. Otherwise omit. Never merge two roster ids together.
 - latestObservationText should be a concise OCR/observation-style text summary of the currently shared content or meeting focus.
 - Prefer concrete owners and deadlines when present; otherwise use empty string.
+- For actionItems.evidence, include the shortest supporting transcript quote that proves the task assignment.
 - Keep alerts high precision and useful.
 
 Meeting title: ${session.title}
@@ -1052,6 +1172,7 @@ Roster (real names): ${rosterList || 'none'}
 Provisional/device speakers (may be merged): ${provisionalList || 'none'}
 Share state: ${session.shareState}
 Sharer: ${session.sharerName || 'Unknown'}
+Screen observation / OCR: ${session.latestObservationText || 'none'}
 Transcript:\n${transcriptWindow}`;
 
   const systemPrompt =
@@ -1077,6 +1198,7 @@ Transcript:\n${transcriptWindow}`;
       owner?: string;
       deadline?: string;
       status?: 'pending' | 'done';
+      evidence?: string;
     }>;
     decisions?: Array<{
       text?: string;
@@ -1116,6 +1238,10 @@ Transcript:\n${transcriptWindow}`;
         owner: item.owner?.trim() || 'Unknown',
         deadline: item.deadline?.trim() || undefined,
         status: item.status === 'done' ? 'done' : 'pending',
+        reviewState: 'suggested',
+        evidence: item.evidence?.trim() || undefined,
+        timestamp: nowLabel,
+        source: 'llm',
       })),
     decisions: (parsed.decisions || [])
       .filter((item) => item.text?.trim())
@@ -1174,28 +1300,6 @@ Transcript:\n${transcriptWindow}`;
   };
 }
 
-function inferActionItemFromText(
-  text: string,
-  speaker: string,
-  chapterId: string,
-  index: number,
-) {
-  if (!/负责|跟进|action|todo|ddl|截止|下周|owner/i.test(text))
-    return undefined;
-  const ownerMatch = text.match(
-    /(?:让|由|owner[:：]?|负责)\s*([A-Za-z\u4e00-\u9fa5 ]{2,30})/i,
-  );
-  const deadlineMatch = text.match(/(\d{2}[-/]\d{2}|下周[一二三四五六日天]?)/);
-  return {
-    id: `action-${index}`,
-    title: text.slice(0, 72),
-    owner: (ownerMatch?.[1] || speaker || 'Unknown').trim(),
-    deadline: deadlineMatch?.[1],
-    status: 'pending' as const,
-    chapterId,
-  };
-}
-
 function inferDecisionFromText(text: string, chapterId: string, index: number) {
   if (!/确认|通过|决定|敲定|同意|approved|agreed/i.test(text)) return undefined;
   return {
@@ -1249,10 +1353,10 @@ function buildStructuredMeetingData(
     type: /负责|跟进|action|todo|ddl|截止|下周/i.test(chunk.text)
       ? ('action' as const)
       : /确认|通过|决定|敲定|同意|approved|agreed/i.test(chunk.text)
-        ? ('decision' as const)
-        : /提到你|esone|you/i.test(chunk.text)
-          ? ('mention' as const)
-          : ('topic' as const),
+      ? ('decision' as const)
+      : /提到你|esone|you/i.test(chunk.text)
+      ? ('mention' as const)
+      : ('topic' as const),
     title: chunk.text.slice(0, 48),
     description: chunk.text,
     timestamp: new Date(chunk.ts).toLocaleTimeString([], {
@@ -1280,9 +1384,9 @@ function buildStructuredMeetingData(
       id: `timeline-screen-${latestTs}`,
       type: 'screen',
       title: '共享画面观察已更新',
-      description: `${
-        session.sharerName || 'Someone'
-      } 正在共享屏幕，已记录最新观察。`,
+      description:
+        session.latestObservationText ||
+        `${session.sharerName || 'Someone'} 正在共享屏幕，已记录最新观察。`,
       timestamp: new Date(latestTs).toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
@@ -1294,7 +1398,13 @@ function buildStructuredMeetingData(
 
   const actionItems = transcript
     .map((chunk, index) =>
-      inferActionItemFromText(chunk.text, chunk.speaker, chapterId, index),
+      inferActionItemFromText({
+        text: chunk.text,
+        speaker: chunk.speaker,
+        chapterId,
+        index,
+        ts: chunk.ts,
+      }),
     )
     .filter(
       (item): item is NonNullable<ReturnType<typeof inferActionItemFromText>> =>
@@ -1331,12 +1441,15 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_CLOSE_SIDE_PANEL',
   'MEETING_PILOT_SET_SIDE_PANEL_PIN',
   'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
+  'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE',
   'MEETING_PILOT_OPEN_LIVE_MAP',
   'MEETING_PILOT_START_CAPTURE',
   'MEETING_PILOT_STOP_CAPTURE',
   'MEETING_PILOT_UPDATE_ALERTS',
+  'MEETING_PILOT_UPDATE_ACTION_ITEM',
   'MEETING_PILOT_OBSERVATION_UPDATE',
   'MEETING_PILOT_TRANSCRIPT_UPDATE',
+  'MEETING_PILOT_RINGCENTRAL_TRANSCRIPT_STATUS',
   'MEETING_PILOT_CAPTURE_STATUS',
   'MEETING_PILOT_DIGEST_STATUS',
   'MEETING_PILOT_RENAME_PARTICIPANT',
@@ -1566,11 +1679,12 @@ async function upsertMeetingSession(
   }
 
   const session = await registry.upsertDetection(payload);
-  const hydrated = (await syncSessionReadiness(session.tabId)) || session;
-  await configureTabSidePanel(hydrated.tabId, true);
-  await updateBrowserAction(hydrated);
-  await broadcastSessionSnapshot(hydrated);
-  return hydrated;
+  const gated = (await syncSessionCaptureGateReadiness(session.tabId)) || session;
+  refreshSessionReadinessInBackground(gated.tabId);
+  await configureTabSidePanel(gated.tabId, true);
+  await updateBrowserAction(gated);
+  await broadcastSessionSnapshot(gated);
+  return gated;
 }
 
 async function endMeetingSession(
@@ -1653,16 +1767,42 @@ async function resolveActiveRecordingBlocker(
     if (await isRecordingSessionStillOpen(candidate)) {
       return candidate;
     }
-    console.warn('[Meeting Pilot][background] clearing stale recording session', {
-      tabId: candidate.tabId,
-      meetingId: candidate.meetingId,
-      status: candidate.status,
-      inMeeting: candidate.inMeeting,
-    });
+    console.warn(
+      '[Meeting Pilot][background] clearing stale recording session',
+      {
+        tabId: candidate.tabId,
+        meetingId: candidate.meetingId,
+        status: candidate.status,
+        inMeeting: candidate.inMeeting,
+      },
+    );
     await finalizeMeetingTabSession(candidate.tabId, 'stale-recording-cleanup');
   }
 
   return undefined;
+}
+
+function isRecentRingCentralTranscriptActive(
+  session: MeetingPilotSessionSnapshot | undefined,
+): boolean {
+  if (!session?.webTranscript?.enabled || !session.webTranscript.active) {
+    return false;
+  }
+  const lastSeenAt = Number(session.webTranscript.lastSeenAt || 0);
+  return Boolean(lastSeenAt && Date.now() - lastSeenAt < 60_000);
+}
+
+function buildRingCentralTranscriptTierStatus(
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>,
+  reason: string,
+): MeetingPilotTierStatus {
+  return {
+    activeTier: 'ringcentral_transcript',
+    badge: 'RC Transcript',
+    mode: getMeetingTranscriptionMode(envConfig),
+    lastTransitionAt: Date.now(),
+    lastTransitionReason: reason,
+  };
 }
 
 type StartMeetingCaptureResult = {
@@ -1678,7 +1818,9 @@ function resolveSessionSelfName(
   const selfParticipant = session.participants.find(
     (participant) => participant.isSelf || participant.role === 'You',
   );
-  return selfParticipant?.name?.replace(/\s*\(you\)\s*$/i, '').trim() || undefined;
+  return (
+    selfParticipant?.name?.replace(/\s*\(you\)\s*$/i, '').trim() || undefined
+  );
 }
 
 async function startMeetingCapture(
@@ -1706,7 +1848,7 @@ async function startMeetingCapture(
     };
   }
 
-  const session = await syncSessionReadiness(tabId, true);
+  const session = await syncSessionCaptureGateReadiness(tabId);
   if (!session || session.meetingId !== meetingId) {
     console.warn('[Meeting Pilot][background] capture session not ready', {
       tabId,
@@ -1725,7 +1867,12 @@ async function startMeetingCapture(
     await broadcastSessionSnapshot(session);
     return { session };
   }
+  refreshSessionReadinessInBackground(tabId);
 
+  const envConfig = await getEnvConfig();
+  const webTranscriptActive =
+    isMeetingRingCentralTranscriptEnabled(envConfig) &&
+    isRecentRingCentralTranscriptActive(session);
   const selfName = resolveSessionSelfName(session);
   const armed = await registry.setCaptureState(tabId, {
     kind: 'armed',
@@ -1754,6 +1901,7 @@ async function startMeetingCapture(
         micMuted: session.micMuted === true,
         selfName,
         speakerLabel: session.speakerLabel,
+        webTranscriptActive,
       });
       const updated = await registry.setCaptureState(tabId, {
         kind: 'recording',
@@ -1797,6 +1945,7 @@ async function startMeetingCapture(
       micMuted: session.micMuted === true,
       selfName,
       speakerLabel: session.speakerLabel,
+      webTranscriptActive,
     });
   } catch (error) {
     const updated = await registry.setCaptureState(tabId, {
@@ -1977,10 +2126,13 @@ async function ensureMeetingContentScript(tabId: number): Promise<void> {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
   } catch (error) {
-    console.warn('[Meeting Pilot][background] content script injection failed', {
-      tabId,
-      error: String((error as Error)?.message || error),
-    });
+    console.warn(
+      '[Meeting Pilot][background] content script injection failed',
+      {
+        tabId,
+        error: String((error as Error)?.message || error),
+      },
+    );
   }
 }
 
@@ -1992,6 +2144,29 @@ async function closeMeetingEmbeddedPanel(tabId: number): Promise<boolean> {
     });
     return Boolean(response?.success);
   } catch {
+    return false;
+  }
+}
+
+async function showCaptureAuthGuide(
+  tabId: number,
+  retried = false,
+): Promise<boolean> {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE',
+      tabId,
+    });
+    return Boolean(response?.success);
+  } catch (error) {
+    if (!retried) {
+      await ensureMeetingContentScript(tabId);
+      return showCaptureAuthGuide(tabId, true);
+    }
+    console.warn('[Meeting Pilot][background] auth guide open failed', {
+      tabId,
+      error: String((error as Error)?.message || error),
+    });
     return false;
   }
 }
@@ -2022,11 +2197,14 @@ async function openMeetingChromeSidePanel(
       await chrome.sidePanel.open({ tabId });
       return 'side-panel';
     } catch (error) {
-      console.warn('[Meeting Pilot][background] Chrome side panel open failed', {
-        tabId,
-        source,
-        error: String((error as Error)?.message || error),
-      });
+      console.warn(
+        '[Meeting Pilot][background] Chrome side panel open failed',
+        {
+          tabId,
+          source,
+          error: String((error as Error)?.message || error),
+        },
+      );
     }
   }
 
@@ -2034,12 +2212,15 @@ async function openMeetingChromeSidePanel(
     return 'unavailable';
   }
 
-  console.warn('[Meeting Pilot][background] falling back to side panel window', {
-    tabId,
-    source,
-    catchup: openOptions.catchup,
-    debug: openOptions.debug,
-  });
+  console.warn(
+    '[Meeting Pilot][background] falling back to side panel window',
+    {
+      tabId,
+      source,
+      catchup: openOptions.catchup,
+      debug: openOptions.debug,
+    },
+  );
   await openMeetingSidePanelWindow(tabId, openOptions);
   return 'window';
 }
@@ -2072,9 +2253,9 @@ async function openMeetingSidePanel(
 function isCaptureActiveForUi(session?: MeetingPilotSessionSnapshot): boolean {
   return Boolean(
     session &&
-    ['armed', 'recording', 'uploading', 'completed'].includes(
-      session.capture.kind,
-    ),
+      ['armed', 'recording', 'uploading', 'completed'].includes(
+        session.capture.kind,
+      ),
   );
 }
 
@@ -2118,9 +2299,7 @@ function createSpeechGuidanceNote(
   sourceInput?: string,
 ): MeetingPilotSpeechGuidanceSessionNote {
   return {
-    id: `speech-note-${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`,
+    id: `speech-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     text,
     sourceInput,
     createdAt: Date.now(),
@@ -2282,7 +2461,10 @@ async function handleSpeechContextUpsert(
 }> {
   const text = String(request.text || request.value || '').trim();
   const session = registry.getSessionByTabId(tabId);
-  if (!session || (request.meetingId && request.meetingId !== session.meetingId)) {
+  if (
+    !session ||
+    (request.meetingId && request.meetingId !== session.meetingId)
+  ) {
     return { success: false, message: '没有找到当前会议。' };
   }
   if (!text) {
@@ -2387,7 +2569,10 @@ async function handleSpeechContextClear(
   session?: MeetingPilotSessionSnapshot;
 }> {
   const session = registry.getSessionByTabId(tabId);
-  if (!session || (request.meetingId && request.meetingId !== session.meetingId)) {
+  if (
+    !session ||
+    (request.meetingId && request.meetingId !== session.meetingId)
+  ) {
     return { success: false };
   }
   const noteId = String(request.noteId || '').trim();
@@ -2406,7 +2591,10 @@ async function handleSpeechContextClear(
     await broadcastSessionSnapshot(updated);
   }
   const refreshed = await refreshSpeechSuggestion(tabId, { force: true });
-  return { success: Boolean(refreshed || updated), session: refreshed || updated };
+  return {
+    success: Boolean(refreshed || updated),
+    session: refreshed || updated,
+  };
 }
 
 async function handleCapturedStatusUpdate(
@@ -2430,10 +2618,10 @@ async function handleCapturedStatusUpdate(
           capture.kind === 'recording'
             ? 'recording'
             : capture.kind === 'error'
-              ? 'error'
-              : session.inMeeting
-                ? 'ready'
-                : session.status,
+            ? 'error'
+            : session.inMeeting
+            ? 'ready'
+            : session.status,
       }))
     : await registry.setCaptureState(tabId, capture);
   if (updated) {
@@ -2532,9 +2720,7 @@ async function handleTranscriptUpdate(
     resolutionConfidence: resolution.confidence,
   };
   const nextTranscript = [
-    ...session.transcript.filter(
-      (chunk) => !(chunk.id === enrichedChunk.id && chunk.lowConfidence),
-    ),
+    ...session.transcript.filter((chunk) => chunk.id !== enrichedChunk.id),
     enrichedChunk,
   ].slice(-60);
 
@@ -2707,29 +2893,41 @@ async function handleTranscriptUpdate(
     nextTopic,
     Number(envConfig.MEETING_SCREENSHOT_INTERVAL_SEC) || 18,
   );
+  const currentChapterId =
+    structuredData.chapters[structuredData.chapters.length - 1]?.id;
+  const llmActionItems =
+    llmResult?.actionItems.map((item) => ({
+      ...item,
+      chapterId: item.chapterId || currentChapterId,
+    })) || [];
+  const llmDecisions =
+    llmResult?.decisions.map((item) => ({
+      ...item,
+      chapterId: item.chapterId || currentChapterId,
+    })) || [];
   const mergedTimelineEvents = llmResult
     ? [
         ...structuredData.timelineEvents.filter(
           (event) => event.type === 'screen',
         ),
-        ...llmResult.decisions.map((decision, index) => ({
+        ...llmDecisions.map((decision, index) => ({
           id: `timeline-llm-decision-${index}`,
           type: 'decision' as const,
           title: decision.text.slice(0, 48),
           description: decision.text,
           timestamp: decision.timestamp,
-          chapterId:
-            structuredData.chapters[structuredData.chapters.length - 1]?.id,
+          chapterId: decision.chapterId,
         })),
-        ...llmResult.actionItems.map((item, index) => ({
+        ...llmActionItems.map((item, index) => ({
           id: `timeline-llm-action-${index}`,
           type: 'action' as const,
           title: item.title.slice(0, 48),
-          description: `${item.owner} · ${item.title}`,
-          timestamp: formatTranscriptTimestamp(Date.now()),
+          description: item.evidence
+            ? `${item.owner} · ${item.title}\n依据：${item.evidence}`
+            : `${item.owner} · ${item.title}`,
+          timestamp: item.timestamp || formatTranscriptTimestamp(Date.now()),
           speaker: item.owner,
-          chapterId:
-            structuredData.chapters[structuredData.chapters.length - 1]?.id,
+          chapterId: item.chapterId,
         })),
         ...structuredData.timelineEvents.filter(
           (event) => event.type === 'topic',
@@ -2738,7 +2936,12 @@ async function handleTranscriptUpdate(
     : structuredData.timelineEvents;
 
   const latestStructuredParse: MeetingPilotStructuredParseResult = llmResult
-    ? { ...llmResult, participantStances: resolvedStances }
+    ? {
+        ...llmResult,
+        actionItems: llmActionItems,
+        decisions: llmDecisions,
+        participantStances: resolvedStances,
+      }
     : {
         topic: nextTopic,
         summary: nextSummary || session.summary,
@@ -2762,6 +2965,11 @@ async function handleTranscriptUpdate(
               } 正在共享屏幕，当前内容聚焦于 ${nextTopic}`
             : `当前会议讨论聚焦于 ${nextTopic}`,
       };
+  const nextActionItems = mergeActionItemReviewStates(
+    llmActionItems.length ? llmActionItems : structuredData.actionItems,
+    session.actionItems,
+  );
+  latestStructuredParse.actionItems = nextActionItems;
 
   const updated = await registry.updateObservation(tabId, {
     transcript: nextTranscript,
@@ -2771,12 +2979,8 @@ async function handleTranscriptUpdate(
     participants: nextParticipants,
     chapters: structuredData.chapters,
     timelineEvents: mergedTimelineEvents,
-    actionItems: llmResult?.actionItems.length
-      ? llmResult.actionItems
-      : structuredData.actionItems,
-    decisions: llmResult?.decisions.length
-      ? llmResult.decisions
-      : structuredData.decisions,
+    actionItems: nextActionItems,
+    decisions: llmDecisions.length ? llmDecisions : structuredData.decisions,
     timelineProgress: structuredData.timelineProgress,
     latestObservationText: latestStructuredParse.latestObservationText,
     latestStructuredParse,
@@ -2818,6 +3022,67 @@ function enqueueTranscriptUpdate(
   });
   transcriptUpdateQueues.set(tabId, queued);
   return next;
+}
+
+async function handleRingCentralTranscriptStatus(
+  message: Record<string, any>,
+): Promise<void> {
+  const tabId = Number(message.tabId);
+  if (!Number.isFinite(tabId)) return;
+  const session = registry.getSessionByTabId(tabId);
+  if (!session) return;
+  const envConfig = await getEnvConfig();
+  const enabled =
+    isMeetingRingCentralTranscriptEnabled(envConfig) &&
+    message.enabled !== false;
+  const active = Boolean(enabled && message.active);
+  const available = Boolean(enabled && (message.available || active));
+  const lastSeenAt = active
+    ? Number(message.lastSeenAt || Date.now())
+    : session.webTranscript?.lastSeenAt;
+  const webTranscript = {
+    enabled,
+    available,
+    active,
+    lastSeenAt,
+    latestChunkId:
+      typeof message.latestChunkId === 'string'
+        ? message.latestChunkId
+        : session.webTranscript?.latestChunkId,
+    lastError:
+      typeof message.lastError === 'string'
+        ? message.lastError
+        : session.webTranscript?.lastError,
+  };
+  const tier = active
+    ? buildRingCentralTranscriptTierStatus(
+        envConfig,
+        'RingCentral web transcript detected; audio ASR is bypassed.',
+      )
+    : session.tier?.activeTier === 'ringcentral_transcript'
+      ? {
+          activeTier: null,
+          badge: 'Probing' as const,
+          mode: getMeetingTranscriptionMode(envConfig),
+          lastTransitionAt: Date.now(),
+          lastTransitionReason:
+            'RingCentral web transcript is not currently visible.',
+        }
+      : session.tier;
+
+  const updated = await registry.updateObservation(tabId, {
+    webTranscript,
+    tier,
+  });
+  if (updated) {
+    await broadcastSessionSnapshot(updated);
+  }
+  await pushOffscreenCommand({
+    type: 'MEETING_PILOT_OFFSCREEN_SET_WEB_TRANSCRIPT_ACTIVE',
+    tabId,
+    meetingId: session.meetingId,
+    active,
+  }).catch(() => undefined);
 }
 
 async function handleDigestStatusUpdate(
@@ -2869,6 +3134,7 @@ async function handleDigestStatusUpdate(
 export function buildMeetingIngestPayloads(
   session: MeetingPilotSessionSnapshot,
 ) {
+  const activeActionItems = getActiveMeetingActionItems(session.actionItems);
   const panoramaUrl = chrome.runtime.getURL(
     `meeting-panorama.html?meetingId=${encodeURIComponent(
       session.meetingId,
@@ -2892,7 +3158,7 @@ ${
 
 ### 行动项
 ${
-  session.actionItems
+  activeActionItems
     .map(
       (item) =>
         `- [${item.owner}] ${item.title}${
@@ -2920,11 +3186,12 @@ ${
           ? session.capture.stoppedAt - session.capture.startedAt
           : undefined,
       topicCount: session.chapters.length,
-      actionItemCount: session.actionItems.length,
+      actionItemCount: activeActionItems.length,
       latestObservationText: session.latestObservationText || null,
       summary: session.summary,
       chapters: session.chapters,
-      actionItems: session.actionItems,
+      actionItems: activeActionItems,
+      allActionItems: session.actionItems,
       decisions: session.decisions,
       timelineEvents: session.timelineEvents,
       participantStances: session.participants.flatMap((participant) =>
@@ -2996,6 +3263,7 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
     .slice(-6)
     .map((chunk) => `${chunk.speaker}: ${chunk.text}`)
     .join(' ');
+  const screenObservation = String(session.latestObservationText || '').trim();
   const meetingMetadata = [
     `Meeting: ${session.title}`,
     session.participants.length
@@ -3017,7 +3285,13 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
       session.title.trim().toLowerCase() &&
     session.currentTopic !== 'Live discussion';
   const hasRealSummary = session.summary.trim().length > 20;
-  if (!hasRealTranscript && !hasRealTopic && !hasRealSummary) {
+  const hasRealScreenObservation = screenObservation.length > 20;
+  if (
+    !hasRealTranscript &&
+    !hasRealTopic &&
+    !hasRealSummary &&
+    !hasRealScreenObservation
+  ) {
     return;
   }
 
@@ -3029,6 +3303,7 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
     currentTopic: session.currentTopic,
     summary: session.summary,
     transcriptSummary,
+    screenObservation,
     meetingMetadata,
   });
 
@@ -3055,7 +3330,10 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
     if (updated) {
       await broadcastSessionSnapshot(updated);
       void refreshSpeechSuggestion(tabId).catch((error) => {
-        console.warn('Meeting Pilot speech suggestion after recall failed:', error);
+        console.warn(
+          'Meeting Pilot speech suggestion after recall failed:',
+          error,
+        );
       });
     }
   } catch (error) {
@@ -3096,11 +3374,13 @@ async function handleMeetingPilotMessage(
     case 'MEETING_PILOT_GET_STATE': {
       await ensureInitialized();
       if (typeof tabId === 'number' && Number.isFinite(tabId)) {
-        await syncSessionReadiness(tabId, true);
+        await syncSessionCaptureGateReadiness(tabId);
+        refreshSessionReadinessInBackground(tabId);
       } else {
         const activeSession = registry.getActiveSession();
         if (activeSession) {
-          await syncSessionReadiness(activeSession.tabId, true);
+          await syncSessionCaptureGateReadiness(activeSession.tabId);
+          refreshSessionReadinessInBackground(activeSession.tabId);
         }
       }
       sendResponse(buildStateResponse(tabId));
@@ -3140,10 +3420,13 @@ async function handleMeetingPilotMessage(
           selfName: session.selfName,
           speakerLabel: session.speakerLabel,
         }).catch((error) => {
-          console.warn('[Meeting Pilot][background] offscreen context sync failed', {
-            tabId: session.tabId,
-            error: String((error as Error)?.message || error),
-          });
+          console.warn(
+            '[Meeting Pilot][background] offscreen context sync failed',
+            {
+              tabId: session.tabId,
+              error: String((error as Error)?.message || error),
+            },
+          );
         });
       }
       await broadcastSessionSnapshot(session);
@@ -3190,10 +3473,13 @@ async function handleMeetingPilotMessage(
         sendResponse({ success: false });
         return;
       }
-      const updated = await registry.updateSession(resolvedTabId, (session) => ({
-        ...session,
-        sidePanelPinned: pinned,
-      }));
+      const updated = await registry.updateSession(
+        resolvedTabId,
+        (session) => ({
+          ...session,
+          sidePanelPinned: pinned,
+        }),
+      );
       if (updated) {
         await broadcastSessionSnapshot(updated);
         await pushSessionSnapshotToMeetingTab(updated);
@@ -3207,6 +3493,13 @@ async function handleMeetingPilotMessage(
         );
       }
       sendResponse({ success: Boolean(updated), session: updated, surface });
+      return;
+    }
+    case 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE': {
+      await ensureInitialized();
+      const resolvedTabId = Number(request.tabId || tabId || 0);
+      const success = await showCaptureAuthGuide(resolvedTabId);
+      sendResponse({ success });
       return;
     }
     case 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL': {
@@ -3310,6 +3603,99 @@ async function handleMeetingPilotMessage(
       }
       return;
     }
+    case 'MEETING_PILOT_UPDATE_ACTION_ITEM': {
+      await ensureInitialized();
+      const actionTabId = Number(request.tabId || tabId || 0);
+      const actionItemId = String(request.actionItemId || '');
+      const status =
+        request.status === 'done'
+          ? 'done'
+          : request.status === 'pending'
+          ? 'pending'
+          : undefined;
+      const reviewState = normalizeActionItemReviewState(request.reviewState);
+      const titleProvided = hasOwnRequestField(request, 'title');
+      const ownerProvided = hasOwnRequestField(request, 'owner');
+      const deadlineProvided = hasOwnRequestField(request, 'deadline');
+      const nextTitle = titleProvided
+        ? sanitizeActionTextEdit(request.title, 160)
+        : undefined;
+      const nextOwner = ownerProvided
+        ? sanitizeActionTextEdit(request.owner, 80)
+        : undefined;
+      const nextDeadline = deadlineProvided
+        ? sanitizeActionTextEdit(request.deadline, 80)
+        : undefined;
+      if ((titleProvided && !nextTitle) || (ownerProvided && !nextOwner)) {
+        sendResponse({
+          success: false,
+          message: '行动项标题和负责人不能为空。',
+        });
+        return;
+      }
+      const hasContentEdit = titleProvided || ownerProvided || deadlineProvided;
+      if (!Number.isFinite(actionTabId) || !actionItemId) {
+        sendResponse({ success: false });
+        return;
+      }
+      const reviewedAt = Date.now();
+      const updated = await registry.updateSession(actionTabId, (session) => {
+        let changed = false;
+        const actionItems = session.actionItems.map((item) => {
+          if (item.id !== actionItemId) {
+            return item;
+          }
+          changed = true;
+          const firstContentEdit = hasContentEdit && !item.editedAt;
+          return {
+            ...item,
+            title: nextTitle || item.title,
+            owner: nextOwner || item.owner,
+            deadline: deadlineProvided
+              ? nextDeadline || undefined
+              : item.deadline,
+            status: status || item.status,
+            reviewState:
+              reviewState ||
+              (hasContentEdit ? 'confirmed' : item.reviewState) ||
+              'suggested',
+            reviewedAt,
+            editedAt: hasContentEdit ? reviewedAt : item.editedAt,
+            generatedTitle:
+              firstContentEdit && !item.generatedTitle
+                ? item.title
+                : item.generatedTitle,
+            generatedOwner:
+              firstContentEdit && !item.generatedOwner
+                ? item.owner
+                : item.generatedOwner,
+            generatedDeadline:
+              firstContentEdit && item.generatedDeadline === undefined
+                ? item.deadline || ''
+                : item.generatedDeadline,
+          };
+        });
+        if (!changed) {
+          return session;
+        }
+        return {
+          ...session,
+          actionItems,
+          latestStructuredParse: session.latestStructuredParse
+            ? {
+                ...session.latestStructuredParse,
+                actionItems,
+              }
+            : session.latestStructuredParse,
+        };
+      });
+      if (updated) {
+        await broadcastSessionSnapshot(updated);
+        await pushSessionSnapshotToMeetingTab(updated);
+      }
+      sendResponse({ success: Boolean(updated), session: updated });
+      return;
+    }
     case 'MEETING_PILOT_OBSERVATION_UPDATE': {
       await ensureInitialized();
       const observationText = String(request.observationText || '').trim();
@@ -3329,6 +3715,8 @@ async function handleMeetingPilotMessage(
       });
       if (session) {
         await broadcastSessionSnapshot(session);
+        scheduleMeetingMemoryRefresh(Number(tabId));
+        scheduleSpeechSuggestionRefresh(Number(tabId));
       }
       sendResponse({ success: Boolean(session), session });
       return;
@@ -3337,6 +3725,16 @@ async function handleMeetingPilotMessage(
       await ensureInitialized();
       const transcriptTabId = Number(request.tabId || tabId || 0);
       await enqueueTranscriptUpdate(transcriptTabId, {
+        ...request,
+        tabId: transcriptTabId,
+      });
+      sendResponse({ success: true });
+      return;
+    }
+    case 'MEETING_PILOT_RINGCENTRAL_TRANSCRIPT_STATUS': {
+      await ensureInitialized();
+      const transcriptTabId = Number(request.tabId || tabId || 0);
+      await handleRingCentralTranscriptStatus({
         ...request,
         tabId: transcriptTabId,
       });
@@ -3586,10 +3984,13 @@ function handleTabUpdate(
     if (current && current.inMeeting) {
       void finalizeMeetingTabSession(tabId, 'tab-left-meeting-url').catch(
         (error) => {
-          console.warn('[Meeting Pilot][background] tab update finalize failed', {
-            tabId,
-            error: String((error as Error)?.message || error),
-          });
+          console.warn(
+            '[Meeting Pilot][background] tab update finalize failed',
+            {
+              tabId,
+              error: String((error as Error)?.message || error),
+            },
+          );
         },
       );
     }
@@ -3635,18 +4036,13 @@ function inferSpeakerLabelFromTab(tab: chrome.tabs.Tab): string | undefined {
   return tab.title?.includes('speaking') ? tab.title : undefined;
 }
 
-export async function initMeetingPilotBackgroundRuntime(): Promise<void> {
-  await ensureInitialized();
+let meetingPilotMessageListenerRegistered = false;
 
-  chrome.tabs.onUpdated.addListener(handleTabUpdate);
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    void finalizeMeetingTabSession(tabId, 'tab-removed').catch((error) => {
-      console.warn('[Meeting Pilot][background] tab removal finalize failed', {
-        tabId,
-        error: String((error as Error)?.message || error),
-      });
-    });
-  });
+function registerMeetingPilotMessageListener(): void {
+  if (meetingPilotMessageListenerRegistered) {
+    return;
+  }
+  meetingPilotMessageListenerRegistered = true;
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (
@@ -3675,6 +4071,21 @@ export async function initMeetingPilotBackgroundRuntime(): Promise<void> {
       }
     });
     return true;
+  });
+}
+
+export async function initMeetingPilotBackgroundRuntime(): Promise<void> {
+  registerMeetingPilotMessageListener();
+  await ensureInitialized();
+
+  chrome.tabs.onUpdated.addListener(handleTabUpdate);
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void finalizeMeetingTabSession(tabId, 'tab-removed').catch((error) => {
+      console.warn('[Meeting Pilot][background] tab removal finalize failed', {
+        tabId,
+        error: String((error as Error)?.message || error),
+      });
+    });
   });
 
   chrome.runtime.onInstalled.addListener(() => {

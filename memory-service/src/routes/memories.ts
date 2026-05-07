@@ -14,7 +14,7 @@ const deleteMemoriesQuerystringSchema = {
     source: { type: 'string' as const, minLength: 1 },
     scope: {
       type: 'string' as const,
-      enum: ['work', 'personal', 'both'],
+      enum: ['work', 'personal', 'both', 'all'],
     },
   },
   additionalProperties: false,

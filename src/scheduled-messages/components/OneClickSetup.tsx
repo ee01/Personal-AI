@@ -6,7 +6,7 @@
 import * as React from 'react';
 import { useState } from 'react';
 import { SheetInitializer } from '../SheetInitializer';
-import { InitializationResult } from '../types';
+import { InitializationResult, SheetConfig } from '../types';
 import { getGoogleAuthToken } from '../../utils/googleAuth';
 
 interface OneClickSetupProps {
@@ -114,23 +114,26 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   };
   
   const handleManualBind = async () => {
-    if (!manualSheetUrl.trim()) {
-      setError('请输入 Sheet URL');
+    const rawSheetInput = manualSheetUrl.trim();
+    if (!rawSheetInput) {
+      setError('请输入 Sheet URL 或 Sheet ID');
       return;
     }
     
     setIsInitializing(true);
     setError('');
-    setCurrentStep('正在从 Sheet 读取配置...');
+    setCurrentStep('正在验证 Sheet 地址...');
     
     try {
       // 从 URL 提取 Sheet ID
-      const sheetId = extractSheetId(manualSheetUrl);
+      const sheetId = extractSheetId(rawSheetInput);
       if (!sheetId) {
-        throw new Error('无效的 Sheet URL');
+        throw new Error('无效的 Sheet URL 或 Sheet ID');
       }
+      const canonicalSheetUrl = buildSheetUrl(sheetId);
       
       // 获取授权（强制刷新以应用新权限）
+      setCurrentStep('正在获取 Google 授权...');
       const token = await getAuthTokenWithForceRefresh();
       if (!token) {
         throw new Error('无法获取 Google 授权');
@@ -140,24 +143,73 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       const { ConfigSyncService } = await import('../ConfigSyncService');
       const syncService = new ConfigSyncService(token);
       
-      const sheetConfig = await syncService.readConfigFromSheet(sheetId);
+      setCurrentStep('正在读取 Sheet Config 工作表...');
+      let sheetConfig: Partial<SheetConfig>;
+      try {
+        sheetConfig = await syncService.readConfigFromSheet(sheetId);
+      } catch (readError) {
+        if (!ConfigSyncService.isMissingConfigSheetError(readError)) {
+          throw readError;
+        }
+
+        console.warn('Sheet 缺少 Config 工作表，正在自动补齐:', readError);
+        setCurrentStep('未找到 Config 工作表，正在为旧维护表补齐配置...');
+        await syncService.ensureConfigSheet(sheetId);
+        sheetConfig = {
+          sheetId,
+          sheetUrl: canonicalSheetUrl,
+        };
+      }
       
       // 如果 Sheet 中没有配置，创建最小配置
       if (!sheetConfig.sheet_version) {
         console.warn('Sheet Config 表为空，创建最小配置');
-        await chrome.storage.local.set({
-          scheduledMessagesConfig: {
-            sheetId,
-            sheetUrl: manualSheetUrl,
-            sheet_version: '2.0',
-            created_by: 'Manual',
-            created_at: new Date().toISOString()
-          }
+        setCurrentStep('未检测到完整 Config，正在补齐基础配置...');
+        await syncService.ensureConfigSheet(sheetId);
+        const worksheetIds: { messagesSheetId?: number; logsSheetId?: number } = await syncService.getScheduledMessagesWorksheetIds(sheetId).catch((idError) => {
+          console.warn('读取 Messages/Logs 工作表 ID 失败，将仅保存基础绑定信息:', idError);
+          return {};
+        });
+        await syncService.syncConfig({
+          sheetId,
+          sheetUrl: canonicalSheetUrl,
+          messagesSheetId: worksheetIds.messagesSheetId,
+          logsSheetId: worksheetIds.logsSheetId,
+          sheet_version: '2.0',
+          created_by: 'Manual',
+          created_at: new Date().toISOString()
         });
       } else {
-        // 保存从 Sheet 读取的完整配置到 Chrome Storage
-        await syncService.saveConfigToStorage(sheetConfig as any);
-        console.log('✅ 从 Sheet 读取并绑定配置:', sheetConfig);
+        const needsMessagesSheetId = sheetConfig.messagesSheetId === undefined || sheetConfig.messagesSheetId === null;
+        const needsLogsSheetId = sheetConfig.logsSheetId === undefined || sheetConfig.logsSheetId === null;
+        let recoveredConfig = sheetConfig;
+        let wroteRecoveredConfig = false;
+
+        if (needsMessagesSheetId || needsLogsSheetId) {
+          try {
+            setCurrentStep('正在检查 Messages/Logs 工作表定位...');
+            recoveredConfig = await syncService.recoverScheduledMessagesWorksheetIds(sheetId, sheetConfig);
+            const recoveredWorksheetIds =
+              (needsMessagesSheetId && recoveredConfig.messagesSheetId !== undefined && recoveredConfig.messagesSheetId !== null) ||
+              (needsLogsSheetId && recoveredConfig.logsSheetId !== undefined && recoveredConfig.logsSheetId !== null);
+
+            if (recoveredWorksheetIds) {
+              setCurrentStep('正在把子表定位写回 Config...');
+              await syncService.syncConfig(recoveredConfig as SheetConfig);
+              wroteRecoveredConfig = true;
+            }
+          } catch (idError) {
+            console.warn('读取 Messages/Logs 工作表 ID 失败，将仅恢复已有 Config:', idError);
+          }
+        }
+
+        if (!wroteRecoveredConfig) {
+          // 保存从 Sheet 读取的完整配置到 Chrome Storage
+          setCurrentStep('正在恢复本地配置...');
+          await syncService.saveConfigToStorage(recoveredConfig as any);
+        }
+
+        console.log('✅ 从 Sheet 读取并绑定配置:', recoveredConfig);
       }
       
       // 刷新页面
@@ -168,7 +220,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       
     } catch (err: any) {
       console.error('绑定 Sheet 失败:', err);
-      setError(err.message || '绑定失败，请检查 Sheet 是否存在 Config 工作表');
+      setError(getManualBindErrorMessage(err));
       setIsInitializing(false);
     }
   };
@@ -182,10 +234,55 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     });
   };
   
-  const extractSheetId = (url: string): string | null => {
-    const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    return match ? match[1] : null;
+  const buildSheetUrl = (sheetId: string): string => {
+    return `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
   };
+
+  const extractSheetId = (input: string): string | null => {
+    const value = input.trim();
+    const pathMatch = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (pathMatch) {
+      return pathMatch[1];
+    }
+
+    const queryMatch = value.match(/[?&]id=([a-zA-Z0-9-_]+)/);
+    if (queryMatch) {
+      return queryMatch[1];
+    }
+
+    const driveFileMatch = value.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+    if (driveFileMatch) {
+      return driveFileMatch[1];
+    }
+
+    if (/^[a-zA-Z0-9-_]{20,}$/.test(value)) {
+      return value;
+    }
+
+    return null;
+  };
+
+  const getManualBindErrorMessage = (err: any): string => {
+    const message = err?.message || '';
+    if (message.includes('401') || message.includes('invalid_token') || message.includes('Unauthorized')) {
+      return '绑定失败：Google 授权已失效，请重新授权后再试。';
+    }
+    if (message.includes('403')) {
+      return '绑定失败：当前 Google 账号没有访问这个 Sheet 的权限。';
+    }
+    if (message.includes('404') || message.includes('Requested entity was not found')) {
+      return '绑定失败：找不到这个 Sheet，请确认链接或 ID 是否正确。';
+    }
+    if (message.includes('读取 Sheet 配置失败')) {
+      return '绑定失败：无法读取 Config 工作表。请确认这是定时消息维护表，且当前 Google 账号有访问权限。';
+    }
+    if (message.includes('Unable to parse range')) {
+      return '绑定失败：找不到 Config 工作表，且自动补齐失败。请确认这是定时消息维护表，且当前 Google 账号有编辑权限。';
+    }
+    return message || '绑定失败，请检查 Sheet URL、Config 工作表和 Google 授权状态';
+  };
+
+  const manualBindDisabled = isInitializing || !manualSheetUrl.trim();
   
   return (
     <div style={styles.container}>
@@ -343,8 +440,11 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             
             <button 
               style={styles.primaryButton}
+              disabled={isInitializing}
               onClick={handleOneClickSetup}
-              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'}
+              onMouseOver={(e) => {
+                if (!isInitializing) e.currentTarget.style.backgroundColor = '#0056b3';
+              }}
               onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'}
             >
               🚀 一键生成维护表
@@ -356,19 +456,34 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             
             <div style={styles.manualSection}>
               <p style={styles.manualTitle}>如果您已有维护表，可以直接绑定：</p>
+              <p style={styles.manualHint}>支持 Sheet 分享链接、Drive open?id 链接或直接粘贴 Sheet ID；旧维护表缺少 Config 时会自动补齐。</p>
               <div style={styles.inputGroup}>
                 <input
                   type="text"
-                  placeholder="粘贴 Sheet URL..."
+                  placeholder="粘贴 Sheet URL 或 Sheet ID..."
                   value={manualSheetUrl}
                   onChange={(e) => setManualSheetUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !manualBindDisabled) {
+                      void handleManualBind();
+                    }
+                  }}
+                  disabled={isInitializing}
                   style={styles.input}
                 />
                 <button 
-                  style={styles.secondaryButton}
+                  style={{
+                    ...styles.secondaryButton,
+                    ...(manualBindDisabled ? styles.disabledButton : {}),
+                  }}
+                  disabled={manualBindDisabled}
                   onClick={handleManualBind}
-                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#5a6268'}
-                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#6c757d'}
+                  onMouseOver={(e) => {
+                    if (!manualBindDisabled) e.currentTarget.style.backgroundColor = '#5a6268';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = manualBindDisabled ? '#adb5bd' : '#6c757d';
+                  }}
                 >
                   绑定
                 </button>
@@ -465,6 +580,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#666',
     marginBottom: '10px',
   },
+  manualHint: {
+    fontSize: '12px',
+    color: '#888',
+    lineHeight: 1.5,
+    marginTop: '-4px',
+    marginBottom: '10px',
+  },
   inputGroup: {
     display: 'flex',
     gap: '10px',
@@ -485,6 +607,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '6px',
     cursor: 'pointer',
     transition: 'background-color 0.3s',
+  },
+  disabledButton: {
+    backgroundColor: '#adb5bd',
+    cursor: 'not-allowed',
   },
   completeButton: {
     padding: '15px',
@@ -620,5 +746,3 @@ styleSheet.textContent = `
   }
 `;
 document.head.appendChild(styleSheet);
-
-

@@ -1,4 +1,8 @@
-export type MeetingPilotASRTier = 'web_speech' | 'desktop_whisper' | 'cloud';
+export type MeetingPilotASRTier =
+  | 'ringcentral_transcript'
+  | 'web_speech'
+  | 'desktop_whisper'
+  | 'cloud';
 
 export interface ASRTranscriptEvent {
   kind: 'interim' | 'final';

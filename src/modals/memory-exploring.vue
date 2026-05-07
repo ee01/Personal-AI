@@ -159,6 +159,21 @@
               @keypress.enter="handleSearch"
             />
           </div>
+          <div class="scope-segmented" role="group" aria-label="记忆范围">
+            <button
+              v-for="option in recallScopeOptions"
+              :key="option.value"
+              type="button"
+              :title="option.title"
+              :class="[
+                'scope-option',
+                { active: selectedRecallScope === option.value },
+              ]"
+              @click="selectedRecallScope = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
           <button class="filter-btn" @click="handleSearch">📊 搜索</button>
           <button class="filter-btn" @click="clearSearch">🔄 重置</button>
         </div>
@@ -175,13 +190,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useMemoryStore } from './memory-store';
 import AISearchAnimation from './components/AISearchAnimation.vue';
 import {
   getMemoryServiceClient,
   type OutreachTemplateRuntimeStatusItem,
+  type RecallScope,
 } from '../services/MemoryServiceClient';
 
 /* eslint-disable no-undef */
@@ -194,6 +210,7 @@ const router = useRouter();
 const route = useRoute();
 const entityTypes = computed(() => store.entityTypes);
 const searchQuery = ref('');
+const selectedRecallScope = ref<RecallScope>('work');
 const followThreadCount = ref(0);
 const meetingCount = ref(0);
 const pendingDecisionCount = ref(0);
@@ -208,8 +225,77 @@ const TERMINAL_OUTREACH_STATUSES = new Set([
   'cancelled',
   'failed',
 ]);
+const recallScopeOptions: Array<{
+  value: RecallScope;
+  label: string;
+  title: string;
+}> = [
+  { value: 'work', label: '工作', title: '只检索工作记忆' },
+  { value: 'personal', label: '个人', title: '只检索个人记忆' },
+  { value: 'all', label: '全部', title: '同时检索工作与个人记忆' },
+];
+
+function isRecallScope(value: unknown): value is RecallScope {
+  return (
+    value === 'work' ||
+    value === 'personal' ||
+    value === 'both' ||
+    value === 'all'
+  );
+}
+
+function getRouteSearchQuery() {
+  const rawQuery = route.query.q;
+  if (Array.isArray(rawQuery)) return String(rawQuery[0] || '');
+  return typeof rawQuery === 'string' ? rawQuery : '';
+}
+
+function getRouteRecallScope(): RecallScope {
+  return isRecallScope(route.query.scope) ? route.query.scope : 'work';
+}
+
+function syncSearchControlsFromRoute() {
+  selectedRecallScope.value = getRouteRecallScope();
+  const routedQuery = getRouteSearchQuery();
+  if (routedQuery) {
+    searchQuery.value = routedQuery;
+  }
+}
+
+async function hydrateSearchFromRoute() {
+  if (route.path !== '/search') return;
+  const routedQuery = getRouteSearchQuery().trim();
+  if (routedQuery.length < 2) return;
+
+  const routedScope = getRouteRecallScope();
+  searchQuery.value = routedQuery;
+  selectedRecallScope.value = routedScope;
+
+  if (
+    store.searchContext.mode &&
+    store.searchContext.query === routedQuery &&
+    store.searchContext.scope === routedScope
+  ) {
+    return;
+  }
+
+  await store.performAskSearch(routedQuery, routedScope);
+}
+
+function hasChromeStorage() {
+  return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
+}
+
+function hasChromeStorageChangeListener() {
+  return typeof chrome !== 'undefined' && Boolean(chrome.storage?.onChanged);
+}
 
 async function loadFollowThreadCount() {
+  if (!hasChromeStorage()) {
+    followThreadCount.value = 0;
+    return;
+  }
+
   try {
     const result = await chrome.storage.local.get('concernedItems');
     const items = (result.concernedItems || []).filter((item: any) => {
@@ -228,20 +314,22 @@ async function loadFollowThreadCount() {
 }
 
 async function loadMeetingCount() {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'GET_MEETINGS',
-      limit: 1,
-      offset: 0,
-    });
-    if (response?.success) {
-      meetingCount.value = Number(
-        response?.data?.total || response?.total || 0,
-      );
-      return;
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_MEETINGS',
+        limit: 1,
+        offset: 0,
+      });
+      if (response?.success) {
+        meetingCount.value = Number(
+          response?.data?.total || response?.total || 0,
+        );
+        return;
+      }
+    } catch (error) {
+      console.warn('通过消息通道加载会议数量失败，尝试直接请求:', error);
     }
-  } catch (error) {
-    console.warn('通过消息通道加载会议数量失败，尝试直接请求:', error);
   }
 
   try {
@@ -278,11 +366,15 @@ function handleStorageChange(
 onMounted(async () => {
   await loadFollowThreadCount();
   await loadMeetingCount();
-  chrome.storage.onChanged.addListener(handleStorageChange);
+  if (hasChromeStorageChangeListener()) {
+    chrome.storage.onChanged.addListener(handleStorageChange);
+  }
 });
 
 onUnmounted(() => {
-  chrome.storage.onChanged.removeListener(handleStorageChange);
+  if (hasChromeStorageChangeListener()) {
+    chrome.storage.onChanged.removeListener(handleStorageChange);
+  }
   if (outreachCountTimer) {
     clearInterval(outreachCountTimer);
     outreachCountTimer = null;
@@ -365,7 +457,9 @@ function resolveTemplateNextDispatchAt(
       : '09:00';
   if (!scheduleDate) return null;
   const date = new Date(
-    `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
+    `${scheduleDate}T${
+      scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime
+    }`,
   );
   if (Number.isNaN(date.getTime())) return null;
   return Math.floor(date.getTime() / 1000);
@@ -400,7 +494,7 @@ const performSearch = () => {
     if (store.searchContext.mode === 'overview') {
       // 原来是 AI 搜索，继续用 AI 搜索
       console.log('[搜索] 保持智能 AI 搜索模式:', searchQuery.value);
-      store.performAskSearch(searchQuery.value);
+      store.performAskSearch(searchQuery.value, selectedRecallScope.value);
     } else if (store.searchContext.mode === 'entity') {
       // 原来是实体向量搜索，继续用实体向量搜索
       const entityType = store.searchContext.entityType;
@@ -409,40 +503,63 @@ const performSearch = () => {
         searchQuery.value,
         entityType,
       );
-      store.performEntityVectorSearch(searchQuery.value, entityType);
+      store.performEntityVectorSearch(
+        searchQuery.value,
+        entityType,
+        selectedRecallScope.value,
+      );
     }
   } else if (path === '/' || path === '/user-profile' || path === '/timeline') {
     // 首页概览、用户画像、时间轴 - 使用 ask() 智能搜索
     console.log('[搜索] 执行智能 AI 搜索:', searchQuery.value);
-    store.performAskSearch(searchQuery.value);
+    store.performAskSearch(searchQuery.value, selectedRecallScope.value);
   } else if (path.startsWith('/entity/')) {
     // 分栏搜索 - 使用向量匹配
     const entityType = route.params.type as string;
     console.log('[搜索] 执行实体向量搜索:', searchQuery.value, entityType);
-    store.performEntityVectorSearch(searchQuery.value, entityType);
+    store.performEntityVectorSearch(
+      searchQuery.value,
+      entityType,
+      selectedRecallScope.value,
+    );
   } else {
     // 其他情况 - 通用向量搜索
     console.log('[搜索] 执行通用向量搜索:', searchQuery.value);
-    store.performEntityVectorSearch(searchQuery.value);
+    store.performEntityVectorSearch(
+      searchQuery.value,
+      undefined,
+      selectedRecallScope.value,
+    );
   }
 
   // 跳转到搜索结果页
   router.push({
     path: '/search',
-    query: { q: searchQuery.value },
+    query: { q: searchQuery.value, scope: selectedRecallScope.value },
   });
 };
 
 const clearSearch = () => {
   searchQuery.value = '';
+  selectedRecallScope.value = 'work';
   store.clearSearchContext();
   router.push('/');
 };
 
 onMounted(() => {
+  syncSearchControlsFromRoute();
   // 直接初始化 store，MemorySystem 会自动初始化
   store.initialize();
+  void hydrateSearchFromRoute();
 });
+
+watch(
+  () => [route.path, route.query.q, route.query.scope],
+  () => {
+    syncSearchControlsFromRoute();
+    void hydrateSearchFromRoute();
+  },
+);
 </script>
 
 <style>
@@ -455,13 +572,8 @@ onMounted(() => {
 
 body {
   font-size: 1rem;
-  font-family:
-    'SF Pro Display',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    sans-serif;
+  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, sans-serif;
   background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
   color: #ffffff;
   overflow-x: hidden;
@@ -471,13 +583,8 @@ body {
 .memory-container {
   display: flex;
   min-height: 100vh;
-  font-family:
-    'SF Pro Display',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    sans-serif;
+  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, sans-serif;
   background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
   color: #ffffff;
   overflow-x: hidden;
@@ -645,6 +752,41 @@ body {
 
 .filter-btn:hover {
   background: rgba(59, 130, 246, 0.2);
+}
+
+.scope-segmented {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0.2rem;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.75rem;
+}
+
+.scope-option {
+  min-width: 3.25rem;
+  padding: 0.55rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.55rem;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.scope-option:hover {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.scope-option.active {
+  color: #f8fafc;
+  background: rgba(16, 185, 129, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.35);
 }
 
 /* 页面过渡动画 */
@@ -2120,6 +2262,15 @@ body {
 
   .search-box {
     width: 100%;
+  }
+
+  .scope-segmented,
+  .filter-btn {
+    width: 100%;
+  }
+
+  .scope-option {
+    flex: 1;
   }
 
   .topic-header {

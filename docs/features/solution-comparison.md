@@ -1,21 +1,26 @@
 # 解决方案对比：为什么升级为双 Jira Rule
 
+*最后更新: 2026-05-03*
+
 ## 当前结论
 
 当前实现采用两条 Jira Automation Rule：
 
 1. `Timeline Sync Rule`
-   - 每天清晨执行一次
+   - 每天 05:00 执行一次
    - 按项目逐个调用内网 `get_release_info`
-   - 再逐个调用 Apps Script `cacheReleaseInfo`
+   - 再通过 POST JSON 逐个调用 Apps Script `cacheReleaseInfo`
    - 将每个项目的 timeline 数据持久化到 Script Properties
+   - 每个缓存写入 webhook 都启用 response capture，方便在 Jira audit log 中确认单项目写入结果；同步规则不在单项目后接阻断式 condition，避免一个项目失败导致后续项目全部跳过
 
 2. `Scheduled Messages Executor Rule`
    - 每分钟执行一次
    - 只调用 `getBotMessageCurrentTime`
    - Apps Script 从缓存中读取 timeline 数据并匹配消息
 
-这个方案替代了旧的“一步 GET”与“两批 GET cache”方案。
+这个方案替代了旧的“一步 GET”和“两批 GET cache”方案。
+
+Apps Script 端仍保留 GET inline releaseInfo 参数解析能力，主要用于兼容旧版 Jira Rule 或手工调试；正常链路应优先读取 Timeline Sync Rule 用 POST JSON 写入的缓存。
 
 ---
 
@@ -27,30 +32,31 @@
 - Jira Automation 可以访问内网 `get_release_info`
 - 因此必须由 Jira 先取到 timeline 数据，再把数据传给 Apps Script 做时间匹配
 
-同时存在两个硬约束：
+同时存在三个硬约束：
 
-1. Google Apps Script Web App 对 `POST` 会返回 `302` 重定向
-2. Jira Automation 对 `GET` 的 302 兼容较好，但对 `POST` 的 302 不可靠
+1. Google Apps Script ContentService 的响应会重定向到一次性 URL，调用方必须能跟随重定向
+2. 直接把所有项目 `releaseInfo` 放进一个 GET URL 会遇到长度和编码风险
+3. Jira Automation 的 `urlEncode` 会把空格编码成 `+`，复杂 Groovy Map 放在 query string 中容易出现跨解析器歧义
 
-所以主链路必须优先建立在 `GET` 之上。
+所以当前主链路采用“缓存写入 POST JSON + 执行器短 GET 读缓存”的组合：复杂 payload 不进入 URL，执行器的高频请求仍保持短 URL。
 
 ---
 
 ## 方案对比
 
-### 方案 0：Jira 直接 POST 到 Apps Script
+### 方案 0：Jira 每分钟直接 POST 所有 releaseInfo 到 Apps Script
 
 ```text
 Jira -> POST getBotMessageCurrentTime
+     -> body 中包含所有项目 releaseInfo
      -> Apps Script
-     -> 302 Redirect
-     -> Jira 无法稳定处理
 ```
 
 结论：
 
-- 失败方案
-- Apps Script Web App 的 POST 302 行为决定了它不适合作为 Jira 的直接 POST 目标
+- 不采用
+- 每分钟携带所有项目 releaseInfo 会让执行规则既大又难排障
+- 执行器不需要复杂 payload；让它读缓存更清晰
 
 ---
 
@@ -103,16 +109,16 @@ Jira Rule 同一次执行中:
 结论：
 
 - 过渡方案
-- 不适合作为长期架构
+- 不适合作为长期架构；后续已被 POST JSON cache 写入替代
 
 ---
 
-### 方案 3：双 Jira Rule + 每项目单独 GET 缓存
+### 方案 3：双 Jira Rule + 每项目单独 POST JSON 缓存
 
 ```text
 Rule A: Timeline Sync Rule (daily)
   Jira -> GET internal release info (per project)
-      -> GET Apps Script cacheReleaseInfo (per project)
+      -> POST Apps Script cacheReleaseInfo (per project JSON body)
 
 Rule B: Scheduled Messages Executor Rule (every minute)
   Jira -> GET Apps Script getBotMessageCurrentTime
@@ -122,8 +128,8 @@ Rule B: Scheduled Messages Executor Rule (every minute)
 
 优点：
 
-- 全链路仍然是 GET，绕开 POST 302 限制
 - 每次 `cacheReleaseInfo` 只传一个项目，不再依赖 batch 拆分
+- `releaseInfo` 走 JSON body，不再把 Groovy Map、空格、`+` 和百分号放进 URL query
 - `getBotMessageCurrentTime` 不携带大块 timeline 参数，URL 很短
 - timeline 采集和消息执行解耦，规则职责清晰
 - 新增项目只需要加项目配置，不需要重新估算 batch
@@ -134,6 +140,8 @@ Rule B: Scheduled Messages Executor Rule (every minute)
 - 需要两条 Jira Rule，而不是一条
 - timeline 数据不是实时读取，而是按天同步
 - 如果 Sync Rule 丢失，Timeline Bot/AI 消息会停止触发
+- 如果单个项目写入失败，需要从 Jira audit log 或 Apps Script 日志定位对应项目
+- 单项目写入失败不应阻断后续项目同步，否则部分项目的偶发异常会扩散成整条规则不可用
 
 结论：
 
@@ -166,7 +174,7 @@ timeline 数据更新频率不高，按天同步可以接受。
 
 当前设计采用：
 
-- `Timeline Sync Rule` 每天清晨同步一次
+- `Timeline Sync Rule` 每天 05:00 同步一次
 - Apps Script 缓存允许 36 小时冗余窗口
 
 这样做的目的：
@@ -175,6 +183,50 @@ timeline 数据更新频率不高，按天同步可以接受。
 - 在规则偶发晚跑或 Jira 有短暂抖动时，仍有足够容错空间
 
 如果未来 timeline 更新频率升高，再把每日同步提升到每 6 小时或每小时即可，整体架构无需变化。
+
+---
+
+## 当前实现核对
+
+关键实现位置：
+
+- `src/scheduled-messages/jira-timeline-sync-rule-template.json`
+  - 定义每天 05:00 的 Timeline Sync Rule
+  - 动态插入每个项目的 releaseInfo 读取与缓存写入步骤
+
+- `src/scheduled-messages/timelineProjects.ts`
+  - 维护项目列表、内网 releaseInfo 变量名和 `cacheReleaseInfo` webhook
+  - 缓存写入 webhook 使用 POST JSON body，并启用 response capture，便于在 Jira audit log 中查看单项目结果
+  - 不生成 top-level success condition；Atlassian Automation 的普通 condition 失败会停止后续 action，不适合作为每项目缓存写入后的线性断言
+
+- `src/scheduled-messages/app-script-template.gs`
+  - `cacheReleaseInfo` 按项目写入 Script Properties
+  - `cacheReleaseInfo` 同时保留旧 GET query 和新 POST JSON body 入口
+  - 缺少 project、未知 project、空 releaseInfo 或解析失败时返回 `success: false`，避免静默成功
+  - `getTimelineCacheStatus` 只返回每个项目缓存是否就绪、过期、缺失或格式异常，不返回具体 release 日期
+  - `getBotMessageCurrentTime` 优先读缓存，找不到缓存时跳过 Timeline 消息，但普通时间消息仍可执行
+
+- `src/scheduled-messages/ScheduledMessagesManager.tsx`
+  - 老用户缺少 Timeline Sync Rule 时显示补齐入口
+  - Timeline 触发创建表单会在缺少执行 rule 或 sync rule 时阻止提交
+  - Timeline 触发表单会显示当前项目缓存状态，并支持手动刷新
+  - Timeline 偏移天数在提交时校验为 -30 到 30 的整数，避免空输入或中间态输入被保存成无效值
+  - 普通 Bot/AI 时间触发消息如果使用 `{currentRelease}` 等项目变量，也会保存所选项目，确保执行器能用缓存替换变量
+  - 首次配置后提示用户可手动运行 Sync Rule 或等待下一次 05:00 同步
+
+---
+
+## 本轮可靠性改进
+
+结合 Zapier / n8n / Temporal 等自动化产品的共性做法，最值得补强的不是把当前架构改成新服务，而是先提升失败可见性：
+
+- 自动化平台通常会提供错误分支、失败执行记录、重试或持久化状态；本功能的薄弱点是每个项目的缓存写入以前不够可见，且线性阻断会放大单点失败。
+- Timeline Sync Rule 现在捕获 `cacheReleaseInfo` 响应，Jira audit log 可以看到每个项目的写入结果。
+- `cacheReleaseInfo` 写入使用 POST JSON body，避免复杂 `releaseInfo` 在 URL query 中被长度限制或 `+`/空格解析差异破坏；旧 GET 入口保留为兼容路径。
+- Timeline Sync Rule 不再用普通 condition 检查每个项目的 `success` 字段，因为 condition 失败会停止后续 action；当前策略是继续同步其他项目，再通过 UI 缓存状态和 audit log 暴露失败项目。
+- Apps Script 缓存端点现在对无效输入返回结构化失败结果，而不是在没有写入缓存时仍返回 `success: true`。
+- UI 文案明确“补齐 Sync Rule”与“每日 05:00 同步”的关系，减少用户误以为补齐后马上可触发 Timeline 消息。
+- UI 现在可直接读取 Timeline 缓存诊断状态。用户创建 Timeline 消息时能看到所选项目是否已经同步、是否过期，以及需要手动运行 Sync Rule 还是等待每日同步。
 
 ---
 
@@ -214,8 +266,8 @@ timeline 数据更新频率不高，按天同步可以接受。
 在当前约束下，最佳方案是：
 
 - 保留 Jira 访问内网的能力
-- 放弃 POST 到 Apps Script
+- 放弃每分钟携带所有 releaseInfo 的直接调用
 - 放弃一步 GET 和手工 batch GET
-- 采用“双 Jira Rule + 每项目单独 GET 缓存 + Executor 只读缓存”的结构
+- 采用“双 Jira Rule + 每项目单独 POST JSON 缓存 + Executor 短 GET 只读缓存”的结构
 
 这是当前实现采用的正式方案。

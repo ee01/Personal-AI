@@ -9,6 +9,10 @@ import {
   SlideAnalysisResult 
 } from '../interfaces/slideAnalyzer';
 import { BaseSlideAnalyzer } from './baseAnalyzer';
+import {
+  extractJiraTicketKeys,
+  hasJiraTicketKey,
+} from '../utils/slidesAnalyzerSuggestions';
 
 /**
  * 文本结构类型
@@ -41,7 +45,7 @@ interface TextBlock {
  */
 export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextContentAnalyzer {
   // Jira工单ID模式
-  private static readonly JIRA_TICKET_PATTERN = /([A-Z]+-\d+)/;
+  private static readonly JIRA_TICKET_PATTERN = /\b([A-Z][A-Z0-9]+-\d+)\b/;
   
   // 项目状态关键词和正则表达式
   private static readonly STATUS_PATTERNS = [
@@ -57,7 +61,7 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
     /owner[:：]\s*([^,，。\n]+)/i,
     /责任人[:：]\s*([^,，。\n]+)/i,
     /assignee[:：]\s*([^,，。\n]+)/i,
-    /@([^\s]+)/
+    /@([^\s,，。.;；:：]+)/
   ];
   
   // 赛道/团队关键词和正则表达式
@@ -497,7 +501,7 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
       }
       
       // 尝试提取负责人（通常使用@符号）
-      const ownerMatches = content.match(/@([^\s]+)/);
+      const ownerMatches = content.match(/@([^\s,，。.;；:：]+)/);
       if (ownerMatches) {
         owner = ownerMatches[1];
         projectName = projectName.replace(/@[^\s]+/, '').trim();
@@ -560,7 +564,7 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
       }
       
       const content = block.content;
-      const jiraMatches = content.match(/[A-Z]+-\d+/g);
+      const jiraMatches = extractJiraTicketKeys(content);
       
       if (!jiraMatches || jiraMatches.length === 0) {
         continue;
@@ -590,7 +594,7 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
         }
         
         // 提取负责人（如果有）
-        const ownerMatch = textAfterJira.match(/@([^\s]+)/);
+        const ownerMatch = textAfterJira.match(/@([^\s,，。.;；:：]+)/);
         if (ownerMatch) {
           owner = ownerMatch[1];
           projectName = projectName.replace(/@[^\s]+/, '').trim();
@@ -696,9 +700,9 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
     score += (completenessScore / totalFields) * 0.4;
     
     // 3. Jira ID评分
-    const jiraProjects = projects.filter(p => /[A-Z]+-\d+/.test(p.id));
+    const jiraProjects = projects.filter(p => hasJiraTicketKey(p.id));
     score += (jiraProjects.length / projects.length) * 0.3;
     
     return Math.min(1, score);
   }
-} 
+}

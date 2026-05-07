@@ -38,6 +38,10 @@ const fixtureHtml = `<!doctype html>
             <a class="issue-link-key" href="https://jira.ringcentral.com/browse/UX-200">UX-200</a>
             <span class="issue-link-summary">Missing design spec</span>
           </div>
+          <div class="issue-link">
+            <a class="issue-link-key" href="https://jira.ringcentral.com/browse/UXDES-300">UXDES-300</a>
+            <span class="issue-link-summary">Shared UXDES spec</span>
+          </div>
         </div>
       </div>
     </main>
@@ -85,6 +89,17 @@ try {
         },
         {
           object: {
+            title: 'Draft onboarding walkthrough',
+            url: 'https://www.loom.com/share/notready123',
+            status: {
+              icon: {
+                title: 'Not ready for dev',
+              },
+            },
+          },
+        },
+        {
+          object: {
             title: 'Ignore implementation note',
             url: 'https://example.com/not-design',
           },
@@ -113,6 +128,10 @@ try {
     }
 
     if (pathname === '/rest/api/2/issue/UX-200/remotelink') {
+      return fulfillJson([]);
+    }
+
+    if (pathname === '/rest/api/2/issue/UXDES-300/remotelink') {
       return fulfillJson([]);
     }
 
@@ -146,6 +165,21 @@ try {
       });
     }
 
+    if (pathname === '/rest/api/2/issue/UXDES-300') {
+      return fulfillJson({
+        key: 'UXDES-300',
+        fields: {
+          summary: 'Shared UXDES spec',
+          issuetype: { name: 'Story' },
+          status: { name: 'To Do' },
+          customfield_21233: null,
+          customfield_11450: null,
+          duedate: null,
+          fixVersions: [],
+        },
+      });
+    }
+
     if (pathname === '/rest/api/2/search') {
       return fulfillJson({ issues: [] });
     }
@@ -162,7 +196,7 @@ try {
   await page.waitForSelector('.design-links-container', { timeout: 10000 });
 
   const itemTexts = await page.locator('.design-link-item').allTextContents();
-  assert.equal(itemTexts.length, 4, 'description, remote, and missing UX design rows should render once each');
+  assert.equal(itemTexts.length, 6, 'description, remote, and missing UX design rows should render once each');
   assert.match(itemTexts[0], /Figma Prototype/);
   assert.doesNotMatch(itemTexts[0], /Ready checkout prototype/);
   assert.match(itemTexts[0], /UX-100/);
@@ -173,11 +207,16 @@ try {
   assert.equal((itemTexts[0].match(/UX-100/g) || []).length, 1, 'UX epic key should not render twice');
   assert.match(itemTexts[1], /UX-200/);
   assert.doesNotMatch(itemTexts[1], /Design link missing/);
-  assert.doesNotMatch(itemTexts[1], /Missing design spec/);
+  assert.match(itemTexts[1], /Missing design spec/);
   assert.match(itemTexts[1], /Missing link/);
-  assert.match(itemTexts[2], /Figma Design/);
-  assert.match(itemTexts[2], /Description/);
-  assert.match(itemTexts[3], /Miro board/);
+  assert.match(itemTexts[2], /UXDES-300/);
+  assert.match(itemTexts[2], /Shared UXDES spec/);
+  assert.match(itemTexts[2], /Missing link/);
+  assert.match(itemTexts[3], /Draft onboarding walkthrough/);
+  assert.match(itemTexts[3], /Not ready for dev/);
+  assert.match(itemTexts[4], /Figma Design/);
+  assert.match(itemTexts[4], /Description/);
+  assert.match(itemTexts[5], /Miro board/);
 
   const firstHref = await page.locator('.design-link').first().getAttribute('href');
   assert.equal(firstHref, 'https://www.figma.com/proto/remote123/Checkout');
@@ -186,8 +225,12 @@ try {
 
   const statusClass = await page.locator('.design-status-tag').first().getAttribute('class');
   assert.match(statusClass, /design-status-tag--ready/);
-  const missingStatusClass = await page.locator('.design-status-tag', { hasText: 'Missing link' }).getAttribute('class');
+  const missingStatusTags = page.locator('.design-status-tag', { hasText: 'Missing link' });
+  assert.equal(await missingStatusTags.count(), 2, 'both missing UX rows should show a missing status');
+  const missingStatusClass = await missingStatusTags.first().getAttribute('class');
   assert.match(missingStatusClass, /design-status-tag--missing/);
+  const notReadyStatusClass = await page.locator('.design-status-tag', { hasText: 'Not ready for dev' }).getAttribute('class');
+  assert.match(notReadyStatusClass, /design-status-tag--not-ready/);
 
   const containerHtml = await page.locator('.design-links-container').innerHTML();
   assert.equal(containerHtml.includes('notfigma.com'), false);
@@ -196,6 +239,21 @@ try {
     return getComputedStyle(element).transform;
   });
   assert.equal(transform, 'none', 'design links panel should not shift page content');
+
+  const beforeHoverBox = await page.locator('.design-links-container').boundingBox();
+  assert.ok(beforeHoverBox, 'design links panel should have a bounding box before hover');
+  await page.hover('.design-links-container');
+  const hoverTransform = await page.locator('.design-links-container').evaluate(element => {
+    return getComputedStyle(element).transform;
+  });
+  assert.equal(hoverTransform, 'none', 'design links panel should stay stable on hover');
+  const afterHoverBox = await page.locator('.design-links-container').boundingBox();
+  assert.ok(afterHoverBox, 'design links panel should have a bounding box after hover');
+  assert.equal(
+    Math.round(afterHoverBox.y),
+    Math.round(beforeHoverBox.y),
+    'design links panel should not move vertically on hover',
+  );
 
   await page.evaluate(() => {
     history.pushState({}, '', '/browse/DEF-456');

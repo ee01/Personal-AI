@@ -109,6 +109,7 @@ export interface RecallItem {
   id: string;
   type: 'message' | 'chunk' | 'entity';
   content: string;
+  scope?: 'work' | 'personal';
   displayTitle?: string;
   displayText?: string;
   previewText?: string;
@@ -120,6 +121,12 @@ export interface RecallItem {
   exploreLink?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
+  entity?: {
+    id: string;
+    type: string;
+    name: string;
+    description?: string;
+  };
 }
 
 // ---------- Active recall blocks ----------
@@ -2485,7 +2492,7 @@ export class MemoryServiceClient {
     if (filters?.status) params.set('status', filters.status);
     if (filters?.key) params.set('key', filters.key);
     if (filters?.confirmedOnly !== undefined)
-      params.set('confirmedOnly', String(filters.confirmedOnly));
+      params.set('confirmed_only', String(filters.confirmedOnly));
     if (filters?.limit !== undefined)
       params.set('limit', String(filters.limit));
     if (filters?.offset !== undefined)

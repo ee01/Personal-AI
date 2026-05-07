@@ -18,8 +18,10 @@ import {
 import { FallbackChatGPTClient } from './explorer/sources/FallbackChatGPTClient.js';
 import { WebpageMcpChatGPTClient } from './explorer/sources/WebpageMcpChatGPTClient.js';
 import { DoubaoChatSource } from './explorer/sources/DoubaoChatSource.js';
+import { FallbackDoubaoSource } from './explorer/sources/FallbackDoubaoSource.js';
 import { WebpageMcpDoubaoSource } from './explorer/sources/WebpageMcpDoubaoSource.js';
 import { WebpageMcpHost } from './explorer/transports/WebpageMcpHost.js';
+import { FallbackDoubaoBroadcast } from './transports/FallbackDoubaoBroadcast.js';
 import { WebpageMcpDoubaoBroadcast } from './transports/WebpageMcpDoubaoBroadcast.js';
 import { createBridgeServer } from './server.js';
 import { BridgeMemoryServiceClient } from './memoryServiceClient.js';
@@ -60,51 +62,13 @@ async function main(): Promise<void> {
   const mcpHost = WebpageMcpHost.getInstance();
   const browser = new DoubaoBrowserSession(config);
   const mcpBroadcast = new WebpageMcpDoubaoBroadcast(mcpHost);
-
-  // Thin facade: routes Doubao broadcast operations to the configured transport.
-  const broadcastAdapter = {
-    ensureStarted: () => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp' ? mcpBroadcast.ensureStarted() : browser.ensureStarted();
-    },
-    openLogin: () => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp' ? mcpBroadcast.openLogin() : browser.openLogin();
-    },
-    openThread: (url: string) => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp' ? mcpBroadcast.openThread(url) : browser.openThread(url);
-    },
-    collectConversationSnapshots: () => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp'
-        ? mcpBroadcast.collectConversationSnapshots()
-        : browser.collectConversationSnapshots();
-    },
-    sendTranscript: (transcript: string, threadUrl?: string, options?: import('./browserSession.js').BrowserSendOptions) => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp'
-        ? mcpBroadcast.sendTranscript(transcript, threadUrl, options)
-        : browser.sendTranscript(transcript, threadUrl, options);
-    },
-    probeAuthStatus: () => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp' ? mcpBroadcast.probeAuthStatus() : browser.probeAuthStatus();
-    },
-    findThreadByTitle: (title: string) => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp'
-        ? mcpBroadcast.findThreadByTitle(title)
-        : browser.findThreadByTitle(title);
-    },
-    status: () => {
-      const t = settingsStore.getSettings().explorer.doubao.broadcastTransport;
-      return t === 'webpage_mcp' ? mcpBroadcast.status() : browser.status();
-    },
-    close: async () => {
-      await Promise.all([mcpBroadcast.close(), browser.close()]);
-    },
-  };
+  const broadcastAdapter = new FallbackDoubaoBroadcast({
+    getTransport: () =>
+      settingsStore.getSettings().explorer.doubao.broadcastTransport,
+    webpageMcpClient: mcpBroadcast,
+    playwrightClient: browser,
+    log: (message, error) => console.warn(message, error),
+  });
 
   const version = packageJson.version || '0.0.0';
   const service = new DoubaoBridgeService(config, store, broadcastAdapter, version);
@@ -113,28 +77,13 @@ async function main(): Promise<void> {
   const rawMessageStore = new RawMessageStore(explorerDbFile);
   const cursorStore = new CursorStore(explorerCursorFile);
 
-  // Thin facade: picks the right Doubao exploration transport at call-time.
   const mcpDoubaoExplorer = new WebpageMcpDoubaoSource(mcpHost);
-  const doubaoExplorerClient = {
-    openLogin: () => {
-      const t = settingsStore.getSettings().explorer.doubao.transport;
-      return t === 'webpage_mcp'
-        ? mcpDoubaoExplorer.openLogin()
-        : browser.openLogin();
-    },
-    probeAuthStatus: () => {
-      const t = settingsStore.getSettings().explorer.doubao.transport;
-      return t === 'webpage_mcp'
-        ? mcpDoubaoExplorer.probeAuthStatus()
-        : browser.probeAuthStatus();
-    },
-    collectConversationSnapshots: () => {
-      const t = settingsStore.getSettings().explorer.doubao.transport;
-      return t === 'webpage_mcp'
-        ? mcpDoubaoExplorer.collectConversationSnapshots()
-        : browser.collectConversationSnapshots();
-    },
-  };
+  const doubaoExplorerClient = new FallbackDoubaoSource({
+    getTransport: () => settingsStore.getSettings().explorer.doubao.transport,
+    webpageMcpClient: mcpDoubaoExplorer,
+    playwrightClient: browser,
+    log: (message, error) => console.warn(message, error),
+  });
 
   const doubaoSource = new DoubaoChatSource(
     settingsStore,

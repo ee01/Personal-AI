@@ -39,6 +39,35 @@ const storage: Record<string, any> = {
 const ingests: any[] = [];
 const botMessages: any[] = [];
 const relationshipPrompts: string[] = [];
+let runtimeStatusItems: any[] = [
+  {
+    template: {
+      id: 'template-before-followup',
+      title: 'SDK migration followup',
+      questionTemplate: 'migration guide 发布了吗？',
+      targetType: 'group',
+      targetRef: 'sdk-updates',
+      enabled: true,
+      syncState: 'synced',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    latestSession: {
+      id: 'session-before-followup',
+      templateId: 'template-before-followup',
+      targetType: 'group',
+      targetRef: 'sdk-updates',
+      targetResolvedLabel: 'SDK Updates',
+      renderedQuestion: 'migration guide 发布了吗？',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      followupCount: 0,
+      maxFollowup: 2,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+  },
+];
 
 function installChromeMock() {
   const local = {
@@ -99,36 +128,8 @@ function installFetchMock() {
     ) {
       return new Response(
         JSON.stringify({
-          items: [
-            {
-              template: {
-                id: 'template-before-followup',
-                title: 'SDK migration followup',
-                questionTemplate: 'migration guide 发布了吗？',
-                targetType: 'group',
-                targetRef: 'sdk-updates',
-                enabled: true,
-                syncState: 'synced',
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              },
-              latestSession: {
-                id: 'session-before-followup',
-                templateId: 'template-before-followup',
-                targetType: 'group',
-                targetRef: 'sdk-updates',
-                targetResolvedLabel: 'SDK Updates',
-                renderedQuestion: 'migration guide 发布了吗？',
-                status: 'waiting_reply',
-                requiresApproval: false,
-                followupCount: 0,
-                maxFollowup: 2,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              },
-            },
-          ],
-          total: 1,
+          items: runtimeStatusItems,
+          total: runtimeStatusItems.length,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
@@ -170,7 +171,28 @@ function installFetchMock() {
     }
 
     if (url.startsWith('http://mock-ollama/api/generate')) {
-      if (!prompt) {
+      if (prompt.includes('<message_group')) {
+        if (prompt.includes('low confidence blocker maybe mentioned')) {
+          return new Response(
+            JSON.stringify({
+              response: JSON.stringify({
+                data: [
+                  {
+                    shouldNotify: true,
+                    shouldStore: true,
+                    matched_rule: '[RULE_REF:manual:manual-1]',
+                    matched_rule_refs: ['manual:manual-1'],
+                    matched_rule_ids: [],
+                    summary: 'possible manual blocker match',
+                    confidence: 0.42,
+                  },
+                ],
+              }),
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
         return new Response(
           JSON.stringify({
             response: JSON.stringify({
@@ -237,6 +259,21 @@ function installFetchMock() {
       }
 
       if (prompt.includes('分析以下消息的重要性')) {
+        if (prompt.includes('architecture decision should be remembered')) {
+          return new Response(
+            JSON.stringify({
+              response: JSON.stringify({
+                isImportant: true,
+                shouldStore: true,
+                priority: 'high',
+                reason: 'architecture decision should be preserved',
+                tags: ['architecture'],
+              }),
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
         return new Response(
           JSON.stringify({
             response: JSON.stringify({
@@ -293,6 +330,13 @@ async function main() {
     'outreach:session-before-followup',
   ]);
   assert.equal(relationshipPrompts.length, 1);
+  assert.equal(result.agentWorkflowTrace?.length, 6);
+  assert.equal(result.agentWorkflowTrace?.[0].agentId, 'entityRecognizer');
+  assert.equal(result.agentWorkflowTrace?.[1].agentId, 'notificationJudge');
+  assert.match(
+    result.agentWorkflowTrace?.[1].outputSummary || '',
+    /outreach:session-before-followup/,
+  );
   assert.match(relationshipPrompts[0], /James Lee, Priya Shah/);
   assert.deepEqual(result.enrichedData.relationships, [
     {
@@ -308,7 +352,141 @@ async function main() {
     ingests[0].metadata.summary,
     'system-only outreach evidence matched',
   );
+  assert.equal(ingests[0].metadata.agentWorkflowTrace.length, 6);
   assert.equal(botMessages.length, 0);
+
+  storage.concernedItems = [
+    {
+      id: 'outreach:legacy-system-item',
+      source: 'outreach',
+      text: 'legacy internal item that must be ignored',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+  relationshipPrompts.length = 0;
+
+  const systemOnlyResult = await processNewMessage({
+    sender: 'Priya Shah',
+    team_id: 'team-1',
+    team_name: 'SDK Updates',
+    content: 'migration guide 发布了，后续迁移可以开始',
+    datetime: '2026-04-15T00:05:00.000Z',
+  });
+
+  assert.equal(systemOnlyResult.shouldStore, true);
+  assert.equal(systemOnlyResult.shouldNotify, false);
+  assert.deepEqual(systemOnlyResult.matchedRuleRefs, [
+    'outreach:session-before-followup',
+  ]);
+  assert.equal(ingests.length, 1);
+  assert.equal(botMessages.length, 0);
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const relevanceOnlyResult = await processNewMessage({
+    sender: 'Morgan Chen',
+    team_id: 'team-2',
+    team_name: 'Architecture',
+    content: 'architecture decision should be remembered for the API split',
+    datetime: '2026-04-15T00:10:00.000Z',
+  });
+
+  assert.equal(relevanceOnlyResult.shouldStore, true);
+  assert.equal(relevanceOnlyResult.shouldNotify, false);
+  assert.deepEqual(relevanceOnlyResult.matchedRuleRefs, []);
+  assert.equal(
+    relevanceOnlyResult.storageReview?.reasonSource,
+    'relevanceJudgment',
+  );
+  assert.equal(
+    relevanceOnlyResult.storageReview?.summary,
+    'architecture decision should be preserved',
+  );
+  assert.equal(ingests.length, 1);
+  assert.equal(
+    ingests[0].metadata.summary,
+    'architecture decision should be preserved',
+  );
+  assert.equal(
+    ingests[0].metadata.storageReview.reasonSource,
+    'relevanceJudgment',
+  );
+  assert.equal(ingests[0].metadata.storageReview.traceStatus, 'complete');
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [
+    {
+      id: 'manual-1',
+      text: 'Only notify me when blocker is mentioned',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const lowConfidenceManualResult = await processNewMessage({
+    sender: 'Avery Wong',
+    team_id: 'team-3',
+    team_name: 'Escalations',
+    content: 'low confidence blocker maybe mentioned',
+    datetime: '2026-04-15T00:20:00.000Z',
+  });
+
+  assert.equal(lowConfidenceManualResult.shouldStore, true);
+  assert.equal(lowConfidenceManualResult.shouldNotify, false);
+  assert.equal(lowConfidenceManualResult.notificationReview?.required, true);
+  assert.equal(
+    lowConfidenceManualResult.notificationReview?.reason,
+    'low_confidence_notification',
+  );
+  assert.deepEqual(lowConfidenceManualResult.matchedRuleRefs, [
+    'manual:manual-1',
+  ]);
+  assert.equal(ingests.length, 1);
+  assert.equal(botMessages.length, 0);
+  assert.equal(ingests[0].metadata.notificationReview.required, true);
+  assert.equal(
+    ingests[0].metadata.storageReview.notificationReviewRequired,
+    true,
+  );
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [];
+  storage.customAgents = [
+    {
+      id: 'legacyInvalidToolAgent',
+      name: 'Legacy Invalid Tool Agent',
+      description: 'Old custom agent with a removed tool',
+      enabled: true,
+      priority: 55,
+      tools: ['removedWorkflowTool'],
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const invalidToolResult = await processNewMessage({
+    sender: 'Taylor Kim',
+    team_id: 'team-4',
+    team_name: 'General',
+    content: 'routine sync note without a storage signal',
+    datetime: '2026-04-15T00:30:00.000Z',
+  });
+  const invalidToolStep = invalidToolResult.agentWorkflowTrace?.find(
+    (step) => step.agentId === 'legacyInvalidToolAgent',
+  );
+  assert.equal(invalidToolStep?.status, 'skipped');
+  assert.equal(invalidToolStep?.tools?.[0]?.status, 'skipped');
+  assert.match(invalidToolStep?.outputSummary || '', /tool is not registered/);
+  assert.equal(ingests.length, 0);
+  delete storage.customAgents;
 
   console.log('verify-memory-entry-agent-workflow: ok');
 }

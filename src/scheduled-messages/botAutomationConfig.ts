@@ -38,6 +38,19 @@ export function hasTimelineSyncRule(config?: Partial<SheetConfig> | null): boole
   return Boolean(getTimelineSyncRule(config)?.ruleId);
 }
 
+export function getJiraAutomationRuleUrl(rule?: Partial<BotAutomationRule> | null): string {
+  const jiraUrl = rule?.jiraUrl?.trim();
+  const projectKey = rule?.projectKey?.trim();
+  const ruleId = rule?.ruleId?.toString().trim();
+
+  if (!jiraUrl || !projectKey || !ruleId) {
+    return '';
+  }
+
+  const jiraBaseUrl = jiraUrl.replace(/\/+$/, '');
+  return `${jiraBaseUrl}/jira/software/c/projects/${encodeURIComponent(projectKey)}/automation#/rule/${encodeURIComponent(ruleId)}`;
+}
+
 export function normalizeSheetConfig<T extends Partial<SheetConfig> | null | undefined>(config: T): T {
   if (!config) {
     return config;

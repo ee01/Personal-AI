@@ -118,7 +118,7 @@ const askBodySchema = {
     includeEvidence: { type: 'boolean' as const },
     scope: {
       type: 'string' as const,
-      enum: ['work', 'personal', 'both'],
+      enum: ['work', 'personal', 'both', 'all'],
     },
   },
   additionalProperties: false,

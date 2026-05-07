@@ -23,6 +23,7 @@ const TIER_BADGE_MAP: Record<
   MeetingPilotASRTier,
   MeetingPilotTierStatus['badge']
 > = {
+  ringcentral_transcript: 'RC Transcript',
   web_speech: 'On-Device',
   desktop_whisper: 'Local ASR',
   cloud: 'Cloud',

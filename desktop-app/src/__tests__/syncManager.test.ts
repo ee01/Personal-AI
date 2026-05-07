@@ -133,8 +133,9 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
     bridgeService as any,
   );
 
-  await manager.runNow('reminder_sync');
+  const result = await manager.runNow('reminder_sync');
 
+  assert.deepEqual(result, { status: 'succeeded' });
   assert.deepEqual(calls, [
     'render:todo_sync',
     'bridge:todo-memo',
@@ -207,8 +208,9 @@ test('runNow falls back to reminder_sync when todo_sync is not supported', async
     bridgeService as any,
   );
 
-  await manager.runNow('reminder_sync');
+  const result = await manager.runNow('reminder_sync');
 
+  assert.deepEqual(result, { status: 'succeeded' });
   assert.deepEqual(calls, ['render:reminder_sync', 'bridge:todo-memo']);
 });
 
@@ -295,8 +297,9 @@ test('runNow skips placeholder todo and notice digests when itemCount is 0', asy
     bridgeService as any,
   );
 
-  await manager.runNow('reminder_sync');
+  const result = await manager.runNow('reminder_sync');
 
+  assert.deepEqual(result, { status: 'skipped' });
   assert.deepEqual(calls, ['render:todo_sync', 'render:notice_sync']);
   assert.deepEqual(
     reportedJobs.map((job) => ({
@@ -314,6 +317,219 @@ test('runNow skips placeholder todo and notice digests when itemCount is 0', asy
         id: 'job-notice_sync',
         status: 'skipped',
         errorMessage: 'No notices to sync',
+      },
+    ],
+  );
+});
+
+test('runNow reports failed todo delivery and surfaces the send error', async () => {
+  const calls: string[] = [];
+  const deliveryEvents: Array<{
+    sourceRef: string;
+    lane: string;
+    channel: string;
+    status: string;
+    error?: string;
+  }> = [];
+  const reportedJobs: Array<{
+    id: string;
+    payload: {
+      status: string;
+      errorMessage?: string;
+    };
+  }> = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    getProviderCapabilities: async () => ({
+      provider: 'doubao',
+      supportedScenarios: ['todo_sync', 'notice_sync', 'reminder_sync'],
+    }),
+    renderContextPackage: async ({ scenario }: { scenario: string }) => {
+      calls.push(`render:${scenario}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [
+          {
+            title: scenario === 'notice_sync' ? 'Notice Digest' : 'Todo Digest',
+            kind: scenario === 'notice_sync' ? 'notice_digest' : 'todo_digest',
+            bodyMd:
+              scenario === 'notice_sync'
+                ? '- No notices.'
+                : '- 跟进周报',
+            itemCount: scenario === 'notice_sync' ? 0 : 1,
+            sourceRefs:
+              scenario === 'notice_sync'
+                ? []
+                : ['proposed_action:action-failed'],
+          },
+        ],
+        syncJob: {
+          id: `job-${scenario}`,
+          status: 'queued',
+        },
+      };
+    },
+    reportSyncJob: async (_provider: string, id: string, payload: any) => {
+      reportedJobs.push({ id, payload });
+    },
+    reportNotificationDelivery: async (
+      events: Array<{
+        sourceRef: string;
+        lane: string;
+        channel: string;
+        status: string;
+        error?: string;
+      }>,
+    ) => {
+      deliveryEvents.push(...events);
+    },
+  };
+  const bridgeService = {
+    syncTodosAsMemo: async () => {
+      calls.push('bridge:todo-memo');
+      return {
+        accepted: false,
+        kind: 'todo_sync',
+        targetBindingType: 'mobile_context',
+        transcript: '',
+        sentAt: new Date().toISOString(),
+        error: 'Doubao challenge detected before send',
+      };
+    },
+    syncNotices: async () => {
+      calls.push('bridge:notice');
+      return {
+        accepted: true,
+        kind: 'notice_sync',
+        targetBindingType: 'mobile_context',
+        transcript: '',
+        sentAt: new Date().toISOString(),
+      };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  await assert.rejects(
+    () => manager.runNow('reminder_sync'),
+    /Doubao challenge detected before send/,
+  );
+
+  assert.deepEqual(calls, [
+    'render:todo_sync',
+    'bridge:todo-memo',
+    'render:notice_sync',
+  ]);
+  assert.deepEqual(deliveryEvents, [
+    {
+      sourceRef: 'proposed_action:action-failed',
+      lane: 'todo',
+      channel: 'doubao',
+      status: 'failed',
+      error: 'Doubao challenge detected before send',
+    },
+  ]);
+  assert.deepEqual(
+    reportedJobs.map((job) => ({
+      id: job.id,
+      status: job.payload.status,
+      errorMessage: job.payload.errorMessage,
+    })),
+    [
+      {
+        id: 'job-todo_sync',
+        status: 'failed',
+        errorMessage: 'Doubao challenge detected before send',
+      },
+      {
+        id: 'job-notice_sync',
+        status: 'skipped',
+        errorMessage: 'No notices to sync',
+      },
+    ],
+  );
+});
+
+test('runNow skips placeholder mobile briefing when itemCount is 0', async () => {
+  const calls: string[] = [];
+  const reportedJobs: Array<{
+    id: string;
+    payload: {
+      status: string;
+      errorMessage?: string;
+    };
+  }> = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    renderContextPackage: async ({ scenario }: { scenario: string }) => {
+      calls.push(`render:${scenario}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [
+          {
+            title: 'Active Focus Digest',
+            kind: 'active_focus_digest',
+            bodyMd: '- No recent high-signal memories found in the freshness window.',
+            itemCount: 0,
+            sourceRefs: [],
+          },
+        ],
+        syncJob: {
+          id: `job-${scenario}`,
+          status: 'queued',
+        },
+      };
+    },
+    reportSyncJob: async (_provider: string, id: string, payload: any) => {
+      reportedJobs.push({ id, payload });
+    },
+  };
+  const bridgeService = {
+    syncMobileBriefing: async () => {
+      calls.push('bridge:mobile');
+      return {
+        accepted: true,
+        kind: 'mobile_briefing',
+        targetBindingType: 'mobile_context',
+        transcript: '',
+        sentAt: new Date().toISOString(),
+      };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  const result = await manager.runNow('mobile_briefing');
+
+  assert.deepEqual(result, { status: 'skipped' });
+  assert.deepEqual(calls, ['render:mobile_briefing']);
+  assert.deepEqual(
+    reportedJobs.map((job) => ({
+      id: job.id,
+      status: job.payload.status,
+      errorMessage: job.payload.errorMessage,
+    })),
+    [
+      {
+        id: 'job-mobile_briefing',
+        status: 'skipped',
+        errorMessage: 'No recent memory highlights to sync',
       },
     ],
   );

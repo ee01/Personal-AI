@@ -6,11 +6,75 @@
  * 添加新消息类型时只需在 messageHandlers 中添加一个属性即可。
  */
 
-import { getMemoryServiceClient } from '../services/MemoryServiceClient';
+import {
+  getMemoryServiceClient,
+  type RecallItem,
+} from '../services/MemoryServiceClient';
 
 // Get the singleton client instance
 const client = getMemoryServiceClient();
 let testMeetingsFixture: any = null;
+
+const EMPTY_SEARCH_RESULT_DETAILS = {
+  conversations: [],
+  webpages: [],
+  resources: [],
+  projects: [],
+  people: [],
+  topics: [],
+  jiraTickets: [],
+  cooccurringEntities: [],
+};
+
+function getRecallItemTitle(item: RecallItem): string {
+  const title =
+    item.displayTitle ||
+    item.sourceTitle ||
+    item.entity?.name ||
+    item.source ||
+    item.previewText ||
+    item.content;
+  return String(title || item.id).slice(0, 80);
+}
+
+function getRecallItemDescription(item: RecallItem): string {
+  return (
+    item.previewText ||
+    item.displayText ||
+    item.entity?.description ||
+    item.content ||
+    ''
+  );
+}
+
+function mapRecallItemToSearchResult(item: RecallItem) {
+  const metadata = item.metadata || {};
+  const entityType =
+    item.type === 'entity'
+      ? item.entity?.type || String(metadata.entityType || 'entity')
+      : item.type;
+
+  return {
+    ...(metadata || {}),
+    id: item.id,
+    name: getRecallItemTitle(item),
+    type: entityType,
+    recallType: item.type,
+    description: getRecallItemDescription(item),
+    relevanceScore: item.score,
+    scope: item.scope || metadata.scope,
+    source: item.source || metadata.source,
+    sourceUrl: item.sourceUrl || metadata.sourceUrl,
+    sourceTitle: item.sourceTitle || metadata.sourceTitle,
+    displayTitle: item.displayTitle,
+    displayText: item.displayText,
+    previewText: item.previewText,
+    exploreLink: item.exploreLink,
+    timestamp: item.timestamp,
+    channels: Array.isArray(metadata.channels) ? metadata.channels : [],
+    recentDataDetails: { ...EMPTY_SEARCH_RESULT_DETAILS },
+  };
+}
 
 /**
  * 格式化时间为相对时间（预留功能）
@@ -128,32 +192,19 @@ const messageHandlers: Record<string, MessageHandler> = {
 
   SEARCH_ENTITIES: async (request) => {
     try {
-      const { query, entityType, limit = 30 } = request;
+      const { query, entityType, scope = 'work', limit = 30 } = request;
       const recallResult = await client.recall(query, {
         topK: limit,
-        channels: ['vector'],
+        channels: entityType ? ['graph', 'vector', 'fts'] : ['vector', 'fts'],
         entityTypes: entityType ? [entityType] : undefined,
+        scope,
+        includeMetadata: true,
+        presentationHint: 'compact',
       });
 
-      // Map recall items to the entity shape expected by the frontend UI
-      const entitiesWithDetails = (recallResult.items || []).map((item) => ({
-        id: item.id,
-        name: item.source || item.content?.slice(0, 40),
-        type: item.type,
-        description: item.content,
-        relevanceScore: item.score,
-        ...(item.metadata || {}),
-        recentDataDetails: {
-          conversations: [],
-          webpages: [],
-          resources: [],
-          projects: [],
-          people: [],
-          topics: [],
-          jiraTickets: [],
-          cooccurringEntities: [],
-        },
-      }));
+      const entitiesWithDetails = (recallResult.items || []).map(
+        mapRecallItemToSearchResult,
+      );
 
       return {
         success: true,

@@ -182,7 +182,10 @@ const updateProfileItemBodySchema = {
     salienceScore: { type: 'number' as const, minimum: 0, maximum: 1 },
     validFrom: { type: 'number' as const },
     validTo: { type: 'number' as const },
-    status: { type: 'string' as const, enum: ['active', 'superseded', 'retracted', 'archived'] },
+    status: {
+      type: 'string' as const,
+      enum: ['active', 'pending_confirm', 'superseded', 'retracted', 'archived'],
+    },
   },
   additionalProperties: false,
 };
@@ -321,7 +324,7 @@ export async function profileRoutes(
       conditions.push('status = ?');
       params.push(status);
     } else {
-      conditions.push("status = 'active'");
+      conditions.push("status IN ('active', 'pending_confirm')");
     }
 
     if (key) {
@@ -367,6 +370,7 @@ export async function profileRoutes(
 
       const fingerprint = contentHash(itemKey + ':' + itemValue.toLowerCase().trim());
       const currentTime = now();
+      const initialScore = confidence ?? 1.0;
 
       // Check for duplicate fingerprint among active items
       const existing = db
@@ -387,14 +391,15 @@ export async function profileRoutes(
           (id, item_type, item_key, item_value, evidence_refs, source_kind, confidence,
            user_confirmed, status, salience_score, mention_count, last_seen,
            valid_from, valid_to, created_at, updated_at, fingerprint)
-         VALUES (?, ?, ?, ?, ?, 'explicit', ?, 1, 'active', 0.5, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'explicit', ?, 1, 'active', ?, 1, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         itemType,
         itemKey,
         itemValue,
         evidenceRefs ? JSON.stringify(evidenceRefs) : null,
-        confidence ?? 1.0,
+        initialScore,
+        initialScore,
         currentTime,
         validFrom ?? null,
         validTo ?? null,
@@ -436,10 +441,26 @@ export async function profileRoutes(
       const params: unknown[] = [];
 
       if (body.itemValue !== undefined) {
+        const newFingerprint = contentHash(existing.item_key + ':' + body.itemValue.toLowerCase().trim());
+        const duplicate = db
+          .prepare(
+            `SELECT id FROM user_profile_items
+             WHERE fingerprint = ?
+               AND id != ?
+               AND status IN ('active', 'pending_confirm')
+             LIMIT 1`,
+          )
+          .get(newFingerprint, id) as { id: string } | undefined;
+
+        if (duplicate) {
+          return reply.status(409).send({
+            error: 'A profile item with the same key and value already exists',
+            existingId: duplicate.id,
+          });
+        }
+
         updates.push('item_value = ?');
         params.push(body.itemValue);
-        // Recompute fingerprint when value changes
-        const newFingerprint = contentHash(existing.item_key + ':' + body.itemValue.toLowerCase().trim());
         updates.push('fingerprint = ?');
         params.push(newFingerprint);
       }
@@ -536,7 +557,7 @@ export async function profileRoutes(
 
       const currentTime = now();
       db.prepare(
-        'UPDATE user_profile_items SET user_confirmed = 1, updated_at = ? WHERE id = ?',
+        "UPDATE user_profile_items SET user_confirmed = 1, status = 'active', updated_at = ? WHERE id = ?",
       ).run(currentTime, id);
 
       const row = db

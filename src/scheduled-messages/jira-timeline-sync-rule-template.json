@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.3.1",
-    "lastUpdated": "2026-03-18",
+    "version": "1.3.4",
+    "lastUpdated": "2026-05-04",
     "description": "Personal AI Scheduled Messages Timeline Sync Rule Template"
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",

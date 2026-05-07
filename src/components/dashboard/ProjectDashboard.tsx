@@ -1,6 +1,16 @@
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { buildProjectHealthSummary } from '../../utils/dashboardIntegration';
+import {
+  buildMilestoneClassToken,
+  buildMilestoneMarkerText,
+  buildProjectFocusSummary,
+  buildProjectHealthSummary,
+  buildProjectStatusEvidenceItems,
+  buildProjectStatusUpdateDraft,
+  compareProjectsByDashboardPriority,
+  type ProjectSyncReadiness,
+  type ProjectStatusEvidenceItem,
+} from '../../utils/dashboardIntegration';
 import { getEnvConfig, EnvConfigType } from '../../utils';
 
 // 新仪表盘数据结构（与 docs/demo/项目进展图-缩放版.html 对齐）
@@ -29,14 +39,119 @@ interface FishboneProject {
   platformConfig?: PlatformKey[]; // 默认 sdk/ios/android/qa，可选 dev
 }
 
+type AddTaskState = {
+  projectId: string;
+  position: number;
+  milestoneLabel?: string;
+  milestoneDate?: string;
+};
+
+type TaskAttention = {
+  task: FishboneTask;
+  level: 'blocked' | 'overdue' | 'due-soon';
+  label: string;
+  detail: string;
+};
+
+const clampPercent = (value: number, min = 10, max = 90) => {
+  if (!Number.isFinite(value)) return 50;
+  return Math.max(min, Math.min(max, value));
+};
+
+const buildTaskPositionKey = (projectId: string, taskId: string) => `${projectId}::${taskId}`;
+
+const normalizeStatusToken = (status: string | undefined) =>
+  String(status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+
+const buildStatusClassToken = (status: string | undefined) => normalizeStatusToken(status) || 'unknown';
+
+const isCompletedTask = (task: FishboneTask) => {
+  const token = normalizeStatusToken(task.status);
+  return token === 'done' || token === 'closed' || token === 'complete' || token === 'completed';
+};
+
+const parseDateOnly = (date: string | undefined): Date | null => {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const parsed = new Date(`${date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getDaysUntil = (date: string | undefined, now = new Date()): number | null => {
+  const parsed = parseDateOnly(date);
+  if (!parsed) return null;
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+};
+
+const buildProjectAttentionTasks = (project: FishboneProject, now = new Date()): TaskAttention[] => {
+  const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+
+  return tasks
+    .map((task): TaskAttention | null => {
+      if (normalizeStatusToken(task.status).includes('blocked')) {
+        return {
+          task,
+          level: 'blocked',
+          label: '阻塞',
+          detail: task.eta ? `ETA ${task.eta}` : '需要明确处理人',
+        };
+      }
+
+      if (isCompletedTask(task)) return null;
+
+      const days = getDaysUntil(task.eta, now);
+      if (days === null) return null;
+
+      if (days < 0) {
+        return {
+          task,
+          level: 'overdue',
+          label: '过期',
+          detail: `已超 ${Math.abs(days)} 天`,
+        };
+      }
+
+      if (days <= 7) {
+        return {
+          task,
+          level: 'due-soon',
+          label: '近 7 天',
+          detail: days === 0 ? '今天到期' : `${days} 天后到期`,
+        };
+      }
+
+      return null;
+    })
+    .filter((item): item is TaskAttention => Boolean(item))
+    .sort((a, b) => {
+      const levelWeight = { blocked: 0, overdue: 1, 'due-soon': 2 };
+      const levelDelta = levelWeight[a.level] - levelWeight[b.level];
+      if (levelDelta !== 0) return levelDelta;
+      return (a.task.eta || '').localeCompare(b.task.eta || '');
+    })
+    .slice(0, 4);
+};
+
 const ProjectDashboard: React.FC = () => {
   const [projects, setProjects] = useState<FishboneProject[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [env, setEnv] = useState<EnvConfigType | null>(null);
   const [actionStatus, setActionStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [statusDraftPreview, setStatusDraftPreview] = useState<{
+    project: FishboneProject;
+    draft: string;
+    generatedDraft: string;
+    evidence: ProjectStatusEvidenceItem[];
+    lastGeneratedAt: Date;
+  } | null>(null);
+  const [syncReadiness, setSyncReadiness] = useState<ProjectSyncReadiness | null>(null);
+  const [syncPanelOpen, setSyncPanelOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // 新增项目入口
@@ -58,33 +173,75 @@ const ProjectDashboard: React.FC = () => {
   ]);
 
   // 详情弹窗
-  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [detailTaskRef, setDetailTaskRef] = useState<{ projectId: string; taskId: string } | null>(null);
   
   // 任务添加功能
-  const [showAddTask, setShowAddTask] = useState<{projectId: string; position: number} | null>(null);
+  const [showAddTask, setShowAddTask] = useState<AddTaskState | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskType, setNewTaskType] = useState<'dep'|'task'|'design'>('task');
+  const [newTaskEta, setNewTaskEta] = useState('');
   
   // 拖拽功能状态
   const [dragState, setDragState] = useState<{
     isDragging: boolean;
     draggedTask: string | null;
+    projectId: string | null;
     startX: number;
     startY: number;
     startPosition: number;
     containerWidth: number;
     mouseDownTime: number;
-  }>({ isDragging: false, draggedTask: null, startX: 0, startY: 0, startPosition: 0, containerWidth: 0, mouseDownTime: 0 });
+  }>({ isDragging: false, draggedTask: null, projectId: null, startX: 0, startY: 0, startPosition: 0, containerWidth: 0, mouseDownTime: 0 });
   
   const [taskPositions, setTaskPositions] = useState<Record<string, number>>({});
+  const dragAnchorRef = useRef<number | null>(null);
+  const dragStartedRef = useRef(false);
 
   const selectedTask = useMemo(() => {
-    for (const p of projects) {
-      const t = p.tasks.find(t => t.id === detailTaskId);
-      if (t) return { project: p, task: t };
-    }
+    if (!detailTaskRef) return null;
+    const project = projects.find(p => p.id === detailTaskRef.projectId);
+    const task = project?.tasks.find(t => t.id === detailTaskRef.taskId);
+    if (project && task) return { project, task };
     return null;
-  }, [projects, detailTaskId]);
+  }, [projects, detailTaskRef]);
+
+  const dashboardNow = useMemo(() => lastRefresh, [lastRefresh]);
+
+  const dashboardStats = useMemo(() => projects.reduce(
+    (acc, project) => {
+      const health = buildProjectHealthSummary(project, dashboardNow);
+      acc.totalProjects += 1;
+      acc.totalTasks += health.totalTasks;
+      acc.completedTasks += health.completedTasks;
+      acc.blockedTasks += health.blockedTasks;
+      acc.overdueTasks += health.overdueTasks;
+      acc.dueSoonTasks += health.dueSoonTasks;
+      if (health.state === 'off-track') acc.offTrackProjects += 1;
+      if (health.state === 'at-risk') acc.atRiskProjects += 1;
+      return acc;
+    },
+    {
+      totalProjects: 0,
+      totalTasks: 0,
+      completedTasks: 0,
+      blockedTasks: 0,
+      overdueTasks: 0,
+      dueSoonTasks: 0,
+      offTrackProjects: 0,
+      atRiskProjects: 0,
+    },
+  ), [projects, dashboardNow]);
+
+  const focusSummary = useMemo(
+    () => buildProjectFocusSummary(projects, { now: dashboardNow, maxItems: 8 }),
+    [projects, dashboardNow],
+  );
+  const focusItems = focusSummary.visibleItems;
+
+  const prioritizedProjects = useMemo(
+    () => [...projects].sort((a, b) => compareProjectsByDashboardPriority(a, b, dashboardNow)),
+    [projects, dashboardNow],
+  );
 
   useEffect(() => {
     getEnvConfig().then(setEnv).catch(() => setEnv(null));
@@ -107,22 +264,58 @@ const ProjectDashboard: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const loadProjects = async () => {
-    setIsLoading(true);
+  const copyTextToClipboard = async (text: string) => {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        // Fall back to the legacy copy path below when browser permission blocks Clipboard API.
+      }
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    if (!copied) {
+      throw new Error('复制到剪贴板失败');
+    }
+  };
+
+  const loadProjects = async (options?: { silent?: boolean }) => {
+    const showLoadingState = !options?.silent;
+    if (showLoadingState) {
+      setIsLoading(true);
+    }
     try {
       const res = await chrome.runtime.sendMessage({ type: 'GET_PROJECT_DATA' });
       if (res?.success) {
         setProjects(res.projects || []);
         setLastRefresh(new Date());
+      } else if (!options?.silent) {
+        throw new Error(res?.error || '刷新项目数据失败');
+      }
+    } catch (error) {
+      if (!options?.silent) {
+        showActionStatus('error', error instanceof Error ? error.message : '刷新项目数据失败');
       }
     } finally {
-      setIsLoading(false);
+      if (showLoadingState) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     loadProjects();
-    const timer = setInterval(loadProjects, 30000);
+    const timer = setInterval(() => loadProjects({ silent: true }), 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -135,8 +328,8 @@ const ProjectDashboard: React.FC = () => {
     return start + step * index;
   };
 
-  const openDetail = (taskId: string) => setDetailTaskId(taskId);
-  const closeDetail = () => setDetailTaskId(null);
+  const openDetail = (projectId: string, taskId: string) => setDetailTaskRef({ projectId, taskId });
+  const closeDetail = () => setDetailTaskRef(null);
 
   const updateTask = async (projectId: string, itemType: 'dep'|'task'|'design', taskId: string, changes: any) => {
     // 乐观更新
@@ -145,11 +338,15 @@ const ProjectDashboard: React.FC = () => {
       tasks: p.tasks.map(t => t.id === taskId ? { ...t, ...changes } : t)
     })));
     try {
-      await chrome.runtime.sendMessage({
+      const response = await chrome.runtime.sendMessage({
         type: 'UPDATE_PROJECT_ITEM', projectId, itemType, itemId: taskId, changes,
         userContext: { timestamp: Date.now(), source: 'dashboard_edit' }
       });
-    } catch {
+      if (!response?.success) {
+        throw new Error(response?.error || '保存任务失败');
+      }
+    } catch (error) {
+      showActionStatus('error', error instanceof Error ? error.message : '保存任务失败');
       loadProjects();
     }
   };
@@ -171,22 +368,20 @@ const ProjectDashboard: React.FC = () => {
   const handleSuggest = async () => {
     setSuggesting(true);
     try {
-      // 使用 MemoryServiceClient 获取项目建议
-      const { getMemoryServiceClient } = await import('../../services/MemoryServiceClient');
-      const client = getMemoryServiceClient();
-      const projectResult = await client.getEntities('Project');
+      const response = await chrome.runtime.sendMessage({
+        type: 'SUGGEST_PROJECTS',
+        question: newProjectPrompt.trim() || '建议项目',
+      });
 
-      // 按项目名称长度倒序排列（可能代表信息量）
-      const sortedProjects = (projectResult.items || [])
-        .map((p: any) => p.name)
-        .filter((name: string) => name && name.trim().length > 0)
-        .sort((a: string, b: string) => b.length - a.length)
-        .slice(0, 8);
-      
-      setSuggestions(sortedProjects);
+      if (!response?.success) {
+        throw new Error(response?.error || '获取项目建议失败');
+      }
+
+      setSuggestions(Array.isArray(response.suggestions) ? response.suggestions : []);
     } catch (error) {
       console.error('获取项目建议失败:', error);
       setSuggestions([]);
+      showActionStatus('error', error instanceof Error ? error.message : '获取项目建议失败');
     } finally {
       setSuggesting(false);
     }
@@ -205,21 +400,25 @@ const ProjectDashboard: React.FC = () => {
 
   const handleCreateProject = async () => {
     const platformList = (Object.keys(platformConfig) as PlatformKey[]).filter(k => platformConfig[k]);
-    const milestoneList = milestones.filter(m => m.label.trim() && m.date).map(m => ({
+    const milestoneList = milestones.filter(m => m.label.trim()).map(m => ({
       id: `milestone-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       label: m.label.trim(),
-      date: m.date
+      date: m.date || undefined
     }));
     
-    const res = await chrome.runtime.sendMessage({
-      type: 'ADD_PROJECT',
-      name: newProjectName.trim(),
-      description: newProjectDesc.trim(),
-      platformConfig: platformList,
-      milestones: milestoneList,
-      prompt: newProjectPrompt.trim()
-    });
-    if (res?.success) {
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'ADD_PROJECT',
+        name: newProjectName.trim(),
+        description: newProjectDesc.trim(),
+        platformConfig: platformList,
+        milestones: milestoneList,
+        prompt: newProjectPrompt.trim()
+      });
+      if (!res?.success) {
+        throw new Error(res?.error || '创建项目失败');
+      }
+
       setCreateModalOpen(false);
       setNewProjectName(''); setNewProjectDesc(''); setNewProjectPrompt(''); setSuggestions([]);
       setPlatformConfig({ sdk: true, ios: true, android: true, qa: true, dev: false });
@@ -228,7 +427,10 @@ const ProjectDashboard: React.FC = () => {
         { label: 'Beta', date: '' },
         { label: 'GA', date: '' }
       ]);
-      await loadProjects();
+      showActionStatus('success', `项目 ${res.project?.name || newProjectName.trim()} 已创建`);
+      await loadProjects({ silent: true });
+    } catch (error) {
+      showActionStatus('error', error instanceof Error ? error.message : '创建项目失败');
     }
   };
 
@@ -239,6 +441,7 @@ const ProjectDashboard: React.FC = () => {
 
   // 同步数据
   const handleSyncData = async () => {
+    setIsSyncing(true);
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'QUICK_ACTION',
@@ -246,14 +449,22 @@ const ProjectDashboard: React.FC = () => {
         data: { projectId: 'all' }
       });
 
-      if (response?.success) {
-        console.log('数据同步完成');
-        await loadProjects();
-      } else {
-        console.error('同步失败:', response?.error);
+      if (!response?.success) {
+        throw new Error(response?.error || '同步失败');
       }
+
+      if (response.result) {
+        setSyncReadiness(response.result as ProjectSyncReadiness);
+        setSyncPanelOpen(true);
+      }
+
+      showActionStatus('success', response.result?.summary || '数据源状态已检查');
+      await loadProjects({ silent: true });
     } catch (error) {
       console.error('同步数据失败:', error);
+      showActionStatus('error', error instanceof Error ? error.message : '同步数据失败');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -287,6 +498,42 @@ const ProjectDashboard: React.FC = () => {
       showActionStatus('error', error instanceof Error ? error.message : '导出报告失败');
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleOpenStatusDraftPreview = (project: FishboneProject) => {
+    const generatedDraft = buildProjectStatusUpdateDraft(project, { now: dashboardNow });
+    setStatusDraftPreview({
+      project,
+      draft: generatedDraft,
+      generatedDraft,
+      evidence: buildProjectStatusEvidenceItems(project, { now: dashboardNow, maxAttentionTasks: 8 }),
+      lastGeneratedAt: new Date(),
+    });
+  };
+
+  const handleResetStatusDraft = () => {
+    setStatusDraftPreview(prev => {
+      if (!prev) return prev;
+
+      const generatedDraft = buildProjectStatusUpdateDraft(prev.project, { now: dashboardNow });
+      return {
+        ...prev,
+        draft: generatedDraft,
+        generatedDraft,
+        evidence: buildProjectStatusEvidenceItems(prev.project, { now: dashboardNow, maxAttentionTasks: 8 }),
+        lastGeneratedAt: new Date(),
+      };
+    });
+  };
+
+  const handleCopyStatusDraft = async (project: FishboneProject, draft?: string) => {
+    try {
+      await copyTextToClipboard(draft || buildProjectStatusUpdateDraft(project, { now: dashboardNow }));
+      showActionStatus('success', `项目 ${project.name} 状态更新草稿已复制`);
+    } catch (error) {
+      console.error('复制状态草稿失败:', error);
+      showActionStatus('error', error instanceof Error ? error.message : '复制状态草稿失败');
     }
   };
 
@@ -357,23 +604,30 @@ const ProjectDashboard: React.FC = () => {
       type: newTaskType,
       title: newTaskTitle.trim(),
       status: 'todo',
-      eta: '',
+      eta: newTaskEta,
       desc: '',
       anchorPosition: showAddTask.position,
     };
 
-    const res = await chrome.runtime.sendMessage({
-      type: 'ADD_PROJECT_ITEM',
-      projectId: showAddTask.projectId,
-      itemType: 'task',
-      itemData: newTask
-    });
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'ADD_PROJECT_ITEM',
+        projectId: showAddTask.projectId,
+        itemType: 'task',
+        itemData: newTask
+      });
 
-    if (res?.success) {
+      if (!res?.success) {
+        throw new Error(res?.error || '创建任务失败');
+      }
       setShowAddTask(null);
       setNewTaskTitle('');
       setNewTaskType('task');
-      await loadProjects();
+      setNewTaskEta('');
+      showActionStatus('success', `任务 ${newTask.title} 已创建`);
+      await loadProjects({ silent: true });
+    } catch (error) {
+      showActionStatus('error', error instanceof Error ? error.message : '创建任务失败');
     }
   };
 
@@ -386,14 +640,14 @@ const ProjectDashboard: React.FC = () => {
     // 计算点击位置相对于时间线的百分比（10%-90%范围）
     const relativeX = clickX - containerPadding;
     const availableWidth = rect.width - (containerPadding * 2);
-    const anchorPosition = (relativeX / availableWidth) * 80 + 10;
+    const anchorPosition = clampPercent((relativeX / availableWidth) * 80 + 10);
     
     // 根据锚点位置自动选择对应的milestone阶段
     const project = projects.find(p => p.id === projectId);
-    let selectedMilestone = '';
-    if (project?.milestones) {
+    let selectedMilestone: MilestonePoint | null = null;
+    if (project?.milestones?.length) {
       // 找到最接近的milestone
-      let closestMilestone = project.milestones[0];
+      let closestMilestone: MilestonePoint = project.milestones[0];
       let minDistance = Math.abs(computeLeftPercent(0, project.milestones.length) - anchorPosition);
       
       project.milestones.forEach((milestone, index) => {
@@ -404,12 +658,16 @@ const ProjectDashboard: React.FC = () => {
           closestMilestone = milestone;
         }
       });
-      selectedMilestone = closestMilestone.label;
+      selectedMilestone = closestMilestone;
     }
     
-    setShowAddTask({ projectId, position: Math.round(anchorPosition) });
-    // 如果有选中的milestone，可以在创建任务时使用
-    console.log(`点击锚点位置 ${anchorPosition.toFixed(1)}% 对应milestone: ${selectedMilestone}`);
+    setNewTaskEta(selectedMilestone?.date || '');
+    setShowAddTask({
+      projectId,
+      position: Math.round(anchorPosition),
+      milestoneLabel: selectedMilestone?.label,
+      milestoneDate: selectedMilestone?.date,
+    });
   };
 
   // 任务拖拽完成处理（旧版本，保留兼容性）
@@ -452,12 +710,14 @@ const ProjectDashboard: React.FC = () => {
     setDragState({
       isDragging: false, // 初始不拖拽
       draggedTask: task.id,
+      projectId,
       startX: e.clientX,
       startY: e.clientY,
       startPosition: anchorPixelPosition, // 存储锚点位置
       containerWidth: availableWidth,
       mouseDownTime: Date.now()
     });
+    dragAnchorRef.current = currentAnchorPercent;
   };
   
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -477,13 +737,15 @@ const ProjectDashboard: React.FC = () => {
           target.classList.add('dragging');
           document.body.classList.add('modal-open');
         }
+        dragStartedRef.current = true;
         
         setDragState(prev => ({
           ...prev,
           isDragging: true
         }));
+      } else {
+        return;
       }
-      return;
     }
     
     // 执行拖拽逻辑 - 基于锚点计算
@@ -500,22 +762,24 @@ const ProjectDashboard: React.FC = () => {
     let newAnchorPercent = ((clampedAnchorPosition - containerPadding) / dragState.containerWidth) * 80 + 10;
     
     // 应用吸附功能（基于锚点）
-    const projectId = projects.find(p => p.tasks.some(t => t.id === dragState.draggedTask))?.id;
+    const projectId = dragState.projectId;
     if (projectId) {
       newAnchorPercent = getSnapPosition(newAnchorPercent, projectId);
     }
     
     // 更新锚点位置（taskPositions现在存储的是锚点位置）
+    const positionKey = buildTaskPositionKey(projectId || '', dragState.draggedTask);
+    dragAnchorRef.current = newAnchorPercent;
     setTaskPositions(prev => ({
       ...prev,
-      [dragState.draggedTask!]: newAnchorPercent
+      [positionKey]: newAnchorPercent
     }));
   };
   
   const handleMouseUp = () => {
     if (!dragState.draggedTask) return;
     
-    if (dragState.isDragging) {
+    if (dragState.isDragging || dragStartedRef.current) {
       // 清除拖拽样式
       const target = document.querySelector(`[data-task-id="${dragState.draggedTask}"]`) as HTMLElement;
       if (target) {
@@ -530,18 +794,30 @@ const ProjectDashboard: React.FC = () => {
           target.classList.remove('was-dragging');
         }
       }, 100);
+
+      const project = projects.find(p => p.id === dragState.projectId);
+      const task = project?.tasks.find(t => t.id === dragState.draggedTask);
+      const anchorPosition = dragAnchorRef.current;
+      if (project && task && typeof anchorPosition === 'number') {
+        void updateTask(project.id, task.type, task.id, {
+          anchorPosition: Math.round(clampPercent(anchorPosition, 2, 98) * 10) / 10,
+        });
+      }
     }
     
     // 重置拖拽状态
     setDragState({ 
       isDragging: false, 
       draggedTask: null, 
+      projectId: null,
       startX: 0, 
       startY: 0,
       startPosition: 0, 
       containerWidth: 0,
       mouseDownTime: 0 
     });
+    dragAnchorRef.current = null;
+    dragStartedRef.current = false;
   };
   
   // 获取不同类型任务的锚点偏移量（相对于卡片左边）- 预留扩展用
@@ -561,8 +837,9 @@ const ProjectDashboard: React.FC = () => {
 
   // 获取任务锚点位置（以bone-connector为基准，支持自定义位置）
   const getTaskAnchorPosition = (taskId: string, projectId: string) => {
-    if (taskPositions[taskId]) {
-      return taskPositions[taskId];
+    const positionKey = buildTaskPositionKey(projectId, taskId);
+    if (Object.prototype.hasOwnProperty.call(taskPositions, positionKey)) {
+      return taskPositions[positionKey];
     }
     
     const project = projects.find(p => p.id === projectId);
@@ -570,7 +847,7 @@ const ProjectDashboard: React.FC = () => {
 
     const task = project.tasks.find(t => t.id === taskId);
     if (task && typeof task.anchorPosition === 'number' && Number.isFinite(task.anchorPosition)) {
-      return Math.max(2, Math.min(98, task.anchorPosition));
+      return clampPercent(task.anchorPosition, 2, 98);
     }
     
     const tasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
@@ -618,7 +895,7 @@ const ProjectDashboard: React.FC = () => {
   };
   
   // 处理点击事件（智能判断是否是拖拽后的点击）
-  const handleTaskClick = (taskId: string, e: React.MouseEvent) => {
+  const handleTaskClick = (projectId: string, taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const target = e.currentTarget as HTMLElement;
     
@@ -632,7 +909,7 @@ const ProjectDashboard: React.FC = () => {
       return;
     }
     
-    openDetail(taskId);
+    openDetail(projectId, taskId);
   };
 
   // 监听全局鼠标事件
@@ -675,14 +952,15 @@ const ProjectDashboard: React.FC = () => {
           // 为每个项目重新计算任务锚点位置
           projects.forEach(project => {
             project.tasks.forEach((task, _index) => {
-              if (prev[task.id]) {
+              const positionKey = buildTaskPositionKey(project.id, task.id);
+              if (Object.prototype.hasOwnProperty.call(prev, positionKey)) {
                 // 如果已有自定义锚点位置，保持不变
-                newPositions[task.id] = prev[task.id];
+                newPositions[positionKey] = prev[positionKey];
               } else {
                 // 使用默认的均匀分布锚点位置
                 const tasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
                 const taskIndex = tasks.findIndex(t => t.id === task.id);
-                newPositions[task.id] = computeLeftPercent(taskIndex, tasks.length);
+                newPositions[positionKey] = computeLeftPercent(taskIndex, tasks.length);
               }
             });
           });
@@ -755,12 +1033,12 @@ const ProjectDashboard: React.FC = () => {
           <button 
             className="control-button" 
             disabled={isLoading}
-            onClick={loadProjects}
+            onClick={() => loadProjects()}
           >
             🔄 {isLoading ? '刷新中...' : '刷新数据'}
           </button>
-          <button className="control-button secondary" onClick={handleSyncData}>
-            ⚡ 同步数据
+          <button className="control-button secondary" onClick={handleSyncData} disabled={isSyncing}>
+            ⚡ {isSyncing ? '检查中...' : '检查数据源'}
           </button>
           <button className="control-button warning" onClick={handleOpenImportReport} disabled={isImporting}>
             📥 {isImporting ? '导入中...' : '导入报告'}
@@ -774,6 +1052,100 @@ const ProjectDashboard: React.FC = () => {
         </div>
       </div>
 
+      <div className="data-source-banner" role="status" aria-live="polite">
+        <div className="data-source-copy">
+          <span className="data-source-pill">本地工作台</span>
+          <div>
+            <strong>当前显示的是本地项目数据</strong>
+            <span>Jira、GitHub、Confluence 自动同步尚未接入；健康状态基于本地任务、ETA 和阻塞状态计算。</span>
+          </div>
+        </div>
+        <button className="data-source-action" type="button" onClick={handleSyncData} disabled={isSyncing}>
+          {isSyncing ? '检查中...' : '检查数据源'}
+        </button>
+      </div>
+
+      {syncPanelOpen && syncReadiness && (
+        <div className="data-source-panel" role="region" aria-label="数据源检查结果">
+          <div className="data-source-panel-header">
+            <div>
+              <strong>数据源检查结果</strong>
+              <span>
+                {syncReadiness.summary}
+                {syncReadiness.checkedAt ? ` · ${new Date(syncReadiness.checkedAt).toLocaleTimeString()}` : ''}
+              </span>
+            </div>
+            <button className="data-source-close" type="button" onClick={() => setSyncPanelOpen(false)}>
+              收起
+            </button>
+          </div>
+          <div className="data-source-grid">
+            {syncReadiness.sources.map(source => (
+              <div className={`data-source-card ${source.status}`} key={source.source}>
+                <div className="data-source-card-top">
+                  <strong>{source.label}</strong>
+                  <span>{source.configured ? '已配置' : '未配置'}</span>
+                </div>
+                <p>{source.detail}</p>
+                <div className="data-source-next">{source.nextStep}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <div className="dashboard-overview">
+          <div className="overview-summary">
+            <div>
+              <div className="overview-eyebrow">今日焦点</div>
+              <h2 className="overview-title">
+                {focusSummary.totalItems
+                  ? `${focusSummary.totalItems} 个优先处理项`
+                  : '暂无阻塞、过期或 7 天内到期任务'}
+              </h2>
+            </div>
+            <div className="overview-metrics">
+              <span>{dashboardStats.totalProjects} 项目</span>
+              <span>{dashboardStats.completedTasks}/{dashboardStats.totalTasks} 完成</span>
+              <span>{dashboardStats.blockedTasks} 阻塞</span>
+              <span>{dashboardStats.overdueTasks} 过期</span>
+              <span>{dashboardStats.dueSoonTasks} 近 7 天</span>
+              <span>{dashboardStats.offTrackProjects + dashboardStats.atRiskProjects} 需关注项目</span>
+            </div>
+          </div>
+          <div className="focus-list" aria-label="跨项目优先处理任务">
+            {focusItems.length === 0 ? (
+              <div className="focus-empty">当前没有需要立即处理的任务；项目列表会按风险优先排序。</div>
+            ) : (
+              <>
+                {focusItems.map(item => (
+                  <button
+                    key={`${item.projectId}-${item.task.id}`}
+                    type="button"
+                    className={`focus-item ${item.level}`}
+                    onClick={() => openDetail(item.projectId, item.task.id)}
+                    title={item.task.desc || item.task.title}
+                  >
+                    <span className="focus-label">{item.label}</span>
+                    <span className="focus-main">
+                      <strong>{item.task.title}</strong>
+                      <span>{item.projectName}</span>
+                    </span>
+                    <span className="focus-detail">{item.detail}</span>
+                  </button>
+                ))}
+                {focusSummary.hiddenItems > 0 && (
+                  <div className="focus-overflow" aria-label={`还有 ${focusSummary.hiddenItems} 个优先处理项未在首屏展示`}>
+                    还有 {focusSummary.hiddenItems} 个未展示，按刷新后的项目排序继续查看。
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="container">
         <div className="project-list">
           {projects.length === 0 && (
@@ -785,12 +1157,13 @@ const ProjectDashboard: React.FC = () => {
               </button>
             </div>
           )}
-          {projects.map(project => {
+          {prioritizedProjects.map(project => {
             const milestones = project.milestones || [];
             const tasks = [...(project.tasks || [])]
               .sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
-            const health = buildProjectHealthSummary(project);
-              return (
+            const health = buildProjectHealthSummary(project, dashboardNow);
+            const attentionTasks = buildProjectAttentionTasks(project, dashboardNow);
+            return (
               <div className="project-card" key={project.id}>
                 <div className="project-header">
                   <div>
@@ -798,6 +1171,13 @@ const ProjectDashboard: React.FC = () => {
                     {project.description && <p style={{ margin: '5px 0 0', color: 'var(--text-muted)' }}>{project.description}</p>}
                   </div>
                   <div className="project-actions">
+                    <button
+                      className="badge"
+                      type="button"
+                      onClick={() => handleOpenStatusDraftPreview(project)}
+                    >
+                      预览状态草稿
+                    </button>
                     <button
                       className="badge"
                       type="button"
@@ -823,13 +1203,32 @@ const ProjectDashboard: React.FC = () => {
                     )}
                   </div>
                 </div>
+                {attentionTasks.length > 0 && (
+                  <div className="project-alerts" aria-label={`${project.name} 需要关注的任务`}>
+                    <div className="project-alerts-title">优先处理</div>
+                    <div className="project-alerts-list">
+                      {attentionTasks.map(item => (
+                        <button
+                          key={item.task.id}
+                          type="button"
+                          className={`project-alert ${item.level}`}
+                          onClick={() => openDetail(project.id, item.task.id)}
+                          title={item.task.desc || item.task.title}
+                        >
+                          <span className="project-alert-label">{item.label}</span>
+                          <span className="project-alert-title">{item.task.title}</span>
+                          <span className="project-alert-detail">{item.detail}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div
                   className="fishbone-container" 
                   onClick={(e) => {
-                    // 只在点击空白区域时添加任务
-                    if ((e.target as HTMLElement).classList.contains('fishbone-container')) {
-                      handleTimelineClick(project.id, e);
-                    }
+                    const target = e.target as HTMLElement;
+                    if (target.closest('.task-bone, .milestone, button, a, input, textarea, select')) return;
+                    handleTimelineClick(project.id, e);
                   }}
                 >
                   <div className="timeline-spine" />
@@ -839,11 +1238,17 @@ const ProjectDashboard: React.FC = () => {
                   <div className="add-task-hint">💡 点击时间线空白处添加任务</div>
 
                   {milestones.map((m, i) => (
-                    <div key={m.id} className={`milestone ${m.label.toLowerCase()}`} style={{ left: `${computeLeftPercent(i, milestones.length)}%` }}>
+                    <div
+                      key={m.id}
+                      className={`milestone milestone-${buildMilestoneClassToken(m.label)}`}
+                      style={{ left: `${computeLeftPercent(i, milestones.length)}%` }}
+                      title={`${m.label}${m.date ? ` · ${m.date}` : ''}`}
+                      aria-label={`${m.label}${m.date ? `，${m.date}` : ''}`}
+                    >
                       <div className="milestone-label">{m.label}</div>
                       {m.date && <div className="milestone-date">{m.date}</div>}
-                      {m.label}
-        </div>
+                      <span className="milestone-marker-text">{buildMilestoneMarkerText(m.label, i)}</span>
+                    </div>
                   ))}
 
                   {tasks.map((t, _i) => {
@@ -854,14 +1259,15 @@ const ProjectDashboard: React.FC = () => {
                         <div 
                           className={`task-bone ${t.type} ${verticalPosition}`} 
                           data-task-id={t.id}
+                          data-project-id={project.id}
                           style={{ 
                             left: `${taskPosition}%`,
                             transform: dragState.draggedTask === t.id ? 'scale(1.08)' : undefined,
                             transition: dragState.draggedTask === t.id ? 'none' : 'all 0.3s ease',
                             zIndex: dragState.draggedTask === t.id ? 20 : undefined
                           }} 
-                          onClick={(e) => handleTaskClick(t.id, e)}
-                          onDoubleClick={(e) => handleTaskClick(t.id, e)}
+                          onClick={(e) => handleTaskClick(project.id, t.id, e)}
+                          onDoubleClick={(e) => handleTaskClick(project.id, t.id, e)}
                           onMouseDown={(e) => handleMouseDown(e, t, project.id)}
                         >
                           {/* 连接线现在在卡片内部，支持动态位置 */}
@@ -869,13 +1275,13 @@ const ProjectDashboard: React.FC = () => {
                           
                           <div className="task-title">{t.title}</div>
                           <div className="task-meta">
-                            <span className={`status-tag status-${(t.status || 'pending').toLowerCase()}`}>{t.status}</span>
+                            <span className={`status-tag status-${buildStatusClassToken(t.status)}`}>{t.status}</span>
                             {t.eta && <span className="eta-tag">ETA: {t.eta}</span>}
                           </div>
                           {t.platforms && (
                             <div className="platforms">
                               {Object.entries(t.platforms).map(([name, p]) => (
-                                <div key={name} className={`platform-dot ${(p?.status || 'pending').toLowerCase()}`} title={`${name.toUpperCase()}: ${p?.status}${p?.assignee ? ' - ' + p.assignee : ''}${p?.jira ? ' (' + p.jira + ')' : ''}`} />
+                                <div key={name} className={`platform-dot ${buildStatusClassToken(p?.status)}`} title={`${name.toUpperCase()}: ${p?.status}${p?.assignee ? ' - ' + p.assignee : ''}${p?.jira ? ' (' + p.jira + ')' : ''}`} />
                               ))}
                             </div>
                           )}
@@ -997,6 +1403,72 @@ const ProjectDashboard: React.FC = () => {
                       </div>
                     )}
 
+      {statusDraftPreview && (
+        <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) setStatusDraftPreview(null); }}>
+          <div className="zoom-content status-draft-modal">
+            <div className="zoom-header">
+              <h2 className="zoom-title">{statusDraftPreview.project.name} 状态更新草稿</h2>
+              <button className="close-btn" onClick={() => setStatusDraftPreview(null)}>×</button>
+            </div>
+            <div className="zoom-body">
+              <div className="status-draft-layout">
+                <section className="status-draft-panel">
+                  <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--info)' }}>E</span>证据来源</h3>
+                  {statusDraftPreview.evidence.length === 0 ? (
+                    <div className="status-evidence-empty">暂无可引用证据；请先补充任务 ETA、Jira 或平台状态。</div>
+                  ) : (
+                    <div className="status-evidence-list">
+                      {statusDraftPreview.evidence.map((item, index) => (
+                        <div className="status-evidence-item" key={`${item.type}-${item.taskId || 'project'}-${item.title}-${index}`}>
+                          <span className={`status-evidence-label ${item.type}`}>{item.label}</span>
+                          <div>
+                            <strong>{item.title}</strong>
+                            <span>{item.detail}</span>
+                            <em>{item.source}</em>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+                <section className="status-draft-panel">
+                  <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--success)' }}>T</span>可编辑草稿</h3>
+                  <textarea
+                    className="status-draft-textarea"
+                    aria-label="可编辑状态更新草稿"
+                    value={statusDraftPreview.draft}
+                    onChange={e => setStatusDraftPreview(prev => prev ? { ...prev, draft: e.target.value } : prev)}
+                  />
+                  <div className="status-draft-meta">
+                    <span>{statusDraftPreview.draft === statusDraftPreview.generatedDraft ? '未修改生成稿' : '已手动修改'}</span>
+                    <span>{statusDraftPreview.evidence.length} 条证据</span>
+                    <span>生成于 {statusDraftPreview.lastGeneratedAt.toLocaleTimeString()}</span>
+                  </div>
+                </section>
+              </div>
+              <div className="edit-actions status-draft-actions">
+                <button
+                  className="cancel-btn"
+                  onClick={handleResetStatusDraft}
+                  disabled={statusDraftPreview.draft === statusDraftPreview.generatedDraft}
+                >
+                  恢复生成稿
+                </button>
+                <button
+                  className="save-btn"
+                  onClick={() => handleCopyStatusDraft(statusDraftPreview.project, statusDraftPreview.draft)}
+                >
+                  复制审阅稿
+                </button>
+                <button className="cancel-btn" onClick={() => setStatusDraftPreview(null)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedTask && (
         <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) closeDetail(); }}>
           <div className="zoom-content">
@@ -1084,7 +1556,7 @@ const ProjectDashboard: React.FC = () => {
                     {Object.entries(selectedTask.task.platforms).map(([name, p]) => (
                       <div className="platform-item" key={name}>
                         <div className="platform-name">{name.toUpperCase()}</div>
-                        <span className={`platform-status status-${(p?.status || 'pending').toLowerCase()}`}>{p?.status || 'pending'}</span>
+                        <span className={`platform-status status-${buildStatusClassToken(p?.status)}`}>{p?.status || 'pending'}</span>
                         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
                           <div><strong>负责人:</strong> <input className="edit-input" value={p?.assignee || ''} onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, { platforms: { ...selectedTask.task.platforms, [name]: { ...(p || {}), assignee: e.target.value } } })} /></div>
                           <div><strong>JIRA:</strong> <input className="edit-input" value={p?.jira || ''} onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, { platforms: { ...selectedTask.task.platforms, [name]: { ...(p || {}), jira: e.target.value } } })} /></div>
@@ -1129,6 +1601,18 @@ const ProjectDashboard: React.FC = () => {
               <div className="detail-section">
                 <div className="info-grid">
                   <div className="info-item">
+                    <span className="info-label">时间线位置</span>
+                    <div className="timeline-context">
+                      <strong>{showAddTask.position}%</strong>
+                      {showAddTask.milestoneLabel && (
+                        <span>
+                          最近里程碑：{showAddTask.milestoneLabel}
+                          {showAddTask.milestoneDate ? ` · ${showAddTask.milestoneDate}` : ''}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="info-item">
                     <span className="info-label">任务标题</span>
                     <input 
                       className="edit-input" 
@@ -1149,6 +1633,15 @@ const ProjectDashboard: React.FC = () => {
                       <option value="task">任务 (Task)</option>
                       <option value="design">设计 (Design)</option>
                     </select>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">预计完成时间</span>
+                    <input
+                      className="edit-input"
+                      type="date"
+                      value={newTaskEta}
+                      onChange={e => setNewTaskEta(e.target.value)}
+                    />
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
@@ -1214,6 +1707,50 @@ const ProjectDashboard: React.FC = () => {
         .badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; background: var(--primary-light); color: var(--primary); border: none; cursor: pointer; }
         .badge:disabled { opacity: 0.6; cursor: not-allowed; }
 
+        .data-source-banner { margin: 0 20px 16px; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--info); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; box-shadow: var(--shadow); }
+        .data-source-copy { min-width: 0; display: flex; align-items: center; gap: 12px; color: var(--text); }
+        .data-source-copy strong { display: block; font-size: 13px; margin-bottom: 2px; }
+        .data-source-copy span:last-child { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+        .data-source-pill { flex: 0 0 auto; border-radius: 999px; padding: 4px 9px; background: #ecfeff; border: 1px solid #a5f3fc; color: #0e7490; font-size: 12px; font-weight: 700; white-space: nowrap; }
+        .data-source-action { flex: 0 0 auto; padding: 7px 12px; border: 1px solid #a5f3fc; border-radius: 6px; background: #f0fdfa; color: #0f766e; cursor: pointer; font-size: 12px; font-weight: 700; }
+        .data-source-action:hover:not(:disabled) { background: #ccfbf1; }
+        .data-source-action:disabled { opacity: .65; cursor: not-allowed; }
+        .data-source-panel { margin: 0 20px 20px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; box-shadow: var(--shadow); }
+        .data-source-panel-header { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 12px; }
+        .data-source-panel-header strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 3px; }
+        .data-source-panel-header span { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+        .data-source-close { flex: 0 0 auto; border: 1px solid var(--border); background: var(--bg); color: var(--text-muted); border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 700; }
+        .data-source-close:hover { border-color: var(--primary); color: var(--primary); }
+        .data-source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+        .data-source-card { border: 1px solid var(--border); border-left: 4px solid var(--text-muted); border-radius: 8px; background: var(--bg); padding: 12px; min-width: 0; }
+        .data-source-card.ready { border-left-color: var(--success); }
+        .data-source-card.not_configured { border-left-color: var(--warning); }
+        .data-source-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 8px; }
+        .data-source-card-top strong { color: var(--text); font-size: 13px; }
+        .data-source-card-top span { border-radius: 999px; padding: 2px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .data-source-card p { margin: 0 0 8px; color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .data-source-next { color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+
+        .dashboard-overview { margin: 0 20px 20px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 18px; box-shadow: var(--shadow); }
+        .overview-summary { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 14px; }
+        .overview-eyebrow { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
+        .overview-title { margin: 4px 0 0; color: var(--text); font-size: 20px; line-height: 1.25; }
+        .overview-metrics { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; color: var(--text-muted); font-size: 12px; }
+        .overview-metrics span { padding: 5px 9px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+        .focus-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+        .focus-empty { padding: 12px; color: var(--text-muted); background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
+        .focus-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 10px; cursor: pointer; color: var(--text); transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+        .focus-item:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: var(--shadow); }
+        .focus-label { border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 700; color: white; white-space: nowrap; }
+        .focus-item.blocked .focus-label { background: var(--danger); }
+        .focus-item.overdue .focus-label { background: var(--warning); }
+        .focus-item.due-soon .focus-label { background: var(--info); }
+        .focus-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .focus-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+        .focus-main span { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .focus-detail { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+        .focus-overflow { display: flex; align-items: center; min-height: 44px; padding: 10px 12px; color: var(--text-muted); background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; line-height: 1.35; }
+
         .project-list { display: flex; flex-direction: column; gap: 30px; }
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
         .project-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
@@ -1234,15 +1771,28 @@ const ProjectDashboard: React.FC = () => {
         .health-headline { font-weight: 650; color: var(--text); }
         .health-metrics { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; color: var(--text-muted); font-size: 12px; }
         .health-metrics span { padding: 3px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+        .project-alerts { display: flex; gap: 12px; align-items: center; margin: -6px 0 18px; }
+        .project-alerts-title { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; white-space: nowrap; }
+        .project-alerts-list { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
+        .project-alert { display: inline-flex; align-items: center; gap: 7px; max-width: 320px; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 7px 9px; color: var(--text); cursor: pointer; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+        .project-alert:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: var(--shadow); }
+        .project-alert-label { border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 700; color: white; white-space: nowrap; }
+        .project-alert.blocked .project-alert-label { background: var(--danger); }
+        .project-alert.overdue .project-alert-label { background: var(--warning); }
+        .project-alert.due-soon .project-alert-label { background: var(--info); }
+        .project-alert-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+        .project-alert-detail { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 
         .fishbone-container { position: relative; height: 200px; margin: 20px 0; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 12px; padding: 20px; border: 2px solid var(--border); cursor: crosshair; }
         .timeline-spine { position: absolute; left: 40px; right: 40px; top: 50%; height: 4px; background: linear-gradient(90deg, var(--design-color), var(--primary), var(--dep-color)); border-radius: 2px; transform: translateY(-50%); }
         .timeline-arrow { position: absolute; right: 35px; top: 50%; transform: translateY(-50%); width: 0; height: 0; border-left: 12px solid var(--dep-color); border-top: 8px solid transparent; border-bottom: 8px solid transparent; }
 
-        .milestone { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 20px; height: 20px; border-radius: 50%; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: white; z-index: 10; }
-        .milestone.beta { background: var(--success); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2); }
-        .milestone.ga { background: var(--primary); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2); }
+        .milestone { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 28px; height: 28px; border-radius: 50%; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: white; z-index: 10; background: var(--purple); border: 2px solid white; box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.18); }
+        .milestone.milestone-alpha { background: var(--info); box-shadow: 0 0 0 4px rgba(6, 182, 212, 0.2); }
+        .milestone.milestone-beta { background: var(--success); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2); }
+        .milestone.milestone-ga { background: var(--primary); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2); }
         .milestone:hover { transform: translate(-50%, -50%) scale(1.3); box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.3); }
+        .milestone-marker-text { max-width: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1; }
         .milestone-label { position: absolute; top: -35px; left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
         .milestone-date { position: absolute; bottom: -35px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
@@ -1363,17 +1913,34 @@ const ProjectDashboard: React.FC = () => {
         .task-title { font-size: 14px; font-weight: 600; margin: 0 0 6px; color: var(--text); }
         .task-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .status-tag { padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; color: white; text-transform: lowercase; }
+        .status-todo { background: var(--text-muted); }
         .status-progress { background: var(--info); }
+        .status-testing { background: var(--warning); }
+        .status-testbuild { background: var(--warning); }
         .status-review { background: var(--purple); }
         .status-done { background: var(--success); }
+        .status-closed { background: var(--success); }
+        .status-complete { background: var(--success); }
+        .status-completed { background: var(--success); }
+        .status-rollout { background: var(--primary); }
         .status-blocked { background: var(--danger); }
         .status-pending { background: var(--text-muted); }
+        .status-unknown { background: var(--text-muted); }
         .eta-tag { font-size: 10px; color: var(--text-muted); }
         .platforms { display: flex; gap: 3px; margin-top: 6px; }
         .platform-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .platform-dot.todo { background: var(--text-muted); }
         .platform-dot.done { background: var(--success); }
+        .platform-dot.closed { background: var(--success); }
+        .platform-dot.complete { background: var(--success); }
+        .platform-dot.completed { background: var(--success); }
         .platform-dot.progress { background: var(--info); }
+        .platform-dot.testing { background: var(--warning); }
+        .platform-dot.testbuild { background: var(--warning); }
+        .platform-dot.rollout { background: var(--primary); }
+        .platform-dot.blocked { background: var(--danger); }
         .platform-dot.pending { background: var(--text-muted); }
+        .platform-dot.unknown { background: var(--text-muted); }
 
         .zoom-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 1000; display: none; opacity: 0; transition: opacity 0.4s ease; }
         .zoom-overlay.active { display: flex; opacity: 1; }
@@ -1404,13 +1971,35 @@ const ProjectDashboard: React.FC = () => {
         /* 新增样式 */
         .add-task-hint { position: absolute; top: 8px; right: 8px; font-size: 10px; color: var(--text-muted); background: rgba(255,255,255,0.8); padding: 4px 8px; border-radius: 12px; pointer-events: none; opacity: 0.7; }
         .drag-indicator { position: absolute; top: 4px; right: 4px; font-size: 8px; color: var(--text-muted); opacity: 0.5; }
+        .timeline-context { min-height: 38px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text-muted); font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
+        .timeline-context strong { color: var(--text); font-size: 14px; }
         .task-bone:hover .drag-indicator { opacity: 1; }
+        .status-draft-modal { width: min(1100px, 95vw); }
+        .status-draft-layout { display: grid; grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr); gap: 18px; align-items: stretch; }
+        .status-draft-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
+        .status-evidence-list { display: flex; flex-direction: column; gap: 10px; }
+        .status-evidence-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: flex-start; padding: 10px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+        .status-evidence-label { border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 700; color: white; background: var(--text-muted); white-space: nowrap; }
+        .status-evidence-label.task { background: var(--danger); }
+        .status-evidence-label.jira { background: var(--primary); }
+        .status-evidence-label.platform { background: var(--warning); }
+        .status-evidence-label.milestone { background: var(--success); }
+        .status-evidence-item strong { display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+        .status-evidence-item span:not(.status-evidence-label) { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+        .status-evidence-item em { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; font-style: normal; }
+        .status-evidence-empty { padding: 12px; color: var(--text-muted); background: var(--card); border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
+        .status-draft-textarea { width: 100%; min-height: 360px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--card); color: var(--text); font-size: 13px; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; box-sizing: border-box; }
+        .status-draft-textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14); }
+        .status-draft-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--text-muted); font-size: 12px; }
+        .status-draft-meta span { padding: 3px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+        .status-draft-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
         .save-btn, .cancel-btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
         .save-btn { background: var(--success); color: white; }
         .save-btn:hover:not(:disabled) { background: #0ea55c; }
         .save-btn:disabled { background: var(--text-muted); cursor: not-allowed; }
         .cancel-btn { background: var(--border); color: var(--text); }
-        .cancel-btn:hover { background: var(--text-muted); color: white; }
+        .cancel-btn:hover:not(:disabled) { background: var(--text-muted); color: white; }
+        .cancel-btn:disabled { opacity: .55; cursor: not-allowed; }
 
         @media (max-width: 768px) {
           .container { padding: 15px; }
@@ -1424,6 +2013,18 @@ const ProjectDashboard: React.FC = () => {
           .dashboard-header { flex-direction: column; gap: 16px; text-align: center; margin: 10px; }
           .dashboard-controls { flex-wrap: wrap; justify-content: center; }
           .dashboard-title { font-size: 1.5em; }
+          .data-source-banner { margin: 0 10px 10px; flex-direction: column; align-items: flex-start; }
+          .data-source-copy { align-items: flex-start; }
+          .data-source-panel { margin: 0 10px 10px; }
+          .data-source-panel-header { flex-direction: column; }
+          .dashboard-overview { margin: 0 10px 10px; }
+          .overview-summary { flex-direction: column; }
+          .overview-metrics { justify-content: flex-start; }
+          .focus-item { grid-template-columns: auto minmax(0, 1fr); }
+          .focus-detail { grid-column: 2; }
+          .status-draft-layout { grid-template-columns: 1fr; }
+          .status-draft-textarea { min-height: 280px; }
+          .status-draft-actions { justify-content: flex-start; }
         }
       `}</style>
     </div>

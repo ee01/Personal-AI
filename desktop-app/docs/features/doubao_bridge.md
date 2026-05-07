@@ -21,9 +21,23 @@ The app is no longer just a one-way Doubao bridge. It now manages a bidirectiona
 The output side remains responsible for the established Doubao sync path:
 
 - login and auth status for the managed Doubao profile
+- optional reuse of the user's daily Chrome session through `webpage-mcp`
+- managed Chromium fallback for outbound broadcast when `webpage-mcp` is
+  unavailable or cannot verify that a message was sent, with a short cooldown
+  before retrying the connector
+- an in-place broadcast transport save action in the broadcast card, so switching
+  between the managed profile and daily Chrome session does not require finding
+  the Doubao explorer settings card; unsaved changes are shown inline and are
+  saved automatically before immediate login, binding, or manual push actions
+- visible transport banners on Doubao and ChatGPT explorer cards, including the
+  most recent daily-browser fallback reason when the app had to use the managed
+  Chromium profile
 - `memory_sync_thread` for long-lived memory sync
 - `mobile_context_thread` for the real mobile conversation context
 - scheduled stable-memory, briefing, and reminder delivery
+- manual run-now delivery returns `succeeded` or `skipped`, so the app can tell
+  users when there was no real content to push instead of showing a false
+  success message
 
 ### Input flow
 
@@ -92,7 +106,26 @@ The explorer expects an open `chatgpt.com` tab in that Chrome window. Behavior:
 Doubao additionally supports:
 
 - DOM-based conversation reading using the existing managed Playwright profile
+- optional `webpage-mcp` transport that reads from the user's existing Chrome tab when enabled
+- managed Chromium fallback for Doubao explorer reads when `webpage-mcp` fails
+- explicit `doubao.com` tab targeting for the `webpage-mcp` transport, so an
+  unrelated active Chrome tab is never scraped as Doubao
+- visible fallback diagnostics for Doubao explorer reads, so users can tell
+  whether the current run used their daily browser session or the managed
+  Chromium profile
+- normalized `/chat/<id>`, `/thread/<id>`, and absolute conversation links in the
+  DOM fallback
 - conservative skip logic for obviously active/in-progress threads
+
+For outbound Doubao broadcast, the `webpage-mcp` transport only reports success
+after it fills the composer, submits the message, and observes the sent text in
+the page. This prevents reminder and notice jobs from being marked delivered
+when a selector changed, a challenge page appeared, or the active tab was wrong.
+It also preflights the current page for Doubao challenge text and waits briefly
+after submit for the sent text to appear outside the editable composer, reducing
+false failures on slow pages and false successes from unsent input text. If
+these checks return an unsent result, outbound sync falls back to the managed
+Chromium profile instead of treating the daily-browser attempt as final.
 
 ## Local Desktop App API
 

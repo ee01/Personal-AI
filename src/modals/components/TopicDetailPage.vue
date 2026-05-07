@@ -10,19 +10,49 @@
         <div class="topic-info">
           <h2>{{ topicData.name }}</h2>
           <div class="topic-meta">
-            <span class="meta-item">📈 {{ topicData.statistic?.conversations || 0 }} 条讨论</span>
-            <span class="meta-item">🔗 {{ topicData.statistic?.projects || 0 }} 个关联项目</span>
-            <span class="meta-item">👥 {{ topicData.statistic?.participants || 0 }} 位参与者</span>
-            <span class="meta-item">📚 {{ topicData.statistic?.resources || 0 }} 个资源</span> 
-            <span v-if="topicUnreadCount > 0" class="meta-item unread-meta">● {{ topicUnreadCount }} 条未读</span>
-            <span class="meta-item">⏰ 最后更新：{{ formatTimeAgo(topicData.readStatus?.lastUpdateTime || topicData.updated || Date.now()) }}</span>
+            <span class="meta-item"
+              >📈 {{ topicData.statistic?.conversations || 0 }} 条讨论</span
+            >
+            <span class="meta-item"
+              >🔗 {{ topicData.statistic?.projects || 0 }} 个关联项目</span
+            >
+            <span class="meta-item"
+              >👥 {{ topicData.statistic?.participants || 0 }} 位参与者</span
+            >
+            <span class="meta-item"
+              >📚 {{ topicData.statistic?.resources || 0 }} 个资源</span
+            >
+            <span v-if="topicUnreadCount > 0" class="meta-item unread-meta"
+              >● {{ topicUnreadCount }} 条未读</span
+            >
+            <span class="meta-item"
+              >⏰ 最后更新：{{
+                formatTimeAgo(
+                  topicData.readStatus?.lastUpdateTime ||
+                    topicData.updated ||
+                    Date.now(),
+                )
+              }}</span
+            >
           </div>
         </div>
-        <div class="topic-actions">
-          <button class="action-btn">📝 编辑主题</button>
-          <button class="action-btn">🔗 添加关联</button>
-        </div>
       </div>
+    </div>
+
+    <div v-if="topicReadUndo" class="topic-undo-toast" role="status">
+      <span>已将「{{ topicReadUndo.topicName }}」标记为已读</span>
+      <button type="button" @click="handleUndoTopicRead">撤销</button>
+    </div>
+
+    <div
+      v-if="conversationReadUndo"
+      class="topic-undo-toast conversation-undo-toast"
+      role="status"
+    >
+      <span>
+        已将「{{ formatConversationUndoLabel(conversationReadUndo) }}」标记为已读
+      </span>
+      <button type="button" @click="handleUndoConversationRead">撤销</button>
     </div>
 
     <div v-if="isLoading" class="loading-container">
@@ -32,8 +62,8 @@
 
     <div v-else-if="topicData" class="topic-detail-content">
       <div class="tab-navigation">
-        <button 
-          v-for="tab in tabs" 
+        <button
+          v-for="tab in tabs"
           :key="tab.key"
           :class="['tab-btn', { active: activeTab === tab.key }]"
           @click="activeTab = tab.key"
@@ -46,21 +76,21 @@
       <div v-if="activeTab === 'projects'" class="tab-content active">
         <div class="section-header">
           <h3>📂 相关项目</h3>
-          <button class="add-btn">+ 添加项目</button>
         </div>
         <div class="items-grid">
-          <div v-for="project in topicData.recentDataDetails.projects" :key="project.id" class="item-card">
+          <div
+            v-for="project in topicProjects"
+            :key="project.id"
+            class="item-card"
+          >
             <div class="item-header">
               <div class="item-title">
                 <span>🚀</span>
                 <span>{{ project.name }}</span>
               </div>
-              <div class="item-actions">
-                <button class="item-action" title="取消关联">❌</button>
-              </div>
             </div>
             <div class="item-content">
-              <div style="margin-bottom: 0.5rem;">
+              <div style="margin-bottom: 0.5rem">
                 <span class="card-badge">{{ project.status }}</span>
               </div>
               <p>{{ project.description }}</p>
@@ -73,24 +103,24 @@
       <div v-if="activeTab === 'resources'" class="tab-content active">
         <div class="section-header">
           <h3>📚 相关资源</h3>
-          <button class="add-btn">+ 添加资源</button>
         </div>
         <div class="items-grid">
-          <div v-for="resource in topicData.recentDataDetails.resources" :key="resource.id" class="item-card">
+          <div
+            v-for="resource in topicResources"
+            :key="resource.id"
+            class="item-card"
+          >
             <div class="item-header">
               <div class="item-title">
                 <span>📚</span>
                 <span>{{ resource.name }}</span>
               </div>
-              <div class="item-actions">
-                <button class="item-action" title="删除资源">❌</button>
-              </div>
             </div>
             <div class="item-content">
-              <div style="margin-bottom: 0.5rem;">
+              <div style="margin-bottom: 0.5rem">
                 <span class="card-badge">{{ resource.type }}</span>
               </div>
-              <p><a :href="resource.url" style="color: #60a5fa;">查看资源</a></p>
+              <p><a :href="resource.url" style="color: #60a5fa">查看资源</a></p>
             </div>
           </div>
         </div>
@@ -100,26 +130,34 @@
       <div v-if="activeTab === 'tickets'" class="tab-content active">
         <div class="section-header">
           <h3>🎯 相关Tickets</h3>
-          <button class="add-btn">+ 添加Ticket</button>
         </div>
         <div class="items-grid">
-          <div v-for="ticket in topicData.recentDataDetails.jiraTickets" :key="ticket.id" class="item-card">
+          <div
+            v-for="ticket in topicTickets"
+            :key="ticket.id"
+            class="item-card"
+          >
             <div class="item-header">
               <div class="item-title">
                 <span>🎯</span>
                 <span>{{ ticket.id }}</span>
               </div>
-              <div class="item-actions">
-                <button class="item-action" title="取消关联">❌</button>
-              </div>
             </div>
             <div class="item-content">
-              <h4 style="margin-bottom: 0.5rem; font-weight: 600;">{{ ticket.title }}</h4>
-              <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+              <h4 style="margin-bottom: 0.5rem; font-weight: 600">
+                {{ ticket.title }}
+              </h4>
+              <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem">
                 <span class="card-badge">{{ ticket.status }}</span>
-                <span class="card-badge" :style="getPriorityStyle(ticket.priority)">{{ ticket.priority }}</span>
+                <span
+                  class="card-badge"
+                  :style="getPriorityStyle(ticket.priority)"
+                  >{{ ticket.priority }}</span
+                >
               </div>
-              <p style="font-size: 0.875rem; color: #94a3b8;">负责人：{{ ticket.assignee }}</p>
+              <p style="font-size: 0.875rem; color: #94a3b8">
+                负责人：{{ ticket.assignee }}
+              </p>
             </div>
           </div>
         </div>
@@ -130,7 +168,12 @@
         <div class="section-header">
           <h3>💬 聊天记录</h3>
           <div class="search-controls">
-            <input type="text" class="search-input" placeholder="搜索聊天记录..." v-model="convSearchQuery" />
+            <input
+              type="text"
+              class="search-input"
+              placeholder="搜索聊天记录、上下文或来源..."
+              v-model="convSearchQuery"
+            />
             <select class="filter-select" v-model="convFilter">
               <option value="all">全部群组</option>
               <option value="team">团队群</option>
@@ -148,58 +191,114 @@
             </button>
           </div>
         </div>
-        <div class="conversations-list">
-          <div 
-            v-for="conv in filteredConversations" 
-            :key="conv.id" 
+        <div
+          v-if="messageFocusNotice"
+          :class="['message-focus-notice', messageFocusNotice.type]"
+          role="status"
+        >
+          {{ messageFocusNotice.text }}
+        </div>
+        <div v-if="filteredConversations.length === 0" class="empty-state">
+          没有匹配的聊天记录
+        </div>
+        <div v-else class="conversations-list">
+          <div
+            v-for="conv in filteredConversations"
+            :key="conv.id"
             class="conversation-item"
-            :class="{ 
+            :class="{
               expanded: expandedConversations.has(conv.id),
-              unread: !conv.isRead
+              unread: !conv.isRead,
+              targeted: highlightedConversationId === conv.id,
             }"
+            :data-conversation-id="conv.id"
           >
             <div class="conversation-header">
               <div class="conversation-meta">
-                <div class="sender-avatar">{{ (conv.sender || '?').charAt(0) }}</div>
+                <div class="sender-avatar">
+                  {{ (conv.sender || '?').charAt(0) }}
+                </div>
                 <div class="sender-info">
                   <div class="sender-name">
                     {{ conv.sender || '未知用户' }}
-                    <span v-if="conv.isRead !== true" class="unread-indicator">●</span>
+                    <span v-if="conv.isRead !== true" class="unread-indicator"
+                      >●</span
+                    >
                   </div>
-                  <div class="group-name">{{ conv.groupName || '未知群组' }}</div>
+                  <div class="group-name">
+                    {{ conv.groupName || '未知群组' }}
+                    <span
+                      v-if="doesConversationContextMatch(conv)"
+                      class="context-match-badge"
+                    >
+                      上下文匹配
+                    </span>
+                  </div>
                 </div>
               </div>
-              <div class="conversation-time">{{ formatTimeAgo(conv.datetime) || '未知时间' }}</div>
+              <div class="conversation-side-actions">
+                <a
+                  v-if="getConversationSourceUrl(conv)"
+                  class="conversation-source-link"
+                  :href="getConversationSourceUrl(conv)"
+                  target="_blank"
+                  rel="noreferrer"
+                  @click.stop
+                >
+                  来源
+                </a>
+                <div class="conversation-time">
+                  {{ formatTimeAgo(conv.datetime) || '未知时间' }}
+                </div>
+              </div>
             </div>
-            <div class="conversation-summary" v-html="highlightText(conv.summary || '暂无摘要', convSearchQuery)"></div>
-            <div 
+            <div
+              class="conversation-summary"
+              v-html="
+                highlightText(conv.summary || '暂无摘要', convSearchQuery)
+              "
+            ></div>
+            <button
+              type="button"
               class="context-indicator"
               :class="{ expanded: expandedConversations.has(conv.id) }"
               @click="toggleConversationExpand(conv.id)"
             >
               <span class="indicator-text">
-                {{ expandedConversations.has(conv.id) ? '🔼 收起上下文' : `🔍 查看上下文 (${conv.contextMessages?.length || 0} 条相关消息)` }}
+                {{
+                  expandedConversations.has(conv.id)
+                    ? '🔼 收起上下文'
+                    : `🔍 查看上下文 (${
+                        conv.contextMessages?.length || 0
+                      } 条相关消息)`
+                }}
               </span>
-            </div>
-            <div 
-              v-if="conv.contextMessages" 
+            </button>
+            <div
+              v-if="conv.contextMessages"
               class="context-content"
               :class="{ expanded: expandedConversations.has(conv.id) }"
             >
               <div class="context-divider"></div>
-              <div 
-                v-for="(contextMsg, index) in conv.contextMessages" 
-                :key="index" 
+              <div
+                v-for="(contextMsg, index) in conv.contextMessages"
+                :key="index"
                 class="context-item"
                 :class="{ 'main-message': contextMsg.isMainMessage }"
               >
                 <div class="context-header">
-                  <div class="context-sender">{{ contextMsg.sender || '未知用户' }}</div>
-                  <div class="context-time">{{ formatTimeAgo(contextMsg.datetime) || '未知时间' }}</div>
+                  <div class="context-sender">
+                    {{ contextMsg.sender || '未知用户' }}
+                  </div>
+                  <div class="context-time">
+                    {{ formatTimeAgo(contextMsg.datetime) || '未知时间' }}
+                  </div>
                 </div>
-                <div 
+                <div
                   class="context-content-text"
-                  v-html="contextMsg.isMainMessage ? highlightText(contextMsg.content || '', convSearchQuery) : (contextMsg.content || '内容为空')"
+                  v-html="
+                    highlightText(contextMsg.content || '内容为空', convSearchQuery)
+                  "
                 ></div>
               </div>
             </div>
@@ -212,7 +311,12 @@
         <div class="section-header">
           <h3>🌐 网页记录</h3>
           <div class="search-controls">
-            <input type="text" class="search-input" placeholder="搜索网页记录..." v-model="webSearchQuery" />
+            <input
+              type="text"
+              class="search-input"
+              placeholder="搜索网页记录..."
+              v-model="webSearchQuery"
+            />
             <select class="filter-select" v-model="webTypeFilter">
               <option value="all">全部类型</option>
               <option value="jira">Jira</option>
@@ -224,21 +328,41 @@
           </div>
         </div>
         <div class="webpages-list">
-          <div v-for="webpage in filteredWebpages" :key="webpage.id" class="webpage-item">
+          <div v-if="filteredWebpages.length === 0" class="empty-state">
+            暂无匹配网页记录
+          </div>
+          <div
+            v-for="webpage in filteredWebpages"
+            :key="webpage.id"
+            class="webpage-item"
+          >
             <div class="webpage-header">
               <div class="webpage-icon">{{ getWebpageIcon(webpage.type) }}</div>
               <div class="webpage-info">
-                <div class="webpage-title">{{ webpage.title || '未知标题' }}</div>
+                <div class="webpage-title">
+                  {{ webpage.title || '未知标题' }}
+                </div>
                 <div class="webpage-url">{{ webpage.url || '#' }}</div>
                 <div class="webpage-meta">
                   <span>访问时间：{{ webpage.visitTime || '未知时间' }}</span>
-                  <span v-if="webpage.relevanceScore">相关性：{{ (webpage.relevanceScore * 100).toFixed(0) }}%</span>
+                  <span v-if="webpage.relevanceScore"
+                    >相关性：{{
+                      (webpage.relevanceScore * 100).toFixed(0)
+                    }}%</span
+                  >
                 </div>
               </div>
             </div>
-            <div class="webpage-content">{{ webpage.summary || '暂无摘要' }}</div>
+            <div class="webpage-content">
+              {{ webpage.summary || '暂无摘要' }}
+            </div>
             <div v-if="webpage.tags" class="webpage-tags">
-              <span v-for="tag in webpage.tags" :key="tag" class="webpage-tag">{{ tag }}</span>
+              <span
+                v-for="tag in webpage.tags"
+                :key="tag"
+                class="webpage-tag"
+                >{{ tag }}</span
+              >
             </div>
           </div>
         </div>
@@ -248,9 +372,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore } from '../memory-store';
+import {
+  findTopicConversationByMessageId,
+  getTopicDetailRecentData,
+  topicConversationHasContextMatch,
+  topicConversationMatchesQuery,
+} from '../topic-detail-data';
+import { renderHighlightedText } from '../topic-detail-rendering';
 
 const route = useRoute();
 const router = useRouter();
@@ -259,69 +390,96 @@ const store = useMemoryStore();
 const topicId = computed(() => route.params.id as string);
 const topicData = computed(() => store.topicDetailData);
 const isLoading = computed(() => store.isLoading);
+const topicReadUndo = computed(() => store.topicReadUndo);
+const conversationReadUndo = computed(() => store.conversationReadUndo);
 const activeTab = ref('conversations');
-const topicUnreadCount = computed(() => topicData.value?.readStatus?.unreadCount || 0);
+const topicUnreadCount = computed(
+  () => topicData.value?.readStatus?.unreadCount || 0,
+);
+const topicRecentData = computed(() =>
+  getTopicDetailRecentData(topicData.value),
+);
+const topicConversations = computed(() => topicRecentData.value.conversations);
+const topicWebpages = computed(() => topicRecentData.value.webpages);
+const topicProjects = computed(() => topicRecentData.value.projects);
+const topicResources = computed(() => topicRecentData.value.resources);
+const topicTickets = computed(() => topicRecentData.value.jiraTickets);
 
 const convSearchQuery = ref('');
 const convFilter = ref('all');
 const webSearchQuery = ref('');
 const webTypeFilter = ref('all');
 const expandedConversations = ref(new Set());
+const highlightedConversationId = ref<string | null>(null);
+const messageFocusNotice = ref<{
+  type: 'info' | 'warning';
+  text: string;
+} | null>(null);
 
 const tabs = [
   { key: 'projects', label: '🚀 相关项目' },
   { key: 'resources', label: '📚 相关资源' },
   { key: 'tickets', label: '🎯 相关Tickets' },
   { key: 'conversations', label: '💬 聊天记录' },
-  { key: 'webpages', label: '🌐 网页记录' }
+  { key: 'webpages', label: '🌐 网页记录' },
 ];
 
 const filteredConversations = computed(() => {
-  let filtered = topicData.value?.recentDataDetails?.conversations || [];
-  
+  let filtered = topicConversations.value;
+
   if (convSearchQuery.value.trim()) {
-    const query = convSearchQuery.value.toLowerCase();
-    filtered = filtered.filter(conv => 
-      (conv.summary || '').toLowerCase().includes(query) ||
-      (conv.sender || '').toLowerCase().includes(query) ||
-      (conv.groupName || '').toLowerCase().includes(query)
+    filtered = filtered.filter((conv) =>
+      topicConversationMatchesQuery(conv, convSearchQuery.value),
     );
   }
-  
+
   if (convFilter.value !== 'all') {
-    filtered = filtered.filter(conv => {
+    filtered = filtered.filter((conv) => {
       switch (convFilter.value) {
         case 'team':
-          return (conv.groupName || '').includes('团队') || (conv.groupName || '').includes('Team');
+          return (
+            (conv.groupName || '').includes('团队') ||
+            (conv.groupName || '').includes('Team')
+          );
         case 'project':
-          return (conv.groupName || '').includes('项目') || (conv.groupName || '').includes('Project');
+          return (
+            (conv.groupName || '').includes('项目') ||
+            (conv.groupName || '').includes('Project')
+          );
         case 'tech':
-          return (conv.groupName || '').includes('技术') || (conv.groupName || '').includes('Tech') || (conv.groupName || '').includes('开发');
+          return (
+            (conv.groupName || '').includes('技术') ||
+            (conv.groupName || '').includes('Tech') ||
+            (conv.groupName || '').includes('开发')
+          );
         default:
           return true;
       }
     });
   }
-  
+
   return filtered;
 });
 
 const filteredWebpages = computed(() => {
-  let filtered = topicData.value?.recentDataDetails?.webpages || [];
-  
+  let filtered = topicWebpages.value;
+
   if (webSearchQuery.value.trim()) {
     const query = webSearchQuery.value.toLowerCase();
-    filtered = filtered.filter(webpage => 
-      (webpage.title || '').toLowerCase().includes(query) ||
-      (webpage.summary || '').toLowerCase().includes(query) ||
-      (webpage.url || '').toLowerCase().includes(query)
+    filtered = filtered.filter(
+      (webpage) =>
+        (webpage.title || '').toLowerCase().includes(query) ||
+        (webpage.summary || '').toLowerCase().includes(query) ||
+        (webpage.url || '').toLowerCase().includes(query),
     );
   }
-  
+
   if (webTypeFilter.value !== 'all') {
-    filtered = filtered.filter(webpage => webpage.type === webTypeFilter.value);
+    filtered = filtered.filter(
+      (webpage) => webpage.type === webTypeFilter.value,
+    );
   }
-  
+
   return filtered;
 });
 
@@ -337,7 +495,7 @@ const toggleConversationExpand = (conversationId: string) => {
     newExpanded.clear();
     newExpanded.add(conversationId);
     // 展开时标记为已读
-    store.markConversationAsRead(topicId.value, conversationId);
+    void store.markConversationAsRead(topicId.value, conversationId);
   }
   expandedConversations.value = newExpanded;
 };
@@ -348,11 +506,108 @@ const handleMarkAllAsRead = async () => {
   }
 };
 
+const handleUndoTopicRead = async () => {
+  await store.undoLastTopicRead();
+};
+
+const handleUndoConversationRead = async () => {
+  await store.undoLastConversationRead();
+};
+
+const doesConversationContextMatch = (conversation: any): boolean => {
+  return topicConversationHasContextMatch(
+    conversation,
+    convSearchQuery.value,
+  );
+};
+
+const formatConversationUndoLabel = (undoState: any): string => {
+  const label =
+    undoState?.conversationLabel || undoState?.conversationId || '这条讨论';
+  const normalizedLabel = String(label).replace(/\s+/g, ' ').trim();
+  return normalizedLabel.length > 36
+    ? `${normalizedLabel.slice(0, 36)}...`
+    : normalizedLabel;
+};
+
+const normalizeQueryValue = (value: unknown): string => {
+  if (Array.isArray(value)) return String(value[0] || '').trim();
+  return String(value || '').trim();
+};
+
+const focusConversationFromQuery = async (messageIdValue: unknown) => {
+  const messageId = normalizeQueryValue(messageIdValue);
+  if (!messageId) {
+    messageFocusNotice.value = null;
+    return;
+  }
+  if (!topicId.value || !topicData.value) return;
+
+  const targetConversation = findTopicConversationByMessageId(
+    topicData.value,
+    messageId,
+  );
+  if (!targetConversation?.id) {
+    activeTab.value = 'conversations';
+    convFilter.value = 'all';
+    convSearchQuery.value = '';
+    messageFocusNotice.value = {
+      type: 'warning',
+      text: '没有在当前主题详情中找到链接里的消息，已显示全部聊天记录。',
+    };
+    return;
+  }
+
+  activeTab.value = 'conversations';
+  convFilter.value = 'all';
+  messageFocusNotice.value = {
+    type: 'info',
+    text: '已定位到链接里的聊天记录，并同步为已读。',
+  };
+
+  if (
+    convSearchQuery.value &&
+    !filteredConversations.value.some(
+      (conversation: any) => conversation.id === targetConversation.id,
+    )
+  ) {
+    convSearchQuery.value = '';
+  }
+
+  expandedConversations.value = new Set([targetConversation.id]);
+  highlightedConversationId.value = targetConversation.id;
+  await store.markConversationAsRead(topicId.value, targetConversation.id);
+  await nextTick();
+
+  const targetElement = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-conversation-id]'),
+  ).find((element) => element.dataset.conversationId === targetConversation.id);
+  targetElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  window.setTimeout(() => {
+    if (highlightedConversationId.value === targetConversation.id) {
+      highlightedConversationId.value = null;
+    }
+    if (messageFocusNotice.value?.type === 'info') {
+      messageFocusNotice.value = null;
+    }
+  }, 2400);
+};
+
 const highlightText = (text: string, searchQuery: string) => {
-  if (!searchQuery.trim()) return text;
-  
-  const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-  return text.replace(regex, '<mark style="background: rgba(251, 191, 36, 0.3); color: #fbbf24; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-weight: 600;">$1</mark>');
+  return renderHighlightedText(text, searchQuery);
+};
+
+const getConversationSourceUrl = (conversation: any): string => {
+  const url =
+    conversation?.teamUrl ||
+    conversation?.sourceUrl ||
+    conversation?.permalink ||
+    conversation?.url;
+  if (!url || url === '#') return '';
+  const normalizedUrl = String(url).trim();
+  if (/^https?:\/\//i.test(normalizedUrl)) return normalizedUrl;
+  return '';
 };
 
 const getWebpageIcon = (type: string) => {
@@ -361,20 +616,19 @@ const getWebpageIcon = (type: string) => {
     confluence: '📝',
     github: '🐙',
     docs: '📄',
-    blog: '📰'
+    blog: '📰',
   };
   return icons[type] || '🌐';
 };
 
 const getPriorityStyle = (priority: string) => {
   const styles = {
-    '高': { background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444' },
-    '中': { background: 'rgba(251, 191, 36, 0.2)', color: '#f59e0b' },
-    '低': { background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e' }
+    高: { background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444' },
+    中: { background: 'rgba(251, 191, 36, 0.2)', color: '#f59e0b' },
+    低: { background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e' },
   };
   return styles[priority] || styles['中'];
 };
-
 
 /**
  * 格式化时间为相对时间
@@ -382,33 +636,105 @@ const getPriorityStyle = (priority: string) => {
 const formatTimeAgo = (timestamp: number): string => {
   const now = Date.now();
   const diff = now - timestamp;
-  
+
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
   const weeks = Math.floor(diff / 604800000);
-  
+
   if (hours < 1) return '刚刚';
   if (hours < 24) return `${hours}小时前`;
   if (days < 7) return `${days}天前`;
   if (weeks < 4) return `${weeks}周前`;
   return new Date(timestamp).toLocaleDateString();
-}
+};
 
-watch(topicId, (newId) => {
-  if (newId) {
-    store.loadTopicDetail(newId);
-  }
-}, { immediate: true });
+watch(
+  topicId,
+  async (newId) => {
+    if (newId) {
+      await store.loadTopicDetail(newId);
+      await focusConversationFromQuery(route.query.messageId);
+    }
+  },
+  { immediate: true },
+);
 
-watch(() => route.query, (newQuery) => {
-  if (newQuery.messageId) {
-    activeTab.value = 'conversations';
-    console.log('定位到消息:', newQuery.messageId);
-  }
-});
+watch(
+  () => route.query.messageId,
+  (messageId) => {
+    focusConversationFromQuery(messageId);
+  },
+);
 </script>
 
 <style scoped>
+.topic-undo-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.88);
+  color: #dbeafe;
+  font-size: 0.875rem;
+}
+
+.topic-undo-toast button {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid rgba(96, 165, 250, 0.42);
+  border-radius: 0.375rem;
+  background: rgba(37, 99, 235, 0.18);
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.topic-undo-toast button:hover,
+.topic-undo-toast button:focus-visible {
+  outline: none;
+  background: rgba(37, 99, 235, 0.32);
+  color: #ffffff;
+}
+
+.conversation-undo-toast {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+}
+
+.conversation-side-actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.25rem;
+  margin-left: 1rem;
+}
+
+.conversation-source-link {
+  color: #93c5fd;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.conversation-source-link:hover,
+.conversation-source-link:focus-visible {
+  color: #bfdbfe;
+  text-decoration: underline;
+}
+
+.context-indicator {
+  display: block;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
 /* 全部已阅按钮 */
 .mark-all-read-btn {
   padding: 0.75rem 1.5rem;
@@ -452,8 +778,13 @@ watch(() => route.query, (newQuery) => {
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* 未读消息样式 */
@@ -465,5 +796,54 @@ watch(() => route.query, (newQuery) => {
 .conversation-item.unread .sender-name {
   color: #60a5fa;
   font-weight: 600;
+}
+
+.context-match-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+  padding: 0.08rem 0.35rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 999px;
+  color: #93c5fd;
+  background: rgba(37, 99, 235, 0.12);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+
+.conversation-item.targeted {
+  outline: 2px solid rgba(96, 165, 250, 0.75);
+  box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.12);
+}
+
+.message-focus-notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.message-focus-notice.info {
+  color: #bfdbfe;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.message-focus-notice.warning {
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.empty-state {
+  padding: 1.5rem;
+  color: #94a3b8;
+  text-align: center;
+  border: 1px dashed rgba(148, 163, 184, 0.25);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.24);
 }
 </style>

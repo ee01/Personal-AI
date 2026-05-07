@@ -72,6 +72,9 @@ const elements = {
     'doubao-source-interval-minutes',
   ),
   doubaoSourceScope: document.getElementById('doubao-source-scope'),
+  doubaoSourceTransportBanner: document.getElementById(
+    'doubao-source-transport-banner',
+  ),
   doubaoSourceSaveButton: document.getElementById('doubao-source-save-button'),
   doubaoSourceLoginButton: document.getElementById(
     'doubao-source-login-button',
@@ -134,10 +137,13 @@ const elements = {
   broadcastMcpGuide: document.getElementById('broadcast-webpage-mcp-guide'),
   broadcastMcpTestButton: document.getElementById('broadcast-mcp-test-button'),
   broadcastMcpTestMessage: document.getElementById('broadcast-mcp-test-message'),
+  broadcastTransportSaveButton: document.getElementById('broadcast-transport-save-button'),
+  broadcastTransportMessage: document.getElementById('broadcast-transport-message'),
 };
 
 let refreshTimer;
 let settingsDirty = false;
+let broadcastTransportDirty = false;
 let latestStatus = null;
 let latestSettingsPayload = null;
 let latestExplorerStatus = null;
@@ -248,6 +254,14 @@ function sourceUsesDailyBrowser(source, sourceStatus) {
   );
 }
 
+function broadcastUsesDailyBrowser() {
+  return (
+    latestSettingsPayload?.effective?.explorer?.doubao?.broadcastTransport ===
+      'webpage_mcp' ||
+    elements.broadcastUseDailyBrowser?.checked
+  );
+}
+
 function formatRunOutcome(sourceStatus) {
   if (!sourceStatus) return '待检查';
   if (sourceStatus.running) return '抓取中';
@@ -279,6 +293,18 @@ function setStatusPill(element, text, tone = 'pending') {
   if (!element) return;
   element.textContent = text;
   element.className = `step-status step-status-${tone}`;
+}
+
+function setManualRunResultMessage(
+  element,
+  result,
+  { succeeded, skipped },
+) {
+  if (result?.status === 'skipped') {
+    setMessage(element, result.errorMessage || skipped, 'warn');
+    return;
+  }
+  setMessage(element, succeeded, 'success');
 }
 
 function collectRuntimeSettings() {
@@ -319,6 +345,48 @@ function markExplorerSourceDirty(source) {
 
 function clearExplorerSourceDirty(source) {
   explorerSourceDirty.delete(source);
+}
+
+function selectedBroadcastTransport() {
+  return elements.broadcastUseDailyBrowser?.checked
+    ? 'webpage_mcp'
+    : 'playwright';
+}
+
+function describeBroadcastTransport(transport = selectedBroadcastTransport()) {
+  return transport === 'webpage_mcp'
+    ? '日常 Chrome 登录态'
+    : '桌面端 Chromium profile';
+}
+
+function syncBroadcastTransportPresentation() {
+  if (!elements.loginButton) return;
+  elements.loginButton.textContent =
+    selectedBroadcastTransport() === 'webpage_mcp'
+      ? '打开 Chrome 豆包'
+      : '打开登录窗口';
+}
+
+function clearBroadcastTransportDirty() {
+  broadcastTransportDirty = false;
+}
+
+function syncBroadcastTransportDirtyFromControl() {
+  const savedTransport =
+    latestSettingsPayload?.effective?.explorer?.doubao?.broadcastTransport ??
+    'playwright';
+  const selectedTransport = selectedBroadcastTransport();
+  broadcastTransportDirty = selectedTransport !== savedTransport;
+  if (broadcastTransportDirty) {
+    setMessage(
+      elements.broadcastTransportMessage,
+      `广播方式尚未保存：将切换为${describeBroadcastTransport(selectedTransport)}。保存后生效；登录、绑定和手动推送会先自动保存。`,
+      'warn',
+    );
+  } else {
+    setMessage(elements.broadcastTransportMessage, '');
+  }
+  syncBroadcastTransportPresentation();
 }
 
 function applyRuntimeSettings(settings, { force = false } = {}) {
@@ -411,14 +479,14 @@ function applyExplorerSettings(explorerSettings, { force = false } = {}) {
       elements.chatgptMcpGuide,
     );
   }
-  // Broadcast transport (not part of explorerSourceDirty, always sync from server)
-  if (elements.broadcastUseDailyBrowser && (force || !explorerSourceDirty.has('doubao'))) {
+  if (elements.broadcastUseDailyBrowser && !broadcastTransportDirty) {
     elements.broadcastUseDailyBrowser.checked =
       explorerSettings.doubao?.broadcastTransport === 'webpage_mcp';
     syncWebpageMcpGuide(
       elements.broadcastUseDailyBrowser,
       elements.broadcastMcpGuide,
     );
+    syncBroadcastTransportPresentation();
   }
   if (elements.askDefaultScopeValue) {
     elements.askDefaultScopeValue.textContent = formatAskScope(
@@ -465,7 +533,7 @@ function renderSummary(status) {
       tone: stableOn ? 'on' : 'off',
     },
     {
-      label: '同步 · 近期重点 / 待办 → 豆包',
+      label: '同步 · 近期记忆重点 / 待办 → 豆包',
       value: briefingOn ? '已开启' : '未开启',
       tone: briefingOn ? 'on' : 'off',
     },
@@ -520,7 +588,9 @@ function renderNextStep(status) {
     [
       !checklist.doubaoConnected,
       '先完成豆包登录',
-      '桥接器需要独立浏览器 profile 才能继续绑定输出线程，也才能读取豆包输入来源。',
+      broadcastUsesDailyBrowser()
+        ? '请在日常 Chrome 里打开 doubao.com 并登录；Personal AI 只会操作明确的豆包标签页，成功后再继续绑定输出线程。'
+        : '桥接器需要独立浏览器 profile 才能继续绑定输出线程，也才能读取豆包输入来源。',
     ],
     [
       !checklist.memorySyncBound,
@@ -530,7 +600,7 @@ function renderNextStep(status) {
     [
       !checklist.mobileContextBound,
       '绑定手机版对话',
-      '让近期重点、待办和通知推送回你真正会继续使用的那条手机对话。',
+      '让近期记忆重点、待办和通知推送回你真正会继续使用的那条手机对话。',
     ],
   ];
 
@@ -686,41 +756,62 @@ function renderSourceCard(source, sourceStatus) {
       sourceStatus.settings?.defaultScope,
     );
   }
-  if (source === 'chatgpt') {
-    renderChatgptTransportBanner(sourceStatus);
-  }
+  renderSourceTransportBanner(source, sourceStatus);
 }
 
-function renderChatgptTransportBanner(sourceStatus) {
-  const banner = elements.chatgptSourceTransportBanner;
+function renderSourceTransportBanner(source, sourceStatus) {
+  const isDoubao = source === 'doubao';
+  const banner = isDoubao
+    ? elements.doubaoSourceTransportBanner
+    : elements.chatgptSourceTransportBanner;
   if (!banner) return;
   const transport = sourceStatus.transport;
+  const preferredDailyBrowser =
+    sourceStatus.settings?.transport === 'webpage_mcp';
+  const sourceLabel = isDoubao ? '豆包' : 'ChatGPT';
 
-  if (!transport || transport.mode === 'unknown') {
+  if (
+    (!transport || transport.mode === 'unknown') &&
+    !preferredDailyBrowser
+  ) {
     banner.hidden = true;
     banner.textContent = '';
     return;
   }
 
-  if (transport.mode === 'playwright') {
+  if (
+    transport?.mode === 'playwright' &&
+    !transport.fallbackReason &&
+    !preferredDailyBrowser
+  ) {
     banner.hidden = true;
     banner.textContent = '';
     return;
   }
 
-  if (transport.mode === 'webpage_mcp') {
+  banner.hidden = false;
+
+  if (transport?.fallbackReason) {
+    banner.className = 'inline-message status-blocked';
+    banner.textContent = `当前传输：已临时回退到内置 Chromium。日常浏览器不可用：${transport.fallbackReason}`;
+    return;
+  }
+
+  if (transport?.mode === 'webpage_mcp') {
     banner.hidden = false;
     if (sourceStatus.authStatus === 'connected') {
       banner.className = 'inline-message success';
-      banner.textContent = '当前传输：日常浏览器（webpage-mcp）。已借用登录态。';
-    } else if (transport.fallbackReason) {
-      banner.className = 'inline-message status-blocked';
-      banner.textContent = `当前传输：日常浏览器（webpage-mcp）。登录态待确认：${transport.fallbackReason}`;
+      banner.textContent = `当前传输：日常浏览器（webpage-mcp）。已借用 ${sourceLabel} 登录态。`;
     } else {
       banner.className = 'inline-message';
-      banner.textContent =
-        '当前传输：日常浏览器（webpage-mcp）。保存并开启后会使用日常浏览器登录态。';
+      banner.textContent = `当前传输：日常浏览器（webpage-mcp）。保存并开启后会使用日常浏览器 ${sourceLabel} 登录态。`;
     }
+    return;
+  }
+
+  if (preferredDailyBrowser) {
+    banner.className = 'inline-message';
+    banner.textContent = `当前传输：日常浏览器（webpage-mcp）。保存并开启后会使用日常浏览器 ${sourceLabel} 登录态。`;
     return;
   }
 
@@ -771,6 +862,10 @@ function applyButtonAvailability(status, explorerStatus) {
     !latestSettingsPayload || !explorerSourceDirty.has('doubao');
   elements.chatgptSourceSaveButton.disabled =
     !latestSettingsPayload || !explorerSourceDirty.has('chatgpt');
+  if (elements.broadcastTransportSaveButton) {
+    elements.broadcastTransportSaveButton.disabled =
+      !latestSettingsPayload || !broadcastTransportDirty;
+  }
 
   elements.doubaoSourceLoginButton.disabled =
     !doubaoSource || doubaoSource.running;
@@ -908,6 +1003,51 @@ async function saveRuntimeSettings({ silent = false } = {}) {
   return saved;
 }
 
+async function saveBroadcastTransportSettings(
+  { silent = false, refresh = true } = {},
+) {
+  const currentExplorer = latestSettingsPayload?.effective?.explorer;
+  if (!currentExplorer) {
+    throw new Error('广播方式设置尚未加载完成，请稍后重试。');
+  }
+  const nextExplorer = {
+    ...currentExplorer,
+    doubao: {
+      ...currentExplorer.doubao,
+      broadcastTransport: selectedBroadcastTransport(),
+    },
+  };
+  const saved = await bridgeApi.updateSettings({ explorer: nextExplorer });
+  latestSettingsPayload = saved;
+  clearBroadcastTransportDirty();
+  applyExplorerSettings(saved.effective.explorer);
+  applyButtonAvailability(latestStatus, latestExplorerStatus);
+  if (!silent) {
+    setMessage(
+      elements.broadcastTransportMessage,
+      elements.broadcastUseDailyBrowser?.checked
+        ? '广播方式已保存：会优先借用日常 Chrome 中的豆包登录态。'
+        : '广播方式已保存：会使用桌面端自带 Chromium profile。',
+      'success',
+    );
+  }
+  if (refresh) {
+    await refreshStatus();
+  }
+  return saved;
+}
+
+async function savePendingBroadcastTransport() {
+  if (broadcastTransportDirty) {
+    await saveBroadcastTransportSettings({ silent: true, refresh: false });
+    setMessage(
+      elements.broadcastTransportMessage,
+      `已先保存广播方式：${describeBroadcastTransport()}。正在继续当前操作。`,
+      'success',
+    );
+  }
+}
+
 function collectExplorerSettings() {
   const currentExplorer = latestSettingsPayload?.effective?.explorer;
   if (!currentExplorer) {
@@ -933,9 +1073,7 @@ function collectExplorerSettings() {
       transport: elements.doubaoSourceUseDailyBrowser?.checked
         ? 'webpage_mcp'
         : 'playwright',
-      broadcastTransport: elements.broadcastUseDailyBrowser?.checked
-        ? 'webpage_mcp'
-        : 'playwright',
+      broadcastTransport: currentExplorer.doubao.broadcastTransport,
     },
     chatgpt: {
       ...currentExplorer.chatgpt,
@@ -1161,7 +1299,8 @@ if (elements.doubaoSourceUseDailyBrowser) {
 if (elements.broadcastUseDailyBrowser) {
   elements.broadcastUseDailyBrowser.addEventListener('change', () => {
     syncWebpageMcpGuide(elements.broadcastUseDailyBrowser, elements.broadcastMcpGuide);
-    markExplorerSourceDirty('doubao');
+    syncBroadcastTransportDirtyFromControl();
+    syncBroadcastTransportPresentation();
     applyButtonAvailability(latestStatus, latestExplorerStatus);
   });
 }
@@ -1181,6 +1320,22 @@ if (elements.doubaoMcpTestButton) {
 if (elements.broadcastMcpTestButton) {
   elements.broadcastMcpTestButton.addEventListener('click', () => {
     void runMcpConnectionTest(elements.broadcastMcpTestMessage);
+  });
+}
+
+if (elements.broadcastTransportSaveButton) {
+  elements.broadcastTransportSaveButton.addEventListener('click', () => {
+    void withAction(elements.broadcastTransportSaveButton, '保存中...', async () => {
+      try {
+        await saveBroadcastTransportSettings();
+      } catch (error) {
+        setMessage(
+          elements.broadcastTransportMessage,
+          error instanceof Error ? error.message : '保存广播方式失败',
+          'error',
+        );
+      }
+    });
   });
 }
 
@@ -1210,10 +1365,13 @@ elements.testMemoryButton.addEventListener('click', () => {
 elements.loginButton.addEventListener('click', () => {
   void withAction(elements.loginButton, '打开中...', async () => {
     try {
+      await savePendingBroadcastTransport();
       const result = await bridgeApi.openLogin();
       setMessage(
         elements.loginMessage,
-        `已打开登录窗口：${result.url}`,
+        selectedBroadcastTransport() === 'webpage_mcp'
+          ? `已打开 Chrome 豆包标签页：${result.url}`
+          : `已打开登录窗口：${result.url}`,
         'success',
       );
       await refreshStatus();
@@ -1230,6 +1388,7 @@ elements.loginButton.addEventListener('click', () => {
 elements.memoryThreadButton.addEventListener('click', () => {
   void withAction(elements.memoryThreadButton, '创建中...', async () => {
     try {
+      await savePendingBroadcastTransport();
       const thread = await bridgeApi.createMemorySyncThread();
       setMessage(
         elements.memoryThreadMessage,
@@ -1250,6 +1409,7 @@ elements.memoryThreadButton.addEventListener('click', () => {
 elements.mobileThreadButton.addEventListener('click', () => {
   void withAction(elements.mobileThreadButton, '绑定中...', async () => {
     try {
+      await savePendingBroadcastTransport();
       const binding = await bridgeApi.autoBindMobileThread();
       setMessage(
         elements.mobileThreadMessage,
@@ -1270,12 +1430,13 @@ elements.mobileThreadButton.addEventListener('click', () => {
 elements.runStableButton.addEventListener('click', () => {
   void withAction(elements.runStableButton, '推送中...', async () => {
     try {
-      await bridgeApi.runNow('stable_memory');
-      setMessage(
-        elements.memoryThreadMessage,
-        '已手动推送一次 persona 到长期记忆线程。',
-        'success',
-      );
+      await savePendingBroadcastTransport();
+      const result = await bridgeApi.runNow('stable_memory');
+      setManualRunResultMessage(elements.memoryThreadMessage, result, {
+        succeeded: '已手动推送一次 persona 到长期记忆线程。',
+        skipped:
+          '本次没有可推送的长期记忆；Memory Service 当前未渲染出稳定画像更新。',
+      });
       await refreshStatus();
     } catch (error) {
       setMessage(
@@ -1290,12 +1451,13 @@ elements.runStableButton.addEventListener('click', () => {
 elements.runBriefingButton.addEventListener('click', () => {
   void withAction(elements.runBriefingButton, '推送中...', async () => {
     try {
-      await bridgeApi.runNow('mobile_briefing');
-      setMessage(
-        elements.mobileThreadMessage,
-        '已手动推送一次近期重点到手机对话。',
-        'success',
-      );
+      await savePendingBroadcastTransport();
+      const result = await bridgeApi.runNow('mobile_briefing');
+      setManualRunResultMessage(elements.mobileThreadMessage, result, {
+        succeeded: '已手动推送一次近期记忆重点到手机对话。',
+        skipped:
+          '本次没有可推送的近期记忆重点；没有真实高信号内容时不会向豆包发送占位文本。',
+      });
       await refreshStatus();
     } catch (error) {
       setMessage(
@@ -1310,12 +1472,12 @@ elements.runBriefingButton.addEventListener('click', () => {
 elements.runReminderButton.addEventListener('click', () => {
   void withAction(elements.runReminderButton, '推送中...', async () => {
     try {
-      await bridgeApi.runNow('reminder_sync');
-      setMessage(
-        elements.mobileThreadMessage,
-        '已手动推送一次待办 / 通知到手机对话。',
-        'success',
-      );
+      await savePendingBroadcastTransport();
+      const result = await bridgeApi.runNow('reminder_sync');
+      setManualRunResultMessage(elements.mobileThreadMessage, result, {
+        succeeded: '已手动推送一次待办 / 通知到手机对话。',
+        skipped: '本次没有可推送的待办或通知。',
+      });
       await refreshStatus();
     } catch (error) {
       setMessage(

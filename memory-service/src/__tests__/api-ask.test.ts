@@ -306,6 +306,48 @@ describe('Ask API', () => {
     recallSpy.mockRestore();
   });
 
+  it('accepts all ask scope from the search UI', async () => {
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ask-all-scope-memory',
+            type: 'message',
+            content:
+              'Personal and work planning context should be available when the user searches all memories.',
+            score: 0.88,
+            source: 'manual',
+            timestamp: Math.floor(Date.now() / 1000) - 120,
+          },
+        ],
+        totalFound: 1,
+        channels: ['time'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'All-scope evidence is available.',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'What planning context do I have?',
+        includeEvidence: true,
+        scope: 'all',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(recallSpy).toHaveBeenCalled();
+    expect(recallSpy.mock.calls[0][0].scope).toBe('all');
+    expect(res.json().evidence?.[0]?.id).toBe('ask-all-scope-memory');
+    recallSpy.mockRestore();
+  });
+
   it('streams the main answer before the final structured result', async () => {
     generateStreamMock.mockImplementation(
       async (_prompt, _options, onDelta) => {

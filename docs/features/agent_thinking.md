@@ -1,310 +1,108 @@
----
-description: 
-globs: 
-alwaysApply: false
----
-# 智能Agent系统 - 综合文档
+# Agent Thinking 功能概览
 
-*最后更新: 2024-12-20*
+最后更新: 2026-05-06
 
-## 功能概述
+## 功能定位
 
-智能Agent系统（agentThinking）是一个基于新接口设计的通用分析框架，提供了统一的智能分析能力。该组件是原有IntelligentAgent的升级版本，采用更灵活、可扩展的架构设计，支持多种内容类型的分析处理。
+Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `src/agentThinking.ts`。它把消息、项目、网页等输入先交给 LLM 做初始结构化分析，再按 `maxActions` 进入思考-行动循环，按需调用已注册工具补充上下文，最后输出可解释的分析结果。
 
-### 核心能力
+当前主要使用场景:
 
-- **多类型内容分析**：支持消息、项目、会议、文档、网页等多种内容的智能分析
-- **思考-行动循环**：实现基于LLM的思考-行动循环，提高分析深度
-- **批量处理能力**：支持高效的批量分析处理
-- **兼容性保障**：提供与旧版IntelligentAgent的兼容层
-- **灵活配置**：支持通过配置调整分析深度和行为
-- **多工具协同处理**：动态决定工具调用顺序和使用策略
-- **强类型分析结果**：不同分析类型返回特定结构的结果对象
+- 消息批量分析: `messageDealing.ts` 会把群消息转成 message group 后调用 `IntelligentAgent.analyze(...)`。
+- 项目/网页分析: background、Google Slides、网页智能等路径会复用同一个分析入口。
+- Options 演示页: `src/options.tsx` + `src/agent-visualizer.tsx` 展示工具目录、思考步骤和结果摘要。
 
-## 系统架构
+## 当前实现
 
-agentThinking采用模块化架构设计，将各类分析能力统一在一个框架下，同时保持扩展性。
+公开入口:
 
-## 系统架构
+- `analyze(input, config, context?, onStepCompleted?)`
+- `analyzeBatch(items, config, context?, onProgress?)`
+- `getToolDescriptions()` 用于提示词
+- `getToolCatalog()` 用于 UI 展示
 
-智能Agent系统由以下主要组件构成：
+主要结果结构定义在 `src/interfaces/analysisInterfaces.ts`，包括 `MessageAnalysisResult`、`ProjectAnalysisResult`、`WebpageAnalysisResult` 等。
 
-```
-智能Agent系统
-├── 核心组件
-│   ├── IntelligentAgent类 - 主要智能体
-│   ├── 工具注册表 - 可用工具的注册中心
-│   └── 处理流程管理器 - 处理思考-行动循环
-│
-├── 接口定义
-│   ├── 基础分析结果 (BaseAnalysisResult) - 所有分析结果的基类
-│   ├── 类型特定结果 (MessageAnalysisResult, ProjectAnalysisResult等)
-│   ├── 分析配置 (AnalysisConfig) - 控制分析行为 
-│   └── 分析上下文 (AnalysisContext) - 提供环境信息
-│
-├── 工具集
-│   ├── 实体提取 - 提取消息中的人物、项目等实体
-│   ├── 历史消息搜索 - 查询相关历史消息
-│   ├── 消息存储 - 将消息存储到向量数据库
-│   ├── 消息通知 - 通过bot发送通知
-│   ├── JIRA查询 - 获取JIRA任务信息
-│   ├── 组织架构查询 - 获取人员的组织关系
-│   ├── 发布任务查询 - 查询本月发布任务
-│   └── Sprint数据查询 - 查询Sprint进度和bug数据
-│
-└── 可视化组件
-    ├── AgentVisualizer - 显示详细的思考过程
-    ├── AgentFlowVisualizer - 流程图可视化
-    └── AgentResultSummary - 处理结果摘要
-```
+当前实际注册工具:
 
-## 消息处理流程
+- `historySearch`: 通过 Memory Service recall 搜索历史上下文。
+- `jiraQuery`: 通过 Jira REST API 查询单个或多个 issue，并带 30 分钟内存缓存。
 
-消息处理流程展示了智能Agent如何处理收到的信息：
+注意: 组织架构、发布任务、Sprint 等工具仍是注释中的示例，不应在文档或 UI 中描述为已上线能力。网页初始分析可以直接产出 `shouldStore`、`shouldNotify`、实体和行动建议，不依赖这些未注册工具。
 
-```
-          ┌─────────────┐
-          │  新消息接收  │
-          └──────┬──────┘
-                 │
-          ┌──────▼──────┐
-          │ 初始消息分析 │
-          └──────┬──────┘
-                 │
-┌───────────────┐│┌───────────────┐
-│               ▼▼▼               │
-│        ┌──────────────┐         │
-│        │  思考下一步  │◄────────┐│
-│        └──────┬───────┘         ││
-│               │                 ││
-│        ┌──────▼───────┐         ││
-│        │  需要更多信息? │         ││
-│        └──────┬───────┘         ││
-│               │                 ││
-│        ┌──────▼───────┐         ││
-│   ┌───►│  选择合适工具  │         ││
-│   │    └──────┬───────┘         ││
-│   │           │                 ││
-│   │    ┌──────▼───────┐         ││
-│   │    │   执行工具    │         ││
-│   │    └──────┬───────┘         ││
-│   │           │                 ││
-│   │    ┌──────▼───────┐         ││
-│   │    │  收集工具结果  │         ││
-│   │    └──────┬───────┘         ││
-│   │           │                 ││
-│   │    ┌──────▼───────┐         ││
-│   │    │ 是否需要更多工具?│────是──┘│
-│   │    └──────┬───────┘          │
-│   │           │否                │
-│   │    ┌──────▼───────┐          │
-│   │    │   信息足够?  │────否─────┘
-│   │    └──────┬───────┘
-│   │           │是
-│   │    ┌──────▼───────┐
-│   │    │ 做出最终决策  │
-│   │    └──────┬───────┘
-│   │           │
-│   │    ┌──────▼───────┐     ┌──────────────┐
-│   │    │ 是否需要存储? │──是──►│ 存储到向量数据库 │
-│   │    └──────┬───────┘     └──────────────┘
-│   │           │否
-│   │    ┌──────▼───────┐     ┌──────────────┐
-│   │    │ 是否需要通知? │──是──►│  发送bot通知   │
-│   │    └──────┬───────┘     └──────────────┘
-│   │           │否
-│   │    ┌──────▼───────┐
-│   └────┤ 处理下一条消息 │
-         └──────────────┘
+2026-05-06 状态:
+
+- 工具目录、提示词和 Options 工具表都从实际注册表派生，不再把注释里的示例工具当成已上线工具展示。
+- 思考循环新增工具调用去重: 相同 `tool id + 参数` 会生成稳定 key，已执行过的同参数调用会在本轮跳过并记录为 `skipped`。
+- Options 演示只使用 `historySearch` 和 `jiraQuery` 两个真实工具，并展示重复调用被跳过的状态。
+- `AgentVisualizer` 默认展示状态、摘要和证据概览；原始调试详情和工具返回收在展开区，避免把完整推理过程当作用户主路径。
+- 同一步里多次调用同一个工具时，工具结果会完整保留；如果只有部分重复调用被跳过，UI 会显示“部分跳过”，避免把成功结果误判为全跳过。
+- 当达到 `maxActions` 仍未收到 `finish` 时，结果会追加 `max_actions_reached` 步骤，用当前已收集信息明确结束本轮分析。
+- 网页分析分支也会记录工具结果、重复跳过状态和思考循环的 LLM 统计，避免网页路径和消息/项目路径表现不一致。
+- 工具执行前新增轻量 guardrail: 未注册工具、缺少必填参数的调用会被标记为 `blocked`，不会进入真实工具执行，也不会写入 `usedTools` 或工具记忆。
+- 消息提示词不再推荐未注册的 `orgStructure`，并明确要求只使用当前工具目录中的 ID；Options 演示会展示无效工具被阻断的状态。
+- 单条消息提示构建兼容 `messageContent`、`message_content` 和 `content`，避免标准化后消息正文在提示词里退化成“无内容”。
+
+## 处理流程
+
+1. 检测输入类型和消息格式。
+2. 标准化输入字段，例如 `content` 到 `message_content`、`team_id` 到 `groupId`。
+3. 构建分析提示词并调用 LLM 获取初始结构化判断。
+4. 对每条消息或每个分析对象执行思考-行动循环。
+5. 根据工具结果更新当前决策、元数据和 `thoughtProcess`。
+6. 返回结果，并在消息组处理完成时触发进度回调。
+
+## 已知边界
+
+- `meeting` 和 `document` 分支仍是占位实现，只返回基础示例结果。
+- 工具调用缺少持久 checkpoint，浏览器刷新或 service worker 中断后不能恢复同一次思考循环。
+- 高风险副作用动作目前没有统一的人审/确认中断层。
+- 思考过程已有摘要化主路径，但完整调试详情仍在本地 UI 可展开，后续需要按权限/环境进一步分层。
+- 当前工具 guardrail 只覆盖注册表和必填参数校验；工具级权限、人审、敏感数据脱敏仍需后续分层。
+
+## 建设性改进方向
+
+参考 ReAct、LangGraph、OpenAI Agents SDK、Claude extended thinking 等业内方案，后续优先级建议:
+
+- 为长任务引入 checkpoint 或可恢复任务记录，减少 MV3 service worker 生命周期影响。
+- 将需要通知、写入、外部 API 修改等动作纳入人审策略。
+- 继续把 `thoughtProcess` 的用户摘要和调试详情分层，后续可把摘要字段前移到数据结构而不是只在 UI 层推导。
+- 为工具调用增加更细的安全分类，例如只读、外部写入、通知、权限变更，并在执行前走统一 guardrail。
+- 如果后续恢复长时间 agent run，需要持久化每步输入、工具结果、决策摘要和跳过原因，支持刷新后继续和事后审计。
+
+## 外部参考
+
+- [ReAct](https://arxiv.org/abs/2210.03629): 把推理 trace 和行动交错，用外部工具降低幻觉和错误传播。
+- [Chain-of-Thought Prompting](https://arxiv.org/abs/2201.11903): 中间推理步骤能提升复杂推理，但产品侧需要控制展示粒度。
+- [LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence): checkpoint 支持 human-in-the-loop、time travel、fault tolerance。
+- [LangSmith Observability](https://docs.langchain.com/oss/python/langchain/observability): trace 应覆盖工具调用、模型交互和决策点，方便调试和生产监控。
+- [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/): 工具 guardrail 可在执行前后验证或阻断工具调用。
+- [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/): agent run 的 traces 可覆盖 LLM、工具、handoff、guardrail 和自定义事件。
+- [Claude Extended Thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking): 支持 summarized/omitted thinking，说明生产 UI 不应默认依赖完整思考文本。
+
+## Reminders 反馈
+
+本轮通过 Reminders 读取本机列表，未找到名为 `Personal AI` 的列表；已枚举现有列表名称但没有可归属到该列表的开放反馈。因此本轮没有可纳入或标记完成的提醒。
+
+## 验证
+
+相关回归脚本:
+
+```bash
+TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts
 ```
 
-## 思考-行动循环
+该脚本覆盖:
 
-智能Agent系统基于"思考-行动"循环，而不是预定义的线性流程。每次循环包括：
+- message group 中多条消息都会被处理，不会在第一条后提前返回。
+- group 完成回调能收到完整结果。
+- 无 `context` 的单条消息分析不会崩溃。
+- 同一步多个同 ID 工具调用会保留全部结果，重复参数调用会被跳过且不会覆盖成功结果。
+- `maxActions` 耗尽会写入明确的 `max_actions_reached` 结束步骤。
+- 未注册工具和缺少必填参数的工具调用会被阻断，且不会触发真实工具请求。
+- 单条消息的 `content`/`message_content` 会进入提示词，不会显示为“无内容”。
 
-1. **思考阶段**：Agent评估当前状态，思考下一步行动
-2. **决策阶段**：决定是执行某个工具还是结束处理
-3. **执行阶段**：如果选择执行工具，则调用相应工具并收集结果
-4. **更新阶段**：更新内存状态，记录执行结果
+本轮额外验证:
 
-整个过程由LLM驱动，每次决策都通过提示工程引导LLM做出合理的判断。
-
-## 工具调用策略
-
-工具调用不是预先定义的固定顺序，而是基于消息内容动态决定的。例如：
-
-- 如果消息提到项目，Agent可能会选择查询JIRA
-- 如果消息提到多个人物，Agent可能会选择查询组织架构
-- 如果消息提到截止日期，Agent可能会查询发布计划
-
-这种灵活性使Agent能够根据具体情况"思考"出最合适的行动路径，而不是按照固定流程执行。
-
-## 接口定义
-
-### 核心接口
-
-```typescript
-// 主要分析方法
-async analyze(input: any, config: AnalysisConfig, context?: AnalysisContext): Promise<AnalysisResult>
-
-// 批量分析方法
-async analyzeBatch(
-  items: any[],
-  config: AnalysisConfig,
-  context?: AnalysisContext,
-  onProgress?: (result: AnalysisResult) => void
-): Promise<AnalysisResult[]>
-```
-
-### 基础分析结果
-
-```typescript
-interface BaseAnalysisResult {
-  type: string;                 // 结果类型
-  confidence: number;           // 可信度
-  summary: string;              // 分析总结
-  thoughtProcess?: ThoughtStep[]; // 思考过程
-  metaData: {
-    llmCallCount: number;       // LLM调用次数
-    llmCallTokens: number;      // Token使用量
-    usedTools: string[];        // 使用的工具
-    timestamp: number;          // 时间戳
-  };
-}
-```
-
-## 使用示例
-
-### 消息分析
-
-```typescript
-import { IntelligentAgent } from './agentThinking';
-
-const agent = new IntelligentAgent();
-
-const result = await agent.analyze(
-  {
-    message_content: "团队会议将推迟到下周二，请大家准备项目进度报告。",
-    sender: "项目经理",
-    team_name: "产品开发组",
-    datetime: "2023-12-10T10:00:00Z"
-  },
-  {
-    type: 'message',
-    analysisDepth: 'normal',
-    maxActions: 3
-  }
-);
-
-console.log(result.summary);
-console.log(result.isImportant);
-console.log(result.entities);
-```
-
-### 项目分析
-
-```typescript
-const projectResult = await agent.analyze(
-  {
-    project: {
-      id: "PRJ-2023-001",
-      name: "新版产品开发",
-      status: "In Progress",
-      owner: "张三",
-      dueDate: "2024-03-01"
-    }
-  },
-  {
-    type: 'project',
-    analysisDepth: 'deep',
-    preferredTools: ['jiraQuery', 'historySearch']
-  }
-);
-
-console.log(projectResult.summary);
-console.log(projectResult.riskLevel);
-console.log(projectResult.suggestions);
-```
-
-### 网页内容分析
-
-```typescript
-const webpageResult = await agent.analyze(
-  {
-    title: "项目进度更新 - 前端重构完成情况",
-    url: "https://company.com/project-updates/frontend-refactor",
-    mainContent: `
-      前端重构项目目前已完成60%，主要完成了以下模块：
-      - 用户登录系统重构 ✅
-      - 数据可视化组件优化 ✅
-      - 响应式设计改进 🔄 (进行中)
-      
-      预计12月底前完成所有重构工作。
-      负责人：张三、李四
-      下一步：优化性能，准备上线测试
-    `,
-    chromeAIResult: {
-      relevance: 0.85,
-      shouldStore: true,
-      entities: {
-        projects: ["前端重构项目"],
-        people: ["张三", "李四"],
-        deadlines: ["2024-12-31"]
-      },
-      reasoning: "包含明确的项目进度信息和截止日期"
-    }
-  },
-  {
-    type: 'webpage',
-    analysisDepth: 'deep',
-    maxActions: 3,
-    preferredTools: ['entityExtraction', 'historySearch', 'storeMessage']
-  }
-);
-
-console.log(webpageResult.summary);
-console.log(webpageResult.contentRelevance);
-console.log(webpageResult.extractedEntities);
-console.log(webpageResult.shouldStore);
-console.log(webpageResult.actionSuggestions);
-```
-
-## 系统优势
-
-### 技术优势
-1. **强类型支持**：明确的接口定义，提高代码安全性
-2. **可配置性**：通过配置控制行为，无需修改核心代码
-3. **可扩展性**：易于添加新的分析类型和工具
-
-### 业务优势
-1. **自主决策**：根据上下文自主选择工具
-2. **灵活调用**：动态决定工具调用顺序
-3. **可解释性**：完整记录思考过程
-4. **批量处理**：支持高效的批量分析
-
-## 版本历史
-
-### v2.1.0 (2024-12-20)
-- 新增网页内容分析类型 (webpage)
-- 添加WebpageAnalysisResult和WebpageAnalysisInput接口
-- 实现与Chrome内置AI的集成分析流程
-- 支持Chrome AI预分析 + agentThinking深度分析的分层架构
-- 增加网页分析专用的思考-行动循环和工具处理逻辑
-
-### v2.0.0 (2024-12-20)
-- 整合所有相关文档，形成统一的综合文档
-- 完善接口定义和系统架构描述
-- 添加详细的流程图和使用示例
-
-### v1.1.0 (2024-05-08)
-- 优化项目分析功能
-- 改进工具系统和参数验证
-
-### v1.0.0 (2023-12-01)
-- 初始版本发布
-- 支持多种内容分析
-- 实现思考-行动循环引擎
-
----
-
-*本文档整合了所有相关技术文档，形成了智能Agent系统的完整技术资源。*
+- `npm start` 首次 webpack dev 编译成功后已停止 watch。
+- 用 mock `chrome` 环境加载 `dist/options.html`，点击“启动演示”后确认 `orgStructure` 显示“已阻断”，工具目录仍只展示 `historySearch` 和 `jiraQuery`。

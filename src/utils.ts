@@ -8,6 +8,8 @@ export type BotPushScenario =
   | 'decision_center'
   | 'outreach_result';
 
+export type MeetingTranscribeLanguage = 'auto' | 'zh-CN' | 'en-US';
+
 export interface ResolvedBotPushTarget {
   mode: BotPushTargetMode;
   apiType: 'user' | 'team' | null;
@@ -56,6 +58,7 @@ export interface EnvConfigType {
   JIRA_USERNAME?: string;
   JIRA_API_TOKEN?: string;
   DESIGN_JIRA_PROJECT?: string; // Jira Design项目前缀（如 UX）
+  DESIGN_LINK_DOMAINS?: string; // 额外设计链接域名，逗号/分号/换行分隔
   DEPENDENCIES_JIRA_PROJECT?: string; // Jira外部依赖项目前缀（如 RCV）
   // 消息交互功能开关
   ENABLE_AUTO_REPLY: boolean; // 启用自动答复功能
@@ -120,6 +123,8 @@ export interface EnvConfigType {
     | 'openai_audio_transcriptions'
     | 'openai_chat_completions';
   MEETING_TRANSCRIBE_MODEL: string;
+  MEETING_TRANSCRIBE_LANGUAGE: MeetingTranscribeLanguage;
+  MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED: boolean;
   MEETING_NAME_ALIASES: string;
   MEETING_HOTWORDS: string;
   MEETING_SUMMARY_INTERVAL_SEC: number;
@@ -135,6 +140,35 @@ export function getMeetingTranscriptionMode(
   const v = envConfig.MEETING_TRANSCRIPTION_MODE;
   if (v === 'local-only' || v === 'cloud-only') return v;
   return 'auto';
+}
+
+export function isMeetingRingCentralTranscriptEnabled(
+  envConfig: Pick<EnvConfigType, 'MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED'>,
+): boolean {
+  return envConfig.MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED !== false;
+}
+
+export function normalizeMeetingTranscribeLanguage(
+  value: unknown,
+): MeetingTranscribeLanguage {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace('_', '-');
+  if (raw === 'zh' || raw.startsWith('zh-')) return 'zh-CN';
+  if (raw === 'cn' || raw === 'chinese') return 'zh-CN';
+  if (raw === 'en' || raw.startsWith('en-')) return 'en-US';
+  if (raw === 'english') return 'en-US';
+  return 'auto';
+}
+
+export function getMeetingTranscribeLanguageCode(
+  value: unknown,
+): 'zh' | 'en' | undefined {
+  const normalized = normalizeMeetingTranscribeLanguage(value);
+  if (normalized === 'zh-CN') return 'zh';
+  if (normalized === 'en-US') return 'en';
+  return undefined;
 }
 
 export function normalizeBotPushTarget(
@@ -164,6 +198,18 @@ export function normalizeConcernedItemsDigestHour(
   }
 
   return Math.min(23, Math.max(0, Math.floor(parsed)));
+}
+
+export function normalizeConcernedItemsDigestDayOfWeek(
+  value: number | string | undefined | null,
+  fallback = 1,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(6, Math.max(0, Math.floor(parsed)));
 }
 
 export function getBotPushTarget(
@@ -379,6 +425,7 @@ export function normalizeEnvConfigShape(
     config.MEETING_TRANSCRIBE_API_STYLE === 'openai_chat_completions'
       ? 'openai_chat_completions'
       : defaultEnvConfig.MEETING_TRANSCRIBE_API_STYLE;
+  const normalizedMeetingTranscribeLanguage: MeetingTranscribeLanguage = 'auto';
 
   return {
     ...defaultEnvConfig,
@@ -392,6 +439,9 @@ export function normalizeEnvConfigShape(
     MEETING_MINUTES_API_URL: normalizedMinutesApiUrl,
     MEETING_DIGEST_API_BASE_URL: normalizedMinutesApiUrl,
     MEETING_TRANSCRIBE_API_STYLE: normalizedMeetingTranscribeApiStyle,
+    MEETING_TRANSCRIBE_LANGUAGE: normalizedMeetingTranscribeLanguage,
+    MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED:
+      config.MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED !== false,
   };
 }
 
@@ -443,6 +493,7 @@ export const defaultEnvConfig: EnvConfigType = {
   JIRA_USERNAME: process.env.JIRA_USERNAME || '',
   JIRA_API_TOKEN: process.env.JIRA_API_TOKEN || '',
   DESIGN_JIRA_PROJECT: process.env.DESIGN_JIRA_PROJECT || 'UX*',
+  DESIGN_LINK_DOMAINS: process.env.DESIGN_LINK_DOMAINS || '',
   DEPENDENCIES_JIRA_PROJECT: process.env.DEPENDENCIES_JIRA_PROJECT || 'RCV',
   // 消息交互功能开关（默认全部启用）
   ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== 'false',
@@ -541,6 +592,9 @@ export const defaultEnvConfig: EnvConfigType = {
       ? 'openai_chat_completions'
       : 'openai_audio_transcriptions',
   MEETING_TRANSCRIBE_MODEL: process.env.MEETING_TRANSCRIBE_MODEL || 'whisper-1',
+  MEETING_TRANSCRIBE_LANGUAGE: 'auto',
+  MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED:
+    process.env.MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED !== 'false',
   MEETING_NAME_ALIASES: process.env.MEETING_NAME_ALIASES || '',
   MEETING_HOTWORDS: process.env.MEETING_HOTWORDS || '',
   MEETING_DANMAKU_SPEED:
@@ -564,6 +618,7 @@ export const defaultEnvConfig: EnvConfigType = {
 };
 
 const GET_ENV_CONFIG_MESSAGE = 'PERSONAL_AI_GET_ENV_CONFIG' as const;
+const GET_ENV_CONFIG_BACKGROUND_TIMEOUT_MS = 800;
 
 /**
  * Offscreen documents and a few other extension contexts do not expose
@@ -575,20 +630,28 @@ async function getEnvConfigViaBackground(): Promise<EnvConfigType | null> {
     return null;
   }
   try {
-    const response = await new Promise<{
-      success?: boolean;
-      envConfig?: EnvConfigType;
-    }>((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: GET_ENV_CONFIG_MESSAGE }, (res) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve(
-          (res || {}) as { success?: boolean; envConfig?: EnvConfigType },
-        );
-      });
-    });
+    const response = await Promise.race([
+      new Promise<{
+        success?: boolean;
+        envConfig?: EnvConfigType;
+      }>((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: GET_ENV_CONFIG_MESSAGE }, (res) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(
+            (res || {}) as { success?: boolean; envConfig?: EnvConfigType },
+          );
+        });
+      }),
+      new Promise<{
+        success?: boolean;
+        envConfig?: EnvConfigType;
+      }>((resolve) => {
+        setTimeout(() => resolve({}), GET_ENV_CONFIG_BACKGROUND_TIMEOUT_MS);
+      }),
+    ]);
     if (response?.envConfig) {
       return normalizeEnvConfigShape(response.envConfig);
     }

@@ -2,7 +2,7 @@
  * Message Reaction UI - 消息交互工具栏界面
  *
  * UI 结构：
- * - 悬停 3 秒后显示工具栏（稍后处理按钮 + 自动答复按钮 + icon）
+ * - 短暂停留后显示工具栏（功能按钮 + PAI icon）
  * - 点击"稍后处理"按钮默认触发 1 小时后提醒
  * - hover "稍后处理"按钮时显示 Snooze 快速选项菜单
  * - 点击"自动答复"按钮打开自动答复配置
@@ -18,7 +18,7 @@
 // 工具栏名称: Personal AI Message Toolbar (PAI Toolbar)
 // 主要 CSS 类名:
 //   - .message-reaction-toolbar     : 工具栏容器 (PAI Toolbar Container)
-//   - .snooze-text-btn              : "稍后处理" 按钮 (Snooze Button)
+//   - .snooze-icon-btn              : "稍后处理" 按钮 (Snooze Button)
 //   - .auto-reply-btn               : "自动答复" 按钮 (Auto Reply Button)
 //   - .snooze-icon                  : Personal AI 图标 (PAI Icon)
 //   - .reaction-settings-btn        : 设置按钮 (Settings Button)
@@ -42,6 +42,19 @@ import {
   LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   getMessageReactionActionDefinitions,
 } from './messageReactionLayout';
+import {
+  MESSAGE_REACTION_SETTINGS_DELAY_MS,
+  MESSAGE_REACTION_SHOW_DELAY_MS,
+} from './messageReactionTiming';
+import { computeFloatingPosition } from './floatingPosition';
+import { getSnoozeCreateFailureMessage } from './snoozeCreateResult';
+import { getToolbarRuntimeActionError } from './toolbarActionResult';
+import {
+  SNOOZE_CUSTOM_OPTION_LABEL,
+  SNOOZE_MANAGE_OPTION_LABEL,
+  buildSnoozeQuickMenuOptions,
+  escapeSnoozeMenuText,
+} from './snoozeQuickMenuPresentation';
 
 // 功能开关配置接口
 export interface MessageReactionConfig {
@@ -88,7 +101,7 @@ async function getRealtimeConfig(): Promise<MessageReactionConfig> {
  */
 async function saveReactionConfig(
   config: MessageReactionConfig,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const result = await chrome.storage.local.get(['envConfig']);
     const envConfig = result.envConfig || {};
@@ -98,8 +111,10 @@ async function saveReactionConfig(
     envConfig.ENABLE_LINKED_ACTION = config.enableLinkedAction;
     await chrome.storage.local.set({ envConfig });
     console.log('💬 消息交互配置已保存:', config);
+    return true;
   } catch (error) {
     console.error('保存消息交互配置失败:', error);
+    return false;
   }
 }
 
@@ -108,10 +123,16 @@ let currentSnoozeMenu: HTMLElement | null = null; // Snooze 快速选项菜单
 let currentSnoozePicker: HTMLElement | null = null; // Snooze 时间选择器
 const _hoverTimeout: ReturnType<typeof setTimeout> | null = null; // eslint-disable-line
 let snoozeHideTimeout: ReturnType<typeof setTimeout> | null = null;
+let snoozePickerDismissBindTimeout: ReturnType<typeof setTimeout> | null = null;
+let snoozePickerOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
+let snoozePickerKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
 let isHoveringToolbar = false;
 let isHoveringSnoozeMenu = false;
+let isFocusWithinSnoozeMenu = false;
 let isSnoozePickerOpen = false; // 标记时间选择器是否打开
 let currentMessageElement: HTMLElement | null = null;
+let activeSnoozeMenuAnchor: HTMLElement | null = null;
+let snoozeMenuRequestSeq = 0;
 
 // 处理过的消息元素
 const processedMessages = new WeakSet<HTMLElement>();
@@ -151,6 +172,7 @@ function injectStyles() {
     
     /* ===== 消息交互按钮通用样式 ===== */
     .message-reaction-action-btn {
+      appearance: none;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -166,6 +188,19 @@ function injectStyles() {
       box-sizing: border-box;
     }
 
+    .message-reaction-action-btn:disabled,
+    .reaction-settings-btn:disabled {
+      cursor: wait;
+      opacity: 0.58;
+    }
+
+    .message-reaction-action-btn:focus-visible,
+    .reaction-settings-btn:focus-visible,
+    .snooze-toast-action:focus-visible {
+      outline: 2px solid rgba(33, 150, 243, 0.55);
+      outline-offset: 2px;
+    }
+
     .message-reaction-action-btn svg {
       flex-shrink: 0;
     }
@@ -174,6 +209,7 @@ function injectStyles() {
     .snooze-icon-btn {
       width: 28px;
       min-width: 28px;
+      height: 28px;
       padding: 0;
       color: #2196F3;
       background: rgba(33, 150, 243, 0.08);
@@ -263,7 +299,7 @@ function injectStyles() {
     .snooze-menu {
       position: fixed;
       z-index: 999999;
-      min-width: 120px;
+      min-width: 150px;
       background: #ffffff;
       border-radius: 8px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 
@@ -286,6 +322,16 @@ function injectStyles() {
       height: 14px;
       background: transparent;
     }
+
+    .snooze-menu.position-above::before {
+      top: auto;
+      bottom: -10px;
+    }
+
+    .snooze-menu.position-below::before {
+      top: -10px;
+      bottom: auto;
+    }
     
     @keyframes snooze-menu-in {
       from {
@@ -299,7 +345,15 @@ function injectStyles() {
     }
     
     /* ===== 快速选项（精简版） ===== */
-    .snooze-quick-option {
+    .snooze-quick-option,
+    .snooze-custom-option,
+    .snooze-manage-option {
+      appearance: none;
+      width: 100%;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      text-align: left;
       display: flex;
       align-items: center;
       gap: 6px;
@@ -309,9 +363,11 @@ function injectStyles() {
       white-space: nowrap;
     }
     
-    .snooze-quick-option:hover {
+    .snooze-quick-option:hover,
+    .snooze-quick-option:focus-visible {
       background: #fff5f5;
       color: #ee5a5a;
+      outline: none;
     }
     
     .snooze-quick-option:active {
@@ -328,6 +384,23 @@ function injectStyles() {
       font-size: 12px;
       color: inherit;
     }
+
+    .snooze-quick-option-text {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+
+    .snooze-quick-option-time {
+      font-size: 10px;
+      line-height: 1.2;
+      color: #888;
+    }
+
+    .snooze-quick-option:hover .snooze-quick-option-time {
+      color: #c2410c;
+    }
     
     /* 分隔线 */
     .snooze-divider {
@@ -337,20 +410,23 @@ function injectStyles() {
     }
     
     /* 自定义选项 */
-    .snooze-custom-option {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      cursor: pointer;
-      transition: background 0.1s ease;
+    .snooze-custom-option,
+    .snooze-manage-option {
       color: #888;
       font-size: 12px;
     }
     
-    .snooze-custom-option:hover {
+    .snooze-custom-option:hover,
+    .snooze-custom-option:focus-visible,
+    .snooze-manage-option:hover,
+    .snooze-manage-option:focus-visible {
       background: #f8f8f8;
       color: #666;
+      outline: none;
+    }
+
+    .snooze-manage-option {
+      color: #5f6368;
     }
     
     /* ===== 自定义时间选择器 ===== */
@@ -449,6 +525,10 @@ function injectStyles() {
       font-weight: 500;
       color: #ee5a5a;
     }
+
+    .snooze-preview-time.invalid {
+      color: #cf1322;
+    }
     
     .snooze-picker-footer {
       display: flex;
@@ -523,9 +603,27 @@ function injectStyles() {
       font-size: 14px;
       font-weight: 600;
     }
+
+    .snooze-toast-action {
+      margin-left: 4px;
+      padding: 3px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .snooze-toast-action:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
     
     /* ===== 设置按钮（x 按钮） ===== */
     .reaction-settings-btn {
+      appearance: none;
+      padding: 0;
       width: 20px;
       height: 20px;
       border-radius: 4px 0 0 4px;
@@ -632,6 +730,85 @@ function getSnoozeClockIconSvg(): string {
   `;
 }
 
+function getSettingsIconSvg(): string {
+  return `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.07A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.07 14H3a2 2 0 1 1 0-4h.07A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.07V3a2 2 0 1 1 4 0v.07A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.37 9c.27.61.88 1 1.56 1H21a2 2 0 1 1 0 4h-.07A1.7 1.7 0 0 0 19.4 15Z"></path>
+    </svg>
+  `;
+}
+
+async function openScheduledMessagesManager() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'OPEN_SCHEDULED_MESSAGES',
+      data: {
+        category: 'Snooze',
+      },
+    });
+    if (!response?.success) {
+      throw new Error(response?.error || '打开定时消息管理失败');
+    }
+  } catch (error) {
+    console.warn('打开定时消息管理失败，回退到直接打开页面:', error);
+    window.open(
+      chrome.runtime.getURL('scheduled-messages.html?category=Snooze'),
+      '_blank',
+    );
+  }
+}
+
+function showSnoozeCreatedToast(remindAt: Date, updated = false) {
+  const prefix = updated ? '已更新提醒' : '已设置提醒';
+  showSuccessToast(`${prefix}：${formatRemindTime(remindAt)}`, {
+    label: '管理',
+    onClick: openScheduledMessagesManager,
+  });
+}
+
+function getErrorMessage(error: unknown, fallbackMessage: string): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : fallbackMessage;
+}
+
+function setToolbarButtonPending(button: HTMLElement, pending: boolean) {
+  button.dataset.pending = pending ? 'true' : 'false';
+  if (button instanceof HTMLButtonElement) {
+    button.disabled = pending;
+  }
+  button.style.pointerEvents = pending ? 'none' : '';
+  button.style.opacity = pending ? '0.6' : '';
+}
+
+async function runToolbarButtonAction(
+  button: HTMLElement,
+  action: () => Promise<void>,
+) {
+  if (button.dataset.pending === 'true') {
+    return;
+  }
+
+  setToolbarButtonPending(button, true);
+  try {
+    await action();
+  } finally {
+    setToolbarButtonPending(button, false);
+  }
+}
+
+async function sendToolbarRuntimeAction(
+  request: unknown,
+  fallbackMessage: string,
+) {
+  const response = await chrome.runtime.sendMessage(request);
+  const errorMessage = getToolbarRuntimeActionError(response, fallbackMessage);
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+}
+
 /**
  * 隐藏 Snooze 快速选项菜单
  */
@@ -640,12 +817,76 @@ function hideSnoozeMenu() {
     currentSnoozeMenu.remove();
     currentSnoozeMenu = null;
   }
+  isHoveringSnoozeMenu = false;
+  isFocusWithinSnoozeMenu = false;
+}
+
+function clearSnoozePickerDismissHandlers() {
+  if (snoozePickerDismissBindTimeout) {
+    clearTimeout(snoozePickerDismissBindTimeout);
+    snoozePickerDismissBindTimeout = null;
+  }
+
+  if (snoozePickerOutsideClickHandler) {
+    document.removeEventListener(
+      'mousedown',
+      snoozePickerOutsideClickHandler,
+      true,
+    );
+    snoozePickerOutsideClickHandler = null;
+  }
+
+  if (snoozePickerKeydownHandler) {
+    document.removeEventListener('keydown', snoozePickerKeydownHandler);
+    snoozePickerKeydownHandler = null;
+  }
+}
+
+function bindSnoozePickerDismissHandlers() {
+  clearSnoozePickerDismissHandlers();
+
+  snoozePickerOutsideClickHandler = (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest('.snooze-picker') ||
+      target?.closest('.snooze-menu') ||
+      target?.closest('.message-reaction-toolbar')
+    ) {
+      return;
+    }
+
+    hideAllSnoozeUI();
+    hideToolbar();
+  };
+
+  snoozePickerKeydownHandler = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+
+    e.preventDefault();
+    hideAllSnoozeUI();
+    hideToolbar();
+  };
+
+  snoozePickerDismissBindTimeout = setTimeout(() => {
+    if (snoozePickerOutsideClickHandler) {
+      document.addEventListener(
+        'mousedown',
+        snoozePickerOutsideClickHandler,
+        true,
+      );
+    }
+    if (snoozePickerKeydownHandler) {
+      document.addEventListener('keydown', snoozePickerKeydownHandler);
+    }
+    snoozePickerDismissBindTimeout = null;
+  }, 0);
 }
 
 /**
  * 隐藏 Snooze 时间选择器
  */
 function hideSnoozePicker() {
+  clearSnoozePickerDismissHandlers();
   if (currentSnoozePicker) {
     currentSnoozePicker.remove();
     currentSnoozePicker = null;
@@ -686,7 +927,12 @@ function scheduleSnoozeHide() {
     clearTimeout(snoozeHideTimeout);
   }
   snoozeHideTimeout = setTimeout(() => {
-    if (!isHoveringToolbar && !isHoveringSnoozeMenu && !isSnoozePickerOpen) {
+    if (
+      !isHoveringToolbar &&
+      !isHoveringSnoozeMenu &&
+      !isFocusWithinSnoozeMenu &&
+      !isSnoozePickerOpen
+    ) {
       hideSnoozeMenu();
       hideToolbar();
     }
@@ -724,10 +970,13 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   // 格式化为 input datetime-local 需要的格式
   const formatForInput = (date: Date) => {
     const pad = (n: number) => n.toString().padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+      date.getDate(),
+    )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
 
   let selectedDate = tomorrow9am;
+  const minDateValue = formatForInput(now);
 
   picker.innerHTML = `
     <div class="snooze-picker-header">
@@ -739,7 +988,9 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     <div class="snooze-picker-body">
       <div class="snooze-input-group">
         <label class="snooze-input-label">选择日期和时间</label>
-        <input type="datetime-local" class="snooze-input snooze-datetime-input" value="${formatForInput(selectedDate)}" min="${formatForInput(now)}">
+        <input type="datetime-local" class="snooze-input snooze-datetime-input" value="${formatForInput(
+          selectedDate,
+        )}" min="${minDateValue}">
       </div>
       <div class="snooze-preview">
         <div class="snooze-preview-label">将在以下时间提醒您：</div>
@@ -757,17 +1008,24 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
 
   // 定位
   const pickerRect = picker.getBoundingClientRect();
-  let left = anchorRect.right - pickerRect.width;
-  let top = anchorRect.bottom + 4;
+  const pickerPosition = computeFloatingPosition(
+    anchorRect,
+    { width: pickerRect.width, height: pickerRect.height },
+    { width: window.innerWidth, height: window.innerHeight },
+    { align: 'right' },
+  );
 
-  // 边界检测
-  if (left < 10) left = 10;
-  if (top + pickerRect.height > window.innerHeight - 10) {
-    top = anchorRect.top - pickerRect.height - 4;
-  }
-
-  picker.style.left = `${left}px`;
-  picker.style.top = `${top}px`;
+  picker.style.left = `${pickerPosition.left}px`;
+  picker.style.top = `${pickerPosition.top}px`;
+  picker.classList.toggle(
+    'position-above',
+    pickerPosition.placement === 'above',
+  );
+  picker.classList.toggle(
+    'position-below',
+    pickerPosition.placement === 'below',
+  );
+  bindSnoozePickerDismissHandlers();
 
   // 绑定事件
   const datetimeInput = picker.querySelector(
@@ -778,10 +1036,28 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     '.snooze-btn-confirm',
   ) as HTMLButtonElement;
 
-  datetimeInput.addEventListener('change', () => {
-    selectedDate = new Date(datetimeInput.value);
+  const updateSelectedDate = () => {
+    const candidate = new Date(datetimeInput.value);
+    const isValidFutureDate = Boolean(
+      datetimeInput.value &&
+        !Number.isNaN(candidate.getTime()) &&
+        candidate.getTime() > Date.now(),
+    );
+
+    confirmBtn.disabled = !isValidFutureDate;
+    previewTime.classList.toggle('invalid', !isValidFutureDate);
+
+    if (!isValidFutureDate) {
+      previewTime.textContent = '请选择未来时间';
+      return;
+    }
+
+    selectedDate = candidate;
     previewTime.textContent = formatRemindTime(selectedDate);
-  });
+  };
+
+  datetimeInput.addEventListener('input', updateSelectedDate);
+  datetimeInput.addEventListener('change', updateSelectedDate);
 
   // 阻止 datetime-local 的点击事件冒泡
   datetimeInput.addEventListener('click', (e) => {
@@ -795,8 +1071,10 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
       const toolbar = currentMessageElement.querySelector(
         '.message-reaction-toolbar',
       );
-      if (toolbar) {
-        showSnoozeQuickMenu(messageInfo, toolbar as HTMLElement);
+      const snoozeButton = toolbar?.querySelector('.snooze-icon-btn');
+      const anchor = snoozeButton || toolbar;
+      if (anchor) {
+        showSnoozeQuickMenu(messageInfo, anchor as HTMLElement);
       }
     }
   });
@@ -807,24 +1085,33 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   });
 
   confirmBtn.addEventListener('click', async () => {
+    updateSelectedDate();
+    if (confirmBtn.disabled) {
+      showErrorToast('请选择未来时间');
+      return;
+    }
+
     confirmBtn.disabled = true;
     confirmBtn.textContent = '创建中...';
 
-    const success = await createSnoozeReminder({
+    const result = await createSnoozeReminder({
       messageInfo,
       remindAt: selectedDate,
     });
 
     // 如果成功，隐藏 UI；如果失败，恢复按钮状态
-    if (success) {
+    if (result.success) {
       hideAllSnoozeUI();
       hideToolbar();
-      showSuccessToast(`已设置提醒：${formatRemindTime(selectedDate)}`);
+      showSnoozeCreatedToast(selectedDate, result.updated === true);
     } else {
       // 恢复按钮状态
       confirmBtn.disabled = false;
       confirmBtn.textContent = '确认';
-      showErrorToast('创建提醒失败，请稍后重试');
+      const failureMessage = getSnoozeCreateFailureMessage(result);
+      if (failureMessage) {
+        showErrorToast(failureMessage);
+      }
     }
   });
 
@@ -867,19 +1154,27 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
     <div class="reaction-settings-header">消息交互功能设置</div>
     <div class="reaction-settings-body">
       <label class="reaction-settings-option">
-        <input type="checkbox" class="reaction-settings-checkbox" data-feature="snooze" ${config.enableSnooze ? 'checked' : ''}>
+        <input type="checkbox" class="reaction-settings-checkbox" data-feature="snooze" ${
+          config.enableSnooze ? 'checked' : ''
+        }>
         <span class="reaction-settings-label">稍后处理</span>
       </label>
       <label class="reaction-settings-option">
-        <input type="checkbox" class="reaction-settings-checkbox" data-feature="followThread" ${config.enableFollowThread ? 'checked' : ''}>
+        <input type="checkbox" class="reaction-settings-checkbox" data-feature="followThread" ${
+          config.enableFollowThread ? 'checked' : ''
+        }>
         <span class="reaction-settings-label">关注后续</span>
       </label>
       <label class="reaction-settings-option">
-        <input type="checkbox" class="reaction-settings-checkbox" data-feature="autoReply" ${config.enableAutoReply ? 'checked' : ''}>
+        <input type="checkbox" class="reaction-settings-checkbox" data-feature="autoReply" ${
+          config.enableAutoReply ? 'checked' : ''
+        }>
         <span class="reaction-settings-label">自动答复</span>
       </label>
       <label class="reaction-settings-option">
-        <input type="checkbox" class="reaction-settings-checkbox" data-feature="linkedAction" ${config.enableLinkedAction ? 'checked' : ''}>
+        <input type="checkbox" class="reaction-settings-checkbox" data-feature="linkedAction" ${
+          config.enableLinkedAction ? 'checked' : ''
+        }>
         <span class="reaction-settings-label">联动操作</span>
       </label>
     </div>
@@ -911,46 +1206,56 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
   popup.style.top = `${top}px`;
 
   // 绑定保存事件
-  popup
-    .querySelector('.snooze-btn-confirm')!
-    .addEventListener('click', async () => {
-      const snoozeCheckbox = popup.querySelector(
-        '[data-feature="snooze"]',
-      ) as HTMLInputElement;
-      const followThreadCheckbox = popup.querySelector(
-        '[data-feature="followThread"]',
-      ) as HTMLInputElement;
-      const autoReplyCheckbox = popup.querySelector(
-        '[data-feature="autoReply"]',
-      ) as HTMLInputElement;
-      const linkedActionCheckbox = popup.querySelector(
-        '[data-feature="linkedAction"]',
-      ) as HTMLInputElement;
+  const saveButton = popup.querySelector(
+    '.snooze-btn-confirm',
+  ) as HTMLButtonElement;
+  saveButton.addEventListener('click', async () => {
+    saveButton.disabled = true;
+    saveButton.textContent = '保存中...';
 
-      const newConfig: MessageReactionConfig = {
-        enableSnooze: snoozeCheckbox.checked,
-        enableFollowThread: followThreadCheckbox.checked,
-        enableAutoReply: autoReplyCheckbox.checked,
-        enableLinkedAction: linkedActionCheckbox.checked,
-      };
+    const snoozeCheckbox = popup.querySelector(
+      '[data-feature="snooze"]',
+    ) as HTMLInputElement;
+    const followThreadCheckbox = popup.querySelector(
+      '[data-feature="followThread"]',
+    ) as HTMLInputElement;
+    const autoReplyCheckbox = popup.querySelector(
+      '[data-feature="autoReply"]',
+    ) as HTMLInputElement;
+    const linkedActionCheckbox = popup.querySelector(
+      '[data-feature="linkedAction"]',
+    ) as HTMLInputElement;
 
-      await saveReactionConfig(newConfig);
+    const newConfig: MessageReactionConfig = {
+      enableSnooze: snoozeCheckbox.checked,
+      enableFollowThread: followThreadCheckbox.checked,
+      enableAutoReply: autoReplyCheckbox.checked,
+      enableLinkedAction: linkedActionCheckbox.checked,
+    };
 
-      hideSettingsPopup();
-      hideToolbar();
+    const saved = await saveReactionConfig(newConfig);
+    if (!saved) {
+      saveButton.disabled = false;
+      saveButton.textContent = '保存';
+      showErrorToast('设置保存失败，请稍后重试');
+      return;
+    }
 
-      // 如果全部关闭，显示提示
-      if (
-        !newConfig.enableSnooze &&
-        !newConfig.enableFollowThread &&
-        !newConfig.enableAutoReply &&
-        !newConfig.enableLinkedAction
-      ) {
-        showSuccessToast('已关闭所有消息交互功能');
-      } else {
-        showSuccessToast('设置已保存');
-      }
-    });
+    hideSettingsPopup();
+    hideToolbar();
+
+    // 如果全部关闭，显示提示
+    if (
+      !newConfig.enableSnooze &&
+      !newConfig.enableFollowThread &&
+      !newConfig.enableAutoReply &&
+      !newConfig.enableLinkedAction
+    ) {
+      showSuccessToast('已关闭所有消息交互功能');
+    } else {
+      showSuccessToast('设置已保存');
+    }
+  });
 
   // 点击外部关闭
   const closeOnOutsideClick = (e: MouseEvent) => {
@@ -972,6 +1277,20 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
 /**
  * 显示 Snooze 快速选项菜单
  */
+function shouldShowSnoozeQuickMenu(
+  anchorElement: HTMLElement,
+  requestSeq: number,
+  allowWithoutHover = false,
+): boolean {
+  return (
+    requestSeq === snoozeMenuRequestSeq &&
+    activeSnoozeMenuAnchor === anchorElement &&
+    document.contains(anchorElement) &&
+    (allowWithoutHover || anchorElement.matches(':hover')) &&
+    !isSnoozePickerOpen
+  );
+}
+
 async function showSnoozeQuickMenu(
   messageInfo: MessageInfo,
   anchorElement: HTMLElement,
@@ -982,25 +1301,43 @@ async function showSnoozeQuickMenu(
   menu.className = 'snooze-menu';
 
   const quickOptions = getQuickOptions();
+  const quickOptionViews = buildSnoozeQuickMenuOptions(
+    quickOptions,
+    formatRemindTime,
+  );
 
   // 精简的菜单，不包含消息预览
   menu.innerHTML = `
-    ${quickOptions
+    ${quickOptionViews
       .map((opt) => {
-        const time = opt.getTime();
         return `
-        <div class="snooze-quick-option" data-time="${time.getTime()}">
-          <span class="snooze-quick-option-icon">${opt.icon}</span>
-          <span class="snooze-quick-option-label">${opt.label}</span>
-        </div>
+        <button type="button" class="snooze-quick-option" data-option-index="${
+          opt.index
+        }" aria-label="${escapeSnoozeMenuText(opt.ariaLabel)}">
+          <span class="snooze-quick-option-icon" aria-hidden="true">${escapeSnoozeMenuText(
+            opt.icon,
+          )}</span>
+          <span class="snooze-quick-option-text">
+            <span class="snooze-quick-option-label">${escapeSnoozeMenuText(
+              opt.label,
+            )}</span>
+            <span class="snooze-quick-option-time">${escapeSnoozeMenuText(
+              opt.timeLabel,
+            )}</span>
+          </span>
+        </button>
       `;
       })
       .join('')}
     <div class="snooze-divider"></div>
-    <div class="snooze-custom-option">
-      <span class="snooze-quick-option-icon">📅</span>
+    <button type="button" class="snooze-custom-option" aria-label="${SNOOZE_CUSTOM_OPTION_LABEL}">
+      <span class="snooze-quick-option-icon" aria-hidden="true">📅</span>
       <span>自定义...</span>
-    </div>
+    </button>
+    <button type="button" class="snooze-manage-option" aria-label="${SNOOZE_MANAGE_OPTION_LABEL}">
+      <span class="snooze-quick-option-icon" aria-hidden="true">↗</span>
+      <span>${SNOOZE_MANAGE_OPTION_LABEL}</span>
+    </button>
   `;
 
   document.body.appendChild(menu);
@@ -1009,48 +1346,52 @@ async function showSnoozeQuickMenu(
   // 定位菜单（在按钮下方，左对齐）
   const anchorRect = anchorElement.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
+  const menuPosition = computeFloatingPosition(
+    anchorRect,
+    { width: menuRect.width, height: menuRect.height },
+    { width: window.innerWidth, height: window.innerHeight },
+    { align: 'left' },
+  );
 
-  let left = anchorRect.left; // 左对齐到按钮
-  let top = anchorRect.bottom + 4;
-
-  // 边界检测
-  if (left < 10) left = 10;
-  if (left + menuRect.width > window.innerWidth - 10) {
-    left = window.innerWidth - menuRect.width - 10;
-  }
-  if (top + menuRect.height > window.innerHeight - 10) {
-    top = anchorRect.top - menuRect.height - 4;
-  }
-
-  menu.style.left = `${left}px`;
-  menu.style.top = `${top}px`;
+  menu.style.left = `${menuPosition.left}px`;
+  menu.style.top = `${menuPosition.top}px`;
+  menu.classList.toggle('position-above', menuPosition.placement === 'above');
+  menu.classList.toggle('position-below', menuPosition.placement === 'below');
 
   // 绑定快速选项点击
   menu.querySelectorAll('.snooze-quick-option').forEach((opt) => {
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const timestamp = parseInt((opt as HTMLElement).dataset.time!);
-      const remindAt = new Date(timestamp);
+      const optionIndex = Number((opt as HTMLElement).dataset.optionIndex);
+      const quickOption = quickOptions[optionIndex];
+      if (!quickOption) {
+        showErrorToast('无法识别提醒时间');
+        return;
+      }
+      const remindAt = quickOption.getTime();
 
       // 禁用菜单
       menu.style.pointerEvents = 'none';
       menu.style.opacity = '0.7';
 
-      const success = await createSnoozeReminder({
+      const result = await createSnoozeReminder({
         messageInfo,
         remindAt,
       });
 
       // 如果成功，隐藏 UI；如果失败，恢复菜单状态
-      if (success) {
+      if (result.success) {
         hideAllSnoozeUI();
         hideToolbar();
-        showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
+        showSnoozeCreatedToast(remindAt, result.updated === true);
       } else {
         // 恢复菜单状态
         menu.style.pointerEvents = '';
         menu.style.opacity = '';
-        showErrorToast('创建提醒失败，请稍后重试');
+        const failureMessage = getSnoozeCreateFailureMessage(result);
+        if (failureMessage) {
+          showErrorToast(failureMessage);
+        }
       }
     });
   });
@@ -1063,6 +1404,15 @@ async function showSnoozeQuickMenu(
       showSnoozePicker(messageInfo, anchorRect);
     });
 
+  menu
+    .querySelector('.snooze-manage-option')!
+    .addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await openScheduledMessagesManager();
+      hideAllSnoozeUI();
+      hideToolbar();
+    });
+
   // 鼠标事件
   menu.addEventListener('mouseenter', () => {
     isHoveringSnoozeMenu = true;
@@ -1072,6 +1422,28 @@ async function showSnoozeQuickMenu(
   menu.addEventListener('mouseleave', () => {
     isHoveringSnoozeMenu = false;
     scheduleSnoozeHide();
+  });
+
+  menu.addEventListener('focusin', () => {
+    isFocusWithinSnoozeMenu = true;
+    cancelSnoozeHide();
+  });
+
+  menu.addEventListener('focusout', (e: FocusEvent) => {
+    const relatedTarget = e.relatedTarget as HTMLElement | null;
+    if (relatedTarget?.closest('.snooze-menu')) {
+      return;
+    }
+    isFocusWithinSnoozeMenu = false;
+    scheduleSnoozeHide();
+  });
+
+  menu.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    hideAllSnoozeUI();
+    hideToolbar();
+    anchorElement.focus();
   });
 }
 
@@ -1145,8 +1517,8 @@ function processMessageElement(messageElement: HTMLElement) {
     // 根据配置决定显示哪些按钮
     let buttonsHtml = '';
 
-    // 设置按钮（x 按钮）在最左边，初始隐藏
-    buttonsHtml += `<span class="reaction-settings-btn">×</span>`;
+    // 设置按钮在最左边，初始隐藏
+    buttonsHtml += `<button type="button" class="reaction-settings-btn" title="消息交互设置" aria-label="消息交互设置">${getSettingsIconSvg()}</button>`;
 
     const enabledButtons = getMessageReactionActionDefinitions(config);
     const buttonCount = enabledButtons.length;
@@ -1158,25 +1530,36 @@ function processMessageElement(messageElement: HTMLElement) {
         isFirst && isLast
           ? 'border-radius: 4px 0 0 4px;'
           : isFirst
-            ? 'border-radius: 4px 0 0 4px;'
-            : '';
+          ? 'border-radius: 4px 0 0 4px;'
+          : '';
       const borderLeft = !isFirst ? 'border-left: none;' : '';
 
       if (action.usesClockIcon) {
         buttonsHtml += `
-          <span
+          <button
+            type="button"
             class="${action.className}"
             style="${borderRadius}${borderLeft}"
             title="${action.label}"
             aria-label="${action.label}"
           >
             ${getSnoozeClockIconSvg()}
-          </span>
+          </button>
         `;
         return;
       }
 
-      buttonsHtml += `<span class="${action.className}" style="${borderRadius}${borderLeft}">${action.label}</span>`;
+      buttonsHtml += `
+        <button
+          type="button"
+          class="${action.className}"
+          style="${borderRadius}${borderLeft}"
+          title="${action.label}"
+          aria-label="${action.label}"
+        >
+          ${action.label}
+        </button>
+      `;
     });
 
     // 图标根据按钮情况调整样式
@@ -1249,7 +1632,7 @@ function processMessageElement(messageElement: HTMLElement) {
     // 取消之前的隐藏计划
     cancelSnoozeHide();
 
-    // 3 秒后显示工具栏（实时获取配置）
+    // 短暂停留后显示工具栏（实时获取配置）
     if (showTriggerTimeout) {
       clearTimeout(showTriggerTimeout);
     }
@@ -1281,7 +1664,7 @@ function processMessageElement(messageElement: HTMLElement) {
           messageInfo = info;
         },
       );
-    }, 3000);
+    }, MESSAGE_REACTION_SHOW_DELAY_MS);
   });
 
   conversationCard.addEventListener('mouseleave', (e: MouseEvent) => {
@@ -1320,7 +1703,7 @@ function processMessageElement(messageElement: HTMLElement) {
 
     toolbar.classList.add('visible');
 
-    // 2 秒后显示设置按钮
+    // 长悬停后显示设置按钮
     if (showSettingsBtnTimeout) {
       clearTimeout(showSettingsBtnTimeout);
     }
@@ -1329,7 +1712,7 @@ function processMessageElement(messageElement: HTMLElement) {
       if (settingsBtn) {
         settingsBtn.classList.add('visible');
       }
-    }, 2000);
+    }, MESSAGE_REACTION_SETTINGS_DELAY_MS);
   });
 
   toolbar.addEventListener('mouseleave', () => {
@@ -1383,53 +1766,10 @@ function bindToolbarEvents(
   ) as HTMLElement | null;
 
   if (textBtn) {
-    // 点击：默认 1 小时后提醒
-    textBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      e.preventDefault();
+    const openSnoozeMenuFromButton = async (focusFirstOption = false) => {
+      const requestSeq = ++snoozeMenuRequestSeq;
+      activeSnoozeMenuAnchor = textBtn;
 
-      console.log('💬 MessageReaction: 点击稍后处理按钮（1小时后提醒）');
-
-      // 获取消息信息
-      let messageInfo = getMessageInfo();
-      if (!messageInfo) {
-        messageInfo = await extractMessageInfo(targetElement);
-        if (messageInfo) setMessageInfo(messageInfo);
-      }
-
-      if (!messageInfo) {
-        showErrorToast('无法获取消息信息');
-        return;
-      }
-
-      // 禁用按钮
-      textBtn.style.pointerEvents = 'none';
-      textBtn.style.opacity = '0.6';
-
-      // 1 小时后提醒
-      const remindAt = new Date();
-      remindAt.setHours(remindAt.getHours() + 1);
-
-      const success = await createSnoozeReminder({
-        messageInfo,
-        remindAt,
-      });
-
-      // 如果成功，隐藏 UI；如果失败，恢复按钮状态
-      if (success) {
-        hideAllSnoozeUI();
-        hideToolbar();
-        showSuccessToast(`已设置提醒：${formatRemindTime(remindAt)}`);
-      } else {
-        // 恢复按钮状态
-        textBtn.style.pointerEvents = '';
-        textBtn.style.opacity = '';
-        showErrorToast('创建提醒失败，请稍后重试');
-      }
-    });
-
-    // 悬浮：显示 Snooze 快速选项菜单
-    textBtn.addEventListener('mouseenter', async () => {
       // 取消隐藏
       cancelSnoozeHide();
 
@@ -1440,9 +1780,73 @@ function bindToolbarEvents(
         if (messageInfo) setMessageInfo(messageInfo);
       }
 
-      if (messageInfo) {
+      if (
+        messageInfo &&
+        shouldShowSnoozeQuickMenu(textBtn, requestSeq, focusFirstOption)
+      ) {
         showSnoozeQuickMenu(messageInfo, textBtn);
+        if (focusFirstOption) {
+          requestAnimationFrame(() => {
+            currentSnoozeMenu
+              ?.querySelector<HTMLElement>('button.snooze-quick-option')
+              ?.focus();
+          });
+        }
       }
+    };
+
+    // 点击：默认 1 小时后提醒
+    textBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      await runToolbarButtonAction(textBtn, async () => {
+        console.log('💬 MessageReaction: 点击稍后处理按钮（1小时后提醒）');
+
+        // 获取消息信息
+        let messageInfo = getMessageInfo();
+        if (!messageInfo) {
+          messageInfo = await extractMessageInfo(targetElement);
+          if (messageInfo) setMessageInfo(messageInfo);
+        }
+
+        if (!messageInfo) {
+          showErrorToast('无法获取消息信息');
+          return;
+        }
+
+        // 1 小时后提醒
+        const remindAt = new Date();
+        remindAt.setHours(remindAt.getHours() + 1);
+
+        const result = await createSnoozeReminder({
+          messageInfo,
+          remindAt,
+        });
+
+        if (result.success) {
+          hideAllSnoozeUI();
+          hideToolbar();
+          showSnoozeCreatedToast(remindAt, result.updated === true);
+        } else {
+          const failureMessage = getSnoozeCreateFailureMessage(result);
+          if (failureMessage) {
+            showErrorToast(failureMessage);
+          }
+        }
+      });
+    });
+
+    // 悬浮：显示 Snooze 快速选项菜单
+    textBtn.addEventListener('mouseenter', () => {
+      void openSnoozeMenuFromButton(false);
+    });
+
+    textBtn.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      e.stopPropagation();
+      void openSnoozeMenuFromButton(true);
     });
 
     // 移出：检查是否移动到 Snooze 菜单，如果不是则隐藏菜单
@@ -1450,8 +1854,13 @@ function bindToolbarEvents(
       const relatedTarget = e.relatedTarget as HTMLElement;
       const isMovingToSnoozeMenu = relatedTarget?.closest('.snooze-menu');
 
+      if (!isMovingToSnoozeMenu && activeSnoozeMenuAnchor === textBtn) {
+        activeSnoozeMenuAnchor = null;
+        snoozeMenuRequestSeq += 1;
+      }
+
       if (!isMovingToSnoozeMenu) {
-        hideSnoozeMenu();
+        scheduleSnoozeHide();
       }
     });
   }
@@ -1471,38 +1880,43 @@ function bindToolbarEvents(
     autoReplyBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
 
-      // 获取消息信息
-      let messageInfo = getMessageInfo();
-      if (!messageInfo) {
-        messageInfo = await extractMessageInfo(targetElement);
-        if (messageInfo) setMessageInfo(messageInfo);
-      }
+      await runToolbarButtonAction(autoReplyBtn, async () => {
+        // 获取消息信息
+        let messageInfo = getMessageInfo();
+        if (!messageInfo) {
+          messageInfo = await extractMessageInfo(targetElement);
+          if (messageInfo) setMessageInfo(messageInfo);
+        }
 
-      if (!messageInfo) {
-        showErrorToast('无法获取消息信息');
-        return;
-      }
+        if (!messageInfo) {
+          showErrorToast('无法获取消息信息');
+          return;
+        }
 
-      // 发送消息给 background 打开自动答复配置窗口
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'OPEN_AUTO_REPLY_CONFIG',
-          data: {
-            sender: messageInfo.senderName,
-            groupId: messageInfo.groupId,
-            groupName: messageInfo.groupName,
-            content: messageInfo.content,
-            messageId: messageInfo.id,
-          },
-        });
+        // 发送消息给 background 打开自动答复配置窗口
+        try {
+          await sendToolbarRuntimeAction(
+            {
+              type: 'OPEN_AUTO_REPLY_CONFIG',
+              data: {
+                sender: messageInfo.senderName,
+                groupId: messageInfo.groupId,
+                groupName: messageInfo.groupName,
+                content: messageInfo.content,
+                messageId: messageInfo.id,
+              },
+            },
+            '打开配置失败，请稍后重试',
+          );
 
-        hideAllSnoozeUI();
-        hideToolbar();
-        showSuccessToast('正在打开自动答复配置...');
-      } catch (error) {
-        console.error('打开自动答复配置失败:', error);
-        showErrorToast('打开配置失败，请稍后重试');
-      }
+          hideAllSnoozeUI();
+          hideToolbar();
+          showSuccessToast('正在打开自动答复配置...');
+        } catch (error) {
+          console.error('打开自动答复配置失败:', error);
+          showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));
+        }
+      });
     });
   }
 
@@ -1521,40 +1935,45 @@ function bindToolbarEvents(
     followThreadBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
 
-      // 获取消息信息
-      let messageInfo = getMessageInfo();
-      if (!messageInfo) {
-        messageInfo = await extractMessageInfo(targetElement);
-        if (messageInfo) setMessageInfo(messageInfo);
-      }
+      await runToolbarButtonAction(followThreadBtn, async () => {
+        // 获取消息信息
+        let messageInfo = getMessageInfo();
+        if (!messageInfo) {
+          messageInfo = await extractMessageInfo(targetElement);
+          if (messageInfo) setMessageInfo(messageInfo);
+        }
 
-      if (!messageInfo) {
-        showErrorToast('无法获取消息信息');
-        return;
-      }
+        if (!messageInfo) {
+          showErrorToast('无法获取消息信息');
+          return;
+        }
 
-      // 发送消息给 background 打开关注后续配置窗口
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'OPEN_FOLLOW_THREAD_CONFIG',
-          data: {
-            postId: messageInfo.id,
-            sender: messageInfo.senderName,
-            groupId: messageInfo.groupId,
-            groupName: messageInfo.groupName,
-            content: messageInfo.content,
-            timestamp: messageInfo.timestamp,
-            messageLink: messageInfo.messageLink,
-          },
-        });
+        // 发送消息给 background 打开关注后续配置窗口
+        try {
+          await sendToolbarRuntimeAction(
+            {
+              type: 'OPEN_FOLLOW_THREAD_CONFIG',
+              data: {
+                postId: messageInfo.id,
+                sender: messageInfo.senderName,
+                groupId: messageInfo.groupId,
+                groupName: messageInfo.groupName,
+                content: messageInfo.content,
+                timestamp: messageInfo.timestamp,
+                messageLink: messageInfo.messageLink,
+              },
+            },
+            '打开配置失败，请稍后重试',
+          );
 
-        hideAllSnoozeUI();
-        hideToolbar();
-        showSuccessToast('正在打开关注后续配置...');
-      } catch (error) {
-        console.error('打开关注后续配置失败:', error);
-        showErrorToast('打开配置失败，请稍后重试');
-      }
+          hideAllSnoozeUI();
+          hideToolbar();
+          showSuccessToast('正在打开关注后续配置...');
+        } catch (error) {
+          console.error('打开关注后续配置失败:', error);
+          showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));
+        }
+      });
     });
   }
 
@@ -1571,38 +1990,43 @@ function bindToolbarEvents(
     linkedActionBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
 
-      let messageInfo = getMessageInfo();
-      if (!messageInfo) {
-        messageInfo = await extractMessageInfo(targetElement);
-        if (messageInfo) setMessageInfo(messageInfo);
-      }
+      await runToolbarButtonAction(linkedActionBtn, async () => {
+        let messageInfo = getMessageInfo();
+        if (!messageInfo) {
+          messageInfo = await extractMessageInfo(targetElement);
+          if (messageInfo) setMessageInfo(messageInfo);
+        }
 
-      if (!messageInfo) {
-        showErrorToast('无法获取消息信息');
-        return;
-      }
+        if (!messageInfo) {
+          showErrorToast('无法获取消息信息');
+          return;
+        }
 
-      try {
-        await chrome.runtime.sendMessage({
-          type: LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
-          data: {
-            sender: messageInfo.senderName,
-            groupId: messageInfo.groupId,
-            groupName: messageInfo.groupName,
-            content: messageInfo.content,
-            messageId: messageInfo.id,
-            timestamp: messageInfo.timestamp,
-            messageLink: messageInfo.messageLink,
-          },
-        });
+        try {
+          await sendToolbarRuntimeAction(
+            {
+              type: LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
+              data: {
+                sender: messageInfo.senderName,
+                groupId: messageInfo.groupId,
+                groupName: messageInfo.groupName,
+                content: messageInfo.content,
+                messageId: messageInfo.id,
+                timestamp: messageInfo.timestamp,
+                messageLink: messageInfo.messageLink,
+              },
+            },
+            '打开配置失败，请稍后重试',
+          );
 
-        hideAllSnoozeUI();
-        hideToolbar();
-        showSuccessToast('正在打开联动操作配置...');
-      } catch (error) {
-        console.error('打开联动操作配置失败:', error);
-        showErrorToast('打开配置失败，请稍后重试');
-      }
+          hideAllSnoozeUI();
+          hideToolbar();
+          showSuccessToast('正在打开联动操作配置...');
+        } catch (error) {
+          console.error('打开联动操作配置失败:', error);
+          showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));
+        }
+      });
     });
   }
 }

@@ -79,6 +79,7 @@ export class ExplorerManager {
           lastRunOutcome: this.runState.doubao.lastRunOutcome,
           lastError: this.runState.doubao.lastError,
           cache: this.options.rawStore.getStats('doubao'),
+          transport: this.sourceAdapters.doubao?.getTransportStatus?.(),
         },
         chatgpt: {
           source: 'chatgpt',

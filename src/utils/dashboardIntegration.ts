@@ -157,10 +157,175 @@ export interface ProjectHealthSummary {
   };
 }
 
+export interface ProjectStatusDraftOptions {
+  now?: Date;
+  maxAttentionTasks?: number;
+}
+
+export type ProjectAttentionLevel = 'blocked' | 'overdue' | 'due-soon';
+
+export interface ProjectFocusItem {
+  projectId: string;
+  projectName: string;
+  task: FishboneTask;
+  level: ProjectAttentionLevel;
+  label: string;
+  detail: string;
+  daysUntil: number | null;
+  priority: number;
+}
+
+export interface ProjectFocusSummary {
+  totalItems: number;
+  visibleItems: ProjectFocusItem[];
+  hiddenItems: number;
+}
+
+export type ProjectStatusEvidenceType = 'task' | 'jira' | 'platform' | 'milestone';
+
+export interface ProjectStatusEvidenceItem {
+  type: ProjectStatusEvidenceType;
+  label: string;
+  title: string;
+  detail: string;
+  source: string;
+  priority: number;
+  taskId?: string;
+}
+
+export interface ProjectSyncSourceStatus {
+  source: 'jira' | 'github' | 'confluence';
+  label: string;
+  configured: boolean;
+  status: 'not_configured' | 'ready';
+  detail: string;
+  nextStep: string;
+}
+
+export interface ProjectSyncReadiness {
+  success: boolean;
+  checkedAt: string;
+  summary: string;
+  sources: ProjectSyncSourceStatus[];
+  error?: string;
+}
+
 const PROJECT_DASHBOARD_STORAGE_KEY = 'projectDashboardFishboneProjects';
+
+const PROJECT_HEALTH_PRIORITY: Record<ProjectHealthState, number> = {
+  'off-track': 0,
+  'at-risk': 1,
+  empty: 2,
+  'on-track': 3,
+};
+
+const PROJECT_ATTENTION_PRIORITY: Record<ProjectAttentionLevel, number> = {
+  blocked: 0,
+  overdue: 1,
+  'due-soon': 2,
+};
+
+function normalizeProjectSuggestionName(input: unknown): string {
+  if (typeof input === 'string') return input.trim();
+  if (input && typeof input === 'object' && 'name' in input) {
+    return String((input as { name?: unknown }).name || '').trim();
+  }
+  return '';
+}
+
+function tokenizeProjectSuggestionQuery(question: string): string[] {
+  return String(question || '')
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9\u4e00-\u9fff]+/i)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+export function rankProjectSuggestionNames(
+  items: Array<{ name?: unknown } | string>,
+  question = '',
+  maxItems = 8,
+): string[] {
+  const query = String(question || '').trim().toLowerCase();
+  const tokens = tokenizeProjectSuggestionQuery(question);
+  const seen = new Set<string>();
+  const names = (Array.isArray(items) ? items : [])
+    .map(normalizeProjectSuggestionName)
+    .filter((name) => {
+      if (!name) return false;
+      const key = name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  const scored = names.map((name, index) => {
+    const lowerName = name.toLowerCase();
+    const tokenScore = tokens.reduce(
+      (score, token) => score + (lowerName.includes(token) ? 2 : 0),
+      0,
+    );
+    const exactScore = query && lowerName.includes(query) ? 4 : 0;
+    return {
+      name,
+      index,
+      score: tokenScore + exactScore,
+    };
+  });
+
+  const hasQueryMatches = scored.some((item) => item.score > 0);
+
+  return scored
+    .filter((item) => !hasQueryMatches || item.score > 0)
+    .sort((a, b) => {
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) return scoreDelta;
+
+      const lengthDelta = b.name.length - a.name.length;
+      if (lengthDelta !== 0) return lengthDelta;
+
+      return a.index - b.index;
+    })
+    .slice(0, maxItems)
+    .map((item) => item.name);
+}
 
 function normalizeStatusToken(status: string | undefined): string {
   return String(status || 'unknown').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+export function buildMilestoneClassToken(label: string | undefined): string {
+  const token = String(label || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return token || 'milestone';
+}
+
+export function buildMilestoneMarkerText(label: string | undefined, index = 0): string {
+  const trimmed = String(label || '').trim();
+  if (!trimmed) return String(index + 1);
+
+  const trailingNumber = trimmed.match(/\d+$/)?.[0];
+  if (trailingNumber) return trailingNumber.slice(-2);
+
+  const words = trimmed
+    .split(/[\s_-]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (words.length >= 2 && words.every((word) => /^[a-z0-9]/i.test(word))) {
+    return words
+      .slice(0, 2)
+      .map((word) => word[0])
+      .join('')
+      .toUpperCase();
+  }
+
+  return Array.from(trimmed).slice(0, 2).join('').toUpperCase();
 }
 
 function parseDateOnly(date: string | undefined): Date | null {
@@ -281,6 +446,367 @@ export function buildProjectHealthSummary(
   };
 }
 
+export function compareProjectsByDashboardPriority(
+  left: FishboneProject,
+  right: FishboneProject,
+  now = new Date(),
+): number {
+  const leftHealth = buildProjectHealthSummary(left, now);
+  const rightHealth = buildProjectHealthSummary(right, now);
+
+  const healthDelta = PROJECT_HEALTH_PRIORITY[leftHealth.state] - PROJECT_HEALTH_PRIORITY[rightHealth.state];
+  if (healthDelta !== 0) return healthDelta;
+
+  const blockedDelta = rightHealth.blockedTasks - leftHealth.blockedTasks;
+  if (blockedDelta !== 0) return blockedDelta;
+
+  const overdueDelta = rightHealth.overdueTasks - leftHealth.overdueTasks;
+  if (overdueDelta !== 0) return overdueDelta;
+
+  const dueSoonDelta = rightHealth.dueSoonTasks - leftHealth.dueSoonTasks;
+  if (dueSoonDelta !== 0) return dueSoonDelta;
+
+  const leftMilestoneDays = leftHealth.upcomingMilestone?.daysUntil ?? Number.POSITIVE_INFINITY;
+  const rightMilestoneDays = rightHealth.upcomingMilestone?.daysUntil ?? Number.POSITIVE_INFINITY;
+  const milestoneDelta = leftMilestoneDays - rightMilestoneDays;
+  if (milestoneDelta !== 0) return milestoneDelta;
+
+  return left.name.localeCompare(right.name);
+}
+
+export function buildProjectFocusItems(
+  projects: FishboneProject[],
+  options: { now?: Date; maxItems?: number } = {},
+): ProjectFocusItem[] {
+  const now = options.now || new Date();
+  const maxItems = options.maxItems ?? 8;
+
+  return collectProjectFocusItems(projects, now).slice(0, maxItems);
+}
+
+export function buildProjectFocusSummary(
+  projects: FishboneProject[],
+  options: { now?: Date; maxItems?: number } = {},
+): ProjectFocusSummary {
+  const now = options.now || new Date();
+  const maxItems = options.maxItems ?? 8;
+  const allItems = collectProjectFocusItems(projects, now);
+  const visibleItems = allItems.slice(0, maxItems);
+
+  return {
+    totalItems: allItems.length,
+    visibleItems,
+    hiddenItems: Math.max(0, allItems.length - visibleItems.length),
+  };
+}
+
+function collectProjectFocusItems(projects: FishboneProject[], now: Date): ProjectFocusItem[] {
+  return (Array.isArray(projects) ? projects : [])
+    .flatMap((project) => {
+      const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+
+      return tasks
+        .map((task): ProjectFocusItem | null => {
+          if (isBlockedStatus(task.status)) {
+            return {
+              projectId: project.id,
+              projectName: project.name,
+              task,
+              level: 'blocked',
+              label: '阻塞',
+              detail: task.eta ? `ETA ${task.eta}` : '需要明确负责人或解除条件',
+              daysUntil: daysUntil(task.eta, now),
+              priority: PROJECT_ATTENTION_PRIORITY.blocked,
+            };
+          }
+
+          if (isCompletedStatus(task.status)) return null;
+
+          const delta = daysUntil(task.eta, now);
+          if (delta === null) return null;
+
+          if (delta < 0) {
+            return {
+              projectId: project.id,
+              projectName: project.name,
+              task,
+              level: 'overdue',
+              label: '过期',
+              detail: `已超 ${Math.abs(delta)} 天`,
+              daysUntil: delta,
+              priority: PROJECT_ATTENTION_PRIORITY.overdue,
+            };
+          }
+
+          if (delta <= 7) {
+            return {
+              projectId: project.id,
+              projectName: project.name,
+              task,
+              level: 'due-soon',
+              label: '近 7 天',
+              detail: delta === 0 ? '今天到期' : `${delta} 天后到期`,
+              daysUntil: delta,
+              priority: PROJECT_ATTENTION_PRIORITY['due-soon'],
+            };
+          }
+
+          return null;
+        })
+        .filter((item): item is ProjectFocusItem => Boolean(item));
+    })
+    .sort((a, b) => {
+      const priorityDelta = a.priority - b.priority;
+      if (priorityDelta !== 0) return priorityDelta;
+
+      const leftDays = a.daysUntil ?? Number.POSITIVE_INFINITY;
+      const rightDays = b.daysUntil ?? Number.POSITIVE_INFINITY;
+      const dateDelta = leftDays - rightDays;
+      if (dateDelta !== 0) return dateDelta;
+
+      const projectDelta = a.projectName.localeCompare(b.projectName);
+      if (projectDelta !== 0) return projectDelta;
+
+      return a.task.title.localeCompare(b.task.title);
+    });
+}
+
+function buildTaskJiraKeys(task: FishboneTask): string[] {
+  const keys = new Set<string>();
+
+  (task.jira || []).forEach((item) => {
+    if (item?.key) keys.add(item.key);
+  });
+
+  Object.values(task.platforms || {}).forEach((platform) => {
+    if (platform?.jira) keys.add(platform.jira);
+  });
+
+  return Array.from(keys);
+}
+
+function formatRelativeDays(days: number): string {
+  if (days === 0) return '今天';
+  if (days > 0) return `${days} 天后`;
+  return `已超 ${Math.abs(days)} 天`;
+}
+
+function buildStatusDraftAttentionTasks(
+  project: FishboneProject,
+  now: Date,
+  maxItems: number,
+): Array<{
+  task: FishboneTask;
+  label: string;
+  detail: string;
+  priority: number;
+}> {
+  const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+
+  return tasks
+    .map((task) => {
+      if (isBlockedStatus(task.status)) {
+        return {
+          task,
+          label: '阻塞',
+          detail: task.eta ? `ETA ${task.eta}` : '需要明确负责人或解除条件',
+          priority: 0,
+        };
+      }
+
+      if (isCompletedStatus(task.status)) return null;
+
+      const delta = daysUntil(task.eta, now);
+      if (delta === null) return null;
+
+      if (delta < 0) {
+        return {
+          task,
+          label: '过期',
+          detail: `已超 ${Math.abs(delta)} 天`,
+          priority: 1,
+        };
+      }
+
+      if (delta <= 7) {
+        return {
+          task,
+          label: '近 7 天到期',
+          detail: delta === 0 ? '今天到期' : `${delta} 天后到期`,
+          priority: 2,
+        };
+      }
+
+      return null;
+    })
+    .filter(
+      (
+        item,
+      ): item is {
+        task: FishboneTask;
+        label: string;
+        detail: string;
+        priority: number;
+      } => Boolean(item),
+    )
+    .sort((a, b) => {
+      const priorityDelta = a.priority - b.priority;
+      if (priorityDelta !== 0) return priorityDelta;
+      return (a.task.eta || '').localeCompare(b.task.eta || '');
+    })
+    .slice(0, maxItems);
+}
+
+export function buildProjectStatusEvidenceItems(
+  project: FishboneProject,
+  options: ProjectStatusDraftOptions = {},
+): ProjectStatusEvidenceItem[] {
+  const now = options.now || new Date();
+  const maxItems = options.maxAttentionTasks ?? 8;
+  const evidence: ProjectStatusEvidenceItem[] = [];
+  const health = buildProjectHealthSummary(project, now);
+  const attentionTasks = buildStatusDraftAttentionTasks(project, now, maxItems);
+
+  attentionTasks.forEach(({ task, label, detail, priority }) => {
+    const jiraKeys = buildTaskJiraKeys(task);
+    const jiraDetail = jiraKeys.length ? `；Jira ${jiraKeys.join(', ')}` : '';
+    evidence.push({
+      type: 'task',
+      label,
+      title: task.title,
+      detail: `${detail}${jiraDetail}`,
+      source: '本地任务状态 / ETA',
+      priority,
+      taskId: task.id,
+    });
+  });
+
+  if (health.upcomingMilestone) {
+    evidence.push({
+      type: 'milestone',
+      label: '里程碑',
+      title: health.upcomingMilestone.label,
+      detail: `${health.upcomingMilestone.date}，${formatRelativeDays(health.upcomingMilestone.daysUntil)}`,
+      source: '本地里程碑计划',
+      priority: 3,
+    });
+  }
+
+  const jiraEvidenceKeys = new Set<string>();
+  (Array.isArray(project.tasks) ? project.tasks : []).forEach((task) => {
+    buildTaskJiraKeys(task).forEach((jiraKey) => {
+      const key = `${task.id}:${jiraKey}`;
+      if (jiraEvidenceKeys.has(key)) return;
+      jiraEvidenceKeys.add(key);
+      evidence.push({
+        type: 'jira',
+        label: 'Jira',
+        title: jiraKey,
+        detail: task.title,
+        source: '任务关联 Jira',
+        priority: 4,
+        taskId: task.id,
+      });
+    });
+
+    Object.entries(task.platforms || {}).forEach(([platformName, platform]) => {
+      const status = normalizeStatusToken(platform?.status);
+      if (!status || isCompletedStatus(status)) return;
+      if (!status.includes('blocked') && status !== 'pending' && status !== 'todo') return;
+
+      evidence.push({
+        type: 'platform',
+        label: platformName.toUpperCase(),
+        title: task.title,
+        detail: `${platform?.status || 'pending'}${platform?.assignee ? ` · ${platform.assignee}` : ''}${platform?.jira ? ` · ${platform.jira}` : ''}`,
+        source: '平台状态',
+        priority: status.includes('blocked') ? 1 : 5,
+        taskId: task.id,
+      });
+    });
+  });
+
+  return evidence
+    .sort((a, b) => {
+      const priorityDelta = a.priority - b.priority;
+      if (priorityDelta !== 0) return priorityDelta;
+      const labelDelta = a.label.localeCompare(b.label);
+      if (labelDelta !== 0) return labelDelta;
+      return a.title.localeCompare(b.title);
+    })
+    .slice(0, maxItems);
+}
+
+export function buildProjectStatusUpdateDraft(
+  project: FishboneProject,
+  options: ProjectStatusDraftOptions = {},
+): string {
+  const now = options.now || new Date();
+  const maxAttentionTasks = options.maxAttentionTasks ?? 5;
+  const health = buildProjectHealthSummary(project, now);
+  const milestones = Array.isArray(project.milestones) ? project.milestones : [];
+  const attentionTasks = buildStatusDraftAttentionTasks(project, now, maxAttentionTasks);
+  const evidenceItems = buildProjectStatusEvidenceItems(project, {
+    now,
+    maxAttentionTasks: Math.max(maxAttentionTasks, 6),
+  });
+
+  const lines: string[] = [
+    `${project.name} 状态更新`,
+    '',
+    `状态：${health.label} - ${health.headline}`,
+    `关键指标：${health.completedTasks}/${health.totalTasks} 完成，${health.blockedTasks} 阻塞，${health.overdueTasks} 过期，${health.dueSoonTasks} 个 7 天内到期。`,
+  ];
+
+  if (health.upcomingMilestone) {
+    lines.push(
+      `下个里程碑：${health.upcomingMilestone.label} (${health.upcomingMilestone.date}，还有 ${health.upcomingMilestone.daysUntil} 天)`,
+    );
+  }
+
+  if (milestones.length) {
+    lines.push(
+      `里程碑：${milestones
+        .map((milestone) => `${milestone.label}${milestone.date ? ` ${milestone.date}` : ' 待定'}`)
+        .join('；')}`,
+    );
+  }
+
+  lines.push('', '证据来源：');
+  if (!evidenceItems.length) {
+    lines.push('- 本地项目工作台暂无可引用证据。');
+  } else {
+    evidenceItems.forEach((item) => {
+      lines.push(`- [${item.label}] ${item.title}：${item.detail}（${item.source}）`);
+    });
+  }
+
+  lines.push('', '需要关注：');
+
+  if (!attentionTasks.length) {
+    lines.push('- 暂无阻塞、过期或 7 天内到期任务。');
+  } else {
+    attentionTasks.forEach(({ task, label, detail }) => {
+      const jiraKeys = buildTaskJiraKeys(task);
+      const evidence = jiraKeys.length ? `；Jira ${jiraKeys.join(', ')}` : '';
+      lines.push(`- [${label}] ${task.title} (${detail}${evidence})`);
+    });
+  }
+
+  lines.push('', '建议下一步：');
+  if (health.blockedTasks > 0) {
+    lines.push('- 先确认阻塞项负责人、解除条件和下一次检查时间。');
+  } else if (health.overdueTasks > 0) {
+    lines.push('- 重新确认过期任务 ETA，并同步受影响的里程碑。');
+  } else if (health.dueSoonTasks > 0) {
+    lines.push('- 检查近 7 天到期任务是否需要资源或排期调整。');
+  } else {
+    lines.push('- 保持当前节奏，并在下次状态更新前补充新的证据来源。');
+  }
+
+  return lines.join('\n');
+}
+
 function sanitizeFishboneProject(project: FishboneProject): FishboneProject {
   const sanitized = sanitizeProject(project) as FishboneProject;
   return {
@@ -289,6 +815,17 @@ function sanitizeFishboneProject(project: FishboneProject): FishboneProject {
       ['sdk', 'ios', 'android', 'qa', 'dev'].includes(item),
     ),
   };
+}
+
+function sanitizeFishboneChanges(changes: any): any {
+  if (!changes || typeof changes !== 'object') return {};
+
+  const next = { ...changes };
+  if ('anchorPosition' in next) {
+    const value = Number(next.anchorPosition);
+    next.anchorPosition = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined;
+  }
+  return next;
 }
 
 /**
@@ -366,6 +903,8 @@ export class DashboardDataManager {
   private async persistFishboneProjects(): Promise<void> {
     const storage = this.getChromeStorage();
     if (!storage) return;
+
+    this.fishboneProjects = this.fishboneProjects.map(sanitizeFishboneProject);
 
     await storage.set({
       [PROJECT_DASHBOARD_STORAGE_KEY]: {
@@ -787,16 +1326,17 @@ export class DashboardDataManager {
       if (!project) {
         return { success: false, error: '项目不存在' };
       }
+      const safeChanges = sanitizeFishboneChanges(changes);
 
       // 根据类型更新对应的项目（鱼骨模型）
       switch (itemType) {
         case 'project':
-          Object.assign(project, changes);
+          Object.assign(project, safeChanges);
           break;
         case 'milestone': {
           const milestone = project.milestones.find((m: any) => m.id === itemId);
           if (!milestone) return { success: false, error: '里程碑不存在' };
-          Object.assign(milestone, changes);
+          Object.assign(milestone, safeChanges);
           break;
         }
         case 'task':
@@ -804,9 +1344,11 @@ export class DashboardDataManager {
         case 'design': {
           const task = project.tasks.find((t: any) => t.id === itemId);
           if (!task) return { success: false, error: '任务不存在' };
-          Object.assign(task, changes);
+          Object.assign(task, safeChanges);
           break;
         }
+        default:
+          return { success: false, error: `不支持的项目项类型: ${itemType}` };
       }
       await this.persistFishboneProjects();
       return { success: true };
@@ -831,7 +1373,7 @@ export class DashboardDataManager {
         return { success: false, error: '项目不存在' };
       }
 
-      const newItem = { id: `${itemType}-${Date.now()}`, ...itemData };
+      const newItem = { id: `${itemType}-${Date.now()}`, ...sanitizeFishboneChanges(itemData) };
       switch (itemType) {
         case 'milestone':
           project.milestones.push({ id: newItem.id, label: newItem.label || 'M', date: newItem.date });
@@ -841,16 +1383,18 @@ export class DashboardDataManager {
         case 'design':
           project.tasks.push({
             id: newItem.id,
-            type: (itemData.type || 'task'),
-            title: itemData.title || '新任务',
-            status: itemData.status || 'todo',
-            eta: itemData.eta,
-            desc: itemData.desc,
-            anchorPosition: itemData.anchorPosition,
-            platforms: itemData.platforms,
-            jira: itemData.jira
+            type: (newItem.type || 'task'),
+            title: newItem.title || '新任务',
+            status: newItem.status || 'todo',
+            eta: newItem.eta,
+            desc: newItem.desc,
+            anchorPosition: newItem.anchorPosition,
+            platforms: newItem.platforms,
+            jira: newItem.jira
           });
           break;
+        default:
+          return { success: false, error: `不支持的项目项类型: ${itemType}` };
       }
       await this.persistFishboneProjects();
       return { success: true, newItem };
@@ -862,23 +1406,51 @@ export class DashboardDataManager {
   /**
    * 同步项目数据
    */
-  async syncProjectData(_projectId: string): Promise<{ success: boolean; syncResults?: any; error?: string }> {
+  async syncProjectData(_projectId: string): Promise<ProjectSyncReadiness> {
     try {
-      // 模拟同步过程
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const syncResults = {
-        jira: { synced: 5, updated: 2, errors: 0 },
-        github: { synced: 8, updated: 1, errors: 0 },
-        confluence: { synced: 3, updated: 0, errors: 0 }
+      await this.ensureFishboneProjectsLoaded();
+
+      const sources: ProjectSyncSourceStatus[] = [
+        {
+          source: 'jira',
+          label: 'Jira',
+          configured: false,
+          status: 'not_configured',
+          detail: '尚未接入真实 Jira 项目同步',
+          nextStep: '继续维护本地任务，或通过报告导入 Jira 摘要',
+        },
+        {
+          source: 'github',
+          label: 'GitHub',
+          configured: false,
+          status: 'not_configured',
+          detail: '尚未接入 GitHub PR / commit 同步',
+          nextStep: '后续可按项目仓库映射接入 PR 状态',
+        },
+        {
+          source: 'confluence',
+          label: 'Confluence',
+          configured: false,
+          status: 'not_configured',
+          detail: '尚未接入 Confluence 页面同步',
+          nextStep: '后续可按项目空间或页面链接同步状态材料',
+        },
+      ];
+
+      return {
+        success: true,
+        checkedAt: new Date().toISOString(),
+        summary: '真实数据源尚未接入；当前显示的是本地项目工作台数据。',
+        sources,
       };
-
-      // 更新项目最后同步时间
-      // 鱼骨模型暂不更新 lastUpdated 字段
-
-      return { success: true, syncResults };
     } catch (error: any) {
-      return { success: false, error: error.message };
+      return {
+        success: false,
+        checkedAt: new Date().toISOString(),
+        summary: '数据源状态检查失败',
+        sources: [],
+        error: error.message,
+      };
     }
   }
 
@@ -969,10 +1541,15 @@ export class DashboardDataManager {
     try {
       await this.ensureFishboneProjectsLoaded();
 
-      const id = this.createUniqueProjectId(data.name);
+      const projectName = String(data.name || '').trim();
+      if (!projectName) {
+        return { success: false, error: '项目名称不能为空' };
+      }
+
+      const id = this.createUniqueProjectId(projectName);
       const project: FishboneProject = {
         id,
-        name: data.name,
+        name: projectName,
         description: data.description || '',
         milestones: Array.isArray(data.milestones)
           ? data.milestones
@@ -1021,12 +1598,8 @@ export class DashboardDataManager {
       // Recall similar messages for context (result not directly used for names)
       await client.recall(question, { topK: 10 });
 
-      const names = new Set<string>();
-      // 直接从已知项目列表获取建议
       const projectResult = await client.getEntities('Project');
-      (projectResult.items || []).forEach(p => names.add(p.name));
-
-      const suggestions = Array.from(names).slice(0, 8);
+      const suggestions = rankProjectSuggestionNames(projectResult.items || [], question);
       return { success: true, suggestions };
     } catch (e: any) {
       return { success: false, suggestions: [], error: e.message };

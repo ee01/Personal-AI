@@ -259,20 +259,20 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
 
       const existing = this.db
         .prepare(
-          `SELECT id, mention_count, evidence_refs_json, salience_score
+          `SELECT id, mention_count, evidence_refs, salience_score
            FROM user_profile_items
            WHERE fingerprint = ?
            LIMIT 1`,
         )
         .get(fingerprint) as
-        | { id: string; mention_count: number; evidence_refs_json: string | null; salience_score: number }
+        | { id: string; mention_count: number; evidence_refs: string | null; salience_score: number }
         | undefined;
 
       if (existing) {
         // Reinforce existing preference
         const newMentionCount = existing.mention_count + 1;
-        const evidenceRefs: Array<{ messageId?: string; ts: number }> = existing.evidence_refs_json
-          ? JSON.parse(existing.evidence_refs_json)
+        const evidenceRefs: Array<{ messageId?: string; ts: number }> = existing.evidence_refs
+          ? JSON.parse(existing.evidence_refs)
           : [];
         if (contextMessageId) {
           evidenceRefs.push({ messageId: contextMessageId, ts: currentTime });
@@ -294,7 +294,7 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
              SET mention_count = ?,
                  last_seen = ?,
                  salience_score = ?,
-                 evidence_refs_json = ?,
+                 evidence_refs = ?,
                  updated_at = ?
              WHERE id = ?`,
           )
@@ -328,7 +328,7 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
             `INSERT INTO user_profile_items
               (id, item_type, item_key, item_value, fingerprint,
                source_kind, confidence, salience_score,
-               mention_count, last_seen, evidence_refs_json,
+               mention_count, last_seen, evidence_refs,
                user_confirmed, status, created_at, updated_at)
              VALUES (?, 'preference', ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, 'active', ?, ?)`,
           )
@@ -371,19 +371,19 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
 
       const existing = this.db
         .prepare(
-          `SELECT id, mention_count, evidence_refs_json, salience_score
+          `SELECT id, mention_count, evidence_refs, salience_score
            FROM user_profile_items
            WHERE fingerprint = ?
            LIMIT 1`,
         )
         .get(fingerprint) as
-        | { id: string; mention_count: number; evidence_refs_json: string | null; salience_score: number }
+        | { id: string; mention_count: number; evidence_refs: string | null; salience_score: number }
         | undefined;
 
       if (existing) {
         const newMentionCount = existing.mention_count + 1;
-        const evidenceRefs: Array<{ ts: number }> = existing.evidence_refs_json
-          ? JSON.parse(existing.evidence_refs_json)
+        const evidenceRefs: Array<{ ts: number }> = existing.evidence_refs
+          ? JSON.parse(existing.evidence_refs)
           : [];
         evidenceRefs.push({ ts: currentTime });
 
@@ -403,7 +403,7 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
              SET mention_count = ?,
                  last_seen = ?,
                  salience_score = ?,
-                 evidence_refs_json = ?,
+                 evidence_refs = ?,
                  updated_at = ?
              WHERE id = ?`,
           )
@@ -434,7 +434,7 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
             `INSERT INTO user_profile_items
               (id, item_type, item_key, item_value, fingerprint,
                source_kind, confidence, salience_score,
-               mention_count, last_seen, evidence_refs_json,
+               mention_count, last_seen, evidence_refs,
                user_confirmed, status, created_at, updated_at)
              VALUES (?, 'fact', ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, 'active', ?, ?)`,
           )

@@ -6,11 +6,13 @@
 import { SheetConfig } from './types';
 import { ConfigSyncService } from './ConfigSyncService';
 import { normalizeSheetConfig } from './botAutomationConfig';
+import { isAppScriptVersionOlder } from './appScriptVersioning';
 
 export interface UpdateCheckResult {
   needsUpdate: boolean;
   currentVersion: string;
   latestVersion: string;
+  versionUsage?: AppScriptVersionUsage;
   error?: string;
 }
 
@@ -29,9 +31,19 @@ export interface AppScriptVersionInfo {
   lastUpdated: string;
 }
 
-export const APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR = 'APP_SCRIPT_PROJECT_HISTORY_LIMIT';
+export interface AppScriptVersionUsage {
+  count: number;
+  limit: number;
+  remaining: number;
+  nearLimit: boolean;
+  projectHistoryUrl: string;
+}
 
-function buildProjectHistoryUrl(scriptId: string): string {
+export const APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR = 'APP_SCRIPT_PROJECT_HISTORY_LIMIT';
+const APP_SCRIPT_VERSION_LIMIT = 200;
+const APP_SCRIPT_VERSION_WARNING_THRESHOLD = 195;
+
+export function buildProjectHistoryUrl(scriptId: string): string {
   return `https://script.google.com/home/projects/${encodeURIComponent(scriptId)}/projecthistory`;
 }
 
@@ -47,10 +59,13 @@ class AppScriptProjectHistoryLimitError extends Error {
   readonly helpUrl: string;
   readonly helpMessage: string;
 
-  constructor(scriptId: string) {
+  constructor(scriptId: string, usage?: AppScriptVersionUsage) {
     const helpUrl = buildProjectHistoryUrl(scriptId);
     const helpMessage = '请打开 Project History 页面，使用右下角批量删除按钮清理旧的未使用版本（建议保留 5 个以内）后重试升级。';
-    super(`App Script 历史版本已达到 200 个上限，无法创建新版本。${helpMessage} ${helpUrl}`);
+    const usageText = usage
+      ? `当前已有 ${usage.count}/${usage.limit} 个历史版本，`
+      : '';
+    super(`App Script ${usageText}历史版本已达到 200 个上限，无法创建新版本。${helpMessage} ${helpUrl}`);
     this.name = 'AppScriptProjectHistoryLimitError';
     this.helpUrl = helpUrl;
     this.helpMessage = helpMessage;
@@ -152,12 +167,19 @@ export class AppScriptUpdater {
       const currentVersion = await this.getDeployedVersion();
       
       // 比较版本
-      const needsUpdate = this.compareVersions(currentVersion, latestVersion) < 0;
+      const needsUpdate = isAppScriptVersionOlder(currentVersion, latestVersion);
+      const versionUsage = needsUpdate && this.config.scriptId
+        ? await this.getProjectVersionUsage(this.config.scriptId).catch((error) => {
+            console.warn('读取 App Script 历史版本使用量失败:', error);
+            return undefined;
+          })
+        : undefined;
       
       return {
         needsUpdate,
         currentVersion,
-        latestVersion
+        latestVersion,
+        versionUsage
       };
       
     } catch (error) {
@@ -223,22 +245,25 @@ export class AppScriptUpdater {
       const latestVersionInfo = await AppScriptUpdater.getLatestVersionInfo();
       const latestVersion = latestVersionInfo.version;
       
-      // 1. 加载最新的 App Script 模板代码
+      // 1. 先验证存在可更新的正式 deployment，避免预检失败时仍消耗 Apps Script 版本额度
+      const deploymentId = await this.getOrCreateDeploymentId();
+
+      // 2. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
+      await this.assertProjectVersionCapacity(this.config.scriptId);
+      
+      // 3. 加载最新的 App Script 模板代码
       const scriptCode = await this.loadAppScriptTemplate();
       
-      // 2. 更新 App Script 项目代码
+      // 4. 更新 App Script 项目代码
       await this.updateProjectContent(this.config.scriptId, scriptCode);
       
-      // 3. 创建新版本
+      // 5. 创建新版本
       const versionNumber = await this.createVersion(this.config.scriptId, latestVersion);
       
-      // 4. 获取现有的 deployment ID（必须是有 versionNumber 的正式部署，不是 @HEAD）
-      const deploymentId = await this.getOrCreateDeploymentId();
-      
-      // 5. 更新部署到新版本（保持 URL 不变）
+      // 6. 更新部署到新版本（保持 URL 不变）
       await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber, latestVersion);
       
-      // 6. 更新配置中的版本信息
+      // 7. 更新配置中的版本信息
       await this.updateConfigVersion(latestVersionInfo);
       
       console.log('App Script 更新成功！');
@@ -364,6 +389,64 @@ export class AppScriptUpdater {
     const versionResult = await response.json();
     console.log(`✅ 版本创建成功: ${versionResult.versionNumber}`);
     return versionResult.versionNumber;
+  }
+
+  /**
+   * 查询 Project History 已使用的版本数量。Apps Script 每个项目最多 200 个版本。
+   */
+  private async getProjectVersionUsage(scriptId: string): Promise<AppScriptVersionUsage> {
+    let pageToken = '';
+    let count = 0;
+
+    do {
+      const params = new URLSearchParams({ pageSize: String(APP_SCRIPT_VERSION_LIMIT) });
+      if (pageToken) {
+        params.set('pageToken', pageToken);
+      }
+
+      const response = await fetch(
+        `https://script.googleapis.com/v1/projects/${scriptId}/versions?${params.toString()}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.token}`
+          }
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`获取 Project History 版本列表失败: ${error}`);
+      }
+
+      const data = await response.json();
+      count += Array.isArray(data.versions) ? data.versions.length : 0;
+      pageToken = data.nextPageToken || '';
+    } while (pageToken);
+
+    const remaining = Math.max(0, APP_SCRIPT_VERSION_LIMIT - count);
+    return {
+      count,
+      limit: APP_SCRIPT_VERSION_LIMIT,
+      remaining,
+      nearLimit: count >= APP_SCRIPT_VERSION_WARNING_THRESHOLD,
+      projectHistoryUrl: buildProjectHistoryUrl(scriptId)
+    };
+  }
+
+  private async assertProjectVersionCapacity(scriptId: string): Promise<AppScriptVersionUsage> {
+    const usage = await this.getProjectVersionUsage(scriptId);
+
+    if (usage.remaining <= 0) {
+      throw new AppScriptProjectHistoryLimitError(scriptId, usage);
+    }
+
+    if (usage.nearLimit) {
+      console.warn(
+        `⚠️ App Script Project History 版本额度偏高: ${usage.count}/${usage.limit}，本次升级后剩余 ${usage.remaining - 1}`,
+      );
+    }
+
+    return usage;
   }
   
   /**
@@ -564,25 +647,6 @@ export class AppScriptUpdater {
     } catch (error) {
       console.warn('同步配置到 Sheet 失败（不影响功能）:', error);
     }
-  }
-  
-  /**
-   * 比较版本号
-   * @returns -1: v1 < v2, 0: v1 = v2, 1: v1 > v2
-   */
-  private compareVersions(v1: string, v2: string): number {
-    const parts1 = v1.split('.').map(Number);
-    const parts2 = v2.split('.').map(Number);
-    
-    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-      const num1 = parts1[i] || 0;
-      const num2 = parts2[i] || 0;
-      
-      if (num1 < num2) return -1;
-      if (num1 > num2) return 1;
-    }
-    
-    return 0;
   }
   
   /**

@@ -101,7 +101,11 @@ function installFetchMock() {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const prompt = String(body?.prompt || '');
 
-    if (url.startsWith('http://mock-memory/api/v1/outreach/sessions')) {
+    if (
+      url.startsWith(
+        'http://mock-memory/api/v1/outreach/templates/runtime-status',
+      )
+    ) {
       return new Response(
         JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -227,6 +231,16 @@ async function main() {
             time: '2099-04-16T09:00:00.000Z',
             id: 'post-leave-1',
             text: 'Current User will be on leave 2099-04-18~2099-04-20.',
+            event: {
+              title: 'Current User PTO',
+              start: '2099-04-18',
+              end: '2099-04-20',
+              timeRange: '2099-04-18~2099-04-20',
+              location: 'OOO',
+              startAtMs: Date.parse('2099-04-18T00:00:00.000Z'),
+              endAtMs: Date.parse('2099-04-20T23:59:00.000Z'),
+              ignored: 'drop-me',
+            },
           },
         ],
       },
@@ -256,6 +270,15 @@ async function main() {
     plannedAutomations[0].message.content,
     'Current User will be on leave 2099-04-18~2099-04-20.',
   );
+  assert.deepEqual(plannedAutomations[0].message.event, {
+    title: 'Current User PTO',
+    start: '2099-04-18',
+    end: '2099-04-20',
+    timeRange: '2099-04-18~2099-04-20',
+    location: 'OOO',
+    startAtMs: Date.parse('2099-04-18T00:00:00.000Z'),
+    endAtMs: Date.parse('2099-04-20T23:59:00.000Z'),
+  });
   console.log('verify-memory-entry-automation-flow: ok');
 }
 

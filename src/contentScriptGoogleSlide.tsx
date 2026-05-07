@@ -25,10 +25,9 @@ import {
 } from './slide';
 import { JiraTicket } from './types';
 import {
-  containsSuggestionText,
   extractJiraTicketKeys,
-  joinSuggestionText,
 } from './utils/slidesAnalyzerSuggestions';
+import { createProjectUpdateSuggestion } from './utils/slidesAnalyzerUpdateSuggestions';
 
 // 分析结果接口
 export interface DisplaySlideAnalysisResult {
@@ -264,88 +263,16 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
       const result = analysisResults[i] as ProjectAnalysisResult;
       
       if (result && result.suggestions) {
-        // 获取建议更新值 - 简化结构，直接获取数组的第一个元素作为建议值
-        // 注意: 新结构中suggestions中的每个字段应该直接是字符串数组
-        
-        // 只为存在的列创建建议
-        const hasStatusColumn = project.columnIndices?.status !== undefined;
-        const hasOwnerColumn = project.columnIndices?.owner !== undefined;
-        const hasTrackColumn = project.columnIndices?.track !== undefined;
-        const hasCommentsColumn = project.columnIndices?.comments !== undefined;
-        
-        // 根据实际存在的列获取建议值
-        const suggestedStatus = hasStatusColumn && result.suggestions.status;
-        const suggestedOwner = hasOwnerColumn && result.suggestions.owner;
-        const suggestedTrack = hasTrackColumn && result.suggestions.track;
-        const suggestedCommentsText = joinSuggestionText(
-          result.suggestions.highlights,
-          result.suggestions.actionItems,
-        );
-        const suggestedComments = hasCommentsColumn ? suggestedCommentsText : '';
-        
-        // 获取更新理由
-        const reasons = Array.isArray(result.suggestions.risks) ? result.suggestions.risks : [];
-        
-        // 标记是否需要更新
-        const needsUpdate = 
-          (hasStatusColumn && suggestedStatus && suggestedStatus !== project.status) ||
-          (hasOwnerColumn && suggestedOwner && suggestedOwner !== project.owner) ||
-          (hasTrackColumn && suggestedTrack && suggestedTrack !== project.track) ||
-          (hasCommentsColumn && suggestedComments && !containsSuggestionText(project.comments, suggestedComments));
-        
-        if (needsUpdate) {
-          const suggestion: ProjectUpdateSuggestion = {
-            projectId: project.id,
-            projectName: project.name,
-            currentStatus: project.status,
-            currentOwner: project.owner,
-            currentTrack: project.track,
-            currentComments: project.comments,
-            reason: reasons,
-            sourceInfo: {
-              jiraIssues: result.jiraIssues ? Object.values(result.jiraIssues) : [],
-              chatHistory: []
-            },
-            confidence: result.confidence || 0.5,
-            // 添加幻灯片位置信息
-            slideId: project.slideId,
-            tableId: project.tableId,
-            rowIndex: project.row,
-            columnIndices: {
-              status: project.columnIndices?.status,
-              owner: project.columnIndices?.owner,
-              track: project.columnIndices?.track,
-              comments: project.columnIndices?.comments
-            }
-          };
-          
-          // 只添加实际存在列的建议更新字段
-          if (hasStatusColumn && suggestedStatus) {
-            suggestion.suggestedStatus = suggestedStatus;
-            suggestion.suggestedStatusReason = (result.suggestions.statusReason || '');
-          }
-          
-          if (hasOwnerColumn && suggestedOwner) {
-            suggestion.suggestedOwner = suggestedOwner;
-            suggestion.suggestedOwnerReason = (result.suggestions.ownerReason || '');
-          }
-          
-          if (hasTrackColumn && suggestedTrack) {
-            suggestion.suggestedTrack = suggestedTrack;
-          }
-          
-          if (hasCommentsColumn && suggestedComments) {
-            suggestion.suggestedComments = suggestedComments;
-            suggestion.suggestedCommentsReason = (result.suggestions.highlightsReason || '');
-            suggestion.suggestedCommentsReason += '\n' + (result.suggestions.actionItemsReason || '');
-          }
-          
+        const suggestion = createProjectUpdateSuggestion(project, result);
+        const needsUpdate = Boolean(suggestion);
+
+        if (suggestion) {
           analysisResult.updateSuggestions.push(suggestion);
         }
         
         // 更新统计数据
         const statusHasRisk = project.status.toLowerCase().includes('risk');
-        const suggestedStatusHasRisk = suggestedStatus && suggestedStatus.toLowerCase().includes('risk');
+        const suggestedStatusHasRisk = suggestion?.suggestedStatus?.toLowerCase().includes('risk');
         
         if (statusHasRisk || (needsUpdate && suggestedStatusHasRisk) || result.riskLevel === 'critical' || result.riskLevel === 'high') {
           analysisResult.summary.riskProjects++;
@@ -440,6 +367,10 @@ function showAnalysisResults(result: DisplaySlideAnalysisResult, presentationId:
         // 确保所有需要的字段都存在
         if (!selectedUpdates || !Array.isArray(selectedUpdates)) {
           console.error('收到无效的更新请求', event.data);
+          postToAnalysisPopup({
+            type: 'UPDATE_ERROR',
+            errorMessage: '收到无效的更新请求，请重新打开分析窗口后再试'
+          });
           return;
         }
     
@@ -480,11 +411,13 @@ async function applyProjectUpdates(presentationId: string, token: string, select
     const result = await applySlideUpdates(presentationId, token, selectedUpdates);
     
     if (result.success) {
-      showToast(`成功更新了 ${result.updatedCount} 个项目字段`, 'success');
+      const skippedCount = result.errors?.length || 0;
+      const skippedSummary = skippedCount > 0 ? `，跳过 ${skippedCount} 项` : '';
+      showToast(`成功更新了 ${result.updatedCount} 个字段${skippedSummary}`, skippedCount > 0 ? 'warning' : 'success');
       console.log('更新成功:', result);
       
       // 显示成功消息并通知弹出窗口
-      showSuccessInPopup(selectedUpdates, result.updatedCount);
+      showSuccessInPopup(selectedUpdates, result.updatedCount, result.errors);
     } else {
       const errorMessage = result.errors && result.errors.length > 0 
         ? result.errors.join('; ') 
@@ -511,12 +444,13 @@ async function applyProjectUpdates(presentationId: string, token: string, select
 }
 
 // 在弹出窗口中显示成功消息
-function showSuccessInPopup(updates: ProjectUpdateSuggestion[], updatedCount: number) {
+function showSuccessInPopup(updates: ProjectUpdateSuggestion[], updatedCount: number, errors?: string[]) {
   // 向所有打开的窗口发送消息
   const message = {
     type: 'UPDATE_SUCCESS',
     updatedCount,
-    updates
+    updates,
+    errors
   };
   
   postToAnalysisPopup(message);

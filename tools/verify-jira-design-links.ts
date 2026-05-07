@@ -164,7 +164,12 @@ function verifyStatusTones() {
   assert.equal(getUXEpicStatusTone('On Hold'), 'blocked');
   assert.equal(getUXEpicStatusTone('Rejected'), 'cancelled');
   assert.equal(getDesignStatusTone('Ready for dev'), 'ready');
+  assert.equal(getDesignStatusTone('Ready for development'), 'ready');
+  assert.equal(getDesignStatusTone('Ready for review'), 'review');
+  assert.equal(getDesignStatusTone('Not ready for dev'), 'not-ready');
+  assert.equal(getDesignStatusTone('Draft handoff'), 'not-ready');
   assert.equal(getDesignStatusTone('Design updated'), 'updated');
+  assert.equal(getDesignStatusTone('Outdated after design change'), 'updated');
   assert.equal(getDesignStatusTone('Missing link'), 'missing');
   assert.equal(getDesignStatusTone('Waiting for permission'), 'blocked');
   assert.equal(getDesignStatusTone('Resolved'), 'done');

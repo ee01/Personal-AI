@@ -601,7 +601,7 @@ Rules:
 
       const existing = this.db
         .prepare(
-          `SELECT id, mention_count, evidence_refs_json, salience_score
+          `SELECT id, mention_count, evidence_refs, salience_score
            FROM user_profile_items
            WHERE fingerprint = ?
            LIMIT 1`,
@@ -610,7 +610,7 @@ Rules:
         | {
             id: string;
             mention_count: number;
-            evidence_refs_json: string | null;
+            evidence_refs: string | null;
             salience_score: number;
           }
         | undefined;
@@ -619,8 +619,8 @@ Rules:
         // Reinforce existing profile item
         const newMentionCount = existing.mention_count + 1;
         const evidenceRefs: Array<{ messageId: string; ts: number }> =
-          existing.evidence_refs_json
-            ? JSON.parse(existing.evidence_refs_json)
+          existing.evidence_refs
+            ? JSON.parse(existing.evidence_refs)
             : [];
         evidenceRefs.push({ messageId, ts: timestamp });
 
@@ -640,7 +640,7 @@ Rules:
              SET mention_count = ?,
                  last_seen = ?,
                  salience_score = ?,
-                 evidence_refs_json = ?,
+                 evidence_refs = ?,
                  updated_at = ?
              WHERE id = ?`,
           )
@@ -654,7 +654,7 @@ Rules:
           );
       } else {
         // Before inserting, check for conflicts with existing items sharing the same key
-        const conflictRequest = this.truthMaintainer.detectProfileConflict(
+        this.truthMaintainer.detectProfileConflict(
           { itemKey: key, itemValue: candidate.itemValue, confidence },
           this.db,
         );
@@ -672,15 +672,16 @@ Rules:
 
         const evidenceRefs = JSON.stringify([{ messageId, ts: timestamp }]);
 
-        // If a conflict was detected, insert as pending_confirm instead of active
-        const status = conflictRequest ? 'pending_confirm' : 'active';
+        // LLM-extracted profile candidates need user calibration before they
+        // can participate in USER_CORE or provider personalization products.
+        const status = 'pending_confirm';
 
         this.db
           .prepare(
             `INSERT INTO user_profile_items
               (id, item_type, item_key, item_value, fingerprint,
                source_kind, confidence, salience_score,
-               mention_count, last_seen, evidence_refs_json,
+               mention_count, last_seen, evidence_refs,
                user_confirmed, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, 'inferred', ?, ?, 1, ?, ?, 0, ?, ?, ?)`,
           )

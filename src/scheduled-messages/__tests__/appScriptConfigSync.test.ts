@@ -9,6 +9,7 @@ type FetchCall = {
 };
 
 const originalFetch = globalThis.fetch;
+const originalChrome = (globalThis as any).chrome;
 
 function installFetchMock(handler: (url: string, init?: RequestInit) => Promise<Response> | Response) {
   const calls: FetchCall[] = [];
@@ -24,10 +25,11 @@ function installFetchMock(handler: (url: string, init?: RequestInit) => Promise<
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+  (globalThis as any).chrome = originalChrome;
 });
 
 test('ConfigSyncService reads App Script deployment metadata from Config sheet', async () => {
-  installFetchMock(() =>
+  const calls = installFetchMock(() =>
     new Response(
       JSON.stringify({
         values: [
@@ -48,14 +50,44 @@ test('ConfigSyncService reads App Script deployment metadata from Config sheet',
   const service = new ConfigSyncService('token');
   const config = await service.readConfigFromSheet('sheet-123');
 
+  assert.match(calls[0].url, /\/values\/Config!A2:B$/);
   assert.equal(config.scriptId, 'script-123');
   assert.equal(config.deploymentId, 'deployment-456');
   assert.equal(config.appScriptVersion, '2.6.1');
   assert.equal(config.appScriptLastUpdated, '2026-04-03');
 });
 
+test('ConfigSyncService ignores invalid Sheet grid IDs from Config sheet', async () => {
+  installFetchMock(() =>
+    new Response(
+      JSON.stringify({
+        values: [
+          ['messages_sheet_id', '123abc'],
+          ['logs_sheet_id', '0'],
+          ['sheet_version', '2.7'],
+          ['created_by', 'Personal AI Extension'],
+          ['created_at', '2026-04-30 12:00:00'],
+        ],
+      }),
+      { status: 200 },
+    ),
+  );
+
+  const service = new ConfigSyncService('token');
+  const config = await service.readConfigFromSheet('sheet-123');
+
+  assert.equal(config.messagesSheetId, undefined);
+  assert.equal(config.logsSheetId, 0);
+});
+
 test('ConfigSyncService writes App Script deployment metadata to Config sheet', async () => {
-  const calls = installFetchMock(() => new Response('{}', { status: 200 }));
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
 
   const service = new ConfigSyncService('token');
   await service.saveConfigToSheet({
@@ -71,12 +103,451 @@ test('ConfigSyncService writes App Script deployment metadata to Config sheet', 
     created_at: '2026-04-30 12:00:00',
   });
 
-  assert.equal(calls.length, 1);
-  const body = JSON.parse(String(calls[0].init?.body));
+  assert.equal(calls.length, 2);
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  assert.match(putCall.url, /valueInputOption=RAW/);
+  const body = JSON.parse(String(putCall.init?.body));
   const rows = body.values as [string, string][];
   const configMap = new Map(rows.filter(([key]) => key));
 
   assert.equal(configMap.get('deployment_id'), 'deployment-456');
   assert.equal(configMap.get('app_script_version'), '2.6.1');
   assert.equal(configMap.get('app_script_last_updated'), '2026-04-03');
+});
+
+test('ConfigSyncService writes Config values as raw strings to avoid Sheet coercion', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-05-05T18:30:00.000Z',
+    botAutomation: {
+      executorRule: {
+        ruleId: '90071992547409931234',
+        ruleName: 'Executor',
+        webhookUrl: 'https://script.google.com/macros/s/deploy/exec',
+        projectKey: 'MTR',
+        jiraUrl: 'https://jira.example.com',
+        createdAt: '2026-05-05T18:30:00.000Z',
+      },
+    },
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  assert.match(putCall.url, /valueInputOption=RAW/);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(configMap.get('created_at'), '2026-05-05T18:30:00.000Z');
+  assert.equal(configMap.get('bot_automation_executor_rule_id'), '90071992547409931234');
+});
+
+test('ConfigSyncService preserves unmanaged Config keys while replacing managed keys', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['custom_owner_note', 'do not remove'],
+          ['web_app_url', 'https://old.example.com/exec'],
+          ['deploymentId', 'stale-deployment-alias'],
+          ['bot_executor_rule_id', 'stale-rule'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    scriptId: 'script-123',
+    webAppUrl: 'https://script.google.com/macros/s/deploy/exec',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-04-30 12:00:00',
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const rows = body.values as [string, string][];
+  const configMap = new Map(rows.filter(([key]) => key));
+
+  assert.equal(configMap.get('custom_owner_note'), 'do not remove');
+  assert.equal(configMap.get('web_app_url'), 'https://script.google.com/macros/s/deploy/exec');
+  assert.equal(configMap.has('deploymentId'), false);
+  assert.equal(configMap.has('bot_executor_rule_id'), false);
+});
+
+test('ConfigSyncService creates missing Config sheet before saving to a legacy maintenance sheet', async () => {
+  let configReadCount = 0;
+  const calls = installFetchMock((url, init) => {
+    if (url.includes('/values/Config!A2:B') && !init?.method) {
+      configReadCount += 1;
+      if (configReadCount === 1) {
+        return new Response(
+          JSON.stringify({ error: { message: 'Unable to parse range: Config!A2:B' } }),
+          { status: 400 },
+        );
+      }
+
+      return new Response(JSON.stringify({ values: [] }), { status: 200 });
+    }
+
+    if (url.includes('?fields=sheets.properties')) {
+      return new Response(
+        JSON.stringify({
+          sheets: [
+            { properties: { sheetId: 11, title: 'Messages', index: 0 } },
+            { properties: { sheetId: 12, title: 'Logs', index: 1 } },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url.endsWith(':batchUpdate') && init?.method === 'POST') {
+      return new Response(
+        JSON.stringify({
+          replies: [{ addSheet: { properties: { sheetId: 13, title: 'Config' } } }],
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url.includes('/values/Config!A1:B1') && init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    if (url.includes('/values/Config!A2:B') && init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    throw new Error(`Unexpected fetch call: ${url}`);
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    sheet_version: '2.7',
+    created_by: 'Manual',
+    created_at: '2026-04-30 12:00:00',
+  });
+
+  assert.equal(configReadCount, 2);
+
+  const addSheetCall = calls.find(call => call.url.endsWith(':batchUpdate'));
+  assert.ok(addSheetCall);
+  const addSheetBody = JSON.parse(String(addSheetCall.init?.body));
+  assert.equal(addSheetBody.requests[0].addSheet.properties.title, 'Config');
+
+  const headerCall = calls.find(call => call.url.includes('/values/Config!A1:B1'));
+  assert.ok(headerCall);
+  assert.deepEqual(JSON.parse(String(headerCall.init?.body)).values, [['Key', 'Value']]);
+
+  const finalPutCall = calls.find(call => call.url.includes('/values/Config!A2:B') && call.init?.method === 'PUT');
+  assert.ok(finalPutCall);
+  const body = JSON.parse(String(finalPutCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+  assert.equal(configMap.get('sheet_version'), '2.7');
+});
+
+test('ConfigSyncService returns worksheet IDs by title for manual bind recovery', async () => {
+  installFetchMock((url) => {
+    assert.match(url, /\?fields=sheets\.properties/);
+    return new Response(
+      JSON.stringify({
+        sheets: [
+          { properties: { sheetId: 101, title: 'Messages', index: 0 } },
+          { properties: { sheetId: 102, title: 'Config', index: 1 } },
+          { properties: { sheetId: 103, title: 'Logs', index: 2 } },
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  const ids = await service.getScheduledMessagesWorksheetIds('sheet-123');
+
+  assert.deepEqual(ids, {
+    messagesSheetId: 101,
+    logsSheetId: 103,
+    configSheetId: 102,
+  });
+});
+
+test('ConfigSyncService recovers missing worksheet IDs from existing sheet tabs', async () => {
+  installFetchMock((url) => {
+    assert.match(url, /\?fields=sheets\.properties/);
+    return new Response(
+      JSON.stringify({
+        sheets: [
+          { properties: { sheetId: 101, title: 'Messages', index: 0 } },
+          { properties: { sheetId: 102, title: 'Config', index: 1 } },
+          { properties: { sheetId: 103, title: 'Logs', index: 2 } },
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  const config = await service.recoverScheduledMessagesWorksheetIds('sheet-123', {
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    messagesSheetId: 909,
+    sheet_version: '2.7',
+    created_by: 'Manual',
+    created_at: '2026-04-30T00:00:00.000Z',
+  });
+
+  assert.equal(config.messagesSheetId, 909);
+  assert.equal(config.logsSheetId, 103);
+});
+
+test('ConfigSyncService skips missing Bot Automation rule fields instead of writing null values', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-04-30 12:00:00',
+    botAutomation: {
+      executorRule: {
+        ruleId: 'executor-only',
+      },
+    },
+  } as any);
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const rows = body.values as [string, string][];
+  const configMap = new Map(rows.filter(([key]) => key));
+
+  assert.equal(configMap.get('bot_executor_rule_id'), 'executor-only');
+  assert.equal(configMap.get('bot_automation_executor_rule_id'), 'executor-only');
+  assert.equal(configMap.has('bot_executor_rule_name'), false);
+  assert.equal(configMap.has('bot_automation_executor_webhook_url'), false);
+  assert.equal(rows.some((row) => row.some((value) => value === null || value === undefined)), false);
+});
+
+test('ConfigSyncService writes Sheet before local storage during full sync', async () => {
+  const events: string[] = [];
+  let storedConfig: any;
+  let sheetLastSyncTime = '';
+
+  installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      events.push('sheet');
+      const body = JSON.parse(String(init.body));
+      const rows = body.values as [string, string][];
+      sheetLastSyncTime = new Map(rows.filter(([key]) => key)).get('last_sync_time') || '';
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
+
+  (globalThis as any).chrome = {
+    storage: {
+      local: {
+        set: async (value: any) => {
+          events.push('storage');
+          storedConfig = value.scheduledMessagesConfig;
+        },
+      },
+    },
+  };
+
+  const service = new ConfigSyncService('token');
+  await service.syncConfig({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    scriptId: 'script-123',
+    webAppUrl: 'https://script.google.com/macros/s/deploy/exec',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-04-30 12:00:00',
+  });
+
+  assert.deepEqual(events, ['sheet', 'storage']);
+  assert.ok(sheetLastSyncTime);
+  assert.equal(storedConfig.last_sync_time, sheetLastSyncTime);
+});
+
+test('ConfigSyncService keeps sibling Bot Automation rule on partial update', async () => {
+  let storedConfig: any;
+
+  installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
+
+  (globalThis as any).chrome = {
+    storage: {
+      local: {
+        get: async () => ({
+          scheduledMessagesConfig: {
+            sheetId: 'sheet-123',
+            sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+            sheet_version: '2.7',
+            created_by: 'Personal AI Extension',
+            created_at: '2026-04-30 12:00:00',
+            botAutomation: {
+              executorRule: {
+                ruleId: 'executor-old',
+                ruleName: 'Executor Old',
+                webhookUrl: 'https://old.example.com',
+                projectKey: 'OLD',
+                jiraUrl: 'https://jira.example.com',
+                createdAt: '2026-04-30T00:00:00.000Z',
+              },
+              timelineSyncRule: {
+                ruleId: 'timeline-keep',
+                ruleName: 'Timeline Keep',
+                webhookUrl: 'https://timeline.example.com',
+                projectKey: 'OLD',
+                jiraUrl: 'https://jira.example.com',
+                createdAt: '2026-04-30T00:00:00.000Z',
+              },
+            },
+          },
+        }),
+        set: async (value: any) => {
+          storedConfig = value.scheduledMessagesConfig;
+        },
+      },
+    },
+  };
+
+  const service = new ConfigSyncService('token');
+  const config = await service.updatePartialConfig({
+    botAutomation: {
+      executorRule: {
+        ruleId: 'executor-new',
+        ruleName: 'Executor New',
+        webhookUrl: 'https://new.example.com',
+        projectKey: 'NEW',
+        jiraUrl: 'https://jira.example.com',
+        createdAt: '2026-05-01T00:00:00.000Z',
+      },
+    },
+  });
+
+  assert.equal(config.botAutomation?.executorRule?.ruleId, 'executor-new');
+  assert.equal(config.botAutomation?.timelineSyncRule?.ruleId, 'timeline-keep');
+  assert.equal(storedConfig.botAutomation.timelineSyncRule.ruleId, 'timeline-keep');
+});
+
+test('ConfigSyncService uses newer Sheet Config as base for partial updates', async () => {
+  let storedConfig: any;
+  const remoteRows = [
+    ['sheet_version', '2.7'],
+    ['created_by', 'Personal AI Extension'],
+    ['created_at', '2026-05-01T00:00:00.000Z'],
+    ['last_sync_time', '2026-05-01T10:00:00.000Z'],
+    ['bot_automation_executor_rule_id', 'executor-remote'],
+    ['bot_automation_executor_rule_name', 'Executor Remote'],
+    ['bot_automation_timeline_sync_rule_id', 'timeline-remote'],
+    ['bot_automation_timeline_sync_rule_name', 'Timeline Remote'],
+  ];
+
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: remoteRows }), { status: 200 });
+  });
+
+  (globalThis as any).chrome = {
+    storage: {
+      local: {
+        get: async () => ({
+          scheduledMessagesConfig: {
+            sheetId: 'sheet-123',
+            sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+            sheet_version: '2.7',
+            created_by: 'Personal AI Extension',
+            created_at: '2026-04-30T00:00:00.000Z',
+            last_sync_time: '2026-05-01T09:00:00.000Z',
+            botAutomation: {
+              executorRule: {
+                ruleId: 'executor-local',
+                ruleName: 'Executor Local',
+                webhookUrl: 'https://local.example.com/executor',
+                projectKey: 'OLD',
+                jiraUrl: 'https://jira.example.com',
+                createdAt: '2026-04-30T00:00:00.000Z',
+              },
+              timelineSyncRule: {
+                ruleId: 'timeline-local',
+                ruleName: 'Timeline Local',
+                webhookUrl: 'https://local.example.com/timeline',
+                projectKey: 'OLD',
+                jiraUrl: 'https://jira.example.com',
+                createdAt: '2026-04-30T00:00:00.000Z',
+              },
+            },
+          },
+        }),
+        set: async (value: any) => {
+          storedConfig = value.scheduledMessagesConfig;
+        },
+      },
+    },
+  };
+
+  const service = new ConfigSyncService('token');
+  const config = await service.updatePartialConfig({
+    botAutomation: {
+      executorRule: {
+        ruleName: 'Executor Updated',
+      } as any,
+    },
+  } as any);
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(config.botAutomation?.executorRule?.ruleId, 'executor-remote');
+  assert.equal(config.botAutomation?.executorRule?.ruleName, 'Executor Updated');
+  assert.equal(config.botAutomation?.timelineSyncRule?.ruleId, 'timeline-remote');
+  assert.equal(storedConfig.botAutomation.timelineSyncRule.ruleId, 'timeline-remote');
+  assert.equal(configMap.get('bot_automation_executor_rule_name'), 'Executor Updated');
+  assert.equal(configMap.get('bot_automation_timeline_sync_rule_id'), 'timeline-remote');
 });

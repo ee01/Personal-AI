@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.3.1",
-    "lastUpdated": "2026-03-18",
+    "version": "1.3.7",
+    "lastUpdated": "2026-05-06",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template"
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -170,7 +170,7 @@
                     "name": "Authorization",
                     "value": {
                       "keyOrValue": "Bearer {{BOT_TOKEN}}",
-                      "secret": false
+                      "secret": true
                     }
                   },
                   {
@@ -199,12 +199,22 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true&topic={{replacedTopic.urlEncode}}&content={{replacedContent.urlEncode}}",
-                "headers": [],
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
+                "headers": [
+                  {
+                    "id": "_header_mark_private_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  }
+                ],
                 "sendIssue": false,
-                "contentType": "empty",
-                "method": "GET",
-                "responseEnabled": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
+                "method": "POST",
+                "responseEnabled": true,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -252,7 +262,7 @@
                     "name": "Authorization",
                     "value": {
                       "keyOrValue": "Bearer {{BOT_TOKEN}}",
-                      "secret": false
+                      "secret": true
                     }
                   },
                   {
@@ -281,12 +291,22 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true&topic={{replacedTopic.urlEncode}}&content={{replacedContent.urlEncode}}",
-                "headers": [],
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
+                "headers": [
+                  {
+                    "id": "_header_mark_group_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  }
+                ],
                 "sendIssue": false,
-                "contentType": "empty",
-                "method": "GET",
-                "responseEnabled": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
+                "method": "POST",
+                "responseEnabled": true,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -353,21 +373,22 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId}}&success=true&topic={{replacedTopic.urlEncode}}&content={{replacedContent.urlEncode}}",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
                 "headers": [
                   {
-                    "id": "_header_1762763239434",
-                    "name": "",
+                    "id": "_header_mark_email_content_type",
+                    "name": "Content-Type",
                     "value": {
-                      "keyOrValue": "",
+                      "keyOrValue": "application/json",
                       "secret": false
                     }
                   }
                 ],
                 "sendIssue": false,
-                "contentType": "empty",
-                "method": "GET",
-                "responseEnabled": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
+                "method": "POST",
+                "responseEnabled": true,
                 "usedSecretsKeys": []
               },
               "children": [],

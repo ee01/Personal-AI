@@ -22,6 +22,20 @@ export type DigestFrequency =
   | { type: 'weekly'; dayOfWeek: number; hour: number }  // dayOfWeek: 0(Sun)-6(Sat)
   | { type: 'custom'; intervalMinutes: number };
 
+/**
+ * 每条关注项自己的摘要配置
+ */
+export interface DigestConfig {
+  /** 是否启用摘要 */
+  enabled: boolean;
+  /** 推送频率 */
+  frequency: 'daily' | 'weekly';
+  /** 推送小时（24小时制），默认 8 */
+  preferredHour?: number;
+  /** 每周推送日：0=周日, 1=周一, ... 6=周六；默认周一 */
+  preferredDayOfWeek?: number;
+}
+
 // ==================== 队列数据 ====================
 
 /**
@@ -135,14 +149,4 @@ export interface DigestProcessResult {
 
 // ==================== ConcernedItems 扩展 ====================
 
-/**
- * 每日摘要配置（挂载在 TopicItemWithAutoReply 上）
- */
-export interface DigestConfig {
-  /** 是否启用每日摘要 */
-  enabled: boolean;
-  /** 推送频率 */
-  frequency: 'daily' | 'weekly';
-  /** 推送小时（24小时制），默认 8 */
-  preferredHour?: number;
-}
+// DigestConfig 挂载在 TopicItemWithAutoReply 上，由具体处理器解释。

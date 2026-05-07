@@ -16,6 +16,13 @@ interface SyncState {
   reminderSync?: number;
 }
 
+export type SyncAttemptStatus = 'succeeded' | 'skipped' | 'failed';
+
+export interface SyncAttemptResult {
+  status: SyncAttemptStatus;
+  errorMessage?: string;
+}
+
 export interface SyncTaskSnapshot {
   intervalMs: number;
   lastRunAt?: string;
@@ -105,6 +112,23 @@ function extractNotices(pkg: ProviderMemoryProduct, limit = 8) {
       priority: 'normal' as const,
     };
   });
+}
+
+function syncResultToAttempt(result: {
+  accepted?: boolean;
+  error?: string;
+}): SyncAttemptResult {
+  if (result.accepted && !result.error) {
+    return { status: 'succeeded' };
+  }
+  return {
+    status: 'failed',
+    errorMessage: result.error || 'Transcript was not sent',
+  };
+}
+
+function shouldAdvanceSyncState(result: SyncAttemptResult): boolean {
+  return result.status !== 'failed';
 }
 
 export class BridgeSyncManager {
@@ -289,8 +313,10 @@ export class BridgeSyncManager {
           status.bindings.memory_sync &&
           this.due(this.syncState.stableMemory, settings.stableMemoryIntervalMs)
         ) {
-          await this.syncStableMemoryAsMemo();
-          this.syncState.stableMemory = Date.now();
+          const result = await this.syncStableMemoryAsMemo();
+          if (shouldAdvanceSyncState(result)) {
+            this.syncState.stableMemory = Date.now();
+          }
         }
 
         if (
@@ -300,8 +326,10 @@ export class BridgeSyncManager {
             settings.mobileBriefingIntervalMs,
           )
         ) {
-          await this.syncMobileBriefing();
-          this.syncState.mobileBriefing = Date.now();
+          const result = await this.syncMobileBriefing();
+          if (shouldAdvanceSyncState(result)) {
+            this.syncState.mobileBriefing = Date.now();
+          }
         }
 
         // 待办 / 通知同步
@@ -309,8 +337,10 @@ export class BridgeSyncManager {
           status.bindings.mobile_context &&
           this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)
         ) {
-          await this.syncReminderChannels();
-          this.syncState.reminderSync = Date.now();
+          const result = await this.syncReminderChannels();
+          if (shouldAdvanceSyncState(result)) {
+            this.syncState.reminderSync = Date.now();
+          }
         }
       }
 
@@ -324,31 +354,45 @@ export class BridgeSyncManager {
     }
   }
 
-  async runNow(kind: AutoSyncKind): Promise<void> {
+  async runNow(kind: AutoSyncKind): Promise<SyncAttemptResult> {
     if (kind === 'stable_memory') {
-      await this.syncStableMemoryAsMemo();
+      const result = await this.syncStableMemoryAsMemo();
+      this.assertSyncAttemptSucceeded(kind, result);
       this.syncState.stableMemory = Date.now();
-      return;
+      return result;
     }
 
     if (kind === 'mobile_briefing') {
-      await this.syncMobileBriefing();
+      const result = await this.syncMobileBriefing();
+      this.assertSyncAttemptSucceeded(kind, result);
       this.syncState.mobileBriefing = Date.now();
-      return;
+      return result;
     }
 
-    await this.syncReminderChannels();
+    const result = await this.syncReminderChannels();
+    this.assertSyncAttemptSucceeded(kind, result);
     this.syncState.reminderSync = Date.now();
+    return result;
   }
 
-  private async syncStableMemory(): Promise<void> {
+  private assertSyncAttemptSucceeded(
+    kind: AutoSyncKind,
+    result: SyncAttemptResult,
+  ): void {
+    if (result.status !== 'failed') return;
+    throw new Error(result.errorMessage || `${kind} sync failed`);
+  }
+
+  private async syncStableMemory(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const rendered = await this.memoryClient.renderContextPackage({
       provider: this.config.provider,
       scenario: 'stable_memory',
       deviceContext: 'doubao_bridge_daemon',
     });
-    if (rendered.packages.length === 0) return;
+    if (rendered.packages.length === 0) {
+      return { status: 'skipped' };
+    }
 
     const result = await this.bridgeService.syncStableMemory({
       items: rendered.packages.map((pkg) => ({
@@ -364,22 +408,40 @@ export class BridgeSyncManager {
       result.error,
       result.threadId,
     );
+
+    return syncResultToAttempt(result);
   }
 
-  private async syncMobileBriefing(): Promise<void> {
+  private async syncMobileBriefing(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const rendered = await this.memoryClient.renderContextPackage({
       provider: this.config.provider,
       scenario: 'mobile_briefing',
       deviceContext: 'doubao_bridge_daemon',
     });
-    const bullets = rendered.packages
+    const actionablePackages = rendered.packages.filter((pkg) =>
+      packageHasItems(pkg),
+    );
+    if (actionablePackages.length === 0) {
+      await this.reportSkipped(
+        rendered,
+        startedAt,
+        'No recent memory highlights to sync',
+      );
+      return { status: 'skipped' };
+    }
+
+    const bullets = actionablePackages
       .flatMap((pkg) => extractBullets(pkg, 5))
       .slice(0, 12);
-    if (bullets.length === 0) return;
+    if (bullets.length === 0) {
+      const reason = 'No mobile briefing bullets extracted';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped' };
+    }
 
     const result = await this.bridgeService.syncMobileBriefing({
-      title: '自动同步的近期重点',
+      title: '自动同步的近期记忆重点',
       bullets,
     });
 
@@ -390,9 +452,11 @@ export class BridgeSyncManager {
       result.error,
       result.threadId,
     );
+
+    return syncResultToAttempt(result);
   }
 
-  private async syncReminders(): Promise<void> {
+  private async syncReminders(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const rendered = await this.memoryClient.renderContextPackage({
       provider: this.config.provider,
@@ -402,7 +466,9 @@ export class BridgeSyncManager {
     const reminders = rendered.packages
       .flatMap((pkg) => extractReminders(pkg))
       .slice(0, 8);
-    if (reminders.length === 0) return;
+    if (reminders.length === 0) {
+      return { status: 'skipped' };
+    }
 
     const result = await this.bridgeService.syncReminders({
       reminders,
@@ -415,20 +481,24 @@ export class BridgeSyncManager {
       result.error,
       result.threadId,
     );
+
+    return syncResultToAttempt(result);
   }
 
   /**
    * 使用随手记格式同步长期记忆
    * 自动分类并格式化为豆包随手记
    */
-  async syncStableMemoryAsMemo(): Promise<void> {
+  async syncStableMemoryAsMemo(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const rendered = await this.memoryClient.renderContextPackage({
       provider: this.config.provider,
       scenario: 'stable_memory',
       deviceContext: 'doubao_bridge_daemon',
     });
-    if (rendered.packages.length === 0) return;
+    if (rendered.packages.length === 0) {
+      return { status: 'skipped' };
+    }
 
     const result = await this.bridgeService.syncStableMemoryAsMemo({
       items: rendered.packages.map((pkg) => ({
@@ -444,14 +514,23 @@ export class BridgeSyncManager {
       result.error,
       result.threadId,
     );
+
+    return syncResultToAttempt(result);
   }
 
-  private async syncReminderChannels(): Promise<void> {
-    await this.syncTodosAsMemo();
-    await this.syncNotices();
+  private async syncReminderChannels(): Promise<SyncAttemptResult> {
+    const results = [await this.syncTodosAsMemo(), await this.syncNotices()];
+    const failed = results.find((result) => result.status === 'failed');
+    if (failed) {
+      return failed;
+    }
+    if (results.some((result) => result.status === 'succeeded')) {
+      return { status: 'succeeded' };
+    }
+    return { status: 'skipped' };
   }
 
-  async syncTodosAsMemo(): Promise<void> {
+  async syncTodosAsMemo(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const rendered = await this.renderTodoPackage();
     const actionablePackages = rendered.packages.filter((pkg) =>
@@ -459,43 +538,53 @@ export class BridgeSyncManager {
     );
     if (actionablePackages.length === 0) {
       await this.reportSkipped(rendered, startedAt, 'No pending todos to sync');
-      return;
+      return { status: 'skipped' };
     }
 
     const reminders = actionablePackages
       .flatMap((pkg) => extractReminders(pkg))
       .slice(0, 8);
-    if (reminders.length === 0) return;
+    if (reminders.length === 0) {
+      const reason = 'No todo titles extracted';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped' };
+    }
 
     const result = await this.bridgeService.syncTodosAsMemo({
       reminders,
     });
 
-    if (result.accepted && !result.error) {
-      await this.reportDelivery(rendered, 'todo', 'delivered');
-    }
+    const attempt = syncResultToAttempt(result);
+    await this.reportDelivery(
+      rendered,
+      'todo',
+      attempt.status === 'succeeded' ? 'delivered' : 'failed',
+      attempt.errorMessage,
+    );
 
     await this.report(
       rendered,
-      result.accepted && !result.error ? 'succeeded' : 'failed',
+      attempt.status === 'succeeded' ? 'succeeded' : 'failed',
       startedAt,
       result.error,
       result.threadId,
     );
+
+    return attempt;
   }
 
-  async syncRemindersAsMemo(): Promise<void> {
-    await this.syncTodosAsMemo();
+  async syncRemindersAsMemo(): Promise<SyncAttemptResult> {
+    return this.syncTodosAsMemo();
   }
 
-  async syncNotices(): Promise<void> {
+  async syncNotices(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const supported = await this.supportsScenario('notice_sync');
     if (!supported) {
       console.warn(
         '[doubao-bridge] memory-service does not support notice_sync yet, skipping notice push',
       );
-      return;
+      return { status: 'skipped' };
     }
 
     const rendered = await this.memoryClient.renderContextPackage({
@@ -508,29 +597,39 @@ export class BridgeSyncManager {
     );
     if (actionablePackages.length === 0) {
       await this.reportSkipped(rendered, startedAt, 'No notices to sync');
-      return;
+      return { status: 'skipped' };
     }
 
     const notices = actionablePackages
       .flatMap((pkg) => extractNotices(pkg))
       .slice(0, 8);
-    if (notices.length === 0) return;
+    if (notices.length === 0) {
+      const reason = 'No notice titles extracted';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped' };
+    }
 
     const result = await this.bridgeService.syncNotices({
       notices,
     });
 
-    if (result.accepted && !result.error) {
-      await this.reportDelivery(rendered, 'notice', 'delivered');
-    }
+    const attempt = syncResultToAttempt(result);
+    await this.reportDelivery(
+      rendered,
+      'notice',
+      attempt.status === 'succeeded' ? 'delivered' : 'failed',
+      attempt.errorMessage,
+    );
 
     await this.report(
       rendered,
-      result.accepted && !result.error ? 'succeeded' : 'failed',
+      attempt.status === 'succeeded' ? 'succeeded' : 'failed',
       startedAt,
       result.error,
       result.threadId,
     );
+
+    return attempt;
   }
 
   private async renderTodoPackage(): Promise<RenderContextPackageResponse> {

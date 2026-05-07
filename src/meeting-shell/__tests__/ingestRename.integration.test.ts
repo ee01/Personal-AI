@@ -7,14 +7,14 @@ import assert from 'node:assert/strict';
 const chromeStub = {
   runtime: {
     getURL: (path: string) => `chrome-extension://test/${path}`,
-    onMessage: { addListener: () => {} },
-    onInstalled: { addListener: () => {} },
-    onStartup: { addListener: () => {} },
+    onMessage: { addListener: () => undefined },
+    onInstalled: { addListener: () => undefined },
+    onStartup: { addListener: () => undefined },
     sendMessage: () => Promise.resolve(),
   },
   tabs: {
-    onUpdated: { addListener: () => {} },
-    onRemoved: { addListener: () => {} },
+    onUpdated: { addListener: () => undefined },
+    onRemoved: { addListener: () => undefined },
     sendMessage: () => Promise.resolve(),
     query: () => Promise.resolve([]),
   },
@@ -39,13 +39,14 @@ const chromeStub = {
 import {
   buildFallbackMeetingArchiveTitle,
   buildMeetingIngestPayloads,
+  mergeActionItemReviewStates,
   shouldGenerateMeetingArchiveTitle,
-} from '../background';
-import { renameParticipant } from '../participantOps';
+} from '../background.ts';
+import { renameParticipant } from '../participantOps.ts';
 import {
   MeetingPilotParticipant,
   MeetingPilotSessionSnapshot,
-} from '../protocol';
+} from '../protocol.ts';
 
 function makeSession(): MeetingPilotSessionSnapshot {
   const participants: MeetingPilotParticipant[] = [
@@ -206,4 +207,105 @@ test('archive title generation keeps an explicit meeting title', () => {
     shouldGenerateMeetingArchiveTitle('Design Review Weekly', 'meeting-int-1'),
     false,
   );
+});
+
+test('action item review state is preserved across regenerated items', () => {
+  const merged = mergeActionItemReviewStates(
+    [
+      {
+        id: 'action-llm-0',
+        title: 'Send launch checklist',
+        owner: 'Bella',
+        deadline: 'Friday',
+        status: 'pending',
+        reviewState: 'suggested',
+        source: 'llm',
+      },
+    ],
+    [
+      {
+        id: 'action-old-1',
+        title: 'Send launch checklist',
+        owner: 'Bella',
+        deadline: 'Friday',
+        status: 'done',
+        reviewState: 'confirmed',
+        reviewedAt: 123,
+        source: 'heuristic',
+      },
+    ],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 'action-llm-0');
+  assert.equal(merged[0].status, 'done');
+  assert.equal(merged[0].reviewState, 'confirmed');
+  assert.equal(merged[0].reviewedAt, 123);
+});
+
+test('generated action item id collision does not transfer review state', () => {
+  const merged = mergeActionItemReviewStates(
+    [
+      {
+        id: 'action-llm-0',
+        title: 'Prepare launch checklist',
+        owner: 'Chris',
+        deadline: 'Monday',
+        status: 'pending',
+        source: 'llm',
+      },
+    ],
+    [
+      {
+        id: 'action-llm-0',
+        title: 'Send launch checklist',
+        owner: 'Bella',
+        deadline: 'Friday',
+        status: 'pending',
+        reviewState: 'dismissed',
+        reviewedAt: 123,
+        source: 'llm',
+      },
+    ],
+  );
+
+  const newItem = merged.find(
+    (item) => item.title === 'Prepare launch checklist',
+  );
+  const oldItem = merged.find((item) => item.title === 'Send launch checklist');
+
+  assert.ok(newItem);
+  assert.equal(newItem.reviewState, 'suggested');
+  assert.equal(newItem.status, 'pending');
+  assert.equal(newItem.reviewedAt, undefined);
+  assert.ok(oldItem);
+  assert.equal(oldItem.reviewState, 'dismissed');
+});
+
+test('meeting ingest excludes dismissed action items from recap payload', () => {
+  const [summaryPayload] = buildMeetingIngestPayloads({
+    ...makeSession(),
+    actionItems: [
+      {
+        id: 'action-active',
+        title: 'Prepare launch checklist',
+        owner: 'Bella',
+        status: 'pending',
+        reviewState: 'confirmed',
+      },
+      {
+        id: 'action-dismissed',
+        title: 'Discuss vague owner',
+        owner: 'Unknown',
+        status: 'pending',
+        reviewState: 'dismissed',
+      },
+    ],
+  });
+
+  assert.match(summaryPayload.content, /Prepare launch checklist/);
+  assert.doesNotMatch(summaryPayload.content, /Discuss vague owner/);
+  assert.equal((summaryPayload.metadata as any).actionItemCount, 1);
+  assert.equal((summaryPayload.metadata as any).actionItems.length, 1);
+  assert.equal((summaryPayload.metadata as any).allActionItems.length, 2);
 });

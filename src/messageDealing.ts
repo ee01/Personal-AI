@@ -13,7 +13,10 @@ import {
   getMemoryServiceClient,
   type MessageRuleAutomationPlanRequest,
 } from './services/MemoryServiceClient';
-import { getTaskEnabled, onTaskEnabledChanged } from './services/TaskScheduler';
+import {
+  getTaskEnabled,
+  onTaskEnabledChanged,
+} from './services/taskSchedulerDefinitions';
 import {
   handleAutoReplyRules,
   TopicItemWithAutoReply,
@@ -33,6 +36,8 @@ import { buildMessageFilterSystemPrompt } from './prompts';
 import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 import {
   extractRuleIdsFromMatchedRule,
+  filterWatchRulesForMessageContext,
+  filterWatchRulesForMessageGroups,
   getFirstManualItemFromMatchedRules,
   getManualItemsFromMatchedRules,
   isManualConcernedItem,
@@ -170,14 +175,51 @@ function extractEventPayload(sourcePost: any): MessageRuleAutomationEvent | unde
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function mergeMatchedRuleIds(...sources: Array<number[] | undefined>): number[] {
+  return Array.from(
+    new Set(
+      sources
+        .flatMap((source) => source || [])
+        .filter((id) => Number.isInteger(id) && id >= 0),
+    ),
+  );
+}
+
+function addSourcePostToIndex(index: Map<string, any>, post: any) {
+  if (!post) return;
+  const sourcePost = post?.raw ?? post;
+  const postId = String(
+    post?.post_id ??
+      post?.id ??
+      post?.raw?.post_id ??
+      post?.raw?.id ??
+      sourcePost?.post_id ??
+      sourcePost?.id ??
+      '',
+  ).trim();
+  if (!postId) return;
+  index.set(postId, sourcePost);
+}
+
+function addMessageGroupToSourcePostIndex(index: Map<string, any>, group: any) {
+  for (const post of group?.posts || []) {
+    addSourcePostToIndex(index, post);
+  }
+  for (const post of group?.standalone || []) {
+    addSourcePostToIndex(index, post);
+  }
+  for (const thread of group?.threads || []) {
+    addSourcePostToIndex(index, thread?.rootPost);
+    for (const reply of thread?.replies || []) {
+      addSourcePostToIndex(index, reply);
+    }
+  }
+}
+
 function buildSourcePostIndex(messageGroups: any[]): Map<string, any> {
   const index = new Map<string, any>();
   for (const group of messageGroups || []) {
-    for (const post of group?.posts || []) {
-      const postId = String(post?.post_id ?? post?.id ?? post?.raw?.id ?? '').trim();
-      if (!postId) continue;
-      index.set(postId, post?.raw ?? post);
-    }
+    addMessageGroupToSourcePostIndex(index, group);
   }
   return index;
 }
@@ -235,9 +277,10 @@ export async function analyzeMessages(
 ) {
   try {
     // 检查是否在 background script 环境中
+    const serviceWorkerScope = (globalThis as any).ServiceWorkerGlobalScope;
     const isBackground =
-      typeof ServiceWorkerGlobalScope !== 'undefined' &&
-      self instanceof ServiceWorkerGlobalScope;
+      typeof serviceWorkerScope !== 'undefined' &&
+      self instanceof serviceWorkerScope;
     if (isBackground) {
       // 在 background script 中直接调用处理函数
       const response = await analyzeMessagesInBackground(
@@ -411,6 +454,7 @@ export async function analyzeMessagesInBackground(
       data: [] as any[],
     };
   }
+  const sourcePostIndex = buildSourcePostIndex(data);
 
   // 根据配置选择处理方式
   if (envConfig.ANALYSIS_TYPE === 'agentThinking') {
@@ -449,8 +493,6 @@ export async function analyzeMessagesInBackground(
         threads: item.threads || [],
         standalone: item.standalone || [],
       }));
-      const sourcePostIndex = buildSourcePostIndex(messageGroups);
-
       // 🆕 关注后续检测已移至 LLM 分析中统一处理（方案 B）
       // 通过 buildRuleText 生成专门的"关注后续"规则，让 LLM 识别语义相关的消息
 
@@ -547,8 +589,9 @@ export async function analyzeMessagesInBackground(
         } = { handled: false };
         if (result.matchedRule) {
           // 从 matchedRule 中提取规则 ID（如果可用）
-          const matchedRuleIds = extractRuleIdsFromMatchedRule(
-            result.matchedRule,
+          const matchedRuleIds = mergeMatchedRuleIds(
+            result.matchedRuleIds,
+            extractRuleIdsFromMatchedRule(result.matchedRule),
           );
 
           autoReplyResult = await handleAutoReplyRules(
@@ -622,14 +665,20 @@ export async function analyzeMessagesInBackground(
 
         // 2️⃣ 统一通知推送（合并关注后续和普通推送）
         // 查找匹配的关注项
-        const matchedRuleIds = extractRuleIdsFromMatchedRule(
-          result.matchedRule || '',
+        const matchedRuleIds = mergeMatchedRuleIds(
+          result.matchedRuleIds,
+          extractRuleIdsFromMatchedRule(result.matchedRule || ''),
         );
         const resolvedMatchedRules = resolveMatchedWatchRules({
           watchRules: runtimeWatchRules,
           matchedRule: result.matchedRule,
           matchedRuleRefs: result.matchedRuleRefs,
           matchedRuleIds,
+          messageContext: {
+            sender: originalMessage.sender || '',
+            groupId: originalMessage.groupId || '',
+            groupName: originalMessage.groupName || '',
+          },
         });
         const matchedManualItems = getManualItemsFromMatchedRules(
           resolvedMatchedRules.watchRules,
@@ -657,6 +706,8 @@ export async function analyzeMessagesInBackground(
               summary: result.summary || '',
               datetime: originalMessage.datetime || '',
               postId,
+              ruleId: matchedConcernedItem.id,
+              digestConfig: matchedConcernedItem.digestConfig,
             });
             console.log('📥 消息已加入摘要队列（非即时推送）');
           } else {
@@ -872,14 +923,21 @@ export async function analyzeMessagesInBackground(
         // 如果需要发送通知
         if (processResult.shouldNotify) {
           // 使用新的匹配函数查找关注项
-          const matchedRuleIds = extractRuleIdsFromMatchedRule(
-            processResult.matchedRule || '',
+          const matchedRuleIds = mergeMatchedRuleIds(
+            processResult.matchedRuleIds,
+            extractRuleIdsFromMatchedRule(processResult.matchedRule || ''),
           );
           const resolvedMatchedRules = resolveMatchedWatchRules({
             watchRules: runtimeWatchRules,
             matchedRule: processResult.matchedRule,
             matchedRuleRefs: processResult.matchedRuleRefs,
             matchedRuleIds,
+            messageContext: {
+              sender: processResult.messageContext?.sender || post.creator || '',
+              groupId: processResult.messageContext?.groupId || item.groupId || '',
+              groupName:
+                processResult.messageContext?.groupName || item.groupName || '',
+            },
           });
           const matchedManualItems = getManualItemsFromMatchedRules(
             resolvedMatchedRules.watchRules,
@@ -907,6 +965,8 @@ export async function analyzeMessagesInBackground(
                 summary: processResult.summary || '',
                 datetime: processResult.messageContext?.datetime || '',
                 postId: post.id || '',
+                ruleId: matchedConcernedItem.id,
+                digestConfig: matchedConcernedItem.digestConfig,
               });
               console.log('📥 消息已加入摘要队列（非即时推送）');
             } else {
@@ -986,6 +1046,7 @@ export async function analyzeMessagesInBackground(
       runtimeWatchRules,
       username,
       isScheduledTask,
+      sourcePostIndex,
     );
   }
 }
@@ -995,15 +1056,9 @@ async function processMessageFilterByConcernedItems(
   runtimeWatchRules: WatchRule[],
   username: string,
   isScheduledTask: boolean,
+  sourcePostIndex: Map<string, any>,
 ) {
   const envConfig = await getEnvConfig();
-
-  // 使用统一的 prompt 构建函数
-  const system_prompt = buildMessageFilterSystemPrompt({
-    concernedItems: runtimeWatchRules,
-    username,
-    envConfig,
-  });
 
   // 以下是原有的LLM处理逻辑，当未启用智能Agent时使用
   if (envConfig.ANALYZE_BY_GROUP) {
@@ -1037,6 +1092,18 @@ async function processMessageFilterByConcernedItems(
       }
       // 使用新的 Thread 结构化格式构建消息
       const message = formatMessageGroupWithThreads(item);
+      const scopedWatchRules = filterWatchRulesForMessageContext(
+        runtimeWatchRules,
+        {
+          groupId: item.groupId,
+          groupName: item.groupName,
+        },
+      );
+      const system_prompt = buildMessageFilterSystemPrompt({
+        concernedItems: scopedWatchRules,
+        username,
+        envConfig,
+      });
       const user_prompt = `
 我的名字是：<current_user_name>${username}</current_user_name> （如果过滤规则中消息的内容 message_content 有提到我，可作为判断消息是否有@我，即便是不带姓氏@名字部分 也视为提及，排除 sender 是我的消息）
 
@@ -1049,6 +1116,7 @@ ${message}
         user_prompt,
         system_prompt,
         messageData: item,
+        sourcePostIndex,
       });
       chrome.storage.local.set({
         ollamaAnalysisProgress: {
@@ -1074,6 +1142,18 @@ ${message}
       '<messages>\n' +
       data.map((item) => formatMessageGroupWithThreads(item)).join('\n') +
       '\n</messages>';
+    const scopedWatchRules = filterWatchRulesForMessageGroups(
+      runtimeWatchRules,
+      data.map((item) => ({
+        groupId: item.groupId,
+        groupName: item.groupName,
+      })),
+    );
+    const system_prompt = buildMessageFilterSystemPrompt({
+      concernedItems: scopedWatchRules,
+      username,
+      envConfig,
+    });
 
     const user_prompt = `
 我的名字是：<current_user_name>${username}</current_user_name> （如果过滤规则中消息的内容 message_content 有提到我，可作为判断消息是否有@我，即便是不带姓氏@名字部分 也视为提及，排除 sender 是我的消息）
@@ -1092,6 +1172,7 @@ ${messages}
     const dealResponse = await reviewMessageByLLMAndSendToBot({
       user_prompt,
       system_prompt,
+      sourcePostIndex,
     });
     console.log('MessageDealing response:', dealResponse);
     chrome.storage.local.set({
@@ -1114,13 +1195,12 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
     );
     const runtimeWatchRules = await loadRuntimeWatchRules(manualConcernedItems);
     const { userinfo } = await chrome.storage.local.get('userinfo');
-    const sourcePostIndex = new Map<string, any>();
-    if (Array.isArray(body.messageData?.posts)) {
-      for (const post of body.messageData.posts) {
-        const postId = String(post?.id ?? '').trim();
-        if (!postId) continue;
-        sourcePostIndex.set(postId, post);
-      }
+    const sourcePostIndex =
+      body.sourcePostIndex instanceof Map
+        ? new Map<string, any>(body.sourcePostIndex)
+        : new Map<string, any>();
+    if (body.messageData) {
+      addMessageGroupToSourcePostIndex(sourcePostIndex, body.messageData);
     }
     if (!body.prompt)
       body.prompt = body.user_prompt + '\n\n' + body.system_prompt;
@@ -1311,6 +1391,13 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
           matchedRule: matched_rule,
           matchedRuleRefs: json.matched_rule_refs,
           matchedRuleIds: json.matched_rule_ids,
+          messageContext: {
+            sender: json.sender,
+            groupId: body.messageData ? body.messageData.groupId : json.team_id,
+            groupName: body.messageData
+              ? body.messageData.groupName
+              : json.team_name,
+          },
         });
         const matchedManualItems = getManualItemsFromMatchedRules(
           resolvedMatchedRules.watchRules,
@@ -1340,6 +1427,8 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
               summary: json.summary || '',
               datetime: json.datetime,
               postId: json.post_id,
+              ruleId: matchedConcernedItem.id,
+              digestConfig: matchedConcernedItem.digestConfig,
             });
             console.log('📥 消息已加入摘要队列（非即时推送）');
           } else {

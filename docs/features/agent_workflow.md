@@ -1,6 +1,6 @@
 # Agent Workflow 智能工作流系统
 
-*最后更新: 2026-04-30*
+*最后更新: 2026-05-07*
 
 ## 功能概述
 
@@ -19,36 +19,42 @@ Agent Workflow 是消息入口的标准化多 Agent 编排模式。它在 `ANALY
 | 5 | 外部信息获取 Agent | 70 | `externalServiceQuery` | 预留 Jira/Wiki 类外部查询接口，目前仍是模拟实现 |
 | 6 | 回复建议 Agent | 60 | `replyAdviser` | 生成是否需要回复及建议文案 |
 
-`processNewMessage` 会规范化消息内容、时间和实体结果，避免不同入口传入 `message_content`、`content`、`text` 时造成后续 Agent 丢上下文。命中存储条件时，它通过 `MemoryServiceClient.ingest` 写入 Memory Service，并保留匹配规则、摘要、实体、关系和回复建议等元数据。
+`processNewMessage` 会规范化消息内容、时间和实体结果，避免不同入口传入 `message_content`、`content`、`text` 时造成后续 Agent 丢上下文。命中存储条件时，它通过 `MemoryServiceClient.ingest` 写入 Memory Service，并保留匹配规则、稳定摘要、实体、关系、回复建议、轻量执行 trace 和 `storageReview` 存储审计等元数据。
+
+低置信度手动关注项命中不会直接触发通知和规则自动化。当前阈值是 70%：低于阈值时，系统会把原始命中、置信度、阈值和复核原因写入 `notificationReview`，并保留到 Memory Service 审计元数据；`shouldNotify` 会降级为 false，避免误触发外部副作用。
 
 ## 关注项与自动化
 
-`concernedItemMatcher` 会读取手动关注项，并通过 `loadRuntimeWatchRules` 合并主动询问等系统运行时规则。匹配结果优先使用稳定的 `matchedRuleRefs`，`matchedRuleIds` 只作为旧规则兼容字段。
+`concernedItemMatcher` 会读取手动关注项，并通过 `loadRuntimeWatchRules` 合并主动询问等系统运行时规则。即使用户没有手动关注项，系统运行时规则仍可用于存储证据，但不会误发用户通知。匹配结果优先使用稳定的 `matchedRuleRefs`，`matchedRuleIds` 只作为旧规则兼容字段。
 
 通知、摘要队列和规则自动化仍由 `messageDealing.ts` 在 Agent Workflow 结果返回后统一执行。只有匹配到手动关注项时才会触发用户通知和手动规则自动化；系统规则可以用于存储证据，但不会误发用户通知。
 
 ## 配置体验
 
-Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`。
+Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段和记忆审计字段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例或最近 Memory Service 消息中选择一条回放；回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以先填入样例，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序。
 
 ## 当前边界
 
 - 当前编排是单次顺序执行，没有持久 checkpoint、暂停恢复或时间旅行调试。
 - `externalServiceQuery` 仍是占位实现，还没有接真实 Jira/Wiki adapter。
-- Agent 级错误会被隔离并继续后续流程，但没有面向用户的逐步审计日志。
+- Agent 级错误会被隔离并继续后续流程，轻量 trace 和 `storageReview` 会保存到记忆元数据；Options 已支持最近消息回放和 trace 明细查看，但还没有可暂停/恢复的完整逐步回放页面。
 - 批量处理仍按消息逐条调用，适合稳定性优先的消息入口，不适合作为复杂长任务执行器。
 
 ## 行业参考带来的改进方向
 
-- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) 和 [durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution) 强调 checkpoint、可恢复、可回放；Agent Workflow 后续应补一份轻量执行 trace，至少记录每个 Agent 输入摘要、输出和失败原因。
-- [Microsoft Copilot Studio AI approvals](https://learn.microsoft.com/en-us/microsoft-copilot-studio/faqs-ai-approvals) 把低风险自动决策和人工审核阶段组合起来；本功能适合给低置信度通知、自动化动作增加人工确认门槛。
-- [Zapier Agents](https://help.zapier.com/hc/en-us/articles/24393442652557-Build-an-agent-in-Zapier-Agents) 的体验重点是 trigger、tools、knowledge sources、test、publish；本功能可以补一个“测试关注项”入口，用历史消息预览命中、通知和存储结果。
+- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) 和 [durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution) 强调 checkpoint、可恢复、可回放；Agent Workflow 已先补轻量执行 trace，后续可再升级成可恢复 checkpoint。
+- [Microsoft Copilot Studio AI approvals](https://learn.microsoft.com/en-us/microsoft-copilot-studio/faqs-ai-approvals) 把低风险自动决策和人工审核阶段组合起来；Agent Workflow 已先对低置信度通知和自动化动作增加人工复核门槛。
+- [Zapier Agents triggers](https://help.zapier.com/hc/en-us/articles/45394909914381-Set-up-your-agent-s-trigger) 的体验重点是 trigger、tools、knowledge sources、test、publish；Agent Workflow 已补“关注项测试”和最近消息回放，后续可把测试结果发布前检查做成固定步骤。
+- [CrewAI Flows](https://docs.crewai.com/en/concepts/flows) 强调可控流程、人工反馈和流式进度；Agent Workflow 的 Options 测试路径应继续优先服务“配置后立即验证”，而不是只展示静态 Agent 列表。
+- [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/) 把 workflow、agent、tool、guardrail 等运行片段组织成 trace；Agent Workflow 当前适合继续保留轻量 trace 摘要，把敏感原文留在消息本体而不是审计字段。
+- [LangSmith observability](https://docs.langchain.com/oss/python/langchain/observability) 强调按工具调用、提示和决策点追踪执行；Agent Workflow 的测试面板应继续把用户最关心的决策摘要前置，而不是只暴露原始 trace。
 - Generative Agents 论文强调 observation、planning、reflection 对行为质量的作用；Reflexion 论文强调把反馈写入 episodic memory 改进后续决策。Agent Workflow 更适合先加入失败/误报反馈回流，而不是增加更多固定 Agent。
-- [Agentic Systems](https://arxiv.org/abs/2501.00881) 这类综述强调垂直 Agent 需要清晰的组件、运行模式和实施策略；自定义 Agent 配置后续应要求声明输入、输出和副作用等级，避免工具链不可控。
+- [AgentTrace](https://arxiv.org/abs/2602.10133) 等 Agent observability 论文强调结构化 trace 对排障、风险分析和信任校准的价值；当前已把每条存储消息的存储原因和 trace 健康状态压缩进 `storageReview`，后续应保持轻量，避免把完整隐私上下文写入审计字段。
+- [Agentproof](https://arxiv.org/abs/2603.20356) 和 [Agent Workflow Optimization](https://www.microsoft.com/en-us/research/publication/optimizing-agentic-workflows-using-meta-tools/) 分别强调工作流拓扑校验和基于 trace 的冗余工具优化；当前系统是固定顺序编排，后续更适合先做配置静态检查和慢工具提示，再考虑自动重排 Agent。
 
 ## 下一步建议
 
-1. 为每条消息保存一份轻量 `agentWorkflowTrace`，支持从通知或记忆记录追溯每个 Agent 的判断。
-2. 给低置信度通知和自动化动作增加“待确认”状态，避免 LLM 误判直接触发外部副作用。
-3. 把 `externalServiceQuery` 拆成真实 Jira/Wiki adapter，并按工具能力在 UI 中标注“可执行外部副作用”。
-4. 增加关注项测试面板，用最近历史消息回放规则命中结果，降低用户调规则成本。
+1. 把低置信度 `notificationReview` 接入一个真实复核队列，让用户可以确认、忽略并把反馈回流给关注项规则。
+2. 把 `externalServiceQuery` 拆成真实 Jira/Wiki adapter，并按工具能力在 UI 中标注“可执行外部副作用”。
+3. 把内置样例和最近消息回放升级为可保存的测试样例集，支持回归对比规则改动前后的命中结果。
+4. 把 Options 里的 trace / storageReview 明细扩展到通知或记忆记录详情，让用户能从真实结果追溯每个 Agent 的判断。

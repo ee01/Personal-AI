@@ -26,6 +26,7 @@ import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
+import { formatLocalScheduleDateTime } from './scheduled-messages/scheduleDateTime';
 import type { ScheduledMessage } from './scheduled-messages/types';
 import {
   getCurrentUser,
@@ -45,6 +46,10 @@ import {
   registerFollowThreadDigestTask,
 } from './message-reaction/FollowThreadHandler';
 import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionEntry';
+import {
+  findOpenSnoozeReminderForMessage,
+  getSnoozeReminderSourceKey,
+} from './message-reaction/snoozeDeduplication';
 import {
   registerConcernedItemsDigestTask,
   updateConcernedItemsDigestTaskSchedule,
@@ -71,11 +76,36 @@ interface BackendNotificationMeta {
 
 // Map to track backend notification metadata for click handling
 const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
+const pendingSnoozeReminderKeys = new Set<string>();
 const GLIP_POPUP_DEFAULT_WIDTH = 1100;
 const GLIP_POPUP_DEFAULT_HEIGHT = 900;
 
 function waitForDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function ensureBackgroundAlarm(
+  name: string,
+  alarmInfo: chrome.alarms.AlarmCreateInfo,
+  shouldReplace: (alarm: chrome.alarms.Alarm) => boolean = () => false,
+): void {
+  chrome.alarms.get(name, (alarm) => {
+    if (chrome.runtime.lastError) {
+      console.warn(
+        `读取后台定时器失败: ${name}`,
+        chrome.runtime.lastError.message,
+      );
+      return;
+    }
+
+    if (alarm && !shouldReplace(alarm)) {
+      console.log(`✅ 后台定时器已存在: ${name}`);
+      return;
+    }
+
+    chrome.alarms.create(name, alarmInfo);
+    console.log(`⏰ 后台定时器已设置: ${name}`);
+  });
 }
 
 async function waitForTabReady(tabId: number): Promise<void> {
@@ -186,8 +216,8 @@ function parseOutreachEpochSeconds(raw?: string): number | undefined {
   const normalized = raw.includes('T')
     ? raw
     : raw.includes(' ')
-      ? raw.replace(' ', 'T')
-      : `${raw}T09:00:00`;
+    ? raw.replace(' ', 'T')
+    : `${raw}T09:00:00`;
   const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) return undefined;
   return Math.floor(date.getTime() / 1000);
@@ -259,8 +289,8 @@ function buildOutreachTemplatePayload(
     status === 'Paused'
       ? 'paused'
       : status === 'Completed' || status === 'Done'
-        ? 'cancelled'
-        : 'synced';
+      ? 'cancelled'
+      : 'synced';
 
   return {
     id: message.ID,
@@ -584,7 +614,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
     // Poll backend notifications (dream_digest, weekly_report, etc.)
     if (alarm.name === 'pollBackendNotifications') {
-      pollBackendNotifications();
+      await pollBackendNotifications();
       return;
     }
 
@@ -681,8 +711,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // 获取任务调度状态
   if (request.type === 'GET_TASK_SCHEDULER_STATUS') {
-    const status = taskScheduler.getTaskStatus();
-    sendResponse({ success: true, tasks: status });
+    (async () => {
+      try {
+        await taskScheduler.startAllTasks();
+        const status = await taskScheduler.getTaskStatusFresh();
+        sendResponse({ success: true, tasks: status });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
     return true;
   }
 
@@ -700,12 +737,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({
             success,
             message: success ? '任务状态已更新' : '任务控制失败',
+            error: success ? undefined : `任务控制失败: ${taskId}`,
           });
         } else if (action === 'run') {
-          const success = await taskScheduler.runTaskManually(taskId);
+          const result = await taskScheduler.runTaskManuallyWithResult(taskId);
           sendResponse({
-            success,
-            message: success ? '任务执行成功' : '任务执行失败',
+            success: result.success,
+            message: result.success
+              ? '任务执行成功'
+              : result.error || '任务执行失败',
+            error: result.success ? undefined : result.error || '任务执行失败',
+            skipped: result.skipped,
+          });
+        } else {
+          sendResponse({
+            success: false,
+            error: `不支持的任务操作: ${action}`,
           });
         }
       } catch (error) {
@@ -755,8 +802,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 同步 MemoryServiceClient 配置（从 envConfig 读取，此处做运行时更新）
     (async () => {
       try {
-        const { getMemoryServiceClient } =
-          await import('./services/MemoryServiceClient');
+        const { getMemoryServiceClient } = await import(
+          './services/MemoryServiceClient'
+        );
         const client = getMemoryServiceClient();
         if (config?.MEMORY_SERVICE_BASE_URL)
           client.setBaseUrl(config.MEMORY_SERVICE_BASE_URL);
@@ -814,7 +862,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const { fixVersion } = request;
       console.log(`📊 获取 Rollout Date: ${fixVersion}`);
       try {
-        const url = `https://rcv-dora-metrics.int.rclabenv.com/api/releases/${encodeURIComponent(fixVersion)}/lead-time`;
+        const url = `https://rcv-dora-metrics.int.rclabenv.com/api/releases/${encodeURIComponent(
+          fixVersion,
+        )}/lead-time`;
         const response = await fetch(url, { method: 'GET' });
         if (!response.ok) {
           sendResponse({ success: false, data: null });
@@ -1712,7 +1762,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         console.log('📅 打开定时消息管理界面...');
-        const url = chrome.runtime.getURL('scheduled-messages.html');
+        const params = new URLSearchParams();
+        const requestData = request.data || {};
+        const categories = Array.isArray(requestData.categories)
+          ? requestData.categories
+          : requestData.category
+          ? [requestData.category]
+          : [];
+
+        categories
+          .map((category: unknown) =>
+            typeof category === 'string' ? category.trim() : '',
+          )
+          .filter(Boolean)
+          .forEach((category: string) => params.append('category', category));
+
+        if (requestData.filterPendingReview === true) {
+          params.set('filterPendingReview', 'true');
+        }
+
+        const query = params.toString();
+        const url = chrome.runtime.getURL(
+          `scheduled-messages.html${query ? `?${query}` : ''}`,
+        );
         await chrome.tabs.create({ url });
         sendResponse({ success: true });
       } catch (error: any) {
@@ -1857,11 +1929,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // 使用同步方式获取必要数据，然后快速响应
     const { messageInfo, remindAt, note } = request.data;
+    const snoozeSourceKey = messageInfo
+      ? getSnoozeReminderSourceKey(messageInfo)
+      : '';
     console.log('🔔 Background: Snooze 请求数据:', {
       messageId: messageInfo?.id,
       groupName: messageInfo?.groupName,
       remindAt: remindAt,
     });
+
+    if (snoozeSourceKey && pendingSnoozeReminderKeys.has(snoozeSourceKey)) {
+      sendResponse({
+        success: false,
+        reason: 'request_pending',
+        error: '正在创建或更新这条消息的提醒，请稍候',
+      });
+      return true;
+    }
+
+    if (snoozeSourceKey) {
+      pendingSnoozeReminderKeys.add(snoozeSourceKey);
+    }
 
     // 快速处理核心逻辑，然后立即响应
     (async () => {
@@ -1900,9 +1988,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const service = new ScheduledMessageService(token);
 
         // 格式化提醒时间
-        const remindDate = new Date(remindAt);
-        const dateStr = remindDate.toISOString().split('T')[0]; // YYYY-MM-DD
-        const timeStr = remindDate.toTimeString().slice(0, 5); // HH:mm
+        const { dateStr, timeStr } = formatLocalScheduleDateTime(remindAt);
 
         console.log('🔔 Background: 提醒时间:', dateStr, timeStr);
 
@@ -1926,11 +2012,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           contentParts.splice(2, 0, `**备注**: ${note}`);
         }
 
+        const snoozeContent = contentParts.join('\n');
+        const existingSnooze = findOpenSnoozeReminderForMessage(
+          await service.getAllMessages(),
+          messageInfo,
+        );
+
+        if (existingSnooze) {
+          console.log(
+            '🔔 Background: 已存在同源 Snooze，改为更新提醒时间:',
+            existingSnooze.ID,
+          );
+
+          const updatedMessage = await service.updateMessage(
+            existingSnooze.ID,
+            {
+              Topic: existingSnooze.Topic || `稍后处理: ${topicSummary}`,
+              Content: snoozeContent,
+              Schedule_Date: dateStr,
+              Schedule_Time: timeStr,
+              Status: 'Active',
+              Exec_Log: '已重新安排，待执行',
+            },
+          );
+
+          sendResponse({
+            success: true,
+            messageId: updatedMessage.ID,
+            updated: true,
+          });
+          return;
+        }
+
         // 创建定时消息（核心操作）
         console.log('🔔 Background: 创建定时消息...');
         const newMessage = await service.createMessage({
           Topic: `稍后处理: ${topicSummary}`,
-          Content: contentParts.join('\n'),
+          Content: snoozeContent,
           Schedule_Date: dateStr,
           Schedule_Time: timeStr,
           Push_Method: 'Bot',
@@ -2003,7 +2121,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               sourceUrl: messageInfo.messageLink,
               timestamp: Date.now(),
               metadata: {
-                summary: `用户主动关注的消息：${messageInfo.content.substring(0, 100)}`,
+                summary: `用户主动关注的消息：${messageInfo.content.substring(
+                  0,
+                  100,
+                )}`,
                 matchedRules: ['user_snooze'],
                 replyAdvice: '',
                 contextMessages: [
@@ -2050,7 +2171,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               if (messageInfo.senderName) {
                 await memClient.createProfileItem({
                   itemType: 'interaction',
-                  itemKey: `snooze_person_${messageInfo.senderName.replace(/\s+/g, '_').toLowerCase()}`,
+                  itemKey: `snooze_person_${messageInfo.senderName
+                    .replace(/\s+/g, '_')
+                    .toLowerCase()}`,
                   itemValue: JSON.stringify({
                     actionType: 'favorite',
                     context: 'snooze_reminder',
@@ -2067,7 +2190,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               if (messageInfo.groupName) {
                 await memClient.createProfileItem({
                   itemType: 'interaction',
-                  itemKey: `snooze_topic_${messageInfo.groupName.replace(/\s+/g, '_').toLowerCase()}`,
+                  itemKey: `snooze_topic_${messageInfo.groupName
+                    .replace(/\s+/g, '_')
+                    .toLowerCase()}`,
                   itemValue: JSON.stringify({
                     actionType: 'favorite',
                     context: 'snooze_reminder',
@@ -2099,6 +2224,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.error('❌ Background: 创建 Snooze 提醒失败:', error);
         console.error('❌ Background: 错误堆栈:', error.stack);
         sendResponse({ success: false, error: error.message || '创建失败' });
+      } finally {
+        if (snoozeSourceKey) {
+          pendingSnoozeReminderKeys.delete(snoozeSourceKey);
+        }
       }
     })();
     return true;
@@ -2402,17 +2531,24 @@ chrome.notifications.onClosed.addListener((notificationId) => {
   }
 });
 
-// 初始化关注后续清理任务
-chrome.alarms.create('cleanupFollowThreads', {
-  when: getNextCleanupTime(),
-});
-console.log('✅ 关注后续清理任务已设置');
+// 初始化关注后续清理任务。不要在每次 Service Worker 唤醒时重置已有 alarm。
+ensureBackgroundAlarm(
+  'cleanupFollowThreads',
+  {
+    when: getNextCleanupTime(),
+  },
+  (alarm) => alarm.scheduledTime <= Date.now(),
+);
 
 // Poll backend notifications every 15 minutes for dream_digest, weekly_report, etc.
-chrome.alarms.create('pollBackendNotifications', {
-  delayInMinutes: 1,
-  periodInMinutes: 15,
-});
+ensureBackgroundAlarm(
+  'pollBackendNotifications',
+  {
+    delayInMinutes: 1,
+    periodInMinutes: 15,
+  },
+  (alarm) => alarm.periodInMinutes !== 15,
+);
 
 /** Track the last notification we saw so we don't re-show it. */
 let _lastSeenNotifCreatedAt = 0;
@@ -2427,7 +2563,10 @@ async function pollBackendNotifications(): Promise<void> {
         20,
       );
       for (const item of feed.items) {
-        const notifId = `backend-${item.sourceRef.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const notifId = `backend-${item.sourceRef.replace(
+          /[^a-zA-Z0-9_-]/g,
+          '_',
+        )}`;
         backendNotificationMeta.set(notifId, {
           sourceRef: item.sourceRef,
           lane: item.lane,
@@ -2897,7 +3036,9 @@ async function _exportProjectReport(projectId: string) {
     return {
       success: true,
       report,
-      downloadUrl: `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(report, null, 2))}`,
+      downloadUrl: `data:application/json;charset=utf-8,${encodeURIComponent(
+        JSON.stringify(report, null, 2),
+      )}`,
     };
   } catch (error) {
     console.error('❌ 报告导出失败:', error);

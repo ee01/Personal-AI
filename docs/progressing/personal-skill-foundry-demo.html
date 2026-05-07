@@ -1,0 +1,1357 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Personal Skill Foundry Demo</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #5d6978;
+      --line: #d9e0e7;
+      --panel: #ffffff;
+      --page: #f6f7f4;
+      --accent: #0f766e;
+      --accent-2: #b45309;
+      --accent-3: #3b5bdb;
+      --danger: #b42318;
+      --ok: #16803c;
+      --warn: #9a6700;
+      --shadow: 0 12px 34px rgba(24, 32, 41, 0.08);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.72), rgba(246,247,244,0.96)),
+        url("data:image/svg+xml,%3Csvg width='180' height='180' viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23d8ddd4' stroke-width='1'%3E%3Cpath d='M0 35h180M0 90h180M0 145h180M35 0v180M90 0v180M145 0v180'/%3E%3C/g%3E%3Ccircle cx='35' cy='35' r='2' fill='%230f766e' fill-opacity='.22'/%3E%3Ccircle cx='145' cy='90' r='2' fill='%23b45309' fill-opacity='.22'/%3E%3Ccircle cx='90' cy='145' r='2' fill='%233b5bdb' fill-opacity='.18'/%3E%3C/svg%3E");
+      color: var(--ink);
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 280px minmax(420px, 1fr) 340px;
+      gap: 16px;
+      height: 100vh;
+      padding: 16px;
+    }
+
+    .rail,
+    .workspace,
+    .side {
+      min-height: 0;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .rail {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+
+    .brand {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 760;
+    }
+
+    .brand p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .filters {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    .search {
+      height: 36px;
+      width: 100%;
+      border: 1px solid #cbd5df;
+      border-radius: 6px;
+      padding: 0 10px;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 4px;
+      background: #eef2f1;
+      border: 1px solid #d8e1df;
+      border-radius: 7px;
+    }
+
+    .segmented button {
+      border: 0;
+      border-radius: 5px;
+      height: 30px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .segmented button.active {
+      background: #fff;
+      color: var(--accent);
+      box-shadow: 0 1px 4px rgba(15, 118, 110, 0.14);
+    }
+
+    .candidate-list {
+      overflow: auto;
+      padding: 10px;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+    }
+
+    .candidate {
+      width: 100%;
+      text-align: left;
+      border: 1px solid #d8e0e6;
+      background: #fff;
+      border-radius: var(--radius);
+      padding: 12px;
+      cursor: pointer;
+      display: grid;
+      gap: 9px;
+      min-height: 128px;
+    }
+
+    .candidate.active {
+      border-color: rgba(15, 118, 110, 0.65);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    .candidate-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .candidate h2 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    .risk {
+      flex: none;
+      border-radius: 999px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 720;
+      border: 1px solid;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .risk.low {
+      color: var(--ok);
+      border-color: rgba(22, 128, 60, 0.35);
+      background: rgba(22, 128, 60, 0.08);
+    }
+
+    .risk.medium {
+      color: var(--warn);
+      border-color: rgba(154, 103, 0, 0.35);
+      background: rgba(154, 103, 0, 0.08);
+    }
+
+    .risk.high {
+      color: var(--danger);
+      border-color: rgba(180, 35, 24, 0.35);
+      background: rgba(180, 35, 24, 0.08);
+    }
+
+    .candidate p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .score-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+
+    .score {
+      border: 1px solid #e3e8ec;
+      border-radius: 6px;
+      padding: 7px;
+      background: #fbfcfa;
+    }
+
+    .score strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1;
+      color: var(--ink);
+    }
+
+    .score span {
+      display: block;
+      margin-top: 4px;
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+
+    .topbar {
+      padding: 16px 18px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(251, 252, 250, 0.9);
+    }
+
+    .titleblock {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 780;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .titleblock h2 {
+      margin: 5px 0 0;
+      font-size: 24px;
+      line-height: 1.15;
+      font-weight: 800;
+    }
+
+    .titleblock p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 820px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      flex: none;
+    }
+
+    .icon-btn,
+    .primary,
+    .secondary,
+    .danger-btn {
+      height: 36px;
+      border-radius: 6px;
+      border: 1px solid;
+      cursor: pointer;
+      font-weight: 720;
+      font-size: 12px;
+    }
+
+    .icon-btn {
+      width: 36px;
+      display: grid;
+      place-items: center;
+      background: #fff;
+      border-color: #cbd5df;
+      color: var(--muted);
+    }
+
+    .primary {
+      padding: 0 13px;
+      border-color: #0f766e;
+      background: #0f766e;
+      color: #fff;
+    }
+
+    .secondary {
+      padding: 0 12px;
+      border-color: #cbd5df;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .danger-btn {
+      padding: 0 12px;
+      border-color: rgba(180, 35, 24, 0.35);
+      background: rgba(180, 35, 24, 0.08);
+      color: var(--danger);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      overflow-x: auto;
+    }
+
+    .tab {
+      height: 32px;
+      border: 1px solid #d4dce4;
+      border-radius: 999px;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      color: #fff;
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+
+    .content {
+      min-height: 0;
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
+      gap: 14px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .section-head {
+      padding: 13px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    .section h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 780;
+    }
+
+    .section-body {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #edf1f4;
+    }
+
+    .kv:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .kv .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .kv .value {
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .pill {
+      border: 1px solid #d7e0e7;
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: #344054;
+      background: #fbfcfa;
+      font-size: 11px;
+      font-weight: 680;
+      line-height: 1;
+    }
+
+    .steps {
+      display: grid;
+      gap: 10px;
+      counter-reset: step;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid #e1e7ec;
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: #e7f2f0;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .step strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .step span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .eval-list,
+    .evidence-list,
+    .export-list,
+    .receipt-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .eval,
+    .evidence,
+    .export,
+    .receipt {
+      border: 1px solid #e0e6eb;
+      border-radius: 7px;
+      padding: 12px;
+      background: #fff;
+      display: grid;
+      gap: 8px;
+    }
+
+    .eval-top,
+    .evidence-top,
+    .export-top,
+    .receipt-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .eval h4,
+    .evidence h4,
+    .export h4,
+    .receipt h4 {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .eval p,
+    .evidence p,
+    .export p,
+    .receipt p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .status {
+      flex: none;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 760;
+      line-height: 1;
+      border: 1px solid;
+    }
+
+    .status.pass {
+      color: var(--ok);
+      border-color: rgba(22, 128, 60, 0.35);
+      background: rgba(22, 128, 60, 0.08);
+    }
+
+    .status.warn {
+      color: var(--warn);
+      border-color: rgba(154, 103, 0, 0.35);
+      background: rgba(154, 103, 0, 0.08);
+    }
+
+    .status.draft {
+      color: var(--accent-3);
+      border-color: rgba(59, 91, 219, 0.28);
+      background: rgba(59, 91, 219, 0.08);
+    }
+
+    .status.block {
+      color: var(--danger);
+      border-color: rgba(180, 35, 24, 0.35);
+      background: rgba(180, 35, 24, 0.08);
+    }
+
+    .codebox {
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: 7px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .side {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .side-head {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    .side-head h3 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .side-head p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .side-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+    }
+
+    .meter {
+      display: grid;
+      gap: 8px;
+    }
+
+    .meter-row {
+      display: grid;
+      grid-template-columns: 94px 1fr 34px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      background: #e8eef1;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      width: var(--w);
+    }
+
+    .policy {
+      border: 1px solid #e0e6eb;
+      border-radius: 7px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .policy-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .policy-line span:first-child {
+      color: var(--muted);
+    }
+
+    .policy-line span:last-child {
+      font-weight: 720;
+      text-align: right;
+    }
+
+    .side-foot {
+      border-top: 1px solid var(--line);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      background: #fbfcfa;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(120%);
+      opacity: 0;
+      transition: 180ms ease;
+      background: #111827;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 7px;
+      font-size: 13px;
+      box-shadow: 0 14px 34px rgba(17, 24, 39, 0.22);
+      pointer-events: none;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    .empty {
+      padding: 32px;
+      color: var(--muted);
+      text-align: center;
+      border: 1px dashed #cbd5df;
+      border-radius: var(--radius);
+      background: #fbfcfa;
+    }
+
+    @media (max-width: 1180px) {
+      .app {
+        grid-template-columns: 260px minmax(420px, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
+      }
+
+      .side {
+        grid-column: 1 / -1;
+        min-height: 360px;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .app {
+        height: auto;
+        min-height: 100vh;
+        grid-template-columns: 1fr;
+        padding: 10px;
+      }
+
+      .rail,
+      .workspace,
+      .side {
+        min-height: auto;
+      }
+
+      .candidate-list,
+      .content,
+      .side-body {
+        max-height: none;
+      }
+
+      .topbar {
+        flex-direction: column;
+      }
+
+      .actions {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .primary,
+      .secondary,
+      .danger-btn {
+        flex: 1;
+        min-width: 130px;
+      }
+
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      .kv {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="rail" aria-label="Skill candidates">
+      <header class="brand">
+        <h1>Personal Skill Foundry</h1>
+        <p>Review repeated successful workflows and turn them into portable, tested skills.</p>
+      </header>
+
+      <div class="filters">
+        <input id="search" class="search" placeholder="Search candidates" aria-label="Search candidates" />
+        <div class="segmented" aria-label="Candidate filters">
+          <button class="active" data-filter="all">All</button>
+          <button data-filter="work">Work</button>
+          <button data-filter="ai">AI tools</button>
+        </div>
+      </div>
+
+      <div id="candidateList" class="candidate-list"></div>
+    </aside>
+
+    <section class="workspace" aria-label="Skill detail">
+      <header class="topbar">
+        <div class="titleblock">
+          <div class="eyebrow" id="eyebrow">Candidate</div>
+          <h2 id="skillTitle"></h2>
+          <p id="skillSummary"></p>
+        </div>
+        <div class="actions">
+          <button class="icon-btn" id="copyBtn" aria-label="Copy skill preview" title="Copy skill preview">⧉</button>
+          <button class="secondary" id="evalBtn">Run evals</button>
+          <button class="primary" id="promoteBtn">Promote</button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Skill detail tabs">
+        <button class="tab active" data-tab="spec">Spec</button>
+        <button class="tab" data-tab="evals">Evals</button>
+        <button class="tab" data-tab="evidence">Evidence</button>
+        <button class="tab" data-tab="exports">Exports</button>
+      </nav>
+
+      <div id="content" class="content"></div>
+    </section>
+
+    <aside class="side" aria-label="Publish panel">
+      <header class="side-head">
+        <h3>Publish Readiness</h3>
+        <p id="readinessText"></p>
+      </header>
+
+      <div class="side-body">
+        <section class="section">
+          <div class="section-head">
+            <h3>Signals</h3>
+            <span id="riskBadge" class="risk medium">Medium</span>
+          </div>
+          <div class="section-body">
+            <div class="meter" id="meters"></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h3>Risk Policy</h3>
+            <span class="status draft">editable</span>
+          </div>
+          <div class="section-body">
+            <div class="policy" id="policy"></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h3>Recent Receipts</h3>
+            <span class="status pass" id="receiptCount">0</span>
+          </div>
+          <div class="section-body">
+            <div class="receipt-list" id="receipts"></div>
+          </div>
+        </section>
+      </div>
+
+      <footer class="side-foot">
+        <button class="secondary" id="dismissBtn">Dismiss</button>
+        <button class="danger-btn" id="pauseBtn">Pause cues</button>
+      </footer>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const skills = [
+      {
+        id: "jira-headcount",
+        title: "Jira Headcount Trend Report",
+        scope: "work",
+        status: "candidate",
+        risk: "medium",
+        summary: "Builds a repeatable Jira data workflow for dev headcount, assignee dedupe, trend charts, and Sophia-ready reporting.",
+        trigger: "Jira, Google Sheets, or messages mentioning headcount, assignee dedupe, trend chart, Q3 project data.",
+        notUse: "Do not use when the source data lacks project key, date range, or team ownership.",
+        sources: ["Jira", "RingCentral", "Codex", "Google Sheets"],
+        scores: { repeat: 84, success: 76, reuse: 91 },
+        steps: [
+          ["Confirm data scope", "Ask for project key, date range, ticket types, and whether empty assignees count."],
+          ["Normalize Jira export", "Deduplicate assignees, separate bots, handle empty owners, and preserve raw query notes."],
+          ["Aggregate trends", "Group by month, team, status, and project stream, then flag suspicious jumps."],
+          ["Generate report", "Create chart-ready table plus a concise narrative for Sophia or project sync."],
+          ["Write receipt", "Record filters, assumptions, output file, and corrections as skill run feedback."]
+        ],
+        evals: [
+          ["Happy path export", "CSV contains project, assignee, status, created date, resolved date.", "pass"],
+          ["Missing assignee", "Tickets with empty assignee must be excluded or placed in an unknown bucket.", "warn"],
+          ["Ambiguous range", "If no date range is provided, ask before calculating trend.", "pass"]
+        ],
+        evidence: [
+          ["2026-04-30 Daily Summary", "Sophia and Esone collaborated on JIRA data extraction, dev headcount, and trend charts.", "meeting/message"],
+          ["RingCentral message", "Sophia wants the process streamlined by May after the current automation saved time.", "glip"],
+          ["Codex workflow", "Accepted outputs included data normalization, chart generation, and explanation text.", "ai chat"]
+        ],
+        exports: [
+          ["Codex Skill", "Generate scripts, charts, and validation checks inside a repo.", "draft"],
+          ["Claude Skill", "Produce spreadsheet and written report artifacts.", "draft"],
+          ["Personal AI Ambient Cue", "Suggest on Jira and Sheets pages.", "ready"],
+          ["MCP Tool", "Expose render_skill_context and record_skill_feedback.", "planned"]
+        ],
+        policy: {
+          "External writes": "Ask first",
+          "Personal data": "Work scope only",
+          "Secrets": "Block export",
+          "Auto-run": "Preview required"
+        },
+        receipts: [
+          ["Candidate mined", "3 evidence clusters, 2 accepted outputs, 1 correction signal."],
+          ["Eval draft created", "Generated happy path, missing assignee, and ambiguous range cases."]
+        ],
+        preview: "Use this skill when asked to produce a Jira headcount trend report. First confirm project key, date range, ticket types, and assignee policy. Never invent missing Jira filters."
+      },
+      {
+        id: "codex-harness",
+        title: "Codex Harness First Pass",
+        scope: "ai",
+        status: "candidate",
+        risk: "low",
+        summary: "Turns this repo's agent workflow into a reusable coding-agent skill: read instructions, own files, edit narrowly, verify honestly.",
+        trigger: "Codex, Claude Code, Cursor, or terminal tasks that modify Personal AI or similar repos.",
+        notUse: "Do not use for pure brainstorming, no-edit code explanations, or tasks where the user explicitly asks not to run tools.",
+        sources: ["AGENT.md", "Codex", "Git", "Tests"],
+        scores: { repeat: 93, success: 88, reuse: 86 },
+        steps: [
+          ["Read local instructions", "Open AGENT.md and any relevant feature docs before editing."],
+          ["Inspect worktree", "Use git status and never revert unrelated user changes."],
+          ["Define owned files", "Keep edits close to the requested surface and avoid unrelated refactors."],
+          ["Verify by risk tier", "Run the smallest validation tier that gives real confidence."],
+          ["Report evidence", "State exactly what ran, what passed, and what could not be verified."]
+        ],
+        evals: [
+          ["Dirty worktree", "Skill must preserve unrelated modified files.", "pass"],
+          ["Docs-only change", "Skill must not run unnecessary extension build.", "pass"],
+          ["Failed test", "Skill must not report success when command failed.", "pass"]
+        ],
+        evidence: [
+          ["AGENT.md", "Post-change verification tiers and dirty worktree rules are explicit.", "repo"],
+          ["Automation runs", "Previous plans were docs-only and did not require build verification.", "operation"],
+          ["Codex memory", "User repeatedly expects validation evidence and concise delivery.", "ai chat"]
+        ],
+        exports: [
+          ["Codex Skill", "Install as a personal coding workflow skill.", "ready"],
+          ["Claude Code Skill", "Export SKILL.md plus references to AGENT.md.", "draft"],
+          ["Repo AGENT Patch", "Suggest reusable workflow additions without overwriting source of truth.", "planned"]
+        ],
+        policy: {
+          "External writes": "Never",
+          "Personal data": "Exclude",
+          "Secrets": "Block export",
+          "Auto-run": "Allowed for read-only"
+        },
+        receipts: [
+          ["Candidate mined", "High repetition from repository automation behavior."],
+          ["Risk scan", "No external write actions required."]
+        ],
+        preview: "When modifying code, first read AGENT.md, inspect dirty worktree, choose the minimum validation tier, and report only checks that actually ran."
+      },
+      {
+        id: "meeting-handoff",
+        title: "Meeting Handoff Brief",
+        scope: "work",
+        status: "candidate",
+        risk: "medium",
+        summary: "Creates a five-minute meeting brief with related decisions, people, handoff state, open questions, and next actions.",
+        trigger: "RingCentral meetings or messages mentioning Video Mobile, Rooms, Nova, RCV SDK, Coa, Fred, Sophia, or handover.",
+        notUse: "Do not use for casual meetings, sensitive HR topics, or meetings without clear project association.",
+        sources: ["Meeting Pilot", "RingCentral", "Daily Summary", "Decision Episodes"],
+        scores: { repeat: 71, success: 68, reuse: 89 },
+        steps: [
+          ["Identify meeting context", "Match title, attendees, project names, and recent messages."],
+          ["Recall handoff state", "Find recent decisions, commitments, blockers, and owner changes."],
+          ["Build brief", "Separate what to say, what to ask, and what not to re-litigate."],
+          ["Capture outcome", "After the meeting, extract action items and possible skill patches."]
+        ],
+        evals: [
+          ["Known project", "Video Mobile handoff brief must include Coa and Fred sync.", "pass"],
+          ["No project match", "Should avoid generating a confident brief.", "warn"],
+          ["Sensitive topic", "Should require explicit user approval before including personal context.", "pass"]
+        ],
+        evidence: [
+          ["2026-04-30 Daily Summary", "Sophia plans responsibility adjustments around Video Mobile, Rooms, RCV SDK, and Nova.", "daily"],
+          ["Daily Reflection", "Open questions include final ownership and post-holiday coordination.", "reflection"],
+          ["Meeting Pilot", "Recent meeting records show project progress and Q3 preparation discussions.", "meeting"]
+        ],
+        exports: [
+          ["Personal AI Ambient Cue", "Show in Meeting Pilot side panel.", "ready"],
+          ["Claude Skill", "Generate meeting brief and follow-up summary.", "draft"],
+          ["Provider Capsule", "Can call Cross-AI Memory Capsule for injection.", "planned"]
+        ],
+        policy: {
+          "External writes": "Ask first",
+          "Personal data": "Redact by default",
+          "Secrets": "Block export",
+          "Auto-run": "Meeting preview only"
+        },
+        receipts: [
+          ["Candidate mined", "Matched project handoff and meeting-summary patterns."],
+          ["Needs review", "Sensitive people context requires stricter redaction."]
+        ],
+        preview: "Before a project meeting, summarize current handoff state, key people, decisions, open questions, and suggested next actions. Keep personal context redacted unless approved."
+      },
+      {
+        id: "ai-tool-comparator",
+        title: "AI Tool Trial Comparator",
+        scope: "ai",
+        status: "candidate",
+        risk: "low",
+        summary: "Compares Codex, Claude Code, Cursor, Factory.ai, Kimi, and GLM by cost, security approval, coding fit, and team rollout constraints.",
+        trigger: "Messages about AI tool trials, license reclaim, Cursor cost, OpenAI deal, Claude Code vs Codex vote, or Factory.ai approval.",
+        notUse: "Do not use when the user asks for official procurement advice without current source links.",
+        sources: ["RingCentral", "Daily Reflection", "Web", "AI chats"],
+        scores: { repeat: 79, success: 62, reuse: 82 },
+        steps: [
+          ["Collect current facts", "Pull latest internal memory and current public pricing/security docs when needed."],
+          ["Compare dimensions", "Cost, availability, security approval, coding quality, review quality, connectors, and production constraints."],
+          ["Generate recommendation", "Separate team default, exception path, and personal workflow advice."],
+          ["Schedule revisit", "Create follow-up when trial period or vote deadline approaches."]
+        ],
+        evals: [
+          ["Factory.ai approved", "Must include production use allowed with RingCentral email login.", "pass"],
+          ["Cursor cost", "Must mention cost pressure without inventing license policy.", "pass"],
+          ["Stale pricing", "Must browse or mark pricing unknown.", "warn"]
+        ],
+        evidence: [
+          ["2026-04-30 Daily Summary", "Cursor users may move to usage-based tools; vote requested for Claude Code vs Codex.", "daily"],
+          ["RingCentral message", "Factory.ai free trial active and security-approved for production with RingCentral email.", "glip"],
+          ["Reflection Thread", "AI tools usage and limitations are actively tracked.", "reflection"]
+        ],
+        exports: [
+          ["Claude Skill", "Produce comparison memo.", "draft"],
+          ["Codex Skill", "Generate internal evaluation table and source checklist.", "draft"],
+          ["Reminder Sync", "Create revisit reminders for trial/vote deadlines.", "planned"]
+        ],
+        policy: {
+          "External writes": "Never",
+          "Personal data": "Exclude",
+          "Secrets": "Block export",
+          "Auto-run": "Allowed for draft memo"
+        },
+        receipts: [
+          ["Candidate mined", "Recent high-frequency AI tool migration evidence."],
+          ["Freshness guard", "Pricing requires current web verification before recommendation."]
+        ],
+        preview: "Compare AI tools using current memory and fresh sources. Separate observed facts from recommendation, and mark any price or policy as unknown if not verified."
+      }
+    ];
+
+    let currentId = skills[0].id;
+    let currentTab = "spec";
+    let activeFilter = "all";
+    const promoted = new Set();
+
+    const $ = (selector) => document.querySelector(selector);
+    const list = $("#candidateList");
+    const content = $("#content");
+    const toast = $("#toast");
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+
+    function currentSkill() {
+      return skills.find((skill) => skill.id === currentId) || skills[0];
+    }
+
+    function filteredSkills() {
+      const query = $("#search").value.trim().toLowerCase();
+      return skills.filter((skill) => {
+        const matchesFilter = activeFilter === "all" || skill.scope === activeFilter;
+        const haystack = [skill.title, skill.summary, skill.trigger, skill.sources.join(" ")].join(" ").toLowerCase();
+        return matchesFilter && (!query || haystack.includes(query));
+      });
+    }
+
+    function riskClass(risk) {
+      return risk === "low" ? "low" : risk === "high" ? "high" : "medium";
+    }
+
+    function renderCandidates() {
+      const items = filteredSkills();
+      if (!items.length) {
+        list.innerHTML = `<div class="empty">No candidates match this filter.</div>`;
+        return;
+      }
+
+      list.innerHTML = items.map((skill) => `
+        <button class="candidate ${skill.id === currentId ? "active" : ""}" data-id="${skill.id}">
+          <div class="candidate-top">
+            <h2>${skill.title}</h2>
+            <span class="risk ${riskClass(skill.risk)}">${skill.risk}</span>
+          </div>
+          <p>${skill.summary}</p>
+          <div class="score-row">
+            <div class="score"><strong>${skill.scores.repeat}</strong><span>repeat</span></div>
+            <div class="score"><strong>${skill.scores.success}</strong><span>success</span></div>
+            <div class="score"><strong>${skill.scores.reuse}</strong><span>reuse</span></div>
+          </div>
+        </button>
+      `).join("");
+
+      list.querySelectorAll(".candidate").forEach((button) => {
+        button.addEventListener("click", () => {
+          currentId = button.dataset.id;
+          render();
+        });
+      });
+    }
+
+    function renderHeader(skill) {
+      $("#eyebrow").textContent = promoted.has(skill.id) ? "Draft skill" : "Candidate";
+      $("#skillTitle").textContent = skill.title;
+      $("#skillSummary").textContent = skill.summary;
+      $("#promoteBtn").textContent = promoted.has(skill.id) ? "Promoted" : "Promote";
+      $("#promoteBtn").disabled = promoted.has(skill.id);
+    }
+
+    function renderSpec(skill) {
+      return `
+        <div class="grid-2">
+          <section class="section">
+            <div class="section-head">
+              <h3>Skill DNA</h3>
+              <span class="status ${promoted.has(skill.id) ? "draft" : "warn"}">${promoted.has(skill.id) ? "draft" : "candidate"}</span>
+            </div>
+            <div class="section-body">
+              <div class="kv"><div class="label">Trigger</div><div class="value">${skill.trigger}</div></div>
+              <div class="kv"><div class="label">Do not use</div><div class="value">${skill.notUse}</div></div>
+              <div class="kv"><div class="label">Sources</div><div class="value"><div class="pill-row">${skill.sources.map((s) => `<span class="pill">${s}</span>`).join("")}</div></div></div>
+              <div class="kv"><div class="label">Preview</div><div class="value">${skill.preview}</div></div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <h3>Workflow</h3>
+              <span class="status draft">${skill.steps.length} steps</span>
+            </div>
+            <div class="section-body">
+              <div class="steps">
+                ${skill.steps.map(([title, body]) => `<div class="step"><div><strong>${title}</strong><span>${body}</span></div></div>`).join("")}
+              </div>
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function renderEvals(skill) {
+      return `
+        <section class="section">
+          <div class="section-head">
+            <h3>Evaluation Cases</h3>
+            <button class="secondary" onclick="runEvals()">Run all</button>
+          </div>
+          <div class="section-body">
+            <div class="eval-list">
+              ${skill.evals.map(([title, body, status]) => `
+                <article class="eval">
+                  <div class="eval-top">
+                    <h4>${title}</h4>
+                    <span class="status ${status === "pass" ? "pass" : "warn"}">${status}</span>
+                  </div>
+                  <p>${body}</p>
+                </article>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderEvidence(skill) {
+      return `
+        <section class="section">
+          <div class="section-head">
+            <h3>Evidence Chain</h3>
+            <span class="status draft">${skill.evidence.length} refs</span>
+          </div>
+          <div class="section-body">
+            <div class="evidence-list">
+              ${skill.evidence.map(([title, body, kind]) => `
+                <article class="evidence">
+                  <div class="evidence-top">
+                    <h4>${title}</h4>
+                    <span class="pill">${kind}</span>
+                  </div>
+                  <p>${body}</p>
+                </article>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderExports(skill) {
+      return `
+        <div class="grid-2">
+          <section class="section">
+            <div class="section-head">
+              <h3>Export Targets</h3>
+              <span class="status draft">${skill.exports.length} targets</span>
+            </div>
+            <div class="section-body">
+              <div class="export-list">
+                ${skill.exports.map(([title, body, status]) => `
+                  <article class="export">
+                    <div class="export-top">
+                      <h4>${title}</h4>
+                      <span class="status ${status === "ready" ? "pass" : status === "planned" ? "warn" : "draft"}">${status}</span>
+                    </div>
+                    <p>${body}</p>
+                  </article>
+                `).join("")}
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <h3>Generated SKILL.md Preview</h3>
+              <span class="status draft">rendered</span>
+            </div>
+            <div class="section-body">
+              <pre class="codebox"># ${skill.title}
+
+## When to use
+${skill.trigger}
+
+## When not to use
+${skill.notUse}
+
+## Workflow
+${skill.steps.map((step, index) => `${index + 1}. ${step[0]} - ${step[1]}`).join("\n")}
+
+## Risk policy
+${Object.entries(skill.policy).map(([key, value]) => `- ${key}: ${value}`).join("\n")}</pre>
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function renderContent(skill) {
+      if (currentTab === "evals") {
+        content.innerHTML = renderEvals(skill);
+      } else if (currentTab === "evidence") {
+        content.innerHTML = renderEvidence(skill);
+      } else if (currentTab === "exports") {
+        content.innerHTML = renderExports(skill);
+      } else {
+        content.innerHTML = renderSpec(skill);
+      }
+    }
+
+    function renderSide(skill) {
+      const total = Math.round((skill.scores.repeat + skill.scores.success + skill.scores.reuse) / 3);
+      $("#readinessText").textContent = `${total}% ready based on repetition, success signals, reuse value, and risk policy.`;
+      const risk = $("#riskBadge");
+      risk.className = `risk ${riskClass(skill.risk)}`;
+      risk.textContent = skill.risk;
+
+      $("#meters").innerHTML = `
+        <div class="meter-row"><span>Repetition</span><div class="bar"><span style="--w:${skill.scores.repeat}%"></span></div><strong>${skill.scores.repeat}</strong></div>
+        <div class="meter-row"><span>Success</span><div class="bar"><span style="--w:${skill.scores.success}%"></span></div><strong>${skill.scores.success}</strong></div>
+        <div class="meter-row"><span>Reuse value</span><div class="bar"><span style="--w:${skill.scores.reuse}%"></span></div><strong>${skill.scores.reuse}</strong></div>
+      `;
+
+      $("#policy").innerHTML = Object.entries(skill.policy).map(([key, value]) => `
+        <div class="policy-line"><span>${key}</span><span>${value}</span></div>
+      `).join("");
+
+      $("#receiptCount").textContent = String(skill.receipts.length);
+      $("#receipts").innerHTML = skill.receipts.map(([title, body]) => `
+        <article class="receipt">
+          <div class="receipt-top">
+            <h4>${title}</h4>
+            <span class="status pass">logged</span>
+          </div>
+          <p>${body}</p>
+        </article>
+      `).join("");
+    }
+
+    function renderTabs() {
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.tab === currentTab);
+      });
+    }
+
+    function render() {
+      const skill = currentSkill();
+      renderCandidates();
+      renderHeader(skill);
+      renderTabs();
+      renderContent(skill);
+      renderSide(skill);
+    }
+
+    function runEvals() {
+      showToast(`Eval run queued for ${currentSkill().title}`);
+      currentTab = "evals";
+      render();
+    }
+
+    window.runEvals = runEvals;
+
+    document.querySelectorAll(".segmented button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".segmented button").forEach((b) => b.classList.remove("active"));
+        button.classList.add("active");
+        activeFilter = button.dataset.filter;
+        const visible = filteredSkills();
+        if (!visible.some((skill) => skill.id === currentId) && visible.length) {
+          currentId = visible[0].id;
+        }
+        render();
+      });
+    });
+
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        currentTab = tab.dataset.tab;
+        render();
+      });
+    });
+
+    $("#search").addEventListener("input", () => {
+      const visible = filteredSkills();
+      if (visible.length && !visible.some((skill) => skill.id === currentId)) {
+        currentId = visible[0].id;
+      }
+      render();
+    });
+
+    $("#promoteBtn").addEventListener("click", () => {
+      promoted.add(currentId);
+      showToast("Promoted to draft skill");
+      render();
+    });
+
+    $("#evalBtn").addEventListener("click", runEvals);
+
+    $("#copyBtn").addEventListener("click", async () => {
+      const skill = currentSkill();
+      const text = `${skill.title}\n\n${skill.preview}`;
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("Skill preview copied");
+      } catch {
+        showToast("Clipboard unavailable in this preview");
+      }
+    });
+
+    $("#dismissBtn").addEventListener("click", () => {
+      showToast("Candidate dismissed for this demo session");
+    });
+
+    $("#pauseBtn").addEventListener("click", () => {
+      showToast("Ambient cues paused for this skill");
+    });
+
+    render();
+  </script>
+</body>
+</html>

@@ -82,8 +82,30 @@ describe('Context Recall API (POST /context-recall)', () => {
       now - 60,
     );
     db.prepare(
-      `INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`,
-    ).run(9001, 'Project Falcon launch readiness review with the platform team.');
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      9002,
+      'messages/personal-falcon-memory',
+      1,
+      1,
+      'Personal Falcon launch readiness note for weekend planning.',
+      'hash-falcon-personal-1',
+      'personal',
+      'manual',
+      'manual',
+      'Falcon',
+      now - 30,
+    );
+    db.prepare(
+      `INSERT INTO chunks_fts(rowid, content) VALUES (?, ?), (?, ?)`,
+    ).run(
+      9001,
+      'Project Falcon launch readiness review with the platform team.',
+      9002,
+      'Personal Falcon launch readiness note for weekend planning.',
+    );
   });
 
   it('rejects payloads missing surface', async () => {
@@ -124,14 +146,35 @@ describe('Context Recall API (POST /context-recall)', () => {
     const body = res.json();
     expect(Array.isArray(body.matches)).toBe(true);
     expect(typeof body.queryTimeMs).toBe('number');
-    if (body.matches.length > 0) {
-      const top = body.matches[0];
-      expect(top.id).toBeDefined();
-      expect(typeof top.score).toBe('number');
-      expect(typeof top.snippet).toBe('string');
-      expect(typeof top.exploreLink === 'string' || top.exploreLink === undefined).toBe(true);
-      expect(body.topMatch?.id).toBe(top.id);
-    }
+    expect(body.matches.length).toBeGreaterThan(0);
+    const top = body.matches[0];
+    expect(top.id).toBeDefined();
+    expect(typeof top.score).toBe('number');
+    expect(typeof top.snippet).toBe('string');
+    expect(
+      typeof top.exploreLink === 'string' || top.exploreLink === undefined,
+    ).toBe(true);
+    expect(body.topMatch?.id).toBe(top.id);
+  });
+
+  it('uses all scope by default for passive recall', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'Falcon launch readiness',
+        primaryText: 'Project Falcon launch readiness weekend planning',
+        limit: 5,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const ids = body.matches.map((match: any) => match.id);
+    expect(ids).toContain('9001');
+    expect(ids).toContain('9002');
   });
 
   it('responds quickly (<200ms in the in-memory test harness)', async () => {

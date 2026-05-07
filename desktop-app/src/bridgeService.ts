@@ -117,12 +117,12 @@ function renderStableMemory(items: StableMemorySyncRequest['items']): string {
 }
 
 function renderBriefing(payload: MobileBriefingRequest): string {
-  const lines = ['请把以下近期重点记录到随手记：', '', payload.title, ''];
+  const lines = ['请把以下近期记忆重点记录到随手记：', '', payload.title, ''];
   for (const bullet of payload.bullets) {
     lines.push(`- ${bullet}`);
   }
   lines.push('');
-  lines.push('请按近期重点的方式保存，方便我之后查看和回顾。');
+  lines.push('请按近期记忆重点的方式保存，方便我之后查看和回顾；不要把关注规则或同步配置当作记忆重点。');
   return lines.join('\n');
 }
 
@@ -177,6 +177,12 @@ function normalizeBrowserLifecycleError(message: string): string {
     return '当前豆包页面里没有找到可输入区域。请先确认桥接器浏览器仍停留在可用的豆包页面。';
   }
   return message;
+}
+
+function missingBindingError(targetBindingType: BindingType): string {
+  return targetBindingType === 'mobile_context'
+    ? '手机对话尚未绑定。请先在 Personal AI.app 中绑定手机版对话，再推送近期重点、待办、通知或查询结果。'
+    : '目标线程尚未绑定。';
 }
 
 export class DoubaoBridgeService {
@@ -556,6 +562,21 @@ export class DoubaoBridgeService {
         threadId,
         transcript,
         sentAt: nowIso(),
+      };
+    }
+
+    if (!threadUrl) {
+      const message = missingBindingError(targetBindingType);
+      this.state.lastError = message;
+      await this.persist();
+      return {
+        accepted: false,
+        kind,
+        targetBindingType,
+        threadId,
+        transcript,
+        sentAt: nowIso(),
+        error: message,
       };
     }
 

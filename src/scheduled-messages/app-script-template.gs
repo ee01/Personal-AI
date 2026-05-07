@@ -26,12 +26,22 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.6.1';
-var APP_SCRIPT_LAST_UPDATED = '2026-04-03';
+var APP_SCRIPT_VERSION = '2.6.24';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-07';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
+var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
 // Timeline Sync Rule 默认每天运行一次，这里给缓存留出冗余窗口，避免偶发延迟导致全天失效
 var TIMELINE_CACHE_MAX_AGE_MS = 36 * 60 * 60 * 1000;
+var EXECUTION_MARK_KEY_PREFIX = 'BOT_EXECUTION_MARK_';
+var EXECUTION_MARK_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+var JIRA_RELEASE_INFO_MAX_CHARS = 12000;
+var JIRA_GROOVY_MAX_NESTING_DEPTH = 12;
+var TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS = 260;
+// Google Apps Script PropertiesService limits each stored value to 9 KB.
+// Preflight the serialized Timeline cache so Jira gets an actionable error
+// instead of a generic setProperty exception.
+var TIMELINE_CACHE_PROPERTY_MAX_BYTES = 9 * 1024;
 
 var TIMELINE_PROJECT_PARAM_MAP = [
   { project: 'mThor', paramKey: 'mThor' },
@@ -49,7 +59,7 @@ var TIMELINE_PROJECT_PARAM_MAP = [
  * 
  * 执行逻辑：
  * 1. 判断日期是否匹配（OneTime/Periodic 检查日期，Timeline 检查里程碑）
- * 2. 判断时间是否匹配（有 Schedule_Time 则匹配分钟，无则在 9:00 执行）
+ * 2. 判断时间是否匹配（有 Schedule_Time 则匹配分钟；未设时间的 Bot/AI 和带 AI_Endpoint 的 JiraAutomation 由执行器 8:00 后排队，AsMe 9:00 执行）
  * 3. 发送消息
  */
 function minuteTrigger() {
@@ -66,7 +76,7 @@ function minuteTrigger() {
  * 
  * 注意：所有类型都可能有或没有 Schedule_Time
  * - 有 Schedule_Time: 在指定时间执行
- * - 无 Schedule_Time: 默认在早上 9:00 执行
+ * - 无 Schedule_Time: AsMe 默认在早上 9:00 执行；Bot/AI/带 AI_Endpoint 的 JiraAutomation 由执行器 8:00 后排队
  */
 function determineMessageType(rowData) {
   // Timeline 消息：基于项目进度（没有 Schedule_Date，有 Timeline_Milestone）
@@ -240,8 +250,8 @@ function getColumnIndex(headers, columnName) {
  * 判断消息的时间是否匹配当前分钟（只判断时间条件，日期匹配需在调用前完成）
  * 
  * 时间匹配规则：
- * - 有 Schedule_Time: 匹配当前分钟 (±1分钟容差)
- * - 无 Schedule_Time: 在早上 9:00 执行（所有类型默认）
+ * - 有 Schedule_Time: 匹配当前分钟或最多迟到 1 分钟；不提前发送
+ * - 无 Schedule_Time: 在早上 9:00 命中当前分钟；执行器还会在 8:00 后兜底排队
  * 
  * @param {object} rowData - 消息行数据
  * @param {Date} now - 当前时间
@@ -255,14 +265,67 @@ function matchesCurrentMinuteTime(rowData, now, messageType) {
   const hasScheduleTime = rowData.Schedule_Time && rowData.Schedule_Time.toString().trim();
   
   if (hasScheduleTime) {
-    // 有指定时间，检查时间是否匹配当前分钟（±1分钟容差）
+    // 有指定时间，检查时间是否匹配当前分钟或最多迟到 1 分钟；不提前发送
     const scheduleMinutes = parseTimeToMinutes(rowData.Schedule_Time.toString());
+    if (scheduleMinutes === null) {
+      Logger.log(`跳过无效执行时间: ${rowData.ID || rowData.Topic || ''} - ${rowData.Schedule_Time}`);
+      return false;
+    }
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    return Math.abs(nowMinutes - scheduleMinutes) <= 1;
+    const diff = nowMinutes - scheduleMinutes;
+    const previousDayWrappedDiff = nowMinutes + 1440 - scheduleMinutes;
+    return (diff >= 0 && diff <= 1) || (scheduleMinutes > nowMinutes && previousDayWrappedDiff <= 1);
   } else {
-    // 没有指定时间，默认在早上 9:00 执行（所有类型统一）
+    // 没有指定时间，AsMe 通过当前分钟在 9:00 执行；执行器消息另有 8:00 后兜底排队
     return now.getHours() === 9 && now.getMinutes() === 0;
   }
+}
+
+/**
+ * 为跨午夜补偿计算日期判断时应使用的参考日期。
+ *
+ * 例如：消息设在 2026-05-02 23:50，执行器在 2026-05-03 00:05 恢复轮询时，
+ * 时间仍在 30 分钟补偿窗口内，日期判断应落在 2026-05-02。
+ */
+function getDateReferenceForMatchMode(rowData, now, matchMode) {
+  if (
+    matchMode !== 'CURRENT_MINUTE' &&
+    matchMode !== 'PAST_30_MINUTES'
+  ) {
+    return now;
+  }
+
+  if (!rowData.Schedule_Time || !rowData.Schedule_Time.toString().trim()) {
+    return now;
+  }
+
+  const scheduleMinutes = parseTimeToMinutes(rowData.Schedule_Time.toString());
+  if (scheduleMinutes === null) {
+    return now;
+  }
+
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  if (scheduleMinutes <= nowMinutes) {
+    return now;
+  }
+
+  const wrappedDiff = nowMinutes + 1440 - scheduleMinutes;
+  const isPreviousDayCurrentMinute = matchMode === 'CURRENT_MINUTE' && wrappedDiff <= 1;
+  const isPreviousDayCompensation = matchMode === 'PAST_30_MINUTES' && wrappedDiff > 1 && wrappedDiff <= 30;
+
+  if (!isPreviousDayCurrentMinute && !isPreviousDayCompensation) {
+    return now;
+  }
+
+  return new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - 1,
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds()
+  );
 }
 
 /**
@@ -275,18 +338,71 @@ function isSameDate(date1, date2) {
 }
 
 /**
+ * 解析 Sheet 里的 yyyy-MM-dd 日期，避免 V8 把日期字符串按 UTC 解释后跨日。
+ */
+function parseScheduleDate(dateValue) {
+  if (!dateValue) return null;
+
+  if (Object.prototype.toString.call(dateValue) === '[object Date]') {
+    return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
+  }
+
+  const text = dateValue.toString().trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (match) {
+    return new Date(
+      parseInt(match[1], 10),
+      parseInt(match[2], 10) - 1,
+      parseInt(match[3], 10)
+    );
+  }
+
+  const parsed = new Date(text);
+  if (isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function toScheduleDateOnly(dateValue) {
+  if (!dateValue || isNaN(dateValue.getTime())) return null;
+  return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
+}
+
+function isAfterScheduleEndDate(currentTime, endDateValue) {
+  const endDate = parseScheduleDate(endDateValue);
+  const currentDateOnly = toScheduleDateOnly(currentTime);
+  const endDateOnly = toScheduleDateOnly(endDate);
+
+  if (!currentDateOnly || !endDateOnly) return false;
+  return currentDateOnly.getTime() > endDateOnly.getTime();
+}
+
+function isOnOrAfterScheduleEndDate(currentTime, endDateValue) {
+  const endDate = parseScheduleDate(endDateValue);
+  const currentDateOnly = toScheduleDateOnly(currentTime);
+  const endDateOnly = toScheduleDateOnly(endDate);
+
+  if (!currentDateOnly || !endDateOnly) return false;
+  return currentDateOnly.getTime() >= endDateOnly.getTime();
+}
+
+/**
  * 检查周期性消息是否应该执行
  */
 function checkPeriodicSchedule(rowData, now) {
   if (!rowData.Schedule_Date) return false;
   
-  const startDate = new Date(rowData.Schedule_Date);
-  const endDate = rowData.End_Date ? new Date(rowData.End_Date) : null;
+  const startDate = parseScheduleDate(rowData.Schedule_Date);
+  const endDate = rowData.End_Date ? parseScheduleDate(rowData.End_Date) : null;
   const every = parseInt(rowData.Repeat_Every) || 1;
   const repeatUnit = rowData.Repeat_Unit || 'Day';
+
+  if (!startDate) return false;
   
-  // 检查是否已经过了结束日期
-  if (endDate && now > endDate) return false;
+  // End_Date 是包含当天的日期上限；结束日当天仍应允许最后一次发送。
+  if (endDate && isAfterScheduleEndDate(now, rowData.End_Date)) return false;
   
   // 检查是否还没到开始日期
   if (now < startDate) return false;
@@ -316,7 +432,10 @@ function checkPeriodicSchedule(rowData, now) {
       const allowedDays = repeatDays.toString().split(',').map(function(d) {
         return parseInt(d.trim(), 10);
       });
-      shouldSend = allowedDays.indexOf(todayDayOfWeek) !== -1;
+      const weekIndex = Math.floor(daysToStart / 7);
+      shouldSend = weekIndex >= 0 &&
+        weekIndex % every === 0 &&
+        allowedDays.indexOf(todayDayOfWeek) !== -1;
     } else {
       // 原有逻辑：每 N 周的同一天
       if (daysToStart >= 0 && daysToStart % (7 * every) === 0) {
@@ -539,7 +658,7 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   }
   
   // 检查是否应该标记为 Done（统一使用 shouldMarkAsDone 逻辑）
-  if (success && shouldMarkAsDone(rowData)) {
+  if (success && shouldMarkAsDone(rowData, now)) {
     if (statusCol > 0) {
       sheet.getRange(rowIndex, statusCol).setValue('Done');
       Logger.log(`任务已完成所有推送，标记为 Done: ${rowData.ID}`);
@@ -595,9 +714,11 @@ function calculateNextExecution(rowData, currentTime) {
     return '';
     
   } else if (messageType === 'Periodic') {
-    const startDate = new Date(rowData.Schedule_Date);
+    const startDate = parseScheduleDate(rowData.Schedule_Date);
     const every = parseInt(rowData.Repeat_Every) || 1;
     const repeatUnit = rowData.Repeat_Unit || 'Day';
+
+    if (!startDate) return '';
     
     let nextDate = new Date(currentTime);
     
@@ -614,11 +735,17 @@ function calculateNextExecution(rowData, currentTime) {
         }).sort(function(a, b) { return a - b; });
         var todayDayOfWeek = nextDate.getDay();
         
-        // 找今天之后最近的一个允许的星期
-        for (var offset = 1; offset <= 7; offset++) {
+        // 找今天之后最近的一个允许的星期，并保留每 N 周的间隔约束
+        for (var offset = 1; offset <= (7 * every) + 7; offset++) {
           var checkDay = (todayDayOfWeek + offset) % 7;
-          if (allowedDays.indexOf(checkDay) !== -1) {
-            nextDate.setDate(nextDate.getDate() + offset);
+          var candidateDate = new Date(nextDate);
+          candidateDate.setDate(nextDate.getDate() + offset);
+          var candidateDateOnly = new Date(candidateDate.getFullYear(), candidateDate.getMonth(), candidateDate.getDate());
+          var startDateOnly = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+          var daysFromStart = Math.floor((candidateDateOnly - startDateOnly) / (1000 * 60 * 60 * 24));
+          var weekIndex = Math.floor(daysFromStart / 7);
+          if (weekIndex >= 0 && weekIndex % every === 0 && allowedDays.indexOf(checkDay) !== -1) {
+            nextDate = candidateDate;
             break;
           }
         }
@@ -643,6 +770,397 @@ function calculateNextExecution(rowData, currentTime) {
 /**
  * Web App GET 请求处理
  */
+function createJsonOutput(payload) {
+  return ContentService.createTextOutput(
+    JSON.stringify(payload)
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function parseJsonPostBody(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    return {};
+  }
+
+  const rawBody = e.postData.contents.toString();
+  const trimmedBody = rawBody.trim();
+  if (!trimmedBody || !shouldParsePostDataAsJson(e, trimmedBody)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedBody);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    throw new Error(`POST JSON 解析失败: ${error.toString()}`);
+  }
+}
+
+function shouldParsePostDataAsJson(e, trimmedBody) {
+  const contentType = getPostDataType(e).toLowerCase();
+  if (contentType.indexOf('application/json') !== -1 || contentType.indexOf('+json') !== -1) {
+    return true;
+  }
+
+  return trimmedBody[0] === '{' || trimmedBody[0] === '[';
+}
+
+function isPostJsonParseError(error) {
+  return error && error.message && error.message.indexOf('POST JSON 解析失败') !== -1;
+}
+
+function getPostDataType(e) {
+  return e && e.postData && e.postData.type ? e.postData.type.toString() : '';
+}
+
+function getPostBodyLength(e) {
+  return e && e.postData && e.postData.contents ? e.postData.contents.toString().length : 0;
+}
+
+function buildPostJsonParseErrorPayload(action, error, e) {
+  const actionName = getRequestParameterValue(action);
+  const payload = {
+    success: false,
+    status: 'ERROR',
+    errorCode: 'INVALID_POST_JSON',
+    action: actionName,
+    error: error.toString(),
+    receivedContentType: getPostDataType(e),
+    bodyLength: getPostBodyLength(e),
+    acceptedFormats: [
+      'POST JSON body with Content-Type: application/json',
+      'Jira text smart values must use .asJsonString before being inserted into JSON',
+      'Avoid putting releaseInfo, topic, or content in the URL query string'
+    ],
+    nextAction: '检查 Jira Automation 的 Send web request：Method=POST，Custom data 是完整 JSON，动态文本字段使用 .asJsonString，Header 包含 Content-Type: application/json。'
+  };
+
+  if (actionName === 'cacheReleaseInfo') {
+    const troubleshooting = getReleaseInfoTroubleshootingPayload();
+    return Object.assign({}, troubleshooting, payload, {
+      acceptedFormats: payload.acceptedFormats.concat(troubleshooting.acceptedFormats),
+      nextAction: `${payload.nextAction} ${troubleshooting.nextAction}`,
+      expectedBody: '{"project":"mThor","releaseInfo":{{mThorReleaseInfo.asJsonString}}}'
+    });
+  }
+
+  if (actionName === 'markBotMessageExecuted') {
+    return Object.assign(payload, {
+      expectedBody: '{"messageId":{{messageId.asJsonString}},"rowIndex":{{webhookResponse.body.rowIndex}},"success":true,"topic":{{replacedTopic.asJsonString}},"content":{{replacedContent.asJsonString}}}'
+    });
+  }
+
+  return payload;
+}
+
+function mergeRequestParameters(queryParameters, bodyParameters) {
+  const merged = {};
+  const query = queryParameters || {};
+  const body = bodyParameters || {};
+
+  Object.keys(query).forEach(function(key) {
+    merged[key] = query[key];
+  });
+
+  Object.keys(body).forEach(function(key) {
+    if (body[key] !== undefined && body[key] !== null) {
+      merged[key] = body[key];
+    }
+  });
+
+  return merged;
+}
+
+function normalizeExecutionKey(executionKey) {
+  const raw = getRequestParameterValue(executionKey).trim();
+  if (!raw) {
+    return '';
+  }
+
+  if (/^ek_[A-Za-z0-9_.:-]+$/.test(raw)) {
+    return raw;
+  }
+
+  const safePrefix = raw.replace(/[^A-Za-z0-9_.:-]/g, '_').substring(0, 140);
+  return `ek_${safePrefix}_${simpleStringHash(raw)}`;
+}
+
+function simpleStringHash(value) {
+  let hash = 0;
+  const text = value || '';
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function buildExecutionMarkPropertyKey(executionKey) {
+  const normalized = normalizeExecutionKey(executionKey);
+  return normalized ? `${EXECUTION_MARK_KEY_PREFIX}${normalized}` : '';
+}
+
+function parseExecutionMarkRecord(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getRecordedExecutionMark(props, propertyKey, now) {
+  if (!propertyKey) {
+    return null;
+  }
+
+  const existing = parseExecutionMarkRecord(props.getProperty(propertyKey));
+  if (!existing) {
+    return null;
+  }
+
+  const markedAt = existing.markedAt ? new Date(existing.markedAt).getTime() : 0;
+  if (markedAt && now.getTime() - markedAt > EXECUTION_MARK_MAX_AGE_MS) {
+    props.deleteProperty(propertyKey);
+    return null;
+  }
+
+  return existing;
+}
+
+function recordExecutionMark(props, propertyKey, executionKey, messageId, rowIndex, success, now) {
+  if (!propertyKey) {
+    return;
+  }
+
+  props.setProperty(propertyKey, JSON.stringify({
+    executionKey: normalizeExecutionKey(executionKey),
+    messageId,
+    rowIndex,
+    success,
+    markedAt: now.toISOString()
+  }));
+}
+
+function withExecutionMarkLock(callback) {
+  if (typeof LockService === 'undefined') {
+    return callback();
+  }
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(5000);
+    return callback();
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (error) {
+      Logger.log(`释放执行标记锁失败: ${error}`);
+    }
+  }
+}
+
+function buildMessageExecutionKey(message, messageId, now) {
+  const minuteKey = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMddHHmm');
+  const raw = [
+    'v1',
+    messageId,
+    message.rowIndex,
+    message.matchMode || '',
+    minuteKey
+  ].join(':');
+
+  return normalizeExecutionKey(raw);
+}
+
+function getReleaseInfoTroubleshootingPayload() {
+  return {
+    expectedShape: '{releaseInfo={Milestone=MM/DD/YYYY, ...}}',
+    acceptedFormats: [
+      'POST JSON body: {"project":"mThor","releaseInfo":{"releaseInfo":{"FF":"MM/DD/YYYY"}}}',
+      'Groovy Map fallback: {currentRelease=Version, releaseInfo={FF=MM/DD/YYYY}}'
+    ],
+    limits: {
+      maxChars: JIRA_RELEASE_INFO_MAX_CHARS,
+      maxNestingDepth: JIRA_GROOVY_MAX_NESTING_DEPTH,
+      maxCachePropertyBytes: TIMELINE_CACHE_PROPERTY_MAX_BYTES
+    },
+    nextAction: '优先让 Jira Rule 使用 POST JSON 和 asJsonString；如果只能传 Groovy Map，请给包含逗号、等号或换行的值加引号，并保持 payload 在限制内。'
+  };
+}
+
+function truncateTimelineSyncDiagnostic(value, maxLength) {
+  const text = getRequestParameterValue(value).replace(/\s+/g, ' ').trim();
+  if (!text || text.length <= maxLength) {
+    return text;
+  }
+
+  return text.substring(0, maxLength - 3) + '...';
+}
+
+function getTimelineSyncAttemptKey(paramKey) {
+  return TIMELINE_SYNC_ATTEMPT_KEY_PREFIX + paramKey;
+}
+
+function buildTimelineSyncAttempt(projectConfig, payload) {
+  const now = new Date();
+  const attempt = {
+    project: projectConfig.project,
+    paramKey: projectConfig.paramKey,
+    success: payload && payload.success === true,
+    attemptedAt: now.toISOString(),
+    timestamp: now.getTime()
+  };
+
+  const errorCode = truncateTimelineSyncDiagnostic(payload && payload.errorCode, 80);
+  const error = truncateTimelineSyncDiagnostic(payload && (payload.error || payload.message), TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+  const parseError = truncateTimelineSyncDiagnostic(payload && payload.parseError, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+
+  if (errorCode) {
+    attempt.errorCode = errorCode;
+  }
+  if (error) {
+    attempt.error = error;
+  }
+  if (parseError) {
+    attempt.parseError = parseError;
+  }
+  if (payload && typeof payload.payloadBytes === 'number' && isFinite(payload.payloadBytes)) {
+    attempt.payloadBytes = payload.payloadBytes;
+  }
+  if (payload && typeof payload.maxBytes === 'number' && isFinite(payload.maxBytes)) {
+    attempt.maxBytes = payload.maxBytes;
+  }
+  if (payload && typeof payload.milestoneCount === 'number' && isFinite(payload.milestoneCount)) {
+    attempt.milestoneCount = payload.milestoneCount;
+  }
+  if (payload && Array.isArray(payload.milestoneKeys)) {
+    attempt.milestoneKeys = payload.milestoneKeys
+      .map(function(key) { return getRequestParameterValue(key).trim(); })
+      .filter(function(key) { return key; })
+      .slice(0, 20);
+  }
+
+  return attempt;
+}
+
+function recordTimelineSyncAttempt(projectConfig, payload) {
+  if (!projectConfig) {
+    return;
+  }
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty(
+      getTimelineSyncAttemptKey(projectConfig.paramKey),
+      JSON.stringify(buildTimelineSyncAttempt(projectConfig, payload || {}))
+    );
+  } catch (error) {
+    Logger.log(`[cacheReleaseInfo] 记录同步尝试失败: ${error.toString()}`);
+  }
+}
+
+function createTimelineCacheResponse(projectConfig, payload) {
+  recordTimelineSyncAttempt(projectConfig, payload);
+  return createJsonOutput(payload);
+}
+
+function handleCacheReleaseInfoRequest(parameters) {
+  let projectConfig = null;
+
+  try {
+    const paramKey = getRequestParameterValue(parameters.project);
+    const rawReleaseInfo = parameters.releaseInfo;
+    projectConfig = getTimelineProjectConfigByParamKey(paramKey);
+
+    if (!projectConfig) {
+      const message = `[cacheReleaseInfo] 未知项目参数: ${paramKey || '(empty)'}`;
+      Logger.log(message);
+      return createJsonOutput({ success: false, errorCode: 'UNKNOWN_PROJECT', error: message, project: paramKey });
+    }
+
+    if (isMissingRequestValue(rawReleaseInfo)) {
+      const message = `[cacheReleaseInfo] 缺少 releaseInfo，项目: ${projectConfig.project}`;
+      Logger.log(message);
+      return createTimelineCacheResponse(projectConfig, {
+        success: false,
+        errorCode: 'MISSING_RELEASE_INFO',
+        error: message,
+        project: projectConfig.project,
+        paramKey: projectConfig.paramKey
+      });
+    }
+
+    const parseResult = parseSingleProjectReleaseInfoForCache(rawReleaseInfo);
+
+    if (!parseResult.success) {
+      const message = `[cacheReleaseInfo] releaseInfo 解析失败，项目: ${projectConfig.project}，原因: ${parseResult.parseError || parseResult.errorCode}`;
+      Logger.log(message);
+      return createTimelineCacheResponse(projectConfig, Object.assign({
+        success: false,
+        errorCode: parseResult.errorCode || 'INVALID_RELEASE_INFO',
+        error: message,
+        parseError: parseResult.parseError || '',
+        project: projectConfig.project,
+        paramKey: projectConfig.paramKey
+      }, getReleaseInfoTroubleshootingPayload()));
+    }
+
+    const projectInfo = parseResult.projectInfo;
+    const props = PropertiesService.getScriptProperties();
+    const cacheKey = getTimelineProjectCacheKey(paramKey);
+    const updatedAt = new Date().toISOString();
+    const cachePayload = {
+      project: projectConfig.project,
+      paramKey: projectConfig.paramKey,
+      releaseInfo: projectInfo,
+      updatedAt,
+      timestamp: new Date().getTime(),
+    };
+    const serializedCachePayload = JSON.stringify(cachePayload);
+    const cachePayloadBytes = getUtf8ByteLength(serializedCachePayload);
+
+    if (cachePayloadBytes > TIMELINE_CACHE_PROPERTY_MAX_BYTES) {
+      const message = `[cacheReleaseInfo] releaseInfo 缓存超过 Script Properties 单值限制，项目: ${projectConfig.project}`;
+      Logger.log(`${message}，大小: ${cachePayloadBytes}/${TIMELINE_CACHE_PROPERTY_MAX_BYTES} bytes`);
+      return createTimelineCacheResponse(projectConfig, Object.assign({}, getReleaseInfoTroubleshootingPayload(), {
+        success: false,
+        errorCode: 'TIMELINE_CACHE_TOO_LARGE',
+        error: message,
+        project: projectConfig.project,
+        paramKey: projectConfig.paramKey,
+        payloadBytes: cachePayloadBytes,
+        maxBytes: TIMELINE_CACHE_PROPERTY_MAX_BYTES,
+        milestoneCount: Object.keys(projectInfo.releaseInfo).length,
+        milestoneKeys: Object.keys(projectInfo.releaseInfo).slice(0, 20),
+        nextAction: 'Timeline 缓存超过 Apps Script Script Properties 单值 9KB 限制。请减少同步的 Milestone 数量或字段体积；如项目确实需要更大 payload，需要改用 Sheet/Drive 等外部缓存。'
+      }));
+    }
+
+    props.setProperty(cacheKey, serializedCachePayload);
+    Logger.log(`[cacheReleaseInfo] 缓存成功，项目: ${projectConfig.project}`);
+
+    return createTimelineCacheResponse(projectConfig, {
+      success: true,
+      project: projectConfig.project,
+      paramKey: projectConfig.paramKey,
+      updatedAt,
+      milestoneCount: Object.keys(projectInfo.releaseInfo).length,
+      milestoneKeys: Object.keys(projectInfo.releaseInfo),
+    });
+  } catch (cacheError) {
+    Logger.log(`[cacheReleaseInfo] 错误: ${cacheError.toString()}`);
+    return createTimelineCacheResponse(projectConfig, {
+      success: false,
+      errorCode: 'CACHE_RELEASE_INFO_EXCEPTION',
+      error: cacheError.toString()
+    });
+  }
+}
+
 function doGet(e) {
   const action = e.parameter.action;
   Logger.log(`action: ${action}`);
@@ -725,35 +1243,14 @@ function doGet(e) {
   // 按项目缓存 releaseInfo 到 Script Properties
   // Timeline Sync Rule 会逐项目写入，避免 URL 过长和单 value 过大
   if (action === 'cacheReleaseInfo') {
-    try {
-      const paramKey = e.parameter.project || '';
-      const projectInfo = parseSingleProjectReleaseInfo(e.parameter.releaseInfo || '');
-      const projectConfig = getTimelineProjectConfigByParamKey(paramKey);
+    return handleCacheReleaseInfoRequest(e.parameter);
+  }
 
-      if (projectConfig && projectInfo) {
-        const props = PropertiesService.getScriptProperties();
-        const cacheKey = getTimelineProjectCacheKey(paramKey);
-        const cachePayload = {
-          project: projectConfig.project,
-          paramKey: projectConfig.paramKey,
-          releaseInfo: projectInfo,
-          updatedAt: new Date().toISOString(),
-          timestamp: new Date().getTime(),
-        };
-
-        props.setProperty(cacheKey, JSON.stringify(cachePayload));
-        Logger.log(`[cacheReleaseInfo] 缓存成功，项目: ${projectConfig.project}`);
-      }
-      
-      return ContentService.createTextOutput(
-        JSON.stringify({ success: true })
-      ).setMimeType(ContentService.MimeType.JSON);
-    } catch (cacheError) {
-      Logger.log(`[cacheReleaseInfo] 错误: ${cacheError.toString()}`);
-      return ContentService.createTextOutput(
-        JSON.stringify({ success: false, error: cacheError.toString() })
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
+  // 返回 Timeline 缓存状态，供扩展 UI 判断 Sync Rule 是否已经把数据写入缓存
+  if (action === 'getTimelineCacheStatus') {
+    return ContentService.createTextOutput(
+      JSON.stringify(getTimelineCacheStatus())
+    ).setMimeType(ContentService.MimeType.JSON);
   }
   
   // 获取当前时间点需要执行的单条 Bot 消息（供 Jira Automation 调用）
@@ -802,12 +1299,13 @@ function doGet(e) {
     const rowIndex = parseInt(e.parameter.rowIndex) || 0;
     const success = e.parameter.success === 'true';
     const error = e.parameter.error || '';
+    const executionKey = getRequestParameterValue(e.parameter.executionKey);
     // 接收替换后的内容（用于日志记录）
-    const replacedTopic = e.parameter.topic ? decodeURIComponent(e.parameter.topic) : '';
-    const replacedContent = e.parameter.content ? decodeURIComponent(e.parameter.content) : '';
+    const replacedTopic = getRequestParameterValue(e.parameter.topic);
+    const replacedContent = getRequestParameterValue(e.parameter.content);
     
     return ContentService.createTextOutput(
-      JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent))
+      JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey))
     ).setMimeType(ContentService.MimeType.JSON);
   }
   
@@ -846,28 +1344,53 @@ function doGet(e) {
  * 支持 Jira 传递 release info 数据
  */
 function doPost(e) {
+  let queryParameters = {};
+  let action = '';
+
   try {
-    const action = e.parameter.action;
+    queryParameters = e.parameter || {};
+    action = getRequestParameterValue(queryParameters.action);
+    const postData = parseJsonPostBody(e);
+    action = action || getRequestParameterValue(postData.action);
     Logger.log(`POST action: ${action}`);
-    Logger.log(`POST 请求来源: ${JSON.stringify(e.parameter)}`);
+    Logger.log(`POST 请求来源: ${JSON.stringify(queryParameters)}`);
+
+    if (action === 'cacheReleaseInfo') {
+      return handleCacheReleaseInfoRequest(mergeRequestParameters(queryParameters, postData));
+    }
+
+    if (action === 'markBotMessageExecuted') {
+      const parameters = mergeRequestParameters(queryParameters, postData);
+      const messageId = getRequestParameterValue(parameters.messageId);
+      const rowIndex = parseInt(getRequestParameterValue(parameters.rowIndex)) || 0;
+      const success = parameters.success === true || getRequestParameterValue(parameters.success) === 'true';
+      const error = getRequestParameterValue(parameters.error);
+      const replacedTopic = getRequestParameterValue(parameters.topic);
+      const replacedContent = getRequestParameterValue(parameters.content);
+      const executionKey = getRequestParameterValue(parameters.executionKey);
+
+      return ContentService.createTextOutput(
+        JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey))
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
     
     if (action === 'getBotMessageCurrentTime') {
       // 解析 POST 数据
-      let postData = JSON.parse(e.postData.contents);
-      Logger.log(`接收到 releaseInfo 数据: ${JSON.stringify(postData).substring(0, 200)}...`);
+      let requestData = postData;
+      Logger.log(`接收到 releaseInfo 数据: ${JSON.stringify(requestData).substring(0, 200)}...`);
       
       // 支持两种 body 格式：
       // 1. { releaseInfo: {...}, currentTime: "..." } - 标准格式
       // 2. { mThor: "...", jupiterDesktop: "...", ... } - Jira POST 的 per-project 格式（规避 URL 长度限制）
-      if (!postData.releaseInfo || Object.keys(postData.releaseInfo).length === 0) {
-        const releaseInfo = extractReleaseInfoFromParameters(postData);
+      if (!requestData.releaseInfo || Object.keys(requestData.releaseInfo).length === 0) {
+        const releaseInfo = extractReleaseInfoFromParameters(requestData);
         if (releaseInfo) {
-          postData = { releaseInfo: releaseInfo, currentTime: postData.currentTime || '' };
+          requestData = { releaseInfo: releaseInfo, currentTime: requestData.currentTime || '' };
         }
       }
       
       // 调用新的处理函数
-      const result = getMessageCurrentTimeWithReleaseInfo(postData);
+      const result = getMessageCurrentTimeWithReleaseInfo(requestData);
       
       // 返回响应，添加 CORS 和 Cache 控制头
       const output = ContentService.createTextOutput(JSON.stringify(result))
@@ -884,9 +1407,12 @@ function doPost(e) {
   } catch (error) {
     Logger.log(`doPost 错误: ${error.toString()}`);
     Logger.log(`错误堆栈: ${error.stack || '无堆栈信息'}`);
-    return ContentService.createTextOutput(
-      JSON.stringify({ status: 'ERROR', message: error.toString() })
-    ).setMimeType(ContentService.MimeType.JSON);
+
+    if (isPostJsonParseError(error)) {
+      return createJsonOutput(buildPostJsonParseErrorPayload(action, error, e));
+    }
+
+    return createJsonOutput({ status: 'ERROR', message: error.toString() });
   }
 }
 
@@ -925,62 +1451,84 @@ function setupTriggersInternal() {
  * @param {string} errorMsg - 错误消息（可选）
  * @param {string} replacedTopic - 替换变量后的主题（可选，用于日志记录）
  * @param {string} replacedContent - 替换变量后的内容（可选，用于日志记录）
+ * @param {string} executionKey - 单次执行的幂等键（可选，用于规避 Jira/网络重试重复记账）
  * @returns {object} 更新结果
  */
-function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent) {
+function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent, executionKey) {
   try {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
-    if (!sheet) {
-      return { success: false, error: 'Messages sheet not found' };
-    }
-    
-    const data = sheet.getDataRange().getDisplayValues();
-    const headers = data[0];
-    
-    // 如果没有提供 rowIndex 或 rowIndex 无效，通过 messageId 查找
-    let actualRowIndex = rowIndex;
-    if (!rowIndex || rowIndex < 1 || rowIndex >= data.length) {
-      Logger.log(`rowIndex 无效 (${rowIndex})，尝试通过 messageId 查找: ${messageId}`);
-      actualRowIndex = findRowIndexByMessageId(data, headers, messageId);
-      
-      if (!actualRowIndex) {
-        return { 
-          success: false, 
-          error: `无法找到消息 ID: ${messageId}`,
-          messageId: messageId
-        };
-      }
-      Logger.log(`通过 messageId 找到行索引: ${actualRowIndex}`);
-    }
-    
-    const row = data[actualRowIndex - 1]; // rowIndex 是从 1 开始的
-    if (!row) {
-      return { 
-        success: false, 
-        error: `行索引 ${actualRowIndex} 超出范围`,
-        messageId: messageId
-      };
-    }
-    
-    const rowData = parseRow(row, headers);
-    
     // 构建替换后的内容对象（用于日志记录）
     const replacedContentObj = (replacedTopic || replacedContent) ? {
       topic: replacedTopic || '',
       content: replacedContent || ''
     } : null;
-    
-    // 更新执行日志（已包含 shouldMarkAsDone 判断和 insertPushLog 调用）
-    updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg, replacedContentObj);
-    
-    Logger.log(`标记消息执行完成: ${messageId}, 成功: ${success}`);
-    
-    return {
-      success: true,
-      messageId: messageId,
-      marked: true,
-      rowIndex: actualRowIndex
+
+    const normalizedExecutionKey = normalizeExecutionKey(executionKey);
+    const applyExecutionMark = function() {
+      const now = new Date();
+      const props = normalizedExecutionKey ? PropertiesService.getScriptProperties() : null;
+      const propertyKey = normalizedExecutionKey ? buildExecutionMarkPropertyKey(normalizedExecutionKey) : '';
+      const existingMark = props ? getRecordedExecutionMark(props, propertyKey, now) : null;
+
+      if (existingMark) {
+        Logger.log(`跳过重复执行标记: ${messageId}, executionKey=${normalizedExecutionKey}`);
+        return {
+          success: true,
+          messageId: getRequestParameterValue(messageId) || getRequestParameterValue(existingMark.messageId),
+          marked: true,
+          duplicate: true,
+          rowIndex: parseInt(existingMark.rowIndex, 10) || parseInt(rowIndex, 10) || 0,
+          executionKey: normalizedExecutionKey
+        };
+      }
+
+      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+      if (!sheet) {
+        return { success: false, error: 'Messages sheet not found' };
+      }
+
+      const data = sheet.getDataRange().getDisplayValues();
+      const headers = data[0];
+
+      const resolvedRow = resolveExecutionMarkRow(data, headers, rowIndex, messageId);
+      if (!resolvedRow.success) {
+        return {
+          success: false,
+          error: resolvedRow.error,
+          messageId: messageId,
+          rowIndex: rowIndex
+        };
+      }
+
+      const actualRowIndex = resolvedRow.rowIndex;
+      const rowData = resolvedRow.rowData;
+
+      // 更新执行日志（已包含 shouldMarkAsDone 判断和 insertPushLog 调用）
+      updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg, replacedContentObj);
+      if (props) {
+        recordExecutionMark(props, propertyKey, normalizedExecutionKey, messageId, actualRowIndex, success, now);
+      }
+
+      Logger.log(`标记消息执行完成: ${messageId}, 成功: ${success}`);
+
+      const response = {
+        success: true,
+        messageId: messageId,
+        marked: true,
+        duplicate: false,
+        rowIndex: actualRowIndex
+      };
+      if (normalizedExecutionKey) {
+        response.executionKey = normalizedExecutionKey;
+      }
+      return response;
     };
+
+    if (normalizedExecutionKey) {
+      return withExecutionMarkLock(applyExecutionMark);
+    }
+
+    // 兼容旧 Jira Rule：没有 executionKey 时保持原行为。
+    return applyExecutionMark();
     
   } catch (error) {
     Logger.log(`markBotMessageExecuted 执行失败: ${error}`);
@@ -1000,6 +1548,11 @@ function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replaced
  * @returns {number|null} 行索引（从 1 开始）或 null
  */
 function findRowIndexByMessageId(data, headers, messageId) {
+  const targetMessageId = getRequestParameterValue(messageId);
+  if (!targetMessageId) {
+    return null;
+  }
+
   const idColIndex = headers.indexOf('ID');
   if (idColIndex === -1) {
     Logger.log('错误：未找到 ID 列');
@@ -1007,13 +1560,66 @@ function findRowIndexByMessageId(data, headers, messageId) {
   }
   
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idColIndex] && data[i][idColIndex].toString() === messageId.toString()) {
+    if (getRequestParameterValue(data[i][idColIndex]) === targetMessageId) {
       return i + 1; // 返回从 1 开始的索引
     }
   }
   
-  Logger.log(`未找到消息 ID: ${messageId}`);
+  Logger.log(`未找到消息 ID: ${targetMessageId}`);
   return null;
+}
+
+function getMessageIdAtRow(data, headers, rowIndex) {
+  const idColIndex = headers.indexOf('ID');
+  if (idColIndex === -1 || rowIndex <= 1 || rowIndex > data.length) {
+    return '';
+  }
+
+  const row = data[rowIndex - 1];
+  return row ? getRequestParameterValue(row[idColIndex]) : '';
+}
+
+function resolveExecutionMarkRow(data, headers, rowIndex, messageId) {
+  const requestedRowIndex = parseInt(rowIndex, 10) || 0;
+  const targetMessageId = getRequestParameterValue(messageId);
+  const hasUsableRowIndex = requestedRowIndex > 1 && requestedRowIndex <= data.length;
+
+  if (hasUsableRowIndex) {
+    const rowMessageId = getMessageIdAtRow(data, headers, requestedRowIndex);
+    if (!targetMessageId || rowMessageId === targetMessageId) {
+      return {
+        success: true,
+        rowIndex: requestedRowIndex,
+        rowData: parseRow(data[requestedRowIndex - 1], headers)
+      };
+    }
+
+    Logger.log(`rowIndex ${requestedRowIndex} 的消息 ID (${rowMessageId || 'empty'}) 与回调 ID (${targetMessageId}) 不一致，改按 messageId 查找`);
+  } else {
+    Logger.log(`rowIndex 无效 (${rowIndex})，尝试通过 messageId 查找: ${targetMessageId || '(empty)'}`);
+  }
+
+  const fallbackRowIndex = findRowIndexByMessageId(data, headers, targetMessageId);
+  if (fallbackRowIndex) {
+    Logger.log(`通过 messageId 找到行索引: ${fallbackRowIndex}`);
+    return {
+      success: true,
+      rowIndex: fallbackRowIndex,
+      rowData: parseRow(data[fallbackRowIndex - 1], headers)
+    };
+  }
+
+  if (!targetMessageId) {
+    return {
+      success: false,
+      error: `行索引 ${requestedRowIndex || '(empty)'} 无效，且未提供消息 ID`
+    };
+  }
+
+  return {
+    success: false,
+    error: `无法找到消息 ID: ${targetMessageId}`
+  };
 }
 
 /**
@@ -1027,7 +1633,7 @@ function findRowIndexByMessageId(data, headers, messageId) {
  * @param {object} rowData - 行数据对象
  * @returns {boolean} 是否应该标记为 Done
  */
-function shouldMarkAsDone(rowData) {
+function shouldMarkAsDone(rowData, currentTime) {
   const messageType = determineMessageType(rowData);
   
   // Timeline 消息：不标记为 Done（基于发布周期，每次 release 都会触发）
@@ -1042,12 +1648,11 @@ function shouldMarkAsDone(rowData) {
   
   // Periodic 消息：需要判断是否还有下一次执行
   if (messageType === 'Periodic') {
-    const now = new Date();
+    const now = currentTime || new Date();
     
-    // 检查是否有结束日期，且已经过了结束日期
+    // 结束日当天执行成功后即可收尾，避免第二天再保留 Active。
     if (rowData.End_Date) {
-      const endDate = new Date(rowData.End_Date);
-      if (now > endDate) {
+      if (isOnOrAfterScheduleEndDate(now, rowData.End_Date)) {
         return true;
       }
     }
@@ -1055,7 +1660,7 @@ function shouldMarkAsDone(rowData) {
     // 检查是否达到重复次数限制
     if (rowData.Repeat_Count) {
       const repeatCount = parseInt(rowData.Repeat_Count);
-      const execCount = parseInt(rowData.Exec_Count) || 0;
+      const execCount = (parseInt(rowData.Exec_Count) || 0) + 1;
       if (execCount >= repeatCount) {
         return true;
       }
@@ -1100,14 +1705,17 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     if (rowData.Status !== 'Active' || !isValidPushMethod) {
       continue;
     }
+
+    const dateReference = getDateReferenceForMatchMode(rowData, now, matchMode);
+    const matchDate = Utilities.formatDate(dateReference, Session.getScriptTimeZone(), 'yyyy-MM-dd');
     
-    // 过滤：今日已推送成功的消息
-    if (isPushedSuccessfullyToday(rowData, currentDate)) {
+    // 过滤：该执行日期已推送成功的消息
+    if (isPushedSuccessfullyToday(rowData, matchDate)) {
       continue;
     }
     
-    // 过滤：今日已推送失败的消息（避免阻塞队列）
-    if (isPushedFailedToday(rowData, currentDate)) {
+    // 过滤：该执行日期已推送失败的消息（避免阻塞队列）
+    if (isPushedFailedToday(rowData, matchDate)) {
       continue;
     }
     
@@ -1125,15 +1733,15 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       
       // 获取 Timeline 目标日期
       const targetDate = getTimelineTargetDate(rowData, releaseInfo);
-      dateMatches = targetDate && isSameDate(now, targetDate);
+      dateMatches = targetDate && isSameDate(dateReference, targetDate);
       
     } else if (messageType === 'Periodic') {
       // Periodic 消息：使用周期性日期判断逻辑
-      dateMatches = checkPeriodicSchedule(rowData, now);
+      dateMatches = checkPeriodicSchedule(rowData, dateReference);
       
     } else {
       // OneTime 消息：检查 Schedule_Date 是否匹配今天
-      dateMatches = rowData.Schedule_Date && rowData.Schedule_Date === currentDate;
+      dateMatches = rowData.Schedule_Date && rowData.Schedule_Date === matchDate;
     }
     
     // 日期不匹配，跳过
@@ -1243,8 +1851,15 @@ function matchesPast30MinutesTime(rowData, now, messageType) {
   }
   
   const scheduleMinutes = parseTimeToMinutes(rowData.Schedule_Time.toString());
+  if (scheduleMinutes === null) {
+    Logger.log(`跳过无效执行时间: ${rowData.ID || rowData.Topic || ''} - ${rowData.Schedule_Time}`);
+    return false;
+  }
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const diff = nowMinutes - scheduleMinutes;
+  let diff = nowMinutes - scheduleMinutes;
+  if (diff < 0) {
+    diff += 1440;
+  }
   
   // 在过去 30 分钟窗口内（但不包括当前分钟，因为已经在 CURRENT_MINUTE 模式处理过了）
   return diff > 1 && diff <= 30;
@@ -1275,7 +1890,7 @@ function matchesNoSpecifiedTime(rowData, now, messageType) {
 }
 
 /**
- * 判断消息今日是否已成功推送
+ * 判断消息在指定执行日期是否已成功推送
  */
 function isPushedSuccessfullyToday(rowData, currentDate) {
   const lastExec = rowData.Last_Exec;
@@ -1283,7 +1898,7 @@ function isPushedSuccessfullyToday(rowData, currentDate) {
   
   if (!lastExec) return false;
   
-  // 检查 Last_Exec 是否是今天
+  // 检查 Last_Exec 是否是指定执行日期
   const lastExecDate = lastExec.toString().substring(0, 10);
   if (lastExecDate !== currentDate) {
     return false;
@@ -1296,7 +1911,7 @@ function isPushedSuccessfullyToday(rowData, currentDate) {
 }
 
 /**
- * 判断消息今日是否推送失败
+ * 判断消息在指定执行日期是否推送失败
  */
 function isPushedFailedToday(rowData, currentDate) {
   const lastExec = rowData.Last_Exec;
@@ -1304,7 +1919,7 @@ function isPushedFailedToday(rowData, currentDate) {
   
   if (!lastExec) return false;
   
-  // 检查 Last_Exec 是否是今天
+  // 检查 Last_Exec 是否是指定执行日期
   const lastExecDate = lastExec.toString().substring(0, 10);
   if (lastExecDate !== currentDate) {
     return false;
@@ -1320,11 +1935,24 @@ function isPushedFailedToday(rowData, currentDate) {
  * 将时间字符串（HH:mm）转换为分钟数
  */
 function parseTimeToMinutes(timeStr) {
-  const parts = timeStr.split(':');
-  if (parts.length < 2) return 0;
+  if (!timeStr || !timeStr.toString().trim()) return null;
   
-  const hours = parseInt(parts[0]) || 0;
-  const minutes = parseInt(parts[1]) || 0;
+  const match = /^(\d{1,2}):(\d{1,2})(?::\d{1,2})?\s*(AM|PM)?$/i.exec(timeStr.toString().trim());
+  if (!match) return null;
+
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const period = match[3] ? match[3].toUpperCase() : '';
+
+  if (period) {
+    if (hours < 1 || hours > 12) return null;
+    if (period === 'PM' && hours !== 12) hours += 12;
+    if (period === 'AM' && hours === 12) hours = 0;
+  } else if (hours < 0 || hours > 23) {
+    return null;
+  }
+
+  if (minutes < 0 || minutes > 59) return null;
   
   return hours * 60 + minutes;
 }
@@ -1460,9 +2088,8 @@ function replaceAIBodyVariables(bodyStr, topic, content, teamId) {
   
   // JSON 转义函数：转义双引号、反斜杠、换行符等特殊字符
   function escapeJsonString(str) {
-    if (!str) return '';
-    return str.toString()
-      .replace(/"/g, '\\"')     // 双引号
+    if (str === null || str === undefined) return '';
+    return JSON.stringify(str.toString()).slice(1, -1);
   }
   
   let result = bodyStr.toString();
@@ -1581,6 +2208,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     }
     
     Logger.log(`返回待发送消息数据: ${messageId} - ${message.Topic}`);
+    const executionKey = buildMessageExecutionKey(message, messageId, now);
     
     // === 检查是否是 AI 消息或 JiraAutomation（有 AI_Endpoint）===
     if (message.Push_Method === 'AI' || (message.Push_Method === 'JiraAutomation' && message.AI_Endpoint)) {
@@ -1600,7 +2228,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       
       // 立即标记为成功（避免超时重复），传递替换后的内容用于日志记录
       try {
-        markBotMessageExecuted(messageId, message.rowIndex, true, '', message.Topic, message.Content);
+        markBotMessageExecuted(messageId, message.rowIndex, true, '', message.Topic, message.Content, executionKey);
         Logger.log(`AI 消息已标记为成功: ${messageId}`);
       } catch (markError) {
         Logger.log(`标记 AI 消息失败: ${markError}`);
@@ -1618,6 +2246,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         aiHeaders: headersObj,
         aiBody: bodyStr,
         rowIndex: message.rowIndex,
+        executionKey: executionKey,
         timestamp: new Date().toISOString()
       };
     }
@@ -1637,6 +2266,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       // Email 消息字段
       glipEmailAddress: message.glipEmailAddress || '',
       rowIndex: message.rowIndex,
+      executionKey: executionKey,
       timestamp: new Date().toISOString()
     };
     
@@ -1765,85 +2395,303 @@ function replaceProjectVariablesInText(text, projectInfo) {
  * @returns {object} 解析后的对象
  */
 function parseJiraJson(jsonStr) {
-  if (!jsonStr || jsonStr.trim() === '') {
+  try {
+    return parseJiraJsonStrict(jsonStr);
+  } catch (e) {
+    Logger.log(`Groovy Map 解析失败: ${getSafeJiraParseErrorMessage(e)}`);
+    Logger.log(`原始字符串: ${String(jsonStr || '').trim()}`);
+    return {};
+  }
+}
+
+function parseJiraJsonStrict(jsonStr) {
+  if (jsonStr && typeof jsonStr === 'object') {
+    return jsonStr;
+  }
+
+  if (isMissingRequestValue(jsonStr)) {
     return {};
   }
   
-  const str = jsonStr.trim();
+  const str = String(jsonStr).trim();
+  assertJiraReleaseInfoStringWithinBounds(str);
+  let jsonParseError = null;
   
   // 尝试 1: 标准 JSON 解析
   try {
     return JSON.parse(str);
   } catch (e) {
+    jsonParseError = e;
     Logger.log(`标准 JSON 解析失败，尝试 Groovy Map 格式: ${e.toString()}`);
   }
   
   // 尝试 2: 处理 Groovy Map 格式 {key=value, key2=value2}
   try {
-    // 移除外层的大括号
-    let content = str;
-    if (content.startsWith('{') && content.endsWith('}')) {
-      content = content.substring(1, content.length - 1);
-    }
-    
-    // 如果是空对象
-    if (content.trim() === '') {
-      return {};
-    }
-    
-    const result = {};
-    
-    // 分割键值对（处理嵌套对象的情况）
-    const pairs = splitGroovyMapPairs(content);
-    
-    for (const pair of pairs) {
-      const trimmedPair = pair.trim();
-      if (!trimmedPair) continue;
-      
-      // 查找第一个 = 号的位置
-      const equalIndex = trimmedPair.indexOf('=');
-      if (equalIndex === -1) continue;
-      
-      const key = trimmedPair.substring(0, equalIndex).trim();
-      let value = trimmedPair.substring(equalIndex + 1).trim();
-      
-      // 处理嵌套对象 {key=value}
-      if (value.startsWith('{') && value.endsWith('}')) {
-        result[key] = parseJiraJson(value); // 递归解析
-      } 
-      // 处理数组 [item1, item2]
-      else if (value.startsWith('[') && value.endsWith(']')) {
-        const arrayContent = value.substring(1, value.length - 1);
-        result[key] = arrayContent.split(',').map(item => item.trim());
-      }
-      // 处理 null
-      else if (value === 'null') {
-        result[key] = null;
-      }
-      // 处理布尔值
-      else if (value === 'true') {
-        result[key] = true;
-      } else if (value === 'false') {
-        result[key] = false;
-      }
-      // 处理数字
-      else if (/^-?\d+\.?\d*$/.test(value)) {
-        result[key] = parseFloat(value);
-      }
-      // 其他情况作为字符串
-      else {
-        result[key] = value;
-      }
-    }
+    const result = parseGroovyMapObject(str);
     
     Logger.log(`Groovy Map 解析成功: ${JSON.stringify(result)}`);
     return result;
     
   } catch (e) {
-    Logger.log(`Groovy Map 解析失败: ${e.toString()}`);
-    Logger.log(`原始字符串: ${str}`);
+    const error = new Error(getSafeGroovyParseMessage(e));
+    error.diagnosticCode = e.diagnosticCode || 'PARSE_RELEASE_INFO_FAILED';
+    error.jsonParseError = jsonParseError ? jsonParseError.toString() : '';
+    error.groovyParseError = getSafeGroovyParseMessage(e);
+    throw error;
+  }
+}
+
+function createJiraReleaseInfoParseError(message, diagnosticCode) {
+  const error = new Error(message);
+  error.diagnosticCode = diagnosticCode;
+  return error;
+}
+
+function assertJiraReleaseInfoStringWithinBounds(value) {
+  if (value.length > JIRA_RELEASE_INFO_MAX_CHARS) {
+    throw createJiraReleaseInfoParseError(
+      `releaseInfo 超过 ${JIRA_RELEASE_INFO_MAX_CHARS} 字符限制`,
+      'RELEASE_INFO_TOO_LARGE'
+    );
+  }
+}
+
+function assertGroovyNestingDepth(depth) {
+  if (depth > JIRA_GROOVY_MAX_NESTING_DEPTH) {
+    throw createJiraReleaseInfoParseError(
+      `Groovy Map 嵌套层级超过 ${JIRA_GROOVY_MAX_NESTING_DEPTH} 层限制`,
+      'RELEASE_INFO_TOO_DEEP'
+    );
+  }
+}
+
+function getSafeGroovyParseMessage(error) {
+  const rawMessage = error && error.message ? error.message : String(error || '');
+
+  if (rawMessage.indexOf('无法解析 Groovy Map 键值对') !== -1) {
+    return 'Groovy Map 中存在无法识别的键值对';
+  }
+
+  return rawMessage.substring(0, 180);
+}
+
+function getSafeJiraParseErrorMessage(error) {
+  if (!error) {
+    return '未知解析错误';
+  }
+
+  if (error.groovyParseError) {
+    return error.groovyParseError;
+  }
+
+  return (error.message || String(error)).substring(0, 180);
+}
+
+function parseGroovyMapObject(mapText, depth) {
+  const currentDepth = depth || 0;
+  assertGroovyNestingDepth(currentDepth);
+
+  let content = mapText.trim();
+  if (content.startsWith('{') && content.endsWith('}')) {
+    content = content.substring(1, content.length - 1);
+  }
+
+  if (content.trim() === '') {
     return {};
   }
+
+  const result = {};
+  const pairs = splitGroovyMapPairs(content, currentDepth);
+  let parsedPairCount = 0;
+
+  for (const pair of pairs) {
+    const trimmedPair = pair.trim();
+    if (!trimmedPair) continue;
+
+    const equalIndex = findGroovyMapPairSeparator(trimmedPair, currentDepth);
+    if (equalIndex === -1) {
+      throw new Error(`无法解析 Groovy Map 键值对: ${trimmedPair.substring(0, 120)}`);
+    }
+
+    const key = parseGroovyMapKey(trimmedPair.substring(0, equalIndex));
+    const value = trimmedPair.substring(equalIndex + 1);
+    result[key] = parseGroovyMapValue(value, currentDepth + 1);
+    parsedPairCount++;
+  }
+
+  if (parsedPairCount === 0) {
+    throw new Error('Groovy Map 中没有可解析的键值对');
+  }
+
+  return result;
+}
+
+function parseGroovyMapKey(keyText) {
+  const key = keyText.trim();
+  if (isQuotedGroovyString(key)) {
+    return parseGroovyQuotedString(key);
+  }
+  return key;
+}
+
+function parseGroovyMapValue(valueText, depth) {
+  const currentDepth = depth || 0;
+  assertGroovyNestingDepth(currentDepth);
+
+  const value = valueText.trim();
+
+  if (value === '') {
+    return '';
+  }
+
+  if (value.startsWith('{') && value.endsWith('}')) {
+    return parseGroovyMapObject(value, currentDepth);
+  }
+
+  if (value.startsWith('[') && value.endsWith(']')) {
+    return parseGroovyArray(value, currentDepth);
+  }
+
+  if (isQuotedGroovyString(value)) {
+    return parseGroovyQuotedString(value);
+  }
+
+  if (value === 'null') {
+    return null;
+  }
+
+  if (value === 'true') {
+    return true;
+  }
+
+  if (value === 'false') {
+    return false;
+  }
+
+  if (/^-?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) {
+    return parseFloat(value);
+  }
+
+  return value;
+}
+
+function parseGroovyArray(arrayText, depth) {
+  const currentDepth = depth || 0;
+  assertGroovyNestingDepth(currentDepth);
+
+  const content = arrayText.substring(1, arrayText.length - 1).trim();
+  if (!content) {
+    return [];
+  }
+
+  return splitGroovyMapPairs(content, currentDepth).map(function(item) {
+    return parseGroovyMapValue(item, currentDepth + 1);
+  });
+}
+
+function isQuotedGroovyString(value) {
+  if (value.length < 2) {
+    return false;
+  }
+
+  const first = value[0];
+  const last = value[value.length - 1];
+  return (first === '"' || first === "'") && first === last;
+}
+
+function parseGroovyQuotedString(value) {
+  const quote = value[0];
+  const inner = value.substring(1, value.length - 1);
+  let result = '';
+  let escaped = false;
+
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i];
+
+    if (escaped) {
+      if (char === 'n') {
+        result += '\n';
+      } else if (char === 'r') {
+        result += '\r';
+      } else if (char === 't') {
+        result += '\t';
+      } else if (char === 'b') {
+        result += '\b';
+      } else if (char === 'f') {
+        result += '\f';
+      } else if (char === 'u') {
+        const hex = inner.substring(i + 1, i + 5);
+        if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+          result += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else {
+          result += char;
+        }
+      } else if (char === quote || char === '\\') {
+        result += char;
+      } else {
+        result += char;
+      }
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else {
+      result += char;
+    }
+  }
+
+  if (escaped) {
+    result += '\\';
+  }
+
+  return result;
+}
+
+function findGroovyMapPairSeparator(pairText, depth) {
+  const baseDepth = depth || 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let quoteChar = '';
+  let escaped = false;
+
+  for (let i = 0; i < pairText.length; i++) {
+    const char = pairText[i];
+
+    if (quoteChar) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quoteChar) {
+        quoteChar = '';
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quoteChar = char;
+    } else if (char === '{') {
+      braceDepth++;
+      assertGroovyNestingDepth(baseDepth + braceDepth + bracketDepth);
+    } else if (char === '}') {
+      if (braceDepth === 0) {
+        throw new Error('Groovy Map 键值对包含多余的 }');
+      }
+      braceDepth--;
+    } else if (char === '[') {
+      bracketDepth++;
+      assertGroovyNestingDepth(baseDepth + braceDepth + bracketDepth);
+    } else if (char === ']') {
+      if (bracketDepth === 0) {
+        throw new Error('Groovy Map 键值对包含多余的 ]');
+      }
+      bracketDepth--;
+    } else if (char === '=' && braceDepth === 0 && bracketDepth === 0) {
+      return i;
+    }
+  }
+
+  return -1;
 }
 
 function getTimelineProjectConfigByParamKey(paramKey) {
@@ -1859,21 +2707,101 @@ function getTimelineProjectCacheKey(paramKey) {
   return TIMELINE_CACHE_KEY_PREFIX + paramKey;
 }
 
+function isValidProjectReleaseInfo(projectInfo) {
+  if (!projectInfo || typeof projectInfo !== 'object' || Array.isArray(projectInfo)) {
+    return false;
+  }
+
+  if (!projectInfo.releaseInfo || typeof projectInfo.releaseInfo !== 'object' || Array.isArray(projectInfo.releaseInfo)) {
+    return false;
+  }
+
+  return Object.keys(projectInfo.releaseInfo).length > 0;
+}
+
 function parseSingleProjectReleaseInfo(rawValue) {
-  if (!rawValue) {
-    return null;
+  const result = parseSingleProjectReleaseInfoForCache(rawValue);
+  return result.success ? result.projectInfo : null;
+}
+
+function parseSingleProjectReleaseInfoForCache(rawValue) {
+  if (isMissingRequestValue(rawValue)) {
+    return {
+      success: false,
+      errorCode: 'MISSING_RELEASE_INFO',
+      parseError: 'releaseInfo 参数为空'
+    };
   }
 
   try {
-    const parsed = parseJiraJson(rawValue);
-    if (parsed && Object.keys(parsed).length > 0) {
-      return parsed;
+    const parsed = parseJiraJsonStrict(rawValue);
+    if (isValidProjectReleaseInfo(parsed)) {
+      return {
+        success: true,
+        projectInfo: parsed
+      };
     }
+
+    const parsedKeys = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? Object.keys(parsed).slice(0, 8)
+      : [];
+
+    return {
+      success: false,
+      errorCode: 'INVALID_RELEASE_INFO_SCHEMA',
+      parseError: parsedKeys.length
+        ? `releaseInfo 必须是非空对象；当前顶层字段: ${parsedKeys.join(', ')}`
+        : 'releaseInfo 必须是非空对象'
+    };
   } catch (error) {
     Logger.log(`[cacheReleaseInfo] 解析单项目 releaseInfo 失败: ${error.toString()}`);
+    return {
+      success: false,
+      errorCode: error.diagnosticCode || 'PARSE_RELEASE_INFO_FAILED',
+      parseError: getSafeJiraParseErrorMessage(error)
+    };
+  }
+}
+
+function getRequestParameterValue(value) {
+  if (isMissingRequestValue(value)) {
+    return '';
   }
 
-  return null;
+  // Apps Script 已经把 e.parameter 解码过；再次 decode 会在 "100% done"
+  // 这类原文百分号上抛错，也可能误改用户原文里的 "%2F"。
+  return value.toString();
+}
+
+function isMissingRequestValue(value) {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+function getUtf8ByteLength(value) {
+  const text = String(value || '');
+  let bytes = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const nextCode = text.charCodeAt(i + 1);
+      if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+
+  return bytes;
 }
 
 function readLegacyReleaseInfoCache() {
@@ -1937,6 +2865,163 @@ function readReleaseInfoFromCache() {
   return readLegacyReleaseInfoCache();
 }
 
+function readTimelineSyncAttempt(props, paramKey, nowMs) {
+  const raw = props.getProperty(getTimelineSyncAttemptKey(paramKey));
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const timestamp = Number(parsed.timestamp || Date.parse(parsed.attemptedAt || ''));
+    const hasTimestamp = !isNaN(timestamp) && timestamp > 0;
+    const attempt = {
+      success: parsed.success === true,
+      attemptedAt: parsed.attemptedAt || (hasTimestamp ? new Date(timestamp).toISOString() : ''),
+      ageMs: hasTimestamp ? Math.max(0, nowMs - timestamp) : null
+    };
+
+    const errorCode = truncateTimelineSyncDiagnostic(parsed.errorCode, 80);
+    const error = truncateTimelineSyncDiagnostic(parsed.error, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+    const parseError = truncateTimelineSyncDiagnostic(parsed.parseError, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+
+    if (errorCode) {
+      attempt.errorCode = errorCode;
+    }
+    if (error) {
+      attempt.error = error;
+    }
+    if (parseError) {
+      attempt.parseError = parseError;
+    }
+    if (typeof parsed.payloadBytes === 'number' && isFinite(parsed.payloadBytes)) {
+      attempt.payloadBytes = parsed.payloadBytes;
+    }
+    if (typeof parsed.maxBytes === 'number' && isFinite(parsed.maxBytes)) {
+      attempt.maxBytes = parsed.maxBytes;
+    }
+    if (typeof parsed.milestoneCount === 'number' && isFinite(parsed.milestoneCount)) {
+      attempt.milestoneCount = parsed.milestoneCount;
+    }
+    if (Array.isArray(parsed.milestoneKeys)) {
+      attempt.milestoneKeys = parsed.milestoneKeys
+        .map(function(key) { return getRequestParameterValue(key).trim(); })
+        .filter(function(key) { return key; })
+        .slice(0, 20);
+    }
+
+    return attempt;
+  } catch (error) {
+    Logger.log(`[getTimelineCacheStatus] 读取项目 ${paramKey} 最近同步尝试失败: ${error.toString()}`);
+    return null;
+  }
+}
+
+function attachTimelineSyncAttempt(status, lastAttempt) {
+  if (lastAttempt) {
+    status.lastAttempt = lastAttempt;
+  }
+  return status;
+}
+
+function getTimelineSyncAttemptError(lastAttempt) {
+  if (!lastAttempt || lastAttempt.success !== false) {
+    return '';
+  }
+
+  return lastAttempt.parseError || lastAttempt.error || lastAttempt.errorCode || 'Timeline Sync 最近一次写入失败';
+}
+
+function getTimelineCacheStatus() {
+  const props = PropertiesService.getScriptProperties();
+  const nowMs = new Date().getTime();
+  const generatedAt = new Date(nowMs).toISOString();
+
+  const projects = TIMELINE_PROJECT_PARAM_MAP.map(function(config) {
+    const cacheKey = getTimelineProjectCacheKey(config.paramKey);
+    const lastAttempt = readTimelineSyncAttempt(props, config.paramKey, nowMs);
+    const baseStatus = {
+      project: config.project,
+      paramKey: config.paramKey,
+      cached: false,
+      valid: false,
+      expired: false,
+      status: 'missing'
+    };
+
+    try {
+      const raw = props.getProperty(cacheKey);
+      if (!raw) {
+        const lastAttemptError = getTimelineSyncAttemptError(lastAttempt);
+        if (lastAttemptError) {
+          return attachTimelineSyncAttempt(Object.assign({}, baseStatus, {
+            status: 'error',
+            error: lastAttemptError
+          }), lastAttempt);
+        }
+        return attachTimelineSyncAttempt(baseStatus, lastAttempt);
+      }
+
+      const cachedData = JSON.parse(raw);
+      const timestamp = Number(cachedData.timestamp || Date.parse(cachedData.updatedAt || ''));
+      const hasTimestamp = !isNaN(timestamp) && timestamp > 0;
+      const ageMs = hasTimestamp ? Math.max(0, nowMs - timestamp) : null;
+      const expired = ageMs === null || ageMs > TIMELINE_CACHE_MAX_AGE_MS;
+      const valid = isValidProjectReleaseInfo(cachedData.releaseInfo);
+      const milestoneKeys = valid ? Object.keys(cachedData.releaseInfo.releaseInfo) : [];
+      const status = !valid ? 'invalid' : expired ? 'expired' : 'ready';
+      const lastAttemptError = status === 'ready' ? '' : getTimelineSyncAttemptError(lastAttempt);
+
+      return attachTimelineSyncAttempt({
+        project: config.project,
+        paramKey: config.paramKey,
+        cached: true,
+        valid: valid,
+        expired: expired,
+        status: lastAttemptError ? 'error' : status,
+        error: lastAttemptError || '',
+        updatedAt: cachedData.updatedAt || (hasTimestamp ? new Date(timestamp).toISOString() : ''),
+        ageMs: ageMs,
+        expiresAt: hasTimestamp ? new Date(timestamp + TIMELINE_CACHE_MAX_AGE_MS).toISOString() : '',
+        milestoneKeys: milestoneKeys
+      }, lastAttempt);
+    } catch (error) {
+      Logger.log(`[getTimelineCacheStatus] 读取项目 ${config.project} 缓存失败: ${error.toString()}`);
+      return attachTimelineSyncAttempt(Object.assign({}, baseStatus, {
+        cached: true,
+        status: 'error',
+        error: error.toString()
+      }), lastAttempt);
+    }
+  });
+
+  const readyProjects = projects.filter(function(item) {
+    return item.status === 'ready';
+  }).length;
+  const missingProjects = projects.filter(function(item) {
+    return item.status === 'missing';
+  }).length;
+  const staleProjects = projects.filter(function(item) {
+    return item.status === 'expired' || item.status === 'invalid' || item.status === 'error';
+  }).length;
+
+  return {
+    success: true,
+    generatedAt: generatedAt,
+    maxAgeMs: TIMELINE_CACHE_MAX_AGE_MS,
+    totalProjects: projects.length,
+    readyProjects: readyProjects,
+    missingProjects: missingProjects,
+    staleProjects: staleProjects,
+    allProjectsReady: readyProjects === projects.length,
+    projects: projects
+  };
+}
+
 function extractReleaseInfoFromParameters(parameters) {
   const releaseInfoParam = parameters.releaseInfo || '';
   
@@ -1980,25 +3065,49 @@ function extractReleaseInfoFromParameters(parameters) {
  * @param {string} content - Map 内容（不含外层大括号）
  * @returns {array} 键值对数组
  */
-function splitGroovyMapPairs(content) {
+function splitGroovyMapPairs(content, depth) {
+  const baseDepth = depth || 0;
   const pairs = [];
   let currentPair = '';
   let braceDepth = 0;
   let bracketDepth = 0;
+  let quoteChar = '';
+  let escaped = false;
   
   for (let i = 0; i < content.length; i++) {
     const char = content[i];
-    
-    if (char === '{') {
+
+    if (quoteChar) {
+      currentPair += char;
+
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quoteChar) {
+        quoteChar = '';
+      }
+    } else if (char === '"' || char === "'") {
+      quoteChar = char;
+      currentPair += char;
+    } else if (char === '{') {
       braceDepth++;
+      assertGroovyNestingDepth(baseDepth + braceDepth + bracketDepth);
       currentPair += char;
     } else if (char === '}') {
+      if (braceDepth === 0) {
+        throw new Error('Groovy Map 包含多余的 }');
+      }
       braceDepth--;
       currentPair += char;
     } else if (char === '[') {
       bracketDepth++;
+      assertGroovyNestingDepth(baseDepth + braceDepth + bracketDepth);
       currentPair += char;
     } else if (char === ']') {
+      if (bracketDepth === 0) {
+        throw new Error('Groovy Map 包含多余的 ]');
+      }
       bracketDepth--;
       currentPair += char;
     } else if (char === ',' && braceDepth === 0 && bracketDepth === 0) {
@@ -2013,6 +3122,14 @@ function splitGroovyMapPairs(content) {
   // 添加最后一个键值对
   if (currentPair.trim()) {
     pairs.push(currentPair);
+  }
+
+  if (quoteChar) {
+    throw new Error('Groovy Map 包含未闭合的字符串');
+  }
+
+  if (braceDepth !== 0 || bracketDepth !== 0) {
+    throw new Error('Groovy Map 包含未闭合的嵌套结构');
   }
   
   return pairs;

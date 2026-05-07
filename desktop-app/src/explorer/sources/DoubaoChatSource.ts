@@ -10,7 +10,11 @@ import type { BridgeAuthStatus } from '../../types.js';
 import { RawMessageStore } from '../cache/RawMessageStore.js';
 import { CursorStore } from '../CursorStore.js';
 import { ExplorerExtractor } from '../extractor.js';
-import type { ExplorationCursor, RawMessageRecord } from '../types.js';
+import type {
+  ExplorationCursor,
+  ExplorerTransportStatus,
+  RawMessageRecord,
+} from '../types.js';
 import { filterDoubaoSyncMessages } from './doubaoSyncFilter.js';
 
 const DOUBAO_BATCH_SIZE = 3;
@@ -20,6 +24,7 @@ export interface DoubaoConversationCollectorClient {
   openLogin(): Promise<string>;
   probeAuthStatus(): Promise<'connected' | 'needs_login'>;
   collectConversationSnapshots(): Promise<BrowserConversationSnapshot[]>;
+  getClientStatus?: () => ExplorerTransportStatus | undefined;
 }
 
 export interface DoubaoSourceOptions {
@@ -344,6 +349,10 @@ export class DoubaoChatSource {
     }
 
     return { insertedCount, implemented: true };
+  }
+
+  getTransportStatus(): ExplorerTransportStatus | undefined {
+    return this.client.getClientStatus?.();
   }
 
   private shouldCollectSnapshot(

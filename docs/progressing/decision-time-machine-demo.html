@@ -1,0 +1,1232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Decision Time Machine Demo</title>
+  <!--
+    Assumptions:
+    - This is a standalone product prototype for deciding whether to build the feature.
+    - Data is synthetic but shaped from real Personal AI memory signals: AI tool migration, meetings, Jira, Codex/Factory.ai.
+    - The design uses a dense workbench layout, not a landing page, because the target user is reviewing/operating memory.
+    Reasoning:
+    - The core interaction must make "then vs now" obvious.
+    - Evidence provenance and privacy controls should be visible in the first viewport.
+    - The demo must open directly from file:// with no build step.
+  -->
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --panel: #fffcf6;
+      --ink: #211f1b;
+      --muted: #736f66;
+      --line: #d8d0c4;
+      --line-strong: #b9ad9c;
+      --rust: #a94f2b;
+      --teal: #2f766d;
+      --gold: #9d7b21;
+      --red: #9e3030;
+      --green: #507b3b;
+      --blue: #415c85;
+      --shadow: 0 14px 40px rgba(38, 31, 21, 0.08);
+      --radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(169, 79, 43, 0.07), transparent 36%),
+        linear-gradient(180deg, rgba(47, 118, 109, 0.08), transparent 42%),
+        var(--bg);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: 58px 1fr;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 280px 1fr auto;
+      align-items: center;
+      gap: 18px;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 252, 246, 0.84);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--ink);
+      display: grid;
+      place-items: center;
+      font-size: 15px;
+      font-weight: 700;
+      background: #efe5d8;
+    }
+
+    .brand-title {
+      font-weight: 720;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .search {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 246, 0.72);
+      padding: 0 12px;
+      border-radius: var(--radius);
+      color: var(--muted);
+      min-width: 260px;
+    }
+
+    .search input {
+      border: 0;
+      outline: 0;
+      background: transparent;
+      width: 100%;
+      color: var(--ink);
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .icon-btn,
+    .primary-btn,
+    .ghost-btn {
+      height: 34px;
+      border-radius: 7px;
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: 120ms ease;
+    }
+
+    .icon-btn {
+      width: 36px;
+      font-weight: 700;
+    }
+
+    .primary-btn {
+      padding: 0 12px;
+      background: var(--ink);
+      color: #fffaf1;
+      border-color: var(--ink);
+    }
+
+    .ghost-btn {
+      padding: 0 11px;
+    }
+
+    .icon-btn:hover,
+    .primary-btn:hover,
+    .ghost-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 300px minmax(500px, 1fr) 380px;
+    }
+
+    .sidebar,
+    .detail,
+    .inspector {
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+      background: rgba(255, 252, 246, 0.66);
+    }
+
+    .detail {
+      padding: 20px 22px 28px;
+    }
+
+    .inspector {
+      border-left: 1px solid var(--line);
+      padding: 18px 16px 28px;
+      background: rgba(255, 252, 246, 0.72);
+    }
+
+    .section-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 8px 0 10px;
+    }
+
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-bottom: 18px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: transparent;
+      border-radius: 999px;
+      padding: 6px 9px;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .chip.active {
+      color: var(--ink);
+      border-color: var(--rust);
+      background: rgba(169, 79, 43, 0.1);
+    }
+
+    .decision-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .decision-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 246, 0.78);
+      border-radius: var(--radius);
+      padding: 12px;
+      cursor: pointer;
+      display: grid;
+      gap: 8px;
+    }
+
+    .decision-item.active {
+      border-color: var(--rust);
+      background: #fff8ef;
+      box-shadow: 0 0 0 2px rgba(169, 79, 43, 0.08);
+    }
+
+    .item-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .item-title {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .status {
+      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 7px;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+
+    .status.revisit {
+      color: var(--red);
+      border-color: rgba(158, 48, 48, 0.5);
+      background: rgba(158, 48, 48, 0.08);
+    }
+
+    .status.active {
+      color: var(--green);
+      border-color: rgba(80, 123, 59, 0.5);
+      background: rgba(80, 123, 59, 0.08);
+    }
+
+    .item-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .confidence {
+      height: 5px;
+      background: #e6ded2;
+      overflow: hidden;
+      border-radius: 999px;
+    }
+
+    .confidence span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--teal), var(--rust));
+    }
+
+    .hero-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 230px;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .headline {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 16px;
+    }
+
+    h1 {
+      font-size: clamp(24px, 3vw, 38px);
+      line-height: 1.05;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 600;
+    }
+
+    .statement {
+      font-size: 15px;
+      line-height: 1.65;
+      color: #403b34;
+      max-width: 780px;
+    }
+
+    .meta-grid {
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 246, 0.72);
+      border-radius: var(--radius);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      overflow: hidden;
+    }
+
+    .metric {
+      padding: 12px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .metric:nth-child(2n) {
+      border-right: 0;
+    }
+
+    .metric:nth-last-child(-n + 2) {
+      border-bottom: 0;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .split {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: minmax(0, 0.96fr) minmax(300px, 0.74fr);
+      gap: 18px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 246, 0.72);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .panel-title {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: 720;
+      font-size: 13px;
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 84px minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .event-time {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      padding-top: 2px;
+    }
+
+    .event-main {
+      border-left: 2px solid var(--line-strong);
+      padding-left: 12px;
+    }
+
+    .event-main.changed {
+      border-left-color: var(--rust);
+    }
+
+    .event-main.new {
+      border-left-color: var(--teal);
+    }
+
+    .event-main b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .event-main p {
+      margin: 0;
+      color: #514b42;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .graph {
+      min-height: 270px;
+      position: relative;
+      background:
+        linear-gradient(90deg, rgba(33, 31, 27, 0.045) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(33, 31, 27, 0.045) 1px, transparent 1px);
+      background-size: 28px 28px;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .node {
+      position: absolute;
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      box-shadow: 0 8px 22px rgba(33, 31, 27, 0.08);
+      max-width: 170px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .node.primary {
+      background: var(--ink);
+      color: #fffaf1;
+      border-color: var(--ink);
+    }
+
+    .node.warn {
+      border-color: rgba(157, 123, 33, 0.65);
+      background: #fff4cf;
+    }
+
+    .node.change {
+      border-color: rgba(169, 79, 43, 0.65);
+      background: #ffe9dc;
+    }
+
+    .line {
+      position: absolute;
+      height: 2px;
+      background: var(--line-strong);
+      transform-origin: left center;
+      opacity: 0.72;
+    }
+
+    .lens-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .lens-tab {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .lens-tab.active {
+      background: var(--ink);
+      color: #fffaf1;
+      border-color: var(--ink);
+    }
+
+    .lens-copy {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 13px;
+      background: var(--panel);
+      margin-bottom: 14px;
+    }
+
+    .lens-copy h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      line-height: 1.2;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 600;
+    }
+
+    .lens-copy p {
+      margin: 0;
+      color: #504a41;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .delta-list,
+    .evidence-list,
+    .privacy-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .delta,
+    .evidence,
+    .privacy-row {
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 246, 0.76);
+      border-radius: 7px;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .delta b,
+    .evidence b {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .delta.changed b {
+      color: var(--rust);
+    }
+
+    .delta.valid b {
+      color: var(--green);
+    }
+
+    .delta.risk b {
+      color: var(--gold);
+    }
+
+    .evidence {
+      cursor: pointer;
+    }
+
+    .evidence.active {
+      border-color: var(--teal);
+      background: rgba(47, 118, 109, 0.08);
+    }
+
+    .source-line {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 7px;
+    }
+
+    .source-pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .privacy-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .privacy-row label {
+      display: grid;
+      gap: 3px;
+    }
+
+    .privacy-row span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toggle {
+      width: 44px;
+      height: 24px;
+      appearance: none;
+      background: #ddd4c8;
+      border-radius: 999px;
+      position: relative;
+      outline: none;
+      cursor: pointer;
+      transition: 120ms ease;
+      flex: 0 0 auto;
+    }
+
+    .toggle::after {
+      content: "";
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fffaf1;
+      position: absolute;
+      left: 3px;
+      top: 3px;
+      box-shadow: 0 2px 8px rgba(33, 31, 27, 0.18);
+      transition: 120ms ease;
+    }
+
+    .toggle:checked {
+      background: var(--teal);
+    }
+
+    .toggle:checked::after {
+      left: 23px;
+    }
+
+    .pack {
+      margin-top: 12px;
+      border: 1px solid var(--line-strong);
+      background: #211f1b;
+      color: #fff7ea;
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .pack-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 250, 241, 0.14);
+      font-size: 12px;
+    }
+
+    .pack pre {
+      margin: 0;
+      padding: 13px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #f3eadb;
+      min-height: 220px;
+    }
+
+    .mini-status {
+      color: #cbbca8;
+      font-size: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(18px);
+      background: var(--ink);
+      color: #fffaf1;
+      border-radius: 7px;
+      padding: 10px 13px;
+      opacity: 0;
+      pointer-events: none;
+      transition: 160ms ease;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1120px) {
+      .workspace {
+        grid-template-columns: 270px 1fr;
+      }
+
+      .inspector {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .topbar {
+        grid-template-columns: 1fr auto;
+      }
+
+      .search {
+        display: none;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar,
+      .inspector {
+        border: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero-row,
+      .split,
+      .inspector {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">DT</div>
+        <div>
+          <div class="brand-title">Decision Time Machine</div>
+        </div>
+      </div>
+      <div class="search" role="search">
+        <span aria-hidden="true">/</span>
+        <input id="searchInput" type="search" placeholder="Search decisions, people, projects, tools">
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" title="Refresh">R</button>
+        <button class="icon-btn" title="Settings">S</button>
+        <button class="primary-btn" id="replayTop">Generate Replay Pack</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="sidebar">
+        <div class="section-label">Filters</div>
+        <div class="filter-row">
+          <button class="chip active" data-filter="all">All</button>
+          <button class="chip" data-filter="revisit">Needs review</button>
+          <button class="chip" data-filter="active">Active</button>
+          <button class="chip" data-filter="ai">AI tools</button>
+          <button class="chip" data-filter="meeting">Meetings</button>
+        </div>
+
+        <div class="section-label">Decision Episodes</div>
+        <div class="decision-list" id="decisionList"></div>
+      </aside>
+
+      <section class="detail">
+        <div class="hero-row">
+          <div class="headline">
+            <h1 id="decisionTitle"></h1>
+            <div class="statement" id="decisionStatement"></div>
+          </div>
+          <div class="meta-grid" aria-label="decision metrics">
+            <div class="metric">
+              <strong id="metricEvidence">0</strong>
+              <span>evidence refs</span>
+            </div>
+            <div class="metric">
+              <strong id="metricChanged">0</strong>
+              <span>changed signals</span>
+            </div>
+            <div class="metric">
+              <strong id="metricConfidence">0%</strong>
+              <span>confidence</span>
+            </div>
+            <div class="metric">
+              <strong id="metricAge">0d</strong>
+              <span>since decision</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="split">
+          <div class="panel">
+            <div class="panel-title">
+              <span>Decision Timeline</span>
+              <button class="ghost-btn" id="markReviewed">Mark reviewed</button>
+            </div>
+            <div class="panel-body">
+              <div class="timeline" id="timeline"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">
+              <span>Evidence Map</span>
+              <span class="mini-status" id="graphMode">Then lens</span>
+            </div>
+            <div class="panel-body">
+              <div class="graph" id="graph"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector">
+        <div>
+          <div class="section-label">As-of Lens</div>
+          <div class="lens-tabs">
+            <button class="lens-tab active" data-lens="then">Then</button>
+            <button class="lens-tab" data-lens="now">Now</button>
+          </div>
+          <div class="lens-copy">
+            <h2 id="lensTitle"></h2>
+            <p id="lensBody"></p>
+          </div>
+
+          <div class="section-label">Decision Delta</div>
+          <div class="delta-list" id="deltaList"></div>
+
+          <div class="section-label">Evidence</div>
+          <div class="evidence-list" id="evidenceList"></div>
+        </div>
+
+        <div>
+          <div class="section-label">Replay Privacy</div>
+          <div class="privacy-list">
+            <div class="privacy-row">
+              <label>
+                Work group evidence
+                <span>Messages, meetings, Jira snippets</span>
+              </label>
+              <input class="toggle privacy-toggle" type="checkbox" data-source="work" checked>
+            </div>
+            <div class="privacy-row">
+              <label>
+                One-on-one context
+                <span>Private chats require explicit consent</span>
+              </label>
+              <input class="toggle privacy-toggle" type="checkbox" data-source="private">
+            </div>
+            <div class="privacy-row">
+              <label>
+                AI conversation output
+                <span>Accepted model suggestions and plans</span>
+              </label>
+              <input class="toggle privacy-toggle" type="checkbox" data-source="ai" checked>
+            </div>
+          </div>
+
+          <div class="pack">
+            <div class="pack-head">
+              <span>Replay Pack Preview</span>
+              <button class="ghost-btn" id="copyPack">Copy</button>
+            </div>
+            <pre id="packPreview"></pre>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div class="toast" id="toast">Replay pack generated</div>
+
+  <script>
+    const decisions = [
+      {
+        id: "ai-tool-migration",
+        title: "AI tool migration: Codex, Claude Code, Cursor, Factory.ai",
+        filter: ["revisit", "ai", "meeting"],
+        status: "revisit",
+        decidedAt: "2026-04-30",
+        confidence: 0.82,
+        statement: "The team should keep active Cursor users unblocked while pushing broad Codex experimentation and monitoring Factory.ai production approval.",
+        then: {
+          title: "What was true then",
+          body: "The decision was formed while cost pressure, tool access, and team trial windows were all moving. The practical stance was to avoid forcing active users off Cursor, while encouraging daily Codex use cases and treating Factory.ai as a newly approved but still watched option."
+        },
+        now: {
+          title: "What changed now",
+          body: "Newer messages indicate an imminent OpenAI deal preference vote, continued cost debate, and production use permission for Factory.ai. The decision still holds, but the assumptions around price, preferred model, and org-wide default tool need review."
+        },
+        deltas: [
+          { kind: "changed", label: "Tool policy", text: "OpenAI deal preference vote started after the original discussion." },
+          { kind: "valid", label: "Still valid", text: "Do not break active Cursor users before a suitable alternative is proven." },
+          { kind: "risk", label: "Review needed", text: "Factory.ai is approved for production use, but security and usage monitoring still matter." }
+        ],
+        timeline: [
+          { date: "Apr 29", type: "base", title: "Factory.ai workshop and trial", text: "Trial window and hands-on exploration created a new tool option for engineering teams." },
+          { date: "Apr 30", type: "changed", title: "Cost pressure on Cursor", text: "Discussion shifted toward reducing less-active Cursor seats while keeping active users comfortable." },
+          { date: "Apr 30", type: "base", title: "Daily Codex usage collection", text: "Team asked to post daily Codex use cases to discover practical automation scenarios." },
+          { date: "May 01", type: "new", title: "OpenAI deal preference vote", text: "New vote asks team to choose Claude Code, Codex, or both before a large deal is signed." }
+        ],
+        evidence: [
+          { type: "message", source: "AI Tools workgroup", privacy: "work", tag: "supports", text: "Active Cursor users can continue until they find a suitable alternative." },
+          { type: "message", source: "RC China agile coaches", privacy: "work", tag: "supports", text: "Team encouraged daily Codex posts to collect interesting usage scenarios." },
+          { type: "message", source: "Global P+T", privacy: "work", tag: "changed", text: "Factory.ai production use became OK with RingCentral email login." },
+          { type: "message", source: "AI Tools workgroup", privacy: "work", tag: "changed", text: "Preference vote requested for Claude Code, Codex, or both." },
+          { type: "ai chat", source: "Codex discussion", privacy: "ai", tag: "background", text: "Codex can turn API ideas into small apps and automation prototypes." }
+        ],
+        nodes: ["Codex", "Cursor", "Factory.ai", "OpenAI deal", "Security review", "Daily use cases"]
+      },
+      {
+        id: "meeting-pilot-context",
+        title: "Meeting Pilot should surface decision memory, not only transcript memory",
+        filter: ["active", "meeting", "ai"],
+        status: "active",
+        decidedAt: "2026-04-29",
+        confidence: 0.76,
+        statement: "Meeting Pilot should evolve from recording and summarizing meetings into a context layer that recalls relevant decisions, commitments, and changed assumptions while the meeting is happening.",
+        then: {
+          title: "What was true then",
+          body: "The meeting memory pipeline already captured meeting summaries and fragments. The missing product value was not another transcript list, but the ability to enter a meeting with the right historical decision context."
+        },
+        now: {
+          title: "What changed now",
+          body: "The memory system already has passive context recall, meeting routes, provider packages, and reflection threads. That makes a decision replay surface a practical extension instead of a new system."
+        },
+        deltas: [
+          { kind: "valid", label: "Still valid", text: "Meeting context should be short, high-confidence, and evidence-linked." },
+          { kind: "changed", label: "Capability available", text: "ContextRecallService already supports fast passive recall for meeting surfaces." },
+          { kind: "risk", label: "Risk", text: "Low-quality ASR fragments must not create high-confidence decision episodes." }
+        ],
+        timeline: [
+          { date: "Apr 29", type: "base", title: "Meeting records persisted", text: "RingCentral Video summaries and topics were stored as meeting memory." },
+          { date: "Apr 29", type: "changed", title: "Fragmented transcript signal", text: "Some transcripts were noisy, which argues for evidence confidence and source quality." },
+          { date: "May 02", type: "new", title: "Decision replay concept", text: "Decision Time Machine proposes meeting entry points for then/now context." }
+        ],
+        evidence: [
+          { type: "meeting", source: "RingCentral Video", privacy: "work", tag: "background", text: "Meeting summaries already include attendees, topics, and high-level discussion context." },
+          { type: "code", source: "ContextRecallService", privacy: "work", tag: "supports", text: "Passive recall is designed for web, meeting, popup, and follow-thread surfaces." },
+          { type: "code", source: "Meeting routes", privacy: "work", tag: "supports", text: "Persisted meeting records can be listed and opened by meeting id." },
+          { type: "ai chat", source: "Product reflection", privacy: "ai", tag: "supports", text: "Decision replay should preserve evidence and avoid lossy transcript summaries." }
+        ],
+        nodes: ["Meeting", "Transcript", "Decision", "Evidence", "Context recall", "Replay pack"]
+      },
+      {
+        id: "jira-data-memory",
+        title: "Jira data queries should become reusable operational memory",
+        filter: ["active", "ai"],
+        status: "active",
+        decidedAt: "2026-04-30",
+        confidence: 0.71,
+        statement: "When the user asks AI to pull Jira data, deduplicate assignees, or draw trends, Personal AI should remember the query intent, data assumptions, and resulting chart logic for reuse.",
+        then: {
+          title: "What was true then",
+          body: "A real user report showed that AI-assisted Jira data retrieval and trend charting saved significant manual time. The value came from remembering a repeatable data workflow, not only the output table."
+        },
+        now: {
+          title: "What changed now",
+          body: "This decision can become a reusable operational memory: source filters, dedupe rules, team/time assumptions, chart recipe, and caveats should be replayed into future Codex or spreadsheet tasks."
+        },
+        deltas: [
+          { kind: "valid", label: "Still valid", text: "Reusable analysis recipes can save time on repeated project reporting." },
+          { kind: "changed", label: "Opportunity", text: "Decision episodes can store query assumptions and chart logic as evidence-backed workflow memory." },
+          { kind: "risk", label: "Risk", text: "Jira data snapshots must record time range and filters to avoid stale conclusions." }
+        ],
+        timeline: [
+          { date: "Apr 30", type: "base", title: "Jira data saved time", text: "A team member described using AI to pull assignee data, dedupe developers, and chart trends." },
+          { date: "May 02", type: "new", title: "Operational recipe framing", text: "The workflow should be stored as an executable memory recipe." }
+        ],
+        evidence: [
+          { type: "message", source: "RC China agile coaches", privacy: "work", tag: "supports", text: "Jira data retrieval, dedupe, tables, and trend charts saved a half day of manual work." },
+          { type: "ai chat", source: "Codex workflow", privacy: "ai", tag: "background", text: "Coding agents can reproduce data pulls when given filters, assumptions, and expected output." },
+          { type: "operation", source: "Future recipe", privacy: "private", tag: "open_question", text: "Need capture of exact query filters and sheet/chart output decisions." }
+        ],
+        nodes: ["Jira", "Assignee dedupe", "Trend chart", "Codex", "Report recipe", "Caveats"]
+      }
+    ];
+
+    let state = {
+      decisionId: decisions[0].id,
+      lens: "then",
+      filter: "all",
+      evidenceIndex: 0,
+      privacy: { work: true, private: false, ai: true }
+    };
+
+    const els = {
+      list: document.getElementById("decisionList"),
+      title: document.getElementById("decisionTitle"),
+      statement: document.getElementById("decisionStatement"),
+      metricEvidence: document.getElementById("metricEvidence"),
+      metricChanged: document.getElementById("metricChanged"),
+      metricConfidence: document.getElementById("metricConfidence"),
+      metricAge: document.getElementById("metricAge"),
+      timeline: document.getElementById("timeline"),
+      graph: document.getElementById("graph"),
+      graphMode: document.getElementById("graphMode"),
+      lensTitle: document.getElementById("lensTitle"),
+      lensBody: document.getElementById("lensBody"),
+      deltaList: document.getElementById("deltaList"),
+      evidenceList: document.getElementById("evidenceList"),
+      packPreview: document.getElementById("packPreview"),
+      toast: document.getElementById("toast"),
+      search: document.getElementById("searchInput")
+    };
+
+    function currentDecision() {
+      return decisions.find((item) => item.id === state.decisionId) || decisions[0];
+    }
+
+    function daysSince(dateText) {
+      const start = new Date(`${dateText}T00:00:00+08:00`);
+      const now = new Date("2026-05-02T00:00:00+08:00");
+      return Math.max(0, Math.round((now - start) / 86400000));
+    }
+
+    function renderList() {
+      const query = (els.search.value || "").trim().toLowerCase();
+      const items = decisions.filter((decision) => {
+        const matchesFilter = state.filter === "all" || decision.filter.includes(state.filter);
+        const matchesQuery = !query || `${decision.title} ${decision.statement}`.toLowerCase().includes(query);
+        return matchesFilter && matchesQuery;
+      });
+
+      els.list.innerHTML = items.map((decision) => `
+        <button class="decision-item ${decision.id === state.decisionId ? "active" : ""}" data-id="${decision.id}">
+          <div class="item-head">
+            <div class="item-title">${decision.title}</div>
+            <span class="status ${decision.status}">${decision.status === "revisit" ? "review" : "active"}</span>
+          </div>
+          <div class="item-meta">
+            <span>${decision.decidedAt}</span>
+            <span>${decision.evidence.length} refs</span>
+            <span>${Math.round(decision.confidence * 100)}%</span>
+          </div>
+          <div class="confidence"><span style="width:${Math.round(decision.confidence * 100)}%"></span></div>
+        </button>
+      `).join("");
+
+      els.list.querySelectorAll(".decision-item").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.decisionId = button.dataset.id;
+          state.evidenceIndex = 0;
+          renderAll();
+        });
+      });
+    }
+
+    function renderDetail() {
+      const decision = currentDecision();
+      els.title.textContent = decision.title;
+      els.statement.textContent = decision.statement;
+      els.metricEvidence.textContent = decision.evidence.length;
+      els.metricChanged.textContent = decision.deltas.filter((delta) => delta.kind === "changed" || delta.kind === "risk").length;
+      els.metricConfidence.textContent = `${Math.round(decision.confidence * 100)}%`;
+      els.metricAge.textContent = `${daysSince(decision.decidedAt)}d`;
+
+      els.timeline.innerHTML = decision.timeline.map((event) => `
+        <div class="event">
+          <div class="event-time">${event.date}</div>
+          <div class="event-main ${event.type}">
+            <b>${event.title}</b>
+            <p>${event.text}</p>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function renderGraph() {
+      const decision = currentDecision();
+      const nodes = decision.nodes;
+      const positions = [
+        [44, 42], [220, 38], [130, 118], [24, 192], [224, 190], [126, 236]
+      ];
+      const linePairs = [[0, 2], [1, 2], [2, 3], [2, 4], [3, 5], [4, 5]];
+
+      function lineStyle(a, b) {
+        const [x1, y1] = positions[a];
+        const [x2, y2] = positions[b];
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        return `left:${x1 + 38}px;top:${y1 + 15}px;width:${length}px;transform:rotate(${angle}deg)`;
+      }
+
+      els.graphMode.textContent = state.lens === "then" ? "Then lens" : "Now lens";
+      els.graph.innerHTML = [
+        ...linePairs.map(([a, b]) => `<div class="line" style="${lineStyle(a, b)}"></div>`),
+        ...nodes.map((name, index) => {
+          let cls = "node";
+          if (index === 2) cls += " primary";
+          if (state.lens === "now" && (index === 3 || index === 4)) cls += " change";
+          if (state.lens === "now" && index === 5) cls += " warn";
+          return `<div class="${cls}" style="left:${positions[index][0]}px;top:${positions[index][1]}px">${name}</div>`;
+        })
+      ].join("");
+    }
+
+    function renderInspector() {
+      const decision = currentDecision();
+      const lens = decision[state.lens];
+      els.lensTitle.textContent = lens.title;
+      els.lensBody.textContent = lens.body;
+
+      els.deltaList.innerHTML = decision.deltas.map((delta) => `
+        <div class="delta ${delta.kind}">
+          <b>${delta.label}</b>
+          ${delta.text}
+        </div>
+      `).join("");
+
+      els.evidenceList.innerHTML = decision.evidence.map((item, index) => `
+        <div class="evidence ${index === state.evidenceIndex ? "active" : ""}" data-index="${index}">
+          <b>${item.type} / ${item.tag}</b>
+          ${item.text}
+          <div class="source-line">
+            <span class="source-pill">${item.source}</span>
+            <span class="source-pill">${item.privacy}</span>
+          </div>
+        </div>
+      `).join("");
+
+      els.evidenceList.querySelectorAll(".evidence").forEach((node) => {
+        node.addEventListener("click", () => {
+          state.evidenceIndex = Number(node.dataset.index);
+          renderInspector();
+        });
+      });
+    }
+
+    function renderPack() {
+      const decision = currentDecision();
+      const evidence = decision.evidence.filter((item) => state.privacy[item.privacy]);
+      const hidden = decision.evidence.length - evidence.length;
+      const changed = decision.deltas.filter((item) => item.kind !== "valid");
+
+      els.packPreview.textContent = [
+        `Target: Codex / Claude / Meeting Pilot`,
+        `Scenario: continue decision with evidence`,
+        ``,
+        `Decision: ${decision.statement}`,
+        ``,
+        `Then: ${decision.then.body}`,
+        ``,
+        `Now: ${decision.now.body}`,
+        ``,
+        `Changed signals:`,
+        ...changed.map((item) => `- ${item.label}: ${item.text}`),
+        ``,
+        `Evidence included (${evidence.length}):`,
+        ...evidence.map((item) => `- [${item.type} | ${item.source}] ${item.text}`),
+        ``,
+        hidden > 0 ? `Redacted: ${hidden} private/source-restricted evidence item(s).` : `Redacted: none.`,
+        ``,
+        `Ask the target AI to output:`,
+        `1. What changed since the original decision`,
+        `2. Recommended next action`,
+        `3. Questions the user should ask before committing`
+      ].join("\n");
+    }
+
+    function showToast(message) {
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      window.setTimeout(() => els.toast.classList.remove("show"), 1500);
+    }
+
+    function renderAll() {
+      renderList();
+      renderDetail();
+      renderGraph();
+      renderInspector();
+      renderPack();
+    }
+
+    document.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        document.querySelectorAll(".chip").forEach((item) => item.classList.remove("active"));
+        chip.classList.add("active");
+        state.filter = chip.dataset.filter;
+        renderList();
+      });
+    });
+
+    document.querySelectorAll(".lens-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".lens-tab").forEach((item) => item.classList.remove("active"));
+        tab.classList.add("active");
+        state.lens = tab.dataset.lens;
+        renderGraph();
+        renderInspector();
+      });
+    });
+
+    document.querySelectorAll(".privacy-toggle").forEach((toggle) => {
+      toggle.addEventListener("change", () => {
+        state.privacy[toggle.dataset.source] = toggle.checked;
+        renderPack();
+      });
+    });
+
+    document.getElementById("replayTop").addEventListener("click", () => showToast("Replay pack generated with current privacy controls"));
+    document.getElementById("markReviewed").addEventListener("click", () => showToast("Decision marked reviewed for this demo"));
+    document.getElementById("copyPack").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(els.packPreview.textContent);
+        showToast("Replay pack copied");
+      } catch {
+        showToast("Clipboard unavailable; preview is ready");
+      }
+    });
+    els.search.addEventListener("input", renderList);
+
+    renderAll();
+  </script>
+</body>
+</html>

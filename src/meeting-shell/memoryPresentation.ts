@@ -103,6 +103,7 @@ export interface BuildMeetingPilotContextRecallArgs {
   currentTopic?: string;
   summary?: string;
   transcriptSummary?: string;
+  screenObservation?: string;
   meetingMetadata?: string;
 }
 
@@ -142,6 +143,17 @@ export function buildMeetingPilotContextRecallRequest(
   const cleanedPrimary = dropBoilerplateLines(
     sanitizeMemoryText(args.transcriptSummary ?? ''),
   );
+  const cleanedScreenObservation = dropBoilerplateLines(
+    sanitizeMemoryText(args.screenObservation ?? ''),
+  );
+  const primaryText = [
+    cleanedPrimary,
+    cleanedScreenObservation
+      ? `[共享画面 / OCR]\n${cleanedScreenObservation}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   const secondary = [
     args.currentTopic,
     args.summary,
@@ -154,7 +166,7 @@ export function buildMeetingPilotContextRecallRequest(
     surface: 'meeting_passive',
     contextType: 'meeting',
     title: args.meetingTitle,
-    primaryText: cleanedPrimary || args.meetingTitle,
+    primaryText: primaryText || args.meetingTitle,
     secondaryTexts: secondary,
     sourceTypes: ['meeting', 'manual', 'web', 'glip'],
     limit: 3,

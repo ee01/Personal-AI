@@ -6,6 +6,10 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect } from 'react';
+import {
+    sanitizeIndependentUserConfig,
+    USER_CONFIG_PROMPT_CHAR_LIMIT
+} from '../services/userConfigSanitizer';
 
 // 数据类型定义
 interface CustomPrompts {
@@ -95,76 +99,132 @@ interface ConfigData {
 
 type TabType = 'prompts' | 'personal' | 'team' | 'work' | 'communication' | 'analysis';
 
+const createDefaultConfig = (): ConfigData => ({
+    customPrompts: {
+        message: {
+            enabled: false,
+            content: '',
+            position: 'after_analysis_guide'
+        },
+        project: {
+            enabled: false,
+            content: '',
+            position: 'after_analysis_guide'
+        }
+    },
+    userContextConfig: {
+        personalInfo: {
+            name: '',
+            email: '',
+            title: '',
+            department: '',
+            location: '',
+            timezone: 'GMT+8'
+        },
+        stakeholders: {
+            directManager: '',
+            keyStakeholders: [],
+            reportingFrequency: '每周'
+        },
+        teamInfo: {
+            teamName: '',
+            teamMission: '',
+            teamSize: 0,
+            members: [],
+            workingHours: '',
+            timezone: 'GMT+8'
+        },
+        workFocus: {
+            primaryConcerns: [],
+            businessDomains: [],
+            keyMetrics: [],
+            riskTolerance: 'medium'
+        },
+        communicationContext: {
+            audienceType: [],
+            communicationStyle: '简洁直接',
+            culturalContext: '',
+            languagePreference: '中英文混合',
+            reportingFormat: '项目状态报告'
+        },
+        analysisPreferences: {
+            messageAnalysis: {
+                focusAreas: [],
+                ignoredTopics: [],
+                urgencyKeywords: []
+            },
+            projectAnalysis: {
+                riskFactors: [],
+                successCriteria: [],
+                reviewCycle: 'weekly'
+            }
+        },
+        lastUpdated: 0,
+        version: '1.0'
+    }
+});
+
+const deepMerge = <T,>(base: T, override: any): T => {
+    if (override === undefined || override === null) return base;
+    if (Array.isArray(base) || Array.isArray(override)) return override as T;
+    if (typeof base !== 'object' || typeof override !== 'object') return override as T;
+
+    const merged: Record<string, any> = { ...(base as Record<string, any>) };
+    Object.keys(override).forEach((key) => {
+        merged[key] = deepMerge(merged[key], override[key]);
+    });
+    return merged as T;
+};
+
+const normalizeConfig = (config: any): ConfigData => {
+    const source = config || {};
+    return sanitizeIndependentUserConfig(deepMerge(createDefaultConfig(), {
+        customPrompts: source.customPrompts || {},
+        userContextConfig: source.userContextConfig || {}
+    })) as ConfigData;
+};
+
+const getConfigTimestamp = (config: any): number => {
+    const candidates = [
+        config?.lastUpdated,
+        config?.cloudSyncTime,
+        config?.userContextConfig?.lastUpdated
+    ];
+    for (const candidate of candidates) {
+        const value = Number(candidate);
+        if (Number.isFinite(value) && value > 0) return value;
+    }
+    return 0;
+};
+
+const hasStoredConfig = (config: any): boolean => (
+    Boolean(config?.customPrompts || config?.userContextConfig)
+);
+
+const createEmptyStakeholder = (): Stakeholder => ({
+    name: '',
+    position: '',
+    relationship: '',
+    priority: 'medium'
+});
+
+const createEmptyTeamMember = (): TeamMember => ({
+    name: '',
+    position: '',
+    role: '',
+    speciality: ''
+});
+
 const PromptConfig: React.FC = () => {
     const [activeTab, setActiveTab] = useState<TabType>('prompts');
     const [statusMessage, setStatusMessage] = useState('');
     const [statusType, setStatusType] = useState<'success' | 'error' | ''>('');
     const [currentUserInfo, setCurrentUserInfo] = useState({ name: '', email: '' });
-    
-    const [configData, setConfigData] = useState<ConfigData>({
-        customPrompts: {
-            message: {
-                enabled: false,
-                content: '',
-                position: 'after_analysis_guide'
-            },
-            project: {
-                enabled: false,
-                content: '',
-                position: 'after_analysis_guide'
-            }
-        },
-        userContextConfig: {
-            personalInfo: {
-                name: '',
-                email: '',
-                title: '',
-                department: '',
-                location: '',
-                timezone: 'GMT+8'
-            },
-            stakeholders: {
-                directManager: '',
-                keyStakeholders: [],
-                reportingFrequency: '每周'
-            },
-            teamInfo: {
-                teamName: '',
-                teamMission: '',
-                teamSize: 0,
-                members: [],
-                workingHours: '',
-                timezone: 'GMT+8'
-            },
-            workFocus: {
-                primaryConcerns: [],
-                businessDomains: [],
-                keyMetrics: [],
-                riskTolerance: 'medium'
-            },
-            communicationContext: {
-                audienceType: [],
-                communicationStyle: '简洁直接',
-                culturalContext: '',
-                languagePreference: '中英文混合',
-                reportingFormat: '项目状态报告'
-            },
-            analysisPreferences: {
-                messageAnalysis: {
-                    focusAreas: [],
-                    ignoredTopics: [],
-                    urgencyKeywords: []
-                },
-                projectAnalysis: {
-                    riskFactors: [],
-                    successCriteria: [],
-                    reviewCycle: 'weekly'
-                }
-            },
-            lastUpdated: 0,
-            version: '1.0'
-        }
-    });
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [syncSource, setSyncSource] = useState('');
+    const [configData, setConfigData] = useState<ConfigData>(createDefaultConfig);
 
     useEffect(() => {
         loadCurrentUserInfo();
@@ -181,67 +241,83 @@ const PromptConfig: React.FC = () => {
                 setCurrentUserInfo({ name: displayName, email: displayEmail });
                 
                 // 更新配置数据中的基本信息
-                setConfigData(prev => ({
-                    ...prev,
-                    userContextConfig: {
-                        ...prev.userContextConfig,
-                        personalInfo: {
-                            ...prev.userContextConfig.personalInfo,
-                            name: displayName,
-                            email: displayEmail
-                        }
-                    }
-                }));
+	                setConfigData(prev => ({
+	                    ...prev,
+	                    userContextConfig: {
+	                        ...prev.userContextConfig,
+	                        personalInfo: {
+	                            ...prev.userContextConfig.personalInfo,
+	                            name: prev.userContextConfig.personalInfo.name || displayName,
+	                            email: prev.userContextConfig.personalInfo.email || displayEmail
+	                        }
+	                    }
+	                }));
             }
         } catch (error) {
             console.error('加载用户信息失败:', error);
         }
     };
 
-    const loadFromStorage = async () => {
-        try {
-            // 🆕 优先从云端加载配置
-            console.log('尝试从云端加载独立用户配置...');
-            
-            const cloudResponse = await chrome.runtime.sendMessage({
-                type: 'GET_INDEPENDENT_USER_CONFIG'
-            });
-            
-            if (cloudResponse && cloudResponse.success && cloudResponse.data) {
-                // 使用云端配置
-                console.log('云端配置加载成功:', cloudResponse.data);
-                setConfigData(prev => ({
-                    customPrompts: { ...prev.customPrompts, ...cloudResponse.data.customPrompts },
-                    userContextConfig: { ...prev.userContextConfig, ...cloudResponse.data.userContextConfig }
-                }));
-                showStatusMessage('配置已从云端加载', 'success');
-            } else {
-                // 降级：从本地存储加载并迁移到云端
-                console.log('云端配置不存在，尝试从本地加载并迁移...');
-                await migrateFromLocalToCloud();
+	const loadFromStorage = async () => {
+	    setIsLoading(true);
+	    try {
+            const localResult = await chrome.storage.local.get([
+                'customPrompts',
+                'userContextConfig',
+                'cloudSyncTime'
+            ]);
+            let nextConfig = normalizeConfig(localResult);
+            let sourceLabel = hasStoredConfig(localResult) ? '本机配置' : '默认配置';
+
+            try {
+                const cloudResponse = await chrome.runtime.sendMessage({
+                    type: 'GET_INDEPENDENT_USER_CONFIG'
+                });
+
+                if (cloudResponse?.success && hasStoredConfig(cloudResponse.data)) {
+                    const cloudConfig = normalizeConfig(cloudResponse.data);
+                    const shouldUseCloud =
+                        !hasStoredConfig(localResult) ||
+                        getConfigTimestamp(cloudResponse.data) >= getConfigTimestamp(localResult);
+
+                    if (shouldUseCloud) {
+                        nextConfig = cloudConfig;
+                        sourceLabel = '记忆服务备份';
+                        await chrome.storage.local.set({
+                            customPrompts: cloudConfig.customPrompts,
+                            userContextConfig: cloudConfig.userContextConfig,
+                            cloudSyncTime: Date.now()
+                        });
+                    }
+                }
+            } catch (cloudError) {
+                console.warn('记忆服务配置读取失败，继续使用本机配置:', cloudError);
             }
+
+            setConfigData(nextConfig);
+            setHasUnsavedChanges(false);
+            setSyncSource(sourceLabel);
+            showStatusMessage(`已加载${sourceLabel}`, 'success');
         } catch (error) {
             console.error('加载配置失败:', error);
             showStatusMessage('加载配置失败: ' + error.message, 'error');
-            
-            // 降级：尝试从本地加载
-            try {
-                const result = await chrome.storage.local.get(['customPrompts', 'userContextConfig']);
-                if (result.customPrompts || result.userContextConfig) {
-                    setConfigData(prev => ({
-                        customPrompts: { ...prev.customPrompts, ...result.customPrompts },
-                        userContextConfig: { ...prev.userContextConfig, ...result.userContextConfig }
-                    }));
-                    showStatusMessage('已从本地缓存加载配置', 'success');
-                }
-            } catch (localError) {
-                console.error('本地配置加载也失败:', localError);
-            }
-        }
-    };
+        } finally {
+	        setIsLoading(false);
+	    }
+	};
 
-    // 🆕 数据迁移：从本地存储迁移到云端
-    const migrateFromLocalToCloud = async () => {
+	const reloadFromStorage = () => {
+	    if (
+	        hasUnsavedChanges &&
+	        !confirm('当前有未保存修改，重新加载会丢弃这些修改。继续重新加载？')
+	    ) {
+	        return;
+	    }
+	    loadFromStorage();
+	};
+
+	// 🆕 数据迁移：从本地存储迁移到云端
+	const _migrateFromLocalToCloud = async () => {
         try {
             const result = await chrome.storage.local.get(['customPrompts', 'userContextConfig']);
             
@@ -290,80 +366,115 @@ const PromptConfig: React.FC = () => {
         }
     };
 
-    const saveConfiguration = async () => {
-        try {
-            const updatedConfig = {
-                customPrompts: configData.customPrompts,
-                userContextConfig: {
-                    ...configData.userContextConfig,
-                    lastUpdated: Date.now(),
-                    version: '1.0'
-                }
-            };
-            
-            console.log('保存配置到云端...', updatedConfig);
-            
-            // 🆕 保存到云端
-            const response = await chrome.runtime.sendMessage({
-                type: 'STORE_INDEPENDENT_USER_CONFIG',
-                config: updatedConfig
-            });
-            
-            if (response && response.success) {
-                console.log('配置保存到云端成功');
-                setConfigData({
-                    customPrompts: updatedConfig.customPrompts,
-                    userContextConfig: updatedConfig.userContextConfig
-                });
-                showStatusMessage('配置已保存到云端', 'success');
-                
-                // 可选：同时保存到本地作为备份
-                try {
-                    await chrome.storage.local.set({
-                        customPrompts: updatedConfig.customPrompts,
-                        userContextConfig: updatedConfig.userContextConfig,
-                        cloudSyncTime: Date.now()
-                    });
-                    console.log('配置也已备份到本地');
-                } catch (localError) {
-                    console.warn('本地备份失败:', localError);
-                }
-            } else {
-                throw new Error(response?.error || '云端保存失败');
-            }
-            
-        } catch (error) {
-            console.error('保存配置失败:', error);
-            showStatusMessage('保存配置失败: ' + error.message, 'error');
-            
-            // 降级：保存到本地
-            try {
-                console.log('降级到本地保存...');
-                await chrome.storage.local.set({
-                    customPrompts: configData.customPrompts,
-                    userContextConfig: {
-                        ...configData.userContextConfig,
-                        lastUpdated: Date.now()
-                    }
-                });
-                showStatusMessage('配置已保存到本地（云端暂不可用）', 'success');
-            } catch (localError) {
-                console.error('本地保存也失败:', localError);
-                showStatusMessage('配置保存完全失败: ' + localError.message, 'error');
-            }
+	const validateConfiguration = (): boolean => {
+        const messagePromptContent = configData.customPrompts.message.content.trim();
+        const projectPromptContent = configData.customPrompts.project.content.trim();
+
+	    if (
+	        configData.customPrompts.message.enabled &&
+	        !messagePromptContent
+	    ) {
+	            showStatusMessage('消息分析提示词为空，已启用时需要填写内容', 'error');
+	            setActiveTab('prompts');
+	            return false;
+	        }
+
+        if (messagePromptContent.length > USER_CONFIG_PROMPT_CHAR_LIMIT) {
+            showStatusMessage(`消息分析提示词不能超过 ${USER_CONFIG_PROMPT_CHAR_LIMIT} 字符`, 'error');
+            setActiveTab('prompts');
+            return false;
         }
-    };
+
+	        if (
+            configData.customPrompts.project.enabled &&
+            !projectPromptContent
+        ) {
+            showStatusMessage('项目分析提示词为空，已启用时需要填写内容', 'error');
+            setActiveTab('prompts');
+            return false;
+        }
+
+        if (projectPromptContent.length > USER_CONFIG_PROMPT_CHAR_LIMIT) {
+            showStatusMessage(`项目分析提示词不能超过 ${USER_CONFIG_PROMPT_CHAR_LIMIT} 字符`, 'error');
+            setActiveTab('prompts');
+            return false;
+        }
+
+	    return true;
+	};
+
+	const persistConfiguration = async (): Promise<ConfigData | null> => {
+	    if (!validateConfiguration()) return null;
+
+	    const updatedConfig = sanitizeIndependentUserConfig({
+	        customPrompts: configData.customPrompts,
+	        userContextConfig: {
+	            ...configData.userContextConfig,
+	            lastUpdated: Date.now(),
+	            version: '1.0'
+	        }
+	    }) as ConfigData;
+
+	    await chrome.storage.local.set({
+	        customPrompts: updatedConfig.customPrompts,
+	        userContextConfig: updatedConfig.userContextConfig,
+	        cloudSyncTime: Date.now()
+	    });
+
+	    setConfigData(updatedConfig);
+	    setHasUnsavedChanges(false);
+
+	    try {
+	        const response = await chrome.runtime.sendMessage({
+	            type: 'STORE_INDEPENDENT_USER_CONFIG',
+	            config: updatedConfig
+	        });
+
+	        if (!response?.success) {
+	            throw new Error(response?.error || '记忆服务备份失败');
+	        }
+
+	        setSyncSource('本机配置 + 记忆服务备份');
+	        showStatusMessage('配置已保存，并已备份到记忆服务', 'success');
+	    } catch (cloudError) {
+	        console.warn('记忆服务备份失败，本机配置已保存:', cloudError);
+	        setSyncSource('本机配置');
+	        showStatusMessage('配置已保存到本机，记忆服务备份暂不可用', 'success');
+	    }
+
+	    return updatedConfig;
+	};
+
+	const saveConfiguration = async () => {
+	    setIsSaving(true);
+	    try {
+	        await persistConfiguration();
+	    } catch (error) {
+	        console.error('保存配置失败:', error);
+	        showStatusMessage('保存配置失败: ' + error.message, 'error');
+	    } finally {
+	        setIsSaving(false);
+	    }
+	};
 
     // 🆕 触发数据融合到用户画像
-    const triggerDataFusion = async () => {
-        try {
-            console.log('开始将配置融合到用户画像...');
-            showStatusMessage('正在融合配置到用户画像...', 'success');
-            
-            const response = await chrome.runtime.sendMessage({
-                type: 'FUSE_USER_CONTEXT_CONFIG',
-                userContextConfig: configData.userContextConfig
-            });
+	const triggerDataFusion = async () => {
+	    setIsSaving(true);
+	    try {
+	        let configForFusion = configData;
+	        if (hasUnsavedChanges) {
+	            const savedConfig = await persistConfiguration();
+	            if (!savedConfig) return;
+	            configForFusion = savedConfig;
+	        }
+
+	        console.log('开始将配置融合到用户画像...');
+	        showStatusMessage('正在融合配置到用户画像...', 'success');
+
+	        const response = await chrome.runtime.sendMessage({
+	            type: 'FUSE_USER_CONTEXT_CONFIG',
+	            userContextConfig: configForFusion.userContextConfig
+	        });
             
             if (response && response.success) {
                 console.log('配置融合成功:', response.data);
@@ -389,11 +500,13 @@ const PromptConfig: React.FC = () => {
             } else {
                 throw new Error(response?.error || '融合失败');
             }
-        } catch (error) {
-            console.error('数据融合失败:', error);
-            showStatusMessage('数据融合失败: ' + error.message, 'error');
-        }
-    };
+	    } catch (error) {
+	        console.error('数据融合失败:', error);
+	        showStatusMessage('数据融合失败: ' + error.message, 'error');
+	    } finally {
+	        setIsSaving(false);
+	    }
+	};
 
     const resetToDefaults = () => {
         if (confirm('确定要重置所有配置为默认值吗？此操作不可撤销。')) {
@@ -401,65 +514,15 @@ const PromptConfig: React.FC = () => {
                 name: configData.userContextConfig.personalInfo.name,
                 email: configData.userContextConfig.personalInfo.email
             };
-            
-            setConfigData({
-                customPrompts: {
-                    message: { enabled: false, content: '', position: 'after_analysis_guide' },
-                    project: { enabled: false, content: '', position: 'after_analysis_guide' }
-                },
-                userContextConfig: {
-                    personalInfo: {
-                        name: savedUserInfo.name,
-                        email: savedUserInfo.email,
-                        title: '',
-                        department: '',
-                        location: '',
-                        timezone: 'GMT+8'
-                    },
-                    stakeholders: {
-                        directManager: '',
-                        keyStakeholders: [],
-                        reportingFrequency: '每周'
-                    },
-                    teamInfo: {
-                        teamName: '',
-                        teamMission: '',
-                        teamSize: 0,
-                        members: [],
-                        workingHours: '',
-                        timezone: 'GMT+8'
-                    },
-                    workFocus: {
-                        primaryConcerns: [],
-                        businessDomains: [],
-                        keyMetrics: [],
-                        riskTolerance: 'medium'
-                    },
-                    communicationContext: {
-                        audienceType: [],
-                        communicationStyle: '简洁直接',
-                        culturalContext: '',
-                        languagePreference: '中英文混合',
-                        reportingFormat: '项目状态报告'
-                    },
-                    analysisPreferences: {
-                        messageAnalysis: {
-                            focusAreas: [],
-                            ignoredTopics: [],
-                            urgencyKeywords: []
-                        },
-                        projectAnalysis: {
-                            riskFactors: [],
-                            successCriteria: [],
-                            reviewCycle: 'weekly'
-                        }
-                    },
-                    lastUpdated: Date.now(),
-                    version: '1.0'
-                }
-            });
-            
-            showStatusMessage('配置已重置为默认值', 'success');
+
+            const nextConfig = createDefaultConfig();
+            nextConfig.userContextConfig.personalInfo.name = savedUserInfo.name;
+            nextConfig.userContextConfig.personalInfo.email = savedUserInfo.email;
+            nextConfig.userContextConfig.lastUpdated = Date.now();
+
+            setConfigData(nextConfig);
+            setHasUnsavedChanges(true);
+            showStatusMessage('配置已重置，保存后生效', 'success');
         }
     };
 
@@ -472,58 +535,68 @@ const PromptConfig: React.FC = () => {
         }, 3000);
     };
 
-    const addToArray = (path: string, value = '') => {
-        const keys = path.split('.');
-        setConfigData(prev => {
-            const newConfig = { ...prev };
-            let current: any = newConfig;
-            
-            for (let i = 0; i < keys.length - 1; i++) {
-                current = current[keys[i]];
-            }
-            
-            const lastKey = keys[keys.length - 1];
-            if (Array.isArray(current[lastKey])) {
-                current[lastKey] = [...current[lastKey], value];
-            }
-            
-            return newConfig;
-        });
-    };
+	const updateConfigAtPath = (
+	    path: string,
+	    updater: any | ((currentValue: any) => any)
+	) => {
+	    const keys = path.split('.');
+	    setHasUnsavedChanges(true);
+	    setConfigData(prev => {
+	        const newConfig: any = { ...prev };
+	        let currentNew = newConfig;
+	        let currentOld: any = prev;
 
-    const removeFromArray = (path: string, index: number) => {
-        const keys = path.split('.');
-        setConfigData(prev => {
-            const newConfig = { ...prev };
-            let current: any = newConfig;
-            
-            for (let i = 0; i < keys.length - 1; i++) {
-                current = current[keys[i]];
-            }
-            
-            const lastKey = keys[keys.length - 1];
-            if (Array.isArray(current[lastKey])) {
-                current[lastKey] = current[lastKey].filter((_: any, i: number) => i !== index);
-            }
-            
-            return newConfig;
-        });
-    };
+	        for (let i = 0; i < keys.length - 1; i++) {
+	            const key = keys[i];
+	            const oldChild = currentOld?.[key];
+	            currentNew[key] = Array.isArray(oldChild)
+	                ? [...oldChild]
+	                : { ...(oldChild || {}) };
+	            currentNew = currentNew[key];
+	            currentOld = oldChild;
+	        }
 
-    const updateValue = (path: string, value: any) => {
-        const keys = path.split('.');
-        setConfigData(prev => {
-            const newConfig = { ...prev };
-            let current: any = newConfig;
-            
-            for (let i = 0; i < keys.length - 1; i++) {
-                current = current[keys[i]];
-            }
-            
-            current[keys[keys.length - 1]] = value;
-            return newConfig;
-        });
-    };
+	        const lastKey = keys[keys.length - 1];
+	        const currentValue = currentNew[lastKey];
+	        currentNew[lastKey] =
+	            typeof updater === 'function' ? updater(currentValue) : updater;
+	        return newConfig as ConfigData;
+	    });
+	};
+
+	const addToArray = (path: string, value: any = '') => {
+	    updateConfigAtPath(path, (items: any[]) => (
+	        Array.isArray(items) ? [...items, value] : [value]
+	    ));
+	};
+
+	const removeFromArray = (path: string, index: number) => {
+	    updateConfigAtPath(path, (items: any[]) => (
+	        Array.isArray(items) ? items.filter((_: any, i: number) => i !== index) : []
+	    ));
+	};
+
+	const updateValue = (path: string, value: any) => {
+	    updateConfigAtPath(path, value);
+	};
+
+	const updateStakeholder = (index: number, key: keyof Stakeholder, value: string) => {
+	    updateConfigAtPath(
+	        'userContextConfig.stakeholders.keyStakeholders',
+	        (items: Stakeholder[]) => (Array.isArray(items) ? items : []).map((item, i) => (
+	            i === index ? { ...item, [key]: value } : item
+	        ))
+	    );
+	};
+
+	const updateTeamMember = (index: number, key: keyof TeamMember, value: string) => {
+	    updateConfigAtPath(
+	        'userContextConfig.teamInfo.members',
+	        (items: TeamMember[]) => (Array.isArray(items) ? items : []).map((item, i) => (
+	            i === index ? { ...item, [key]: value } : item
+	        ))
+	    );
+	};
 
     const renderArrayField = (label: string, path: string, items: string[]) => (
         <div className="field-group">
@@ -578,12 +651,18 @@ const PromptConfig: React.FC = () => {
                                 启用消息分析自定义提示词
                             </label>
                             {configData.customPrompts.message.enabled && (
-                                <textarea
-                                    value={configData.customPrompts.message.content}
-                                    onChange={(e) => updateValue('customPrompts.message.content', e.target.value)}
-                                    placeholder="输入消息分析的自定义提示词..."
-                                    rows={4}
-                                />
+                                <>
+                                    <textarea
+                                        value={configData.customPrompts.message.content}
+                                        onChange={(e) => updateValue('customPrompts.message.content', e.target.value)}
+                                        placeholder="输入消息分析的自定义提示词..."
+                                        rows={4}
+                                        maxLength={USER_CONFIG_PROMPT_CHAR_LIMIT}
+                                    />
+	                                    <div className="field-meta">
+	                                        {configData.customPrompts.message.content.length}/{USER_CONFIG_PROMPT_CHAR_LIMIT}
+	                                    </div>
+                                </>
                             )}
                         </div>
 
@@ -597,12 +676,18 @@ const PromptConfig: React.FC = () => {
                                 启用项目分析自定义提示词
                             </label>
                             {configData.customPrompts.project.enabled && (
-                                <textarea
-                                    value={configData.customPrompts.project.content}
-                                    onChange={(e) => updateValue('customPrompts.project.content', e.target.value)}
-                                    placeholder="输入项目分析的自定义提示词..."
-                                    rows={4}
-                                />
+                                <>
+                                    <textarea
+                                        value={configData.customPrompts.project.content}
+                                        onChange={(e) => updateValue('customPrompts.project.content', e.target.value)}
+                                        placeholder="输入项目分析的自定义提示词..."
+                                        rows={4}
+                                        maxLength={USER_CONFIG_PROMPT_CHAR_LIMIT}
+                                    />
+                                    <div className="field-meta">
+                                        {configData.customPrompts.project.content.length}/{USER_CONFIG_PROMPT_CHAR_LIMIT}
+                                    </div>
+                                </>
                             )}
                         </div>
                     </div>
@@ -660,22 +745,198 @@ const PromptConfig: React.FC = () => {
                             </select>
                         </div>
 
-                        <div className="field-group">
-                            <label>直接主管</label>
-                            <input
-                                type="text"
-                                value={configData.userContextConfig.stakeholders.directManager}
+	                        <div className="field-group">
+	                            <label>直接主管</label>
+	                            <input
+	                                type="text"
+	                                value={configData.userContextConfig.stakeholders.directManager}
                                 onChange={(e) => updateValue('userContextConfig.stakeholders.directManager', e.target.value)}
-                                placeholder="直接主管姓名"
-                            />
-                        </div>
-                    </div>
-                );
+	                                placeholder="直接主管姓名"
+	                            />
+	                        </div>
 
-            case 'work':
-                return (
-                    <div className="tab-content">
-                        <h3>工作关注点</h3>
+	                        <div className="field-group">
+	                            <label>汇报频率</label>
+	                            <select
+	                                value={configData.userContextConfig.stakeholders.reportingFrequency}
+	                                onChange={(e) => updateValue('userContextConfig.stakeholders.reportingFrequency', e.target.value)}
+	                            >
+	                                <option value="每日">每日</option>
+	                                <option value="每周">每周</option>
+	                                <option value="每两周">每两周</option>
+	                                <option value="每月">每月</option>
+	                                <option value="按需">按需</option>
+	                            </select>
+	                        </div>
+
+	                        <div className="field-group">
+	                            <label>关键干系人</label>
+	                            <div className="structured-list">
+	                                {configData.userContextConfig.stakeholders.keyStakeholders.map((stakeholder, index) => (
+	                                    <div key={index} className="structured-item">
+	                                        <div className="structured-grid">
+	                                            <input
+	                                                type="text"
+	                                                value={stakeholder.name}
+	                                                onChange={(e) => updateStakeholder(index, 'name', e.target.value)}
+	                                                placeholder="姓名"
+	                                            />
+	                                            <input
+	                                                type="text"
+	                                                value={stakeholder.position}
+	                                                onChange={(e) => updateStakeholder(index, 'position', e.target.value)}
+	                                                placeholder="职位"
+	                                            />
+	                                            <input
+	                                                type="text"
+	                                                value={stakeholder.relationship}
+	                                                onChange={(e) => updateStakeholder(index, 'relationship', e.target.value)}
+	                                                placeholder="关系"
+	                                            />
+	                                            <select
+	                                                value={stakeholder.priority}
+	                                                onChange={(e) => updateStakeholder(index, 'priority', e.target.value)}
+	                                            >
+	                                                <option value="high">高优先级</option>
+	                                                <option value="medium">中优先级</option>
+	                                                <option value="low">低优先级</option>
+	                                            </select>
+	                                        </div>
+	                                        <button
+	                                            type="button"
+	                                            onClick={() => removeFromArray('userContextConfig.stakeholders.keyStakeholders', index)}
+	                                            className="remove-btn"
+	                                        >
+	                                            删除
+	                                        </button>
+	                                    </div>
+	                                ))}
+	                                <button
+	                                    type="button"
+	                                    onClick={() => addToArray('userContextConfig.stakeholders.keyStakeholders', createEmptyStakeholder())}
+	                                    className="add-btn"
+	                                >
+	                                    添加关键干系人
+	                                </button>
+	                            </div>
+	                        </div>
+	                    </div>
+	                );
+
+	            case 'team':
+	                return (
+	                    <div className="tab-content">
+	                        <h3>团队信息</h3>
+
+	                        <div className="field-group">
+	                            <label>团队名称</label>
+	                            <input
+	                                type="text"
+	                                value={configData.userContextConfig.teamInfo.teamName}
+	                                onChange={(e) => updateValue('userContextConfig.teamInfo.teamName', e.target.value)}
+	                                placeholder="团队名称"
+	                            />
+	                        </div>
+
+	                        <div className="field-group">
+	                            <label>团队使命</label>
+	                            <textarea
+	                                value={configData.userContextConfig.teamInfo.teamMission}
+	                                onChange={(e) => updateValue('userContextConfig.teamInfo.teamMission', e.target.value)}
+	                                placeholder="团队当前使命或主要目标"
+	                                rows={3}
+	                            />
+	                        </div>
+
+	                        <div className="field-row">
+	                            <div className="field-group">
+	                                <label>团队规模</label>
+	                                <input
+	                                    type="number"
+	                                    min="0"
+	                                    value={configData.userContextConfig.teamInfo.teamSize}
+	                                    onChange={(e) => updateValue('userContextConfig.teamInfo.teamSize', Number(e.target.value) || 0)}
+	                                />
+	                            </div>
+	                            <div className="field-group">
+	                                <label>工作时间</label>
+	                                <input
+	                                    type="text"
+	                                    value={configData.userContextConfig.teamInfo.workingHours}
+	                                    onChange={(e) => updateValue('userContextConfig.teamInfo.workingHours', e.target.value)}
+	                                    placeholder="例如 10:00-19:00"
+	                                />
+	                            </div>
+	                            <div className="field-group">
+	                                <label>团队时区</label>
+	                                <select
+	                                    value={configData.userContextConfig.teamInfo.timezone}
+	                                    onChange={(e) => updateValue('userContextConfig.teamInfo.timezone', e.target.value)}
+	                                >
+	                                    <option value="GMT+8">GMT+8 (北京时间)</option>
+	                                    <option value="GMT">GMT (格林尼治时间)</option>
+	                                    <option value="GMT-5">GMT-5 (美东时间)</option>
+	                                    <option value="GMT-8">GMT-8 (美西时间)</option>
+	                                </select>
+	                            </div>
+	                        </div>
+
+	                        <div className="field-group">
+	                            <label>团队成员</label>
+	                            <div className="structured-list">
+	                                {configData.userContextConfig.teamInfo.members.map((member, index) => (
+	                                    <div key={index} className="structured-item">
+	                                        <div className="structured-grid">
+	                                            <input
+	                                                type="text"
+	                                                value={member.name}
+	                                                onChange={(e) => updateTeamMember(index, 'name', e.target.value)}
+	                                                placeholder="姓名"
+	                                            />
+	                                            <input
+	                                                type="text"
+	                                                value={member.position}
+	                                                onChange={(e) => updateTeamMember(index, 'position', e.target.value)}
+	                                                placeholder="职位"
+	                                            />
+	                                            <input
+	                                                type="text"
+	                                                value={member.role}
+	                                                onChange={(e) => updateTeamMember(index, 'role', e.target.value)}
+	                                                placeholder="职责"
+	                                            />
+	                                            <input
+	                                                type="text"
+	                                                value={member.speciality}
+	                                                onChange={(e) => updateTeamMember(index, 'speciality', e.target.value)}
+	                                                placeholder="专长"
+	                                            />
+	                                        </div>
+	                                        <button
+	                                            type="button"
+	                                            onClick={() => removeFromArray('userContextConfig.teamInfo.members', index)}
+	                                            className="remove-btn"
+	                                        >
+	                                            删除
+	                                        </button>
+	                                    </div>
+	                                ))}
+	                                <button
+	                                    type="button"
+	                                    onClick={() => addToArray('userContextConfig.teamInfo.members', createEmptyTeamMember())}
+	                                    className="add-btn"
+	                                >
+	                                    添加团队成员
+	                                </button>
+	                            </div>
+	                        </div>
+	                    </div>
+	                );
+
+	            case 'work':
+	                return (
+	                    <div className="tab-content">
+	                        <h3>工作关注点</h3>
                         
                         {renderArrayField('主要关注点', 'userContextConfig.workFocus.primaryConcerns', configData.userContextConfig.workFocus.primaryConcerns)}
                         {renderArrayField('业务领域', 'userContextConfig.workFocus.businessDomains', configData.userContextConfig.workFocus.businessDomains)}
@@ -692,12 +953,67 @@ const PromptConfig: React.FC = () => {
                                 <option value="high">高</option>
                             </select>
                         </div>
-                    </div>
-                );
+	                    </div>
+	                );
 
-            case 'analysis':
-                return (
-                    <div className="tab-content">
+	            case 'communication':
+	                return (
+	                    <div className="tab-content">
+	                        <h3>沟通偏好</h3>
+
+	                        {renderArrayField('受众类型', 'userContextConfig.communicationContext.audienceType', configData.userContextConfig.communicationContext.audienceType)}
+
+	                        <div className="field-group">
+	                            <label>沟通风格</label>
+	                            <select
+	                                value={configData.userContextConfig.communicationContext.communicationStyle}
+	                                onChange={(e) => updateValue('userContextConfig.communicationContext.communicationStyle', e.target.value)}
+	                            >
+	                                <option value="简洁直接">简洁直接</option>
+	                                <option value="结构化汇报">结构化汇报</option>
+	                                <option value="详细解释">详细解释</option>
+	                                <option value="行动项优先">行动项优先</option>
+	                            </select>
+	                        </div>
+
+	                        <div className="field-group">
+	                            <label>文化背景</label>
+	                            <input
+	                                type="text"
+	                                value={configData.userContextConfig.communicationContext.culturalContext}
+	                                onChange={(e) => updateValue('userContextConfig.communicationContext.culturalContext', e.target.value)}
+	                                placeholder="例如 跨时区协作、中文为主"
+	                            />
+	                        </div>
+
+	                        <div className="field-row">
+	                            <div className="field-group">
+	                                <label>语言偏好</label>
+	                                <select
+	                                    value={configData.userContextConfig.communicationContext.languagePreference}
+	                                    onChange={(e) => updateValue('userContextConfig.communicationContext.languagePreference', e.target.value)}
+	                                >
+	                                    <option value="中文">中文</option>
+	                                    <option value="英文">英文</option>
+	                                    <option value="中英文混合">中英文混合</option>
+	                                </select>
+	                            </div>
+	                            <div className="field-group">
+	                                <label>汇报格式</label>
+	                                <input
+	                                    type="text"
+	                                    value={configData.userContextConfig.communicationContext.reportingFormat}
+	                                    onChange={(e) => updateValue('userContextConfig.communicationContext.reportingFormat', e.target.value)}
+	                                    placeholder="例如 项目状态报告"
+	                                />
+	                            </div>
+	                        </div>
+	                    </div>
+	                );
+
+	            case 'analysis':
+	                return (
+	                    <div className="tab-content">
                         <h3>分析偏好</h3>
                         
                         <h4>消息分析</h4>
@@ -728,17 +1044,48 @@ const PromptConfig: React.FC = () => {
         }
     };
 
-    return (
-        <div className="prompt-config">
-            <div className="config-header">
-                <h1>🛠️ 配置管理</h1>
-                <div className="config-actions">
-                    <button onClick={loadFromStorage} className="reload-btn">重新加载</button>
-                    <button onClick={saveConfiguration} className="save-btn">保存配置</button>
-                    <button onClick={triggerDataFusion} className="fusion-btn">🔄 融合到用户画像</button>
-                    <button onClick={resetToDefaults} className="reset-btn">重置默认</button>
+	    return (
+	        <div className="prompt-config">
+	            <div className="config-header">
+		                <h1>自定义提示词与上下文</h1>
+	                <div className="config-actions">
+	                    <button
+	                        onClick={reloadFromStorage}
+	                        className="reload-btn"
+	                        disabled={isLoading || isSaving}
+	                    >
+                        {isLoading ? '加载中...' : '重新加载'}
+                    </button>
+                    <button
+                        onClick={saveConfiguration}
+                        className="save-btn"
+                        disabled={isLoading || isSaving}
+                    >
+                        {isSaving ? '保存中...' : hasUnsavedChanges ? '保存配置 *' : '保存配置'}
+                    </button>
+                    <button
+                        onClick={triggerDataFusion}
+	                        className="fusion-btn"
+	                        disabled={isLoading || isSaving}
+	                    >
+	                        融合到用户画像
+	                    </button>
+                    <button
+                        onClick={resetToDefaults}
+                        className="reset-btn"
+                        disabled={isLoading || isSaving}
+                    >
+                        重置默认
+                    </button>
                 </div>
             </div>
+
+            {(syncSource || hasUnsavedChanges) && (
+                <div className="sync-summary">
+                    <span>{syncSource || '尚未保存'}</span>
+                    {hasUnsavedChanges && <strong>有未保存修改</strong>}
+                </div>
+            )}
 
             {statusMessage && (
                 <div className={`status-message ${statusType}`}>
@@ -746,13 +1093,15 @@ const PromptConfig: React.FC = () => {
                 </div>
             )}
 
-            <div className="config-tabs">
-                {[
-                    { id: 'prompts', label: '🤖 提示词' },
-                    { id: 'personal', label: '👤 个人信息' },
-                    { id: 'work', label: '💼 工作关注' },
-                    { id: 'analysis', label: '📊 分析偏好' }
-                ].map(tab => (
+	            <div className="config-tabs">
+	                {[
+	                    { id: 'prompts', label: '提示词' },
+	                    { id: 'personal', label: '个人信息' },
+	                    { id: 'team', label: '团队信息' },
+	                    { id: 'work', label: '工作关注' },
+	                    { id: 'communication', label: '沟通偏好' },
+	                    { id: 'analysis', label: '分析偏好' }
+	                ].map(tab => (
                     <button
                         key={tab.id}
                         className={`config-tab ${activeTab === tab.id ? 'active' : ''}`}
@@ -775,24 +1124,26 @@ const PromptConfig: React.FC = () => {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 }
 
-                .config-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 24px;
-                    padding-bottom: 16px;
-                    border-bottom: 2px solid #e0e0e0;
-                }
+	                .config-header {
+	                    display: flex;
+	                    justify-content: space-between;
+	                    align-items: center;
+	                    gap: 16px;
+	                    margin-bottom: 24px;
+	                    padding-bottom: 16px;
+	                    border-bottom: 2px solid #e0e0e0;
+	                }
 
                 .config-header h1 {
                     margin: 0;
                     color: #2c3e50;
                 }
 
-                .config-actions {
-                    display: flex;
-                    gap: 12px;
-                }
+	                .config-actions {
+	                    display: flex;
+	                    flex-wrap: wrap;
+	                    gap: 12px;
+	                }
 
                 .config-actions button {
                     padding: 8px 16px;
@@ -800,6 +1151,11 @@ const PromptConfig: React.FC = () => {
                     border-radius: 4px;
                     cursor: pointer;
                     transition: background-color 0.3s;
+                }
+
+                .config-actions button:disabled {
+                    opacity: 0.6;
+                    cursor: not-allowed;
                 }
 
                 .save-btn {
@@ -850,6 +1206,24 @@ const PromptConfig: React.FC = () => {
                     text-align: center;
                 }
 
+                .sync-summary {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    padding: 10px 12px;
+                    margin-bottom: 16px;
+                    border: 1px solid #dfe6e9;
+                    border-radius: 6px;
+                    background: #f8f9fa;
+                    color: #34495e;
+                    font-size: 13px;
+                }
+
+                .sync-summary strong {
+                    color: #b7791f;
+                    font-weight: 600;
+                }
+
                 .status-message.success {
                     background: #d4edda;
                     color: #155724;
@@ -862,17 +1236,18 @@ const PromptConfig: React.FC = () => {
                     border: 1px solid #f5c6cb;
                 }
 
-                .config-tabs {
-                    display: flex;
-                    margin-bottom: 24px;
-                    border-bottom: 1px solid #e0e0e0;
-                }
+	                .config-tabs {
+	                    display: flex;
+	                    flex-wrap: wrap;
+	                    margin-bottom: 24px;
+	                    border-bottom: 1px solid #e0e0e0;
+	                }
 
-                .config-tab {
-                    padding: 12px 24px;
-                    background: none;
-                    border: none;
-                    cursor: pointer;
+	                .config-tab {
+	                    padding: 12px 18px;
+	                    background: none;
+	                    border: none;
+	                    cursor: pointer;
                     border-bottom: 3px solid transparent;
                     transition: all 0.3s;
                 }
@@ -899,9 +1274,16 @@ const PromptConfig: React.FC = () => {
                     color: #2c3e50;
                 }
 
-                .field-group {
-                    margin-bottom: 20px;
-                }
+	                .field-group {
+	                    margin-bottom: 20px;
+	                }
+
+	                .field-row {
+	                    display: grid;
+	                    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	                    gap: 16px;
+	                    align-items: start;
+	                }
 
                 .field-group label {
                     display: block;
@@ -928,6 +1310,13 @@ const PromptConfig: React.FC = () => {
                     border-color: #3498db;
                 }
 
+                .field-meta {
+                    margin-top: 6px;
+                    text-align: right;
+                    color: #6b7280;
+                    font-size: 12px;
+                }
+
                 .user-info {
                     background: #f8f9fa;
                     padding: 16px;
@@ -940,9 +1329,9 @@ const PromptConfig: React.FC = () => {
                     color: #555;
                 }
 
-                .array-field {
-                    border: 1px solid #e0e0e0;
-                    border-radius: 4px;
+	                .array-field {
+	                    border: 1px solid #e0e0e0;
+	                    border-radius: 4px;
                     padding: 12px;
                     background: #f8f9fa;
                 }
@@ -983,11 +1372,57 @@ const PromptConfig: React.FC = () => {
                     font-size: 14px;
                 }
 
-                .add-btn:hover {
-                    background: #229954;
-                }
+	                .add-btn:hover {
+	                    background: #229954;
+	                }
 
-                h4 {
+	                .structured-list {
+	                    border: 1px solid #e0e0e0;
+	                    border-radius: 4px;
+	                    padding: 12px;
+	                    background: #f8f9fa;
+	                }
+
+	                .structured-item {
+	                    display: grid;
+	                    grid-template-columns: 1fr auto;
+	                    gap: 8px;
+	                    align-items: start;
+	                    margin-bottom: 8px;
+	                }
+
+	                .structured-grid {
+	                    display: grid;
+	                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	                    gap: 8px;
+	                }
+
+	                @media (max-width: 720px) {
+	                    .prompt-config {
+	                        padding: 14px;
+	                    }
+
+	                    .config-header {
+	                        align-items: stretch;
+	                        flex-direction: column;
+	                    }
+
+	                    .config-actions button,
+	                    .config-tab {
+	                        min-height: 40px;
+	                    }
+
+	                    .structured-item,
+	                    .array-item {
+	                        grid-template-columns: 1fr;
+	                    }
+
+	                    .array-item {
+	                        display: grid;
+	                    }
+	                }
+
+	                h4 {
                     color: #2c3e50;
                     margin-top: 24px;
                     margin-bottom: 16px;

@@ -542,6 +542,70 @@ test('ExplorerManager status does not probe disabled source auth', async () => {
   assert.equal(enabledStatus.sources.chatgpt.authStatus, 'connected');
 });
 
+test('ExplorerManager status reports Doubao transport fallback', async () => {
+  const settings = {
+    explorer: {
+      doubao: {
+        enabled: true,
+        lookbackDays: 7,
+        intervalMinutes: 5,
+        defaultScope: 'personal' as const,
+        transport: 'webpage_mcp' as const,
+      },
+      chatgpt: {
+        enabled: false,
+        maxConversations: 0,
+        lookbackDays: 0,
+        intervalMinutes: 10,
+        defaultScope: 'work' as const,
+      },
+      autoClassify: false,
+      askDefaultScope: 'work' as const,
+    },
+  };
+  const manager = new ExplorerManager({
+    settingsStore: {
+      getSettings: () => settings,
+    } as any,
+    memoryClient: {
+      deleteMemoriesBySourceScope: async () => ({
+        source: 'doubao',
+        scope: 'work',
+        deletedMessages: 0,
+        deletedChunks: 0,
+      }),
+    } as any,
+    rawStore: {
+      getStats: () => ({
+        messageCount: 0,
+        pendingExtractCount: 0,
+        conversationCount: 0,
+      }),
+      close: () => undefined,
+    } as any,
+    cursorStore: {
+      get: async () => undefined,
+      reset: async () => 0,
+    } as any,
+    sourceAdapters: {
+      doubao: {
+        getAuthStatus: async () => 'connected',
+        getTransportStatus: () => ({
+          mode: 'playwright',
+          fallbackReason: 'No existing doubao.com tab found',
+        }),
+      },
+    },
+  });
+
+  const status = await manager.getStatus();
+
+  assert.deepEqual(status.sources.doubao.transport, {
+    mode: 'playwright',
+    fallbackReason: 'No existing doubao.com tab found',
+  });
+});
+
 test('explorer revoke endpoint proxies memory deletion by source and scope', async () => {
   const tempDir = await createTempDir('desktop-app-explorer-revoke-');
   const config = loadConfig({

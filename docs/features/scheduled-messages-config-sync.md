@@ -1,184 +1,96 @@
-# 定时消息配置同步机制
+# 定时消息配置同步
 
 ## 概述
 
-为了解决用户在更换设备或手动绑定 Sheet 时丢失配置（特别是 Bot 配置）的问题，我们实现了配置同步机制，确保所有配置同时存储在 Chrome Storage 和 Sheet Config 表中。
+定时消息系统把运行配置同时保存到两个位置：
 
-## 改进内容
+- `chrome.storage.local.scheduledMessagesConfig`：当前浏览器的快速读取缓存
+- Google Sheet 的 `Config` 工作表：跨设备恢复、手动绑定和排障时的共享配置源
 
-### 1. 创建 ConfigSyncService
+这个机制解决的是更换设备、重装扩展或手动绑定已有维护表时，Bot、Apps Script、Sheet 子表 ID 等配置丢失的问题。
 
-新增 `ConfigSyncService.ts` 工具类，提供统一的配置读写接口：
+## 当前实现
 
-- `readConfigFromSheet(sheetId)` - 从 Sheet Config 表读取完整配置
-- `saveConfigToSheet(config)` - 保存配置到 Sheet Config 表
-- `saveConfigToStorage(config)` - 保存配置到 Chrome Storage
-- `syncConfig(config)` - 同时同步到两个位置
-- `updatePartialConfig(updates)` - 更新部分配置并同步
+核心实现位于 `src/scheduled-messages/ConfigSyncService.ts`：
 
-### 2. 扩展 Sheet Config 表字段
+- `readConfigFromSheet(sheetId)`：从 `Config!A2:B` 读取键值配置，并恢复为 `SheetConfig`
+- `saveConfigToSheet(config)`：用 `RAW` 写回扩展管理的配置键，同时保留未知键，避免 Sheets 自动把 ID/时间戳转成数字或日期
+- `saveConfigToStorage(config)`：写入 Chrome Storage
+- `syncConfig(config)`：先写 Sheet，再写 Chrome Storage，降低 Sheet 写失败后的半同步风险
+- `updatePartialConfig(updates)`：合并局部更新；如果 Sheet 上的 `last_sync_time` 更新，会先以 Sheet 配置为基准，降低旧本地配置覆盖跨设备更新的风险；Bot 双规则字段会保留未被更新的 sibling rule
+- `recoverScheduledMessagesWorksheetIds(sheetId, config)`：手动绑定旧维护表时，从工作表标题恢复缺失的 Messages/Logs grid id，并在恢复成功时写回 Config
 
-新增以下字段以支持 Bot 配置：
+## 同步字段
 
-| 字段名 | 说明 |
-|-------|------|
-| `bot_executor_rule_id` | Jira Automation Rule ID |
-| `bot_executor_rule_name` | 规则名称 |
-| `bot_executor_webhook_url` | Webhook URL |
-| `bot_executor_project_key` | Jira Project Key |
-| `bot_executor_jira_url` | Jira 实例 URL |
-| `bot_executor_created_at` | Bot 配置创建时间 |
+当前同步字段包括：
 
-### 3. 改进 Bot 配置流程
+- Sheet 与 Apps Script：`sheet_version`、`script_id`、`deployment_id`、`web_app_url`
+- 触发器：`minute_trigger_id`、`daily_trigger_id`
+- 子表 ID：`messages_sheet_id`、`logs_sheet_id`
+- 版本信息：`app_script_version`、`app_script_last_updated`
+- 审计信息：`created_by`、`created_at`、`last_sync_time`
+- 旧版 Bot 执行规则：`bot_executor_*`
+- 新版 Bot Automation：`bot_automation_executor_*`、`bot_automation_timeline_sync_*`
 
-在 `BotConfigDialog` 中配置 Bot 后：
-- ✅ 使用 `ConfigSyncService.syncConfig()` 同时保存到 Sheet 和本地
-- ✅ 确保配置在两个位置保持一致
+旧版 `bot_executor_*` 会继续镜像 executor rule，确保老版本维护表仍可恢复。
 
-### 4. 改进手动绑定流程
+## 用户流程
 
-在 `OneClickSetup.handleManualBind()` 中：
-- ✅ 从 Sheet Config 表读取完整配置（包括 Bot 配置）
-- ✅ 自动恢复所有配置项
-- ✅ 如果 Sheet Config 表为空，创建最小配置
+### 首次初始化
 
-## 测试指南
+`SheetInitializer` 创建维护表、Apps Script、触发器和 Config 工作表后，调用 `ConfigSyncService.syncConfig()` 同步到 Sheet 和本地。
 
-### 测试场景 1：Bot 配置同步
+### 手动绑定已有 Sheet
 
-**步骤：**
-1. 打开定时消息管理页面
-2. 配置 Bot 推送功能（输入 Jira URL 和 Project Key）
-3. 等待配置成功
-4. 打开 Google Sheet，检查 Config 工作表
-5. 验证以下字段是否存在：
-   - `bot_executor_rule_id`
-   - `bot_executor_rule_name`
-   - `bot_executor_webhook_url`
-   - `bot_executor_project_key`
-   - `bot_executor_jira_url`
-   - `bot_executor_created_at`
+`OneClickSetup.handleManualBind()` 会：
 
-**预期结果：**
-- ✅ Config 表中包含所有 Bot 配置字段
-- ✅ 控制台输出：`✅ 配置已同步到 Sheet Config 表`
+1. 从 Sheet URL 或直接粘贴的 Sheet ID 提取 `sheetId`
+2. 读取 `Config` 工作表
+3. 如果存在完整配置，保存到 Chrome Storage 并刷新页面
+4. 如果旧维护表缺少 `Config` 工作表，会在用户有编辑权限时创建该工作表并写入表头
+5. 如果 Config 为空，写入带 Messages/Logs sheet id 的最小 Config 后再保存到本地，以便下一台设备也能恢复
+6. 如果 Config 已存在但缺少 Messages/Logs sheet id，会按工作表标题补齐并回写 Config；读取工作表列表失败时仍会恢复已有 Config，不阻塞绑定
 
----
+### Bot 配置与升级
 
-### 测试场景 2：手动绑定恢复配置
+`BotConfigDialog` 配置或修复 Jira Automation 后，会把 executor rule 和 timeline sync rule 一起写入 Config。只升级其中一个 rule 时，另一个 rule 会被保留。
 
-**步骤：**
-1. 记录当前 Sheet URL
-2. 清除扩展存储：
-   ```javascript
-   chrome.storage.local.clear()
-   ```
-3. 刷新定时消息管理页面
-4. 使用"手动绑定"功能，输入之前的 Sheet URL
-5. 点击"绑定"按钮
-6. 等待页面刷新
+## 2026-05-05 巡检更新
 
-**预期结果：**
-- ✅ 页面显示"正在从 Sheet 读取配置..."
-- ✅ 所有配置恢复（包括 Bot 配置）
-- ✅ Bot 推送功能可正常使用，无需重新配置
-- ✅ 控制台输出：`✅ 从 Sheet 读取并绑定配置`
+- 文档仍符合当前代码边界：Sheet 是跨设备恢复源，Chrome Storage 是本机快速缓存。
+- 本轮修复了旧 Config 的恢复缺口：以前只有 Config 为空时才补 Messages/Logs sheet id；现在 Config 已存在但缺少这些 id 时也会补齐并写回。
+- 业内参考：Chrome `storage.sync` 适合小型用户设置，但有约 100 KB 总量和 8 KB 单项限制；Google Sheets developer metadata 可把业务字段和 sheet/行/列语义绑定，减少用户编辑表格结构后的断链风险；同步理论研究强调冲突识别、回滚/接受信息和用户可理解的合并结果。当前实现仍选择轻量的 last-write-wins，后续如果增加多设备编辑 UI，应先暴露“远端更新时间、本地更新时间、将覆盖字段”。
 
----
+## 行为边界
 
-### 测试场景 3：跨设备配置迁移
+- 当前冲突策略是“最后写入 wins”，没有多设备自动合并 UI。
+- 局部更新会在写入前读取 Sheet，并在 Sheet 明显更新时以 Sheet 版本作为合并基准；同一字段并发编辑仍然遵循最后写入 wins。
+- `last_sync_time` 主要用于排障和判断配置新旧，不是强一致锁。
+- 写 Sheet 时只替换扩展管理的键；用户或未来版本新增的未知键会被保留。
+- Config 写入使用 `valueInputOption=RAW`，因为这些值是机器配置，不应被 Sheets 按用户输入规则自动解析。
+- 如果 Sheet 写入失败，`syncConfig()` 不会继续写本地，避免本地显示已配置但跨设备无法恢复。
+- 如果 `saveConfigToSheet()` 写入旧维护表时发现 `Config` 工作表缺失，会先补齐 `Config` 工作表和表头，再继续写入配置。
+- Config 里的 `messages_sheet_id`、`logs_sheet_id` 只接受非负整数；无效值会被忽略，后续运行时可重新发现子表 ID。
+- Messages/Logs sheet id 仍依赖默认工作表标题恢复；如果用户重命名这两个表，后续更稳的方案是同步 Google Sheets developer metadata。
 
-**步骤：**
-1. 在设备 A 上完成 Bot 配置
-2. 记录 Sheet URL
-3. 在设备 B 上安装扩展
-4. 使用手动绑定功能绑定相同的 Sheet URL
-5. 验证所有配置是否迁移
+## 参考资料
 
-**预期结果：**
-- ✅ 设备 B 上自动恢复所有配置
-- ✅ Bot 推送功能无需重新配置
-- ✅ 所有定时消息正常显示
+- Chrome Extensions `chrome.storage`：本地、同步、会话存储的适用边界与 quota。
+- Google Sheets API developer metadata：用元数据语义绑定 spreadsheet、sheet、行或列，降低 A1 range 和标题漂移风险。
+- Csirmaz & Csirmaz, "Data Synchronization: A Complete Theoretical Solution for Filesystems"：同步可拆成冲突识别和冲突解决，用户应能理解将被回滚或接受的变更。
 
----
+## 验证
 
-### 测试场景 4：配置更新同步
+目标单测：
 
-**步骤：**
-1. 已配置 Bot 的系统
-2. 删除并重新配置 Bot（使用不同的 Project Key）
-3. 检查 Sheet Config 表是否更新
+```bash
+TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node src/scheduled-messages/__tests__/appScriptConfigSync.test.ts
+```
 
-**预期结果：**
-- ✅ Config 表中的 Bot 配置字段已更新为新值
-- ✅ `last_sync_time` 字段更新为最新时间
+关键人工回归：
 
----
-
-## 兼容性说明
-
-### 向后兼容
-
-- ✅ 旧版本创建的 Sheet 仍然可以正常使用
-- ✅ 如果 Config 表中没有 Bot 配置字段，系统会正常工作
-- ✅ 手动绑定时会优雅降级：如果 Sheet 为空，创建最小配置
-
-### 数据迁移
-
-对于已有用户：
-1. 如果已在本地配置 Bot，下次更新配置时会自动同步到 Sheet
-2. 可以通过重新配置 Bot 来主动触发同步
-3. 不影响现有消息和触发器
-
-## 配置存储位置对比
-
-| 配置项 | Chrome Storage | Sheet Config |
-|-------|----------------|--------------|
-| Sheet ID | ✅ | ✅ |
-| Sheet URL | ✅ | ❌ (可从 ID 推导) |
-| Script ID | ✅ | ✅ |
-| Web App URL | ✅ | ✅ |
-| Trigger IDs | ✅ | ✅ |
-| Bot Executor | ✅ | ✅ (新增) |
-| Version | ✅ | ✅ |
-| Timestamps | ✅ | ✅ |
-
-## 其他可能需要同步的配置
-
-目前未同步但可能需要考虑的配置：
-- **messagesSheetId**: Messages 工作表的 Sheet ID（数字 ID）
-  - 当前只存储在 Chrome Storage
-  - 建议：如果用户重命名了工作表，可以通过此 ID 找到正确的表
-  - 优先级：中
-
-## 注意事项
-
-1. **权限要求**：需要 Google Sheets API 读写权限
-2. **错误处理**：如果 Sheet Config 表不存在，会抛出错误
-3. **性能考虑**：每次配置更新都会同时写入两个位置
-4. **并发问题**：多设备同时修改配置可能导致冲突（以最后写入为准）
-
-## 故障排查
-
-### 问题：手动绑定后 Bot 配置丢失
-
-**可能原因：**
-- Sheet Config 表中没有 Bot 配置字段
-- 网络请求失败
-
-**解决方案：**
-1. 检查 Sheet Config 表是否包含 `bot_executor_*` 字段
-2. 重新配置 Bot 推送功能
-3. 查看控制台日志确认同步状态
-
-### 问题：配置同步失败
-
-**可能原因：**
-- Google Sheets API 权限不足
-- Sheet 已被删除或无法访问
-
-**解决方案：**
-1. 检查控制台错误信息
-2. 验证 Google 账号权限
-3. 确认 Sheet 仍然存在且可访问
-
+1. 创建或绑定定时消息维护表
+2. 配置 Bot Automation
+3. 检查 Sheet `Config` 工作表包含新版 `bot_automation_*` 字段和旧版 `bot_executor_*` 镜像字段
+4. 清空本地 `chrome.storage.local` 后用同一 Sheet URL 手动绑定
+5. 确认 Bot 状态、Web App URL、Messages/Logs 子表 ID 都能恢复

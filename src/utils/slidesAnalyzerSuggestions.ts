@@ -44,18 +44,61 @@ export function normalizeComparableText(value: unknown): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-export function containsSuggestionText(
+function splitSuggestionLines(value: unknown): string[] {
+  return flattenSuggestionValue(value)
+    .flatMap(part => part.split(/\r?\n/))
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+export function getNewSuggestionText(
   existingText: unknown,
   suggestedText: unknown,
-): boolean {
+): string {
   const existing = normalizeComparableText(existingText);
   const suggested = normalizeComparableText(suggestedText);
 
   if (!suggested) {
-    return true;
+    return '';
   }
 
-  return existing.includes(suggested);
+  if (existing.includes(suggested)) {
+    return '';
+  }
+
+  const existingLines = new Set(
+    splitSuggestionLines(existingText).map(line => normalizeComparableText(line)),
+  );
+  const seenSuggestionLines = new Set<string>();
+  const newLines: string[] = [];
+
+  for (const line of splitSuggestionLines(suggestedText)) {
+    const normalizedLine = normalizeComparableText(line);
+    if (!normalizedLine || seenSuggestionLines.has(normalizedLine)) {
+      continue;
+    }
+
+    seenSuggestionLines.add(normalizedLine);
+
+    if (existingLines.has(normalizedLine)) {
+      continue;
+    }
+
+    if (normalizedLine.length >= 8 && existing.includes(normalizedLine)) {
+      continue;
+    }
+
+    newLines.push(line);
+  }
+
+  return newLines.join('\n');
+}
+
+export function containsSuggestionText(
+  existingText: unknown,
+  suggestedText: unknown,
+): boolean {
+  return getNewSuggestionText(existingText, suggestedText) === '';
 }
 
 export function extractJiraTicketKeys(...values: unknown[]): string[] {
@@ -73,4 +116,12 @@ export function extractJiraTicketKeys(...values: unknown[]): string[] {
   }
 
   return Array.from(keys);
+}
+
+export function findFirstJiraTicketKey(value: unknown): string | undefined {
+  return extractJiraTicketKeys(value)[0];
+}
+
+export function hasJiraTicketKey(value: unknown): boolean {
+  return findFirstJiraTicketKey(value) !== undefined;
 }

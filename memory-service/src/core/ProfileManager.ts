@@ -263,7 +263,10 @@ export class ProfileManager {
     const identityRows = this.db
       .prepare(
         `SELECT * FROM user_profile_items
-         WHERE status = 'active' AND item_type = 'fact' AND item_key IN (${placeholders})
+         WHERE status = 'active'
+           AND user_confirmed = 1
+           AND item_type = 'fact'
+           AND item_key IN (${placeholders})
          ORDER BY salience_score DESC
          LIMIT ?`,
       )
@@ -282,7 +285,9 @@ export class ProfileManager {
     const focusRows = this.db
       .prepare(
         `SELECT * FROM user_profile_items
-         WHERE status = 'active' AND last_seen >= ?
+         WHERE status = 'active'
+           AND user_confirmed = 1
+           AND last_seen >= ?
          ORDER BY salience_score DESC
          LIMIT 5`,
       )
@@ -300,7 +305,9 @@ export class ProfileManager {
     const interestRows = this.db
       .prepare(
         `SELECT * FROM user_profile_items
-         WHERE status = 'active' AND item_type = 'interest'
+         WHERE status = 'active'
+           AND user_confirmed = 1
+           AND item_type = 'interest'
          ORDER BY salience_score DESC
          LIMIT 10`,
       )

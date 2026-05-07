@@ -1,4 +1,9 @@
-import type { EnvConfigType } from '../utils';
+import {
+  getMeetingTranscribeLanguageCode,
+  normalizeMeetingTranscribeLanguage,
+  type EnvConfigType,
+  type MeetingTranscribeLanguage,
+} from '../utils';
 
 export type MeetingTranscribeApiStyle =
   | 'openai_audio_transcriptions'
@@ -128,6 +133,16 @@ function extractChatCompletionText(payload: any): string {
   return '';
 }
 
+function getLanguageInstruction(language: MeetingTranscribeLanguage): string {
+  if (language === 'zh-CN') {
+    return 'Transcribe the audio verbatim in Chinese. Do not translate it to English.';
+  }
+  if (language === 'en-US') {
+    return 'Transcribe the audio verbatim in English. Do not translate it.';
+  }
+  return 'Transcribe the audio verbatim, preserving each utterance in its original spoken language. Chinese and English may be mixed. Do not translate.';
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -250,8 +265,11 @@ export async function requestMeetingTranscription(args: {
   model: string;
   apiStyle: MeetingTranscribeApiStyle;
   audioBlob: Blob;
+  language?: MeetingTranscribeLanguage | string;
   timeoutMs?: number;
 }): Promise<MeetingTranscriptionResult> {
+  const language = normalizeMeetingTranscribeLanguage(args.language);
+  const languageCode = getMeetingTranscribeLanguageCode(language);
   if (args.apiStyle === 'openai_chat_completions') {
     const maxRawAudioBytes = 7.5 * 1024 * 1024;
     if (args.audioBlob.size > maxRawAudioBytes) {
@@ -276,6 +294,10 @@ export async function requestMeetingTranscription(args: {
         model: args.model,
         messages: [
           {
+            role: 'system',
+            content: getLanguageInstruction(language),
+          },
+          {
             role: 'user',
             content: [
               {
@@ -290,6 +312,7 @@ export async function requestMeetingTranscription(args: {
         stream: false,
         asr_options: {
           enable_itn: false,
+          ...(languageCode ? { language: languageCode } : {}),
         },
       }),
     });
@@ -318,6 +341,9 @@ export async function requestMeetingTranscription(args: {
     `meeting-cumulative-${Date.now()}.wav`,
   );
   formData.append('model', args.model);
+  if (languageCode) {
+    formData.append('language', languageCode);
+  }
   const response = await fetch(endpoint, {
     method: 'POST',
     signal: withTimeoutSignal(args.timeoutMs ?? 30000),

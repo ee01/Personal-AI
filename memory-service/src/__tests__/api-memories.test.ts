@@ -170,5 +170,28 @@ describe('Memories API', () => {
       { target_type: 'message', target_id: 'personal-alpha' },
       { target_type: 'message', target_id: 'work-beta' },
     ]);
+
+    const allScopeRes = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/memories?source=alpha&scope=all',
+    });
+
+    expect(allScopeRes.statusCode).toBe(200);
+    expect(allScopeRes.json()).toEqual({
+      source: 'alpha',
+      scope: 'all',
+      deletedMessages: 1,
+      deletedChunks: 1,
+    });
+
+    const finalMessageIds = db
+      .prepare('SELECT id FROM messages_raw ORDER BY id')
+      .all() as Array<{ id: string }>;
+    expect(finalMessageIds.map((row) => row.id)).toEqual(['work-beta']);
+
+    const finalChunkIds = db
+      .prepare('SELECT chunk_id FROM chunks ORDER BY chunk_id')
+      .all() as Array<{ chunk_id: number }>;
+    expect(finalChunkIds.map((row) => row.chunk_id)).toEqual([203]);
   });
 });

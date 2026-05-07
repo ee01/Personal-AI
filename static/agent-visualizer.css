@@ -56,6 +56,7 @@
   padding: 10px;
   display: flex;
   align-items: center;
+  gap: 10px;
   cursor: pointer;
   transition: background-color 0.2s;
 }
@@ -73,23 +74,91 @@
   justify-content: center;
   color: white;
   font-size: 12px;
-  margin-right: 10px;
+  flex: 0 0 auto;
+}
+
+.step-header-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.step-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .step-time {
   font-size: 12px;
   color: #777;
-  margin-right: 10px;
+  flex: 0 0 auto;
 }
 
 .step-title {
-  flex-grow: 1;
   font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.step-summary {
+  color: #555;
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.step-status {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #57606a;
+  background: #eaeef2;
+}
+
+.step-status.done {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.step-status.tool {
+  background: #ddf4ff;
+  color: #0969da;
+}
+
+.step-status.error {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.step-status.blocked {
+  background: #fff1d6;
+  color: #9a6700;
+}
+
+.step-status.skipped {
+  background: #f6f8fa;
+  color: #57606a;
+}
+
+.step-status.partial {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.step-status.budget,
+.step-status.stopped {
+  background: #f6f8fa;
+  color: #6e7781;
 }
 
 .expand-icon {
   color: #999;
   font-size: 12px;
+  flex: 0 0 auto;
 }
 
 .step-details {
@@ -178,6 +247,16 @@
   border-left: 4px solid #F44336;
 }
 
+.flow-node.tool.skipped {
+  background-color: #f6f8fa;
+  border-left: 4px solid #757575;
+}
+
+.flow-node.tool.partial {
+  background-color: #fff8c5;
+  border-left: 4px solid #bf8700;
+}
+
 .flow-node.decision {
   background-color: #EDE7F6;
   border-left: 4px solid #673AB7;
@@ -210,6 +289,18 @@
 
 .flow-node.tool.error .icon-tool {
   background-color: #F44336;
+}
+
+.flow-node.tool.blocked .icon-tool {
+  background-color: #D97706;
+}
+
+.flow-node.tool.skipped .icon-tool {
+  background-color: #757575;
+}
+
+.flow-node.tool.partial .icon-tool {
+  background-color: #bf8700;
 }
 
 .icon-decision {
@@ -346,4 +437,4 @@
 
 .reasons-section li {
   margin-bottom: 5px;
-} 
+}

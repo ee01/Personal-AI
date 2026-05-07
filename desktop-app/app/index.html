@@ -13,7 +13,7 @@
           <p class="eyebrow">Personal AI · 4.0</p>
           <h1>让 AI 记住你</h1>
           <p class="hero-copy">
-            左侧是「记忆广播」——把记忆系统里的长期记忆、近期重点和待办，自动推到豆包等外部入口；右侧是「记忆探索」——从豆包、ChatGPT 等日常对话里，把值得沉淀的事实和偏好自动写回记忆。
+            左侧是「记忆广播」——把记忆系统里的长期记忆、近期记忆重点和待办，自动推到豆包等外部入口；右侧是「记忆探索」——从豆包、ChatGPT 等日常对话里，把值得沉淀的事实和偏好自动写回记忆。
           </p>
         </div>
         <div class="hero-actions">
@@ -151,7 +151,7 @@
               <input id="stable-hours" type="number" min="1" step="1" />
             </label>
             <label>
-              <span>近期重点（小时）</span>
+              <span>近期记忆重点（小时）</span>
               <input id="briefing-hours" type="number" min="1" step="1" />
             </label>
             <label>
@@ -177,7 +177,7 @@
             <p class="column-label">Broadcast</p>
             <h2>记忆广播</h2>
             <p>
-              把记忆系统中的长期记忆、近期重点与待办自动推到豆包；未来还会扩展到更多外部入口（skill 记忆、其他对话工具等）。
+              把记忆系统中的长期记忆、近期记忆重点与待办自动推到豆包；关注规则只用于触发提醒，不会被当作近期记忆重点保存。
             </p>
           </div>
 
@@ -191,11 +191,10 @@
                     id="step-login-status"
                     class="step-status step-status-pending"
                     >待登录</span
-                  >
                 </div>
                 <p>
-                  桥接器会使用自己的浏览器 profile
-                  保存登录态，不会读取你的主浏览器 Cookie。
+                  默认使用桥接器自己的浏览器 profile；开启日常浏览器模式时，只通过扩展操作明确的
+                  doubao.com 标签页，不导出主浏览器 Cookie。
                 </p>
               </div>
             </div>
@@ -226,8 +225,16 @@
             </div>
 
             <div class="action-row">
+              <button
+                id="broadcast-transport-save-button"
+                class="secondary"
+                type="button"
+              >
+                保存广播方式
+              </button>
               <button id="login-button" type="button">打开登录窗口</button>
             </div>
+            <p id="broadcast-transport-message" class="inline-message"></p>
             <p id="login-message" class="inline-message"></p>
           </article>
 
@@ -273,7 +280,7 @@
                   >
                 </div>
                 <p>
-                  把近期重点、待办和通知推送回你在手机 /
+                  把近期记忆重点、待办和通知推送回你在手机 /
                   耳机里会继续使用的那条对话。
                 </p>
               </div>
@@ -283,7 +290,7 @@
                 自动绑定手机对话
               </button>
               <button id="run-briefing-button" class="secondary" type="button">
-                现在推一次近期重点
+                现在推一次近期记忆重点
               </button>
               <button id="run-reminder-button" class="secondary" type="button">
                 现在推一次待办 / 通知
@@ -310,7 +317,7 @@
               </div>
             </div>
             <p class="step-note">
-              如果你想先验证链路，可以先分别手动推送 persona、近期重点和待办 /
+              如果你想先验证链路，可以先分别手动推送 persona、近期记忆重点和待办 /
               通知，确认都能写入正确线程。
             </p>
             <div class="action-row">
@@ -454,6 +461,12 @@
               <p class="field-hint webpage-mcp-fallback-hint">未检测到扩展时不会阻塞同步 — 会临时使用桌面端自带 Chromium。</p>
             </div>
 
+            <p
+              id="doubao-source-transport-banner"
+              class="inline-message"
+              hidden
+            ></p>
+
             <div class="action-row">
               <button id="doubao-source-save-button" type="button">
                 保存来源设置
@@ -475,9 +488,8 @@
             </div>
 
             <p class="privacy-note">
-              隐私提示：只使用桥接器自己的豆包浏览器 profile
-              读取你授权的会话，不会读取主浏览器
-              Cookie，也不会直接改写真实聊天；如果要在 Explorer
+              隐私提示：默认只使用桥接器自己的豆包浏览器 profile；开启日常浏览器模式时，只读取明确打开的
+              doubao.com 标签页，不导出主浏览器 Cookie，也不会直接改写真实聊天；如果要在 Explorer
               里撤回已入库记忆，会按这里保存的默认范围执行。
             </p>
             <p id="doubao-source-message" class="inline-message"></p>

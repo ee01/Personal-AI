@@ -2,6 +2,36 @@ import type { ScheduledMessage } from './types';
 
 type TimelineOffsetInput = ScheduledMessage['Timeline_Offset'] | string | null | undefined;
 
+export function parseTimelineOffsetInputValue(value: string): number | undefined {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return undefined;
+  }
+
+  const parsedOffset = Number(trimmedValue);
+  if (!Number.isFinite(parsedOffset) || !Number.isInteger(parsedOffset)) {
+    return undefined;
+  }
+
+  return parsedOffset;
+}
+
+export function isValidTimelineOffsetValue(
+  offset: TimelineOffsetInput,
+  min = -30,
+  max = 30,
+): boolean {
+  const normalizedOffset = typeof offset === 'string'
+    ? parseTimelineOffsetInputValue(offset)
+    : offset;
+
+  return typeof normalizedOffset === 'number' &&
+    Number.isFinite(normalizedOffset) &&
+    Number.isInteger(normalizedOffset) &&
+    normalizedOffset >= min &&
+    normalizedOffset <= max;
+}
+
 export function normalizeTimelineOffset(offset: TimelineOffsetInput): number {
   if (typeof offset === 'number' && Number.isFinite(offset)) {
     return offset;

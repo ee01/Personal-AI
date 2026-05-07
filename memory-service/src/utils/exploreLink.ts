@@ -5,12 +5,13 @@
  * because the modal is mounted into different shells (extension popup, in-page
  * modal, desktop app webview) and the host portion is decided by the consumer.
  *
- * Routes (kept in sync with src/modals/memory-exploring.vue):
+ * Routes (kept in sync with src/modals/memory-exploring-entry.ts):
  *
  *   /timeline?focus=<id>            // jump to a single message/chunk
- *   /entity/<type>/<id>             // open entity detail
- *   /chunk/<chunkId>                // open a knowledge chunk
- *   /thread/<conversationId>?focus=<msgId>
+ *   /topic/<id>                     // open topic detail
+ *   /person/<id>                    // open person detail
+ *   /project/<id>                   // open project placeholder/detail
+ *   /entity/<type>?focus=<id>       // open entity list and focus an entity
  */
 
 import type { Entity, EntityType, RecallItem } from '../types/index.js';
@@ -28,13 +29,14 @@ export function buildExploreLink(input: ExploreLinkInput): string | undefined {
   if (input.type === 'entity') {
     const t = input.entity?.type || input.entityType;
     if (!t) return undefined;
-    return `#/entity/${encodeURIComponent(t)}/${encodeURIComponent(input.id)}`;
-  }
-  if (input.type === 'chunk') {
-    return `#/chunk/${encodeURIComponent(input.id)}`;
+    const encodedId = encodeURIComponent(input.id);
+    if (t === 'Topic') return `#/topic/${encodedId}`;
+    if (t === 'Person') return `#/person/${encodedId}`;
+    if (t === 'Project') return `#/project/${encodedId}`;
+    return `#/entity/${encodeURIComponent(t)}?focus=${encodedId}`;
   }
   if (input.conversationId) {
-    return `#/thread/${encodeURIComponent(input.conversationId)}?focus=${encodeURIComponent(input.id)}`;
+    return `#/timeline?thread=${encodeURIComponent(input.conversationId)}&focus=${encodeURIComponent(input.id)}`;
   }
   return `#/timeline?focus=${encodeURIComponent(input.id)}`;
 }

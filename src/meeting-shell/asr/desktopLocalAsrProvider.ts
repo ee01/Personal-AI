@@ -2,6 +2,10 @@ import type { ASRProvider, ASREventMap, MeetingPilotASRTier } from './types';
 import { createASREventEmitter } from './types';
 import { createPcmStreamer } from './pcmStreamer';
 import { sanitizeASRTranscriptText } from './transcriptFilter';
+import {
+  normalizeMeetingTranscribeLanguage,
+  type MeetingTranscribeLanguage,
+} from '../../utils';
 
 const MAX_CHUNK_BYTES = 900 * 1024;
 const DESKTOP_ASR_BASE_URL = 'http://127.0.0.1:46321';
@@ -67,9 +71,11 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-function getPreferredLocale(): string {
-  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
-  return nav?.language || 'auto';
+function getPreferredLocale(language: MeetingTranscribeLanguage): string {
+  if (language === 'zh-CN' || language === 'en-US') {
+    return language;
+  }
+  return 'auto';
 }
 
 function formatEngineLabel(
@@ -97,6 +103,7 @@ function formatEngineLabel(
 export class DesktopLocalAsrProvider implements ASRProvider {
   readonly tier: MeetingPilotASRTier = 'desktop_whisper';
 
+  private language: MeetingTranscribeLanguage;
   private emitter = createASREventEmitter();
   private sessionId: string | undefined;
   private sessionStartedAt = 0;
@@ -110,6 +117,10 @@ export class DesktopLocalAsrProvider implements ASRProvider {
   private fallbackFinalEngine: LocalFinalEngine | undefined;
   private lastChainLabel: string | undefined;
   private lastPartialByUtterance = new Map<string, string>();
+
+  constructor(language: MeetingTranscribeLanguage | string = 'auto') {
+    this.language = normalizeMeetingTranscribeLanguage(language);
+  }
 
   async isAvailable(): Promise<{ ok: boolean; reason?: string }> {
     if (
@@ -192,7 +203,8 @@ export class DesktopLocalAsrProvider implements ASRProvider {
         path: '/asr/session/start',
         body: {
           sessionId: this.sessionId,
-          locale: getPreferredLocale(),
+          locale: getPreferredLocale(this.language),
+          language: this.language,
           liveEngine: 'auto',
           finalEngine: 'funasr_nano',
           fallbackFinalEngine: 'whisper_cpp',

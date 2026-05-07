@@ -4,6 +4,8 @@
 
 为了让用户能够在扩展更新时自动获取最新的 App Script 代码，我们实现了一套完整的自动更新机制。该机制使用 Google Apps Script API 的 `deployments.update` 接口，确保在更新代码的同时保持 Web App URL 不变。
 
+当前实现会在后台静默检查、在管理页面提供手动检查和升级入口，并在升级前展示当前/最新版本、Project History 版本额度、URL 不变和失败保留旧版本的说明。升级会先预检是否存在可更新的正式 Web App deployment，再检查 Apps Script Project History 是否还有新建版本额度，然后才写入代码和创建新版本，避免 deployment 配置异常或 200 个版本上限导致升级中途阻塞。版本比较按 SemVer 优先级处理，兼容常见的 `v` 前缀和 build metadata，避免因为 `2.6.16+build.7` 这类等价版本造成重复升级。
+
 ## 功能特性
 
 ### 1. 版本标记
@@ -12,8 +14,8 @@
 
 ```javascript
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.6.1';
-var APP_SCRIPT_LAST_UPDATED = '2026-04-03';
+var APP_SCRIPT_VERSION = '2.6.23';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-06';
 ```
 
 同时提供了一个 API 端点来获取当前部署的版本：
@@ -48,8 +50,9 @@ export interface SheetConfig {
 创建了 `AppScriptUpdater` 类，提供以下功能：
 
 - **检查更新**: `checkForUpdates()` - 对比本地版本和部署版本
-- **执行更新**: `updateAppScript()` - 自动更新 App Script 代码并重新部署
-- **版本比较**: `compareVersions()` - 语义化版本号比较
+- **执行更新**: `updateAppScript()` - 先预检正式 deployment，再自动更新 App Script 代码并重新部署
+- **版本额度预检**: 升级前通过 `projects.versions.list` 读取 Project History 使用量；达到 200 个版本上限时直接提示清理，不先覆盖脚本代码
+- **版本比较**: 使用 `compareAppScriptVersions()` 按 SemVer 优先级比较版本，build metadata 不参与排序，异常旧值会被视为需要恢复升级
 - **版本解析**: 从 `app-script-template.gs` 读取最新版本和更新时间，避免在多个文件重复维护版本号
 
 ### 4. 自动检测机制
@@ -70,7 +73,9 @@ if (details.reason === 'update') {
 
 #### 在 UI 中
 
-用户打开定时消息管理页面时自动检查更新，如果有新版本会显示更新按钮。
+用户打开定时消息管理页面时会静默检查更新：只复用 Chrome 已缓存的 Google 授权，不会在页面加载时弹出授权窗口。如果没有缓存授权，会显示一个非阻塞提示，用户可以手动点击“检查脚本”再授权检查。
+
+如果发现有新版本，header 和页面提示条会显示“升级调度系统”入口；用户手动点击升级时才会触发交互式授权，并依次检查 Sheet Schema、App Script 和 Jira Automation 规则。提示条会说明当前版本、最新版本、Project History 额度、升级前会预检部署、Web App URL 会保持不变，以及失败项会保留旧版本。如果 Project History 已满，会把主操作切换为打开清理页面。
 
 ## 更新流程
 
@@ -83,10 +88,13 @@ if (details.reason === 'update') {
 2. **版本检查**
    - 延迟 3 秒后开始检查（避免与其他初始化冲突）
    - 从 Chrome Storage 读取配置
+   - 只使用缓存授权；没有缓存 token 时跳过后台检查，不打断用户
    - 调用 Web App 的 `getVersion` 端点获取当前部署版本
    - 与扩展中的最新版本对比
 
 3. **执行更新**（如果需要）
+   - 先查找并验证有 `versionNumber` 的正式 Web App deployment；如果只有 @HEAD 或没有 Web App deployment，升级会在创建脚本版本前失败
+   - 读取 Project History 版本数量；如果已达到 200 个版本上限，直接提示用户清理，不写入 HEAD 代码
    - 加载最新的 App Script 模板代码
    - 使用 `projects/{scriptId}/content` API 更新项目代码
    - 创建新版本 `projects/{scriptId}/versions`
@@ -102,7 +110,7 @@ if (details.reason === 'update') {
 用户也可以在 UI 中手动触发更新：
 
 1. 打开定时消息管理页面
-2. 如果有新版本，会在 header 显示 "🔄 更新脚本" 按钮
+2. 如果有新版本，会在 header 显示“升级调度系统”按钮
 3. 点击按钮确认更新
 4. 等待更新完成
 
@@ -197,7 +205,7 @@ await fetch(
 
 3. **Deployment ID 不存在**
    - 自动从 API 获取现有 deployment 列表
-   - 找到 Web App 类型的 deployment
+   - 找到有 `versionNumber` 的正式 Web App deployment
    - 保存到配置供后续使用
 
 4. **更新失败**
@@ -207,6 +215,7 @@ await fetch(
 
 5. **App Script 历史版本达到 200 个上限**
    - 识别 Google 返回的版本上限错误
+   - 升级前主动读取 Project History 用量；已满时直接阻止升级写入
    - 提供 Project History 清理入口
    - 用户清理旧版本后可重试升级
 
@@ -436,6 +445,15 @@ import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
    - 在 UI 中显示版本更新日志
    - 让用户了解新功能
 
+## 更新记录
+
+- 2026-05-06：升级前增加 Project History 版本额度预检；达到 200 个版本上限时，管理页直接引导用户打开清理页面，避免先覆盖脚本 HEAD 代码后才失败。
+- 2026-05-06：App Script 版本更新到 2.6.23，Timeline Sync 会记录每个项目最近一次缓存写入尝试的安全诊断，便于 UI 展示失败原因。
+- 2026-05-06：App Script 版本更新到 2.6.22，显式时间消息不再因分钟容差提前发送；非法 POST JSON 诊断同时保留 `.asJsonString` 修复指引和 releaseInfo 兜底格式。
+- 2026-05-05：升级流程先预检正式 Web App deployment，再写入代码和创建版本，避免配置异常时消耗 Apps Script 版本额度。
+- 2026-05-05：App Script 版本更新到 2.6.20，修复 Jira 执行回写在 Sheet 排序或插行后可能误信旧 rowIndex 的问题。
+- 2026-05-04：补强 App Script 版本比较，支持 `v` 前缀、预发布版本和 build metadata；管理页增加可升级提示条，升级确认中展示当前/最新版本。
+
 ---
 
 **相关文件：**
@@ -447,4 +465,6 @@ import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 
 **参考文档：**
 - [Google Apps Script API - deployments.update](https://developers.google.com/apps-script/api/reference/rest/v1/projects.deployments/update)
+- [Google Apps Script Versions](https://developers.google.com/apps-script/guides/versions)
+- [Google Apps Script API - versions.list](https://developers.google.com/apps-script/api/reference/rest/v1/projects.versions/list)
 - [Semantic Versioning 2.0.0](https://semver.org/)

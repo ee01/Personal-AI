@@ -3,18 +3,22 @@ export function getIndexedDBData(databaseName: string, storeName: string): Promi
         const request = indexedDB.open(databaseName);
     
         request.onsuccess = (event: any) => {
-            const db = event.target.result;
-            const transaction = db.transaction([storeName], 'readonly');
-            const objectStore = transaction.objectStore(storeName);
-            const dataRequest = objectStore.getAll();
-    
-            dataRequest.onsuccess = (event: any) => {
-            resolve(event.target.result);
-            };
-    
-            dataRequest.onerror = (event: any) => {
-            reject(event.target.error);
-            };
+            try {
+                const db = event.target.result;
+                const transaction = db.transaction([storeName], 'readonly');
+                const objectStore = transaction.objectStore(storeName);
+                const dataRequest = objectStore.getAll();
+        
+                dataRequest.onsuccess = (event: any) => {
+                resolve(event.target.result);
+                };
+        
+                dataRequest.onerror = (event: any) => {
+                reject(event.target.error);
+                };
+            } catch (error) {
+                reject(error);
+            }
         };
     
         request.onerror = (event: any) => {
@@ -34,18 +38,22 @@ export function getIndexedDBDataById(databaseName: string, storeName: string, id
         const request = indexedDB.open(databaseName);
     
         request.onsuccess = (event: any) => {
-            const db = event.target.result;
-            const transaction = db.transaction([storeName], 'readonly');
-            const objectStore = transaction.objectStore(storeName);
-            const dataRequest = objectStore.get(id);
-    
-            dataRequest.onsuccess = (event: any) => {
-                resolve(event.target.result);
-            };
-    
-            dataRequest.onerror = (event: any) => {
-                reject(event.target.error);
-            };
+            try {
+                const db = event.target.result;
+                const transaction = db.transaction([storeName], 'readonly');
+                const objectStore = transaction.objectStore(storeName);
+                const dataRequest = objectStore.get(id);
+        
+                dataRequest.onsuccess = (event: any) => {
+                    resolve(event.target.result);
+                };
+        
+                dataRequest.onerror = (event: any) => {
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                reject(error);
+            }
         };
     
         request.onerror = (event: any) => {
@@ -65,38 +73,42 @@ export function getIndexedDBDataByIds(databaseName: string, storeName: string, i
         const request = indexedDB.open(databaseName);
     
         request.onsuccess = (event: any) => {
-            const db = event.target.result;
-            const transaction = db.transaction([storeName], 'readonly');
-            const objectStore = transaction.objectStore(storeName);
-            
-            const results: any[] = [];
-            let completed = 0;
-            
-            if (ids.length === 0) {
-                resolve([]);
-                return;
+            try {
+                const db = event.target.result;
+                const transaction = db.transaction([storeName], 'readonly');
+                const objectStore = transaction.objectStore(storeName);
+                
+                const results: any[] = [];
+                let completed = 0;
+                
+                if (ids.length === 0) {
+                    resolve([]);
+                    return;
+                }
+                
+                ids.forEach((id) => {
+                    const dataRequest = objectStore.get(id);
+                    
+                    dataRequest.onsuccess = (event: any) => {
+                        if (event.target.result) {
+                            results.push(event.target.result);
+                        }
+                        completed++;
+                        if (completed === ids.length) {
+                            resolve(results);
+                        }
+                    };
+                    
+                    dataRequest.onerror = () => {
+                        completed++;
+                        if (completed === ids.length) {
+                            resolve(results);
+                        }
+                    };
+                });
+            } catch (error) {
+                reject(error);
             }
-            
-            ids.forEach((id) => {
-                const dataRequest = objectStore.get(id);
-                
-                dataRequest.onsuccess = (event: any) => {
-                    if (event.target.result) {
-                        results.push(event.target.result);
-                    }
-                    completed++;
-                    if (completed === ids.length) {
-                        resolve(results);
-                    }
-                };
-                
-                dataRequest.onerror = () => {
-                    completed++;
-                    if (completed === ids.length) {
-                        resolve(results);
-                    }
-                };
-            });
         };
     
         request.onerror = (event: any) => {

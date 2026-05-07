@@ -10,19 +10,31 @@
         <ul class="quick-summary">
           <li>🚀 Personal-AI 项目已进入测试阶段</li>
           <li>💬 有 {{ unreadTopicsCount }} 个主题包含未读讨论</li>
-          <li>📊 {{ overviewStats?.totalEntities || 0 }} 个实体，{{ overviewStats?.totalRelationships || 0 }} 个关系</li>
-          <li>📈 本周新增 {{ overviewStats?.entitiesCreatedThisWeek || 0 }} 个实体</li>
+          <li>
+            📊 {{ overviewStats?.totalEntities || 0 }} 个实体，{{
+              overviewStats?.totalRelationships || 0
+            }}
+            个关系
+          </li>
+          <li>
+            📈 本周新增 {{ overviewStats?.entitiesCreatedThisWeek || 0 }} 个实体
+          </li>
         </ul>
         <p>我帮你整理了今天你可能想先看的内容 👇</p>
       </div>
     </div>
 
+    <div v-if="topicReadUndo" class="topic-undo-toast" role="status">
+      <span>已将「{{ topicReadUndo.topicName }}」标记为已读</span>
+      <button type="button" @click="handleUndoTopicRead">撤销</button>
+    </div>
+
     <div class="content-grid" id="today-cards-grid">
       <!-- 今日重点项目 -->
-      <div 
-        v-if="!isCardClosed('today-projects')" 
-        class="content-card" 
-        style="position: relative;"
+      <div
+        v-if="!isCardClosed('today-projects')"
+        class="content-card"
+        style="position: relative"
         @click="navigateToEntityType('Project')"
       >
         <button
@@ -66,10 +78,10 @@
       </div>
 
       <!-- 热门主题讨论 -->
-      <div 
-        v-if="!isCardClosed('today-topics')" 
-        class="content-card" 
-        style="position: relative;"
+      <div
+        v-if="!isCardClosed('today-topics')"
+        class="content-card"
+        style="position: relative"
         @click="navigateToEntityType('Topic')"
       >
         <button
@@ -108,10 +120,10 @@
       </div>
 
       <!-- 重要联系人动态 -->
-      <div 
-        v-if="!isCardClosed('today-people')" 
-        class="content-card" 
-        style="position: relative;"
+      <div
+        v-if="!isCardClosed('today-people')"
+        class="content-card"
+        style="position: relative"
         @click="navigateToEntityType('Person')"
       >
         <button
@@ -150,10 +162,10 @@
       </div>
 
       <!-- AI 推荐内容 -->
-      <div 
-        v-if="!isCardClosed('today-ai-recommend')" 
-        class="content-card" 
-        style="position: relative;"
+      <div
+        v-if="!isCardClosed('today-ai-recommend')"
+        class="content-card"
+        style="position: relative"
       >
         <button
           type="button"
@@ -194,7 +206,7 @@
       <div
         v-if="!isCardClosed('today-outreach')"
         class="content-card"
-        style="position: relative;"
+        style="position: relative"
         @click="router.push('/outreach')"
       >
         <button
@@ -217,7 +229,13 @@
         <ul class="info-list">
           <li class="info-item">
             <span>🕒</span>
-            <span>待触发模板 {{ pendingTemplateCount }} · 已排程 {{ scheduledSessionCount }}<template v-if="outreachSummary.pendingApprovalCount > 0"> · 待审批 {{ outreachSummary.pendingApprovalCount }}</template></span>
+            <span
+              >待触发模板 {{ pendingTemplateCount }} · 已排程
+              {{ scheduledSessionCount
+              }}<template v-if="outreachSummary.pendingApprovalCount > 0">
+                · 待审批 {{ outreachSummary.pendingApprovalCount }}</template
+              ></span
+            >
             <span class="info-time">计划中</span>
           </li>
           <li class="info-item">
@@ -240,69 +258,181 @@
 
     <!-- 未读主题瀑布流推送 -->
     <div v-if="waterfallTopics.length > 0" id="unread-topics-waterfall">
-      <h2 style="margin: 2rem 0 1rem; font-size: 1.5rem; font-weight: 600;">📬 未读主题推送</h2>
+      <h2 style="margin: 2rem 0 1rem; font-size: 1.5rem; font-weight: 600">
+        📬 未读主题推送
+      </h2>
       <div class="waterfall-container" id="waterfall-topics-container">
-        <div 
-          v-for="topic in waterfallTopics.slice(0, waterfallDisplayCount)" 
+        <div
+          v-for="topic in waterfallTopics.slice(0, waterfallDisplayCount)"
           :key="topic.id"
           class="waterfall-item"
         >
-          <div 
-            class="content-card unread" 
+          <div
+            class="content-card unread"
             :data-topic-id="topic.id"
-            style="position: relative;"
+            style="position: relative"
             @click="handleTopicClick(topic)"
           >
-            <button
-              type="button"
-              class="mark-read-btn"
-              title="标记主题已读"
-              :aria-label="`标记 ${topic.name} 为已读`"
-              @click.stop="handleMarkTopicAsRead(topic.id)"
-            >
-              阅
-            </button>
             <div class="card-header">
               <div class="card-title">
                 <span>💡</span>
                 <span>{{ topic.name }}</span>
               </div>
-              <span class="unread-badge">{{ topic.readStatus?.unreadCount || 0 }}</span>
+              <span class="unread-badge">{{
+                topic.readStatus?.unreadCount || 0
+              }}</span>
             </div>
-            <div class="card-content" style="margin-bottom: 0.75rem;">
+            <div class="card-content" style="margin-bottom: 0.75rem">
               {{ topic.description }}
             </div>
-            <div class="card-content" style="font-size: 0.875rem; line-height: 1.5;">
-              {{ topic.importance >= 0.8 ? '🔥 热门' : '' }} 
-              {{ topic.statistic?.conversations || 0 }}条讨论 • {{ formatTime(topic.updated || Date.now()) }}
+            <div
+              class="card-content"
+              style="font-size: 0.875rem; line-height: 1.5"
+            >
+              {{ topic.importance >= 0.8 ? '🔥 热门' : '' }}
+              {{ topic.statistic?.conversations || 0 }}条讨论 •
+              {{ formatTime(topic.updated || Date.now()) }}
             </div>
             <!-- 未读讨论 -->
-            <div v-if="topic.unreadDiscussions && topic.unreadDiscussions.length > 0" class="unread-discussions">
+            <div
+              v-if="
+                topic.unreadDiscussions && topic.unreadDiscussions.length > 0
+              "
+              class="unread-discussions"
+            >
               <div class="unread-discussions-title">
-                💬 未读讨论 ({{topic.unreadDiscussions.length}}条)
+                💬 未读讨论 ({{ topic.unreadDiscussions.length }}条)
               </div>
-              <div 
-                v-for="(discussion, idx) in topic.unreadDiscussions.slice(0, 2)" 
+              <div
+                v-for="(discussion, idx) in topic.unreadDiscussions.slice(0, 2)"
                 :key="idx"
                 class="discussion-item"
               >
                 <span class="discussion-icon">▪</span>
                 <div class="discussion-text">{{ discussion.text }}</div>
               </div>
-              <div 
-                v-if="topic.unreadDiscussions.length > 2" 
-                style="text-align: center; color: #60a5fa; font-size: 0.75rem; margin-top: 0.5rem;"
+              <div
+                v-if="topic.unreadDiscussions.length > 2"
+                style="
+                  text-align: center;
+                  color: #60a5fa;
+                  font-size: 0.75rem;
+                  margin-top: 0.5rem;
+                "
               >
                 还有 {{ topic.unreadDiscussions.length - 2 }} 条...
               </div>
             </div>
+            <div class="topic-triage-actions">
+              <div class="topic-defer-menu" @click.stop>
+                <button
+                  type="button"
+                  class="topic-action-btn later"
+                  :aria-label="`选择 ${topic.name} 的稍后处理时间`"
+                  :aria-expanded="activeDeferTopicId === topic.id"
+                  @click.stop="toggleTopicDeferMenu(topic.id)"
+                >
+                  ⏰ 稍后
+                </button>
+                <div
+                  v-if="activeDeferTopicId === topic.id"
+                  class="topic-defer-options"
+                  role="menu"
+                >
+                  <button
+                    v-for="option in topicDeferOptions"
+                    :key="option.key"
+                    type="button"
+                    class="topic-defer-option"
+                    role="menuitem"
+                    @click.stop="
+                      handleDeferTopicForLater(topic.id, option.until)
+                    "
+                  >
+                    <span>{{ option.label }}</span>
+                    <small>{{ formatDeferredUntil(option.until) }}</small>
+                  </button>
+                  <div class="topic-custom-defer" role="none">
+                    <label :for="`overview-topic-custom-defer-${topic.id}`">
+                      自定义时间
+                    </label>
+                    <div class="topic-custom-defer-row">
+                      <input
+                        :id="`overview-topic-custom-defer-${topic.id}`"
+                        v-model="customDeferValue"
+                        type="datetime-local"
+                        :min="customDeferMin"
+                        @click.stop
+                        @keydown.enter.prevent="handleCustomDefer(topic.id)"
+                      />
+                      <button
+                        type="button"
+                        :disabled="!customDeferTimestamp"
+                        @click.stop="handleCustomDefer(topic.id)"
+                      >
+                        确定
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="topic-defer-menu topic-mute-menu" @click.stop>
+                <button
+                  type="button"
+                  class="topic-action-btn mute"
+                  :aria-label="`静音 ${topic.name} 以减少未读噪声`"
+                  :aria-expanded="activeMuteTopicId === topic.id"
+                  @click.stop="toggleTopicMuteMenu(topic.id)"
+                >
+                  🔕 静音
+                </button>
+                <div
+                  v-if="activeMuteTopicId === topic.id"
+                  class="topic-defer-options topic-mute-options"
+                  role="menu"
+                >
+                  <button
+                    v-for="option in topicMuteOptions"
+                    :key="option.key"
+                    type="button"
+                    class="topic-defer-option topic-mute-option"
+                    role="menuitem"
+                    @click.stop="handleMuteTopic(topic.id, option.until)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <small>{{ formatMutedUntil(option.until) }}</small>
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="topic-action-btn read"
+                :aria-label="`标记 ${topic.name} 为已读`"
+                @click.stop="handleMarkTopicAsRead(topic.id)"
+              >
+                ✓ 已阅
+              </button>
+            </div>
             <!-- 关联项目标签 -->
-            <div v-if="topic.relatedProjects && topic.relatedProjects.length > 0" style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
-              <span 
-                v-for="project in topic.relatedProjects" 
+            <div
+              v-if="topic.relatedProjects && topic.relatedProjects.length > 0"
+              style="
+                margin-top: 0.75rem;
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+              "
+            >
+              <span
+                v-for="project in topic.relatedProjects"
                 :key="project.id"
-                style="padding: 0.25rem 0.5rem; background: rgba(59,130,246,0.1); 
-                       color: #60a5fa; border-radius: 0.25rem; font-size: 0.75rem;"
+                style="
+                  padding: 0.25rem 0.5rem;
+                  background: rgba(59, 130, 246, 0.1);
+                  color: #60a5fa;
+                  border-radius: 0.25rem;
+                  font-size: 0.75rem;
+                "
               >
                 {{ project.name }}
               </span>
@@ -310,9 +440,9 @@
           </div>
         </div>
       </div>
-      <button 
+      <button
         v-if="waterfallTopics.length > waterfallDisplayCount"
-        class="load-more-btn" 
+        class="load-more-btn"
         @click="loadMoreTopics"
       >
         加载更多主题
@@ -324,7 +454,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useMemoryStore } from '../memory-store';
+import {
+  useMemoryStore,
+  getTopicDeferPresetOptions,
+  getTopicMutePresetOptions,
+} from '../memory-store';
 import {
   getMemoryServiceClient,
   type OutreachSummary,
@@ -337,6 +471,26 @@ const router = useRouter();
 const overviewStats = computed(() => store.overviewStats);
 const closedTodayCards = computed(() => store.closedTodayCards);
 const waterfallDisplayCount = ref(6);
+const activeDeferTopicId = ref<string | null>(null);
+const activeMuteTopicId = ref<string | null>(null);
+const topicDeferOptions = ref(getTopicDeferPresetOptions());
+const topicMuteOptions = ref(getTopicMutePresetOptions());
+const topicReadUndo = computed(() => store.topicReadUndo);
+const formatDateTimeLocal = (timestamp = Date.now() + 60 * 60 * 1000) => {
+  const date = new Date(timestamp);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate(),
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+const customDeferValue = ref(formatDateTimeLocal());
+const customDeferMin = computed(() => formatDateTimeLocal(Date.now() + 60_000));
+const customDeferTimestamp = computed(() => {
+  const timestamp = new Date(customDeferValue.value).getTime();
+  return Number.isFinite(timestamp) && timestamp > Date.now()
+    ? timestamp
+    : null;
+});
 const outreachSummary = ref<OutreachSummary>({
   upcomingCount: 0,
   waitingReplyCount: 0,
@@ -382,7 +536,7 @@ const _navigateToTopic = (topicId: string) => {
 };
 
 const getEntityCount = (entityType: string) => {
-  const entity = store.entityTypes.find(e => e.type === entityType);
+  const entity = store.entityTypes.find((e) => e.type === entityType);
   return entity ? entity.count : 0;
 };
 
@@ -395,28 +549,89 @@ const handleCloseTodayCard = (cardId: string) => {
 };
 
 const handleTopicClick = (topic: any) => {
-  // 点击主题进入详情页
-  store.markTopicAsRead(topic.id);
+  // 点击主题只进入详情页，避免误清空未读。
   router.push(`/topic/${topic.id}`);
 };
 
 const handleMarkTopicAsRead = async (topicId: string) => {
   // 找到对应的DOM元素
-  const cardElement = document.querySelector(`[data-topic-id="${topicId}"]`) as HTMLElement;
-  
+  const cardElement = document.querySelector(
+    `[data-topic-id="${topicId}"]`,
+  ) as HTMLElement;
+
   if (cardElement) {
     // 添加淡出动画class
     cardElement.classList.add('fade-out');
-    
+
     // 等待动画完成(300ms)后再标记已读
-    await new Promise(resolve => setTimeout(resolve, 300));
-    
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
     // 标记已读(这会触发Vue的响应式更新)
     await store.markTopicAsRead(topicId);
   } else {
     // 如果找不到元素,直接标记已读
     await store.markTopicAsRead(topicId);
   }
+};
+
+const toggleTopicDeferMenu = (topicId: string) => {
+  if (activeDeferTopicId.value === topicId) {
+    activeDeferTopicId.value = null;
+    return;
+  }
+
+  activeMuteTopicId.value = null;
+  topicDeferOptions.value = getTopicDeferPresetOptions();
+  customDeferValue.value = formatDateTimeLocal();
+  activeDeferTopicId.value = topicId;
+};
+
+const toggleTopicMuteMenu = (topicId: string) => {
+  if (activeMuteTopicId.value === topicId) {
+    activeMuteTopicId.value = null;
+    return;
+  }
+
+  activeDeferTopicId.value = null;
+  topicMuteOptions.value = getTopicMutePresetOptions();
+  activeMuteTopicId.value = topicId;
+};
+
+const handleDeferTopicForLater = async (topicId: string, until?: number) => {
+  activeDeferTopicId.value = null;
+  const cardElement = document.querySelector(
+    `[data-topic-id="${topicId}"]`,
+  ) as HTMLElement;
+
+  if (cardElement) {
+    cardElement.classList.add('fade-out');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  await store.deferTopicForLater(topicId, until);
+};
+
+const handleMuteTopic = async (topicId: string, until?: number | null) => {
+  activeMuteTopicId.value = null;
+  const cardElement = document.querySelector(
+    `[data-topic-id="${topicId}"]`,
+  ) as HTMLElement;
+
+  if (cardElement) {
+    cardElement.classList.add('fade-out');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  await store.muteTopic(topicId, until);
+};
+
+const handleCustomDefer = async (topicId: string) => {
+  if (!customDeferTimestamp.value) return;
+  await handleDeferTopicForLater(topicId, customDeferTimestamp.value);
+};
+
+const handleUndoTopicRead = async () => {
+  await store.undoLastTopicRead();
 };
 
 const loadMoreTopics = () => {
@@ -428,10 +643,42 @@ const formatTime = (timestamp: number) => {
   const diff = now - timestamp;
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
-  
+
   if (hours < 24) return `${hours}小时前`;
   if (days < 30) return `${days}天前`;
   return new Date(timestamp).toLocaleDateString();
+};
+
+const formatDeferredUntil = (timestamp?: number) => {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const now = new Date();
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const time = date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  if (date.toDateString() === now.toDateString()) {
+    return `今天 ${time}`;
+  }
+  if (date.toDateString() === tomorrow.toDateString()) {
+    return `明天 ${time}`;
+  }
+  return date.toLocaleString(undefined, {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const formatMutedUntil = (timestamp?: number | null) => {
+  if (timestamp === null) return '直到手动恢复';
+  if (!timestamp) return '';
+  return formatDeferredUntil(timestamp);
 };
 
 async function loadOutreachSummary() {
@@ -442,7 +689,9 @@ async function loadOutreachSummary() {
       client.getOutreachTemplateRuntimeStatus(undefined, 100),
     ]);
     outreachSummary.value = summary;
-    pendingTemplateCount.value = templates.items.filter((item) => isPendingTemplate(item)).length;
+    pendingTemplateCount.value = templates.items.filter((item) =>
+      isPendingTemplate(item),
+    ).length;
   } catch (error) {
     console.error('加载主动询问概览失败:', error);
   }
@@ -454,20 +703,31 @@ function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
   if (template.enabled === false) return false;
   if (template.syncState && template.syncState !== 'synced') return false;
   if (!nextDispatchAt) return false;
-  return !item.latestSession || TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status);
+  return (
+    !item.latestSession ||
+    TERMINAL_OUTREACH_STATUSES.has(item.latestSession.status)
+  );
 }
 
-function resolveTemplateNextDispatchAt(item: OutreachTemplateRuntimeStatusItem): number | null {
+function resolveTemplateNextDispatchAt(
+  item: OutreachTemplateRuntimeStatusItem,
+): number | null {
   const raw = item.template.scheduleSpec?.nextDispatchAt;
   if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
-  const scheduleDate = typeof item.template.scheduleSpec?.scheduleDate === 'string'
-    ? item.template.scheduleSpec.scheduleDate
-    : '';
-  const scheduleTime = typeof item.template.scheduleSpec?.scheduleTime === 'string'
-    ? item.template.scheduleSpec.scheduleTime
-    : '09:00';
+  const scheduleDate =
+    typeof item.template.scheduleSpec?.scheduleDate === 'string'
+      ? item.template.scheduleSpec.scheduleDate
+      : '';
+  const scheduleTime =
+    typeof item.template.scheduleSpec?.scheduleTime === 'string'
+      ? item.template.scheduleSpec.scheduleTime
+      : '09:00';
   if (!scheduleDate) return null;
-  const date = new Date(`${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`);
+  const date = new Date(
+    `${scheduleDate}T${
+      scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime
+    }`,
+  );
   if (Number.isNaN(date.getTime())) return null;
   return Math.floor(date.getTime() / 1000);
 }
@@ -496,7 +756,11 @@ onUnmounted(() => {
   width: 2.5rem;
   height: 2.5rem;
   border-radius: 50%;
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2));
+  background: linear-gradient(
+    135deg,
+    rgba(34, 197, 94, 0.2),
+    rgba(16, 185, 129, 0.2)
+  );
   border: 2px solid rgba(34, 197, 94, 0.4);
   color: #22c55e;
   font-weight: 700;
@@ -540,7 +804,11 @@ onUnmounted(() => {
 }
 
 .mark-read-btn:hover {
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(16, 185, 129, 0.3));
+  background: linear-gradient(
+    135deg,
+    rgba(34, 197, 94, 0.3),
+    rgba(16, 185, 129, 0.3)
+  );
   border-color: #22c55e;
   transform: scale(1.1);
   box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.2);
@@ -563,6 +831,188 @@ onUnmounted(() => {
   outline-offset: 2px;
 }
 
+.topic-triage-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.topic-defer-menu {
+  position: relative;
+}
+
+.topic-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.topic-action-btn:hover,
+.topic-action-btn:focus-visible {
+  border-color: rgba(96, 165, 250, 0.55);
+  background: rgba(30, 41, 59, 0.95);
+  color: #ffffff;
+}
+
+.topic-action-btn.later {
+  border-color: rgba(245, 158, 11, 0.32);
+  color: #fbbf24;
+}
+
+.topic-action-btn.mute {
+  border-color: rgba(148, 163, 184, 0.34);
+  color: #cbd5e1;
+}
+
+.topic-action-btn.read {
+  border-color: rgba(34, 197, 94, 0.36);
+  color: #22c55e;
+}
+
+.topic-undo-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.88);
+  color: #dbeafe;
+  font-size: 0.875rem;
+}
+
+.topic-undo-toast button {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid rgba(96, 165, 250, 0.42);
+  border-radius: 0.375rem;
+  background: rgba(37, 99, 235, 0.18);
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.topic-undo-toast button:hover,
+.topic-undo-toast button:focus-visible {
+  outline: none;
+  background: rgba(37, 99, 235, 0.32);
+  color: #ffffff;
+}
+
+.topic-defer-options {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 11rem;
+  padding: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+}
+
+.topic-defer-option {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.topic-defer-option small {
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.topic-defer-option:hover,
+.topic-defer-option:focus-visible {
+  outline: none;
+  background: rgba(245, 158, 11, 0.12);
+  color: #ffffff;
+}
+
+.topic-custom-defer {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.65rem 0.65rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.topic-custom-defer label {
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.topic-custom-defer-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) auto;
+  gap: 0.4rem;
+}
+
+.topic-custom-defer input {
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.375rem;
+  background: rgba(2, 6, 23, 0.42);
+  color: #e2e8f0;
+  font-size: 0.75rem;
+}
+
+.topic-custom-defer button {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  border-radius: 0.375rem;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.topic-custom-defer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 640px) {
+  .topic-defer-options {
+    right: auto;
+    left: 0;
+  }
+
+  .topic-custom-defer-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* 未读徽章 */
 .unread-badge {
   background: linear-gradient(135deg, #ef4444, #dc2626);
@@ -577,8 +1027,13 @@ onUnmounted(() => {
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
-  50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.6); }
+  0%,
+  100% {
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.6);
+  }
 }
 
 /* 主题卡片未读状态 */

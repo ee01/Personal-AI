@@ -4,6 +4,11 @@
  * 不依赖 Chrome APIs，保证在任何上下文中都能正常工作
  */
 
+import {
+  formatLocalScheduleDate,
+  getTodayLocalScheduleDate,
+} from './scheduleDateTime';
+
 /**
  * Schedule 配置接口
  */
@@ -93,7 +98,7 @@ export function getNextScheduleDate(
           continue;
         }
         
-        return targetDate.toISOString().split('T')[0];
+        return formatLocalScheduleDate(targetDate);
       }
     }
   }
@@ -103,7 +108,7 @@ export function getNextScheduleDate(
     today.setDate(today.getDate() + 1);
   }
   
-  return today.toISOString().split('T')[0];
+  return formatLocalScheduleDate(today);
 }
 
 /**
@@ -158,10 +163,9 @@ export function parseCronExpression(cron: string): CronParseResult | null {
  * @returns YYYY-MM-DD 格式的日期字符串
  */
 export function getDefaultScheduleDateForFixed(): string {
-  const now = new Date();
   // 对于所有 FIXED 模式，默认使用今天的日期
   // 用户可以在导入后通过管理界面调整
-  return now.toISOString().split('T')[0];
+  return getTodayLocalScheduleDate();
 }
 
 /**
@@ -346,4 +350,3 @@ export function buildScheduleMessageFields(scheduleConfig: ScheduleConfig): Reco
   
   return fields;
 }
-

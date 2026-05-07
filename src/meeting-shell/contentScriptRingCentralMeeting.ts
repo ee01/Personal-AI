@@ -33,6 +33,7 @@ type MeetingPilotRuntimeConfig = {
   autoDetect: boolean;
   entryMode: 'auto' | 'manual';
   memoryContextEnabled: boolean;
+  ringCentralTranscriptEnabled: boolean;
   privacyNoticeText: string;
   hotwords: string[];
   nameAliases: string[];
@@ -54,6 +55,7 @@ const overlayState: OverlayState = {
 };
 
 let debounceTimer: number | undefined;
+let transcriptPollTimer: number | undefined;
 let mounted = false;
 let observersInstalled = false;
 let hoverCloseTimer: number | undefined;
@@ -62,14 +64,18 @@ let lastAlertMeetingId: string | undefined;
 const seenDanmakuIds = new Set<string>();
 const dismissedP0Ids = new Set<string>();
 const emittedHeuristicAlertIds = new Set<string>();
+const seenRingCentralTranscriptChunks = new Map<string, string>();
 let danmakuSpeedKey: 'fast' | 'medium' | 'slow' = 'medium';
 const contentScriptStartedAt = Date.now();
+let lastRingCentralTranscriptSignature = '';
+let lastRingCentralTranscriptStatusAt = 0;
 let runtimeConfig: MeetingPilotRuntimeConfig = {
   enabled: true,
   floatingIconVisible: true,
   autoDetect: true,
   entryMode: 'auto',
   memoryContextEnabled: true,
+  ringCentralTranscriptEnabled: true,
   privacyNoticeText: '',
   hotwords: [],
   nameAliases: [],
@@ -206,6 +212,8 @@ async function hydrateDanmakuConfig(): Promise<void> {
       autoDetect: envConfig.MEETING_AUTO_DETECT !== false,
       entryMode: envConfig.MEETING_ENTRY_MODE || 'auto',
       memoryContextEnabled: envConfig.MEETING_MEMORY_CONTEXT_ENABLED !== false,
+      ringCentralTranscriptEnabled:
+        envConfig.MEETING_RINGCENTRAL_TRANSCRIPT_ENABLED !== false,
       privacyNoticeText: String(
         envConfig.MEETING_PRIVACY_NOTICE_TEXT || '',
       ).trim(),
@@ -225,6 +233,7 @@ async function hydrateDanmakuConfig(): Promise<void> {
 
 function normalizeText(value?: string | null): string {
   return (value || '')
+    .replace(/â€¢/g, '•')
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -831,6 +840,21 @@ function isCaptureEnabled(snapshot?: MeetingPilotSessionSnapshot): boolean {
       snapshot.capture.kind,
     ),
   );
+}
+
+function isTranscriptPilotEnabled(
+  snapshot?: MeetingPilotSessionSnapshot,
+): boolean {
+  return Boolean(
+    snapshot?.webTranscript?.active &&
+      snapshot.transcript.some(
+        (chunk) => chunk.source === 'ringcentral_transcript',
+      ),
+  );
+}
+
+function isMeetingPilotUsable(snapshot?: MeetingPilotSessionSnapshot): boolean {
+  return isCaptureEnabled(snapshot) || isTranscriptPilotEnabled(snapshot);
 }
 
 function hasCaptureAttempt(snapshot?: MeetingPilotSessionSnapshot): boolean {
@@ -1479,6 +1503,362 @@ function emitHeuristicAlerts(
   });
 }
 
+interface RingCentralTranscriptDomItem {
+  id: string;
+  speaker: string;
+  text: string;
+  ts: number;
+  timeText: string;
+}
+
+function isRingCentralTranscriptNoiseLine(value?: string | null): boolean {
+  const text = normalizeText(value);
+  if (!text) return true;
+  if (/^[a-f0-9]{24,}$/i.test(text)) return true;
+  if (/^image(?:[:/]|$)/i.test(text)) return true;
+  if (/^svg\+xml/i.test(text)) return true;
+  if (/^•?\s*you$/i.test(text)) return true;
+  return /^(search|transcript|notes(?:\s*\(beta\))?|translate|close|pause notes, transcripts and recording)$/i.test(
+    text,
+  );
+}
+
+function isRingCentralTranscriptMarkerLine(value?: string | null): boolean {
+  const text = normalizeText(value);
+  return (
+    !text ||
+    /^[a-f0-9]{24,}$/i.test(text) ||
+    /^image(?:[:/]|$)/i.test(text) ||
+    /^svg\+xml/i.test(text) ||
+    /^•?\s*you$/i.test(text)
+  );
+}
+
+function looksLikeTranscriptTimeLine(value?: string | null): boolean {
+  return /\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b/i.test(
+    normalizeText(value),
+  );
+}
+
+function parseTranscriptClockMs(value: string, now = Date.now()): number {
+  const match = normalizeText(value).match(
+    /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?\b/i,
+  );
+  if (!match) return now;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  const meridiem = match[4]?.toUpperCase();
+  if (meridiem === 'PM' && hour < 12) hour += 12;
+  if (meridiem === 'AM' && hour === 12) hour = 0;
+  const parsed = new Date(now);
+  parsed.setHours(hour, minute, second, 0);
+  if (parsed.getTime() - now > 6 * 60 * 60 * 1000) {
+    parsed.setDate(parsed.getDate() - 1);
+  }
+  return parsed.getTime();
+}
+
+function simpleTranscriptHash(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function normalizeTranscriptSpeaker(value?: string | null): string {
+  return normalizeText(value)
+    .replace(/\s*•\s*You\s*$/i, '')
+    .replace(/\s*\(you\)\s*$/i, '')
+    .trim();
+}
+
+function normalizeTranscriptComparable(value: string): string {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5\s]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getTranscriptComparableWords(value: string): string[] {
+  return normalizeTranscriptComparable(value).split(/\s+/).filter(Boolean);
+}
+
+function startsWithSimilarTranscriptPrefix(
+  earlier: string,
+  later: string,
+): boolean {
+  const left = getTranscriptComparableWords(earlier);
+  const right = getTranscriptComparableWords(later);
+  if (!left.length || !right.length) return false;
+  const prefixLength = Math.min(3, left.length, right.length);
+  if (!prefixLength) return false;
+  let matches = 0;
+  for (let index = 0; index < prefixLength; index += 1) {
+    if (left[index] === right[index]) {
+      matches += 1;
+    }
+  }
+  return matches >= Math.max(1, prefixLength - 1);
+}
+
+function collapseProgressiveTranscriptLines(lines: string[]): string[] {
+  if (lines.length < 2) return lines;
+  const textLines = lines.filter((line) => !isRingCentralTranscriptNoiseLine(line));
+  if (textLines.length < 2) return lines;
+
+  let progressivePairs = 0;
+  for (let index = 0; index < textLines.length - 1; index += 1) {
+    const current = textLines[index];
+    const next = textLines[index + 1];
+    if (
+      startsWithSimilarTranscriptPrefix(current, next) ||
+      normalizeTranscriptComparable(next).startsWith(
+        normalizeTranscriptComparable(current).slice(0, 18),
+      )
+    ) {
+      progressivePairs += 1;
+    }
+  }
+
+  if (progressivePairs < Math.max(1, textLines.length - 2)) {
+    return lines;
+  }
+
+  const longest = textLines.reduce((best, line) =>
+    normalizeTranscriptComparable(line).length >=
+    normalizeTranscriptComparable(best).length
+      ? line
+      : best,
+  );
+  return [longest];
+}
+
+function collapseRepeatedTranscriptText(value: string): string {
+  const text = normalizeText(value);
+  const sentences = text
+    .split(/(?<=[。！？.!?])\s+/u)
+    .map((part) => normalizeText(part))
+    .filter(Boolean);
+  if (sentences.length < 2) return text;
+
+  const kept: string[] = [];
+  sentences.forEach((sentence) => {
+    const comparable = normalizeTranscriptComparable(sentence);
+    const nextKept = kept.filter((existing) => {
+      const existingComparable = normalizeTranscriptComparable(existing);
+      return !(
+        comparable.startsWith(existingComparable) &&
+        comparable.length > existingComparable.length + 8
+      );
+    });
+    if (
+      nextKept.some((existing) => {
+        const existingComparable = normalizeTranscriptComparable(existing);
+        return (
+          existingComparable.startsWith(comparable) &&
+          existingComparable.length > comparable.length + 8
+        );
+      })
+    ) {
+      kept.splice(0, kept.length, ...nextKept);
+      return;
+    }
+    nextKept.push(sentence);
+    kept.splice(0, kept.length, ...nextKept);
+  });
+
+  return kept.join(' ');
+}
+
+function splitRingCentralTranscriptLines(root: Element): string[] {
+  return String((root as HTMLElement).innerText || root.textContent || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r/g, '\n')
+    .split(/\n+/)
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+}
+
+function getRingCentralTranscriptRoots(): Element[] {
+  const selectors = [
+    '#transcript-tabpanel',
+    '[id*="transcript" i][role="tabpanel"]',
+    '[id*="transcript-tabpanel" i]',
+    '[aria-label*="Transcript" i]',
+    '[role="tabpanel"]',
+  ];
+  const roots = new Set<Element>();
+  selectors.forEach((selector) => {
+    document.querySelectorAll(selector).forEach((node) => roots.add(node));
+  });
+  return Array.from(roots)
+    .map((node) => ({
+      node,
+      timeCount: splitRingCentralTranscriptLines(node).filter(
+        looksLikeTranscriptTimeLine,
+      ).length,
+    }))
+    .filter((item) => item.timeCount > 0)
+    .sort((left, right) => right.timeCount - left.timeCount)
+    .map((item) => item.node);
+}
+
+function findSpeakerBeforeTime(lines: string[], timeIndex: number): string {
+  for (
+    let index = timeIndex - 1;
+    index >= 0 && index >= timeIndex - 5;
+    index -= 1
+  ) {
+    const candidate = lines[index];
+    if (isRingCentralTranscriptMarkerLine(candidate)) continue;
+    if (isRingCentralTranscriptNoiseLine(candidate)) continue;
+    if (looksLikeTranscriptTimeLine(candidate)) continue;
+    return normalizeTranscriptSpeaker(candidate);
+  }
+  return '';
+}
+
+function trimNextSpeakerMetadata(
+  lines: string[],
+  nextSpeaker?: string,
+): string[] {
+  const trimmed = [...lines];
+  let removedMarker = false;
+  while (
+    trimmed.length &&
+    isRingCentralTranscriptMarkerLine(trimmed[trimmed.length - 1])
+  ) {
+    removedMarker = true;
+    trimmed.pop();
+  }
+  const normalizedNextSpeaker = normalizeTranscriptSpeaker(nextSpeaker);
+  if (
+    normalizedNextSpeaker &&
+    trimmed.length > 1 &&
+    normalizeTranscriptSpeaker(trimmed[trimmed.length - 1]) ===
+      normalizedNextSpeaker
+  ) {
+    trimmed.pop();
+  }
+  if (
+    removedMarker &&
+    trimmed.length > 1 &&
+    !looksLikeTranscriptTimeLine(trimmed[trimmed.length - 1]) &&
+    !/[。！？.!?，,]/.test(trimmed[trimmed.length - 1])
+  ) {
+    trimmed.pop();
+  }
+  while (
+    trimmed.length &&
+    isRingCentralTranscriptMarkerLine(trimmed[trimmed.length - 1])
+  ) {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function collectRingCentralTranscriptDomItems(
+  meetingId: string,
+): RingCentralTranscriptDomItem[] {
+  if (!runtimeConfig.ringCentralTranscriptEnabled) return [];
+  const root = getRingCentralTranscriptRoots()[0];
+  if (!root) return [];
+  const lines = splitRingCentralTranscriptLines(root);
+  const timeIndexes = lines
+    .map((line, index) => ({ line, index }))
+    .filter((item) => looksLikeTranscriptTimeLine(item.line));
+  const items: RingCentralTranscriptDomItem[] = [];
+  timeIndexes.forEach((timeItem, order) => {
+    const nextTimeIndex = timeIndexes[order + 1]?.index ?? lines.length;
+    const speaker = findSpeakerBeforeTime(lines, timeItem.index);
+    const nextSpeaker =
+      typeof timeIndexes[order + 1]?.index === 'number'
+        ? findSpeakerBeforeTime(lines, timeIndexes[order + 1].index)
+        : undefined;
+    const textLines = trimNextSpeakerMetadata(
+      lines.slice(timeItem.index + 1, nextTimeIndex),
+      nextSpeaker,
+    ).filter((line) => !looksLikeTranscriptTimeLine(line));
+    const collapsedLines = collapseProgressiveTranscriptLines(textLines).filter(
+      (line) => !isRingCentralTranscriptNoiseLine(line),
+    );
+    const text = collapseRepeatedTranscriptText(collapsedLines.join(' '));
+    if (!text || text === speaker) return;
+    const ts = parseTranscriptClockMs(timeItem.line);
+    const id = `rc-transcript-${meetingId}-${ts}-${simpleTranscriptHash(
+      speaker || 'unknown',
+    )}-${order}`;
+    items.push({
+      id,
+      speaker,
+      text,
+      ts,
+      timeText: timeItem.line,
+    });
+  });
+  return items;
+}
+
+async function emitRingCentralTranscriptFromDom(
+  context: ReturnType<typeof getMeetingPageContext>,
+): Promise<void> {
+  if (!context || !runtimeConfig.ringCentralTranscriptEnabled) return;
+  const items = collectRingCentralTranscriptDomItems(context.meetingId);
+  const latest = items[items.length - 1];
+  const signature = `${context.meetingId}:${items.length}:${latest?.id || ''}`;
+  const now = Date.now();
+  const shouldSendStatus =
+    signature !== lastRingCentralTranscriptSignature ||
+    now - lastRingCentralTranscriptStatusAt > 10_000;
+  if (shouldSendStatus) {
+    lastRingCentralTranscriptSignature = signature;
+    lastRingCentralTranscriptStatusAt = now;
+    await chrome.runtime
+      .sendMessage({
+        type: 'MEETING_PILOT_RINGCENTRAL_TRANSCRIPT_STATUS',
+        tabId: 0,
+        meetingId: context.meetingId,
+        enabled: true,
+        available: items.length > 0,
+        active: items.length > 0,
+        lastSeenAt: latest ? now : undefined,
+        latestChunkId: latest?.id,
+      })
+      .catch(() => undefined);
+  }
+
+  for (const item of items.sort((left, right) => left.ts - right.ts)) {
+    const textSignature = simpleTranscriptHash(item.text);
+    if (seenRingCentralTranscriptChunks.get(item.id) === textSignature) {
+      continue;
+    }
+    seenRingCentralTranscriptChunks.set(item.id, textSignature);
+    await chrome.runtime
+      .sendMessage({
+        type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+        tabId: 0,
+        transcriptChunk: {
+          id: item.id,
+          speaker: item.speaker,
+          text: item.text,
+          ts: item.ts,
+          source: 'ringcentral_transcript',
+          lowConfidence: false,
+        },
+      })
+      .catch(() => undefined);
+  }
+
+  if (seenRingCentralTranscriptChunks.size > 200) {
+    Array.from(seenRingCentralTranscriptChunks.keys())
+      .slice(0, seenRingCentralTranscriptChunks.size - 160)
+      .forEach((id) => seenRingCentralTranscriptChunks.delete(id));
+  }
+}
+
 function hideMeetingPilotFloatingIconTemporarily(): void {
   overlayState.temporarilyHidden = true;
   overlayState.closeConfirmOpen = false;
@@ -2032,6 +2412,14 @@ function createOverlay(): void {
         animation: blink 1.2s ease-in-out infinite;
         box-shadow: 0 0 10px rgba(255, 71, 87, 0.36);
       }
+      .rec-dot[data-state="transcript"] {
+        background: #69db7c;
+        animation: none;
+        box-shadow: 0 0 10px rgba(105, 219, 124, 0.28);
+      }
+      .rec-dot[data-state="transcript"] + .rec-text {
+        color: #69db7c;
+      }
       .rec-text {
         font-size: 11px;
         font-weight: 700;
@@ -2356,6 +2744,11 @@ function createOverlay(): void {
         opacity: 1;
         animation: recSpin 2s linear infinite;
       }
+      .entry.transcript-live .rec-ring {
+        opacity: 1;
+        border-top-color: #69db7c;
+        animation: recSpin 3s linear infinite;
+      }
       .fab-badge {
         position: absolute;
         top: -4px;
@@ -2437,7 +2830,7 @@ function createOverlay(): void {
         </div>
         <div class="coachmark-step">
           <span class="coachmark-step-index">2</span>
-          <span>在弹出的 popup 第一项点击“开启会议全貌”。</span>
+          <span id="mpCoachmarkStep2Text">在弹出的 popup 第一项点击“开启会议全貌”。</span>
         </div>
       </div>
     </div>
@@ -2615,7 +3008,7 @@ function createOverlay(): void {
       event.shiftKey ||
       event.key.toLowerCase() !== 'c' ||
       isTextEntryTarget(event.target) ||
-      !isCaptureEnabled(overlayState.snapshot)
+      !isMeetingPilotUsable(overlayState.snapshot)
     ) {
       return;
     }
@@ -2705,7 +3098,7 @@ function createOverlay(): void {
   };
 
   primary?.addEventListener('click', () => {
-    const enabled = isCaptureEnabled(overlayState.snapshot);
+    const enabled = isMeetingPilotUsable(overlayState.snapshot);
     if (enabled) {
       setCatchupModalOpen(true);
       return;
@@ -2716,7 +3109,7 @@ function createOverlay(): void {
     setCoachmarkOpen(true);
   });
   secondary?.addEventListener('click', () => {
-    const enabled = isCaptureEnabled(overlayState.snapshot);
+    const enabled = isMeetingPilotUsable(overlayState.snapshot);
     void (enabled ? openPanel() : openSettings());
   });
   entryCloseBtn?.addEventListener('click', (event) => {
@@ -2759,7 +3152,7 @@ function createOverlay(): void {
       hideEntryCloseControls(true);
       return;
     }
-    if (isCaptureEnabled(overlayState.snapshot)) {
+    if (isMeetingPilotUsable(overlayState.snapshot)) {
       void openPanel();
       return;
     }
@@ -2866,7 +3259,9 @@ function renderOverlay(
   ) as HTMLButtonElement | null;
 
   const chapter = getCurrentChapter(snapshot);
-  const enabled = isCaptureEnabled(snapshot);
+  const captureEnabled = isCaptureEnabled(snapshot);
+  const transcriptPilotEnabled = isTranscriptPilotEnabled(snapshot);
+  const enabled = captureEnabled || transcriptPilotEnabled;
   const hasAttempt = hasCaptureAttempt(snapshot);
   const readiness = snapshot?.readiness;
   const captureKind = snapshot?.capture.kind || 'idle';
@@ -2893,7 +3288,7 @@ function renderOverlay(
     shadow.getElementById('mpCoachmark')?.classList.remove('visible');
   }
 
-  if (enabled && overlayState.coachmarkOpen) {
+  if (captureEnabled && overlayState.coachmarkOpen) {
     overlayState.coachmarkOpen = false;
   }
 
@@ -2903,7 +3298,11 @@ function renderOverlay(
   dock?.setAttribute('data-hover', String(overlayState.hover));
   panel?.classList.toggle('idle', !enabled);
   headerRow?.classList.toggle('idle', !enabled);
-  entry?.classList.toggle('recording', enabled);
+  entry?.classList.toggle('recording', captureEnabled);
+  entry?.classList.toggle(
+    'transcript-live',
+    transcriptPilotEnabled && !captureEnabled,
+  );
   entry?.classList.toggle('has-alert', currentAlertCount > 0);
   entryCloseBtn?.classList.toggle(
     'visible',
@@ -2914,23 +3313,33 @@ function renderOverlay(
     fabBadge.textContent = String(currentAlertCount);
   }
   if (statusDot instanceof HTMLElement) {
-    statusDot.dataset.state = enabled
+    statusDot.dataset.state = captureEnabled
       ? 'recording'
+      : transcriptPilotEnabled
+        ? 'transcript'
       : captureKind === 'error'
         ? 'error'
         : 'idle';
   }
 
   if (statusText) {
-    statusText.textContent = enabled
+    statusText.textContent = captureEnabled
       ? 'REC'
+      : transcriptPilotEnabled
+        ? 'TXT'
       : captureKind === 'error'
         ? 'ERROR'
         : captureKind === 'stopped'
           ? 'STOPPED'
           : readinessLabel;
   }
-  if (timer) timer.textContent = enabled ? formatElapsed(elapsedMs) : '00:00';
+  if (timer) {
+    timer.textContent = enabled
+      ? transcriptPilotEnabled && !captureEnabled
+        ? 'low'
+        : formatElapsed(elapsedMs)
+      : '00:00';
+  }
 
   if (!enabled) {
     if (eyebrow) eyebrow.textContent = '会议全貌';
@@ -2994,18 +3403,28 @@ function renderOverlay(
       secondary.disabled = overlayState.busy;
     }
   } else {
-    if (eyebrow) eyebrow.textContent = '当前话题';
+    if (eyebrow) {
+      eyebrow.textContent =
+        transcriptPilotEnabled && !captureEnabled
+          ? 'Transcript Pilot'
+          : '当前话题';
+    }
     if (topicTitle) topicTitle.textContent = chapter?.title || '会议进行中';
     if (topicMeta)
-      topicMeta.textContent = `${formatDurationLabel(elapsedMs)} · ${
-        speaker || shareOwner || '多人讨论'
-      }${speaker ? ' 主讲' : ''}`;
+      topicMeta.textContent =
+        transcriptPilotEnabled && !captureEnabled
+          ? '已通过 RingCentral Transcript 自动运行。启用画面理解与纪要后会补齐 OCR 和会后 Minutes。'
+          : `${formatDurationLabel(elapsedMs)} · ${
+              speaker || shareOwner || '多人讨论'
+            }${speaker ? ' 主讲' : ''}`;
     if (primary) {
       primary.textContent = '⚡ Catch Up';
       primary.disabled = overlayState.busy;
     }
     if (idlePrimary) {
-      idlePrimary.textContent = '开始 Capture';
+      idlePrimary.textContent = transcriptPilotEnabled
+        ? '启用画面理解与纪要'
+        : '开始 Capture';
       idlePrimary.disabled = overlayState.busy;
     }
     if (secondary) {
@@ -3047,6 +3466,11 @@ function syncCoachmark(
   );
   const captureKind = snapshot?.capture.kind || 'idle';
   const visible = overlayState.coachmarkOpen && !isCaptureEnabled(snapshot);
+  const transcriptPilotEnabled = isTranscriptPilotEnabled(snapshot);
+  const popupActionLabel = transcriptPilotEnabled
+    ? '启用画面理解与纪要'
+    : '开启会议全貌';
+  const step2 = shadow.getElementById('mpCoachmarkStep2Text');
 
   backdrop?.classList.toggle('visible', visible);
   shell?.classList.toggle('visible', visible);
@@ -3058,14 +3482,21 @@ function syncCoachmark(
         ? '请从扩展 icon 重试 Capture'
         : captureKind === 'stopped'
           ? '请从扩展 icon 重新开启 Capture'
-          : '请点击右上角扩展图标';
+          : transcriptPilotEnabled
+            ? '启用画面理解与纪要'
+            : '请点击右上角扩展图标';
   }
   if (copy) {
     copy.textContent = readinessBlocked
       ? `${
           snapshot?.readiness.summary || '当前配置阻止了 Capture。'
-        } 先修复配置，再点击浏览器右上角的 Personal AI 图标，在 popup 第一项点击“开启会议全貌”。`
-      : 'Chrome 的 tab capture 授权在当前实现里需要从扩展 popup 稳定发起。先点击浏览器右上角的 Personal AI 图标，然后在弹出的 popup 第一项点击“开启会议全貌”。';
+        } 先修复配置，再点击浏览器右上角的 Personal AI 图标，在 popup 第一项点击“${popupActionLabel}”。`
+      : transcriptPilotEnabled
+        ? '当前已通过 RingCentral Transcript 运行低配会议全貌。要让记忆关联同时利用共享画面 OCR，并生成会后图文纪要，需要从扩展 popup 发起一次浏览器授权。'
+        : `Chrome 的 tab capture 授权在当前实现里需要从扩展 popup 稳定发起。先点击浏览器右上角的 Personal AI 图标，然后在弹出的 popup 第一项点击“${popupActionLabel}”。`;
+  }
+  if (step2) {
+    step2.textContent = `在弹出的 popup 第一项点击“${popupActionLabel}”。`;
   }
 }
 
@@ -3111,6 +3542,7 @@ async function syncContext(reason: string): Promise<void> {
     overlayState.lastSignature === signature &&
     reason !== 'action-complete'
   ) {
+    void emitRingCentralTranscriptFromDom(context);
     return;
   }
   overlayState.lastSignature = signature;
@@ -3134,6 +3566,7 @@ async function syncContext(reason: string): Promise<void> {
       overlayState.snapshot = response;
     }
     emitHeuristicAlerts(context);
+    void emitRingCentralTranscriptFromDom(context);
   } catch (error) {
     console.warn('Meeting Pilot context sync failed:', error);
   }
@@ -3177,6 +3610,11 @@ function installObservers(): void {
   window.addEventListener('hashchange', () => scheduleSync('hashchange'));
   window.addEventListener('popstate', () => scheduleSync('popstate'));
   window.addEventListener('focus', () => scheduleSync('focus'));
+  window.clearInterval(transcriptPollTimer);
+  transcriptPollTimer = window.setInterval(
+    () => scheduleSync('transcript-poll'),
+    5000,
+  );
 
   scheduleSync('initial');
 }
@@ -3202,6 +3640,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.type === 'MEETING_PILOT_CLOSE_EMBEDDED_PANEL') {
     const success = setEmbeddedPanelOpen(false);
     sendResponse({ success });
+    return true;
+  }
+  if (request.type === 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE') {
+    setCoachmarkOpen(true);
+    sendResponse({ success: true });
     return true;
   }
   if (request.type === 'MEETING_PILOT_FOCUS_PARTICIPANT') {

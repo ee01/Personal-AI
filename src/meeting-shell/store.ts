@@ -211,6 +211,7 @@ export class MeetingPilotRegistry {
       transcript: reusableExisting?.transcript || [],
       transcriptTurns: reusableExisting?.transcriptTurns || [],
       memoryRefs: reusableExisting?.memoryRefs || [],
+      webTranscript: reusableExisting?.webTranscript,
       sidePanelPinned: reusableExisting?.sidePanelPinned ?? false,
       ...(() => {
         const fields = buildSessionSummaryFields(payload, reusableExisting);
@@ -353,6 +354,7 @@ export class MeetingPilotRegistry {
       transcript: data.transcript || session.transcript,
       transcriptTurns: data.transcriptTurns || session.transcriptTurns,
       memoryRefs: data.memoryRefs || session.memoryRefs,
+      webTranscript: data.webTranscript || session.webTranscript,
     }));
   }
 }

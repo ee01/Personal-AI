@@ -1,0 +1,1021 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory Trust Console Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f5f1;
+      --panel: #ffffff;
+      --panel-soft: #fbfaf7;
+      --ink: #1e2329;
+      --muted: #65707c;
+      --line: #d9d5ca;
+      --line-strong: #c1bcaf;
+      --teal: #0f766e;
+      --teal-soft: #dff3ef;
+      --amber: #b45309;
+      --amber-soft: #fff2d8;
+      --red: #b42318;
+      --red-soft: #ffe5e1;
+      --blue: #2854a3;
+      --blue-soft: #e7eefc;
+      --violet: #6d3fb1;
+      --violet-soft: #eee8ff;
+      --shadow: 0 18px 45px rgba(24, 30, 37, 0.08);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 268px minmax(520px, 1fr) 390px;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 22px 18px;
+      background: #ece8df;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: var(--ink);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.15;
+      font-weight: 760;
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 7px;
+    }
+
+    .nav button {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #343b44;
+      border-radius: 7px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 10px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .nav button.active,
+    .nav button:hover {
+      background: rgba(255, 255, 255, 0.7);
+      border-color: var(--line);
+    }
+
+    .nav span:first-child {
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .count {
+      min-width: 24px;
+      height: 22px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: #d7d1c3;
+      font-size: 12px;
+      color: #424851;
+      padding: 0 7px;
+    }
+
+    .source-block {
+      display: grid;
+      gap: 12px;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0;
+      font-weight: 760;
+    }
+
+    .source {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.55);
+      padding: 11px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .source-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      font-size: 13px;
+      font-weight: 720;
+    }
+
+    .source-head span:last-child {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 680;
+    }
+
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #d8d2c4;
+    }
+
+    .bar i {
+      display: block;
+      height: 100%;
+      border-radius: 999px;
+      background: var(--teal);
+    }
+
+    .source:nth-of-type(3) .bar i {
+      background: var(--amber);
+    }
+
+    .source:nth-of-type(4) .bar i {
+      background: var(--blue);
+    }
+
+    .source p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .main {
+      padding: 24px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+    }
+
+    .topbar h2 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+
+    .topbar p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 740px;
+      line-height: 1.55;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      color: var(--ink);
+      min-height: 36px;
+      border-radius: 7px;
+      padding: 0 12px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr 1fr 1fr;
+      gap: 12px;
+    }
+
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: 0 10px 28px rgba(24, 30, 37, 0.04);
+      min-height: 112px;
+      display: grid;
+      align-content: space-between;
+      gap: 14px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .metric .trend {
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 740;
+    }
+
+    .issue-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      min-height: 0;
+    }
+
+    .lane {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+    }
+
+    .lane-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .lane-head h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .lane-head span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .issue-list {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      min-height: 0;
+    }
+
+    .issue {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 13px;
+      display: grid;
+      gap: 11px;
+      cursor: pointer;
+      text-align: left;
+      box-shadow: 0 10px 26px rgba(24, 30, 37, 0.04);
+    }
+
+    .issue.selected {
+      border-color: #1f8a7e;
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15), var(--shadow);
+    }
+
+    .issue:hover {
+      border-color: var(--line-strong);
+    }
+
+    .issue-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .issue-title {
+      font-size: 14px;
+      font-weight: 760;
+      line-height: 1.35;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 23px;
+      border-radius: 999px;
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
+    .badge.teal {
+      background: var(--teal-soft);
+      color: var(--teal);
+    }
+
+    .badge.amber {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .badge.red {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .badge.blue {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .badge.violet {
+      background: var(--violet-soft);
+      color: var(--violet);
+    }
+
+    .issue p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .issue-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 11px;
+      border-top: 1px solid #ece8df;
+      padding-top: 9px;
+    }
+
+    .detail {
+      border-left: 1px solid var(--line);
+      background: var(--panel-soft);
+      padding: 24px 20px;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .detail-card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 15px;
+      box-shadow: 0 10px 28px rgba(24, 30, 37, 0.04);
+    }
+
+    .detail-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .detail-head h3 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .detail-head p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 9px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 7px;
+      padding: 10px;
+      min-height: 74px;
+    }
+
+    .mini strong {
+      display: block;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .mini span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .tabs {
+      display: flex;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .tabs button {
+      flex: 1;
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 740;
+      color: var(--muted);
+    }
+
+    .tabs button:last-child {
+      border-right: 0;
+    }
+
+    .tabs button.active {
+      background: var(--ink);
+      color: #fff;
+    }
+
+    .evidence {
+      display: grid;
+      gap: 10px;
+      overflow: auto;
+      min-height: 0;
+      padding-right: 2px;
+    }
+
+    .evidence-item {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .evidence-item .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .evidence-item strong {
+      font-size: 12px;
+    }
+
+    .evidence-item p {
+      margin: 0;
+      color: #3e4650;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .repair {
+      display: grid;
+      gap: 10px;
+    }
+
+    .repair h4 {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .repair p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .trust-gate {
+      border: 1px solid #dfc678;
+      background: #fff8e8;
+      border-radius: var(--radius);
+      padding: 13px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .trust-gate h4 {
+      margin: 0;
+      color: #7a4a05;
+      font-size: 13px;
+    }
+
+    .trust-gate p {
+      margin: 0;
+      color: #6f5a2f;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(20px);
+      opacity: 0;
+      background: #1e2329;
+      color: #fff;
+      border-radius: 7px;
+      padding: 10px 14px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      transition: opacity 180ms ease, transform 180ms ease;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .app {
+        grid-template-columns: 220px minmax(460px, 1fr);
+      }
+
+      .detail {
+        display: none;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .app {
+        display: block;
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .main {
+        padding: 18px;
+      }
+
+      .summary-grid,
+      .issue-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        display: grid;
+      }
+
+      .actions {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">MT</div>
+        <div>
+          <h1>Memory Trust</h1>
+          <p>Personal AI 可信记忆层</p>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Memory Trust Sections">
+        <button class="active"><span>Overview</span><span class="count">12</span></button>
+        <button><span>Issues</span><span class="count">34</span></button>
+        <button><span>Sources</span><span class="count">7</span></button>
+        <button><span>Policies</span><span class="count">4</span></button>
+        <button><span>Ledger</span><span class="count">98</span></button>
+      </nav>
+
+      <div class="source-block">
+        <div class="section-title"><span>Source health</span><span>last scan 07:10</span></div>
+
+        <div class="source">
+          <div class="source-head"><span>RingCentral messages</span><span>82</span></div>
+          <div class="bar"><i style="width:82%"></i></div>
+          <p>High evidence density, moderate policy sensitivity.</p>
+        </div>
+
+        <div class="source">
+          <div class="source-head"><span>Meeting Pilot</span><span>58</span></div>
+          <div class="bar"><i style="width:58%"></i></div>
+          <p>Duplicate topics and ASR noise need cleanup before AI handoff.</p>
+        </div>
+
+        <div class="source">
+          <div class="source-head"><span>AI conversations</span><span>74</span></div>
+          <div class="bar"><i style="width:74%"></i></div>
+          <p>Useful for skills, requires cross-provider privacy gate.</p>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2>Memory Health Inbox</h2>
+          <p>Review the memory issues that most affect recall, meeting hints, and cross-AI context handoff. Repairs are reversible and keep raw evidence unless you explicitly choose deletion.</p>
+        </div>
+        <div class="actions">
+          <button class="btn">Run scan</button>
+          <button class="btn primary" id="gateButton">Preview AI handoff</button>
+        </div>
+      </header>
+
+      <section class="summary-grid" aria-label="Memory trust summary">
+        <div class="metric">
+          <div>
+            <strong>72</strong>
+            <span>Overall trust score</span>
+          </div>
+          <div class="trend">+6 after last consolidation</div>
+        </div>
+        <div class="metric">
+          <div>
+            <strong>18</strong>
+            <span>Duplicate or noisy meeting items</span>
+          </div>
+          <div class="trend">merge view available</div>
+        </div>
+        <div class="metric">
+          <div>
+            <strong>7</strong>
+            <span>Profile facts need confirmation</span>
+          </div>
+          <div class="trend">3 high impact</div>
+        </div>
+        <div class="metric">
+          <div>
+            <strong>4</strong>
+            <span>External AI handoff warnings</span>
+          </div>
+          <div class="trend">redaction ready</div>
+        </div>
+      </section>
+
+      <section class="issue-layout">
+        <div class="lane">
+          <div class="lane-head">
+            <h3>High impact</h3>
+            <span>affects next recall</span>
+          </div>
+          <div class="issue-list" id="highIssues"></div>
+        </div>
+
+        <div class="lane">
+          <div class="lane-head">
+            <h3>Quiet fixes</h3>
+            <span>batchable</span>
+          </div>
+          <div class="issue-list" id="quietIssues"></div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="detail" aria-label="Issue detail">
+      <div class="detail-card">
+        <div class="detail-head">
+          <div>
+            <h3 id="detailTitle">Meeting fragments repeated</h3>
+            <p id="detailSummary">Multiple topic snippets from the same RingCentral meeting compete with the canonical meeting summary.</p>
+          </div>
+          <span id="detailBadge" class="badge amber">Duplicate</span>
+        </div>
+      </div>
+
+      <div class="mini-grid">
+        <div class="mini">
+          <strong id="detailScore">58</strong>
+          <span>Trust score after scan</span>
+        </div>
+        <div class="mini">
+          <strong id="detailEvidence">14</strong>
+          <span>Evidence refs affected</span>
+        </div>
+        <div class="mini">
+          <strong id="detailImpact">High</strong>
+          <span>Impact on AI handoff</span>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button class="active">Evidence</button>
+        <button>Repair</button>
+        <button>Ledger</button>
+      </div>
+
+      <div class="evidence" id="evidenceList"></div>
+
+      <div class="detail-card repair">
+        <h4 id="repairTitle">Recommended repair</h4>
+        <p id="repairText">Create one canonical meeting episode, lower salience for duplicated topic snippets, keep all raw transcript chunks searchable as evidence.</p>
+        <div class="button-row">
+          <button class="btn primary" id="applyButton">Apply reversible repair</button>
+          <button class="btn">Snooze</button>
+          <button class="btn">Open raw memory</button>
+        </div>
+      </div>
+
+      <div class="trust-gate" id="trustGate">
+        <h4>External AI handoff gate</h4>
+        <p>Redacted version excludes unconfirmed profile facts and replaces internal policy details with local evidence references.</p>
+        <div class="button-row">
+          <button class="btn primary" id="redactButton">Use redacted context</button>
+          <button class="btn">Keep local only</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast">Repair proposal applied to preview state.</div>
+
+  <script>
+    const issues = [
+      {
+        id: "dup-meeting",
+        lane: "high",
+        title: "RingCentral meeting fragments repeated",
+        summary: "14 snippets from one meeting overlap with the canonical summary and could dominate recall.",
+        badge: ["Duplicate", "amber"],
+        score: 58,
+        evidence: 14,
+        impact: "High",
+        meta: "Meeting Pilot · affects Rehearsal and Capsule",
+        repairTitle: "Merge view, keep raw evidence",
+        repairText: "Create one canonical meeting episode, lower salience for duplicated topic snippets, and keep all transcript chunks searchable as evidence.",
+        evidenceItems: [
+          ["meeting-pilot", "RingCentral Video — 团队任务分配与Q3项目启动", "Repeated topic snippets share the same meeting id and nearly identical transcript window."],
+          ["daily summary", "2026-04-29 Nova Project & Team Operations", "The daily summary already contains a cleaner project-level decision and action list."],
+          ["metadata", "memory_metadata.redundancy", "Candidate group has high redundancy and low unique entity density."]
+        ]
+      },
+      {
+        id: "privacy-handoff",
+        lane: "high",
+        title: "External AI handoff includes policy-sensitive context",
+        summary: "A draft context pack for Codex includes internal AI tool cost and approval policy details.",
+        badge: ["Sensitive", "red"],
+        score: 64,
+        evidence: 6,
+        impact: "Critical",
+        meta: "ProviderContextService · external boundary",
+        repairTitle: "Redact provider context",
+        repairText: "Replace internal names and policy details with scoped summaries. Keep source links local and include only task-relevant constraints.",
+        evidenceItems: [
+          ["glip", "AI Tools for Engineering - Workgroup", "Messages discuss Cursor license policy, Codex voting, and Factory.ai production use conditions."],
+          ["daily summary", "2026-04-30 AI Tools", "Summary names stakeholders and policy decisions that should be scoped before external use."],
+          ["source policy", "RingCentral work group", "Current policy is ask_each_time for external AI provider handoff."]
+        ]
+      },
+      {
+        id: "profile-confirm",
+        lane: "high",
+        title: "Useful profile facts are not confirmed",
+        summary: "Role and timezone are reliable, but user preferences remain empty and several focus topics are only inferred.",
+        badge: ["Weak profile", "blue"],
+        score: 71,
+        evidence: 9,
+        impact: "Medium",
+        meta: "USER_CORE · affects personalization",
+        repairTitle: "Ask for lightweight confirmation",
+        repairText: "Promote stable identity facts and ask the user to confirm three high-signal working preferences before writing them into USER_CORE.",
+        evidenceItems: [
+          ["USER_CORE", "Identity", "Name, role, and timezone exist; preferences are still empty."],
+          ["profile items", "message_analysis observations", "Multiple recurring topics are inferred but not user-confirmed."],
+          ["daily summaries", "Jira and AI tools", "Repeated work patterns suggest stable context needs."]
+        ]
+      },
+      {
+        id: "asr-noise",
+        lane: "quiet",
+        title: "Low-information ASR fragments",
+        summary: "Several meeting snippets contain mixed scripts, repeated syllables, and no stable entities.",
+        badge: ["Noise", "violet"],
+        score: 42,
+        evidence: 11,
+        impact: "Medium",
+        meta: "Meeting Pilot · batch repair",
+        repairTitle: "Quarantine noisy transcript chunks",
+        repairText: "Lower salience and exclude from external AI context. Keep them available behind Show noisy evidence.",
+        evidenceItems: [
+          ["meeting-pilot", "RingCentral Video — ʃʃʃʃʃʃʃ", "The fragment has abnormal language mix and no project/entity signal."],
+          ["detector", "noise ratio", "Character entropy and repetition exceed the source threshold."],
+          ["recall logs", "low click-through", "No user interactions with this class of recalled evidence."]
+        ]
+      },
+      {
+        id: "stale-fact",
+        lane: "quiet",
+        title: "AI tool policy may have changed",
+        summary: "Factory.ai trial and Codex preference messages changed within a short window and should be marked time-sensitive.",
+        badge: ["Stale risk", "amber"],
+        score: 67,
+        evidence: 5,
+        impact: "Medium",
+        meta: "Glip · policy fact",
+        repairTitle: "Mark as time-sensitive",
+        repairText: "Attach valid_from and review_after metadata so future recall says this was true as of 2026-04-30.",
+        evidenceItems: [
+          ["daily summary", "Factory.ai Security & Usage", "Factory.ai free trial approved for production projects with RingCentral email login."],
+          ["glip", "Codex / Claude Code vote", "Team preference was still being collected before a large OpenAI deal."],
+          ["policy", "temporal fact", "Tool access facts should expire or request refresh before reuse."]
+        ]
+      },
+      {
+        id: "source-gap",
+        lane: "quiet",
+        title: "Some summaries lack raw source links",
+        summary: "A few consolidated chunks are useful, but do not expose direct raw message anchors in the UI.",
+        badge: ["Source gap", "teal"],
+        score: 76,
+        evidence: 8,
+        impact: "Low",
+        meta: "Consolidation · evidence trail",
+        repairTitle: "Backfill source anchors",
+        repairText: "Use message ids and file paths to attach source_anchor values, improving evidence trail navigation.",
+        evidenceItems: [
+          ["chunks", "daily markdown", "Summary chunks are indexed but raw message anchors are not always shown."],
+          ["ledger", "summarized event missing", "Some consolidation events predate trust ledger tracking."],
+          ["UI", "Memory Exploring", "Evidence trail can degrade into plain text without clickable anchors."]
+        ]
+      }
+    ];
+
+    const high = document.getElementById("highIssues");
+    const quiet = document.getElementById("quietIssues");
+    const toast = document.getElementById("toast");
+    let selectedId = issues[0].id;
+
+    function issueNode(issue) {
+      const button = document.createElement("button");
+      button.className = "issue" + (issue.id === selectedId ? " selected" : "");
+      button.type = "button";
+      button.innerHTML = `
+        <div class="issue-top">
+          <div class="issue-title">${issue.title}</div>
+          <span class="badge ${issue.badge[1]}">${issue.badge[0]}</span>
+        </div>
+        <p>${issue.summary}</p>
+        <div class="issue-meta">
+          <span>${issue.meta}</span>
+          <span>${issue.evidence} refs</span>
+        </div>
+      `;
+      button.addEventListener("click", () => selectIssue(issue.id));
+      return button;
+    }
+
+    function renderIssues() {
+      high.innerHTML = "";
+      quiet.innerHTML = "";
+      issues.forEach((issue) => {
+        if (issue.lane === "high") high.appendChild(issueNode(issue));
+        else quiet.appendChild(issueNode(issue));
+      });
+    }
+
+    function selectIssue(id) {
+      selectedId = id;
+      const issue = issues.find((item) => item.id === id);
+      document.getElementById("detailTitle").textContent = issue.title;
+      document.getElementById("detailSummary").textContent = issue.summary;
+      const badge = document.getElementById("detailBadge");
+      badge.className = `badge ${issue.badge[1]}`;
+      badge.textContent = issue.badge[0];
+      document.getElementById("detailScore").textContent = issue.score;
+      document.getElementById("detailEvidence").textContent = issue.evidence;
+      document.getElementById("detailImpact").textContent = issue.impact;
+      document.getElementById("repairTitle").textContent = issue.repairTitle;
+      document.getElementById("repairText").textContent = issue.repairText;
+
+      const evidenceList = document.getElementById("evidenceList");
+      evidenceList.innerHTML = "";
+      issue.evidenceItems.forEach((item, index) => {
+        const node = document.createElement("div");
+        node.className = "evidence-item";
+        node.innerHTML = `
+          <div class="row">
+            <strong>${item[0]}</strong>
+            <span class="badge ${index === 0 ? issue.badge[1] : "teal"}">${index === 0 ? "supports" : "context"}</span>
+          </div>
+          <p><strong>${item[1]}</strong></p>
+          <p>${item[2]}</p>
+        `;
+        evidenceList.appendChild(node);
+      });
+      renderIssues();
+    }
+
+    function showToast(text) {
+      toast.textContent = text;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+
+    document.getElementById("applyButton").addEventListener("click", () => {
+      showToast("Repair proposal applied to preview state.");
+    });
+
+    document.getElementById("gateButton").addEventListener("click", () => {
+      selectIssue("privacy-handoff");
+      showToast("Trust Gate preview selected.");
+    });
+
+    document.getElementById("redactButton").addEventListener("click", () => {
+      showToast("Redacted context selected for this handoff.");
+    });
+
+    renderIssues();
+    selectIssue(selectedId);
+  </script>
+</body>
+</html>

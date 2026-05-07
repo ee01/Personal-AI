@@ -101,7 +101,11 @@ function installFetchMock() {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const prompt = String(body?.prompt || '');
 
-    if (url.startsWith('http://mock-memory/api/v1/outreach/sessions')) {
+    if (
+      url.startsWith(
+        'http://mock-memory/api/v1/outreach/templates/runtime-status',
+      )
+    ) {
       return new Response(
         JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },

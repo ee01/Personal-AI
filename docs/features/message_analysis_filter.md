@@ -1,6 +1,6 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-04-16_
+_最后更新: 2026-05-06_
 
 > 说明：文件名沿用 `message_analysis_filter.md` 以兼容现有引用；本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
@@ -70,6 +70,18 @@ _最后更新: 2026-04-16_
 - 用户规则与系统规则共用同一条消息分析主链路
 - 系统规则不会污染用户的规则列表与统计
 - 帮我问 / 反思等能力可以复用现有消息过滤与结构化输出能力
+
+## 范围校验
+
+运行时现在会先做确定性的候选规则筛选，再把候选规则交给 LLM 做语义判断。
+
+筛选依据包括：
+
+- 手动规则的 `filterSender`
+- 手动规则的 `filterGroup`
+- 系统观察规则的目标群组、已发送会话或目标对象
+
+LLM 返回命中后，通知、自动回复、摘要、关联操作和入库分发前还会再次按消息上下文校验范围。这样可以避免一条只属于某个群组或某个发送人的规则，因为模型误判而在其他聊天里触发。
 
 ## 用户可见能力
 
@@ -214,6 +226,8 @@ _最后更新: 2026-04-16_
 
 这替代了过去纯数组下标式的脆弱规则编号。
 
+`matched_rule_ids` 仍作为旧格式兼容层保留。当前 agentThinking、Agent Workflow 和普通 filter 模式都会把它归一化到同一套规则解析逻辑里，但新实现仍优先使用 `matched_rule_refs`。
+
 ### 4. 消息入库
 
 命中的消息会写入 memory-service，成为可回忆、可摘要、可反思的记忆素材。
@@ -341,6 +355,65 @@ Popup 中的入口名称已改为：
 - 更多外部系统动作模板
 - 更通用的自然语言到 RuntimeAction 规划
 - 更多系统规则来源
+
+## 2026-05-05 更新：范围匹配与误触发控制
+
+本轮代码检查发现，运行时范围匹配已经有“LLM 前候选筛选 + 分发前二次校验”的设计，但旧的字符串包含匹配过于宽松：例如 `filterGroup=AI` 可能误命中 `Daily Standup`。这会削弱文档里强调的“范围校验”边界。
+
+当前实现已改为更保守的范围匹配：
+
+- 群组 / 发送人先做精确匹配和去空格/连字符后的紧凑匹配。
+- 英文、数字、下划线、连字符等名称按完整 token 序列匹配，短词不会再命中其他单词内部。
+- 中日韩等无空格名称仍保留安全的包含匹配，方便 `研发` 匹配 `研发群`。
+- 新增 / 编辑规则保存时会 trim 群组与发送人条件，空白不会被保存成看似有限制、实际全局生效的条件。
+- 规则页会对“所有群组 + 所有发送人”的全局规则、以及过短范围词给出可见提示，引导用户先收窄范围。
+
+业内产品也采用类似心智：Slack Workflow Builder 的消息触发器要求先指定 channel，并用关键词条件控制触发；Zapier Filter step 明确把“只有满足条件才继续执行”作为工作流中的单独步骤。触发-动作系统研究也反复提醒，规则爆炸、重复规则和上下文风险会让用户更难判断自动化后果。因此本功能应继续把范围、审批、动作队列状态放在用户可见路径里，而不是只依赖模型语义判断。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/intl/en-gb/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Filter Actions](https://docs.zapier.com/powered-by-zapier/zap-creation/filter-actions)
+- [Trigger-Action Programming in the Wild: An Analysis of 200,000 IFTTT Recipes](https://www.blaseur.com/papers/chi16-ifttt.pdf)
+- [If This Context Then That Concern: Exploring users' concerns with IFTTT applets](https://arxiv.org/abs/2012.12518)
+- [Data Privacy in Trigger-Action Systems](https://arxiv.org/abs/2012.05749)
+
+## 2026-05-06 更新：自动回复范围一致性
+
+本轮进一步检查发现，自动回复在统一规则解析后仍保留了一段旧的 `includes` 范围校验。它不会造成越权触发，但会误拦截已经通过新规则匹配器的合法命中，例如大小写不同、空格 / 连字符不同但实际指向同一群组或发送人的规则。
+
+当前实现已收敛为：
+
+- 自动回复先复用统一的 `ruleRef + messageContext` 解析结果。
+- 定时消息初始化检查只在确实命中自动回复规则后发生，避免无关消息产生噪音。
+- 自动回复、通知、摘要、关联操作都依赖同一套范围边界，减少“某个能力单独用旧匹配逻辑”的分叉风险。
+
+产品上继续建议把规则配置页呈现为“当/则”路径：先展示群组与发送人范围，再展示命中后的通知、摘要、自动回复和关联操作。这样更接近 Slack / Zapier 的触发器 + 条件 + 动作心智，也能缓解 IFTTT 研究里提到的上下文风险判断问题。
+
+## 2026-05-06 更新：联动操作事件上下文与新建路径预览
+
+本轮代码检查发现，普通批量过滤模式下命中记忆入口规则后可以创建 RuntimeAction，但传给 message-rule planner 的 `message.event` 可能为空。原因是原始消息索引只覆盖了逐群处理里的 `messageData.posts`，没有覆盖批量模式的 `standalone` / `threads` 输入。这样会让已经由上游解析出的结构化日程、时间段或地点信息在联动操作阶段丢失。
+
+当前实现已调整为：
+
+- 原始消息索引统一覆盖 `posts`、`standalone`、thread root 和 thread replies。
+- 批量过滤和逐群过滤都会把同一个 source post index 传入后续处理。
+- planner 请求继续只透传安全归一化后的 `event` 字段，例如标题、起止日期、时间段、地点和毫秒时间戳。
+- 新建规则表单加入“当 / 则”预览：左侧汇总消息模式与群组 / 发送人范围，右侧汇总写入记忆、推送、摘要、自动答复、关注后续和联动操作状态。
+
+产品依据：
+
+- Slack Workflow Builder 把 workflow 拆成 trigger、steps、variables 等组成部分，消息关键词也只是明确触发器之一。
+- Zapier 的自然语言 builder 会生成步骤列表，并要求测试和批准会产生数据的测试动作。
+- 触发-动作编程研究显示，用户容易误判规则行为，尤其是状态 / 事件、即时 / 持续动作之间的差异。
+- 注意力感知通知研究提醒，通知系统需要同时考虑信息优先级和打断成本；记忆入口规则的摘要、通知与范围预览应继续显性化。
+
+参考资料：
+
+- [Slack：Build a workflow](https://slack.com/help/articles/17542172840595-Build-a-workflow--Create-a-workflow-in-Slack)
+- [Zapier：Create Zaps by describing your workflow](https://help.zapier.com/hc/en-us/articles/44244146813453-Create-Zaps-by-describing-your-workflow)
+- [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)
+- [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
 
 ## 适用场景
 

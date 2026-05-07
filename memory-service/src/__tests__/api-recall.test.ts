@@ -174,6 +174,50 @@ describe('Recall API', () => {
     );
   });
 
+  it('treats all scope as both work and personal memories', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, scope, source_type, sender, group_name, timestamp, importance, sentiment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'personal-memory-1',
+      'Personal note about private budget planning.',
+      'personal',
+      'manual',
+      'self',
+      'Personal',
+      now - 30,
+      0.8,
+      'neutral',
+      now - 30,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'planning',
+        topK: 10,
+        channels: ['time'],
+        timeRange: {
+          start: now - 3600,
+          end: now + 60,
+        },
+        scope: 'all',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items.map((item: any) => item.id)).toContain(
+      'meeting-memory-1',
+    );
+    expect(body.items.map((item: any) => item.id)).toContain(
+      'personal-memory-1',
+    );
+  });
+
   it('applies scope filtering to chunk recall and returns both only when explicitly requested', async () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare(
@@ -249,6 +293,22 @@ describe('Recall API', () => {
     const bothBody = bothRes.json();
     expect(bothBody.items.map((item: any) => item.id)).toContain('101');
     expect(bothBody.items.map((item: any) => item.id)).toContain('102');
+
+    const allRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'roadmap milestone',
+        topK: 10,
+        channels: ['fts'],
+        scope: 'all',
+      },
+    });
+
+    expect(allRes.statusCode).toBe(200);
+    const allBody = allRes.json();
+    expect(allBody.items.map((item: any) => item.id)).toContain('101');
+    expect(allBody.items.map((item: any) => item.id)).toContain('102');
   });
 
   it('returns compact preview text while preserving full cleaned display text', async () => {

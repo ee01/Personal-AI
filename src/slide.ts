@@ -14,6 +14,11 @@ import {
 import { SlideAnalyzerFactoryImpl } from './analyzers/analyzerFactory';
 import { LLMContentAnalyzer } from './analyzers/llmAnalyzer';
 import { JiraTicket } from './types';
+import {
+  containsSuggestionText,
+  getNewSuggestionText,
+  normalizeComparableText,
+} from './utils/slidesAnalyzerSuggestions';
 
 /**
  * 项目数据接口定义
@@ -77,6 +82,58 @@ export interface ProjectUpdateSuggestion {
     track?: number;
     comments?: number;
   };
+}
+
+function isValidColumnIndex(columnIndex: unknown): columnIndex is number {
+  return Number.isInteger(columnIndex) && (columnIndex as number) >= 0;
+}
+
+function hasMeaningfulTextChange(currentValue: unknown, suggestedValue: unknown): boolean {
+  if (typeof suggestedValue !== 'string' || !suggestedValue.trim()) {
+    return false;
+  }
+
+  return normalizeComparableText(currentValue) !== normalizeComparableText(suggestedValue);
+}
+
+function addReplaceTableCellTextRequests(
+  requests: Array<Record<string, unknown>>,
+  tableId: string,
+  rowIndex: number,
+  columnIndex: number,
+  text: string,
+): void {
+  const cellLocation = {
+    rowIndex,
+    columnIndex
+  };
+
+  requests.push({
+    deleteText: {
+      objectId: tableId,
+      cellLocation,
+      textRange: {
+        type: 'ALL'
+      }
+    }
+  });
+
+  requests.push({
+    insertText: {
+      objectId: tableId,
+      cellLocation,
+      text,
+      insertionIndex: 0
+    }
+  });
+}
+
+function addMissingColumnError(
+  errors: string[],
+  update: ProjectUpdateSuggestion,
+  fieldLabel: string,
+): void {
+  errors.push(`无法更新${fieldLabel}: ${update.projectId} - ${update.projectName} 缺少可写表格列`);
 }
 
 /**
@@ -224,13 +281,13 @@ export async function getProjectsFromSlide(
             console.log(`尝试使用LLM分析失败的幻灯片: ${slide.objectId}`);
             const llmAnalyzer = new LLMContentAnalyzer();
             const llmResult = await llmAnalyzer.analyze(slide);
-            
+
             // 添加幻灯片ID到项目数据
             const slideProjects = llmResult.projects.map(project => ({
               ...project,
               slideId: slide.objectId
             }));
-            
+
             // 添加LLM分析结果
             allProjects.push(...slideProjects);
             
@@ -273,8 +330,8 @@ export async function applyProjectUpdates(
 ): Promise<{ success: boolean; updatedCount: number; errors?: string[] }> {
   try {
     // 准备批量更新请求
-    const requests = [];
-    const errors = [];
+    const requests: Array<Record<string, unknown>> = [];
+    const errors: string[] = [];
     let updatedFieldCount = 0;
     
     for (const update of updates) {
@@ -283,149 +340,108 @@ export async function applyProjectUpdates(
         errors.push(`缺少更新位置信息: ${update.projectId} - ${update.projectName}`);
         continue;
       }
-      
-      // 添加状态更新请求
-      if (update.suggestedStatus && update.columnIndices?.status !== undefined) {
-        try {
-          // 删除文本请求
-          requests.push({
-            deleteText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.status
-              }
-            }
-          });
-          
-          // 插入文本请求
-          requests.push({
-            insertText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.status
-              },
-              text: update.suggestedStatus
-            }
-          });
-          
-          updatedFieldCount++;
-          console.log(`准备更新项目 "${update.projectName}" 的状态: ${update.currentStatus} -> ${update.suggestedStatus}`);
-        } catch (error) {
-          const errorMsg = `更新状态失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
-          console.error(errorMsg);
-          errors.push(errorMsg);
+
+      if (hasMeaningfulTextChange(update.currentStatus, update.suggestedStatus)) {
+        if (isValidColumnIndex(update.columnIndices?.status)) {
+          try {
+            addReplaceTableCellTextRequests(
+              requests,
+              update.tableId,
+              update.rowIndex,
+              update.columnIndices.status,
+              update.suggestedStatus,
+            );
+
+            updatedFieldCount++;
+            console.log(`准备更新项目 "${update.projectName}" 的状态: ${update.currentStatus} -> ${update.suggestedStatus}`);
+          } catch (error) {
+            const errorMsg = `更新状态失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
+            console.error(errorMsg);
+            errors.push(errorMsg);
+          }
+        } else {
+          addMissingColumnError(errors, update, '状态');
+        }
+      }
+
+      if (hasMeaningfulTextChange(update.currentOwner, update.suggestedOwner)) {
+        if (isValidColumnIndex(update.columnIndices?.owner)) {
+          try {
+            addReplaceTableCellTextRequests(
+              requests,
+              update.tableId,
+              update.rowIndex,
+              update.columnIndices.owner,
+              update.suggestedOwner,
+            );
+
+            updatedFieldCount++;
+            console.log(`准备更新项目 "${update.projectName}" 的负责人: ${update.currentOwner} -> ${update.suggestedOwner}`);
+          } catch (error) {
+            const errorMsg = `更新负责人失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
+            console.error(errorMsg);
+            errors.push(errorMsg);
+          }
+        } else {
+          addMissingColumnError(errors, update, '负责人');
+        }
+      }
+
+      if (hasMeaningfulTextChange(update.currentTrack, update.suggestedTrack)) {
+        if (isValidColumnIndex(update.columnIndices?.track)) {
+          try {
+            addReplaceTableCellTextRequests(
+              requests,
+              update.tableId,
+              update.rowIndex,
+              update.columnIndices.track,
+              update.suggestedTrack,
+            );
+
+            updatedFieldCount++;
+            console.log(`准备更新项目 "${update.projectName}" 的赛道: ${update.currentTrack || '空'} -> ${update.suggestedTrack}`);
+          } catch (error) {
+            const errorMsg = `更新赛道失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
+            console.error(errorMsg);
+            errors.push(errorMsg);
+          }
+        } else {
+          addMissingColumnError(errors, update, '赛道');
         }
       }
       
-      // 添加负责人更新请求
-      if (update.suggestedOwner && update.columnIndices?.owner !== undefined) {
-        try {
-          // 删除文本请求
-          requests.push({
-            deleteText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.owner
-              }
+      if (update.suggestedComments) {
+        if (isValidColumnIndex(update.columnIndices?.comments)) {
+          try {
+            const newComments = getNewSuggestionText(update.currentComments, update.suggestedComments);
+
+            if (!newComments || containsSuggestionText(update.currentComments, newComments)) {
+              console.log(`跳过项目 "${update.projectName}" 的重复备注建议`);
+              continue;
             }
-          });
-          
-          // 插入文本请求
-          requests.push({
-            insertText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.owner
-              },
-              text: update.suggestedOwner
-            }
-          });
-          
-          updatedFieldCount++;
-          console.log(`准备更新项目 "${update.projectName}" 的负责人: ${update.currentOwner} -> ${update.suggestedOwner}`);
-        } catch (error) {
-          const errorMsg = `更新负责人失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
-          console.error(errorMsg);
-          errors.push(errorMsg);
-        }
-      }
-      
-      // 添加赛道更新请求
-      if (update.suggestedTrack && update.columnIndices?.track !== undefined) {
-        try {
-          // 删除文本请求
-          requests.push({
-            deleteText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.track
-              }
-            }
-          });
-          
-          // 插入文本请求
-          requests.push({
-            insertText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.track
-              },
-              text: update.suggestedTrack
-            }
-          });
-          
-          updatedFieldCount++;
-          console.log(`准备更新项目 "${update.projectName}" 的赛道: ${update.currentTrack || '空'} -> ${update.suggestedTrack}`);
-        } catch (error) {
-          const errorMsg = `更新赛道失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
-          console.error(errorMsg);
-          errors.push(errorMsg);
-        }
-      }
-      
-      // 添加备注更新请求
-      if (update.suggestedComments && update.columnIndices?.comments !== undefined) {
-        try {
-          // 检查是否是添加而不是完全替换
-          const finalText = update.currentComments 
-            ? `${update.currentComments}\n${update.suggestedComments}`
-            : update.suggestedComments;
-          
-          // 删除文本请求
-          requests.push({
-            deleteText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.comments
-              }
-            }
-          });
-          
-          // 插入文本请求
-          requests.push({
-            insertText: {
-              objectId: update.tableId,
-              cellLocation: {
-                rowIndex: update.rowIndex,
-                columnIndex: update.columnIndices.comments
-              },
-              text: finalText
-            }
-          });
-          
-          updatedFieldCount++;
-          console.log(`准备更新项目 "${update.projectName}" 的备注${update.currentComments ? '(附加)' : ''}`);
-        } catch (error) {
-          const errorMsg = `更新备注失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
-          console.error(errorMsg);
-          errors.push(errorMsg);
+
+            // 检查是否是添加而不是完全替换
+            const finalText = update.currentComments
+              ? `${update.currentComments}\n${newComments}`
+              : newComments;
+
+            addReplaceTableCellTextRequests(
+              requests,
+              update.tableId,
+              update.rowIndex,
+              update.columnIndices.comments,
+              finalText,
+            );
+
+            updatedFieldCount++;
+            console.log(`准备更新项目 "${update.projectName}" 的备注${update.currentComments ? '(附加)' : ''}`);
+          } catch (error) {
+            const errorMsg = `更新备注失败 (${update.projectId}): ${error instanceof Error ? error.message : String(error)}`;
+            console.error(errorMsg);
+            errors.push(errorMsg);
+          }
+        } else {
+          addMissingColumnError(errors, update, '备注');
         }
       }
     }
@@ -433,6 +449,14 @@ export async function applyProjectUpdates(
     // 如果没有任何请求，直接返回
     if (requests.length === 0) {
       console.log('没有要应用的更新');
+      if (errors.length > 0) {
+        return {
+          success: false,
+          updatedCount: 0,
+          errors
+        };
+      }
+
       return {
         success: true,
         updatedCount: 0,
@@ -528,11 +552,11 @@ async function fetchPresentationData(presentationId: string, token: string): Pro
       }
     }
   );
-  
+
   if (!response.ok) {
     const errorData = await response.json();
     throw new Error(`Google Slides API错误: ${JSON.stringify(errorData)}`);
   }
   
   return await response.json() as GooglePresentation;
-} 
+}

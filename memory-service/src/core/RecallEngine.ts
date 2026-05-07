@@ -248,7 +248,10 @@ function normalizeStoredScope(
   return scope === 'personal' ? 'personal' : 'work';
 }
 
-function normalizeRequestedScope(scope: RecallScope | undefined): RecallScope {
+function normalizeRequestedScope(
+  scope: RecallScope | undefined,
+): MemoryScope | 'both' {
+  if (scope === 'all') return 'both';
   return scope ?? 'work';
 }
 

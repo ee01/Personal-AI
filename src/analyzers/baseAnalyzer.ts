@@ -9,6 +9,7 @@ import {
   ProjectStructureType, 
   SlideAnalysisResult 
 } from '../interfaces/slideAnalyzer';
+import { extractJiraTicketKeys } from '../utils/slidesAnalyzerSuggestions';
 
 /**
  * 基础分析器抽象类
@@ -219,9 +220,7 @@ export abstract class BaseSlideAnalyzer implements SlideContentAnalyzer {
    * @returns 是否包含单个Jira工单
    */
   protected containsSingleJiraTicket(text: string): boolean {
-    const jiraTicketPattern = /[A-Z]+-\d+/g;
-    const matches = text.match(jiraTicketPattern);
-    return matches !== null && matches.length === 1;
+    return extractJiraTicketKeys(text).length === 1;
   }
   
   /**
@@ -230,9 +229,7 @@ export abstract class BaseSlideAnalyzer implements SlideContentAnalyzer {
    * @returns 是否包含多个Jira工单
    */
   protected containsMultipleJiraTickets(text: string): boolean {
-    const jiraTicketPattern = /[A-Z]+-\d+/g;
-    const matches = text.match(jiraTicketPattern);
-    return matches !== null && matches.length > 1;
+    return extractJiraTicketKeys(text).length > 1;
   }
   
   /**
@@ -270,7 +267,6 @@ export abstract class BaseSlideAnalyzer implements SlideContentAnalyzer {
    * @returns Jira工单ID数组
    */
   protected extractJiraTickets(text: string): string[] {
-    const jiraTicketPattern = /[A-Z]+-\d+/g;
-    return text.match(jiraTicketPattern) || [];
+    return extractJiraTicketKeys(text);
   }
-} 
+}

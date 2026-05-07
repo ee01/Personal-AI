@@ -153,7 +153,7 @@ function getDesignLinksFromDescription(
 }
 
 // 从DOM中查找linked issues中的UX tickets
-function getUXTicketsFromLinkedIssues(projectPrefix = 'UX'): { key: string; url: string; summary: string; source: 'linked_issues' }[] {
+function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url: string; summary: string; source: 'linked_issues' }[] {
   const uxTickets: { key: string; url: string; summary: string; source: 'linked_issues' }[] = [];
   
   // 查找Issue Links部分
@@ -224,7 +224,7 @@ async function fetchChildIssues(parentKey: string): Promise<any[]> {
 }
 
 // 查找UX类型的ticket
-async function findUXTickets(parentData: any, currentTicketKey: string, projectPrefix = 'UX'): Promise<UXTicketReference[]> {
+async function findUXTickets(parentData: any, currentTicketKey: string, projectPrefix = 'UX*'): Promise<UXTicketReference[]> {
   try {
     const uxTickets: UXTicketReference[] = [];
     
@@ -435,7 +435,7 @@ async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: s
 }
 
 // 从Epic ticket中查找UX linked issues
-async function getUXTicketsFromEpic(epicKey: string, projectPrefix = 'UX'): Promise<UXTicketReference[]> {
+async function getUXTicketsFromEpic(epicKey: string, projectPrefix = 'UX*'): Promise<UXTicketReference[]> {
   try {
     const epicData = await fetchTicketData(epicKey);
     return await findUXTickets(epicData, '', projectPrefix); // 传空字符串作为currentTicketKey
@@ -561,6 +561,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
           <a href="${escapeAttribute(uxTicketUrl)}" title="${escapeAttribute(design.summary || design.uxTicketKey)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link">
             ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
           </a>
+          <span class="design-missing-summary" title="${escapeAttribute(design.summary || design.uxTicketKey)}">${escapeHtml(design.summary || design.uxTicketKey)}</span>
         `;
       const designStatusText = design.linkProvided ? design.designStatus : 'Missing link';
       const designStatusTag = designStatusText
@@ -621,25 +622,24 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       margin: 10px 0;
       padding: 8px 12px;
       background-color: #f0f5ff;
+      border: 1px solid #d6e4ff;
       border-radius: 4px;
-      display: inline-flex;
+      display: flex;
       flex-direction: column;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      transition: all 0.3s ease;
+      box-shadow: 0 1px 2px rgba(9,30,66,0.12);
       position: relative;
       overflow: visible;
-      max-height: ${40 + (designData.length - 1) * 30}px;
+      max-width: min(100%, 980px);
       z-index: 1;
     }
     .design-links-container:hover {
-      max-height: ${80 + (designData.length - 1) * 30}px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-      transform: translateY(4px);
-      z-index: 1000;
+      box-shadow: 0 2px 4px rgba(9,30,66,0.16);
+      transform: none;
     }
     .design-links-content {
       display: flex;
       flex-direction: column;
+      gap: 4px;
       background-color: #f0f5ff;
       position: relative;
       z-index: 2;
@@ -647,37 +647,30 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     .design-link-item {
       display: flex;
       align-items: center;
-      gap: 4px;
-      margin-bottom: 4px;
+      gap: 4px 6px;
       position: relative;
-    }
-    .design-link-item:last-child {
-      margin-bottom: 0;
+      flex-wrap: wrap;
+      min-width: 0;
+      max-width: 100%;
     }
     .design-links-footer {
       font-size: 12px;
       color: #666;
-      margin-top: 0;
+      margin-top: 6px;
       padding-top: 8px;
       border-top: 1px dashed #ccc;
-      opacity: 0;
-      transform: translateY(-10px);
-      transition: all 0.3s ease;
-      position: absolute;
-      top: 100%;
-      left: 0;
-      right: 0;
+      opacity: 0.8;
+      transform: none;
+      position: static;
       background-color: #f0f5ff;
-      padding: 8px 12px;
-      border-radius: 0 0 4px 4px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
+      gap: 8px;
     }
     .design-links-container:hover .design-links-footer {
-      opacity: 1;
-      transform: translateY(0);
+      opacity: 0.8;
+      transform: none;
     }
     .footer-text {
       font-size: 12px;
@@ -713,6 +706,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       text-decoration: none;
       display: inline-block;
       max-width: min(64vw, 540px);
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -837,6 +831,10 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     .design-status-tag--missing {
       color: #7a3e00;
       background-color: #fff0b3;
+    }
+    .design-status-tag--not-ready {
+      color: #974f0c;
+      background-color: #fffae6;
     }
     .design-status-tag--blocked {
       color: #7a3e00;
@@ -1344,7 +1342,7 @@ async function main(): Promise<void> {
     
     // 加载配置
     const config = await getEnvConfig();
-    const designProject = config.DESIGN_JIRA_PROJECT || 'UX';
+    const designProject = config.DESIGN_JIRA_PROJECT || 'UX*';
     const extraDesignDomains = parseDesignDomainPatterns(config.DESIGN_LINK_DOMAINS);
     
     // 等待DOM加载完成

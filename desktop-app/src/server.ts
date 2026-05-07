@@ -131,9 +131,13 @@ function buildBlockingReasons(
   }
 
   if (status.authStatus !== 'connected') {
+    const usesDailyBrowserBroadcast =
+      settings.explorer.doubao.broadcastTransport === 'webpage_mcp';
     reasons.push({
       code: 'auth_required',
-      message: '豆包尚未登录',
+      message: usesDailyBrowserBroadcast
+        ? '日常 Chrome 的豆包标签页尚未登录或不可用'
+        : '豆包尚未登录',
       syncKinds: ['stableMemory', 'mobileBriefing', 'reminderSync'],
     });
   }
@@ -743,10 +747,12 @@ export async function createBridgeServer(
   }>('/sync/run-now', async (request, reply) => {
     try {
       const kind = normalizeAutoSyncKind(request.body.kind);
-      await deps.syncManager.runNow(kind);
+      const result = await deps.syncManager.runNow(kind);
       return {
         ok: true,
         kind,
+        status: result.status,
+        errorMessage: result.errorMessage,
       };
     } catch (error) {
       const message =

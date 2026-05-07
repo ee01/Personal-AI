@@ -16,14 +16,25 @@ import type { WebpageMcpHost } from '../transports/WebpageMcpHost.js';
 
 const DOUBAO_URL_PATTERN = 'doubao.com';
 const DOUBAO_LOGIN_URL = 'https://www.doubao.com/chat/';
+const DOUBAO_BASE_URL = 'https://www.doubao.com';
+
+function normalizeDoubaoUrl(href?: string): string {
+  if (!href) return '';
+  try {
+    return new URL(href, DOUBAO_BASE_URL).toString();
+  } catch {
+    return href;
+  }
+}
 
 export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient {
   constructor(private readonly host: WebpageMcpHost) {}
 
   async openLogin(): Promise<string> {
+    const tabId = await this.host.findTabByUrl(DOUBAO_URL_PATTERN);
     await this.host.callTool('chrome_navigate', {
       url: DOUBAO_LOGIN_URL,
-      openMode: 'new_tab',
+      ...(tabId !== undefined ? { tabId } : { openMode: 'new_tab' }),
     }).catch(() => undefined);
     return DOUBAO_LOGIN_URL;
   }
@@ -31,6 +42,9 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
   async probeAuthStatus(): Promise<'connected' | 'needs_login'> {
     try {
       const tabId = await this.host.findTabByUrl(DOUBAO_URL_PATTERN);
+      if (tabId === undefined) {
+        return 'needs_login';
+      }
       const js = `
         (async () => {
           try {
@@ -56,7 +70,7 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
   }
 
   async collectConversationSnapshots(): Promise<BrowserConversationSnapshot[]> {
-    const tabId = await this.host.findTabByUrl(DOUBAO_URL_PATTERN);
+    const tabId = await this.requireDoubaoTab();
     const js = `
       (async () => {
         try {
@@ -109,12 +123,16 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
           const conversations = items.slice(0, 50).map((el) => {
             const link = el.querySelector('a') || el.closest('a') || el;
             const href = link?.getAttribute('href') || '';
-            const idMatch = href.match(/\\/chat\\/(\\d+)/);
+            const url = href
+              ? new URL(href, 'https://www.doubao.com').toString()
+              : '';
+            const idMatch = url.match(/\\/(?:chat|thread)\\/([^/?#]+)/);
             const conversationId = idMatch?.[1] || el.getAttribute('data-id') || el.id || '';
-            const title = el.querySelector('[class*="title"], [class*="name"], p, span')?.textContent?.trim() || '';
+            const title =
+              el.querySelector('[class*="title"], [class*="name"], p, span')?.textContent?.trim() || '';
             const timeEl = el.querySelector('[class*="time"], time, [class*="date"]');
             const updatedLabel = timeEl?.textContent?.trim() || timeEl?.getAttribute('datetime') || '';
-            return { conversationId, title, updatedLabel, href };
+            return { conversationId, title, updatedLabel, url };
           }).filter(c => c.conversationId);
           return JSON.stringify({ conversations });
         } catch(e) {
@@ -127,7 +145,7 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
       conversationId: string;
       title: string;
       updatedLabel: string;
-      href: string;
+      url: string;
     }> = [];
 
     try {
@@ -142,11 +160,12 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
 
     const snapshots: BrowserConversationSnapshot[] = [];
     for (const conv of convInfoList) {
-      if (conv.href) {
+      const url = normalizeDoubaoUrl(conv.url);
+      if (url) {
         try {
           const navTabId = tabId;
           const navArgs: Record<string, unknown> = {
-            url: `https://www.doubao.com${conv.href}`,
+            url,
           };
           if (navTabId !== undefined) navArgs.tabId = navTabId;
           await this.host.callTool('chrome_navigate', navArgs);
@@ -159,6 +178,7 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
       const messages = await this.scrapeMessages(tabId);
       snapshots.push({
         conversationId: conv.conversationId,
+        url,
         title: conv.title,
         updatedLabel: conv.updatedLabel,
         messages,
@@ -209,6 +229,7 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
       if (!conversationId) return [];
       const title = String(conv['title'] ?? '');
       const updatedLabel = String(conv['update_time'] ?? conv['updated_at'] ?? '');
+      const url = normalizeDoubaoUrl(String(conv['url'] ?? conv['link'] ?? ''));
       const rawMessages = (conv['messages'] ?? conv['message_list']) as unknown[];
       const messages: BrowserConversationMessageSnapshot[] = Array.isArray(rawMessages)
         ? rawMessages.flatMap((m) => {
@@ -224,7 +245,17 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
             }];
           })
         : [];
-      return [{ conversationId, title, updatedLabel, messages }];
+      return [{ conversationId, title, updatedLabel, url, messages }];
     });
+  }
+
+  private async requireDoubaoTab(): Promise<number> {
+    const tabId = await this.host.findTabByUrl(DOUBAO_URL_PATTERN);
+    if (tabId === undefined) {
+      throw new Error(
+        'No existing doubao.com tab found in Chrome. Open Doubao in your daily browser first.',
+      );
+    }
+    return tabId;
   }
 }

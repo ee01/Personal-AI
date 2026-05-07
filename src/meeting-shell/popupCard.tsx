@@ -132,6 +132,7 @@ type PopupMeetingContext = {
 
 type PopupSessionView = PopupMeetingContext & {
   captureKind: string;
+  transcriptPilotActive: boolean;
   canStartCapture: boolean;
   readinessStatus: 'ready' | 'blocked' | 'degraded';
   readinessSummary: string;
@@ -270,6 +271,12 @@ function toSessionView(
     url: safeText(url, fallbackContext?.url || ''),
     title: safeText(rawSession?.title, fallbackContext?.title || 'RingCentral meeting'),
     captureKind: safeText(capture?.kind, 'idle'),
+    transcriptPilotActive: Boolean(
+      rawSession?.webTranscript?.active &&
+        rawSession.transcript.some(
+          (chunk) => chunk.source === 'ringcentral_transcript',
+        ),
+    ),
     canStartCapture:
       readinessStatus !== 'blocked' &&
       (typeof readiness?.canStartCapture === 'boolean'
@@ -298,6 +305,9 @@ function resolveLaunchLabel(view: PopupSessionView): string {
   if (!view.canStartCapture) {
     return '去配置 Meeting Pilot';
   }
+  if (view.transcriptPilotActive) {
+    return '启用画面理解与纪要';
+  }
   if (view.captureKind === 'error') {
     return '重试开启会议全貌';
   }
@@ -310,6 +320,9 @@ function resolveLaunchLabel(view: PopupSessionView): string {
 function resolveStatusLabel(view: PopupSessionView): string {
   if (view.captureKind === 'recording') {
     return 'Recording';
+  }
+  if (view.transcriptPilotActive) {
+    return 'Transcript';
   }
   if (view.readinessStatus === 'blocked') {
     return 'Blocked';
@@ -445,6 +458,7 @@ export function MeetingPilotPopupCard({
   const launchLabel = resolveLaunchLabel(view);
   const statusLabel = resolveStatusLabel(view);
   const isRecording = view.captureKind === 'recording';
+  const canOpenLowPowerPanel = isRecording || view.transcriptPilotActive;
 
   const startCapture = async () => {
     if (launching) {
@@ -557,7 +571,7 @@ export function MeetingPilotPopupCard({
             {view.meetingId}
           </div>
         </div>
-        <div className={`mp-pill ${isRecording ? 'live' : ''}`}>{statusLabel}</div>
+        <div className={`mp-pill ${canOpenLowPowerPanel ? 'live' : ''}`}>{statusLabel}</div>
       </div>
       <div className="mp-summary">{view.readinessSummary}</div>
       {/* English: Start Meeting Pilot */}
@@ -569,7 +583,7 @@ export function MeetingPilotPopupCard({
         {launching ? '正在开启…' : launchLabel}
       </button>
       <div className="mp-actions">
-        <button onClick={openSidePanel} disabled={!isRecording}>
+        <button onClick={openSidePanel} disabled={!canOpenLowPowerPanel}>
           打开面板
         </button>
         <button onClick={openPanorama} disabled={!currentSession}>

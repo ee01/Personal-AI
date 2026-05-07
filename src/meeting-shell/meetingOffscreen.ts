@@ -1,4 +1,11 @@
-import { getEnvConfig, getMeetingTranscriptionMode } from '../utils';
+import {
+  getEnvConfig,
+  getMeetingTranscriptionMode,
+  isMeetingRingCentralTranscriptEnabled,
+  normalizeMeetingTranscribeLanguage,
+  type EnvConfigType,
+  type MeetingTranscribeLanguage,
+} from '../utils';
 import { MEETING_PILOT_OFFSCREEN_PATH } from './protocol';
 import { releaseWhisperTranscodeContext } from './transcodeForWhisper';
 import { ASROrchestrator } from './asr/orchestrator';
@@ -15,14 +22,19 @@ type OffscreenCaptureState = {
   stream?: MediaStream;
   micStream?: MediaStream;
   asrAudioStream?: MediaStream;
+  micAsrStream?: MediaStream;
   recorder?: MediaRecorder;
   asrOrchestrator?: ASROrchestrator;
   micAsrOrchestrator?: ASROrchestrator;
   tierStatus?: MeetingPilotTierStatus;
+  envConfig?: EnvConfigType;
+  webTranscriptActive: boolean;
+  audioAsrSuppressedByWebTranscript: boolean;
   micGain?: GainNode;
   micMuted: boolean;
   selfName?: string;
   activeSpeakerLabel?: string;
+  transcribeLanguage: MeetingTranscribeLanguage;
   /**
    * Route captured tab audio back to speakers while keeping tab and mic ASR
    * separate so speaker attribution can distinguish remote speakers from self.
@@ -65,6 +77,9 @@ const state: OffscreenCaptureState = {
   blobSize: 0,
   transcriptSeq: 0,
   micMuted: false,
+  transcribeLanguage: 'auto',
+  webTranscriptActive: false,
+  audioAsrSuppressedByWebTranscript: false,
   requestLog: [],
 };
 
@@ -98,6 +113,17 @@ function shouldEmitMicTranscript(): boolean {
   if (state.micMuted) return false;
   if (!state.activeSpeakerLabel) return true;
   return isSelfSpeakerLabel(state.activeSpeakerLabel);
+}
+
+function getTranscriptSpeakerForChannel(args: {
+  channel: 'tab' | 'mic';
+  fixedSpeaker?: string;
+}): string {
+  if (args.fixedSpeaker) return args.fixedSpeaker;
+  if (args.channel === 'tab') {
+    return String(state.activeSpeakerLabel || '').trim();
+  }
+  return '';
 }
 
 function updateMeetingContextForOffscreen(message: Record<string, any>): void {
@@ -179,6 +205,19 @@ function emitCaptureStatus(kind: string, lastError?: string): void {
     },
     tierStatus: state.tierStatus,
   });
+}
+
+function setWebTranscriptTierStatus(reason: string): void {
+  state.tierStatus = {
+    activeTier: 'ringcentral_transcript',
+    badge: 'RC Transcript',
+    mode: state.envConfig
+      ? getMeetingTranscriptionMode(state.envConfig)
+      : 'auto',
+    lastTransitionAt: Date.now(),
+    lastTransitionReason: reason,
+  };
+  emitCaptureStatus('recording');
 }
 
 function emitDigestStatus(digest: Record<string, unknown>): void {
@@ -345,6 +384,7 @@ async function createAsrAudioStream(args: {
     micSrc.connect(micGain);
     micGain.connect(micDest);
     appendCaptureLog('info', 'offscreen mic stream acquired; ASR uses tab+mic separate streams');
+    state.micAsrStream = micDest.stream;
     return { tabStream: tabOnlyStream, micStream: micDest.stream };
   } catch (error) {
     appendCaptureLog(
@@ -352,6 +392,215 @@ async function createAsrAudioStream(args: {
       `offscreen mic unavailable; ASR uses tab-only: ${String((error as Error)?.name || '')} ${String((error as Error)?.message || error)}`.trim(),
     );
     return { tabStream: tabOnlyStream };
+  }
+}
+
+function getMeetingLanguageFromEnv(
+  envConfig: EnvConfigType,
+): MeetingTranscribeLanguage {
+  return normalizeMeetingTranscribeLanguage(
+    envConfig.MEETING_TRANSCRIBE_LANGUAGE,
+  );
+}
+
+function buildTabAsrProviders(
+  transcriptionMode: ReturnType<typeof getMeetingTranscriptionMode>,
+  language: MeetingTranscribeLanguage,
+) {
+  if (transcriptionMode === 'local-only') {
+    return [new DesktopLocalAsrProvider(language), new WebSpeechProvider(language)];
+  }
+  return [new DesktopLocalAsrProvider(language), new CloudASRProvider()];
+}
+
+function buildMicAsrProviders(
+  transcriptionMode: ReturnType<typeof getMeetingTranscriptionMode>,
+  language: MeetingTranscribeLanguage,
+) {
+  if (transcriptionMode === 'cloud-only') {
+    return [new CloudASRProvider()];
+  }
+  return [new DesktopLocalAsrProvider(language)];
+}
+
+function getAsrLanguageLogLabel(language: MeetingTranscribeLanguage): string {
+  if (language === 'zh-CN') return 'Chinese (zh-CN)';
+  if (language === 'en-US') return 'English (en-US)';
+  return 'auto';
+}
+
+async function stopAsrOrchestrators(): Promise<void> {
+  const stops = [
+    state.asrOrchestrator?.stop(),
+    state.micAsrOrchestrator?.stop(),
+  ].filter((promise): promise is Promise<void> => Boolean(promise));
+  state.asrOrchestrator = undefined;
+  state.micAsrOrchestrator = undefined;
+  if (stops.length) {
+    await Promise.allSettled(stops);
+  }
+}
+
+async function startAsrOrchestrators(args: {
+  tabStream: MediaStream;
+  micStream?: MediaStream;
+  envConfig: EnvConfigType;
+}): Promise<void> {
+  state.envConfig = args.envConfig;
+  const transcriptionMode = getMeetingTranscriptionMode(args.envConfig);
+  const language = getMeetingLanguageFromEnv(args.envConfig);
+  state.transcribeLanguage = language;
+  if (
+    state.webTranscriptActive &&
+    isMeetingRingCentralTranscriptEnabled(args.envConfig)
+  ) {
+    state.audioAsrSuppressedByWebTranscript = true;
+    setWebTranscriptTierStatus(
+      'RingCentral web transcript is active; local/cloud ASR is skipped.',
+    );
+    appendCaptureLog(
+      'info',
+      'ASR skipped because RingCentral web transcript is active',
+    );
+    return;
+  }
+  state.audioAsrSuppressedByWebTranscript = false;
+  const providers = buildTabAsrProviders(transcriptionMode, language);
+  const buildOrchestrator = (orchestratorArgs: {
+    channel: 'tab' | 'mic';
+    fixedSpeaker?: string;
+  }) =>
+    new ASROrchestrator({
+      providers,
+      mode: transcriptionMode,
+      onTierStatus: (tierStatus: MeetingPilotTierStatus) => {
+        if (orchestratorArgs.channel === 'mic') return;
+        state.tierStatus = tierStatus;
+        void chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
+          tabId: state.tabId,
+          tierStatus,
+        });
+        emitCaptureStatus('recording');
+      },
+      onTranscript: (event) => {
+        state.transcriptSeq += 1;
+        void chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+          tabId: state.tabId,
+          transcriptChunk: {
+            id: event.utteranceId
+              ? `transcript-${event.utteranceId}`
+              : `transcript-${event.ts}-${state.transcriptSeq}`,
+            speaker: getTranscriptSpeakerForChannel(orchestratorArgs),
+            text: event.text,
+            ts: event.ts,
+            source:
+              event.tier === 'web_speech'
+                ? 'web_speech'
+                : event.tier === 'desktop_whisper'
+                  ? 'desktop_whisper'
+                  : 'cloud',
+            lowConfidence: event.kind === 'interim',
+          },
+        });
+      },
+      onCaptureLog: (level, msg) =>
+        appendCaptureLog(level, `${orchestratorArgs.channel} ${msg}`),
+    });
+
+  const orchestrator = buildOrchestrator({ channel: 'tab' });
+  state.asrOrchestrator = orchestrator;
+  if (args.tabStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+    void orchestrator.start(args.tabStream);
+  }
+  if (args.micStream) {
+    const fixedSpeaker = state.selfName || 'You';
+    const micOrchestrator = new ASROrchestrator({
+      providers: buildMicAsrProviders(transcriptionMode, language),
+      mode: transcriptionMode,
+      onTierStatus: () => undefined,
+      onTranscript: (event) => {
+        if (!shouldEmitMicTranscript()) {
+          appendCaptureLog(
+            'info',
+            `mic transcript suppressed (${
+              state.micMuted
+                ? 'muted'
+                : `active speaker: ${state.activeSpeakerLabel || 'unknown'}`
+            })`,
+          );
+          return;
+        }
+        state.transcriptSeq += 1;
+        void chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+          tabId: state.tabId,
+          transcriptChunk: {
+            id: event.utteranceId
+              ? `transcript-${event.utteranceId}`
+              : `transcript-${event.ts}-${state.transcriptSeq}`,
+            speaker: fixedSpeaker,
+            text: event.text,
+            ts: event.ts,
+            source:
+              event.tier === 'web_speech'
+                ? 'web_speech'
+                : event.tier === 'desktop_whisper'
+                  ? 'desktop_whisper'
+                  : 'cloud',
+            lowConfidence: event.kind === 'interim',
+          },
+        });
+      },
+      onCaptureLog: (level, msg) => appendCaptureLog(level, `mic ${msg}`),
+    });
+    state.micAsrOrchestrator = micOrchestrator;
+    void micOrchestrator.start(args.micStream);
+    appendCaptureLog('info', `mic ASR orchestrator started for ${fixedSpeaker}`);
+  }
+  appendCaptureLog(
+    'info',
+    `ASR orchestrator started (mode: ${transcriptionMode}, language: ${getAsrLanguageLogLabel(
+      language,
+    )})`,
+  );
+}
+
+async function setWebTranscriptActive(active: boolean): Promise<void> {
+  if (state.webTranscriptActive === active) {
+    return;
+  }
+  state.webTranscriptActive = active;
+  if (active) {
+    state.audioAsrSuppressedByWebTranscript = true;
+    await stopAsrOrchestrators();
+    setWebTranscriptTierStatus(
+      'RingCentral web transcript became active; local/cloud ASR stopped.',
+    );
+    appendCaptureLog(
+      'info',
+      'ASR stopped because RingCentral web transcript became active',
+    );
+    return;
+  }
+
+  if (
+    state.audioAsrSuppressedByWebTranscript &&
+    state.asrAudioStream &&
+    state.envConfig &&
+    state.stream
+  ) {
+    appendCaptureLog(
+      'info',
+      'RingCentral web transcript disappeared; restarting audio ASR fallback',
+    );
+    state.audioAsrSuppressedByWebTranscript = false;
+    await startAsrOrchestrators({
+      tabStream: state.asrAudioStream,
+      micStream: state.micAsrStream,
+      envConfig: state.envConfig,
+    });
   }
 }
 
@@ -370,8 +619,12 @@ async function startCapture(message: Record<string, any>): Promise<void> {
   state.blobSize = 0;
   state.transcriptSeq = 0;
   state.tierStatus = undefined;
+  state.micAsrStream = undefined;
   state.startedAt = Date.now();
   state.requestLog = [];
+  state.envConfig = undefined;
+  state.webTranscriptActive = message.webTranscriptActive === true;
+  state.audioAsrSuppressedByWebTranscript = false;
   state.selfName = String(message.selfName || '').trim() || undefined;
   state.activeSpeakerLabel =
     String(message.speakerLabel || '').trim() || undefined;
@@ -444,115 +697,11 @@ async function startCapture(message: Record<string, any>): Promise<void> {
     });
     state.asrAudioStream = asrStreams.tabStream;
     const envConfig = await getEnvConfig();
-    const transcriptionMode = getMeetingTranscriptionMode(envConfig);
-    // SpeechRecognition.start(audioTrack) is unstable in extension/offscreen
-    // renderers. Use it only when the user explicitly chooses local-only.
-    const providers =
-      transcriptionMode === 'local-only'
-        ? [new DesktopLocalAsrProvider(), new WebSpeechProvider()]
-        : [new DesktopLocalAsrProvider(), new CloudASRProvider()];
-    const buildOrchestrator = (args: {
-      channel: 'tab' | 'mic';
-      fixedSpeaker?: string;
-    }) =>
-      new ASROrchestrator({
-        providers,
-        mode: transcriptionMode,
-        onTierStatus: (tierStatus: MeetingPilotTierStatus) => {
-          if (args.channel === 'mic') return;
-          state.tierStatus = tierStatus;
-          void chrome.runtime.sendMessage({
-            type: 'MEETING_PILOT_TIER_STATUS_UPDATE',
-            tabId: state.tabId,
-            tierStatus,
-          });
-          emitCaptureStatus('recording');
-        },
-        onTranscript: (event) => {
-          state.transcriptSeq += 1;
-          void chrome.runtime.sendMessage({
-            type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
-            tabId: state.tabId,
-            transcriptChunk: {
-              id: event.utteranceId
-                ? `transcript-${event.utteranceId}`
-                : `transcript-${event.ts}-${state.transcriptSeq}`,
-              speaker: args.fixedSpeaker || '',
-              text: event.text,
-              ts: event.ts,
-              source:
-                event.tier === 'web_speech'
-                  ? 'web_speech'
-                  : event.tier === 'desktop_whisper'
-                    ? 'desktop_whisper'
-                    : 'cloud',
-              lowConfidence: event.kind === 'interim',
-            },
-          });
-        },
-        onCaptureLog: (level, msg) =>
-          appendCaptureLog(level, `${args.channel} ${msg}`),
-      });
-
-    const orchestrator = buildOrchestrator({ channel: 'tab' });
-    state.asrOrchestrator = orchestrator;
-    if (
-      asrStreams.tabStream.getAudioTracks().some((t) => t.readyState === 'live')
-    ) {
-      void orchestrator.start(asrStreams.tabStream);
-    }
-    if (asrStreams.micStream) {
-      const fixedSpeaker = state.selfName || 'You';
-      const micProviders =
-        transcriptionMode === 'cloud-only'
-          ? [new CloudASRProvider()]
-          : [new DesktopLocalAsrProvider()];
-      const micOrchestrator = new ASROrchestrator({
-        providers: micProviders,
-        mode: transcriptionMode,
-        onTierStatus: () => undefined,
-        onTranscript: (event) => {
-          if (!shouldEmitMicTranscript()) {
-            appendCaptureLog(
-              'info',
-              `mic transcript suppressed (${state.micMuted ? 'muted' : `active speaker: ${state.activeSpeakerLabel || 'unknown'}`})`,
-            );
-            return;
-          }
-          state.transcriptSeq += 1;
-          void chrome.runtime.sendMessage({
-            type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
-            tabId: state.tabId,
-            transcriptChunk: {
-              id: event.utteranceId
-                ? `transcript-${event.utteranceId}`
-                : `transcript-${event.ts}-${state.transcriptSeq}`,
-              speaker: fixedSpeaker,
-              text: event.text,
-              ts: event.ts,
-              source:
-                event.tier === 'web_speech'
-                  ? 'web_speech'
-                  : event.tier === 'desktop_whisper'
-                    ? 'desktop_whisper'
-                    : 'cloud',
-              lowConfidence: event.kind === 'interim',
-            },
-          });
-        },
-        onCaptureLog: (level, msg) => appendCaptureLog(level, `mic ${msg}`),
-      });
-      state.micAsrOrchestrator = micOrchestrator;
-      void micOrchestrator.start(asrStreams.micStream);
-      appendCaptureLog(
-        'info',
-        `mic ASR orchestrator started for ${fixedSpeaker}`,
-      );
-    }
-    appendCaptureLog(
-      'info',
-      `ASR orchestrator started (mode: ${transcriptionMode})`,
-    );
+    await startAsrOrchestrators({
+      tabStream: asrStreams.tabStream,
+      micStream: asrStreams.micStream,
+      envConfig,
+    });
     emitCaptureStatus('recording');
     void analyzeObservationFromFrame(stream).finally(() => {
       if (audioTracks.length) {
@@ -576,14 +725,7 @@ async function startCapture(message: Record<string, any>): Promise<void> {
 
 async function stopCapture(): Promise<void> {
   const recorder = state.recorder;
-  if (state.asrOrchestrator) {
-    await state.asrOrchestrator.stop();
-    state.asrOrchestrator = undefined;
-  }
-  if (state.micAsrOrchestrator) {
-    await state.micAsrOrchestrator.stop();
-    state.micAsrOrchestrator = undefined;
-  }
+  await stopAsrOrchestrators();
   const stopPromise =
     recorder && recorder.state !== 'inactive'
       ? new Promise<void>((resolve) => {
@@ -608,6 +750,7 @@ async function stopCapture(): Promise<void> {
   }
   state.micGain = undefined;
   state.asrAudioStream = undefined;
+  state.micAsrStream = undefined;
   if (state.audioContext) {
     state.audioContext.close().catch(() => undefined);
     state.audioContext = undefined;
@@ -817,6 +960,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       );
       appendCaptureLog('error', `capture stop failed: ${messageText}`);
       emitCaptureStatus('error', messageText);
+    });
+    sendResponse({ success: true });
+    return true;
+  }
+  if (message.type === 'MEETING_PILOT_OFFSCREEN_SET_WEB_TRANSCRIPT_ACTIVE') {
+    void setWebTranscriptActive(message.active === true).catch((error) => {
+      appendCaptureLog(
+        'error',
+        `web transcript ASR switch failed: ${String(
+          (error as Error)?.message || error,
+        )}`,
+      );
     });
     sendResponse({ success: true });
     return true;

@@ -3,6 +3,7 @@
     <div class="search-header">
       <h2>🔍 搜索结果</h2>
       <p v-if="searchQuery">关键词: "{{ searchQuery }}"</p>
+      <p class="scope-caption">范围: {{ currentScopeLabel }}</p>
     </div>
     
     <!-- AI 智能回答区域（仅 overview 模式显示） -->
@@ -57,7 +58,7 @@
         
         <!-- 元数据 -->
         <div v-if="searchContext.askResult.metadata" class="answer-metadata">
-          <span>共分析 {{ searchContext.askResult.metadata.totalEntities }} 个实体</span>
+          <span>共引用 {{ searchContext.askResult.metadata.totalEntities }} 条证据</span>
           <span>•</span>
           <span>耗时 {{ searchContext.askResult.metadata.processingTime }}ms</span>
         </div>
@@ -104,6 +105,9 @@
             <div v-if="entity.relevanceScore" class="relevance-score">
               {{ Math.round(entity.relevanceScore * 100) }}% 匹配
             </div>
+            <div v-if="entity.scope" class="scope-badge">
+              {{ getScopeLabel(entity.scope) }}
+            </div>
           </div>
           
           <div class="result-content">
@@ -111,6 +115,28 @@
             <p v-if="entity.description" class="result-description">
               {{ entity.description }}
             </p>
+            <div v-if="getResultMeta(entity).length" class="result-meta">
+              <span
+                v-for="meta in getResultMeta(entity)"
+                :key="meta"
+                class="result-meta-item"
+              >
+                {{ meta }}
+              </span>
+            </div>
+            <div
+              v-if="getResultChannels(entity).length"
+              class="match-reasons"
+              aria-label="命中通道"
+            >
+              <span
+                v-for="channel in getResultChannels(entity)"
+                :key="channel"
+                class="match-reason"
+              >
+                {{ getRecallChannelLabel(channel) }}
+              </span>
+            </div>
             <div v-if="entity.tags && entity.tags.length > 0" class="result-tags">
               <span 
                 v-for="tag in entity.tags.slice(0, 3)" 
@@ -126,8 +152,25 @@
           </div>
           
           <div class="result-actions">
-            <button class="action-btn primary">
-              查看详情 →
+            <button
+              v-if="entity.exploreLink"
+              class="action-btn primary"
+              @click.stop="openExploreLink(entity.exploreLink)"
+            >
+              在记忆中查看
+            </button>
+            <button
+              v-if="getSafeSourceUrl(entity)"
+              class="action-btn secondary"
+              @click.stop="openSourceUrl(entity.sourceUrl)"
+            >
+              打开来源
+            </button>
+            <button
+              v-if="!entity.exploreLink && !getSafeSourceUrl(entity)"
+              class="action-btn primary"
+            >
+              查看详情
             </button>
           </div>
         </div>
@@ -138,7 +181,7 @@
       <span>🔍</span>
       <p>没有找到相关结果</p>
       <p class="search-tips">
-        尝试使用不同的关键词或更具体的描述
+        当前范围是 {{ currentScopeLabel }}，可以切换范围或换一个更具体的关键词
       </p>
     </div>
   </div>
@@ -148,6 +191,16 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore, ENTITY_TYPE_CONFIG } from '../memory-store';
+import {
+  MEMORY_RESULT_TYPE_CONFIG,
+  getRecallChannelLabel,
+  getResultChannels,
+  getResultMeta,
+  getScopeLabel,
+  normalizeMemorySourceUrl,
+  sanitizeMemoryExploreRoute,
+  shouldResetTypeFilter,
+} from '../searchResultPresentation';
 import { markdownToHtml } from '../utils/markdown';
 
 const route = useRoute();
@@ -166,6 +219,10 @@ const renderedAnswer = computed(() => {
   return ans ? markdownToHtml(ans) : '';
 });
 
+const currentScopeLabel = computed(() =>
+  getScopeLabel(route.query.scope || searchContext.value.scope || 'work'),
+);
+
 // 自动设置筛选器：如果是从实体列表页搜索过来的，自动选中该实体类型
 watch(() => searchContext.value.entityType, (entityType) => {
   if (entityType && searchContext.value.mode === 'entity') {
@@ -181,7 +238,7 @@ const toggleAiAnswer = () => {
 
 const getSectionTitle = () => {
   if (searchContext.value.mode === 'overview') {
-    return '📊 关联的实体数据';
+    return '📚 相关记忆证据';
   } else if (searchContext.value.entityType) {
     const typeName = ENTITY_TYPE_CONFIG[searchContext.value.entityType]?.name || '实体';
     return `🔍 向量匹配查询到的${typeName}`;
@@ -195,7 +252,7 @@ const availableTypes = computed(() => {
   typeMap.set('all', { key: 'all', name: '全部', icon: '📁', count: entities.value.length });
   
   entities.value.forEach(entity => {
-    const config = ENTITY_TYPE_CONFIG[entity.type];
+    const config = ENTITY_TYPE_CONFIG[entity.type] || MEMORY_RESULT_TYPE_CONFIG[entity.type];
     if (config) {
       const existing = typeMap.get(entity.type) || { 
         key: entity.type, 
@@ -211,6 +268,16 @@ const availableTypes = computed(() => {
   return Array.from(typeMap.values()).filter(type => type.count > 0);
 });
 
+watch(
+  availableTypes,
+  (types) => {
+    if (shouldResetTypeFilter(selectedTypeFilter.value, types)) {
+      selectedTypeFilter.value = 'all';
+    }
+  },
+  { immediate: true },
+);
+
 // 根据类型过滤的结果
 const filteredResults = computed(() => {
   if (selectedTypeFilter.value === 'all') {
@@ -220,14 +287,35 @@ const filteredResults = computed(() => {
 });
 
 const getEntityIcon = (type: string) => {
-  return ENTITY_TYPE_CONFIG[type]?.icon || '📂';
+  return ENTITY_TYPE_CONFIG[type]?.icon || MEMORY_RESULT_TYPE_CONFIG[type]?.icon || '📂';
 };
 
 const getEntityTypeName = (type: string) => {
-  return ENTITY_TYPE_CONFIG[type]?.name || type;
+  return ENTITY_TYPE_CONFIG[type]?.name || MEMORY_RESULT_TYPE_CONFIG[type]?.name || type;
+};
+
+const getSafeSourceUrl = (entity: any) => {
+  return normalizeMemorySourceUrl(entity?.sourceUrl);
+};
+
+const openExploreLink = (exploreLink?: string) => {
+  const safeExploreRoute = sanitizeMemoryExploreRoute(exploreLink);
+  if (!safeExploreRoute) return false;
+  router.push(safeExploreRoute.slice(1));
+  return true;
+};
+
+const openSourceUrl = (sourceUrl?: string) => {
+  const safeSourceUrl = normalizeMemorySourceUrl(sourceUrl);
+  if (!safeSourceUrl) return false;
+  window.open(safeSourceUrl, '_blank', 'noopener,noreferrer');
+  return true;
 };
 
 const handleResultClick = (entity: any) => {
+  if (openExploreLink(entity.exploreLink)) return;
+  if (openSourceUrl(entity.sourceUrl)) return;
+
   switch (entity.type) {
     case 'Topic':
       router.push(`/topic/${entity.id}`);
@@ -458,6 +546,12 @@ const handleResultClick = (entity: any) => {
   font-size: 1rem;
 }
 
+.search-header .scope-caption {
+  margin-top: 0.5rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
 .results-summary {
   display: flex;
   justify-content: space-between;
@@ -526,6 +620,8 @@ const handleResultClick = (entity: any) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   margin-bottom: 1rem;
 }
 
@@ -556,6 +652,14 @@ const handleResultClick = (entity: any) => {
   border-radius: 0.375rem;
 }
 
+.scope-badge {
+  font-size: 0.75rem;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.16);
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+}
+
 .result-content {
   margin-bottom: 1rem;
 }
@@ -576,6 +680,43 @@ const handleResultClick = (entity: any) => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.result-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.result-meta-item {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.result-meta-item + .result-meta-item::before {
+  content: '·';
+  margin-right: 0.5rem;
+  color: #475569;
+}
+
+.match-reasons {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.match-reason {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.375rem;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.12);
+  font-size: 0.72rem;
+  line-height: 1.2;
 }
 
 .result-tags {
@@ -601,6 +742,8 @@ const handleResultClick = (entity: any) => {
 .result-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .action-btn {
@@ -618,6 +761,12 @@ const handleResultClick = (entity: any) => {
 .action-btn.primary {
   background: rgba(59, 130, 246, 0.2);
   border-color: rgba(59, 130, 246, 0.4);
+}
+
+.action-btn.secondary {
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
 }
 
 .action-btn:hover {

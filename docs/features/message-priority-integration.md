@@ -1,344 +1,91 @@
-# 消息查找逻辑整合 - 三匹配模式查找
-
-## 📋 概述
-
-整合了新旧版本的消息查找逻辑，实现了更完善和可靠的消息执行机制。
-
-## 🔧 主要改进
-
-### 1. 三匹配模式查找机制（防止遗漏消息）
-
-整合后的系统会按以下三种匹配模式依次查找消息：
-
-#### **匹配模式 1：CURRENT_MINUTE（当前分钟的消息）**
-- **Time-based 消息**：匹配 `Schedule_Time` 为当前分钟的消息
-- **Timeline 消息**：
-  - 有 `Schedule_Time`：匹配指定时间（允许1分钟误差）
-  - 无 `Schedule_Time`：在早上9点执行
-- **用途**：确保消息在指定时间准时执行
-
-#### **匹配模式 2：PAST_30_MINUTES（过去 30 分钟内应该执行但未执行的消息）**
-- **Time-based 消息**：匹配 `Schedule_Time` 在过去 30 分钟内的消息
-- **Timeline 消息**：匹配 Timeline 目标日期是今天且有 `Schedule_Time` 在过去30分钟内的消息
-- 仅处理今天的消息
-- **用途**：补偿机制，防止因网络问题等导致消息丢失
-
-#### **匹配模式 3：NO_TIME_SPECIFIED（未指定时间的消息，8 点后）**
-- **Time-based 消息**：匹配只设置了 `Schedule_Date` 但没有设置 `Schedule_Time` 的消息
-- **Timeline 消息**：匹配 Timeline 目标日期是今天且没有设置 `Schedule_Time` 的消息
-- 仅在 8:00 之后执行
-- **用途**：处理只关心日期不关心时间的消息
-
-### 2. 按表格顺序查找（不依赖 Priority 字段）
-
-- 消息按表格中的实际顺序查找
-- 返回第一个匹配的消息
-- **注意**：表格中没有 `Priority` 字段，查找顺序由表格行序决定
-- 用户可以通过调整表格中消息的行顺序来控制优先级
-
-### 3. 自动去重机制
-
-- **跳过今日已推送成功的消息**
-  - 检查 `Last_Exec` 是否为今天
-  - 检查 `Exec_Log` 是否包含 ✅ 或 "成功"
-  
-- **跳过今日已推送失败的消息**
-  - 检查 `Last_Exec` 是否为今天
-  - 检查 `Exec_Log` 是否包含 ❌ 或 "失败"
-  - 避免失败消息阻塞队列
-
-### 4. 自动生成 ID
-
-- 如果消息的 `ID` 字段为空，自动生成唯一 ID
-- 格式：`MSG_{timestamp}_{random}`
-- 自动写入 Sheet，避免重复发送
-
-### 5. AI 消息特殊处理
-
-- 识别 `Push_Method = 'AI'` 的消息
-- 解析 `AI_Endpoint`（提取 method、host、uri）
-- 解析 `AI_Headers`（转换为固定字段对象）
-- 替换 `AI_Body` 中的变量（`{Topic}`, `{Content}`, `{TeamID}`）
-- 立即标记为成功（避免超时重复）
-
-### 6. Timeline 支持（统一三匹配模式）
-
-- 支持基于项目里程碑的触发
-- 通过 Jira Automation 传递 `releaseInfo` 参数
-- **与 Time-based 消息一致**：Timeline 消息也支持三种匹配模式
-  - ✅ 当前分钟匹配（CURRENT_MINUTE）
-  - ✅ 过去30分钟补偿（PAST_30_MINUTES）
-  - ✅ 未指定时间（NO_TIME_SPECIFIED）
-- **补偿机制**：如果 Timeline 消息在指定时间未执行（如网络问题），会在30分钟内补偿执行
-- 自动替换消息中的项目进度变量：
-  - `{currentRelease}` - 当前版本号
-  - `{currentPhase}` - 当前阶段
-  - `{currentPhaseStartDate}` - 当前阶段开始日期
-  - `{currentPhaseStartedWorkdays}` - 当前阶段已开始工作日
-  - `{nextPhase}` - 下一阶段
-  - `{nextPhaseStartDate}` - 下一阶段开始日期
-  - `{nextPhaseCountdownWorkdays}` - 距离下一阶段的工作日
-
-## 📊 新旧版本对比
-
-| 特性 | 旧版本 | 新版本（整合前） | 新版本（整合后） |
-|------|--------|----------------|----------------|
-| 当前分钟消息 | ✅ | ✅ | ✅ |
-| 过去30分钟补偿 | ✅ | ❌ | ✅ |
-| 未指定时间(8点后) | ✅ | ❌ | ✅ |
-| Timeline 支持 | ✅（内网API） | ✅（参数传递） | ✅（参数传递） |
-| 按表格顺序查找 | ✅ | ❌ | ✅ |
-| 去重检查 | ✅ | ❌ | ✅ |
-| 自动生成 ID | ✅ | ❌ | ✅ |
-| AI 消息处理 | ✅ | ❌ | ✅ |
-| AsMe Timeline支持 | ✅（不安全） | ❌ | ✅（Script Properties 缓存） |
-
-## 🔍 核心函数
-
-### `getMessageCurrentTimeWithReleaseInfo(postData)`
-
-主入口函数，整合了三匹配模式查找、ID 生成、AI 消息处理：
-
-```javascript
-// 匹配模式 1: 当前分钟的消息
-let message = findMatchingMessage(data, headers, now, releaseInfo, 'CURRENT_MINUTE', currentDate, currentHour);
+# 定时消息匹配、补偿与队列可视化
 
-// 匹配模式 2: 过去 30 分钟的消息
-if (!message) {
-  message = findMatchingMessage(data, headers, now, releaseInfo, 'PAST_30_MINUTES', currentDate, currentHour);
-}
-
-// 匹配模式 3: 未指定时间的消息（8点后）
-if (!message && currentHour >= 8) {
-  message = findMatchingMessage(data, headers, now, releaseInfo, 'NO_TIME_SPECIFIED', currentDate, currentHour);
-}
+## 功能概述
 
-// 确保消息有 ID
-if (!message.ID) {
-  message.ID = `MSG_${new Date().getTime()}_${Math.random().toString(36).substr(2, 9)}`;
-  // 写入 Sheet
-}
+定时消息系统使用 Google Sheets 作为配置表，使用 Apps Script 与 Jira Automation 执行 Bot、AI Report 和托管的 Jira Automation 消息。当前实现不依赖 `Priority` 字段；同一时间命中的多条消息按 Messages 表格行顺序执行第一条，因此用户可以通过调整行顺序控制优先级。
 
-// 检查是否是 AI 消息
-if (message.Push_Method === 'AI') {
-  // 解析 AI 字段
-  // 立即标记为成功
-  // 返回 AI 消息数据
-}
+> 文件名保留 `message-priority-integration.md` 是历史原因；当前功能真实边界是定时消息的执行匹配、补偿、幂等和队列可见性。
 
-// 返回 Bot 消息数据
-```
+AsMe 消息由 Apps Script 的分钟触发器直接处理。Bot、AI Report，以及带 `AI_Endpoint` 的 JiraAutomation 消息由 Jira Automation 每分钟调用 Apps Script 的 `getMessageCurrentTimeWithReleaseInfo(postData)` 处理。
 
-### `findMatchingMessage(data, headers, now, releaseInfo, matchMode, currentDate, currentHour)`
+## 当前执行规则
 
-核心查找函数，按匹配模式查找消息：
+Bot/AI/JiraAutomation 执行入口会按以下顺序查找消息：
 
-**参数说明：**
-- `data` - 表格数据
-- `headers` - 表头
-- `now` - 当前时间
-- `releaseInfo` - 项目进度信息（用于 Timeline）
-- `matchMode` - 匹配模式：`'CURRENT_MINUTE'` | `'PAST_30_MINUTES'` | `'NO_TIME_SPECIFIED'`
-- `currentDate` - 当前日期（yyyy-MM-dd）
-- `currentHour` - 当前小时
+1. `CURRENT_MINUTE`：执行当前分钟命中的消息。指定 `Schedule_Time` 时允许准点或最多迟到 1 分钟的触发器抖动容差，但不会提前发送；未指定时间时，当前分钟规则默认 9:00。
+2. `PAST_30_MINUTES`：补偿过去 30 分钟内错过、且尚未标记成功/失败的定时消息。
+3. `NO_TIME_SPECIFIED`：8:00 后执行未指定 `Schedule_Time` 的消息。
 
-**处理流程：**
-1. 按表格顺序遍历所有消息（Active + Bot/AI）
-2. 过滤已推送成功/失败的消息
-3. 根据 matchMode 调用对应的 shouldExecute 函数
-4. 每个 shouldExecute 函数内部自动判断 Timeline 或 Time-based
-5. 返回第一个匹配的消息（按表格顺序）
-
-### `shouldExecuteNow(rowData, now, messageType, releaseInfo, currentDate)`
-### `shouldExecuteInPast30Minutes(rowData, now, messageType, currentDate, releaseInfo)`
-### `shouldExecuteTodayWithoutTime(rowData, now, messageType, currentDate, releaseInfo)`
-
-三个匹配函数，分别对应三种匹配模式：
+补偿窗口支持跨午夜场景：例如 23:50 的 Bot/AI 消息如果在 00:05 才恢复轮询，仍会按前一日的执行日期匹配，并继续使用 `Last_Exec` / `Exec_Log` 去重，避免已经成功的消息被重复补偿。
 
-**共同特点：**
-- 内部自动判断消息类型（Timeline 或 Time-based）
-- Timeline 消息调用 `getTimelineTargetDate()` 获取目标日期
-- Time-based 消息直接读取 `Schedule_Date`
-- 统一的处理逻辑，无需外部判断
-
-### `getTimelineTargetDate(rowData, releaseInfo)`
-
-辅助函数，获取 Timeline 消息的目标日期：
-
-**处理流程：**
-1. 从 `releaseInfo` 中获取项目和里程碑信息
-2. 解析里程碑日期（格式：MM/DD/YYYY）
-3. 应用偏移量（Timeline_Offset）
-4. 返回最终的目标日期
-
-## 🚨 防止遗漏消息的场景
-
-### 场景 1：网络问题导致消息未执行（Time-based 和 Timeline 消息通用）
-
-**问题：**
-- Time-based 消息应该在 17:00 执行，由于网络问题未执行
-- Timeline 消息应该在项目里程碑日 17:00 执行，由于网络问题未执行
-
-**解决：**
-- 在 17:01 - 17:30 之间，匹配模式 2（PAST_30_MINUTES）会持续尝试
-- **Time-based 和 Timeline 消息享受相同的补偿机制**
-- 确保消息不会因为瞬时故障而丢失
-
-### 场景 2：只关心日期不关心时间（Time-based 和 Timeline 消息通用）
-
-**问题：**
-- Time-based 消息只设置了 `Schedule_Date`，没有设置 `Schedule_Time`
-- Timeline 消息设置了里程碑触发，但没有设置 `Schedule_Time`
-
-**解决：**
-- 匹配模式 3（NO_TIME_SPECIFIED）会在 8:00 之后执行此类消息
-- **Time-based 消息**：在 8 点后任何时间执行
-- **Timeline 消息**：在目标日期的 9 点执行（CURRENT_MINUTE 模式），如果错过则 8 点后兜底（NO_TIME_SPECIFIED 模式）
-- 适合日报、周报等场景
-
-### 场景 3：多条消息同时触发
-
-**问题：**
-- 多条消息都应该在同一时间执行
-- 需要确定执行顺序
-
-**解决：**
-- 按表格行顺序查找
-- 返回第一个匹配的消息
-- 用户可以通过调整表格中消息的行顺序来控制优先级
-
-## 📝 使用建议
-
-### 1. 调整消息执行顺序
-
-通过调整表格中消息的行顺序来控制优先级：
-- **重要消息**：放在表格上方
-- **普通消息**：放在表格中间
-- **低优先级消息**：放在表格下方
-- **说明**：系统按表格顺序查找，返回第一个匹配的消息
-
-### 2. 合理使用三种触发方式
-
-- **精确时间触发**: 设置 `Schedule_Date` + `Schedule_Time`
-- **日期触发**: 只设置 `Schedule_Date`（8点后执行）
-- **Timeline 触发**: 设置 `Timeline_Project` + `Timeline_Milestone` + `Timeline_Offset`
-
-### 3. 监控执行日志
-
-查看 `Exec_Log` 列：
-- ✅ 推送成功
-- ❌ 推送失败
-- 查看 `Last_Exec` 了解最后执行时间
-
-## 🔄 与 Jira Automation 的集成
-
-Jira Automation 每分钟调用一次 Google Apps Script：
-
-```javascript
-// GET 请求（带 releaseInfo 参数）
-https://script.google.com/.../exec?action=getBotMessageCurrentTime
-  &mThor={releaseInfo}
-  &jupiterDesktop={releaseInfo}
-  &jupiterWeb={releaseInfo}
-
-// POST 请求（JSON body）
-{
-  "releaseInfo": {
-    "mThor": {...},
-    "Jupiter desktop": {...},
-    "Jupiter web": {...}
-  },
-  "currentTime": "2025-11-12 17:00"
-}
-```
-
-## ✅ 验证结果
-
-- ✅ 无 Linter 错误
-- ✅ 保留旧版本的可靠性（三匹配模式查找）
-- ✅ 移除不存在的 Priority 字段依赖（按表格顺序查找）
-- ✅ 函数重命名：`findMessageByPriority` → `findMatchingMessage`
-- ✅ 参数改进：`priorityLevel` (数字) → `matchMode` (字符串枚举)
-- ✅ 整合中转函数：移除 `findMessageWithTimelineSupport`
-- ✅ 补充缺失逻辑：自动生成 ID + AI 消息处理
-- ✅ Timeline 参数传递（不调用内网 API）
-- ✅ 修复 AsMe 推送的 Timeline 处理（通过 Script Properties 缓存，不再调用内网 API）
-- ✅ **统一匹配逻辑**：Timeline 和 Time-based 消息共享三匹配模式
-- ✅ **代码极简化**：移除外部 `if (isTimeline)` 判断，函数内部自动识别
-- ✅ **删除冗余函数**：`checkTimelineTrigger` 被拆分到三个 `shouldExecute` 函数中
-- ✅ **新增辅助函数**：`getTimelineTargetDate()` 用于获取 Timeline 目标日期
-
-## 🎯 关键改进点
-
-### 1. 函数命名更清晰
-
-- **旧名称**：`findMessageByPriority(priorityLevel)` 
-  - ❌ 误导：让人以为有 Priority 字段
-- **新名称**：`findMatchingMessage(matchMode)`
-  - ✅ 清晰：表达按匹配模式查找
-
-### 2. 参数使用更直观
-
-- **旧参数**：`priorityLevel = 1 | 2 | 3`
-  - ❌ 不清晰：数字含义需要查文档
-- **新参数**：`matchMode = 'CURRENT_MINUTE' | 'PAST_30_MINUTES' | 'NO_TIME_SPECIFIED'`
-  - ✅ 自解释：一看就懂是什么意思
-
-### 3. 代码结构更简洁
-
-- **旧结构**：`getMessageCurrentTimeWithReleaseInfo` → `findMessageWithTimelineSupport` → `findMessageByPriority`
-  - ❌ 三层嵌套，中转函数冗余
-- **新结构**：`getMessageCurrentTimeWithReleaseInfo` → `findMatchingMessage`
-  - ✅ 两层结构，直接调用
-
-### 4. Timeline 和 Time-based 消息统一处理
-
-- **原逻辑**：
-  - ❌ Timeline 消息只在 CURRENT_MINUTE 模式处理
-  - ❌ 没有补偿机制
-  - ❌ 与 Time-based 消息处理逻辑不一致
-  - ❌ 代码有重复，分别在不同函数处理
-  
-- **新逻辑**：
-  - ✅ Timeline 消息支持三种匹配模式
-  - ✅ 享受 30 分钟补偿机制
-  - ✅ 与 Time-based 消息处理逻辑完全一致
-  - ✅ 代码复用，维护更简单
-  - ✅ 无需外部判断，函数内部自动识别
-
-**实现方式（极简）**：
-```javascript
-// 在 findMatchingMessage 中，不需要判断 isTimeline
-if (matchMode === 'CURRENT_MINUTE') {
-  matches = shouldExecuteNow(rowData, now, messageType, releaseInfo, currentDate);
-} else if (matchMode === 'PAST_30_MINUTES') {
-  matches = shouldExecuteInPast30Minutes(rowData, now, messageType, currentDate, releaseInfo);
-} else if (matchMode === 'NO_TIME_SPECIFIED') {
-  matches = shouldExecuteTodayWithoutTime(rowData, now, messageType, currentDate, releaseInfo);
-}
-
-// 每个 shouldExecute 函数内部自动判断是 Timeline 还是 Time-based
-function shouldExecuteNow(rowData, now, messageType, releaseInfo, currentDate) {
-  const isTimeline = !rowData.Schedule_Date && rowData.Timeline_Milestone;
-  
-  if (isTimeline) {
-    // 处理 Timeline 消息
-    const targetDate = getTimelineTargetDate(rowData, releaseInfo);
-    // ...
-  } else {
-    // 处理 Time-based 消息
-    // ...
-  }
-}
-```
-
-**好处**：
-- ✅ 代码结构更简洁（无需外部 if/else 判断）
-- ✅ Timeline 消息不再因为网络问题而丢失
-- ✅ 两种类型的消息享受相同的可靠性保障
-- ✅ 用户不需要区分消息类型，都能享受补偿机制
-- ✅ 函数职责更单一（每个 shouldExecute 函数负责一种匹配模式）
-
-## 📅 修改日期
-
-2025-11-12
+查找前会先判断日期是否匹配：
+
+- OneTime：`Schedule_Date` 等于当天。
+- Periodic：按 `Repeat_Every`、`Repeat_Unit`、`Repeat_Days`、`End_Date` 等字段计算。
+- Timeline：通过 Timeline Sync Rule 写入 Script Properties 的里程碑缓存计算目标日期。
+
+AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在指定时间或未指定时间的 9:00 执行。
+
+## 去重与执行记录
+
+系统通过 `Last_Exec` 和 `Exec_Log` 做当天去重：
+
+- 当天已成功的消息不会再次进入队列。
+- 当天已失败的消息也会跳过，避免失败项阻塞后续消息。
+- 缺失 `ID` 的消息会自动生成并写回 Sheet。
+- AI/JiraAutomation API 消息会在返回给 Jira 后立即标记执行，避免外部执行链路超时导致重复触发。
+
+## AI/JiraAutomation 请求体
+
+`AI_Body` 支持以下变量：
+
+- `{Topic}`
+- `{Content}`
+- `{TeamID}`
+- Timeline 变量，如 `{currentRelease}`、`{currentPhase}`、`{nextPhaseStartDate}` 等。
+
+从 App Script `2.6.4` 起，变量替换会使用 JSON 字符串转义，保证内容里包含双引号、反斜杠或换行时，替换后的 JSON body 仍可被外部 API 正常解析。
+
+## 用户体验
+
+定时消息列表会显示执行策略提示：
+
+- 有指定时间的 Bot/AI/JiraAutomation：显示 30 分钟补偿窗口。
+- 未指定时间的 Bot/AI/JiraAutomation：显示 8:00 后执行。
+- 未指定时间的 AsMe：显示 9:00 执行。
+- 多条 Bot/AI/带 `AI_Endpoint` 的 JiraAutomation 落在同一执行槽位时，列表会显示按 Sheet 行序计算的队列位置、预计延后分钟数；如果指定时间消息的队列位置加上已消耗的补偿窗口后无法在 30 分钟内执行，创建/编辑表单会阻止保存，并建议改为未来时间或清空时间进入 8:00 后队列。
+- 队列位置会排除同一执行日期已经成功或失败的行，因为 Apps Script 实际执行时也会跳过这些行，避免失败或已完成项继续制造虚假的排队压力。
+
+创建表单会按推送方式动态显示默认时间：Bot/AI/JiraAutomation 留空提示为 8:00 后排队，AsMe 留空提示为 9:00 左右推送；快捷时间按钮也使用对应默认时间。这样用户不用打开 Sheet 或阅读实现细节，也能判断消息大概何时会被派发，以及错过时间后是否会补偿。
+
+## 外部对照结论
+
+- Microsoft Teams 的定时发送强调用户选择发送时间，并可编辑、改期和删除待发送消息；当前 Personal AI 已有编辑/删除，但列表需要清晰暴露执行策略，且不能早于用户选择的时间发送。
+- Slack 的 scheduled message API 会返回可管理的 `scheduled_message_id`，并通过 list/delete API 管理待发消息；Personal AI 目前用 Sheet 行序作为轻量队列，因此需要在 UI 暴露“第几个执行”和“哪些行不再阻塞”来补足可观察性，并继续补上更顺手的改期操作。
+- Google Apps Script 有运行时间、触发器、URL Fetch 等配额限制，补偿窗口和去重是必要的可靠性保护。
+- Google Pub/Sub 的 exactly-once 文档也强调用消息处理进度避免重复工作；本功能以 `ID`、`Last_Exec`、`Exec_Log` 做轻量幂等。
+- 通知体验研究和 Apple HIG 都强调不要用高打断级别承载低价值信息；本功能的后续优化应继续把“立即推送”和“摘要/低打断”分开设计。
+- 智能通知系统研究建议根据用户情境、紧急度和接收偏好决定提醒方式；定时消息后续可以把“立即发”“排队发”“汇总发”做成显式策略，而不是只靠时间字段表达。
+- TIM 等通知发送时机研究强调整体 send-time control：后续可以在用户选择已拥挤时段时主动推荐低冲突时间，而不是只展示队列风险。
+
+参考：
+
+- [Microsoft Teams scheduled chat messages](https://support.microsoft.com/en-us/office/schedule-chat-messages-in-microsoft-teams-2fc5ea77-7bb4-4511-8f59-e62bac1c0f6a)
+- [Slack `chat.scheduleMessage`](https://docs.slack.dev/reference/methods/chat.scheduleMessage/)
+- [Slack `chat.deleteScheduledMessage`](https://api.slack.com/methods/chat.deleteScheduledMessage)
+- [Google Apps Script quotas](https://developers.google.com/apps-script/guides/services/quotas)
+- [Google Pub/Sub exactly-once delivery](https://docs.cloud.google.com/pubsub/docs/exactly-once-delivery)
+- [Interruptive notifications in support of task management](https://www.sciencedirect.com/science/article/pii/S1071581915000245)
+- [Intelligent Notification Systems: A Survey](https://arxiv.org/abs/1711.10171)
+- [TIM: Temporal Interaction Model in Notification System](https://arxiv.org/abs/2406.07067)
+- [Apple HIG: Managing notifications](https://developer.apple.com/design/human-interface-guidelines/managing-notifications)
+
+## 最近更新
+
+- 2026-05-01：修复 `AI_Body` 变量替换的 JSON 转义问题；列表补充执行策略提示；更新文档为当前实现。
+- 2026-05-03：补偿窗口支持跨午夜；创建表单的留空时间提示改为按推送方式显示 8:00/9:00 默认策略。
+- 2026-05-04：列表和创建表单增加同槽队列位置提示，提前暴露多条 Bot/AI/JiraAutomation 同时触发时的排队延后和补偿窗口风险。
+- 2026-05-04：队列压力计算对齐 Apps Script 去重规则，排除同一执行日期已经成功或失败的行；文档标题改为当前真实功能边界。
+- 2026-05-05：创建/编辑表单会阻止保存已经排到 30 分钟补偿窗外的显式时间消息；JiraAutomation 只有配置 `AI_Endpoint` 时才按 8:00 后执行器队列展示。
+- 2026-05-05：队列风险提示会纳入当前已消耗的补偿窗口，避免用户在窗口剩余时间不足时仍保存一个实际赶不上的显式时间消息。
+- 2026-05-06：显式时间消息不再因 1 分钟容差提前发送；容差仅覆盖准点或最多迟到 1 分钟的触发器抖动，并在列表/表单提示中明确“不提前发送”。

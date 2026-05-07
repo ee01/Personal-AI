@@ -46,6 +46,10 @@ import { ScheduledMessage, CreateMessageFormData, SheetConfig, Statistics, Messa
 import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 import { normalizeSheetConfig } from './botAutomationConfig';
 import { formatTimelineNextExecutionText } from './timelineFormatting';
+import {
+  getTodayLocalScheduleDate,
+} from './scheduleDateTime';
+import { calculateScheduledMessageNextExecution } from './scheduleNextExecution';
 
 const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Target_Type',
@@ -256,7 +260,15 @@ export class ScheduledMessageService {
     const updatedMessage = { ...messages[index], ...updates };
     
     // 重新计算下次执行时间
-    if (updates.Schedule_Date || updates.Schedule_Time || updates.Type || updates.Repeat_Every) {
+    if (
+      updates.Schedule_Date !== undefined ||
+      updates.Schedule_Time !== undefined ||
+      updates.Type !== undefined ||
+      updates.Repeat_Every !== undefined ||
+      updates.Repeat_Unit !== undefined ||
+      updates.Repeat_Days !== undefined ||
+      updates.Push_Method !== undefined
+    ) {
       updatedMessage.Next_Exec = this.calculateNextExecution(updatedMessage);
     }
     
@@ -332,7 +344,7 @@ export class ScheduledMessageService {
    */
   async getStatistics(): Promise<Statistics> {
     const messages = await this.getAllMessages();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayLocalScheduleDate();
     
     return {
       total: messages.length,
@@ -679,46 +691,6 @@ export class ScheduledMessageService {
       return formatTimelineNextExecutionText(message);
     }
     
-    if (message.Type === 'Daily') {
-      // Daily 类型只执行一次
-      return message.Schedule_Date || '';
-    } else if (message.Type === 'Hourly') {
-      // Hourly 类型只执行一次
-      return `${message.Schedule_Date} ${message.Schedule_Time}`;
-    } else if (message.Type === 'Periodic') {
-      // 周期性任务
-      if (!message.Schedule_Date || !message.Repeat_Every || !message.Repeat_Unit) {
-        return '';
-      }
-      
-      const startDate = new Date(message.Schedule_Date);
-      const now = new Date();
-      const nextDate = new Date(startDate);
-      
-      // 如果开始日期在未来，返回开始日期
-      if (startDate > now) {
-        return message.Schedule_Date;
-      }
-      
-      // 计算下一次执行时间
-      const every = message.Repeat_Every;
-      const unit = message.Repeat_Unit;
-      
-      while (nextDate <= now) {
-        if (unit === 'Day') {
-          nextDate.setDate(nextDate.getDate() + every);
-        } else if (unit === 'Week') {
-          nextDate.setDate(nextDate.getDate() + (7 * every));
-        } else if (unit === 'Month') {
-          nextDate.setMonth(nextDate.getMonth() + every);
-        } else if (unit === 'Year') {
-          nextDate.setFullYear(nextDate.getFullYear() + every);
-        }
-      }
-      
-      return nextDate.toISOString().split('T')[0];
-    }
-    
-    return '';
+    return calculateScheduledMessageNextExecution(message);
   }
 }

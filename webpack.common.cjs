@@ -81,6 +81,10 @@ module.exports = (env) => {
     },
     resolve: {
       extensions: ['.ts', '.js', '.tsx', '.jsx', '.vue'],
+      extensionAlias: {
+        '.js': ['.ts', '.js'],
+        '.jsx': ['.tsx', '.jsx'],
+      },
       fallback: {
         fs: false,
         path: require.resolve('path-browserify'),
