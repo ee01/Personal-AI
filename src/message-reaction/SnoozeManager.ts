@@ -65,7 +65,7 @@ async function initCache() {
         );
       });
     } catch (e) {
-      console.error('Failed to load person cache:', e);
+      console.warn('Failed to load person cache:', e);
       personCache = new Map();
     }
   }
@@ -81,7 +81,7 @@ async function initCache() {
         });
       });
     } catch (e) {
-      console.error('Failed to load group cache:', e);
+      console.warn('Failed to load group cache:', e);
       groupCache = new Map();
     }
   }
