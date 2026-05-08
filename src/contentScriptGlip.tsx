@@ -526,7 +526,10 @@ function createJiraCard(
   // 定位卡片（先添加到 DOM 再定位）
   document.body.appendChild(card);
   bindJiraCardCopyActions(card, ticket);
-  positionCardFixed(card, triggerElement);
+  if (!positionCardFixed(card, triggerElement)) {
+    card.remove();
+    return card;
+  }
 
   // 添加鼠标事件
   card.addEventListener('mouseenter', () => {
@@ -545,9 +548,30 @@ function createJiraCard(
   return card;
 }
 
+function getUsableFixedAnchorRect(trigger: HTMLElement): DOMRect | null {
+  if (!trigger.isConnected) return null;
+  const style = window.getComputedStyle(trigger);
+  if (style.display === 'none' || style.visibility === 'hidden') return null;
+
+  const rect = trigger.getBoundingClientRect();
+  const isUsable =
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.left) &&
+    rect.width >= 2 &&
+    rect.height >= 2 &&
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < window.innerHeight &&
+    rect.left < window.innerWidth;
+
+  return isUsable ? rect : null;
+}
+
 // 定位卡片（修复版本，避免漂移）
-function positionCardFixed(card: HTMLElement, trigger: HTMLElement) {
-  const triggerRect = trigger.getBoundingClientRect();
+function positionCardFixed(card: HTMLElement, trigger: HTMLElement): boolean {
+  const triggerRect = getUsableFixedAnchorRect(trigger);
+  if (!triggerRect) return false;
+
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
 
@@ -571,11 +595,13 @@ function positionCardFixed(card: HTMLElement, trigger: HTMLElement) {
   if (top + cardRect.height > viewportHeight - 20) {
     top = triggerRect.top - cardRect.height - 8;
   }
+  if (top < 20) top = 20;
 
   // 设置固定位置
   card.style.left = `${left}px`;
   card.style.top = `${top}px`;
   card.style.visibility = 'visible';
+  return true;
 }
 
 // 创建加载中卡片
@@ -598,7 +624,10 @@ function createLoadingCard(
   `;
 
   document.body.appendChild(card);
-  positionCardFixed(card, triggerElement);
+  if (!positionCardFixed(card, triggerElement)) {
+    card.remove();
+    return card;
+  }
 
   card.addEventListener('mouseenter', () => {
     isHoveringCard = true;
@@ -632,7 +661,10 @@ function createErrorCard(
   `;
 
   document.body.appendChild(card);
-  positionCardFixed(card, triggerElement);
+  if (!positionCardFixed(card, triggerElement)) {
+    card.remove();
+    return card;
+  }
 
   card.addEventListener('mouseleave', () => {
     hideCard();

@@ -544,7 +544,7 @@ export function insertTextIntoComposer(target: ComposerTarget, text: string): vo
   const insertion = text.trim();
   if (!insertion) return;
 
-  target.element.focus();
+  target.element.focus({ preventScroll: true });
 
   if (target.kind === 'textarea' || target.kind === 'input') {
     const current = element.value || '';
@@ -563,18 +563,31 @@ export function insertTextIntoComposer(target: ComposerTarget, text: string): vo
   }
 
   const prefix = readComposerText(target) ? '\n\n' : '';
-  if (document.queryCommandSupported?.('insertText')) {
-    document.execCommand('insertText', false, `${prefix}${insertion}`);
-  } else {
-    target.element.textContent = `${target.element.textContent || ''}${prefix}${insertion}`;
+  const insertedText = `${prefix}${insertion}`;
+  const selection = document.getSelection();
+  if (selection) {
+    const range = document.createRange();
+    range.selectNodeContents(target.element);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  const insertedWithCommand = document.queryCommandSupported?.('insertText')
+    ? document.execCommand('insertText', false, insertedText)
+    : false;
+  if (!insertedWithCommand) {
+    target.element.appendChild(document.createTextNode(insertedText));
   }
   target.element.dispatchEvent(
     new InputEvent('input', {
       bubbles: true,
+      composed: true,
       inputType: 'insertText',
-      data: `${prefix}${insertion}`,
+      data: insertedText,
     }),
   );
+  target.element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 export function isComposerElement(element: Element | null | undefined): boolean {

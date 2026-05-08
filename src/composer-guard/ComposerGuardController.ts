@@ -20,6 +20,8 @@ const STYLE_ID = 'pai-composer-guard-styles';
 const REQUEST_DEBOUNCE_MS = 700;
 const DISMISS_TTL_MS = 30 * 60 * 1000;
 const MIN_ASSIST_CONFIDENCE = 0.58;
+const ICON_SIZE = 32;
+const VIEWPORT_MARGIN = 8;
 
 type GuardState = 'ready';
 
@@ -51,6 +53,46 @@ function isSensitiveEditableElement(element: HTMLElement): boolean {
   });
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function isUsableViewportRect(rect: DOMRect): boolean {
+  return (
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.right) &&
+    Number.isFinite(rect.bottom) &&
+    Number.isFinite(rect.left) &&
+    rect.width >= 4 &&
+    rect.height >= 4 &&
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < window.innerHeight &&
+    rect.left < window.innerWidth
+  );
+}
+
+function getUsableElementRect(element: HTMLElement): DOMRect | null {
+  const style = window.getComputedStyle(element);
+  if (style.display === 'none' || style.visibility === 'hidden') {
+    return null;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (isUsableViewportRect(rect)) {
+    return rect;
+  }
+
+  for (const clientRect of Array.from(element.getClientRects())) {
+    const domRect = DOMRect.fromRect(clientRect);
+    if (isUsableViewportRect(domRect)) {
+      return domRect;
+    }
+  }
+
+  return null;
+}
+
 export class ComposerGuardController {
   private root: HTMLDivElement | null = null;
   private activeSession: ActiveComposerSession | null = null;
@@ -59,7 +101,6 @@ export class ComposerGuardController {
   private positionTimer: number | null = null;
   private requestSeq = 0;
   private dismissedContexts = new Map<string, number>();
-  private outsidePointerHandler: ((event: PointerEvent) => void) | null = null;
 
   start(): void {
     if (hasSensitiveUrlSignal(window.location.href)) {
@@ -72,6 +113,7 @@ export class ComposerGuardController {
     document.addEventListener('keydown', this.handleKeyDown, true);
     window.addEventListener('scroll', this.schedulePositionRefresh, true);
     window.addEventListener('resize', this.schedulePositionRefresh);
+    this.activateFromElement(document.activeElement, true);
   }
 
   private handleFocusIn = (event: FocusEvent): void => {
@@ -81,8 +123,11 @@ export class ComposerGuardController {
 
   private handleInput = (event: Event): void => {
     const target = event.target instanceof Element ? event.target : null;
-    if (!this.activeSession || !target) return;
-    if (!isComposerElement(target)) return;
+    if (!target || !isComposerElement(target)) return;
+    if (!this.activeSession) {
+      this.activateFromElement(target, true);
+      return;
+    }
     this.refreshActiveDraft();
   };
 
@@ -229,16 +274,6 @@ export class ComposerGuardController {
     root.setAttribute('aria-label', 'Personal AI composer guard');
     document.documentElement.appendChild(root);
     this.root = root;
-    root.addEventListener('mouseenter', () => this.setTargetGlow(true));
-    root.addEventListener('mouseleave', () => this.setTargetGlow(false));
-
-    this.outsidePointerHandler = (event: PointerEvent) => {
-      if (!this.root || this.root.contains(event.target as Node)) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (target && isComposerElement(target)) return;
-      this.setTargetGlow(false);
-    };
-    document.addEventListener('pointerdown', this.outsidePointerHandler, true);
 
     return root;
   }
@@ -257,6 +292,7 @@ export class ComposerGuardController {
       return;
     }
 
+    this.setTargetGlow(true);
     this.render('ready');
   }
 
@@ -279,8 +315,15 @@ export class ComposerGuardController {
       </div>
     `;
 
-    root.querySelector('[data-action="insert"]')?.addEventListener('click', () => {
+    const insertButton = root.querySelector('[data-action="insert"]');
+    insertButton?.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       this.insertLatestAssist();
+    });
+    insertButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
     });
 
     this.positionRoot();
@@ -327,20 +370,12 @@ export class ComposerGuardController {
     this.setTargetGlow(false);
     this.activeSession = null;
     this.latestAssist = null;
-    if (this.outsidePointerHandler) {
-      document.removeEventListener('pointerdown', this.outsidePointerHandler, true);
-      this.outsidePointerHandler = null;
-    }
     this.root?.remove();
     this.root = null;
   }
 
   private removeAffordance(): void {
     this.setTargetGlow(false);
-    if (this.outsidePointerHandler) {
-      document.removeEventListener('pointerdown', this.outsidePointerHandler, true);
-      this.outsidePointerHandler = null;
-    }
     this.root?.remove();
     this.root = null;
   }
@@ -362,11 +397,63 @@ export class ComposerGuardController {
 
   private positionRoot(): void {
     if (!this.root || !this.activeSession) return;
-    const rect = this.activeSession.target.element.getBoundingClientRect();
-    const top = Math.max(8, Math.min(window.innerHeight - 36, rect.top - 12));
-    const left = Math.max(8, Math.min(window.innerWidth - 36, rect.right - 28));
+    const rect = this.getTargetAnchorRect();
+    if (!rect) {
+      this.removeAffordance();
+      return;
+    }
+
+    const maxTop = Math.max(VIEWPORT_MARGIN, window.innerHeight - ICON_SIZE - VIEWPORT_MARGIN);
+    const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - ICON_SIZE - VIEWPORT_MARGIN);
+    const top = clamp(rect.top - 12, VIEWPORT_MARGIN, maxTop);
+    const left = clamp(rect.right - 28, VIEWPORT_MARGIN, maxLeft);
+    this.root.classList.toggle('pai-composer-guard--near-left', left < 360);
     this.root.style.top = `${top}px`;
     this.root.style.left = `${left}px`;
+  }
+
+  private getTargetAnchorRect(): DOMRect | null {
+    const targetElement = this.activeSession?.target.element;
+    if (!targetElement) return null;
+
+    const candidates: HTMLElement[] = [targetElement];
+    const anchorSelectors = [
+      '.ql-container',
+      '.ProseMirror',
+      '[role="textbox"]',
+      '[contenteditable="true"]',
+      '[data-test-automation-id*="compose"]',
+      '[data-testid*="composer"]',
+      '[data-testid*="chat-input"]',
+      'form',
+      'footer',
+    ];
+
+    for (const selector of anchorSelectors) {
+      const closest = targetElement.closest(selector);
+      if (closest instanceof HTMLElement && !candidates.includes(closest)) {
+        candidates.push(closest);
+      }
+    }
+
+    let parent = targetElement.parentElement;
+    for (let depth = 0; parent && depth < 5; depth += 1) {
+      if (
+        parent !== document.body &&
+        parent !== document.documentElement &&
+        !candidates.includes(parent)
+      ) {
+        candidates.push(parent);
+      }
+      parent = parent.parentElement;
+    }
+
+    for (const candidate of candidates) {
+      const rect = getUsableElementRect(candidate);
+      if (rect) return rect;
+    }
+
+    return null;
   }
 
   private injectStyles(): void {
@@ -418,10 +505,10 @@ export class ComposerGuardController {
         max-height: 260px;
         overflow: auto;
         padding: 10px 12px;
-        border: 1px solid rgba(222, 61, 61, 0.28);
+        border: 1px solid rgba(17, 24, 39, 0.12);
         border-radius: 8px;
         background: rgba(255, 255, 255, 0.98);
-        box-shadow: 0 14px 34px rgba(91, 24, 24, 0.18);
+        box-shadow: 0 14px 34px rgba(17, 24, 39, 0.16);
         color: #1f2937;
         opacity: 0;
         transform: translateX(8px) scale(0.98);
@@ -433,6 +520,15 @@ export class ComposerGuardController {
         opacity: 1;
         transform: translateX(0) scale(1);
         pointer-events: auto;
+      }
+      .pai-composer-guard--near-left .pai-composer-guard-popover {
+        right: auto;
+        left: 38px;
+        transform: translateX(-8px) scale(0.98);
+        transform-origin: left top;
+      }
+      .pai-composer-guard--near-left:hover .pai-composer-guard-popover {
+        transform: translateX(0) scale(1);
       }
       .pai-composer-guard-label {
         color: #c62828;
@@ -446,10 +542,10 @@ export class ComposerGuardController {
         font-size: 12px;
       }
       .pai-composer-guard-target-glow {
-        outline: 1px solid rgba(218, 48, 48, 0.42) !important;
+        outline: 1px solid rgba(218, 48, 48, 0.54) !important;
         box-shadow:
-          0 0 0 3px rgba(218, 48, 48, 0.12),
-          0 0 20px rgba(218, 48, 48, 0.3) !important;
+          0 0 0 3px rgba(218, 48, 48, 0.16),
+          0 0 22px rgba(218, 48, 48, 0.38) !important;
         transition: box-shadow 140ms ease, outline-color 140ms ease;
       }
     `;
