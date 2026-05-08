@@ -120,7 +120,17 @@
               <div style="margin-bottom: 0.5rem">
                 <span class="card-badge">{{ resource.type }}</span>
               </div>
-              <p><a :href="resource.url" style="color: #60a5fa">查看资源</a></p>
+              <p v-if="getSafeExternalUrl(resource.url)">
+                <a
+                  :href="getSafeExternalUrl(resource.url)"
+                  class="item-link"
+                  target="_blank"
+                  rel="noreferrer"
+                  @click.stop
+                  >查看资源</a
+                >
+              </p>
+              <p v-else class="item-muted">暂无可打开链接</p>
             </div>
           </div>
         </div>
@@ -166,7 +176,17 @@
       <!-- 聊天记录标签页 -->
       <div v-if="activeTab === 'conversations'" class="tab-content active">
         <div class="section-header">
-          <h3>💬 聊天记录</h3>
+          <div class="conversation-section-title">
+            <h3>💬 聊天记录</h3>
+            <div class="conversation-read-summary" aria-live="polite">
+              <span class="read-summary-pill unread"
+                >未读 {{ conversationUnreadCount }}</span
+              >
+              <span class="read-summary-pill"
+                >全部 {{ conversationTotalCount }}</span
+              >
+            </div>
+          </div>
           <div class="search-controls">
             <input
               type="text"
@@ -174,6 +194,15 @@
               placeholder="搜索聊天记录、上下文或来源..."
               v-model="convSearchQuery"
             />
+            <select
+              class="filter-select read-filter-select"
+              v-model="convReadFilter"
+              aria-label="按阅读状态筛选聊天记录"
+            >
+              <option value="all">全部状态</option>
+              <option value="unread">仅未读</option>
+              <option value="read">已读</option>
+            </select>
             <select class="filter-select" v-model="convFilter">
               <option value="all">全部群组</option>
               <option value="team">团队群</option>
@@ -199,7 +228,7 @@
           {{ messageFocusNotice.text }}
         </div>
         <div v-if="filteredConversations.length === 0" class="empty-state">
-          没有匹配的聊天记录
+          {{ conversationEmptyText }}
         </div>
         <div v-else class="conversations-list">
           <div
@@ -208,7 +237,7 @@
             class="conversation-item"
             :class="{
               expanded: expandedConversations.has(conv.id),
-              unread: !conv.isRead,
+              unread: isConversationUnread(conv),
               targeted: highlightedConversationId === conv.id,
             }"
             :data-conversation-id="conv.id"
@@ -221,7 +250,9 @@
                 <div class="sender-info">
                   <div class="sender-name">
                     {{ conv.sender || '未知用户' }}
-                    <span v-if="conv.isRead !== true" class="unread-indicator"
+                    <span
+                      v-if="isConversationUnread(conv)"
+                      class="unread-indicator"
                       >●</span
                     >
                   </div>
@@ -268,9 +299,7 @@
                 {{
                   expandedConversations.has(conv.id)
                     ? '🔼 收起上下文'
-                    : `🔍 查看上下文 (${
-                        conv.contextMessages?.length || 0
-                      } 条相关消息)`
+                    : getConversationContextLabel(conv)
                 }}
               </span>
             </button>
@@ -284,11 +313,19 @@
                 v-for="(contextMsg, index) in conv.contextMessages"
                 :key="index"
                 class="context-item"
-                :class="{ 'main-message': contextMsg.isMainMessage }"
+                :class="{
+                  'main-message': contextMsg.isMainMessage,
+                  unread: isContextMessageUnread(contextMsg),
+                }"
               >
                 <div class="context-header">
                   <div class="context-sender">
                     {{ contextMsg.sender || '未知用户' }}
+                    <span
+                      v-if="isContextMessageUnread(contextMsg)"
+                      class="unread-indicator"
+                      >●</span
+                    >
                   </div>
                   <div class="context-time">
                     {{ formatTimeAgo(contextMsg.datetime) || '未知时间' }}
@@ -351,6 +388,16 @@
                     }}%</span
                   >
                 </div>
+                <a
+                  v-if="getSafeExternalUrl(webpage.url)"
+                  class="webpage-open-link"
+                  :href="getSafeExternalUrl(webpage.url)"
+                  target="_blank"
+                  rel="noreferrer"
+                  @click.stop
+                >
+                  打开来源
+                </a>
               </div>
             </div>
             <div class="webpage-content">
@@ -377,9 +424,15 @@ import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore } from '../memory-store';
 import {
   findTopicConversationByMessageId,
+  filterTopicConversationsByReadState,
+  getTopicConversationUnreadMessageCount,
+  getTopicConversationUnreadCount,
   getTopicDetailRecentData,
+  isTopicConversationUnread,
+  sortTopicConversationsForTriage,
   topicConversationHasContextMatch,
   topicConversationMatchesQuery,
+  type TopicConversationReadFilter,
 } from '../topic-detail-data';
 import { renderHighlightedText } from '../topic-detail-rendering';
 
@@ -406,6 +459,7 @@ const topicResources = computed(() => topicRecentData.value.resources);
 const topicTickets = computed(() => topicRecentData.value.jiraTickets);
 
 const convSearchQuery = ref('');
+const convReadFilter = ref<TopicConversationReadFilter>('all');
 const convFilter = ref('all');
 const webSearchQuery = ref('');
 const webTypeFilter = ref('all');
@@ -424,8 +478,23 @@ const tabs = [
   { key: 'webpages', label: '🌐 网页记录' },
 ];
 
+const conversationUnreadCount = computed(() =>
+  getTopicConversationUnreadCount(topicConversations.value),
+);
+const conversationTotalCount = computed(() => topicConversations.value.length);
+const conversationEmptyText = computed(() => {
+  if (convReadFilter.value === 'unread') return '没有匹配的未读聊天记录';
+  if (convReadFilter.value === 'read') return '没有匹配的已读聊天记录';
+  return '没有匹配的聊天记录';
+});
+
 const filteredConversations = computed(() => {
-  let filtered = topicConversations.value;
+  let filtered = sortTopicConversationsForTriage(topicConversations.value);
+
+  filtered = filterTopicConversationsByReadState(
+    filtered,
+    convReadFilter.value,
+  );
 
   if (convSearchQuery.value.trim()) {
     filtered = filtered.filter((conv) =>
@@ -521,6 +590,21 @@ const doesConversationContextMatch = (conversation: any): boolean => {
   );
 };
 
+const isConversationUnread = (conversation: any): boolean => {
+  return isTopicConversationUnread(conversation);
+};
+
+const getConversationContextLabel = (conversation: any): string => {
+  const contextCount = conversation?.contextMessages?.length || 0;
+  const unreadCount = getTopicConversationUnreadMessageCount(conversation);
+  const unreadSuffix = unreadCount > 0 ? ` · ${unreadCount} 未读` : '';
+  return `🔍 查看上下文 (${contextCount} 条相关消息${unreadSuffix})`;
+};
+
+const isContextMessageUnread = (contextMessage: any): boolean => {
+  return contextMessage?.isRead !== true;
+};
+
 const formatConversationUndoLabel = (undoState: any): string => {
   const label =
     undoState?.conversationLabel || undoState?.conversationId || '这条讨论';
@@ -598,16 +682,20 @@ const highlightText = (text: string, searchQuery: string) => {
   return renderHighlightedText(text, searchQuery);
 };
 
-const getConversationSourceUrl = (conversation: any): string => {
-  const url =
-    conversation?.teamUrl ||
-    conversation?.sourceUrl ||
-    conversation?.permalink ||
-    conversation?.url;
+const getSafeExternalUrl = (url: unknown): string => {
   if (!url || url === '#') return '';
   const normalizedUrl = String(url).trim();
   if (/^https?:\/\//i.test(normalizedUrl)) return normalizedUrl;
   return '';
+};
+
+const getConversationSourceUrl = (conversation: any): string => {
+  return getSafeExternalUrl(
+    conversation?.teamUrl ||
+      conversation?.sourceUrl ||
+      conversation?.permalink ||
+      conversation?.url,
+  );
 };
 
 const getWebpageIcon = (type: string) => {
@@ -707,6 +795,44 @@ watch(
   color: #fde68a;
 }
 
+.conversation-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.conversation-read-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.read-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.42);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.read-summary-pill.unread {
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.18);
+}
+
+.read-filter-select {
+  min-width: 7.5rem;
+}
+
 .conversation-side-actions {
   display: grid;
   justify-items: end;
@@ -725,6 +851,25 @@ watch(
 .conversation-source-link:focus-visible {
   color: #bfdbfe;
   text-decoration: underline;
+}
+
+.item-link,
+.webpage-open-link {
+  color: #60a5fa;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.item-link:hover,
+.item-link:focus-visible,
+.webpage-open-link:hover,
+.webpage-open-link:focus-visible {
+  color: #bfdbfe;
+  text-decoration: underline;
+}
+
+.item-muted {
+  color: #64748b;
 }
 
 .context-indicator {
@@ -796,6 +941,11 @@ watch(
 .conversation-item.unread .sender-name {
   color: #60a5fa;
   font-weight: 600;
+}
+
+.context-item.unread {
+  border-left: 2px solid rgba(248, 113, 113, 0.55);
+  padding-left: 0.75rem;
 }
 
 .context-match-badge {

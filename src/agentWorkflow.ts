@@ -706,18 +706,23 @@ ${xmlMessage}
       const matchedManualItem = getFirstManualItemFromMatchedRules(
         resolvedMatch.watchRules,
       );
+      const hasResolvedMatch = resolvedMatch.watchRules.length > 0;
 
       return {
         shouldNotify: Boolean(matchedManualItem?.notifyMethod),
-        shouldStore: resolvedMatch.watchRules.length > 0,
-        matchedRule: firstMatch.matched_rule || '',
-        matchedRuleRefs: resolvedMatch.matchedRuleRefs,
-        matchedRuleIds: resolvedMatch.matchedRuleIds,
-        summary: firstMatch.summary || firstMatch.filter_reason || '',
+        shouldStore: hasResolvedMatch,
+        matchedRule: hasResolvedMatch ? firstMatch.matched_rule || '' : '',
+        matchedRuleRefs: hasResolvedMatch ? resolvedMatch.matchedRuleRefs : [],
+        matchedRuleIds: hasResolvedMatch ? resolvedMatch.matchedRuleIds : [],
+        summary: hasResolvedMatch
+          ? firstMatch.summary || firstMatch.filter_reason || ''
+          : '',
         confidence:
-          typeof firstMatch.confidence === 'number'
+          hasResolvedMatch && typeof firstMatch.confidence === 'number'
             ? firstMatch.confidence
-            : 0.7,
+            : hasResolvedMatch
+              ? 0.7
+              : 0,
       };
     },
   },

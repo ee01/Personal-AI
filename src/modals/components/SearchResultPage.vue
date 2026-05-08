@@ -55,6 +55,79 @@
             </ul>
           </div>
         </div>
+
+        <div v-if="decisionEvidenceChain" class="decision-chain-section">
+          <div class="decision-chain-header">
+            <div>
+              <h4>决策证据链</h4>
+              <p>{{ decisionEvidenceChain.answerSummary }}</p>
+            </div>
+            <span class="decision-confidence">
+              {{ Math.round((decisionEvidenceChain.confidence || 0) * 100) }}%
+            </span>
+          </div>
+
+          <div v-if="decisionEvidenceChain.decisionStatement" class="decision-statement">
+            {{ decisionEvidenceChain.decisionStatement }}
+          </div>
+
+          <div class="decision-chain-grid">
+            <div v-if="decisionEvidenceChain.then" class="decision-chain-card">
+              <h5>当时依据</h5>
+              <p class="decision-conclusion">{{ decisionEvidenceChain.then.conclusion }}</p>
+              <ul v-if="decisionEvidenceChain.then.rationale?.length">
+                <li v-for="item in decisionEvidenceChain.then.rationale" :key="item">
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
+            <div v-if="decisionEvidenceChain.now" class="decision-chain-card">
+              <h5>现在变化</h5>
+              <ul v-if="decisionEvidenceChain.now.changed?.length">
+                <li v-for="item in decisionEvidenceChain.now.changed" :key="item">
+                  {{ item }}
+                </li>
+              </ul>
+              <p v-if="!decisionEvidenceChain.now.changed?.length" class="decision-muted">
+                暂未找到明确变化证据。
+              </p>
+              <div v-if="decisionEvidenceChain.now.missingEvidence?.length" class="decision-missing">
+                <strong>缺少证据</strong>
+                <span v-for="item in decisionEvidenceChain.now.missingEvidence" :key="item">
+                  {{ item }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            v-if="decisionEvidenceRefs.length"
+            class="decision-evidence-list"
+          >
+            <h5>引用证据</h5>
+            <div
+              v-for="ref in decisionEvidenceRefs.slice(0, 4)"
+              :key="`${ref.sourceType}-${ref.sourceId}`"
+              class="decision-evidence-item"
+            >
+              <span class="decision-evidence-source">
+                {{ ref.sourceTitle || ref.sourceType }}
+              </span>
+              <span class="decision-evidence-stance">
+                {{ getDecisionStanceLabel(ref.stance) }}
+              </span>
+              <p>{{ ref.snippet }}</p>
+              <button
+                v-if="ref.exploreLink"
+                class="decision-link-btn"
+                @click.stop="openExploreLink(ref.exploreLink)"
+              >
+                在记忆中查看
+              </button>
+            </div>
+          </div>
+        </div>
         
         <!-- 元数据 -->
         <div v-if="searchContext.askResult.metadata" class="answer-metadata">
@@ -183,6 +256,14 @@
       <p class="search-tips">
         当前范围是 {{ currentScopeLabel }}，可以切换范围或换一个更具体的关键词
       </p>
+      <button
+        v-if="canBroadenSearchScope"
+        class="empty-action-btn"
+        type="button"
+        @click="broadenSearchScope"
+      >
+        搜索全部记忆
+      </button>
     </div>
   </div>
 </template>
@@ -219,8 +300,52 @@ const renderedAnswer = computed(() => {
   return ans ? markdownToHtml(ans) : '';
 });
 
+const decisionEvidenceChainBlock = computed(() =>
+  searchContext.value.askResult?.blocks?.find(
+    (block: any) => block?.type === 'decision_evidence_chain',
+  ),
+);
+
+const decisionEvidenceChain = computed(
+  () => decisionEvidenceChainBlock.value?.payload,
+);
+
+const decisionEvidenceRefs = computed(() => {
+  const payload = decisionEvidenceChain.value;
+  const refs = [
+    ...(payload?.then?.evidenceRefs || []),
+    ...(payload?.now?.contradictedBy || []),
+  ];
+  const seen = new Set<string>();
+  return refs.filter((ref: any) => {
+    const key = `${ref.sourceType}-${ref.sourceId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+});
+
+const normalizeScope = (scope: unknown) => {
+  const value = Array.isArray(scope) ? scope[0] : scope;
+  if (value === 'personal' || value === 'both' || value === 'all') {
+    return value;
+  }
+  return 'work';
+};
+
+const currentScopeValue = computed(() =>
+  normalizeScope(route.query.scope || searchContext.value.scope),
+);
+
 const currentScopeLabel = computed(() =>
-  getScopeLabel(route.query.scope || searchContext.value.scope || 'work'),
+  getScopeLabel(currentScopeValue.value),
+);
+
+const canBroadenSearchScope = computed(
+  () =>
+    searchQuery.value.trim().length >= 2 &&
+    currentScopeValue.value !== 'all' &&
+    currentScopeValue.value !== 'both',
 );
 
 // 自动设置筛选器：如果是从实体列表页搜索过来的，自动选中该实体类型
@@ -298,6 +423,19 @@ const getSafeSourceUrl = (entity: any) => {
   return normalizeMemorySourceUrl(entity?.sourceUrl);
 };
 
+const getDecisionStanceLabel = (stance: string) => {
+  switch (stance) {
+    case 'supports':
+      return '支撑';
+    case 'contradicts':
+      return '变化';
+    case 'open_question':
+      return '待确认';
+    default:
+      return '背景';
+  }
+};
+
 const openExploreLink = (exploreLink?: string) => {
   const safeExploreRoute = sanitizeMemoryExploreRoute(exploreLink);
   if (!safeExploreRoute) return false;
@@ -310,6 +448,27 @@ const openSourceUrl = (sourceUrl?: string) => {
   if (!safeSourceUrl) return false;
   window.open(safeSourceUrl, '_blank', 'noopener,noreferrer');
   return true;
+};
+
+const broadenSearchScope = () => {
+  const query = searchQuery.value.trim();
+  if (!query) return;
+
+  const nextScope = 'all';
+  if (searchContext.value.mode === 'entity') {
+    store.performEntityVectorSearch(
+      query,
+      searchContext.value.entityType,
+      nextScope,
+    );
+  } else {
+    store.performAskSearch(query, nextScope);
+  }
+
+  router.replace({
+    path: '/search',
+    query: { ...route.query, q: query, scope: nextScope },
+  });
 };
 
 const handleResultClick = (entity: any) => {
@@ -518,6 +677,139 @@ const handleResultClick = (entity: any) => {
   border-top: 1px solid rgba(148, 163, 184, 0.1);
   font-size: 0.875rem;
   color: #94a3b8;
+}
+
+.decision-chain-section {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid rgba(20, 184, 166, 0.28);
+  border-radius: 0.75rem;
+  background: rgba(15, 118, 110, 0.12);
+}
+
+.decision-chain-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.decision-chain-header h4 {
+  margin: 0 0 0.35rem;
+  color: #5eead4;
+  font-size: 1rem;
+}
+
+.decision-chain-header p,
+.decision-chain-card p,
+.decision-evidence-item p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.6;
+  font-size: 0.875rem;
+}
+
+.decision-confidence {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid rgba(94, 234, 212, 0.4);
+  border-radius: 999px;
+  color: #99f6e4;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.decision-statement {
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  border-left: 3px solid #5eead4;
+  border-radius: 0.35rem;
+  background: rgba(15, 23, 42, 0.42);
+  color: #e2e8f0;
+  line-height: 1.6;
+}
+
+.decision-chain-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.85rem;
+}
+
+.decision-chain-card {
+  padding: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.34);
+}
+
+.decision-chain-card h5,
+.decision-evidence-list h5 {
+  margin: 0 0 0.65rem;
+  color: #99f6e4;
+  font-size: 0.9rem;
+}
+
+.decision-chain-card ul {
+  margin: 0.65rem 0 0;
+  padding-left: 1.1rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+  font-size: 0.875rem;
+}
+
+.decision-conclusion {
+  color: #e2e8f0;
+}
+
+.decision-muted {
+  color: #94a3b8;
+}
+
+.decision-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+  color: #fbbf24;
+  font-size: 0.8rem;
+}
+
+.decision-evidence-list {
+  margin-top: 1rem;
+}
+
+.decision-evidence-item {
+  padding: 0.8rem;
+  margin-top: 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.32);
+}
+
+.decision-evidence-source,
+.decision-evidence-stance {
+  display: inline-flex;
+  margin: 0 0.4rem 0.5rem 0;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.8);
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.decision-evidence-stance {
+  color: #5eead4;
+}
+
+.decision-link-btn {
+  margin-top: 0.65rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  border-radius: 0.4rem;
+  background: rgba(20, 184, 166, 0.08);
+  color: #5eead4;
+  cursor: pointer;
 }
 
 /* 关联实体数据标题 */
@@ -797,6 +1089,23 @@ const handleResultClick = (entity: any) => {
 .search-tips {
   font-size: 0.875rem;
   color: #64748b;
+}
+
+.empty-action-btn {
+  margin-top: 1rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 0.5rem;
+  background: rgba(59, 130, 246, 0.16);
+  color: #bfdbfe;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.empty-action-btn:hover {
+  border-color: rgba(147, 197, 253, 0.55);
+  background: rgba(59, 130, 246, 0.25);
 }
 
 @keyframes fadeInUp {

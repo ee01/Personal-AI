@@ -15,7 +15,7 @@
    - 点击 "Import rule" 按钮
    - 选择之前从 Jira Automation 导出的 JSON 文件
    - 如果文件中有多条规则，先在预览弹窗中选择要导入的一条
-   - 确认目标项目、触发器、组件数量、Web request / external action / secret / JQL / URL / account / schedule 摘要和导入警告后再执行导入
+   - 确认目标项目、触发器、组件数量、Web request / external action / secret / JQL / URL / account / schedule 摘要、迁移复核清单和导入警告后再执行导入
    - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留
 
 3. **导入完成**
@@ -68,9 +68,9 @@
 
 3. **用户界面**
    - 在 iframe 内动态添加导入按钮
-   - 如果 Jira Automation 工具栏异步渲染，会继续等待 `Create rule` 按钮出现再插入
+   - 如果 Jira Automation 工具栏异步渲染，会继续等待 `Create rule` 按钮出现再插入；慢加载时会有限重试，避免按钮只尝试一次后消失
    - 提供文件选择、规则选择、导入预览和进度反馈
-   - 预览中突出显示 Web request、外部集成动作、secret 引用、JQL/filter、硬编码 URL、账号引用、源项目引用、scheduled trigger、链式触发和版本兼容风险，提醒用户启用前复核
+   - 预览中突出显示 Web request、外部集成动作、secret 引用、JQL/filter、硬编码 URL、账号引用、源项目引用、scheduled trigger、链式触发和版本兼容风险，并按高 / 中 / 低风险生成启用前复核清单
    - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要中
    - 显示成功/错误消息
 

@@ -26,6 +26,69 @@ const getMessageIds = (message: any): string[] => {
     .map((value) => String(value));
 };
 
+export type TopicConversationReadFilter = 'all' | 'unread' | 'read';
+
+const getConversationReadNodes = (conversation: any): any[] => {
+  if (!conversation) return [];
+
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+  return [conversation, ...contextMessages.filter(Boolean)];
+};
+
+export const getTopicConversationUnreadMessageCount = (
+  conversation: any,
+): number => {
+  const readNodes = getConversationReadNodes(conversation);
+  if (readNodes.length === 0) return 0;
+
+  return readNodes.filter((message) => message?.isRead !== true).length;
+};
+
+export const isTopicConversationUnread = (conversation: any): boolean => {
+  return getTopicConversationUnreadMessageCount(conversation) > 0;
+};
+
+export const getTopicConversationUnreadCount = (
+  conversations: any[],
+): number => {
+  return conversations.filter((conversation) =>
+    isTopicConversationUnread(conversation),
+  ).length;
+};
+
+export const filterTopicConversationsByReadState = (
+  conversations: any[],
+  readFilter: TopicConversationReadFilter,
+): any[] => {
+  if (readFilter === 'unread') {
+    return conversations.filter((conversation) =>
+      isTopicConversationUnread(conversation),
+    );
+  }
+  if (readFilter === 'read') {
+    return conversations.filter(
+      (conversation) => !isTopicConversationUnread(conversation),
+    );
+  }
+  return conversations;
+};
+
+export const sortTopicConversationsForTriage = (
+  conversations: any[],
+): any[] => {
+  return conversations
+    .map((conversation, index) => ({ conversation, index }))
+    .sort((a, b) => {
+      const unreadDelta =
+        Number(isTopicConversationUnread(b.conversation)) -
+        Number(isTopicConversationUnread(a.conversation));
+      return unreadDelta || a.index - b.index;
+    })
+    .map((item) => item.conversation);
+};
+
 const getNormalizedQuery = (query: string): string => {
   return String(query || '').trim().toLowerCase();
 };

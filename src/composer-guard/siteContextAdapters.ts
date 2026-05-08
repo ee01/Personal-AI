@@ -137,7 +137,10 @@ function getContextTextContent(root?: Element | null): string {
         'footer',
         'iframe',
         '.pai-context-bubble',
+        '.pai-context-card',
+        '.pai-context-toast',
         '.pai-composer-guard',
+        '#pai-context-bubble-styles',
       ].join(', '),
     )
     .forEach((node) => node.remove());

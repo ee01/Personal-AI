@@ -7,7 +7,7 @@
 
 import executorRuleTemplate from './jira-rule-template.json';
 import timelineSyncRuleTemplate from './jira-timeline-sync-rule-template.json';
-import { BotAutomationRule, SheetConfig } from './types';
+import { BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types';
 import { ConfigSyncService } from './ConfigSyncService';
 import { 
   JiraAutomationService, 
@@ -36,6 +36,68 @@ export interface JiraRuleUpdateResult {
 }
 
 type ManagedRuleKind = 'executor' | 'timelineSync';
+
+function escapeJsonStringValue(value?: string): string {
+  return JSON.stringify(value || '').slice(1, -1);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function hasRingCentralSenderCredentials(sender?: RingCentralSenderConfig): boolean {
+  return Boolean(sender?.enabled && sender.clientId && sender.clientSecret && sender.jwt);
+}
+
+function getRingCentralSenderReplacements(
+  sender: RingCentralSenderConfig | undefined,
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>
+): Record<string, string> {
+  if (!hasRingCentralSenderCredentials(sender)) {
+    return {
+      '{{RINGCENTRAL_SENDER_DIFY_API_BASE_URL}}': trimTrailingSlash(
+        envConfig.RINGCENTRAL_SENDER_DIFY_API_BASE_URL || 'https://dify.int.rclabenv.com/v1'
+      ),
+      '{{RINGCENTRAL_SENDER_DIFY_API_KEY}}': '',
+      '{{RINGCENTRAL_SENDER_CLIENT_ID}}': '',
+      '{{RINGCENTRAL_SENDER_CLIENT_SECRET}}': '',
+      '{{RINGCENTRAL_SENDER_JWT}}': '',
+    };
+  }
+
+  const difyBaseUrl = trimTrailingSlash(envConfig.RINGCENTRAL_SENDER_DIFY_API_BASE_URL || '');
+  const difyApiKey = envConfig.RINGCENTRAL_SENDER_DIFY_API_KEY || '';
+
+  if (!difyBaseUrl || !difyApiKey) {
+    throw new Error('RingCentral AsMe sender 已启用，但缺少 RINGCENTRAL_SENDER_DIFY_API_BASE_URL 或 RINGCENTRAL_SENDER_DIFY_API_KEY。');
+  }
+
+  return {
+    '{{RINGCENTRAL_SENDER_DIFY_API_BASE_URL}}': difyBaseUrl,
+    '{{RINGCENTRAL_SENDER_DIFY_API_KEY}}': difyApiKey,
+    '{{RINGCENTRAL_SENDER_CLIENT_ID}}': sender!.clientId || '',
+    '{{RINGCENTRAL_SENDER_CLIENT_SECRET}}': sender!.clientSecret || '',
+    '{{RINGCENTRAL_SENDER_JWT}}': sender!.jwt || '',
+  };
+}
+
+function replaceRingCentralSenderPlaceholders(
+  templateString: string,
+  sender: RingCentralSenderConfig | undefined,
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>
+): string {
+  let result = templateString;
+  const replacements = getRingCentralSenderReplacements(sender, envConfig);
+
+  for (const [placeholder, value] of Object.entries(replacements)) {
+    result = result.replace(
+      new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'),
+      () => escapeJsonStringValue(value)
+    );
+  }
+
+  return result;
+}
 
 export class JiraRuleUpdater {
   private config: SheetConfig | null = null;
@@ -312,8 +374,10 @@ export class JiraRuleUpdater {
       .replace(/{{PROJECT_KEY}}/g, ruleConfig.projectKey || '')
       .replace(/{{PROJECT_ID}}/g, String(existingRule.projects?.[0]?.projectId || ''))
       .replace(/{{USER_KEY}}/g, existingRule.authorAccountId || '');
-    
-    const rulePayload = JSON.parse(rulePayloadString);
+
+    const rulePayload = JSON.parse(
+      replaceRingCentralSenderPlaceholders(rulePayloadString, this.config?.ringCentralSender, envConfig)
+    );
     
     // 移除 _metadata 字段（这是模板内部使用的，不应发送到 Jira）
     delete rulePayload._metadata;

@@ -1,6 +1,6 @@
 const REDACTED_VALUE = '[REDACTED]';
 
-const SENSITIVE_KEY_PATTERN = /(authorization|api[_-]?key|password|secret|token)/i;
+const SENSITIVE_KEY_PATTERN = /(authorization|api[_-]?key|password|secret|token|jwt)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -22,6 +22,12 @@ function shouldRedactProperty(key: string, value: unknown, sensitiveContext: boo
   return SENSITIVE_KEY_PATTERN.test(key) && key !== 'name' && key !== 'headerName';
 }
 
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/("(?:clientSecret|jwt|password|token|api[_-]?key|secret)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")/gi, '$1[REDACTED]$3')
+    .replace(/(Bearer\s+)([^"\\\s]+)/gi, '$1[REDACTED]');
+}
+
 function redactValue(value: unknown, sensitiveContext = false): unknown {
   if (Array.isArray(value)) {
     return value.map(item => redactValue(item, sensitiveContext));
@@ -37,6 +43,11 @@ function redactValue(value: unknown, sensitiveContext = false): unknown {
   const result: Record<string, unknown> = {};
 
   Object.entries(value).forEach(([key, nestedValue]) => {
+    if (typeof nestedValue === 'string' && key === 'customBody') {
+      result[key] = redactSensitiveText(nestedValue);
+      return;
+    }
+
     if (shouldRedactProperty(key, nestedValue, nextSensitiveContext)) {
       result[key] = REDACTED_VALUE;
       return;

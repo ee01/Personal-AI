@@ -79,7 +79,72 @@
 
 这个改造让安装 UX 不再依赖任何「自动写文件 / 自动控制浏览器」能力，所有平台都至少有可行路径。
 
+### 命名与状态机：「候选」→「萃取建议」，状态从 3 态收敛到 2 态
+
+「候选（candidate）」这个词在用户视角下含义模糊：它既不是「我已经拥有的技能」，也不是「我打算丢掉的东西」，听起来像是在投票里待选的选项。重新命名为「**萃取建议（Skill Suggestion）**」：
+
+- **「萃取」** 呼应"个人技能炼金台"的主题，暗示"从你真实做过的事情里提炼出来"。它的来源就是 [`docs/progressing/operation-memory-flight-recorder-plan.md`](./operation-memory-flight-recorder-plan.md) 里的 operation episode。
+- **「建议」** 明确告诉用户：这是 Flight Recorder 给你的提案，不是已经被你认领的资产；要不要纳入完全由你定。
+
+同时把原本 `candidate / draft / active` 三态收敛为两态：
+
+| 状态 | 含义 | 在主列表是否可见 |
+|---|---|---|
+| `suggestion` | Flight Recorder 萃取出的建议，等用户决策 | 否（在 inbox bar 里集中处理） |
+| `active` | 用户认领的真源技能 | 是 |
+| `dismissed` | 用户主动丢弃的建议 | 否（默认隐藏，可在过滤器里恢复） |
+
+之所以去掉 `draft`：在简化版的"安装指引 + URL"模型下，技能从识别到可用之间的中间态意义不大——一旦用户在 inbox 里点「使用」，就直接 promote 为 `active` 并立即可被各平台同步。如果用户在使用前还要改 SKILL.md，那是版本演进问题（`v0.1 → v0.2`），不应该再多一个状态来表达"还没准备好"。
+
+### 主动推送：识别到新建议时，先在通知里让用户决策
+
+之前默认用户会主动来 Skill Foundry 看建议。这与现实不符：用户可能几周才打开一次。新方案让建议**主动找人**：
+
+1. **触发**：Operation Memory Flight Recorder 在每次完成一个 episode 后，调用萃取 pipeline；只要置信度 ≥ 阈值，就生成一条 `Skill Suggestion`。
+2. **推送渠道**：直接走 Personal AI 现有的 `NotificationService`（消息通知 / 系统弹窗 / 桌面通知），文案模板：
+
+   > 📥 **Personal AI** · 萃取出一条新技能建议
+   > **Jira Headcount Trend Report** — 来自和 Sophia 的 Jira 协作 episode（近 30 天 5 次相似）
+   > [使用] [丢弃] [稍后审]
+
+3. **三选一动作**：
+   - **使用**：直接 promote 为 `active`，进入主列表；随后所有开启了平台同步的 agent 平台会跟随推送（可在通知里附「同步给 Codex / OpenClaw / Claude Code」状态行）。
+   - **丢弃**：标 `dismissed`，30 天内不再为同一类操作产出建议（避免重复打扰）。
+   - **稍后审**：保留在 Inbox 里，等用户回到 Skill Foundry 主动审。
+
+4. **节流与降噪**：每天最多推送 N 条；同一类 episode 在用户已 dismissed 后进入冷却期；用户可在设置里调"每天最多推送几条"或"完全静默，让我自己来看"。
+
+5. **降级**：如果通知发送失败 / 用户禁用通知，建议依然落到 Inbox bar，下一次用户回到 Skill Foundry 时会以红点 + 数字徽章呈现。
+
+### Inbox Bar：未决策建议的承载点
+
+界面上对应的承载点是 Skill Foundry 顶部的一条 **Inbox Bar**：
+
+- 收起态：`📥 萃取建议 · N 条待决策`，未读时带红点；点击展开。
+- 展开态：横向滚动的小卡片列，每张小卡显示：
+  - 候选标题 + 萃取自的 episode（带 🛫 链接）
+  - 触发统计（"近 30 天 5 次相似"）
+  - 三动作：[使用] / [丢弃] / [展开]，与通知里的三选一保持一致
+- 点 [展开] 才打开右侧详情区做精细审稿；多数情况用户在小卡上一键决策即可。
+- 全部决策完后，Inbox Bar 自动收起。
+
+这样建议是 **ephemeral** 的（用完即清），不会和"在用技能"共用主列表的视觉空间，让"我有什么技能"和"系统建议我什么"两件事一眼可分辨。
+
+### 主列表只展示「在用」
+
+主列表（左栏候选列表）的默认过滤器改为 **`在用`**——用户来这里第一眼应该看到自己已经认领的资产，而不是 Flight Recorder 给的提案。Segmented 过滤器：
+
+- `在用`（默认）— `status === active`
+- `全部` — `active + dismissed`，方便回顾
+- `已丢弃` — 仅 `dismissed`，便于"我之前丢错了，捡回来"
+
+`suggestion` **不出现**在主列表的任何过滤器里，因为它有专属的 Inbox Bar 入口；这避免了用户在两个地方都看到同一条建议、不知道该在哪里操作。
+
+> **术语对齐**：本节之后的章节里依然会出现 `Skill Candidate` / `skill_candidates` / `Candidate Scoring` 等旧术语——这些是 2026-04 起草本时遗留的英文命名。**它们在新方案下统一指代「萃取建议 / Skill Suggestion」**，状态字段从 `candidate / draft / active` 简化为 `suggestion / active / dismissed`。后续重构 schema 时直接把表名 / API 路径里的 `candidates` 替换为 `suggestions`，无需保留向前兼容（这部分还没上线）。
+
 ### 自动同步分三类，统一在「⚙ 自动同步设置」里管理
+
+> **作用域：自动同步是 per-platform，不是 per-skill。** 一旦对某个平台开启自动同步，Personal AI 会把**所有 active 技能**推送到该平台；之后该平台新增 / 升级 / 撤销的技能也会自动跟随。我们不在单条技能上提供「只同步给 Codex 不同步给 Claude」这种细粒度开关，因为：① per-skill 矩阵会让用户每写一条技能都要做一次 N 选题；② Personal AI 的真源版本是单一的，没必要给每条技能维护一份独立的多平台分发策略。需要例外时，通过 skill 上的 `riskPolicy.exclude_platforms`（极少数）或 `scope = ai|work` + 平台默认 scope 过滤实现。
 
 | 同步路径 | 适用平台 | 能力 | 默认开关 |
 |---|---|---|---|
@@ -88,7 +153,45 @@
 | `fs_via_desktop_app` | Codex / Claude Code / Cursor / 任何本地 SKILL.md 目录 | Desktop App fs watcher，监听 mtime + sha256 | 默认关，未装 Desktop App 时 disabled |
 | `manual_only` | ChatGPT GPTs / Claude.ai Skills 等 Web 平台 | 不写文件，只能复制安装指引 | 不可开自动同步，开关常驻 disabled |
 
-设置入口是一个 dialog，不是常驻面板。这避免一开始就给用户暴露七八个开关。开 dialog 的入口有两个：页面顶部「⚙ 自动同步设置」按钮，以及「绑定」tab 里的「平台级自动同步」二级入口。
+设置入口是一个 dialog，不是常驻面板。这避免一开始就给用户暴露七八个开关。开 dialog 的入口有两个：页面顶部「⚙ 自动同步设置」按钮，以及「绑定」tab 里的「平台级自动同步」二级入口（按钮文案带"平台级"前缀，提醒用户这不是当前 skill 的设置）。
+
+### mtime / hash 冲突判定：哪个版本算最新
+
+per-platform 同步开启后，每条技能在每个平台上有 3 个候选版本：**Personal AI 真源（authoritative）**、**远端实际安装版本（platform）**、**对端可能存在的本地手改（platform-edit）**。同步 daemon 周期性比较：
+
+```
+sync tick (per skill × per active platform):
+  source = personal_ai.skills[slug]   # { version, updated_at, sha256 }
+  remote = platform.read(slug)        # { version, mtime, sha256 } 或 None
+  if remote == None:
+    install(source)                    # 首次推送
+  elif remote.sha256 == source.sha256:
+    noop                               # 已对齐
+  elif remote.version == source.version and remote.sha256 != source.sha256:
+    # 同 version 但 hash 不一致 → 平台被本地手改
+    if remote.mtime > source.updated_at:
+      flag_external_change(slug, platform, remote)   # 进候选审稿
+    else:
+      install(source)                  # 远端是旧脏文件，覆盖
+  elif remote.version < source.version:
+    # 远端版本旧，正常推送，但若 remote.mtime > source.updated_at 仍要审稿
+    if remote.mtime > source.updated_at:
+      flag_conflict(slug, platform, remote)
+    else:
+      install(source)
+  elif remote.version > source.version:
+    # 几乎不会发生（远端不应私自升 version），出现就 100% 进候选
+    flag_conflict(slug, platform, remote)
+```
+
+判定的两个核心信号：
+
+1. **`sha256` 是「真不真」的判官**：只要远端 sha256 和真源不一致，就一定要细看；相同则永远 noop。
+2. **`mtime > source.updated_at` 是「会不会丢用户改动」的判官**：哪怕版本号匹配，也要把"远端 mtime 比真源 updated_at 新"当成"用户在远端手改了"，进候选审稿；不能直接覆盖。
+
+这意味着 `mtime` 不是用来选「谁是最新」，而是用来选「需不需要先问用户」。最终入库始终是 Personal AI（真源），不会因为本地 mtime 新而把真源回写——回写只在用户在候选 inbox 里 approve 之后发生。
+
+> Web 平台（`manual_only`）没有可读的 mtime / sha256，所以不参与这一判定，状态始终标 `unknown`，依赖用户主动确认。
 
 ### 双向同步与冲突：默认只做单向推送，mtime 冲突是开放问题
 
@@ -140,7 +243,7 @@
 
 前两次自动化已经产出：
 
-- `cross-ai-memory-capsule-plan.md`：跨 AI 记忆胶囊交接。
+- `docs/features/context_assist.md`：AI Prompt Injection / Context Handoff 与会前准备。
 - `decision-time-machine-plan.md`：个人决策记忆回放。
 
 本次刻意避开这两个方向。Skill Foundry 的核心对象不是“上下文包”或“决策 episode”，而是**可反复执行的 procedural memory / workflow skill**。
@@ -1183,16 +1286,16 @@ UI 上应直接展示：
 
 ## 与现有两个 plan 的关系
 
-### 与 Cross-AI Memory Capsule
+### 与 AI Prompt Injection / Context Handoff
 
-Capsule 解决“这次任务给目标 AI 什么上下文”。
+AI Prompt Injection 解决“这次任务给目标 AI 什么上下文”。
 
 Skill Foundry 解决“这类任务以后应该怎么做”。
 
 二者结合：
 
-- Capsule 可以包含 `recommendedSkills`。
-- Skill 运行时可以调用 Capsule 生成场景上下文。
+- AI context pack 可以包含 `recommendedSkills`。
+- Skill 运行时可以调用 AI context pack 生成场景上下文。
 
 ### 与 Decision Time Machine
 

@@ -1,0 +1,1511 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relationship Memory Radar Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --panel-soft: #f1f5f4;
+      --ink: #17201f;
+      --muted: #66706d;
+      --line: #d9dfdd;
+      --teal: #08776c;
+      --teal-soft: #dff2ee;
+      --blue: #315ea8;
+      --blue-soft: #e5edfb;
+      --amber: #9b6400;
+      --amber-soft: #fff2d2;
+      --red: #b3261e;
+      --red-soft: #fde7e5;
+      --green: #247347;
+      --green-soft: #e4f4ea;
+      --shadow: 0 12px 34px rgba(26, 37, 35, 0.09);
+      --radius: 8px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      letter-spacing: 0;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 22px;
+      background: #ffffff;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 260px;
+    }
+
+    .mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: var(--teal);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.2;
+      font-weight: 720;
+    }
+
+    .brand small {
+      color: var(--muted);
+      font-size: 12px;
+      display: block;
+      margin-top: 2px;
+    }
+
+    .search {
+      flex: 1;
+      max-width: 680px;
+      position: relative;
+    }
+
+    .search input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 36px 0 12px;
+      background: #f8faf9;
+      outline: none;
+    }
+
+    .search input:focus {
+      border-color: var(--teal);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(8, 119, 108, 0.12);
+    }
+
+    .kbd {
+      position: absolute;
+      right: 8px;
+      top: 7px;
+      min-width: 22px;
+      height: 20px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      background: #fff;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-btn, .text-btn {
+      height: 32px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    .icon-btn {
+      width: 32px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+    }
+
+    .text-btn {
+      padding: 0 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .icon-btn:hover, .text-btn:hover, .person:hover {
+      border-color: #aab5b1;
+      background: #f8faf9;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 300px minmax(420px, 1fr) 360px;
+      gap: 14px;
+      padding: 14px;
+      min-height: 0;
+    }
+
+    .column {
+      min-height: calc(100vh - 86px);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .column-head {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .column-head h2 {
+      margin: 0;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .badge {
+      min-width: 22px;
+      height: 22px;
+      border-radius: 99px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 7px;
+      font-size: 12px;
+      font-weight: 700;
+      background: var(--teal-soft);
+      color: var(--teal);
+    }
+
+    .scroll {
+      overflow: auto;
+      min-height: 0;
+      padding: 10px;
+    }
+
+    .segment {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8faf9;
+      margin-bottom: 10px;
+    }
+
+    .segment button {
+      height: 28px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .segment button.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(23, 32, 31, 0.08);
+      font-weight: 650;
+    }
+
+    .person {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .person.active {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(8, 119, 108, 0.12);
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 800;
+      background: var(--blue);
+      flex: none;
+    }
+
+    .person:nth-child(3n) .avatar { background: var(--teal); }
+    .person:nth-child(4n) .avatar { background: #6c4aa3; }
+
+    .person h3 {
+      margin: 0 0 4px;
+      font-size: 14px;
+      line-height: 1.2;
+    }
+
+    .person p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      margin-top: 4px;
+      background: var(--green);
+    }
+
+    .status-dot.warn { background: var(--amber); }
+    .status-dot.hot { background: var(--red); }
+
+    .main {
+      padding: 0;
+      min-width: 0;
+    }
+
+    .brief-head {
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .brief-head-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brief-title {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .brief-title .avatar {
+      width: 44px;
+      height: 44px;
+      font-size: 16px;
+    }
+
+    .brief-title h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .brief-title p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tabs button {
+      border: 0;
+      background: transparent;
+      height: 32px;
+      padding: 0 10px;
+      cursor: pointer;
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+    }
+
+    .tabs button.active {
+      color: var(--teal);
+      border-bottom-color: var(--teal);
+      font-weight: 700;
+    }
+
+    .content {
+      overflow: auto;
+      padding: 14px;
+      min-height: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .section.full {
+      grid-column: 1 / -1;
+    }
+
+    .section h3 {
+      margin: 0;
+      padding: 11px 12px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfc;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .section-body {
+      padding: 12px;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fbfcfc;
+      min-height: 66px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .coverage {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+
+    .coverage strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .coverage p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .mini-stat {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 7px;
+    }
+
+    .mini-stat b {
+      display: block;
+      font-size: 13px;
+    }
+
+    .mini-stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+      margin-top: 2px;
+    }
+
+    .list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .item-title {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 5px;
+    }
+
+    .item-title strong {
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .review-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 9px;
+    }
+
+    .tiny-btn {
+      height: 26px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 0 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .tiny-btn:hover {
+      border-color: #9aa7a3;
+      background: #f7faf9;
+    }
+
+    .tiny-btn.primary {
+      border-color: var(--teal);
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+
+    .pill {
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 99px;
+      padding: 0 7px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.teal { background: var(--teal-soft); color: var(--teal); }
+    .pill.blue { background: var(--blue-soft); color: var(--blue); }
+    .pill.amber { background: var(--amber-soft); color: var(--amber); }
+    .pill.red { background: var(--red-soft); color: var(--red); }
+    .pill.green { background: var(--green-soft); color: var(--green); }
+    .pill.gray { background: #edf0ef; color: #59625f; }
+
+    .draft {
+      background: #0f1b1a;
+      color: #eaf5f2;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: 210px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      position: relative;
+      padding-left: 16px;
+    }
+
+    .timeline:before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 4px;
+      bottom: 4px;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .event {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .event:before {
+      content: "";
+      position: absolute;
+      left: -16px;
+      top: 14px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--teal);
+      border: 2px solid #fff;
+    }
+
+    .event time {
+      color: var(--muted);
+      font-size: 11px;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .event strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .event p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .right-card {
+      border-bottom: 1px solid var(--line);
+      padding: 12px;
+    }
+
+    .right-card h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+
+    .trust-meter {
+      height: 8px;
+      background: #edf0ef;
+      border-radius: 99px;
+      overflow: hidden;
+      margin: 9px 0 8px;
+    }
+
+    .trust-meter span {
+      display: block;
+      height: 100%;
+      width: var(--score);
+      background: var(--teal);
+    }
+
+    .evidence-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .evidence {
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .evidence .meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .evidence p {
+      margin: 0;
+      font-size: 12px;
+      color: #34403d;
+      line-height: 1.4;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%) translateY(20px);
+      opacity: 0;
+      pointer-events: none;
+      background: #111d1b;
+      color: #fff;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 20;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .shell {
+        grid-template-columns: 280px minmax(420px, 1fr);
+      }
+      .right {
+        display: none;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .topbar {
+        height: auto;
+        min-height: 58px;
+        flex-wrap: wrap;
+        padding: 10px 12px;
+      }
+      .brand { min-width: 100%; }
+      .search { order: 3; max-width: none; min-width: 100%; }
+      .actions { margin-left: auto; }
+      .shell {
+        grid-template-columns: 1fr;
+        padding: 10px;
+      }
+      .column {
+        min-height: auto;
+      }
+      .left {
+        max-height: 420px;
+      }
+      .grid, .metric-row {
+        grid-template-columns: 1fr;
+      }
+      .brief-head-row {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">P</div>
+        <div>
+          <h1>Relationship Memory Radar</h1>
+          <small>Personal AI · 升级 memory-exploring 的人物 tab</small>
+        </div>
+      </div>
+      <div class="search">
+        <input id="searchInput" type="search" placeholder="搜索人、项目、open loop 或上下文包">
+        <span class="kbd">⌘K</span>
+      </div>
+      <div class="actions">
+        <button class="icon-btn" title="刷新上下文" id="refreshBtn">↻</button>
+        <button class="text-btn" id="packageTopBtn">复制 AI 上下文包</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <aside class="column left">
+        <div class="column-head">
+          <h2>人物 · 关系雷达</h2>
+          <span class="badge" id="peopleCount">5</span>
+        </div>
+        <div class="scroll">
+          <div class="coverage">
+            <strong>只为高频人物生成完整雷达</strong>
+            <p>所有人都会被索引；只有 score ≥ 60、近 30 天至少 5 个关系事件、覆盖 2 个以上活跃日，才进入 Radar candidate。</p>
+            <div class="mini-grid">
+              <div class="mini-stat"><b>50</b><span>后台 active 上限</span></div>
+              <div class="mini-stat"><b>20</b><span>页面默认展示</span></div>
+              <div class="mini-stat"><b>10</b><span>冷启动 topK</span></div>
+            </div>
+          </div>
+          <div class="segment" role="tablist" aria-label="People filters">
+            <button class="active" data-filter="all">全部</button>
+            <button data-filter="open">未闭环</button>
+            <button data-filter="review">待确认</button>
+          </div>
+          <div id="peopleList"></div>
+        </div>
+      </aside>
+
+      <section class="column main">
+        <div class="brief-head">
+          <div class="brief-head-row">
+            <div class="brief-title">
+              <div class="avatar" id="mainAvatar">SL</div>
+              <div>
+                <h2 id="personName">Sophia (Jinmei) Lin</h2>
+                <p id="personSubtitle">RingCentral · 最近 7 天 6 条高相关记忆</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="text-btn" id="markDoneBtn">标记 open loop 已处理</button>
+              <button class="text-btn" id="packageBtn">复制给 AI</button>
+            </div>
+          </div>
+          <div class="metric-row">
+            <div class="metric">
+              <strong id="metricScore">88</strong>
+              <span>Radar score</span>
+            </div>
+            <div class="metric">
+              <strong id="metricLoops">3</strong>
+              <span>未闭环事项</span>
+            </div>
+            <div class="metric">
+              <strong id="metricEvidence">9</strong>
+              <span>可追溯证据</span>
+            </div>
+            <div class="metric">
+              <strong id="metricFresh">7d</strong>
+              <span>新鲜度窗口</span>
+            </div>
+          </div>
+          <nav class="tabs">
+            <button class="active" data-tab="brief">Brief</button>
+            <button data-tab="timeline">Timeline</button>
+            <button data-tab="loops">Open Loops</button>
+            <button data-tab="review">Review</button>
+            <button data-tab="package">AI Package</button>
+          </nav>
+        </div>
+        <div class="content" id="mainContent"></div>
+      </section>
+
+      <aside class="column right">
+        <div class="column-head">
+          <h2>Evidence & Trust</h2>
+          <span class="badge" id="trustBadge">High</span>
+        </div>
+        <div class="scroll" id="rightRail"></div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">已复制</div>
+
+  <script>
+    const people = [
+      {
+        id: 'sophia',
+        initials: 'SL',
+        name: 'Sophia (Jinmei) Lin',
+        subtitle: 'Jira 数据 · Rooms/Coa · Nova',
+        status: 'hot',
+        score: 88,
+        loops: 3,
+        evidence: 9,
+        freshness: '7d',
+        trust: 'High',
+        radarState: 'radar_active',
+        events30: 18,
+        activeDays: 6,
+        radarReason: '近 30 天高频协作 + Jira/Rooms open loops + 多个项目重叠',
+        summary: 'Sophia 近期与 Esone 高频协作，重点集中在 Jira 数据统计、Rooms 与 Coa 协作澄清、Nova E2E 配置和 handover。',
+        topics: [
+          ['Rooms/Coa 协作', '推进 Rooms 前先确认 Coa collaboration 的 owner 与边界。', 'amber'],
+          ['Jira 数据可视化', '正在一起处理开发人数统计、去重和趋势图。', 'teal'],
+          ['Nova E2E 配置', '她提醒 E2E 配置不应给 Nova 团队造成过多负担。', 'blue']
+        ],
+        moves: [
+          ['先问 owner', '“Coa 这块现在谁 owner？Rooms 这边需要我先补什么上下文？”'],
+          ['同步 Jira 口径', '“开发人数统计我会按上次去重口径整理，图表给你先 review。”'],
+          ['避免假设', '不要直接写 Sophia 已 owner Rooms；证据只显示她建议先澄清协作。']
+        ],
+        loopsList: [
+          ['确认 Rooms 与 Coa 的协作边界', '来自 2026-04-30 私聊，未见后续闭环。', 'high'],
+          ['5 月前 settle 的部分是什么', '只有一句目标信号，缺少对象和 owner。', 'medium'],
+          ['Jira 开发人数统计口径', '需要继续沿用去重 assignee + 季度趋势口径。', 'low']
+        ],
+        events: [
+          ['2026-04-30 07:23', '目标时间信号', 'Sophia 提到希望 5 月前 settle 某部分，但对象需要补齐。'],
+          ['2026-04-30 07:17', 'Jira 数据协作', '与 Esone 协作统计开发人数并做数据可视化。'],
+          ['2026-04-30 06:46', 'Rooms/Coa 澄清', '建议先 clarifying collaboration with Coa before proceeding with Rooms。'],
+          ['2026-04-30 06:30', 'Nova E2E 配置', '提醒 E2E configuration 不应太麻烦。']
+        ],
+        evidenceList: [
+          ['RingCentral 私聊', '2026-04-30 06:46', '建议推进 Rooms 前先确认 Coa collaboration。'],
+          ['敏捷教练-RC China', '2026-04-30 07:17', '协作处理 Jira 数据、开发人数统计和可视化。'],
+          ['RingCentral 私聊', '2026-04-30 06:30', 'E2E 配置不应给 Nova 团队增加过多麻烦。']
+        ],
+        doNotAssume: ['不要假设 Sophia 是 Rooms owner。', '不要把 “5 月前 settle” 当成已明确任务。'],
+        reviewItems: [
+          {
+            id: 'sophia-owner-style',
+            type: 'collaboration_note',
+            title: '是否确认这条协作偏好？',
+            body: 'Sophia 可能偏好先澄清 owner / collaboration boundary，再推进 Rooms 类事项。',
+            source: '基于 2026-04-30 Rooms/Coa 私聊，置信度 0.68',
+            status: 'pending'
+          },
+          {
+            id: 'sophia-merge',
+            type: 'identity_merge',
+            title: '身份合并建议',
+            body: 'Sophia Lin、Sophia (Jinmei) Lin、sophia.lin 可能是同一人。',
+            source: 'sender + 1:1 group title + directory alias',
+            status: 'pending'
+          }
+        ]
+      },
+      {
+        id: 'fred',
+        initials: 'FY',
+        name: 'Fred Yang',
+        subtitle: 'AI tooling cost · Cursor policy',
+        status: 'warn',
+        score: 76,
+        loops: 2,
+        evidence: 4,
+        freshness: '9d',
+        trust: 'Med',
+        radarState: 'radar_candidate',
+        events30: 9,
+        activeDays: 3,
+        radarReason: 'AI 工具政策相关消息密集，且包含团队成本影响',
+        summary: 'Fred 近期主要关联 AI 工具成本策略、Cursor license reclaim 和 usage-based tools 迁移，适合在团队工具沟通前恢复政策口径。',
+        topics: [
+          ['Cursor license policy', '低活跃用户可能迁移到 usage-based AI tools。', 'amber'],
+          ['例外处理', '例外可能需要 Mercury Li 参与确认。', 'blue'],
+          ['团队提醒', 'Fred 要求团队关注先前消息。', 'gray']
+        ],
+        moves: [
+          ['确认例外口径', '“Cursor reclaim 的例外还是统一找 Mercury 确认吗？”'],
+          ['避免误读政策', '不要把 usage-based 迁移写成所有用户强制执行。'],
+          ['同步团队影响', '可以问是否需要给 Scrum Masters 一版简短 FAQ。']
+        ],
+        loopsList: [
+          ['Cursor 例外处理口径', '消息提到 exceptions possible，但未见正式 FAQ。', 'medium'],
+          ['AI 工具成本沟通', '团队需要提前知道 license reclaim 策略。', 'medium']
+        ],
+        events: [
+          ['2026-04-30 15:07', '成本策略', 'Fred 提到低活跃 Cursor 用户切换到 usage-based AI tools。'],
+          ['2026-04-29 23:42', '团队提醒', '请团队关注之前一条重要消息。'],
+          ['2026-04-29 14:43', 'License reclaim', '宣布 Cursor licenses were reclaimed，并建议尝试 Codex。']
+        ],
+        evidenceList: [
+          ['AI Tools Workgroup', '2026-04-30 15:07', '低活跃 Cursor 用户转 usage-based tools。'],
+          ['AI Tools Workgroup', '2026-04-29 14:43', 'Cursor licenses reclaimed; try Codex。']
+        ],
+        doNotAssume: ['不要说 Fred 已禁止 Cursor。', '不要给出未确认的费用数字。'],
+        reviewItems: [
+          {
+            id: 'fred-policy',
+            type: 'open_loop',
+            title: '是否保持为未闭环？',
+            body: 'Cursor reclaim 例外口径可能仍需 Mercury Li 确认。',
+            source: 'AI Tools Workgroup 两条消息，置信度 0.61',
+            status: 'pending'
+          }
+        ]
+      },
+      {
+        id: 'gary',
+        initials: 'GC',
+        name: 'Gary Chevsky',
+        subtitle: 'Claude Code vs Codex vote',
+        status: 'hot',
+        score: 72,
+        loops: 1,
+        evidence: 2,
+        freshness: '8d',
+        trust: 'Med',
+        radarState: 'radar_candidate',
+        events30: 5,
+        activeDays: 2,
+        radarReason: '低频但高影响：OpenAI deal 前的 Claude Code vs Codex 投票',
+        summary: 'Gary 的近期关键上下文是 OpenAI 大单前，需要团队快速在 Claude Code 与 Codex 之间表达偏好。',
+        topics: [
+          ['工具投票', '签约前需要快速收集团队 Claude Code vs Codex 投票。', 'red'],
+          ['OpenAI deal', '投票可能关联大型 OpenAI commercial decision。', 'blue']
+        ],
+        moves: [
+          ['汇总团队偏好', '“我可以收 Scrum Master 侧的投票和理由，今天给你一版摘要。”'],
+          ['问截止时间', '“签约前反馈的 hard deadline 是什么时候？”'],
+          ['分清事实', '目前只知道需要 vote，不知道最终采购结论。']
+        ],
+        loopsList: [
+          ['Claude Code vs Codex 投票反馈', '需要确认投票截止时间和汇总方式。', 'high']
+        ],
+        events: [
+          ['2026-04-30 16:29', '快速投票', 'Gary 请求团队在签 OpenAI 大单前快速 vote。']
+        ],
+        evidenceList: [
+          ['AI Tools Workgroup', '2026-04-30 16:29', 'Quick team vote on Claude Code vs Codex before large OpenAI deal。']
+        ],
+        doNotAssume: ['不要说 OpenAI deal 已签。', '不要替团队下结论。'],
+        reviewItems: [
+          {
+            id: 'gary-deadline',
+            type: 'open_loop',
+            title: '是否需要主动提醒？',
+            body: 'Claude Code vs Codex 投票反馈可能有签约前截止时间。',
+            source: '单条高影响消息，置信度 0.57',
+            status: 'pending'
+          }
+        ]
+      },
+      {
+        id: 'john',
+        initials: 'JL',
+        name: 'John Lin',
+        subtitle: 'Codex · RingCentral API',
+        status: 'open',
+        score: 64,
+        loops: 1,
+        evidence: 3,
+        freshness: '8d',
+        trust: 'Med',
+        radarState: 'indexed',
+        events30: 4,
+        activeDays: 2,
+        radarReason: '暂未达 active 阈值，但因 Codex + RC API 主题进入候选展示',
+        summary: 'John 近期关联 Codex 与 RingCentral API 应用构建，适合在 AI coding tools 推广或 API demo 时引用。',
+        topics: [
+          ['Codex app building', 'John 提到 Codex 可以基于 RingCentral API 构建应用。', 'teal'],
+          ['AI coding adoption', '与团队日常使用 Codex 经验分享相关。', 'blue']
+        ],
+        moves: [
+          ['邀请案例', '“你上次提到 Codex + RC API 的例子，能不能补一个 demo idea？”'],
+          ['连接平台', '可以把相关需求转成 Codex context package。']
+        ],
+        loopsList: [
+          ['Codex + RingCentral API demo idea', '可跟进一个轻量应用案例。', 'low']
+        ],
+        events: [
+          ['2026-04-30 09:58', 'Codex API 应用', 'John 提到 Codex can help build apps using RingCentral API。'],
+          ['2026-04-30 10:11', 'AI 兴趣', 'Ben 与 John 讨论 Codex，并决定暂不改 RingClaw。']
+        ],
+        evidenceList: [
+          ['RingCentral', '2026-04-30 09:58', 'Codex can help build apps using RingCentral API。'],
+          ['RingCentral', '2026-04-30 10:11', 'Ben 与 John 讨论 Codex，暂不改 RingClaw。']
+        ],
+        doNotAssume: ['不要假设 John 已承诺做 demo。'],
+        reviewItems: []
+      },
+      {
+        id: 'zora',
+        initials: 'ZZ',
+        name: 'Zora (Haimei) Zheng',
+        subtitle: 'Testing confirmation',
+        status: 'open',
+        score: 58,
+        loops: 0,
+        evidence: 2,
+        freshness: '8d',
+        trust: 'High',
+        radarState: 'indexed',
+        events30: 2,
+        activeDays: 1,
+        radarReason: '低频人物，只保留基础检索和证据，不生成完整雷达',
+        summary: 'Zora 最近给出测试成功反馈，可作为某项变更已经通过验证的证据来源。',
+        topics: [
+          ['测试反馈', 'Zora 告知 Esone 改动测试成功。', 'green'],
+          ['交付确认', '适合作为后续 recap 的 evidence ref。', 'blue']
+        ],
+        moves: [
+          ['感谢并归档', '“收到，感谢验证。我把这个结果记到交付证据里。”'],
+          ['无需追问', '目前没有明显 open loop。']
+        ],
+        loopsList: [],
+        events: [
+          ['2026-04-30 05:38', '测试成功', 'Zora 告知 Esone changes were successful after testing。']
+        ],
+        evidenceList: [
+          ['RingCentral', '2026-04-30 05:38', '测试后确认改动成功。']
+        ],
+        doNotAssume: ['不要把一次测试成功扩大成所有场景通过。'],
+        reviewItems: []
+      }
+    ];
+
+    let selected = people[0];
+    let activeTab = 'brief';
+
+    const peopleList = document.getElementById('peopleList');
+    const mainContent = document.getElementById('mainContent');
+    const rightRail = document.getElementById('rightRail');
+    const toast = document.getElementById('toast');
+
+    function toneForPriority(priority) {
+      if (priority === 'high') return 'red';
+      if (priority === 'medium') return 'amber';
+      return 'green';
+    }
+
+    function renderPeople(filter = 'all') {
+      const rows = people.filter(person => {
+        if (filter === 'open') return person.loops > 0;
+        if (filter === 'review') return person.reviewItems?.some(item => item.status === 'pending');
+        return true;
+      });
+      document.getElementById('peopleCount').textContent = rows.length;
+      peopleList.innerHTML = rows.map(person => `
+        <button class="person ${person.id === selected.id ? 'active' : ''}" data-id="${person.id}">
+          <span class="avatar">${person.initials}</span>
+          <span>
+            <h3>${person.name}</h3>
+            <p>${person.subtitle}</p>
+            <p>${person.radarState} · score ${person.score} · ${person.events30} events / ${person.activeDays} days</p>
+          </span>
+          <span class="status-dot ${person.status}"></span>
+        </button>
+      `).join('');
+    }
+
+    function renderHeader() {
+      document.getElementById('mainAvatar').textContent = selected.initials;
+      document.getElementById('personName').textContent = selected.name;
+      document.getElementById('personSubtitle').textContent = `${selected.radarState} · ${selected.radarReason}`;
+      document.getElementById('metricScore').textContent = selected.score;
+      document.getElementById('metricLoops').textContent = selected.loops;
+      document.getElementById('metricEvidence').textContent = selected.evidence;
+      document.getElementById('metricFresh').textContent = selected.freshness;
+      document.getElementById('trustBadge').textContent = selected.trust;
+    }
+
+    function renderBrief() {
+      return `
+        <div class="grid">
+          <section class="section full">
+            <h3>沟通前 brief <span class="pill teal">30 秒扫读</span></h3>
+            <div class="section-body">
+              <p style="margin:0;color:#34403d;line-height:1.55">${selected.summary}</p>
+            </div>
+          </section>
+          <section class="section full">
+            <h3>为什么进入关系雷达 <span class="pill blue">${selected.radarState}</span></h3>
+            <div class="section-body">
+              <div class="mini-grid">
+                <div class="mini-stat"><b>${selected.score}</b><span>Radar score</span></div>
+                <div class="mini-stat"><b>${selected.events30}</b><span>30 天事件</span></div>
+                <div class="mini-stat"><b>${selected.activeDays}</b><span>活跃天数</span></div>
+              </div>
+              <p style="margin:10px 0 0;color:var(--muted);font-size:12px;line-height:1.45">${selected.radarReason}</p>
+            </div>
+          </section>
+          <section class="section">
+            <h3>当前主题 <span class="pill blue">${selected.topics.length}</span></h3>
+            <div class="section-body list">
+              ${selected.topics.map(([title, body, tone]) => `
+                <div class="item">
+                  <div class="item-title"><strong>${title}</strong><span class="pill ${tone}">${tone}</span></div>
+                  <p>${body}</p>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+          <section class="section">
+            <h3>建议动作 <span class="pill green">人工确认</span></h3>
+            <div class="section-body list">
+              ${selected.moves.map(([title, body]) => `
+                <div class="item">
+                  <div class="item-title"><strong>${title}</strong><span class="pill gray">suggested</span></div>
+                  <p>${body}</p>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+          <section class="section full">
+            <h3>不可假设 <span class="pill amber">防误用</span></h3>
+            <div class="section-body list">
+              ${selected.doNotAssume.map(text => `
+                <div class="item">
+                  <div class="item-title"><strong>${text}</strong><span class="pill amber">boundary</span></div>
+                  <p>这条会进入 AI context package 的 do-not-assume 区域。</p>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function renderTimeline() {
+      return `
+        <section class="section full">
+          <h3>关系事件时间线 <span class="pill teal">${selected.events.length}</span></h3>
+          <div class="section-body">
+            <div class="timeline">
+              ${selected.events.map(([time, title, body]) => `
+                <div class="event">
+                  <time>${time}</time>
+                  <strong>${title}</strong>
+                  <p>${body}</p>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderLoops() {
+      if (!selected.loopsList.length) {
+        return `
+          <section class="section full">
+            <h3>Open loops <span class="pill green">clear</span></h3>
+            <div class="section-body">
+              <p style="margin:0;color:var(--muted)">当前没有明显未闭环事项。保留最近证据，后续有新消息时重新计算。</p>
+            </div>
+          </section>
+        `;
+      }
+      return `
+        <section class="section full">
+          <h3>Open loops <span class="pill amber">${selected.loopsList.length}</span></h3>
+          <div class="section-body list">
+            ${selected.loopsList.map(([title, body, priority]) => `
+              <div class="item">
+                <div class="item-title"><strong>${title}</strong><span class="pill ${toneForPriority(priority)}">${priority}</span></div>
+                <p>${body}</p>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderReview() {
+      const pending = selected.reviewItems || [];
+      if (!pending.length) {
+        return `
+          <section class="section full">
+            <h3>Review queue <span class="pill green">clear</span></h3>
+            <div class="section-body">
+              <p style="margin:0;color:var(--muted)">这个人当前没有待确认的人际上下文。低频人物仍可被检索，但不会持续生成完整关系雷达。</p>
+            </div>
+          </section>
+        `;
+      }
+      return `
+        <section class="section full">
+          <h3>Review queue <span class="pill amber">${pending.filter(item => item.status === 'pending').length} pending</span></h3>
+          <div class="section-body list">
+            ${pending.map(item => `
+              <div class="item">
+                <div class="item-title">
+                  <strong>${item.title}</strong>
+                  <span class="pill ${item.status === 'pending' ? 'amber' : 'green'}">${item.status}</span>
+                </div>
+                <p>${item.body}</p>
+                <p style="margin-top:6px">${item.source}</p>
+                <div class="review-actions">
+                  <button class="tiny-btn primary" data-review="${item.id}" data-action="confirm">确认</button>
+                  <button class="tiny-btn" data-review="${item.id}" data-action="edit">编辑后确认</button>
+                  <button class="tiny-btn" data-review="${item.id}" data-action="reject">不对</button>
+                  <button class="tiny-btn" data-review="${item.id}" data-action="snooze">稍后</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function packageText() {
+      const facts = selected.topics.map(([title, body]) => `- ${title}: ${body}`).join('\\n');
+      const loops = selected.loopsList.length
+        ? selected.loopsList.map(([title, body]) => `- ${title}: ${body}`).join('\\n')
+        : '- No obvious open loops.';
+      const boundaries = selected.doNotAssume.map(x => `- ${x}`).join('\\n');
+      const confirmedNotes = (selected.reviewItems || [])
+        .filter(item => item.status === 'confirmed' || item.status === 'confirmed_edited')
+        .map(item => `- ${item.body}`)
+        .join('\\n') || '- No confirmed collaboration notes yet.';
+      return `Relationship context package
+Person: ${selected.name}
+Purpose: prepare a concise, evidence-aware follow-up.
+Radar state: ${selected.radarState}
+
+Known context:
+${facts}
+
+Open loops:
+${loops}
+
+Confirmed collaboration notes:
+${confirmedNotes}
+
+Do not assume:
+${boundaries}
+
+Excluded by default:
+- Pending inferred notes and sensitive refs are not included until confirmed.
+
+Suggested tone:
+- Direct, collaborative, no over-explaining.
+- Ask clarifying questions when ownership or deadline is not explicit.
+
+Evidence count: ${selected.evidence}
+Freshness: ${selected.freshness}
+Trust: ${selected.trust}`;
+    }
+
+    function renderPackage() {
+      return `
+        <section class="section full">
+          <h3>AI context package <span class="pill blue">redacted</span></h3>
+          <div class="section-body">
+            <pre class="draft">${packageText()}</pre>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderContent() {
+      if (activeTab === 'timeline') mainContent.innerHTML = renderTimeline();
+      else if (activeTab === 'loops') mainContent.innerHTML = renderLoops();
+      else if (activeTab === 'review') mainContent.innerHTML = renderReview();
+      else if (activeTab === 'package') mainContent.innerHTML = renderPackage();
+      else mainContent.innerHTML = renderBrief();
+    }
+
+    function renderRightRail() {
+      const pendingItems = selected.reviewItems || [];
+      rightRail.innerHTML = `
+        <div class="right-card">
+          <h3>Trust summary</h3>
+          <div class="trust-meter" style="--score:${selected.score}%"><span></span></div>
+          <p style="margin:0;color:var(--muted);font-size:12px;line-height:1.45">
+            ${selected.trust === 'High' ? '证据密度较高，可作为沟通前 brief 使用。' : '存在推断或证据较少，外发前建议人工确认。'}
+          </p>
+        </div>
+        <div class="right-card">
+          <h3>Storage model</h3>
+          <div class="evidence-list">
+            <div class="evidence">
+              <div class="meta"><span>truth source</span><span>SQLite</span></div>
+              <p>relationship_people / events / open_loops / collaboration_notes / review_items。</p>
+            </div>
+            <div class="evidence">
+              <div class="meta"><span>readable projection</span><span>Markdown</span></div>
+              <p>entities/people/&lt;slug&gt;.md 只做可读快照，不替代结构化真源。</p>
+            </div>
+          </div>
+        </div>
+        <div class="right-card">
+          <h3>Evidence refs</h3>
+          <div class="evidence-list">
+            ${selected.evidenceList.map(([source, time, text]) => `
+              <div class="evidence">
+                <div class="meta"><span>${source}</span><span>${time}</span></div>
+                <p>${text}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="right-card">
+          <h3>Review queue</h3>
+          <div class="evidence-list">
+            ${pendingItems.length ? pendingItems.map(item => `
+              <div class="evidence">
+                <div class="meta"><span>${item.type}</span><span>${item.status}</span></div>
+                <p>${item.body}</p>
+                <div class="review-actions">
+                  <button class="tiny-btn primary" data-review="${item.id}" data-action="confirm">确认</button>
+                  <button class="tiny-btn" data-review="${item.id}" data-action="reject">不对</button>
+                  <button class="tiny-btn" data-review="${item.id}" data-action="snooze">稍后</button>
+                </div>
+              </div>
+            `).join('') : `
+              <div class="evidence">
+                <div class="meta"><span>clear</span><span>no pending</span></div>
+                <p>没有待确认项；未确认推断不会默认进入外部 AI 上下文包。</p>
+              </div>
+            `}
+          </div>
+        </div>
+        <div class="right-card">
+          <h3>Demo data source</h3>
+          <div class="evidence-list">
+            <div class="evidence">
+              <div class="meta"><span>SSH read-only</span><span>static sample</span></div>
+              <p>样例来自远端记忆摘要信号的手工产品化整理，不是实时 memory-service API 数据。</p>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAll() {
+      renderPeople(document.querySelector('.segment button.active').dataset.filter);
+      renderHeader();
+      renderContent();
+      renderRightRail();
+    }
+
+    function showToast(text) {
+      toast.textContent = text;
+      toast.classList.add('show');
+      window.setTimeout(() => toast.classList.remove('show'), 1300);
+    }
+
+    function handleReviewAction(event) {
+      const button = event.target.closest('[data-review]');
+      if (!button) return;
+      const item = (selected.reviewItems || []).find(entry => entry.id === button.dataset.review);
+      if (!item) return;
+      const action = button.dataset.action;
+      if (action === 'confirm') {
+        item.status = 'confirmed';
+        showToast('已确认：后续召回会提升这条关系上下文权重');
+      } else if (action === 'edit') {
+        item.status = 'confirmed_edited';
+        showToast('Demo：编辑后确认，会保留原提案和用户修订');
+      } else if (action === 'reject') {
+        item.status = 'rejected';
+        showToast('已标记不对：同类推断会降权');
+      } else {
+        item.status = 'snoozed';
+        showToast('已稍后：不会进入本次 AI 上下文包');
+      }
+      renderAll();
+    }
+
+    peopleList.addEventListener('click', event => {
+      const button = event.target.closest('.person');
+      if (!button) return;
+      selected = people.find(person => person.id === button.dataset.id) || selected;
+      renderAll();
+    });
+
+    document.querySelector('.segment').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      document.querySelectorAll('.segment button').forEach(el => el.classList.remove('active'));
+      button.classList.add('active');
+      renderPeople(button.dataset.filter);
+    });
+
+    document.querySelector('.tabs').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      document.querySelectorAll('.tabs button').forEach(el => el.classList.remove('active'));
+      button.classList.add('active');
+      activeTab = button.dataset.tab;
+      renderContent();
+    });
+
+    mainContent.addEventListener('click', handleReviewAction);
+    rightRail.addEventListener('click', handleReviewAction);
+
+    document.getElementById('packageBtn').addEventListener('click', () => {
+      navigator.clipboard?.writeText(packageText());
+      activeTab = 'package';
+      document.querySelectorAll('.tabs button').forEach(el => el.classList.toggle('active', el.dataset.tab === 'package'));
+      renderContent();
+      showToast('AI 上下文包已复制');
+    });
+
+    document.getElementById('packageTopBtn').addEventListener('click', () => {
+      navigator.clipboard?.writeText(packageText());
+      showToast('AI 上下文包已复制');
+    });
+
+    document.getElementById('markDoneBtn').addEventListener('click', () => {
+      showToast('Demo：会把选中 open loop 标记为 resolved');
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      showToast('Demo：已重新生成关系上下文卡');
+    });
+
+    document.getElementById('searchInput').addEventListener('input', event => {
+      const q = event.target.value.trim().toLowerCase();
+      if (!q) {
+        renderPeople(document.querySelector('.segment button.active').dataset.filter);
+        return;
+      }
+      const rows = people.filter(person =>
+        person.name.toLowerCase().includes(q) ||
+        person.subtitle.toLowerCase().includes(q) ||
+        person.topics.some(([title, body]) => `${title} ${body}`.toLowerCase().includes(q))
+      );
+      document.getElementById('peopleCount').textContent = rows.length;
+      peopleList.innerHTML = rows.map(person => `
+        <button class="person ${person.id === selected.id ? 'active' : ''}" data-id="${person.id}">
+          <span class="avatar">${person.initials}</span>
+          <span>
+            <h3>${person.name}</h3>
+            <p>${person.subtitle}</p>
+            <p>${person.radarState} · score ${person.score}</p>
+          </span>
+          <span class="status-dot ${person.status}"></span>
+        </button>
+      `).join('');
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>

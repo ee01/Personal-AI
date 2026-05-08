@@ -59,6 +59,13 @@ import {
   syncUserIdentityToMemory,
 } from './services/UserIdentitySyncService';
 import { initMeetingPilotBackgroundRuntime } from './meeting-shell/background';
+import {
+  connectOutlookCalendar,
+  disconnectOutlookCalendar,
+  getOutlookCalendarStatus,
+  syncCalendarEventsToMemoryService,
+  syncOutlookCalendarToMemoryService,
+} from './context-assist/outlookCalendar';
 
 console.log('Background script loaded');
 void initMeetingPilotBackgroundRuntime().catch((error) => {
@@ -618,6 +625,24 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       return;
     }
 
+    if (alarm.name === 'contextAssistOutlookCalendarSync') {
+      const envConfig = await getEnvConfig();
+      if (
+        envConfig.CONTEXT_ASSIST_ENABLED !== false &&
+        envConfig.MEETING_PREP_ENABLED !== false &&
+        envConfig.MEETING_PREP_CALENDAR_SOURCE !== 'ringcentral_indexeddb'
+      ) {
+        const status = await getOutlookCalendarStatus();
+        if (status.connected && envConfig.MS_OUTLOOK_CLIENT_ID) {
+          await syncOutlookCalendarToMemoryService(
+            getMemoryServiceClient(),
+            envConfig,
+          );
+        }
+      }
+      return;
+    }
+
     // 处理未知 alarm
     console.log(`⚡ 未处理的 alarm 事件: ${alarm.name}`);
   } catch (error) {
@@ -1011,6 +1036,102 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({
           success: false,
           error: err?.message || 'composer_assist_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'CONTEXT_ASSIST_REQUEST') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.contextAssist(request.request);
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        console.warn('[background] context-assist failed:', err);
+        sendResponse({
+          success: false,
+          error: err?.message || 'context_assist_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'CALENDAR_EVENTS_SYNC_REQUEST') {
+    (async () => {
+      try {
+        const result = await syncCalendarEventsToMemoryService(
+          getMemoryServiceClient(),
+          request.sourceSystem,
+          request.events || [],
+        );
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        console.warn('[background] calendar sync failed:', err);
+        sendResponse({
+          success: false,
+          error: err?.message || 'calendar_sync_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'OUTLOOK_CALENDAR_STATUS') {
+    getOutlookCalendarStatus()
+      .then((result) => sendResponse({ success: true, result }))
+      .catch((err) =>
+        sendResponse({
+          success: false,
+          error: err?.message || 'outlook_status_failed',
+        }),
+      );
+    return true;
+  }
+
+  if (request.type === 'OUTLOOK_CALENDAR_CONNECT') {
+    (async () => {
+      try {
+        const envConfig = request.config || (await getEnvConfig());
+        const result = await connectOutlookCalendar(envConfig);
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        sendResponse({
+          success: false,
+          error: err?.message || 'outlook_connect_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'OUTLOOK_CALENDAR_DISCONNECT') {
+    disconnectOutlookCalendar()
+      .then((result) => sendResponse({ success: true, result }))
+      .catch((err) =>
+        sendResponse({
+          success: false,
+          error: err?.message || 'outlook_disconnect_failed',
+        }),
+      );
+    return true;
+  }
+
+  if (request.type === 'OUTLOOK_CALENDAR_SYNC_NOW') {
+    (async () => {
+      try {
+        const envConfig = request.config || (await getEnvConfig());
+        const result = await syncOutlookCalendarToMemoryService(
+          getMemoryServiceClient(),
+          envConfig,
+        );
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        sendResponse({
+          success: false,
+          error: err?.message || 'outlook_sync_failed',
         });
       }
     })();
@@ -2566,6 +2687,15 @@ ensureBackgroundAlarm(
     periodInMinutes: 15,
   },
   (alarm) => alarm.periodInMinutes !== 15,
+);
+
+ensureBackgroundAlarm(
+  'contextAssistOutlookCalendarSync',
+  {
+    delayInMinutes: 2,
+    periodInMinutes: 30,
+  },
+  (alarm) => alarm.periodInMinutes !== 30,
 );
 
 /** Track the last notification we saw so we don't re-show it. */

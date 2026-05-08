@@ -6,6 +6,7 @@ import {
   dedupeDesignData,
   escapeHtml,
   extractDesignLinks,
+  formatDesignStatusLabel,
   getDesignDisplayLabel,
   getDesignDisplayPriority,
   getDesignStatusTone,
@@ -88,11 +89,29 @@ function verifyFigmaLabels() {
     }),
     'Checkout flow map',
   );
+  assert.equal(
+    getDesignDisplayLabel({
+      type: 'figma',
+      url: 'https://www.figma.com/design/abc/demo',
+      source: 'description',
+      title: 'Checkout mobile handoff',
+    }),
+    'Checkout mobile handoff',
+  );
+  assert.equal(
+    getDesignDisplayLabel({
+      type: 'figma',
+      url: 'https://www.figma.com/design/abc/demo',
+      source: 'description',
+      title: 'the design',
+    }),
+    'Figma Design',
+  );
 }
 
 function verifyDedupe() {
   const items: DesignDisplayItem[] = [
-    { type: 'figma', url: 'https://www.figma.com/design/abc/demo', source: 'description' },
+    { type: 'figma', url: 'https://www.figma.com/design/abc/demo', source: 'description', title: 'the design' },
     {
       type: 'figma',
       url: 'https://www.figma.com/design/abc/demo',
@@ -153,7 +172,7 @@ function verifyDedupe() {
   assert.equal(deduped[1].source, 'linked_issues, epic_issue_link, description, remote_link');
   assert.equal((deduped[1] as any).uxEpicStatus, 'In Progress');
   assert.equal((deduped[1] as any).designStatus, 'Ready for dev');
-  assert.equal((deduped[1] as any).designLabel, 'Figma Design');
+  assert.equal((deduped[1] as any).designLabel, 'Ready checkout prototype');
   assert.equal((deduped[1] as any).summary, 'Ready checkout prototype');
   assert.equal((deduped[2] as any).uxTicketKey, 'UX-124');
 }
@@ -165,15 +184,23 @@ function verifyStatusTones() {
   assert.equal(getUXEpicStatusTone('Rejected'), 'cancelled');
   assert.equal(getDesignStatusTone('Ready for dev'), 'ready');
   assert.equal(getDesignStatusTone('Ready for development'), 'ready');
+  assert.equal(getDesignStatusTone('ready_for_development'), 'ready');
+  assert.equal(getDesignStatusTone('ready-for-dev'), 'ready');
   assert.equal(getDesignStatusTone('Ready for review'), 'review');
   assert.equal(getDesignStatusTone('Not ready for dev'), 'not-ready');
+  assert.equal(getDesignStatusTone('not_ready_for_dev'), 'not-ready');
   assert.equal(getDesignStatusTone('Draft handoff'), 'not-ready');
   assert.equal(getDesignStatusTone('Design updated'), 'updated');
+  assert.equal(getDesignStatusTone('changed'), 'updated');
   assert.equal(getDesignStatusTone('Outdated after design change'), 'updated');
   assert.equal(getDesignStatusTone('Missing link'), 'missing');
   assert.equal(getDesignStatusTone('Waiting for permission'), 'blocked');
   assert.equal(getDesignStatusTone('Resolved'), 'done');
-  assert.equal(getDesignStatusTone('Needs review'), 'review');
+  assert.equal(getDesignStatusTone('in_review'), 'review');
+  assert.equal(formatDesignStatusLabel('ready_for_development'), 'Ready for development');
+  assert.equal(formatDesignStatusLabel('READY_FOR_DEV'), 'Ready for dev');
+  assert.equal(formatDesignStatusLabel('not-ready-for-dev'), 'Not ready for dev');
+  assert.equal(formatDesignStatusLabel('Needs review'), 'Needs review');
 }
 
 function verifyDisplayOrdering() {

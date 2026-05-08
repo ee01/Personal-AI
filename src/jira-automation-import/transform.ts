@@ -82,6 +82,15 @@ export interface JiraAutomationRuleReviewSignals {
   sourceProjectReferences: string[];
 }
 
+export type JiraAutomationImportReviewSeverity = 'high' | 'medium' | 'low';
+
+export interface JiraAutomationImportReviewChecklistItem {
+  id: string;
+  label: string;
+  detail: string;
+  severity: JiraAutomationImportReviewSeverity;
+}
+
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null;
 }
@@ -569,4 +578,88 @@ export function buildJiraAutomationImportWarnings(
   }
 
   return warnings;
+}
+
+export function buildJiraAutomationImportReviewChecklist(
+  exportedRule: ExportedRule,
+): JiraAutomationImportReviewChecklistItem[] {
+  const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const items: JiraAutomationImportReviewChecklistItem[] = [
+    {
+      id: 'target-project',
+      label: 'Target project scope',
+      detail: 'The imported copy will be scoped to the current Jira project. Embedded project keys, ids, filters, and custom text are not rewritten.',
+      severity: summary.sourceProjectReferenceCount > 0 || summary.jqlReferenceCount > 0 ? 'high' : 'medium',
+    },
+  ];
+
+  if (summary.jqlReferenceCount > 0) {
+    items.push({
+      id: 'jql-filters',
+      label: 'JQL and filters',
+      detail: `${summary.jqlReferenceCount} JQL/filter reference(s) need target-project validation before enabling.`,
+      severity: 'high',
+    });
+  }
+
+  if (summary.sourceProjectReferenceCount > 0) {
+    items.push({
+      id: 'source-project-references',
+      label: 'Source project references',
+      detail: `${summary.sourceProjectReferenceCount} source-project reference(s) were found inside trigger, action, label, or description fields.`,
+      severity: 'high',
+    });
+  }
+
+  if (
+    summary.webRequestCount > 0 ||
+    summary.externalIntegrationCount > 0 ||
+    summary.hardcodedUrlCount > 0 ||
+    summary.secretReferenceCount > 0 ||
+    summary.emailReferenceCount > 0
+  ) {
+    const parts = [
+      summary.webRequestCount > 0 ? `${summary.webRequestCount} web request(s)` : '',
+      summary.externalIntegrationCount > 0 ? `${summary.externalIntegrationCount} external action(s)` : '',
+      summary.hardcodedUrlCount > 0 ? `${summary.hardcodedUrlCount} URL(s)` : '',
+      summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} secret reference(s)` : '',
+      summary.emailReferenceCount > 0 ? `${summary.emailReferenceCount} account/email reference(s)` : '',
+    ].filter(Boolean);
+
+    items.push({
+      id: 'external-effects',
+      label: 'External effects and credentials',
+      detail: `${parts.join(', ')} need endpoint, credential, and recipient review.`,
+      severity: summary.webRequestCount > 0 || summary.externalIntegrationCount > 0 || summary.secretReferenceCount > 0
+        ? 'high'
+        : 'medium',
+    });
+  }
+
+  if (summary.scheduledTrigger) {
+    items.push({
+      id: 'schedule',
+      label: 'Schedule and timezone',
+      detail: 'A scheduled trigger was detected. Confirm cadence, timezone, JQL window, and duplicate-run risk before enabling.',
+      severity: 'medium',
+    });
+  }
+
+  if (exportedRule.canOtherRuleTrigger) {
+    items.push({
+      id: 'rule-chaining',
+      label: 'Rule chaining',
+      detail: 'The source rule can be triggered by other automation rules. Personal AI blocks that by default for the imported copy.',
+      severity: 'medium',
+    });
+  }
+
+  items.push({
+    id: 'version-compatibility',
+    label: 'Jira Automation version',
+    detail: 'Use exports from the same Jira Automation version when possible. Jira may reject incompatible JSON.',
+    severity: 'low',
+  });
+
+  return items;
 }

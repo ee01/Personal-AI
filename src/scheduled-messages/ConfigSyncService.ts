@@ -3,8 +3,12 @@
  * 负责在 Chrome Storage 和 Sheet Config 表之间同步配置
  */
 
-import { BotAutomationRule, SheetConfig } from './types';
-import { getBotAutomationConfig, normalizeSheetConfig } from './botAutomationConfig';
+import { BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types.js';
+import {
+  getBotAutomationConfig,
+  normalizeRingCentralSenderConfig,
+  normalizeSheetConfig,
+} from './botAutomationConfig.js';
 
 type ConfigRow = [string, string];
 type SheetMetadata = {
@@ -15,7 +19,7 @@ type SheetMetadata = {
   };
 };
 
-const CONFIG_MIN_ROW_COUNT = 49;
+const CONFIG_MIN_ROW_COUNT = 56;
 const CONFIG_SHEET_TITLE = 'Config';
 const CONFIG_READ_RANGE = `${CONFIG_SHEET_TITLE}!A2:B`;
 const CONFIG_HEADER_RANGE = `${CONFIG_SHEET_TITLE}!A1:B1`;
@@ -57,11 +61,34 @@ const BOT_RULE_SUFFIXES = [
   'rule_last_updated',
 ];
 
+const RINGCENTRAL_SENDER_KEYS = [
+  'ringcentral_sender_enabled',
+  'ringcentral_sender_client_id',
+  'ringcentral_sender_client_secret',
+  'ringcentral_sender_jwt',
+  'ringcentral_sender_updated_at',
+];
+
 const MANAGED_CONFIG_KEYS = new Set<string>(CONFIG_BASE_KEYS);
 for (const prefix of BOT_RULE_PREFIXES) {
   for (const suffix of BOT_RULE_SUFFIXES) {
     MANAGED_CONFIG_KEYS.add(`${prefix}_${suffix}`);
   }
+}
+for (const key of RINGCENTRAL_SENDER_KEYS) {
+  MANAGED_CONFIG_KEYS.add(key);
+}
+
+function getManagedConfigKeysForWrite(includeRingCentralSenderKeys: boolean): Set<string> {
+  if (includeRingCentralSenderKeys) {
+    return MANAGED_CONFIG_KEYS;
+  }
+
+  const managedKeys = new Set(MANAGED_CONFIG_KEYS);
+  for (const key of RINGCENTRAL_SENDER_KEYS) {
+    managedKeys.delete(key);
+  }
+  return managedKeys;
 }
 
 function buildConfigRange(rowCount = CONFIG_MIN_ROW_COUNT): string {
@@ -116,6 +143,10 @@ function mergeRule(
   } as BotAutomationRule;
 }
 
+function parseConfigBoolean(value: string): boolean {
+  return ['true', '1', 'yes', 'y', 'on'].includes(value.trim().toLowerCase());
+}
+
 export class ConfigSyncService {
   private token: string;
 
@@ -156,6 +187,13 @@ export class ConfigSyncService {
           config.botAutomation[kind] = {} as BotAutomationRule;
         }
         return config.botAutomation[kind] as BotAutomationRule;
+      };
+
+      const ensureRingCentralSender = (): RingCentralSenderConfig => {
+        if (!config.ringCentralSender) {
+          config.ringCentralSender = { enabled: false };
+        }
+        return config.ringCentralSender;
       };
 
       for (const row of rows) {
@@ -290,6 +328,21 @@ export class ConfigSyncService {
           case 'bot_automation_timeline_sync_rule_last_updated':
             ensureRule('timelineSyncRule').ruleLastUpdated = value;
             break;
+          case 'ringcentral_sender_enabled':
+            ensureRingCentralSender().enabled = parseConfigBoolean(value);
+            break;
+          case 'ringcentral_sender_client_id':
+            ensureRingCentralSender().clientId = value;
+            break;
+          case 'ringcentral_sender_client_secret':
+            ensureRingCentralSender().clientSecret = value;
+            break;
+          case 'ringcentral_sender_jwt':
+            ensureRingCentralSender().jwt = value;
+            break;
+          case 'ringcentral_sender_updated_at':
+            ensureRingCentralSender().updatedAt = value;
+            break;
         }
       }
 
@@ -303,15 +356,24 @@ export class ConfigSyncService {
   /**
    * 保存配置到 Sheet Config 表
    */
-  async saveConfigToSheet(config: SheetConfig, lastSyncTime?: string): Promise<void> {
+  async saveConfigToSheet(
+    config: SheetConfig,
+    lastSyncTime?: string,
+    options?: { includeRingCentralSenderKeys?: boolean }
+  ): Promise<void> {
     try {
+      const includeRingCentralSenderKeys = options?.includeRingCentralSenderKeys ??
+        config.ringCentralSender !== undefined;
       const normalizedConfig = normalizeSheetConfig({
         ...config,
         last_sync_time: lastSyncTime || new Date().toISOString(),
       }) as SheetConfig;
-      const configData = this.buildManagedConfigRows(normalizedConfig);
+      const configData = this.buildManagedConfigRows(normalizedConfig, {
+        includeRingCentralSenderKeys,
+      });
       const existingRows = await this.readRawConfigRowsForWrite(normalizedConfig.sheetId);
-      const mergedConfigData = this.mergeConfigRows(existingRows, configData);
+      const managedKeysForWrite = getManagedConfigKeysForWrite(includeRingCentralSenderKeys);
+      const mergedConfigData = this.mergeConfigRows(existingRows, configData, managedKeysForWrite);
       const rowCount = Math.max(CONFIG_MIN_ROW_COUNT, existingRows.length, mergedConfigData.length);
       const paddedConfigData = [...mergedConfigData];
       while (paddedConfigData.length < rowCount) {
@@ -366,13 +428,16 @@ export class ConfigSyncService {
    */
   async syncConfig(config: SheetConfig): Promise<void> {
     const lastSyncTime = new Date().toISOString();
+    const includeRingCentralSenderKeys = config.ringCentralSender !== undefined;
     const normalizedConfig = normalizeSheetConfig({
       ...config,
       last_sync_time: lastSyncTime,
     }) as SheetConfig;
 
     // Sheet 是跨设备恢复来源，先写入成功后再更新本地，避免失败时留下半同步状态。
-    await this.saveConfigToSheet(normalizedConfig, lastSyncTime);
+    await this.saveConfigToSheet(normalizedConfig, lastSyncTime, {
+      includeRingCentralSenderKeys,
+    });
     await this.saveConfigToStorage(normalizedConfig);
 
     console.log('✅ 配置已同步到 Sheet 和 Chrome Storage');
@@ -599,7 +664,10 @@ export class ConfigSyncService {
     }
   }
 
-  private buildManagedConfigRows(normalizedConfig: SheetConfig): ConfigRow[] {
+  private buildManagedConfigRows(
+    normalizedConfig: SheetConfig,
+    options: { includeRingCentralSenderKeys: boolean }
+  ): ConfigRow[] {
     const configData: ConfigRow[] = [];
 
     // 基础配置
@@ -681,10 +749,31 @@ export class ConfigSyncService {
     pushRuleConfig('bot_automation_executor', botAutomation.executorRule);
     pushRuleConfig('bot_automation_timeline_sync', botAutomation.timelineSyncRule);
 
+    const ringCentralSender = normalizeRingCentralSenderConfig(normalizedConfig.ringCentralSender);
+    if (options.includeRingCentralSenderKeys) {
+      configData.push(['ringcentral_sender_enabled', ringCentralSender?.enabled ? 'true' : 'false']);
+      if (ringCentralSender?.clientId) {
+        configData.push(['ringcentral_sender_client_id', ringCentralSender.clientId]);
+      }
+      if (ringCentralSender?.clientSecret) {
+        configData.push(['ringcentral_sender_client_secret', ringCentralSender.clientSecret]);
+      }
+      if (ringCentralSender?.jwt) {
+        configData.push(['ringcentral_sender_jwt', ringCentralSender.jwt]);
+      }
+      if (ringCentralSender?.updatedAt) {
+        configData.push(['ringcentral_sender_updated_at', ringCentralSender.updatedAt]);
+      }
+    }
+
     return configData;
   }
 
-  private mergeConfigRows(existingRows: ConfigRow[], managedRows: ConfigRow[]): ConfigRow[] {
+  private mergeConfigRows(
+    existingRows: ConfigRow[],
+    managedRows: ConfigRow[],
+    managedKeys: Set<string>
+  ): ConfigRow[] {
     const managedByKey = new Map(managedRows);
     const writtenKeys = new Set<string>();
     const mergedRows: ConfigRow[] = [];
@@ -695,7 +784,7 @@ export class ConfigSyncService {
         continue;
       }
 
-      if (MANAGED_CONFIG_KEYS.has(key)) {
+      if (managedKeys.has(key)) {
         if (managedByKey.has(key)) {
           mergedRows.push([key, managedByKey.get(key)!]);
           writtenKeys.add(key);

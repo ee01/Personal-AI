@@ -58,9 +58,9 @@ Personal AI 的目标是保存“所有记忆”，其中很关键但目前最�
 
 `docs/progressing` 已有以下方向：
 
-- Cross-AI Memory Capsule Studio：把上下文交给其他 AI。
+- Context Assist 的写作护航 / AI Prompt Injection：把上下文交给其他 AI。
 - Decision Time Machine：回放决策证据。
-- Memory Rehearsal Studio：重要沟通前演练。
+- Context Assist 的会前准备：重要沟通前恢复上下文。
 - Memory Trust Console：管理记忆可信度。
 - Personal Skill Foundry：把做事方法沉淀成 skill。
 - Proactive Notification System：主动预警和提醒。
@@ -205,7 +205,7 @@ Personal AI 返回：
 - 回放：按步骤查看。
 - 搜索：自然语言找 episode。
 - 提炼：发送到 Skill Foundry。
-- 导出：生成 Cross-AI Memory Capsule。
+- 导出：生成 AI context pack。
 - 复核：编辑错误步骤、标记敏感内容、合并重复 episode。
 - 再做一次：生成 agent plan，但默认需要用户逐步确认。
 
@@ -656,7 +656,7 @@ Demo 展示一个“Jira 季度人力趋势分析”的操作 episode：
 
 - 相似 episode 提示。
 - Skill candidate。
-- Cross-AI Context Package 导出。
+- AI context pack 导出。
 
 ## 决策建议
 

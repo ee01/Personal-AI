@@ -122,6 +122,27 @@ async function startHarnessServer() {
         return;
       }
 
+      if (req.method === 'GET' && req.url?.startsWith('/browse/PAI-123')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>PAI-123 Falcon Jira issue</title></head>
+            <body>
+              <main>
+                <h1 id="summary-val">Falcon launch readiness follow-up</h1>
+                <span id="key-val">PAI-123</span>
+                <span id="status-val">In Review</span>
+                <section id="description-val">
+                  Jira issue description covers Falcon owner handoff, launch
+                  dependencies, release confidence, customer communication,
+                  QA verification, and follow-up review material.
+                </section>
+              </main>
+            </body>
+          </html>`);
+        return;
+      }
+
       if (req.method === 'GET' && req.url?.startsWith('/unsafe-route')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(`<!doctype html>
@@ -285,10 +306,10 @@ async function launchExtensionContext(apiBaseUrl) {
   log(`UPDATE_ENV_CONFIG response: ${JSON.stringify(updateResponse)}`);
   await configPage.close();
 
-  return { context, serviceWorker };
+  return { context, extensionId, serviceWorker };
 }
 
-async function verifyNormalPage(server, context, serviceWorker) {
+async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   const page = await context.newPage();
   await page.setViewportSize({ width: 340, height: 720 });
   const diagnostics = attachPageDiagnostics(page, 'normal');
@@ -321,6 +342,15 @@ async function verifyNormalPage(server, context, serviceWorker) {
     server.contextRecallRequests[startCount].surface,
     'web_passive',
     '召回 surface 不正确',
+  );
+  assert.equal(
+    server.contextRecallRequests[startCount].contextType,
+    'webpage',
+    '普通网页应以 webpage contextType 召回',
+  );
+  assert.ok(
+    server.contextRecallRequests[startCount].sourceTypes?.includes('web'),
+    '普通网页应透传 sourceTypes 以约束召回来源',
   );
   assert.equal(
     server.contextRecallRequests[startCount].url,
@@ -445,6 +475,35 @@ async function verifyNormalPage(server, context, serviceWorker) {
   }
 
   await mutedPage.close();
+
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await optionsPage.waitForSelector('text=网页记忆提示静默站点', {
+    timeout: 5000,
+  });
+  await optionsPage.waitForSelector('text=127.0.0.1', { timeout: 5000 });
+  await optionsPage.getByRole('button', { name: '恢复', exact: true }).click();
+  await optionsPage.waitForSelector('text=当前没有被临时静默的网站', {
+    timeout: 5000,
+  });
+  await optionsPage.close();
+
+  const unmutedPage = await context.newPage();
+  const unmutedStartCount = server.contextRecallRequests.length;
+  await unmutedPage.goto(`${server.origin}/normal?unmuted=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, unmutedStartCount + 1, 12000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    unmutedStartCount + 1,
+    '从设置页恢复站点后应重新触发被动召回',
+  );
+  await unmutedPage.close();
   await page.close();
 }
 
@@ -472,6 +531,58 @@ async function verifySensitiveQueryPage(server, context) {
       log(entry);
     }
     throw new Error('敏感查询参数页面出现脚本异常');
+  }
+  await page.close();
+}
+
+async function verifyJiraIssueContext(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'jira-issue');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/browse/PAI-123?utm_source=tracker`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `jira issue bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    'Jira issue 页面应触发一次被动召回',
+  );
+  const request = server.contextRecallRequests[startCount];
+  assert.equal(request.surface, 'web_passive');
+  assert.equal(
+    request.contextType,
+    'jira_issue',
+    'Jira issue 页面应透传 jira_issue contextType',
+  );
+  assert.ok(
+    request.sourceTypes?.includes('jira'),
+    'Jira issue 页面应透传 Jira sourceTypes',
+  );
+  assert.ok(
+    request.entityHints?.some(
+      (hint) => hint.kind === 'jira_issue_key' && hint.value === 'PAI-123',
+    ),
+    'Jira issue 页面应透传 issue key entity hint',
+  );
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('Jira issue 页面出现脚本异常');
   }
   await page.close();
 }
@@ -700,9 +811,10 @@ try {
 
   await verifySensitiveTransitionRace(server, context);
   await verifySensitiveQueryPage(server, context);
+  await verifyJiraIssueContext(server, context);
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
-  await verifyNormalPage(server, context, launch.serviceWorker);
+  await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
   await verifySensitivePage(server, context);
   log('browser checks passed');
 } finally {

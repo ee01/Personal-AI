@@ -15,6 +15,7 @@ export type SourceType =
   | 'manual'
   | 'system'
   | 'meeting'
+  | 'calendar'
   | 'ai_chat'
   | 'doubao';
 export type MemoryScope = 'work' | 'personal';
@@ -668,7 +669,9 @@ export type ContextRecallSurface =
   | 'web_passive'
   | 'meeting_passive'
   | 'popup_passive'
-  | 'follow_thread';
+  | 'follow_thread'
+  | 'meeting_prep'
+  | 'composer_guard';
 
 export type ContextRecallContextType =
   | 'webpage'
@@ -811,6 +814,123 @@ export interface ComposerAssistResponse {
   confidence: number;
   queryTimeMs: number;
   debug?: Record<string, unknown>;
+}
+
+export type ContextAssistSurface = 'meeting_prep' | 'composer_guard';
+
+export type ContextAssistContextType =
+  | 'meeting'
+  | 'message_thread'
+  | 'jira_issue'
+  | 'web_agent_prompt';
+
+export interface ContextAssistMeetingParticipant {
+  name?: string;
+  email?: string;
+  responseStatus?: string;
+}
+
+export interface ContextAssistMeetingEvent {
+  externalId?: string;
+  seriesKey?: string;
+  title?: string;
+  descriptionPreview?: string;
+  startTime?: number;
+  endTime?: number;
+  organizer?: ContextAssistMeetingParticipant;
+  attendees?: ContextAssistMeetingParticipant[];
+  location?: string;
+  joinUrl?: string;
+  sourceUrl?: string;
+  cancelled?: boolean;
+  lastModifiedTime?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ContextAssistRequest {
+  surface: ContextAssistSurface;
+  contextType: ContextAssistContextType;
+  title?: string;
+  url?: string;
+  userGoal?: string;
+  primaryText?: string;
+  secondaryTexts?: string[];
+  keywords?: string[];
+  entityHints?: ContextRecallEntityHint[];
+  event?: ContextAssistMeetingEvent;
+  composer?: ComposerAssistRequest;
+  sourceTypes?: RecallSourceType[];
+  limit?: number;
+  debug?: boolean;
+}
+
+export interface ContextAssistCueCard {
+  id: string;
+  kind: 'brief' | 'memory' | 'question' | 'action';
+  title: string;
+  body: string;
+  evidenceIds?: string[];
+}
+
+export interface ContextAssistResponse {
+  available: boolean;
+  surface: ContextAssistSurface;
+  suggestionType:
+    | 'none'
+    | 'meeting_brief'
+    | ComposerAssistResponse['suggestionType'];
+  title?: string;
+  summary?: string;
+  insertText?: string;
+  cueCards: ContextAssistCueCard[];
+  evidence: ComposerAssistEvidence[];
+  riskLevel: 'low' | 'medium' | 'high';
+  previewRequired: boolean;
+  confidence: number;
+  queryTimeMs: number;
+  debug?: Record<string, unknown>;
+}
+
+export type CalendarEventSourceSystem = 'outlook' | 'ringcentral_indexeddb';
+
+export interface CalendarEventSyncParticipant {
+  name?: string;
+  email?: string;
+  responseStatus?: string;
+}
+
+export interface CalendarEventSyncItem {
+  externalId: string;
+  seriesKey?: string;
+  title: string;
+  descriptionPreview?: string;
+  startTime: number;
+  endTime?: number;
+  organizer?: CalendarEventSyncParticipant;
+  attendees?: CalendarEventSyncParticipant[];
+  location?: string;
+  joinUrl?: string;
+  sourceUrl?: string;
+  cancelled?: boolean;
+  lastModifiedTime?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CalendarEventsSyncRequest {
+  sourceSystem: CalendarEventSourceSystem;
+  events: CalendarEventSyncItem[];
+  deletedExternalIds?: string[];
+  syncedAt?: number;
+  debug?: boolean;
+}
+
+export interface CalendarEventsSyncResponse {
+  created: number;
+  updated: number;
+  unchanged: number;
+  cancelled: number;
+  deleted: number;
+  total: number;
 }
 
 export interface HealthResponse {

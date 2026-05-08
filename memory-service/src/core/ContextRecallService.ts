@@ -33,6 +33,8 @@ const DEFAULT_LIMIT_BY_SURFACE: Record<string, number> = {
   web_passive: 3,
   meeting_passive: 3,
   popup_passive: 1,
+  meeting_prep: 5,
+  composer_guard: 3,
 };
 
 const HARD_LIMIT = 5;
@@ -220,6 +222,10 @@ function explainMatch(item: RecallItem, req: ContextRecallRequest): string {
       ? '网页上下文'
       : req.surface === 'meeting_passive'
         ? '会议上下文'
-        : '当前上下文';
+        : req.surface === 'meeting_prep'
+          ? '会前准备'
+          : req.surface === 'composer_guard'
+            ? '写作上下文'
+            : '当前上下文';
   return `${channelLabel} 命中 ${surfaceLabel}`;
 }

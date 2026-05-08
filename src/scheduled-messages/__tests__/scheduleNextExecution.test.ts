@@ -214,3 +214,55 @@ test('honors every-N-weeks after the selected time passes on a valid day', () =>
     '2026-05-13 09:30',
   );
 });
+
+test('keeps End_Date inclusive when calculating periodic next execution', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-05-01',
+        Schedule_Time: '09:30',
+        Repeat_Every: 1,
+        Repeat_Unit: 'Day',
+        End_Date: '2026-05-04',
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 1, 10, 0),
+    ),
+    '2026-05-04 09:30',
+  );
+});
+
+test('returns empty when the next periodic occurrence is after End_Date', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-05-01',
+        Schedule_Time: '09:30',
+        Repeat_Every: 1,
+        Repeat_Unit: 'Day',
+        End_Date: '2026-05-01',
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 1, 10, 0),
+    ),
+    '',
+  );
+});
+
+test('returns empty when weekly Repeat_Days has no valid occurrence before End_Date', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-05-04',
+        Schedule_Time: '09:30',
+        Repeat_Every: 1,
+        Repeat_Unit: 'Week',
+        Repeat_Days: '5',
+        End_Date: '2026-05-07',
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 4, 8, 0),
+    ),
+    '',
+  );
+});

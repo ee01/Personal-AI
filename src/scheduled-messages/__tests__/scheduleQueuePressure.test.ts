@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 
 import type { ScheduledMessage } from '../types.js';
 import {
+  formatScheduleQueueSlotSummary,
+  formatScheduleQueueSummary,
   formatScheduleQueueBlockReason,
   formatScheduleQueuePressure,
+  formatScheduleQueueSuggestion,
   getScheduleQueuePressure,
+  getScheduleQueueSummary,
+  getScheduleQueueSuggestion,
 } from '../scheduleQueuePressure.js';
 
 const beforeSlot = new Date('2026-05-04T08:00:00');
@@ -179,5 +184,78 @@ test('blocks explicit-time queues that no longer fit remaining compensation wind
   assert.equal(
     formatScheduleQueueBlockReason(pressure!),
     '当前同一执行时间排在第 12/12 个，预计延后 11 分钟，补偿窗口仅剩 10 分钟，无法在 30 分钟补偿窗口内执行，请改成未来时间，或清空执行时间进入 08:00 后队列。',
+  );
+});
+
+test('summarizes congested executor queue slots and sorts risk first', () => {
+  const safeSlot = [
+    makeMessage('safe-1', { Topic: 'Safe one', Schedule_Time: '10:30' }),
+    makeMessage('safe-2', { Topic: 'Safe two', Schedule_Time: '10:30' }),
+  ];
+  const riskySlot = Array.from({ length: 12 }, (_, index) => makeMessage(`risk-${index + 1}`, {
+    Topic: `Risk ${index + 1}`,
+    Schedule_Time: '09:30',
+  }));
+
+  const summary = getScheduleQueueSummary(
+    [...safeSlot, ...riskySlot],
+    new Date('2026-05-04T09:50:30'),
+  );
+
+  assert.equal(summary?.congestedSlotCount, 2);
+  assert.equal(summary?.queuedMessageCount, 14);
+  assert.equal(summary?.riskSlotCount, 1);
+  assert.equal(summary?.largestSlotSize, 12);
+  assert.equal(summary?.maxDelayMinutes, 11);
+  assert.equal(summary?.topSlots[0].slotKey, '2026-05-04 09:30');
+  assert.equal(summary?.topSlots[0].exceedsCompensationWindow, true);
+  assert.equal(summary?.topSlots[0].remainingCompensationMinutes, 10);
+  assert.deepEqual(summary?.topSlots[0].sampleTopics, ['Risk 1', 'Risk 2', 'Risk 3']);
+  assert.equal(
+    formatScheduleQueueSlotSummary(summary!.topSlots[0]),
+    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，示例：Risk 1、Risk 2、Risk 3',
+  );
+  assert.equal(
+    formatScheduleQueueSummary(summary!),
+    '2 个时间槽同时排队；14 条 Bot/AI 消息受影响；最大同槽 12 条；最大预计延后 11 分钟；1 个时间槽可能超过 30 分钟补偿窗口',
+  );
+});
+
+test('queue summary ignores completed rows and returns null without congestion', () => {
+  const completed = makeMessage('done-1', {
+    Last_Exec: '2026-05-04 09:30',
+    Exec_Log: '✅ 推送成功',
+  });
+  const active = makeMessage('active-1');
+  const paused = makeMessage('paused-1', { Status: 'Paused' });
+
+  assert.equal(getScheduleQueueSummary([completed, active, paused], beforeSlot), null);
+});
+
+test('queue summary ignores expired explicit-time slots that are no longer executable', () => {
+  const oldMessages = [
+    makeMessage('old-1'),
+    makeMessage('old-2'),
+  ];
+
+  assert.equal(
+    getScheduleQueueSummary(oldMessages, new Date('2026-05-04T10:01:30')),
+    null,
+  );
+});
+
+test('suggests the first unreserved minute after a crowded explicit slot', () => {
+  const messages = Array.from({ length: 32 }, (_, index) => makeMessage(`msg-${index + 1}`));
+  const suggestion = getScheduleQueueSuggestion(messages, messages[31], beforeSlot);
+
+  assert.deepEqual(suggestion, {
+    dateStr: '2026-05-04',
+    timeStr: '10:01',
+    label: '2026-05-04 10:01',
+    inspectedMinutes: 32,
+  });
+  assert.equal(
+    formatScheduleQueueSuggestion(suggestion!),
+    '建议改到 2026-05-04 10:01，避开当前拥挤时间槽。',
   );
 });

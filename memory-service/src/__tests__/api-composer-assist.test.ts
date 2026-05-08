@@ -193,4 +193,23 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.suggestionType).toBe('none');
     expect(body.evidence).toEqual([]);
   });
+
+  it('does not use draft text as the recall query signal', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        title: 'Unrelated chat',
+        draftText: 'Factory AI free trial security approval',
+        primaryText: 'basalt kitchen cabinet hardware',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.suggestionType).toBe('none');
+  });
 });

@@ -1,5 +1,8 @@
 const SAFE_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:']);
 
+export const CONTEXT_SITE_MUTE_STORAGE_KEY = 'pai-context-muted-sites-v1';
+export const CONTEXT_SITE_MUTE_TTL_MS = 24 * 60 * 60 * 1000;
+
 const LOW_VALUE_CONTEXT_HOSTS = new Set([
   'google.com',
   'www.google.com',
@@ -75,6 +78,78 @@ export interface SensitiveControlDescriptor {
   ariaLabel?: string | null;
   placeholder?: string | null;
   inputMode?: string | null;
+}
+
+export type ContextSiteMuteRecord = Record<string, number>;
+
+export function normalizeContextSiteMuteHost(rawHostname: string): string {
+  return rawHostname.trim().toLowerCase().replace(/\.$/, '');
+}
+
+export function isContextSiteMuteActive(
+  mutedAt: number,
+  now = Date.now(),
+): boolean {
+  return (
+    Number.isFinite(mutedAt) &&
+    mutedAt > 0 &&
+    now - mutedAt >= 0 &&
+    now - mutedAt < CONTEXT_SITE_MUTE_TTL_MS
+  );
+}
+
+export function getContextSiteMuteExpiresAt(mutedAt: number): number | null {
+  if (!Number.isFinite(mutedAt) || mutedAt <= 0) return null;
+  return mutedAt + CONTEXT_SITE_MUTE_TTL_MS;
+}
+
+export function formatContextSiteMuteRemaining(
+  mutedAt: number,
+  now = Date.now(),
+): string {
+  const expiresAt = getContextSiteMuteExpiresAt(mutedAt);
+  if (!expiresAt || expiresAt <= now) return '已过期';
+
+  const remainingMs = expiresAt - now;
+  const remainingMinutes = Math.ceil(remainingMs / 60_000);
+  if (remainingMinutes < 60) {
+    return `${remainingMinutes} 分钟后恢复`;
+  }
+
+  const remainingHours = Math.ceil(remainingMinutes / 60);
+  return `${remainingHours} 小时后恢复`;
+}
+
+export function pruneContextSiteMuteRecord(
+  rawValue: unknown,
+  now = Date.now(),
+): { record: ContextSiteMuteRecord; changed: boolean } {
+  const record: ContextSiteMuteRecord = {};
+  let changed = false;
+
+  if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+    return { record, changed: Boolean(rawValue) };
+  }
+
+  for (const [rawHost, rawMutedAt] of Object.entries(rawValue)) {
+    const host = normalizeContextSiteMuteHost(rawHost);
+    if (!host || typeof rawMutedAt !== 'number') {
+      changed = true;
+      continue;
+    }
+
+    if (!isContextSiteMuteActive(rawMutedAt, now)) {
+      changed = true;
+      continue;
+    }
+
+    if (host !== rawHost) {
+      changed = true;
+    }
+    record[host] = rawMutedAt;
+  }
+
+  return { record, changed };
 }
 
 export function sanitizeContextExternalUrl(

@@ -53,6 +53,103 @@
   line-height: 1.4;
 }
 
+.agent-workflow-diagnostic-block {
+  display: grid;
+  gap: 7px;
+  margin: -4px 0 18px;
+}
+
+.agent-workflow-diagnostic-block.compact {
+  margin: 0;
+}
+
+.agent-workflow-diagnostics {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-workflow-diagnostic {
+  display: grid;
+  grid-template-columns: auto minmax(116px, 0.35fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #d8dee4;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px 9px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-workflow-diagnostic > span {
+  border-radius: 999px;
+  background: #f6f8fa;
+  color: #57606a;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.agent-workflow-diagnostic strong {
+  color: #24292f;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-diagnostic small,
+.agent-workflow-diagnostic em {
+  min-width: 0;
+  color: #57606a;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-diagnostic em {
+  grid-column: 3;
+  color: #6e7781;
+}
+
+.agent-workflow-diagnostic.error {
+  border-left-color: #cf222e;
+}
+
+.agent-workflow-diagnostic.error > span {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.agent-workflow-diagnostic.warning {
+  border-left-color: #bf8700;
+}
+
+.agent-workflow-diagnostic.warning > span {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.agent-workflow-diagnostic.info {
+  border-left-color: #0969da;
+}
+
+.agent-workflow-diagnostic.info > span {
+  background: #ddf4ff;
+  color: #0969da;
+}
+
+.agent-workflow-diagnostic.ok {
+  border-left-color: #1a7f37;
+}
+
+.agent-workflow-diagnostic.ok > span {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
 .agent-workflow-test-panel {
   margin: 0 0 24px;
   border: 1px solid #d8dee4;
@@ -154,6 +251,86 @@
 .agent-test-decision.review {
   background: #fff8c5;
   color: #9a6700;
+}
+
+.agent-workflow-path {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.agent-workflow-path-item {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d8dee4;
+  border-left: 4px solid #0969da;
+  border-radius: 6px;
+  background: #fff;
+  padding: 9px 10px;
+  line-height: 1.45;
+}
+
+.agent-workflow-path-item > span {
+  width: fit-content;
+  border-radius: 999px;
+  background: #ddf4ff;
+  color: #0969da;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.agent-workflow-path-item strong {
+  color: #24292f;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-path-item small,
+.agent-workflow-path-item em {
+  color: #57606a;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-path-item.success {
+  border-left-color: #1a7f37;
+}
+
+.agent-workflow-path-item.success > span {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.agent-workflow-path-item.warning {
+  border-left-color: #bf8700;
+}
+
+.agent-workflow-path-item.warning > span {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.agent-workflow-path-item.error {
+  border-left-color: #cf222e;
+}
+
+.agent-workflow-path-item.error > span {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.agent-workflow-path-item.muted {
+  border-left-color: #8c959f;
+  background: #f6f8fa;
+}
+
+.agent-workflow-path-item.muted > span {
+  background: #eaeef2;
+  color: #57606a;
 }
 
 .agent-test-review-banner {
@@ -537,7 +714,8 @@
   }
 
   .agent-test-trace-step summary,
-  .agent-test-tool {
+  .agent-test-tool,
+  .agent-workflow-diagnostic {
     grid-template-columns: 1fr;
   }
 
@@ -547,6 +725,10 @@
 
   .agent-test-trace-meta {
     align-items: flex-start;
+  }
+
+  .agent-workflow-diagnostic em {
+    grid-column: auto;
   }
 }
 

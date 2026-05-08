@@ -7,6 +7,7 @@ import { getLocalStorageItem, setLocalStorageItem } from "./storage";
 import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
   buildJiraAutomationImportRule,
+  buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportWarnings,
   collectJiraAutomationImportReviewSignals,
   isJiraAutomationImportFileSizeAllowed,
@@ -14,6 +15,7 @@ import {
   summarizeJiraAutomationImportRule,
   type ExportedData,
   type ImportRule,
+  type JiraAutomationImportReviewChecklistItem,
 } from './jira-automation-import/transform';
 import { 
   parseCronExpression, 
@@ -537,6 +539,80 @@ function formatReviewSignalValue(count: number, samples: string[]): string {
   return sampleText ? `${count} to review: ${sampleText}${moreText}` : `${count} to review`;
 }
 
+function getChecklistSeverityStyle(severity: JiraAutomationImportReviewChecklistItem['severity']): string {
+  if (severity === 'high') {
+    return 'background: #FFEBE6; color: #AE2E24; border-color: #FFD2CC;';
+  }
+
+  if (severity === 'medium') {
+    return 'background: #FFF7D6; color: #7F5F01; border-color: #F5CD47;';
+  }
+
+  return 'background: #E9F2FF; color: #0C66E4; border-color: #CCE0FF;';
+}
+
+function renderReviewChecklist(
+  doc: Document,
+  container: HTMLElement,
+  items: JiraAutomationImportReviewChecklistItem[],
+): void {
+  container.textContent = '';
+
+  const title = doc.createElement('div');
+  title.textContent = 'Review before enabling';
+  title.style.cssText = 'font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #172B4D;';
+  container.appendChild(title);
+
+  const help = doc.createElement('div');
+  help.textContent = 'The import stays disabled. Use this checklist before enabling the copy in Jira.';
+  help.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-bottom: 10px;';
+  container.appendChild(help);
+
+  items.forEach((item) => {
+    const row = doc.createElement('div');
+    row.style.cssText = `
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 10px;
+      padding: 9px 0;
+      border-top: 1px solid #EBECF0;
+    `;
+
+    const severity = doc.createElement('span');
+    severity.textContent = item.severity.toUpperCase();
+    severity.style.cssText = `
+      align-self: start;
+      justify-self: start;
+      min-width: 54px;
+      text-align: center;
+      padding: 2px 6px;
+      border: 1px solid;
+      border-radius: 3px;
+      font-size: 11px;
+      line-height: 1.4;
+      font-weight: 700;
+      ${getChecklistSeverityStyle(item.severity)}
+    `;
+
+    const content = doc.createElement('div');
+    content.style.cssText = 'min-width: 0;';
+
+    const label = doc.createElement('div');
+    label.textContent = item.label;
+    label.style.cssText = 'font-size: 13px; line-height: 1.35; font-weight: 600; color: #172B4D;';
+
+    const detail = doc.createElement('div');
+    detail.textContent = item.detail;
+    detail.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-top: 2px; word-break: break-word;';
+
+    content.appendChild(label);
+    content.appendChild(detail);
+    row.appendChild(severity);
+    row.appendChild(content);
+    container.appendChild(row);
+  });
+}
+
 function showImportPreviewDialog(
   exportedData: ExportedData,
   file: File,
@@ -631,6 +707,16 @@ function showImportPreviewDialog(
     `;
     dialog.appendChild(details);
 
+    const checklistBox = doc.createElement('div');
+    checklistBox.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #DFE1E6;
+      border-radius: 6px;
+      background: white;
+    `;
+    dialog.appendChild(checklistBox);
+
     const safeguardBox = doc.createElement('div');
     safeguardBox.style.cssText = `
       margin-bottom: 16px;
@@ -702,6 +788,7 @@ function showImportPreviewDialog(
       );
       appendInfoRow(doc, details, 'Target project', `${projectContext.projectKey} (${projectContext.projectId})`);
       appendInfoRow(doc, details, 'Imported state', 'DISABLED');
+      renderReviewChecklist(doc, checklistBox, buildJiraAutomationImportReviewChecklist(rule));
 
       warningBox.textContent = '';
       const warnings = buildJiraAutomationImportWarnings(rule);
@@ -870,7 +957,11 @@ function findCreateRuleButton(doc: Document): HTMLElement | null {
   return null;
 }
 
-function waitForCreateRuleButton(doc: Document, projectContext: JiraAutomationProjectContext): void {
+function waitForCreateRuleButton(
+  doc: Document,
+  projectContext: JiraAutomationProjectContext,
+  attempt = 0,
+): void {
   if (importButtonObservers.has(doc) || doc.getElementById('import-rule-button') || !doc.body) {
     return;
   }
@@ -878,19 +969,40 @@ function waitForCreateRuleButton(doc: Document, projectContext: JiraAutomationPr
   importButtonObservers.add(doc);
   const observer = new MutationObserver(() => {
     if (doc.getElementById('import-rule-button')) {
-      observer.disconnect();
+      stopObserving();
       return;
     }
 
     const button = findCreateRuleButton(doc);
     if (button) {
-      observer.disconnect();
+      stopObserving();
       appendImportButtonNearElement(button, projectContext, doc);
     }
   });
 
+  function stopObserving(): void {
+    observer.disconnect();
+    importButtonObservers.delete(doc);
+  }
+
   observer.observe(doc.body, { childList: true, subtree: true });
-  setTimeout(() => observer.disconnect(), 15000);
+  setTimeout(() => {
+    stopObserving();
+
+    if (doc.getElementById('import-rule-button') || !doc.body) {
+      return;
+    }
+
+    const button = findCreateRuleButton(doc);
+    if (button) {
+      appendImportButtonNearElement(button, projectContext, doc);
+      return;
+    }
+
+    if (attempt < 3) {
+      waitForCreateRuleButton(doc, projectContext, attempt + 1);
+    }
+  }, 15000);
 }
 
 function createImportButton(iframeDoc: Document, projectContext: JiraAutomationProjectContext): void {

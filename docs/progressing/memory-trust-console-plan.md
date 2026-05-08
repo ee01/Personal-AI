@@ -47,10 +47,10 @@
 
 `docs/progressing` 近期已有四个新能力方案：
 
-- `cross-ai-memory-capsule-plan.md`：跨 AI 记忆胶囊交接台。
+- `docs/features/context_assist.md`：AI Prompt Injection / Context Handoff 与会前准备。
 - `decision-time-machine-plan.md`：个人决策记忆回放台。
 - `personal-skill-foundry-plan.md`：个人技能炼金台。
-- `memory-rehearsal-studio-plan.md`：记忆情景演练室。
+- `docs/features/context_assist.md`：会前准备与后续情景演练扩展。
 
 本次方案刻意避开这些主线。Memory Trust Console 的核心对象不是“上下文包”“决策 episode”“可复用技能”或“未来沟通演练”，而是这些能力共同依赖的**记忆可信度与修复工作流**。
 
@@ -267,7 +267,7 @@ interface SourceTrustProfile {
 ```ts
 interface TrustLedgerEvent {
   id: string;
-  targetType: 'message' | 'chunk' | 'profile' | 'entity' | 'decision' | 'skill' | 'capsule';
+  targetType: 'message' | 'chunk' | 'profile' | 'entity' | 'decision' | 'skill' | 'context_pack';
   targetId: string;
   eventType:
     | 'captured'
@@ -334,7 +334,7 @@ Trust Ledger 不是给用户每天读流水，而是用于：
 
 ### 体验 3：跨 AI 注入前的 Trust Gate
 
-当 Cross-AI Memory Capsule、Decision Time Machine、Skill Foundry 或 Rehearsal Studio 准备把上下文交给外部 AI 时，Memory Trust Console 提供一个轻量 gate：
+当 AI Prompt Injection / Context Handoff、Decision Time Machine、Skill Foundry 或 Rehearsal Studio 准备把上下文交给外部 AI 时，Memory Trust Console 提供一个轻量 gate：
 
 > 这次上下文包含 12 条记忆，其中 2 条未确认画像、1 条公司内部政策、3 条会议 transcript。建议脱敏人员名单，并把未确认画像改成低置信提示。
 
@@ -385,10 +385,10 @@ Trust Ledger 不是给用户每天读流水，而是用于：
 | `TruthMaintainer` | 继续负责事实冲突，Trust Console 负责展示、分流、批量处理和用户体验 |
 | `ProfileManager` / `USER_CORE.md` | 把弱画像、未确认偏好、过期身份事实暴露给用户校准 |
 | `ConsolidationEngine` | 输出 nightly health scan，不只生成 summary 和 reflection |
-| Cross-AI Memory Capsule | 注入前调用 Trust Gate，避免把未确认/敏感/过期记忆交给外部 AI |
+| AI Prompt Injection / Context Handoff | 注入前调用 Trust Gate，避免把未确认/敏感/过期记忆交给外部 AI |
 | Decision Time Machine | 决策 episode 显示 trust badges 和 changed/stale 检查 |
 | Personal Skill Foundry | skill 候选必须通过证据和执行反馈可信度检查 |
-| Memory Rehearsal Studio | 人物/会议模拟必须显示证据强度，避免无依据画像 |
+| Context Assist / 后续情景演练 | 人物/会议模拟必须显示证据强度，避免无依据画像 |
 
 ## 信息架构
 
@@ -537,7 +537,7 @@ CREATE TABLE memory_trust_ledger (
 
 - 联系方式、会议链接、内部政策、人员评价、客户/财务/法律/医疗等敏感类。
 - 外部 AI provider 注入风险。
-- 来源策略冲突：例如某来源设为 local-only，但被 capsule 选中。
+- 来源策略冲突：例如某来源设为 local-only，但被 AI context pack 选中。
 
 输出：
 
@@ -655,7 +655,7 @@ POST /api/v1/memory-health/trust-gate/preview
 
 范围：
 
-- Cross-AI Memory Capsule 生成前调用 `/trust-gate/preview`。
+- AI Prompt Injection / Context Handoff 生成前调用 `/trust-gate/preview`。
 - Meeting Pilot / Rehearsal / Decision / Skill 的召回结果显示 trust badges。
 - ProviderContextService 支持 `privacyMode=redacted`。
 - 外部 AI 注入回执写 ledger。
@@ -827,7 +827,7 @@ trustScore =
 
 - 用户处理每日 Memory Health Inbox 的中位时间 < 2 分钟。
 - 批量修复 proposal 接受率。
-- Cross-AI Capsule / Rehearsal / Decision 生成时的低信任警告减少。
+- AI Prompt Injection / Rehearsal / Decision 生成时的低信任警告减少。
 
 ## 实施计划
 
@@ -848,7 +848,7 @@ trustScore =
 ### 第 3 周：Trust Gate
 
 - 给 ProviderContextService 增加 trust preview。
-- 给 Cross-AI Capsule / Decision / Rehearsal 的 context package 增加 trust badges。
+- 给 AI Prompt Injection / Decision / Rehearsal 的 context package 增加 trust badges。
 - 实现 redacted context preview。
 
 ### 第 4 周：source policy 和反馈闭环

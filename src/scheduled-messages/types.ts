@@ -139,6 +139,14 @@ export interface BotAutomationConfig {
   timelineSyncRule?: BotAutomationRule;
 }
 
+export interface RingCentralSenderConfig {
+  enabled: boolean;
+  clientId?: string;
+  clientSecret?: string;
+  jwt?: string;
+  updatedAt?: string;
+}
+
 // Sheet 配置接口
 export interface SheetConfig {
   sheetId: string;
@@ -161,6 +169,8 @@ export interface SheetConfig {
   botAutomation?: BotAutomationConfig;
   // 旧版兼容字段：仅 executor rule
   botExecutor?: BotAutomationRule;
+  // AsMe RingCentral sender：配置后由 Jira rule 调内网 Dify workflow 发送
+  ringCentralSender?: RingCentralSenderConfig;
 }
 
 // 初始化结果

@@ -12,10 +12,12 @@ import {
   escapeAttribute,
   escapeHtml,
   extractDesignLinks,
+  formatDesignStatusLabel,
   getDesignDisplayLabel,
   getDesignStatusTone,
   getDesignSourceLabel,
   getUXEpicStatusTone,
+  isMeaningfulDesignTitle,
   mergeDesignSources,
   matchesProjectPattern,
   normalizeDesignUrl,
@@ -122,6 +124,18 @@ function createDirectDesignItem(candidate: DesignLinkCandidate, source: string):
   };
 }
 
+function getDescriptionLinkTitle(link: HTMLAnchorElement): string | undefined {
+  return (
+    link.textContent?.replace(/\s+/g, ' ').trim() ||
+    link.getAttribute('title')?.replace(/\s+/g, ' ').trim() ||
+    undefined
+  );
+}
+
+function getCandidateDesignLabel(candidate: DesignLinkCandidate): string {
+  return isMeaningfulDesignTitle(candidate.title) ? candidate.title!.trim() : candidate.label;
+}
+
 // 从DOM description中查找设计链接
 function getDesignLinksFromDescription(
   extraDesignDomains: string[] = [],
@@ -143,7 +157,10 @@ function getDesignLinksFromDescription(
     
     // 从链接元素中查找设计链接
     links.forEach(link => {
-      addCandidate(extractDesignLinks(link.href, false, extraDesignDomains)[0] || null);
+      const linkTitle = getDescriptionLinkTitle(link);
+      extractDesignLinks(link.href, false, extraDesignDomains)
+        .map(candidate => ({ ...candidate, title: linkTitle || candidate.title }))
+        .forEach(addCandidate);
     });
     
     extractDesignLinks(text, false, extraDesignDomains).forEach(addCandidate);
@@ -337,7 +354,7 @@ async function fetchRemoteDesignLinks(
         const candidate = extractDesignLinks(url, false, extraDesignDomains)[0];
         if (!candidate || seenUrls.has(candidate.url)) continue;
 
-        const statusTitle = object.status?.icon?.title || (object.status?.resolved ? 'Resolved' : undefined);
+        const statusTitle = getRemoteDesignStatus(remoteLink);
         seenUrls.add(candidate.url);
         designLinks.push({
           ...candidate,
@@ -356,6 +373,27 @@ async function fetchRemoteDesignLinks(
 
   jiraRemoteDesignLinksCache.set(cacheKey, request);
   return request;
+}
+
+function getRemoteDesignStatus(remoteLink: any): string | undefined {
+  const status = remoteLink?.object?.status;
+  const statusCandidates = [
+    typeof status === 'string' ? status : undefined,
+    status?.icon?.title,
+    status?.title,
+    status?.name,
+    status?.status,
+    status?.value,
+    status?.category?.name,
+    status?.resolved ? 'Done' : undefined,
+  ];
+
+  for (const statusCandidate of statusCandidates) {
+    const formattedStatus = formatDesignStatusLabel(statusCandidate);
+    if (formattedStatus) return formattedStatus;
+  }
+
+  return undefined;
 }
 
 // 获取 UX ticket 的 design link 和对应 UX Epic 状态
@@ -484,11 +522,12 @@ async function appendUXDesignItems(
     }
 
     for (const candidate of candidates) {
+      const candidateDisplayLabel = getCandidateDesignLabel(candidate);
       designData.push({
         type: 'ux_ticket',
         url: candidate.url,
-        summary: candidate.title || uxTicket.summary || designContext.summary || candidate.label,
-        designLabel: candidate.tool === 'figma' ? candidate.label : (candidate.title || candidate.label),
+        summary: candidateDisplayLabel || uxTicket.summary || designContext.summary || candidate.label,
+        designLabel: candidateDisplayLabel,
         uxTicketKey: uxTicket.key,
         source: mergeDesignSources(baseSource, candidate.source || 'design_field'),
         linkProvided: true,
@@ -504,6 +543,10 @@ async function appendUXDesignItems(
 
 function removeDesignLinks(): void {
   document.querySelectorAll('.design-links-container').forEach(element => element.remove());
+}
+
+function removeBackendProgress(): void {
+  document.querySelectorAll('.backend-progress-container').forEach(element => element.remove());
 }
 
 // 显示设计链接
@@ -522,14 +565,17 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   const iconUrl = chrome.runtime.getURL('icons/icon48.png');
 
   designLinksContainer.className = 'design-links-container';
+  designLinksContainer.setAttribute('role', 'region');
+  designLinksContainer.setAttribute('aria-label', 'Design context');
   
   let linksHtml = '';
   designData.forEach((design, _index) => {
     if (design.type === 'figma' || design.type === 'design_link') {
       const linkLabel = getDesignDisplayLabel(design);
       const safeUrl = escapeAttribute(design.url);
-      const statusTag = design.status
-        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(design.status)}">${escapeHtml(design.status)}</span>`
+      const designStatusLabel = formatDesignStatusLabel(design.status);
+      const statusTag = designStatusLabel
+        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(design.status)}">${escapeHtml(designStatusLabel)}</span>`
         : '';
       linksHtml += `
         <div class="design-link-item">
@@ -561,9 +607,8 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
           <a href="${escapeAttribute(uxTicketUrl)}" title="${escapeAttribute(design.summary || design.uxTicketKey)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link">
             ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
           </a>
-          <span class="design-missing-summary" title="${escapeAttribute(design.summary || design.uxTicketKey)}">${escapeHtml(design.summary || design.uxTicketKey)}</span>
         `;
-      const designStatusText = design.linkProvided ? design.designStatus : 'Missing link';
+      const designStatusText = design.linkProvided ? formatDesignStatusLabel(design.designStatus) : 'Missing link';
       const designStatusTag = designStatusText
         ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(designStatusText)}">${escapeHtml(designStatusText)}</span>`
         : '';
@@ -622,24 +667,25 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       margin: 10px 0;
       padding: 8px 12px;
       background-color: #f0f5ff;
-      border: 1px solid #d6e4ff;
       border-radius: 4px;
-      display: flex;
+      display: inline-flex;
       flex-direction: column;
-      box-shadow: 0 1px 2px rgba(9,30,66,0.12);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      transition: all 0.3s ease;
       position: relative;
       overflow: visible;
-      max-width: min(100%, 980px);
+      max-height: ${40 + (designData.length - 1) * 30}px;
       z-index: 1;
     }
     .design-links-container:hover {
-      box-shadow: 0 2px 4px rgba(9,30,66,0.16);
-      transform: none;
+      max-height: ${80 + (designData.length - 1) * 30}px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+      transform: translateY(4px);
+      z-index: 1000;
     }
     .design-links-content {
       display: flex;
       flex-direction: column;
-      gap: 4px;
       background-color: #f0f5ff;
       position: relative;
       z-index: 2;
@@ -647,30 +693,40 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     .design-link-item {
       display: flex;
       align-items: center;
-      gap: 4px 6px;
+      gap: 4px;
+      margin-bottom: 4px;
       position: relative;
       flex-wrap: wrap;
       min-width: 0;
       max-width: 100%;
     }
+    .design-link-item:last-child {
+      margin-bottom: 0;
+    }
     .design-links-footer {
       font-size: 12px;
       color: #666;
-      margin-top: 6px;
+      margin-top: 0;
       padding-top: 8px;
       border-top: 1px dashed #ccc;
-      opacity: 0.8;
-      transform: none;
-      position: static;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: all 0.3s ease;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
       background-color: #f0f5ff;
+      padding: 8px 12px;
+      border-radius: 0 0 4px 4px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
-      gap: 8px;
     }
     .design-links-container:hover .design-links-footer {
-      opacity: 0.8;
-      transform: none;
+      opacity: 1;
+      transform: translateY(0);
     }
     .footer-text {
       font-size: 12px;
@@ -720,15 +776,6 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       font-weight: 500;
       white-space: nowrap;
     }
-    .design-missing-summary {
-      color: #44546f;
-      display: inline-block;
-      max-width: min(54vw, 420px);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      vertical-align: bottom;
-    }
     .ux-ticket-link {
       color: #0052cc;
       font-size: 11px;
@@ -771,7 +818,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       border-radius: 999px;
       font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0.01em;
+      letter-spacing: 0;
       line-height: 1.5;
       white-space: nowrap;
     }
@@ -1024,8 +1071,7 @@ function displayBackendProgress(progressData: BackendProgressData[]): void {
   if (!anchor) return;
   
   // 检查是否已经存在
-  const existing = document.querySelector('.backend-progress-container');
-  if (existing) existing.remove();
+  removeBackendProgress();
   
   if (progressData.length === 0) return;
   
@@ -1188,22 +1234,30 @@ function displayBackendProgress(progressData: BackendProgressData[]): void {
 }
 
 // 收集并显示Backend Progress信息
-async function collectAndDisplayBackendProgress(ticketId: string, depProject: string): Promise<void> {
+async function collectAndDisplayBackendProgress(
+  ticketId: string,
+  depProject: string,
+  shouldContinue: () => boolean = () => true,
+): Promise<void> {
   try {
     const allProgressData: BackendProgressData[] = [];
     
     const isSubtask = isSubtaskTicket();
     const isEpic = await isEpicTicket();
+    if (!shouldContinue()) return;
     
     if (isEpic) {
       // 当前是Epic，查找Epic自身的linked issues中的依赖ticket
       const epicData = await fetchTicketData(ticketId);
+      if (!shouldContinue()) return;
       const depTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
       for (const dep of depTickets) {
         const details = await fetchDependencyDetails(dep.key);
+        if (!shouldContinue()) return;
         let rolloutDate: string | null = null;
         if (details.fixVersion) {
           rolloutDate = await fetchRolloutDate(details.fixVersion);
+          if (!shouldContinue()) return;
         }
         allProgressData.push({
           dependencyTicketKey: dep.key,
@@ -1220,12 +1274,15 @@ async function collectAndDisplayBackendProgress(ticketId: string, depProject: st
       const parentLink = getParentLinkFromDOM();
       if (parentLink) {
         const parentData = await fetchTicketData(parentLink.key);
+        if (!shouldContinue()) return;
         const depTickets = findDependencyTicketsFromData(parentData, depProject, ticketId);
         for (const dep of depTickets) {
           const details = await fetchDependencyDetails(dep.key);
+          if (!shouldContinue()) return;
           let rolloutDate: string | null = null;
           if (details.fixVersion) {
             rolloutDate = await fetchRolloutDate(details.fixVersion);
+            if (!shouldContinue()) return;
           }
           allProgressData.push({
             dependencyTicketKey: dep.key,
@@ -1240,14 +1297,18 @@ async function collectAndDisplayBackendProgress(ticketId: string, depProject: st
         
         // Sub-task的Epic可能不在当前DOM中，通过API获取parent的Epic Link
         const epicKey = await fetchTicketEpicLink(parentLink.key);
+        if (!shouldContinue()) return;
         if (epicKey) {
           const epicData = await fetchTicketData(epicKey);
+          if (!shouldContinue()) return;
           const epicDepTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
           for (const dep of epicDepTickets) {
             const details = await fetchDependencyDetails(dep.key);
+            if (!shouldContinue()) return;
             let rolloutDate: string | null = null;
             if (details.fixVersion) {
               rolloutDate = await fetchRolloutDate(details.fixVersion);
+              if (!shouldContinue()) return;
             }
             allProgressData.push({
               dependencyTicketKey: dep.key,
@@ -1266,9 +1327,11 @@ async function collectAndDisplayBackendProgress(ticketId: string, depProject: st
       const domDepTickets = getDependencyTicketsFromLinkedIssues(depProject);
       for (const dep of domDepTickets) {
         const details = await fetchDependencyDetails(dep.key);
+        if (!shouldContinue()) return;
         let rolloutDate: string | null = null;
         if (details.fixVersion) {
           rolloutDate = await fetchRolloutDate(details.fixVersion);
+          if (!shouldContinue()) return;
         }
         allProgressData.push({
           dependencyTicketKey: dep.key,
@@ -1285,12 +1348,15 @@ async function collectAndDisplayBackendProgress(ticketId: string, depProject: st
       const epicLink = getParentEpicFromDOM();
       if (epicLink) {
         const epicData = await fetchTicketData(epicLink.key);
+        if (!shouldContinue()) return;
         const epicDepTickets = findDependencyTicketsFromData(epicData, depProject, ticketId);
         for (const dep of epicDepTickets) {
           const details = await fetchDependencyDetails(dep.key);
+          if (!shouldContinue()) return;
           let rolloutDate: string | null = null;
           if (details.fixVersion) {
             rolloutDate = await fetchRolloutDate(details.fixVersion);
+            if (!shouldContinue()) return;
           }
           allProgressData.push({
             dependencyTicketKey: dep.key,
@@ -1319,6 +1385,7 @@ async function collectAndDisplayBackendProgress(ticketId: string, depProject: st
     }
     
     if (mergedProgressData.length > 0) {
+      if (!shouldContinue()) return;
       console.log('Backend progress found:', mergedProgressData);
       displayBackendProgress(mergedProgressData);
     } else {
@@ -1331,7 +1398,12 @@ async function collectAndDisplayBackendProgress(ticketId: string, depProject: st
 
 // 主函数
 async function main(): Promise<void> {
-  if (!isJiraTicketPage()) return;
+  if (!isJiraTicketPage()) {
+    mainRunSequence += 1;
+    removeDesignLinks();
+    removeBackendProgress();
+    return;
+  }
   const runId = ++mainRunSequence;
   
   try {
@@ -1339,18 +1411,22 @@ async function main(): Promise<void> {
     const ticketId = getTicketIdFromUrl();
     const isCurrentRun = () => runId === mainRunSequence && isJiraTicketPage() && getTicketIdFromUrl() === ticketId;
     console.log('Current Jira ticket:', ticketId);
-    
-    // 加载配置
-    const config = await getEnvConfig();
-    const designProject = config.DESIGN_JIRA_PROJECT || 'UX*';
-    const extraDesignDomains = parseDesignDomainPatterns(config.DESIGN_LINK_DOMAINS);
-    
+
     // 等待DOM加载完成
     await waitForElement('.issue-header-content, #description-val, #customfield_15751-val, #customfield_11450-val, #type-val', 5000)
       .catch(error => {
         console.warn('Jira design links continuing after DOM wait timeout:', error);
       });
     if (!isCurrentRun()) return;
+
+    removeDesignLinks();
+    removeBackendProgress();
+
+    // 加载配置
+    const config = await getEnvConfig();
+    if (!isCurrentRun()) return;
+    const designProject = config.DESIGN_JIRA_PROJECT || 'UX*';
+    const extraDesignDomains = parseDesignDomainPatterns(config.DESIGN_LINK_DOMAINS);
     
     const allDesignData: DesignDisplayItem[] = [];
     
@@ -1358,6 +1434,7 @@ async function main(): Promise<void> {
     allDesignData.push(...getDesignLinksFromDescription(extraDesignDomains));
 
     const remoteDesignLinks = await fetchRemoteDesignLinks(ticketId, extraDesignDomains);
+    if (!isCurrentRun()) return;
     remoteDesignLinks.forEach(candidate => {
       allDesignData.push(createDirectDesignItem(candidate, candidate.source || 'remote_link'));
     });
@@ -1365,22 +1442,28 @@ async function main(): Promise<void> {
     // 2. 从当前页面的linked issues中查找UX tickets
     const linkedUXTickets = getUXTicketsFromLinkedIssues(designProject);
     await appendUXDesignItems(allDesignData, linkedUXTickets, undefined, extraDesignDomains);
+    if (!isCurrentRun()) return;
     
     // 判断是否为Epic ticket
     if (await isEpicTicket()) {
+      if (!isCurrentRun()) return;
       // 如果是Epic，直接从Epic中查找UX linked issues
       const epicUXTickets = await getUXTicketsFromEpic(ticketId, designProject);
       await appendUXDesignItems(allDesignData, epicUXTickets, 'epic', extraDesignDomains);
+      if (!isCurrentRun()) return;
       
       // 还需要检查Epic的Parent Link
       const parentLink = getParentLinkFromDOM();
       if (parentLink) {
         console.log('Parent ticket:', parentLink.key);
         const parentData = await fetchTicketData(parentLink.key);
+        if (!isCurrentRun()) return;
         const parentUXTickets = await findUXTickets(parentData, ticketId, designProject);
         await appendUXDesignItems(allDesignData, parentUXTickets, 'parent', extraDesignDomains);
+        if (!isCurrentRun()) return;
       }
     } else {
+      if (!isCurrentRun()) return;
       // 如果不是Epic，先获取Epic Link
       const epicLink = getParentEpicFromDOM();
       if (epicLink) {
@@ -1389,14 +1472,18 @@ async function main(): Promise<void> {
         // 从Epic中查找UX linked issues
         const epicUXTickets = await getUXTicketsFromEpic(epicLink.key, designProject);
         await appendUXDesignItems(allDesignData, epicUXTickets, 'epic', extraDesignDomains);
+        if (!isCurrentRun()) return;
         
         // 通过API获取Epic的Parent Link
         const parentLink = await getEpicParentLink(epicLink.key);
+        if (!isCurrentRun()) return;
         if (parentLink) {
           console.log('Parent ticket:', parentLink.key);
           const parentData = await fetchTicketData(parentLink.key);
+          if (!isCurrentRun()) return;
           const parentUXTickets = await findUXTickets(parentData, ticketId, designProject);
           await appendUXDesignItems(allDesignData, parentUXTickets, 'parent', extraDesignDomains);
+          if (!isCurrentRun()) return;
         }
       }
     }
@@ -1417,7 +1504,8 @@ async function main(): Promise<void> {
     const depProject = config.DEPENDENCIES_JIRA_PROJECT;
     if (depProject) {
       if (!isCurrentRun()) return;
-      await collectAndDisplayBackendProgress(ticketId, depProject);
+      await collectAndDisplayBackendProgress(ticketId, depProject, isCurrentRun);
+      if (!isCurrentRun()) return;
     }
     
   } catch (error) {
@@ -1465,6 +1553,10 @@ function handlePageChanges(): void {
       currentUrl = location.href;
       if (isJiraTicketPage()) {
         setTimeout(main, 1000); // 延迟执行，等待页面加载
+      } else {
+        mainRunSequence += 1;
+        removeDesignLinks();
+        removeBackendProgress();
       }
     }
   });

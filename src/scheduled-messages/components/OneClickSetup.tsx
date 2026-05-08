@@ -457,6 +457,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             <div style={styles.manualSection}>
               <p style={styles.manualTitle}>如果您已有维护表，可以直接绑定：</p>
               <p style={styles.manualHint}>支持 Sheet 分享链接、Drive open?id 链接或直接粘贴 Sheet ID；旧维护表缺少 Config 时会自动补齐。</p>
+              <div style={styles.syncNotice}>
+                绑定会以 Sheet Config 作为跨设备恢复源；当前设备未参与写回的新字段会保留在 Sheet 中，避免旧本地配置覆盖远端设置。
+              </div>
               <div style={styles.inputGroup}>
                 <input
                   type="text"
@@ -485,7 +488,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                     e.currentTarget.style.backgroundColor = manualBindDisabled ? '#adb5bd' : '#6c757d';
                   }}
                 >
-                  绑定
+                  绑定已有表
                 </button>
               </div>
             </div>
@@ -586,6 +589,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     lineHeight: 1.5,
     marginTop: '-4px',
     marginBottom: '10px',
+  },
+  syncNotice: {
+    fontSize: '12px',
+    color: '#495057',
+    backgroundColor: '#f8f9fa',
+    border: '1px solid #e9ecef',
+    borderRadius: '6px',
+    padding: '10px 12px',
+    marginBottom: '12px',
+    lineHeight: 1.5,
   },
   inputGroup: {
     display: 'flex',

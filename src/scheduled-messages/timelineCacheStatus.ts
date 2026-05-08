@@ -22,6 +22,9 @@ export interface TimelineCacheSyncAttempt {
   errorCode?: string;
   error?: string;
   parseError?: string;
+  requestContentType?: string;
+  nextAction?: string;
+  requestBodyBytes?: number;
   payloadBytes?: number;
   maxBytes?: number;
   milestoneCount?: number;
@@ -40,6 +43,8 @@ export interface TimelineCacheStatus {
   projects: TimelineCacheProjectStatus[];
   error?: string;
 }
+
+export const TIMELINE_CACHE_AUTO_REFRESH_MIN_INTERVAL_MS = 5000;
 
 const TIMELINE_CACHE_STATUS_CODES: TimelineCacheProjectStatusCode[] = [
   'ready',
@@ -113,7 +118,10 @@ function normalizeTimelineCacheSyncAttempt(value: unknown): TimelineCacheSyncAtt
   const errorCode = getString(value.errorCode).trim();
   const error = getString(value.error).trim();
   const parseError = getString(value.parseError).trim();
+  const requestContentType = getString(value.requestContentType).trim();
+  const nextAction = getString(value.nextAction).trim();
   const ageMs = getOptionalFiniteNumber(value.ageMs);
+  const requestBodyBytes = getOptionalFiniteNumber(value.requestBodyBytes);
   const payloadBytes = getOptionalFiniteNumber(value.payloadBytes);
   const maxBytes = getOptionalFiniteNumber(value.maxBytes);
   const milestoneCount = getOptionalFiniteNumber(value.milestoneCount);
@@ -133,6 +141,15 @@ function normalizeTimelineCacheSyncAttempt(value: unknown): TimelineCacheSyncAtt
   }
   if (parseError) {
     attempt.parseError = parseError;
+  }
+  if (requestContentType) {
+    attempt.requestContentType = requestContentType;
+  }
+  if (nextAction) {
+    attempt.nextAction = nextAction;
+  }
+  if (requestBodyBytes !== undefined && requestBodyBytes !== null) {
+    attempt.requestBodyBytes = requestBodyBytes;
   }
   if (payloadBytes !== undefined && payloadBytes !== null) {
     attempt.payloadBytes = payloadBytes;
@@ -261,6 +278,24 @@ export function parseTimelineCacheStatusResponseText(responseText: string): Time
   }
 }
 
+export function shouldAutoRefreshTimelineCacheStatus(input: {
+  enabled: boolean;
+  isLoading: boolean;
+  nowMs: number;
+  lastRefreshAtMs?: number | null;
+}): boolean {
+  if (!input.enabled || input.isLoading) {
+    return false;
+  }
+
+  const lastRefreshAtMs = input.lastRefreshAtMs;
+  if (typeof lastRefreshAtMs !== 'number' || !Number.isFinite(lastRefreshAtMs) || lastRefreshAtMs <= 0) {
+    return true;
+  }
+
+  return input.nowMs - lastRefreshAtMs >= TIMELINE_CACHE_AUTO_REFRESH_MIN_INTERVAL_MS;
+}
+
 export function formatTimelineCacheAge(ageMs?: number | null): string {
   if (typeof ageMs !== 'number' || !Number.isFinite(ageMs)) {
     return '未知时间';
@@ -298,9 +333,16 @@ function formatTimelineCacheByteCount(bytes?: number): string {
 
 function formatTimelineCacheAttemptDetails(attempt: TimelineCacheSyncAttempt): string {
   const details: string[] = [];
+  const requestBodyBytes = formatTimelineCacheByteCount(attempt.requestBodyBytes);
   const payloadBytes = formatTimelineCacheByteCount(attempt.payloadBytes);
   const maxBytes = formatTimelineCacheByteCount(attempt.maxBytes);
 
+  if (attempt.requestContentType) {
+    details.push(`Content-Type ${attempt.requestContentType}`);
+  }
+  if (requestBodyBytes) {
+    details.push(`请求体 ${requestBodyBytes}`);
+  }
   if (payloadBytes && maxBytes) {
     details.push(`payload ${payloadBytes}/${maxBytes}`);
   } else if (payloadBytes) {
@@ -340,8 +382,9 @@ export function formatTimelineCacheLastAttempt(attempt?: TimelineCacheSyncAttemp
     .filter(Boolean)
     .join(' - ');
   const details = formatTimelineCacheAttemptDetails(attempt);
+  const nextAction = attempt.nextAction ? `；建议：${attempt.nextAction}` : '';
 
-  return `最近同步失败（${ageText}）${reason ? `：${reason}` : ''}${details ? `；${details}` : ''}`;
+  return `最近同步失败（${ageText}）${reason ? `：${reason}` : ''}${details ? `；${details}` : ''}${nextAction}`;
 }
 
 export function getTimelineCacheStatusLabel(status: TimelineCacheProjectStatusCode): string {
@@ -484,11 +527,19 @@ export function buildTimelineCacheDiagnosticText(input: {
       const lastAttempt = formatTimelineCacheLastAttempt(projectStatus.lastAttempt);
       if (lastAttempt) {
         lines.push(lastAttempt);
+        if (projectStatus.status === 'ready' && projectStatus.lastAttempt?.success === false) {
+          lines.push('当前影响: 缓存仍可用；建议手动运行 Timeline Sync Rule 修复最近失败后刷新状态。');
+        }
       }
 
       const milestoneKeys = formatTimelineMilestoneKeysForDiagnostics(projectStatus.milestoneKeys);
       if (milestoneKeys) {
         lines.push(`缓存 Milestone: ${milestoneKeys}`);
+      }
+
+      if (isTimelineMilestoneMissingForDiagnostics(selectedMilestone, projectStatus.milestoneKeys)) {
+        lines.push(`Milestone 缺失: 当前项目缓存不包含 ${selectedMilestone}`);
+        lines.push('建议操作: 先手动运行 Timeline Sync Rule，或改选缓存中已有的 Milestone。');
       }
 
       const actionText = getTimelineCacheSaveBlockText(projectStatus);
@@ -513,6 +564,20 @@ export function buildTimelineCacheDiagnosticText(input: {
   }
 
   return lines.join('\n');
+}
+
+function isTimelineMilestoneMissingForDiagnostics(
+  selectedMilestone?: string,
+  milestoneKeys?: string[],
+): boolean {
+  const normalizedSelected = selectedMilestone?.trim();
+  if (!normalizedSelected || !milestoneKeys || milestoneKeys.length === 0) {
+    return false;
+  }
+
+  return !milestoneKeys
+    .map(key => key.trim())
+    .some(key => key === normalizedSelected);
 }
 
 function formatTimelineMilestoneKeysForDiagnostics(milestoneKeys?: string[]): string {

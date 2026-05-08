@@ -298,6 +298,74 @@ result = findMatchingMessage(data, headers, now, {}, 'PAST_30_MINUTES', '2026-05
   assert.equal(context.result.matchMode, 'PAST_30_MINUTES');
 });
 
+test('Apps Script only returns AsMe messages to Jira when RingCentral sender is enabled', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    Session: { getScriptTimeZone: () => 'Asia/Shanghai' },
+    Utilities: {
+      formatDate: (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      },
+    },
+    disabled: null as any,
+    enabled: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+var headers = ['ID', 'Status', 'Push_Method', 'Schedule_Date', 'Schedule_Time', 'Topic', 'Content', 'Glip_User_Name', 'Glip_Team_ID', 'Last_Exec', 'Exec_Log'];
+var data = [
+  headers,
+  ['MSG_ASME', 'Active', 'AsMe', '2026-05-03', '09:00', 'As me', 'hello @John', 'esone.qiu', '', '', '']
+];
+var now = new Date(2026, 4, 3, 9, 0);
+disabled = findMatchingMessage(data, headers, now, {}, 'CURRENT_MINUTE', '2026-05-03', 9, false);
+enabled = findMatchingMessage(data, headers, now, {}, 'CURRENT_MINUTE', '2026-05-03', 9, true);`,
+    context,
+  );
+
+  assert.equal(context.disabled, null);
+  assert.equal(context.enabled.ID, 'MSG_ASME');
+  assert.equal(context.enabled.targetType, 'ringcentral_sender');
+  assert.equal(context.enabled.chatId, 'esone.qiu');
+});
+
+test('Apps Script uses Glip_Team_ID as RingCentral AsMe chatId for group targets', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    Session: { getScriptTimeZone: () => 'Asia/Shanghai' },
+    Utilities: {
+      formatDate: (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      },
+    },
+    result: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+var headers = ['ID', 'Status', 'Push_Method', 'Schedule_Date', 'Schedule_Time', 'Topic', 'Content', 'Glip_User_Name', 'Glip_Team_ID', 'Last_Exec', 'Exec_Log'];
+var data = [
+  headers,
+  ['MSG_ASME_GROUP', 'Active', 'AsMe', '2026-05-03', '09:00', 'As me group', 'hello team', '', '123456789', '', '']
+];
+var now = new Date(2026, 4, 3, 9, 0);
+result = findMatchingMessage(data, headers, now, {}, 'CURRENT_MINUTE', '2026-05-03', 9, true);`,
+    context,
+  );
+
+  assert.equal(context.result.targetType, 'ringcentral_sender');
+  assert.equal(context.result.chatId, '123456789');
+});
+
 test('Apps Script does not fire explicit executor messages before the scheduled minute', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const context = {
@@ -650,6 +718,131 @@ test('Apps Script cacheReleaseInfo accepts standard JSON object releaseInfo body
   assert.doesNotMatch(context.result.text, /\[object Object\]/);
 });
 
+test('Apps Script cacheReleaseInfo exposes only milestones with valid dates', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const releaseInfo =
+    '{currentRelease=25.4.20, releaseInfo={=11/01/2025, Product DF=, BadIso=2026-05-10, InvalidDay=02/31/2026, FF=11/13/2025, Release=11/20/2025}}';
+  const properties: Record<string, string> = {};
+  const context = {
+    Logger: { log: () => undefined },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text: string) => {
+        const output = {
+          text,
+          mimeType: '',
+          setMimeType(mimeType: string) {
+            output.mimeType = mimeType;
+            return output;
+          },
+        };
+        return output;
+      },
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key: string) => properties[key] || null,
+        setProperty: (key: string, value: string) => {
+          properties[key] = value;
+        },
+      }),
+    },
+    releaseInfo,
+    result: null as any,
+    status: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+result = doGet({ parameter: { action: 'cacheReleaseInfo', project: 'mThor', releaseInfo: releaseInfo } });
+status = getTimelineCacheStatus();`,
+    context,
+  );
+
+  const body = JSON.parse(context.result.text);
+  const mThorStatus = context.status.projects.find((project: any) => project.project === 'mThor');
+
+  assert.equal(body.success, true);
+  assert.equal(body.milestoneCount, 2);
+  assert.deepEqual(Array.from(body.milestoneKeys), ['FF', 'Release']);
+  assert.deepEqual(Array.from(mThorStatus.milestoneKeys), ['FF', 'Release']);
+  assert.equal(mThorStatus.milestoneKeys.includes(''), false);
+  assert.doesNotMatch(JSON.stringify(mThorStatus), /Product DF|BadIso|InvalidDay/);
+});
+
+test('Apps Script cacheReleaseInfo rejects releaseInfo without usable milestone dates', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const releaseInfo =
+    '{currentRelease=25.4.20, releaseInfo={=11/13/2025, Product DF=, BadIso=2026-05-10, InvalidDay=02/31/2026}}';
+  const properties: Record<string, string> = {};
+  const context = {
+    Logger: { log: () => undefined },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text: string) => {
+        const output = {
+          text,
+          mimeType: '',
+          setMimeType(mimeType: string) {
+            output.mimeType = mimeType;
+            return output;
+          },
+        };
+        return output;
+      },
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key: string) => properties[key] || null,
+        setProperty: (key: string, value: string) => {
+          properties[key] = value;
+        },
+      }),
+    },
+    releaseInfo,
+    result: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}\nresult = doGet({ parameter: { action: 'cacheReleaseInfo', project: 'mThor', releaseInfo: releaseInfo } });`,
+    context,
+  );
+
+  const body = JSON.parse(context.result.text);
+  assert.equal(body.success, false);
+  assert.equal(body.errorCode, 'INVALID_RELEASE_INFO_SCHEMA');
+  assert.match(body.parseError, /有效日期/);
+  assert.equal(properties.TIMELINE_CACHE_mThor, undefined);
+});
+
+test('Apps Script Timeline target date safely ignores malformed milestone values and offsets', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    result: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+var releaseInfo = { mThor: { releaseInfo: { FF: '11/13/2025', Empty: '', Numeric: 20260510, BadIso: '2026-05-10' } } };
+var validDate = getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milestone: 'FF', Timeline_Offset: '-1' }, releaseInfo);
+result = {
+  empty: getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milestone: 'Empty', Timeline_Offset: '0' }, releaseInfo),
+  numeric: getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milestone: 'Numeric', Timeline_Offset: '0' }, releaseInfo),
+  badIso: getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milestone: 'BadIso', Timeline_Offset: '0' }, releaseInfo),
+  badOffset: getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milestone: 'FF', Timeline_Offset: 'abc' }, releaseInfo),
+  valid: validDate ? [validDate.getFullYear(), validDate.getMonth() + 1, validDate.getDate()] : null
+};`,
+    context,
+  );
+
+  assert.equal(context.result.empty, null);
+  assert.equal(context.result.numeric, null);
+  assert.equal(context.result.badIso, null);
+  assert.equal(context.result.badOffset, null);
+  assert.deepEqual(Array.from(context.result.valid), [2025, 11, 12]);
+});
+
 test('Apps Script cacheReleaseInfo reports actionable diagnostics for malformed POST JSON', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const context = {
@@ -685,6 +878,8 @@ test('Apps Script cacheReleaseInfo reports actionable diagnostics for malformed 
   assert.equal(body.action, 'cacheReleaseInfo');
   assert.equal(body.receivedContentType, 'application/json');
   assert.equal(body.bodyLength, context.postBody.length);
+  assert.equal(body.requestContentType, 'application/json');
+  assert.ok(body.requestBodyBytes >= body.bodyLength);
   assert.match(body.error, /POST JSON 解析失败/);
   assert.match(body.nextAction, /POST JSON/);
   assert.match(body.nextAction, /asJsonString/);
@@ -695,11 +890,67 @@ test('Apps Script cacheReleaseInfo reports actionable diagnostics for malformed 
   assert.doesNotMatch(context.result.text, /25\.4\.20/);
 });
 
+test('Apps Script records malformed cache POST JSON attempts in Timeline cache status', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const properties: Record<string, string> = {};
+  const context = {
+    Logger: { log: () => undefined },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text: string) => {
+        const output = {
+          text,
+          mimeType: '',
+          setMimeType(mimeType: string) {
+            output.mimeType = mimeType;
+            return output;
+          },
+        };
+        return output;
+      },
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key: string) => properties[key] || null,
+        setProperty: (key: string, value: string) => {
+          properties[key] = value;
+        },
+      }),
+    },
+    postBody: '{"project":"mThor","releaseInfo": {currentRelease=25.4.20}}',
+    result: null as any,
+    status: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+result = doPost({ parameter: { action: 'cacheReleaseInfo' }, postData: { contents: postBody, type: 'application/json' } });
+status = getTimelineCacheStatus();`,
+    context,
+  );
+
+  const body = JSON.parse(context.result.text);
+  const mThorStatus = context.status.projects.find((project: any) => project.project === 'mThor');
+
+  assert.equal(body.success, false);
+  assert.equal(body.errorCode, 'INVALID_POST_JSON');
+  assert.equal(body.project, 'mThor');
+  assert.equal(body.paramKey, 'mThor');
+  assert.equal(mThorStatus.status, 'error');
+  assert.equal(mThorStatus.cached, false);
+  assert.equal(mThorStatus.lastAttempt.success, false);
+  assert.equal(mThorStatus.lastAttempt.errorCode, 'INVALID_POST_JSON');
+  assert.equal(mThorStatus.lastAttempt.requestContentType, 'application/json');
+  assert.ok(mThorStatus.lastAttempt.requestBodyBytes >= context.postBody.length);
+  assert.match(mThorStatus.lastAttempt.parseError, /POST JSON 解析失败/);
+  assert.doesNotMatch(JSON.stringify(mThorStatus), /25\.4\.20/);
+});
+
 test('Apps Script cacheReleaseInfo rejects cache payloads over Script Properties value limit', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const releaseInfo: Record<string, string> = {};
   for (let index = 0; index < 120; index++) {
-    releaseInfo[`Gate ${index}`] = `05/${String((index % 28) + 1).padStart(2, '0')}/2026 ${'x'.repeat(80)}`;
+    releaseInfo[`Gate ${index} ${'x'.repeat(80)}`] = `05/${String((index % 28) + 1).padStart(2, '0')}/2026`;
   }
   const properties: Record<string, string> = {};
   const context = {
@@ -857,6 +1108,7 @@ status = getTimelineCacheStatus();`,
   assert.equal(mThorStatus.lastAttempt.success, false);
   assert.equal(mThorStatus.lastAttempt.errorCode, 'INVALID_RELEASE_INFO_SCHEMA');
   assert.match(mThorStatus.lastAttempt.parseError, /releaseInfo 必须是非空对象/);
+  assert.match(mThorStatus.lastAttempt.nextAction, /POST JSON/);
   assert.doesNotMatch(JSON.stringify(mThorStatus), /25\.4\.20/);
 });
 
@@ -883,6 +1135,7 @@ test('Apps Script keeps ready cache usable while surfacing a later failed Timeli
       timestamp: timestamp + 60 * 1000,
       errorCode: 'TIMELINE_CACHE_TOO_LARGE',
       error: 'payload too large',
+      nextAction: '减少同步字段后重新运行 Timeline Sync Rule。',
       payloadBytes: 10000,
       maxBytes: 9216,
     }),
@@ -906,6 +1159,7 @@ test('Apps Script keeps ready cache usable while surfacing a later failed Timeli
   assert.equal(mThorStatus.status, 'ready');
   assert.equal(mThorStatus.lastAttempt.success, false);
   assert.equal(mThorStatus.lastAttempt.errorCode, 'TIMELINE_CACHE_TOO_LARGE');
+  assert.equal(mThorStatus.lastAttempt.nextAction, '减少同步字段后重新运行 Timeline Sync Rule。');
   assert.equal(mThorStatus.lastAttempt.payloadBytes, 10000);
   assert.doesNotMatch(JSON.stringify(mThorStatus), /05\/10\/2026|05\/20\/2026/);
 });
@@ -1023,7 +1277,7 @@ test('Executor rule mark-executed webhooks carry rowIndex from the message looku
 
   collectUrls(template);
 
-  assert.equal(webhooks.length, 3);
+  assert.equal(webhooks.length, 4);
   for (const webhook of webhooks) {
     const url = webhook.value.url;
     const body = webhook.value.customBody || '';
@@ -1110,10 +1364,75 @@ test('Executor rule keeps Bot API token hidden and redacted from diagnostic logs
   assert.doesNotMatch(JSON.stringify(redacted), /root-token|live-token/);
 });
 
+test('Executor rule sends RingCentral AsMe messages through the Dify workflow branch', () => {
+  const template = JSON.parse(
+    readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
+  );
+  const ringCentralWebhooks: any[] = [];
+
+  const collectRingCentralWebhooks = (node: any) => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (
+      node.type === 'jira.issue.outgoing.webhook' &&
+      String(node.value?.url || '').includes('{{RINGCENTRAL_SENDER_DIFY_API_BASE_URL}}/workflows/run')
+    ) {
+      ringCentralWebhooks.push(node);
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        value.forEach(collectRingCentralWebhooks);
+      } else if (value && typeof value === 'object') {
+        collectRingCentralWebhooks(value);
+      }
+    }
+  };
+
+  collectRingCentralWebhooks(template);
+
+  assert.equal(ringCentralWebhooks.length, 1);
+  const webhook = ringCentralWebhooks[0];
+  const authHeader = webhook.value.headers.find((header: any) => header.name === 'Authorization');
+  assert.equal(authHeader?.value?.keyOrValue, 'Bearer {{RINGCENTRAL_SENDER_DIFY_API_KEY}}');
+  assert.equal(authHeader?.value?.secret, true);
+  assert.match(webhook.value.customBody, /"clientId": "{{RINGCENTRAL_SENDER_CLIENT_ID}}"/);
+  assert.match(webhook.value.customBody, /"clientSecret": "{{RINGCENTRAL_SENDER_CLIENT_SECRET}}"/);
+  assert.match(webhook.value.customBody, /"jwt": "{{RINGCENTRAL_SENDER_JWT}}"/);
+  assert.match(webhook.value.customBody, /"chatId": {{webhookResponse.body.chatId.asJsonString}}/);
+  assert.match(webhook.value.customBody, /"message_text": {{webhookResponse.body.content.asJsonString}}/);
+});
+
+test('Jira rule payload redaction hides RingCentral sender credentials', () => {
+  const payload = {
+    value: {
+      headers: [
+        {
+          name: 'Authorization',
+          value: {
+            keyOrValue: 'Bearer dify-token',
+            secret: true,
+          },
+        },
+      ],
+      customBody: '{ "inputs": { "clientId": "visible-client-id", "clientSecret": "live-client-secret", "jwt": "live-jwt", "chatId": "esone.qiu" } }',
+    },
+  };
+
+  const redacted = redactJiraRulePayloadForLog(payload);
+
+  assert.equal(redacted.value.headers[0].value.keyOrValue, '[REDACTED]');
+  assert.match(redacted.value.customBody, /"clientId": "visible-client-id"/);
+  assert.match(redacted.value.customBody, /"clientSecret": "\[REDACTED\]"/);
+  assert.match(redacted.value.customBody, /"jwt": "\[REDACTED\]"/);
+  assert.match(redacted.value.customBody, /"chatId": "esone\.qiu"/);
+  assert.doesNotMatch(JSON.stringify(redacted), /dify-token|live-client-secret|live-jwt/);
+});
+
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.6\.24';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.7\.2';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);

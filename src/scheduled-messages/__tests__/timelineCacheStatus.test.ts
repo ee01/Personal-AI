@@ -12,6 +12,7 @@ import {
   getTimelineCacheStatusLabel,
   validateTimelineCacheStatusResponse,
   parseTimelineCacheStatusResponseText,
+  shouldAutoRefreshTimelineCacheStatus,
   type TimelineCacheStatus,
 } from '../timelineCacheStatus.js';
 
@@ -223,6 +224,9 @@ test('Timeline cache response validation preserves safe last sync attempt diagno
           ageMs: 15 * 60 * 1000,
           errorCode: 'INVALID_RELEASE_INFO_SCHEMA',
           parseError: 'releaseInfo 必须是非空对象',
+          requestContentType: 'application/json',
+          nextAction: '检查 Custom data 并重新运行 Timeline Sync Rule。',
+          requestBodyBytes: 512,
           payloadBytes: 4096,
           maxBytes: 9216,
           milestoneKeys: [' FF ', 'Release', 123],
@@ -233,6 +237,9 @@ test('Timeline cache response validation preserves safe last sync attempt diagno
 
   assert.equal(normalized.projects[0].status, 'error');
   assert.equal(normalized.projects[0].lastAttempt?.success, false);
+  assert.equal(normalized.projects[0].lastAttempt?.requestContentType, 'application/json');
+  assert.equal(normalized.projects[0].lastAttempt?.nextAction, '检查 Custom data 并重新运行 Timeline Sync Rule。');
+  assert.equal(normalized.projects[0].lastAttempt?.requestBodyBytes, 512);
   assert.equal(normalized.projects[0].lastAttempt?.payloadBytes, 4096);
   assert.deepEqual(normalized.projects[0].lastAttempt?.milestoneKeys, ['FF', 'Release']);
   assert.match(
@@ -241,7 +248,11 @@ test('Timeline cache response validation preserves safe last sync attempt diagno
   );
   assert.match(
     formatTimelineCacheLastAttempt(normalized.projects[0].lastAttempt),
-    /payload 4KB\/9KB，样例 FF、Release/,
+    /Content-Type application\/json，请求体 512B，payload 4KB\/9KB，样例 FF、Release/,
+  );
+  assert.match(
+    formatTimelineCacheLastAttempt(normalized.projects[0].lastAttempt),
+    /建议：检查 Custom data 并重新运行 Timeline Sync Rule。/,
   );
 });
 
@@ -298,4 +309,80 @@ test('Timeline cache diagnostic text summarizes selected project troubleshooting
   assert.match(diagnostic, /缓存 Milestone: FF、Release/);
   assert.match(diagnostic, /选中 Milestone: Release/);
   assert.match(diagnostic, /Timeline Sync Rule: https:\/\/jira\.example\/rule\/123/);
+});
+
+test('Timeline cache diagnostic text flags a selected milestone missing from ready cache', () => {
+  const diagnostic = buildTimelineCacheDiagnosticText({
+    status: readyStatus,
+    error: '',
+    selectedProject: 'mThor',
+    selectedMilestone: 'Regression',
+    timelineSyncRuleUrl: 'https://jira.example/rule/123',
+  });
+
+  assert.match(diagnostic, /状态: 缓存可用/);
+  assert.match(diagnostic, /缓存 Milestone: FF、Release/);
+  assert.match(diagnostic, /Milestone 缺失: 当前项目缓存不包含 Regression/);
+  assert.match(diagnostic, /改选缓存中已有的 Milestone/);
+});
+
+test('Timeline cache diagnostic text explains ready cache with a later failed sync attempt', () => {
+  const diagnostic = buildTimelineCacheDiagnosticText({
+    status: {
+      ...readyStatus,
+      projects: [{
+        ...readyStatus.projects[0],
+        lastAttempt: {
+          success: false,
+          ageMs: 10 * 60 * 1000,
+          errorCode: 'INVALID_POST_JSON',
+        },
+      }],
+    },
+    error: '',
+    selectedProject: 'mThor',
+    selectedMilestone: 'FF',
+    timelineSyncRuleUrl: 'https://jira.example/rule/123',
+  });
+
+  assert.match(diagnostic, /状态: 缓存可用/);
+  assert.match(diagnostic, /最近同步失败（10 分钟前）：INVALID_POST_JSON/);
+  assert.match(diagnostic, /当前影响: 缓存仍可用/);
+});
+
+test('Timeline cache auto refresh is throttled while the dialog is loading or freshly refreshed', () => {
+  assert.equal(shouldAutoRefreshTimelineCacheStatus({
+    enabled: false,
+    isLoading: false,
+    nowMs: 10000,
+    lastRefreshAtMs: null,
+  }), false);
+
+  assert.equal(shouldAutoRefreshTimelineCacheStatus({
+    enabled: true,
+    isLoading: true,
+    nowMs: 10000,
+    lastRefreshAtMs: null,
+  }), false);
+
+  assert.equal(shouldAutoRefreshTimelineCacheStatus({
+    enabled: true,
+    isLoading: false,
+    nowMs: 10000,
+    lastRefreshAtMs: null,
+  }), true);
+
+  assert.equal(shouldAutoRefreshTimelineCacheStatus({
+    enabled: true,
+    isLoading: false,
+    nowMs: 14000,
+    lastRefreshAtMs: 10000,
+  }), false);
+
+  assert.equal(shouldAutoRefreshTimelineCacheStatus({
+    enabled: true,
+    isLoading: false,
+    nowMs: 16000,
+    lastRefreshAtMs: 10000,
+  }), true);
 });

@@ -36,6 +36,8 @@ interface TopicReadStatus {
 - 主题详情展开某条聊天上下文时，自动标记该条消息已读，并提供短时间撤销；“全部已阅”会标记当前主题已读，并提供短时间撤销。
 - 主题详情支持 `?messageId=` 深链：进入后自动切到聊天记录、展开对应讨论、短暂高亮并把该讨论标记为已读；如果当前详情数据没有这条消息，会显示提示并回到全部聊天记录。
 - 主题详情里的聊天记录如果带有可信的 `teamUrl` / `sourceUrl` / `permalink` / `url`，会展示“来源”链接，便于从聚合视图追溯到原始消息。
+- 主题详情里的资源和网页记录只会把可信的 `http(s)` 地址展示成外部链接，避免空链接或非网页协议看起来可点击。
+- 主题详情里的聊天记录会显示“未读 / 全部”计数，支持按阅读状态筛选，并把父消息或上下文消息任一未读的讨论排到前面；“查看上下文”会在点击前提示该讨论里还有多少未读项，上下文消息本身未读时也会保留未读标识。
 - 主题详情里的聊天搜索覆盖摘要、发送者、群组、上下文消息和来源字段；命中上下文时会在聊天条目上提示，避免用户搜索到结果却不知道为什么匹配。
 - 主题详情里的相关项目、资源和 Ticket 当前是只读引用面板；尚未接入编辑/新增/解绑 API 的操作不会展示成可点击按钮。
 - 聊天摘要和上下文在高亮搜索词前会先做 HTML 转义，避免消息正文中的标签被当作页面内容执行。
@@ -50,7 +52,7 @@ interface TopicReadStatus {
 
 主题“静音”保存在浏览器 `localStorage`，到期后会自动重新回到未读流；永久静音需要用户在“静音”视图手动恢复。快捷时间由 `getTopicMutePresetOptions()` 生成：1 天、1 周、一直静音。
 
-主题整组已阅和单条讨论已阅的撤销状态只保存在当前前端会话里，默认保留约 10 秒；撤销时会恢复主题 `readStatus`、未读预览和已知聊天记录的读取状态，并通过现有 `CACHE_ENTITY` 路径同步。
+主题整组已阅和单条讨论已阅的撤销状态只保存在当前前端会话里，默认保留约 10 秒；撤销时会恢复主题 `readStatus`、未读预览和已知聊天记录的读取状态，并通过现有 `CACHE_ENTITY` 路径同步。已知聊天记录包括 `conversation.contextMessages`，展开命中上下文消息时也会同步它的 `isRead` / `readTimestamp`，撤销会恢复原状态。
 
 主题详情的数据读取由 `src/modals/topic-detail-data.ts` 做轻量归一化，优先读取 `recentDataDetails`，并兼容旧的 `relatedData`、顶层 `relatedProjects` / `relatedResources` / `relatedTickets` / `webpages` / `conversations` 字段。详情接口成功但没有返回数据时会走 mock 详情兜底，避免旧实体或本地验证环境打开详情时空白或阻塞。已读同步也会兼容顶层 `conversations` / `latestConversations`，并能用上下文消息 id 清理对应未读预览；如果某个列表态主题没有能绑定到该消息的 conversation 或 unread preview，不会被误扣未读数。
 
@@ -63,6 +65,7 @@ interface TopicReadStatus {
 - Gmail 的 Unread first / Priority Inbox 说明未读视图需要和重要性排序共存。
 - Feedly AI Mute Filters 的价值在于降噪；主题阅读后续也应提供静音、隐藏低价值主题的能力。
 - Notion AI Connectors 强调来源引用和权限边界；主题聚合页后续展示 AI 摘要时，也应该保留可追溯来源。
+- 开发者即时通讯的 short-text topic modeling 研究表明，聊天消息很短且依赖上下文；详情页不能只看父消息摘要，还要把上下文消息纳入阅读状态和搜索判断。
 
 相关研究给出的启发：
 

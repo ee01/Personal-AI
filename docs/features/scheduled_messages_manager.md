@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-05-06*
+*最后更新: 2026-05-08*
 
 ## 功能概述
 
@@ -35,6 +35,7 @@
 - 日期和时间按本机本地时间保存，避免接近午夜时被 UTC 转换成前一天 / 后一天
 - 执行时间必须是有效的本地时间（00:00-23:59），异常值会在管理界面提示并被执行器跳过
 - 周期任务的 `End_Date` 包含结束日当天；达到 `Repeat_Count` 后会在本次成功发送后收尾
+- 周期任务的预计执行和保存校验会同步检查 `End_Date`；如果结束日前已经没有下一次可执行日期，表单会阻止保存并提示用户调整结束日或重复规则
 - 周重复任务的预览和 `Next_Exec` 始终指向未来的有效执行日，今天时间已过时会自动跳到下一个匹配星期
 
 ### 5. 灵活的表格结构 ✨
@@ -48,6 +49,11 @@
 - 筛选结果为空时会显示明确空状态和“清除筛选”按钮，不再只留下空表格
 - 筛选逻辑由共享 helper 统一处理，便于入口链接和 UI 保持一致
 - 自动答复通知中的“点击审核或取消”链接会带上 `messageId`，管理页打开后直接定位目标消息，并提供返回完整列表的恢复路径
+
+### 7. 队列健康提示
+- Bot / AI / JiraAutomation 消息由 Jira Automation 每分钟执行一条；管理页会汇总同一执行时间的排队情况
+- 当同一时间槽可能超过 30 分钟补偿窗口时，顶部会显示风险提示，并列出受影响的时间槽和示例消息
+- 新增 / 编辑表单会实时提示当前消息在同槽队列中的位置；高风险时间会阻止保存，避免创建后才发现不会按预期发送
 
 ## 使用方法
 
@@ -107,8 +113,9 @@
 5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
 6. 执行日期 / 时间支持快捷选择：1 分钟后、下个整点、下次默认时间（AsMe 09:00，Bot / AI / JiraAutomation 08:00）或清空时间
 7. 表单会显示预计下次执行时间；一次性任务若已经错过可执行窗口，会提示改成未来时间
-8. 未填写执行时间时，AsMe 默认按 09:00 执行；Bot / AI / JiraAutomation 默认从 08:00 后进入队列，每分钟执行一条
-9. 点击“✅ 创建消息”完成创建
+8. 周期任务若因为结束日期或重复星期设置导致没有下一次执行机会，会在预计执行区域显示“暂无可执行时间”，并阻止保存
+9. 未填写执行时间时，AsMe 默认按 09:00 执行；Bot / AI / JiraAutomation 默认从 08:00 后进入队列，每分钟执行一条
+10. 点击“✅ 创建消息”完成创建
 
 ### 管理列表筛选
 
@@ -117,6 +124,13 @@
 - “过滤掉仅发我的”用于隐藏只发给当前账号的个人提醒
 - 从自动答复通知打开时，页面会优先展示目标消息；如果该消息已处理，仍会显示当前状态，避免用户在待审核列表中找不到记录
 - 如果筛选后没有结果，页面会提示当前筛选条件并提供一键清除筛选
+
+### 队列健康查看
+
+- 顶部队列提示只在存在同槽排队时出现；没有排队风险时不会占用界面
+- 普通排队提示用于说明最大同槽数量和预计延后时间
+- 风险提示表示至少一个时间槽可能超过 30 分钟补偿窗口，建议改成未来明确时间，或清空执行时间进入 08:00 后队列
+- 表单打开时会自动刷新时间判断，长时间停留后仍能正确阻止已错过的执行时间
 
 ### 消息类型说明
 
@@ -147,12 +161,13 @@
 ### 推送方式说明
 
 #### AsMe（以我的身份发送）
-- 通过 Google Mail 发送邮件到 Glip 邮箱
-- 在 Glip 中显示为用户本人发送的消息
-- 自动生成邮箱地址：
+- 默认通过 Google Mail 发送邮件到 Glip 邮箱，在 Glip 中显示为用户本人发送的消息
+- 自动生成 fallback 邮箱地址：
   - `Esone Qiu` → `esone.qiu@reply.ringcentral.glip.com`
   - 或直接使用群组 ID：`{teamId}@reply.ringcentral.glip.com`
-- 由 **AppScript 引擎**执行，24/7 可靠运行
+- 如果 Bot 初始化时配置了 RingCentral Client ID / Client Secret / JWT，AsMe 会改由 **Jira Automation** 调内网 Dify RingCentral sender workflow 发送
+- RingCentral sender 路径继续复用 `Glip_User_Name` / `Glip_Team_ID` 作为 Dify `chatId`；例如 `Glip_User_Name = esone.qiu` 会传给 Dify 的 `chatId`
+- 未配置或关闭 RingCentral sender 时，仍由 **AppScript 引擎**执行邮件 fallback
 
 #### Bot（机器人身份发送）
 - 通过 Jira Automation 调用内网 Bot API
@@ -312,6 +327,14 @@ memory-service runtime（Outreach）
 - 由两条 Jira Automation Rule 组成：
   - Executor Rule 每分钟触发一次 Webhook 调用 AppScript
   - Timeline Sync Rule 每天 05:00 按项目刷新 releaseInfo 缓存
+- Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。
+- 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
+- 因此 Executor Rule 把高频取消息链路保持为短 GET；体积较大、容易被 URL 编码破坏的 Timeline release info 和执行状态写回改用 POST JSON body，并开启 `responseEnabled`，让失败能在 Jira Audit Log 和扩展缓存状态里被看到。
+- `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
+- Timeline Sync Rule 逐项目调用内网 release info API 并写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。
+- 首次配置或修复 Timeline Sync Rule 后，用户可以手动运行一次 Sync Rule 让缓存立即生效；新增/编辑 Timeline 消息或使用 `{currentRelease}`、`{nextPhase}` 等项目变量时，必须成功读取所选项目的缓存状态，否则保存会被拦截。
+- 缓存状态接口只暴露项目状态、Milestone key 和最近同步尝试摘要，不暴露具体 release 日期；如果接口返回 HTML、空响应或 Apps Script 错误对象，管理页会显示升级/排查提示，不会把异常响应当成有效缓存。
+- 旧 inline `releaseInfo` GET 参数仍保留解析能力，主要用于兼容旧 Rule 或手工调试；维护 Timeline 项目时要保持 `app-script-template.gs` 的 `TIMELINE_PROJECT_PARAM_MAP` 与前端项目清单一致。
 - AppScript 执行完整流程：
   1. 按优先级选择单条消息（当前分钟 > 过去30分钟 > 未指定时间）
   2. 过滤今日已成功/已失败的消息
@@ -375,6 +398,13 @@ memory-service runtime（Outreach）
 | daily_trigger_id | 每日触发器 ID |
 | web_app_url | Web App 地址 |
 | jira_executor_rule_id | Jira 执行器规则 ID |
+| bot_automation_executor_rule_id | Bot/AI/AsMe RingCentral sender 执行规则 ID |
+| bot_automation_timeline_sync_rule_id | Timeline Sync 规则 ID |
+| ringcentral_sender_enabled | 是否启用 AsMe RingCentral sender |
+| ringcentral_sender_client_id | RingCentral sender Client ID |
+| ringcentral_sender_client_secret | RingCentral sender Client Secret |
+| ringcentral_sender_jwt | RingCentral sender JWT |
+| ringcentral_sender_updated_at | RingCentral sender 配置更新时间 |
 | sheet_version | 版本号 |
 | created_by | 创建者 |
 | created_at | 创建时间 |

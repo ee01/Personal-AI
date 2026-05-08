@@ -54,8 +54,27 @@ export type DesignDisplayItem = FigmaDesignItem | ExternalDesignItem | UXDesignI
 export type UXEpicStatusTone = 'todo' | 'in-progress' | 'done' | 'blocked' | 'cancelled';
 export type DesignStatusTone = 'ready' | 'updated' | 'missing' | 'not-ready' | 'blocked' | 'review' | 'done' | 'neutral';
 
+const genericDesignTitles = new Set([
+  'design',
+  'the design',
+  'design link',
+  'figma',
+  'figma design',
+  'figma file',
+  'figma link',
+  'prototype',
+  'figma prototype',
+  'link',
+  'here',
+  'click here',
+  'open link',
+  'see design',
+  'view design',
+  'view figma',
+]);
+
 export function getUXEpicStatusTone(status?: string): UXEpicStatusTone {
-  const normalizedStatus = status?.trim().toLowerCase() || '';
+  const normalizedStatus = normalizeStatusForMatching(status);
 
   if (!normalizedStatus) return 'todo';
 
@@ -80,8 +99,39 @@ export function getUXEpicStatusTone(status?: string): UXEpicStatusTone {
   return 'todo';
 }
 
+function normalizeStatusForMatching(status?: string | null): string {
+  return status
+    ?.trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || '';
+}
+
+export function formatDesignStatusLabel(status?: string | null): string | undefined {
+  const trimmedStatus = status?.trim();
+  if (!trimmedStatus) return undefined;
+
+  const expandedStatus = trimmedStatus
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!expandedStatus) return undefined;
+
+  const isMachineCase = expandedStatus !== trimmedStatus
+    || /^[a-z\s]+$/.test(expandedStatus)
+    || /^[A-Z\s]+$/.test(expandedStatus);
+
+  if (!isMachineCase) {
+    return trimmedStatus;
+  }
+
+  const sentenceStatus = expandedStatus.toLowerCase();
+  return sentenceStatus.charAt(0).toUpperCase() + sentenceStatus.slice(1);
+}
+
 export function getDesignStatusTone(status?: string): DesignStatusTone {
-  const normalizedStatus = status?.trim().toLowerCase() || '';
+  const normalizedStatus = normalizeStatusForMatching(status);
 
   if (!normalizedStatus) return 'neutral';
 
@@ -114,7 +164,14 @@ export function getDesignStatusTone(status?: string): DesignStatusTone {
     return 'ready';
   }
 
-  if (matchesAny(['updated', 'outdated', 'changed', 'new changes', 'out of sync', 'stale'])) {
+  if (matchesPattern([
+    /\bupdated\b/,
+    /\boutdated\b/,
+    /\bchanged\b/,
+    /\bnew changes\b/,
+    /\bout of sync\b/,
+    /\bstale\b/,
+  ])) {
     return 'updated';
   }
 
@@ -144,15 +201,17 @@ function getDesignStatusPriority(status?: string): number {
   return priorityByTone[getDesignStatusTone(status)];
 }
 
-function getItemSourcePriority(item: DesignDisplayItem): number {
-  const source = item.source || '';
-
+function getSourcePriority(source: string): number {
   if (source.includes('remote_link')) return 0;
   if (source.includes('design_field')) return 1;
   if (source.includes('linked_issues') || source.includes('issue_link') || source.includes('child_issue')) return 2;
   if (source.includes('description')) return 3;
 
   return 4;
+}
+
+function getItemSourcePriority(item: DesignDisplayItem): number {
+  return getSourcePriority(item.source || '');
 }
 
 export function getDesignDisplayPriority(item: DesignDisplayItem): number {
@@ -203,6 +262,51 @@ export function escapeHtml(value: unknown): string {
 
 export function escapeAttribute(value: unknown): string {
   return escapeHtml(value);
+}
+
+export function isMeaningfulDesignTitle(title?: string | null): boolean {
+  const normalizedTitle = title
+    ?.trim()
+    .replace(/\s+/g, ' ');
+
+  if (!normalizedTitle || normalizedTitle.length < 4) return false;
+  if (/^https?:\/\//i.test(normalizedTitle)) return false;
+
+  const comparableTitle = normalizedTitle
+    .toLowerCase()
+    .replace(/[↗→›»：:\-–—_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (genericDesignTitles.has(comparableTitle)) return false;
+  if (/^(click|open|view|see|check|inspect)\s+(here|this|the\s+design|design|figma)$/i.test(comparableTitle)) {
+    return false;
+  }
+
+  return true;
+}
+
+function chooseDesignTitle(
+  currentTitle: string | undefined,
+  nextTitle: string | undefined,
+  currentSource: string,
+  nextSource: string,
+): string | undefined {
+  const trimmedCurrent = currentTitle?.trim();
+  const trimmedNext = nextTitle?.trim();
+  const currentIsMeaningful = isMeaningfulDesignTitle(trimmedCurrent);
+  const nextIsMeaningful = isMeaningfulDesignTitle(trimmedNext);
+
+  if (nextIsMeaningful && !currentIsMeaningful) return trimmedNext;
+  if (currentIsMeaningful && !nextIsMeaningful) return trimmedCurrent;
+
+  if (nextIsMeaningful && currentIsMeaningful) {
+    return getSourcePriority(nextSource) < getSourcePriority(currentSource)
+      ? trimmedNext
+      : trimmedCurrent;
+  }
+
+  return trimmedCurrent || trimmedNext || undefined;
 }
 
 export function normalizeDesignUrl(rawUrl?: string | null): string | null {
@@ -374,7 +478,7 @@ export function extractDesignLinks(
 
 export function getDesignDisplayLabel(item: FigmaDesignItem | ExternalDesignItem): string {
   const title = item.title?.trim();
-  if (title && !/^https?:\/\//i.test(title)) return title;
+  if (isMeaningfulDesignTitle(title)) return title;
   return item.label || (item.type === 'figma' ? getFigmaDisplayLabel(item.url) : 'Design link');
 }
 
@@ -421,8 +525,8 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
     if (item.type === 'figma' || item.type === 'design_link') {
       const existing = seenDirect.get(item.url);
       if (existing) {
+        existing.title = chooseDesignTitle(existing.title, item.title, existing.source, item.source);
         existing.source = mergeDesignSources(existing.source, item.source);
-        existing.title = existing.title || item.title;
         existing.label = existing.label || item.label;
         existing.status = existing.status || item.status;
         continue;
@@ -436,9 +540,14 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
     const uxKey = `${item.uxTicketKey}:${item.url || '__missing__'}`;
     const existing = seenUX.get(uxKey);
     if (existing) {
+      const existingSource = existing.source;
       existing.source = mergeDesignSources(existing.source, item.source);
-      existing.summary = existing.summary || item.summary;
-      existing.designLabel = existing.designLabel || item.designLabel;
+      existing.summary = chooseDesignTitle(existing.summary, item.summary, existingSource, item.source)
+        || existing.summary
+        || item.summary;
+      existing.designLabel = chooseDesignTitle(existing.designLabel, item.designLabel, existingSource, item.source)
+        || existing.designLabel
+        || item.designLabel;
       existing.uxEpicKey = existing.uxEpicKey || item.uxEpicKey;
       existing.uxEpicStatus = existing.uxEpicStatus || item.uxEpicStatus;
       existing.uxEta = existing.uxEta || item.uxEta;
@@ -456,9 +565,17 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
     const matchingDirectItem = seenDirect.get(item.url);
     if (!matchingDirectItem) continue;
 
+    const directDisplayTitle = isMeaningfulDesignTitle(matchingDirectItem.title)
+      ? matchingDirectItem.title
+      : matchingDirectItem.label;
+    const existingSource = item.source;
     item.source = mergeDesignSources(item.source, matchingDirectItem.source);
-    item.summary = matchingDirectItem.title || item.summary || matchingDirectItem.label;
-    item.designLabel = item.designLabel || matchingDirectItem.label;
+    item.summary = chooseDesignTitle(item.summary, directDisplayTitle, existingSource, matchingDirectItem.source)
+      || item.summary
+      || directDisplayTitle;
+    item.designLabel = chooseDesignTitle(item.designLabel, directDisplayTitle, existingSource, matchingDirectItem.source)
+      || item.designLabel
+      || matchingDirectItem.label;
     item.designStatus = item.designStatus || matchingDirectItem.status;
     consumedDirectUrls.add(matchingDirectItem.url);
   }

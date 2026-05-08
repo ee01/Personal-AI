@@ -20,8 +20,8 @@ const analysisResult = {
       suggestedStatus: 'On track',
       currentOwner: 'Ada',
       currentTrack: 'Core',
-      currentComments: 'Existing note',
-      suggestedComments: 'Jira moved to resolved and release notes are ready',
+      currentComments: 'Existing note\nJira moved to resolved',
+      suggestedComments: 'Jira moved to resolved\nRelease notes are ready',
       reason: ['Jira status changed to resolved'],
       sourceInfo: {
         jiraIssues: [
@@ -119,10 +119,42 @@ const analysisResult = {
         comments: 4,
       },
     },
+    {
+      projectId: 'DUP-COMMENTS-1',
+      projectName: 'Duplicate comments only',
+      currentStatus: 'In progress',
+      currentOwner: 'Ada',
+      currentTrack: 'Core Platform',
+      currentComments: 'Design review done. Follow up with PM.',
+      suggestedComments: 'Design review done\nFollow up with PM',
+      reason: ['Existing notes already cover the generated action items'],
+      sourceInfo: {
+        jiraIssues: [
+          {
+            key: 'DUP-COMMENTS-1',
+            status: 'In progress',
+            priority: 'Low',
+            summary: 'Duplicate comment result should not be actionable',
+            assignee: 'Ada',
+            url: 'https://jira.ringcentral.com/browse/DUP-COMMENTS-1',
+          },
+        ],
+      },
+      confidence: 0.93,
+      slideId: 'slide-1',
+      tableId: 'table-1',
+      rowIndex: 5,
+      columnIndices: {
+        status: 1,
+        owner: 2,
+        track: 3,
+        comments: 4,
+      },
+    },
   ],
   summary: {
-    totalProjects: 4,
-    projectsNeedingUpdate: 4,
+    totalProjects: 5,
+    projectsNeedingUpdate: 5,
     normalProjects: 0,
     attentionProjects: 1,
     riskProjects: 1,
@@ -225,11 +257,14 @@ try {
   assert.match(pageText, /无法写回字段 1/);
   assert.match(pageText, /来源证据/);
   assert.match(pageText, /Jira: MTR-123407/);
+  assert.match(pageText, /Release notes are ready/);
+  assert.doesNotMatch(pageText, /Jira moved to resolved and release notes are ready/);
   assert.match(pageText, /缺少可见来源或理由/);
   assert.match(pageText, /低可信建议未自动选中/);
   assert.match(pageText, /无法写回 状态列/);
+  assert.match(pageText, /备注建议已存在于当前备注/);
   assert.match(pageText, /应用 2 个字段到 Slides/);
-  assert.match(pageText, /当前视图 4 \/ 4 个建议/);
+  assert.match(pageText, /当前视图 5 \/ 5 个建议/);
 
   assert.equal(await analysisPage.locator('#update-status-0').isChecked(), true);
   assert.equal(await analysisPage.locator('#update-comments-0').isChecked(), true);
@@ -239,6 +274,8 @@ try {
   assert.equal(await analysisPage.locator('#update-status-3').count(), 0);
   assert.equal(await analysisPage.locator('#update-owner-3').count(), 0);
   assert.equal(await analysisPage.locator('#update-track-3').count(), 0);
+  assert.equal(await analysisPage.locator('#select-all-4').isDisabled(), true);
+  assert.equal(await analysisPage.locator('#update-comments-4').count(), 0);
 
   await analysisPage.locator('#review-filter-review').click();
   assert.equal(await analysisPage.locator('.project-item').count(), 2);
@@ -273,7 +310,7 @@ try {
 
   const appliedUpdates = await opener.evaluate(() => window.appliedUpdates);
   assert.equal(appliedUpdates[0].suggestedStatus, 'On track');
-  assert.equal(appliedUpdates[0].suggestedComments, 'Jira moved to resolved and release notes are ready');
+  assert.equal(appliedUpdates[0].suggestedComments, 'Release notes are ready');
   assert.equal(appliedUpdates[1].suggestedOwner, 'Cara');
   assert.equal(appliedUpdates[1].suggestedStatus, undefined);
 

@@ -32,11 +32,13 @@ import {
   getBotDialogModeForStatus,
   getExecutorRule,
   getJiraAutomationRuleUrl,
+  getRingCentralSenderConfig,
   getTimelineSyncRule,
   hasExecutorRule,
   hasTimelineSyncRule,
   normalizeSheetConfig,
   withBotAutomation,
+  withRingCentralSender,
 } from './botAutomationConfig';
 import {
   formatTimelineFrequencyText,
@@ -61,6 +63,7 @@ import {
   getTimelineCacheStatusLabel,
   getTimelineProjectCacheSaveBlockText,
   parseTimelineCacheStatusResponseText,
+  shouldAutoRefreshTimelineCacheStatus,
   type TimelineCacheStatus,
 } from './timelineCacheStatus';
 import {
@@ -86,7 +89,12 @@ import {
 import {
   formatScheduleQueueBlockReason,
   formatScheduleQueuePressure,
+  formatScheduleQueueSuggestion,
+  formatScheduleQueueSlotSummary,
+  formatScheduleQueueSummary,
   getScheduleQueuePressure,
+  getScheduleQueueSuggestion,
+  getScheduleQueueSummary,
 } from './scheduleQueuePressure';
 import {
   filterScheduledMessagesForView,
@@ -666,6 +674,7 @@ const ScheduledMessagesManager: React.FC = () => {
     ringCentralReady: false,
   });
   const [outreachRuntimeLoaded, setOutreachRuntimeLoaded] = useState(false);
+  const [queueSummaryNow, setQueueSummaryNow] = useState(() => new Date());
   const timelineSyncRuleUrl = useMemo(
     () => getJiraAutomationRuleUrl(getTimelineSyncRule(config)),
     [config],
@@ -675,6 +684,11 @@ const ScheduledMessagesManager: React.FC = () => {
     initializeApp();
     void getCurrentUserName();
     void loadOutreachRuntime();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setQueueSummaryNow(new Date()), 60 * 1000);
+    return () => window.clearInterval(timer);
   }, []);
   
   // 从所有消息中提取 category 选项
@@ -2403,6 +2417,10 @@ const ScheduledMessagesManager: React.FC = () => {
     filterSelfOnly ? '隐藏仅发给我的消息' : '',
     selectedCategoryValues.length > 0 ? `类别：${selectedCategoryValues.join('、')}` : '',
   ].filter(Boolean).join(' · ');
+  const scheduleQueueSummary = useMemo(
+    () => getScheduleQueueSummary(messages, queueSummaryNow),
+    [messages, queueSummaryNow],
+  );
   const clearMessageFilters = () => {
     setTargetMessageId('');
     setFilterPendingReview(false);
@@ -2637,6 +2655,29 @@ const ScheduledMessagesManager: React.FC = () => {
           >
             🔧 前往主动询问配置
           </button>
+        </div>
+      )}
+
+      {scheduleQueueSummary && (
+        <div style={scheduleQueueSummary.riskSlotCount > 0 ? styles.queueRiskBanner : styles.queueInfoBanner}>
+          <div style={styles.warningContent}>
+            <span style={styles.warningIcon}>{scheduleQueueSummary.riskSlotCount > 0 ? '⏱️' : '📬'}</span>
+            <div style={styles.warningText}>
+              <strong>
+                {scheduleQueueSummary.riskSlotCount > 0 ? 'Bot/AI 队列可能延迟' : 'Bot/AI 队列正在排队'}
+              </strong>
+              <p style={scheduleQueueSummary.riskSlotCount > 0 ? styles.queueRiskDescription : styles.queueInfoDescription}>
+                {formatScheduleQueueSummary(scheduleQueueSummary)}
+              </p>
+              <div style={styles.queueSlotList}>
+                {scheduleQueueSummary.topSlots.map(slot => (
+                  <div key={slot.slotKey} style={styles.queueSlotItem}>
+                    {formatScheduleQueueSlotSummary(slot)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       )}
       
@@ -3725,6 +3766,13 @@ const AddMessageDialog: React.FC<{
   const isEditMode = !!editingMessage;
   const isReminderMode = dialogMode === 'reminder';
   const isOutreachMode = dialogMode === 'outreach';
+  const [scheduleNow, setScheduleNow] = React.useState(() => new Date());
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setScheduleNow(new Date()), 30 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // 格式化时间为 HH:MM 格式（确保两位数）
   const formatTimeToHHMM = (time: string | undefined): string => {
     return normalizeLocalScheduleTime(time) || '';
@@ -3953,6 +4001,8 @@ const AddMessageDialog: React.FC<{
     return '';
   });
   const [categoryTags, setCategoryTags] = useState<SelectOption[]>(getInitialCategoryTags);
+  const timelineCacheLastRefreshAtRef = useRef<number | null>(null);
+  const timelineCacheStatusLoadingRef = useRef(false);
   const hasProjectVariablesInForm = containsProjectVariableText(
     formData.Content,
     formData.AI_Body,
@@ -3983,6 +4033,7 @@ const AddMessageDialog: React.FC<{
       return;
     }
 
+    timelineCacheLastRefreshAtRef.current = Date.now();
     setTimelineCacheStatusLoading(true);
     setTimelineCacheStatusError('');
 
@@ -4004,6 +4055,42 @@ const AddMessageDialog: React.FC<{
       setTimelineCacheStatus(null);
       setTimelineCacheStatusError('');
     }
+  }, [shouldLoadTimelineCacheStatus, botConfigured, timelineBotConfigured, loadTimelineCacheStatus]);
+
+  React.useEffect(() => {
+    timelineCacheStatusLoadingRef.current = timelineCacheStatusLoading;
+  }, [timelineCacheStatusLoading]);
+
+  React.useEffect(() => {
+    const enabled = shouldLoadTimelineCacheStatus && botConfigured && timelineBotConfigured;
+    if (!enabled) {
+      return;
+    }
+
+    const handlePageResume = () => {
+      if (document.visibilityState && document.visibilityState !== 'visible') {
+        return;
+      }
+
+      if (!shouldAutoRefreshTimelineCacheStatus({
+        enabled,
+        isLoading: timelineCacheStatusLoadingRef.current,
+        nowMs: Date.now(),
+        lastRefreshAtMs: timelineCacheLastRefreshAtRef.current,
+      })) {
+        return;
+      }
+
+      void loadTimelineCacheStatus();
+    };
+
+    window.addEventListener('focus', handlePageResume);
+    document.addEventListener('visibilitychange', handlePageResume);
+
+    return () => {
+      window.removeEventListener('focus', handlePageResume);
+      document.removeEventListener('visibilitychange', handlePageResume);
+    };
   }, [shouldLoadTimelineCacheStatus, botConfigured, timelineBotConfigured, loadTimelineCacheStatus]);
 
   const selectedTimelineProjectStatus = useMemo(() => {
@@ -4567,12 +4654,12 @@ ${content}
       }
 
       if (scheduleBlockReason) {
-        alert(`${scheduleBlockReason}\n\n预计下次执行：${schedulePreviewLabel || schedulePreview}`);
+        alert(`${scheduleBlockReason}\n\n预计下次执行：${schedulePreviewDisplayValue || schedulePreview || '暂无可执行时间'}`);
         return;
       }
 
       if (scheduleQueueBlockReason) {
-        alert(`${scheduleQueueBlockReason}\n\n预计下次执行：${schedulePreviewLabel || schedulePreview}`);
+        alert(`${scheduleQueueBlockReason}\n\n预计下次执行：${schedulePreviewDisplayValue || schedulePreview || '暂无可执行时间'}`);
         return;
       }
 
@@ -4703,7 +4790,8 @@ ${content}
     
     // 验证周期性消息
     if (isRepeating) {
-      if (!formData.Repeat_Every || !formData.Repeat_Unit) {
+      const repeatEvery = Number(formData.Repeat_Every);
+      if (!Number.isFinite(repeatEvery) || repeatEvery < 1 || !formData.Repeat_Unit) {
         alert('请完整填写重复设置');
         return;
       }
@@ -4874,6 +4962,7 @@ ${content}
     return calculateScheduledMessageNextExecution({
       Schedule_Date: formData.Schedule_Date,
       Schedule_Time: formData.Schedule_Time,
+      End_Date: formData.End_Date,
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
       Repeat_Days: repeatDaysValue,
@@ -4882,6 +4971,7 @@ ${content}
     });
   }, [
     formData.AI_Endpoint,
+    formData.End_Date,
     formData.Schedule_Date,
     formData.Schedule_Time,
     formData.Repeat_Every,
@@ -4934,17 +5024,18 @@ ${content}
       : '未填写时间时按 09:00 执行。';
   }, [formData.AI_Endpoint, formData.Push_Method, formData.Schedule_Time, schedulePreview]);
 
-  const scheduleQueuePressure = useMemo(() => {
+  const scheduleQueueDraftMessage = useMemo<ScheduledMessage | null>(() => {
     if (isTimelineTrigger || !schedulePreview) {
       return null;
     }
 
-    const draftMessage: ScheduledMessage = {
+    return {
       ID: editingMessage?.ID || '__draft_scheduled_message__',
       Topic: formData.Topic || '',
       Content: formData.Content || '',
       Schedule_Date: formData.Schedule_Date,
       Schedule_Time: formData.Schedule_Time,
+      End_Date: formData.End_Date,
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
       Repeat_Days: repeatDaysValue,
@@ -4955,13 +5046,11 @@ ${content}
       AI_Endpoint: formData.AI_Endpoint,
       Status: 'Active',
     };
-
-    return getScheduleQueuePressure(existingMessages, draftMessage);
   }, [
     editingMessage?.ID,
-    existingMessages,
     formData.AI_Endpoint,
     formData.Content,
+    formData.End_Date,
     formData.Glip_Team_ID,
     formData.Glip_User_Name,
     formData.Push_Method,
@@ -4975,6 +5064,31 @@ ${content}
     schedulePreview,
   ]);
 
+  const scheduleQueuePressure = useMemo(() => {
+    if (!scheduleQueueDraftMessage) {
+      return null;
+    }
+
+    return getScheduleQueuePressure(existingMessages, scheduleQueueDraftMessage, scheduleNow);
+  }, [
+    existingMessages,
+    scheduleQueueDraftMessage,
+    scheduleNow,
+  ]);
+
+  const scheduleQueueSuggestion = useMemo(() => {
+    if (!scheduleQueueDraftMessage || !scheduleQueuePressure?.exceedsCompensationWindow) {
+      return null;
+    }
+
+    return getScheduleQueueSuggestion(existingMessages, scheduleQueueDraftMessage, scheduleNow);
+  }, [
+    existingMessages,
+    scheduleQueueDraftMessage,
+    scheduleQueuePressure?.exceedsCompensationWindow,
+    scheduleNow,
+  ]);
+
   const scheduleQueueBlockReason = scheduleQueuePressure?.exceedsCompensationWindow
     ? formatScheduleQueueBlockReason(scheduleQueuePressure)
     : '';
@@ -4983,8 +5097,33 @@ ${content}
     ? formatScheduleQueuePressure(scheduleQueuePressure)
     : '');
 
+  const scheduleQueueSuggestionText = scheduleQueueSuggestion
+    ? formatScheduleQueueSuggestion(scheduleQueueSuggestion)
+    : '';
+
+  const applyScheduleQueueSuggestion = () => {
+    if (!scheduleQueueSuggestion) {
+      return;
+    }
+
+    handleScheduleDateChange(scheduleQueueSuggestion.dateStr);
+    handleChange('Schedule_Time', scheduleQueueSuggestion.timeStr);
+  };
+
   const scheduleBlockReason = useMemo(() => {
-    if (isTimelineTrigger || isRepeating || !formData.Schedule_Date || !schedulePreview) {
+    if (isTimelineTrigger || !formData.Schedule_Date) {
+      return '';
+    }
+
+    if (isRepeating) {
+      if (formData.End_Date?.trim() && !schedulePreview) {
+        return '结束日期早于下一次可执行日期，请延后结束日期、调整重复规则，或关闭重复。';
+      }
+
+      return '';
+    }
+
+    if (!schedulePreview) {
       return '';
     }
 
@@ -4994,7 +5133,7 @@ ${content}
       return '';
     }
 
-    const now = Date.now();
+    const now = scheduleNow.getTime();
     const hasExplicitTime = Boolean(formData.Schedule_Time?.trim());
     const isExecutorDriven = isExecutorDrivenSchedule({
       Push_Method: formData.Push_Method,
@@ -5019,19 +5158,23 @@ ${content}
     return '';
   }, [
     formData.AI_Endpoint,
+    formData.End_Date,
     formData.Push_Method,
     formData.Schedule_Date,
     formData.Schedule_Time,
     isRepeating,
     isTimelineTrigger,
     schedulePreview,
+    scheduleNow,
   ]);
+  const schedulePreviewDisplayValue = schedulePreviewLabel || (scheduleBlockReason ? '暂无可执行时间' : '');
 
   const hasScheduleWarning = Boolean(
     scheduleBlockReason ||
     scheduleQueueBlockReason ||
     scheduleQueuePressure?.exceedsCompensationWindow,
   );
+  const isSubmitBlockedBySchedule = Boolean(scheduleTimeError || scheduleBlockReason || scheduleQueueBlockReason);
   
   const handleUserTagsChange = (tags: string[]) => {
     setUserTags(tags);
@@ -5432,10 +5575,10 @@ ${content}
                 </button>
               </div>
               <small style={dialogStyles.hint}>按本机本地时间保存到 Sheet，避免跨日误差</small>
-              {schedulePreviewLabel && (
+              {schedulePreviewDisplayValue && (
                 <div style={hasScheduleWarning ? dialogStyles.scheduleWarning : dialogStyles.schedulePreview}>
                   <div style={dialogStyles.schedulePreviewLabel}>预计下次执行</div>
-                  <div style={dialogStyles.schedulePreviewValue}>{schedulePreviewLabel}</div>
+                  <div style={dialogStyles.schedulePreviewValue}>{schedulePreviewDisplayValue}</div>
                   {schedulePreviewHint && (
                     <div style={dialogStyles.schedulePreviewHint}>{schedulePreviewHint}</div>
                   )}
@@ -5446,6 +5589,18 @@ ${content}
                         : dialogStyles.schedulePreviewHint
                     }>
                       {scheduleQueueWarning}
+                    </div>
+                  )}
+                  {scheduleQueueSuggestionText && (
+                    <div style={dialogStyles.scheduleSuggestionRow}>
+                      <span>{scheduleQueueSuggestionText}</span>
+                      <button
+                        type="button"
+                        style={dialogStyles.scheduleSuggestionButton}
+                        onClick={applyScheduleQueueSuggestion}
+                      >
+                        使用建议时间
+                      </button>
                     </div>
                   )}
                   {scheduleBlockReason && (
@@ -6822,9 +6977,14 @@ ${content}
             <button 
               type="submit" 
               style={dialogStyles.submitButton}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isSubmitBlockedBySchedule}
+              title={isSubmitBlockedBySchedule ? '请先修正执行时间或队列风险' : undefined}
             >
-              {isSubmitting ? (isEditMode ? '保存中...' : '创建中...') : (isEditMode ? '✅ 保存修改' : '✅ 创建消息')}
+              {isSubmitting
+                ? (isEditMode ? '保存中...' : '创建中...')
+                : isSubmitBlockedBySchedule
+                  ? '请先调整时间'
+                  : (isEditMode ? '✅ 保存修改' : '✅ 创建消息')}
             </button>
           </div>
         </form>
@@ -7065,6 +7225,24 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderBottom: '1px solid #fed7aa',
     animation: 'slideDown 0.3s ease-out',
   },
+  queueInfoBanner: {
+    backgroundColor: '#eef6ff',
+    borderLeft: '4px solid #0d6efd',
+    padding: '14px 20px',
+    display: 'flex',
+    alignItems: 'center',
+    borderBottom: '1px solid #b6d4fe',
+    animation: 'slideDown 0.3s ease-out',
+  },
+  queueRiskBanner: {
+    backgroundColor: '#fff7ed',
+    borderLeft: '4px solid #f97316',
+    padding: '14px 20px',
+    display: 'flex',
+    alignItems: 'center',
+    borderBottom: '1px solid #fed7aa',
+    animation: 'slideDown 0.3s ease-out',
+  },
   warningContent: {
     display: 'flex',
     alignItems: 'flex-start',
@@ -7087,6 +7265,31 @@ const styles: { [key: string]: React.CSSProperties } = {
     margin: '4px 0 0 0',
     fontSize: '13px',
     color: '#9a3412',
+  },
+  queueInfoDescription: {
+    margin: '4px 0 0 0',
+    fontSize: '13px',
+    color: '#0b4f8a',
+  },
+  queueRiskDescription: {
+    margin: '4px 0 0 0',
+    fontSize: '13px',
+    color: '#9a3412',
+  },
+  queueSlotList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginTop: '8px',
+  },
+  queueSlotItem: {
+    padding: '4px 8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.75)',
+    border: '1px solid rgba(148, 163, 184, 0.45)',
+    borderRadius: '6px',
+    fontSize: '12px',
+    color: '#334155',
+    lineHeight: 1.35,
   },
   warningButton: {
     padding: '8px 16px',
@@ -7366,6 +7569,27 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     color: '#8a5a00',
     lineHeight: 1.35,
   },
+  scheduleSuggestionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    flexWrap: 'wrap',
+    marginTop: '8px',
+    fontSize: '12px',
+    color: '#5f4100',
+    lineHeight: 1.35,
+  },
+  scheduleSuggestionButton: {
+    padding: '5px 9px',
+    backgroundColor: '#fff',
+    color: '#8a5a00',
+    border: '1px solid #f0c36d',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    lineHeight: 1.2,
+  },
   label: {
     display: 'block',
     marginBottom: '6px',
@@ -7481,9 +7705,14 @@ const BotConfigDialog: React.FC<{
   const existingExecutorRule = getExecutorRule(normalizedConfig);
   const existingTimelineSyncRule = getTimelineSyncRule(normalizedConfig);
   const existingBaseRule = existingExecutorRule || existingTimelineSyncRule;
+  const existingRingCentralSender = getRingCentralSenderConfig(normalizedConfig);
   const isProjectConfigLocked = mode !== 'create' && Boolean(existingBaseRule?.jiraUrl && existingBaseRule?.projectKey);
   const [jiraUrl, setJiraUrl] = useState(existingBaseRule?.jiraUrl || 'https://jira.ringcentral.com');
   const [projectKey, setProjectKey] = useState(existingBaseRule?.projectKey || '');
+  const [ringCentralSenderEnabled, setRingCentralSenderEnabled] = useState(Boolean(existingRingCentralSender?.enabled));
+  const [ringCentralClientId, setRingCentralClientId] = useState(existingRingCentralSender?.clientId || '');
+  const [ringCentralClientSecret, setRingCentralClientSecret] = useState('');
+  const [ringCentralJwt, setRingCentralJwt] = useState('');
   
   // 使用 ref 跟踪组件是否已挂载
   const isMountedRef = useRef(true);
@@ -7529,6 +7758,8 @@ const BotConfigDialog: React.FC<{
     : mode === 'repair'
       ? '✅ 修复缺失规则'
       : '✅ 开始配置';
+  const hasExistingRingCentralClientSecret = Boolean(existingRingCentralSender?.clientSecret);
+  const hasExistingRingCentralJwt = Boolean(existingRingCentralSender?.jwt);
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -7545,6 +7776,30 @@ const BotConfigDialog: React.FC<{
       setError('请输入 Jira URL');
       return;
     }
+
+    const resolvedRingCentralSender = {
+      enabled: false,
+      clientId: undefined as string | undefined,
+      clientSecret: undefined as string | undefined,
+      jwt: undefined as string | undefined,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (ringCentralSenderEnabled) {
+      const resolvedClientId = ringCentralClientId.trim();
+      const resolvedClientSecret = ringCentralClientSecret.trim() || existingRingCentralSender?.clientSecret || '';
+      const resolvedJwt = ringCentralJwt.trim() || existingRingCentralSender?.jwt || '';
+
+      if (!resolvedClientId || !resolvedClientSecret || !resolvedJwt) {
+        setError('开启 RingCentral AsMe sender 时，需要填完整 Client ID、Client Secret 和 JWT。');
+        return;
+      }
+
+      resolvedRingCentralSender.enabled = true;
+      resolvedRingCentralSender.clientId = resolvedClientId;
+      resolvedRingCentralSender.clientSecret = resolvedClientSecret;
+      resolvedRingCentralSender.jwt = resolvedJwt;
+    }
     
     setIsSubmitting(true);
     setError('');
@@ -7556,7 +7811,8 @@ const BotConfigDialog: React.FC<{
       const jiraService = new JiraAutomationService();
       const jiraConfig = {
         jiraUrl: resolvedJiraUrl,
-        projectKey: resolvedProjectKey
+        projectKey: resolvedProjectKey,
+        ringCentralSender: resolvedRingCentralSender,
       };
       
       // 步骤 1: 测试连接
@@ -7613,9 +7869,21 @@ const BotConfigDialog: React.FC<{
         }
       }
 
-      const updatedConfig = withBotAutomation(normalizedConfig, nextBotAutomation);
+      const updatedConfig = withRingCentralSender(
+        withBotAutomation(normalizedConfig, nextBotAutomation),
+        resolvedRingCentralSender
+      );
       
-      // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
+      if (mode !== 'create' && nextBotAutomation.executorRule?.ruleId) {
+        const { JiraRuleUpdater } = await import('./JiraRuleUpdater');
+        const updateResult = await new JiraRuleUpdater(updatedConfig).updateJiraRule();
+        if (!updateResult.success) {
+          throw new Error(updateResult.error || updateResult.message || '更新 Jira executor rule 失败');
+        }
+      }
+
+      // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage。放在 Jira rule 更新成功之后，
+      // 避免 Config 先启用 sender 但 executor rule 未更新时禁用旧邮件 fallback。
       const token = await getGoogleAuthToken({ caller: 'BotConfigDialog.handleSubmit' });
       const { ConfigSyncService } = await import('./ConfigSyncService');
       const syncService = new ConfigSyncService(token);
@@ -7709,6 +7977,72 @@ const BotConfigDialog: React.FC<{
                 <small style={dialogStyles.hint}>
                   {isProjectConfigLocked ? '已复用现有 Project Key' : '请输入您有管理权限的项目 Key，如：MTR'}
                 </small>
+              </div>
+
+              <div style={{
+                backgroundColor: '#f8f9fa',
+                padding: '14px',
+                borderRadius: '8px',
+                border: '1px solid #e0e0e0',
+                marginBottom: '16px',
+              }}>
+                <label style={{ ...dialogStyles.label, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={ringCentralSenderEnabled}
+                    onChange={(e) => setRingCentralSenderEnabled(e.target.checked)}
+                    disabled={isSubmitting}
+                  />
+                  RingCentral AsMe sender
+                </label>
+                <small style={dialogStyles.hint}>
+                  开启后，AsMe 会由 Jira rule 调内网 Dify 接口发送；关闭时继续使用 AppScript 邮件 fallback。
+                </small>
+
+                {ringCentralSenderEnabled && (
+                  <div style={{ marginTop: '14px' }}>
+                    <div style={dialogStyles.formGroup}>
+                      <label style={dialogStyles.label}>RingCentral Client ID *</label>
+                      <input
+                        style={dialogStyles.input}
+                        type="text"
+                        value={ringCentralClientId}
+                        onChange={(e) => setRingCentralClientId(e.target.value)}
+                        placeholder="Client ID"
+                        disabled={isSubmitting}
+                      />
+                    </div>
+
+                    <div style={dialogStyles.formGroup}>
+                      <label style={dialogStyles.label}>RingCentral Client Secret *</label>
+                      <input
+                        style={dialogStyles.input}
+                        type="password"
+                        value={ringCentralClientSecret}
+                        onChange={(e) => setRingCentralClientSecret(e.target.value)}
+                        placeholder={hasExistingRingCentralClientSecret ? '已配置，留空则沿用' : 'Client Secret'}
+                        disabled={isSubmitting}
+                      />
+                      {hasExistingRingCentralClientSecret && (
+                        <small style={dialogStyles.hint}>为避免暴露 secret，这里不回显已有值。</small>
+                      )}
+                    </div>
+
+                    <div style={dialogStyles.formGroup}>
+                      <label style={dialogStyles.label}>RingCentral JWT *</label>
+                      <textarea
+                        style={{ ...dialogStyles.textarea, minHeight: '72px' }}
+                        value={ringCentralJwt}
+                        onChange={(e) => setRingCentralJwt(e.target.value)}
+                        placeholder={hasExistingRingCentralJwt ? '已配置，留空则沿用' : 'JWT'}
+                        disabled={isSubmitting}
+                      />
+                      {hasExistingRingCentralJwt && (
+                        <small style={dialogStyles.hint}>为避免暴露 JWT，这里不回显已有值。</small>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
               
               {error && (

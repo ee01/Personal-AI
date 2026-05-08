@@ -431,6 +431,44 @@ async function main() {
   ingests.length = 0;
   botMessages.length = 0;
 
+  const staleMatcherRefResult = await processNewMessage({
+    sender: 'Morgan Chen',
+    team_id: 'team-2',
+    team_name: 'Architecture',
+    content:
+      'architecture decision should be remembered for the API split but this is not a blocker match',
+    datetime: '2026-04-15T00:15:00.000Z',
+  });
+
+  assert.equal(staleMatcherRefResult.shouldStore, true);
+  assert.equal(staleMatcherRefResult.shouldNotify, false);
+  assert.deepEqual(staleMatcherRefResult.matchedRuleRefs, []);
+  assert.equal(
+    staleMatcherRefResult.storageReview?.reasonSource,
+    'relevanceJudgment',
+  );
+  assert.equal(
+    staleMatcherRefResult.storageReview?.summary,
+    'architecture decision should be preserved',
+  );
+  assert.equal(ingests.length, 1);
+  assert.equal(
+    ingests[0].metadata.summary,
+    'architecture decision should be preserved',
+  );
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [
+    {
+      id: 'manual-1',
+      text: 'Only notify me when blocker is mentioned',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+
   const lowConfidenceManualResult = await processNewMessage({
     sender: 'Avery Wong',
     team_id: 'team-3',

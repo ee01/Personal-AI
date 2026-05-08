@@ -22,6 +22,10 @@ import { OnlineReflection } from '../core/OnlineReflection.js';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { resolveDelegateOpenClawPolicy } from '../core/actions/delegateOpenClawPolicy.js';
 import {
+  DecisionEvidenceChainService,
+  type DecisionEvidenceChainBlock,
+} from '../core/DecisionEvidenceChainService.js';
+import {
   EvidenceResolutionPlanner,
   type CandidateArtifact,
   type EvidenceResolutionPlan,
@@ -44,6 +48,8 @@ interface AskBody {
   includeEvidence?: boolean;
   scope?: RecallScope;
 }
+
+type AskBlock = RecallBlock | DecisionEvidenceChainBlock;
 
 interface StructuredTimelineItem {
   date: string;
@@ -70,7 +76,7 @@ interface AskResponse {
   queryTimeMs: number;
   structuredAnswer?: StructuredAskAnswer;
   /** Structured UI blocks (timeline, evidence_list, media, summary). */
-  blocks?: RecallBlock[];
+  blocks?: AskBlock[];
   /** Higher-level synthesis derived from the recalled evidence. */
   analysis?: RecallAnalysis;
   resolutionState?: EvidenceResolutionState;
@@ -91,7 +97,7 @@ interface AskResponse {
 
 interface PreparedAskContext {
   recalledItems: RecallItem[];
-  recallBlocks?: RecallBlock[];
+  recallBlocks?: AskBlock[];
   recallAnalysis?: RecallAnalysis;
   intentContext: string;
   combinedMemoryContext: string;
@@ -738,10 +744,18 @@ async function prepareAskContext(
   if (actionOutcome.externalEvidence.length > 0) {
     await reportStatus?.('已获取外部证据，正在整合上下文...');
   }
+  const decisionEvidenceChain = new DecisionEvidenceChainService().build({
+    query,
+    recalledItems,
+    externalEvidence: actionOutcome.externalEvidence,
+  });
+  const askBlocks: AskBlock[] = decisionEvidenceChain
+    ? [...(recallBlocks ?? []), decisionEvidenceChain]
+    : (recallBlocks ?? []);
 
   return {
     recalledItems,
-    recallBlocks,
+    recallBlocks: askBlocks.length > 0 ? askBlocks : undefined,
     intentContext,
     combinedMemoryContext,
     actionOutcome,

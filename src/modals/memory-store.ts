@@ -319,6 +319,45 @@ const getConversationIdentitySet = (conversation: any): Set<string> => {
   return identitySet;
 };
 
+const getConversationReadStateNodes = (conversation: any): any[] => {
+  const nodes = conversation ? [conversation] : [];
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+
+  contextMessages.forEach((contextMessage: any) => {
+    if (contextMessage && !nodes.includes(contextMessage)) {
+      nodes.push(contextMessage);
+    }
+  });
+
+  return nodes;
+};
+
+const isConversationRead = (conversation: any): boolean => {
+  return getConversationReadStateNodes(conversation).every(
+    (message) => message?.isRead === true,
+  );
+};
+
+const markConversationReadStateNodesAsRead = (
+  conversation: any,
+  timestamp: number,
+): boolean => {
+  let changed = false;
+
+  getConversationReadStateNodes(conversation).forEach((message) => {
+    if (message.isRead !== true) {
+      changed = true;
+      message.isRead = true;
+      message.readTimestamp = timestamp;
+      return;
+    }
+  });
+
+  return changed;
+};
+
 const getTopicConversationLists = (topic: any): any[][] => {
   if (!topic) return [];
 
@@ -347,7 +386,7 @@ const inferUnreadCountFromConversations = (topic: any): number => {
     ...lists.map(
       (conversations) =>
         conversations.filter(
-          (conversation: any) => conversation?.isRead !== true,
+          (conversation: any) => !isConversationRead(conversation),
         ).length,
     ),
   );
@@ -383,8 +422,7 @@ const setTopicReadStatus = (
 const markKnownConversationsAsRead = (topic: any, timestamp: number) => {
   getTopicConversationLists(topic).forEach((conversations) => {
     conversations.forEach((conversation: any) => {
-      conversation.isRead = true;
-      conversation.readTimestamp = timestamp;
+      markConversationReadStateNodesAsRead(conversation, timestamp);
     });
   });
 };
@@ -404,11 +442,9 @@ const markKnownConversationAsRead = (
       ) {
         return;
       }
-      if (conversation.isRead !== true) {
+      if (markConversationReadStateNodesAsRead(conversation, timestamp)) {
         changed = true;
       }
-      conversation.isRead = true;
-      conversation.readTimestamp = timestamp;
     });
   });
 
@@ -447,7 +483,7 @@ const hasUnreadConversationMatch = (
       (conversation: any) =>
         getConversationIdentitySet(conversation).has(
           normalizedConversationId,
-        ) && conversation.isRead !== true,
+        ) && !isConversationRead(conversation),
     ),
   );
 };
@@ -513,21 +549,24 @@ const cloneTopicReadState = (value: any) => {
 
 const captureTopicReadUndoTarget = (topic: any): _TopicReadUndoTarget => {
   const conversationStates: _TopicReadUndoConversationState[] = [];
-  const seenConversations = new Set<any>();
+  const seenReadStateNodes = new Set<any>();
 
   getTopicConversationLists(topic).forEach((conversations) => {
     conversations.forEach((conversation: any) => {
-      if (!conversation || seenConversations.has(conversation)) return;
-      seenConversations.add(conversation);
-      conversationStates.push({
-        conversation,
-        hadIsRead: Object.prototype.hasOwnProperty.call(conversation, 'isRead'),
-        isRead: conversation.isRead,
-        hadReadTimestamp: Object.prototype.hasOwnProperty.call(
-          conversation,
-          'readTimestamp',
-        ),
-        readTimestamp: conversation.readTimestamp,
+      if (!conversation || seenReadStateNodes.has(conversation)) return;
+      getConversationReadStateNodes(conversation).forEach((message) => {
+        if (!message || seenReadStateNodes.has(message)) return;
+        seenReadStateNodes.add(message);
+        conversationStates.push({
+          conversation: message,
+          hadIsRead: Object.prototype.hasOwnProperty.call(message, 'isRead'),
+          isRead: message.isRead,
+          hadReadTimestamp: Object.prototype.hasOwnProperty.call(
+            message,
+            'readTimestamp',
+          ),
+          readTimestamp: message.readTimestamp,
+        });
       });
     });
   });
@@ -2581,6 +2620,7 @@ export const useMemoryStore = defineStore('memory', () => {
         success: true,
         answer: result.answer,
         structuredAnswer: result.structuredAnswer,
+        blocks: result.blocks || [],
         evidence,
         entitiesByType: {},
         metadata: {

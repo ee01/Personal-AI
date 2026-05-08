@@ -348,6 +348,141 @@ describe('Ask API', () => {
     recallSpy.mockRestore();
   });
 
+  it('adds a decision evidence chain block for historical decision questions', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'decision-codex-base',
+            type: 'message',
+            content:
+              'Fred said the team decided to keep active Cursor users unblocked while pushing Codex experimentation because Cursor cost pressure was high.',
+            score: 0.96,
+            source: 'glip',
+            sourceUrl: 'https://memory.example.com/messages/decision-codex-base',
+            sourceTitle: 'AI tools migration discussion',
+            timestamp: now - 86400,
+            metadata: {
+              sourceType: 'glip',
+              sender: 'Fred',
+              groupName: 'AI Tools for Engineering',
+            },
+          },
+          {
+            id: 'decision-factory-change',
+            type: 'message',
+            content:
+              'Factory.ai production approval changed on Apr 30, so the AI tool migration decision needs review before the OpenAI deal vote.',
+            score: 0.9,
+            source: 'glip',
+            sourceUrl:
+              'https://memory.example.com/messages/decision-factory-change',
+            sourceTitle: 'Factory.ai production approval update',
+            timestamp: now - 3600,
+            metadata: {
+              sourceType: 'glip',
+              sender: 'Global P+T',
+              groupName: 'Global P+T',
+            },
+          },
+        ],
+        totalFound: 2,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer:
+          '当时的方向是保留活跃 Cursor 用户，同时推动 Codex 实验。',
+        keyFindings: ['Cursor 成本压力是关键背景。'],
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '为什么当时决定推 Codex 而不是继续 Cursor？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const decisionBlock = body.blocks?.find(
+      (block: any) => block.type === 'decision_evidence_chain',
+    );
+
+    expect(decisionBlock).toBeDefined();
+    expect(decisionBlock.payload.chainType).toBe('why_decided');
+    expect(decisionBlock.payload.decisionDetected).toBe(true);
+    expect(decisionBlock.payload.decisionStatement).toContain('Cursor');
+    expect(
+      decisionBlock.payload.then.evidenceRefs.some(
+        (ref: any) => ref.sourceId === 'decision-codex-base',
+      ),
+    ).toBe(true);
+    expect(
+      decisionBlock.payload.then.evidenceRefs.find(
+        (ref: any) => ref.sourceId === 'decision-codex-base',
+      )?.stance,
+    ).toBe('supports');
+    expect(
+      decisionBlock.payload.now.changed.some((change: string) =>
+        change.includes('Factory.ai'),
+      ),
+    ).toBe(true);
+    expect(
+      decisionBlock.payload.now.changed.some((change: string) =>
+        change.includes('unblocked'),
+      ),
+    ).toBe(false);
+    expect(decisionBlock.payload.saveCandidate).toBeDefined();
+    recallSpy.mockRestore();
+  });
+
+  it('does not add a decision evidence chain block for ordinary ask queries', async () => {
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'ordinary-ask-memory',
+            type: 'message',
+            content: 'John said the release risk is increasing.',
+            score: 0.9,
+            source: 'glip',
+            timestamp: Math.floor(Date.now() / 1000) - 120,
+          },
+        ],
+        totalFound: 1,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'John said release risk is increasing.',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '最近 John 说过什么？',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(
+      body.blocks?.some((block: any) => block.type === 'decision_evidence_chain'),
+    ).not.toBe(true);
+    recallSpy.mockRestore();
+  });
+
   it('streams the main answer before the final structured result', async () => {
     generateStreamMock.mockImplementation(
       async (_prompt, _options, onDelta) => {
@@ -394,6 +529,79 @@ describe('Ask API', () => {
       res.body.indexOf('event: answer_done'),
     );
     expect(res.body).toContain('Release risk increased.');
+  });
+
+  it('streams decision evidence chain blocks during recall_done and final result', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const recallSpy = vi
+      .spyOn(RecallEngine.prototype, 'recall')
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'stream-decision-base',
+            type: 'message',
+            content:
+              'The team decided to keep active Cursor users unblocked while pushing Codex experimentation because Cursor cost pressure was high.',
+            score: 0.96,
+            source: 'glip',
+            sourceTitle: 'AI tools migration discussion',
+            timestamp: now - 86400,
+            metadata: { sourceType: 'glip', sender: 'Fred' },
+          },
+          {
+            id: 'stream-decision-change',
+            type: 'message',
+            content:
+              'Factory.ai production approval changed, so the tool migration decision needs review.',
+            score: 0.88,
+            source: 'glip',
+            sourceTitle: 'Factory.ai update',
+            timestamp: now - 3600,
+            metadata: { sourceType: 'glip', sender: 'Global P+T' },
+          },
+        ],
+        totalFound: 2,
+        channels: ['fts'],
+        queryTimeMs: 1,
+      } as any);
+    generateStreamMock.mockImplementation(
+      async (_prompt, _options, onDelta) => {
+        await onDelta('当时是为了保留 Cursor 活跃用户，');
+        await onDelta('同时推动 Codex 实验。');
+        return {
+          content: '当时是为了保留 Cursor 活跃用户，同时推动 Codex 实验。',
+        };
+      },
+    );
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: '当时是为了保留 Cursor 活跃用户，同时推动 Codex 实验。',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask/stream',
+      payload: {
+        query: '为什么当时决定推 Codex 而不是继续 Cursor？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    const recallDone = events.find((event) => event.type === 'recall_done');
+    const result = events.find((event) => event.type === 'result');
+    const recallBlocks = recallDone?.blocks as Array<Record<string, any>>;
+    const resultBlocks = result?.blocks as Array<Record<string, any>>;
+
+    expect(
+      recallBlocks.some((block) => block.type === 'decision_evidence_chain'),
+    ).toBe(true);
+    expect(
+      resultBlocks.some((block) => block.type === 'decision_evidence_chain'),
+    ).toBe(true);
+    recallSpy.mockRestore();
   });
 
   it('merges synchronous OpenClaw evidence into ask responses and returns follow-up action info', async () => {

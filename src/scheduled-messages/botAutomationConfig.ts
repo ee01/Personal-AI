@@ -1,4 +1,4 @@
-import { BotAutomationConfig, BotAutomationRule, SheetConfig } from './types';
+import { BotAutomationConfig, BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types';
 
 export type BotConfigValidityStatus =
   | 'ok'
@@ -10,6 +10,48 @@ export type BotConfigDialogMode = 'create' | 'upgrade-sync-only' | 'repair';
 
 function cloneRule(rule?: BotAutomationRule): BotAutomationRule | undefined {
   return rule ? { ...rule } : undefined;
+}
+
+function trimOptional(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function normalizeRingCentralSenderConfig(
+  config?: Partial<RingCentralSenderConfig> | null
+): RingCentralSenderConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+
+  const normalized: RingCentralSenderConfig = {
+    enabled: Boolean(config.enabled),
+    clientId: trimOptional(config.clientId),
+    clientSecret: trimOptional(config.clientSecret),
+    jwt: trimOptional(config.jwt),
+    updatedAt: trimOptional(config.updatedAt),
+  };
+
+  const hasAnyValue = normalized.enabled ||
+    Boolean(normalized.clientId || normalized.clientSecret || normalized.jwt || normalized.updatedAt);
+
+  return hasAnyValue ? normalized : undefined;
+}
+
+export function getRingCentralSenderConfig(
+  config?: Partial<SheetConfig> | null
+): RingCentralSenderConfig | undefined {
+  return normalizeRingCentralSenderConfig(config?.ringCentralSender);
+}
+
+export function hasRingCentralSenderCredentials(config?: Partial<SheetConfig> | null): boolean {
+  const senderConfig = getRingCentralSenderConfig(config);
+  return Boolean(
+    senderConfig?.enabled &&
+    senderConfig.clientId &&
+    senderConfig.clientSecret &&
+    senderConfig.jwt
+  );
 }
 
 export function getBotAutomationConfig(config?: Partial<SheetConfig> | null): BotAutomationConfig {
@@ -61,6 +103,7 @@ export function normalizeSheetConfig<T extends Partial<SheetConfig> | null | und
     ...config,
     botAutomation,
     botExecutor: botAutomation.executorRule,
+    ringCentralSender: normalizeRingCentralSenderConfig(config.ringCentralSender),
   };
 
   return nextConfig as T;
@@ -74,6 +117,16 @@ export function withBotAutomation(
     ...config,
     botAutomation,
     botExecutor: botAutomation.executorRule,
+  }) as SheetConfig;
+}
+
+export function withRingCentralSender(
+  config: SheetConfig,
+  ringCentralSender: RingCentralSenderConfig | undefined
+): SheetConfig {
+  return normalizeSheetConfig({
+    ...config,
+    ringCentralSender,
   }) as SheetConfig;
 }
 

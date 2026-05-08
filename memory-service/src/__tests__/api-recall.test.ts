@@ -40,6 +40,9 @@ describe('Recall API', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM memory_metadata').run();
+    db.prepare('DELETE FROM relationships').run();
+    db.prepare('DELETE FROM entities').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare(
       `INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`,
@@ -364,5 +367,120 @@ __回复建议__：可以回复确认风险和 owner。
     expect(body.items[0].displayText).not.toContain('__回复建议__');
     expect(body.items[0].displayText).not.toContain('点击查看原消息');
     expect(body.items[0].previewText.length).toBeLessThanOrEqual(35);
+  });
+
+  it('uses text similarity to diversify time-window recall results', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare('DELETE FROM messages_raw').run();
+    const insertMessage = db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, sender, group_name, timestamp, importance, sentiment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertMessage.run(
+      'mmr-dup-new',
+      'Alpha launch risk owner Sarah confirmed migration blocker.',
+      'manual',
+      'Sarah',
+      'Launch',
+      now - 10,
+      0.8,
+      'neutral',
+      now - 10,
+    );
+    insertMessage.run(
+      'mmr-dup-old',
+      'Alpha launch risk owner Sarah confirmed migration blocker.',
+      'manual',
+      'Sarah',
+      'Launch',
+      now - 20,
+      0.8,
+      'neutral',
+      now - 20,
+    );
+    insertMessage.run(
+      'mmr-diverse',
+      'Beta onboarding risk owner Nina flagged analytics blocker.',
+      'manual',
+      'Nina',
+      'Onboarding',
+      now - 30,
+      0.8,
+      'neutral',
+      now - 30,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'recent project risk owner blocker',
+        topK: 2,
+        channels: ['time'],
+        timeRange: {
+          start: now - 120,
+          end: now + 10,
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const ids = body.items.map((item: any) => item.id);
+
+    expect(ids).toContain('mmr-dup-new');
+    expect(ids).toContain('mmr-diverse');
+    expect(ids).not.toContain('mmr-dup-old');
+  });
+
+  it('reinforces graph entity recall using the entity target type', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO entities
+        (id, type, name, description, importance, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'entity-orion-launch',
+      'Project',
+      'Orion Launch',
+      'Release coordination project for Orion.',
+      0.9,
+      'active',
+      now,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Orion Launch',
+        topK: 1,
+        channels: ['graph'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items[0].id).toBe('entity-orion-launch');
+
+    const entityMeta = db
+      .prepare(
+        `SELECT access_count
+         FROM memory_metadata
+         WHERE target_type = 'entity' AND target_id = ?`,
+      )
+      .get('entity-orion-launch') as { access_count: number } | undefined;
+    const messageMeta = db
+      .prepare(
+        `SELECT access_count
+         FROM memory_metadata
+         WHERE target_type = 'message' AND target_id = ?`,
+      )
+      .get('entity-orion-launch') as { access_count: number } | undefined;
+
+    expect(entityMeta?.access_count).toBe(1);
+    expect(messageMeta).toBeUndefined();
   });
 });

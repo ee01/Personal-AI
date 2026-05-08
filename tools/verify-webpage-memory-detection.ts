@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 
 import {
+  CONTEXT_SITE_MUTE_TTL_MS,
+  formatContextSiteMuteRemaining,
+  getContextSiteMuteExpiresAt,
   hasSensitiveUrlSignal,
   isLowValueContextHost,
   isSensitiveControlDescriptor,
+  isContextSiteMuteActive,
+  normalizeContextSiteMuteHost,
   normalizeContextPageUrl,
+  pruneContextSiteMuteRecord,
   sanitizeContextExternalUrl,
   sanitizeExploreRoute,
 } from '../src/web-intelligence/contextRecallGuards';
@@ -64,6 +70,27 @@ assert.equal(
 assert.equal(
   isSensitiveControlDescriptor({ name: 'jira-search-query', type: 'search' }),
   false,
+);
+
+const now = 1_700_000_000_000;
+assert.equal(normalizeContextSiteMuteHost(' Example.COM. '), 'example.com');
+assert.equal(isContextSiteMuteActive(now - 1_000, now), true);
+assert.equal(isContextSiteMuteActive(now - CONTEXT_SITE_MUTE_TTL_MS - 1, now), false);
+assert.equal(getContextSiteMuteExpiresAt(now), now + CONTEXT_SITE_MUTE_TTL_MS);
+assert.equal(formatContextSiteMuteRemaining(now - 2 * 60 * 60 * 1000, now), '22 小时后恢复');
+assert.deepEqual(
+  pruneContextSiteMuteRecord(
+    {
+      ' Example.COM. ': now - 1_000,
+      'expired.example': now - CONTEXT_SITE_MUTE_TTL_MS - 1,
+      invalid: 'not-number',
+    },
+    now,
+  ),
+  {
+    record: { 'example.com': now - 1_000 },
+    changed: true,
+  },
 );
 
 console.log('[verify-webpage-memory-detection] helper checks passed');

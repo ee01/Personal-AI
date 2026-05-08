@@ -16,6 +16,7 @@ import {
   type OutreachDirectoryStatus,
   type RuntimeConfigResponse,
   type UpdateRuntimeConfigPayload,
+  type CalendarEventsSyncResponse,
 } from './services/MemoryServiceClient';
 import { agentCoordinator } from './agentWorkflow';
 import {
@@ -28,12 +29,24 @@ import {
   type AgentWorkflowTestInput,
   type AgentWorkflowReplayMessage,
 } from './agentWorkflowReplay';
+import {
+  buildAgentWorkflowDecisionPath,
+  buildAgentWorkflowConfigDiagnostics,
+  buildAgentWorkflowResultDiagnostics,
+  type AgentWorkflowDiagnostic,
+} from './agentWorkflowDiagnostics';
 import { IntelligentAgent, type AgentToolDescription } from './agentThinking';
 import {
   AgentVisualizer,
   AgentFlowVisualizer,
   AgentResultSummary,
 } from './agent-visualizer';
+import {
+  CONTEXT_SITE_MUTE_STORAGE_KEY,
+  formatContextSiteMuteRemaining,
+  getContextSiteMuteExpiresAt,
+  pruneContextSiteMuteRecord,
+} from './web-intelligence/contextRecallGuards';
 
 type PushTargetField =
   | 'MESSAGE_ANALYSIS_PUSH_TARGET'
@@ -72,6 +85,18 @@ interface MemoryImportResponse {
     deletedPaths: string[];
   };
   warnings: string[];
+}
+
+interface OutlookCalendarStatusView {
+  connected: boolean;
+  account?: {
+    displayName?: string;
+    userPrincipalName?: string;
+  };
+  expiresAt?: number;
+  lastSyncAt?: number;
+  lastSyncResult?: CalendarEventsSyncResponse;
+  lastError?: string;
 }
 
 const PUSH_TARGET_RULES: Array<{
@@ -729,6 +754,210 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
   );
 }
 
+interface ContextMutedSiteView {
+  host: string;
+  mutedAt: number;
+  remaining: string;
+  expiresAtLabel: string;
+}
+
+function ContextSiteMuteSettings() {
+  const [mutedSites, setMutedSites] = React.useState<ContextMutedSiteView[]>(
+    [],
+  );
+  const [loading, setLoading] = React.useState(false);
+  const [message, setMessage] = React.useState('');
+
+  const toMutedSiteViews = (
+    record: Record<string, number>,
+  ): ContextMutedSiteView[] => {
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return Object.entries(record)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([host, mutedAt]) => {
+        const expiresAt = getContextSiteMuteExpiresAt(mutedAt);
+        return {
+          host,
+          mutedAt,
+          remaining: formatContextSiteMuteRemaining(mutedAt),
+          expiresAtLabel: expiresAt ? formatter.format(new Date(expiresAt)) : '',
+        };
+      });
+  };
+
+  const readMutedSiteRecord = async (): Promise<Record<string, number>> => {
+    const result = await chrome.storage.local.get(CONTEXT_SITE_MUTE_STORAGE_KEY);
+    const pruned = pruneContextSiteMuteRecord(
+      result?.[CONTEXT_SITE_MUTE_STORAGE_KEY],
+    );
+    if (pruned.changed) {
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_MUTE_STORAGE_KEY]: pruned.record,
+      });
+    }
+    return pruned.record;
+  };
+
+  const refreshMutedSites = async (nextMessage = '') => {
+    setLoading(true);
+    try {
+      const record = await readMutedSiteRecord();
+      setMutedSites(toMutedSiteViews(record));
+      setMessage(nextMessage);
+    } catch (error) {
+      console.warn('Failed to load context site mutes:', error);
+      setMessage('读取静默站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    void refreshMutedSites();
+  }, []);
+
+  const unmuteSite = async (host: string) => {
+    setLoading(true);
+    try {
+      const record = await readMutedSiteRecord();
+      delete record[host];
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_MUTE_STORAGE_KEY]: record,
+      });
+      setMutedSites(toMutedSiteViews(record));
+      setMessage(`已恢复 ${host} 的网页记忆提示`);
+    } catch (error) {
+      console.warn('Failed to unmute context site:', error);
+      setMessage('恢复站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearMutedSites = async () => {
+    setLoading(true);
+    try {
+      await chrome.storage.local.set({ [CONTEXT_SITE_MUTE_STORAGE_KEY]: {} });
+      setMutedSites([]);
+      setMessage('已恢复全部网页记忆提示站点');
+    } catch (error) {
+      console.warn('Failed to clear context site mutes:', error);
+      setMessage('恢复全部站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="form-group">
+      <label>网页记忆提示静默站点</label>
+      <div
+        style={{
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          background: '#f8fafc',
+          padding: '12px 14px',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 12,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <small style={{ color: '#64748b' }}>
+            管理右下角记忆卡片里选择“此网站今天不提示”的站点。
+          </small>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => refreshMutedSites('已刷新静默站点')}
+              disabled={loading}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              刷新
+            </button>
+            <button
+              type="button"
+              onClick={clearMutedSites}
+              disabled={loading || mutedSites.length === 0}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              全部恢复
+            </button>
+          </div>
+        </div>
+
+        {mutedSites.length > 0 ? (
+          <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+            {mutedSites.map((site) => (
+              <div
+                key={site.host}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  gap: 10,
+                  alignItems: 'center',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 6,
+                  background: '#fff',
+                  padding: '9px 10px',
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <strong
+                    style={{
+                      display: 'block',
+                      color: '#0f172a',
+                      overflowWrap: 'anywhere',
+                    }}
+                  >
+                    {site.host}
+                  </strong>
+                  <small style={{ color: '#64748b' }}>
+                    {site.remaining}
+                    {site.expiresAtLabel ? ` · 到期 ${site.expiresAtLabel}` : ''}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => unmuteSite(site.host)}
+                  disabled={loading}
+                  style={{ fontSize: 12, padding: '4px 10px' }}
+                >
+                  恢复
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <small style={{ color: '#64748b', display: 'block', marginTop: 10 }}>
+            当前没有被临时静默的网站。
+          </small>
+        )}
+
+        {message ? (
+          <small
+            aria-live="polite"
+            style={{ color: '#2563eb', display: 'block', marginTop: 10 }}
+          >
+            {message}
+          </small>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const Options = () => {
   const outreachConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const meetingPilotConfigSectionRef = useRef<HTMLDivElement | null>(null);
@@ -751,6 +980,9 @@ const Options = () => {
   >([]);
   const [outreachDirectoryRefreshing, setOutreachDirectoryRefreshing] =
     useState(false);
+  const [outlookCalendarStatus, setOutlookCalendarStatus] =
+    useState<OutlookCalendarStatusView>({ connected: false });
+  const [outlookCalendarBusy, setOutlookCalendarBusy] = useState(false);
   const [highlightedSection, setHighlightedSection] = useState<string>('');
 
   // Weekly Report backend state (synced with memory-service)
@@ -889,9 +1121,11 @@ const Options = () => {
         );
         loadDreamDigestSettingsFromBackend(merged);
         loadOutreachDirectoryStatusFromBackend(merged);
+        refreshOutlookCalendarStatus();
       } else {
         // 如果没有保存过配置，则尝试从 .env 加载
         loadEnvDefaults();
+        refreshOutlookCalendarStatus();
       }
     });
   }, []);
@@ -1223,6 +1457,111 @@ const Options = () => {
       });
     } finally {
       setOutreachDirectoryRefreshing(false);
+    }
+  };
+
+  const refreshOutlookCalendarStatus = async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'OUTLOOK_CALENDAR_STATUS',
+      });
+      if (response?.success && response.result) {
+        setOutlookCalendarStatus(response.result);
+      }
+    } catch (error) {
+      console.warn('Failed to load Outlook calendar status:', error);
+    }
+  };
+
+  const persistConfigForCalendarAction = async (): Promise<EnvConfigType> => {
+    const persistedConfig = sanitizeLocalEnvConfig(config);
+    await chrome.storage.local.set({ envConfig: persistedConfig });
+    await chrome.runtime.sendMessage({
+      type: 'UPDATE_ENV_CONFIG',
+      config: persistedConfig,
+    });
+    return persistedConfig;
+  };
+
+  const handleOutlookCalendarConnect = async () => {
+    if (!(config.MS_OUTLOOK_CLIENT_ID || '').trim()) {
+      setStatus({
+        message: '连接 Outlook Calendar 前需要填写 Microsoft Outlook Client ID',
+        type: 'error',
+      });
+      return;
+    }
+    setOutlookCalendarBusy(true);
+    try {
+      const persistedConfig = await persistConfigForCalendarAction();
+      const response = await chrome.runtime.sendMessage({
+        type: 'OUTLOOK_CALENDAR_CONNECT',
+        config: persistedConfig,
+      });
+      if (!response?.success) {
+        throw new Error(response?.error || 'outlook_connect_failed');
+      }
+      setOutlookCalendarStatus(response.result);
+      setStatus({ message: 'Outlook Calendar 已连接', type: 'success' });
+    } catch (error) {
+      setStatus({
+        message: `连接 Outlook Calendar 失败: ${(error as Error).message}`,
+        type: 'error',
+      });
+    } finally {
+      setOutlookCalendarBusy(false);
+    }
+  };
+
+  const handleOutlookCalendarDisconnect = async () => {
+    setOutlookCalendarBusy(true);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'OUTLOOK_CALENDAR_DISCONNECT',
+      });
+      if (!response?.success) {
+        throw new Error(response?.error || 'outlook_disconnect_failed');
+      }
+      setOutlookCalendarStatus(response.result || { connected: false });
+      setStatus({ message: 'Outlook Calendar 已断开', type: 'success' });
+    } catch (error) {
+      setStatus({
+        message: `断开 Outlook Calendar 失败: ${(error as Error).message}`,
+        type: 'error',
+      });
+    } finally {
+      setOutlookCalendarBusy(false);
+    }
+  };
+
+  const handleOutlookCalendarSyncNow = async () => {
+    setOutlookCalendarBusy(true);
+    try {
+      const persistedConfig = await persistConfigForCalendarAction();
+      const response = await chrome.runtime.sendMessage({
+        type: 'OUTLOOK_CALENDAR_SYNC_NOW',
+        config: persistedConfig,
+      });
+      if (!response?.success) {
+        throw new Error(response?.error || 'outlook_sync_failed');
+      }
+      await refreshOutlookCalendarStatus();
+      const result = response.result as CalendarEventsSyncResponse | undefined;
+      setStatus({
+        message: result
+          ? `Outlook Calendar 已同步 ${result.total} 个会议，变化 ${
+              result.created + result.updated + result.cancelled + result.deleted
+            }`
+          : 'Outlook Calendar 已同步',
+        type: 'success',
+      });
+    } catch (error) {
+      setStatus({
+        message: `同步 Outlook Calendar 失败: ${(error as Error).message}`,
+        type: 'error',
+      });
+    } finally {
+      setOutlookCalendarBusy(false);
     }
   };
 
@@ -2226,6 +2565,7 @@ const Options = () => {
             对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
           </small>
         </div>
+        <ContextSiteMuteSettings />
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
           name="SELF_REFLECTION_ENABLED"
@@ -2419,6 +2759,157 @@ const Options = () => {
             icon 会恢复显示。
           </small>
         ) : null}
+        <div
+          className="form-group"
+          style={{
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+            padding: '14px',
+            marginTop: '14px',
+            marginBottom: '18px',
+            background: '#fbfdff',
+          }}
+        >
+          <h3 style={{ margin: '0 0 10px' }}>Context Assist / 会前准备</h3>
+          <small style={{ color: '#666', display: 'block', marginBottom: 12 }}>
+            在 RingCentral Video Home 的会议详情右侧显示 Personal AI
+            会前准备；Outlook 未授权时会使用 RingCentral 本地 Calendar IndexedDB
+            的轻量会议元数据做静默同步。
+          </small>
+          <ToggleField
+            id="CONTEXT_ASSIST_ENABLED"
+            name="CONTEXT_ASSIST_ENABLED"
+            checked={config.CONTEXT_ASSIST_ENABLED !== false}
+            onChange={handleInputChange}
+            label="启用 Context Assist"
+            description="统一启用会前准备和写作护航的场景化记忆提示。"
+          />
+          <ToggleField
+            id="MEETING_PREP_ENABLED"
+            name="MEETING_PREP_ENABLED"
+            checked={config.MEETING_PREP_ENABLED !== false}
+            onChange={handleInputChange}
+            label="启用会前准备"
+            description="在 RingCentral Video Home 的选中会议详情区注入会前准备卡片。"
+            disabled={config.CONTEXT_ASSIST_ENABLED === false}
+          />
+          <div className="form-group">
+            <label htmlFor="MEETING_PREP_CALENDAR_SOURCE">Calendar Source</label>
+            <select
+              id="MEETING_PREP_CALENDAR_SOURCE"
+              name="MEETING_PREP_CALENDAR_SOURCE"
+              value={config.MEETING_PREP_CALENDAR_SOURCE || 'auto'}
+              onChange={handleInputChange}
+              disabled={
+                config.CONTEXT_ASSIST_ENABLED === false ||
+                config.MEETING_PREP_ENABLED === false
+              }
+            >
+              <option value="auto">Auto：Outlook 优先，RingCentral 本地兜底</option>
+              <option value="outlook">Microsoft Outlook Calendar</option>
+              <option value="ringcentral_indexeddb">
+                RingCentral IndexedDB fallback
+              </option>
+            </select>
+          </div>
+          {config.MEETING_PREP_CALENDAR_SOURCE !== 'ringcentral_indexeddb' ? (
+            <>
+              <div className="form-group">
+                <label htmlFor="MS_OUTLOOK_CLIENT_ID">
+                  Microsoft Outlook Client ID
+                </label>
+                <input
+                  type="text"
+                  id="MS_OUTLOOK_CLIENT_ID"
+                  name="MS_OUTLOOK_CLIENT_ID"
+                  value={config.MS_OUTLOOK_CLIENT_ID || ''}
+                  onChange={handleInputChange}
+                  placeholder="Azure App Registration client id"
+                  disabled={
+                    config.CONTEXT_ASSIST_ENABLED === false ||
+                    config.MEETING_PREP_ENABLED === false
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="MS_OUTLOOK_TENANT_ID">
+                  Microsoft Tenant ID
+                </label>
+                <input
+                  type="text"
+                  id="MS_OUTLOOK_TENANT_ID"
+                  name="MS_OUTLOOK_TENANT_ID"
+                  value={config.MS_OUTLOOK_TENANT_ID || 'common'}
+                  onChange={handleInputChange}
+                  placeholder="common / organizations / tenant id"
+                  disabled={
+                    config.CONTEXT_ASSIST_ENABLED === false ||
+                    config.MEETING_PREP_ENABLED === false
+                  }
+                />
+                <small
+                  style={{ color: '#666', display: 'block', marginTop: '5px' }}
+                >
+                  Redirect URI：
+                  {chrome.identity.getRedirectURL('outlook-calendar')}
+                </small>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleOutlookCalendarConnect}
+                  disabled={outlookCalendarBusy}
+                >
+                  {outlookCalendarStatus.connected
+                    ? '重新授权 Outlook'
+                    : '授权 Outlook Calendar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOutlookCalendarSyncNow}
+                  disabled={outlookCalendarBusy || !outlookCalendarStatus.connected}
+                >
+                  立即同步
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOutlookCalendarDisconnect}
+                  disabled={outlookCalendarBusy || !outlookCalendarStatus.connected}
+                >
+                  断开
+                </button>
+              </div>
+              <small
+                style={{ color: '#666', display: 'block', marginTop: '8px' }}
+              >
+                {outlookCalendarStatus.connected
+                  ? `已连接 ${
+                      outlookCalendarStatus.account?.displayName ||
+                      outlookCalendarStatus.account?.userPrincipalName ||
+                      'Outlook account'
+                    }${
+                      outlookCalendarStatus.lastSyncAt
+                        ? ` · 上次同步 ${new Date(
+                            outlookCalendarStatus.lastSyncAt,
+                          ).toLocaleString()}`
+                        : ''
+                    }`
+                  : '未连接 Outlook；Video Home 页面会自动使用 RingCentral 本地会议元数据。'}
+              </small>
+            </>
+          ) : (
+            <small style={{ color: '#666', display: 'block' }}>
+              当前仅使用 RingCentral IndexedDB fallback。同步会在 Video Home 页面打开时静默发生。
+            </small>
+          )}
+        </div>
         <div className="form-group">
           <label htmlFor="MEETING_TRANSCRIPTION_MODE">Transcription Mode</label>
           <select
@@ -3688,6 +4179,28 @@ const AgentSettings = () => {
       : workflowTestTrace.some((step: any) => step.status === 'error')
         ? 'partial'
         : 'complete');
+  const workflowConfigDiagnostics = buildAgentWorkflowConfigDiagnostics(
+    sortedAgents,
+    availableTools,
+  );
+  const workflowRunDiagnostics = buildAgentWorkflowResultDiagnostics(
+    workflowTestResult,
+  );
+  const workflowDecisionPath =
+    buildAgentWorkflowDecisionPath(workflowTestResult);
+  const workflowDiagnosticSeverityLabels: Record<string, string> = {
+    error: '阻塞',
+    warning: '注意',
+    info: '提示',
+    ok: '通过',
+  };
+  const workflowDecisionPathStatusLabels: Record<string, string> = {
+    success: '通过',
+    warning: '注意',
+    error: '阻塞',
+    info: '提示',
+    muted: '跳过',
+  };
 
   const formatWorkflowTraceDuration = (durationMs?: number) => {
     if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
@@ -3751,6 +4264,40 @@ const AgentSettings = () => {
       ]
     : [];
 
+  const renderWorkflowDiagnostics = (
+    diagnostics: AgentWorkflowDiagnostic[],
+    emptyMessage: string,
+  ) => {
+    const okDiagnostic = {
+      id: 'ok',
+      severity: 'ok',
+      title: '检查通过',
+      message: emptyMessage,
+      detail: undefined,
+    } as const;
+    const visibleDiagnostics =
+      diagnostics.length > 0 ? diagnostics : [okDiagnostic];
+
+    return (
+      <div className="agent-workflow-diagnostics">
+        {visibleDiagnostics.map((item) => (
+          <div
+            key={item.id}
+            className={`agent-workflow-diagnostic ${item.severity}`}
+          >
+            <span>
+              {workflowDiagnosticSeverityLabels[item.severity] ||
+                item.severity}
+            </span>
+            <strong>{item.title}</strong>
+            <small>{item.message}</small>
+            {item.detail && <em>{item.detail}</em>}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="agent-settings">
       <div className="agent-workflow-summary">
@@ -3782,6 +4329,14 @@ const AgentSettings = () => {
             {field}
           </span>
         ))}
+      </div>
+
+      <div className="agent-workflow-diagnostic-block">
+        <div className="agent-test-section-title">配置检查</div>
+        {renderWorkflowDiagnostics(
+          workflowConfigDiagnostics,
+          '当前配置未发现阻塞项',
+        )}
       </div>
 
       <div className="agent-workflow-test-panel">
@@ -3951,6 +4506,31 @@ const AgentSettings = () => {
               <span className="agent-test-decision">
                 置信度 {Math.round(workflowTestConfidence * 100)}%
               </span>
+            </div>
+            {workflowDecisionPath.length > 0 && (
+              <div className="agent-workflow-path" aria-label="Agent Workflow 决策路径">
+                {workflowDecisionPath.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`agent-workflow-path-item ${item.status}`}
+                  >
+                    <span>
+                      {workflowDecisionPathStatusLabels[item.status] ||
+                        item.status}
+                    </span>
+                    <strong>{item.title}</strong>
+                    <small>{item.summary}</small>
+                    {item.detail && <em>{item.detail}</em>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="agent-workflow-diagnostic-block compact">
+              <div className="agent-test-section-title">运行诊断</div>
+              {renderWorkflowDiagnostics(
+                workflowRunDiagnostics,
+                '本次 trace 未发现阻塞项',
+              )}
             </div>
             {workflowTestResult.notificationReview?.required && (
               <div className="agent-test-review-banner">

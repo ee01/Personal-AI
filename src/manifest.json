@@ -37,6 +37,12 @@
       "all_frames": false
     },
     {
+      "matches": ["https://app.ringcentral.com/video/home*"],
+      "js": ["contentScriptRingCentralVideoHome.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
       "matches": ["https://docs.google.com/spreadsheets/*"],
       "js": ["contentScriptGoogleSheet.js"]
     },

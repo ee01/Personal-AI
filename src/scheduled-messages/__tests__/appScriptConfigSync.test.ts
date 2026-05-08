@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ConfigSyncService } from '../ConfigSyncService';
+import { ConfigSyncService } from '../ConfigSyncService.js';
 
 type FetchCall = {
   url: string;
@@ -55,6 +55,32 @@ test('ConfigSyncService reads App Script deployment metadata from Config sheet',
   assert.equal(config.deploymentId, 'deployment-456');
   assert.equal(config.appScriptVersion, '2.6.1');
   assert.equal(config.appScriptLastUpdated, '2026-04-03');
+});
+
+test('ConfigSyncService reads RingCentral sender config from Config sheet', async () => {
+  installFetchMock(() =>
+    new Response(
+      JSON.stringify({
+        values: [
+          ['ringcentral_sender_enabled', 'true'],
+          ['ringcentral_sender_client_id', 'rc-client-id'],
+          ['ringcentral_sender_client_secret', 'rc-client-secret'],
+          ['ringcentral_sender_jwt', 'rc-jwt'],
+          ['ringcentral_sender_updated_at', '2026-05-07T10:00:00.000Z'],
+        ],
+      }),
+      { status: 200 },
+    ),
+  );
+
+  const service = new ConfigSyncService('token');
+  const config = await service.readConfigFromSheet('sheet-123');
+
+  assert.equal(config.ringCentralSender?.enabled, true);
+  assert.equal(config.ringCentralSender?.clientId, 'rc-client-id');
+  assert.equal(config.ringCentralSender?.clientSecret, 'rc-client-secret');
+  assert.equal(config.ringCentralSender?.jwt, 'rc-jwt');
+  assert.equal(config.ringCentralSender?.updatedAt, '2026-05-07T10:00:00.000Z');
 });
 
 test('ConfigSyncService ignores invalid Sheet grid IDs from Config sheet', async () => {
@@ -116,6 +142,42 @@ test('ConfigSyncService writes App Script deployment metadata to Config sheet', 
   assert.equal(configMap.get('app_script_last_updated'), '2026-04-03');
 });
 
+test('ConfigSyncService writes RingCentral sender config to Config sheet', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-05-07T10:00:00.000Z',
+    ringCentralSender: {
+      enabled: true,
+      clientId: 'rc-client-id',
+      clientSecret: 'rc-client-secret',
+      jwt: 'rc-jwt',
+      updatedAt: '2026-05-07T10:00:00.000Z',
+    },
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(configMap.get('ringcentral_sender_enabled'), 'true');
+  assert.equal(configMap.get('ringcentral_sender_client_id'), 'rc-client-id');
+  assert.equal(configMap.get('ringcentral_sender_client_secret'), 'rc-client-secret');
+  assert.equal(configMap.get('ringcentral_sender_jwt'), 'rc-jwt');
+});
+
 test('ConfigSyncService writes Config values as raw strings to avoid Sheet coercion', async () => {
   const calls = installFetchMock((_url, init) => {
     if (init?.method === 'PUT') {
@@ -154,7 +216,7 @@ test('ConfigSyncService writes Config values as raw strings to avoid Sheet coerc
   assert.equal(configMap.get('bot_automation_executor_rule_id'), '90071992547409931234');
 });
 
-test('ConfigSyncService preserves unmanaged Config keys while replacing managed keys', async () => {
+test('ConfigSyncService preserves unmanaged Config keys and remote sender keys while replacing managed keys', async () => {
   const calls = installFetchMock((_url, init) => {
     if (init?.method === 'PUT') {
       return new Response('{}', { status: 200 });
@@ -167,6 +229,7 @@ test('ConfigSyncService preserves unmanaged Config keys while replacing managed 
           ['web_app_url', 'https://old.example.com/exec'],
           ['deploymentId', 'stale-deployment-alias'],
           ['bot_executor_rule_id', 'stale-rule'],
+          ['ringcentral_sender_client_secret', 'old-secret'],
         ],
       }),
       { status: 200 },
@@ -194,6 +257,52 @@ test('ConfigSyncService preserves unmanaged Config keys while replacing managed 
   assert.equal(configMap.get('web_app_url'), 'https://script.google.com/macros/s/deploy/exec');
   assert.equal(configMap.has('deploymentId'), false);
   assert.equal(configMap.has('bot_executor_rule_id'), false);
+  assert.equal(configMap.get('ringcentral_sender_client_secret'), 'old-secret');
+});
+
+test('ConfigSyncService clears remote sender credentials when sender is explicitly disabled', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['ringcentral_sender_enabled', 'true'],
+          ['ringcentral_sender_client_id', 'old-client-id'],
+          ['ringcentral_sender_client_secret', 'old-secret'],
+          ['ringcentral_sender_jwt', 'old-jwt'],
+          ['ringcentral_sender_updated_at', '2026-05-07T10:00:00.000Z'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-05-07T10:00:00.000Z',
+    ringCentralSender: {
+      enabled: false,
+      updatedAt: '2026-05-08T10:00:00.000Z',
+    },
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(configMap.get('ringcentral_sender_enabled'), 'false');
+  assert.equal(configMap.get('ringcentral_sender_updated_at'), '2026-05-08T10:00:00.000Z');
+  assert.equal(configMap.has('ringcentral_sender_client_id'), false);
+  assert.equal(configMap.has('ringcentral_sender_client_secret'), false);
+  assert.equal(configMap.has('ringcentral_sender_jwt'), false);
 });
 
 test('ConfigSyncService creates missing Config sheet before saving to a legacy maintenance sheet', async () => {

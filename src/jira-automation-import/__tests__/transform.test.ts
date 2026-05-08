@@ -6,6 +6,7 @@ import {
   JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH,
   buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportRule,
+  buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportWarnings,
   collectJiraAutomationImportReviewSignals,
   isJiraAutomationImportFileSizeAllowed,
@@ -304,6 +305,48 @@ test('buildJiraAutomationImportWarnings calls out environment-bound references',
   assert.ok(warnings.some((warning) => warning.includes('JQL or filter')));
   assert.ok(warnings.some((warning) => warning.includes('hard-coded URL')));
   assert.ok(warnings.some((warning) => warning.includes('email or account')));
+});
+
+test('buildJiraAutomationImportReviewChecklist groups enablement review risks by severity', () => {
+  const checklist = buildJiraAutomationImportReviewChecklist({
+    ...baseRule,
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    trigger: {
+      ...baseRule.trigger,
+      value: {
+        schedule: { method: 'CRON' },
+        jql: 'project = SRC AND status = Done',
+      },
+    },
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://hooks.example.com/SRC/release',
+          usedSecretsKeys: ['personal-ai-token'],
+          recipients: 'release-owner@example.com',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    checklist.map((item) => item.id),
+    [
+      'target-project',
+      'jql-filters',
+      'source-project-references',
+      'external-effects',
+      'schedule',
+      'rule-chaining',
+      'version-compatibility',
+    ],
+  );
+  assert.equal(checklist.find((item) => item.id === 'target-project')?.severity, 'high');
+  assert.equal(checklist.find((item) => item.id === 'external-effects')?.severity, 'high');
+  assert.equal(checklist.find((item) => item.id === 'schedule')?.severity, 'medium');
+  assert.equal(checklist.find((item) => item.id === 'version-compatibility')?.severity, 'low');
 });
 
 test('isJiraAutomationImportFileSizeAllowed follows Atlassian 5MB limit', () => {

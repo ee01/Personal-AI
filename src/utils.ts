@@ -9,6 +9,10 @@ export type BotPushScenario =
   | 'outreach_result';
 
 export type MeetingTranscribeLanguage = 'auto' | 'zh-CN' | 'en-US';
+export type MeetingPrepCalendarSource =
+  | 'auto'
+  | 'outlook'
+  | 'ringcentral_indexeddb';
 
 export interface ResolvedBotPushTarget {
   mode: BotPushTargetMode;
@@ -109,8 +113,15 @@ export interface EnvConfigType {
   RINGCENTRAL_CLEAR_JWT?: boolean;
   RINGCENTRAL_CLIENT_SECRET_CONFIGURED?: boolean;
   RINGCENTRAL_JWT_CONFIGURED?: boolean;
+  RINGCENTRAL_SENDER_DIFY_API_BASE_URL: string;
+  RINGCENTRAL_SENDER_DIFY_API_KEY: string;
   MEETING_PILOT_ENABLED: boolean;
   MEETING_PILOT_FLOATING_ICON_VISIBLE: boolean;
+  CONTEXT_ASSIST_ENABLED: boolean;
+  MEETING_PREP_ENABLED: boolean;
+  MEETING_PREP_CALENDAR_SOURCE: MeetingPrepCalendarSource;
+  MS_OUTLOOK_CLIENT_ID: string;
+  MS_OUTLOOK_TENANT_ID: string;
   MEETING_MINUTES_API_URL: string;
   MEETING_FEATURE_ENABLED: boolean;
   MEETING_DANMAKU_SPEED: 'fast' | 'medium' | 'slow';
@@ -414,6 +425,11 @@ export function normalizeEnvConfigShape(
     typeof config.MEETING_PILOT_FLOATING_ICON_VISIBLE === 'boolean'
       ? config.MEETING_PILOT_FLOATING_ICON_VISIBLE
       : defaultEnvConfig.MEETING_PILOT_FLOATING_ICON_VISIBLE;
+  const normalizedMeetingPrepCalendarSource: MeetingPrepCalendarSource =
+    config.MEETING_PREP_CALENDAR_SOURCE === 'outlook' ||
+    config.MEETING_PREP_CALENDAR_SOURCE === 'ringcentral_indexeddb'
+      ? config.MEETING_PREP_CALENDAR_SOURCE
+      : 'auto';
 
   const normalizedMinutesApiUrl =
     String(
@@ -435,6 +451,12 @@ export function normalizeEnvConfigShape(
     MEETING_PILOT_ENABLED: normalizedMeetingPilotEnabled,
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
       normalizedMeetingPilotFloatingIconVisible,
+    CONTEXT_ASSIST_ENABLED: config.CONTEXT_ASSIST_ENABLED !== false,
+    MEETING_PREP_ENABLED: config.MEETING_PREP_ENABLED !== false,
+    MEETING_PREP_CALENDAR_SOURCE: normalizedMeetingPrepCalendarSource,
+    MS_OUTLOOK_CLIENT_ID: String(config.MS_OUTLOOK_CLIENT_ID || '').trim(),
+    MS_OUTLOOK_TENANT_ID:
+      String(config.MS_OUTLOOK_TENANT_ID || '').trim() || 'common',
     MEETING_FEATURE_ENABLED: normalizedMeetingPilotEnabled,
     MEETING_MINUTES_API_URL: normalizedMinutesApiUrl,
     MEETING_DIGEST_API_BASE_URL: normalizedMinutesApiUrl,
@@ -566,11 +588,25 @@ export const defaultEnvConfig: EnvConfigType = {
     process.env.RINGCENTRAL_CLIENT_SECRET,
   ),
   RINGCENTRAL_JWT_CONFIGURED: Boolean(process.env.RINGCENTRAL_JWT),
+  RINGCENTRAL_SENDER_DIFY_API_BASE_URL:
+    process.env.RINGCENTRAL_SENDER_DIFY_API_BASE_URL ||
+    'https://dify.int.rclabenv.com/v1',
+  RINGCENTRAL_SENDER_DIFY_API_KEY:
+    process.env.RINGCENTRAL_SENDER_DIFY_API_KEY || '',
   MEETING_PILOT_ENABLED:
     process.env.MEETING_PILOT_ENABLED !== 'false' &&
     process.env.MEETING_FEATURE_ENABLED !== 'false',
   MEETING_PILOT_FLOATING_ICON_VISIBLE:
     process.env.MEETING_PILOT_FLOATING_ICON_VISIBLE !== 'false',
+  CONTEXT_ASSIST_ENABLED: process.env.CONTEXT_ASSIST_ENABLED !== 'false',
+  MEETING_PREP_ENABLED: process.env.MEETING_PREP_ENABLED !== 'false',
+  MEETING_PREP_CALENDAR_SOURCE:
+    process.env.MEETING_PREP_CALENDAR_SOURCE === 'outlook' ||
+    process.env.MEETING_PREP_CALENDAR_SOURCE === 'ringcentral_indexeddb'
+      ? process.env.MEETING_PREP_CALENDAR_SOURCE
+      : 'auto',
+  MS_OUTLOOK_CLIENT_ID: process.env.MS_OUTLOOK_CLIENT_ID || '',
+  MS_OUTLOOK_TENANT_ID: process.env.MS_OUTLOOK_TENANT_ID || 'common',
   MEETING_MINUTES_API_URL:
     process.env.MEETING_MINUTES_API_URL ||
     process.env.MEETING_DIGEST_API_BASE_URL ||

@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.6.24';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-07';
+var APP_SCRIPT_VERSION = '2.7.2';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-08';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -120,8 +120,13 @@ function executeScheduledMessages() {
   const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   let timelineReleaseInfo = null;
   let timelineReleaseInfoLoaded = false;
+  const ringCentralSenderConfig = getRingCentralSenderConfigFromSheet();
+  const shouldHandoffAsMeToJira = isRingCentralSenderReady(ringCentralSenderConfig);
   
   Logger.log(`开始执行定时任务，当前时间: ${Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
+  if (shouldHandoffAsMeToJira) {
+    Logger.log('RingCentral AsMe sender 已启用，AsMe 消息由 Jira Automation 处理，AppScript 邮件 fallback 暂停');
+  }
   
   // 遍历每一行（跳过表头）
   for (let i = 1; i < data.length; i++) {
@@ -134,6 +139,7 @@ function executeScheduledMessages() {
     // 基本过滤条件
     if (rowData.Status !== 'Active') continue;
     if (rowData.Push_Method !== 'AsMe') continue; // Bot 和 AI 由 Jira 处理
+    if (shouldHandoffAsMeToJira) continue;
     
     try {
       // 步骤 1: 先判断日期是否匹配
@@ -225,6 +231,62 @@ function parseRow(row, headers) {
     rowData[header] = row[idx];
   });
   return rowData;
+}
+
+function readConfigSheetMap() {
+  const config = {};
+
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Config');
+    if (!sheet) {
+      return config;
+    }
+
+    const rows = sheet.getDataRange().getDisplayValues();
+    for (let i = 0; i < rows.length; i++) {
+      const key = rows[i][0] ? rows[i][0].toString().trim() : '';
+      if (!key || key === 'Key') {
+        continue;
+      }
+
+      config[key] = rows[i][1] === undefined || rows[i][1] === null ? '' : rows[i][1].toString();
+    }
+  } catch (error) {
+    Logger.log(`读取 Config 工作表失败: ${error.toString()}`);
+  }
+
+  return config;
+}
+
+function parseConfigBoolean(value) {
+  return ['true', '1', 'yes', 'y', 'on'].indexOf((value || '').toString().trim().toLowerCase()) >= 0;
+}
+
+function getRingCentralSenderConfigFromSheet() {
+  const config = readConfigSheetMap();
+  return {
+    enabled: parseConfigBoolean(config.ringcentral_sender_enabled),
+    clientId: (config.ringcentral_sender_client_id || '').toString().trim(),
+    clientSecret: (config.ringcentral_sender_client_secret || '').toString().trim(),
+    jwt: (config.ringcentral_sender_jwt || '').toString().trim(),
+    executorRuleId: (
+      config.bot_automation_executor_rule_id ||
+      config.bot_executor_rule_id ||
+      config.jira_executor_rule_id ||
+      ''
+    ).toString().trim()
+  };
+}
+
+function isRingCentralSenderReady(config) {
+  return Boolean(
+    config &&
+    config.enabled &&
+    config.clientId &&
+    config.clientSecret &&
+    config.jwt &&
+    config.executorRuleId
+  );
 }
 
 /**
@@ -816,6 +878,40 @@ function getPostBodyLength(e) {
   return e && e.postData && e.postData.contents ? e.postData.contents.toString().length : 0;
 }
 
+function getRawPostBody(e) {
+  return e && e.postData && e.postData.contents ? e.postData.contents.toString() : '';
+}
+
+function getPostBodyBytes(e) {
+  return getUtf8ByteLength(getRawPostBody(e));
+}
+
+function parseJsonStringFragment(fragment) {
+  try {
+    return JSON.parse('"' + fragment + '"');
+  } catch (error) {
+    return fragment.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+}
+
+function extractJsonStringPropertyFromText(text, propertyName) {
+  const source = getRequestParameterValue(text);
+  if (!source || !propertyName) {
+    return '';
+  }
+
+  const pattern = new RegExp('"' + propertyName + '"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"', 'i');
+  const match = source.match(pattern);
+  return match ? parseJsonStringFragment(match[1]) : '';
+}
+
+function resolveCacheReleaseInfoProjectFromPostFailure(e, queryParameters) {
+  const queryProject = getRequestParameterValue(queryParameters && queryParameters.project).trim();
+  const bodyProject = extractJsonStringPropertyFromText(getRawPostBody(e), 'project').trim();
+  const paramKey = queryProject || bodyProject;
+  return paramKey ? getTimelineProjectConfigByParamKey(paramKey) : null;
+}
+
 function buildPostJsonParseErrorPayload(action, error, e) {
   const actionName = getRequestParameterValue(action);
   const payload = {
@@ -826,6 +922,8 @@ function buildPostJsonParseErrorPayload(action, error, e) {
     error: error.toString(),
     receivedContentType: getPostDataType(e),
     bodyLength: getPostBodyLength(e),
+    requestContentType: getPostDataType(e),
+    requestBodyBytes: getPostBodyBytes(e),
     acceptedFormats: [
       'POST JSON body with Content-Type: application/json',
       'Jira text smart values must use .asJsonString before being inserted into JSON',
@@ -850,6 +948,25 @@ function buildPostJsonParseErrorPayload(action, error, e) {
   }
 
   return payload;
+}
+
+function recordCachePostJsonParseFailure(action, payload, e, queryParameters) {
+  if (getRequestParameterValue(action) !== 'cacheReleaseInfo') {
+    return;
+  }
+
+  const projectConfig = resolveCacheReleaseInfoProjectFromPostFailure(e, queryParameters);
+  if (!projectConfig) {
+    return;
+  }
+
+  payload.project = projectConfig.project;
+  payload.paramKey = projectConfig.paramKey;
+  recordTimelineSyncAttempt(projectConfig, Object.assign({}, payload, {
+    success: false,
+    errorCode: payload.errorCode || 'INVALID_POST_JSON',
+    parseError: payload.error || 'POST JSON 解析失败'
+  }));
 }
 
 function mergeRequestParameters(queryParameters, bodyParameters) {
@@ -1018,6 +1135,8 @@ function buildTimelineSyncAttempt(projectConfig, payload) {
   const errorCode = truncateTimelineSyncDiagnostic(payload && payload.errorCode, 80);
   const error = truncateTimelineSyncDiagnostic(payload && (payload.error || payload.message), TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
   const parseError = truncateTimelineSyncDiagnostic(payload && payload.parseError, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+  const requestContentType = truncateTimelineSyncDiagnostic(payload && payload.requestContentType, 120);
+  const nextAction = truncateTimelineSyncDiagnostic(payload && payload.nextAction, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
 
   if (errorCode) {
     attempt.errorCode = errorCode;
@@ -1027,6 +1146,17 @@ function buildTimelineSyncAttempt(projectConfig, payload) {
   }
   if (parseError) {
     attempt.parseError = parseError;
+  }
+  if (requestContentType) {
+    attempt.requestContentType = requestContentType;
+  }
+  if (nextAction) {
+    attempt.nextAction = nextAction;
+  }
+  if (payload && typeof payload.requestBodyBytes === 'number' && isFinite(payload.requestBodyBytes)) {
+    attempt.requestBodyBytes = payload.requestBodyBytes;
+  } else if (payload && typeof payload.bodyLength === 'number' && isFinite(payload.bodyLength)) {
+    attempt.requestBodyBytes = payload.bodyLength;
   }
   if (payload && typeof payload.payloadBytes === 'number' && isFinite(payload.payloadBytes)) {
     attempt.payloadBytes = payload.payloadBytes;
@@ -1110,6 +1240,7 @@ function handleCacheReleaseInfoRequest(parameters) {
     }
 
     const projectInfo = parseResult.projectInfo;
+    const validMilestoneKeys = getValidTimelineMilestoneKeys(projectInfo.releaseInfo);
     const props = PropertiesService.getScriptProperties();
     const cacheKey = getTimelineProjectCacheKey(paramKey);
     const updatedAt = new Date().toISOString();
@@ -1134,8 +1265,8 @@ function handleCacheReleaseInfoRequest(parameters) {
         paramKey: projectConfig.paramKey,
         payloadBytes: cachePayloadBytes,
         maxBytes: TIMELINE_CACHE_PROPERTY_MAX_BYTES,
-        milestoneCount: Object.keys(projectInfo.releaseInfo).length,
-        milestoneKeys: Object.keys(projectInfo.releaseInfo).slice(0, 20),
+        milestoneCount: validMilestoneKeys.length,
+        milestoneKeys: validMilestoneKeys.slice(0, 20),
         nextAction: 'Timeline 缓存超过 Apps Script Script Properties 单值 9KB 限制。请减少同步的 Milestone 数量或字段体积；如项目确实需要更大 payload，需要改用 Sheet/Drive 等外部缓存。'
       }));
     }
@@ -1148,8 +1279,8 @@ function handleCacheReleaseInfoRequest(parameters) {
       project: projectConfig.project,
       paramKey: projectConfig.paramKey,
       updatedAt,
-      milestoneCount: Object.keys(projectInfo.releaseInfo).length,
-      milestoneKeys: Object.keys(projectInfo.releaseInfo),
+      milestoneCount: validMilestoneKeys.length,
+      milestoneKeys: validMilestoneKeys,
     });
   } catch (cacheError) {
     Logger.log(`[cacheReleaseInfo] 错误: ${cacheError.toString()}`);
@@ -1409,7 +1540,9 @@ function doPost(e) {
     Logger.log(`错误堆栈: ${error.stack || '无堆栈信息'}`);
 
     if (isPostJsonParseError(error)) {
-      return createJsonOutput(buildPostJsonParseErrorPayload(action, error, e));
+      const payload = buildPostJsonParseErrorPayload(action, error, e);
+      recordCachePostJsonParseFailure(action, payload, e, queryParameters);
+      return createJsonOutput(payload);
     }
 
     return createJsonOutput({ status: 'ERROR', message: error.toString() });
@@ -1690,18 +1823,20 @@ function shouldMarkAsDone(rowData, currentTime) {
  * @param {string} matchMode - 匹配模式：'CURRENT_MINUTE' | 'PAST_30_MINUTES' | 'NO_TIME_SPECIFIED'
  * @param {string} currentDate - 当前日期（yyyy-MM-dd）
  * @param {number} currentHour - 当前小时
+ * @param {boolean} ringCentralSenderEnabled - 是否允许 Jira 处理 AsMe RingCentral sender
  * @returns {object|null} 消息对象或 null
  */
-function findMatchingMessage(data, headers, now, releaseInfo, matchMode, currentDate, currentHour) {
+function findMatchingMessage(data, headers, now, releaseInfo, matchMode, currentDate, currentHour, ringCentralSenderEnabled) {
   // 遍历所有消息，找到第一个符合匹配模式的消息（按表格顺序）
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const rowData = parseRow(row, headers);
     
-    // 基本过滤：必须是 Active + Bot 或 AI 或 JiraAutomation（有 AI_Endpoint 的）
+    // 基本过滤：必须是 Active + Jira 执行器支持的推送方式
     const isValidPushMethod = rowData.Push_Method === 'Bot' || 
                               rowData.Push_Method === 'AI' || 
-                              (rowData.Push_Method === 'JiraAutomation' && rowData.AI_Endpoint);
+                              (rowData.Push_Method === 'JiraAutomation' && rowData.AI_Endpoint) ||
+                              (ringCentralSenderEnabled === true && rowData.Push_Method === 'AsMe');
     if (rowData.Status !== 'Active' || !isValidPushMethod) {
       continue;
     }
@@ -1790,7 +1925,13 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       
       // 确定 targetType
       let targetType = 'private'; // 默认
-      if (rowData.Push_Method === 'AI') {
+      let chatId = '';
+      if (rowData.Push_Method === 'AsMe' && ringCentralSenderEnabled === true) {
+        targetType = 'ringcentral_sender';
+        chatId = (rowData.Glip_Team_ID && rowData.Glip_Team_ID.trim())
+          ? rowData.Glip_Team_ID.trim()
+          : (rowData.Glip_User_Name || '').trim();
+      } else if (rowData.Push_Method === 'AI') {
         targetType = 'api';
       } else if (rowData.Glip_Team_ID && rowData.Glip_Team_ID.trim()) {
         targetType = 'group';
@@ -1816,6 +1957,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         AI_Headers: rowData.AI_Headers || '',
         AI_Body: aiBody,
         targetType: targetType,
+        chatId: chatId,
         rowIndex: i + 1,
         Schedule_Date: rowData.Schedule_Date,
         Schedule_Time: rowData.Schedule_Time,
@@ -2152,17 +2294,22 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     const headers = data[0];
     const currentDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
     const currentHour = now.getHours();
+    const ringCentralSenderConfig = getRingCentralSenderConfigFromSheet();
+    const ringCentralSenderReady = isRingCentralSenderReady(ringCentralSenderConfig);
     
     Logger.log(`[三匹配模式查找] 开始查找消息，当前时间: ${currentDate} ${currentHour}:${now.getMinutes()}`);
+    if (ringCentralSenderReady) {
+      Logger.log('[三匹配模式查找] RingCentral AsMe sender 已启用，AsMe 消息可由 Jira 执行');
+    }
     
     // 匹配模式 1: 查找当前分钟需要执行的消息
     Logger.log('[匹配模式 1] 查找当前分钟的消息...');
-    let message = findMatchingMessage(data, headers, now, releaseInfo, 'CURRENT_MINUTE', currentDate, currentHour);
+    let message = findMatchingMessage(data, headers, now, releaseInfo, 'CURRENT_MINUTE', currentDate, currentHour, ringCentralSenderReady);
     
     // 匹配模式 2: 查找过去 30 分钟内应该执行但未执行的消息
     if (!message) {
       Logger.log('[匹配模式 2] 查找过去 30 分钟的消息...');
-      message = findMatchingMessage(data, headers, now, releaseInfo, 'PAST_30_MINUTES', currentDate, currentHour);
+      message = findMatchingMessage(data, headers, now, releaseInfo, 'PAST_30_MINUTES', currentDate, currentHour, ringCentralSenderReady);
       if (message) {
         Logger.log(`[匹配模式 2] ✅ 找到消息: ${message.ID} - ${message.Topic} (补偿执行)`);
       }
@@ -2171,7 +2318,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     // 匹配模式 3: 查找未指定时间的消息（仅限 8 点后）
     if (!message && currentHour >= 8) {
       Logger.log('[匹配模式 3] 查找未指定时间的消息（8点后）...');
-      message = findMatchingMessage(data, headers, now, releaseInfo, 'NO_TIME_SPECIFIED', currentDate, currentHour);
+      message = findMatchingMessage(data, headers, now, releaseInfo, 'NO_TIME_SPECIFIED', currentDate, currentHour, ringCentralSenderReady);
       if (message) {
         Logger.log(`[匹配模式 3] ✅ 找到消息: ${message.ID} - ${message.Topic}`);
       }
@@ -2263,6 +2410,8 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       // Group 消息字段
       teamId: message.Glip_Team_ID || '',
       teamName: message.Glip_Team_ID || 'Team', // 使用 teamId 作为 teamName 或默认值
+      // RingCentral AsMe sender 字段
+      chatId: message.chatId || '',
       // Email 消息字段
       glipEmailAddress: message.glipEmailAddress || '',
       rowIndex: message.rowIndex,
@@ -2290,9 +2439,15 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
 function getTimelineTargetDate(rowData, releaseInfo) {
   const project = rowData.Timeline_Project;
   const milestone = rowData.Timeline_Milestone;
-  const offset = parseInt(rowData.Timeline_Offset || '0');
+  const offsetText = getRequestParameterValue(rowData.Timeline_Offset || '0').trim();
+  const offset = /^-?\d+$/.test(offsetText) ? parseInt(offsetText, 10) : NaN;
   
   if (!project || !milestone) {
+    return null;
+  }
+
+  if (!isFinite(offset)) {
+    Logger.log(`Timeline 偏移天数格式错误: ${rowData.Timeline_Offset}`);
     return null;
   }
   
@@ -2304,19 +2459,14 @@ function getTimelineTargetDate(rowData, releaseInfo) {
   }
   
   // 获取 milestone 日期
-  const milestoneDate = projectInfo.releaseInfo[milestone];
+  const milestoneDate = getTimelineMilestoneDateText(projectInfo.releaseInfo[milestone]);
   if (!milestoneDate) {
-    Logger.log(`未找到 Milestone: ${milestone}`);
+    Logger.log(`未找到有效 Milestone 日期: ${milestone}`);
     return null;
   }
   
   // 解析日期（格式：MM/DD/YYYY）
   const dateParts = milestoneDate.split('/');
-  if (dateParts.length !== 3) {
-    Logger.log(`Milestone 日期格式错误: ${milestoneDate}`);
-    return null;
-  }
-  
   const baseDate = new Date(
     parseInt(dateParts[2]), // year
     parseInt(dateParts[0]) - 1, // month (0-based)
@@ -2708,15 +2858,74 @@ function getTimelineProjectCacheKey(paramKey) {
 }
 
 function isValidProjectReleaseInfo(projectInfo) {
+  return getProjectReleaseInfoSchemaError(projectInfo) === '';
+}
+
+function getProjectReleaseInfoSchemaError(projectInfo) {
   if (!projectInfo || typeof projectInfo !== 'object' || Array.isArray(projectInfo)) {
-    return false;
+    return 'releaseInfo 必须是非空对象';
   }
 
   if (!projectInfo.releaseInfo || typeof projectInfo.releaseInfo !== 'object' || Array.isArray(projectInfo.releaseInfo)) {
-    return false;
+    return 'releaseInfo 必须是非空对象';
   }
 
-  return Object.keys(projectInfo.releaseInfo).length > 0;
+  const milestoneKeys = Object.keys(projectInfo.releaseInfo);
+  if (milestoneKeys.length === 0) {
+    return 'releaseInfo 必须是非空对象';
+  }
+
+  if (getValidTimelineMilestoneKeys(projectInfo.releaseInfo).length === 0) {
+    return 'releaseInfo 必须包含至少一个有效日期（MM/DD/YYYY）的 Milestone';
+  }
+
+  return '';
+}
+
+function getTimelineMilestoneDateText(value) {
+  const text = getRequestParameterValue(value).trim();
+  if (!text) {
+    return '';
+  }
+
+  const dateParts = text.split('/');
+  if (dateParts.length !== 3) {
+    return '';
+  }
+
+  if (!/^\d{1,2}$/.test(dateParts[0]) || !/^\d{1,2}$/.test(dateParts[1]) || !/^\d{4}$/.test(dateParts[2])) {
+    return '';
+  }
+
+  const month = parseInt(dateParts[0], 10);
+  const day = parseInt(dateParts[1], 10);
+  const year = parseInt(dateParts[2], 10);
+
+  if (!isFinite(month) || !isFinite(day) || !isFinite(year)) {
+    return '';
+  }
+
+  const parsedDate = new Date(year, month - 1, day);
+  if (
+    parsedDate.getFullYear() !== year ||
+    parsedDate.getMonth() !== month - 1 ||
+    parsedDate.getDate() !== day
+  ) {
+    return '';
+  }
+
+  return text;
+}
+
+function getValidTimelineMilestoneKeys(releaseInfoMap) {
+  if (!releaseInfoMap || typeof releaseInfoMap !== 'object' || Array.isArray(releaseInfoMap)) {
+    return [];
+  }
+
+  return Object.keys(releaseInfoMap).filter(function(key) {
+    const milestoneKey = getRequestParameterValue(key).trim();
+    return milestoneKey && getTimelineMilestoneDateText(releaseInfoMap[key]);
+  });
 }
 
 function parseSingleProjectReleaseInfo(rawValue) {
@@ -2735,7 +2944,8 @@ function parseSingleProjectReleaseInfoForCache(rawValue) {
 
   try {
     const parsed = parseJiraJsonStrict(rawValue);
-    if (isValidProjectReleaseInfo(parsed)) {
+    const schemaError = getProjectReleaseInfoSchemaError(parsed);
+    if (!schemaError) {
       return {
         success: true,
         projectInfo: parsed
@@ -2750,8 +2960,8 @@ function parseSingleProjectReleaseInfoForCache(rawValue) {
       success: false,
       errorCode: 'INVALID_RELEASE_INFO_SCHEMA',
       parseError: parsedKeys.length
-        ? `releaseInfo 必须是非空对象；当前顶层字段: ${parsedKeys.join(', ')}`
-        : 'releaseInfo 必须是非空对象'
+        ? `${schemaError}；当前顶层字段: ${parsedKeys.join(', ')}`
+        : schemaError
     };
   } catch (error) {
     Logger.log(`[cacheReleaseInfo] 解析单项目 releaseInfo 失败: ${error.toString()}`);
@@ -2844,7 +3054,8 @@ function readReleaseInfoFromCache() {
         continue;
       }
 
-      if (!cachedData.releaseInfo) {
+      if (!isValidProjectReleaseInfo(cachedData.releaseInfo)) {
+        Logger.log(`[GET] 项目 ${config.project} 缓存格式异常，跳过`);
         continue;
       }
 
@@ -2888,6 +3099,8 @@ function readTimelineSyncAttempt(props, paramKey, nowMs) {
     const errorCode = truncateTimelineSyncDiagnostic(parsed.errorCode, 80);
     const error = truncateTimelineSyncDiagnostic(parsed.error, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
     const parseError = truncateTimelineSyncDiagnostic(parsed.parseError, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+    const requestContentType = truncateTimelineSyncDiagnostic(parsed.requestContentType, 120);
+    const nextAction = truncateTimelineSyncDiagnostic(parsed.nextAction, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
 
     if (errorCode) {
       attempt.errorCode = errorCode;
@@ -2897,6 +3110,15 @@ function readTimelineSyncAttempt(props, paramKey, nowMs) {
     }
     if (parseError) {
       attempt.parseError = parseError;
+    }
+    if (requestContentType) {
+      attempt.requestContentType = requestContentType;
+    }
+    if (nextAction) {
+      attempt.nextAction = nextAction;
+    }
+    if (typeof parsed.requestBodyBytes === 'number' && isFinite(parsed.requestBodyBytes)) {
+      attempt.requestBodyBytes = parsed.requestBodyBytes;
     }
     if (typeof parsed.payloadBytes === 'number' && isFinite(parsed.payloadBytes)) {
       attempt.payloadBytes = parsed.payloadBytes;
@@ -2972,7 +3194,7 @@ function getTimelineCacheStatus() {
       const ageMs = hasTimestamp ? Math.max(0, nowMs - timestamp) : null;
       const expired = ageMs === null || ageMs > TIMELINE_CACHE_MAX_AGE_MS;
       const valid = isValidProjectReleaseInfo(cachedData.releaseInfo);
-      const milestoneKeys = valid ? Object.keys(cachedData.releaseInfo.releaseInfo) : [];
+      const milestoneKeys = valid ? getValidTimelineMilestoneKeys(cachedData.releaseInfo.releaseInfo) : [];
       const status = !valid ? 'invalid' : expired ? 'expired' : 'ready';
       const lastAttemptError = status === 'ready' ? '' : getTimelineSyncAttemptError(lastAttempt);
 

@@ -22,7 +22,14 @@ const contextRecallBodySchema = {
   properties: {
     surface: {
       type: 'string' as const,
-      enum: ['web_passive', 'meeting_passive', 'popup_passive', 'follow_thread'],
+      enum: [
+        'web_passive',
+        'meeting_passive',
+        'popup_passive',
+        'follow_thread',
+        'meeting_prep',
+        'composer_guard',
+      ],
     },
     contextType: {
       type: 'string' as const,

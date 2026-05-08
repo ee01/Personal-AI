@@ -263,11 +263,13 @@ export class ScheduledMessageService {
     if (
       updates.Schedule_Date !== undefined ||
       updates.Schedule_Time !== undefined ||
+      updates.End_Date !== undefined ||
       updates.Type !== undefined ||
       updates.Repeat_Every !== undefined ||
       updates.Repeat_Unit !== undefined ||
       updates.Repeat_Days !== undefined ||
-      updates.Push_Method !== undefined
+      updates.Push_Method !== undefined ||
+      updates.AI_Endpoint !== undefined
     ) {
       updatedMessage.Next_Exec = this.calculateNextExecution(updatedMessage);
     }

@@ -4,16 +4,21 @@
  */
 
 import {
+    CONTEXT_SITE_MUTE_STORAGE_KEY,
     formatRecallTimestamp,
+    isContextSiteMuteActive,
     hasSensitiveUrlSignal,
     isLowValueContextHost,
     isSensitiveControlDescriptor,
+    normalizeContextSiteMuteHost,
     normalizeContextPageUrl,
+    pruneContextSiteMuteRecord,
     sanitizeContextExternalUrl,
     sanitizeExploreRoute,
 } from './web-intelligence/contextRecallGuards';
 import { startComposerGuardController } from './composer-guard/ComposerGuardController';
 import { buildPassiveContextSnapshot } from './composer-guard/siteContextAdapters';
+import type { SiteContextSnapshot } from './composer-guard/types';
 
 interface SimplePageContent {
     title: string;
@@ -41,10 +46,14 @@ interface SimpleAnalysisResult {
 interface ContextMatchPayload {
     contextKey: string;
     stabilityKey: string;
+    surface: 'web_passive' | 'meeting_passive';
+    contextType: 'webpage' | 'message_thread' | 'jira_issue' | 'document';
     title: string;
     url: string;
     keywords?: string[];
     snippet?: string;
+    entityHints?: Array<{ kind: string; value: string }>;
+    sourceTypes?: string[];
 }
 
 interface ContextRecallMatch {
@@ -105,8 +114,6 @@ const DISMISSED_CONTEXT_TTL_MS = 30 * 60 * 1000;
 const URL_WATCH_INTERVAL_MS = 500;
 const GENERIC_CONTEXT_STABLE_MS = 250;
 const RINGCENTRAL_CONTEXT_STABLE_MS = 700;
-const SITE_CONTEXT_MUTE_TTL_MS = 24 * 60 * 60 * 1000;
-const SITE_CONTEXT_MUTE_STORAGE_KEY = 'pai-context-muted-sites-v1';
 const CONTEXT_UI_EXCLUDE_SELECTOR = [
     'script',
     'style',
@@ -810,22 +817,17 @@ class WebIntelligenceContentScript {
         this.pendingContextKey = payload.contextKey;
         const requestId = ++this.pendingContextRequestId;
 
-        const surface: 'web_passive' | 'meeting_passive' = this.isRingCentralMessagePage()
-            ? 'meeting_passive'
-            : 'web_passive';
-        const contextType: 'message_thread' | 'webpage' = this.isRingCentralMessagePage()
-            ? 'message_thread'
-            : 'webpage';
-
         chrome.runtime.sendMessage({
             type: 'CONTEXT_RECALL_REQUEST',
             request: {
-                surface,
-                contextType,
+                surface: payload.surface,
+                contextType: payload.contextType,
                 title: payload.title,
                 url: payload.url,
                 primaryText: payload.snippet,
                 secondaryTexts: payload.keywords,
+                entityHints: payload.entityHints,
+                sourceTypes: payload.sourceTypes,
                 limit: 1,
             },
         }, (response) => {
@@ -872,14 +874,61 @@ class WebIntelligenceContentScript {
             return {
                 contextKey: snapshot.contextKey,
                 stabilityKey: snapshot.contextKey,
+                surface: this.toPassiveRecallSurface(snapshot),
+                contextType: this.toPassiveRecallContextType(snapshot),
                 title: snapshot.title,
                 url: snapshot.url,
                 keywords: snapshot.keywords,
                 snippet: snapshot.primaryText,
+                entityHints: this.toPassiveRecallEntityHints(snapshot),
+                sourceTypes: snapshot.sourceTypes,
             };
         }
 
         return null;
+    }
+
+    private toPassiveRecallSurface(
+        snapshot: SiteContextSnapshot,
+    ): 'web_passive' | 'meeting_passive' {
+        return snapshot.contextType === 'message_thread'
+            ? 'meeting_passive'
+            : 'web_passive';
+    }
+
+    private toPassiveRecallContextType(
+        snapshot: SiteContextSnapshot,
+    ): 'webpage' | 'message_thread' | 'jira_issue' | 'document' {
+        if (snapshot.contextType === 'message_thread') {
+            return 'message_thread';
+        }
+        if (snapshot.contextType === 'jira_issue') {
+            return 'jira_issue';
+        }
+        return 'webpage';
+    }
+
+    private toPassiveRecallEntityHints(
+        snapshot: SiteContextSnapshot,
+    ): Array<{ kind: string; value: string }> | undefined {
+        const hints: Array<{ kind: string; value: string }> = [];
+        const identifiers = snapshot.identifiers || {};
+        if (identifiers.conversationId) {
+            hints.push({ kind: 'conversation_id', value: identifiers.conversationId });
+        }
+        if (identifiers.groupId) {
+            hints.push({ kind: 'group_id', value: identifiers.groupId });
+        }
+        if (identifiers.threadRootPostId) {
+            hints.push({ kind: 'thread_root_post_id', value: identifiers.threadRootPostId });
+        }
+        if (identifiers.issueKey) {
+            hints.push({ kind: 'jira_issue_key', value: identifiers.issueKey });
+        }
+        if (identifiers.provider) {
+            hints.push({ kind: 'web_agent_provider', value: identifiers.provider });
+        }
+        return hints.length > 0 ? hints : undefined;
     }
 
     private buildGenericContextPayload(): ContextMatchPayload | null {
@@ -907,6 +956,8 @@ class WebIntelligenceContentScript {
         return {
             contextKey,
             stabilityKey: contextKey,
+            surface: 'web_passive',
+            contextType: 'webpage',
             title: title || contextUrl,
             url: contextUrl,
             keywords,
@@ -953,6 +1004,8 @@ class WebIntelligenceContentScript {
         return {
             contextKey,
             stabilityKey,
+            surface: 'meeting_passive',
+            contextType: 'message_thread',
             title,
             url: contextUrl,
             keywords: this.collectKeywords([title, selectedTabText, snippet]),
@@ -1070,21 +1123,19 @@ class WebIntelligenceContentScript {
                 const finish = (result?: Record<string, any>): void => {
                     if (settled) return;
                     settled = true;
-                    const stored = result?.[SITE_CONTEXT_MUTE_STORAGE_KEY];
-                    if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
-                        for (const [host, mutedAt] of Object.entries(stored)) {
-                            if (typeof mutedAt === 'number') {
-                                this.mutedSiteHosts.set(host, mutedAt);
-                            }
-                        }
+                    const pruned = pruneContextSiteMuteRecord(
+                        result?.[CONTEXT_SITE_MUTE_STORAGE_KEY],
+                    );
+                    this.mutedSiteHosts = new Map(Object.entries(pruned.record));
+                    if (pruned.changed) {
+                        this.saveSiteMutes();
                     }
                     this.siteMutesLoaded = true;
-                    this.pruneMutedSiteHosts();
                     resolve();
                 };
 
                 const maybePromise = chrome.storage.local.get(
-                    SITE_CONTEXT_MUTE_STORAGE_KEY,
+                    CONTEXT_SITE_MUTE_STORAGE_KEY,
                     finish,
                 ) as unknown as Promise<Record<string, any>> | undefined;
                 if (maybePromise && typeof maybePromise.then === 'function') {
@@ -1106,21 +1157,21 @@ class WebIntelligenceContentScript {
         }
 
         try {
-            chrome.storage.local.set({ [SITE_CONTEXT_MUTE_STORAGE_KEY]: payload });
+            chrome.storage.local.set({ [CONTEXT_SITE_MUTE_STORAGE_KEY]: payload });
         } catch (_error) {
             // Storage is best-effort; in-memory mute still applies until reload.
         }
     }
 
     private getCurrentSiteMuteHost(): string {
-        return window.location.hostname.toLowerCase();
+        return normalizeContextSiteMuteHost(window.location.hostname);
     }
 
     private isCurrentSiteMuted(): boolean {
         this.pruneMutedSiteHosts();
         const host = this.getCurrentSiteMuteHost();
         const mutedAt = this.mutedSiteHosts.get(host);
-        return mutedAt !== undefined && Date.now() - mutedAt < SITE_CONTEXT_MUTE_TTL_MS;
+        return mutedAt !== undefined && isContextSiteMuteActive(mutedAt);
     }
 
     private muteCurrentSite(): void {
@@ -1135,7 +1186,7 @@ class WebIntelligenceContentScript {
         const now = Date.now();
         let changed = false;
         for (const [host, mutedAt] of this.mutedSiteHosts.entries()) {
-            if (now - mutedAt >= SITE_CONTEXT_MUTE_TTL_MS) {
+            if (!isContextSiteMuteActive(mutedAt, now)) {
                 this.mutedSiteHosts.delete(host);
                 changed = true;
             }

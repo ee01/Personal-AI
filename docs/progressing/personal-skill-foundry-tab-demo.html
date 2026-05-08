@@ -6,16 +6,19 @@
   <title>个人技能炼金台 · memory-exploring tab demo</title>
   <!--
     交互简化版（2026-05-07）：
-    - 用户视角：我有什么技能 / 候选 / 绑定到哪些平台 / 怎么快速绑定到其他平台
-    - 移除右侧 "发布就绪" 列；移除 Runs / Evals / Spec tab
+    - 用户视角：我有什么技能 / 萃取建议 / 绑定到哪些平台 / 怎么快速绑定到其他平台
+    - 主列表默认只展示「在用」(active)，状态机简化为 suggestion ↔ active ↔ dismissed
+    - 「萃取建议」(原"候选")—— 由 Flight Recorder 从你的真实操作 episode 萃取，
+       通过 NotificationService 主动推送给用户做 [使用/丢弃/稍后审] 决策；
+       未决策的建议集中在顶部 Inbox Bar，不污染主列表。
     - Tabs 简化为 工作流 / 证据 / 版本 / 绑定
     - 候选卡片底部显示已绑定平台（不是来源）
     - 绑定不是把 SKILL.md 全文塞进剪贴板，而是 "一句安装指引 + skill URL"
       由 agent 通过 URL 抓取 SKILL.md / scripts；已绑定状态由同步程序异步获取
-    - 顶部新增『自动同步设置』入口，区分三类同步路径：
-        a) OpenClaw remote      -> API 直连
-        b) 本地 coding agent    -> 通过 Desktop App 写本地 skill 目录
-        c) 纯 web 平台          -> 只能 manual install（复制安装指引）
+    - 自动同步是 per-platform 而非 per-skill：开启后该平台跟随推送所有 active 技能
+    - 三类同步路径：a) OpenClaw remote → API 直连；
+       b) 本地 coding agent (Codex/Claude Code/Cursor) → Desktop App fs watcher；
+       c) 纯 web 平台 → 仅手动复制安装指引
   -->
   <style>
     * {
@@ -161,6 +164,14 @@
       overflow-y: auto;
       height: 100vh;
       max-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .main-content > .page-header,
+    .main-content > .inbox-bar {
+      flex: none;
     }
 
     .page-header {
@@ -168,7 +179,6 @@
       align-items: flex-start;
       justify-content: space-between;
       gap: 1rem;
-      margin-bottom: 1.2rem;
     }
 
     .page-title {
@@ -249,13 +259,223 @@
       }
     }
 
+    /* ====== 顶部 Inbox Bar：萃取建议（Skill Suggestion）======
+       - 由 Flight Recorder 萃取出的建议技能集中在这里
+       - 同样的三动作 [使用]/[丢弃]/[展开] 在通知里也能直接用 */
+    .inbox-bar {
+      background: linear-gradient(135deg, rgba(96, 165, 250, 0.08), rgba(167, 139, 250, 0.08));
+      border: 1px solid rgba(167, 139, 250, 0.28);
+      border-radius: 0.85rem;
+      backdrop-filter: blur(12px);
+      overflow: hidden;
+    }
+
+    .inbox-bar.collapsed {
+      cursor: pointer;
+    }
+
+    .inbox-bar.collapsed:hover {
+      border-color: rgba(167, 139, 250, 0.5);
+    }
+
+    .inbox-bar-head {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.7rem 1rem;
+    }
+
+    .inbox-bar-head .icon {
+      font-size: 1.1rem;
+    }
+
+    .inbox-bar-head .title {
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .inbox-bar-head .meta {
+      font-size: 0.74rem;
+      color: var(--muted);
+      flex: 1;
+    }
+
+    .inbox-bar-head .bell-dot {
+      display: inline-flex;
+      width: 0.42rem;
+      height: 0.42rem;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+      animation: pulse 1.6s infinite;
+      margin-left: 0.25rem;
+    }
+
+    .inbox-bar-head .toggle {
+      flex: none;
+      width: 1.85rem;
+      height: 1.85rem;
+      border-radius: 0.45rem;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--line-strong);
+      color: var(--ink-2);
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+
+    .inbox-bar-body {
+      border-top: 1px solid rgba(167, 139, 250, 0.18);
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      padding: 0.75rem 1rem 0.85rem;
+    }
+
+    .inbox-push-hint {
+      display: flex;
+      gap: 0.55rem;
+      align-items: flex-start;
+      font-size: 0.74rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .inbox-push-hint .icon {
+      flex: none;
+      font-size: 0.95rem;
+    }
+
+    .inbox-push-hint strong {
+      color: var(--ink-2);
+      font-weight: 700;
+    }
+
+    .inbox-push-hint code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(2, 6, 23, 0.55);
+      border: 1px solid var(--line);
+      padding: 0 0.25rem;
+      border-radius: 0.25rem;
+      font-size: 0.7rem;
+    }
+
+    .suggestion-list {
+      display: flex;
+      gap: 0.6rem;
+      overflow-x: auto;
+      padding-bottom: 0.25rem;
+      scrollbar-width: thin;
+    }
+
+    .suggestion-card {
+      flex: 0 0 280px;
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid var(--line-strong);
+      border-radius: 0.65rem;
+      padding: 0.7rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .suggestion-card:hover {
+      border-color: rgba(96, 165, 250, 0.45);
+      transform: translateY(-1px);
+    }
+
+    .suggestion-card .top {
+      display: flex;
+      gap: 0.4rem;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+
+    .suggestion-card .title {
+      font-size: 0.86rem;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.3;
+    }
+
+    .suggestion-card .when {
+      flex: none;
+      font-size: 0.66rem;
+      color: var(--muted);
+      padding: 0.1rem 0.4rem;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+    }
+
+    .suggestion-card .desc {
+      font-size: 0.74rem;
+      color: var(--muted);
+      line-height: 1.5;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .suggestion-card .source {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.7rem;
+      color: var(--muted-2);
+    }
+
+    .suggestion-card .source-link {
+      color: #93c5fd;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .suggestion-card .source-link:hover {
+      text-decoration: underline;
+    }
+
+    .suggestion-card .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 0.3rem;
+      margin-top: auto;
+    }
+
+    .suggestion-card .btn {
+      height: 1.7rem;
+      padding: 0 0.55rem;
+      font-size: 0.72rem;
+    }
+
+    .suggestion-card .btn.ghost {
+      width: 1.7rem;
+      padding: 0;
+    }
+
+    .header-state-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0 0.6rem;
+      height: 2rem;
+      border-radius: 0.5rem;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.32);
+      color: var(--green);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
     /* ====== 两栏布局（左：候选 / 右：详情） ====== */
     .foundry-grid {
       display: grid;
       grid-template-columns: 320px minmax(0, 1fr);
       gap: 1rem;
-      height: calc(100vh - 8rem);
-      min-height: 560px;
+      flex: 1;
+      min-height: 0;
     }
 
     .panel {
@@ -294,7 +514,7 @@
 
     .rail-segmented {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 0.25rem;
       margin-top: 0.6rem;
       padding: 0.25rem;
@@ -474,19 +694,14 @@
       font-weight: 600;
     }
 
-    .candidate-status .badge.draft {
-      background: rgba(96, 165, 250, 0.14);
-      color: #93c5fd;
-    }
-
-    .candidate-status .badge.candidate {
-      background: rgba(245, 158, 11, 0.14);
-      color: var(--amber);
-    }
-
     .candidate-status .badge.active {
       background: rgba(34, 197, 94, 0.14);
       color: var(--green);
+    }
+
+    .candidate-status .badge.dismissed {
+      background: rgba(148, 163, 184, 0.14);
+      color: var(--muted);
     }
 
     /* ====== 右栏：详情 ====== */
@@ -953,6 +1168,22 @@
       font-size: 0.72rem;
     }
 
+    .install-banner-body .install-banner-scope {
+      display: inline-block;
+      margin-top: 0.45rem;
+      padding: 0.25rem 0.55rem;
+      border-radius: 0.45rem;
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      color: #fbbf24;
+      font-size: 0.72rem;
+      line-height: 1.55;
+    }
+
+    .install-banner-body .install-banner-scope strong {
+      color: #fde68a;
+    }
+
     .binding-card {
       gap: 0.65rem;
     }
@@ -1055,6 +1286,13 @@
       font-size: 0.7rem;
       font-weight: 600;
       color: var(--muted);
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .auto-toggle:hover:not([disabled]) {
+      border-color: rgba(96, 165, 250, 0.45);
+      color: var(--ink-2);
     }
 
     .auto-toggle.on {
@@ -1063,10 +1301,15 @@
       color: var(--green);
     }
 
+    .auto-toggle.on:hover:not([disabled]) {
+      background: rgba(34, 197, 94, 0.18);
+    }
+
     .auto-toggle.unsupported {
       background: rgba(148, 163, 184, 0.08);
       color: var(--muted-2);
       opacity: 0.85;
+      cursor: not-allowed;
     }
 
     /* Versions diff */
@@ -1164,6 +1407,43 @@
       gap: 0.75rem;
     }
 
+    .dialog-body > #syncRowsContainer {
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .dialog-conflict-note {
+      display: grid;
+      grid-template-columns: 1.6rem 1fr;
+      gap: 0.55rem;
+      padding: 0.65rem 0.85rem;
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      border-radius: 0.55rem;
+      font-size: 0.74rem;
+      color: var(--ink-2);
+      line-height: 1.6;
+    }
+
+    .dialog-conflict-note .conflict-icon {
+      font-size: 1rem;
+      line-height: 1.2;
+    }
+
+    .dialog-conflict-note strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .dialog-conflict-note code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(2, 6, 23, 0.55);
+      border: 1px solid var(--line);
+      padding: 0 0.25rem;
+      border-radius: 0.25rem;
+      font-size: 0.7rem;
+    }
+
     .sync-row {
       display: grid;
       grid-template-columns: 2.4rem 1fr auto;
@@ -1206,6 +1486,16 @@
       align-items: center;
       font-size: 0.7rem;
       color: var(--muted-2);
+    }
+
+    .sync-row .body .scope {
+      margin-top: 0.4rem;
+      display: inline-flex;
+      gap: 0.35rem;
+      align-items: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+      flex-wrap: wrap;
     }
 
     .sync-row .control {
@@ -1357,7 +1647,7 @@
         <header class="sidebar-header">
           <div class="logo">🧠 记忆查询系统</div>
           <p class="sidebar-note">
-            个人技能炼金台是从你真实操作里萃取出来的可复用能力库；这里只展示已确认的来源记忆与候选技能。
+            个人技能炼金台是从你真实操作里萃取出来的可复用能力库。主列表只展示你已认领的「在用」技能；新的萃取建议在顶部 Inbox 里集中决策。
           </p>
         </header>
 
@@ -1376,7 +1666,7 @@
           <hr class="sidebar-divider" />
 
           <a class="entity-type"><span class="entity-icon">🛫</span><span class="entity-name">操作记忆</span><span class="entity-count">12</span></a>
-          <a class="entity-type active"><span class="entity-icon">🧪</span><span class="entity-name">个人技能</span><span class="entity-count">4</span></a>
+          <a class="entity-type active"><span class="entity-icon">🧪</span><span class="entity-name">个人技能</span><span class="entity-count" id="sidebarSkillCount">2</span></a>
 
           <hr class="sidebar-divider" />
 
@@ -1404,20 +1694,28 @@
               <span class="pulse"></span>
               Flight Recorder 已联通
             </span>
-            <button class="btn secondary" id="autoSyncBtn">⚙ 自动同步设置</button>
+            <button class="btn secondary" id="autoSyncBtn" title="按平台维度开启自动同步；开启后该平台会跟随推送所有 active 技能">⚙ 平台级自动同步</button>
           </div>
         </header>
 
+        <!--
+          顶部 Inbox Bar：承载未决策的「萃取建议」（来自 Flight Recorder）。
+          - 收起态：一行摘要 + 红点
+          - 展开态：横向滚动小卡片，每条 [使用] / [丢弃] / [展开]
+          - 通知预览：让用户知道每条建议同时通过 NotificationService 主动推送
+            （在通知里就能直接 [使用]/[丢弃]，不必每次回到这里）
+        -->
+        <section class="inbox-bar" id="inboxBar" aria-label="萃取建议 Inbox"></section>
+
         <div class="foundry-grid">
-          <!-- 左栏：候选技能 inbox -->
-          <section class="panel rail" aria-label="技能候选列表">
+          <!-- 左栏：在用技能列表（萃取建议在顶部 Inbox Bar，不在这里） -->
+          <section class="panel rail" aria-label="在用技能列表">
             <div class="rail-head">
-              <input id="search" class="rail-search" placeholder="搜索技能 / 候选 / 平台…" aria-label="搜索候选" />
-              <div class="rail-segmented" role="group" aria-label="候选过滤">
-                <button class="active" data-filter="all">全部</button>
-                <button data-filter="active">在用</button>
-                <button data-filter="draft">草稿</button>
-                <button data-filter="candidate">候选</button>
+              <input id="search" class="rail-search" placeholder="搜索技能 / 平台…" aria-label="搜索技能" />
+              <div class="rail-segmented" role="group" aria-label="技能过滤">
+                <button class="active" data-filter="active">在用</button>
+                <button data-filter="all">全部</button>
+                <button data-filter="dismissed">已丢弃</button>
               </div>
             </div>
             <div id="candidateList" class="candidate-list"></div>
@@ -1427,13 +1725,12 @@
           <section class="panel workspace" aria-label="技能详情">
             <header class="workspace-head">
               <div class="workspace-title">
-                <div class="eyebrow" id="eyebrow">候选技能</div>
+                <div class="eyebrow" id="eyebrow">技能</div>
                 <h2 id="skillTitle"></h2>
                 <p id="skillSummary"></p>
               </div>
-              <div class="workspace-actions">
-                <button class="btn primary" id="promoteBtn">⇪ 升级为 Draft</button>
-                <button class="btn secondary" id="dismissBtn" title="忽略候选">✕</button>
+              <div class="workspace-actions" id="workspaceActions">
+                <!-- 根据当前 skill 的 status 动态渲染（在用 / 建议 / 已丢弃 三种） -->
               </div>
             </header>
 
@@ -1455,14 +1752,23 @@
       <div class="dialog" role="dialog" aria-labelledby="autoSyncTitle">
         <header class="dialog-head">
           <div>
-            <h3 id="autoSyncTitle">⚙ 自动同步设置</h3>
+            <h3 id="autoSyncTitle">⚙ 平台级自动同步</h3>
             <p>
-              开启后，Personal AI 会把所有 active 技能自动推送到目标平台，并周期性回拉 SKILL.md 修改时间，发现冲突时进入候选审稿。<strong>真源永远在 Personal AI 内</strong>。
+              开关是按 <strong>平台</strong> 维度生效的，<strong>不是按单条技能</strong>：对某个平台开启后，Personal AI 会把<strong>所有 active 技能</strong>持续推送到该平台。每条技能不再单独配置同步策略。
             </p>
           </div>
           <button class="btn ghost" id="autoSyncCloseBtn" aria-label="关闭">✕</button>
         </header>
-        <div class="dialog-body" id="syncRowsContainer"></div>
+        <div class="dialog-body">
+          <div class="dialog-conflict-note">
+            <span class="conflict-icon">🪙</span>
+            <div>
+              <strong>冲突如何判定？</strong>
+              真源 sha256 = 远端 sha256 → 已对齐；不一致时，若<strong>远端 mtime &gt; 真源 updatedAt</strong>，说明用户在远端手改过，会进入候选审稿，<strong>不会自动覆盖</strong>；其余情况按真源覆盖远端。Web 平台无 mtime / sha256，状态恒 <code>unknown</code>。
+            </div>
+          </div>
+          <div id="syncRowsContainer"></div>
+        </div>
       </div>
     </div>
 
@@ -1509,7 +1815,7 @@
         slug: "jira-headcount-trend-report",
         title: "Jira Headcount Trend Report",
         scope: "work",
-        status: "candidate",
+        status: "active",
         risk: "medium",
         summary: "把和 Sophia 协作的 Jira 数据分析（人头去重 / 趋势 / 项目维度统计）固化成可复用、可评测的技能。",
         trigger: "页面 URL 是 Jira / Google Sheets，或消息中出现『统计开发人数 / assignee 去重 / Q3 趋势 / headcount』。",
@@ -1538,7 +1844,7 @@
         currentVersion: "v0.3",
         versions: [
           {
-            version: "v0.3 (draft)",
+            version: "v0.3 (active)",
             date: "2026-05-04",
             changelog: "增加 Jira 注入防护与空 assignee 边界",
             createdFrom: "eval_failure",
@@ -1580,7 +1886,7 @@
         slug: "codex-harness-first-pass",
         title: "Codex Harness First Pass",
         scope: "ai",
-        status: "draft",
+        status: "active",
         risk: "low",
         summary: "把这个 repo 的 AGENT.md harness 沉淀成 coding-agent skill：先读 instruction、再 own files、改最小、跑最小验证、不夸大结果。",
         trigger: "Codex / Claude Code / Cursor / 终端任务，目标是改 Personal AI 或类似 repo。",
@@ -1640,8 +1946,11 @@
         slug: "meeting-handoff-brief",
         title: "Meeting Handoff Brief",
         scope: "work",
-        status: "candidate",
+        status: "suggestion",
         risk: "medium",
+        suggestedFrom: "ep-meeting-handoff",
+        suggestedAt: "2 天前",
+        notifiedAt: "2 天前 · 通知中心",
         summary: "在重要项目会议前 10 分钟自动产出 5 分钟 brief：相关项目、人、最近决策、未完成 action。",
         trigger: "RingCentral 会议 / 消息 mention：Video Mobile / Rooms / Nova / RCV SDK / Coa / Fred / Sophia / handover。",
         notUse: "聊家常、含 HR 敏感话题或没有项目归属的会议不要触发。",
@@ -1666,10 +1975,10 @@
         currentVersion: "v0.1",
         versions: [
           {
-            version: "v0.1 (candidate)",
+            version: "v0.1 (suggestion)",
             date: "2026-05-02",
-            changelog: "首版 candidate：4 步工作流",
-            createdFrom: "candidate",
+            changelog: "首版萃取建议：4 步工作流",
+            createdFrom: "suggestion",
             diff: [
               { kind: "add", text: "+ workflow: 4 steps" },
               { kind: "add", text: "+ riskPolicy.personalData = redact_by_default" },
@@ -1687,8 +1996,11 @@
         slug: "ai-tool-trial-comparator",
         title: "AI Tool Trial Comparator",
         scope: "ai",
-        status: "candidate",
+        status: "suggestion",
         risk: "low",
+        suggestedFrom: "ep-ai-trial",
+        suggestedAt: "20 分钟前",
+        notifiedAt: "刚刚 · 通知中心",
         summary: "比较 Codex / Claude Code / Cursor / Factory.ai / Kimi / GLM 等工具的成本、安全审批、coding 适配与团队 rollout 限制。",
         trigger: "消息 mention：AI 工具 trial / license reclaim / Cursor cost / OpenAI deal / Claude Code vs Codex 投票 / Factory.ai 审批。",
         notUse: "用户要求做正式采购建议但缺少最新 source link 时不要直接给出推荐。",
@@ -1713,10 +2025,10 @@
         currentVersion: "v0.1",
         versions: [
           {
-            version: "v0.1 (candidate)",
+            version: "v0.1 (suggestion)",
             date: "2026-05-01",
-            changelog: "首版 candidate",
-            createdFrom: "candidate",
+            changelog: "首版萃取建议",
+            createdFrom: "suggestion",
             diff: [
               { kind: "add", text: "+ workflow: 4 steps" },
               { kind: "add", text: "+ guardrail: pricing 未验证 must mark unknown" },
@@ -1728,13 +2040,38 @@
           { platform: "codex", state: "not_installed", lastSyncedAt: null },
         ],
       },
+      {
+        // 演示「已丢弃」过滤器：用户之前丢过的建议保留可恢复
+        id: "linkedin-noise",
+        slug: "linkedin-recruiter-replier",
+        title: "LinkedIn Recruiter Auto-Replier",
+        scope: "personal",
+        status: "dismissed",
+        risk: "high",
+        dismissedAt: "5 天前",
+        dismissReason: "用户判断不希望沉淀此类自动应答",
+        summary: "对 LinkedIn 招聘消息生成礼貌的拒绝/转发草稿。",
+        trigger: "LinkedIn 消息 mention：opportunity / role / hiring。",
+        notUse: "—",
+        sources: ["LinkedIn"],
+        owner: "esone.qiu",
+        repetition: "近 30 天 7 次相似",
+        riskBrief: "—",
+        steps: [],
+        evidence: [],
+        sourceEpisodes: [],
+        currentVersion: "v0.1",
+        versions: [],
+        bindings: [],
+      },
     ];
 
     // ===== state =====
-    let currentId = skills[0].id;
+    // 默认进入页面时停在第一条「在用」技能
+    let currentId = skills.find((s) => s.status === "active")?.id || skills[0].id;
     let currentTab = "workflow";
-    let activeFilter = "all";
-    const promotedSet = new Set(skills.filter((s) => s.status === "draft" || s.status === "active").map((s) => s.id));
+    let activeFilter = "active"; // 主列表默认只展示「在用」
+    let inboxExpanded = true;     // 顶部 Inbox Bar 默认展开（首次进入主动揭示）
     const autoSync = JSON.parse(JSON.stringify(autoSyncDefaults));
 
     const $ = (sel) => document.querySelector(sel);
@@ -1754,17 +2091,16 @@
     }
 
     function statusOf(skill) {
-      if (skill.status === "active") return "active";
-      if (promotedSet.has(skill.id)) return "draft";
-      return "candidate";
+      // 直接读 skill.status；状态机仅 active / suggestion / dismissed
+      return skill.status;
     }
 
     function statusLabel(status) {
-      return ({ active: "在用", draft: "草稿", candidate: "候选" })[status] || status;
+      return ({ active: "在用", suggestion: "萃取建议", dismissed: "已丢弃" })[status] || status;
     }
 
     function statusEyebrow(status) {
-      return ({ active: "Active Skill", draft: "Draft Skill", candidate: "Candidate" })[status] || "Skill";
+      return ({ active: "Active Skill", suggestion: "Skill Suggestion · 待决策", dismissed: "Dismissed" })[status] || "Skill";
     }
 
     function evidenceStateLabel(state) {
@@ -1816,17 +2152,130 @@
       const q = $("#search").value.trim().toLowerCase();
       return skills.filter((skill) => {
         const status = statusOf(skill);
-        const filterOk = activeFilter === "all" || activeFilter === status;
+        // suggestion 永远不出现在主列表里——它在顶部 Inbox Bar 中处理
+        if (status === "suggestion") return false;
+        let filterOk;
+        if (activeFilter === "all") filterOk = status === "active" || status === "dismissed";
+        else if (activeFilter === "active") filterOk = status === "active";
+        else if (activeFilter === "dismissed") filterOk = status === "dismissed";
+        else filterOk = false;
         const platformLabels = (skill.bindings || []).map((b) => platformMeta[b.platform]?.label || b.platform).join(" ");
         const haystack = [skill.title, skill.summary, skill.trigger, platformLabels].join(" ").toLowerCase();
         return filterOk && (!q || haystack.includes(q));
       });
     }
 
+    function suggestionSkills() {
+      return skills.filter((s) => statusOf(s) === "suggestion");
+    }
+
+    function renderInboxBar() {
+      const bar = $("#inboxBar");
+      const items = suggestionSkills();
+      if (!items.length) {
+        bar.hidden = true;
+        return;
+      }
+      bar.hidden = false;
+      const pushedCount = items.filter((s) => s.notifiedAt).length;
+      if (!inboxExpanded) {
+        bar.className = "inbox-bar collapsed";
+        bar.innerHTML = `
+          <div class="inbox-bar-head">
+            <span class="icon">📥</span>
+            <span class="title">萃取建议</span>
+            <span class="meta">${items.length} 条待决策<span class="bell-dot" aria-hidden="true"></span> · ${pushedCount} 条已通过通知推送</span>
+            <button class="toggle" type="button" data-inbox-toggle aria-label="展开">▾</button>
+          </div>
+        `;
+      } else {
+        bar.className = "inbox-bar";
+        bar.innerHTML = `
+          <div class="inbox-bar-head">
+            <span class="icon">📥</span>
+            <span class="title">萃取建议</span>
+            <span class="meta">${items.length} 条待决策<span class="bell-dot" aria-hidden="true"></span> · 由 Flight Recorder 从你的真实操作 episode 萃取</span>
+            <button class="toggle" type="button" data-inbox-toggle aria-label="收起">▴</button>
+          </div>
+          <div class="inbox-bar-body">
+            <div class="inbox-push-hint">
+              <span class="icon">🔔</span>
+              <span><strong>每识别出一条建议都会推送通知</strong>（<code>NotificationService</code>），通知里直接 <strong>[使用]</strong> / <strong>[丢弃]</strong> / <strong>[稍后审]</strong> 即可决策；这里是同一批未决策建议的集中视图，按钮行为完全等价。</span>
+            </div>
+            <div class="suggestion-list" role="list">
+              ${items.map((s) => renderSuggestionCard(s)).join("")}
+            </div>
+          </div>
+        `;
+      }
+
+      bar.querySelectorAll("[data-inbox-toggle]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          inboxExpanded = !inboxExpanded;
+          renderInboxBar();
+        });
+      });
+
+      bar.querySelectorAll(".inbox-bar.collapsed").forEach((el) => {
+        el.addEventListener("click", () => {
+          inboxExpanded = true;
+          renderInboxBar();
+        });
+      });
+      // 收起态时整条点击展开（上面 querySelectorAll 在 bar 内部找不到 .inbox-bar，改外部判断）
+      if (!inboxExpanded) {
+        bar.addEventListener("click", inboxBarClickToExpand, { once: true });
+      }
+
+      bar.querySelectorAll("[data-suggestion-action]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          handleSkillAction(btn.dataset.suggestionAction, btn.dataset.id);
+        });
+      });
+
+      bar.querySelectorAll("[data-suggestion-episode]").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showToast(`🛫 跳转到 Flight Recorder · ${el.dataset.suggestionEpisode}`);
+        });
+      });
+    }
+
+    function inboxBarClickToExpand() {
+      inboxExpanded = true;
+      renderInboxBar();
+    }
+
+    function renderSuggestionCard(s) {
+      const ep = (s.sourceEpisodes && s.sourceEpisodes[0]) || null;
+      return `
+        <article class="suggestion-card" role="listitem">
+          <div class="top">
+            <div class="title">${s.title}</div>
+            <span class="when" title="萃取时间">${s.suggestedAt || "刚刚"}</span>
+          </div>
+          <p class="desc">${s.summary}</p>
+          <div class="source">
+            🛫 ${ep
+              ? `<a class="source-link" data-suggestion-episode="${ep.id}">${ep.title}</a>`
+              : "Flight Recorder"} · ${s.repetition}
+          </div>
+          ${s.notifiedAt ? `<div class="source"><span class="icon">🔔</span><span>已推送：${s.notifiedAt}</span></div>` : ""}
+          <div class="actions">
+            <button class="btn primary" data-suggestion-action="adopt" data-id="${s.id}">✓ 使用</button>
+            <button class="btn danger" data-suggestion-action="dismiss" data-id="${s.id}">✕ 丢弃</button>
+            <button class="btn ghost" data-suggestion-action="open" data-id="${s.id}" title="展开详情审稿">▷</button>
+          </div>
+        </article>
+      `;
+    }
+
     function renderCandidates() {
       const items = filteredSkills();
       if (!items.length) {
-        list.innerHTML = `<div class="empty">没有匹配的候选。</div>`;
+        list.innerHTML = `<div class="empty">${activeFilter === "dismissed" ? "目前没有已丢弃的技能。" : "没有匹配的技能。"}</div>`;
         return;
       }
       list.innerHTML = items.map((skill) => {
@@ -1874,20 +2323,59 @@
       $("#skillTitle").textContent = skill.title;
       $("#skillSummary").textContent = skill.summary;
 
-      const promoteBtn = $("#promoteBtn");
-      if (status === "active") {
-        promoteBtn.textContent = "✓ 已发布";
-        promoteBtn.disabled = true;
-      } else if (status === "draft") {
-        promoteBtn.textContent = "✓ 已升级为 Draft";
-        promoteBtn.disabled = true;
+      const actions = $("#workspaceActions");
+      if (status === "suggestion") {
+        actions.innerHTML = `
+          <button class="btn primary" data-action="adopt" data-id="${skill.id}">✓ 使用</button>
+          <button class="btn danger" data-action="dismiss" data-id="${skill.id}">✕ 丢弃</button>
+        `;
+      } else if (status === "dismissed") {
+        actions.innerHTML = `
+          <button class="btn secondary" data-action="restore" data-id="${skill.id}">↺ 恢复为建议</button>
+        `;
       } else {
-        promoteBtn.textContent = "⇪ 升级为 Draft";
-        promoteBtn.disabled = false;
+        // active
+        actions.innerHTML = `
+          <span class="header-state-pill">✓ 已认领</span>
+          <button class="btn secondary" data-action="dismiss" data-id="${skill.id}" title="把这条技能转回已丢弃">下架…</button>
+        `;
       }
+
+      actions.querySelectorAll("[data-action]").forEach((btn) => {
+        btn.addEventListener("click", () => handleSkillAction(btn.dataset.action, btn.dataset.id));
+      });
 
       $("#evidenceCount").textContent = skill.evidence.length;
       $("#bindingsCount").textContent = (skill.bindings || []).length;
+    }
+
+    function handleSkillAction(action, id) {
+      const skill = skills.find((s) => s.id === id);
+      if (!skill) return;
+      if (action === "adopt") {
+        skill.status = "active";
+        showToast(`✓ 已认领「${skill.title}」，开启同步的平台会跟随推送`);
+        activeFilter = "active";
+        document.querySelectorAll(".rail-segmented button").forEach((b) =>
+          b.classList.toggle("active", b.dataset.filter === "active")
+        );
+        currentId = id;
+      } else if (action === "dismiss") {
+        skill.status = "dismissed";
+        showToast(`✕ 已丢弃「${skill.title}」（30 天内不再萃取同类）`);
+        // 如果当前正在看这条 suggestion 的详情，自动切回第一条 active
+        if (currentId === id) {
+          const firstActive = skills.find((s) => statusOf(s) === "active");
+          if (firstActive) currentId = firstActive.id;
+        }
+      } else if (action === "restore") {
+        skill.status = "suggestion";
+        showToast(`↺ 「${skill.title}」已回到萃取建议 Inbox`);
+      } else if (action === "open") {
+        currentId = id;
+        showToast(`📖 打开建议详情：先审稿再决策`);
+      }
+      render();
     }
 
     function renderTabs() {
@@ -2018,14 +2506,15 @@
           <div class="install-banner-body">
             <strong>这条技能的真源 URL：</strong>
             <code>${skillUrl}</code><br />
-            把任意平台下面那一句话复制给 agent，它会通过这个 URL 拉取 SKILL.md 和资源。<strong>已绑定状态由后台同步程序异步更新</strong>，不依赖 UI 写入文件。
+            把任意平台下面那一句话复制给 agent，它会通过这个 URL 拉取 SKILL.md 和资源。<strong>已绑定状态由后台同步程序异步更新</strong>，不依赖 UI 写入文件。<br />
+            <span class="install-banner-scope">⚠ 自动同步开关在<strong>平台</strong>维度（不是这条技能）。开启后这个平台会跟着同步你<strong>所有</strong> active 技能。</span>
           </div>
         </div>
 
         <section class="section" style="margin-top: 1rem;">
           <div class="section-head">
             <h3><span class="icon">🔌</span>已绑定平台（${bindings.length}）</h3>
-            <button class="btn secondary" id="bindingsAutoSyncBtn" style="height: 1.7rem; font-size: 0.72rem;">⚙ 平台级自动同步</button>
+            <button class="btn secondary" id="bindingsAutoSyncBtn" style="height: 1.7rem; font-size: 0.72rem;">⚙ 平台级自动同步…</button>
           </div>
           <div class="section-body">
             <div class="bindings-list">
@@ -2055,12 +2544,21 @@
       const sync = autoSync[b.platform] || { enabled: false, capability: "manual_only", mode: "Manual install only" };
       const installCmd = buildInstallCommand(b.platform, skill);
 
+      // auto-toggle 文案明确指向「平台级」语义；点击会打开同一个 dialog（不在卡片里直接切换）。
       const syncTagClass =
+        sync.capability === "internal" ? "on" :
         sync.capability === "manual_only" ? "unsupported" :
         sync.enabled ? "on" : "";
       const syncTagText =
+        sync.capability === "internal" ? "真源" :
         sync.capability === "manual_only" ? "仅手动安装" :
-        sync.enabled ? "自动同步: 开" : "自动同步: 关";
+        sync.enabled ? "平台同步: 开（所有技能）" : "平台同步: 关";
+      const syncTagTooltip =
+        sync.capability === "internal" ? "Personal AI 是真源，永远 active" :
+        sync.capability === "manual_only" ? "Web 平台无法写本地文件，所有技能均需复制安装指引手动安装" :
+        sync.enabled
+          ? `已对 ${meta.label} 开启平台级自动同步：所有 active 技能都会持续推送，点击调整 →`
+          : `平台级自动同步未开启，仅这条技能不受影响；点击查看『所有 active 技能一起开』→`;
 
       return `
         <article class="binding-card">
@@ -2074,7 +2572,7 @@
             </div>
             <div class="binding-state-row">
               <span class="status ${bindingStateClass(b.state)}">${bindingStateLabel(b.state)}</span>
-              <span class="auto-toggle ${syncTagClass}" title="${sync.mode}">${syncTagText}</span>
+              <button class="auto-toggle ${syncTagClass}" data-sync-platform-link="${b.platform}" title="${escapeAttr(syncTagTooltip)}" type="button">${syncTagText}</button>
             </div>
           </div>
 
@@ -2126,16 +2624,26 @@
         });
       });
 
+      content.querySelectorAll("[data-sync-platform-link]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openAutoSyncDialog();
+        });
+      });
+
       const bindingsAutoBtn = document.getElementById("bindingsAutoSyncBtn");
       if (bindingsAutoBtn) bindingsAutoBtn.addEventListener("click", openAutoSyncDialog);
     }
 
     function render() {
       const skill = currentSkill();
+      renderInboxBar();
       renderCandidates();
       renderHeader(skill);
       renderTabs();
       renderContent(skill);
+      const sc = $("#sidebarSkillCount");
+      if (sc) sc.textContent = String(skills.filter((s) => statusOf(s) === "active").length);
     }
 
     function escapeHtml(str) {
@@ -2162,18 +2670,22 @@
     function renderSyncRows() {
       const container = $("#syncRowsContainer");
       const order = ["personal_ai", "openclaw", "codex", "claude_code", "cursor", "chatgpt_gpts", "claude_skills_web"];
+      // 当前 active 技能数量：per-platform 同步开关一旦打开，这些技能都会被一起推送
+      const activeSkillCount = skills.filter((s) => statusOf(s) === "active" || statusOf(s) === "draft").length;
       container.innerHTML = order.map((platform) => {
         const meta = platformMeta[platform];
         const sync = autoSync[platform];
         const desc = describeSyncRow(platform, sync);
         const disabled = platform === "personal_ai" || sync.capability === "manual_only" ||
           (sync.capability === "fs_via_desktop_app" && !desktopAppInstalled);
+        const scopeText = scopeForPlatform(platform, sync, activeSkillCount);
         return `
           <div class="sync-row">
             <div class="icon">${meta.icon}</div>
             <div class="body">
               <strong>${meta.label}</strong>
               <p>${desc.text}</p>
+              ${scopeText ? `<div class="scope">${scopeText}</div>` : ""}
               ${desc.cta ? `<div class="mode">${desc.cta}</div>` : ""}
             </div>
             <div class="control">
@@ -2190,11 +2702,31 @@
         input.addEventListener("change", () => {
           const platform = input.getAttribute("data-sync-platform");
           autoSync[platform].enabled = input.checked;
-          showToast(`${platformMeta[platform].label} 自动同步已${input.checked ? "开启" : "关闭"}`);
+          const count = skills.filter((s) => statusOf(s) === "active" || statusOf(s) === "draft").length;
+          if (input.checked) {
+            showToast(`✓ 已对 ${platformMeta[platform].label} 开启自动同步：${count} 条技能将持续推送`);
+          } else {
+            showToast(`× 已关闭对 ${platformMeta[platform].label} 的自动同步`);
+          }
           renderSyncRows();
           render(); // 让 binding tag 状态实时刷新
         });
       });
+    }
+
+    /**
+     * 解释作用域：让用户清楚知道这个开关一旦打开，会同时影响多少条技能。
+     * 这是 per-platform 设计的关键沟通——避免用户以为这是某条 skill 的开关。
+     */
+    function scopeForPlatform(platform, sync, count) {
+      if (sync.capability === "internal") return "";
+      if (sync.capability === "manual_only") {
+        return `<span class="pill muted">不参与自动同步</span><span>·</span><span>所有技能仅通过『复制安装指引』手动安装</span>`;
+      }
+      const tag = sync.enabled
+        ? `<span class="pill ok">作用域：所有 active 技能（${count} 条）</span>`
+        : `<span class="pill muted">开启后将自动推送 ${count} 条 active 技能</span>`;
+      return tag;
     }
 
     /**
@@ -2263,18 +2795,6 @@
         currentId = visible[0].id;
       }
       render();
-    });
-
-    $("#promoteBtn").addEventListener("click", () => {
-      const skill = currentSkill();
-      if (skill.status === "active") return;
-      promotedSet.add(skill.id);
-      showToast(`⇪ 已把「${skill.title}」升级为 Draft`);
-      render();
-    });
-
-    $("#dismissBtn").addEventListener("click", () => {
-      showToast("👋 候选已忽略（demo session 内）");
     });
 
     $("#autoSyncBtn").addEventListener("click", openAutoSyncDialog);

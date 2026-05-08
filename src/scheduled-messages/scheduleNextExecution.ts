@@ -13,6 +13,7 @@ type ScheduleLike = Pick<
   ScheduledMessage,
   | 'Schedule_Date'
   | 'Schedule_Time'
+  | 'End_Date'
   | 'Repeat_Every'
   | 'Repeat_Unit'
   | 'Repeat_Days'
@@ -90,6 +91,37 @@ function getWeekIndexSinceStart(candidate: Date, start: Date): number {
   const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const daysSinceStart = Math.floor((candidateDay.getTime() - startDay.getTime()) / 86400000);
   return Math.floor(daysSinceStart / 7);
+}
+
+function isAfterEndDate(candidate: Date, endDate?: string): boolean {
+  if (!endDate?.trim()) {
+    return false;
+  }
+
+  let parsedEndDate: Date;
+  try {
+    parsedEndDate = parseLocalScheduleDate(endDate);
+  } catch {
+    return false;
+  }
+
+  const candidateDay = new Date(candidate.getFullYear(), candidate.getMonth(), candidate.getDate());
+  return candidateDay.getTime() > parsedEndDate.getTime();
+}
+
+function formatNextDateIfWithinEndDate(
+  nextDate: Date,
+  message: ScheduleLike,
+): string {
+  if (isAfterEndDate(nextDate, message.End_Date)) {
+    return '';
+  }
+
+  return formatScheduleDateTimeForDisplay(
+    formatLocalScheduleDate(nextDate),
+    message.Schedule_Time,
+    message,
+  );
 }
 
 function findNextWeeklyRepeatDay(
@@ -170,25 +202,21 @@ export function calculateScheduledMessageNextExecution(
   if (repeatDays.length > 0) {
     const weeklyNext = findNextWeeklyRepeatDay(nextDate, now, every, repeatDays);
     if (!weeklyNext) return '';
-    return formatScheduleDateTimeForDisplay(
-      formatLocalScheduleDate(weeklyNext),
-      message.Schedule_Time,
-      message,
-    );
+    return formatNextDateIfWithinEndDate(weeklyNext, message);
   }
 
   if (message.Repeat_Unit === 'Day') {
     for (let attempts = 0; attempts < 1000; attempts++) {
+      if (isAfterEndDate(nextDate, message.End_Date)) {
+        return '';
+      }
+
       if (
         nextDate.getTime() > now.getTime() &&
         nextDate.getDay() >= 1 &&
         nextDate.getDay() <= 5
       ) {
-        return formatScheduleDateTimeForDisplay(
-          formatLocalScheduleDate(nextDate),
-          message.Schedule_Time,
-          message,
-        );
+        return formatNextDateIfWithinEndDate(nextDate, message);
       }
 
       nextDate.setDate(nextDate.getDate() + every);
@@ -209,9 +237,5 @@ export function calculateScheduledMessageNextExecution(
     }
   }
 
-  return formatScheduleDateTimeForDisplay(
-    formatLocalScheduleDate(nextDate),
-    message.Schedule_Time,
-    message,
-  );
+  return formatNextDateIfWithinEndDate(nextDate, message);
 }

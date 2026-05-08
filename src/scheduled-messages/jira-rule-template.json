@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.3.7",
-    "lastUpdated": "2026-05-06",
+    "version": "1.4.0",
+    "lastUpdated": "2026-05-07",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template"
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -231,6 +231,98 @@
               "value": {
                 "first": "{{webhookResponse.body.targetType}}",
                 "second": "private",
+                "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
+          "value": {
+            "conditionMatchType": "ALL"
+          },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{RINGCENTRAL_SENDER_DIFY_API_BASE_URL}}/workflows/run",
+                "headers": [
+                  {
+                    "id": "_header_ringcentral_sender_authorization",
+                    "name": "Authorization",
+                    "value": {
+                      "keyOrValue": "Bearer {{RINGCENTRAL_SENDER_DIFY_API_KEY}}",
+                      "secret": true
+                    }
+                  },
+                  {
+                    "id": "_header_ringcentral_sender_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"inputs\": {\n    \"clientId\": \"{{RINGCENTRAL_SENDER_CLIENT_ID}}\",\n    \"clientSecret\": \"{{RINGCENTRAL_SENDER_CLIENT_SECRET}}\",\n    \"jwt\": \"{{RINGCENTRAL_SENDER_JWT}}\",\n    \"chatId\": {{webhookResponse.body.chatId.asJsonString}},\n    \"message_text\": {{webhookResponse.body.content.asJsonString}}\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{initiator.emailAddress}}\"\n}",
+                "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
+                "headers": [
+                  {
+                    "id": "_header_mark_ringcentral_sender_content_type",
+                    "name": "Content-Type",
+                    "value": {
+                      "keyOrValue": "application/json",
+                      "secret": false
+                    }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
+                "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{webhookResponse.body.targetType}}",
+                "second": "ringcentral_sender",
                 "operator": "EQUALS"
               },
               "children": [],

@@ -52,6 +52,11 @@ interface RecallCandidate {
   salienceScore?: number;
 }
 
+interface RecallAccessTarget {
+  id: string;
+  type: RecallCandidate['type'];
+}
+
 interface VecSearchRow {
   message_id?: string;
   chunk_id?: number;
@@ -156,6 +161,36 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
   const denom = Math.sqrt(normA) * Math.sqrt(normB);
   return denom === 0 ? 0 : dot / denom;
+}
+
+function tokenizeForSimilarity(value: string): Set<string> {
+  const tokens = new Set<string>();
+  const words = value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
+
+  for (const word of words) {
+    if (word.length > 1) {
+      tokens.add(word);
+    }
+
+    for (const char of word) {
+      if (/[\u3400-\u9fff\uf900-\ufaff]/u.test(char)) {
+        tokens.add(char);
+      }
+    }
+  }
+
+  return tokens;
+}
+
+function tokenSetSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection += 1;
+  }
+
+  return intersection / Math.sqrt(a.size * b.size);
 }
 
 /**
@@ -450,8 +485,11 @@ export class RecallEngine {
     });
 
     // Reinforce accessed memories (fire-and-forget)
-    const ids = items.map((i) => i.id);
-    this.reinforceAccessedMemories(ids);
+    const accessTargets = items.map((item) => ({
+      id: item.id,
+      type: item.type,
+    }));
+    this.reinforceAccessedMemories(accessTargets);
 
     return {
       items,
@@ -512,7 +550,6 @@ export class RecallEngine {
             type: 'message',
             content: msg.content,
             score,
-            embedding: queryEmbedding, // placeholder for similarity calc
             timestamp: msg.timestamp,
             source: msg.source_type,
             sourceUrl: msg.source_url ?? undefined,
@@ -1033,6 +1070,24 @@ export class RecallEngine {
     const selected: RecallCandidate[] = [];
     const remaining = new Set(candidates.map((c) => c.id));
     const candidateMap = new Map(candidates.map((c) => [c.id, c]));
+    const textTokenCache = new Map<string, Set<string>>();
+    const getTextTokens = (candidate: RecallCandidate) => {
+      const cacheKey = `${candidate.type}:${candidate.id}`;
+      const cached = textTokenCache.get(cacheKey);
+      if (cached) return cached;
+      const tokens = tokenizeForSimilarity(candidate.content);
+      textTokenCache.set(cacheKey, tokens);
+      return tokens;
+    };
+    const getCandidateSimilarity = (
+      a: RecallCandidate,
+      b: RecallCandidate,
+    ) => {
+      if (a.embedding && b.embedding) {
+        return cosineSimilarity(a.embedding, b.embedding);
+      }
+      return tokenSetSimilarity(getTextTokens(a), getTextTokens(b));
+    };
 
     while (selected.length < topK && remaining.size > 0) {
       let bestId: string | null = null;
@@ -1044,17 +1099,14 @@ export class RecallEngine {
 
         // Compute max similarity to already selected items
         let maxSimToSelected = 0;
-        if (candidate.embedding && selected.length > 0) {
+        if (selected.length > 0) {
           for (const sel of selected) {
-            if (sel.embedding) {
-              const sim = cosineSimilarity(candidate.embedding, sel.embedding);
-              if (sim > maxSimToSelected) {
-                maxSimToSelected = sim;
-              }
+            const sim = getCandidateSimilarity(candidate, sel);
+            if (sim > maxSimToSelected) {
+              maxSimToSelected = sim;
             }
           }
         }
-        // If no embedding, skip diversity penalty (maxSimToSelected stays 0)
 
         const mmrScore =
           MMR_LAMBDA * relevance - (1 - MMR_LAMBDA) * maxSimToSelected;
@@ -1068,7 +1120,7 @@ export class RecallEngine {
       if (bestId == null) break;
 
       const bestCandidate = candidateMap.get(bestId)!;
-      bestCandidate.score = bestMmrScore; // Update score to final MMR score
+      bestCandidate.score = Math.max(0, Math.min(1, bestMmrScore));
       selected.push(bestCandidate);
       remaining.delete(bestId);
     }
@@ -1084,8 +1136,8 @@ export class RecallEngine {
    * After recall, reinforce accessed memories by incrementing access_count
    * and boosting salience. This strengthens memories that are actually used.
    */
-  private reinforceAccessedMemories(ids: string[]): void {
-    if (ids.length === 0) return;
+  private reinforceAccessedMemories(targets: RecallAccessTarget[]): void {
+    if (targets.length === 0) return;
 
     const currentTime = now();
 
@@ -1101,12 +1153,10 @@ export class RecallEngine {
       );
 
       const runAll = this.db.transaction(() => {
-        for (const id of ids) {
-          // Determine target type from id pattern (messages use UUID, chunks use numeric ids)
-          const targetType = /^\d+$/.test(id) ? 'chunk' : 'message';
+        for (const target of targets) {
           upsert.run(
-            targetType,
-            id,
+            target.type,
+            target.id,
             SALIENCE_REINFORCE_BOOST, // initial salience for new entries
             currentTime,
             currentTime,

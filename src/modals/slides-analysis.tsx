@@ -3,7 +3,10 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
 import { ProjectUpdateSuggestion } from '../slide';
 import { DisplaySlideAnalysisResult } from '../contentScriptGoogleSlide';
-import { normalizeComparableText } from '../utils/slidesAnalyzerSuggestions';
+import {
+    getNewSuggestionText,
+    normalizeComparableText,
+} from '../utils/slidesAnalyzerSuggestions';
 
 interface AnalysisData {
     result: DisplaySlideAnalysisResult;
@@ -43,6 +46,16 @@ const hasMeaningfulSuggestedChange = (currentValue: unknown, suggestedValue: unk
 
     return normalizeComparableText(currentValue) !== normalizeComparableText(suggestedValue);
 };
+
+const getNewSuggestedComments = (suggestion: ProjectUpdateSuggestion): string => (
+    getNewSuggestionText(suggestion.currentComments, suggestion.suggestedComments)
+);
+
+const hasDuplicateOnlySuggestedComments = (suggestion: ProjectUpdateSuggestion): boolean => (
+    typeof suggestion.suggestedComments === 'string' &&
+    suggestion.suggestedComments.trim().length > 0 &&
+    !getNewSuggestedComments(suggestion)
+);
 
 const addUniqueEvidenceItem = (items: string[], value: unknown): void => {
     if (typeof value !== 'string') {
@@ -94,7 +107,9 @@ const hasVisibleEvidence = (suggestion: ProjectUpdateSuggestion): boolean => (
 );
 
 const shouldDefaultSelectSuggestion = (suggestion: ProjectUpdateSuggestion): boolean => (
-    (suggestion.confidence || 0) >= HIGH_CONFIDENCE_THRESHOLD && hasVisibleEvidence(suggestion)
+    getAvailableUpdateFields(suggestion).length > 0 &&
+    (suggestion.confidence || 0) >= HIGH_CONFIDENCE_THRESHOLD &&
+    hasVisibleEvidence(suggestion)
 );
 
 const isSuggestionReviewRequired = (suggestion: ProjectUpdateSuggestion): boolean => (
@@ -103,6 +118,12 @@ const isSuggestionReviewRequired = (suggestion: ProjectUpdateSuggestion): boolea
 
 const confidenceReviewText = (suggestion: ProjectUpdateSuggestion): string => {
     const confidence = suggestion.confidence || 0;
+
+    if (getAvailableUpdateFields(suggestion).length === 0) {
+        return getUnavailableUpdateFields(suggestion).length > 0
+            ? '缺少可写列 · 需手动处理'
+            : '无新增可写字段';
+    }
 
     if (confidence < HIGH_CONFIDENCE_THRESHOLD) {
         return '需复核 · 未默认选中';
@@ -125,7 +146,7 @@ const getAvailableUpdateFields = (suggestion: ProjectUpdateSuggestion): UpdateFi
     if (hasStatusColumn && hasMeaningfulSuggestedChange(suggestion.currentStatus, suggestion.suggestedStatus)) {
         fields.push('status');
     }
-    if (hasCommentsColumn && suggestion.suggestedComments) {
+    if (hasCommentsColumn && getNewSuggestedComments(suggestion)) {
         fields.push('comments');
     }
     if (hasOwnerColumn && hasMeaningfulSuggestedChange(suggestion.currentOwner, suggestion.suggestedOwner)) {
@@ -149,7 +170,7 @@ const getUnavailableUpdateFields = (suggestion: ProjectUpdateSuggestion): string
     }
 
     if (
-        suggestion.suggestedComments &&
+        getNewSuggestedComments(suggestion) &&
         !hasWritableColumnIndex(suggestion.columnIndices?.comments)
     ) {
         fields.push(UPDATE_FIELD_LABELS.comments);
@@ -520,7 +541,10 @@ const SlidesAnalysis: React.FC = () => {
                         partialUpdate.suggestedTrack = originalSuggestion.suggestedTrack;
                     }
                     if (isFieldSelected(projectIndex, 'comments')) {
-                        partialUpdate.suggestedComments = originalSuggestion.suggestedComments;
+                        const newSuggestedComments = getNewSuggestedComments(originalSuggestion);
+                        if (newSuggestedComments) {
+                            partialUpdate.suggestedComments = newSuggestedComments;
+                        }
                     }
 
                     return partialUpdate;
@@ -774,6 +798,7 @@ const SlidesAnalysis: React.FC = () => {
                             const evidenceItems = getSuggestionEvidenceItems(suggestion);
                             const needsReview = isSuggestionReviewRequired(suggestion);
                             const isDefaultSelectable = shouldDefaultSelectSuggestion(suggestion);
+                            const newSuggestedComments = getNewSuggestedComments(suggestion);
                             const allAvailableSelected = availableFields.length > 0 &&
                                 availableFields.every((field) => isFieldSelected(index, field));
 
@@ -808,6 +833,11 @@ const SlidesAnalysis: React.FC = () => {
                                         {unavailableFields.length > 0 && (
                                             <div className="project-blocked-note">
                                                 无法写回 {unavailableFields.join('、')}：未识别到可写表格列，请先在 Slides 表格中补齐对应列或手动更新。
+                                            </div>
+                                        )}
+                                        {hasDuplicateOnlySuggestedComments(suggestion) && (
+                                            <div className="project-noop-note">
+                                                备注建议已存在于当前备注，已从可写字段中排除。
                                             </div>
                                         )}
                                         
@@ -972,7 +1002,7 @@ const SlidesAnalysis: React.FC = () => {
                                         </div>
                                     )}
                                     
-                                    {hasCommentsColumn && suggestion.suggestedComments && (
+                                    {hasCommentsColumn && newSuggestedComments && (
                                         <div className="update-item">
                                             <input 
                                                 type="checkbox" 
@@ -983,8 +1013,16 @@ const SlidesAnalysis: React.FC = () => {
                                                 style={{ marginRight: '8px' }}
                                             />
                                             <div>
+                                                {suggestion.currentComments && (
+                                                    <div className="comment-current">
+                                                        当前备注已有内容；只会追加下面的新增行。
+                                                    </div>
+                                                )}
                                                 <div className="update-tag">
-                                                    🔄 更新: Comment列{suggestion.currentComments ? '添加' : '设置为'}"{suggestion.suggestedComments}"
+                                                    🔄 更新: Comment列{suggestion.currentComments ? '追加' : '设置为'}新增备注
+                                                </div>
+                                                <div className="comment-preview">
+                                                    {newSuggestedComments}
                                                 </div>
                                                 {suggestion.suggestedCommentsReason && (
                                                     <div className="reason-tag" style={{ 
@@ -1346,6 +1384,16 @@ const styles = `
         padding: 6px 8px;
     }
 
+    .project-noop-note {
+        background: #f4f5f7;
+        border-left: 3px solid #8993a4;
+        color: #42526e;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 8px;
+        padding: 6px 8px;
+    }
+
     .available-fields-count {
         color: #6b778c;
         margin-left: 6px;
@@ -1370,6 +1418,26 @@ const styles = `
         color: #0066cc;
         font-weight: bold;
         margin-top: 3px;
+    }
+
+    .comment-current {
+        color: #6b778c;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+
+    .comment-preview {
+        background: #fff;
+        border: 1px solid #dfe1e6;
+        border-radius: 4px;
+        color: #172b4d;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 6px;
+        max-width: 760px;
+        padding: 6px 8px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
     }
 
     .reason-tag {

@@ -1,6 +1,6 @@
 # 网页记忆探测与提示
 
-*最后更新: 2026-05-06*
+*最后更新: 2026-05-07*
 
 ## 概述
 
@@ -9,6 +9,7 @@
 当前线上主链路是：
 
 - `src/contentScriptWebIntelligence.ts`
+- `src/composer-guard/siteContextAdapters.ts`
 - `src/background.ts`
 - `src/services/MemoryServiceClient.ts`
 - `memory-service/src/routes/contextRecall.ts`
@@ -46,11 +47,12 @@
 - 如果页面在被动召回请求发出后才出现密码、验证码等敏感输入，内容脚本会在响应回来时再次检查当前页面状态，不展示已过期的提示；如果提示已经显示后输入控件被动态改成敏感表单，也会立即撤销提示并作废挂起召回。
 - 监听 DOM 变化、focus、`hashchange`、`popstate`，并用 URL 轮询补足 SPA 路由变化。
 - 对普通网页使用标题、meta keywords、主内容摘要生成上下文；摘要会剔除 Personal AI 自己注入的 bubble/card，避免提示 UI 污染下一次召回。
+- 对 Jira、RingCentral、AI Web Agent 和普通网页使用 `siteContextAdapters.ts` 生成统一 snapshot；被动召回请求会透传 `contextType`、`sourceTypes` 和关键 entity hints，避免把语义相似但来源/任务不兼容的记忆误召回。
 - 被动召回请求只发送规范化后的 `http/https` 页面 URL：会去掉追踪参数、账号密码和 hash，查询参数稳定排序；如果 URL 带 `access_token`、OAuth `code`、session、密码、OTP 等敏感查询参数，会直接跳过分析和召回。
 - 对 RingCentral 消息页使用会话级上下文，而不是整页 body。
 - 按上下文 key 缓存召回结果，TTL 为 5 分钟，并会清理过期/超量缓存，避免长时间 SPA 会话保留过多旧提示。
 - 用户关闭某个提示后，当前上下文在 30 分钟内不会反复弹出。
-- 用户可从卡片内将当前站点暂停提示 24 小时，状态存入扩展本地 storage；内容脚本会先读取站点静默状态，再发起被动召回。
+- 用户可从卡片内将当前站点暂停提示 24 小时，状态存入扩展本地 storage；内容脚本会先读取站点静默状态，再发起被动召回。设置页的 Memory Service 区域也能查看、恢复单个站点或清空全部临时静默站点。
 
 ## RingCentral 会话级探测
 
@@ -81,6 +83,7 @@ RingCentral 是 SPA，不能只按页面首次加载判断。当前实现会在 
 - 卡片内的外部来源链接只允许 `http` / `https` 协议，扩展内跳转只接受 `#/...` 记忆路由。
 - 卡片渲染会对链接属性做转义，并拒绝带空白、引号或尖括号的异常 `exploreLink`，防止历史记忆里的坏链接污染当前网页。
 - 卡片提供“此网站今天不提示”入口，用于临时降低打扰；点击后显示短暂确认，而不是只让提示突然消失。
+- Options 页提供“网页记忆提示静默站点”管理入口，用户可以看到剩余静默时间，并恢复单个站点或全部站点。
 - 卡片支持键盘打开、Tab 进入操作区、Escape 收起；关闭当前提示时会给出短暂确认；窄屏下会限制宽度不越界，并尊重 `prefers-reduced-motion`。
 
 这个设计偏向 ambient notification：提示要容易被看到，但不应抢占用户当前任务。
@@ -96,6 +99,7 @@ RingCentral 是 SPA，不能只按页面首次加载判断。当前实现会在 
 - `primaryText`
 - `secondaryTexts`
 - `entityHints`
+- `sourceTypes`
 - `scope`
 - `limit`
 
@@ -128,14 +132,36 @@ RingCentral 是 SPA，不能只按页面首次加载判断。当前实现会在 
 
 ## 已知边界
 
-- 站点适配器还没有抽象出来，RingCentral 特化逻辑仍在 `contentScriptWebIntelligence.ts` 内。
 - 普通网页的 snippet 仍是通用主内容抽取，对复杂应用页面不一定准确。
-- 目前有 24 小时站点暂停和隐私场景自动跳过，但还没有全局可管理的“关闭此站点记忆提示”设置页。
+- 目前有 24 小时站点暂停和设置页恢复入口，但还没有永久站点 allow/deny 列表。
 - 内容脚本已有 helper 级验证和浏览器脚本验证，仍缺常驻的完整站点适配器测试矩阵。
 
 ## 后续方向
 
-1. 抽出 `SiteContextAdapter`，把 Generic / RingCentral / Jira / Google Docs 的上下文提取分离。
-2. 增加站点级静默设置，尤其是隐私敏感页面。
-3. 在 context recall 结果里展示更明确的来源类型和时间。
-4. 为内容脚本增加可复用的浏览器端测试 harness，覆盖 SPA 切换、关闭提示和跳转链接。
+1. 增加永久站点级 allow/deny 设置，尤其是隐私敏感页面。
+2. 在 context recall 结果里展示更明确的来源类型和时间。
+3. 为内容脚本增加可复用的浏览器端测试 harness，覆盖 SPA 切换、关闭提示和跳转链接。
+
+## 与 Context Assist 的关系
+
+`Memory Composer Guard` 已纳入 `Context Assist / 情境助理`，不再作为独立 progressing 方案推进。它和 `webpage_memory_detection` 共享页面上下文探测、敏感场景跳过、SPA 切换清理和 memory-service recall 能力。
+
+当前分层：
+
+| 层 | 职责 | 当前来源 |
+|---|---|---|
+| `SiteContextAdapter` | 判断站点、构造页面/会话 snapshot、生成 context key | `src/composer-guard/siteContextAdapters.ts` |
+| `RingCentralMessageAdapter` | 提取 conversation id、标题、可见消息、thread root、composer | `src/composer-guard/siteContextAdapters.ts` + `message-reaction/SnoozeManager.ts` |
+| `ContextRecallController` | 根据 snapshot 调 `/context-recall`、缓存、处理敏感场景和站点静默 | `contentScriptWebIntelligence.ts` |
+| `AmbientMemoryBubble` | 右下角相关记忆提示 | 当前 `.pai-context-bubble` / `.pai-context-card` |
+| `ComposerGuardController` | 监听输入框 focus/draft、调用 `/composer/assist`、显示输入框旁 chip | `src/composer-guard/*` |
+| `ContextAssistService` | 统一会前准备与写作护航的 cue cards / evidence 编排 | `memory-service/src/core/ContextAssistService.ts` |
+
+RingCentral 的上下文策略应保持一致：
+
+- 会话切换时，仍以 URL 中的 `conversationId`、标题、可见消息 id、文本签名构造 context key。
+- 浏览器端只读取可见消息，默认最近 6 条；不滚动虚拟列表抓完整历史。
+- Composer Guard 若需要更多历史，应让 memory-service 按 `group_id`、`source_url`、`metadata_json.postId` 从 `messages_raw` 补水。
+- thread reply 必须读取 thread 原帖；若原帖不在 DOM 中，传 `threadRootPostId` / `chainId` 给后端补水。
+
+这样 `webpage_memory_detection` 继续负责“当前页面有相关记忆”的 ambient 提醒，`Context Assist` 负责“当前草稿/会议发生前是否漏了关键记忆”的场景化提示。完整功能文档见 [`context_assist.md`](./context_assist.md)。

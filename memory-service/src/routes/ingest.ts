@@ -22,7 +22,7 @@ const ingestBodySchema = {
     source: { type: 'string' as const, minLength: 1 },
     sourceType: {
       type: 'string' as const,
-      enum: ['glip', 'jira', 'web', 'manual', 'system', 'meeting'],
+      enum: ['glip', 'jira', 'web', 'manual', 'system', 'meeting', 'calendar'],
     },
     sender: { type: 'string' as const },
     groupId: { type: 'string' as const },

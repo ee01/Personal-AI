@@ -23,7 +23,7 @@ const fixtureHtml = `<!doctype html>
       <span id="type-val">Story</span>
       <div id="description-val">
         Please inspect
-        <a href="https://www.figma.com/design/abc123/Spec?node-id=1-2">the design</a>
+        <a href="https://www.figma.com/design/abc123/Spec?node-id=1-2">Checkout mobile handoff</a>
         and the pasted URL https://www.figma.com/design/abc123/Spec?node-id=1-2).
         The workshop board is https://miro.com/app/board/uXjVdemo.
         Ignore https://notfigma.com/design/abc.
@@ -82,7 +82,7 @@ try {
             url: 'https://www.figma.com/proto/remote123/Checkout',
             status: {
               icon: {
-                title: 'Ready for dev',
+                title: 'ready_for_development',
               },
             },
           },
@@ -93,7 +93,7 @@ try {
             url: 'https://www.loom.com/share/notready123',
             status: {
               icon: {
-                title: 'Not ready for dev',
+                title: 'not_ready_for_dev',
               },
             },
           },
@@ -119,7 +119,7 @@ try {
             url: 'https://www.figma.com/proto/remote123/Checkout',
             status: {
               icon: {
-                title: 'Ready for dev',
+                title: 'ready_for_development',
               },
             },
           },
@@ -196,25 +196,25 @@ try {
   await page.waitForSelector('.design-links-container', { timeout: 10000 });
 
   const itemTexts = await page.locator('.design-link-item').allTextContents();
+  assert.equal(await page.locator('.design-links-header').count(), 0, 'design panel should not render a persistent header');
   assert.equal(itemTexts.length, 6, 'description, remote, and missing UX design rows should render once each');
-  assert.match(itemTexts[0], /Figma Prototype/);
-  assert.doesNotMatch(itemTexts[0], /Ready checkout prototype/);
+  assert.match(itemTexts[0], /Ready checkout prototype/);
   assert.match(itemTexts[0], /UX-100/);
-  assert.match(itemTexts[0], /Ready for dev/);
+  assert.match(itemTexts[0], /Ready for development/);
   assert.match(itemTexts[0], /Cancelled/);
   assert.match(itemTexts[0], /Linked issue/);
   assert.match(itemTexts[0], /Remote link/);
   assert.equal((itemTexts[0].match(/UX-100/g) || []).length, 1, 'UX epic key should not render twice');
   assert.match(itemTexts[1], /UX-200/);
   assert.doesNotMatch(itemTexts[1], /Design link missing/);
-  assert.match(itemTexts[1], /Missing design spec/);
+  assert.doesNotMatch(itemTexts[1], /Missing design spec/);
   assert.match(itemTexts[1], /Missing link/);
   assert.match(itemTexts[2], /UXDES-300/);
-  assert.match(itemTexts[2], /Shared UXDES spec/);
+  assert.doesNotMatch(itemTexts[2], /Shared UXDES spec/);
   assert.match(itemTexts[2], /Missing link/);
   assert.match(itemTexts[3], /Draft onboarding walkthrough/);
   assert.match(itemTexts[3], /Not ready for dev/);
-  assert.match(itemTexts[4], /Figma Design/);
+  assert.match(itemTexts[4], /Checkout mobile handoff/);
   assert.match(itemTexts[4], /Description/);
   assert.match(itemTexts[5], /Miro board/);
 
@@ -240,20 +240,45 @@ try {
   });
   assert.equal(transform, 'none', 'design links panel should not shift page content');
 
-  const beforeHoverBox = await page.locator('.design-links-container').boundingBox();
-  assert.ok(beforeHoverBox, 'design links panel should have a bounding box before hover');
-  await page.hover('.design-links-container');
-  const hoverTransform = await page.locator('.design-links-container').evaluate(element => {
-    return getComputedStyle(element).transform;
+  const footerBeforeHover = await page.locator('.design-links-footer').evaluate(element => {
+    const styles = getComputedStyle(element);
+    return {
+      justifyContent: styles.justifyContent,
+      opacity: styles.opacity,
+      position: styles.position,
+      transform: styles.transform,
+    };
   });
-  assert.equal(hoverTransform, 'none', 'design links panel should stay stable on hover');
-  const afterHoverBox = await page.locator('.design-links-container').boundingBox();
-  assert.ok(afterHoverBox, 'design links panel should have a bounding box after hover');
-  assert.equal(
-    Math.round(afterHoverBox.y),
-    Math.round(beforeHoverBox.y),
-    'design links panel should not move vertically on hover',
-  );
+  assert.equal(footerBeforeHover.justifyContent, 'space-between');
+  assert.equal(footerBeforeHover.opacity, '0');
+  assert.equal(footerBeforeHover.position, 'absolute');
+  assert.notEqual(footerBeforeHover.transform, 'none');
+
+  await page.hover('.design-links-container');
+  await page.waitForFunction(() => {
+    const footer = document.querySelector('.design-links-footer');
+    return footer && getComputedStyle(footer).opacity === '1';
+  }, null, { timeout: 2000 });
+  const footerAfterHover = await page.locator('.design-links-footer').evaluate(element => {
+    const styles = getComputedStyle(element);
+    return {
+      opacity: styles.opacity,
+      transform: styles.transform,
+    };
+  });
+  assert.equal(footerAfterHover.opacity, '1');
+  assert.match(footerAfterHover.transform, /^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
+
+  await page.evaluate(() => {
+    history.pushState({}, '', '/issues/?jql=project%20%3D%20ABC');
+    const marker = document.createElement('span');
+    marker.setAttribute('data-navigation-marker', 'non-ticket');
+    document.body.appendChild(marker);
+  });
+  await page.waitForFunction(() => !document.querySelector('.design-links-container'), null, { timeout: 10000 });
+
+  await page.goto('https://jira.ringcentral.com/browse/ABC-123');
+  await page.waitForSelector('.design-links-container', { timeout: 10000 });
 
   await page.evaluate(() => {
     history.pushState({}, '', '/browse/DEF-456');

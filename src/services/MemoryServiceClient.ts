@@ -27,7 +27,14 @@ export interface MemoryServiceConfig {
 
 export interface IngestPayload {
   content: string;
-  sourceType: 'glip' | 'jira' | 'web' | 'manual' | 'system' | 'meeting';
+  sourceType:
+    | 'glip'
+    | 'jira'
+    | 'web'
+    | 'manual'
+    | 'system'
+    | 'meeting'
+    | 'calendar';
   sender?: string;
   groupId?: string;
   groupName?: string;
@@ -202,6 +209,63 @@ export type RecallBlock =
       payload: { items: RecallMediaItem[] };
     };
 
+export type DecisionEvidenceChainType =
+  | 'why_decided'
+  | 'what_changed'
+  | 'decision_status'
+  | 'who_committed'
+  | 'tradeoff_history'
+  | 'not_a_decision';
+
+export interface DecisionEvidenceRef {
+  sourceType: string;
+  sourceId: string;
+  timestamp?: number;
+  speakerOrActor?: string;
+  stance: 'supports' | 'contradicts' | 'background' | 'open_question';
+  snippet: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  exploreLink?: string;
+  score?: number;
+}
+
+export interface DecisionEvidenceChainPayload {
+  question: string;
+  decisionDetected: boolean;
+  chainType: DecisionEvidenceChainType;
+  answerSummary: string;
+  decisionStatement?: string;
+  then?: {
+    knownAt?: number;
+    conclusion: string;
+    rationale: string[];
+    assumptions: string[];
+    evidenceRefs: DecisionEvidenceRef[];
+  };
+  now?: {
+    checkedAt: number;
+    stillValid: string[];
+    changed: string[];
+    contradictedBy: DecisionEvidenceRef[];
+    missingEvidence: string[];
+  };
+  confidence: number;
+  saveCandidate?: {
+    suggestedTitle: string;
+    reasonToSave: string;
+    defaultStatus: 'candidate' | 'active' | 'revisit_needed';
+  };
+}
+
+export type AskBlock =
+  | RecallBlock
+  | {
+      type: 'decision_evidence_chain';
+      title?: string;
+      payload: DecisionEvidenceChainPayload;
+    };
+
 export interface RecallAnalysis {
   summary: string;
   keyFindings?: string[];
@@ -217,7 +281,9 @@ export type ContextRecallSurface =
   | 'web_passive'
   | 'meeting_passive'
   | 'popup_passive'
-  | 'follow_thread';
+  | 'follow_thread'
+  | 'meeting_prep'
+  | 'composer_guard';
 
 export type ContextRecallContextType =
   | 'webpage'
@@ -345,6 +411,123 @@ export interface ComposerAssistResponse {
   debug?: Record<string, unknown>;
 }
 
+export type ContextAssistSurface = 'meeting_prep' | 'composer_guard';
+
+export type ContextAssistContextType =
+  | 'meeting'
+  | 'message_thread'
+  | 'jira_issue'
+  | 'web_agent_prompt';
+
+export interface ContextAssistMeetingParticipant {
+  name?: string;
+  email?: string;
+  responseStatus?: string;
+}
+
+export interface ContextAssistMeetingEvent {
+  externalId?: string;
+  seriesKey?: string;
+  title?: string;
+  descriptionPreview?: string;
+  startTime?: number;
+  endTime?: number;
+  organizer?: ContextAssistMeetingParticipant;
+  attendees?: ContextAssistMeetingParticipant[];
+  location?: string;
+  joinUrl?: string;
+  sourceUrl?: string;
+  cancelled?: boolean;
+  lastModifiedTime?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ContextAssistRequest {
+  surface: ContextAssistSurface;
+  contextType: ContextAssistContextType;
+  title?: string;
+  url?: string;
+  userGoal?: string;
+  primaryText?: string;
+  secondaryTexts?: string[];
+  keywords?: string[];
+  entityHints?: ContextRecallEntityHint[];
+  event?: ContextAssistMeetingEvent;
+  composer?: ComposerAssistRequest;
+  sourceTypes?: string[];
+  limit?: number;
+  debug?: boolean;
+}
+
+export interface ContextAssistCueCard {
+  id: string;
+  kind: 'brief' | 'memory' | 'question' | 'action';
+  title: string;
+  body: string;
+  evidenceIds?: string[];
+}
+
+export interface ContextAssistResponse {
+  available: boolean;
+  surface: ContextAssistSurface;
+  suggestionType:
+    | 'none'
+    | 'meeting_brief'
+    | ComposerAssistResponse['suggestionType'];
+  title?: string;
+  summary?: string;
+  insertText?: string;
+  cueCards: ContextAssistCueCard[];
+  evidence: ComposerAssistEvidence[];
+  riskLevel: 'low' | 'medium' | 'high';
+  previewRequired: boolean;
+  confidence: number;
+  queryTimeMs: number;
+  debug?: Record<string, unknown>;
+}
+
+export type CalendarEventSourceSystem = 'outlook' | 'ringcentral_indexeddb';
+
+export interface CalendarEventSyncParticipant {
+  name?: string;
+  email?: string;
+  responseStatus?: string;
+}
+
+export interface CalendarEventSyncItem {
+  externalId: string;
+  seriesKey?: string;
+  title: string;
+  descriptionPreview?: string;
+  startTime: number;
+  endTime?: number;
+  organizer?: CalendarEventSyncParticipant;
+  attendees?: CalendarEventSyncParticipant[];
+  location?: string;
+  joinUrl?: string;
+  sourceUrl?: string;
+  cancelled?: boolean;
+  lastModifiedTime?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CalendarEventsSyncRequest {
+  sourceSystem: CalendarEventSourceSystem;
+  events: CalendarEventSyncItem[];
+  deletedExternalIds?: string[];
+  syncedAt?: number;
+  debug?: boolean;
+}
+
+export interface CalendarEventsSyncResponse {
+  created: number;
+  updated: number;
+  unchanged: number;
+  cancelled: number;
+  deleted: number;
+  total: number;
+}
+
 export interface MeetingRecord {
   meetingId: string;
   title: string;
@@ -425,7 +608,7 @@ export interface AskResponse {
     confidence?: number;
   };
   /** Structured UI blocks built from the recalled evidence. */
-  blocks?: RecallBlock[];
+  blocks?: AskBlock[];
   /** Higher-level synthesis derived from the recalled evidence. */
   analysis?: RecallAnalysis;
 }
@@ -1745,6 +1928,20 @@ export class MemoryServiceClient {
   }
 
   /**
+   * Context Assist — shared orchestration for meeting prep and Composer Guard.
+   * The backend still reuses context-recall/recall for retrieval.
+   */
+  async contextAssist(
+    request: ContextAssistRequest,
+  ): Promise<ContextAssistResponse> {
+    return this.request<ContextAssistResponse>(
+      'POST',
+      '/context-assist',
+      request,
+    );
+  }
+
+  /**
    * Composer Guard assist — returns user-approved insertion text for the
    * currently focused message/comment/prompt composer. The backend stays on the
    * evidence-only fast path for v1 and never sends on the user's behalf.
@@ -1755,6 +1952,16 @@ export class MemoryServiceClient {
     return this.request<ComposerAssistResponse>(
       'POST',
       '/composer/assist',
+      request,
+    );
+  }
+
+  async syncCalendarEvents(
+    request: CalendarEventsSyncRequest,
+  ): Promise<CalendarEventsSyncResponse> {
+    return this.request<CalendarEventsSyncResponse>(
+      'POST',
+      '/calendar-events/sync',
       request,
     );
   }

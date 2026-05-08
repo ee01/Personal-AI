@@ -10,8 +10,13 @@ import {
   useMemoryStore,
 } from '../src/modals/memory-store.ts';
 import {
+  filterTopicConversationsByReadState,
   findTopicConversationByMessageId,
+  getTopicConversationUnreadMessageCount,
+  getTopicConversationUnreadCount,
   getTopicDetailRecentData,
+  isTopicConversationUnread,
+  sortTopicConversationsForTriage,
   topicConversationHasContextMatch,
   topicConversationMatchesQuery,
 } from '../src/modals/topic-detail-data.ts';
@@ -268,6 +273,99 @@ async function verifySingleConversationReadCanUndo() {
     );
   }
   assert.equal(store.conversationReadUndo, null);
+}
+
+async function verifyConversationReadSyncsContextMessageState() {
+  const store = createStore();
+  const topic = {
+    ...createTopic(),
+    readStatus: {
+      isRead: false,
+      unreadCount: 1,
+      lastReadTime: null,
+      lastUpdateTime: 1000,
+    },
+    unreadDiscussions: [{ messageId: 'ctx-msg-1', text: 'Nested unread' }],
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'msg-1',
+          isRead: true,
+          summary: 'Parent already read',
+          contextMessages: [
+            { id: 'ctx-msg-1', isRead: false, content: 'Nested unread' },
+            {
+              id: 'ctx-msg-2',
+              isRead: true,
+              readTimestamp: 123,
+              content: 'Nested read',
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  store.entities = [topic] as any;
+  store.topicDetailData = topic as any;
+
+  await store.markConversationAsRead('topic-alpha', 'ctx-msg-1');
+
+  const [conversation] = topic.recentDataDetails.conversations;
+  assert.equal(topic.readStatus.unreadCount, 0);
+  assert.equal(conversation.isRead, true);
+  assert.equal(conversation.contextMessages[0].isRead, true);
+  assert.equal(typeof conversation.contextMessages[0].readTimestamp, 'number');
+  assert.equal(conversation.contextMessages[1].readTimestamp, 123);
+
+  const didUndo = await store.undoLastConversationRead();
+
+  assert.equal(didUndo, true);
+  assert.equal(topic.readStatus.unreadCount, 1);
+  assert.equal(conversation.isRead, true);
+  assert.equal(conversation.contextMessages[0].isRead, false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      conversation.contextMessages[0],
+      'readTimestamp',
+    ),
+    false,
+  );
+  assert.equal(conversation.contextMessages[1].readTimestamp, 123);
+}
+
+async function verifyTopicWithoutReadStatusCountsUnreadContextMessages() {
+  const store = createStore();
+  const topic: any = {
+    id: 'topic-context-only',
+    name: 'Topic Context Only',
+    type: 'Topic',
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'msg-context-only',
+          isRead: true,
+          summary: 'Parent read with unread context',
+          contextMessages: [
+            { id: 'ctx-context-only', isRead: false, content: 'Need review' },
+          ],
+        },
+      ],
+    },
+  };
+
+  store.entities = [topic] as any;
+  store.topicDetailData = topic as any;
+
+  await store.markConversationAsRead('topic-context-only', 'ctx-context-only');
+
+  assert.equal(topic.readStatus.unreadCount, 0);
+  assert.equal(topic.readStatus.isRead, true);
+  assert.equal(
+    topic.recentDataDetails.conversations[0].contextMessages[0].isRead,
+    true,
+  );
+  assert.equal(store.getUnreadTopics().length, 0);
 }
 
 async function verifySingleConversationReadCountsMultipleBoundPreviews() {
@@ -535,6 +633,54 @@ function verifyTopicConversationSearchCoversContextAndSource() {
   assert.equal(topicConversationMatchesQuery(conversation, 'unrelated'), false);
 }
 
+function verifyTopicConversationReadTriageIncludesContextMessages() {
+  const conversations = [
+    {
+      id: 'conv-read',
+      isRead: true,
+      summary: 'Already read',
+      contextMessages: [{ id: 'ctx-read', isRead: true }],
+    },
+    {
+      id: 'conv-context-unread',
+      isRead: true,
+      summary: 'Parent read but nested unread',
+      contextMessages: [{ id: 'ctx-unread', isRead: false }],
+    },
+    {
+      id: 'conv-parent-unread',
+      isRead: false,
+      summary: 'Parent unread',
+      contextMessages: [{ id: 'ctx-parent', isRead: true }],
+    },
+  ];
+
+  assert.equal(isTopicConversationUnread(conversations[0]), false);
+  assert.equal(isTopicConversationUnread(conversations[1]), true);
+  assert.equal(isTopicConversationUnread(conversations[2]), true);
+  assert.equal(getTopicConversationUnreadMessageCount(conversations[1]), 1);
+  assert.equal(getTopicConversationUnreadMessageCount(conversations[2]), 1);
+  assert.equal(getTopicConversationUnreadCount(conversations), 2);
+  assert.deepEqual(
+    filterTopicConversationsByReadState(conversations, 'unread').map(
+      (conversation) => conversation.id,
+    ),
+    ['conv-context-unread', 'conv-parent-unread'],
+  );
+  assert.deepEqual(
+    filterTopicConversationsByReadState(conversations, 'read').map(
+      (conversation) => conversation.id,
+    ),
+    ['conv-read'],
+  );
+  assert.deepEqual(
+    sortTopicConversationsForTriage(conversations).map(
+      (conversation) => conversation.id,
+    ),
+    ['conv-context-unread', 'conv-parent-unread', 'conv-read'],
+  );
+}
+
 function verifyTopicDeferPresetOptions() {
   const fridayMorning = new Date(2026, 4, 1, 10, 15, 0, 0).getTime();
   const options = getTopicDeferPresetOptions(fridayMorning);
@@ -597,6 +743,18 @@ function verifyTopicDetailHasNoDeadMutationControls() {
   assert.equal(source.includes('class="item-action"'), false);
 }
 
+function verifyTopicDetailUsesSafeTraceableLinks() {
+  const source = readFileSync(
+    new URL('../src/modals/components/TopicDetailPage.vue', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /getSafeExternalUrl/);
+  assert.match(source, /class="webpage-open-link"/);
+  assert.match(source, /target="_blank"/);
+  assert.match(source, /rel="noreferrer"/);
+}
+
 function verifyTopicMuteUiIsReachable() {
   const overviewSource = readFileSync(
     new URL('../src/modals/components/OverviewPage.vue', import.meta.url),
@@ -613,6 +771,20 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(listSource, /取消静音/);
 }
 
+function verifyTopicDetailUnreadTriageUiIsReachable() {
+  const source = readFileSync(
+    new URL('../src/modals/components/TopicDetailPage.vue', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /conversationUnreadCount/);
+  assert.match(source, /convReadFilter/);
+  assert.match(source, /getConversationContextLabel/);
+  assert.match(source, /仅未读/);
+  assert.match(source, /isConversationUnread\(conv\)/);
+  assert.match(source, /isContextMessageUnread\(contextMsg\)/);
+}
+
 async function main() {
   await verifyWholeTopicReadSyncsListAndDetail();
   await verifyWholeTopicReadCanUndo();
@@ -622,6 +794,8 @@ async function main() {
   await verifySingleConversationReadSkipsUnmatchedListTopic();
   await verifySingleConversationReadSyncsBoundPreviewWithoutConversation();
   await verifySingleConversationReadCanUndo();
+  await verifyConversationReadSyncsContextMessageState();
+  await verifyTopicWithoutReadStatusCountsUnreadContextMessages();
   await verifySingleConversationReadCountsMultipleBoundPreviews();
   await verifySingleConversationReadWithoutReadStatusUsesInferredCount();
   await verifyDeferredTopicLeavesUnreadQueueWithoutReading();
@@ -631,10 +805,13 @@ async function main() {
   verifyTopicDetailLegacyDataFallback();
   verifyTopicDetailHighlightEscapesHtml();
   verifyTopicConversationSearchCoversContextAndSource();
+  verifyTopicConversationReadTriageIncludesContextMessages();
   verifyTopicDeferPresetOptions();
   verifyTopicMutePresetOptions();
   verifyTopicDetailHasNoDeadMutationControls();
+  verifyTopicDetailUsesSafeTraceableLinks();
   verifyTopicMuteUiIsReachable();
+  verifyTopicDetailUnreadTriageUiIsReachable();
 
   console.log('verify-topic-based-messages: ok');
 }

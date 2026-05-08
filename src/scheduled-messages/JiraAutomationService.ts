@@ -8,7 +8,7 @@ import timelineSyncRuleTemplate from './jira-timeline-sync-rule-template.json';
 import { getEnvConfig } from '../utils';
 import { getJiraToken, jiraFetch } from '../jira';
 import { buildTimelineSyncComponentsFragment } from './timelineProjects';
-import { BotAutomationConfig, BotAutomationRule } from './types';
+import { BotAutomationConfig, BotAutomationRule, RingCentralSenderConfig } from './types';
 import { formatLocalScheduleDate } from './scheduleDateTime';
 import { redactJiraRulePayloadForLog } from './jiraRulePayloadSafety';
 
@@ -25,6 +25,7 @@ export interface JiraAutomationConfig {
   jiraUrl: string;  // Jira 实例 URL，如 https://jira.ringcentral.com
   projectKey: string;  // 项目 Key，如 MTR
   token?: string;  // Personal Access Token (可选，用于认证)
+  ringCentralSender?: RingCentralSenderConfig;
 }
 
 // Jira 规则完整对象（从 API 返回）
@@ -56,6 +57,68 @@ interface CreateRuleContext {
   webAppUrl: string;
   userEmail: string;
   envConfig: Awaited<ReturnType<typeof getEnvConfig>>;
+}
+
+function escapeJsonStringValue(value?: string): string {
+  return JSON.stringify(value || '').slice(1, -1);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function hasRingCentralSenderCredentials(sender?: RingCentralSenderConfig): boolean {
+  return Boolean(sender?.enabled && sender.clientId && sender.clientSecret && sender.jwt);
+}
+
+function getRingCentralSenderReplacements(
+  sender: RingCentralSenderConfig | undefined,
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>
+): Record<string, string> {
+  if (!hasRingCentralSenderCredentials(sender)) {
+    return {
+      '{{RINGCENTRAL_SENDER_DIFY_API_BASE_URL}}': trimTrailingSlash(
+        envConfig.RINGCENTRAL_SENDER_DIFY_API_BASE_URL || 'https://dify.int.rclabenv.com/v1'
+      ),
+      '{{RINGCENTRAL_SENDER_DIFY_API_KEY}}': '',
+      '{{RINGCENTRAL_SENDER_CLIENT_ID}}': '',
+      '{{RINGCENTRAL_SENDER_CLIENT_SECRET}}': '',
+      '{{RINGCENTRAL_SENDER_JWT}}': '',
+    };
+  }
+
+  const difyBaseUrl = trimTrailingSlash(envConfig.RINGCENTRAL_SENDER_DIFY_API_BASE_URL || '');
+  const difyApiKey = envConfig.RINGCENTRAL_SENDER_DIFY_API_KEY || '';
+
+  if (!difyBaseUrl || !difyApiKey) {
+    throw new Error('RingCentral AsMe sender 已启用，但缺少 RINGCENTRAL_SENDER_DIFY_API_BASE_URL 或 RINGCENTRAL_SENDER_DIFY_API_KEY。');
+  }
+
+  return {
+    '{{RINGCENTRAL_SENDER_DIFY_API_BASE_URL}}': difyBaseUrl,
+    '{{RINGCENTRAL_SENDER_DIFY_API_KEY}}': difyApiKey,
+    '{{RINGCENTRAL_SENDER_CLIENT_ID}}': sender!.clientId || '',
+    '{{RINGCENTRAL_SENDER_CLIENT_SECRET}}': sender!.clientSecret || '',
+    '{{RINGCENTRAL_SENDER_JWT}}': sender!.jwt || '',
+  };
+}
+
+function replaceRingCentralSenderPlaceholders(
+  templateString: string,
+  sender: RingCentralSenderConfig | undefined,
+  envConfig: Awaited<ReturnType<typeof getEnvConfig>>
+): string {
+  let result = templateString;
+  const replacements = getRingCentralSenderReplacements(sender, envConfig);
+
+  for (const [placeholder, value] of Object.entries(replacements)) {
+    result = result.replace(
+      new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'),
+      () => escapeJsonStringValue(value)
+    );
+  }
+
+  return result;
 }
 
 export class JiraAutomationService {
@@ -225,7 +288,7 @@ export class JiraAutomationService {
       : context.ruleNameBase;
 
     // 必须先替换 TIMELINE_SYNC_COMPONENTS，再替换 WEB_APP_URL（后者存在于 fragment 中）
-    return templateString
+    const payloadString = templateString
       .replace(/{{RULE_NAME}}/g, ruleName)
       .replace(/{{RULE_VERSION}}/g, this.getRuleVersion(kind))
       .replace(/"{{TIMELINE_SYNC_COMPONENTS}}"/g, buildTimelineSyncComponentsFragment())
@@ -237,6 +300,8 @@ export class JiraAutomationService {
       .replace(/{{PROJECT_KEY}}/g, config.projectKey)
       .replace(/{{PROJECT_ID}}/g, context.projectId)
       .replace(/{{USER_KEY}}/g, context.userKey);
+
+    return replaceRingCentralSenderPlaceholders(payloadString, config.ringCentralSender, context.envConfig);
   }
 
   private async createRuleFromTemplate(

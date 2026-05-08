@@ -38,7 +38,8 @@
     "verify:google-slides-analyzer:e2e": "node tools/verify-google-slides-analyzer-e2e.mjs",
     "verify:jira-design-links": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-jira-design-links.ts",
     "verify:jira-design-links:e2e": "node tools/verify-jira-design-links-e2e.mjs",
-    "verify:agent-workflow-replay": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-agent-workflow-replay.ts"
+    "verify:agent-workflow-replay": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-agent-workflow-replay.ts",
+    "verify:agent-workflow": "npm run verify:agent-workflow-replay && TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-agent-workflow-diagnostics.ts && TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-workflow.ts"
   },
   "type": "module",
   "license": "MIT",
