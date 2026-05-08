@@ -66,6 +66,15 @@ const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Question',
 ]);
 
+function normalizeExecutorTargetType(message: Partial<ScheduledMessage>): void {
+  if (
+    message.Push_Method === 'AI' ||
+    (message.Push_Method === 'JiraAutomation' && Boolean(message.AI_Endpoint))
+  ) {
+    message.Target_Type = 'api';
+  }
+}
+
 export class ScheduledMessageService {
   private token: string;
   private config: SheetConfig | null = null;
@@ -232,6 +241,7 @@ export class ScheduledMessageService {
       Exec_Count: 0,
       Exec_Log: '待执行'
     };
+    normalizeExecutorTargetType(message);
     
     // 自动判断类型
     message.Type = this.determineMessageType(message);
@@ -258,6 +268,7 @@ export class ScheduledMessageService {
     }
     
     const updatedMessage = { ...messages[index], ...updates };
+    normalizeExecutorTargetType(updatedMessage);
     
     // 重新计算下次执行时间
     if (
@@ -442,6 +453,7 @@ export class ScheduledMessageService {
     if (!message.Target_Type && message.Outreach_Target_Type) {
       message.Target_Type = message.Outreach_Target_Type;
     }
+    normalizeExecutorTargetType(message);
 
     if (!message.Outreach_Result && message.Outreach_Last_Result) {
       message.Outreach_Result = message.Outreach_Last_Result;
