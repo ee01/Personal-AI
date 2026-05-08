@@ -2049,14 +2049,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function getUserInfoInRCTab() {
   const accountUD = getLocalStorageItem('global.account.UD', '');
-  const accountInfoList = getLocalStorageItem(
+  const accountSessionData = getLocalStorageItem(
     'global.account.ACCOUNT_SESSION_DATA_LIST',
-    {},
+    [],
   );
+  const accountInfoList = Array.isArray(accountSessionData)
+    ? accountSessionData
+    : Object.values(accountSessionData || {});
 
   const accountInfo = accountUD
-    ? accountInfoList[accountUD]
-    : accountInfoList.find((item: any) => item.displayName != '');
+    ? Array.isArray(accountSessionData)
+      ? accountInfoList.find(
+          (item: any) =>
+            String(item?.accountId || item?.id || item?.extensionId || '') ===
+            String(accountUD),
+        )
+      : accountSessionData[accountUD]
+    : accountInfoList.find((item: any) => item?.displayName != '');
   console.log('accountInfoList', accountInfoList, accountInfo);
   if (accountInfo)
     return {

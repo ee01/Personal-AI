@@ -26,6 +26,8 @@
     "clean": "rm -rf dist/* && rm personal-ai.zip",
     "verify:project-report": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-project-report.ts",
     "verify:memory-backup": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-backup.ts",
+    "verify:message-reaction": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/message-reaction/__tests__/*.test.ts",
+    "verify:message-reaction:e2e": "npm --prefix desktop-app run test:message-reaction-toolbar",
     "verify:topic-based-messages": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-topic-based-messages.ts",
     "verify:appscript-auto-update": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-appscript-auto-update.ts",
     "verify:digest-queue-service": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-digest-queue-service.ts",
