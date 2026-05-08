@@ -329,6 +329,10 @@ function matchesProjectFilter(
   );
 }
 
+function getRecallCandidateKey(candidate: RecallAccessTarget): string {
+  return `${candidate.type}:${candidate.id}`;
+}
+
 // ---------------------------------------------------------------------------
 // RecallEngine
 // ---------------------------------------------------------------------------
@@ -958,7 +962,7 @@ export class RecallEngine {
   // =========================================================================
 
   /**
-   * Merge candidates from all channels. When duplicates exist (same id),
+   * Merge candidates from all channels. When duplicates exist (same type + id),
    * keep the highest score and accumulate channel attributions.
    */
   private mergeAndDeduplicate(
@@ -967,9 +971,10 @@ export class RecallEngine {
     const map = new Map<string, RecallCandidate>();
 
     for (const c of candidates) {
-      const existing = map.get(c.id);
+      const candidateKey = getRecallCandidateKey(c);
+      const existing = map.get(candidateKey);
       if (!existing) {
-        map.set(c.id, { ...c, channels: [...c.channels] });
+        map.set(candidateKey, { ...c, channels: [...c.channels] });
       } else {
         // Merge channels
         for (const ch of c.channels) {
@@ -1060,16 +1065,19 @@ export class RecallEngine {
     // Compute composite relevance for each candidate
     const relevanceMap = new Map<string, number>();
     for (const c of candidates) {
+      const candidateKey = getRecallCandidateKey(c);
       const recency = c.recencyScore ?? 0;
       const salience = c.salienceScore ?? 0;
       const relevance =
         c.score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience;
-      relevanceMap.set(c.id, relevance);
+      relevanceMap.set(candidateKey, relevance);
     }
 
     const selected: RecallCandidate[] = [];
-    const remaining = new Set(candidates.map((c) => c.id));
-    const candidateMap = new Map(candidates.map((c) => [c.id, c]));
+    const remaining = new Set(candidates.map(getRecallCandidateKey));
+    const candidateMap = new Map(
+      candidates.map((c) => [getRecallCandidateKey(c), c]),
+    );
     const textTokenCache = new Map<string, Set<string>>();
     const getTextTokens = (candidate: RecallCandidate) => {
       const cacheKey = `${candidate.type}:${candidate.id}`;

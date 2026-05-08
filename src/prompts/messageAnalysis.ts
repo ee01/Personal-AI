@@ -87,6 +87,7 @@ ${envConfig.ANALYZE_BY_GROUP ? '针对消息内容' : '让我们来一个一个�
     - user_relation_type: 与我的关系类型（mention_me/mention_team/project_related/policy_related/person_tracking/general_interest）
     - thread_context: 如果消息属于某个 <thread>，记录该线程的 root_id；如果是 standalone 但判断为隐式回复，也记录相关的 thread root_id
     - follow_thread_info: 【仅当匹配"关注后续讨论"规则时填写】记录与原消息的关系类型
+    - confidence: 规则匹配置信度，必须是 0-1 之间的小数；例如 0.86，不要返回 86 或 "86%"
 ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任务后，继续下一个 <message_group>。'}
 
 ## 输出格式
@@ -109,6 +110,7 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
             "root_id": "{所属线程的根消息ID}",
             "is_implicit_reply": false
         },
+        "confidence": 0.86,
         "follow_thread_info": {  // 仅当匹配"关注后续讨论"规则时填写
             "original_post_id": "{被关注的原消息post_id}",
             "relation_type": "direct_reply|same_thread|semantic_related|mention",
@@ -149,7 +151,8 @@ ${envConfig.ANALYZE_BY_GROUP ? '' : '结束当前 <message_group> 的三步任�
     4. matched_rule_refs 必须优先返回稳定字符串数组，如 ["manual:topic-1", "outreach:session-1"]
     5. matched_rule_ids 只是兼容字段；只有手动规则带了 [RULE_ID:X] 时才返回，如 [0, 2]
     6. 对于"关注后续讨论"规则，务必填写 follow_thread_info 字段
-    7. actions 数组：如果没有任务则为空数组 []，有任务时必须包含 id, summary, priority, deadline, status, assignee 字段
+    7. confidence 必须返回 0-1 小数；如果只能判断高/中/低，请分别换算为 0.9/0.7/0.4
+    8. actions 数组：如果没有任务则为空数组 []，有任务时必须包含 id, summary, priority, deadline, status, assignee 字段
 `.trim();
 }
 

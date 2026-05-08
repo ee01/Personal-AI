@@ -1149,6 +1149,176 @@ export interface OutreachTemplateRuntimeStatusResponse {
   total: number;
 }
 
+export type PersonalSkillStatus = 'suggestion' | 'active' | 'dismissed';
+export type PersonalSkillRisk = 'low' | 'medium' | 'high';
+export type PersonalSkillScope = 'work' | 'personal' | 'ai';
+export type SkillBindingState =
+  | 'installed'
+  | 'outdated'
+  | 'not_installed'
+  | 'blocked'
+  | 'unknown';
+export type SkillPlatformCapability =
+  | 'internal'
+  | 'api'
+  | 'fs_via_desktop_app'
+  | 'manual_only';
+
+export interface SkillWorkflowStep {
+  title: string;
+  desc?: string;
+  tools?: string[];
+}
+
+export interface SkillEvidenceRef {
+  title: string;
+  desc?: string;
+  kind?: string;
+  evidenceState?: 'complete' | 'partial' | 'manual' | 'unverified';
+  episodeId?: string | null;
+}
+
+export interface SkillSourceEpisode {
+  id: string;
+  title: string;
+  date?: string;
+}
+
+export interface SkillVersionRecord {
+  id: string;
+  skillId: string;
+  version: string;
+  isActive: boolean;
+  skillMd: string;
+  packageJson?: Record<string, unknown>;
+  workflow: SkillWorkflowStep[];
+  evidence: SkillEvidenceRef[];
+  sourceEpisodes: SkillSourceEpisode[];
+  files?: Array<{ relativePath: string; content: string; sha256?: string }>;
+  sha256: string;
+  changelog?: string;
+  createdFrom?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SkillPlatformBinding {
+  id: string;
+  skillId: string;
+  platform: string;
+  state: SkillBindingState;
+  installedVersion?: string;
+  installedSha256?: string;
+  remoteMtime?: number;
+  lastSyncedAt?: number;
+  lastError?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SkillShareInfo {
+  displayUrl: string;
+  urlPath: string;
+  token: string;
+  etag: string;
+}
+
+export interface PersonalSkillListItem {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  scope: PersonalSkillScope;
+  risk: PersonalSkillRisk;
+  trigger?: string;
+  notUse?: string;
+  status: PersonalSkillStatus;
+  owner?: string;
+  sources: string[];
+  repetition?: string;
+  riskBrief?: string;
+  suggestedFrom?: string;
+  suggestedAt?: number;
+  notifiedAt?: number;
+  snoozedUntil?: number;
+  dismissedAt?: number;
+  dismissReason?: string;
+  suggestionClusterKey?: string;
+  currentVersion?: string;
+  currentSha256?: string;
+  bindings: SkillPlatformBinding[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PersonalSkillDetail extends PersonalSkillListItem {
+  versions: SkillVersionRecord[];
+  activeVersion?: SkillVersionRecord;
+  workflow: SkillWorkflowStep[];
+  evidence: SkillEvidenceRef[];
+  sourceEpisodes: SkillSourceEpisode[];
+  share?: SkillShareInfo;
+  shareError?: string;
+}
+
+export interface PersonalSkillListResponse {
+  items: PersonalSkillListItem[];
+  total: number;
+}
+
+export interface PersonalSkillDetailResponse {
+  skill: PersonalSkillDetail;
+}
+
+export interface SkillSyncSetting {
+  platform: string;
+  enabled: boolean;
+  capability: SkillPlatformCapability;
+  mode: string;
+  config?: Record<string, unknown>;
+  lastProbeAt?: number;
+  lastError?: string;
+  updatedAt: number;
+}
+
+export interface SkillSyncSettingsResponse {
+  items: SkillSyncSetting[];
+}
+
+export interface SkillProbeResponse {
+  platform: string;
+  ok: boolean;
+  capability?: SkillPlatformCapability;
+  status?: number;
+  error?: string;
+  response?: unknown;
+}
+
+export interface SkillSyncPlatformRunResult {
+  platform: string;
+  status: 'succeeded' | 'skipped' | 'failed';
+  totalRemote?: number | null;
+  candidates?: number;
+  processed: number;
+  imported: number;
+  updated: number;
+  externalChanges: number;
+  skipped: number;
+  hasMore?: boolean;
+  errors: Array<{ slug?: string; error: string }>;
+  note?: string;
+}
+
+export interface SkillSyncRunResponse {
+  status: 'succeeded' | 'partial_failed';
+  processed: number;
+  activeSkillCount: number;
+  enabledPlatforms: string[];
+  limit: number;
+  platforms: SkillSyncPlatformRunResult[];
+}
+
 export interface ReflectionThreadDetailResponse {
   thread: ReflectionThread;
   runs: ReflectionRun[];
@@ -3009,6 +3179,112 @@ export class MemoryServiceClient {
    */
   async getStats(): Promise<StatsResponse> {
     return this.request<StatsResponse>('GET', '/stats');
+  }
+
+  // --------------------------------------------------------------------------
+  // Personal Skill Library
+  // --------------------------------------------------------------------------
+
+  async getPersonalSkills(filters?: {
+    filter?: 'active' | 'all' | 'dismissed';
+    q?: string;
+  }): Promise<PersonalSkillListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.filter) params.set('filter', filters.filter);
+    if (filters?.q) params.set('q', filters.q);
+    const qs = params.toString();
+    return this.request<PersonalSkillListResponse>(
+      'GET',
+      `/skills${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getSkillSuggestions(): Promise<PersonalSkillListResponse> {
+    return this.request<PersonalSkillListResponse>(
+      'GET',
+      '/skills/suggestions',
+    );
+  }
+
+  async getPersonalSkill(id: string): Promise<PersonalSkillDetailResponse> {
+    return this.request<PersonalSkillDetailResponse>(
+      'GET',
+      `/skills/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async useSkillSuggestion(id: string): Promise<PersonalSkillDetailResponse> {
+    return this.request<PersonalSkillDetailResponse>(
+      'POST',
+      `/skills/suggestions/${encodeURIComponent(id)}/use`,
+      {},
+    );
+  }
+
+  async dismissSkillSuggestion(
+    id: string,
+    reason?: string,
+  ): Promise<PersonalSkillDetailResponse> {
+    return this.request<PersonalSkillDetailResponse>(
+      'POST',
+      `/skills/suggestions/${encodeURIComponent(id)}/dismiss`,
+      { reason },
+    );
+  }
+
+  async snoozeSkillSuggestion(
+    id: string,
+    days = 7,
+  ): Promise<PersonalSkillDetailResponse> {
+    return this.request<PersonalSkillDetailResponse>(
+      'POST',
+      `/skills/suggestions/${encodeURIComponent(id)}/snooze`,
+      { days },
+    );
+  }
+
+  async getSkillSyncSettings(): Promise<SkillSyncSettingsResponse> {
+    return this.request<SkillSyncSettingsResponse>(
+      'GET',
+      '/skills/sync-settings',
+    );
+  }
+
+  async updateSkillSyncSetting(
+    platform: string,
+    enabled: boolean,
+  ): Promise<{ setting: SkillSyncSetting }> {
+    return this.request<{ setting: SkillSyncSetting }>(
+      'PUT',
+      `/skills/sync-settings/${encodeURIComponent(platform)}`,
+      { enabled },
+    );
+  }
+
+  async probeSkillPlatform(platform: string): Promise<SkillProbeResponse> {
+    return this.request<SkillProbeResponse>(
+      'POST',
+      `/skills/bindings/${encodeURIComponent(platform)}/probe`,
+      {},
+    );
+  }
+
+  async runSkillSync(options?: {
+    platform?: string;
+    limit?: number;
+  }): Promise<SkillSyncRunResponse> {
+    return this.request<SkillSyncRunResponse>(
+      'POST',
+      '/skills/sync/run',
+      options || {},
+    );
+  }
+
+  buildPublicSkillUrl(pathOrUrl?: string): string {
+    if (!pathOrUrl) return '';
+    if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+    const publicBase = this.baseUrl.replace(/\/api\/v1\/?$/i, '');
+    return `${publicBase}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`;
   }
 
   /**

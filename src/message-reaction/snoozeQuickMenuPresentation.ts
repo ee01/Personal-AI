@@ -1,4 +1,4 @@
-import type { QuickOption } from './SnoozeManager';
+import type { QuickOption } from './snoozeQuickOptions';
 
 export const SNOOZE_CUSTOM_OPTION_LABEL = '自定义时间';
 export const SNOOZE_MANAGE_OPTION_LABEL = '管理稍后处理';

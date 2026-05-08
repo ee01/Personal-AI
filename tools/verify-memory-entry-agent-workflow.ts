@@ -184,7 +184,7 @@ function installFetchMock() {
                     matched_rule_refs: ['manual:manual-1'],
                     matched_rule_ids: [],
                     summary: 'possible manual blocker match',
-                    confidence: 0.42,
+                    confidence: '42%',
                   },
                 ],
               }),
@@ -479,11 +479,13 @@ async function main() {
 
   assert.equal(lowConfidenceManualResult.shouldStore, true);
   assert.equal(lowConfidenceManualResult.shouldNotify, false);
+  assert.equal(lowConfidenceManualResult.confidence, 0.42);
   assert.equal(lowConfidenceManualResult.notificationReview?.required, true);
   assert.equal(
     lowConfidenceManualResult.notificationReview?.reason,
     'low_confidence_notification',
   );
+  assert.equal(lowConfidenceManualResult.notificationReview?.confidence, 0.42);
   assert.deepEqual(lowConfidenceManualResult.matchedRuleRefs, [
     'manual:manual-1',
   ]);
@@ -494,6 +496,7 @@ async function main() {
     ingests[0].metadata.storageReview.notificationReviewRequired,
     true,
   );
+  assert.equal(ingests[0].metadata.storageReview.confidence, 0.42);
 
   runtimeStatusItems = [];
   storage.concernedItems = [];

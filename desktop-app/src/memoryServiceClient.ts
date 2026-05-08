@@ -376,6 +376,43 @@ export interface DeleteMemoriesBySourceScopeResponse {
   deletedChunks: number;
 }
 
+export interface SkillSyncSetting {
+  platform: string;
+  enabled: boolean;
+  capability: 'internal' | 'api' | 'fs_via_desktop_app' | 'manual_only';
+  mode: string;
+  config?: Record<string, unknown>;
+}
+
+export interface LocalSkillSyncPackage {
+  slug: string;
+  title?: string;
+  description?: string;
+  version?: string;
+  sha256?: string;
+  mtime?: number;
+  skillMd: string;
+  files?: Array<{
+    path: string;
+    content: string;
+    sha256?: string;
+    byteSize?: number;
+  }>;
+}
+
+export interface LocalSkillSyncResponse {
+  status: 'succeeded' | 'partial_failed';
+  platform: string;
+  processed: number;
+  imported: number;
+  updated: number;
+  pulled: number;
+  pushed: number;
+  skipped: number;
+  errors: Array<{ slug?: string; error: string }>;
+  packagesToInstall: LocalSkillSyncPackage[];
+}
+
 export class BridgeMemoryServiceClient {
   constructor(private readonly readSettings: () => BridgeRuntimeSettings) {}
 
@@ -815,6 +852,25 @@ export class BridgeMemoryServiceClient {
     return this.request<DeleteMemoriesBySourceScopeResponse>(
       'DELETE',
       `/api/v1/memories?${params.toString()}`,
+    );
+  }
+
+  async getSkillSyncSettings(): Promise<{ items: SkillSyncSetting[] }> {
+    return this.request<{ items: SkillSyncSetting[] }>(
+      'GET',
+      '/api/v1/skills/sync-settings',
+    );
+  }
+
+  async syncLocalSkillPlatform(input: {
+    platform: string;
+    skills: LocalSkillSyncPackage[];
+  }): Promise<LocalSkillSyncResponse> {
+    this.ensureWriteIdentity();
+    return this.request<LocalSkillSyncResponse>(
+      'POST',
+      '/api/v1/skills/sync/local-platform',
+      input,
     );
   }
 

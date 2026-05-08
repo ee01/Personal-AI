@@ -206,6 +206,7 @@ const mapRecallItemToSearchResult = (item: RecallItem) => {
   return {
     ...(metadata || {}),
     id: item.id,
+    resultKey: `${item.type}:${item.id}`,
     name: getRecallItemTitle(item),
     type: entityType,
     recallType: item.type,

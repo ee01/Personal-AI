@@ -22,6 +22,10 @@ export interface SearchResultTypeOption {
 }
 
 export interface MemorySearchResultLike {
+  id?: unknown;
+  resultKey?: unknown;
+  recallType?: unknown;
+  type?: unknown;
   sourceTitle?: unknown;
   source?: unknown;
   timestamp?: unknown;
@@ -68,6 +72,20 @@ export function getResultChannels(entity: MemorySearchResultLike): string[] {
 
 export function getRecallChannelLabel(channel: string): string {
   return RECALL_CHANNEL_LABELS[channel] || channel;
+}
+
+export function getSearchResultKey(entity: MemorySearchResultLike): string {
+  if (typeof entity.resultKey === 'string' && entity.resultKey.trim()) {
+    return entity.resultKey;
+  }
+
+  const type =
+    typeof entity.recallType === 'string' && entity.recallType.trim()
+      ? entity.recallType
+      : typeof entity.type === 'string' && entity.type.trim()
+        ? entity.type
+        : 'result';
+  return `${type}:${String(entity.id ?? '')}`;
 }
 
 export function sanitizeMemoryExploreRoute(

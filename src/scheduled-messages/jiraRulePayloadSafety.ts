@@ -22,7 +22,7 @@ function shouldRedactProperty(key: string, value: unknown, sensitiveContext: boo
   return SENSITIVE_KEY_PATTERN.test(key) && key !== 'name' && key !== 'headerName';
 }
 
-function redactSensitiveText(value: string): string {
+export function redactJiraRuleTextForLog(value: string): string {
   return value
     .replace(/("(?:clientSecret|jwt|password|token|api[_-]?key|secret)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")/gi, '$1[REDACTED]$3')
     .replace(/(Bearer\s+)([^"\\\s]+)/gi, '$1[REDACTED]');
@@ -44,7 +44,7 @@ function redactValue(value: unknown, sensitiveContext = false): unknown {
 
   Object.entries(value).forEach(([key, nestedValue]) => {
     if (typeof nestedValue === 'string' && key === 'customBody') {
-      result[key] = redactSensitiveText(nestedValue);
+      result[key] = redactJiraRuleTextForLog(nestedValue);
       return;
     }
 

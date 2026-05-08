@@ -59,10 +59,16 @@
   gap: 10px;
   cursor: pointer;
   transition: background-color 0.2s;
+  outline: none;
 }
 
 .step-header:hover {
   background-color: #f0f0f0;
+}
+
+.step-header:focus-visible {
+  background-color: #eef6ff;
+  box-shadow: inset 0 0 0 2px #0969da;
 }
 
 .step-icon {
@@ -247,6 +253,11 @@
   border-left: 4px solid #F44336;
 }
 
+.flow-node.tool.blocked {
+  background-color: #FFF8E1;
+  border-left: 4px solid #D97706;
+}
+
 .flow-node.tool.skipped {
   background-color: #f6f8fa;
   border-left: 4px solid #757575;
@@ -310,11 +321,58 @@
 
 .node-content {
   flex-grow: 1;
+  min-width: 0;
+}
+
+.node-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .node-title {
   font-weight: 500;
   font-size: 14px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.node-result {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: #57606a;
+  background: #eaeef2;
+  flex: 0 0 auto;
+}
+
+.node-result.success {
+  color: #1a7f37;
+  background: #dafbe1;
+}
+
+.node-result.error {
+  color: #cf222e;
+  background: #ffebe9;
+}
+
+.node-result.blocked {
+  color: #9a6700;
+  background: #fff1d6;
+}
+
+.node-result.skipped {
+  color: #57606a;
+  background: #f6f8fa;
+}
+
+.node-result.partial {
+  color: #9a6700;
+  background: #fff8c5;
 }
 
 .node-time {

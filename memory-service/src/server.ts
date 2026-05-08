@@ -60,6 +60,7 @@ import { notificationCenterRoutes } from './routes/notificationCenter.js';
 import { providerRoutes } from './routes/providers.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { extractorRoutes } from './routes/extractor.js';
+import { publicSkillRoutes, skillRoutes } from './routes/skills.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -197,9 +198,13 @@ export async function buildApp(
       await instance.register(providerRoutes);
       await instance.register(meetingRoutes);
       await instance.register(extractorRoutes);
+      await instance.register(skillRoutes);
     },
     { prefix: '/api/v1' },
   );
+
+  // Tokenized, read-only skill share URLs for external agents.
+  await app.register(publicSkillRoutes, { userContextManager });
 
   // Top-level health check (no prefix) for container orchestrators
   await app.register(healthRoutes);

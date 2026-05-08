@@ -191,6 +191,33 @@ function truncateForTrace(value: any, maxLength = 180): string {
     : text;
 }
 
+function parseConfidence(value: any): number | null {
+  let numeric: number;
+  if (typeof value === 'number') {
+    numeric = value;
+  } else if (typeof value === 'string') {
+    const normalized = value.trim().replace(/%$/, '');
+    if (!normalized) return null;
+    numeric = Number(normalized);
+  } else {
+    return null;
+  }
+
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric > 1 && numeric <= 100) {
+    numeric /= 100;
+  }
+  return Math.min(1, Math.max(0, numeric));
+}
+
+function normalizeConfidence(value: any, fallback = 0): number {
+  const parsed = parseConfidence(value);
+  if (parsed !== null) return parsed;
+
+  const parsedFallback = parseConfidence(fallback);
+  return parsedFallback !== null ? parsedFallback : 0;
+}
+
 function buildAgentInputSummary(context: any): string {
   const sender = context.sender || context.creator || 'unknown';
   const group = context.team_name || context.groupName || 'unknown group';
@@ -210,7 +237,8 @@ function summarizeToolResult(toolName: string, result: any): string {
   }
 
   if (toolName === 'concernedItemMatcher') {
-    return `store=${Boolean(result.shouldStore)}, notify=${Boolean(result.shouldNotify)}, refs=${(result.matchedRuleRefs || []).join('|') || 'none'}, confidence=${result.confidence ?? 0}`;
+    const refs = (result.matchedRuleRefs || []).join('|') || 'none';
+    return `store=${Boolean(result.shouldStore)}, notify=${Boolean(result.shouldNotify)}, refs=${refs}, confidence=${normalizeConfidence(result.confidence, 0)}`;
   }
 
   if (toolName === 'relationshipAnalysis') {
@@ -322,12 +350,10 @@ function buildStorageReview(params: {
     reasonSource,
     shouldStore: Boolean(result.shouldStore),
     shouldNotify: Boolean(result.shouldNotify),
-    confidence:
-      typeof result.confidence === 'number'
-        ? result.confidence
-        : typeof matcher?.confidence === 'number'
-          ? matcher.confidence
-          : 0,
+    confidence: normalizeConfidence(
+      result.confidence,
+      matcher?.confidence || 0,
+    ),
     matchedRuleRefs: result.matchedRuleRefs || [],
     matchedRuleIds: result.matchedRuleIds || [],
     entitySummary: {
@@ -363,10 +389,7 @@ function buildNotificationReviewGate(
     return null;
   }
 
-  const confidence =
-    typeof result.confidence === 'number' && Number.isFinite(result.confidence)
-      ? result.confidence
-      : 0;
+  const confidence = normalizeConfidence(result.confidence, 0);
 
   if (confidence >= AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD) {
     return null;
@@ -717,12 +740,9 @@ ${xmlMessage}
         summary: hasResolvedMatch
           ? firstMatch.summary || firstMatch.filter_reason || ''
           : '',
-        confidence:
-          hasResolvedMatch && typeof firstMatch.confidence === 'number'
-            ? firstMatch.confidence
-            : hasResolvedMatch
-              ? 0.7
-              : 0,
+        confidence: hasResolvedMatch
+          ? normalizeConfidence(firstMatch.confidence, 0.7)
+          : 0,
       };
     },
   },

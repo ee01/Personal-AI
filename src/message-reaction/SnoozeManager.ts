@@ -19,6 +19,12 @@ import type { SnoozeReminderResult } from './snoozeCreateResult';
 import { isValidFutureSnoozeTime } from './snoozeTime';
 
 export { formatRemindTime, isValidFutureSnoozeTime } from './snoozeTime';
+export {
+  formatWorkdayQuickLabel,
+  getNextWorkdayTime,
+  getQuickOptions,
+} from './snoozeQuickOptions';
+export type { QuickOption } from './snoozeQuickOptions';
 
 // 消息信息接口
 export interface MessageInfo {
@@ -36,13 +42,6 @@ export interface SnoozeConfig {
   messageInfo: MessageInfo;
   remindAt: Date; // 提醒时间
   note?: string; // 可选备注
-}
-
-// 快速选项
-export interface QuickOption {
-  label: string;
-  icon: string;
-  getTime: () => Date;
 }
 
 // 缓存
@@ -214,67 +213,6 @@ export async function extractMessageInfo(
     console.error('Failed to extract message info:', error);
     return null;
   }
-}
-
-/**
- * 获取快速选项列表
- */
-export function getQuickOptions(): QuickOption[] {
-  return [
-    {
-      label: '1 小时后',
-      icon: '⏰',
-      getTime: () => {
-        const d = new Date();
-        d.setHours(d.getHours() + 1);
-        return d;
-      },
-    },
-    {
-      label: '3 小时后',
-      icon: '🕐',
-      getTime: () => {
-        const d = new Date();
-        d.setHours(d.getHours() + 3);
-        return d;
-      },
-    },
-    {
-      label: '今天下班前',
-      icon: '🌆',
-      getTime: () => {
-        const d = new Date();
-        d.setHours(18, 0, 0, 0);
-        // 如果已过 18 点，则设为第二天
-        if (d <= new Date()) {
-          d.setDate(d.getDate() + 1);
-        }
-        return d;
-      },
-    },
-    {
-      label: '明天 9 点',
-      icon: '☀️',
-      getTime: () => {
-        const d = new Date();
-        d.setDate(d.getDate() + 1);
-        d.setHours(9, 0, 0, 0);
-        return d;
-      },
-    },
-    {
-      label: '下周一 9 点',
-      icon: '📅',
-      getTime: () => {
-        const d = new Date();
-        const dayOfWeek = d.getDay();
-        const daysUntilMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
-        d.setDate(d.getDate() + daysUntilMonday);
-        d.setHours(9, 0, 0, 0);
-        return d;
-      },
-    },
-  ];
 }
 
 // isScheduledMessagesInitialized 和 showInitRequiredDialog 已移至 scheduled-messages/ScheduledMessagesUtils.ts 共用

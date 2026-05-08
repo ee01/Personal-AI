@@ -1,5 +1,7 @@
 import { BotAutomationConfig, BotAutomationRule, RingCentralSenderConfig, SheetConfig } from './types';
 
+const RINGCENTRAL_SENDER_EXECUTOR_RULE_VERSION = '1.4.0';
+
 export type BotConfigValidityStatus =
   | 'ok'
   | 'missing_executor_rule'
@@ -15,6 +17,40 @@ function cloneRule(rule?: BotAutomationRule): BotAutomationRule | undefined {
 function trimOptional(value?: string): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseRuleVersion(rule?: Partial<BotAutomationRule>): string | undefined {
+  const explicitVersion = trimOptional(rule?.ruleVersion);
+  if (explicitVersion) {
+    return explicitVersion;
+  }
+
+  const versionMatch = rule?.ruleName?.match(/\bv(\d+\.\d+\.\d+)\b/);
+  return versionMatch?.[1];
+}
+
+function compareVersionStrings(left: string, right: string): number {
+  const leftParts = left.split('.').map(part => Number.parseInt(part, 10) || 0);
+  const rightParts = right.split('.').map(part => Number.parseInt(part, 10) || 0);
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const diff = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+
+  return 0;
+}
+
+function isLegacyExecutorRuleForRingCentralSender(rule?: Partial<BotAutomationRule>): boolean {
+  if (!rule?.ruleId) {
+    return false;
+  }
+
+  const version = parseRuleVersion(rule);
+  return !version || compareVersionStrings(version, RINGCENTRAL_SENDER_EXECUTOR_RULE_VERSION) < 0;
 }
 
 export function normalizeRingCentralSenderConfig(
@@ -54,6 +90,30 @@ export function hasRingCentralSenderCredentials(config?: Partial<SheetConfig> | 
   );
 }
 
+export function hasCompleteRingCentralSenderConfig(
+  config?: Partial<RingCentralSenderConfig> | null
+): boolean {
+  const senderConfig = normalizeRingCentralSenderConfig(config);
+  return Boolean(
+    senderConfig?.enabled &&
+    senderConfig.clientId &&
+    senderConfig.clientSecret &&
+    senderConfig.jwt
+  );
+}
+
+export function shouldRecreateExecutorRuleForRingCentralSenderUpgrade(
+  currentConfig: Partial<SheetConfig> | null | undefined,
+  nextSenderConfig?: Partial<RingCentralSenderConfig> | null
+): boolean {
+  const executorRule = getExecutorRule(currentConfig);
+  return Boolean(
+    isLegacyExecutorRuleForRingCentralSender(executorRule) &&
+    !hasRingCentralSenderCredentials(currentConfig) &&
+    hasCompleteRingCentralSenderConfig(nextSenderConfig)
+  );
+}
+
 export function getBotAutomationConfig(config?: Partial<SheetConfig> | null): BotAutomationConfig {
   const executorRule = cloneRule(config?.botAutomation?.executorRule || config?.botExecutor);
   const timelineSyncRule = cloneRule(config?.botAutomation?.timelineSyncRule);
@@ -90,7 +150,7 @@ export function getJiraAutomationRuleUrl(rule?: Partial<BotAutomationRule> | nul
   }
 
   const jiraBaseUrl = jiraUrl.replace(/\/+$/, '');
-  return `${jiraBaseUrl}/jira/software/c/projects/${encodeURIComponent(projectKey)}/automation#/rule/${encodeURIComponent(ruleId)}`;
+  return `${jiraBaseUrl}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${encodeURIComponent(projectKey)}#/rule/${encodeURIComponent(ruleId)}`;
 }
 
 export function normalizeSheetConfig<T extends Partial<SheetConfig> | null | undefined>(config: T): T {

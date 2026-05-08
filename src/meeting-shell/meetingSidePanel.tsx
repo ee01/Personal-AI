@@ -9,6 +9,7 @@ import {
   MeetingPilotActionItem,
   MeetingPilotAlert,
   MeetingPilotCaptureLogEntry,
+  MeetingPilotTimelineEvent,
   MeetingPilotSessionSnapshot,
   createMeetingPilotSessionSnapshot,
 } from './protocol';
@@ -76,6 +77,7 @@ const PANEL_UI_STORAGE_PREFIX = 'meetingPilot.panelUi.';
 const DEFAULT_TAB: TabId = 'live';
 const TOP_SCROLL_THRESHOLD = 12;
 const BULK_ACTION_COPY_ID = '__bulk_action_copy__';
+const TIMELINE_FOCUS_DURATION_MS = 2200;
 
 function getRequestedSurfaceMode(): PanelSurfaceMode {
   const params = new URLSearchParams(window.location.search);
@@ -322,6 +324,52 @@ async function writeTextToClipboard(text: string): Promise<void> {
   if (!ok) {
     throw new Error('execCommand copy returned false');
   }
+}
+
+function normalizeTimelineMatchText(value?: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[“”"'.!！?？:：;；,，、()[\]{}]/g, '');
+}
+
+function timelineEventMatchesAction(
+  event: MeetingPilotTimelineEvent,
+  item: MeetingPilotActionItem,
+): boolean {
+  const actionTitle = normalizeTimelineMatchText(item.title);
+  const eventTitle = normalizeTimelineMatchText(event.title);
+  const eventDescription = normalizeTimelineMatchText(event.description);
+  if (!actionTitle || (!eventTitle && !eventDescription)) {
+    return false;
+  }
+  return (
+    Boolean(eventTitle && eventTitle.includes(actionTitle)) ||
+    Boolean(eventTitle && actionTitle.includes(eventTitle)) ||
+    Boolean(eventDescription && eventDescription.includes(actionTitle))
+  );
+}
+
+function findTimelineEventForAction(
+  session: MeetingPilotSessionSnapshot,
+  item: MeetingPilotActionItem,
+): MeetingPilotTimelineEvent | undefined {
+  const sameChapterEvents = item.chapterId
+    ? session.timelineEvents.filter((event) => event.chapterId === item.chapterId)
+    : [];
+  const candidates = sameChapterEvents.length
+    ? sameChapterEvents
+    : session.timelineEvents;
+
+  return (
+    candidates.find(
+      (event) => event.type === 'action' && timelineEventMatchesAction(event, item),
+    ) ||
+    candidates.find((event) => event.type === 'action') ||
+    candidates.find((event) => timelineEventMatchesAction(event, item)) ||
+    sameChapterEvents[0]
+  );
 }
 
 async function loadPanelUiState(
@@ -811,6 +859,10 @@ const shellStyle = `
   .tl-summary { display: flex; align-items: center; gap: 4px; }
   .tl-expand-icon { font-size: 10px; color: var(--text-muted); margin-left: auto; transition: transform 0.2s; flex-shrink: 0; }
   .mini-tl-item.expanded .tl-expand-icon { transform: rotate(90deg); }
+  .mini-tl-item.timeline-focused {
+    border-color: rgba(255,165,2,0.72);
+    box-shadow: 0 0 0 2px rgba(255,165,2,0.18), 0 10px 22px rgba(0,0,0,0.2);
+  }
   .mini-tl-detail {
     display: none;
     margin-top: 8px;
@@ -1572,27 +1624,31 @@ function MeetingSidePanel() {
   const persistTimerRef = useRef<number | null>(null);
   const restoreTimerRefs = useRef<number[]>([]);
   const actionCopyResetTimerRef = useRef<number | null>(null);
+  const timelineFocusResetTimerRef = useRef<number | null>(null);
   const panelUiReadyRef = useRef(false);
   const panelUiStorageKeyRef = useRef('');
+  const [focusedTimelineEventId, setFocusedTimelineEventId] = useState<
+    string | null
+  >(null);
   /** 开发联调：始终可开 Capture Log；?debug=1 仍保留给其它更啰嗦的调试用。 */
   const showDebugTab =
     __DEV__ && new URLSearchParams(window.location.search).get('debug') !== '0';
-  const session =
-    (requestedTabId
-      ? (state?.activeSession?.tabId === requestedTabId
-          ? state.activeSession
-          : undefined) ||
-        state?.sessions.find((item) => item.tabId === requestedTabId) ||
-        state?.activeSession
-      : state?.activeSession) ||
-    (shouldUseMeetingPilotDemo()
-      ? getDemoMeetingSessionSnapshot(0)
-      : createMeetingPilotSessionSnapshot({
-          meetingId: 'unbound',
-          tabId: requestedTabId || 0,
-          url: '',
-          title: 'Meeting Pilot',
-        }));
+  const useDemoSession = shouldUseMeetingPilotDemo();
+  const session = useDemoSession
+    ? getDemoMeetingSessionSnapshot(requestedTabId || 0)
+    : (requestedTabId
+        ? (state?.activeSession?.tabId === requestedTabId
+            ? state.activeSession
+            : undefined) ||
+          state?.sessions.find((item) => item.tabId === requestedTabId) ||
+          state?.activeSession
+        : state?.activeSession) ||
+      createMeetingPilotSessionSnapshot({
+        meetingId: 'unbound',
+        tabId: requestedTabId || 0,
+        url: '',
+        title: 'Meeting Pilot',
+      });
   const panelUiStorageKey = useMemo(
     () => buildPanelUiStorageKey(session),
     [session.meetingId, session.tabId],
@@ -1901,6 +1957,21 @@ function MeetingSidePanel() {
       actionCopyResetTimerRef.current = null;
     }, 1800);
   };
+  const focusTimelineForAction = (item: MeetingPilotActionItem) => {
+    const targetEvent = findTimelineEventForAction(session, item);
+    if (!targetEvent) {
+      return;
+    }
+    persistCurrentTabScroll();
+    setExpandedTimelineIds((current) =>
+      current.includes(targetEvent.id) ? current : [...current, targetEvent.id],
+    );
+    setFocusedTimelineEventId(targetEvent.id);
+    activeTabRef.current = 'timeline';
+    pendingRestoreTabRef.current = null;
+    setActiveTab('timeline');
+    schedulePersistPanelUiState();
+  };
 
   useEffect(() => {
     (async () => {
@@ -1929,6 +2000,9 @@ function MeetingSidePanel() {
     () => () => {
       if (actionCopyResetTimerRef.current) {
         window.clearTimeout(actionCopyResetTimerRef.current);
+      }
+      if (timelineFocusResetTimerRef.current) {
+        window.clearTimeout(timelineFocusResetTimerRef.current);
       }
     },
     [],
@@ -2106,6 +2180,30 @@ function MeetingSidePanel() {
       lastScrollHeight: nextScrollHeight,
     };
   }, [activeTab, activeTabContentVersion, panelUiReady]);
+
+  useLayoutEffect(() => {
+    if (activeTab !== 'timeline' || !focusedTimelineEventId) {
+      return;
+    }
+    const target = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '.mini-tl-item[data-timeline-event-id]',
+      ),
+    ).find((element) => element.dataset.timelineEventId === focusedTimelineEventId);
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (timelineFocusResetTimerRef.current) {
+      window.clearTimeout(timelineFocusResetTimerRef.current);
+    }
+    timelineFocusResetTimerRef.current = window.setTimeout(() => {
+      setFocusedTimelineEventId((current) =>
+        current === focusedTimelineEventId ? null : current,
+      );
+      timelineFocusResetTimerRef.current = null;
+    }, TIMELINE_FOCUS_DURATION_MS);
+  }, [activeTab, focusedTimelineEventId, activeTabContentVersion]);
 
   const toggleCaptureFromFooter = async () => {
     if (session.capture.kind === 'recording') {
@@ -2564,7 +2662,12 @@ function MeetingSidePanel() {
                   key={event.id}
                   className={`mini-tl-item ${event.type} ${
                     expandedTimelineIds.includes(event.id) ? 'expanded' : ''
+                  } ${
+                    focusedTimelineEventId === event.id
+                      ? 'timeline-focused'
+                      : ''
                   }`}
+                  data-timeline-event-id={event.id}
                   onClick={() => toggleTimelineItem(event.id)}
                 >
                   <div className="tl-summary">
@@ -2678,183 +2781,206 @@ function MeetingSidePanel() {
               </>
             ) : null}
             {visibleActionItems.length ? (
-              visibleActionItems.map((item: MeetingPilotActionItem) => (
-                <div
-                  className={`action-card ${getActionReviewState(item)} ${
-                    editingActionId === item.id ? 'editing' : ''
-                  }`}
-                  data-action-id={item.id}
-                  key={item.id}
-                >
-                  {editingActionId === item.id ? (
-                    <div className="ac-edit-form">
-                      <label className="ac-field">
-                        <span>行动项</span>
-                        <input
-                          value={actionEditDraft.title}
-                          onChange={(event) =>
-                            setActionEditDraft((current) => ({
-                              ...current,
-                              title: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <div className="ac-edit-row">
+              visibleActionItems.map((item: MeetingPilotActionItem) => {
+                const timelineTarget = findTimelineEventForAction(session, item);
+                return (
+                  <div
+                    className={`action-card ${getActionReviewState(item)} ${
+                      editingActionId === item.id ? 'editing' : ''
+                    }`}
+                    data-action-id={item.id}
+                    key={item.id}
+                  >
+                    {editingActionId === item.id ? (
+                      <div className="ac-edit-form">
                         <label className="ac-field">
-                          <span>负责人</span>
+                          <span>行动项</span>
                           <input
-                            value={actionEditDraft.owner}
+                            value={actionEditDraft.title}
                             onChange={(event) =>
                               setActionEditDraft((current) => ({
                                 ...current,
-                                owner: event.target.value,
+                                title: event.target.value,
                               }))
                             }
                           />
                         </label>
-                        <label className="ac-field">
-                          <span>截止</span>
-                          <input
-                            value={actionEditDraft.deadline}
-                            placeholder="可留空"
-                            onChange={(event) =>
-                              setActionEditDraft((current) => ({
-                                ...current,
-                                deadline: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      </div>
-                      {actionEditError ? (
-                        <div className="ac-edit-error">{actionEditError}</div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="ac-title">📌 {item.title}</div>
-                      <div className="ac-meta">
-                        <span>👤 {item.owner}</span>
-                        {item.deadline ? <span>📅 {item.deadline}</span> : null}
-                        {item.timestamp ? <span>🕒 {item.timestamp}</span> : null}
-                        <span
-                          className={`ac-status ${getActionStatusClass(item)}`}
-                        >
-                          {getActionStatusLabel(item)}
-                        </span>
-                        {item.editedAt ? (
-                          <span className="ac-edited">人工校正</span>
+                        <div className="ac-edit-row">
+                          <label className="ac-field">
+                            <span>负责人</span>
+                            <input
+                              value={actionEditDraft.owner}
+                              onChange={(event) =>
+                                setActionEditDraft((current) => ({
+                                  ...current,
+                                  owner: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="ac-field">
+                            <span>截止</span>
+                            <input
+                              value={actionEditDraft.deadline}
+                              placeholder="可留空"
+                              onChange={(event) =>
+                                setActionEditDraft((current) => ({
+                                  ...current,
+                                  deadline: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                        </div>
+                        {actionEditError ? (
+                          <div className="ac-edit-error">{actionEditError}</div>
                         ) : null}
                       </div>
-                    </>
-                  )}
-                  {item.evidence ? (
-                    <div className="ac-evidence">依据：{item.evidence}</div>
-                  ) : null}
-                  <div className="ac-actions">
-                    {editingActionId === item.id ? (
-                      <>
-                        <button
-                          className="ac-button primary"
-                          type="button"
-                          onClick={() => void saveActionItemEdit(item)}
-                        >
-                          保存校正
-                        </button>
-                        <button
-                          className="ac-button"
-                          type="button"
-                          onClick={cancelActionItemEdit}
-                        >
-                          取消
-                        </button>
-                      </>
                     ) : (
                       <>
-                        <button
-                          className={`ac-button ${
-                            actionCopyFeedback?.id === item.id &&
-                            actionCopyFeedback.status === 'copied'
-                              ? 'success'
-                              : ''
-                          }`}
-                          type="button"
-                          onClick={() => void copyActionItem(item)}
-                        >
-                          {actionCopyFeedback?.id === item.id
-                            ? actionCopyFeedback.status === 'copied'
-                              ? '已复制'
-                              : '复制失败'
-                            : '复制'}
-                        </button>
-                        <button
-                          className="ac-button"
-                          type="button"
-                          onClick={() => startActionItemEdit(item)}
-                        >
-                          编辑
-                        </button>
-                        {getActionReviewState(item) === 'dismissed' ? (
+                        <div className="ac-title">📌 {item.title}</div>
+                        <div className="ac-meta">
+                          <span>👤 {item.owner}</span>
+                          {item.deadline ? (
+                            <span>📅 {item.deadline}</span>
+                          ) : null}
+                          {item.timestamp ? (
+                            <span>🕒 {item.timestamp}</span>
+                          ) : null}
+                          <span
+                            className={`ac-status ${getActionStatusClass(item)}`}
+                          >
+                            {getActionStatusLabel(item)}
+                          </span>
+                          {item.editedAt ? (
+                            <span className="ac-edited">人工校正</span>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
+                    {item.evidence ? (
+                      <div className="ac-evidence">依据：{item.evidence}</div>
+                    ) : null}
+                    <div className="ac-actions">
+                      {editingActionId === item.id ? (
+                        <>
+                          <button
+                            className="ac-button primary"
+                            type="button"
+                            onClick={() => void saveActionItemEdit(item)}
+                          >
+                            保存校正
+                          </button>
                           <button
                             className="ac-button"
                             type="button"
-                            onClick={() =>
-                              void updateActionItemReview(item, {
-                                status: 'pending',
-                                reviewState: 'suggested',
-                              })
-                            }
+                            onClick={cancelActionItemEdit}
                           >
-                            恢复
+                            取消
                           </button>
-                        ) : (
-                          <>
-                            {getActionReviewState(item) !== 'confirmed' ? (
-                              <button
-                                className="ac-button primary"
-                                type="button"
-                                onClick={() =>
-                                  void updateActionItemReview(item, {
-                                    reviewState: 'confirmed',
-                                  })
-                                }
-                              >
-                                确认
-                              </button>
-                            ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            className={`ac-button ${
+                              actionCopyFeedback?.id === item.id &&
+                              actionCopyFeedback.status === 'copied'
+                                ? 'success'
+                                : ''
+                            }`}
+                            type="button"
+                            onClick={() => void copyActionItem(item)}
+                          >
+                            {actionCopyFeedback?.id === item.id
+                              ? actionCopyFeedback.status === 'copied'
+                                ? '已复制'
+                                : '复制失败'
+                              : '复制'}
+                          </button>
+                          {timelineTarget ? (
+                            <button
+                              className="ac-button"
+                              type="button"
+                              title={
+                                timelineTarget.timestamp
+                                  ? `定位到 ${timelineTarget.timestamp} 的时间线`
+                                  : '定位到对应时间线'
+                              }
+                              onClick={() => focusTimelineForAction(item)}
+                            >
+                              时间线
+                            </button>
+                          ) : null}
+                          <button
+                            className="ac-button"
+                            type="button"
+                            onClick={() => startActionItemEdit(item)}
+                          >
+                            编辑
+                          </button>
+                          {getActionReviewState(item) === 'dismissed' ? (
                             <button
                               className="ac-button"
                               type="button"
                               onClick={() =>
                                 void updateActionItemReview(item, {
-                                  status:
-                                    item.status === 'done' ? 'pending' : 'done',
-                                  reviewState: 'confirmed',
-                                })
-                              }
-                            >
-                              {item.status === 'done' ? '撤回完成' : '完成'}
-                            </button>
-                            <button
-                              className="ac-button danger"
-                              type="button"
-                              onClick={() =>
-                                void updateActionItemReview(item, {
                                   status: 'pending',
-                                  reviewState: 'dismissed',
+                                  reviewState: 'suggested',
                                 })
                               }
                             >
-                              忽略
+                              恢复
                             </button>
-                          </>
-                        )}
-                      </>
-                    )}
+                          ) : (
+                            <>
+                              {getActionReviewState(item) !== 'confirmed' ? (
+                                <button
+                                  className="ac-button primary"
+                                  type="button"
+                                  onClick={() =>
+                                    void updateActionItemReview(item, {
+                                      reviewState: 'confirmed',
+                                    })
+                                  }
+                                >
+                                  确认
+                                </button>
+                              ) : null}
+                              <button
+                                className="ac-button"
+                                type="button"
+                                onClick={() =>
+                                  void updateActionItemReview(item, {
+                                    status:
+                                      item.status === 'done'
+                                        ? 'pending'
+                                        : 'done',
+                                    reviewState: 'confirmed',
+                                  })
+                                }
+                              >
+                                {item.status === 'done' ? '撤回完成' : '完成'}
+                              </button>
+                              <button
+                                className="ac-button danger"
+                                type="button"
+                                onClick={() =>
+                                  void updateActionItemReview(item, {
+                                    status: 'pending',
+                                    reviewState: 'dismissed',
+                                  })
+                                }
+                              >
+                                忽略
+                              </button>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div className="empty-state">
                 {getActionFilterEmptyCopy(

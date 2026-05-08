@@ -222,8 +222,16 @@ try {
     timeout: 15000,
   });
 
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('#workflowTestContent')
+        ?.value.includes('API split has a blocker'),
+    null,
+    { timeout: 15000 },
+  );
   await page
-    .locator('.agent-workflow-scenario-actions button', { hasText: '运行样例' })
+    .locator('.agent-workflow-test-header button', { hasText: '运行测试' })
     .click();
   await page
     .locator('.agent-workflow-path-item strong', { hasText: /^关注项匹配$/ })

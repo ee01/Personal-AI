@@ -167,7 +167,7 @@ assert.equal(getAgentWorkflowHighestSeverity(resultDiagnostics), 'error');
 const decisionPath = buildAgentWorkflowDecisionPath({
   shouldStore: true,
   shouldNotify: false,
-  confidence: 0.42,
+  confidence: 42,
   summary: 'possible manual blocker match',
   matchedRuleRefs: ['manual:manual-1'],
   notificationReview: {

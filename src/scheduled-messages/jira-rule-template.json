@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.4.0",
-    "lastUpdated": "2026-05-07",
+    "version": "1.4.2",
+    "lastUpdated": "2026-05-08",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template"
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -170,7 +170,7 @@
                     "name": "Authorization",
                     "value": {
                       "keyOrValue": "Bearer {{BOT_TOKEN}}",
-                      "secret": true
+                      "secret": false
                     }
                   },
                   {
@@ -262,7 +262,7 @@
                     "name": "Authorization",
                     "value": {
                       "keyOrValue": "Bearer {{RINGCENTRAL_SENDER_DIFY_API_KEY}}",
-                      "secret": true
+                      "secret": false
                     }
                   },
                   {
@@ -277,34 +277,6 @@
                 "sendIssue": false,
                 "contentType": "custom",
                 "customBody": "{\n  \"inputs\": {\n    \"clientId\": \"{{RINGCENTRAL_SENDER_CLIENT_ID}}\",\n    \"clientSecret\": \"{{RINGCENTRAL_SENDER_CLIENT_SECRET}}\",\n    \"jwt\": \"{{RINGCENTRAL_SENDER_JWT}}\",\n    \"chatId\": {{webhookResponse.body.chatId.asJsonString}},\n    \"message_text\": {{webhookResponse.body.content.asJsonString}}\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{initiator.emailAddress}}\"\n}",
-                "method": "POST",
-                "responseEnabled": true,
-                "usedSecretsKeys": []
-              },
-              "children": [],
-              "conditions": [],
-              "optimisedIds": [],
-              "newComponent": false
-            },
-            {
-              "component": "ACTION",
-              "schemaVersion": 2,
-              "type": "jira.issue.outgoing.webhook",
-              "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
-                "headers": [
-                  {
-                    "id": "_header_mark_ringcentral_sender_content_type",
-                    "name": "Content-Type",
-                    "value": {
-                      "keyOrValue": "application/json",
-                      "secret": false
-                    }
-                  }
-                ],
-                "sendIssue": false,
-                "contentType": "custom",
-                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
                 "method": "POST",
                 "responseEnabled": true,
                 "usedSecretsKeys": []
@@ -354,7 +326,7 @@
                     "name": "Authorization",
                     "value": {
                       "keyOrValue": "Bearer {{BOT_TOKEN}}",
-                      "secret": true
+                      "secret": false
                     }
                   },
                   {

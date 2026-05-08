@@ -10,7 +10,7 @@ import { getJiraToken, jiraFetch } from '../jira';
 import { buildTimelineSyncComponentsFragment } from './timelineProjects';
 import { BotAutomationConfig, BotAutomationRule, RingCentralSenderConfig } from './types';
 import { formatLocalScheduleDate } from './scheduleDateTime';
-import { redactJiraRulePayloadForLog } from './jiraRulePayloadSafety';
+import { redactJiraRulePayloadForLog, redactJiraRuleTextForLog } from './jiraRulePayloadSafety';
 
 // Jira Rule 版本信息（从模板的 _metadata 字段读取）
 export const JIRA_EXECUTOR_RULE_VERSION = (executorRuleTemplate as any)._metadata?.version || '1.3.0';
@@ -328,8 +328,9 @@ export class JiraAutomationService {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('创建规则失败，响应:', errorText);
-      throw new Error(`创建 Jira Automation 规则失败 (${response.status}): ${errorText}`);
+      const redactedErrorText = redactJiraRuleTextForLog(errorText);
+      console.error('创建规则失败，响应:', redactedErrorText);
+      throw new Error(`创建 Jira Automation 规则失败 (${response.status}): ${redactedErrorText}`);
     }
 
     const result = await response.json();
@@ -570,8 +571,9 @@ export class JiraAutomationService {
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('更新规则失败，响应:', errorText);
-      throw new Error(`更新 Jira Automation 规则失败 (${response.status}): ${errorText}`);
+      const redactedErrorText = redactJiraRuleTextForLog(errorText);
+      console.error('更新规则失败，响应:', redactedErrorText);
+      throw new Error(`更新 Jira Automation 规则失败 (${response.status}): ${redactedErrorText}`);
     }
     
     const result = await response.json();
@@ -1032,7 +1034,7 @@ export class JiraAutomationService {
    * 获取规则的 URL（用于 Automation_Link）
    */
   getRuleUrl(config: JiraAutomationConfig, ruleId: string): string {
-    return `${config.jiraUrl}/jira/software/c/projects/${config.projectKey}/automation#/rule/${ruleId}`;
+    return `${config.jiraUrl}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${encodeURIComponent(config.projectKey)}#/rule/${encodeURIComponent(ruleId)}`;
   }
   
   /**

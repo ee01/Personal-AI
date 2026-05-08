@@ -25,6 +25,7 @@ import type {
   BridgeSyncManager,
   BridgeSyncManagerSnapshot,
 } from './syncManager.js';
+import type { LocalSkillSyncManager } from './skillSync/localSkillSyncManager.js';
 import type {
   AutoSyncKind,
   BridgeAssistantStreamEvent,
@@ -73,6 +74,7 @@ interface BridgeServerDependencies {
   settingsStore: BridgeSettingsStore;
   syncManager: BridgeSyncManager;
   explorerManager?: ExplorerManager;
+  localSkillSyncManager?: LocalSkillSyncManager;
   version: string;
 }
 
@@ -384,6 +386,23 @@ export async function createBridgeServer(
       const message =
         error instanceof Error ? error.message : 'Memory Service test failed';
       return reply.code(400).send({ ok: false, error: message });
+    }
+  });
+
+  app.post<{
+    Body: { platform?: string };
+  }>('/skills/sync/run', async (request, reply) => {
+    if (!deps.localSkillSyncManager) {
+      return reply.code(501).send({ error: 'Local skill sync is not available.' });
+    }
+    try {
+      return await deps.localSkillSyncManager.run({
+        platform: request.body?.platform,
+      });
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 

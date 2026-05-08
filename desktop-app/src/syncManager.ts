@@ -9,6 +9,7 @@ import { BridgeSettingsStore } from './settings.js';
 import { DoubaoBridgeService } from './bridgeService.js';
 import type { AutoSyncKind } from './types.js';
 import type { ExplorerManager } from './explorer/index.js';
+import type { LocalSkillSyncManager } from './skillSync/localSkillSyncManager.js';
 
 interface SyncState {
   stableMemory?: number;
@@ -144,6 +145,7 @@ export class BridgeSyncManager {
     private readonly memoryClient: BridgeMemoryServiceClient,
     private readonly bridgeService: DoubaoBridgeService,
     private readonly explorerManager?: ExplorerManager,
+    private readonly localSkillSyncManager?: LocalSkillSyncManager,
   ) {}
 
   start(): void {
@@ -347,6 +349,7 @@ export class BridgeSyncManager {
       if (this.explorerManager) {
         await this.explorerManager.tick();
       }
+      await this.localSkillSyncManager?.tick();
     } catch (error) {
       console.error('[doubao-bridge] auto-sync tick failed:', error);
     } finally {

@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.7.3';
+var APP_SCRIPT_VERSION = '2.7.4';
 var APP_SCRIPT_LAST_UPDATED = '2026-05-08';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
@@ -2398,6 +2398,17 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         executionKey: executionKey,
         timestamp: new Date().toISOString()
       };
+    }
+
+    // RingCentral AsMe sender 由 Jira 调内网 Dify workflow 发送。
+    // 与 AI Report 一样，领取到消息后立即标记，避免 Jira 后续 webhookResponse 被 Dify 响应覆盖导致无法收尾。
+    if (message.targetType === 'ringcentral_sender') {
+      try {
+        markBotMessageExecuted(messageId, message.rowIndex, true, '', message.Topic, message.Content, executionKey);
+        Logger.log(`RingCentral AsMe sender 消息已预标记为成功: ${messageId}`);
+      } catch (markError) {
+        Logger.log(`标记 RingCentral AsMe sender 消息失败: ${markError}`);
+      }
     }
     
     // === 返回 Bot 消息数据（供 Jira 调用 Bot API）===

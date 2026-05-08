@@ -425,6 +425,52 @@ try {
   await saveScreenshot(panelPage, 'scene1-3-sidepanel.png');
   assertNoPanelPageErrors();
 
+  log('附加校验: demo side panel 行动项可定位到时间线证据');
+  const actionJumpPage = await context.newPage();
+  const assertNoActionJumpErrors = buildPageErrorCollector(actionJumpPage);
+  await actionJumpPage.goto(
+    `chrome-extension://${extensionId}/meeting-sidepanel.html?demo=1&scene1ActionJump=1`,
+    { waitUntil: 'load' },
+  );
+  await actionJumpPage.waitForFunction(
+    () => {
+      const shell = document.querySelector('.meeting-shell');
+      return Boolean(shell && shell.getAttribute('data-session-title'));
+    },
+    { timeout: 15000 },
+  );
+  await actionJumpPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await actionJumpPage
+    .locator('.action-card[data-action-id="action-1"] .ac-evidence')
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await actionJumpPage
+    .locator('.action-card[data-action-id="action-1"] button', {
+      hasText: '时间线',
+    })
+    .click();
+  await actionJumpPage.waitForFunction(() => {
+    const activeTab = document.querySelector('.panel-tab.active');
+    const focused = document.querySelector('.mini-tl-item.timeline-focused');
+    return (
+      /时间线/.test(activeTab?.textContent || '') &&
+      focused?.classList.contains('expanded') &&
+      /准备 Meeting Pilot 技术评审文档/.test(focused.textContent || '')
+    );
+  });
+  const actionJumpState = await actionJumpPage.evaluate(() => ({
+    activeTab: document.querySelector('.panel-tab.active')?.textContent || '',
+    focusedText:
+      document.querySelector('.mini-tl-item.timeline-focused')?.textContent ||
+      '',
+    expandedCount: document.querySelectorAll('.mini-tl-item.expanded').length,
+  }));
+  assert.match(actionJumpState.activeTab, /时间线/);
+  assert.match(actionJumpState.focusedText, /准备 Meeting Pilot 技术评审文档/);
+  assert.ok(actionJumpState.expandedCount >= 1, '时间线目标事件未展开');
+  await saveScreenshot(actionJumpPage, 'scene1-3b-action-timeline-jump.png');
+  assertNoActionJumpErrors();
+  await actionJumpPage.close();
+
   log('附加校验: overlay 渲染 P0 年龄标签与记忆弹幕链接');
   await panelPage.evaluate(
     async ({ tabId, url, title, meetingId }) => {

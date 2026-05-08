@@ -131,6 +131,23 @@
           <hr class="sidebar-divider" />
 
           <router-link
+            to="/skills"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">🧪</div>
+            <div class="entity-labels">
+              <div class="entity-name">个人技能</div>
+              <div class="entity-subnote">在用技能与萃取建议</div>
+            </div>
+            <div v-if="skillCount > 0" class="entity-count">
+              {{ skillCount }}
+            </div>
+          </router-link>
+
+          <hr class="sidebar-divider" />
+
+          <router-link
             v-for="entityType in entityTypes"
             :key="entityType.type"
             :to="`/entity/${entityType.type}`"
@@ -217,6 +234,7 @@ const pendingDecisionCount = ref(0);
 const activeReflectionCount = ref(0);
 const queuedActionCount = ref(0);
 const outreachSessionCount = ref(0);
+const skillCount = ref(0);
 let outreachCountTimer: ReturnType<typeof setInterval> | null = null;
 const TERMINAL_OUTREACH_STATUSES = new Set([
   'resolved',
@@ -424,6 +442,20 @@ async function loadOutreachSummaryCount() {
   }
 }
 
+async function loadSkillCount() {
+  try {
+    const client = getMemoryServiceClient();
+    const [active, suggestions] = await Promise.all([
+      client.getPersonalSkills({ filter: 'active' }),
+      client.getSkillSuggestions(),
+    ]);
+    skillCount.value = Number(active.total || 0) + Number(suggestions.total || 0);
+  } catch (error) {
+    console.error('加载个人技能数量失败:', error);
+    skillCount.value = 0;
+  }
+}
+
 function countPendingOutreachTemplates(
   items: OutreachTemplateRuntimeStatusItem[],
 ): number {
@@ -467,8 +499,10 @@ function resolveTemplateNextDispatchAt(
 
 onMounted(async () => {
   await loadOutreachSummaryCount();
+  await loadSkillCount();
   outreachCountTimer = setInterval(() => {
     void loadOutreachSummaryCount();
+    void loadSkillCount();
   }, 60_000);
 });
 

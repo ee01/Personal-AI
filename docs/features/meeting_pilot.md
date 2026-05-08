@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-05-07_
+_最后更新: 2026-05-08_
 
 ## 是什么
 
@@ -149,6 +149,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - 行动项 review 状态只会按稳定身份（owner / title / deadline）继承，避免实时分析刷新后把同一列表下标的新行动项误标为已忽略或已完成。
 - Side Panel 每条行动项支持一键复制结构化文本（行动项、负责人、截止、识别时间、状态和依据），也支持按当前筛选批量复制，方便快速贴到聊天、任务系统或会后纪要里。
 - Side Panel 每条行动项支持人工校正标题、负责人和截止时间；保存后会自动进入已确认状态，并在后续实时分析刷新时按 AI 原始身份继续继承，避免用户修正被新一轮结构化分析覆盖。
+- Side Panel 每条行动项支持回跳到同章时间线证据；点击 `时间线` 后会切到时间线 tab、展开并高亮最相关的 action / chapter 事件，便于从任务回看会议上下文。
 - 被忽略的行动项不会进入会议记忆 recap 的主行动项列表，但仍会保留在 session 的完整结构化数据里，方便排查 AI 误判。
 - LLM 结构化分析 prompt 要求输出 `actionItems.evidence`，启发式路径会把触发行动项的 transcript 句子写入 `evidence`。
 - LLM 返回的行动项 / 决议会补齐当前 chapterId，避免时间线展开时找不到同章行动项。
@@ -161,6 +162,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Otter 的 Meeting Summary 把 topics、action items、highlights、slides 放在同一封会后摘要里，说明行动项最好和会议材料/上下文并列呈现。
 - Granola 的 AI-enhanced notes 支持回看增强笔记来自 transcript / raw notes 的依据，并允许用户编辑单次会议笔记；Meeting Pilot 的行动项 review 因此把证据、确认/忽略/完成状态和人工校正入口放在同一条任务上。
 - Otter 的 Conversation / Summary 体验支持复制单条或全部 action items；Teams Facilitator 把 AI 会议笔记放到可编辑的 Loop 页面。Meeting Pilot 的行动项卡片因此需要保留低摩擦的“带依据复制”能力，先满足会后跟进，再考虑写入外部任务系统。
+- Otter 的行动项支持回看 transcript 位置，Granola 也强调每条增强笔记可追溯到 transcript / raw notes；Meeting Pilot 因此把行动项和时间线章节互链，先补足“任务 → 上下文证据”的复核路径。
 - Action Item Detection 相关论文强调行动项依赖 local/global context；Meeting Pilot 因此不应只显示一句“任务”，而应保留 owner、deadline 和证据句。
 - LLM-powered meeting recap 研究建议提供结构化 minutes 和 highlights 两种视图，并允许用户编辑/删除 AI recap；Meeting Pilot 当前先落地了行动项确认、忽略、完成和人工校正，后续再补编辑正文与导出到任务系统。
 

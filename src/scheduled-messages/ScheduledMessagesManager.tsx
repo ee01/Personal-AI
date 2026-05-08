@@ -34,9 +34,11 @@ import {
   getJiraAutomationRuleUrl,
   getRingCentralSenderConfig,
   getTimelineSyncRule,
+  hasRingCentralSenderCredentials,
   hasExecutorRule,
   hasTimelineSyncRule,
   normalizeSheetConfig,
+  shouldRecreateExecutorRuleForRingCentralSenderUpgrade,
   withBotAutomation,
   withRingCentralSender,
 } from './botAutomationConfig';
@@ -642,6 +644,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showBotConfigDialog, setShowBotConfigDialog] = useState(false);
   const [botConfigDialogMode, setBotConfigDialogMode] = useState<BotConfigDialogMode>('create');
+  const [botConfigDefaultEnableRingCentralSender, setBotConfigDefaultEnableRingCentralSender] = useState(false);
   const [botConfigured, setBotConfigured] = useState(false);
   const [timelineBotConfigured, setTimelineBotConfigured] = useState(false);
   const [showBotConfigWarning, setShowBotConfigWarning] = useState(false);
@@ -1169,7 +1172,7 @@ const ScheduledMessagesManager: React.FC = () => {
       ? `\n\n当前 App Script: ${appScriptVersion}\n最新 App Script: ${latestAppScriptVersion}`
       : '';
 
-    if (!confirm(`确定要升级调度系统吗？${versionSummary}\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（先预检部署，保持 Web App URL 不变）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本；如果 App Script deployment 预检失败，不会创建新的脚本版本。整个过程可能需要几分钟时间。`)) {
+    if (!confirm(`确定要升级调度系统吗？${versionSummary}\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（先重新确认线上版本，再预检部署，保持 Web App URL 不变）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本；如果 App Script 已是最新，会跳过脚本写入和版本创建；如果 deployment 预检失败，不会创建新的脚本版本。整个过程可能需要几分钟时间。`)) {
       return;
     }
     
@@ -1208,10 +1211,15 @@ const ScheduledMessagesManager: React.FC = () => {
         const appScriptResult = await appScriptUpdater.updateAppScript();
         
         if (appScriptResult.success) {
-          updateResults.push(`✅ App Script 已升级到 ${appScriptResult.newVersion}`);
+          const reportedVersion = appScriptResult.currentVersion || appScriptResult.newVersion || '';
+          updateResults.push(
+            appScriptResult.skipped
+              ? `✓ ${appScriptResult.message}，未创建新的脚本版本`
+              : `✅ App Script 已升级到 ${appScriptResult.newVersion}`
+          );
           setUpdateAvailable(false);
-          setAppScriptVersion(appScriptResult.newVersion || '');
-          setLatestAppScriptVersion(appScriptResult.newVersion || '');
+          setAppScriptVersion(reportedVersion);
+          setLatestAppScriptVersion(appScriptResult.latestVersion || appScriptResult.newVersion || reportedVersion);
         } else if (
           appScriptResult.errorCode === APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR &&
           appScriptResult.helpUrl
@@ -1369,7 +1377,14 @@ const ScheduledMessagesManager: React.FC = () => {
 
   const openBotConfigDialog = (mode?: BotConfigDialogMode) => {
     const nextMode = mode || getBotDialogModeForStatus(botConfigWarningState.status, config);
+    setBotConfigDefaultEnableRingCentralSender(false);
     setBotConfigDialogMode(nextMode);
+    setShowBotConfigDialog(true);
+  };
+
+  const openRingCentralSenderConfigDialog = () => {
+    setBotConfigDefaultEnableRingCentralSender(true);
+    setBotConfigDialogMode(hasExecutorRule(config) ? 'repair' : 'create');
     setShowBotConfigDialog(true);
   };
   
@@ -2559,7 +2574,7 @@ const ScheduledMessagesManager: React.FC = () => {
               disabled={isUpdating}
               title={isAppScriptVersionLimitReached
                 ? `${appScriptVersionUsageText}请先清理旧版本后再升级。`
-                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}`}
+                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule；升级前会重新确认线上版本，已是最新时不会重复创建脚本版本。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}`}
             >
               {isUpdating
                 ? '⏳ 升级中...'
@@ -2603,7 +2618,7 @@ const ScheduledMessagesManager: React.FC = () => {
                 当前 {appScriptVersion || '未知'}，最新 {latestAppScriptVersion || '未知'}。{appScriptVersionUsageText}
                 {isAppScriptVersionLimitReached
                   ? '请先清理旧版本，避免升级流程被 200 个版本上限阻塞。'
-                  : '升级前会预检部署和版本额度，保持 Web App URL 不变；失败项会保留旧版本，可稍后重试。'}
+                  : '升级前会重新确认线上版本、预检部署和版本额度，保持 Web App URL 不变；如果已是最新，会跳过脚本写入和版本创建。'}
               </p>
             </div>
           </div>
@@ -3039,7 +3054,9 @@ const ScheduledMessagesManager: React.FC = () => {
            timelineSyncRuleUrl={timelineSyncRuleUrl}
            outreachEnabled={outreachRuntime.enabled}
            outreachConfigured={outreachRuntime.enabled && outreachRuntime.ringCentralReady}
+           ringCentralSenderConfigured={hasRingCentralSenderCredentials(config)}
            onConfigureBot={(mode) => openBotConfigDialog(mode)}
+           onConfigureRingCentralSender={openRingCentralSenderConfigDialog}
            onConfigureOutreach={openOptionsPage}
            dialogMode={addDialogMode}
            currentUsername={currentUsername}
@@ -3053,7 +3070,11 @@ const ScheduledMessagesManager: React.FC = () => {
          <BotConfigDialog
            config={config}
            mode={botConfigDialogMode}
-           onClose={() => setShowBotConfigDialog(false)}
+           defaultEnableRingCentralSender={botConfigDefaultEnableRingCentralSender}
+           onClose={() => {
+             setBotConfigDefaultEnableRingCentralSender(false);
+             setShowBotConfigDialog(false);
+           }}
           onSuccess={(updatedConfig) => {
             const normalizedConfig = normalizeSheetConfig(updatedConfig);
             setConfig(normalizedConfig);
@@ -3061,6 +3082,7 @@ const ScheduledMessagesManager: React.FC = () => {
             setTimelineBotConfigured(hasTimelineSyncRule(normalizedConfig));
             setShowBotConfigWarning(false);
             setBotConfigWarningState(buildBotConfigWarningState('ok', normalizedConfig));
+            setBotConfigDefaultEnableRingCentralSender(false);
             setShowBotConfigDialog(false);
             void initializeApp();
             alert(
@@ -3738,7 +3760,9 @@ const AddMessageDialog: React.FC<{
   timelineSyncRuleUrl?: string;
   outreachEnabled: boolean;
   outreachConfigured: boolean;
+  ringCentralSenderConfigured: boolean;
   onConfigureBot: (mode?: BotConfigDialogMode) => void;
+  onConfigureRingCentralSender: () => void;
   onConfigureOutreach: () => void;
   dialogMode?: AddDialogMode;
   currentUsername?: string;
@@ -3755,7 +3779,9 @@ const AddMessageDialog: React.FC<{
   timelineSyncRuleUrl,
   outreachEnabled,
   outreachConfigured,
+  ringCentralSenderConfigured,
   onConfigureBot,
+  onConfigureRingCentralSender,
   onConfigureOutreach: _onConfigureOutreach,
   dialogMode = 'default',
   currentUsername = '',
@@ -6148,6 +6174,35 @@ ${content}
                  </button>
                </div>
              )}
+             {formData.Push_Method === 'AsMe' && !ringCentralSenderConfigured && (
+               <div style={{
+                 marginTop: '12px',
+                 padding: '12px',
+                 backgroundColor: '#e7f3ff',
+                 borderRadius: '6px',
+                 border: '1px solid #b3d7ff',
+               }}>
+                 <p style={{ margin: '0 0 10px 0', color: '#0b4f79', fontSize: '14px', lineHeight: '1.5' }}>
+                   AsMe 当前会继续使用邮件 fallback。配置 RingCentral sender 后，将由 Jira rule 调内网 Dify 接口发送，可支持 @ 人。
+                 </p>
+                 <button
+                   type="button"
+                   onClick={onConfigureRingCentralSender}
+                   style={{
+                     padding: '8px 16px',
+                     backgroundColor: '#007bff',
+                     color: '#fff',
+                     border: 'none',
+                     borderRadius: '4px',
+                     cursor: 'pointer',
+                     fontSize: '14px',
+                     fontWeight: 'bold',
+                   }}
+                 >
+                   🔧 配置 @ 人发送能力
+                 </button>
+               </div>
+             )}
            </div>
           
           {/* AI Report 配置 */}
@@ -7694,9 +7749,10 @@ document.head.appendChild(styleSheet);
 const BotConfigDialog: React.FC<{
   config: SheetConfig;
   mode: BotConfigDialogMode;
+  defaultEnableRingCentralSender?: boolean;
   onClose: () => void;
   onSuccess: (updatedConfig: SheetConfig) => void;
-}> = ({ config, mode, onClose, onSuccess }) => {
+}> = ({ config, mode, defaultEnableRingCentralSender = false, onClose, onSuccess }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState<'input' | 'testing' | 'creating'>('input');
@@ -7709,7 +7765,9 @@ const BotConfigDialog: React.FC<{
   const isProjectConfigLocked = mode !== 'create' && Boolean(existingBaseRule?.jiraUrl && existingBaseRule?.projectKey);
   const [jiraUrl, setJiraUrl] = useState(existingBaseRule?.jiraUrl || 'https://jira.ringcentral.com');
   const [projectKey, setProjectKey] = useState(existingBaseRule?.projectKey || '');
-  const [ringCentralSenderEnabled, setRingCentralSenderEnabled] = useState(Boolean(existingRingCentralSender?.enabled));
+  const [ringCentralSenderEnabled, setRingCentralSenderEnabled] = useState(
+    defaultEnableRingCentralSender || Boolean(existingRingCentralSender?.enabled)
+  );
   const [ringCentralClientId, setRingCentralClientId] = useState(existingRingCentralSender?.clientId || '');
   const [ringCentralClientSecret, setRingCentralClientSecret] = useState('');
   const [ringCentralJwt, setRingCentralJwt] = useState('');
@@ -7745,7 +7803,8 @@ const BotConfigDialog: React.FC<{
       ? [
           '将只重建缺失的 Jira Automation 规则',
           '仍然存在的规则会保留，不会重复创建',
-          'Jira URL 和 Project Key 将优先复用现有配置'
+          'Jira URL 和 Project Key 将优先复用现有配置',
+          '如果这次开启 RingCentral AsMe sender 且当前是旧版 executor rule，会先删除旧 rule 再创建新版 rule'
         ]
       : [
           '需要您在 Jira 上有管理权限的项目',
@@ -7836,8 +7895,32 @@ const BotConfigDialog: React.FC<{
       } as BotAutomationConfig;
 
       let nextBotAutomation: BotAutomationConfig = existingBotAutomation;
+      const shouldRecreateExecutorForRingCentralSender = shouldRecreateExecutorRuleForRingCentralSenderUpgrade(
+        normalizedConfig,
+        resolvedRingCentralSender
+      );
 
-      if (mode === 'create') {
+      if (shouldRecreateExecutorForRingCentralSender && existingBotAutomation.executorRule?.ruleId) {
+        try {
+          await jiraService.deleteRule(jiraConfig, existingBotAutomation.executorRule.ruleId);
+        } catch (deleteError) {
+          const deleteMessage = deleteError instanceof Error ? deleteError.message : String(deleteError);
+          if (!deleteMessage.includes('(404)')) {
+            throw deleteError;
+          }
+          console.warn('旧 Bot executor rule 已不存在，继续创建新 rule:', deleteError);
+        }
+
+        const executorRule = await jiraService.createBotExecutorRule(jiraConfig, normalizedConfig.webAppUrl);
+        const timelineSyncRule = existingBotAutomation.timelineSyncRule?.ruleId
+          ? existingBotAutomation.timelineSyncRule
+          : await jiraService.createTimelineSyncRule(jiraConfig, normalizedConfig.webAppUrl);
+
+        nextBotAutomation = {
+          executorRule,
+          timelineSyncRule,
+        };
+      } else if (mode === 'create') {
         nextBotAutomation = await jiraService.createBotAutomationRules(jiraConfig, normalizedConfig.webAppUrl);
       } else if (mode === 'upgrade-sync-only') {
         if (!existingBotAutomation.executorRule?.ruleId) {
@@ -7875,7 +7958,7 @@ const BotConfigDialog: React.FC<{
         resolvedRingCentralSender
       );
       
-      if (mode !== 'create' && nextBotAutomation.executorRule?.ruleId) {
+      if (mode !== 'create' && !shouldRecreateExecutorForRingCentralSender && nextBotAutomation.executorRule?.ruleId) {
         const { JiraRuleUpdater } = await import('./JiraRuleUpdater');
         const updateResult = await new JiraRuleUpdater(updatedConfig).updateJiraRule();
         if (!updateResult.success) {

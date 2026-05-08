@@ -21,6 +21,7 @@ import ActionQueue from './components/ActionQueue.vue';
 import OutreachSessions from './components/OutreachSessions.vue';
 import OutreachSessionDetail from './components/OutreachSessionDetail.vue';
 import MeetingHistoryPage from './components/MeetingHistoryPage.vue';
+import PersonalSkillsPage from './components/PersonalSkillsPage.vue';
 
 // 路由配置
 const routes = [
@@ -43,6 +44,7 @@ const routes = [
   },
   { path: '/actions', name: 'ActionQueue', component: ActionQueue },
   { path: '/outreach', name: 'OutreachSessions', component: OutreachSessions },
+  { path: '/skills', name: 'PersonalSkills', component: PersonalSkillsPage },
   {
     path: '/outreach/:id',
     name: 'OutreachSessionDetail',

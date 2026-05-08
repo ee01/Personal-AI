@@ -166,7 +166,7 @@
       <div class="search-results-grid">
         <div 
           v-for="entity in filteredResults" 
-          :key="entity.id" 
+          :key="getSearchResultKey(entity)"
           class="search-result-card"
           @click="handleResultClick(entity)"
         >
@@ -277,6 +277,7 @@ import {
   getRecallChannelLabel,
   getResultChannels,
   getResultMeta,
+  getSearchResultKey,
   getScopeLabel,
   normalizeMemorySourceUrl,
   sanitizeMemoryExploreRoute,

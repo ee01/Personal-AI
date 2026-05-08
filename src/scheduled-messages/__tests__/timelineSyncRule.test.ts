@@ -12,7 +12,7 @@ import {
   buildTimelineSyncComponents,
   buildTimelineSyncComponentsFragment,
 } from '../timelineProjects.js';
-import { redactJiraRulePayloadForLog } from '../jiraRulePayloadSafety.js';
+import { redactJiraRulePayloadForLog, redactJiraRuleTextForLog } from '../jiraRulePayloadSafety.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const scheduledMessagesDir = resolve(__dirname, '..');
@@ -364,6 +364,54 @@ result = findMatchingMessage(data, headers, now, {}, 'CURRENT_MINUTE', '2026-05-
 
   assert.equal(context.result.targetType, 'ringcentral_sender');
   assert.equal(context.result.chatId, '123456789');
+});
+
+test('Apps Script pre-marks RingCentral AsMe sender messages when Jira claims them', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_User_Name',
+    'Glip_Team_ID',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    ['MSG_ASME', 'As me', 'hello @John', 'AsMe', 'esone.qiu', '', '2026-05-03', '12:00', '', '0', '', '', 'Active'],
+  ];
+  const configRows = [
+    ['Key', 'Value'],
+    ['ringcentral_sender_enabled', 'true'],
+    ['ringcentral_sender_client_id', 'client-id'],
+    ['ringcentral_sender_client_secret', 'client-secret'],
+    ['ringcentral_sender_jwt', 'jwt'],
+    ['bot_automation_executor_rule_id', '2709'],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, configRows);
+
+  vm.runInNewContext(
+    `${appScript}
+result = getMessageCurrentTimeWithReleaseInfo({ currentTime: '2026-05-03 12:00', releaseInfo: {} });`,
+    context,
+  );
+
+  assert.equal(context.result.executed, true);
+  assert.equal(context.result.targetType, 'ringcentral_sender');
+  assert.equal(context.result.messageId, 'MSG_ASME');
+  assert.equal(context.result.chatId, 'esone.qiu');
+  assert.equal(updates.some(update => update.row === 2 && update.value === 'Done'), true);
+  assert.equal(logs.length, 1);
 });
 
 test('Apps Script does not fire explicit executor messages before the scheduled minute', () => {
@@ -1277,7 +1325,7 @@ test('Executor rule mark-executed webhooks carry rowIndex from the message looku
 
   collectUrls(template);
 
-  assert.equal(webhooks.length, 4);
+  assert.equal(webhooks.length, 3);
   for (const webhook of webhooks) {
     const url = webhook.value.url;
     const body = webhook.value.customBody || '';
@@ -1329,7 +1377,7 @@ test('Executor rule keeps Bot API token hidden and redacted from diagnostic logs
   for (const webhook of botApiWebhooks) {
     const authHeader = webhook.value.headers.find((header: any) => header.name === 'Authorization');
     assert.equal(authHeader?.value?.keyOrValue, 'Bearer {{BOT_TOKEN}}');
-    assert.equal(authHeader?.value?.secret, true);
+    assert.equal(authHeader?.value?.secret, false);
   }
 
   const payload = {
@@ -1395,7 +1443,7 @@ test('Executor rule sends RingCentral AsMe messages through the Dify workflow br
   const webhook = ringCentralWebhooks[0];
   const authHeader = webhook.value.headers.find((header: any) => header.name === 'Authorization');
   assert.equal(authHeader?.value?.keyOrValue, 'Bearer {{RINGCENTRAL_SENDER_DIFY_API_KEY}}');
-  assert.equal(authHeader?.value?.secret, true);
+  assert.equal(authHeader?.value?.secret, false);
   assert.match(webhook.value.customBody, /"clientId": "{{RINGCENTRAL_SENDER_CLIENT_ID}}"/);
   assert.match(webhook.value.customBody, /"clientSecret": "{{RINGCENTRAL_SENDER_CLIENT_SECRET}}"/);
   assert.match(webhook.value.customBody, /"jwt": "{{RINGCENTRAL_SENDER_JWT}}"/);
@@ -1427,12 +1475,17 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
   assert.match(redacted.value.customBody, /"jwt": "\[REDACTED\]"/);
   assert.match(redacted.value.customBody, /"chatId": "esone\.qiu"/);
   assert.doesNotMatch(JSON.stringify(redacted), /dify-token|live-client-secret|live-jwt/);
+
+  const jiraError = 'A secret with key Bearer live-token does not exist. {"jwt":"live-jwt"}';
+  const redactedError = redactJiraRuleTextForLog(jiraError);
+  assert.match(redactedError, /Bearer \[REDACTED\]/);
+  assert.doesNotMatch(redactedError, /live-token|live-jwt/);
 });
 
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.7\.2';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.7\.4';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -1678,6 +1731,7 @@ function createMarkExecutedVmContext(
   updates: any[],
   logs: any[],
   properties: Record<string, string>,
+  configRows: string[][] = [],
 ) {
   const messageSheet = {
     getDataRange: () => ({
@@ -1691,6 +1745,11 @@ function createMarkExecutedVmContext(
     insertRowAfter: () => undefined,
     getRange: () => ({
       setValues: (values: unknown[][]) => logs.push(values),
+    }),
+  };
+  const configSheet = {
+    getDataRange: () => ({
+      getDisplayValues: () => configRows,
     }),
   };
 
@@ -1721,6 +1780,9 @@ function createMarkExecutedVmContext(
           }
           if (name === 'Logs') {
             return logsSheet;
+          }
+          if (name === 'Config') {
+            return configSheet;
           }
           return null;
         },

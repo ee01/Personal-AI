@@ -168,6 +168,7 @@
 - 如果 Bot 初始化时配置了 RingCentral Client ID / Client Secret / JWT，AsMe 会改由 **Jira Automation** 调内网 Dify RingCentral sender workflow 发送
 - RingCentral sender 路径继续复用 `Glip_User_Name` / `Glip_Team_ID` 作为 Dify `chatId`；例如 `Glip_User_Name = esone.qiu` 会传给 Dify 的 `chatId`
 - 未配置或关闭 RingCentral sender 时，仍由 **AppScript 引擎**执行邮件 fallback
+- 老版本 Sheet 如果已有 Bot executor rule 但没有 `ringcentral_sender_*` 配置，新建消息弹窗选择 AsMe 时会提示配置 @ 人发送能力；提交完整 RingCentral credentials 后，会先删除低于 v1.4.0 的旧 executor rule，再创建支持 Dify sender 的新版 rule
 
 #### Bot（机器人身份发送）
 - 通过 Jira Automation 调用内网 Bot API

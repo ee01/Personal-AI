@@ -4,7 +4,7 @@
 
 为了让用户能够在扩展更新时自动获取最新的 App Script 代码，我们实现了一套完整的自动更新机制。该机制使用 Google Apps Script API 的 `deployments.update` 接口，确保在更新代码的同时保持 Web App URL 不变。
 
-当前实现会在后台静默检查、在管理页面提供手动检查和升级入口，并在升级前展示当前/最新版本、Project History 版本额度、URL 不变和失败保留旧版本的说明。升级会先预检是否存在可更新的正式 Web App deployment，再检查 Apps Script Project History 是否还有新建版本额度，然后才写入代码和创建新版本，避免 deployment 配置异常或 200 个版本上限导致升级中途阻塞。版本比较按 SemVer 优先级处理，兼容常见的 `v` 前缀和 build metadata，避免因为 `2.6.16+build.7` 这类等价版本造成重复升级。
+当前实现会在后台静默检查、在管理页面提供手动检查和升级入口，并在升级前展示当前/最新版本、Project History 版本额度、URL 不变和失败保留旧版本的说明。升级会先重新读取线上 Web App 版本，已是最新或更高版本时直接跳过脚本写入和版本创建；确实需要升级时，才预检是否存在可更新的正式 Web App deployment，再检查 Apps Script Project History 是否还有新建版本额度，然后写入代码和创建新版本，避免重复点击、状态过期、deployment 配置异常或 200 个版本上限导致升级中途阻塞。版本探测临时失败不会被当成旧版脚本，旧版兼容只用于 Web App 正常响应但缺少 `version` 字段的情况。版本比较按 SemVer 优先级处理，兼容常见的 `v` 前缀和 build metadata，避免因为 `2.6.16+build.7` 这类等价版本造成重复升级。
 
 ## 功能特性
 
@@ -14,8 +14,8 @@
 
 ```javascript
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.6.26';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-07';
+var APP_SCRIPT_VERSION = '2.7.3';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-08';
 ```
 
 同时提供了一个 API 端点来获取当前部署的版本：
@@ -50,7 +50,9 @@ export interface SheetConfig {
 创建了 `AppScriptUpdater` 类，提供以下功能：
 
 - **检查更新**: `checkForUpdates()` - 对比本地版本和部署版本
-- **执行更新**: `updateAppScript()` - 先预检正式 deployment，再自动更新 App Script 代码并重新部署
+- **执行更新**: `updateAppScript()` - 先重新确认线上版本，再预检正式 deployment，最后自动更新 App Script 代码并重新部署
+- **幂等跳过**: 如果线上 Web App 已经是最新或更高版本，直接返回成功，不写入项目代码，不创建新的 Project History 版本
+- **探测失败保护**: 如果升级前无法确认线上版本，会停止升级并提示重试，避免网络/API 临时失败时消耗脚本版本额度
 - **版本额度预检**: 升级前通过 `projects.versions.list` 读取 Project History 使用量；达到 200 个版本上限时直接提示清理，不先覆盖脚本代码
 - **版本比较**: 使用 `compareAppScriptVersions()` 按 SemVer 优先级比较版本，build metadata 不参与排序，异常旧值会被视为需要恢复升级
 - **版本解析**: 从 `app-script-template.gs` 读取最新版本和更新时间，避免在多个文件重复维护版本号
@@ -90,9 +92,12 @@ if (details.reason === 'update') {
    - 从 Chrome Storage 读取配置
    - 只使用缓存授权；没有缓存 token 时跳过后台检查，不打断用户
    - 调用 Web App 的 `getVersion` 端点获取当前部署版本
+   - 如果版本探测失败，跳过本次自动升级；如果线上已是最新，会同步配置缓存
    - 与扩展中的最新版本对比
 
 3. **执行更新**（如果需要）
+   - 重新读取 Web App 当前版本；如果已经是最新或更高版本，跳过 App Script 写入和版本创建
+   - 如果重新读取失败，停止升级，不继续写代码或创建版本
    - 先查找并验证有 `versionNumber` 的正式 Web App deployment；如果只有 @HEAD 或没有 Web App deployment，升级会在创建脚本版本前失败
    - 读取 Project History 版本数量；如果已达到 200 个版本上限，直接提示用户清理，不写入 HEAD 代码
    - 加载最新的 App Script 模板代码
@@ -218,6 +223,11 @@ await fetch(
    - 升级前主动读取 Project History 用量；已满时直接阻止升级写入
    - 提供 Project History 清理入口
    - 用户清理旧版本后可重试升级
+
+6. **版本探测临时失败**
+   - 网络错误或 Web App 非 2xx 响应会停止检查/升级
+   - 只有 Web App 正常响应但缺少 `version` 字段时，才按旧版脚本继续升级
+   - 避免因为短暂失败重复创建 Apps Script Project History 版本
 
 ### 已知问题和解决方案
 
@@ -447,6 +457,7 @@ import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 
 ## 更新记录
 
+- 2026-05-08：App Script 版本更新到 2.7.3；升级前重新确认线上版本，已是最新时直接跳过脚本写入和版本创建；版本探测临时失败时停止升级，避免重复点击或网络/API 抖动消耗 Project History 版本额度。
 - 2026-05-07：App Script 版本更新到 2.6.26，非法 Timeline Sync POST JSON 诊断会持久记录 Content-Type 和请求体大小，便于在扩展状态面板排查 Jira webhook 配置。
 - 2026-05-06：升级前增加 Project History 版本额度预检；达到 200 个版本上限时，管理页直接引导用户打开清理页面，避免先覆盖脚本 HEAD 代码后才失败。
 - 2026-05-06：App Script 版本更新到 2.6.23，Timeline Sync 会记录每个项目最近一次缓存写入尝试的安全诊断，便于 UI 展示失败原因。

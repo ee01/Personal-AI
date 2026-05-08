@@ -6,7 +6,10 @@
 import { SheetConfig } from './types';
 import { ConfigSyncService } from './ConfigSyncService';
 import { normalizeSheetConfig } from './botAutomationConfig';
-import { isAppScriptVersionOlder } from './appScriptVersioning';
+import {
+  compareAppScriptVersions,
+  isAppScriptVersionOlder,
+} from './appScriptVersioning';
 
 export interface UpdateCheckResult {
   needsUpdate: boolean;
@@ -20,6 +23,9 @@ export interface UpdateResult {
   success: boolean;
   message: string;
   newVersion?: string;
+  currentVersion?: string;
+  latestVersion?: string;
+  skipped?: boolean;
   error?: string;
   errorCode?: string;
   helpUrl?: string;
@@ -29,6 +35,12 @@ export interface UpdateResult {
 export interface AppScriptVersionInfo {
   version: string;
   lastUpdated: string;
+}
+
+interface DeployedAppScriptVersionInfo {
+  version: string;
+  lastUpdated?: string;
+  legacyFallback?: boolean;
 }
 
 export interface AppScriptVersionUsage {
@@ -164,7 +176,8 @@ export class AppScriptUpdater {
       }
       
       // 从 Web App 获取当前部署的版本
-      const currentVersion = await this.getDeployedVersion();
+      const deployedVersionInfo = await this.getDeployedVersionInfo();
+      const currentVersion = deployedVersionInfo.version;
       
       // 比较版本
       const needsUpdate = isAppScriptVersionOlder(currentVersion, latestVersion);
@@ -174,6 +187,15 @@ export class AppScriptUpdater {
             return undefined;
           })
         : undefined;
+
+      if (!needsUpdate) {
+        await this.syncKnownDeployedVersionToConfigIfStale(
+          deployedVersionInfo,
+          latestVersionInfo,
+        ).catch((error) => {
+          console.warn('同步已部署 App Script 版本到配置失败:', error);
+        });
+      }
       
       return {
         needsUpdate,
@@ -198,31 +220,54 @@ export class AppScriptUpdater {
   /**
    * 获取已部署的 App Script 版本
    */
-  private async getDeployedVersion(): Promise<string> {
+  private async getDeployedVersionInfo(): Promise<DeployedAppScriptVersionInfo> {
     if (!this.config?.webAppUrl) {
       throw new Error('未找到 Web App URL');
     }
-    
+
+    let response: Response;
     try {
-      const response = await fetch(`${this.config.webAppUrl}?action=getVersion`, {
+      response = await fetch(`${this.config.webAppUrl}?action=getVersion`, {
         method: 'GET',
         headers: {
           'Cache-Control': 'no-cache'
         }
       });
-      
-      if (!response.ok) {
-        throw new Error(`获取版本失败: HTTP ${response.status}`);
-      }
-      
-      const data = await response.json();
-      return data.version || '0.0.0';
-      
     } catch (error) {
-      console.warn('无法获取已部署的版本，可能是旧版本脚本:', error);
-      // 如果 getVersion 端点不存在，说明是旧版本
-      return '0.0.0';
+      throw new Error(`无法连接 App Script Web App 版本端点: ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    if (!response.ok) {
+      throw new Error(`获取 App Script 版本失败: HTTP ${response.status}`);
+    }
+
+    let data: any = null;
+    try {
+      data = await response.json();
+    } catch (error) {
+      console.warn('App Script 版本端点未返回 JSON，按旧版脚本处理:', error);
+      return { version: '0.0.0', legacyFallback: true };
+    }
+
+    const deployedVersion = typeof data?.version === 'string' ? data.version.trim() : '';
+    if (!deployedVersion) {
+      console.warn('App Script 版本端点未返回 version 字段，按旧版脚本处理');
+      return {
+        version: '0.0.0',
+        lastUpdated: typeof data?.lastUpdated === 'string' ? data.lastUpdated : undefined,
+        legacyFallback: true
+      };
+    }
+
+    return {
+      version: deployedVersion,
+      lastUpdated: typeof data?.lastUpdated === 'string' ? data.lastUpdated : undefined
+    };
+  }
+
+  private buildVersionProbeFailureMessage(error: unknown): string {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `升级前无法确认线上 App Script 版本，已停止本次升级以避免重复创建脚本版本。请检查网络或 Web App URL 后重试。原因：${reason}`;
   }
   
   /**
@@ -244,26 +289,56 @@ export class AppScriptUpdater {
       // 0. 获取最新版本号
       const latestVersionInfo = await AppScriptUpdater.getLatestVersionInfo();
       const latestVersion = latestVersionInfo.version;
+
+      // 1. 重新读取线上部署版本，避免 UI 状态过期或重复点击时创建无意义的新版本
+      if (this.config.webAppUrl) {
+        let deployedVersionInfo: DeployedAppScriptVersionInfo;
+        try {
+          deployedVersionInfo = await this.getDeployedVersionInfo();
+        } catch (error) {
+          throw new Error(this.buildVersionProbeFailureMessage(error));
+        }
+
+        const deployedVersion = deployedVersionInfo.version;
+        const deployedComparison = compareAppScriptVersions(deployedVersion, latestVersion);
+
+        if (deployedComparison >= 0) {
+          await this.syncKnownDeployedVersionToConfigIfStale(
+            deployedVersionInfo,
+            latestVersionInfo,
+          );
+
+          console.log(`✅ App Script 已是最新版本 (${deployedVersion})，跳过项目写入和版本创建`);
+          return {
+            success: true,
+            message: `App Script 已是最新版本 ${deployedVersion}`,
+            currentVersion: deployedVersion,
+            latestVersion,
+            newVersion: deployedVersion,
+            skipped: true
+          };
+        }
+      }
       
-      // 1. 先验证存在可更新的正式 deployment，避免预检失败时仍消耗 Apps Script 版本额度
+      // 2. 先验证存在可更新的正式 deployment，避免预检失败时仍消耗 Apps Script 版本额度
       const deploymentId = await this.getOrCreateDeploymentId();
 
-      // 2. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
+      // 3. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
       await this.assertProjectVersionCapacity(this.config.scriptId);
       
-      // 3. 加载最新的 App Script 模板代码
+      // 4. 加载最新的 App Script 模板代码
       const scriptCode = await this.loadAppScriptTemplate();
       
-      // 4. 更新 App Script 项目代码
+      // 5. 更新 App Script 项目代码
       await this.updateProjectContent(this.config.scriptId, scriptCode);
       
-      // 5. 创建新版本
+      // 6. 创建新版本
       const versionNumber = await this.createVersion(this.config.scriptId, latestVersion);
       
-      // 6. 更新部署到新版本（保持 URL 不变）
+      // 7. 更新部署到新版本（保持 URL 不变）
       await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber, latestVersion);
       
-      // 7. 更新配置中的版本信息
+      // 8. 更新配置中的版本信息
       await this.updateConfigVersion(latestVersionInfo);
       
       console.log('App Script 更新成功！');
@@ -271,6 +346,8 @@ export class AppScriptUpdater {
       return {
         success: true,
         message: `App Script 已更新到版本 ${latestVersion}`,
+        currentVersion: latestVersion,
+        latestVersion,
         newVersion: latestVersion
       };
       
@@ -623,6 +700,36 @@ export class AppScriptUpdater {
     // 同步到 Google Sheet
     await this.syncConfigToSheet();
   }
+
+  private async syncKnownDeployedVersionToConfigIfStale(
+    deployedVersionInfo: DeployedAppScriptVersionInfo,
+    bundledVersionInfo: AppScriptVersionInfo,
+  ): Promise<void> {
+    if (!this.config || deployedVersionInfo.legacyFallback) {
+      return;
+    }
+
+    const deployedComparison = compareAppScriptVersions(
+      deployedVersionInfo.version,
+      bundledVersionInfo.version,
+    );
+    const versionInfo: AppScriptVersionInfo = {
+      version: deployedVersionInfo.version,
+      lastUpdated: deployedComparison === 0
+        ? bundledVersionInfo.lastUpdated
+        : deployedVersionInfo.lastUpdated || this.config.appScriptLastUpdated || bundledVersionInfo.lastUpdated
+    };
+
+    const configuredVersion = this.config.appScriptVersion || '0.0.0';
+    const configuredLastUpdated = this.config.appScriptLastUpdated || '';
+    const configuredComparison = compareAppScriptVersions(configuredVersion, versionInfo.version);
+    const versionIsStale = configuredComparison < 0;
+    const dateIsStale = configuredComparison === 0 && configuredLastUpdated !== versionInfo.lastUpdated;
+
+    if (versionIsStale || dateIsStale) {
+      await this.updateConfigVersion(versionInfo);
+    }
+  }
   
   /**
    * 保存配置到 Chrome Storage
@@ -698,6 +805,10 @@ export class AppScriptUpdater {
       
       // 检查是否需要更新
       const checkResult = await updater.checkForUpdates();
+      if (checkResult.error) {
+        console.warn(`⚠️ App Script 更新检查失败，跳过自动升级: ${checkResult.error}`);
+        return;
+      }
       
       if (!checkResult.needsUpdate) {
         console.log(`✅ App Script 已是最新版本 (${checkResult.currentVersion})`);

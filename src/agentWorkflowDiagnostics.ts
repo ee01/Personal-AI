@@ -95,11 +95,20 @@ function getToolLabel(tool: AgentWorkflowTraceToolLike): string {
   return tool.displayName || tool.name || '未知工具';
 }
 
+function normalizeConfidence(value?: number): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = value > 1 && value <= 100 ? value / 100 : value;
+  return Math.min(1, Math.max(0, normalized));
+}
+
 function getConfidenceLabel(confidence?: number): string {
-  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) {
+  const normalized = normalizeConfidence(confidence);
+  if (normalized === null) {
     return '';
   }
-  return `${Math.round(confidence * 100)}%`;
+  return `${Math.round(normalized * 100)}%`;
 }
 
 function getMatchedRuleLabel(result: AgentWorkflowResultLike): string {

@@ -130,13 +130,17 @@ async function main() {
     const quickLabels = await page.$$eval('.snooze-quick-option-label', (els) =>
       els.map((el) => el.textContent?.trim()),
     );
-    assert.deepEqual(quickLabels, [
-      '1 小时后',
-      '3 小时后',
-      '今天下班前',
-      '明天 9 点',
-      '下周一 9 点',
-    ]);
+    assert.equal(quickLabels.length, 5);
+    assert.deepEqual(quickLabels.slice(0, 2), ['1 小时后', '3 小时后']);
+    assert.match(quickLabels[2], /^(今天|明天|周[一二三四五])下班前$/);
+    assert.match(quickLabels[3], /^(明天|周[一二三四五]) 9 点$/);
+    assert.equal(quickLabels[4], '下周一 9 点');
+
+    const quickTimes = await page.$$eval('.snooze-quick-option-time', (els) =>
+      els.map((el) => el.textContent?.trim()),
+    );
+    assert.equal(quickTimes.length, 5);
+    assert.equal(quickTimes.every(Boolean), true);
 
     await page.locator('.snooze-custom-option').click();
     await page.waitForSelector('.snooze-picker', { timeout: 3_000 });

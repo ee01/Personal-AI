@@ -6,6 +6,7 @@ import {
   getResultChannels,
   getResultMeta,
   getScopeLabel,
+  getSearchResultKey,
   normalizeMemorySourceUrl,
   sanitizeMemoryExploreRoute,
   shouldResetTypeFilter,
@@ -18,6 +19,12 @@ assert.equal(getScopeLabel('both'), '全部记忆');
 
 assert.equal(getRecallChannelLabel('vector'), '语义');
 assert.equal(getRecallChannelLabel('unknown'), 'unknown');
+assert.equal(getSearchResultKey({ resultKey: 'message:101' }), 'message:101');
+assert.equal(
+  getSearchResultKey({ id: '101', recallType: 'chunk', type: 'message' }),
+  'chunk:101',
+);
+assert.equal(getSearchResultKey({ id: '101', type: 'message' }), 'message:101');
 assert.deepEqual(getResultChannels({ channels: ['vector', '', 1, 'fts'] }), [
   'vector',
   'fts',

@@ -5,6 +5,12 @@ import {
   buildAgentToolCallKey,
   IntelligentAgent,
 } from '../src/agentThinking.ts';
+import {
+  buildAgentFlowSteps,
+  getStepKind,
+  getStepSummary,
+  getToolStepResultPresentation,
+} from '../src/agentVisualizerPresentation.ts';
 import { buildRuntimeWatchRules } from '../src/watchRules.ts';
 import type { TopicItemWithAutoReply } from '../src/message-reaction/AutoReplyHandler.ts';
 import type { OutreachSession } from '../src/services/MemoryServiceClient.ts';
@@ -321,8 +327,94 @@ async function main() {
   assert.ok(!agentThinkingSource.includes('考虑使用orgStructure'));
   assert.ok(agentThinkingSource.includes('已阻断调用'));
   const agentVisualizerSource = readFileSync('src/agent-visualizer.tsx', 'utf8');
-  assert.ok(agentVisualizerSource.includes('stepHasToolBlocked'));
-  assert.ok(agentVisualizerSource.includes('已阻断'));
+  assert.ok(agentVisualizerSource.includes('agentVisualizerPresentation'));
+  assert.ok(agentVisualizerSource.includes('role="button"'));
+  assert.ok(agentVisualizerSource.includes('aria-expanded'));
+  const agentVisualizerPresentationSource = readFileSync(
+    'src/agentVisualizerPresentation.ts',
+    'utf8',
+  );
+  assert.ok(agentVisualizerPresentationSource.includes('stepHasToolBlocked'));
+  assert.ok(agentVisualizerPresentationSource.includes('已阻断'));
+  const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
+  assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
+  assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
+
+  const timestamp = Date.parse('2026-05-08T00:00:00.000Z');
+  const blockedStep = {
+    timestamp,
+    thought: '工具未注册',
+    action: 'use_tool',
+    toolUsed: 'orgStructure',
+    toolResult: JSON.stringify({
+      orgStructure: {
+        blocked: true,
+        message: '工具 orgStructure 未注册，已阻断调用。',
+      },
+    }),
+  };
+  assert.equal(getStepKind(blockedStep), '已阻断');
+  assert.equal(
+    getStepSummary(blockedStep),
+    'orgStructure 未通过工具校验，已阻断执行。',
+  );
+  assert.deepEqual(getToolStepResultPresentation(blockedStep), {
+    label: '已阻断',
+    className: 'blocked',
+  });
+
+  const mixedSkippedStep = {
+    timestamp: timestamp + 1000,
+    thought: '重复查询',
+    action: 'use_tool',
+    toolUsed: 'historySearch, historySearch',
+    toolResult: JSON.stringify({
+      historySearch: [
+        {
+          message: '已获得历史消息',
+          result: [{ summary: '记忆摘要' }],
+        },
+        {
+          skipped: true,
+          message: '已跳过重复工具调用',
+        },
+      ],
+    }),
+  };
+  assert.equal(getStepKind(mixedSkippedStep), '部分跳过');
+  assert.deepEqual(getToolStepResultPresentation(mixedSkippedStep), {
+    label: '部分跳过',
+    className: 'partial',
+  });
+
+  const errorStep = {
+    timestamp: timestamp + 2000,
+    thought: '工具失败',
+    action: 'use_tool',
+    toolUsed: 'jiraQuery',
+    toolResult: JSON.stringify({
+      jiraQuery: {
+        error: 'JIRA API 查询失败',
+      },
+    }),
+  };
+  assert.equal(getStepKind(errorStep), '失败');
+  assert.equal(getToolStepResultPresentation(errorStep).className, 'error');
+
+  const flowSteps = buildAgentFlowSteps(
+    [blockedStep, mixedSkippedStep, errorStep],
+    (time) => String(time),
+  );
+  assert.deepEqual(
+    flowSteps
+      .filter((step) => step.type === 'tool')
+      .map((step) => `${step.name}:${step.result}:${step.resultClass}`),
+    [
+      'orgStructure:已阻断:blocked',
+      'historySearch, historySearch:部分跳过:partial',
+      'jiraQuery:失败:error',
+    ],
+  );
 
   const completedGroups: any[][] = [];
   const result = await agent.analyze(

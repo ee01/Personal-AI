@@ -1,6 +1,6 @@
 # Agent Thinking 功能概览
 
-最后更新: 2026-05-06
+最后更新: 2026-05-08
 
 ## 功能定位
 
@@ -43,6 +43,13 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 消息提示词不再推荐未注册的 `orgStructure`，并明确要求只使用当前工具目录中的 ID；Options 演示会展示无效工具被阻断的状态。
 - 单条消息提示构建兼容 `messageContent`、`message_content` 和 `content`，避免标准化后消息正文在提示词里退化成“无内容”。
 
+2026-05-08 状态:
+
+- Agent 可视化的工具状态分类已抽到 `src/agentVisualizerPresentation.ts`，`blocked`、`skipped`、`partial`、`error`、`success` 现在有统一可测试的展示规则。
+- Options 演示页的流程图会直接显示工具节点状态标签，例如“已阻断”“跳过”“失败”，不再只依赖颜色判断。
+- 被阻断的工具节点改为明确的琥珀色样式，避免在流程图里看起来像成功工具调用。
+- 思考时间线的步骤头支持键盘 `Enter` / `Space` 展开，并补充 `role="button"`、`aria-expanded` 和详情区关联，减少只支持鼠标点击的操作阻塞。
+
 ## 处理流程
 
 1. 检测输入类型和消息格式。
@@ -69,6 +76,7 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 继续把 `thoughtProcess` 的用户摘要和调试详情分层，后续可把摘要字段前移到数据结构而不是只在 UI 层推导。
 - 为工具调用增加更细的安全分类，例如只读、外部写入、通知、权限变更，并在执行前走统一 guardrail。
 - 如果后续恢复长时间 agent run，需要持久化每步输入、工具结果、决策摘要和跳过原因，支持刷新后继续和事后审计。
+- 参考 LangSmith / Langfuse 的 trace 体验，后续可以把“工具成功但结果质量不足”作为独立状态，避免用户只看到成功调用却不知道证据是否足够支撑最终判断。
 
 ## 外部参考
 
@@ -76,9 +84,10 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - [Chain-of-Thought Prompting](https://arxiv.org/abs/2201.11903): 中间推理步骤能提升复杂推理，但产品侧需要控制展示粒度。
 - [LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence): checkpoint 支持 human-in-the-loop、time travel、fault tolerance。
 - [LangSmith Observability](https://docs.langchain.com/oss/python/langchain/observability): trace 应覆盖工具调用、模型交互和决策点，方便调试和生产监控。
+- [Langfuse Observability](https://langfuse.com/docs/observability/overview): trace 会把模型调用、工具执行和最终总结放到同一条链路里，适合作为 UI 状态分层参考。
 - [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/): 工具 guardrail 可在执行前后验证或阻断工具调用。
 - [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/): agent run 的 traces 可覆盖 LLM、工具、handoff、guardrail 和自定义事件。
-- [Claude Extended Thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking): 支持 summarized/omitted thinking，说明生产 UI 不应默认依赖完整思考文本。
+- [Claude Extended Thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking): 支持 summarized/omitted thinking，说明生产 UI 不应默认依赖完整思考文本。
 
 ## Reminders 反馈
 
@@ -90,9 +99,10 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 
 ```bash
 TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts
+node tools/verify-agent-thinking-options-e2e.mjs
 ```
 
-该脚本覆盖:
+这些脚本覆盖:
 
 - message group 中多条消息都会被处理，不会在第一条后提前返回。
 - group 完成回调能收到完整结果。
@@ -101,8 +111,11 @@ TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-reso
 - `maxActions` 耗尽会写入明确的 `max_actions_reached` 结束步骤。
 - 未注册工具和缺少必填参数的工具调用会被阻断，且不会触发真实工具请求。
 - 单条消息的 `content`/`message_content` 会进入提示词，不会显示为“无内容”。
+- 可视化状态分类会正确区分“已阻断”“部分跳过”“失败”等状态。
+- Options 演示页能在扩展环境中显示工具目录、流程图状态标签，并支持键盘展开被阻断步骤。
 
 本轮额外验证:
 
-- `npm start` 首次 webpack dev 编译成功后已停止 watch。
-- 用 mock `chrome` 环境加载 `dist/options.html`，点击“启动演示”后确认 `orgStructure` 显示“已阻断”，工具目录仍只展示 `historySearch` 和 `jiraQuery`。
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过。
+- `npm start` 首次 webpack dev 编译成功后已停止 watch；清理本轮引入的 ESLint warning 后重新编译成功。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过；加载 `dist/options.html` 后确认 `orgStructure` 显示“已阻断”、重复调用显示“跳过”、时间线可用键盘展开。

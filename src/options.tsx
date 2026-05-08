@@ -3784,6 +3784,7 @@ const AgentSettings = () => {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const defaultWorkflowScenario = AGENT_WORKFLOW_TEST_SCENARIOS[0];
 
   // 新Agent表单状态
   const [newAgent, setNewAgent] = useState<{
@@ -3802,13 +3803,17 @@ const AgentSettings = () => {
     tools: [],
   });
   const [workflowTestInput, setWorkflowTestInput] =
-    useState<AgentWorkflowTestInput>({
-      sender: 'Example Sender',
-      teamName: 'Example Group',
-      teamId: '',
-      datetime: formatAgentWorkflowDatetimeInputValue(),
-      content: '',
-    });
+    useState<AgentWorkflowTestInput>(() =>
+      defaultWorkflowScenario
+        ? buildAgentWorkflowScenarioInput(defaultWorkflowScenario)
+        : {
+            sender: 'Example Sender',
+            teamName: 'Example Group',
+            teamId: '',
+            datetime: formatAgentWorkflowDatetimeInputValue(),
+            content: '',
+          },
+    );
   const [workflowTestRunning, setWorkflowTestRunning] = useState(false);
   const [workflowTestResult, setWorkflowTestResult] = useState<any>(null);
   const [workflowTestError, setWorkflowTestError] = useState('');
@@ -3947,6 +3952,22 @@ const AgentSettings = () => {
       ...prev,
       [name]: value,
     }));
+  };
+
+  const handleWorkflowScenarioChange = (
+    e: React.ChangeEvent<HTMLSelectElement>,
+  ) => {
+    const scenarioId = e.target.value;
+    setWorkflowScenarioSelectedId(scenarioId);
+    const scenario = AGENT_WORKFLOW_TEST_SCENARIOS.find(
+      (item) => item.id === scenarioId,
+    );
+    if (!scenario) return;
+
+    setWorkflowTestInput(buildAgentWorkflowScenarioInput(scenario));
+    setWorkflowTestResult(null);
+    setWorkflowTestError('');
+    setWorkflowReplayError('');
   };
 
   const runWorkflowTest = async (input: AgentWorkflowTestInput) => {
@@ -4138,6 +4159,7 @@ const AgentSettings = () => {
     newAgent.tools.length > 0 &&
     /^[a-zA-Z][a-zA-Z0-9_-]{1,63}$/.test(sanitizedNewAgentId) &&
     !agents.some((agent) => agent.id === sanitizedNewAgentId);
+  const workflowTestMessageReady = workflowTestInput.content.trim().length > 0;
   const firstAgent = enabledAgents[0];
   const storageAuditFields = [
     '存储原因',
@@ -4344,7 +4366,10 @@ const AgentSettings = () => {
           <div>
             <h3>关注项测试</h3>
           </div>
-          <button onClick={handleRunWorkflowTest} disabled={workflowTestRunning}>
+          <button
+            onClick={handleRunWorkflowTest}
+            disabled={workflowTestRunning || !workflowTestMessageReady}
+          >
             {workflowTestRunning ? '测试中...' : '运行测试'}
           </button>
         </div>
@@ -4354,9 +4379,7 @@ const AgentSettings = () => {
             <select
               id="workflowScenario"
               value={workflowScenarioSelectedId}
-              onChange={(event) =>
-                setWorkflowScenarioSelectedId(event.target.value)
-              }
+              onChange={handleWorkflowScenarioChange}
             >
               {AGENT_WORKFLOW_TEST_SCENARIOS.map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>

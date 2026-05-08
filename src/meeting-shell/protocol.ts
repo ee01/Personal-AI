@@ -659,6 +659,8 @@ const actionSeed: MeetingPilotActionItem[] = [
     deadline: '04-08',
     status: 'pending',
     chapterId: 'chapter-2',
+    evidence: 'Alex: 让 Esone 主导 Meeting Pilot 技术评审并输出评审文档。',
+    timestamp: '10:30',
   },
   {
     id: 'action-2',
@@ -667,6 +669,8 @@ const actionSeed: MeetingPilotActionItem[] = [
     deadline: '04-07',
     status: 'pending',
     chapterId: 'chapter-3',
+    evidence: 'Sarah: 我会确认 QA 资源排期，避免 Sprint 8 开始后卡住。',
+    timestamp: '10:42',
   },
   {
     id: 'action-3',
@@ -675,6 +679,8 @@ const actionSeed: MeetingPilotActionItem[] = [
     deadline: '04-10',
     status: 'pending',
     chapterId: 'chapter-3',
+    evidence: 'Alex: 设计规范也需要 Esone 在 04-10 前输出，方便前端对齐。',
+    timestamp: '10:48',
   },
   {
     id: 'action-4',
@@ -683,6 +689,8 @@ const actionSeed: MeetingPilotActionItem[] = [
     deadline: '04-05',
     status: 'done',
     chapterId: 'chapter-1',
+    evidence: 'Mike: 我今天把 Q2 预算明细提交到财务系统。',
+    timestamp: '10:15',
   },
 ];
 

@@ -90,9 +90,21 @@ const deploymentPreflightIndex = updaterSource.indexOf(
 );
 const contentUpdateIndex = updaterSource.indexOf('await this.updateProjectContent', updateMethodIndex);
 const versionCreateIndex = updaterSource.indexOf('await this.createVersion', updateMethodIndex);
+const deployedVersionCheckIndex = updaterSource.indexOf(
+  'deployedVersionInfo = await this.getDeployedVersionInfo();',
+  updateMethodIndex,
+);
 
 assert.ok(updateMethodIndex >= 0, 'AppScriptUpdater should expose updateAppScript');
 assert.ok(deploymentPreflightIndex > updateMethodIndex, 'App Script updates should preflight deployment lookup');
+assert.ok(
+  deployedVersionCheckIndex > updateMethodIndex,
+  'App Script updates should re-check the deployed version before mutating project state',
+);
+assert.ok(
+  deployedVersionCheckIndex < deploymentPreflightIndex,
+  'The deployed-version recheck should happen before deployment preflight',
+);
 assert.ok(
   deploymentPreflightIndex < contentUpdateIndex,
   'Deployment preflight should happen before mutating project content',
@@ -126,7 +138,15 @@ assert.ok(
   'Project History capacity checks should handle paginated versions.list responses',
 );
 assert.ok(
-  featureDoc.includes('升级会先预检是否存在可更新的正式 Web App deployment'),
+  updaterSource.includes('升级前无法确认线上 App Script 版本'),
+  'App Script updates should stop when the deployed version cannot be confirmed',
+);
+assert.ok(
+  updaterSource.includes('if (checkResult.error)'),
+  'Background auto-update should not treat update-check errors as current state',
+);
+assert.ok(
+  featureDoc.includes('预检是否存在可更新的正式 Web App deployment'),
   'Feature doc should describe the deployment preflight behavior',
 );
 assert.ok(
@@ -134,8 +154,21 @@ assert.ok(
   'Feature doc should describe Project History version-capacity preflight behavior',
 );
 assert.ok(
+  featureDoc.includes('已是最新或更高版本时直接跳过脚本写入和版本创建'),
+  'Feature doc should describe idempotent App Script update skipping',
+);
+assert.ok(
+  featureDoc.includes('版本探测临时失败不会被当成旧版脚本'),
+  'Feature doc should describe transient version-probe failure handling',
+);
+assert.ok(
   managerSource.includes('清理脚本版本'),
   'Scheduled Messages UI should guide users to clean Project History when the version limit is reached',
+);
+assert.ok(
+  managerSource.includes('已是最新时不会重复创建脚本版本') ||
+    managerSource.includes('如果已是最新，会跳过脚本写入和版本创建'),
+  'Scheduled Messages UI should explain that stale update state will not create duplicate script versions',
 );
 
 assert.equal(compareAppScriptVersions('2.6.16', '2.6.16'), 0);
@@ -216,5 +249,138 @@ async function verifyProjectHistoryCapacityChecks(): Promise<void> {
 }
 
 await verifyProjectHistoryCapacityChecks();
+
+async function verifyAlreadyCurrentUpdateSkipsScriptMutations(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let scriptApiCalls = 0;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => undefined,
+      },
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        return new Response(JSON.stringify({
+          version: templateVersion,
+          lastUpdated: templateLastUpdated,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.startsWith('https://script.googleapis.com/')) {
+        scriptApiCalls += 1;
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      appScriptVersion: templateVersion,
+      appScriptLastUpdated: templateLastUpdated,
+    } as any);
+
+    const result = await updater.updateAppScript();
+
+    assert.equal(result.success, true);
+    assert.equal(result.skipped, true);
+    assert.equal(result.currentVersion, templateVersion);
+    assert.equal(result.latestVersion, templateVersion);
+    assert.equal(scriptApiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+  }
+}
+
+await verifyAlreadyCurrentUpdateSkipsScriptMutations();
+
+async function verifyTransientVersionProbeStopsScriptMutations(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let scriptApiCalls = 0;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => undefined,
+      },
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        throw new TypeError('Failed to fetch');
+      }
+
+      if (url.startsWith('https://script.googleapis.com/')) {
+        scriptApiCalls += 1;
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      deploymentId: 'deployment-123',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    const result = await updater.updateAppScript();
+
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /无法确认线上 App Script 版本/);
+    assert.equal(scriptApiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+  }
+}
+
+await verifyTransientVersionProbeStopsScriptMutations();
 
 console.log('App Script auto-update verification passed');

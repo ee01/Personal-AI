@@ -25,6 +25,7 @@ import { FallbackDoubaoBroadcast } from './transports/FallbackDoubaoBroadcast.js
 import { WebpageMcpDoubaoBroadcast } from './transports/WebpageMcpDoubaoBroadcast.js';
 import { createBridgeServer } from './server.js';
 import { BridgeMemoryServiceClient } from './memoryServiceClient.js';
+import { LocalSkillSyncManager } from './skillSync/localSkillSyncManager.js';
 import { BridgeSyncManager } from './syncManager.js';
 import {
   applyBridgeSettingsToConfig,
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
   const service = new DoubaoBridgeService(config, store, broadcastAdapter, version);
   await service.init();
   const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const localSkillSyncManager = new LocalSkillSyncManager(memoryClient);
   const rawMessageStore = new RawMessageStore(explorerDbFile);
   const cursorStore = new CursorStore(explorerCursorFile);
 
@@ -124,6 +126,7 @@ async function main(): Promise<void> {
     memoryClient,
     service,
     explorerManager,
+    localSkillSyncManager,
   );
 
   const app = await createBridgeServer(config, service, {
@@ -131,6 +134,7 @@ async function main(): Promise<void> {
     settingsStore,
     syncManager,
     explorerManager,
+    localSkillSyncManager,
     version,
   });
   const shutdown = async () => {

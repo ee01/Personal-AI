@@ -314,6 +314,75 @@ describe('Recall API', () => {
     expect(allBody.items.map((item: any) => item.id)).toContain('102');
   });
 
+  it('keeps message and chunk recall results separate when their ids collide', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(
+      `INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`,
+    ).run();
+    db.prepare('DELETE FROM messages_raw').run();
+
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, scope, source_type, sender, group_name, timestamp, importance, sentiment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      '101',
+      'Collision planning message evidence from the raw timeline.',
+      'work',
+      'manual',
+      'Alice',
+      'Planning',
+      now - 30,
+      0.8,
+      'neutral',
+      now - 30,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      101,
+      'notes/collision-planning.md',
+      1,
+      1,
+      'Collision planning chunk evidence from a markdown note.',
+      'hash-collision-planning',
+      'work',
+      'notes',
+      'manual',
+      'Planning',
+      now - 20,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      101,
+      'Collision planning chunk evidence from a markdown note.',
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'collision planning evidence',
+        topK: 10,
+        channels: ['fts', 'time'],
+        timeRange: {
+          start: now - 120,
+          end: now + 10,
+        },
+        includeMetadata: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const resultKeys = body.items.map((item: any) => `${item.type}:${item.id}`);
+
+    expect(resultKeys).toContain('message:101');
+    expect(resultKeys).toContain('chunk:101');
+  });
+
   it('returns compact preview text while preserving full cleaned display text', async () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare('DELETE FROM messages_raw').run();

@@ -145,6 +145,21 @@ export interface DesktopAppSyncResult {
   error?: string;
 }
 
+export interface DesktopAppSkillSyncResult {
+  status: 'succeeded' | 'partial_failed' | 'skipped';
+  platforms: Array<{
+    platform: string;
+    root?: string;
+    status: 'succeeded' | 'skipped' | 'failed' | 'partial_failed';
+    scanned: number;
+    imported: number;
+    pulled: number;
+    pushed: number;
+    skipped: number;
+    errors: Array<{ slug?: string; error: string }>;
+  }>;
+}
+
 export interface DesktopAppThreadBindingPayload {
   threadId?: string;
   threadUrl?: string;
@@ -503,6 +518,12 @@ export class DesktopAppClient {
       payload,
     );
   }
+
+  syncSkills(platform?: string): Promise<DesktopAppSkillSyncResult> {
+    return this.request<DesktopAppSkillSyncResult>('POST', '/skills/sync/run', {
+      platform,
+    });
+  }
 }
 
 export type DoubaoBridgeBindingType = DesktopAppBindingType;
@@ -518,6 +539,7 @@ export type DoubaoBridgePairResult = DesktopAppPairResult;
 export type DoubaoBridgeStatus = DesktopAppStatus;
 export type DoubaoBridgeThreadsResponse = DesktopAppThreadsResponse;
 export type DoubaoBridgeSyncResult = DesktopAppSyncResult;
+export type DoubaoBridgeSkillSyncResult = DesktopAppSkillSyncResult;
 export type DoubaoBridgeThreadBindingPayload = DesktopAppThreadBindingPayload;
 export type DoubaoBridgeStableMemoryPayload = DesktopAppStableMemoryPayload;
 export type DoubaoBridgeMobileBriefingPayload = DesktopAppMobileBriefingPayload;
