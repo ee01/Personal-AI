@@ -22,6 +22,32 @@ const COMPOSER_SELECTOR = [
   '#prompt-textarea',
   '[data-testid="chat-input"]',
 ].join(', ');
+const RINGCENTRAL_COMPOSER_SELECTOR = '.ql-editor[contenteditable="true"]';
+const WEB_AGENT_COMPOSER_SELECTORS: Record<string, string> = {
+  chatgpt: [
+    '#prompt-textarea',
+    '[data-testid="composer-textarea"]',
+    '[contenteditable="true"][data-testid*="prompt"]',
+    'textarea[data-id="root"]',
+  ].join(', '),
+  claude: [
+    'div[contenteditable="true"][aria-label*="prompt" i]',
+    'div[contenteditable="true"][data-testid*="chat"]',
+    '.ProseMirror[contenteditable="true"]',
+    'textarea[aria-label*="prompt" i]',
+  ].join(', '),
+  gemini: [
+    'rich-textarea [contenteditable="true"]',
+    'div[contenteditable="true"][aria-label*="prompt" i]',
+    'textarea[aria-label*="prompt" i]',
+  ].join(', '),
+  doubao: [
+    '[data-testid="chat-input"]',
+    '[contenteditable="true"][data-testid*="chat"]',
+    '[contenteditable="true"][aria-label*="输入" i]',
+    'textarea[placeholder*="输入" i]',
+  ].join(', '),
+};
 
 function normalizeText(text?: string | null): string {
   return (text || '').replace(/\s+/g, ' ').trim();
@@ -77,6 +103,44 @@ function closestComposerElement(element?: Element | null): HTMLElement | null {
   return candidate instanceof HTMLElement ? candidate : null;
 }
 
+function getControlHint(element: HTMLElement): string {
+  return normalizeText(
+    [
+      element.getAttribute('placeholder'),
+      element.getAttribute('aria-label'),
+      element.getAttribute('data-placeholder'),
+      element.getAttribute('name'),
+      element.getAttribute('id'),
+      element.getAttribute('class'),
+      element.getAttribute('role'),
+    ]
+      .filter(Boolean)
+      .join(' '),
+  ).toLowerCase();
+}
+
+function includesAny(text: string, terms: string[]): boolean {
+  return terms.some((term) => text.includes(term));
+}
+
+function isSearchLikeControl(element: HTMLElement): boolean {
+  const tag = element.tagName.toLowerCase();
+  const type = (element as HTMLInputElement).type || element.getAttribute('type') || '';
+  const hint = getControlHint(element);
+  const hasSearchHint =
+    /\b(search|filter|query|find|quick search|jump to)\b/.test(hint) ||
+    includesAny(hint, ['搜索', '筛选']);
+  const hasComposerHint =
+    /\b(comment|reply|message|prompt|chat)\b/.test(hint) ||
+    includesAny(hint, ['评论', '回复', '消息', '输入']);
+  return (
+    type.toLowerCase() === 'search' ||
+    element.getAttribute('role') === 'searchbox' ||
+    hasSearchHint ||
+    (tag === 'input' && !hasComposerHint)
+  );
+}
+
 function targetFromElement(
   element: HTMLElement,
   mode: ComposerTarget['mode'],
@@ -109,20 +173,6 @@ function targetFromElement(
   return null;
 }
 
-function firstVisibleComposer(
-  doc: Document,
-  mode: ComposerTarget['mode'],
-  selector = COMPOSER_SELECTOR,
-): ComposerTarget | null {
-  const candidates = Array.from(doc.querySelectorAll<HTMLElement>(selector));
-  for (const candidate of candidates) {
-    if (!isElementVisible(candidate)) continue;
-    const target = targetFromElement(candidate, mode);
-    if (target) return target;
-  }
-  return null;
-}
-
 function getContextTextContent(root?: Element | null): string {
   if (!root) return '';
   const clone = root.cloneNode(true) as HTMLElement;
@@ -148,7 +198,7 @@ function getContextTextContent(root?: Element | null): string {
 }
 
 function getRingCentralConversationId(location: Location): string | null {
-  const match = location.pathname.match(/^\/messages\/([^/?#]+)/);
+  const match = location.pathname.match(/^\/(?:l\/)?messages\/([^/?#]+)/);
   return match?.[1] || null;
 }
 
@@ -219,11 +269,7 @@ function findRingCentralComposer(
   doc: Document,
   fromElement?: Element | null,
 ): ComposerTarget | null {
-  const focused = closestComposerElement(fromElement);
-  const element =
-    focused ||
-    doc.querySelector<HTMLElement>('.ql-editor[contenteditable="true"]') ||
-    firstVisibleComposer(doc, 'main', '.ql-editor[contenteditable="true"]')?.element;
+  const element = closestRingCentralComposerElement(fromElement);
 
   if (!element) return null;
 
@@ -240,12 +286,41 @@ function findRingCentralComposer(
   return targetFromElement(element, mode);
 }
 
+function closestRingCentralComposerElement(element?: Element | null): HTMLElement | null {
+  if (!element) return null;
+  const candidate = element.closest(RINGCENTRAL_COMPOSER_SELECTOR);
+  if (!(candidate instanceof HTMLElement)) return null;
+  return isLikelyRingCentralComposer(candidate) ? candidate : null;
+}
+
+function isLikelyRingCentralComposer(element: HTMLElement): boolean {
+  if (!isElementVisible(element) || isSearchLikeControl(element)) return false;
+  if (!element.classList.contains('ql-editor') || !element.isContentEditable) {
+    return false;
+  }
+
+  const hint = getControlHint(element);
+  if (
+    /\b(message|reply|comment|chat|composer)\b/.test(hint) ||
+    includesAny(hint, ['消息', '回复', '评论', '输入'])
+  ) {
+    return true;
+  }
+
+  return Boolean(
+    element.closest('[data-test-automation-id="conversation-reply-post-tree"]') ||
+      element.closest('[data-test-automation-id*="compose"]') ||
+      element.closest('[data-testid*="composer"]') ||
+      element.closest('[data-test-id*="composer"]'),
+  );
+}
+
 const ringCentralMessageAdapter: SiteContextAdapter = {
   id: 'ringcentral-message',
   match(location) {
     return (
       location.hostname === 'app.ringcentral.com' &&
-      /^\/messages\/[^/?#]+/.test(location.pathname)
+      /^\/(?:l\/)?messages\/[^/?#]+/.test(location.pathname)
     );
   },
   buildSnapshot(doc, location) {
@@ -366,11 +441,38 @@ const jiraIssueAdapter: SiteContextAdapter = {
     };
   },
   findComposer(doc, fromElement) {
-    const focused = closestComposerElement(fromElement);
+    const focused = closestJiraCommentComposerElement(fromElement);
     if (focused) return targetFromElement(focused, 'comment');
-    return firstVisibleComposer(doc, 'comment');
+    return null;
   },
 };
+
+function closestJiraCommentComposerElement(element?: Element | null): HTMLElement | null {
+  const candidate = closestComposerElement(element);
+  if (!candidate || !isLikelyJiraCommentComposer(candidate)) return null;
+  return candidate;
+}
+
+function isLikelyJiraCommentComposer(element: HTMLElement): boolean {
+  if (!isElementVisible(element) || isSearchLikeControl(element)) return false;
+  if (element.tagName.toLowerCase() === 'input') return false;
+
+  const hint = getControlHint(element);
+  const commentAncestor = element.closest(
+    [
+      '[data-testid*="comment"]',
+      '[aria-label*="comment" i]',
+      '[id*="comment" i]',
+      '[class*="comment" i]',
+    ].join(', '),
+  );
+
+  return (
+    /\b(comment|reply)\b/.test(hint) ||
+    includesAny(hint, ['评论', '回复']) ||
+    Boolean(commentAncestor)
+  );
+}
 
 function detectWebAgentProvider(location: Location): ComposerSurface | null {
   const host = location.hostname.toLowerCase();
@@ -450,19 +552,18 @@ const webAgentAdapter: SiteContextAdapter = {
     };
   },
   findComposer(doc, fromElement) {
-    const focused = closestComposerElement(fromElement);
-    if (focused) return targetFromElement(focused, 'prompt');
+    const provider = detectWebAgentProvider(doc.location);
+    const providerSpecificSelector = provider
+      ? WEB_AGENT_COMPOSER_SELECTORS[provider]
+      : undefined;
+    if (!providerSpecificSelector) return null;
 
-    const providerSpecificSelector = [
-      '#prompt-textarea',
-      'textarea[data-id="root"]',
-      'textarea',
-      '.ProseMirror',
-      '[contenteditable="true"][role="textbox"]',
-      '[data-testid="chat-input"]',
-      '[role="textbox"]',
-    ].join(', ');
-    return firstVisibleComposer(doc, 'prompt', providerSpecificSelector);
+    const focused =
+      fromElement instanceof Element
+        ? fromElement.closest(providerSpecificSelector)
+        : null;
+    if (focused instanceof HTMLElement) return targetFromElement(focused, 'prompt');
+    return null;
   },
 };
 

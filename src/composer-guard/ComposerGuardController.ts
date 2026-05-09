@@ -124,7 +124,7 @@ export class ComposerGuardController {
   private handleInput = (event: Event): void => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || !isComposerElement(target)) return;
-    if (!this.activeSession) {
+    if (!this.activeSession || !this.isEventFromActiveTarget(target)) {
       this.activateFromElement(target, true);
       return;
     }
@@ -148,6 +148,9 @@ export class ComposerGuardController {
 
     const context = findActiveComposerContext(document, window.location, fromElement);
     if (!context) {
+      if (fromElement && isComposerElement(fromElement)) {
+        this.clear();
+      }
       return;
     }
 
@@ -182,6 +185,16 @@ export class ComposerGuardController {
     if (requestImmediately || contextChanged || !this.latestAssist) {
       this.scheduleAssistRequest();
     }
+  }
+
+  private isEventFromActiveTarget(target: Element): boolean {
+    const activeTarget = this.activeSession?.target.element;
+    return Boolean(
+      activeTarget &&
+        (activeTarget === target ||
+          activeTarget.contains(target) ||
+          target.contains(activeTarget)),
+    );
   }
 
   private refreshActiveDraft(): void {
